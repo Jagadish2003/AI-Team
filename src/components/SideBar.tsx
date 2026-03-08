@@ -1,7 +1,6 @@
-import React from 'react';
 import { Layers, Box, Database, Check, ChevronRight, ArrowUpRight, ArrowUp, Settings } from 'lucide-react';
 
-export function Sidebar() {
+function Sidebar() {
   return (
     <div className="w-full xl:w-[340px] flex flex-col gap-6">
       {/* ServiceNow Integration Panel */}
@@ -49,3 +48,5 @@ export function Sidebar() {
     </div>
   );
 }
+
+export default Sidebar;

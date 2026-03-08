@@ -1,8 +1,8 @@
-import React from 'react';
+import { useState } from 'react';
 import { Activity, ChevronDown, User } from 'lucide-react';
 
-export function Header() {
-  const [isMenuOpen, setIsMenuOpen] = React.useState(false);
+function Header() {
+  const [isMenuOpen, setIsMenuOpen] = useState(false);
 
   return (
     <header className="sticky top-0 z-50 flex items-center justify-between px-6 py-3 border-b border-neutral-400 bg-[#cecece]">
@@ -17,7 +17,7 @@ export function Header() {
         <span className="w-px h-4 bg-neutral-400"></span>
         <a href="#" className="hover:text-neutral-900">Reports</a>
         
-        {/* ADMINISTRATOR DROPDOWN - ON CLICK */}
+        {/* ADMINISTRATOR DROPDOWN */}
         <div className="relative">
           <div 
             className="flex items-center gap-1 cursor-pointer hover:text-neutral-900 py-2 select-none"
@@ -45,3 +45,5 @@ export function Header() {
     </header>
   );
 }
+
+export default Header;

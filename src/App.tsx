@@ -1,12 +1,10 @@
-import React from 'react';
 import './App.css';
 
-// Import your new components
-import { Header } from './components/Header';
-import { PageHeader } from './components/PageHeader';
-import { IntegrationPanels } from './components/IntegrationPanels';
-import { Sidebar } from './components/Sidebar';
-import { BottomBar } from './components/BottomBar';
+import Header from './components/Header';
+import PageHeader from './components/PageHeader';
+import IntegrationPanels from './components/IntegrationPanels';
+import Sidebar from './components/Sidebar';
+import BottomBar from './components/BottomBar';
 
 function App() {
   return (

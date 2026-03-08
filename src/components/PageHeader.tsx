@@ -1,6 +1,4 @@
-import React from 'react';
-
-export function PageHeader() {
+function PageHeader() {
   return (
     <>
       <div className="px-8 pt-6 pb-4">
@@ -15,3 +13,5 @@ export function PageHeader() {
     </>
   );
 }
+
+export default PageHeader;

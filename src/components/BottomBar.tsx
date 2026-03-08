@@ -1,7 +1,6 @@
-import React from 'react';
 import { Check, ChevronRight } from 'lucide-react';
 
-export function BottomBar() {
+function BottomBar() {
   return (
     <div className="fixed bottom-0 left-0 right-0 w-full bg-[#eeeeee] border-t border-neutral-300 px-8 py-4 flex flex-col md:flex-row items-center justify-between z-50 gap-4">
       {/* Left Side: Progress & Upload */}
@@ -39,3 +38,5 @@ export function BottomBar() {
     </div>
   );
 }
+
+export default BottomBar;

@@ -1,7 +1,6 @@
-import React from 'react';
 import { Settings, Layers, Box, Github, MessageSquare, Check } from 'lucide-react';
 
-export function IntegrationPanels() {
+function IntegrationPanels() {
   return (
     <div className="flex-grow space-y-6">
       {/* Start Here Panel */}
@@ -76,3 +75,5 @@ export function IntegrationPanels() {
     </div>
   );
 }
+
+export default IntegrationPanels;
