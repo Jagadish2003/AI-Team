@@ -1,0 +1,141 @@
+{
+  "recommended": [
+    {
+      "id": "servicenow",
+      "name": "ServiceNow",
+      "category": "ITSM · CMDB",
+      "tier": "recommended",
+      "recommendedRank": 1,
+      "status": "connected",
+      "metrics": [
+        {
+          "label": "Incidents",
+          "value": "2,847"
+        },
+        {
+          "label": "CMDB items",
+          "value": "312"
+        }
+      ],
+      "lastSynced": "3m ago",
+      "reads": [
+        "CMDB items",
+        "Incident Tickets",
+        "Change Logs"
+      ],
+      "signalStrength": 94
+    },
+    {
+      "id": "jira_confluence",
+      "name": "Jira & Confluence",
+      "category": "Delivery · Knowledge",
+      "tier": "recommended",
+      "recommendedRank": 2,
+      "status": "not_connected",
+      "metrics": [
+        {
+          "label": "Records ingested",
+          "value": "5,847"
+        },
+        {
+          "label": "Emails - Teams Chats",
+          "value": ""
+        }
+      ],
+      "lastSynced": "—",
+      "reads": [
+        "Jira",
+        "Confluence",
+        "Emails"
+      ],
+      "signalStrength": 66
+    },
+    {
+      "id": "microsoft_365",
+      "name": "Microsoft 365",
+      "category": "Comms · Collaboration",
+      "tier": "recommended",
+      "recommendedRank": 3,
+      "status": "not_connected",
+      "metrics": [
+        {
+          "label": "Not connected",
+          "value": ""
+        },
+        {
+          "label": "Last synced 2 hrs ago",
+          "value": ""
+        }
+      ],
+      "lastSynced": "2 hrs ago",
+      "reads": [
+        "Exchange",
+        "Teams",
+        "OneDrive"
+      ],
+      "signalStrength": 55
+    }
+  ],
+  "connectors": [
+    {
+      "id": "sap",
+      "name": "SAP",
+      "category": "ERP · Process",
+      "tier": "standard",
+      "status": "connected",
+      "metrics": [
+        {
+          "label": "Object",
+          "value": "Object 1"
+        }
+      ],
+      "lastSynced": "1 day ago",
+      "reads": [
+        "Object 1",
+        "Change docs",
+        "Approvals"
+      ],
+      "signalStrength": 76
+    },
+    {
+      "id": "github",
+      "name": "GitHub",
+      "category": "Engineering · Delivery",
+      "tier": "standard",
+      "status": "connected",
+      "metrics": [
+        {
+          "label": "Object",
+          "value": "Object 2"
+        }
+      ],
+      "lastSynced": "30 min ago",
+      "reads": [
+        "Object 2",
+        "Pull Requests",
+        "Review comments"
+      ],
+      "signalStrength": 81
+    },
+    {
+      "id": "slack",
+      "name": "Slack",
+      "category": "Comms · Ops",
+      "tier": "standard",
+      "status": "connected",
+      "metrics": [
+        {
+          "label": "Object",
+          "value": "Object 2"
+        }
+      ],
+      "lastSynced": "10 min ago",
+      "reads": [
+        "Object 2",
+        "Threads",
+        "Mentions"
+      ],
+      "signalStrength": 79
+    }
+  ]
+}
