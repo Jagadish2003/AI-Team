@@ -1,0 +1,225 @@
+{
+  "recommended": [
+    {
+      "id": "servicenow",
+      "name": "ServiceNow",
+      "category": "ITSM \u00b7 CMDB",
+      "tier": "recommended",
+      "recommendedRank": 1,
+      "status": "connected",
+      "metrics": [
+        {
+          "label": "Incidents",
+          "value": "2847"
+        },
+        {
+          "label": "CMDB Items",
+          "value": "312"
+        }
+      ],
+      "lastSynced": "4 min ago",
+      "reads": [
+        "CMDB Records",
+        "Incident Tickets",
+        "Change Logs"
+      ],
+      "signalStrength": 94
+    },
+    {
+      "id": "jira_confluence",
+      "name": "Jira & Confluence",
+      "category": "Delivery \u00b7 Knowledge",
+      "tier": "recommended",
+      "recommendedRank": 2,
+      "status": "connected",
+      "metrics": [
+        {
+          "label": "Issues",
+          "value": "5847"
+        },
+        {
+          "label": "Confluence Pages",
+          "value": "1120"
+        }
+      ],
+      "lastSynced": "2 hrs ago",
+      "reads": [
+        "Issues",
+        "Transitions",
+        "Runbooks / Pages"
+      ],
+      "signalStrength": 88
+    },
+    {
+      "id": "microsoft_365",
+      "name": "Microsoft 365",
+      "category": "Comms \u00b7 Collaboration",
+      "tier": "recommended",
+      "recommendedRank": 3,
+      "status": "not_connected",
+      "metrics": [
+        {
+          "label": "Mailboxes",
+          "value": "\u2014"
+        },
+        {
+          "label": "Teams Channels",
+          "value": "\u2014"
+        }
+      ],
+      "lastSynced": "\u2014",
+      "reads": [
+        "Shared Inbox",
+        "Teams Channels",
+        "Meeting Transcripts"
+      ],
+      "signalStrength": 55
+    }
+  ],
+  "connectors": [
+    {
+      "id": "sap",
+      "name": "SAP",
+      "category": "ERP \u00b7 Process",
+      "tier": "standard",
+      "status": "connected",
+      "metrics": [
+        {
+          "label": "Systems",
+          "value": "6"
+        },
+        {
+          "label": "Change Docs",
+          "value": "1420"
+        }
+      ],
+      "lastSynced": "1 day ago",
+      "reads": [
+        "Change Documents",
+        "Approvals",
+        "Transports (if available)"
+      ],
+      "signalStrength": 76
+    },
+    {
+      "id": "github",
+      "name": "GitHub",
+      "category": "Engineering \u00b7 Delivery",
+      "tier": "standard",
+      "status": "connected",
+      "metrics": [
+        {
+          "label": "PRs (30d)",
+          "value": "248"
+        },
+        {
+          "label": "Reviews (30d)",
+          "value": "913"
+        }
+      ],
+      "lastSynced": "30 min ago",
+      "reads": [
+        "Pull Requests",
+        "Review Comments",
+        "Commits"
+      ],
+      "signalStrength": 81
+    },
+    {
+      "id": "slack",
+      "name": "Slack",
+      "category": "Comms \u00b7 Ops",
+      "tier": "standard",
+      "status": "connected",
+      "metrics": [
+        {
+          "label": "Channels",
+          "value": "34"
+        },
+        {
+          "label": "Messages (7d)",
+          "value": "12840"
+        }
+      ],
+      "lastSynced": "10 min ago",
+      "reads": [
+        "Channels",
+        "Threads",
+        "Mentions"
+      ],
+      "signalStrength": 79
+    },
+    {
+      "id": "databricks",
+      "name": "Databricks",
+      "category": "Data \u00b7 Platform",
+      "tier": "standard",
+      "status": "not_connected",
+      "metrics": [
+        {
+          "label": "Jobs",
+          "value": "\u2014"
+        },
+        {
+          "label": "Pipelines",
+          "value": "\u2014"
+        }
+      ],
+      "lastSynced": "\u2014",
+      "reads": [
+        "Job Runs",
+        "Pipelines",
+        "Notebooks"
+      ],
+      "signalStrength": 52
+    },
+    {
+      "id": "veeva_qms",
+      "name": "Veeva QMS",
+      "category": "Quality \u00b7 Regulated",
+      "tier": "coming_soon",
+      "status": "coming_soon",
+      "metrics": [
+        {
+          "label": "Deviations",
+          "value": "\u2014"
+        },
+        {
+          "label": "Change Controls",
+          "value": "\u2014"
+        }
+      ],
+      "lastSynced": "\u2014",
+      "reads": [
+        "Deviations",
+        "Change Control",
+        "Doc Review"
+      ],
+      "signalStrength": 0
+    },
+    {
+      "id": "mes_system",
+      "name": "MES System",
+      "category": "Manufacturing \u00b7 Ops",
+      "tier": "coming_soon",
+      "status": "coming_soon",
+      "metrics": [
+        {
+          "label": "Overrides",
+          "value": "\u2014"
+        },
+        {
+          "label": "Rework Events",
+          "value": "\u2014"
+        }
+      ],
+      "lastSynced": "\u2014",
+      "reads": [
+        "Manual Overrides",
+        "Rework",
+        "Audit Trails"
+      ],
+      "signalStrength": 0
+    }
+  ]
+}
