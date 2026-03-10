@@ -1,0 +1,192 @@
+import React, { createContext, useCallback, useContext, useMemo, useState } from 'react';
+import entitiesMock from '../data/mockEntities.json';
+import evidenceMock from '../data/mockEvidence.json';
+import { EvidenceReview, ExtractedEntity, EntityType, ReviewDecision } from '../types/partialResults';
+
+type PartialResultsContextValue = {
+  entities: ExtractedEntity[];
+  evidence: EvidenceReview[];
+  selectedEvidenceId: string | null;
+
+  selectedEntityIds: string[];
+  entityTypes: Record<EntityType, boolean>;
+  queryEntities: string;
+  queryEvidence: string;
+  sourceFilter: string;
+  activeTab: 'Entities' | 'Opportunities';
+
+  saveDraftEnabled: boolean;
+  setSaveDraftEnabled: (v: boolean) => void;
+
+  selectEvidence: (id: string) => void;
+  toggleEntity: (id: string) => void;
+  setEntityTypeEnabled: (t: EntityType, v: boolean) => void;
+  setQueryEntities: (v: string) => void;
+  setQueryEvidence: (v: string) => void;
+  setSourceFilter: (v: string) => void;
+  setActiveTab: (v: 'Entities' | 'Opportunities') => void;
+
+  approveSelected: () => void;
+  rejectSelected: () => void;
+  clearSelection: () => void;
+
+  goPrev: () => void;
+  goNext: () => void;
+
+  filteredEntities: ExtractedEntity[];
+  filteredEvidence: EvidenceReview[];
+  selectedEvidence: EvidenceReview | null;
+  sources: string[];
+  countsByType: Record<EntityType, number>;
+
+  positionLabel: string; // e.g. "3 of 17"
+};
+
+const Ctx = createContext<PartialResultsContextValue | null>(null);
+
+const defaultTypes: Record<EntityType, boolean> = {
+  Application: true,
+  Workflow: true,
+  Service: true,
+  Role: false,
+  DataObject: false,
+  Other: false
+};
+
+export function PartialResultsProvider({ children }: { children: React.ReactNode }) {
+  const [entities] = useState<ExtractedEntity[]>(entitiesMock as unknown as ExtractedEntity[]);
+  const [evidence, setEvidence] = useState<EvidenceReview[]>(evidenceMock as unknown as EvidenceReview[]);
+  const [selectedEvidenceId, setSelectedEvidenceId] = useState<string | null>((evidenceMock as any[])[0]?.id ?? null);
+
+  const [selectedEntityIds, setSelectedEntityIds] = useState<string[]>([]);
+  const [entityTypes, setEntityTypes] = useState(defaultTypes);
+  const [queryEntities, setQueryEntities] = useState('');
+  const [queryEvidence, setQueryEvidence] = useState('');
+  const [sourceFilter, setSourceFilter] = useState<string>('All Sources');
+  const [activeTab, setActiveTab] = useState<'Entities' | 'Opportunities'>('Entities');
+  const [saveDraftEnabled, setSaveDraftEnabled] = useState(true);
+
+  const sources = useMemo(() => {
+    const set = new Set(evidence.map(e => e.source));
+    return ['All Sources', ...Array.from(set).sort()];
+  }, [evidence]);
+
+  const countsByType = useMemo(() => {
+    const counts = { Application:0, Workflow:0, Service:0, Role:0, DataObject:0, Other:0 } as Record<EntityType, number>;
+    for (const e of entities) counts[e.type] = (counts[e.type] ?? 0) + 1;
+    return counts;
+  }, [entities]);
+
+  const filteredEntities = useMemo(() => {
+    const q = queryEntities.trim().toLowerCase();
+    return entities.filter(e => entityTypes[e.type] && (!q || e.name.toLowerCase().includes(q)));
+  }, [entities, entityTypes, queryEntities]);
+
+  const filteredEvidence = useMemo(() => {
+    const q = queryEvidence.trim().toLowerCase();
+    return evidence
+      .filter(ev => sourceFilter === 'All Sources' || ev.source === sourceFilter)
+      .filter(ev => !q || ev.title.toLowerCase().includes(q) || ev.snippet.toLowerCase().includes(q))
+      .filter(ev => selectedEntityIds.length === 0 || selectedEntityIds.some(id => ev.entities.includes(id)));
+  }, [evidence, queryEvidence, sourceFilter, selectedEntityIds]);
+
+  const selectedEvidence = useMemo(() => evidence.find(e => e.id === selectedEvidenceId) ?? null, [evidence, selectedEvidenceId]);
+
+  const currentIndex = useMemo(() => {
+    if (!selectedEvidenceId) return -1;
+    return filteredEvidence.findIndex(e => e.id === selectedEvidenceId);
+  }, [filteredEvidence, selectedEvidenceId]);
+
+  const positionLabel = useMemo(() => {
+    if (!filteredEvidence.length || currentIndex < 0) return `0 of ${filteredEvidence.length}`;
+    return `${currentIndex + 1} of ${filteredEvidence.length}`;
+  }, [filteredEvidence.length, currentIndex]);
+
+  const selectEvidence = useCallback((id: string) => setSelectedEvidenceId(id), []);
+
+  const toggleEntity = useCallback((id: string) => {
+    setSelectedEntityIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
+  }, []);
+
+  const setEntityTypeEnabled = useCallback((t: EntityType, v: boolean) => {
+    setEntityTypes(prev => ({ ...prev, [t]: v }));
+  }, []);
+
+  const clearSelection = useCallback(() => setSelectedEntityIds([]), []);
+
+  const goPrev = useCallback(() => {
+    if (currentIndex <= 0) return;
+    const prev = filteredEvidence[currentIndex - 1];
+    if (prev) setSelectedEvidenceId(prev.id);
+  }, [currentIndex, filteredEvidence]);
+
+  const goNext = useCallback(() => {
+    if (currentIndex < 0) return;
+    const nxt = filteredEvidence[currentIndex + 1];
+    if (nxt) setSelectedEvidenceId(nxt.id);
+  }, [currentIndex, filteredEvidence]);
+
+  const goNextUnreviewed = useCallback((fromIndex: number) => {
+    const next = filteredEvidence.slice(fromIndex + 1).find(e => e.decision === 'UNREVIEWED');
+    if (next) setSelectedEvidenceId(next.id);
+    else {
+      const first = filteredEvidence.find(e => e.decision === 'UNREVIEWED');
+      if (first) setSelectedEvidenceId(first.id);
+    }
+  }, [filteredEvidence]);
+
+  const setDecisionForSelected = useCallback((decision: ReviewDecision) => {
+    if (!selectedEvidenceId) return;
+    setEvidence(prev => prev.map(ev => ev.id === selectedEvidenceId ? { ...ev, decision } : ev));
+    // auto-advance (should-fix) after decision
+    const idx = currentIndex;
+    if (idx >= 0) goNextUnreviewed(idx);
+  }, [selectedEvidenceId, currentIndex, goNextUnreviewed]);
+
+  const approveSelected = useCallback(() => setDecisionForSelected('APPROVED'), [setDecisionForSelected]);
+  const rejectSelected = useCallback(() => setDecisionForSelected('REJECTED'), [setDecisionForSelected]);
+
+  const value = useMemo(() => ({
+    entities,
+    evidence,
+    selectedEvidenceId,
+    selectedEntityIds,
+    entityTypes,
+    queryEntities,
+    queryEvidence,
+    sourceFilter,
+    activeTab,
+    saveDraftEnabled,
+    setSaveDraftEnabled,
+    selectEvidence,
+    toggleEntity,
+    setEntityTypeEnabled,
+    setQueryEntities,
+    setQueryEvidence,
+    setSourceFilter,
+    setActiveTab,
+    approveSelected,
+    rejectSelected,
+    clearSelection,
+    goPrev,
+    goNext,
+    filteredEntities,
+    filteredEvidence,
+    selectedEvidence,
+    sources,
+    countsByType,
+    positionLabel
+  }), [
+    entities, evidence, selectedEvidenceId, selectedEntityIds, entityTypes, queryEntities, queryEvidence, sourceFilter, activeTab,
+    saveDraftEnabled, filteredEntities, filteredEvidence, selectedEvidence, sources, countsByType, positionLabel,
+    selectEvidence, toggleEntity, setEntityTypeEnabled, approveSelected, rejectSelected, clearSelection, goPrev, goNext
+  ]);
+
+  return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
+}
+
+export function usePartialResultsContext() {
+  const ctx = useContext(Ctx);
+  if (!ctx) throw new Error('usePartialResultsContext must be used inside PartialResultsProvider');
+  return ctx;
+}

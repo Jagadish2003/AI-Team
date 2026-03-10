@@ -1,0 +1,57 @@
+[
+  {
+    "ts": "10:20 AM",
+    "level": "INFO",
+    "message": "Discovery run created. Preparing source inventory."
+  },
+  {
+    "ts": "10:20 AM",
+    "level": "INFO",
+    "message": "Queued 2 connected sources and 3 uploaded files for ingestion."
+  },
+  {
+    "ts": "10:21 AM",
+    "level": "INFO",
+    "message": "Parsing ServiceNow export (CMDB + Incidents)\u2026"
+  },
+  {
+    "ts": "10:21 AM",
+    "level": "INFO",
+    "message": "Parsing Jira issues and transitions\u2026"
+  },
+  {
+    "ts": "10:22 AM",
+    "level": "INFO",
+    "message": "Parsed incident_data.csv (2,847 rows)."
+  },
+  {
+    "ts": "10:22 AM",
+    "level": "INFO",
+    "message": "Parsed cmdb_records.xlsx (312 records)."
+  },
+  {
+    "ts": "10:23 AM",
+    "level": "WARNING",
+    "message": "changelogs.csv has missing values in 14 rows (will continue)."
+  },
+  {
+    "ts": "10:23 AM",
+    "level": "INFO",
+    "message": "Starting normalization to common schema (Applications, Roles, Actions)."
+  },
+  {
+    "ts": "10:24 AM",
+    "level": "INFO",
+    "message": "Normalization: mapped 312 CMDB items to Application entities."
+  },
+  {
+    "ts": "10:25 AM",
+    "level": "INFO",
+    "message": "Normalization: mapped 5,847 Jira issues to workflow signals."
+  },
+  {
+    "ts": "10:26 AM",
+    "level": "INFO",
+    "message": "Entity extraction queued (systems, roles, actions, handoffs)."
+  }
+]
