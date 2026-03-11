@@ -34,7 +34,7 @@ export default function EntitiesSidebar({
           value={query}
           onChange={(e) => onQuery(e.target.value)}
           placeholder="Search entities…"
-          className="w-full rounded-md border border-border bg-bg/30 px-3 py-2 text-sm text-text placeholder:text-muted"
+          className="w-full rounded-md border border-border bg-bg/30 px-3 py-2 text-sm text-text placeholder:text-muted focus:outline-none focus:border-[#00B4B4]"
         />
       </div>
 
@@ -44,7 +44,7 @@ export default function EntitiesSidebar({
           {typeList.map(t => (
             <label key={t} className="flex items-center justify-between gap-2">
               <span className="flex items-center gap-2">
-                <input type="checkbox" checked={enabledTypes[t]} onChange={(e) => onTypeToggle(t, e.target.checked)} />
+                <input type="checkbox" className="accent-blue-500" checked={enabledTypes[t]} onChange={(e) => onTypeToggle(t, e.target.checked)} />
                 {t}
               </span>
               <span className="text-xs text-muted">({countsByType[t] ?? 0})</span>

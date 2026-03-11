@@ -1,4 +1,5 @@
-import React from 'react';
+import React, { useState, useRef, useEffect } from 'react';
+import { ChevronDown } from 'lucide-react';
 import Button from '../common/Button';
 import { EvidenceReview } from '../../types/partialResults';
 
@@ -6,6 +7,59 @@ function decisionClass(decision: string) {
   if (decision === 'APPROVED') return 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30';
   if (decision === 'REJECTED') return 'bg-red-500/15 text-red-300 border-red-500/30';
   return 'bg-slate-500/10 text-muted border-border';
+}
+
+function SourceDropdown({
+  sources,
+  value,
+  onChange
+}: {
+  sources: string[];
+  value: string;
+  onChange: (v: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    function handleClickOutside(e: MouseEvent) {
+      if (ref.current && !ref.current.contains(e.target as Node)) {
+        setOpen(false);
+      }
+    }
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
+  return (
+    <div ref={ref} className="relative">
+      <button
+        onClick={() => setOpen((o) => !o)}
+        className="flex items-center gap-2 rounded-lg border border-border bg-panel px-3 py-2 text-sm text-text focus:outline-none focus:ring-1 focus:ring-accent cursor-pointer whitespace-nowrap"
+      >
+        {value}
+        <ChevronDown size={14} className={`text-muted transition-transform ${open ? 'rotate-180' : ''}`} />
+      </button>
+
+      {open && (
+        <div className="absolute right-0 z-50 mt-1 min-w-full rounded-lg border border-border bg-panel shadow-lg overflow-hidden">
+          {sources.map((s) => (
+            <div
+              key={s}
+              onClick={() => { onChange(s); setOpen(false); }}
+              className={`px-4 py-2 text-sm cursor-pointer transition-colors ${
+                s === value
+                  ? 'bg-[#00B4B4] text-[#0d1117] font-medium'
+                  : 'text-text hover:bg-[#00B4B4]/15 hover:text-[#00B4B4]'
+              }`}
+            >
+              {s}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
 }
 
 export default function EvidenceList({
@@ -43,8 +97,13 @@ export default function EvidenceList({
     <div className="rounded-xl border border-border bg-panel p-4">
       <div className="flex items-center justify-between">
         <div className="text-sm font-semibold text-text">{evidence.length} Evidence Snippets</div>
-        <label className="flex items-center gap-2 text-xs text-muted">
-          <input type="checkbox" checked={saveDraftEnabled} onChange={(e) => onSaveDraftEnabled(e.target.checked)} />
+        <label className="flex items-center gap-2 text-xs text-muted cursor-pointer">
+          <input
+            type="checkbox"
+            className="accent-[#00B4B4]"
+            checked={saveDraftEnabled}
+            onChange={(e) => onSaveDraftEnabled(e.target.checked)}
+          />
           Save Draft
         </label>
       </div>
@@ -54,15 +113,9 @@ export default function EvidenceList({
           value={query}
           onChange={(e) => onQuery(e.target.value)}
           placeholder="Search evidence…"
-          className="flex-1 rounded-md border border-border bg-bg/30 px-3 py-2 text-sm text-text placeholder:text-muted"
+          className="flex-1 rounded-md border border-border bg-bg/30 px-3 py-2 text-sm text-text placeholder:text-muted focus:outline-none focus:border-[#00B4B4]"
         />
-        <select
-          value={sourceFilter}
-          onChange={(e) => onSourceFilter(e.target.value)}
-          className="rounded-md border border-border bg-bg/30 px-3 py-2 text-sm text-text"
-        >
-          {sources.map(s => <option key={s} value={s}>{s}</option>)}
-        </select>
+        <SourceDropdown sources={sources} value={sourceFilter} onChange={onSourceFilter} />
       </div>
 
       <div className="mt-3 h-[520px] overflow-auto rounded-lg border border-border bg-bg/20">
@@ -73,7 +126,7 @@ export default function EvidenceList({
               key={ev.id}
               onClick={() => onSelect(ev.id)}
               className={`cursor-pointer border-b border-border/50 p-3 ${
-                selected ? 'bg-panel2' : 'hover:bg-panel2'
+                selected ? 'bg-[#00B4B4]/10 border-l-2 border-l-[#00B4B4]' : 'hover:bg-panel2'
               }`}
             >
               <div className="flex items-center justify-between text-xs text-muted">

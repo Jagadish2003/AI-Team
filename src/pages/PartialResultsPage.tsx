@@ -29,7 +29,8 @@ export default function PartialResultsPage() {
   return (
     <div className="min-h-screen text-text">
       <TopNav />
-      <div className="mx-auto max-w-6xl px-4 py-6 pb-10">
+
+      <div className="w-full px-8 py-6 pb-10">
         <div className="mb-6 flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
           <div>
             <div className="text-2xl font-semibold">Partial Results</div>
@@ -56,7 +57,7 @@ export default function PartialResultsPage() {
 
         <TabsHeader tab={activeTab} onTab={setActiveTab} />
 
-        <div className="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-[360px_1fr_360px]">
+        <div className="mt-4 grid grid-cols-1 gap-6 lg:grid-cols-3">
           <EntitiesSidebar
             entities={filteredEntities}
             countsByType={countsByType}

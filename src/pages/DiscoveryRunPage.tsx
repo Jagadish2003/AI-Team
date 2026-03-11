@@ -22,14 +22,12 @@ export default function DiscoveryRunPage() {
 
   useEffect(() => {
     if (started) return;
-
     const inputs = {
       connectedSources: connectedNames,
       uploadedFiles: uploadedNames,
       sampleWorkspaceEnabled,
       totalSources: connectedNames.length + uploadedNames.length + (sampleWorkspaceEnabled ? 1 : 0)
     };
-
     startRun(inputs);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [started]);
@@ -38,7 +36,7 @@ export default function DiscoveryRunPage() {
     <div className="min-h-screen text-text">
       <TopNav />
 
-      <div className="mx-auto max-w-6xl px-4 py-6 pb-10">
+      <div className="w-full px-8 py-6 pb-10">
         <div className="mb-6 flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
           <div>
             <div className="text-2xl font-semibold">Discovery Run</div>
@@ -46,7 +44,6 @@ export default function DiscoveryRunPage() {
               Run ID: <span className="font-semibold text-text">{run.runId}</span>
             </div>
           </div>
-
           <div
             className={`inline-flex items-center gap-2 rounded-lg border px-3 py-2 text-sm ${
               run.status === 'COMPLETED'
@@ -63,7 +60,7 @@ export default function DiscoveryRunPage() {
           </div>
         </div>
 
-        <div className="grid grid-cols-1 gap-4 lg:grid-cols-[360px_1fr_360px]">
+        <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
           <PipelineStepper steps={run.steps} />
           <RunLogPanel events={events} autoScroll={autoScroll} onToggleAutoScroll={setAutoScroll} />
           <RunSummaryPanel
