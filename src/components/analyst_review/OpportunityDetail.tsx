@@ -1,5 +1,6 @@
 import React from 'react';
 import { OpportunityCandidate, ReviewAuditEvent } from '../../types/analystReview';
+import { ArrowRight } from 'lucide-react';
 
 export default function OpportunityDetail({
   opp,
@@ -25,10 +26,10 @@ export default function OpportunityDetail({
       <div className="flex items-center justify-between px-5 py-3 border-b border-border">
         <div className="text-base font-semibold text-text">{opp.title}</div>
         <button
-          onClick={onNavigate}
-          className="w-7 h-7 border border-border rounded-md flex items-center justify-center text-muted hover:bg-panel2 hover:text-text text-sm transition-colors"
+        onClick={onNavigate}
+        className="w-7 h-7 border border-border rounded-md flex items-center justify-center text-muted hover:bg-panel2 hover:text-text transition-colors"
         >
-          →
+        <ArrowRight size={14} />
         </button>
       </div>
 

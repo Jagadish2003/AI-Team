@@ -24,19 +24,19 @@ export default function AnalystReviewPage() {
     <div className="min-h-screen bg-bg text-text flex flex-col">
       <TopNav />
 
-      {/* Page title row */}
-      <div className="px-6 pt-5 pb-3">
+      {/* Page title — matches PartialResultsPage spacing */}
+      <div className="w-full px-8 py-6 pb-0">
         <div className="text-2xl font-semibold text-text">Analyst Review</div>
         <div className="mt-1 text-sm text-muted">
           Deep-dive trust layer: validate and override AI rationale per opportunity before executive reporting.
         </div>
       </div>
 
-      {/* 3-column grid — fills remaining viewport height */}
-      <div className="flex-1 px-4 pb-4 overflow-hidden">
+      {/* 3-column grid — matches px-8 gutter of PartialResultsPage */}
+      <div className="flex-1 px-8 py-6 pb-10 overflow-hidden">
         <div
-          className="grid h-full gap-4"
-          style={{ gridTemplateColumns: '300px 1fr 320px', height: 'calc(100vh - 130px)' }}
+          className="grid h-full gap-6"
+          style={{ gridTemplateColumns: '300px 1fr 320px', height: 'calc(100vh - 148px)' }}
         >
           <OpportunityList
             items={opportunities}
