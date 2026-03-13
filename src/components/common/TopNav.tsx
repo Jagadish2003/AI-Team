@@ -9,6 +9,7 @@ const items = [
   { to: '/normalization', label: 'Normalization' },
   { to: '/partial-results', label: 'Partial Results' },
   { to: '/analyst-review', label: 'Analyst Review' },
+  { to: '/opportunity-map', label: 'Opportunity Map' },
   { to: '/reports', label: 'Reports' }
 ];
 

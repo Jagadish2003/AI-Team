@@ -14,6 +14,7 @@ import DiscoveryRunPage from './pages/DiscoveryRunPage';
 import PartialResultsPage from './pages/PartialResultsPage';
 import NormalizationInspectorPage from './pages/NormalizationInspectorPage';
 import AnalystReviewPage from './pages/AnalystReviewPage';
+import OpportunityMapPage from './pages/OpportunityMapPage';
 
 export default function App() {
   return (
@@ -32,6 +33,7 @@ export default function App() {
                   <Route path="/partial-results" element={<PartialResultsPage />} />
                   <Route path="/normalization" element={<NormalizationInspectorPage />} />
                   <Route path="/analyst-review" element={<AnalystReviewPage />} />
+                  <Route path="/opportunity-map" element={<OpportunityMapPage />} />
                   <Route path="/reports" element={<div className="min-h-screen text-text p-6">Reports (placeholder)</div>} />
                   <Route path="*" element={<Navigate to="/integration-hub" replace />} />
                 </Routes>
