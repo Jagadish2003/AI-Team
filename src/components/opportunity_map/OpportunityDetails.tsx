@@ -62,8 +62,13 @@ export default function OpportunityDetails({
 
           <div className="mt-3 rounded-lg border border-border bg-bg/20 p-3">
             <div className="text-xs font-semibold text-text">Summary</div>
-            <div className="mt-2 text-sm text-text">{selected.aiRationale}</div>
-          </div>
+              <div
+                className="mt-2 text-sm text-text overflow-y-auto"
+                style={{ height: '3.75rem' }}
+              >
+                {selected.aiRationale}
+              </div>
+            </div>
 
           <div className="mt-3 grid grid-cols-2 gap-2">
             <button
