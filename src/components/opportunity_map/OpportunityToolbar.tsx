@@ -1,14 +1,97 @@
-import React from 'react';
-import { Search } from 'lucide-react';
+import React, { useState, useRef, useEffect } from 'react';
+import { Search, ChevronDown } from 'lucide-react';
 import { OpportunityTier } from '../../types/analystReview';
-
+ 
 export type TierFilter = 'All' | OpportunityTier;
 export type ConfidenceFilter = 'All' | 'LOW' | 'MEDIUM' | 'HIGH';
 export type DecisionFilter = 'All' | 'UNREVIEWED' | 'APPROVED' | 'REJECTED';
-
-const selectClass =
-  'w-full rounded-md border border-border bg-bg/50 px-3 py-2 text-sm text-text appearance-none hover:border-[#00B4B4]/50 transition-colors focus:outline-none focus:border-[#00B4B4] focus:ring-2 focus:ring-[#00B4B4]/50 cursor-pointer';
-
+ 
+function CustomDropdown<T extends string>({
+  options,
+  value,
+  onChange,
+  label,
+}: {
+  options: { value: T; label: string }[];
+  value: T;
+  onChange: (v: T) => void;
+  label: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+ 
+  useEffect(() => {
+    function handleClickOutside(e: MouseEvent) {
+      if (ref.current && !ref.current.contains(e.target as Node)) {
+        setOpen(false);
+      }
+    }
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+ 
+  const selectedLabel = options.find((o) => o.value === value)?.label ?? value;
+ 
+  return (
+    <div ref={ref} className="relative w-full">
+      <button
+        onClick={() => setOpen((o) => !o)}
+        className="w-full cursor-pointer whitespace-nowrap rounded-md border border-border bg-bg/50 px-3 py-2 text-sm text-text hover:border-[#00B4B4]/50 transition-colors focus:outline-none focus:border-[#00B4B4] focus:ring-2 focus:ring-[#00B4B4]/50"
+      >
+        <span className="flex items-center justify-between gap-2">
+          <span>{label}: {selectedLabel}</span>
+          <ChevronDown
+            size={14}
+            className={`text-muted transition-transform ${open ? 'rotate-180' : ''}`}
+          />
+        </span>
+      </button>
+ 
+      {open && (
+        <div className="absolute left-0 z-50 mt-1 w-full overflow-hidden rounded-lg border border-border bg-panel shadow-lg">
+          {options.map((opt) => (
+            <div
+              key={opt.value}
+              onClick={() => {
+                onChange(opt.value);
+                setOpen(false);
+              }}
+              className={`cursor-pointer px-4 py-2 text-sm transition-colors ${
+                opt.value === value
+                  ? 'bg-[#00B4B4] font-medium text-[#0d1117]'
+                  : 'text-text hover:bg-[#00B4B4]/15 hover:text-[#00B4B4]'
+              }`}
+            >
+              {opt.label}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+ 
+const tierOptions: { value: TierFilter; label: string }[] = [
+  { value: 'All', label: 'All' },
+  { value: 'Quick Win', label: 'Quick Win' },
+  { value: 'Strategic', label: 'Strategic' },
+  { value: 'Complex', label: 'Complex' },
+];
+ 
+const confOptions: { value: ConfidenceFilter; label: string }[] = [
+  { value: 'All', label: 'All' },
+  { value: 'HIGH', label: 'High' },
+  { value: 'MEDIUM', label: 'Medium' },
+  { value: 'LOW', label: 'Low' },
+];
+ 
+const decisionOptions: { value: DecisionFilter; label: string }[] = [
+  { value: 'All', label: 'All' },
+  { value: 'UNREVIEWED', label: 'Unreviewed' },
+  { value: 'APPROVED', label: 'Approved' },
+  { value: 'REJECTED', label: 'Rejected' },
+];
+ 
 export default function OpportunityToolbar({
   q, onQ,
   tier, onTier,
@@ -29,6 +112,7 @@ export default function OpportunityToolbar({
   return (
     <div className="mb-4 rounded-xl border border-border bg-panel p-3">
       <div className="grid grid-cols-1 gap-2 md:grid-cols-[1fr_200px_200px_200px]">
+ 
         {/* Search */}
         <div className="relative">
           <input
@@ -39,32 +123,37 @@ export default function OpportunityToolbar({
           />
           <Search className="absolute right-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted pointer-events-none" />
         </div>
-
-        <select className={selectClass} value={tier} onChange={e => onTier(e.target.value as TierFilter)}>
-          <option value="All">Tier: All</option>
-          <option value="Quick Win">Tier: Quick Win</option>
-          <option value="Strategic">Tier: Strategic</option>
-          <option value="Complex">Tier: Complex</option>
-        </select>
-
-        <select className={selectClass} value={conf} onChange={e => onConf(e.target.value as ConfidenceFilter)}>
-          <option value="All">Confidence: All</option>
-          <option value="HIGH">Confidence: High</option>
-          <option value="MEDIUM">Confidence: Medium</option>
-          <option value="LOW">Confidence: Low</option>
-        </select>
-
-        <select className={selectClass} value={decision} onChange={e => onDecision(e.target.value as DecisionFilter)}>
-          <option value="All">Decision: All</option>
-          <option value="UNREVIEWED">Decision: Unreviewed</option>
-          <option value="APPROVED">Decision: Approved</option>
-          <option value="REJECTED">Decision: Rejected</option>
-        </select>
+ 
+        {/* Tier */}
+        <CustomDropdown<TierFilter>
+          options={tierOptions}
+          value={tier}
+          onChange={onTier}
+          label="Tier"
+        />
+ 
+        {/* Confidence */}
+        <CustomDropdown<ConfidenceFilter>
+          options={confOptions}
+          value={conf}
+          onChange={onConf}
+          label="Confidence"
+        />
+ 
+        {/* Decision */}
+        <CustomDropdown<DecisionFilter>
+          options={decisionOptions}
+          value={decision}
+          onChange={onDecision}
+          label="Decision"
+        />
+ 
       </div>
-
+ 
       <div className="mt-2 text-xs text-muted">
         Showing <span className="font-semibold text-text">{totalShown}</span> opportunities.
       </div>
     </div>
   );
 }
+ 

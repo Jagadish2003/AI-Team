@@ -35,8 +35,6 @@ function DecisionBadge({ value }: { value: string }) {
   );
 }
 
-// DecisionIcon removed — no icon before title text
-
 export default function OpportunityList({
   items,
   selectedId,
@@ -90,9 +88,9 @@ export default function OpportunityList({
     All: 'All Tiers', 'Quick Win': 'Quick Win', Strategic: 'Strategic', Complex: 'Complex',
   };
   const sortLabels: Record<SortMode, string> = {
-    'Impact High→Low': 'Impact High→Low',
-    'Effort Low→High': 'Effort Low→High',
-    'Confidence High→Low': 'Confidence High→Low',
+    'Impact High→Low': 'Sort: Impact High→Low',
+    'Effort Low→High': 'Sort: Effort Low→High',
+    'Confidence High→Low': 'Sort: Confidence High→Low',
   };
 
   const dropdownBtn =

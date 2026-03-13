@@ -19,7 +19,7 @@ export default function TopQuickWins({
   return (
     <div className="rounded-xl border border-border bg-panel p-4">
       <div className="flex items-center justify-between">
-        <div className="text-sm font-semibold text-text">Top Quick Wins</div>
+        <div className="text-xl font-semibold text-text pb-2">Top Quick Wins</div>
         <div className="text-xs text-muted">Impact − Effort</div>
       </div>
 

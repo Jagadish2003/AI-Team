@@ -3,13 +3,26 @@ import { OpportunityCandidate } from '../../types/analystReview';
 
 function clamp(n: number, a: number, b: number) { return Math.max(a, Math.min(b, n)); }
 
+// SVG canvas constants — LEFT is wide enough for horizontal Y-axis labels
+const VW = 860;
+const VH = 620;
+const LEFT  = 110;
+const RIGHT = 20;
+const TOP   = 20;
+const BOT   = 30;
+
+const CX = LEFT + (VW - LEFT - RIGHT) / 2;
+const CY = TOP  + (VH - TOP  - BOT)  / 2;
+const RX = VW - RIGHT;
+const BY = VH - BOT;
+
 function buildPoints(filtered: OpportunityCandidate[]) {
-  const W = 640, H = 440, pad = 40;
-  const rScore = (o: OpportunityCandidate) => o.impact - o.effort;
+  const W = RX - LEFT;
+  const H = BY - TOP;
   return filtered.map(o => {
-    const x = pad + ((o.effort - 1) / 9) * (W - 2 * pad);
-    const y = (H - pad) - ((o.impact - 1) / 9) * (H - 2 * pad);
-    const r = clamp(8 + rScore(o) * 2, 6, 22);
+    const x = LEFT + ((o.effort - 1) / 9) * W;
+    const y = BY   - ((o.impact - 1) / 9) * H;
+    const r = clamp(10 + o.impact * 3, 12, 38);
     return { o, x, y, r };
   });
 }
@@ -28,33 +41,52 @@ export default function OpportunityMatrix({
 
   return (
     <div className="rounded-xl border border-border bg-panel p-4">
-      <div className="flex items-center justify-between">
-        <div className="text-sm font-semibold text-text">Effort vs Impact</div>
+      <div className="flex items-center justify-between mb-3">
+        <div className="text-xl font-semibold text-text pb-2">Effort vs Impact</div>
         <div className="text-xs text-muted">Click a bubble to preview details</div>
       </div>
 
-      <div className="mt-3 overflow-auto rounded-lg border border-border bg-bg/10 p-3">
-        <svg width="720" height="520" viewBox="0 0 720 520">
-          <rect x="40" y="40" width="640" height="440" fill="none" stroke="rgba(255,255,255,0.12)" />
-          <line x1="360" y1="40" x2="360" y2="480" stroke="rgba(255,255,255,0.10)" />
-          <line x1="40" y1="260" x2="680" y2="260" stroke="rgba(255,255,255,0.10)" />
+      <div className="rounded-lg border border-border bg-bg/10 overflow-hidden">
+        <svg viewBox={`0 0 ${VW} ${VH}`} width="100%" style={{ display: 'block' }}>
 
-          <text x="40"  y="505" fontSize="12" fill="rgba(255,255,255,0.60)">Low Effort</text>
-          <text x="640" y="505" fontSize="12" fill="rgba(255,255,255,0.60)">High Effort</text>
-          <text x="8"   y="260" transform="rotate(-90 8 260)" fontSize="12" fill="rgba(255,255,255,0.60)">Impact</text>
-          <text x="340" y="18"  fontSize="12" fill="rgba(255,255,255,0.60)">High Impact</text>
-          <text x="340" y="515" fontSize="12" fill="rgba(255,255,255,0.60)">Low Impact</text>
+          {/* Quadrant background fills */}
+          <rect x={LEFT} y={TOP}  width={CX - LEFT} height={CY - TOP}  fill="rgba(0,180,180,0.03)" />
+          <rect x={CX}   y={TOP}  width={RX - CX}   height={CY - TOP}  fill="rgba(255,255,255,0.01)" />
+          <rect x={LEFT} y={CY}   width={CX - LEFT} height={BY - CY}   fill="rgba(255,255,255,0.01)" />
+          <rect x={CX}   y={CY}   width={RX - CX}   height={BY - CY}   fill="rgba(255,255,255,0.01)" />
 
-          <text x="60"  y="70"  fontSize="12" fill="rgba(255,255,255,0.70)">QUICK WINS</text>
-          <text x="390" y="70"  fontSize="12" fill="rgba(255,255,255,0.70)">HIGH VALUE</text>
-          <text x="60"  y="450" fontSize="12" fill="rgba(255,255,255,0.55)">LOW HANGING FRUIT</text>
-          <text x="390" y="450" fontSize="12" fill="rgba(255,255,255,0.55)">LONG TERM</text>
+          {/* Outer border */}
+          <rect x={LEFT} y={TOP} width={RX - LEFT} height={BY - TOP}
+            fill="none" stroke="rgba(255,255,255,0.15)" strokeWidth="1" />
 
-          {points.map(p => {
+          {/* Quadrant dividers */}
+          <line x1={CX} y1={TOP} x2={CX} y2={BY} stroke="rgba(255,255,255,0.15)" strokeWidth="1" />
+          <line x1={LEFT} y1={CY} x2={RX} y2={CY} stroke="rgba(255,255,255,0.15)" strokeWidth="1" />
+
+          {/* Y-axis labels */}
+          <text x={LEFT - 8} y={TOP + 14}
+            fontSize="11" fill="rgba(255,255,255,0.50)" textAnchor="end">HIGH IMPACT</text>
+          <text x={LEFT - 8} y={BY - 6}
+            fontSize="11" fill="rgba(255,255,255,0.50)" textAnchor="end">LOW IMPACT</text>
+
+          {/* X-axis labels */}
+          <text x={LEFT} y={VH - 8} fontSize="11" fill="rgba(255,255,255,0.50)">LOW EFFORT</text>
+          <text x={RX}   y={VH - 8} fontSize="11" fill="rgba(255,255,255,0.50)" textAnchor="end">HIGH EFFORT</text>
+
+          {/* Bubbles only — no tooltip here */}
+          {[...points].sort((a, b) => b.r - a.r).map(p => {
             const isSelected = p.o.id === selectedId;
             const isHover    = p.o.id === hoverId;
-            const fill   = isSelected ? 'rgba(0,180,180,0.25)' : isHover ? 'rgba(255,255,255,0.12)' : 'rgba(255,255,255,0.07)';
-            const stroke = isSelected ? '#00B4B4'              : isHover ? 'rgba(255,255,255,0.40)' : 'rgba(255,255,255,0.20)';
+
+            const fill =
+              isSelected ? 'rgba(0,180,180,0.30)' :
+              isHover    ? 'rgba(255,255,255,0.12)' :
+                           'rgba(10,22,46,0.85)';
+            const stroke =
+              isSelected ? '#00B4B4' :
+              isHover    ? 'rgba(255,255,255,0.50)' :
+                           'rgb(90,110,145)';
+
             return (
               <g
                 key={p.o.id}
@@ -65,12 +97,55 @@ export default function OpportunityMatrix({
               >
                 <circle
                   cx={p.x} cy={p.y} r={p.r}
-                  fill={fill} stroke={stroke} strokeWidth={isSelected ? 2 : 1}
+                  fill={fill} stroke={stroke}
+                  strokeWidth={isSelected ? 2.5 : 1.5}
                   style={{ transition: 'fill 0.15s, stroke 0.15s' }}
                 />
               </g>
             );
           })}
+
+          {/* Quadrant labels — rendered after bubbles */}
+          {[
+            { x: LEFT + 14, y: TOP + 24, label: 'QUICK WINS',        fill: 'rgba(255,255,255,0.60)', w: 102 },
+            { x: CX + 14,   y: TOP + 24, label: 'HIGH VALUE',         fill: 'rgba(255,255,255,0.60)', w: 98  },
+            { x: LEFT + 14, y: CY + 24,  label: 'LOW HANGING FRUIT',  fill: 'rgba(255,255,255,0.40)', w: 162 },
+            { x: CX + 14,   y: CY + 24,  label: 'LONG TERM',          fill: 'rgba(255,255,255,0.40)', w: 94  },
+          ].map(({ x, y, label, fill, w }) => (
+            <g key={label} pointerEvents="none">
+              <rect
+                x={x - 6} y={y - 14}
+                width={w} height={20}
+                rx={3} fill="rgba(10,18,40,0.55)"
+              />
+              <text x={x} y={y}
+                fontSize="11" fontWeight="700" letterSpacing="1.2" fill={fill}>
+                {label}
+              </text>
+            </g>
+          ))}
+
+          {/* Tooltip labels — rendered LAST so always on top of everything */}
+          {points.map(p => {
+            const isSelected = p.o.id === selectedId;
+            const isHover    = p.o.id === hoverId;
+            if (!isHover && !isSelected) return null;
+            const title = p.o.title.length > 26 ? p.o.title.slice(0, 26) + '…' : p.o.title;
+            return (
+              <text
+                key={`label-${p.o.id}`}
+                x={p.x}
+                y={p.y - p.r - 7}
+                fontSize="10"
+                fill={isSelected ? '#00B4B4' : 'rgba(255,255,255,0.80)'}
+                textAnchor="middle"
+                pointerEvents="none"
+              >
+                {title}
+              </text>
+            );
+          })}
+
         </svg>
       </div>
 

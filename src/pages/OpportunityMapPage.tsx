@@ -78,7 +78,7 @@ export default function OpportunityMapPage() {
           totalShown={filtered.length}
         />
 
-        <div className="grid grid-cols-1 gap-4 lg:grid-cols-[1fr_360px]">
+        <div className="grid grid-cols-1 gap-4 lg:grid-cols-[1fr_490px] lg:items-start">
           {/* Left column */}
           <div className="space-y-4">
             <OpportunityMatrix
@@ -93,7 +93,7 @@ export default function OpportunityMapPage() {
           </div>
 
           {/* Right column */}
-          <div className="space-y-4">
+          <div className="flex flex-col gap-4">
             <OpportunityDetails
               selected={selected}
               onViewAnalysis={() => push('View Analysis will be linked in Screen 8/10 (future).')}

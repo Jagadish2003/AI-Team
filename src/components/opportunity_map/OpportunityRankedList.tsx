@@ -27,13 +27,12 @@ export default function OpportunityRankedList({
   onSelect: (id: string) => void;
 }) {
   return (
-    <div className="rounded-xl border border-border bg-panel p-4">
-      <div className="flex items-center justify-between">
-        <div className="text-sm font-semibold text-text">Opportunity List</div>
+    <div className="rounded-xl border border-border bg-panel p-4 flex flex-col">
+      <div className="flex items-center justify-between shrink-0">
+        <div className="text-xl font-semibold text-text pb-2">Opportunity List</div>
         <div className="text-xs text-muted">Ranked</div>
       </div>
-
-      <div className="mt-3 max-h-[420px] overflow-auto space-y-2">
+      <div className="mt-3 overflow-auto space-y-2 max-h-[647px]">
         {ranked.length === 0 ? (
           <div className="text-sm text-muted">No opportunities match the current filters.</div>
         ) : (
@@ -49,17 +48,18 @@ export default function OpportunityRankedList({
                     : 'border-border bg-bg/20 hover:bg-panel2 hover:border-[#00B4B4]/40'
                   }`}
               >
-                <div className="flex items-start justify-between gap-2">
-                  <div className="min-w-0">
-                    <div className="truncate text-sm font-semibold text-text">{o.title}</div>
-                    <div className="mt-1 text-xs text-muted">{o.category}</div>
-                  </div>
-                  <div className="flex flex-col items-end gap-1">
-                    {tierBadge(o.tier)}
-                    {confidenceBadge(o.confidence)}
-                  </div>
+
+                <div className="min-w-0">
+                  <div className="truncate text-sm font-semibold text-text">{o.title}</div>
+                  <div className="mt-1 text-xs text-muted">{o.category}</div>
                 </div>
-                <div className="mt-2 flex items-center justify-between text-xs text-muted">
+
+                {/* Badges row — tier left, confidence right */}
+                <div className="mt-2 flex items-center justify-between pb-2">
+                  {tierBadge(o.tier)}
+                  {confidenceBadge(o.confidence)}
+                </div>
+                <div className="mt-1 flex items-center justify-between text-xs text-muted">
                   <span>Impact {o.impact}/10</span>
                   <span>Effort {o.effort}/10</span>
                 </div>

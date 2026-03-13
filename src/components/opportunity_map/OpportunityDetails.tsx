@@ -36,21 +36,29 @@ export default function OpportunityDetails({
 }) {
   return (
     <div className="rounded-xl border border-border bg-panel p-4">
-      <div className="text-sm font-semibold text-text">Opportunity Details</div>
-
+      <div className="text-xl font-semibold text-text pb-2">Opportunity Details</div>
       {!selected ? (
         <div className="mt-3 text-sm text-muted">Select a bubble to preview details.</div>
       ) : (
         <>
           <div className="mt-3 text-sm font-semibold text-text">{selected.title}</div>
-
-          <div className="mt-2 flex flex-wrap items-center gap-2">
-            {tierBadge(selected.tier)}
-            {confidenceBadge(selected.confidence)}
-            {decisionBadge(selected.decision)}
-          </div>
-
           <div className="mt-2 text-xs text-muted">{selected.category}</div>
+
+          {/* Labeled badges */}
+          <div className="mt-3 space-y-2">
+            <div className="flex items-center gap-2">
+              <span className="w-20 text-xs text-muted">Tier :</span>
+              {tierBadge(selected.tier)}
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="w-20 text-xs text-muted">Confidence :</span>
+              {confidenceBadge(selected.confidence)}
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="w-20 text-xs text-muted">Status :</span>
+              {decisionBadge(selected.decision)}
+            </div>
+          </div>
 
           <div className="mt-3 rounded-lg border border-border bg-bg/20 p-3">
             <div className="text-xs font-semibold text-text">Summary</div>
