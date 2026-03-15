@@ -109,6 +109,7 @@ export default function IntegrationHubPage() {
         confidence={confidence}
         recommendedConnectedCount={recommendedConnectedCount}
         recommendedTotal={3}
+        recommended={recommended} 
         canStart={canStart}
         onStart={() => navigate('/discovery-run')}
         onUpload={() => navigate('/source-intake')}

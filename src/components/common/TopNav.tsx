@@ -42,32 +42,25 @@ export default function TopNav() {
                 >
                   {i.label}
                 </Link>
-                {/* Divider after every item except the last */}
                 {idx < items.length - 1 && (
                   <span className="h-4 w-px bg-muted/30" />
                 )}
               </React.Fragment>
             );
           })}
-
-          {/* Single divider before Administrator */}
           <span className="h-4 w-px bg-muted/30 mx-1" />
 
           <button
             className="flex cursor-pointer items-center gap-1 rounded-md px-2.5 py-1.5 font-medium text-muted transition-colors hover:bg-panel2 hover:text-text"
-            style={{ fontSize: '14px' }}
-          >
+            style={{ fontSize: '14px' }}>
             Administrator
             <ChevronDown size={14} strokeWidth={2.5} className="text-slate-400" />
           </button>
-
           <span className="h-4 w-px bg-muted/30 mx-1" />
-
           <div className="flex h-7 w-7 cursor-pointer items-center justify-center rounded-full transition-colors hover:bg-panel2 hover:text-text">
             <User className="h-4 w-4 text-slate-400" />
           </div>
         </div>
-
       </div>
     </div>
   );

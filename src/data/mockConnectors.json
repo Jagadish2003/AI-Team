@@ -31,7 +31,7 @@
       "category": "Delivery \u00b7 Knowledge",
       "tier": "recommended",
       "recommendedRank": 2,
-      "status": "connected",
+      "status": "not_connected",
       "metrics": [
         {
           "label": "Issues",
