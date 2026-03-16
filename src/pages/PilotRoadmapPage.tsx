@@ -22,7 +22,7 @@ export default function PilotRoadmapPage() {
   return (
     <div className="min-h-screen text-text">
       <TopNav />
-      <div className="mx-auto max-w-6xl px-4 py-6 pb-10">
+      <div className="w-full px-8 py-6 pb-10">
         <PilotRoadmapHeader
           onExport={() => push('Export will be wired in Screen 10 (stub).')}
         />
