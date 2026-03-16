@@ -1,11 +1,12 @@
 import React from 'react';
 import { RunStep } from '../../types/discoveryRun';
+import { Check, Play, AlertTriangle, Clock } from 'lucide-react';
 
 function icon(status: string) {
-  if (status === 'DONE') return '✓';
-  if (status === 'RUNNING') return '▶';
-  if (status === 'FAILED') return '!';
-  return '○';
+  if (status === 'DONE')    return <Check         size={14} strokeWidth={2.5} />;
+  if (status === 'RUNNING') return <Play          size={14} strokeWidth={2.5} />;
+  if (status === 'FAILED')  return <AlertTriangle size={14} strokeWidth={2.5} />;
+  return                           <Clock         size={14} strokeWidth={2} />;
 }
 
 export default function PipelineStepper({ steps }: { steps: RunStep[] }) {
