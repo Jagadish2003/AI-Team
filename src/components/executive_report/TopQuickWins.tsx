@@ -1,20 +1,20 @@
 import React from 'react';
 import { useNavigate } from 'react-router-dom';
-
-interface Opportunity {
-  id: string;
-  title: string;
-  category: string;
-  impact: number;
-  effort: number;
-}
+import { useAnalystReviewContext } from '../../context/AnalystReviewContext';
+import { OpportunityCandidate } from '../../types/analystReview';
 
 interface TopQuickWinsProps {
-  quickWins: Opportunity[];
+  quickWins: OpportunityCandidate[];
 }
 
 export default function TopQuickWins({ quickWins }: TopQuickWinsProps) {
   const nav = useNavigate();
+  const { select } = useAnalystReviewContext();
+
+  const handleOpenOpportunity = (id: string) => {
+    select(id); // persist selected opportunity in shared context
+    nav('/opportunity-map');
+  };
 
   return (
     <div className="rounded-xl border border-border bg-panel p-4">
@@ -24,7 +24,7 @@ export default function TopQuickWins({ quickWins }: TopQuickWinsProps) {
           <button
             key={o.id}
             className="w-full rounded-md border border-border bg-bg/20 px-3 py-2 text-left hover:bg-panel2"
-            onClick={() => nav('/opportunity-map')}
+            onClick={() => handleOpenOpportunity(o.id)}
           >
             <div className="text-sm font-semibold text-text">{o.title}</div>
             <div className="mt-1 text-xs text-muted">
@@ -33,7 +33,9 @@ export default function TopQuickWins({ quickWins }: TopQuickWinsProps) {
           </button>
         ))}
       </div>
-      <div className="mt-2 text-xs text-muted">Opens Opportunity Map (Screen 7).</div>
+      <div className="mt-2 text-xs text-muted">
+        Opens Opportunity Map and pre-selects the same opportunity.
+      </div>
     </div>
   );
 }
