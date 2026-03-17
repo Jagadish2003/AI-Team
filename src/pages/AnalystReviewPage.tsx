@@ -14,6 +14,8 @@ export default function AnalystReviewPage() {
     selected,
     setDecision,
     setOverrideText,
+    setOverrideReason,
+    saveOverride,
     toggleLock,
     audit,
   } = useAnalystReviewContext();
@@ -30,6 +32,7 @@ export default function AnalystReviewPage() {
           Deep-dive trust layer: validate and override AI rationale per opportunity before executive reporting.
         </div>
       </div>
+
       <div className="flex-1 px-8 pb-6 overflow-hidden">
         <div
           className="grid h-full gap-6"
@@ -44,6 +47,7 @@ export default function AnalystReviewPage() {
             onSelect={select}
             onCreate={() => push('Create Opportunity will be available in Sprint 2.')}
           />
+
           <OpportunityDetail
             opp={selected}
             audit={audit}
@@ -54,6 +58,13 @@ export default function AnalystReviewPage() {
             opp={selected}
             audit={audit}
             onOverrideText={setOverrideText}
+            onOverrideReason={setOverrideReason}
+            onSave={() => {
+              const r = saveOverride();
+              if (!r.ok) push(r.error ?? 'Unable to save override');
+              else push('Override saved.');
+            }}
+            onViewEvidence={() => push('Evidence panel will be linked in Screen 7.')}
             onLockToggle={() => { toggleLock(); push('Lock toggled.'); }}
             onDecision={(d) => {
               setDecision(d);

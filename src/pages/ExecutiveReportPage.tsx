@@ -10,16 +10,6 @@ import KeyInsights from '../components/executive_report/KeyInsights';
 import TopQuickWins from '../components/executive_report/TopQuickWins';
 import PilotRoadmapHighlights from '../components/executive_report/PilotRoadmapHighlights';
 
-const SNAPSHOT_BUBBLES = [
-  { x: 90, y: 55, r: 18 },
-  { x: 160, y: 75, r: 14 },
-  { x: 240, y: 45, r: 14 },
-  { x: 300, y: 85, r: 14 },
-  { x: 460, y: 50, r: 12 },
-  { x: 430, y: 150, r: 10 },
-  { x: 520, y: 140, r: 10 },
-];
-
 export default function ExecutiveReportPage() {
   const { push } = useToast();
   const { opportunities } = useAnalystReviewContext();
@@ -35,7 +25,7 @@ export default function ExecutiveReportPage() {
   const blockerCount = useMemo(() => {
     const required = roadmap.stages.flatMap(s => s.requiredPermissions).filter(p => p.required);
     const missing = required.filter(p => !p.satisfied);
-    const uniq = new Map();
+    const uniq = new Map<string, boolean>();
     for (const p of missing) uniq.set(p.label, true);
     return uniq.size;
   }, [roadmap]);
@@ -52,33 +42,28 @@ export default function ExecutiveReportPage() {
     <div className="min-h-screen text-text">
       <TopNav />
 
-      {/* ✅ SAME CONTAINER AS PILOT ROADMAP */}
       <div className="w-full px-8 py-6 pb-10">
-
-        {/* ✅ HEADER (MATCHED) */}
-        <div className="mb-4 flex items-center justify-between">
+        {/* Match PilotRoadmapHeader alignment */}
+        <div className="mb-3 flex items-start justify-between gap-3">
           <div>
-            <h1 className="text-2xl font-semibold">Executive Report</h1>
-            <p className="mt-1 text-sm text-muted">
+            <div className="text-2xl font-semibold">Executive Report</div>
+            <div className="mt-1 text-sm text-muted">
               Internal Demo Gate stub: exports are toasts; narrative is hardcoded.
-            </p>
+            </div>
           </div>
 
-          {/* 🔁 Same style as Pilot button */}
           <button
-            className="rounded-md bg-panel px-4 py-2 text-sm text-text hover:bg-panel2"
+            className="rounded-lg border border-border bg-panel2 px-4 py-2 text-sm font-medium text-text hover:bg-panel"
             onClick={() => push('Export Report (stub)')}
           >
             Export Report
           </button>
         </div>
 
-        {/* ✅ INFO BAR (MATCHES PILOT STYLE) */}
         <div className="mb-4 rounded-xl bg-panel px-4 py-3 text-sm text-muted">
           Overview of confidence, sources, and prioritized quick wins across the roadmap.
         </div>
 
-        {/* ✅ STAT CARDS */}
         <div className="grid grid-cols-1 gap-4 md:grid-cols-4">
           <StatCard title="Overall Confidence" value={roadmap.overallReadiness} />
           <StatCard title="Sources Analyzed" value={`${connectedCount} Connected`} />
@@ -86,16 +71,12 @@ export default function ExecutiveReportPage() {
           <StatCard title="Pilot Roadmap" value="30/60/90 Days" />
         </div>
 
-        {/* ✅ MAIN CONTENT */}
         <div className="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-[2fr_1fr]">
-
-          {/* LEFT SIDE */}
           <div className="space-y-4">
             <KeyInsights />
-            <SnapshotMatrix bubbles={SNAPSHOT_BUBBLES} />
+            <SnapshotMatrix opportunities={opportunities} />
           </div>
 
-          {/* RIGHT SIDE */}
           <div className="space-y-4">
             <TopQuickWins quickWins={quickWins} />
             <PilotRoadmapHighlights
@@ -104,9 +85,7 @@ export default function ExecutiveReportPage() {
               overallReadiness={roadmap.overallReadiness}
             />
           </div>
-
         </div>
-
       </div>
     </div>
   );
