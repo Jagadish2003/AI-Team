@@ -1,4 +1,4 @@
-import React, { useMemo } from 'react';
+import React, { useMemo, useRef } from 'react';
 import { ChevronLeft, ChevronRight } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import TopNav from '../components/common/TopNav';
@@ -15,18 +15,84 @@ export default function SourceIntakePage() {
   const { push } = useToast();
   const nav = useNavigate();
 
+  const singleFileInputRef = useRef<HTMLInputElement | null>(null);
+  const folderInputRef = useRef<HTMLInputElement | null>(null);
+
   const { connectors } = useConnectorContext();
-  const { uploadedFiles, sampleWorkspaceEnabled, addMockFile, removeFile, setSampleWorkspaceEnabled } =
-    useSourceIntakeContext();
+  const {
+    uploadedFiles,
+    sampleWorkspaceEnabled,
+    addMockFile,
+    addFilesFromSelection,
+    removeFile,
+    setSampleWorkspaceEnabled
+  } = useSourceIntakeContext();
 
   const connected = useMemo(() => connectors.filter((c) => c.status === 'connected'), [connectors]);
   const connectedNames = useMemo(() => connected.map((c) => c.name), [connected]);
 
   const canBegin = connected.length > 0 || uploadedFiles.length > 0 || sampleWorkspaceEnabled;
 
+  const handleSingleFileSelected = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const selected = Array.from(event.target.files ?? []);
+
+    if (selected.length === 0) return;
+
+    const firstFile = selected[0];
+    const { addedCount } = addFilesFromSelection([firstFile]);
+
+    if (addedCount > 0) {
+      push(`Added ${firstFile.name}.`);
+    } else {
+      push('Only CSV or Excel files are allowed.');
+    }
+
+    event.target.value = '';
+  };
+
+  const handleFolderSelected = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const selected = Array.from(event.target.files ?? []);
+
+    if (selected.length === 0) return;
+
+    const allAreValid = selected.every((file) => {
+      const lower = file.name.toLowerCase();
+      return lower.endsWith('.csv') || lower.endsWith('.xls') || lower.endsWith('.xlsx');
+    });
+
+    if (!allAreValid) {
+      push('Folder upload accepts only CSV or Excel files.');
+      event.target.value = '';
+      return;
+    }
+
+    const { addedCount } = addFilesFromSelection(selected);
+    push(`Added ${addedCount} file${addedCount === 1 ? '' : 's'} from folder.`);
+
+    event.target.value = '';
+  };
+
   return (
     <div className="min-h-screen text-text">
       <TopNav />
+
+      <input
+        ref={singleFileInputRef}
+        type="file"
+        accept=".csv,.xls,.xlsx"
+        className="hidden"
+        onChange={handleSingleFileSelected}
+      />
+
+      <input
+        ref={folderInputRef}
+        type="file"
+        accept=".csv,.xls,.xlsx"
+        multiple
+        className="hidden"
+        onChange={handleFolderSelected}
+        {...({ webkitdirectory: '', directory: '' } as React.InputHTMLAttributes<HTMLInputElement>)}
+      />
 
       <div className="w-full px-8 py-6 pb-28">
         <div className="mb-6">
@@ -40,7 +106,7 @@ export default function SourceIntakePage() {
         <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
           <UploadPanel
             files={uploadedFiles}
-            onBrowse={() => push('Browse upload is mocked for Sprint 1. Use "Add a mock file".')}
+            onBrowse={() => singleFileInputRef.current?.click()}
             onAddMock={() => {
               addMockFile();
               push('Added a mock upload file.');
@@ -49,7 +115,7 @@ export default function SourceIntakePage() {
               removeFile(id);
               push('Removed file.');
             }}
-            onUploadFolder={() => push('Folder upload available in Sprint 2 (mocked).')}
+            onUploadFolder={() => folderInputRef.current?.click()}
           />
 
           <ManagedAgentPanel
