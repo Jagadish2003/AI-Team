@@ -70,17 +70,11 @@ export default function AnalystReviewPage() {
               push('Lock toggled.');
             }}
             onDecision={(d) => {
-              const action = d === 'APPROVED' ? 'approve' : 'reject';
-              const confirmed = window.confirm(
-                `Are you sure you want to ${action} this opportunity? Once confirmed, the decision cannot be changed.`
-              );
-              if (!confirmed) return;
-
               const result = setDecision(d);
               if (!result.ok) {
                 push(
                   result.error === 'Decision finalized'
-                    ? 'Decision finalized. It can’t be changed now.'
+                    ? 'Decision finalized. It can\u2019t be changed now.'
                     : (result.error ?? 'Unable to update decision.')
                 );
               } else {
