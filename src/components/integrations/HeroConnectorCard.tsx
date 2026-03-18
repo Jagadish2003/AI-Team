@@ -31,15 +31,17 @@ export default function HeroConnectorCard({
       p-5 shadow-sm hover:border-accent/40 hover:bg-panel2
     `}
     >
-      <div className="flex min-w-0 items-start justify-between gap-3">
-        <div className="min-w-0">
+      <div className="flex min-w-0 items-center justify-between gap-2">
+        <div className="min-w-0 flex-1">
           <div className="flex min-w-0 items-center gap-2 text-base font-semibold text-text">
-            {connectorIcons[connector.name] || <Settings size={18} className="text-slate-500" />}
-            <span className="truncate">{connector.name}</span>
+            <span className="shrink-0">{connectorIcons[connector.name] || <Settings size={18} className="text-slate-500" />}</span>
+            <span className="min-w-0 break-words leading-tight">{connector.name}</span>
           </div>
           <div className="mt-1 truncate text-sm text-muted">{connector.category}</div>
         </div>
-        <Badge status={connector.status} />
+        <div className="shrink-0 self-start">
+          <Badge status={connector.status} />
+        </div>
       </div>
       <div className="mt-4 grid grid-cols-2 gap-4">
         {connector.metrics.slice(0, 2).map((m) => (

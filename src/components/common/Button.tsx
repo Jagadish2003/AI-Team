@@ -17,7 +17,7 @@ export default function Button({
   className?: string;
   title?: string;
 }) {
-  const base = 'inline-flex items-center justify-center rounded-md px-3 py-2 text-sm font-medium transition';
+  const base = 'inline-flex items-center justify-center whitespace-nowrap rounded-md px-3 py-2 text-sm font-medium transition';
   const variants: Record<Variant, string> = {
     primary: 'bg-accent text-bg hover:opacity-90 disabled:opacity-40',
     secondary: 'bg-panel2 text-text border border-border hover:bg-panel disabled:opacity-40',
