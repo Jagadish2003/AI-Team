@@ -9,22 +9,34 @@ export default function ReadySourcesSummary({
   fileCount: number;
   sampleEnabled: boolean;
 }) {
-  const connectedItems = connectedNames.length ? connectedNames.slice(0, 2) : [];
+  const connectedItems = connectedNames;  
   const fileItem = fileCount > 0 ? `${fileCount} files` : null;
   const sampleItem = sampleEnabled ? 'Sample workspace' : null;
 
-  const items = [...connectedItems, ...(fileItem ? [fileItem] : []), ...(sampleItem ? [sampleItem] : [])];
+  const items = [
+    ...connectedItems,
+    ...(fileItem ? [fileItem] : []),
+    ...(sampleItem ? [sampleItem] : [])
+  ];
 
-  const total = connectedNames.length + fileCount + (sampleEnabled ? 1 : 0);
+  const total =
+    connectedNames.length +
+    fileCount +
+    (sampleEnabled ? 3 : 0);
 
   return (
     <div className="rounded-xl border border-border bg-panel p-3 text-sm text-muted">
       <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
-        <span className="font-semibold text-text">Ready to discover from:</span>
+        <span className="font-semibold text-text">
+          Ready to discover from:
+        </span>
 
         {items.length ? (
           items.map((item, index) => (
-            <div key={`${item}-${index}`} className="flex items-start gap-2 text-sm text-muted">
+            <div
+              key={`${item}-${index}`}
+              className="flex items-start gap-2 text-sm text-muted"
+            >
               <span className="mt-[2px] shrink-0 text-muted">✓</span>
               <span>{item}</span>
             </div>
@@ -33,7 +45,9 @@ export default function ReadySourcesSummary({
           <span>No sources yet</span>
         )}
 
-        <span className="text-text">{total} sources total</span>
+        <span className="text-text font-semibold">
+          {total} sources total
+        </span>
       </div>
     </div>
   );
