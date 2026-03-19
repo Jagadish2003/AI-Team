@@ -1,0 +1,42 @@
+{
+  "src/data/mockConnectors.json": {
+    "endpoint": "GET /api/connectors",
+    "screen": "S1"
+  },
+  "src/data/mockConfidenceExplanation.json": {
+    "endpoint": "GET /api/confidence/explanation",
+    "screen": "S1"
+  },
+  "src/data/mockUploads.json": {
+    "endpoint": "GET /api/uploads",
+    "screen": "S2"
+  },
+  "src/data/mockDiscoveryRun.json": {
+    "endpoint": "GET /api/runs/{runId}",
+    "screen": "S3"
+  },
+  "src/data/mockRunEvents.json": {
+    "endpoint": "GET /api/runs/{runId}/events",
+    "screen": "S3"
+  },
+  "src/data/mockEvidence.json": {
+    "endpoint": "GET /api/runs/{runId}/evidence",
+    "screen": "S4"
+  },
+  "src/data/mockMappings.json": {
+    "endpoint": "GET /api/runs/{runId}/mappings",
+    "screen": "S5"
+  },
+  "src/data/mockPermissions.json": {
+    "endpoint": "GET /api/permissions",
+    "screen": "S5"
+  },
+  "src/data/mockOpportunities.json": {
+    "endpoint": "GET /api/runs/{runId}/opportunities",
+    "screen": "S6/S7"
+  },
+  "src/data/mockEntities.json": {
+    "endpoint": "GET /api/runs/{runId}/entities",
+    "screen": "S5/S4"
+  }
+}
