@@ -1,0 +1,20 @@
+[
+  {
+    "id": "up_001",
+    "name": "incident_data.csv",
+    "sizeLabel": "1.2 MB",
+    "uploadedLabel": "Just now"
+  },
+  {
+    "id": "up_002",
+    "name": "cmdb_records.xlsx",
+    "sizeLabel": "820 KB",
+    "uploadedLabel": "Just now"
+  },
+  {
+    "id": "up_003",
+    "name": "changelogs.csv",
+    "sizeLabel": "640 KB",
+    "uploadedLabel": "Just now"
+  }
+]

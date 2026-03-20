@@ -1,0 +1,14 @@
+[
+  {
+    "id": "ae_001",
+    "tsLabel": "2026-03-18T10:10:00Z",
+    "action": "OVERRIDE_SAVED",
+    "by": "System"
+  },
+  {
+    "id": "ae_002",
+    "tsLabel": "2026-03-18T10:11:30Z",
+    "action": "APPROVED",
+    "by": "Architect A"
+  }
+]

@@ -1,21 +1,23 @@
-# AgentIQ – Prototype UI (Screens 1–5)
+# Task 2 — Seed Dataset Pack
 
-Buildable React + TypeScript + Tailwind UI for:
-- Screen 1: Integration Hub
-- Screen 2: Source Intake
-- Screen 3: Discovery Run
-- Screen 4: Partial Results
-- Screen 5: Normalization & Mapping Inspector (Transparency)
+## Purpose
+Provide deterministic demo data for the backend. Frontend must never import seed data directly.
 
-## Run
+## One-command seed
 ```bash
-npm install
-npm run dev
+python backend/seed_loader.py
 ```
 
-Open:
-- http://localhost:5173/integration-hub
-- http://localhost:5173/source-intake
-- http://localhost:5173/discovery-run
-- http://localhost:5173/partial-results
-- http://localhost:5173/normalization
+Outputs:
+- backend/dev.db (SQLite) containing JSON payload tables
+
+## Edge cases included
+- One connector in `error` state (Databricks)
+- One evidence item `REJECTED`
+- One opportunity with required permission missing (Microsoft 365)
+
+## QA-critical opportunity values verified
+- opp_002.effort = 7
+- opp_005.effort = 7
+- opp_006.decision = APPROVED
+- opp_008.impact = 5, opp_008.effort = 2

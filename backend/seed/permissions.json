@@ -1,0 +1,37 @@
+[
+  {
+    "id": "p_sn_inc",
+    "label": "ServiceNow: read incidents",
+    "sourceSystem": "ServiceNow",
+    "satisfied": true,
+    "required": true
+  },
+  {
+    "id": "p_sn_cmdb",
+    "label": "ServiceNow: read CMDB",
+    "sourceSystem": "ServiceNow",
+    "satisfied": true,
+    "required": true
+  },
+  {
+    "id": "p_jira_iss",
+    "label": "Jira: read issues",
+    "sourceSystem": "Jira",
+    "satisfied": true,
+    "required": true
+  },
+  {
+    "id": "p_conf_pages",
+    "label": "Confluence: read pages",
+    "sourceSystem": "Jira",
+    "satisfied": false,
+    "required": false
+  },
+  {
+    "id": "p_m365_teams",
+    "label": "Microsoft 365: read Teams channel metadata",
+    "sourceSystem": "Microsoft 365",
+    "satisfied": false,
+    "required": true
+  }
+]

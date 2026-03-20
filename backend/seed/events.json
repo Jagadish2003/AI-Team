@@ -1,0 +1,68 @@
+[
+  {
+    "ts": "2026-03-18T10:12:02Z",
+    "level": "info",
+    "message": "Queued discovery run",
+    "stage": "QUEUE"
+  },
+  {
+    "ts": "2026-03-18T10:12:06Z",
+    "level": "info",
+    "message": "Ingesting connector metadata",
+    "stage": "INGEST"
+  },
+  {
+    "ts": "2026-03-18T10:12:12Z",
+    "level": "info",
+    "message": "Normalizing entities into common schema",
+    "stage": "NORMALIZE"
+  },
+  {
+    "ts": "2026-03-18T10:12:20Z",
+    "level": "info",
+    "message": "Extracting evidence candidates",
+    "stage": "EXTRACT"
+  },
+  {
+    "ts": "2026-03-18T10:12:28Z",
+    "level": "info",
+    "message": "Generating opportunity candidates",
+    "stage": "SCORE"
+  },
+  {
+    "ts": "2026-03-18T10:12:30Z",
+    "level": "info",
+    "message": "Linking evidence to entities",
+    "stage": "LINK"
+  },
+  {
+    "ts": "2026-03-18T10:12:36Z",
+    "level": "info",
+    "message": "Computing confidence signals",
+    "stage": "CONFIDENCE"
+  },
+  {
+    "ts": "2026-03-18T10:12:42Z",
+    "level": "info",
+    "message": "Scoring opportunities by effort vs impact",
+    "stage": "SCORE"
+  },
+  {
+    "ts": "2026-03-18T10:12:48Z",
+    "level": "info",
+    "message": "Building pilot roadmap (30/60/90)",
+    "stage": "ROADMAP"
+  },
+  {
+    "ts": "2026-03-18T10:12:54Z",
+    "level": "info",
+    "message": "Generating executive report payload",
+    "stage": "REPORT"
+  },
+  {
+    "ts": "2026-03-18T10:12:58Z",
+    "level": "info",
+    "message": "Run complete (demo)",
+    "stage": "DONE"
+  }
+]
