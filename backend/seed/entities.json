@@ -1,0 +1,44 @@
+[
+  {
+    "id": "ent_app_sn",
+    "name": "ServiceNow",
+    "type": "Application",
+    "mentionCount": 72,
+    "confidence": "HIGH"
+  },
+  {
+    "id": "ent_app_jira",
+    "name": "Jira",
+    "type": "Application",
+    "mentionCount": 61,
+    "confidence": "HIGH"
+  },
+  {
+    "id": "ent_work_inc",
+    "name": "Incident-to-Resolution",
+    "type": "Workflow",
+    "mentionCount": 38,
+    "confidence": "HIGH"
+  },
+  {
+    "id": "ent_role_l2",
+    "name": "Support L2",
+    "type": "Role",
+    "mentionCount": 24,
+    "confidence": "MEDIUM"
+  },
+  {
+    "id": "ent_role_l3",
+    "name": "Support L3",
+    "type": "Role",
+    "mentionCount": 18,
+    "confidence": "MEDIUM"
+  },
+  {
+    "id": "ent_obj_change",
+    "name": "Change Request",
+    "type": "DataObject",
+    "mentionCount": 21,
+    "confidence": "MEDIUM"
+  }
+]

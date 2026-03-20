@@ -1,0 +1,57 @@
+[
+  {
+    "id": "ev1",
+    "source": "ServiceNow",
+    "title": "Incident bounce loop (L2\u2192L3\u2192L2)",
+    "snippet": "Incident INC-10492 reassigned 5 times before resolution.",
+    "decision": "UNREVIEWED",
+    "confidence": "HIGH",
+    "tsLabel": "18 Mar 2026, 10:14",
+    "evidenceType": "Ticket",
+    "entities": [
+      "ent_app_sn",
+      "ent_work_inc"
+    ]
+  },
+  {
+    "id": "ev2",
+    "source": "Jira",
+    "title": "Ticket wait on approval",
+    "snippet": "Issue DEV-883 blocked 3 days waiting for change approval.",
+    "decision": "UNREVIEWED",
+    "confidence": "MEDIUM",
+    "tsLabel": "18 Mar 2026, 10:15",
+    "evidenceType": "Ticket",
+    "entities": [
+      "ent_app_jira",
+      "ent_obj_change"
+    ]
+  },
+  {
+    "id": "ev3",
+    "source": "ServiceNow",
+    "title": "Rejected: low-signal duplicate",
+    "snippet": "Multiple identical updates with no action outcome.",
+    "decision": "REJECTED",
+    "confidence": "LOW",
+    "tsLabel": "18 Mar 2026, 10:16",
+    "evidenceType": "Ticket",
+    "entities": [
+      "ent_app_sn",
+      "ent_work_inc"
+    ]
+  },
+  {
+    "id": "ev4",
+    "source": "Confluence",
+    "title": "Runbook mismatch",
+    "snippet": "Runbook step names differ across teams for same workflow.",
+    "decision": "UNREVIEWED",
+    "confidence": "MEDIUM",
+    "tsLabel": "18 Mar 2026, 10:17",
+    "evidenceType": "Document",
+    "entities": [
+      "ent_work_inc"
+    ]
+  }
+]
