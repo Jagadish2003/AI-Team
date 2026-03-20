@@ -4,12 +4,14 @@ One command populates a local SQLite database with deterministic demo data.
 This intentionally stores payloads as JSON blobs so Layer-1 API can return
 contract shapes immediately, even before full relational modeling exists.
 
-Usage:
-  python backend/seed_loader.py
+Usage (from anywhere):
+  python backend/seed_loader.py      # from project root
+  python seed_loader.py              # from backend/
+  cd backend && python seed_loader.py
 
-Environment:
+Environment overrides (optional):
   SEED_DIR=backend/seed
-  DB_PATH=backend/dev.db   (SQLite file path)
+  DB_PATH=backend/dev.db
 """
 
 import json
@@ -17,8 +19,11 @@ import os
 import sqlite3
 from pathlib import Path
 
-SEED_DIR = Path(os.getenv("SEED_DIR", "backend/seed"))
-DB_PATH = Path(os.getenv("DB_PATH", "backend/dev.db"))
+# Resolve paths relative to THIS script's location, not the working directory.
+_SCRIPT_DIR = Path(__file__).resolve().parent
+
+SEED_DIR = Path(os.getenv("SEED_DIR", _SCRIPT_DIR / "seed"))
+DB_PATH = Path(os.getenv("DB_PATH", _SCRIPT_DIR / "dev.db"))
 
 TABLES = [
   "connectors", "uploads", "runs", "run_events", "evidence", "entities",
@@ -139,12 +144,12 @@ def main():
   stage90_count = len(complex_unreviewed[:1] + complex_approved[:1])
   assert stage90_count >= 1, "Stage 90 would be empty: need at least one Complex opportunity UNREVIEWED or APPROVED"
 
-
   print("✅ Seed load complete:", DB_PATH)
   print("✅ Verified QA-critical opportunity values.")
   conn_count = len(load_file(FILES["connectors"]))
   upload_count = len(load_file(FILES["uploads"]))
   opp_count = len(opps)
-    
+  print(f"   {conn_count} connectors | {upload_count} uploads | {opp_count} opportunities")
+
 if __name__ == "__main__":
   main()
