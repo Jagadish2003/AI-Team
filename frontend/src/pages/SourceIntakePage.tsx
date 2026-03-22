@@ -1,8 +1,7 @@
-import React, { useMemo, useRef, useState } from 'react';
+import React, { useMemo, useRef } from 'react';
 import { ChevronLeft, ChevronRight } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import TopNav from '../components/common/TopNav';
-import ConfirmModal from '../components/common/ConfirmModal';
 import UploadPanel from '../components/source_intake/UploadPanel';
 import ManagedAgentPanel from '../components/source_intake/ManagedAgentPanel';
 import SampleWorkspacePanel from '../components/source_intake/SampleWorkspacePanel';
@@ -50,11 +49,10 @@ const canBegin =
     const selected = Array.from(event.target.files ?? []);
     if (selected.length === 0) return;
 
-    const firstFile = selected[0];
-    const { addedCount } = addFilesFromSelection([firstFile]);
+    const { addedCount } = addFilesFromSelection(selected);
 
     if (addedCount > 0) {
-      push(`Added ${firstFile.name}.`);
+      push(`Added ${addedCount} file${addedCount === 1 ? '' : 's'}.`);
     } else {
       push('Only CSV or Excel files are allowed.');
     }
@@ -62,31 +60,9 @@ const canBegin =
     event.target.value = '';
   };
 
-  const [folderConfirm, setFolderConfirm] = useState<{ folderName: string; files: File[] } | null>(null);
-
   const isValidFile = (file: File) => {
     const lower = file.name.toLowerCase();
     return lower.endsWith('.csv') || lower.endsWith('.xls') || lower.endsWith('.xlsx');
-  };
-
-  const handleFolderUpload = async () => {
-    try {
-      const dirHandle = await (window as any).showDirectoryPicker();
-      const files: File[] = [];
-      for await (const entry of dirHandle.values()) {
-        if (entry.kind === 'file') {
-          const file = await (entry as any).getFile();
-          if (isValidFile(file)) files.push(file);
-        }
-      }
-      if (files.length === 0) {
-        push('No CSV or Excel files found in the selected folder.');
-        return;
-      }
-      setFolderConfirm({ folderName: dirHandle.name, files });
-    } catch (err: any) {
-      if (err?.name !== 'AbortError') push('Folder upload failed.');
-    }
   };
 
   const handleDrop = (files: File[]) => {
@@ -108,24 +84,12 @@ const canBegin =
         ref={singleFileInputRef}
         type="file"
         accept=".csv,.xls,.xlsx"
+        multiple
         className="hidden"
         onChange={handleSingleFileSelected}
       />
 
-      <ConfirmModal
-        isOpen={folderConfirm !== null}
-        title={`Are you sure you want to upload folder "${folderConfirm?.folderName}"`}
-        message=""
-        confirmLabel="Upload"
-        onConfirm={() => {
-          const { addedCount } = addFilesFromSelection(folderConfirm!.files);
-          push(`Added ${addedCount} file${addedCount === 1 ? '' : 's'} from folder.`);
-          setFolderConfirm(null);
-        }}
-        onCancel={() => setFolderConfirm(null)}
-      />
-
-      <div className="w-full px-8 py-6 pb-28">
+<div className="w-full px-8 py-6 pb-28">
         {/* Header */}
         <div className="mb-6">
           <div className="text-2xl font-semibold">Source Intake</div>
@@ -148,8 +112,7 @@ const canBegin =
               removeFile(id);
               push('Removed file.');
             }}
-            onUploadFolder={handleFolderUpload}
-          onDrop={handleDrop}
+            onDrop={handleDrop}
           />
 
           <ManagedAgentPanel
