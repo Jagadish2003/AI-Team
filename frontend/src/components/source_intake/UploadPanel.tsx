@@ -1,5 +1,5 @@
 import React from 'react';
-import { Upload, FileText, FolderPlus, CirclePlus } from 'lucide-react';
+import { Upload, FileText, CirclePlus } from 'lucide-react';
 import { UploadedFile } from '../../types/upload';
 
 export default function UploadPanel({
@@ -7,14 +7,12 @@ export default function UploadPanel({
   onBrowse,
   onAddMock,
   onRemove,
-  onUploadFolder,
   onDrop
 }: {
   files: UploadedFile[];
   onBrowse: () => void;
   onAddMock: () => void;
   onRemove: (id: string) => void;
-  onUploadFolder: () => void;
   onDrop: (files: File[]) => void;
 }) {
   const handleDragOver = (e: React.DragEvent) => {
@@ -52,7 +50,7 @@ export default function UploadPanel({
   };
 
   return (
-    <div className="w-full max-w-md rounded-xl border border-border bg-panel p-6">
+    <div className="w-full max-w-md rounded-xl border border-border bg-panel p-6 flex flex-col">
       <h2 className="mb-5 text-xl font-semibold text-text">Upload Your Files</h2>
 
       <div
@@ -119,17 +117,11 @@ export default function UploadPanel({
         </div>
       </div>
 
-      <button
-        onClick={onUploadFolder}
-        className="mt-5 flex w-full items-center justify-center gap-2 rounded-md border border-border bg-bg/20 py-2.5 text-sm text-text transition-colors hover:bg-panel/40"
-      >
-        <FolderPlus size={16} />
-        Upload a folder of CSV/Excel files
-      </button>
-
-      <p className="mt-4 text-[10px] leading-tight text-muted/60">
-        Begin Discovery enabled when ≥1 source connected or ≥1 file uploaded.
-      </p>
+      <div className="flex flex-1 min-h-[90px] items-center justify-center">
+        <p className="text-center text-[10px] leading-tight text-muted/60">
+          Begin Discovery enabled when ≥1 source connected or ≥1 file uploaded.
+        </p>
+      </div>
     </div>
   );
 }

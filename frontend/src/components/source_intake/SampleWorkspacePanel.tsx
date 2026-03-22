@@ -12,7 +12,7 @@ export default function SampleWorkspacePanel({
   onLearnMore: () => void;
 }) {
   return (
-    <div className="w-full max-w-md rounded-xl border border-border bg-panel p-6">
+    <div className="w-full max-w-md rounded-xl border border-border bg-panel p-6 flex flex-col">
       <div className="mb-5">
         <h2 className="mb-1 text-xl font-semibold text-text">Start Fresh</h2>
         <p className="text-xs leading-relaxed text-muted">
@@ -62,9 +62,11 @@ export default function SampleWorkspacePanel({
         </button>
       </div>
 
-      <p className="mt-4 text-[10px] leading-tight text-muted/60">
-        Sample data is isolated and can be removed at any time from your settings.
-      </p>
+      <div className="flex flex-1 items-center justify-center">
+        <p className="text-center text-[10px] leading-tight text-muted/60">
+          Sample data is isolated and can be removed at any time from your settings.
+        </p>
+      </div>
     </div>
   );
 }
