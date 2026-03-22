@@ -7,21 +7,61 @@ export default function UploadPanel({
   onBrowse,
   onAddMock,
   onRemove,
-  onUploadFolder
+  onUploadFolder,
+  onDrop
 }: {
   files: UploadedFile[];
   onBrowse: () => void;
   onAddMock: () => void;
   onRemove: (id: string) => void;
   onUploadFolder: () => void;
+  onDrop: (files: File[]) => void;
 }) {
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+  };
+
+  const handleDrop = async (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const collected: File[] = [];
+    const readEntry = (entry: any): Promise<void> => {
+      if (entry.isFile) {
+        return new Promise((resolve) => {
+          entry.file((file: File) => { collected.push(file); resolve(); });
+        });
+      }
+      if (entry.isDirectory) {
+        return new Promise((resolve) => {
+          const reader = entry.createReader();
+          reader.readEntries(async (entries: any[]) => {
+            for (const child of entries) await readEntry(child);
+            resolve();
+          });
+        });
+      }
+      return Promise.resolve();
+    };
+    const items = Array.from(e.dataTransfer.items);
+    for (const item of items) {
+      const entry = item.webkitGetAsEntry?.();
+      if (entry) await readEntry(entry);
+    }
+    if (collected.length > 0) onDrop(collected);
+  };
+
   return (
     <div className="w-full max-w-md rounded-xl border border-border bg-panel p-6">
       <h2 className="mb-5 text-xl font-semibold text-text">Upload Your Files</h2>
 
-      <div className="mb-5 flex flex-col items-center rounded-lg border border-dashed border-border bg-bg/20 px-6 py-10 text-center">
+      <div
+        className="mb-5 flex flex-col items-center rounded-lg border border-dashed border-border bg-bg/20 px-6 py-10 text-center"
+        onDragOver={handleDragOver}
+        onDrop={handleDrop}
+      >
         <Upload className="mb-4 text-muted/60" size={32} />
-        <div className="mb-4 text-sm text-text">Drag & drop files here</div>
+        <div className="mb-4 text-sm text-text">Drag & drop files or folders here</div>
 
         <div className="flex flex-wrap justify-center gap-2">
           <button

@@ -1,0 +1,264 @@
+[
+  {
+    "id": "opp_001",
+    "title": "Incident Router Agent",
+    "category": "ITSM Routing",
+    "impact": 8,
+    "effort": 3,
+    "confidence": "HIGH",
+    "tier": "Quick Win",
+    "decision": "UNREVIEWED",
+    "evidenceIds": [
+      "ev1"
+    ],
+    "permissions": [
+      {
+        "id": "p_sn_inc",
+        "label": "ServiceNow: read incidents",
+        "sourceSystem": "ServiceNow",
+        "satisfied": true,
+        "required": true
+      },
+      {
+        "id": "p_sn_cmdb",
+        "label": "ServiceNow: read CMDB",
+        "sourceSystem": "ServiceNow",
+        "satisfied": true,
+        "required": true
+      }
+    ],
+    "aiRationale": "Auto-route incidents based on pattern + ownership rules to reduce bounce.",
+    "override": {
+      "isLocked": false,
+      "rationaleOverride": "",
+      "overrideReason": "",
+      "updatedAt": null
+    }
+  },
+  {
+    "id": "opp_002",
+    "title": "Change Approval Copilot",
+    "category": "Change Control",
+    "impact": 7,
+    "effort": 7,
+    "confidence": "MEDIUM",
+    "tier": "Strategic",
+    "decision": "UNREVIEWED",
+    "evidenceIds": [
+      "ev2",
+      "ev4"
+    ],
+    "permissions": [
+      {
+        "id": "p_jira_iss",
+        "label": "Jira: read issues",
+        "sourceSystem": "Jira",
+        "satisfied": true,
+        "required": true
+      },
+      {
+        "id": "p_conf_pages",
+        "label": "Confluence: read pages",
+        "sourceSystem": "Jira",
+        "satisfied": false,
+        "required": false
+      }
+    ],
+    "aiRationale": "Summarize changes and recommend approval steps from Jira/Confluence context.",
+    "override": {
+      "isLocked": false,
+      "rationaleOverride": "",
+      "overrideReason": "",
+      "updatedAt": null
+    }
+  },
+  {
+    "id": "opp_005",
+    "title": "Cross-Team Handoff Digest",
+    "category": "Delivery Coordination",
+    "impact": 6,
+    "effort": 7,
+    "confidence": "MEDIUM",
+    "tier": "Strategic",
+    "decision": "UNREVIEWED",
+    "evidenceIds": [
+      "ev2"
+    ],
+    "permissions": [
+      {
+        "id": "p_jira_iss",
+        "label": "Jira: read issues",
+        "sourceSystem": "Jira",
+        "satisfied": true,
+        "required": true
+      },
+      {
+        "id": "p_conf_pages",
+        "label": "Confluence: read pages",
+        "sourceSystem": "Jira",
+        "satisfied": false,
+        "required": false
+      }
+    ],
+    "aiRationale": "Daily digest of blockers + handoffs across Jira issues and change requests.",
+    "override": {
+      "isLocked": false,
+      "rationaleOverride": "",
+      "overrideReason": "",
+      "updatedAt": null
+    }
+  },
+  {
+    "id": "opp_006",
+    "title": "Shift Handover Summary Agent",
+    "category": "Operations",
+    "impact": 8,
+    "effort": 7,
+    "confidence": "MEDIUM",
+    "tier": "Strategic",
+    "decision": "APPROVED",
+    "evidenceIds": [
+      "ev4"
+    ],
+    "permissions": [
+      {
+        "id": "p_m365_teams",
+        "label": "Microsoft 365: read Teams channel metadata",
+        "sourceSystem": "Microsoft 365",
+        "satisfied": false,
+        "required": true
+      }
+    ],
+    "aiRationale": "Summarize shift handover updates and surface risks + missing context.",
+    "override": {
+      "isLocked": false,
+      "rationaleOverride": "",
+      "overrideReason": "",
+      "updatedAt": null
+    }
+  },
+  {
+    "id": "opp_007",
+    "title": "CMDB Drift Detector",
+    "category": "ITSM Hygiene",
+    "impact": 6,
+    "effort": 2,
+    "confidence": "HIGH",
+    "tier": "Quick Win",
+    "decision": "UNREVIEWED",
+    "evidenceIds": [
+      "ev1"
+    ],
+    "permissions": [
+      {
+        "id": "p_sn_cmdb",
+        "label": "ServiceNow: read CMDB",
+        "sourceSystem": "ServiceNow",
+        "satisfied": true,
+        "required": true
+      }
+    ],
+    "aiRationale": "Detect CMDB inconsistencies and propose corrections.",
+    "override": {
+      "isLocked": false,
+      "rationaleOverride": "",
+      "overrideReason": "",
+      "updatedAt": null
+    }
+  },
+  {
+    "id": "opp_008",
+    "title": "Priority Triage Assistant",
+    "category": "ITSM Triage",
+    "impact": 5,
+    "effort": 2,
+    "confidence": "MEDIUM",
+    "tier": "Quick Win",
+    "decision": "UNREVIEWED",
+    "evidenceIds": [
+      "ev1"
+    ],
+    "permissions": [
+      {
+        "id": "p_sn_inc",
+        "label": "ServiceNow: read incidents",
+        "sourceSystem": "ServiceNow",
+        "satisfied": true,
+        "required": true
+      }
+    ],
+    "aiRationale": "Suggest priority and next action using incident metadata.",
+    "override": {
+      "isLocked": false,
+      "rationaleOverride": "",
+      "overrideReason": "",
+      "updatedAt": null
+    }
+  },
+  {
+    "id": "opp_009",
+    "title": "Data Platform Run Guard",
+    "category": "Data Reliability",
+    "impact": 7,
+    "effort": 8,
+    "confidence": "LOW",
+    "tier": "Complex",
+    "decision": "REJECTED",
+    "evidenceIds": [
+      "ev3"
+    ],
+    "permissions": [
+      {
+        "id": "p_db_jobs",
+        "label": "Databricks: read job runs",
+        "sourceSystem": "Databricks",
+        "satisfied": false,
+        "required": true
+      }
+    ],
+    "aiRationale": "Detect failed job runs and orchestrate recovery steps.",
+    "override": {
+      "isLocked": false,
+      "rationaleOverride": "",
+      "overrideReason": "",
+      "updatedAt": null
+    }
+  },
+  {
+    "id": "opp_010",
+    "title": "Automated Compliance Audit Trail Generation",
+    "category": "Compliance Automation",
+    "impact": 9,
+    "effort": 8,
+    "confidence": "LOW",
+    "tier": "Complex",
+    "decision": "UNREVIEWED",
+    "aiRationale": "Generate audit-ready trails and compliance evidence packs automatically from change events, approvals, and ticket metadata.",
+    "evidenceIds": [
+      "ev2",
+      "ev4"
+    ],
+    "permissions": [
+      {
+        "id": "p_audit_log",
+        "label": "ServiceNow: read change audit logs",
+        "sourceSystem": "ServiceNow",
+        "satisfied": true,
+        "required": true
+      },
+      {
+        "id": "p_jira_hist",
+        "label": "Jira: read issue change history",
+        "sourceSystem": "Jira",
+        "satisfied": true,
+        "required": true
+      }
+    ],
+    "override": {
+      "isLocked": false,
+      "rationaleOverride": "",
+      "overrideReason": "",
+      "updatedAt": null
+    }
+  }
+]

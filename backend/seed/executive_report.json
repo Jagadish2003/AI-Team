@@ -1,0 +1,128 @@
+{
+  "confidence": "Moderate",
+  "sourcesAnalyzed": {
+    "recommendedConnected": 2,
+    "totalConnected": 5
+  },
+  "topQuickWins": [
+    {
+      "id": "opp_001",
+      "title": "Incident Router Agent",
+      "category": "ITSM Routing",
+      "impact": 8,
+      "effort": 3,
+      "confidence": "High",
+      "tier": "Quick Win",
+      "decision": "UNREVIEWED",
+      "rationale": "Auto-route incidents based on pattern + ownership rules to reduce bounce.",
+      "evidenceIds": [
+        "ev1"
+      ],
+      "permissions": [
+        {
+          "id": "p_sn_inc",
+          "label": "ServiceNow: read incidents",
+          "sourceSystem": "ServiceNow",
+          "satisfied": true,
+          "required": true
+        },
+        {
+          "id": "p_sn_cmdb",
+          "label": "ServiceNow: read CMDB",
+          "sourceSystem": "ServiceNow",
+          "satisfied": true,
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "opp_008",
+      "title": "Priority Triage Assistant",
+      "category": "ITSM Triage",
+      "impact": 5,
+      "effort": 2,
+      "confidence": "Medium",
+      "tier": "Quick Win",
+      "decision": "UNREVIEWED",
+      "rationale": "Suggest priority and next action using incident metadata.",
+      "evidenceIds": [
+        "ev1"
+      ],
+      "permissions": [
+        {
+          "id": "p_sn_inc",
+          "label": "ServiceNow: read incidents",
+          "sourceSystem": "ServiceNow",
+          "satisfied": true,
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "opp_007",
+      "title": "CMDB Drift Detector",
+      "category": "ITSM Hygiene",
+      "impact": 6,
+      "effort": 2,
+      "confidence": "High",
+      "tier": "Quick Win",
+      "decision": "UNREVIEWED",
+      "rationale": "Detect CMDB inconsistencies and propose corrections.",
+      "evidenceIds": [
+        "ev1"
+      ],
+      "permissions": [
+        {
+          "id": "p_sn_cmdb",
+          "label": "ServiceNow: read CMDB",
+          "sourceSystem": "ServiceNow",
+          "satisfied": true,
+          "required": true
+        }
+      ]
+    }
+  ],
+  "snapshotBubbles": [
+    {
+      "x": 90,
+      "y": 55,
+      "r": 18
+    },
+    {
+      "x": 160,
+      "y": 75,
+      "r": 14
+    },
+    {
+      "x": 240,
+      "y": 45,
+      "r": 14
+    },
+    {
+      "x": 300,
+      "y": 85,
+      "r": 14
+    },
+    {
+      "x": 460,
+      "y": 50,
+      "r": 12
+    },
+    {
+      "x": 430,
+      "y": 150,
+      "r": 10
+    },
+    {
+      "x": 520,
+      "y": 140,
+      "r": 10
+    }
+  ],
+  "roadmapHighlights": {
+    "next30Count": 3,
+    "next60Count": 3,
+    "next90Count": 1,
+    "blockerCount": 2
+  }
+}

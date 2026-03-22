@@ -1,0 +1,172 @@
+[
+  {
+    "id": "map1",
+    "sourceSystem": "ServiceNow",
+    "sourceField": "incident.number",
+    "sourceType": "string",
+    "commonField": "ticket.id",
+    "status": "MAPPED",
+    "confidence": "HIGH",
+    "commonEntity": "Ticket"
+  },
+  {
+    "id": "map2",
+    "sourceSystem": "ServiceNow",
+    "sourceField": "incident.assigned_to",
+    "sourceType": "reference",
+    "commonField": "ticket.owner",
+    "status": "MAPPED",
+    "confidence": "MEDIUM",
+    "commonEntity": "Ticket"
+  },
+  {
+    "id": "map3",
+    "sourceSystem": "Jira",
+    "sourceField": "issue.status",
+    "sourceType": "string",
+    "commonField": "ticket.status",
+    "status": "MAPPED",
+    "confidence": "HIGH",
+    "commonEntity": "Ticket"
+  },
+  {
+    "id": "map4",
+    "sourceSystem": "Jira",
+    "sourceField": "issue.approvals",
+    "sourceType": "array",
+    "commonField": "ticket.approvals",
+    "status": "AMBIGUOUS",
+    "confidence": "MEDIUM",
+    "commonEntity": "Ticket"
+  },
+  {
+    "id": "map5",
+    "sourceSystem": "Databricks",
+    "sourceField": "job_run.state",
+    "sourceType": "string",
+    "commonField": "pipeline.runStatus",
+    "status": "UNMAPPED",
+    "confidence": "LOW",
+    "commonEntity": "Pipeline"
+  },
+  {
+    "id": "map6",
+    "sourceSystem": "ServiceNow",
+    "sourceField": "field_6",
+    "sourceType": "string",
+    "commonField": "common_6",
+    "status": "MAPPED",
+    "confidence": "HIGH",
+    "commonEntity": "Ticket"
+  },
+  {
+    "id": "map7",
+    "sourceSystem": "Jira",
+    "sourceField": "field_7",
+    "sourceType": "string",
+    "commonField": "common_7",
+    "status": "AMBIGUOUS",
+    "confidence": "MEDIUM",
+    "commonEntity": "Ticket"
+  },
+  {
+    "id": "map8",
+    "sourceSystem": "Jira",
+    "sourceField": "field_8",
+    "sourceType": "string",
+    "commonField": "common_8",
+    "status": "UNMAPPED",
+    "confidence": "LOW",
+    "commonEntity": "Ticket"
+  },
+  {
+    "id": "map9",
+    "sourceSystem": "ServiceNow",
+    "sourceField": "field_9",
+    "sourceType": "string",
+    "commonField": "common_9",
+    "status": "MAPPED",
+    "confidence": "HIGH",
+    "commonEntity": "Ticket"
+  },
+  {
+    "id": "map10",
+    "sourceSystem": "Jira",
+    "sourceField": "field_10",
+    "sourceType": "string",
+    "commonField": "common_10",
+    "status": "AMBIGUOUS",
+    "confidence": "MEDIUM",
+    "commonEntity": "Ticket"
+  },
+  {
+    "id": "map11",
+    "sourceSystem": "Jira",
+    "sourceField": "field_11",
+    "sourceType": "string",
+    "commonField": "common_11",
+    "status": "UNMAPPED",
+    "confidence": "LOW",
+    "commonEntity": "Ticket"
+  },
+  {
+    "id": "map12",
+    "sourceSystem": "ServiceNow",
+    "sourceField": "field_12",
+    "sourceType": "string",
+    "commonField": "common_12",
+    "status": "MAPPED",
+    "confidence": "HIGH",
+    "commonEntity": "Ticket"
+  },
+  {
+    "id": "map13",
+    "sourceSystem": "Jira",
+    "sourceField": "field_13",
+    "sourceType": "string",
+    "commonField": "common_13",
+    "status": "AMBIGUOUS",
+    "confidence": "MEDIUM",
+    "commonEntity": "Ticket"
+  },
+  {
+    "id": "map14",
+    "sourceSystem": "Jira",
+    "sourceField": "field_14",
+    "sourceType": "string",
+    "commonField": "common_14",
+    "status": "UNMAPPED",
+    "confidence": "LOW",
+    "commonEntity": "Ticket"
+  },
+  {
+    "id": "map15",
+    "sourceSystem": "ServiceNow",
+    "sourceField": "field_15",
+    "sourceType": "string",
+    "commonField": "common_15",
+    "status": "MAPPED",
+    "confidence": "HIGH",
+    "commonEntity": "Ticket"
+  },
+  {
+    "id": "map16",
+    "sourceSystem": "Jira",
+    "sourceField": "field_16",
+    "sourceType": "string",
+    "commonField": "common_16",
+    "status": "AMBIGUOUS",
+    "confidence": "MEDIUM",
+    "commonEntity": "Ticket"
+  },
+  {
+    "id": "map17",
+    "sourceSystem": "Jira",
+    "sourceField": "field_17",
+    "sourceType": "string",
+    "commonField": "common_17",
+    "status": "UNMAPPED",
+    "confidence": "LOW",
+    "commonEntity": "Ticket"
+  }
+]
