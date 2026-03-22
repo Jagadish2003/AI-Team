@@ -108,8 +108,10 @@ export function DiscoveryRunProvider({ children }: { children: React.ReactNode }
         return { ...s, status };
       });
 
-      const appsDetected = percent < 42 ? Math.floor(percent / 6) : 12;
-      const workflowsInferred = percent < 60 ? Math.floor(Math.max(0, percent - 42) / 6) : 5;
+      const maxApps = prev.inputs.connectedSources.length + prev.inputs.uploadedFiles.length;
+      const maxWorkflows = Math.max(1, Math.ceil(maxApps * 0.4));
+      const appsDetected = percent < 42 ? Math.floor((percent / 42) * maxApps) : maxApps;
+      const workflowsInferred = percent < 60 ? Math.floor(Math.max(0, ((percent - 42) / 18) * maxWorkflows)) : maxWorkflows;
       const opportunitiesFound = percent < 78 ? 0 : (percent < 92 ? 7 : 14);
       const confidence = percent < 30 ? 'LOW' : (percent < 75 ? 'MEDIUM' : 'HIGH');
       const warnings = 1;
