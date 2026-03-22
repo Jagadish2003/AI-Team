@@ -7,35 +7,33 @@ import RunSummaryPanel from '../components/discovery_run/RunSummaryPanel';
 import { useDiscoveryRunContext } from '../context/DiscoveryRunContext';
 import { useConnectorContext } from '../context/ConnectorContext';
 import { useSourceIntakeContext } from '../context/SourceIntakeContext';
-
+ 
 export default function DiscoveryRunPage() {
   const { run, events, autoScroll, setAutoScroll, started, startRun, restartRun } = useDiscoveryRunContext();
-  const { connectors } = useConnectorContext();
+  const { all } = useConnectorContext();
   const { uploadedFiles, sampleWorkspaceEnabled } = useSourceIntakeContext();
   const nav = useNavigate();
-
+ 
   const connectedNames = useMemo(
-    () => connectors.filter((c) => c.status === 'connected').map((c) => c.name),
-    [connectors]
+    () => [...new Set(all.filter((c) => c.status === 'connected').map((c) => c.name))],
+    [all]
   );
+ 
   const uploadedNames = useMemo(() => uploadedFiles.map((f) => f.name), [uploadedFiles]);
-
+ 
   useEffect(() => {
     if (started) return;
-    const inputs = {
+    startRun({
       connectedSources: connectedNames,
       uploadedFiles: uploadedNames,
       sampleWorkspaceEnabled,
       totalSources: connectedNames.length + uploadedNames.length + (sampleWorkspaceEnabled ? 1 : 0)
-    };
-    startRun(inputs);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    });
   }, [started]);
-
+ 
   return (
     <div className="min-h-screen text-text">
       <TopNav />
-
       <div className="w-full px-8 py-6 pb-10">
         <div className="mb-6 flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
           <div>
@@ -59,10 +57,14 @@ export default function DiscoveryRunPage() {
             <span>{run.progress.percent}%</span>
           </div>
         </div>
-
+ 
         <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
           <PipelineStepper steps={run.steps} />
-          <RunLogPanel events={events} autoScroll={autoScroll} onToggleAutoScroll={setAutoScroll} />
+          <RunLogPanel
+            events={events}
+            autoScroll={autoScroll}
+            onToggleAutoScroll={setAutoScroll}
+          />
           <RunSummaryPanel
             run={run}
             onViewPartial={() => nav('/partial-results')}
@@ -75,3 +77,4 @@ export default function DiscoveryRunPage() {
     </div>
   );
 }
+ 
