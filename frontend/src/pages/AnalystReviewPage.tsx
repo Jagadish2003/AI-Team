@@ -3,6 +3,8 @@ import TopNav from '../components/common/TopNav';
 import OpportunityList from '../components/analyst_review/OpportunityList';
 import OpportunityDetail from '../components/analyst_review/OpportunityDetail';
 import ReasoningOverride from '../components/analyst_review/ReasoningOverride';
+import PermissionsPanel from '../components/analyst_review/PermissionsPanel';
+import AuditTrail from '../components/analyst_review/AuditTrail';
 import { useAnalystReviewContext } from '../context/AnalystReviewContext';
 import { useToast } from '../components/common/Toast';
 
@@ -37,7 +39,7 @@ export default function AnalystReviewPage() {
         <div
           className="grid h-full gap-6"
           style={{
-            gridTemplateColumns: '400px 1fr 400px',
+            gridTemplateColumns: '400px 1fr 400px 300px',
             height: 'calc(100vh - 148px)',
           }}
         >
@@ -82,6 +84,11 @@ export default function AnalystReviewPage() {
               }
             }}
           />
+
+          <div className="flex flex-col gap-4 overflow-y-auto">
+            <PermissionsPanel opp={selected} />
+            <AuditTrail events={audit} />
+          </div>
         </div>
       </div>
     </div>
