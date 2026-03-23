@@ -1,23 +1,30 @@
-# Task 2 — Seed Dataset Pack
+# Task 3 — Layer 1 API Skeleton (FastAPI)
 
 ## Purpose
-Provide deterministic demo data for the backend. Frontend must never import seed data directly.
+Serve contract-shaped JSON responses backed by the Task 2 SQLite DB (`backend/dev.db`), protected by a JWT stub.
+This enables the frontend to switch from mocks to fetch calls without UI refactors.
 
-## One-command seed
+## Setup
 ```bash
-python backend/seed_loader.py
+python -m venv .venv
+source .venv/bin/activate
+pip install -r backend/requirements.txt
+cp backend/.env.example backend/.env
 ```
 
-Outputs:
-- backend/dev.db (SQLite) containing JSON payload tables
+## Run
+```bash
+./backend/run.sh
+```
 
-## Edge cases included
-- One connector in `error` state (Databricks)
-- One evidence item `REJECTED`
-- One opportunity with required permission missing (Microsoft 365)
+## Auth
+All `/api/*` endpoints require:
+```
+Authorization: Bearer $DEV_JWT
+```
 
-## QA-critical opportunity values verified
-- opp_002.effort = 7
-- opp_005.effort = 7
-- opp_006.decision = APPROVED
-- opp_008.impact = 5, opp_008.effort = 2
+## Smoke test
+```bash
+export DEV_JWT=dev-token-change-me
+./backend/scripts/smoke_test.sh
+```
