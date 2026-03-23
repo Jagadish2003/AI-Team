@@ -1,23 +1,24 @@
-# Task 2 — Seed Dataset Pack
+# Task 4 — Contract Validation Tests
 
 ## Purpose
-Provide deterministic demo data for the backend. Frontend must never import seed data directly.
+Prevent API drift by validating real FastAPI responses (not fixtures).
 
-## One-command seed
+## How it works
+- Tests run with pytest + FastAPI TestClient.
+- The app is imported from `app/main.py` (Task 3 skeleton).
+- Tests validate:
+  - auth required on /api routes
+  - run-scoped endpoints require runId and return 200
+  - response payloads contain required keys
+  - write endpoints are run-scoped
+  - Stage 90 is non-empty (seed guard)
+
+## Run
 ```bash
-python backend/seed_loader.py
+pytest tests/contract/ -v
 ```
 
-Outputs:
-- backend/dev.db (SQLite) containing JSON payload tables
-
-## Edge cases included
-- One connector in `error` state (Databricks)
-- One evidence item `REJECTED`
-- One opportunity with required permission missing (Microsoft 365)
-
-## QA-critical opportunity values verified
-- opp_002.effort = 7
-- opp_005.effort = 7
-- opp_006.decision = APPROVED
-- opp_008.impact = 5, opp_008.effort = 2
+## Note
+This pack is meant to be copied into the Task 3 backend repo:
+- Copy `backend/tests/` and `.github/workflows/contract-tests.yml`
+- Ensure Task 2 seed_loader has populated `backend/dev.db`
