@@ -1,30 +1,24 @@
-# Task 3 — Layer 1 API Skeleton (FastAPI)
+# Task 4 — Contract Validation Tests
 
 ## Purpose
-Serve contract-shaped JSON responses backed by the Task 2 SQLite DB (`backend/dev.db`), protected by a JWT stub.
-This enables the frontend to switch from mocks to fetch calls without UI refactors.
+Prevent API drift by validating real FastAPI responses (not fixtures).
 
-## Setup
-```bash
-python -m venv .venv
-source .venv/bin/activate
-pip install -r backend/requirements.txt
-cp backend/.env.example backend/.env
-```
+## How it works
+- Tests run with pytest + FastAPI TestClient.
+- The app is imported from `app/main.py` (Task 3 skeleton).
+- Tests validate:
+  - auth required on /api routes
+  - run-scoped endpoints require runId and return 200
+  - response payloads contain required keys
+  - write endpoints are run-scoped
+  - Stage 90 is non-empty (seed guard)
 
 ## Run
 ```bash
-./backend/run.sh
+pytest tests/contract/ -v
 ```
 
-## Auth
-All `/api/*` endpoints require:
-```
-Authorization: Bearer $DEV_JWT
-```
-
-## Smoke test
-```bash
-export DEV_JWT=dev-token-change-me
-./backend/scripts/smoke_test.sh
-```
+## Note
+This pack is meant to be copied into the Task 3 backend repo:
+- Copy `backend/tests/` and `.github/workflows/contract-tests.yml`
+- Ensure Task 2 seed_loader has populated `backend/dev.db`
