@@ -32,7 +32,7 @@ export default function RunLogPanel({
         </label>
       </div>
 
-      <div ref={ref} className="mt-3 h-[520px] overflow-auto rounded-lg border border-border bg-bg/20 p-2">
+      <div ref={ref} className="mt-3 h-[78vh] overflow-y-auto rounded-lg border border-border bg-bg/20 p-2">
         {events.map((e, idx) => (
           <div key={idx} className="border-b border-border/40 px-2 py-2 text-sm">
             <div className="flex items-center gap-2 text-xs text-muted">
