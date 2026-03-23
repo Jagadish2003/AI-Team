@@ -1,9 +1,6 @@
 import React from 'react';
 
-export default function LoadingPanel({
-  title = 'Loading…',
-  subtitle = 'Fetching data from the API.'
-}: { title?: string; subtitle?: string }) {
+export default function LoadingPanel({ title='Loading…', subtitle='Fetching data from the API.' }: { title?: string; subtitle?: string }) {
   return (
     <div className="rounded-xl border border-border bg-panel p-6">
       <div className="flex items-center gap-3">

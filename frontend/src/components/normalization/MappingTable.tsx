@@ -1,7 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useNormalizationContext } from '../../context/NormalizationContext';
 import { ChevronDown, Search } from 'lucide-react';
-import MappingTabs from './MappingTabs';
  
 const PAGE_SIZE = 8;
  
@@ -57,13 +56,28 @@ export default function MappingTable() {
   const canPrev = currentPage > 1;
   const canNext = currentPage < totalPages;
  
+  const tabButton = (id: Tab, label: string) => (
+    <button type="button" onClick={() => setActiveTab(id)}
+      className={`w-full rounded-md border px-3 py-2.5 text-sm font-semibold transition ${
+        activeTab === id
+          ? 'border-accent/60 bg-panel2 text-text'
+          : 'border-border bg-bg/20 text-muted hover:bg-panel2 hover:text-text'
+      }`}>
+      <span>{label}</span>
+      <span className="ml-1">({counts[id]})</span>
+    </button>
+  );
  
   return (
     <div className="flex h-full flex-col rounded-xl border border-border bg-panel p-4">
       <div className="flex flex-col gap-3">
  
         {/* Tabs */}
-        <MappingTabs active={activeTab} counts={counts} onTab={setActiveTab} />
+        <div className="grid grid-cols-3 gap-3">
+          {tabButton('MAPPED', 'Mapped')}
+          {tabButton('UNMAPPED', 'Unmapped')}
+          {tabButton('AMBIGUOUS', 'Ambiguous')}
+        </div>
  
         {/* Search + sort */}
         <div className="grid grid-cols-[minmax(0,1.8fr)_minmax(220px,1fr)] gap-3">
@@ -164,3 +178,4 @@ export default function MappingTable() {
     </div>
   );
 }
+ 

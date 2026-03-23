@@ -4,8 +4,8 @@ import Button from './Button';
 export default function ErrorPanel({
   message,
   onRetry,
-  title = 'Could not load data'
-}: { message: string; onRetry?: () => void; title?: string }) {
+  title='Could not load data'
+}: { message: string; onRetry?: ()=>void; title?: string }) {
   return (
     <div className="rounded-xl border border-red-500/30 bg-red-500/10 p-6">
       <div className="text-sm font-semibold text-red-200">{title}</div>

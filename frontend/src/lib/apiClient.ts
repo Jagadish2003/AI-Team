@@ -1,5 +1,6 @@
 /**
- * AgentIQ — Shared API client for non-run endpoints.
+ * AgentIQ — Task 5 (G-static)
+ * Shared API client for non-run endpoints (S1/S2/S5).
  *
  * Rules:
  * - No hardcoded localhost for non-dev builds.
@@ -11,10 +12,10 @@ const ENV_BASE_URL = import.meta.env.VITE_API_BASE_URL as string | undefined;
 const BASE_URL =
   ENV_BASE_URL ??
   (import.meta.env.DEV
-    ? 'http://localhost:8000'
+    ? "http://localhost:8000"
     : (() => {
         throw new Error(
-          'VITE_API_BASE_URL is not set. Copy .env.development.example to .env.development (or set env in hosting).'
+          "VITE_API_BASE_URL is not set. Copy .env.development.example to .env.development (or set env in hosting)."
         );
       })());
 
@@ -29,14 +30,14 @@ export class ApiError extends Error {
 }
 
 function authHeader(): Record<string, string> {
-  const token = (import.meta.env.VITE_DEV_JWT as string | undefined) ?? 'dev-token-change-me';
+  const token = (import.meta.env.VITE_DEV_JWT as string | undefined) ?? "dev-token-change-me";
   return { Authorization: `Bearer ${token}` };
 }
 
 async function parseBody(res: Response): Promise<unknown> {
-  const ct = res.headers.get('content-type') ?? '';
-  if (ct.includes('application/json')) return res.json().catch(() => ({}));
-  return res.text().catch(() => '');
+  const ct = res.headers.get("content-type") ?? "";
+  if (ct.includes("application/json")) return res.json().catch(() => ({}));
+  return res.text().catch(() => "");
 }
 
 export async function apiGet<T>(path: string): Promise<T> {
@@ -50,8 +51,8 @@ export async function apiGet<T>(path: string): Promise<T> {
 
 export async function apiPost<T>(path: string, payload: unknown): Promise<T> {
   const res = await fetch(`${BASE_URL}${path}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', ...authHeader() },
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...authHeader() },
     body: JSON.stringify(payload),
   });
   const body = await parseBody(res);
