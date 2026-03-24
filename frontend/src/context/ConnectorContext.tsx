@@ -1,19 +1,8 @@
-import React, {
-  createContext,
-  useCallback,
-  useContext,
-  useMemo,
-  useState
-} from 'react';
-import mock from '../data/mockConnectors.json';
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import { Connector } from '../types/connector';
 import { computeConfidence, Confidence } from '../utils/confidence';
 import { getNextBestRecommended } from '../utils/nextBest';
-
-type MockShape = {
-  recommended: Connector[];
-  connectors: Connector[];
-};
+import { connectConnectorApi, fetchConnectors } from '../services/staticApi';
 
 type ConnectorContextValue = {
   all: Connector[];                
@@ -21,6 +10,10 @@ type ConnectorContextValue = {
   recommended: Connector[];
   standard: Connector[];
   selectedConnectorId: string | null;
+
+  loading: boolean;
+  error: string | null;
+  refetch: () => void;
 
   recommendedConnectedCount: number;
   confidence: Confidence;
@@ -33,23 +26,41 @@ type ConnectorContextValue = {
 
 const Ctx = createContext<ConnectorContextValue | null>(null);
 
-function mergeAll(data: MockShape): Connector[] {
-  return [...data.recommended, ...data.connectors];
-}
-
 export function ConnectorProvider({ children }: { children: React.ReactNode }) {
-  const data = mock as unknown as MockShape;
-  const [all, setAll] = useState<Connector[]>(() => mergeAll(data));
-  const [selectedConnectorId, setSelectedConnectorId] = useState<string | null>(
-    data.recommended[0]?.id ?? null
-  );
+  const [all, setAll] = useState<Connector[]>([]);
+  const[selectedConnectorId, setSelectedConnectorId] = useState<string | null>(null);
+
+  const[loading, setLoading] = useState<boolean>(true);
+  const [error, setError] = useState<string | null>(null);
+  const [fetchCount, setFetchCount] = useState<number>(0);
+
+  const refetch = useCallback(() => setFetchCount((c) => c + 1),[]);
+
+  useEffect(() => {
+    let alive = true;
+    setLoading(true);
+    fetchConnectors()
+      .then((data) => {
+        if (!alive) return;
+        setAll(data);
+        setSelectedConnectorId(
+          (prev) => prev ?? (data.find(d => d.tier === 'recommended')?.id ?? data[0]?.id ?? null)
+        );
+        setError(null);
+      })
+      .catch((e: any) => {
+        if (!alive) return;
+        setError(e?.message ?? 'Failed to load connectors');
+      })
+      .finally(() => alive && setLoading(false));
+    return () => { alive = false; };
+  }, [fetchCount]);
+
   const recommended = useMemo(
     () =>
       all
         .filter((c) => c.tier === 'recommended')
-        .sort(
-          (a, b) => (a.recommendedRank ?? 999) - (b.recommendedRank ?? 999)
-        ),
+        .sort((a, b) => (a.recommendedRank ?? 999) - (b.recommendedRank ?? 999)),
     [all]
   );
 
@@ -75,40 +86,16 @@ export function ConnectorProvider({ children }: { children: React.ReactNode }) {
 
   const selectConnector = useCallback((id: string) => {
     setSelectedConnectorId(id);
-  }, []);
+  },[]);
 
-
-  const sampleMetrics: Record<
-    string,
-    { label: string; value: string }[]
-  > = {
-    microsoft_365: [
-      { label: 'Mailboxes', value: '847' },
-      { label: 'Teams Channels', value: '134' }
-    ],
-    databricks: [
-      { label: 'Jobs', value: '62' },
-      { label: 'Pipelines', value: '18' }
-    ]
-  };
-  const connectConnector = useCallback((id: string) => {
-    setAll((prev) =>
-      prev.map((c) => {
-        if (c.id !== id) return c;
-        if (c.status === 'coming_soon') return c;
-
-        return {
-          ...c,
-          status: 'connected',
-          lastSynced: 'just now',
-          metrics: (sampleMetrics[c.id] ?? c.metrics).map((m) => ({
-            ...m
-          })),
-          signalStrength: c.signalStrength === 0 ? 55 : c.signalStrength
-        };
-      })
-    );
-  }, []);
+  const connectConnector = useCallback(async (id: string) => {
+    try {
+      await connectConnectorApi(id);
+      refetch();
+    } catch (e: any) {
+      setError(e?.message ?? 'Failed to connect');
+    }
+  }, [refetch]);
 
   const configureSync = useCallback((id: string) => {
     setAll((prev) =>
@@ -116,21 +103,28 @@ export function ConnectorProvider({ children }: { children: React.ReactNode }) {
         c.id === id ? { ...c, lastSynced: 'just now' } : c
       )
     );
-  }, []);
+  },[]);
 
-  const value: ConnectorContextValue = {
+  const value: ConnectorContextValue = useMemo(() => ({
     all,                    
     connectors: all,        
     recommended,
     standard,
     selectedConnectorId,
+    loading,
+    error,
+    refetch,
     recommendedConnectedCount,
     confidence,
     nextBestRecommendedId,
     selectConnector,
     connectConnector,
     configureSync
-  };
+  }),[
+    all, recommended, standard, selectedConnectorId,
+    loading, error, recommendedConnectedCount, confidence, nextBestRecommendedId,
+    selectConnector, connectConnector, configureSync, refetch
+  ]);
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }

@@ -1,8 +1,8 @@
-import React, { createContext, useContext, useMemo, useState } from 'react';
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import rowsMock from '../data/mockMappings.json';
-import permsMock from '../data/mockPermissions.json';
 import confMock from '../data/mockConfidenceExplanation.json';
 import { MappingRow, PermissionRequirement, ConfidenceExplanation } from '../types/normalization';
+import { fetchPermissions } from '../services/staticApi';
 
 export type Tab = 'MAPPED' | 'UNMAPPED' | 'AMBIGUOUS';
 type SortMode = 'Confidence High→Low' | 'Source A→Z';
@@ -11,6 +11,10 @@ type NormalizationContextValue = {
   rows: MappingRow[];
   permissions: PermissionRequirement[];
   confidence: ConfidenceExplanation;
+
+  permissionsLoading: boolean;
+  permissionsError: string | null;
+  refetchPermissions: () => void;
 
   activeTab: Tab;
   setActiveTab: (t: Tab) => void;
@@ -42,8 +46,31 @@ const Ctx = createContext<NormalizationContextValue | null>(null);
 
 export function NormalizationProvider({ children }: { children: React.ReactNode }) {
   const [rows] = useState<MappingRow[]>(rowsMock as unknown as MappingRow[]);
-  const [permissions] = useState<PermissionRequirement[]>(permsMock as unknown as PermissionRequirement[]);
   const [confidence] = useState<ConfidenceExplanation>(confMock as unknown as ConfidenceExplanation);
+
+  const [permissions, setPermissions] = useState<PermissionRequirement[]>([]);
+  const [permissionsLoading, setPermissionsLoading] = useState<boolean>(true);
+  const [permissionsError, setPermissionsError] = useState<string | null>(null);
+  const [permFetchCount, setPermFetchCount] = useState<number>(0);
+  const refetchPermissions = useCallback(() => setPermFetchCount(c => c + 1), []);
+
+  useEffect(() => {
+    let alive = true;
+    setPermissionsLoading(true);
+    fetchPermissions()
+      .then((data) => {
+        if (!alive) return;
+        setPermissions(data);
+        setPermissionsError(null);
+      })
+      .catch((e) => {
+        if (!alive) return;
+        setPermissionsError(e?.message ?? 'Failed to load permissions');
+      })
+      .finally(() => alive && setPermissionsLoading(false));
+    return () => { alive = false; };
+  }, [permFetchCount]);
+  // --- End Task 5 ---
 
   const [activeTab, setActiveTab] = useState<Tab>('MAPPED');
   const [search, setSearch] = useState('');
@@ -70,8 +97,6 @@ export function NormalizationProvider({ children }: { children: React.ReactNode 
 
   const filteredRows = useMemo(() => {
     const q = search.trim().toLowerCase();
-
-    // ✅ Split comma-joined strings to support multi-select from SourcesEntitiesPanel
     const activeSources = sourceFilter === 'All Sources' ? [] : sourceFilter.split(',');
     const activeEntities = entityFilter === 'All Entities' ? [] : entityFilter.split(',');
 
@@ -93,6 +118,7 @@ export function NormalizationProvider({ children }: { children: React.ReactNode 
 
   const value = useMemo(() => ({
     rows, permissions, confidence,
+    permissionsLoading, permissionsError, refetchPermissions,
     activeTab, setActiveTab,
     search, setSearch,
     sourceFilter, setSourceFilter,
@@ -101,7 +127,8 @@ export function NormalizationProvider({ children }: { children: React.ReactNode 
     selectedRowId, setSelectedRowId,
     sources, entities, counts, filteredRows, selectedRow, relevantPermissions,
   }), [
-    rows, permissions, confidence, activeTab, search, sourceFilter, entityFilter, sortMode, selectedRowId,
+    rows, permissions, confidence, permissionsLoading, permissionsError, refetchPermissions,
+    activeTab, search, sourceFilter, entityFilter, sortMode, selectedRowId,
     sources, entities, counts, filteredRows, selectedRow, relevantPermissions,
   ]);
 
