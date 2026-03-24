@@ -1,6 +1,8 @@
 import React, { useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import TopNav from '../components/common/TopNav';
+import LoadingPanel from '../components/common/LoadingPanel';
+import ErrorPanel from '../components/common/ErrorPanel';
 import HeroConnectorSection from '../components/integrations/HeroConnectorSection';
 import ConnectorGridSection from '../components/integrations/ConnectorGridSection';
 import RightPanel from '../components/integrations/RightPanel';
@@ -18,7 +20,10 @@ export default function IntegrationHubPage() {
     configureSync,
     confidence,
     recommendedConnectedCount,
-    nextBestRecommendedId
+    nextBestRecommendedId,
+    loading,
+    error,
+    refetch
   } = useConnectorContext();
 
   const { push } = useToast();
@@ -40,80 +45,88 @@ export default function IntegrationHubPage() {
     <div className="min-h-screen text-text">
       <TopNav />
 
-      <div className="w-full px-8 pb-[210px] pt-6 lg:pb-[120px]">
-        <div className="mb-6">
-          <div className="text-2xl font-semibold">Integration Hub</div>
-          <div className="mt-1 text-sm text-muted">Connect at least 1 source to start discovery.</div>
-        </div>
+      {/* DoD: Loading + Error states rendering */}
+      {loading && <LoadingPanel />}
+      {error && !loading && <ErrorPanel message={error} onRetry={refetch} />}
 
-        <div className="flex items-start gap-6">
-          <div className="flex flex-[0.7] flex-col gap-6">
-            <div className="rounded-xl border border-border bg-panel p-6 shadow-sm">
-              <HeroConnectorSection
-                connectors={recommended}
-                selectedId={selectedConnectorId}
-                onSelect={selectConnector}
-                onPrimary={(id) => {
-                  connectConnector(id);
-                  push('Connector connected (mock).');
-                }}
-                onSecondary={() => push('Data preview available in Sprint 2.')}
-              />
+      {!loading && !error && (
+        <>
+          <div className="w-full px-8 pb-[210px] pt-6 lg:pb-[120px]">
+            <div className="mb-6">
+              <div className="text-2xl font-semibold">Integration Hub</div>
+              <div className="mt-1 text-sm text-muted">Connect at least 1 source to start discovery.</div>
             </div>
 
-            <div className="mb-6 rounded-xl border border-border bg-panel p-6 shadow-sm">
-              <ConnectorGridSection
-                connectors={standard}
-                selectedId={selectedConnectorId}
-                onSelect={selectConnector}
-                onPrimary={(id) => {
-                  const c = standard.find((x) => x.id === id);
-                  if (!c) return;
+            <div className="flex items-start gap-6">
+              <div className="flex flex-[0.7] flex-col gap-6">
+                <div className="rounded-xl border border-border bg-panel p-6 shadow-sm">
+                  <HeroConnectorSection
+                    connectors={recommended}
+                    selectedId={selectedConnectorId}
+                    onSelect={selectConnector}
+                    onPrimary={(id) => {
+                      connectConnector(id);
+                      push('Connector connected.');
+                    }}
+                    onSecondary={() => push('Data preview available in Sprint 2.')}
+                  />
+                </div>
 
-                  if (c.status === 'connected') {
-                    push('Data preview available in Sprint 2.');
-                  } else if (c.status === 'coming_soon') {
-                    push('Connector coming soon.');
-                  } else {
-                    connectConnector(id);
-                    push('Connector connected (mock).');
-                  }
-                }}
-              />
+                <div className="mb-6 rounded-xl border border-border bg-panel p-6 shadow-sm">
+                  <ConnectorGridSection
+                    connectors={standard}
+                    selectedId={selectedConnectorId}
+                    onSelect={selectConnector}
+                    onPrimary={(id) => {
+                      const c = standard.find((x) => x.id === id);
+                      if (!c) return;
+
+                      if (c.status === 'connected') {
+                        push('Data preview available in Sprint 2.');
+                      } else if (c.status === 'coming_soon') {
+                        push('Connector coming soon.');
+                      } else {
+                        connectConnector(id);
+                        push('Connector connected.');
+                      }
+                    }}
+                  />
+                </div>
+              </div>
+
+              <div className="flex-[0.3]">
+                <RightPanel
+                  selected={selected}
+                  onConfigure={() => {
+                    if (!selected) return;
+                    configureSync(selected.id);
+                    push('Sync configured (mock).');
+                  }}
+                  confidence={confidence}
+                  recommendedConnectedCount={recommendedConnectedCount}
+                  recommendedTotal={3}
+                  next={next}
+                  onConnectNext={() => {
+                    if (!next) return;
+                    connectConnector(next.id);
+                    push('Connected next best source.');
+                  }}
+                />
+              </div>
             </div>
           </div>
 
-          <div className="flex-[0.3]">
-            <RightPanel
-              selected={selected}
-              onConfigure={() => {
-                if (!selected) return;
-                configureSync(selected.id);
-                push('Sync configured (mock).');
-              }}
-              confidence={confidence}
-              recommendedConnectedCount={recommendedConnectedCount}
-              recommendedTotal={3}
-              next={next}
-              onConnectNext={() => {
-                if (!next) return;
-                connectConnector(next.id);
-                push('Connected next best source (mock).');
-              }}
-            />
-          </div>
-        </div>
-      </div>
-
-      <DiscoveryStartBar
-        confidence={confidence}
-        recommendedConnectedCount={recommendedConnectedCount}
-        recommendedTotal={3}
-        recommended={recommended} 
-        canStart={canStart}
-        onStart={() => navigate('/discovery-run')}
-        onUpload={() => navigate('/source-intake')}
-      />
+          <DiscoveryStartBar
+            confidence={confidence}
+            recommendedConnectedCount={recommendedConnectedCount}
+            recommendedTotal={3}
+            recommended={recommended} 
+            canStart={canStart}
+            onStart={() => navigate('/discovery-run')}
+            onUpload={() => navigate('/source-intake')}
+          />
+        </>
+      )}
     </div>
   );
 }

@@ -1,20 +1,20 @@
 [
   {
-    "id": "file_001",
+    "id": "up_001",
     "name": "incident_data.csv",
     "sizeLabel": "1.2 MB",
-    "uploadedLabel": "Uploaded today"
+    "uploadedLabel": "Just now"
   },
   {
-    "id": "file_002",
+    "id": "up_002",
     "name": "cmdb_records.xlsx",
-    "sizeLabel": "860 KB",
-    "uploadedLabel": "Uploaded today"
+    "sizeLabel": "820 KB",
+    "uploadedLabel": "Just now"
   },
   {
-    "id": "file_003",
+    "id": "up_003",
     "name": "changelogs.csv",
-    "sizeLabel": "540 KB",
-    "uploadedLabel": "Uploaded today"
+    "sizeLabel": "640 KB",
+    "uploadedLabel": "Just now"
   }
 ]

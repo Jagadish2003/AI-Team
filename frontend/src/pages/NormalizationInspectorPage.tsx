@@ -1,36 +1,66 @@
 import React, { useState, useEffect } from 'react';
 import TopNav from '../components/common/TopNav';
+import LoadingPanel from '../components/common/LoadingPanel';
+import ErrorPanel from '../components/common/ErrorPanel';
 import { useNormalizationContext } from '../context/NormalizationContext';
 import ConfidenceBanner from '../components/normalization/ConfidenceBanner';
 import SourcesEntitiesPanel from '../components/normalization/SourcesEntitiesPanel';
 import MappingTable from '../components/normalization/MappingTable';
 import FieldDetailsPanel from '../components/normalization/FieldDetailsPanel';
 import { useNavigate } from 'react-router-dom';
- 
-// ── Persist selections at module level so they survive remounts ───────────────
+
 const persistedSources = { current: new Set<string>() };
 const persistedEntities = { current: new Set<string>() };
-// ─────────────────────────────────────────────────────────────────────────────
- 
+
 export default function NormalizationInspectorPage() {
-  const { confidence, counts, setSourceFilter, setEntityFilter } = useNormalizationContext();
+  const {
+    confidence,
+    counts,
+    setSourceFilter,
+    setEntityFilter,
+    permissionsLoading,
+    permissionsError,
+    refetchPermissions
+  } = useNormalizationContext();
   const nav = useNavigate();
- 
+
   const [selectedSources, setSelectedSources] = useState<Set<string>>(new Set(persistedSources.current));
   const [selectedEntities, setSelectedEntities] = useState<Set<string>>(new Set(persistedEntities.current));
- 
+
   const total = counts.MAPPED + counts.AMBIGUOUS + counts.UNMAPPED;
- 
-  // Keep persisted refs in sync
+
   useEffect(() => { persistedSources.current = new Set(selectedSources); }, [selectedSources]);
   useEffect(() => { persistedEntities.current = new Set(selectedEntities); }, [selectedEntities]);
- 
-  // Re-apply filters on mount so table reflects persisted state
+
   useEffect(() => {
     setSourceFilter(selectedSources.size === 0 ? 'All Sources' : Array.from(selectedSources).join(','));
     setEntityFilter(selectedEntities.size === 0 ? 'All Entities' : Array.from(selectedEntities).join(','));
-  }, []);
- 
+  }, [selectedSources, selectedEntities, setSourceFilter, setEntityFilter]);
+
+  // --- Task 5: Handle Loading and Error States ---
+  if (permissionsLoading) {
+    return (
+      <div className="min-h-screen text-text">
+        <TopNav />
+        <div className="p-6">
+          <LoadingPanel title="Loading permissions" subtitle="Fetching permission catalog…" />
+        </div>
+      </div>
+    );
+  }
+
+  if (permissionsError) {
+    return (
+      <div className="min-h-screen text-text">
+        <TopNav />
+        <div className="p-6">
+          <ErrorPanel message={permissionsError} onRetry={refetchPermissions} title="Could not load permissions" />
+        </div>
+      </div>
+    );
+  }
+  // --- End Task 5 ---
+
   return (
     <div className="min-h-screen text-text">
       <TopNav />
@@ -41,9 +71,9 @@ export default function NormalizationInspectorPage() {
             Transparency view: inspect how fields from sources map into AgentIQ&apos;s common schema.
           </div>
         </div>
- 
+
         <ConfidenceBanner conf={confidence} onAction={() => nav('/integration-hub')} />
- 
+
         <div className="mt-4 flex gap-6">
           <div className="flex flex-col gap-4" style={{ flex: 3 }}>
             <div className="flex gap-6" style={{ height: '700px' }}>
@@ -59,7 +89,7 @@ export default function NormalizationInspectorPage() {
                 <MappingTable />
               </div>
             </div>
- 
+
             <div className="flex items-center gap-8 rounded-xl border border-border bg-panel px-6 py-3 text-sm">
               <div className="flex items-center gap-2">
                 <span className="h-2.5 w-2.5 rounded-sm bg-[#00B4B4]" />
@@ -80,7 +110,7 @@ export default function NormalizationInspectorPage() {
               </div>
             </div>
           </div>
- 
+
           <div className="flex flex-col" style={{ flex: 1 }}>
             <FieldDetailsPanel />
           </div>
@@ -89,4 +119,3 @@ export default function NormalizationInspectorPage() {
     </div>
   );
 }
- 
