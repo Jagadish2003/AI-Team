@@ -1,172 +1,103 @@
-[
+[  
   {
     "id": "servicenow",
     "name": "ServiceNow",
-    "category": "ITSM \u00b7 CMDB",
+    "category": "ITSM · CMDB",
     "tier": "recommended",
+    "recommendedRank": 1,
     "status": "connected",
-    "metrics": [
-      {
-        "label": "Incidents",
-        "value": "2,847"
-      },
-      {
-        "label": "CMDB Items",
-        "value": "312"
-      }
+    "metrics":[
+      { "label": "Incidents", "value": "2847" },
+      { "label": "CMDB Items", "value": "312" }
     ],
     "lastSynced": "4 min ago",
-    "reads": [
-      "CMDB Records",
-      "Incident Tickets",
-      "Change Logs"
-    ],
-    "signalStrength": 94,
-    "recommendedRank": 1
+    "reads": ["CMDB Records", "Incident Tickets", "Change Logs"],
+    "signalStrength": 94
   },
   {
-    "id": "jira",
+    "id": "jira_confluence",
     "name": "Jira & Confluence",
-    "category": "Delivery \u00b7 Knowledge",
+    "category": "Delivery · Knowledge",
     "tier": "recommended",
-    "status": "connected",
-    "metrics": [
-      {
-        "label": "Issues",
-        "value": "1,104"
-      },
-      {
-        "label": "Pages",
-        "value": "420"
-      }
+    "recommendedRank": 2,
+    "status": "disconnected",
+    "metrics":[
+      { "label": "Issues", "value": "5847" },
+      { "label": "Confluence Pages", "value": "1120" }
     ],
-    "lastSynced": "7 min ago",
-    "reads": [
-      "Jira Issues",
-      "Confluence Pages",
-      "Workflow Transitions"
-    ],
-    "signalStrength": 88,
-    "recommendedRank": 2
+    "lastSynced": "2 hrs ago",
+    "reads":["Issues", "Transitions", "Runbooks / Pages"],
+    "signalStrength": 88
   },
   {
-    "id": "m365",
+    "id": "microsoft_365",
     "name": "Microsoft 365",
-    "category": "Collaboration",
+    "category": "Comms · Collaboration",
     "tier": "recommended",
-    "status": "available",
-    "metrics": [
-      {
-        "label": "Teams Channels",
-        "value": "\u2014"
-      },
-      {
-        "label": "Messages",
-        "value": "\u2014"
-      }
+    "recommendedRank": 3,
+    "status": "disconnected",
+    "metrics":[
+      { "label": "Mailboxes", "value": "—" },
+      { "label": "Teams Channels", "value": "—" }
     ],
-    "lastSynced": "Not connected",
-    "reads": [
-      "Teams Channels",
-      "Messages",
-      "SharePoint Docs"
-    ],
-    "signalStrength": 0,
-    "recommendedRank": 3
+    "lastSynced": "—",
+    "reads":["Shared Inbox", "Teams Channels", "Meeting Transcripts"],
+    "signalStrength": 55
   },
   {
     "id": "sap",
     "name": "SAP",
-    "category": "ERP",
-    "tier": "coverage",
+    "category": "ERP · Process",
+    "tier": "standard",
     "status": "connected",
-    "metrics": [
-      {
-        "label": "Systems",
-        "value": "6"
-      },
-      {
-        "label": "Transports",
-        "value": "\u2014"
-      }
+    "metrics":[
+      { "label": "Systems", "value": "6" },
+      { "label": "Change Docs", "value": "1420" }
     ],
-    "lastSynced": "12 min ago",
-    "reads": [
-      "Landscape Metadata",
-      "Change Docs"
-    ],
-    "signalStrength": 60
+    "lastSynced": "1 day ago",
+    "reads": ["Change Documents", "Approvals", "Transports (if available)"],
+    "signalStrength": 76
   },
   {
     "id": "github",
     "name": "GitHub",
-    "category": "Code",
-    "tier": "coverage",
+    "category": "Engineering · Delivery",
+    "tier": "standard",
     "status": "connected",
-    "metrics": [
-      {
-        "label": "Repos",
-        "value": "18"
-      },
-      {
-        "label": "PRs/mo",
-        "value": "260"
-      }
+    "metrics":[
+      { "label": "PRs (30d)", "value": "248" },
+      { "label": "Reviews (30d)", "value": "913" }
     ],
-    "lastSynced": "9 min ago",
-    "reads": [
-      "Main Branch",
-      "PR Reviews",
-      "Workflows"
-    ],
-    "signalStrength": 55
+    "lastSynced": "30 min ago",
+    "reads": ["Pull Requests", "Review Comments", "Commits"],
+    "signalStrength": 81
   },
   {
     "id": "slack",
     "name": "Slack",
-    "category": "Collaboration",
-    "tier": "coverage",
+    "category": "Comms · Ops",
+    "tier": "standard",
     "status": "connected",
-    "metrics": [
-      {
-        "label": "Channels",
-        "value": "32"
-      },
-      {
-        "label": "Messages/day",
-        "value": "\u2014"
-      }
+    "metrics":[
+      { "label": "Channels", "value": "34" },
+      { "label": "Messages (7d)", "value": "12840" }
     ],
-    "lastSynced": "15 min ago",
-    "reads": [
-      "Channels",
-      "Threads",
-      "Mentions"
-    ],
-    "signalStrength": 40
+    "lastSynced": "10 min ago",
+    "reads":["Channels", "Threads", "Mentions"],
+    "signalStrength": 79
   },
   {
     "id": "databricks",
     "name": "Databricks",
-    "category": "Data Platform",
-    "tier": "coverage",
-    "status": "error",
-    "metrics": [
-      {
-        "label": "Jobs",
-        "value": "\u2014"
-      },
-      {
-        "label": "Pipelines",
-        "value": "\u2014"
-      }
+    "category": "Data · Platform",
+    "tier": "standard",
+    "status": "disconnected",
+    "metrics":[
+      { "label": "Jobs", "value": "—" },
+      { "label": "Pipelines", "value": "—" }
     ],
-    "lastSynced": "Failed",
-    "reads": [
-      "Job Runs",
-      "Pipelines",
-      "Notebooks"
-    ],
-    "signalStrength": 0
+    "lastSynced": "—",
+    "reads": ["Job Runs", "Pipelines", "Notebooks"],
+    "signalStrength": 52
   }
 ]

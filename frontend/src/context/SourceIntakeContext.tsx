@@ -1,10 +1,15 @@
-import React, { createContext, useCallback, useContext, useMemo, useState } from 'react';
-import uploadsMock from '../data/mockUploads.json';
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import { UploadedFile } from '../types/upload';
+import { addUpload, fetchUploads } from '../services/staticApi';
 
 type SourceIntakeContextValue = {
   uploadedFiles: UploadedFile[];
   sampleWorkspaceEnabled: boolean;
+
+  // Task 5 additions
+  loading: boolean;
+  error: string | null;
+  refetch: () => void;
 
   addMockFile: () => void;
   addFilesFromSelection: (files: File[]) => { addedCount: number; rejectedCount: number };
@@ -37,28 +42,45 @@ function formatFileSize(bytes: number) {
 }
 
 export function SourceIntakeProvider({ children }: { children: React.ReactNode }) {
-  const [uploadedFiles, setUploadedFiles] = useState<UploadedFile[]>(uploadsMock as unknown as UploadedFile[]);
-  const [sampleWorkspaceEnabled, setSampleWorkspaceEnabled] = useState<boolean>(false);
+  const[uploadedFiles, setUploadedFiles] = useState<UploadedFile[]>([]);
+  const[sampleWorkspaceEnabled, setSampleWorkspaceEnabled] = useState<boolean>(false);
+
+  const [loading, setLoading] = useState<boolean>(true);
+  const [error, setError] = useState<string | null>(null);
+  const[fetchCount, setFetchCount] = useState<number>(0);
+  
+  const refetch = useCallback(() => setFetchCount((c) => c + 1),[]);
+
+  useEffect(() => {
+    let alive = true;
+    setLoading(true);
+    fetchUploads()
+      .then((data) => {
+        if (!alive) return;
+        setUploadedFiles(data);
+        setError(null);
+      })
+      .catch((e) => {
+        if (!alive) return;
+        setError(e?.message ?? 'Failed to load uploads');
+      })
+      .finally(() => alive && setLoading(false));
+    return () => { alive = false; };
+  }, [fetchCount]);
 
   const removeFile = useCallback((id: string) => {
     setUploadedFiles((prev) => prev.filter((f) => f.id !== id));
-  }, []);
+  },[]);
 
   const addMockFile = useCallback(() => {
-    setUploadedFiles((prev) => {
-      const n = prev.length + 1;
-      const id = `file_${String(n).padStart(3, '0')}`;
-      return [
-        ...prev,
-        {
-          id,
-          name: `extra_upload_${n}.csv`,
-          sizeLabel: '420 KB',
-          uploadedLabel: 'Uploaded just now'
-        }
-      ];
-    });
-  }, []);
+    const name = `extra_upload_${Date.now()}.csv`;
+    addUpload({ name, sizeLabel: '420 KB' })
+      .then((u) => {
+        setUploadedFiles((prev) =>[...prev, u]);
+        setError(null);
+      })
+      .catch((e) => setError(e?.message ?? 'Failed to add upload'));
+  },[]);
 
   const addFilesFromSelection = useCallback((files: File[]) => {
     const accepted = files.filter(isAllowedSpreadsheetFile);
@@ -68,32 +90,29 @@ export function SourceIntakeProvider({ children }: { children: React.ReactNode }
       return { addedCount: 0, rejectedCount };
     }
 
-    setUploadedFiles((prev) => {
-      const nextIndex = prev.length;
-
-      const mapped: UploadedFile[] = accepted.map((file, index) => ({
-        id: `file_${String(nextIndex + index + 1).padStart(3, '0')}`,
-        name: file.name,
-        sizeLabel: formatFileSize(file.size),
-        uploadedLabel: 'Uploaded just now'
-      }));
-
-      return [...prev, ...mapped];
+    accepted.forEach((file) => {
+      addUpload({ name: file.name, sizeLabel: formatFileSize(file.size) })
+        .then((u) => {
+          setUploadedFiles((prev) => [...prev, u]);
+        })
+        .catch((e) => setError(e?.message ?? 'Failed to add file'));
     });
 
     return { addedCount: accepted.length, rejectedCount };
-  }, []);
+  },[]);
 
   const value = useMemo(
     () => ({
       uploadedFiles,
       sampleWorkspaceEnabled,
+      loading,
+      error,
+      refetch,
       addMockFile,
       addFilesFromSelection,
       removeFile,
       setSampleWorkspaceEnabled
-    }),
-    [uploadedFiles, sampleWorkspaceEnabled, addMockFile, addFilesFromSelection, removeFile]
+    }),[uploadedFiles, sampleWorkspaceEnabled, loading, error, refetch, addMockFile, addFilesFromSelection, removeFile]
   );
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
