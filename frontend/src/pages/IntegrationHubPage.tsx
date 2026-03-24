@@ -1,4 +1,4 @@
-import React, { useMemo } from 'react';
+import React, { useMemo, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import TopNav from '../components/common/TopNav';
 import LoadingPanel from '../components/common/LoadingPanel';
@@ -29,6 +29,13 @@ export default function IntegrationHubPage() {
   const { push } = useToast();
   const navigate = useNavigate();
 
+  useEffect(() => {
+    if (!loading && !selectedConnectorId && recommended && recommended.length > 0) {
+      selectConnector(recommended[0].id);
+    }
+  }, [loading, selectedConnectorId, recommended, selectConnector]);
+  // -------------------------
+
   const selected = useMemo(
     () => [...recommended, ...standard].find((c) => c.id === selectedConnectorId) ?? null,
     [recommended, standard, selectedConnectorId]
@@ -45,7 +52,6 @@ export default function IntegrationHubPage() {
     <div className="min-h-screen text-text">
       <TopNav />
 
-      {/* DoD: Loading + Error states rendering */}
       {loading && <LoadingPanel />}
       {error && !loading && <ErrorPanel message={error} onRetry={refetch} />}
 
@@ -54,7 +60,7 @@ export default function IntegrationHubPage() {
           <div className="w-full px-8 pb-[210px] pt-6 lg:pb-[120px]">
             <div className="mb-6">
               <div className="text-2xl font-semibold">Integration Hub</div>
-              <div className="mt-1 text-sm text-muted">Connect at least 1 source to start discovery.</div>
+              <div className="mt-1 text-sm text-muted">The Integration Hub is where users connect enterprise systems to provide data sources for the discovery process.</div>
             </div>
 
             <div className="flex items-start gap-6">
