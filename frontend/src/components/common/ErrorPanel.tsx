@@ -7,9 +7,9 @@ export default function ErrorPanel({
   title='Could not load data'
 }: { message: string; onRetry?: ()=>void; title?: string }) {
   return (
-    <div className="rounded-xl border border-red-500/30 bg-red-500/10 p-6">
-      <div className="text-sm font-semibold text-red-200">{title}</div>
-      <div className="mt-1 text-xs text-red-100/80 whitespace-pre-wrap">{message}</div>
+    <div className="rounded-xl border border-red-500/30 bg-red-500/10 p-6 flex flex-col items-center text-center">
+      <div className="text-base font-semibold text-red-200">{title}</div>
+      <div className="mt-1 text-sm text-red-100/80 whitespace-pre-wrap">{message}</div>
       {onRetry && (
         <div className="mt-4">
           <Button variant="secondary" onClick={onRetry}>Retry</Button>
