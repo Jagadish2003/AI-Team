@@ -20,7 +20,7 @@
     "category": "Delivery · Knowledge",
     "tier": "recommended",
     "recommendedRank": 2,
-    "status": "disconnected",
+    "status": "connected",
     "metrics":[
       { "label": "Issues", "value": "5847" },
       { "label": "Confluence Pages", "value": "1120" }

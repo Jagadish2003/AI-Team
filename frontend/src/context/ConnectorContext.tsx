@@ -43,9 +43,19 @@ export function ConnectorProvider({ children }: { children: React.ReactNode }) {
       .then((data) => {
         if (!alive) return;
         setAll(data);
-        setSelectedConnectorId(
-          (prev) => prev ?? (data.find(d => d.tier === 'recommended')?.id ?? data[0]?.id ?? null)
-        );
+        
+        // FIX: Sort the data by recommendedRank before picking the default
+        // This ensures rank 1 (ServiceNow) is always selected first
+        setSelectedConnectorId((prev) => {
+          if (prev) return prev;
+          
+          const topRecommended = [...data]
+            .filter((d) => d.tier === 'recommended')
+            .sort((a, b) => (a.recommendedRank ?? 999) - (b.recommendedRank ?? 999));
+            
+          return topRecommended.length > 0 ? topRecommended[0].id : (data[0]?.id ?? null);
+        });
+
         setError(null);
       })
       .catch((e: any) => {
@@ -80,8 +90,7 @@ export function ConnectorProvider({ children }: { children: React.ReactNode }) {
   );
 
   const nextBestRecommendedId = useMemo(
-    () => getNextBestRecommended(recommended),
-    [recommended]
+    () => getNextBestRecommended(recommended),[recommended]
   );
 
   const selectConnector = useCallback((id: string) => {
@@ -95,7 +104,7 @@ export function ConnectorProvider({ children }: { children: React.ReactNode }) {
     } catch (e: any) {
       setError(e?.message ?? 'Failed to connect');
     }
-  }, [refetch]);
+  },[refetch]);
 
   const configureSync = useCallback((id: string) => {
     setAll((prev) =>

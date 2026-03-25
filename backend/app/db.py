@@ -4,7 +4,7 @@ import sqlite3
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-DB_PATH = Path(os.getenv("DB_PATH", "dev.db"))
+DB_PATH = Path(os.getenv("DB_PATH", "database/dev.db"))
 
 def connect() -> sqlite3.Connection:
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
