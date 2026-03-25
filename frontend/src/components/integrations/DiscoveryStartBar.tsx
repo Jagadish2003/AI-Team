@@ -60,8 +60,6 @@ export default function DiscoveryStartBar({
           {/* Count */}
           <div className="text-sm text-muted">
             Connected : <span className="text-text">{recommendedConnectedCount}</span> of <span className="text-text">{recommendedTotal}</span> recommended
-            <span className="mx-2">|</span>
-            ReCx
           </div>
 
           {/* Start button */}
