@@ -2,13 +2,8 @@ import os
 import pytest
 from fastapi.testclient import TestClient
 
-# IMPORTANT:
-# These tests assume the Layer-1 API Skeleton exists in the same repo with:
-#   backend/app/main.py exporting `app`
-# If you run this pack standalone, copy `tests/` into the Task 3 backend repo.
-
 os.environ.setdefault("DEV_JWT", "dev-token-change-me")
-os.environ.setdefault("DB_PATH", "dev.db")
+os.environ.setdefault("DB_PATH", "database/dev.db")
 os.environ.setdefault("CORS_ORIGINS", "http://localhost:5173")
 
 from app.main import app
