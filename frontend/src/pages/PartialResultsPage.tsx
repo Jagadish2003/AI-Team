@@ -4,8 +4,10 @@ import TabsHeader from '../components/partial_results/TabsHeader';
 import EntitiesSidebar from '../components/partial_results/EntitiesSidebar';
 import EvidenceList from '../components/partial_results/EvidenceList';
 import EvidenceViewer from '../components/partial_results/EvidenceViewer';
+
 import { usePartialResultsContext } from '../context/PartialResultsContext';
 import { useDiscoveryRunContext } from '../context/DiscoveryRunContext';
+import { useRunContext } from '../context/RunContext'; // ✅ IMPORTANT
 import { useToast } from '../components/common/Toast';
 
 export default function PartialResultsPage() {
@@ -40,6 +42,7 @@ export default function PartialResultsPage() {
   } = usePartialResultsContext();
 
   const { run } = useDiscoveryRunContext();
+  const { runId } = useRunContext(); // ✅ SOURCE OF TRUTH
   const { push } = useToast();
 
   return (
@@ -48,32 +51,43 @@ export default function PartialResultsPage() {
 
       <div className="w-full px-8 py-6 pb-10">
         <div className="mb-6 flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+          
+          {/* LEFT SIDE */}
           <div>
             <div className="text-2xl font-semibold">Partial Results</div>
+
+            {/* ✅ FIXED: use runId instead of run.runId */}
             <div className="mt-1 text-sm text-muted">
-              Run ID: <span className="font-semibold text-text">{run.runId}</span>
+              Run ID: <span className="font-semibold text-text">{runId}</span>
             </div>
           </div>
 
-          <div
-            className={`inline-flex items-center gap-2 rounded-lg border px-3 py-2 text-sm ${
-              run.status === 'COMPLETED'
-                ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-200'
-                : run.status === 'FAILED'
-                  ? 'border-danger/40 bg-danger/10 text-danger'
-                  : 'border-accent/40 bg-accent/10 text-text'
-            }`}
-          >
-            <span className="h-2 w-2 rounded-full bg-current opacity-80" />
-            {run.status === 'RUNNING' ? 'RUNNING…' : run.status}
-            <span className="text-muted">·</span>
-            <span>{run.progress.percent}%</span>
+          {/* RIGHT SIDE (RUNNING BADGE UI) */}
+          <div className="flex justify-end">
+            <div className="flex items-center gap-2 px-3 py-2 rounded-full bg-accent/20 text-white text-xs font-medium">
+
+              {/* Animated dot */}
+              <span className="w-2 h-2 rounded-full bg-accent animate-pulse"></span>
+
+              {/* Status */}
+              <span>
+                {run.status === 'RUNNING' ? 'RUNNING...' : run.status}
+              </span>
+
+              {/* Percentage */}
+              <span className="opacity-80">
+                {run.progress.percent}%
+              </span>
+
+            </div>
           </div>
+
         </div>
 
         <TabsHeader tab={activeTab} onTab={setActiveTab} />
 
         <div className="mt-4 grid grid-cols-1 gap-6 lg:grid-cols-3">
+          
           <EntitiesSidebar
             entities={filteredEntities}
             countsByType={countsByType}
@@ -114,14 +128,15 @@ export default function PartialResultsPage() {
             onApprove={() => {
               const ok = approveSelected();
               if (ok) push('Approved. Moved to next unreviewed item.');
-              else push('Decision finalized. It can\u2019t be changed now.');
+              else push('Decision finalized. It can’t be changed now.');
             }}
             onReject={() => {
               const ok = rejectSelected();
               if (ok) push('Rejected. Moved to next unreviewed item.');
-              else push('Decision finalized. It can\u2019t be changed now.');
+              else push('Decision finalized. It can’t be changed now.');
             }}
           />
+
         </div>
       </div>
     </div>
