@@ -44,6 +44,11 @@ def init_tables() -> None:
     con = connect()
     cur = con.cursor()
     cur.execute("CREATE TABLE IF NOT EXISTS runs (id TEXT PRIMARY KEY, payload TEXT NOT NULL)")
+    # Migrate run_events if it exists with the old single-key schema
+    cur.execute("PRAGMA table_info(run_events)")
+    existing_cols = {row[1] for row in cur.fetchall()}
+    if existing_cols and "run_id" not in existing_cols:
+        cur.execute("DROP TABLE run_events")
     cur.execute(
         "CREATE TABLE IF NOT EXISTS run_events (run_id TEXT NOT NULL, seq INTEGER NOT NULL, payload TEXT NOT NULL, PRIMARY KEY(run_id, seq))"
     )
