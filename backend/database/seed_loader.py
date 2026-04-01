@@ -19,7 +19,6 @@ import os
 import sqlite3
 from pathlib import Path
 
-# Resolve paths relative to THIS script's location, not the working directory.
 _SCRIPT_DIR = Path(__file__).resolve().parent
 
 SEED_DIR = Path(os.getenv("SEED_DIR", _SCRIPT_DIR / "seed"))
