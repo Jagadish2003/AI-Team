@@ -73,6 +73,14 @@ def upsert_run(run_id: str, payload: Dict[str, Any]) -> None:
     con.commit()
     con.close()
 
+def count_runs() -> int:
+    con = connect()
+    cur = con.cursor()
+    cur.execute("SELECT COUNT(*) FROM runs")
+    row = cur.fetchone()
+    con.close()
+    return row[0] if row else 0
+
 def require_run_exists(run_id: str) -> Dict[str, Any]:
     r = get_run(run_id)
     if not r:
