@@ -1,0 +1,26 @@
+{
+  "issue_metrics": [
+    {
+      "project": "CRM",
+      "volume": 180,
+      "salesforce_label_count": 62
+    },
+    {
+      "project": "INTEG",
+      "volume": 95,
+      "salesforce_label_count": 21
+    }
+  ],
+  "sprint_velocity": [
+    {
+      "sprint_name": "Sprint 28",
+      "completed_points": 42,
+      "salesforce_issue_count": 14
+    },
+    {
+      "sprint_name": "Sprint 29",
+      "completed_points": 38,
+      "salesforce_issue_count": 11
+    }
+  ]
+}

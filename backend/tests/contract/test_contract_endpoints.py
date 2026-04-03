@@ -39,7 +39,7 @@ def test_start_run_and_run_scoped_reads():
     r = client.post("/api/runs/start", headers=auth_headers(), json=payload)
     assert r.status_code == 200
     body = r.json()
-    assert "runId" in body and body["runId"].startswith("run_")
+    assert "runId" in body and body["runId"].startswith("RUN_")
     assert body["status"] == "running"
     assert "startedAt" in body
 
