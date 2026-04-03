@@ -1,11 +1,10 @@
 import json
 import os
-import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List
 
-from .db import init_tables, upsert_run, require_run_exists, delete_run_events, insert_run_events, get_run_events
+from .db import init_tables, upsert_run, require_run_exists, delete_run_events, insert_run_events, get_run_events, count_runs
 
 SEED_DIR = Path(os.getenv("SEED_DIR", "database/seed"))
 SEED_EVENTS_FILE = SEED_DIR / "events.json"
@@ -20,7 +19,8 @@ def load_seed_events() -> List[Dict[str, Any]]:
 
 def start_run_(inputs: Dict[str, Any]) -> Dict[str, Any]:
     init_tables()
-    run_id = f"run_{uuid.uuid4().hex[:6]}"
+    n = count_runs() + 1
+    run_id = f"RUN_{n:03d}"
     started = now_iso()
     run = {"id": run_id, "status": "running", "startedAt": started, "updatedAt": started, "inputs": inputs}
     upsert_run(run_id, run)
