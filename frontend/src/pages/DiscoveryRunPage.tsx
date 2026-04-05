@@ -146,16 +146,13 @@ export default function DiscoveryRunPage() {
       <TopNav />
 
       <div className="flex items-center justify-center h-[80vh]">
-        <div className="w-[420px] rounded-xl border border-border bg-panel p-8 text-center shadow-lg">
-          
+        <div className="w-[470px] rounded-xl border border-white/20 bg-panel p-8 py-12 text-center shadow-xl shadow-black/20  ">  
           <h2 className="text-lg font-semibold mb-2">
             No Active Run
           </h2>
-
           <p className="text-sm text-muted mb-6">
             Start a new discovery run to continue.
           </p>
-
           <button
             onClick={handleStart}
             disabled={loading}
@@ -163,7 +160,6 @@ export default function DiscoveryRunPage() {
           >
             {loading ? "Starting..." : "Start New Discovery Run"}
           </button>
-
         </div>
       </div>
     </div>
