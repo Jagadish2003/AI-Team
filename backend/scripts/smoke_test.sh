@@ -46,4 +46,18 @@ code=$(curl -sS -o /dev/null -w "%{http_code}" "${hdr[@]}" "${BASE_URL}/api/runs
 set -e
 test "$code" = "404"
 
+echo "== 401 on missing auth"
+set +e
+code=$(curl -sS -o /dev/null -w "%{http_code}" "${BASE_URL}/api/connectors")
+set -e
+test "$code" = "401"
+echo "✅ 401 enforced"
+
+echo "== Write persistence: decision survives refetch"
+OPP_ID=$(curl -sS "${hdr[@]}" "${BASE_URL}/api/runs/${RUN_ID}/opportunities" | python -c "import sys,json; print(json.load(sys.stdin)[0]['id'])")
+curl -sS "${hdr[@]}" -X POST "${BASE_URL}/api/runs/${RUN_ID}/opportunities/${OPP_ID}/decision" -d '{"decision":"APPROVED"}' >/dev/null
+DECISION=$(curl -sS "${hdr[@]}" "${BASE_URL}/api/runs/${RUN_ID}/opportunities" | python -c "import sys,json; opps=json.load(sys.stdin); print(next(o['decision'] for o in opps if o['id']=='${OPP_ID}'))")
+test "$DECISION" = "APPROVED"
+echo "✅ Write persistence verified"
+
 echo "✅ Smoke test passed"
