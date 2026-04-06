@@ -1,0 +1,48 @@
+name: Contract Tests
+
+on:
+  pull_request:
+    paths:
+      - "backend/**"
+      - "contracts/**"
+  push:
+    branches: ["main"]
+    paths:
+      - "backend/**"
+      - "contracts/**"
+
+jobs:
+  contract-tests:
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: backend
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest httpx
+
+      - name: Seed database
+        env:
+          DB_PATH: database/dev.db
+          SEED_DIR: database/seed
+        run: python database/seed_loader.py
+
+      - name: Run contract tests
+        env:
+          DEV_JWT: dev-token-change-me
+          DB_PATH: database/dev.db
+          SEED_DIR: database/seed
+          CORS_ORIGINS: http://localhost:5173
+        run: pytest tests/contract/ -v

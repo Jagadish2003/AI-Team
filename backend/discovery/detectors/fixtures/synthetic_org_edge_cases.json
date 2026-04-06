@@ -1,0 +1,25 @@
+{
+  "salesforce_flow_inventory": [],
+  "salesforce_case_metrics": [
+    {
+      "category": "Tiny",
+      "volume": 10,
+      "avg_reassignments": 5.0
+    }
+  ],
+  "salesforce_approval_pending": [],
+  "salesforce_knowledge_coverage": [
+    {
+      "category": "Small",
+      "closed_count": 10,
+      "with_kb_count": 0
+    }
+  ],
+  "salesforce_named_credentials": [],
+  "salesforce_permission_bottlenecks": [],
+  "salesforce_cross_system_references": {
+    "match_count": 0,
+    "total_count": 0,
+    "echo_score": 0.0
+  }
+}

@@ -9,7 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from .db import get_all, get_one, upsert
 from .security import require_auth
 from .roadmap import build_pilot_roadmap
-from .run_store import start_run_, read_run, read_run_events, replay_run
+from .run_store import start_run_, read_run, read_run_events, replay_run as replay_run_
 
 app = FastAPI(title="AgentIQ Layer 1 API Skeleton", version="0.1.0")
 
@@ -27,6 +27,10 @@ def now_iso() -> str:
 
 @app.get("/health")
 def health() -> Dict[str, Any]:
+    return {"ok": True, "ts": now_iso()}
+
+@app.get("/api/health")
+def api_health() -> Dict[str, Any]:
     return {"ok": True, "ts": now_iso()}
 
 @app.get("/api/connectors", dependencies=[Depends(require_auth)])
@@ -92,7 +96,7 @@ def get_events(run_id: str) -> List[Dict[str, Any]]:
 @app.post("/api/runs/{run_id}/replay", dependencies=[Depends(require_auth)])
 def replay_run(run_id: str) -> Dict[str, Any]:
     try:
-        return replay_run(run_id)
+        return replay_run_(run_id)
     except KeyError:
         raise HTTPException(404, "run not found")
 
