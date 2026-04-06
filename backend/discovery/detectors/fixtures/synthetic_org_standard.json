@@ -1,0 +1,113 @@
+{
+  "salesforce_flow_inventory": [
+    {
+      "id": "flow1",
+      "name": "Auto-set status",
+      "type": "Record-Triggered",
+      "trigger_object": "Case",
+      "element_count": 8,
+      "is_active": true,
+      "records_per_day_proxy": 5,
+      "active_flows_on_object": 2
+    },
+    {
+      "id": "flow2",
+      "name": "Complex wizard",
+      "type": "Screen",
+      "trigger_object": "Case",
+      "element_count": 24,
+      "is_active": true,
+      "records_per_day_proxy": 5,
+      "active_flows_on_object": 1
+    }
+  ],
+  "salesforce_case_metrics": [
+    {
+      "category": "Technical Support",
+      "volume": 847,
+      "avg_reassignments": 2.8,
+      "avg_age_days": 4.2
+    },
+    {
+      "category": "Billing",
+      "volume": 120,
+      "avg_reassignments": 0.9,
+      "avg_age_days": 1.1
+    }
+  ],
+  "salesforce_approval_pending": [
+    {
+      "process_name": "Discount Approval",
+      "step_name": "Legal Review",
+      "pending_count": 47,
+      "avg_age_days": 6.2,
+      "approver_count": 2
+    },
+    {
+      "process_name": "Refund Approval",
+      "step_name": "Manager",
+      "pending_count": 8,
+      "avg_age_days": 1.1,
+      "approver_count": 8
+    }
+  ],
+  "salesforce_knowledge_coverage": [
+    {
+      "category": "Billing",
+      "closed_count": 500,
+      "with_kb_count": 180
+    },
+    {
+      "category": "Product Setup",
+      "closed_count": 300,
+      "with_kb_count": 280
+    }
+  ],
+  "salesforce_named_credentials": [
+    {
+      "name": "SAP_ERP",
+      "endpoint": "https://sap.example",
+      "flow_reference_count": 6,
+      "referencing_flow_ids": [
+        "flowA",
+        "flowB",
+        "flowC",
+        "flowD",
+        "flowE",
+        "flowF"
+      ]
+    },
+    {
+      "name": "DocuSign",
+      "endpoint": "https://ds.example",
+      "flow_reference_count": 1,
+      "referencing_flow_ids": [
+        "flowX"
+      ]
+    }
+  ],
+  "salesforce_permission_bottlenecks": [
+    {
+      "step_name": "Legal Review",
+      "pending_count": 34,
+      "approver_count": 2,
+      "bottleneck_score": 17.0
+    },
+    {
+      "step_name": "Manager Approval",
+      "pending_count": 12,
+      "approver_count": 8,
+      "bottleneck_score": 1.5
+    }
+  ],
+  "salesforce_cross_system_references": {
+    "match_count": 198,
+    "total_count": 847,
+    "echo_score": 0.233
+  },
+  "servicenow_cross_system_references": {
+    "match_count": 85,
+    "total_count": 360,
+    "echo_score": 0.236
+  }
+}

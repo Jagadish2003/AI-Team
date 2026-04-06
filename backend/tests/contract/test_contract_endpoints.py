@@ -24,6 +24,13 @@ def test_health_ok():
     assert body["ok"] is True
     assert "ts" in body
 
+def test_api_health_ok():
+    r = client.get("/api/health")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["ok"] is True
+    assert "ts" in body
+
 def test_connectors_shape():
     r = client.get("/api/connectors", headers=auth_headers())
     assert r.status_code == 200
@@ -39,7 +46,7 @@ def test_start_run_and_run_scoped_reads():
     r = client.post("/api/runs/start", headers=auth_headers(), json=payload)
     assert r.status_code == 200
     body = r.json()
-    assert "runId" in body and body["runId"].startswith("run_")
+    assert "runId" in body and body["runId"].startswith("RUN_")
     assert body["status"] == "running"
     assert "startedAt" in body
 
@@ -141,6 +148,18 @@ def test_opportunity_shape_and_override_write_is_run_scoped():
     )
     assert d.status_code == 200
     assert d.json()["decision"] == "APPROVED"
+
+def test_replay_is_deterministic():
+    r = client.post("/api/runs/start", headers=auth_headers(), json={
+        "connectedSources": [], "uploadedFiles": [], "sampleWorkspaceEnabled": False
+    })
+    run_id = r.json()["runId"]
+
+    before = client.get(f"/api/runs/{run_id}/events", headers=auth_headers()).json()
+    replay = client.post(f"/api/runs/{run_id}/replay", headers=auth_headers(), json={})
+    assert replay.status_code == 200
+    after = client.get(f"/api/runs/{run_id}/events", headers=auth_headers()).json()
+    assert before == after, "Replay must be deterministic: event stream must not change"
 
 def test_roadmap_stage90_not_empty():
     # Use seed-driven demo data via /roadmap endpoint. Stage 90 should have >=1 Complex item.
