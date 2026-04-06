@@ -1,8 +1,6 @@
 /backend/.venv
 /backend/.pytest_cache
 /frontend/node_modules
-/backend/app/__pycache__
-/backend/discovery/__pycache__
-/backend/tests/contract/__pycache__
-/backend/tests/detectors/__pycache__
-/backend/tests/ingest/__pycache__
+**/__pycache__
+*.pyc
+backend/database/dev.db
