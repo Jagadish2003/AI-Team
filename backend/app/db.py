@@ -111,3 +111,49 @@ def get_run_events(run_id: str) -> List[Dict[str, Any]]:
     rows = cur.fetchall()
     con.close()
     return [json.loads(r[0]) for r in rows]
+
+# --- replay.py db API ---
+
+def run_get(run_id: str) -> Dict[str, Any]:
+    """Get run by ID, raises HTTP 404 if not found."""
+    return require_run_exists(run_id)
+
+def run_set(run_id: str, run: Dict[str, Any]) -> None:
+    """Persist run metadata."""
+    upsert_run(run_id, run)
+
+def _init_kv_table() -> None:
+    con = connect()
+    cur = con.cursor()
+    cur.execute("CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, payload TEXT NOT NULL)")
+    con.commit()
+    con.close()
+
+def kv_get(key: str) -> Any:
+    if key.startswith("events:"):
+        run_id = key[len("events:"):]
+        return get_run_events(run_id)
+    _init_kv_table()
+    con = connect()
+    cur = con.cursor()
+    cur.execute("SELECT payload FROM kv WHERE key = ?", (key,))
+    row = cur.fetchone()
+    con.close()
+    return json.loads(row[0]) if row else None
+
+def kv_set(key: str, value: Any) -> None:
+    if key.startswith("events:"):
+        run_id = key[len("events:"):]
+        delete_run_events(run_id)
+        if isinstance(value, list):
+            insert_run_events(run_id, value)
+        return
+    _init_kv_table()
+    con = connect()
+    cur = con.cursor()
+    cur.execute(
+        "INSERT INTO kv (key, payload) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET payload=excluded.payload",
+        (key, json.dumps(value)),
+    )
+    con.commit()
+    con.close()
