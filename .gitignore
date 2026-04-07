@@ -4,3 +4,7 @@
 **/__pycache__
 *.pyc
 backend/database/dev.db
+frontend/.env
+frontend/.env.local
+frontend/.env.development
+frontend/.env.production
