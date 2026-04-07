@@ -5,6 +5,9 @@ import OpportunityDetail from '../components/analyst_review/OpportunityDetail';
 import ReasoningOverride from '../components/analyst_review/ReasoningOverride';
 import { useAnalystReviewContext } from '../context/AnalystReviewContext';
 import { useToast } from '../components/common/Toast';
+import { useNavigate } from 'react-router-dom';
+import { useRunContext } from '../context/RunContext';
+import { RunRequiredEmptyState } from '../components/common/RunRequiredEmptyState';
 
 export default function AnalystReviewPage() {
   const {
@@ -21,6 +24,19 @@ export default function AnalystReviewPage() {
   } = useAnalystReviewContext();
 
   const { push } = useToast();
+  const nav = useNavigate();
+  const { runId } = useRunContext();
+
+  if (!runId) {
+    return (
+      <div className="min-h-screen bg-bg text-text flex flex-col">
+        <TopNav />
+        <div className="px-8 py-6">
+          <RunRequiredEmptyState onStart={() => nav('/discovery-run')} />
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-bg text-text flex flex-col">

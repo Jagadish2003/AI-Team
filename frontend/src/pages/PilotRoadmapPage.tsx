@@ -7,17 +7,31 @@ import StagesGrid from '../components/pilot_roadmap/StagesGrid';
 import { useAnalystReviewContext } from '../context/AnalystReviewContext';
 import { useToast } from '../components/common/Toast';
 import { buildPilotRoadmap } from '../utils/buildRoadmap';
+import { useRunContext } from '../context/RunContext';
+import { RunRequiredEmptyState } from '../components/common/RunRequiredEmptyState';
 
 export default function PilotRoadmapPage() {
   const { opportunities, select } = useAnalystReviewContext();
   const model = useMemo(() => buildPilotRoadmap(opportunities), [opportunities]);
   const { push } = useToast();
   const nav = useNavigate();
+  const { runId } = useRunContext();
 
   const openReview = (id: string) => {
     select(id);
     nav('/analyst-review');
   };
+
+  if (!runId) {
+    return (
+      <div className="min-h-screen text-text">
+        <TopNav />
+        <div className="px-8 py-6">
+          <RunRequiredEmptyState onStart={() => nav('/discovery-run')} />
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen text-text">

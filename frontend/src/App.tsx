@@ -23,8 +23,8 @@ export default function App() {
   return (
     <ToastProvider>
       <ConnectorProvider>
-        <SourceIntakeProvider>
-          <RunProvider>
+        <RunProvider>
+          <SourceIntakeProvider>
             <DiscoveryRunProvider>
               <PartialResultsProvider>
                 <NormalizationProvider>
@@ -46,8 +46,8 @@ export default function App() {
                 </NormalizationProvider>
               </PartialResultsProvider>
             </DiscoveryRunProvider>
-          </RunProvider>
-        </SourceIntakeProvider>
+          </SourceIntakeProvider>
+        </RunProvider>
       </ConnectorProvider>
     </ToastProvider>
   );
