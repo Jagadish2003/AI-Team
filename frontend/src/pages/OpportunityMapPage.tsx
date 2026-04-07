@@ -8,11 +8,14 @@ import OpportunityRankedList from '../components/opportunity_map/OpportunityRank
 import { useAnalystReviewContext } from '../context/AnalystReviewContext';
 import { useNavigate } from 'react-router-dom';
 import { useToast } from '../components/common/Toast';
+import { useRunContext } from '../context/RunContext';
+import { RunRequiredEmptyState } from '../components/common/RunRequiredEmptyState';
 
 export default function OpportunityMapPage() {
   const { opportunities, selectedId: contextSelectedId, select } = useAnalystReviewContext();
   const nav = useNavigate();
   const { push } = useToast();
+  const { runId } = useRunContext();
 
   const [q, setQ]           = useState('');
   const [tier, setTier]     = useState<TierFilter>('All');
@@ -57,6 +60,17 @@ export default function OpportunityMapPage() {
     select(id);
     nav('/analyst-review');
   };
+
+  if (!runId) {
+    return (
+      <div className="min-h-screen text-text">
+        <TopNav />
+        <div className="px-8 py-6">
+          <RunRequiredEmptyState onStart={() => nav('/discovery-run')} />
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen text-text">

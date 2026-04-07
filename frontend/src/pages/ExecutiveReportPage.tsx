@@ -3,6 +3,9 @@ import TopNav from '../components/common/TopNav';
 import { useToast } from '../components/common/Toast';
 import { useAnalystReviewContext } from '../context/AnalystReviewContext';
 import { useConnectorContext } from '../context/ConnectorContext';
+import { useNavigate } from 'react-router-dom';
+import { useRunContext } from '../context/RunContext';
+import { RunRequiredEmptyState } from '../components/common/RunRequiredEmptyState';
 import { buildPilotRoadmap } from '../utils/buildRoadmap';
 import StatCard from '../components/executive_report/StatCard';
 import SnapshotMatrix from '../components/executive_report/SnapshotMatrix';
@@ -14,6 +17,8 @@ export default function ExecutiveReportPage() {
   const { push } = useToast();
   const { opportunities } = useAnalystReviewContext();
   const { connectors } = useConnectorContext();
+  const nav = useNavigate();
+  const { runId } = useRunContext();
 
   const connectedCount = useMemo(
     () => connectors.filter(c => c.tier === 'recommended' && c.status === 'connected').length,
@@ -37,6 +42,17 @@ export default function ExecutiveReportPage() {
       .sort((a, b) => ((b.impact - b.effort) - (a.impact - a.effort)) || (b.impact - a.impact))
       .slice(0, 5)
   ), [opportunities]);
+
+  if (!runId) {
+    return (
+      <div className="min-h-screen text-text">
+        <TopNav />
+        <div className="px-8 py-6">
+          <RunRequiredEmptyState onStart={() => nav('/discovery-run')} />
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen text-text">

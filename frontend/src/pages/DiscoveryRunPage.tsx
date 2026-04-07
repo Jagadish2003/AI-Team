@@ -10,22 +10,8 @@ import { useConnectorContext } from "../context/ConnectorContext";
 import { useSourceIntakeContext } from "../context/SourceIntakeContext";
 import { useRunContext } from "../context/RunContext";
 
-import { apiStartRun, apiGetRun, apiGetRunEvents } from "../lib/apiClient";
-
-interface BackendRun {
-  runId: string;
-  status?: string;
-  startedAt?: string;
-  updatedAt?: string;
-}
-
-interface BackendEvent {
-  id: string;
-  runId: string;
-  eventType: string;
-  data: unknown;
-  timestamp: string;
-}
+import { startRun as apiStartRun, fetchRun as apiGetRun, fetchRunEvents as apiGetRunEvents } from "../api/runApi";
+import type { DiscoveryRun as BackendRun, RunEvent as BackendEvent } from "../types/discoveryRun";
 
 export default function DiscoveryRunPage() {
   const {
@@ -68,8 +54,10 @@ export default function DiscoveryRunPage() {
       setBackendRun(null);
       setBackendEvents([]);
 
-      const res = await apiStartRun<{ runId: string }>({
-        timestamp: new Date().toISOString(),
+      const res = await apiStartRun({
+        connectedSources: connectedNames,
+        uploadedFiles: uploadedNames,
+        sampleWorkspaceEnabled,
       });
       setRunId(res.runId);
 
@@ -112,8 +100,8 @@ export default function DiscoveryRunPage() {
 
       try {
         const [runRes, eventsRes] = await Promise.all([
-          apiGetRun<BackendRun>(runId),
-          apiGetRunEvents<BackendEvent[]>(runId),
+          apiGetRun(runId),
+          apiGetRunEvents(runId),
         ]);
 
         if (!cancelled) {
