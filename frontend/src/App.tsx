@@ -8,6 +8,7 @@ import { PartialResultsProvider } from './context/PartialResultsContext';
 import { NormalizationProvider } from './context/NormalizationContext';
 import { ToastProvider } from './components/common/Toast';
 import { AnalystReviewProvider } from './context/AnalystReviewContext';
+import { EvidenceProvider } from './context/EvidenceContext';
 
 import IntegrationHubPage from './pages/IntegrationHubPage';
 import SourceIntakePage from './pages/SourceIntakePage';
@@ -29,6 +30,7 @@ export default function App() {
               <PartialResultsProvider>
                 <NormalizationProvider>
                   <AnalystReviewProvider>
+                  <EvidenceProvider>
                   <Routes>
                     <Route path="/" element={<Navigate to="/integration-hub" replace />} />
                     <Route path="/integration-hub" element={<IntegrationHubPage />} />
@@ -42,6 +44,7 @@ export default function App() {
                     <Route path="/executive-report" element={<ExecutiveReportPage />} />
                     <Route path="*" element={<Navigate to="/integration-hub" replace />} />
                   </Routes>
+                  </EvidenceProvider>
                   </AnalystReviewProvider>
                 </NormalizationProvider>
               </PartialResultsProvider>

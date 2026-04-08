@@ -1,26 +1,33 @@
-import React, { useRef } from 'react';
-import { OpportunityCandidate, Decision, ReviewAuditEvent } from '../../types/analystReview';
+import React, { useEffect, useRef, useState } from 'react';
+import { OpportunityCandidate, ReviewAuditEvent } from '../../types/analystReview';
+import type { Decision } from '../../types/common';
 
 export default function ReasoningOverride({
   opp,
   audit,
-  onOverrideText,
-  onOverrideReason,
   onSave,
   onViewEvidence,
-  onLockToggle,
   onDecision,
 }: {
   opp: OpportunityCandidate | null;
   audit: ReviewAuditEvent[];
-  onOverrideText: (v: string) => void;
-  onOverrideReason: (v: string) => void;
-  onSave: () => void;
+  onSave: (rationaleOverride: string, overrideReason: string, isLocked: boolean) => void;
   onViewEvidence: () => void;
-  onLockToggle: () => void;
   onDecision: (d: Decision) => void;
 }) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  // Local draft state — synced from opp.override when opp changes
+  const [rationaleOverride, setRationaleOverride] = useState(opp?.override.rationaleOverride ?? '');
+  const [overrideReason, setOverrideReason] = useState(opp?.override.overrideReason ?? '');
+  const [isLocked, setIsLocked] = useState(opp?.override.isLocked ?? false);
+
+  useEffect(() => {
+    setRationaleOverride(opp?.override.rationaleOverride ?? '');
+    setOverrideReason(opp?.override.overrideReason ?? '');
+    setIsLocked(opp?.override.isLocked ?? false);
+  }, [opp?.id]);
+
   const isDecisionFinalized = !!opp && opp.decision !== 'UNREVIEWED';
 
   return (
@@ -64,19 +71,9 @@ export default function ReasoningOverride({
                   }`}
               >
                 {opp.decision === 'APPROVED' ? (
-                  <>
-                    <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
-                    </svg>
-                    Approved
-                  </>
+                  <><svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" /></svg>Approved</>
                 ) : (
-                  <>
-                    <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-                    </svg>
-                    Approve
-                  </>
+                  <><svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" /></svg>Approve</>
                 )}
               </button>
 
@@ -91,19 +88,9 @@ export default function ReasoningOverride({
                   }`}
               >
                 {opp.decision === 'REJECTED' ? (
-                  <>
-                    <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M6 18L18 6M6 6l12 12" />
-                    </svg>
-                    Rejected
-                  </>
+                  <><svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M6 18L18 6M6 6l12 12" /></svg>Rejected</>
                 ) : (
-                  <>
-                    <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                    </svg>
-                    Reject
-                  </>
+                  <><svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>Reject</>
                 )}
               </button>
             </div>
@@ -112,8 +99,7 @@ export default function ReasoningOverride({
               className="shrink-0 h-[20px] text-xs text-muted flex items-center transition-opacity duration-200"
               style={{ opacity: opp.override.updatedAt ? 1 : 0 }}
             >
-              {opp.override.updatedAt &&
-                `Last updated: ${new Date(opp.override.updatedAt).toLocaleString()}`}
+              {opp.override.updatedAt && `Last updated: ${new Date(opp.override.updatedAt).toLocaleString()}`}
             </div>
 
             <div className="border-t border-border shrink-0" />
@@ -122,16 +108,16 @@ export default function ReasoningOverride({
               <div className="text-xs font-semibold text-text mb-2">Architect Override</div>
               <textarea
                 ref={textareaRef}
-                className="w-full rounded-lg border border-border bg-bg/30 text-xs p-3 text-text 
-                  placeholder:text-muted leading-relaxed hover:border-[#00B4B4]/50 
-                  transition-colors focus:outline-none focus:border-[#00B4B4] 
-                  focus:ring-2 focus:ring-[#00B4B4]/50 disabled:opacity-50 
+                className="w-full rounded-lg border border-border bg-bg/30 text-xs p-3 text-text
+                  placeholder:text-muted leading-relaxed hover:border-[#00B4B4]/50
+                  transition-colors focus:outline-none focus:border-[#00B4B4]
+                  focus:ring-2 focus:ring-[#00B4B4]/50 disabled:opacity-50
                   resize-none overflow-y-auto reason-scroll"
                 style={{ maxHeight: '200px', minHeight: '124px' }}
                 placeholder="Rewrite rationale in enterprise language…"
-                value={opp.override.rationaleOverride ?? ''}
-                onChange={e => onOverrideText(e.target.value)}
-                disabled={opp.override.isLocked}
+                value={rationaleOverride}
+                onChange={e => setRationaleOverride(e.target.value)}
+                disabled={isLocked}
               />
             </div>
 
@@ -139,22 +125,22 @@ export default function ReasoningOverride({
               <div className="text-xs font-semibold text-text mb-2">Override reason</div>
               <input
                 type="text"
-                className="w-full rounded-md border border-border bg-bg/30 px-3 py-2 text-sm text-text placeholder:text-muted 
+                className="w-full rounded-md border border-border bg-bg/30 px-3 py-2 text-sm text-text placeholder:text-muted
                 focus:outline-none hover:border-[#00B4B4]/50 focus:border-[#00B4B4] focus:ring-2 focus:ring-[#00B4B4]/50 disabled:opacity-50"
                 placeholder="Why are we overriding the AI rationale?"
-                value={opp.override.overrideReason ?? ''}
-                onChange={e => onOverrideReason(e.target.value)}
-                disabled={opp.override.isLocked}
+                value={overrideReason}
+                onChange={e => setOverrideReason(e.target.value)}
+                disabled={isLocked}
               />
             </div>
 
             <div className="grid grid-cols-2 gap-2 shrink-0">
               <button
                 type="button"
-                onClick={onSave}
-                disabled={opp.override.isLocked}
-                className="py-2 rounded-lg border border-border bg-bg/70 text-xs font-semibold 
-                text-text hover:bg-panel2  hover:border-[#00B4B4]/50 disabled:opacity-50 transition-colors"
+                onClick={() => onSave(rationaleOverride, overrideReason, isLocked)}
+                disabled={isLocked}
+                className="py-2 rounded-lg border border-border bg-bg/70 text-xs font-semibold
+                text-text hover:bg-panel2 hover:border-[#00B4B4]/50 disabled:opacity-50 transition-colors"
               >
                 Save Override
               </button>
@@ -162,7 +148,7 @@ export default function ReasoningOverride({
               <button
                 type="button"
                 onClick={onViewEvidence}
-                className="py-2 rounded-lg border border-border bg-bg/70 text-xs font-semibold 
+                className="py-2 rounded-lg border border-border bg-bg/70 text-xs font-semibold
                 text-text hover:bg-panel2 hover:border-[#00B4B4]/50 transition-colors"
               >
                 View Evidence
@@ -171,14 +157,14 @@ export default function ReasoningOverride({
 
             <button
               type="button"
-              onClick={onLockToggle}
+              onClick={() => setIsLocked(l => !l)}
               className={`shrink-0 w-full flex items-center gap-2 px-3 py-2 rounded-lg border text-xs transition-colors
-                ${opp.override.isLocked
+                ${isLocked
                   ? 'bg-amber-500/10 border-amber-500/30 text-amber-300'
                   : 'bg-panel2 border-border text-muted hover:text-text'
                 }`}
             >
-              {opp.override.isLocked ? (
+              {isLocked ? (
                 <svg className="w-3.5 h-3.5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <rect x="3" y="11" width="18" height="11" rx="2" strokeWidth="2" />
                   <path d="M7 11V7a5 5 0 0110 0v4" strokeWidth="2" />
@@ -189,7 +175,7 @@ export default function ReasoningOverride({
                   <path d="M7 11V7a5 5 0 019.9-1" strokeWidth="2" />
                 </svg>
               )}
-              {opp.override.isLocked ? 'Override locked — click to unlock' : 'Lock override rationale'}
+              {isLocked ? 'Override locked — click to unlock' : 'Lock override rationale'}
             </button>
           </div>
         )}

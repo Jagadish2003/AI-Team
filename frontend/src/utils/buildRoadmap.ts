@@ -88,7 +88,7 @@ export function buildPilotRoadmap(all: OpportunityCandidate[]): PilotRoadmapMode
     title,
     summary,
     opportunities: opps,
-    requiredPermissions: uniqByLabel(opps.flatMap(o => o.permissions)),
+    requiredPermissions: uniqByLabel(opps.flatMap(o => o.permissions ?? [])),
     dependencies: mkDeps(id)
   });
 

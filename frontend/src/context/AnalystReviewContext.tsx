@@ -1,100 +1,153 @@
-import React, { createContext, useContext, useState, useCallback } from 'react';
-import { OpportunityCandidate, Decision, ReviewAuditEvent } from '../types/analystReview';
-import rawData from '../data/mockOpportunities.json';
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
+import { useRunContext } from "./RunContext";
+import {
+  fetchAudit,
+  fetchOpportunities,
+  postOpportunityDecision,
+  postOpportunityOverride,
+} from "../api/analystReviewApi";
+import type { OpportunityCandidate, ReviewAuditEvent } from "../types/analystReview";
+import type { Decision } from "../types/common";
 
-const initialAudit: ReviewAuditEvent[] = [
-  { id: 'a1', tsLabel: 'Just now', action: 'Architect Override rationale updated by @jsmith', by: 'jsmith' },
-  { id: 'a2', tsLabel: '2m ago',   action: 'Opportunity Rejected: Optimize SAP Approvals Workflow', by: 'jsmith' },
-  { id: 'a3', tsLabel: '5m ago',   action: 'Review session started', by: 'system' },
-];
+type AnalystReviewContextValue = {
+  loading: boolean;
+  error: string | null;
+  refetch: () => void;
 
-interface AnalystReviewContextValue {
   opportunities: OpportunityCandidate[];
   selectedId: string | null;
-  selected: OpportunityCandidate | null;
-  select: (id: string) => void;
-  setDecision: (d: Decision) => { ok: boolean; error?: string };
-  setOverrideText: (v: string) => void;
-  setOverrideReason: (v: string) => void;
-  toggleLock: () => void;
-  saveOverride: () => { ok: boolean; error?: string };
+  select: (id: string | null) => void;
+
   audit: ReviewAuditEvent[];
+
+  setDecision: (oppId: string, decision: Decision) => Promise<{ ok: boolean; error?: string }>;
+  saveOverride: (
+    oppId: string,
+    rationaleOverride: string,
+    overrideReason: string,
+    isLocked: boolean
+  ) => Promise<{ ok: boolean; error?: string }>;
+};
+
+const Ctx = createContext<AnalystReviewContextValue | null>(null);
+
+function nowLabel(): string {
+  const d = new Date();
+  const dd = String(d.getDate()).padStart(2, "0");
+  const mon = d.toLocaleString("en-GB", { month: "short" });
+  const yyyy = d.getFullYear();
+  const hh = String(d.getHours()).padStart(2, "0");
+  const mm = String(d.getMinutes()).padStart(2, "0");
+  return `${dd} ${mon} ${yyyy}, ${hh}:${mm}`;
 }
 
-const AnalystReviewContext = createContext<AnalystReviewContextValue | null>(null);
+function uid(prefix: string): string {
+  return `${prefix}_${Math.random().toString(16).slice(2, 8)}${Date.now().toString(16).slice(-4)}`;
+}
 
 export function AnalystReviewProvider({ children }: { children: React.ReactNode }) {
-  const [opportunities, setOpportunities] = useState<OpportunityCandidate[]>(
-    rawData as OpportunityCandidate[]
+  const { runId } = useRunContext();
+
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [fetchCount, setFetchCount] = useState(0);
+
+  const [opportunities, setOpportunities] = useState<OpportunityCandidate[]>([]);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [audit, setAudit] = useState<ReviewAuditEvent[]>([]);
+
+  const refetch = useCallback(() => setFetchCount((c) => c + 1), []);
+  const select = useCallback((id: string | null) => setSelectedId(id), []);
+
+  useEffect(() => {
+    if (!runId) return;
+    let cancelled = false;
+
+    (async () => {
+      setLoading(true);
+      setError(null);
+      try {
+        const [opps, aud] = await Promise.all([fetchOpportunities(runId), fetchAudit(runId)]);
+        if (cancelled) return;
+        setOpportunities(opps);
+        setAudit(aud);
+        setSelectedId((prev) => (prev && opps.some((o) => o.id === prev) ? prev : (opps[0]?.id ?? null)));
+      } catch (e: any) {
+        if (cancelled) return;
+        setError(e?.message ?? "Failed to load analyst review data");
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+
+    return () => { cancelled = true; };
+  }, [runId, fetchCount]);
+
+  const setDecision = useCallback(
+    async (oppId: string, decision: Decision) => {
+      if (!runId) return { ok: false, error: "No run selected" };
+
+      const before = opportunities;
+      setOpportunities((prev) => prev.map((o) => (o.id === oppId ? { ...o, decision } : o)));
+      setAudit((prev) => [
+        { id: uid("aud"), tsLabel: nowLabel(), action: decision, by: "Architect", opportunityId: oppId },
+        ...prev,
+      ]);
+
+      try {
+        const updated = await postOpportunityDecision(runId, oppId, decision);
+        setOpportunities((prev) => prev.map((o) => (o.id === oppId ? updated : o)));
+        return { ok: true };
+      } catch (e: any) {
+        setOpportunities(before);
+        setAudit((prev) => prev.filter((a) => !(a.opportunityId === oppId && a.action === decision && a.by === "Architect")));
+        return { ok: false, error: e?.message ?? "Failed to save decision" };
+      }
+    },
+    [runId, opportunities]
   );
-  const [selectedId, setSelectedId] = useState<string | null>(rawData[0]?.id ?? null);
-  const [audit, setAudit] = useState<ReviewAuditEvent[]>(initialAudit);
 
-  const selected = opportunities.find(o => o.id === selectedId) ?? null;
+  const saveOverride = useCallback(
+    async (oppId: string, rationaleOverride: string, overrideReason: string, isLocked: boolean) => {
+      if (!runId) return { ok: false, error: "No run selected" };
+      if (rationaleOverride.trim().length === 0) return { ok: false, error: "Override rationale cannot be empty" };
+      if (overrideReason.trim().length === 0) return { ok: false, error: "Override reason cannot be empty" };
 
-  const addAudit = (action: string) => {
-    setAudit(prev => [{
-      id: String(Date.now()),
-      tsLabel: 'Just now',
-      action,
-      by: 'jsmith',
-    }, ...prev]);
-  };
+      const before = opportunities;
+      setOpportunities((prev) =>
+        prev.map((o) =>
+          o.id === oppId
+            ? { ...o, override: { isLocked, rationaleOverride, overrideReason, updatedAt: new Date().toISOString() } }
+            : o
+        )
+      );
+      setAudit((prev) => [
+        { id: uid("aud"), tsLabel: nowLabel(), action: "OVERRIDE_SAVED", by: "Architect", opportunityId: oppId },
+        ...prev,
+      ]);
 
-  const updateSelected = (fn: (o: OpportunityCandidate) => OpportunityCandidate) => {
-    setOpportunities(prev => prev.map(o => o.id === selectedId ? fn(o) : o));
-  };
-
-  const setDecision = useCallback((d: Decision): { ok: boolean; error?: string } => {
-    if (!selected) return { ok: false, error: 'No opportunity selected' };
-
-    if (selected.decision !== 'UNREVIEWED') {
-      return { ok: false, error: "Decision finalized, can't revert" };
-    }
-
-    updateSelected(o => ({ ...o, decision: d }));
-    addAudit(`Opportunity ${d === 'APPROVED' ? 'Approved' : 'Rejected'}: ${selected?.title}`);
-
-    return { ok: true };
-  }, [selectedId, selected]);
-
-  const setOverrideText = useCallback((v: string) => {
-    updateSelected(o => ({ ...o, override: { ...o.override, rationaleOverride: v } }));
-  }, [selectedId]);
-
-  const setOverrideReason = useCallback((v: string) => {
-    updateSelected(o => ({ ...o, override: { ...o.override, overrideReason: v } }));
-  }, [selectedId]);
-
-  const toggleLock = useCallback(() => {
-    updateSelected(o => ({ ...o, override: { ...o.override, isLocked: !o.override.isLocked } }));
-    addAudit('Override lock toggled');
-  }, [selectedId]);
-
-  const saveOverride = useCallback((): { ok: boolean; error?: string } => {
-    if (!selected) return { ok: false, error: 'No opportunity selected' };
-    const hasOverride = selected.override.rationaleOverride.trim().length > 0;
-    const hasReason = selected.override.overrideReason.trim().length > 0;
-    if (hasOverride && !hasReason) return { ok: false, error: 'Override reason is required.' };
-    updateSelected(o => ({ ...o, override: { ...o.override, updatedAt: new Date().toISOString() } }));
-    addAudit('Architect Override rationale updated by @jsmith');
-    return { ok: true };
-  }, [selected, selectedId]);
-
-  return (
-    <AnalystReviewContext.Provider value={{
-      opportunities, selectedId, selected,
-      select: setSelectedId,
-      setDecision, setOverrideText, setOverrideReason,
-      toggleLock, saveOverride, audit,
-    }}>
-      {children}
-    </AnalystReviewContext.Provider>
+      try {
+        const updated = await postOpportunityOverride(runId, oppId, { rationaleOverride, overrideReason, isLocked });
+        setOpportunities((prev) => prev.map((o) => (o.id === oppId ? updated : o)));
+        return { ok: true };
+      } catch (e: any) {
+        setOpportunities(before);
+        return { ok: false, error: e?.message ?? "Failed to save override" };
+      }
+    },
+    [runId, opportunities]
   );
+
+  const value = useMemo(
+    () => ({ loading, error, refetch, opportunities, selectedId, select, audit, setDecision, saveOverride }),
+    [loading, error, refetch, opportunities, selectedId, select, audit, setDecision, saveOverride]
+  );
+
+  return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }
 
 export function useAnalystReviewContext() {
-  const ctx = useContext(AnalystReviewContext);
-  if (!ctx) throw new Error('useAnalystReviewContext must be used inside AnalystReviewProvider');
-  return ctx;
+  const v = useContext(Ctx);
+  if (!v) throw new Error("useAnalystReviewContext must be used within AnalystReviewProvider");
+  return v;
 }
