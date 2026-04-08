@@ -1,11 +1,15 @@
 import json
 import os
 import sqlite3
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 from fastapi import HTTPException
 
 DB_PATH = Path(os.getenv("DB_PATH", "database/dev.db"))
+
+def now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
 
 def connect() -> sqlite3.Connection:
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)

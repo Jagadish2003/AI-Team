@@ -66,7 +66,9 @@ export default function OpportunityDetails({
                 className="mt-2 text-sm text-text overflow-y-auto"
                 style={{ height: '3.75rem' }}
               >
-                {selected.aiRationale}
+                {selected.override?.rationaleOverride?.trim()
+                  ? selected.override.rationaleOverride
+                  : selected.aiRationale}
               </div>
             </div>
 

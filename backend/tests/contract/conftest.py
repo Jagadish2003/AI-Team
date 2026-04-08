@@ -3,6 +3,8 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
+import pytest
+from fastapi.testclient import TestClient
 
 BACKEND_DIR = Path(__file__).resolve().parents[2]
 SEED_LOADER = BACKEND_DIR / "database" / "seed_loader.py"
@@ -38,3 +40,10 @@ def pytest_sessionfinish(session, exitstatus):
         os.remove(TEST_DB_PATH)
     except OSError:
         pass
+
+
+@pytest.fixture()
+def client():
+    from app.main import app
+    with TestClient(app) as c:
+        yield c
