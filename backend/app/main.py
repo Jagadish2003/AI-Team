@@ -1,12 +1,14 @@
 import os
+import time
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, List
+from uuid import uuid4
 
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
-from .db import get_all, get_one, upsert
+from .db import get_all, get_one, upsert, kv_get, kv_set, run_get
 from .security import require_auth
 from .roadmap import build_pilot_roadmap
 from .run_store import start_run_, read_run, read_run_events
@@ -25,6 +27,31 @@ app.add_middleware(
 
 def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+def run_kv_get(key: str, run_id: str, default: Any = None) -> Any:
+    value = kv_get(f"{key}:{run_id}")
+    return value if value is not None else default
+
+def run_kv_set(key: str, run_id: str, value: Any) -> None:
+    kv_set(f"{key}:{run_id}", value)
+
+def default_audit() -> List[Dict[str, Any]]:
+    return [
+        {
+            "id": "audit_seed_001",
+            "tsLabel": "18 Mar 2026, 10:12",
+            "tsEpoch": 1773828720,
+            "action": "DISCOVERY_STARTED",
+            "by": "System",
+        },
+        {
+            "id": "audit_seed_002",
+            "tsLabel": "18 Mar 2026, 10:15",
+            "tsEpoch": 1773828900,
+            "action": "ANALYSIS_COMPLETE",
+            "by": "System",
+        },
+    ]
 
 @app.get("/health")
 def health() -> Dict[str, Any]:
@@ -123,6 +150,16 @@ def set_evidence_decision(run_id: str, evidence_id: str, body: Dict[str, Any]) -
         raise HTTPException(400, "invalid decision")
     e["decision"] = decision
     upsert("evidence", evidence_id, e)
+    audit_event = {
+        "id": f"audit_{uuid4().hex[:8]}",
+        "tsLabel": now_iso(),
+        "tsEpoch": int(time.time()),
+        "action": f"EVIDENCE_{decision}",
+        "by": "Architect",
+        "evidenceId": evidence_id,
+    }
+    audit = run_kv_get("audit", run_id, default_audit())
+    run_kv_set("audit", run_id, [audit_event, *audit])
     return e
 
 @app.get("/api/runs/{run_id}/entities", dependencies=[Depends(require_auth)])
@@ -163,6 +200,16 @@ def set_opp_decision(run_id: str, opp_id: str, body: Dict[str, Any]) -> Dict[str
         raise HTTPException(400, "invalid decision")
     o["decision"] = decision
     upsert("opportunities", opp_id, o)
+    event = {
+        "id": f"audit_{uuid4().hex[:8]}",
+        "tsLabel": now_iso(),
+        "tsEpoch": int(time.time()),
+        "action": decision,
+        "by": "Architect",
+        "opportunityId": opp_id,
+    }
+    audit = run_kv_get("audit", run_id, default_audit())
+    run_kv_set("audit", run_id, [event, *audit])
     return o
 
 @app.post("/api/runs/{run_id}/opportunities/{opp_id}/override", dependencies=[Depends(require_auth)])
@@ -181,16 +228,23 @@ def set_opp_override(run_id: str, opp_id: str, body: Dict[str, Any]) -> Dict[str
     override["updatedAt"] = now_iso()
     o["override"] = override
     upsert("opportunities", opp_id, o)
+    event = {
+        "id": f"audit_{uuid4().hex[:8]}",
+        "tsLabel": now_iso(),
+        "tsEpoch": int(time.time()),
+        "action": "OVERRIDE_SAVED",
+        "by": "Architect",
+        "opportunityId": opp_id,
+    }
+    audit = run_kv_get("audit", run_id, default_audit())
+    run_kv_set("audit", run_id, [event, *audit])
     return o
 
 @app.get("/api/runs/{run_id}/audit", dependencies=[Depends(require_auth)])
 def list_audit(run_id: str) -> List[Dict[str, Any]]:
-    try:
-        read_run(run_id)
-    except KeyError:
-        raise HTTPException(404, "run not found")
-    events = get_all("audit_events")
-    return list(reversed(events))
+    run_get(run_id)  # raises 404 if missing
+    audit = run_kv_get("audit", run_id, default_audit())
+    return sorted(audit, key=lambda e: int(e.get("tsEpoch", 0)), reverse=True)
 
 @app.get("/api/runs/{run_id}/roadmap", dependencies=[Depends(require_auth)])
 def get_roadmap(run_id: str) -> Dict[str, Any]:
