@@ -17,6 +17,7 @@ export interface MappingRow {
 export interface PermissionRequirement {
   id: string;
   label: string;
+  sourceSystem: string;
   required: boolean;
   satisfied: boolean;
 }

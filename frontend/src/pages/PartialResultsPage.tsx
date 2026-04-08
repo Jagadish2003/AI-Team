@@ -7,8 +7,10 @@ import EvidenceViewer from '../components/partial_results/EvidenceViewer';
 
 import { usePartialResultsContext } from '../context/PartialResultsContext';
 import { useDiscoveryRunContext } from '../context/DiscoveryRunContext';
-import { useRunContext } from '../context/RunContext'; // ✅ IMPORTANT
+import { useRunContext } from '../context/RunContext';
 import { useToast } from '../components/common/Toast';
+import { useNavigate } from 'react-router-dom';
+import { RunRequiredEmptyState } from '../components/common/RunRequiredEmptyState';
 
 export default function PartialResultsPage() {
   const {
@@ -42,8 +44,20 @@ export default function PartialResultsPage() {
   } = usePartialResultsContext();
 
   const { run } = useDiscoveryRunContext();
-  const { runId } = useRunContext(); // ✅ SOURCE OF TRUTH
+  const { runId } = useRunContext();
   const { push } = useToast();
+  const nav = useNavigate();
+
+  if (!runId) {
+    return (
+      <div className="min-h-screen text-text">
+        <TopNav />
+        <div className="px-8 py-6">
+          <RunRequiredEmptyState onStart={() => nav('/discovery-run')} />
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen text-text">

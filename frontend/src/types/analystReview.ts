@@ -1,6 +1,7 @@
-export type Confidence = 'LOW' | 'MEDIUM' | 'HIGH';
-export type Decision = 'UNREVIEWED' | 'APPROVED' | 'REJECTED';
-export type OpportunityTier = 'Quick Win' | 'Strategic' | 'Complex';
+import type { Decision, Confidence } from "./common";
+
+export type Tier = "Quick Win" | "Strategic" | "Complex";
+export type OpportunityTier = Tier; // backward-compat alias
 
 export interface PermissionItem {
   label: string;
@@ -13,26 +14,30 @@ export interface EvidenceItem {
   label: string;
 }
 
+export interface OpportunityOverride {
+  isLocked: boolean;
+  rationaleOverride: string;
+  overrideReason: string;
+  updatedAt: string | null;
+}
+
 export interface OpportunityCandidate {
   id: string;
-  identifier: string;
+  identifier?: string;             // legacy mock field
   title: string;
   category: string;
-  tier: OpportunityTier;
+  tier: Tier;
   impact: number;
   effort: number;
   confidence: Confidence;
   aiRationale: string;
+  summary?: string;
   evidenceIds: string[];
-  evidenceItems: EvidenceItem[];
-  permissions: PermissionItem[];
+  evidenceItems?: EvidenceItem[];  // legacy mock field
+  requiredPermissions?: string[];  // backend contract field
+  permissions?: PermissionItem[];  // legacy mock field
   decision: Decision;
-  override: {
-    isLocked: boolean;
-    rationaleOverride: string;
-    overrideReason: string;
-    updatedAt: string | null;
-  };
+  override: OpportunityOverride;
 }
 
 export interface ReviewAuditEvent {
@@ -40,4 +45,5 @@ export interface ReviewAuditEvent {
   tsLabel: string;
   action: string;
   by: string;
+  opportunityId?: string;
 }
