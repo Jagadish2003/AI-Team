@@ -134,7 +134,7 @@ export default function DiscoveryRunPage() {
       <TopNav />
 
       <div className="flex items-center justify-center h-[80vh]">
-        <div className="w-[470px] rounded-xl border border-white/20 bg-panel p-8 py-12 text-center shadow-xl shadow-black/20  ">  
+        <div className="w-[470px] rounded-xl border border-white/20 bg-panel p-8 py-12 text-center shadow-xl shadow-black/20">  
           <h2 className="text-lg font-semibold mb-2">
             No Active Run
           </h2>
