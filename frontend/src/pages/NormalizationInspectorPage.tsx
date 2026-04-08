@@ -8,6 +8,8 @@ import SourcesEntitiesPanel from '../components/normalization/SourcesEntitiesPan
 import MappingTable from '../components/normalization/MappingTable';
 import FieldDetailsPanel from '../components/normalization/FieldDetailsPanel';
 import { useNavigate } from 'react-router-dom';
+import { useRunContext } from '../context/RunContext';
+import { RunRequiredEmptyState } from '../components/common/RunRequiredEmptyState';
 
 const persistedSources = { current: new Set<string>() };
 const persistedEntities = { current: new Set<string>() };
@@ -23,6 +25,7 @@ export default function NormalizationInspectorPage() {
     refetchPermissions
   } = useNormalizationContext();
   const nav = useNavigate();
+  const { runId } = useRunContext();
 
   const [selectedSources, setSelectedSources] = useState<Set<string>>(new Set(persistedSources.current));
   const [selectedEntities, setSelectedEntities] = useState<Set<string>>(new Set(persistedEntities.current));
@@ -36,6 +39,17 @@ export default function NormalizationInspectorPage() {
     setSourceFilter(selectedSources.size === 0 ? 'All Sources' : Array.from(selectedSources).join(','));
     setEntityFilter(selectedEntities.size === 0 ? 'All Entities' : Array.from(selectedEntities).join(','));
   }, [selectedSources, selectedEntities, setSourceFilter, setEntityFilter]);
+
+  if (!runId) {
+    return (
+      <div className="min-h-screen text-text">
+        <TopNav />
+        <div className="px-8 py-6">
+          <RunRequiredEmptyState onStart={() => nav('/discovery-run')} />
+        </div>
+      </div>
+    );
+  }
 
   // --- Task 5: Handle Loading and Error States ---
   if (permissionsLoading) {

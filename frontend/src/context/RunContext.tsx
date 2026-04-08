@@ -22,15 +22,15 @@ export function RunProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     const url = new URL(window.location.href);
     const fromUrl = url.searchParams.get("runId");
-
-    if (fromUrl) {
-      setRunIdState(fromUrl);
-      window.localStorage.setItem(LS_KEY, fromUrl);
-    } else {
-      // No runId in URL — user intentionally navigated here without one.
-      // Clear localStorage so the "No Active Run" prompt is shown.
-      window.localStorage.removeItem(LS_KEY);
-      setRunIdState(null);
+    const fromLs = window.localStorage.getItem(LS_KEY);
+    const initial = fromUrl ?? (fromLs && fromLs.trim().length > 0 ? fromLs : null);
+    if (initial) {
+      setRunIdState(initial);
+      window.localStorage.setItem(LS_KEY, initial);
+      if (!fromUrl) {
+        url.searchParams.set("runId", initial);
+        window.history.replaceState({}, "", url.toString());
+      }
     }
   }, []);
   const setRunId = useCallback((id: string | null) => {

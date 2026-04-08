@@ -10,22 +10,8 @@ import { useConnectorContext } from "../context/ConnectorContext";
 import { useSourceIntakeContext } from "../context/SourceIntakeContext";
 import { useRunContext } from "../context/RunContext";
 
-import { apiStartRun, apiGetRun, apiGetRunEvents } from "../lib/apiClient";
-
-interface BackendRun {
-  runId: string;
-  status?: string;
-  startedAt?: string;
-  updatedAt?: string;
-}
-
-interface BackendEvent {
-  id: string;
-  runId: string;
-  eventType: string;
-  data: unknown;
-  timestamp: string;
-}
+import { startRun as apiStartRun, fetchRun as apiGetRun, fetchRunEvents as apiGetRunEvents } from "../api/runApi";
+import type { DiscoveryRun as BackendRun, RunEvent as BackendEvent } from "../types/discoveryRun";
 
 export default function DiscoveryRunPage() {
   const {
@@ -68,8 +54,10 @@ export default function DiscoveryRunPage() {
       setBackendRun(null);
       setBackendEvents([]);
 
-      const res = await apiStartRun<{ runId: string }>({
-        timestamp: new Date().toISOString(),
+      const res = await apiStartRun({
+        connectedSources: connectedNames,
+        uploadedFiles: uploadedNames,
+        sampleWorkspaceEnabled,
       });
       setRunId(res.runId);
 
@@ -112,8 +100,8 @@ export default function DiscoveryRunPage() {
 
       try {
         const [runRes, eventsRes] = await Promise.all([
-          apiGetRun<BackendRun>(runId),
-          apiGetRunEvents<BackendEvent[]>(runId),
+          apiGetRun(runId),
+          apiGetRunEvents(runId),
         ]);
 
         if (!cancelled) {
@@ -146,7 +134,7 @@ export default function DiscoveryRunPage() {
       <TopNav />
 
       <div className="flex items-center justify-center h-[80vh]">
-        <div className="w-[470px] rounded-xl border border-white/20 bg-panel p-8 py-12 text-center shadow-xl shadow-black/20  ">  
+        <div className="w-[470px] rounded-xl border border-white/20 bg-panel p-8 py-12 text-center shadow-xl shadow-black/20">  
           <h2 className="text-lg font-semibold mb-2">
             No Active Run
           </h2>

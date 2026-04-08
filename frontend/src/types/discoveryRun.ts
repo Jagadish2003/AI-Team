@@ -7,7 +7,7 @@ export interface RunInputs {
   connectedSources: string[];
   uploadedFiles: string[];
   sampleWorkspaceEnabled: boolean;
-  totalSources: number;
+  totalSources?: number;
 }
 
 export interface RunProgress { percent: number; currentStepId: string; etaSeconds: number; }
@@ -21,8 +21,9 @@ export interface RunSummary {
 }
 
 export interface DiscoveryRun {
-  runId: string;
-  status: RunStatus;
+  id?: string;        // backend contract field
+  runId?: string;     // legacy UI field
+  status: RunStatus | "running" | "complete" | "failed";
   startedAt: string;
   updatedAt: string;
   inputs: RunInputs;
@@ -32,4 +33,13 @@ export interface DiscoveryRun {
 }
 
 export type LogLevel = 'INFO' | 'WARNING' | 'ERROR';
-export interface RunEvent { ts: string; level: LogLevel; message: string; }
+export interface RunEvent {
+  // backend contract fields
+  id?: string;
+  tsLabel?: string;
+  stage?: string;
+  // UI / log fields
+  ts?: string;
+  level?: LogLevel;
+  message: string;
+}

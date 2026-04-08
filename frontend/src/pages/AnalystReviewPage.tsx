@@ -5,22 +5,38 @@ import OpportunityDetail from '../components/analyst_review/OpportunityDetail';
 import ReasoningOverride from '../components/analyst_review/ReasoningOverride';
 import { useAnalystReviewContext } from '../context/AnalystReviewContext';
 import { useToast } from '../components/common/Toast';
+import { useNavigate } from 'react-router-dom';
+import { useRunContext } from '../context/RunContext';
+import { RunRequiredEmptyState } from '../components/common/RunRequiredEmptyState';
 
 export default function AnalystReviewPage() {
   const {
     opportunities,
     selectedId,
     select,
-    selected,
-    setDecision,
-    setOverrideText,
-    setOverrideReason,
-    saveOverride,
-    toggleLock,
     audit,
+    setDecision,
+    saveOverride,
+    loading,
+    error,
   } = useAnalystReviewContext();
 
+  const selected = opportunities.find(o => o.id === selectedId) ?? null;
+
   const { push } = useToast();
+  const nav = useNavigate();
+  const { runId } = useRunContext();
+
+  if (!runId) {
+    return (
+      <div className="min-h-screen bg-bg text-text flex flex-col">
+        <TopNav />
+        <div className="px-8 py-6">
+          <RunRequiredEmptyState onStart={() => nav('/discovery-run')} />
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-bg text-text flex flex-col">
@@ -31,6 +47,8 @@ export default function AnalystReviewPage() {
         <div className="mt-1 text-sm text-muted">
           Deep-dive trust layer: validate and override AI rationale per opportunity before executive reporting.
         </div>
+        {error && <div className="mt-2 text-xs text-red-400">{error}</div>}
+        {loading && <div className="mt-2 text-xs text-muted">Loading…</div>}
       </div>
 
       <div className="flex-1 px-8 pb-6 overflow-hidden">
@@ -57,26 +75,18 @@ export default function AnalystReviewPage() {
           <ReasoningOverride
             opp={selected}
             audit={audit}
-            onOverrideText={setOverrideText}
-            onOverrideReason={setOverrideReason}
-            onSave={() => {
-              const r = saveOverride();
+            onSave={async (rationaleOverride, overrideReason, isLocked) => {
+              if (!selectedId) return;
+              const r = await saveOverride(selectedId, rationaleOverride, overrideReason, isLocked);
               if (!r.ok) push(r.error ?? 'Unable to save override');
               else push('Override saved.');
             }}
             onViewEvidence={() => push('Evidence panel will be linked in Screen 7.')}
-            onLockToggle={() => {
-              toggleLock();
-              push('Lock toggled.');
-            }}
-            onDecision={(d) => {
-              const result = setDecision(d);
+            onDecision={async (d) => {
+              if (!selectedId) return;
+              const result = await setDecision(selectedId, d);
               if (!result.ok) {
-                push(
-                  result.error === 'Decision finalized'
-                    ? 'Decision finalized. It can\u2019t be changed now.'
-                    : (result.error ?? 'Unable to update decision.')
-                );
+                push(result.error ?? 'Unable to update decision.');
               } else {
                 push(`Decision set to ${d}.`);
               }
