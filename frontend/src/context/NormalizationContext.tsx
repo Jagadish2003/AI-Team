@@ -82,11 +82,22 @@ export function NormalizationProvider({ children }: { children: React.ReactNode 
   const sources = useMemo(() => ['All Sources', ...Array.from(new Set(rows.map(r => r.sourceSystem))).sort()], [rows]);
   const entities = useMemo(() => ['All Entities', ...Array.from(new Set(rows.map(r => r.commonEntity))).sort()], [rows]);
 
-  const counts = useMemo(() => {
-    const c: Record<Tab, number> = { MAPPED: 0, UNMAPPED: 0, AMBIGUOUS: 0 };
-    for (const r of rows) c[r.status as Tab] += 1;
-    return c;
-  }, [rows]);
+ const counts = useMemo(() => {
+  const activeSources = sourceFilter === 'All Sources' ? [] : sourceFilter.split(',');
+  const activeEntities = entityFilter === 'All Entities' ? [] : entityFilter.split(',');
+
+  const filtered = rows
+    .filter(r => activeSources.length === 0 || activeSources.includes(r.sourceSystem))
+    .filter(r => activeEntities.length === 0 || activeEntities.includes(r.commonEntity));
+
+  const c: Record<Tab, number> = { MAPPED: 0, UNMAPPED: 0, AMBIGUOUS: 0 };
+
+  for (const r of filtered) {
+    c[r.status as Tab] += 1;
+  }
+
+  return c;
+}, [rows, sourceFilter, entityFilter]);
 
   const selectedRow = useMemo(() => rows.find(r => r.id === selectedRowId) ?? null, [rows, selectedRowId]);
 
