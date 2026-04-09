@@ -211,8 +211,7 @@ export default function OpportunityList({
       <div className="border-t border-border shrink-0">
         <button
           onClick={onCreate}
-          className="w-full px-4 py-2.5 text-xs text-text bg-panel2 hover:bg-border/40 flex items-center gap-1.5 transition-colors"
-        >
+          className="w-full px-4 py-2.5 text-xs text-text bg-panel2 hover:bg-border/40 flex items-center gap-1.5 transition-colors">
           <span className="text-accent font-bold text-sm">+</span>
           <span>Create New Opportunity</span>
           <ChevronRight size={14} className="ml-auto text-muted" />

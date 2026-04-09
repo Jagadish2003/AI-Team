@@ -5,47 +5,32 @@ import { EvidenceReview } from '../../types/partialResults';
 
 function decisionClass(decision: string) {
   const cls =
-    decision === 'APPROVED'
-      ? 'border-emerald-500/50 bg-emerald-500/15 text-emerald-300'
-      : decision === 'REJECTED'
-      ? 'border-red-500/50 bg-red-500/15 text-red-300'
-      : 'border-border bg-bg/30 text-muted';
-
+    decision === 'APPROVED' ? 'border-emerald-500/50 bg-emerald-500/15 text-emerald-300'
+    : decision === 'REJECTED' ? 'border-red-500/50 bg-red-500/15 text-red-300'
+    : 'border-border bg-bg/30 text-muted';
   return `rounded-full border px-2 py-0.5 text-[10px] font-semibold tracking-wide whitespace-nowrap ${cls}`;
 }
+
 function confidenceClass(value: string) {
   const cls =
-    value === 'HIGH'
-      ? 'border-emerald-500/50 bg-emerald-500/15 text-emerald-300'
-      : value === 'MEDIUM'
-      ? 'border-amber-500/50 bg-amber-500/15 text-amber-300'
-      : 'border-red-500/50 bg-red-500/15 text-red-300';
-
+    value === 'HIGH' ? 'border-emerald-500/50 bg-emerald-500/15 text-emerald-300'
+    : value === 'MEDIUM' ? 'border-amber-500/50 bg-amber-500/15 text-amber-300'
+    : 'border-red-500/50 bg-red-500/15 text-red-300';
   return `rounded-full border px-2 py-0.5 text-[10px] font-semibold tracking-wide whitespace-nowrap ${cls}`;
 }
 
-function SourceDropdown({
-  sources,
-  value,
-  onChange
-}: {
-  sources: string[];
-  value: string;
-  onChange: (v: string) => void;
+function SourceDropdown({ sources, value, onChange }: {
+  sources: string[]; value: string; onChange: (v: string) => void;
 }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
-
   useEffect(() => {
     function handleClickOutside(e: MouseEvent) {
-      if (ref.current && !ref.current.contains(e.target as Node)) {
-        setOpen(false);
-      }
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
     }
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
-
   return (
     <div ref={ref} className="relative">
       <button
@@ -57,20 +42,14 @@ function SourceDropdown({
           <ChevronDown size={14} className={`text-muted transition-transform ${open ? 'rotate-180' : ''}`} />
         </span>
       </button>
-
       {open && (
         <div className="absolute right-0 z-50 mt-1 min-w-full overflow-hidden rounded-lg border border-border bg-panel shadow-lg">
           {sources.map((s) => (
             <div
               key={s}
-              onClick={() => {
-                onChange(s);
-                setOpen(false);
-              }}
+              onClick={() => { onChange(s); setOpen(false); }}
               className={`cursor-pointer px-4 py-2 text-sm transition-colors ${
-                s === value
-                  ? 'bg-[#00B4B4] font-medium text-[#0d1117]'
-                  : 'text-text hover:bg-[#00B4B4]/15 hover:text-[#00B4B4]'
+                s === value ? 'bg-[#00B4B4] font-medium text-[#0d1117]' : 'text-text hover:bg-[#00B4B4]/15 hover:text-[#00B4B4]'
               }`}
             >
               {s}
@@ -83,20 +62,9 @@ function SourceDropdown({
 }
 
 export default function EvidenceList({
-  evidence,
-  selectedId,
-  onSelect,
-  sources,
-  sourceFilter,
-  onSourceFilter,
-  query,
-  onQuery,
-  saveDraftEnabled,
-  onSaveDraftEnabled,
-  positionLabel,
-  onPrev,
-  onNext,
-  onPaginationToast
+  evidence, selectedId, onSelect, sources, sourceFilter, onSourceFilter,
+  query, onQuery, saveDraftEnabled, onSaveDraftEnabled,
+  positionLabel, onPrev, onNext, onPaginationToast
 }: {
   evidence: EvidenceReview[];
   selectedId: string | null;
@@ -115,6 +83,8 @@ export default function EvidenceList({
 }) {
   return (
     <div className="rounded-xl border border-border bg-panel p-4">
+
+      {/* Header */}
       <div className="flex items-center justify-between">
         <div className="text-xl font-semibold text-text pb-3">{evidence.length} Evidence Snippets</div>
         <label className="cursor-pointer text-xs text-muted">
@@ -130,6 +100,7 @@ export default function EvidenceList({
         </label>
       </div>
 
+      {/* Search + filter */}
       <div className="mt-3 flex gap-2">
         <div className="relative flex-1">
           <input
@@ -142,8 +113,7 @@ export default function EvidenceList({
         </div>
         <SourceDropdown sources={sources} value={sourceFilter} onChange={onSourceFilter} />
       </div>
-
-      <div className="mt-3 h-[520px] overflow-auto rounded-lg border border-border bg-bg/20">
+      <div className="mt-3 h-[520px] overflow-y-auto rounded-lg border border-border bg-bg/20">
         {evidence.map((ev) => {
           const selected = ev.id === selectedId;
           return (
@@ -156,63 +126,47 @@ export default function EvidenceList({
             >
               <div className="flex items-center justify-between text-xs text-muted">
                 <span>{ev.tsLabel}</span>
-                <span className={confidenceClass(ev.confidence)}>
-                  {ev.confidence}
-                </span>
+                <span className={confidenceClass(ev.confidence)}>{ev.confidence}</span>
               </div>
-
               <div className={`mt-1 text-sm font-semibold ${selected ? 'text-accent' : 'text-text'}`}>
                 {ev.title}
               </div>
               <div className="mt-1 line-clamp-2 text-sm text-muted">{ev.snippet}</div>
               <div className="mt-2 flex items-center gap-2 flex-wrap">
-                <span className="rounded-full border border-border bg-bg/30 px-2 py-0.5 text-[10px] text-text whitespace-nowrap">
-                  {ev.source}
-                </span>
-
-                <span className="rounded-full border border-border bg-bg/30 px-2 py-0.5 text-[10px] text-text whitespace-nowrap">
-                  {ev.evidenceType}
-                </span>
-
-                <span className={decisionClass(ev.decision)}>
-                  {ev.decision}
-                </span>
-
+                <span className="rounded-full border border-border bg-bg/30 px-2 py-0.5 text-[10px] text-text whitespace-nowrap">{ev.source}</span>
+                <span className="rounded-full border border-border bg-bg/30 px-2 py-0.5 text-[10px] text-text whitespace-nowrap">{ev.evidenceType}</span>
+                <span className={decisionClass(ev.decision)}>{ev.decision}</span>
               </div>
             </div>
           );
         })}
       </div>
 
-      <div className="mt-3 flex items-center justify-between text-xs text-muted ">
+      {/* Pagination */}
+      <div className="mt-3 flex items-center justify-between text-xs text-muted">
         <Button
           variant="secondary"
           onClick={onPrev}
           disabled={evidence.length === 0}
-          className="border-border bg-bg/40 px-4 py-2 text-sm font-medium text-text transition-colors hover:bg-bg/60 disabled:cursor-not-allowed disabled:opacity-40"
+          className="flex items-center gap-1 rounded border border-border bg-bg/40 px-4 py-2 text-sm font-medium text-text transition-colors hover:bg-bg/20 disabled:cursor-not-allowed disabled:opacity-40"
         >
-          <ChevronLeft className="h-4 w-4 " />
-          Prev
+          <ChevronLeft className="h-4 w-4" /> Prev
         </Button>
-
         <span>{positionLabel}</span>
-
         <Button
           variant="secondary"
           onClick={onNext}
           disabled={evidence.length === 0}
-          className="border-border bg-bg/40 px-4 py-2 text-sm font-medium text-text transition-colors hover:bg-bg/60 disabled:cursor-not-allowed disabled:opacity-40"
+          className="flex items-center gap-1 rounded border border-border bg-bg/40 px-4 py-2 text-sm font-medium text-text transition-colors hover:bg-bg/20 disabled:cursor-not-allowed disabled:opacity-40"
         >
-          Next
-          <ChevronRight className="h-4 w-4" />
+          Next <ChevronRight className="h-4 w-4"/>
         </Button>
       </div>
 
       <div className="mt-2 text-xs text-muted">
-        <button className="underline" onClick={onPaginationToast}>
-          Learn more
-        </button>
+        <button className="underline" onClick={onPaginationToast}>Learn more</button>
       </div>
+
     </div>
   );
 }
