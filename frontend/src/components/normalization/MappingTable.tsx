@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useNormalizationContext } from '../../context/NormalizationContext';
-import { ChevronDown, Search } from 'lucide-react';
- 
+import { ChevronDown, ChevronLeft, ChevronRight, Search } from 'lucide-react';
+
 const PAGE_SIZE = 8;
  
 type Tab = 'MAPPED' | 'UNMAPPED' | 'AMBIGUOUS';
@@ -166,23 +166,14 @@ export default function MappingTable() {
     </div>
   )}
 </div>
-<div className="mt-3 flex items-center gap-3 text-sm text-text">
-  <button
-    type="button"
-    disabled={!canPrev}
-    onClick={() => setCurrentPage(1)}
-    className="rounded border border-border bg-bg/30 px-2 hover:bg-bg/50 transition-colors disabled:cursor-not-allowed disabled:opacity-40"
-  >
-    «
-  </button>
-
+<div className="mt-3 flex items-center justify-between text-sm text-text">
   <button
     type="button"
     disabled={!canPrev}
     onClick={() => setCurrentPage(p => p - 1)}
-    className="rounded border border-border bg-bg/30 px-2 hover:bg-bg/50 transition-colors disabled:cursor-not-allowed disabled:opacity-40"
+    className="flex items-center gap-1 rounded border border-border bg-bg/40 px-4 py-2 text-sm font-medium text-text transition-colors hover:bg-bg/60 disabled:cursor-not-allowed disabled:opacity-40"
   >
-    ‹
+    <ChevronLeft className="h-4 w-4" /> Prev
   </button>
 
   <span>{currentPage} of {totalPages}</span>
@@ -191,20 +182,11 @@ export default function MappingTable() {
     type="button"
     disabled={!canNext}
     onClick={() => setCurrentPage(p => p + 1)}
-    className="rounded border border-border bg-bg/30 px-2 hover:bg-bg/50 transition-colors disabled:cursor-not-allowed disabled:opacity-40"
+    className="flex items-center gap-1 rounded border border-border bg-bg/40 px-4 py-2 text-sm font-medium text-text transition-colors hover:bg-bg/60 disabled:cursor-not-allowed disabled:opacity-40"
   >
-    ›
+    Next <ChevronRight className="h-4 w-4" />
   </button>
-
-  <button
-    type="button"
-    disabled={!canNext}
-    onClick={() => setCurrentPage(totalPages)}
-    className="rounded border border-border bg-bg/30 px-2 hover:bg-bg/50 transition-colors disabled:cursor-not-allowed disabled:opacity-40"
-  >
-    »
-   </button>
-  </div>
+</div>
 </div>
   );
 }
