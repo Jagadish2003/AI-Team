@@ -1,6 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { ChevronLeft, ChevronRight, ChevronDown, Search } from 'lucide-react';
-import Button from '../common/Button';
 import { EvidenceReview } from '../../types/partialResults';
 
 function decisionClass(decision: string) {
@@ -64,7 +63,7 @@ function SourceDropdown({ sources, value, onChange }: {
 export default function EvidenceList({
   evidence, selectedId, onSelect, sources, sourceFilter, onSourceFilter,
   query, onQuery, saveDraftEnabled, onSaveDraftEnabled,
-  positionLabel, onPrev, onNext, onPaginationToast
+  positionLabel, canPrev, canNext, onPrev, onNext
 }: {
   evidence: EvidenceReview[];
   selectedId: string | null;
@@ -77,9 +76,10 @@ export default function EvidenceList({
   saveDraftEnabled: boolean;
   onSaveDraftEnabled: (v: boolean) => void;
   positionLabel: string;
+  canPrev: boolean;
+  canNext: boolean;
   onPrev: () => void;
   onNext: () => void;
-  onPaginationToast: () => void;
 }) {
   return (
     <div className="rounded-xl border border-border bg-panel p-4">
@@ -143,28 +143,24 @@ export default function EvidenceList({
       </div>
 
       {/* Pagination */}
-      <div className="mt-3 flex items-center justify-between text-xs text-muted">
-        <Button
-          variant="secondary"
+      <div className="mt-3 flex items-center justify-between text-sm text-text">
+        <button
+          type="button"
+          disabled={!canPrev}
           onClick={onPrev}
-          disabled={evidence.length === 0}
-          className="flex items-center gap-1 rounded border border-border bg-bg/40 px-4 py-2 text-sm font-medium text-text transition-colors hover:bg-bg/20 disabled:cursor-not-allowed disabled:opacity-40"
+          className="flex items-center gap-1 rounded border border-border bg-bg/40 px-4 py-2 text-sm font-medium text-text transition-colors hover:bg-bg/60 disabled:cursor-not-allowed disabled:opacity-40"
         >
           <ChevronLeft className="h-4 w-4" /> Prev
-        </Button>
+        </button>
         <span>{positionLabel}</span>
-        <Button
-          variant="secondary"
+        <button
+          type="button"
+          disabled={!canNext}
           onClick={onNext}
-          disabled={evidence.length === 0}
-          className="flex items-center gap-1 rounded border border-border bg-bg/40 px-4 py-2 text-sm font-medium text-text transition-colors hover:bg-bg/20 disabled:cursor-not-allowed disabled:opacity-40"
+          className="flex items-center gap-1 rounded border border-border bg-bg/40 px-4 py-2 text-sm font-medium text-text transition-colors hover:bg-bg/60 disabled:cursor-not-allowed disabled:opacity-40"
         >
-          Next <ChevronRight className="h-4 w-4"/>
-        </Button>
-      </div>
-
-      <div className="mt-2 text-xs text-muted">
-        <button className="underline" onClick={onPaginationToast}>Learn more</button>
+          Next <ChevronRight className="h-4 w-4" />
+        </button>
       </div>
 
     </div>
