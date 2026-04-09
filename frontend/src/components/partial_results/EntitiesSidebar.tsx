@@ -39,7 +39,7 @@ export default function EntitiesSidebar({
         <Search className="absolute right-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted pointer-events-none" />
       </div>
       <div className="mt-4">
-        <div className="text-xs font-semibold text-text">Type</div>
+        <div className="text-md font-semibold text-text">Entity Types</div>
         <div className="mt-2 space-y-2 text-sm text-muted">
           {typeList.map((t) => (
             <label key={t} className="flex items-center justify-between gap-2 cursor-pointer">
@@ -58,12 +58,12 @@ export default function EntitiesSidebar({
         </div>
       </div>
       <div className="mt-4 flex items-center justify-between">
-        <div className="text-xs font-semibold text-text">Top Entities</div>
+        <div className="text-md font-semibold text-text">Top Entities</div>
         <Button variant="ghost" onClick={onClear} className="text-xs">
           Clear
         </Button>
       </div>
-      <div className="mt-2 space-y-2">
+      <div className="mt-2 space-y-2 mb-2">
         {entities.slice(0, 12).map((e) => {
           const selected = selectedEntityIds.includes(e.id);
           return (
@@ -75,7 +75,7 @@ export default function EntitiesSidebar({
               }`}
             >
               <div className="flex items-center justify-between gap-2">
-                <div className="min-w-0">
+                <div className="min-w-0 mt-2 space-y-2">
                   <div className="truncate text-sm font-semibold text-text">{e.name}</div>
                   <div className="text-xs text-muted">
                     {e.type} · {e.mentionCount} mentions
