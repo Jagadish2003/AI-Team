@@ -40,6 +40,8 @@ export default function PartialResultsPage() {
     setSaveDraftEnabled,
     goPrev,
     goNext,
+    canPrev,
+    canNext,
     positionLabel
   } = usePartialResultsContext();
 
@@ -112,9 +114,10 @@ export default function PartialResultsPage() {
               push(v ? 'Auto-save enabled (mock).' : 'Auto-save paused (mock).');
             }}
             positionLabel={positionLabel}
+            canPrev={canPrev}
+            canNext={canNext}
             onPrev={() => goPrev()}
             onNext={() => goNext()}
-            onPaginationToast={() => push('List paging will be added in later')}
           />
 
           <EvidenceViewer

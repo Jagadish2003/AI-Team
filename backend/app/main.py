@@ -10,8 +10,8 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from .db import get_all, get_one, upsert, kv_get, kv_set, run_get
 from .security import require_auth
-from .roadmap import build_pilot_roadmap
 from .run_store import start_run_, read_run, read_run_events
+from .roadmap_engine import build_roadmap
 from .replay import replay_run as replay_run_
 
 app = FastAPI(title="AgentIQ Layer 1 API Skeleton", version="0.1.0")
@@ -252,28 +252,47 @@ def get_roadmap(run_id: str) -> Dict[str, Any]:
         read_run(run_id)
     except KeyError:
         raise HTTPException(404, "run not found")
-    return build_pilot_roadmap(get_all("opportunities"))
+    return build_roadmap(get_all("opportunities"))
 
 @app.get("/api/runs/{run_id}/executive-report", dependencies=[Depends(require_auth)])
 def get_exec_report(run_id: str) -> Dict[str, Any]:
     try:
-        read_run(run_id)
+        run = read_run(run_id)
     except KeyError:
         raise HTTPException(404, "run not found")
+
+    # sourcesAnalyzed MUST derive from run inputs (not live connector state)
+    inputs = run.get("inputs") or {}
+    connected_sources = inputs.get("connectedSources") or []
+    uploaded_files = inputs.get("uploadedFiles") or []
+    sample_enabled = bool(inputs.get("sampleWorkspaceEnabled", False))
+
+    # Determine recommended count from connector catalog
+    connectors = get_all("connectors")
+    name_to_tier = {c.get("name"): c.get("tier") for c in connectors}
+    recommended_connected = sum(1 for n in connected_sources if name_to_tier.get(n) == "recommended")
+
+    sources_analyzed = {
+        "recommendedConnected": recommended_connected,
+        "totalConnected": len(connected_sources),
+        "uploadedFiles": len(uploaded_files),
+        "sampleWorkspaceEnabled": sample_enabled,
+    }
+
     rep = get_one("executive_reports", "exec_001")
     if rep:
+        rep["sourcesAnalyzed"] = sources_analyzed
         return rep
+
     return {
-        "confidence":"MODERATE", 
-        "sourcesAnalyzed":{
-            "recommendedConnected":2,"totalConnected":5
-        },
-        "topQuickWins":[],
-        "snapshotBubbles":[],
-        "roadmapHighlights":{
-            "next30Count":3,
-            "next60Count":2,
-            "next90Count":1,
-            "blockerCount":0
+        "confidence": "MODERATE",
+        "sourcesAnalyzed": sources_analyzed,
+        "topQuickWins": [],
+        "snapshotBubbles": [],
+        "roadmapHighlights": {
+            "next30Count": 3,
+            "next60Count": 2,
+            "next90Count": 1,
+            "blockerCount": 0
         }
     }

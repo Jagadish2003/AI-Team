@@ -89,10 +89,16 @@ def main():
   r = load_file(FILES["runs"])
   upsert(conn, "runs", r["id"], r)
 
-  # events
+  # events (run_events uses run_id+seq schema, not id)
   ev = load_file(FILES["run_events"])
-  for i, e in enumerate(ev, start=1):
-    upsert(conn, "run_events", f"re_{i:03d}", e)
+  cur = conn.cursor()
+  for i, e in enumerate(ev):
+    cur.execute(
+      "INSERT INTO run_events (run_id, seq, payload) VALUES (?, ?, ?) "
+      "ON CONFLICT(run_id, seq) DO UPDATE SET payload=excluded.payload",
+      (r["id"], i, json.dumps(e))
+    )
+  conn.commit()
 
   # evidence
   data = load_file(FILES["evidence"])

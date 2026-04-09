@@ -32,6 +32,8 @@ type PartialResultsContextValue = {
 
   goPrev: () => void;
   goNext: () => void;
+  canPrev: boolean;
+  canNext: boolean;
 
   filteredEntities: ExtractedEntity[];
   filteredEvidence: EvidenceReview[];
@@ -96,6 +98,9 @@ export function PartialResultsProvider({ children }: { children: React.ReactNode
     if (!selectedEvidenceId) return -1;
     return filteredEvidence.findIndex(e => e.id === selectedEvidenceId);
   }, [filteredEvidence, selectedEvidenceId]);
+
+  const canPrev = currentIndex > 0;
+  const canNext = currentIndex >= 0 && currentIndex < filteredEvidence.length - 1;
 
   const positionLabel = useMemo(() => {
     if (!filteredEvidence.length || currentIndex < 0) return `0 of ${filteredEvidence.length}`;
@@ -180,6 +185,8 @@ export function PartialResultsProvider({ children }: { children: React.ReactNode
     clearSelection,
     goPrev,
     goNext,
+    canPrev,
+    canNext,
     filteredEntities,
     filteredEvidence,
     selectedEvidence,
@@ -189,7 +196,8 @@ export function PartialResultsProvider({ children }: { children: React.ReactNode
   }), [
     entities, evidence, selectedEvidenceId, selectedEntityIds, entityTypes, queryEntities, queryEvidence, sourceFilter, activeTab,
     saveDraftEnabled, filteredEntities, filteredEvidence, selectedEvidence, sources, countsByType, positionLabel,
-    selectEvidence, toggleEntity, setEntityTypeEnabled, approveSelected, rejectSelected, clearSelection, goPrev, goNext
+    selectEvidence, toggleEntity, setEntityTypeEnabled, approveSelected, rejectSelected, clearSelection, goPrev, goNext,
+    canPrev, canNext
   ]);
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
