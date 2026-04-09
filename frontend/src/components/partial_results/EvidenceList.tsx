@@ -4,9 +4,24 @@ import Button from '../common/Button';
 import { EvidenceReview } from '../../types/partialResults';
 
 function decisionClass(decision: string) {
-  if (decision === 'APPROVED') return 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30';
-  if (decision === 'REJECTED') return 'bg-red-500/15 text-red-300 border-red-500/30';
-  return 'bg-slate-500/10 text-muted border-border';
+  const cls =
+    decision === 'APPROVED'
+      ? 'border-emerald-500/50 bg-emerald-500/15 text-emerald-300'
+      : decision === 'REJECTED'
+      ? 'border-red-500/50 bg-red-500/15 text-red-300'
+      : 'border-border bg-bg/30 text-muted';
+
+  return `rounded-full border px-2 py-0.5 text-[10px] font-semibold tracking-wide whitespace-nowrap ${cls}`;
+}
+function confidenceClass(value: string) {
+  const cls =
+    value === 'HIGH'
+      ? 'border-emerald-500/50 bg-emerald-500/15 text-emerald-300'
+      : value === 'MEDIUM'
+      ? 'border-amber-500/50 bg-amber-500/15 text-amber-300'
+      : 'border-red-500/50 bg-red-500/15 text-red-300';
+
+  return `rounded-full border px-2 py-0.5 text-[10px] font-semibold tracking-wide whitespace-nowrap ${cls}`;
 }
 
 function SourceDropdown({
@@ -116,7 +131,6 @@ export default function EvidenceList({
       </div>
 
       <div className="mt-3 flex gap-2">
-        {/* Search input with icon and hover/focus teal border */}
         <div className="relative flex-1">
           <input
             value={query}
@@ -142,15 +156,28 @@ export default function EvidenceList({
             >
               <div className="flex items-center justify-between text-xs text-muted">
                 <span>{ev.tsLabel}</span>
-                <span className="rounded bg-bg/40 px-2 py-0.5">{ev.confidence}</span>
+                <span className={confidenceClass(ev.confidence)}>
+                  {ev.confidence}
+                </span>
               </div>
-              <div className="mt-1 text-sm font-semibold text-text">{ev.title}</div>
-              <div className="mt-1 line-clamp-2 text-sm text-muted">{ev.snippet}</div>
 
-              <div className="mt-2 flex items-center gap-2 text-xs text-muted">
-                <span className="rounded border border-border bg-bg/30 px-2 py-0.5">{ev.source}</span>
-                <span className="rounded border border-border bg-bg/30 px-2 py-0.5">{ev.evidenceType}</span>
-                <span className={`rounded border px-2 py-0.5 ${decisionClass(ev.decision)}`}>{ev.decision}</span>
+              <div className={`mt-1 text-sm font-semibold ${selected ? 'text-accent' : 'text-text'}`}>
+                {ev.title}
+              </div>
+              <div className="mt-1 line-clamp-2 text-sm text-muted">{ev.snippet}</div>
+              <div className="mt-2 flex items-center gap-2 flex-wrap">
+                <span className="rounded-full border border-border bg-bg/30 px-2 py-0.5 text-[10px] text-text whitespace-nowrap">
+                  {ev.source}
+                </span>
+
+                <span className="rounded-full border border-border bg-bg/30 px-2 py-0.5 text-[10px] text-text whitespace-nowrap">
+                  {ev.evidenceType}
+                </span>
+
+                <span className={decisionClass(ev.decision)}>
+                  {ev.decision}
+                </span>
+
               </div>
             </div>
           );
@@ -158,12 +185,24 @@ export default function EvidenceList({
       </div>
 
       <div className="mt-3 flex items-center justify-between text-xs text-muted ">
-        <Button variant="secondary" onClick={onPrev} disabled={evidence.length === 0} className='border-border bg-bg/40 px-4 py-2 text-sm font-medium text-text transition-colors hover:bg-bg/60 disabled:cursor-not-allowed disabled:opacity-40'>
+        <Button
+          variant="secondary"
+          onClick={onPrev}
+          disabled={evidence.length === 0}
+          className="border-border bg-bg/40 px-4 py-2 text-sm font-medium text-text transition-colors hover:bg-bg/60 disabled:cursor-not-allowed disabled:opacity-40"
+        >
           <ChevronLeft className="h-4 w-4 " />
           Prev
         </Button>
+
         <span>{positionLabel}</span>
-        <Button variant="secondary" onClick={onNext} disabled={evidence.length === 0} className='border-border bg-bg/40 px-4 py-2 text-sm font-medium text-text transition-colors hover:bg-bg/60 disabled:cursor-not-allowed disabled:opacity-40'>
+
+        <Button
+          variant="secondary"
+          onClick={onNext}
+          disabled={evidence.length === 0}
+          className="border-border bg-bg/40 px-4 py-2 text-sm font-medium text-text transition-colors hover:bg-bg/60 disabled:cursor-not-allowed disabled:opacity-40"
+        >
           Next
           <ChevronRight className="h-4 w-4" />
         </Button>
