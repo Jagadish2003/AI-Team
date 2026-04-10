@@ -25,7 +25,7 @@ SEED_DIR = Path(os.getenv("SEED_DIR", _SCRIPT_DIR / "seed"))
 DB_PATH = Path(os.getenv("DB_PATH", _SCRIPT_DIR / "dev.db"))
 
 TABLES = [
-  "connectors", "uploads", "runs", "run_events", "evidence", "entities",
+  "connectors", "uploads", "runs", "evidence", "entities",
   "mappings", "permissions", "opportunities", "audit_events", "executive_reports"
 ]
 
@@ -52,6 +52,16 @@ def ensure_db(conn: sqlite3.Connection) -> None:
         payload TEXT NOT NULL
       )
     """)
+  # run_events uses a compound primary key (run_id, seq)
+  cur.execute("""
+    CREATE TABLE IF NOT EXISTS run_events (
+      run_id TEXT NOT NULL,
+      seq    INTEGER NOT NULL,
+      payload TEXT NOT NULL,
+      PRIMARY KEY (run_id, seq)
+    )
+  """)
+  cur.execute("CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, payload TEXT NOT NULL)")
   conn.commit()
 
 def upsert(conn: sqlite3.Connection, table: str, id_: str, payload: dict) -> None:
