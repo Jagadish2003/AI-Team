@@ -3,6 +3,8 @@ import TopNav from '../components/common/TopNav';
 import OpportunityList from '../components/analyst_review/OpportunityList';
 import OpportunityDetail from '../components/analyst_review/OpportunityDetail';
 import ReasoningOverride from '../components/analyst_review/ReasoningOverride';
+import LoadingPanel from '../components/common/LoadingPanel';
+import ErrorPanel from '../components/common/ErrorPanel';
 import { useAnalystReviewContext } from '../context/AnalystReviewContext';
 import { useToast } from '../components/common/Toast';
 import { useNavigate } from 'react-router-dom';
@@ -19,6 +21,7 @@ export default function AnalystReviewPage() {
     saveOverride,
     loading,
     error,
+    refetch,
   } = useAnalystReviewContext();
 
   const selected = opportunities.find(o => o.id === selectedId) ?? null;
@@ -38,6 +41,24 @@ export default function AnalystReviewPage() {
     );
   }
 
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-bg text-text flex flex-col">
+        <TopNav />
+        <div className="px-8 py-10"><LoadingPanel title="Loading analyst review…" /></div>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="min-h-screen bg-bg text-text flex flex-col">
+        <TopNav />
+        <div className="px-8 py-10"><ErrorPanel message={error} onRetry={refetch} /></div>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-bg text-text flex flex-col">
       <TopNav />
@@ -47,8 +68,6 @@ export default function AnalystReviewPage() {
         <div className="mt-1 text-sm text-muted">
           Deep-dive trust layer: validate and override AI rationale per opportunity before executive reporting.
         </div>
-        {error && <div className="mt-2 text-xs text-red-400">{error}</div>}
-        {loading && <div className="mt-2 text-xs text-muted">Loading…</div>}
       </div>
 
       <div className="flex-1 px-8 pb-6 overflow-hidden">
