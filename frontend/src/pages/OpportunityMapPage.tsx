@@ -5,6 +5,8 @@ import OpportunityMatrix from '../components/opportunity_map/OpportunityMatrix';
 import TopQuickWins from '../components/opportunity_map/TopQuickWins';
 import OpportunityDetails from '../components/opportunity_map/OpportunityDetails';
 import OpportunityRankedList from '../components/opportunity_map/OpportunityRankedList';
+import LoadingPanel from '../components/common/LoadingPanel';
+import ErrorPanel from '../components/common/ErrorPanel';
 import { useAnalystReviewContext } from '../context/AnalystReviewContext';
 import { useNavigate } from 'react-router-dom';
 import { useToast } from '../components/common/Toast';
@@ -12,7 +14,7 @@ import { useRunContext } from '../context/RunContext';
 import { RunRequiredEmptyState } from '../components/common/RunRequiredEmptyState';
 
 export default function OpportunityMapPage() {
-  const { opportunities, selectedId: contextSelectedId, select } = useAnalystReviewContext();
+  const { opportunities, selectedId: contextSelectedId, select, loading, error, refetch } = useAnalystReviewContext();
   const nav = useNavigate();
   const { push } = useToast();
   const { runId } = useRunContext();
@@ -68,6 +70,24 @@ export default function OpportunityMapPage() {
         <div className="px-8 py-6">
           <RunRequiredEmptyState onStart={() => nav('/discovery-run')} />
         </div>
+      </div>
+    );
+  }
+
+  if (loading) {
+    return (
+      <div className="min-h-screen text-text">
+        <TopNav />
+        <div className="px-8 py-10"><LoadingPanel title="Loading opportunity map…" /></div>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="min-h-screen text-text">
+        <TopNav />
+        <div className="px-8 py-10"><ErrorPanel message={error} onRetry={refetch} /></div>
       </div>
     );
   }

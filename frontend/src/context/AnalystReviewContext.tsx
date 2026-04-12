@@ -110,8 +110,10 @@ export function AnalystReviewProvider({ children }: { children: React.ReactNode 
   const saveOverride = useCallback(
     async (oppId: string, rationaleOverride: string, overrideReason: string, isLocked: boolean) => {
       if (!runId) return { ok: false, error: "No run selected" };
-      if (rationaleOverride.trim().length === 0) return { ok: false, error: "Override rationale cannot be empty" };
-      if (overrideReason.trim().length === 0) return { ok: false, error: "Override reason cannot be empty" };
+      // Only require a reason when rationale text is actually provided
+      if (rationaleOverride.trim().length > 0 && overrideReason.trim().length === 0) {
+        return { ok: false, error: "Override reason is required when rationale override is provided." };
+      }
 
       const before = opportunities;
       setOpportunities((prev) =>
