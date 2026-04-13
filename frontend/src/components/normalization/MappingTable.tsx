@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useNormalizationContext } from '../../context/NormalizationContext';
-import { ChevronDown, Search } from 'lucide-react';
- 
+import { ChevronDown, ChevronLeft, ChevronRight, Search } from 'lucide-react';
+
 const PAGE_SIZE = 8;
  
 type Tab = 'MAPPED' | 'UNMAPPED' | 'AMBIGUOUS';
@@ -12,11 +12,11 @@ const sortOptions: SortMode[] = ['Confidence High→Low', 'Source A→Z'];
 function pill(value: string) {
   const cls =
     value === 'HIGH'
-      ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-200'
+      ? 'border-emerald-500/50 bg-emerald-500/15 text-emerald-300'
       : value === 'MEDIUM'
-      ? 'border-amber-500/40 bg-amber-500/10 text-amber-200'
-      : 'border-red-500/40 bg-red-500/10 text-red-200';
-  return <span className={`rounded-full border px-2 py-0.5 text-xs ${cls}`}>{value}</span>;
+      ? 'border-amber-500/50 bg-amber-500/15 text-amber-300'
+      : 'border-red-500/50 bg-red-500/15 text-red-300';
+  return <span className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold tracking-wide whitespace-nowrap ${cls}`}>{value}</span>;
 }
  
 export default function MappingTable() {
@@ -71,15 +71,12 @@ export default function MappingTable() {
   return (
     <div className="flex h-full flex-col rounded-xl border border-border bg-panel p-4">
       <div className="flex flex-col gap-3">
- 
-        {/* Tabs */}
         <div className="grid grid-cols-3 gap-3">
           {tabButton('MAPPED', 'Mapped')}
           {tabButton('UNMAPPED', 'Unmapped')}
           {tabButton('AMBIGUOUS', 'Ambiguous')}
         </div>
- 
-        {/* Search + sort */}
+
         <div className="grid grid-cols-[minmax(0,1.8fr)_minmax(220px,1fr)] gap-3">
           <div className="relative">
             <input
@@ -115,67 +112,82 @@ export default function MappingTable() {
         </div>
       </div>
  
-      {/* Table header */}
-      <div className="mt-3 grid grid-cols-[2fr_1fr_0.3fr_1.5fr_0.8fr] bg-bg/20 px-4 py-2 text-xs font-semibold text-text rounded-t-lg border border-border">
-        <div>Source Field</div>
-        <div>Source Type</div>
-        <div className="text-center">→</div>
-        <div>Common Field</div>
-        <div>Confidence</div>
-      </div>
- 
-      {/* Rows */}
-      <div className="flex flex-col overflow-y-auto flex-1 border border-t-0 border-border rounded-b-lg">
-        {pageRows.map(row => {
-          const active = row.id === selectedRowId;
-          const hovered = hoveredRowId === row.id;
-          return (
-            <div
-              key={row.id}
-              onClick={() => setSelectedRowId(row.id)}
-              onMouseEnter={() => setHoveredRowId(row.id)}
-              onMouseLeave={() => setHoveredRowId(null)}
-              style={{
-                backgroundColor: active ? '#112e4e' : hovered ? '#131f37' : 'transparent',
-                borderLeft: active ? '3px solid #00B4B4' : '3px solid transparent',
-                transition: 'background-color 0.15s ease',
-              }}
-              className="grid cursor-pointer grid-cols-[2fr_1fr_0.3fr_1.5fr_0.8fr] gap-2 border-t border-border/60 px-3 py-3 text-sm"
-            >
-              <div className="min-w-0">
-                <div className="truncate text-sm font-medium text-text">
-                  {row.sourceSystem}.{row.sourceField}
-                </div>
-                <div className="mt-0.5 truncate text-xs text-muted">
-                  {row.commonEntity}
-                </div>
-              </div>
-              <div className="self-center text-muted">{row.sourceType}</div>
-              <div className="self-center text-center text-muted">→</div>
-              <div className="self-center truncate text-text">{row.commonField}</div>
-              <div className="self-center">{pill(row.confidence)}</div>
-            </div>
-          );
-        })}
- 
-        {pageRows.length === 0 && (
-          <div className="p-4 text-sm text-muted">No rows match your filters.</div>
-        )}
-      </div>
- 
-      {/* Pagination */}
-      <div className="mt-3 flex items-center gap-3 text-sm text-text">
-        <button type="button" disabled={!canPrev} onClick={() => setCurrentPage(1)}
-          className="rounded border border-border px-2 disabled:cursor-not-allowed disabled:opacity-40">«</button>
-        <button type="button" disabled={!canPrev} onClick={() => setCurrentPage(p => p - 1)}
-          className="rounded border border-border px-2 disabled:cursor-not-allowed disabled:opacity-40">‹</button>
-        <span>{currentPage} of {totalPages}</span>
-        <button type="button" disabled={!canNext} onClick={() => setCurrentPage(p => p + 1)}
-          className="rounded border border-border px-2 disabled:cursor-not-allowed disabled:opacity-40">›</button>
-        <button type="button" disabled={!canNext} onClick={() => setCurrentPage(totalPages)}
-          className="rounded border border-border px-2 disabled:cursor-not-allowed disabled:opacity-40">»</button>
-      </div>
+    <div className="mt-3 grid grid-cols-[2fr_1fr_0.3fr_1.5fr_0.8fr] bg-bg/20 px-4 py-2 text-xs font-semibold text-text rounded-t-lg border border-border">
+      <div>Source Field</div>
+      <div>Source Type</div>
+      <div className="text-center">→</div>
+      <div>Common Field</div>
+      <div>Confidence</div>
     </div>
+
+<div className="flex flex-col overflow-y-auto flex-1 rounded-b-lg border border-t-0 border-border bg-bg/20">
+  {pageRows.map(row => {
+    const active = row.id === selectedRowId;
+    return (
+      <div
+        key={row.id}
+        onClick={() => setSelectedRowId(row.id)}
+        className={`cursor-pointer border-b border-border/50 p-3 transition-colors
+          
+          ${active 
+            ? 'bg-accent/10 border-l-2 border-l-accent' 
+            : 'hover:bg-panel2 border-l-2 border-l-transparent'}
+        `}
+      >
+        <div className="grid grid-cols-[2fr_1fr_0.3fr_1.5fr_0.8fr] items-center gap-2">
+          <div className="min-w-0">
+            <div className={`truncate text-sm font-semibold ${active ? 'text-accent' : 'text-text'}`}>
+              {row.sourceSystem}.{row.sourceField}
+            </div>
+            <div className="mt-0.5 truncate text-xs text-muted">
+              {row.commonEntity}
+            </div>
+          </div>
+          <div className="text-sm text-muted">
+            {row.sourceType}
+          </div>
+          <div className="text-center text-muted text-sm">
+            →
+          </div>
+          <div className="truncate text-sm text-text">
+            {row.commonField}
+          </div>
+          <div>
+            {pill(row.confidence)}
+          </div>
+        </div>
+      </div>
+    );
+  })}
+
+  {pageRows.length === 0 && (
+    <div className="p-4 text-sm text-muted">
+      No rows match your filters.
+    </div>
+  )}
+</div>
+<div className="mt-3 flex items-center justify-between text-sm text-text">
+  <button
+    type="button"
+    disabled={!canPrev}
+    onClick={() => setCurrentPage(p => p - 1)}
+    className="flex items-center gap-1 rounded border border-border bg-bg/40 px-4 py-2 text-sm font-medium text-text transition-colors hover:bg-bg/60 disabled:cursor-not-allowed disabled:opacity-40"
+  >
+    <ChevronLeft className="h-4 w-4" /> Prev
+  </button>
+
+  <span>{currentPage} of {totalPages}</span>
+
+  <button
+    type="button"
+    disabled={!canNext}
+    onClick={() => setCurrentPage(p => p + 1)}
+    className="flex items-center gap-1 rounded border border-border bg-bg/40 px-4 py-2 text-sm font-medium text-text transition-colors hover:bg-bg/60 disabled:cursor-not-allowed disabled:opacity-40"
+  >
+    Next <ChevronRight className="h-4 w-4" />
+  </button>
+</div>
+</div>
   );
 }
  

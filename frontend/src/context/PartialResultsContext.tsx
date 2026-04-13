@@ -1,7 +1,7 @@
-import React, { createContext, useCallback, useContext, useMemo, useState } from 'react';
-import entitiesMock from '../data/mockEntities.json';
-import evidenceMock from '../data/mockEvidence.json';
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import { EvidenceReview, ExtractedEntity, EntityType, ReviewDecision } from '../types/partialResults';
+import { fetchEvidence, fetchEntities } from '../api/runApi';
+import { useRunContext } from './RunContext';
 
 type PartialResultsContextValue = {
   entities: ExtractedEntity[];
@@ -32,6 +32,8 @@ type PartialResultsContextValue = {
 
   goPrev: () => void;
   goNext: () => void;
+  canPrev: boolean;
+  canNext: boolean;
 
   filteredEntities: ExtractedEntity[];
   filteredEvidence: EvidenceReview[];
@@ -40,6 +42,9 @@ type PartialResultsContextValue = {
   countsByType: Record<EntityType, number>;
 
   positionLabel: string;
+  loading: boolean;
+  error: string | null;
+  refetch: () => void;
 };
 
 const Ctx = createContext<PartialResultsContextValue | null>(null);
@@ -54,9 +59,36 @@ const defaultTypes: Record<EntityType, boolean> = {
 };
 
 export function PartialResultsProvider({ children }: { children: React.ReactNode }) {
-  const [entities] = useState<ExtractedEntity[]>(entitiesMock as unknown as ExtractedEntity[]);
-  const [evidence, setEvidence] = useState<EvidenceReview[]>(evidenceMock as unknown as EvidenceReview[]);
-  const [selectedEvidenceId, setSelectedEvidenceId] = useState<string | null>((evidenceMock as any[])[0]?.id ?? null);
+  const { runId } = useRunContext();
+  const [entities, setEntities] = useState<ExtractedEntity[]>([]);
+  const [evidence, setEvidence] = useState<EvidenceReview[]>([]);
+  const [selectedEvidenceId, setSelectedEvidenceId] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [fetchCount, setFetchCount] = useState(0);
+  const refetch = useCallback(() => setFetchCount((c) => c + 1), []);
+
+  useEffect(() => {
+    if (!runId) return;
+    let cancelled = false;
+    setLoading(true);
+    setError(null);
+    (async () => {
+      try {
+        const [ev, en] = await Promise.all([fetchEvidence(runId), fetchEntities(runId)]);
+        if (cancelled) return;
+        setEvidence(ev);
+        setEntities(en);
+        setSelectedEvidenceId(ev[0]?.id ?? null);
+      } catch (e: any) {
+        if (cancelled) return;
+        setError(e?.message ?? 'Failed to load partial results');
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [runId, fetchCount]);
 
   const [selectedEntityIds, setSelectedEntityIds] = useState<string[]>([]);
   const [entityTypes, setEntityTypes] = useState(defaultTypes);
@@ -96,6 +128,9 @@ export function PartialResultsProvider({ children }: { children: React.ReactNode
     if (!selectedEvidenceId) return -1;
     return filteredEvidence.findIndex(e => e.id === selectedEvidenceId);
   }, [filteredEvidence, selectedEvidenceId]);
+
+  const canPrev = currentIndex > 0;
+  const canNext = currentIndex >= 0 && currentIndex < filteredEvidence.length - 1;
 
   const positionLabel = useMemo(() => {
     if (!filteredEvidence.length || currentIndex < 0) return `0 of ${filteredEvidence.length}`;
@@ -180,16 +215,22 @@ export function PartialResultsProvider({ children }: { children: React.ReactNode
     clearSelection,
     goPrev,
     goNext,
+    canPrev,
+    canNext,
     filteredEntities,
     filteredEvidence,
     selectedEvidence,
     sources,
     countsByType,
-    positionLabel
+    positionLabel,
+    loading,
+    error,
+    refetch,
   }), [
     entities, evidence, selectedEvidenceId, selectedEntityIds, entityTypes, queryEntities, queryEvidence, sourceFilter, activeTab,
     saveDraftEnabled, filteredEntities, filteredEvidence, selectedEvidence, sources, countsByType, positionLabel,
-    selectEvidence, toggleEntity, setEntityTypeEnabled, approveSelected, rejectSelected, clearSelection, goPrev, goNext
+    selectEvidence, toggleEntity, setEntityTypeEnabled, approveSelected, rejectSelected, clearSelection, goPrev, goNext,
+    canPrev, canNext, loading, error, refetch,
   ]);
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;

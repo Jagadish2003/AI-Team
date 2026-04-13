@@ -71,8 +71,14 @@ export default function IntegrationHubPage() {
                     selectedId={selectedConnectorId}
                     onSelect={selectConnector}
                     onPrimary={(id) => {
-                      connectConnector(id);
-                      push('Connector connected.');
+                      const c = recommended.find(x => x.id === id);
+                      if (c?.status === 'connected') {
+                        configureSync(id);
+                        push('Sync configured (mock).');
+                      } else {
+                        connectConnector(id);
+                        push('Connector connected.');
+                      }
                     }}
                     onSecondary={() => push('Data preview available in Sprint 2.')}
                   />

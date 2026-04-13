@@ -10,6 +10,7 @@ import FieldDetailsPanel from '../components/normalization/FieldDetailsPanel';
 import { useNavigate } from 'react-router-dom';
 import { useRunContext } from '../context/RunContext';
 import { RunRequiredEmptyState } from '../components/common/RunRequiredEmptyState';
+import { useConnectorContext } from '../context/ConnectorContext';
 
 const persistedSources = { current: new Set<string>() };
 const persistedEntities = { current: new Set<string>() };
@@ -26,6 +27,8 @@ export default function NormalizationInspectorPage() {
   } = useNormalizationContext();
   const nav = useNavigate();
   const { runId } = useRunContext();
+  const { all: allConnectors, selectConnector } = useConnectorContext();
+  const m365Connected = allConnectors.some(c => c.id === 'microsoft_365' && c.status === 'connected');
 
   const [selectedSources, setSelectedSources] = useState<Set<string>>(new Set(persistedSources.current));
   const [selectedEntities, setSelectedEntities] = useState<Set<string>>(new Set(persistedEntities.current));
@@ -86,7 +89,15 @@ export default function NormalizationInspectorPage() {
           </div>
         </div>
 
-        <ConfidenceBanner conf={confidence} onAction={() => nav('/integration-hub')} />
+        {!m365Connected && (
+          <ConfidenceBanner
+            conf={confidence}
+            onAction={() => {
+              selectConnector('microsoft_365');
+              nav('/integration-hub');
+            }}
+          />
+        )}
 
         <div className="mt-4 flex gap-6">
           <div className="flex flex-col gap-4" style={{ flex: 3 }}>

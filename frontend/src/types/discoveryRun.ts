@@ -43,3 +43,9 @@ export interface RunEvent {
   level?: LogLevel;
   message: string;
 }
+
+export interface StartRunResponse {
+  runId: string;
+  status: string;
+  startedAt: string;
+}

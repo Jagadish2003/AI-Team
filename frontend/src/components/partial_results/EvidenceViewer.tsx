@@ -48,17 +48,20 @@ const EvidenceViewer: React.FC<EvidenceViewerProps> = ({
           </div>
 
           <div className="rounded-lg border border-border bg-bg/40 px-3 py-2 text-xs text-muted">
-            Entity: {evidence.evidenceType}
+            Evidence Source Type : {evidence.evidenceType}
           </div>
-
           <div className="text-sm leading-relaxed text-text">{evidence.snippet}</div>
-
-          <div className="flex flex-wrap gap-2 text-xs text-muted">
-            <span className="rounded border border-border bg-bg/30 px-2 py-1">Source: {evidence.source}</span>
-            <span className="rounded border border-border bg-bg/30 px-2 py-1">Type: {evidence.evidenceType}</span>
-            <span className="rounded border border-border bg-bg/30 px-2 py-1">Decision: {evidence.decision}</span>
+          <div className="flex flex-col gap-2 text-xs text-muted">
+          <div className="flex items-center justify-between rounded border border-border bg-bg/30 px-3 py-2">
+            <span>
+              Source: <span className="font-semibold text-text">{evidence.source}</span>
+            </span>
+            <span>
+              Type: <span className="font-semibold text-text">{evidence.evidenceType}</span>
+            </span>
+            <span> Decision: <span className="font-semibold text-text">{evidence.decision}</span></span>  
           </div>
-
+        </div>
           <div className="grid grid-cols-2 gap-2">
             <button
               onClick={onApprove}
