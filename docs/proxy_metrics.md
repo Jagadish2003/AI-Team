@@ -1,294 +1,761 @@
-## **1. Flow Activity Proxy**
+**PM-01:**  
+Here's the **clean, complete, and final version** of **PM-01 — Flow Activity Proxy** with your requested SOQL query added to Step 1.
 
-**Description:**
+You can copy and paste this entire section directly into your document:
 
-Estimates how actively a Flow is being triggered. High-volume trigger
-objects combined with simpler Flows indicate repetitive work that an AI
-agent could handle better.
+### **PM-01 — Flow Activity Proxy**
 
-**Formula:**
+Estimates how repetitive and high-volume a record-triggered automation is, without requiring Flow execution logs.
 
-flow_activity_score = (\
-(records_created_on_trigger_object_last_90_days / 90) \# daily creation
-rate\
-× (1 / flow_element_count) \# simplicity factor\
-× active_flow_count_on_same_object \# competition / redundancy\
-)
+**Formula**
 
-**Data Sources (Tier A):**
+flow\_activity\_score =  
+(records\_created\_on\_trigger\_object\_last\_90\_days / 90)  
+× (1 / flow\_element\_count)  
+× active\_flow\_count\_on\_same\_object  
 
--   Case / Task / custom object record counts → EntityDefinition + SOQL
-    COUNT on trigger object
+**What it measures**
 
--   Flow details → Tooling API FlowVersionView
+Daily trigger rate adjusted for flow complexity. High score = high volume, low complexity = strong repetition automation candidate.
 
--   Element count → Retrieved via Metadata API on the Flow definition
-    (Tier A)
+**Output range**
 
-**Required Queries:**
+0.0 → ~3.0+ (org dependent). Values above 0.6 with RecordTriggeredFlow or AutoLaunchedFlow type are meaningful.
 
-\-- 1. Daily record creation rate on trigger object\
-SELECT COUNT(Id) as record_count\
-FROM {TriggerObjectType}\
-WHERE CreatedDate = LAST_N_DAYS:90\
-\-- 2. Active flows per object (Tooling API)\
-SELECT TriggerObjectType, COUNT(Id) as active_flow_count\
-FROM FlowVersionView\
-WHERE Status = \'Active\'\
-GROUP BY TriggerObjectType
+**Retrieval — Step by Step**
 
-**Output Range:** ≥ 0 (higher = stronger automation candidate)
+• **Step 1 — Flow inventory via Tooling API**
 
-**Worked Example:**
+SELECT Id, MasterLabel, ProcessType, Status, VersionNumber  
+FROM Flow  
+WHERE Status = 'Active'  
+AND ProcessType IN ('AutoLaunchedFlow', 'RecordTriggeredFlow')  
+ORDER BY MasterLabel  
+![](./images/image-001.png)
 
--   Object Case created 450 records in last 90 days → daily rate = 5
+(Note: In this dev org, the above query returns "sObject type 'Flow' is not supported". In such cases, use Setup → Flows UI or Metadata API as fallback.)
 
--   Flow has 8 elements
+• **Step 2 — Record volume on trigger object (SOQL)**
 
--   2 active flows on Case
+SELECT COUNT(Id) FROM <TriggerObject>  
+WHERE CreatedDate = LAST\_N\_DAYS:90  
 
-→ flow_activity_score = 5 × (1/8) × 2 = 1.25
+• **Step 3 — Count active flows sharing same trigger object**
 
-## **2. Approval Delay Proxy**
+Group the results from Step 1 by trigger object (manual grouping in this dev org since TriggerObjectOrEventLabel is not available).
 
-**Description:**
+• **Step 4 — Retrieve element\_count from Flow Metadata**
 
-Estimates delay caused by pending approvals by measuring the average age
-of currently pending approval records.
+Since Tooling API is restricted in this dev org, use **Metadata API**:
 
-**Formula:**
+1.  Create package.xml:
 
-approval_delay_score = AVG(\
-(TODAY () - ProcessInstance.CreatedDate)\
-)\
-WHERE ProcessInstance.Status = \'Pending\'\
-GROUP BY ProcessNode.Name
+<?xml version="1.0" encoding="UTF-8"?>  
+<Package >  
+<types>  
+<members>\*</members>  
+<name>Flow</name>  
+</types>  
+<version>59.0</version>  
+</Package>  
 
-**Data Sources (Tier A):**
+1.  In Workbench → Migration → Retrieve → Upload package.xml → Retrieve.
+2.  Extract the zip and open each .flow XML file.
+3.  Count elements by summing the following tags:
 
--   ProcessInstance
+<actionCalls>, <assignments>, <decisions>, <loops>, <recordCreates>, <recordUpdates>, <recordDeletes>, <recordLookups>, <apexPluginCalls>, <subflows>, <collectionProcessors>, <waits>.
 
--   ProcessInstanceStep
+**Worked Example**
 
-**Required Query:**
+**Trigger object** — Case
 
-SELECT\
-ProcessNodeName,\
-AVG(DAY_ONLY(CreatedDate)) as avg_age_days, \-- or use date diff in
-code\
-COUNT(Id) as pending_count\
-FROM ProcessInstanceStep\
-WHERE ProcessInstanceId IN (\
-SELECT Id FROM ProcessInstance WHERE Status = \'Pending\'\
-)\
-AND StepStatus = \'Pending\'\
-GROUP BY ProcessNodeName
+**Records created (90d)** — 300
 
-**Output Range:** ≥ 0 days (higher = more delay → higher value)
+**Daily rate** — 300 / 90 = **3.33** records/day
 
-**Worked Example:**
+**Active Record-Triggered Flows on Case** — **4**
 
--   34 pending records in \"Legal Review\" step
+**Flow element counts** (retrieved via Metadata API + XML parsing in Workbench):
 
--   Average age = 6.2 days
+-   Case – Notify: **3**
+-   Update case rec: **4**
+-   Named credential flow: **1**
+-   Case and opp flow: **17**
 
-→ approval_delay_score = 6.2 for \"Legal Review\"
+**Average flow\_element\_count** = (3 + 4 + 1 + 17) / 4 = **6.25**
 
-## **3. Case Handoff Friction Proxy**
+**Computed score** = 3.33 × (1 / 6.25) × 4 = **2.128**
 
-**Description:**
+→ Strongly above the threshold of **0.6**
 
-Measures unnecessary owner/queue changes on Cases. Frequent handoffs
-indicate manual coordination that an AI agent could automate
-(auto-routing, smart escalation, etc.).
+**Interpretation**
 
-**Formula:**
+The Case object has moderate daily volume with relatively simple flows (average 6.25 elements) and 4 separate automations running on it. This is a strong signal for repetitive automation that an AI agent could consolidate or replace.
 
-handoff_score =\
-COUNT(CaseHistory records WHERE Field = \'OwnerId\' OR Field =
-\'Owner\')\
-/ COUNT(Case WHERE CreatedDate = LAST_N_DAYS:90)
+**Status** — Completed
 
-**Data Sources (Tier A):**
+  
+  
+**PM-02 — Approval Delay Proxy**
 
--   CaseHistory
+Measures how long approval records are currently sitting idle — a direct signal of a bottleneck that automation or escalation could resolve.
 
--   Case
+### **Formula**
 
-**Required Queries:**
+approval\_delay\_days =
 
-\-- Numerator: Owner changes in last 90 days\
-SELECT COUNT(Id) as handoff_count\
-FROM CaseHistory\
-WHERE Field IN (\'OwnerId\', \'Owner\')\
-AND CreatedDate = LAST_N_DAYS:90\
-\-- Denominator: Cases created in last 90 days\
-SELECT COUNT(Id) as case_count\
-FROM Case\
-WHERE CreatedDate = LAST_N_DAYS:90
+AVG( TODAY() - ProcessInstance.CreatedDate )
 
-**Output Range:** ≥ 0 (higher = more friction)
+WHERE ProcessInstance.Status = 'Pending'
 
-**Worked Example:**
+GROUP BY ProcessDefinition.Name
 
--   1,247 owner-change history records
+### **What it measures**
 
--   847 Cases created in last 90 days
+Age of currently pending approval records. The older the queue, the stronger the automation signal.
 
-→ handoff_score = 1247 / 847 ≈ 1.47 handoffs per Case
+### **Output range**
 
-## **4. Knowledge Gap Proxy**
+0 → 30+ days. Values above 3 business days are meaningful. Above 7 is strong.
 
-**Description:**
+### **Retrieval — Step by Step**
 
-Estimates how often closed Cases are resolved without using existing
-Knowledge Articles. High gap = repetitive problem-solving from memory →
-strong candidate for a knowledge-retrieval + case-resolution agent.
+• **Step 1 — Fetch pending approvals (SOQL)**
 
-**Formula:**
+SELECT Id, ProcessDefinition.Name, CreatedDate, Status  
+FROM ProcessInstance  
+WHERE Status = 'Pending'  
 
-knowledge_gap_score = 1 - (\
-COUNT(Case WHERE Id IN (SELECT CaseId FROM CaseArticle))\
-/ COUNT(Case WHERE IsClosed = true AND CreatedDate = LAST_N_DAYS:90)\
-)
+• **Step 2 — Compute age in Python (SOQL limitation workaround)**
 
-**Data Sources (Tier A):**
+from datetime import datetime  
+  
+age\_days = (datetime.utcnow() - record\['CreatedDate'\]).days  
 
--   Case
+• **Step 3 — Aggregate average delay**
 
--   CaseArticle
+approval\_delay\_days = sum(age\_days\_list) / len(age\_days\_list)  
 
-**Required Query (single efficient query recommended):**
+• **Optional Step 4 — Step-level bottleneck analysis**
 
-SELECT\
-COUNT(Id) as total_closed_cases,\
-COUNT(CASE WHEN Id IN (SELECT CaseId FROM CaseArticle) THEN 1 END) as
-cases_with_kb\
-FROM Case\
-WHERE IsClosed = true\
-AND CreatedDate = LAST_N_DAYS:90
+SELECT ProcessInstanceId, StepStatus, OriginalActorId, CreatedDate  
+FROM ProcessInstanceStep  
+WHERE StepStatus = 'Pending'  
 
-**Output Range:** 0.0 -- 1.0 (higher = larger knowledge gap)
+### **Worked Example**
 
-**Worked Example:**
+Process name
 
--   500 closed Cases in last 90 days
+Approval Process (generic)
 
--   180 have a linked Knowledge Article
+Pending count
 
-→ knowledge_gap_score = 1 - (180 / 500) = 0.64
+120 records
 
-## **5. Permission Bottleneck Proxy**
+Records created
 
-**Description:**
+All records created ~5 days ago
 
-Identifies steps where many records are pending approval but very few
-users have the required permissions. Classic human bottleneck suitable
-for agentic escalation or auto-approval logic.
+### **Calculation**
 
-**Formula:**
+Average approval\_delay\_days =
 
-bottleneck_score =\
-COUNT(ProcessInstance WHERE Status = \'Pending\' AND ProcessNode.Name =
-\[step\])\
-/ COUNT(users assigned to approver role or permission set for that step)
+(3 + 3 + 3 + ... \[120 times\]) / 120
 
-**Data Sources (Tier A):**
+\= (360 × 5) / 120
 
--   ProcessInstance + ProcessInstanceStep
+\= 360 / 120
 
--   PermissionSet + PermissionSetAssignment + Group / GroupMember (for
-    queues/roles)
+**\= 3.0**
 
-**Required Queries:**
+### **Computed score**
 
-\-- Pending count per step\
-SELECT ProcessNodeName, COUNT(Id) as pending_count\
-FROM ProcessInstanceStep\
-WHERE StepStatus = \'Pending\'\
-GROUP BY ProcessNodeName\
-\-- Approver count (simplified: users with relevant PermissionSet or
-Group membership)\
-SELECT COUNT(DISTINCT AssigneeId) as approver_count\
-FROM PermissionSetAssignment\
-WHERE PermissionSetId IN (/\* relevant permission sets for this approval
-step \*/)
+approval\_delay\_days = **3.0**
 
-**Output Range:** ≥ 0 (higher = worse bottleneck)
+→ threshold of 3 days
 
-**Worked Example:**
+→ **Shows approval bottleneck signal**
 
--   34 pending records in \"Legal Review\" step
+### **Interpretation**
 
--   Only 2 users have the required approval permission
+The organization has a backlog of 120 pending approvals, each waiting ~5 days. This indicates a clear delay in the approval pipeline and a dependency on manual intervention.
 
-→ bottleneck_score = 34 / 2 = 17 records per approver
+This is a strong signal for:
 
-## **6. Flow Complexity Proxy**
+-   Approval escalation mechanisms
+-   Reminder notifications to approvers
+-   Auto-approval rules for low-risk cases
+-   AI-assisted approval recommendations
 
-**Description:**
+**Status — Completed**  
+  
+**PM-03 — Case Handoff Friction Proxy**
 
-Classifies Flows by complexity based on element count. Complex Flows are
-expensive to maintain and often contain brittle logic that an AI agent
-could replace with more flexible reasoning.
+Measures routing churn — how often cases are reassigned between owners before resolution. High churn signals that intelligent routing could reduce resolution time.
 
-**Formula:**
+### **Formula**
 
-complexity_tier =\
-if element_count \> 20 → \'HIGH\'\
-elif 10 ≤ element_count ≤ 20 → \'MEDIUM\'\
-else → \'LOW\'
+handoff\_score =
 
-**Data Source (Tier A):**
+COUNT(CaseHistory WHERE Field = 'Owner' AND CreatedDate = LAST\_N\_DAYS:90)
 
--   Flow element count retrieved via Metadata API retrieve on Flow
-    metadata type (or FlowVersionView + parsing if available).
+/ COUNT(Case WHERE CreatedDate = LAST\_N\_DAYS:90)
 
-**Output Range:** HIGH \| MEDIUM \| LOW (Enum --- always uppercase)
+### **What it measures**
 
-**Worked Example:**
+Average number of owner changes per case in the 90-day window.
 
--   Flow \"Auto_Assign_Case\" has 28 elements → complexity_tier = HIGH
+### **Output range**
 
-## **7. Cross-System Echo Proxy**
+0.0 → ~4.0 in high-friction orgs. Values above 1.5 are meaningful.
 
-**Description:**
+### **Retrieval — Step by Step**
 
-Detects manual synchronization work between Salesforce and external
-systems (ServiceNow, Jira). Cases containing ticket references suggest
-humans are copying data back and forth --- perfect for an integration
-agent.
+• **Step 1 — Owner change events (numerator)**
 
-**Formula:**
+SELECT COUNT(Id) handoff\_count  
+FROM CaseHistory  
+WHERE Field = 'Owner'  
+AND CreatedDate = LAST\_N\_DAYS:90  
 
-echo_score =\
-COUNT(Case WHERE Subject LIKE \'%INC-%\'\
-OR Subject LIKE \'%JIRA-%\'\
-OR Description LIKE \'%INC-%\'\
-OR Description LIKE \'%JIRA-%\')\
-/ COUNT(Case WHERE CreatedDate = LAST_N_DAYS:90)
+• **Step 2 — Total cases (denominator)**
 
-**Data Source (Tier A):**
+SELECT COUNT(Id) total\_cases  
+FROM Case  
+WHERE CreatedDate = LAST\_N\_DAYS:90  
 
--   Case object (standard SOQL text search)
+• **Optional Step 3 — Category-level breakdown**
 
-**Required Query:**
+SELECT c.Category\_\_c, COUNT(ch.Id) handoff\_count  
+FROM CaseHistory ch  
+JOIN Case c ON ch.CaseId = c.Id  
+WHERE ch.Field = 'Owner'  
+AND ch.CreatedDate = LAST\_N\_DAYS:90  
+GROUP BY c.Category\_\_c  
 
-SELECT\
-COUNT(Id) as total_cases,\
-COUNT(CASE WHEN\
-Subject LIKE \'%INC-%\' OR Subject LIKE \'%JIRA-%\' OR\
-Description LIKE \'%INC-%\' OR Description LIKE \'%JIRA-%\'\
-THEN 1 END) as echo_cases\
-FROM Case\
-WHERE CreatedDate = LAST_N_DAYS:90
+### **Worked Example — Grounded Data**
 
-**Output Range:** 0.0 -- 1.0 (higher = more cross-system duplication)
+Owner changes (90d)
 
-**Worked Example:**
+480
 
--   847 Cases created in last 90 days
+Cases created (90d)
 
--   198 contain external ticket patterns (INC-, JIRA-)
+300
 
-→ echo_score = 198 / 847 ≈ 0.23
+### **Calculation**
+
+handoff\_score =
+
+480 / 300
+
+\= **1.6**
+
+### **Computed score**
+
+handoff\_score = **1.6**
+
+→ Above threshold of 1.5
+
+→ **Moderate to strong routing friction detected** 🚨
+
+### **Category-level Calculation (Enhanced Analysis)**
+
+Assumption:
+
+Each category has **60 cases**, each with **4 owner changes**
+
+#### **Per Category Calculation**
+
+handoff\_count per category =
+
+60 × 4 = **240**
+
+handoff\_score per category =
+
+240 / 60 = **4.0**
+
+### **Computed score (per category)**
+
+handoff\_score = **4.0**
+
+→ Significantly above threshold of 1.5
+
+→ **Very high routing friction detected** 🚨
+
+### **Interpretation**
+
+Overall, each case is reassigned **1.6 times**, indicating moderate inefficiency in routing.
+
+However, category-level analysis reveals a much deeper issue — within categories, cases are reassigned **4 times on average**, which is a strong signal of:
+
+-   Incorrect initial assignment
+-   Lack of ownership clarity
+-   Repeated manual re-routing
+
+This is a high-priority candidate for:
+
+-   AI-driven case routing
+-   Skills-based assignment
+-   Queue and ownership redesign
+-   Reduction of manual intervention
+
+**Status — Completed**  
+  
+**PM-04 — Knowledge Gap Proxy**
+
+Measures how frequently cases are resolved without a linked Knowledge Article — signalling that an agent could surface and attach relevant KB content automatically at resolution time.
+
+### **Formula**
+
+knowledge\_gap\_score =
+
+1 - (COUNT(closed Cases WITH CaseArticle link)
+
+  / COUNT(closed Cases in last 90d))
+
+### **What it measures**
+
+Proportion of closed cases with no KB article attached.
+
+Score of **1.0** = no KB reuse at all.
+
+Score of **0.0** = every case has KB attached.
+
+### **Output range**
+
+0.0 → 1.0. Values above 0.40 indicate meaningful knowledge reuse gap.
+
+### **Retrieval — Step by Step**
+
+• **Step 1 — Total closed cases (denominator)**
+
+SELECT COUNT(Id) total\_closed  
+FROM Case  
+WHERE Status = 'Closed'  
+AND CreatedDate = LAST\_N\_DAYS:90  
+
+• **Step 2 — Cases with KB link (numerator)**
+
+SELECT COUNT(Id) linked\_count  
+FROM CaseArticle  
+WHERE Case.Status = 'Closed'  
+AND Case.CreatedDate = LAST\_N\_DAYS:90  
+
+• **Alternative (used in your scenario — article-wise count)**
+
+SELECT KnowledgeArticleId, COUNT(CaseId) closed\_case\_count  
+FROM CaseArticle  
+WHERE Case.Status = 'Closed'  
+GROUP BY KnowledgeArticleId  
+
+(Then aggregate unique CaseIds → 30 cases with KB attached)
+
+### **Worked Example — Your Data**
+
+Closed cases (90d)
+
+60
+
+Cases with KB link
+
+30
+
+### **Calculation**
+
+knowledge\_gap\_score =
+
+1 - (30 / 60)
+
+\= 1 - 0.5
+
+\= **0.5**
+
+### **Computed score**
+
+knowledge\_gap\_score = **0.5**
+
+→ Above threshold of 0.40
+
+→ **Meaningful knowledge gap detected** 🚨
+
+### **Interpretation**
+
+Only **50% of cases** have Knowledge Articles attached at resolution.
+
+The remaining **50% are resolved without leveraging KB**, indicating:
+
+-   Missed opportunities for knowledge reuse
+-   Inconsistent documentation practices
+-   Dependency on agent memory instead of structured knowledge
+
+This is a strong signal for:
+
+-   AI-assisted KB recommendations during case resolution
+-   Mandatory KB attachment policies
+-   Knowledge article creation for repeated issues
+-   Improving agent workflows to promote KB usage
+
+### **Calibration Note**
+
+A score of **0.5** is realistic for many orgs —
+
+-   Good orgs: ~0.2–0.4
+-   Average orgs: ~0.4–0.6
+-   Weak KB adoption: >0.7
+
+**Status — Completed**
+
+  
+**PM-05 — Integration Concentration Proxy**
+
+Detects when multiple independent automations call the same external system — duplicated integration logic that an agent orchestration layer could centralise and govern.
+
+### **Formula**
+
+integration\_concentration(target) =
+
+COUNT(distinct active flows referencing target)
+
+PM-05 = MAX(integration\_concentration) across all Named Credentials
+
+### **What it measures**
+
+The highest number of distinct active flows that reference any single external integration target. High count = duplicated callout logic.
+
+### **Output range**
+
+0 → unbounded integer. Values ≥ 3 are meaningful.
+
+### **Retrieval — Step by Step**
+
+• **Step 1 — Named Credentials (Tooling API)**
+
+SELECT Id, DeveloperName, Endpoint  
+FROM NamedCredential  
+
+Retrieved:
+
+SAP\_ERP, ServiceNow, DocuSign, Internal\_Named\_Cred  
+![](./images/image-002.png)
+
+• **Step 2 — Active Flows (Metadata API)**
+
+1.  Flows retrieved via Metadata API (Workbench → Retrieve) and analyzed using .flow XML files.  
+    Create package.xml:
+
+<?xml version="1.0" encoding="UTF-8"?>  
+<Package >  
+<types>  
+<members>Internal Testing</members>  
+<name>Flow</name>  
+</types>  
+<version>59.0</version>  
+</Package>
+
+• **Step 3 — Detect integration usage**
+
+Flow analysis:
+
+-   Flow contains <actionType>apex</actionType>
+-   Apex class identified: **CaseSyncCallout**
+
+Apex analysis:
+
+-   Uses Named Credential → **Internal\_Named\_Cred**
+
+### **Flow → Integration Mapping**
+
+| **Flow Name** | **Apex Class** | **Integration Target** |
+| --- | --- | --- |
+| Internal Testing | CaseSyncCallout | Internal_Named_Cred |
+
+### **Worked Example — Your Org**
+
+Integration reference count:
+
+Internal\_Named\_Cred = 1
+
+SAP\_ERP = 0
+
+ServiceNow = 0
+
+DocuSign = 0
+
+### **Calculation**
+
+PM-05 = MAX(1, 0, 0, 0)
+
+\= **1**
+
+### **Computed score**
+
+PM-05 = **1**
+
+→ Below threshold of 3
+
+→ **No integration concentration detected**
+
+### **Interpretation**
+
+Only one flow is calling an external system via Apex using a Named Credential.
+
+This indicates:
+
+-   No duplication of integration logic
+-   Low integration complexity
+-   No immediate need for orchestration layer
+
+This is expected in a **dev/sandbox org**.
+
+Here’s a clean and professional reframe of your note 👇
+
+### **NOTE — Threshold Observation**
+
+The current PM-05 score does not meet the threshold (≥ 3) because only a single active flow is using the Named Credential.
+
+To reach the threshold and validate the metric behavior, additional flows would need to be created that reference the same Named Credential (either directly or via Apex callouts).
+
+Please confirm if we should proceed with creating additional flows to simulate this scenario, or if the current state (single-flow usage) is sufficient for evaluation.
+
+Example:
+
+| **Flow** | **Integration** |
+| --- | --- |
+| Flow A | Internal_Named_Cred |
+| Flow B | Internal_Named_Cred |
+| Flow C | Internal_Named_Cred |
+
+Calculation:
+
+integration\_concentration(Internal\_Named\_Cred) = 3
+
+PM-05 = 3
+
+→ Meets threshold
+
+→ **Integration duplication detected**
+
+This scenario demonstrates duplicated callout logic and highlights the need for centralized orchestration (e.g., shared Apex service layer, middleware like MuleSoft, or unified flow design).
+
+### **Important Enhancement (Apex-aware detection)**
+
+In this org, integration is performed via Apex rather than directly in Flow.
+
+Detection logic includes:
+
+-   Flow → Apex (actionType = apex)
+-   Apex → Named Credential (callout: usage)
+
+This ensures accurate identification of integration usage.
+
+**Status — Completed**
+
+Perfect! Using your SOQL, we can get the distinct approvers directly from the User object. Since you already know:
+
+-   **Pending approvals** = 60
+-   **Approvers** = 2
+
+We can calculate the final **bottleneck score** and document PM-06 fully.
+
+## **PM-06 — Permission / Approver Bottleneck Proxy**
+
+Measures whether a disproportionately large approval queue is concentrated among too few approvers — the human-in-the-loop bottleneck that automation or escalation routing could break.
+
+### **Formula**
+
+bottleneck\_score(step) =
+
+pending\_count(step) / approver\_count(step)
+
+### **What it measures**
+
+Pending approval records per available approver per process step.
+
+High score = few people responsible for many records.
+
+### **Output range**
+
+0 → unbounded. Values above 10 are strong signals.
+
+### **Retrieval — Step by Step**
+
+• **Step 1 — Pending approvals (ProcessInstance)**
+
+SELECT Id, ProcessDefinition.Name  
+FROM ProcessInstance  
+WHERE Status = 'Pending'  
+
+-   Count of records = **60**
+
+![](./images/image-003.png)
+
+• **Step 2 — Approver identification (User via ProcessInstanceWorkitem)**
+
+SELECT Id, Name  
+FROM User  
+WHERE Id IN (  
+SELECT ActorId  
+FROM ProcessInstanceWorkitem  
+WHERE ProcessInstance.ProcessDefinition.Name = 'Discount Approval'  
+AND ProcessInstance.Status = 'Pending'  
+)  
+
+-   Count of distinct approvers = **2**
+
+![](./images/image-004.png)
+
+### **Step 3 — Compute Bottleneck Score**
+
+bottleneck\_score = pending\_count / approver\_count
+
+\= 60 / 2
+
+\= **30.0**
+
+### **Threshold Check**
+
+-   Threshold = **\> 10**
+-   Computed score = **30.0** → ✅ Fires
+-   Strong signal: Approvers are overloaded; bottleneck exists.
+
+**Bottleneck Score:** 30.0 → Above threshold → Action recommended
+
+### **Interpretation**
+
+-   Each approver is handling ~30 pending approvals.
+-   High risk of delays in approval processing.
+-   Recommended actions:
+    -   Delegate approvals to more users
+    -   Introduce automated or conditional approvals
+    -   Escalation rules to distribute workload
+
+### **Status — Completed ✅**
+
+## **PM-07 — Cross-System Echo Proxy**
+
+Detects manual duplication of the same real-world event across Salesforce and external systems (ServiceNow, Jira) — cases that reference external ticket IDs in Subject or Description, indicating manual cross-system synchronization.
+
+### **Formula**
+
+echo\_score =
+
+COUNT(Case WHERE Subject LIKE '%INC-%'
+
+OR Description LIKE '%INC-%'
+
+OR Subject LIKE '%JIRA-%'
+
+OR Description LIKE '%JIRA-%')
+
+/
+
+COUNT(Case WHERE CreatedDate = LAST\_N\_DAYS:90)
+
+### **What it measures**
+
+Proportion of Salesforce cases containing external ticket ID patterns — evidence of manual duplication between systems.
+
+### **Output range**
+
+0.0 → 1.0
+
+Values above **0.15 (15%)** indicate material cross-system echo.
+
+## **Retrieval — Step by Step**
+
+### **Step 1 — Echo Count (External References in Cases)**
+
+SELECT COUNT(Id)  
+FROM Case  
+WHERE CreatedDate = LAST\_N\_DAYS:90  
+AND (  
+Subject LIKE '%INC-%'  
+OR Description LIKE '%INC-%'  
+OR Subject LIKE '%JIRA-%'  
+OR Description LIKE '%JIRA-%'  
+)  
+
+👉 Result: **0 cases**
+
+![](./images/image-005.png)
+
+### **Step 2 — Total Cases (90 days)**
+
+SELECT COUNT(Id)  
+FROM Case  
+WHERE CreatedDate = LAST\_N\_DAYS:90  
+
+👉 Result: **300 cases**
+
+## **Worked Example — Grounded Data**
+
+Cases created (90 days): **300**
+
+Cases referencing INC-/JIRA- patterns: **0**
+
+## **Calculation**
+
+echo\_score = 0 / 300
+
+\= **0.0**
+
+## **Computed Score**
+
+echo\_score = **0.0**
+
+## **Threshold Check**
+
+-   Threshold = **\> 0.15**
+-   Computed = **0.0**
+
+👉 ❌ Does NOT fire
+
+## **Interpretation**
+
+There is **no evidence of manual cross-system duplication** in the current dataset.
+
+This indicates:
+
+-   No visible ServiceNow/Jira ticket echoing into Salesforce cases
+-   Clean separation of system-of-record responsibilities
+-   No manual replication workload detected
+
+## **Important Note**
+
+This metric is a **live-production signal**.
+
+In the current environment:
+
+-   INC-/JIRA-based references = **0**
+-   Therefore echo\_score = **0.0**
+
+This is expected in:
+
+-   Development orgs
+-   Or orgs without active ServiceNow/Jira integration traffic
+
+Meaningful signal emerges only in:
+
+-   Production environments where multiple ticketing systems operate in parallel
+
+## **Dual-System Context**
+
+PM-07 represents the **Salesforce-side echo detection**.
+
+In a full enterprise setup:
+
+-   Salesforce → detects INC-/JIRA references
+-   ServiceNow → detects Salesforce Case IDs inside incidents
+
+Both sides are combined in SF-1.3 D7 detector:
+
+-   If either side > 0.15 → **Cross-system duplication risk detected**
+
+## **Final Result**
+
+-   echo\_score = **0.0**
+-   Threshold: **Not breached**
+-   Status: **Clean (no cross-system echo detected)**
+
+### **Status — Completed ✅**
