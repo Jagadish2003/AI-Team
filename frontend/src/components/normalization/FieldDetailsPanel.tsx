@@ -94,7 +94,6 @@ export default function FieldDetailsPanel() {
               </div>
             )}
           </div>
- 
           <div className="flex-1" />
         </>
       )}

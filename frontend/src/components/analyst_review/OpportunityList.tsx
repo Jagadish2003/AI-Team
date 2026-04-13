@@ -4,8 +4,6 @@ import { Search, ChevronRight, ChevronDown } from 'lucide-react';
 
 type SortMode = 'Impact High→Low' | 'Effort Low→High' | 'Confidence High→Low';
 type TierFilter = 'All' | OpportunityTier;
-
-// HIGH=green, MEDIUM=amber, LOW=red
 function ConfidenceBadge({ value }: { value: string }) {
   const cls =
     value === 'HIGH'
@@ -19,8 +17,6 @@ function ConfidenceBadge({ value }: { value: string }) {
     </span>
   );
 }
-
-// APPROVED=green, REJECTED=red, UNREVIEWED=muted
 function DecisionBadge({ value }: { value: string }) {
   const cls =
     value === 'APPROVED'
@@ -173,9 +169,7 @@ export default function OpportunityList({
                 className={`px-3 py-3 border-b border-border cursor-pointer transition-colors
                   ${active ? 'bg-accent/10 border-l-2 border-l-accent' : 'hover:bg-panel2'}`}
               >
-                {/* ── Row 1: title + confidence badge (no icon before title) ── */}
                 <div className="flex items-start gap-2">
-                  {/* Title + subtitle — takes all available middle space */}
                   <div className="flex-1 min-w-0">
                     <div className={`text-xs font-semibold truncate ${active ? 'text-accent' : 'text-text'}`}>
                       {o.title}
@@ -184,24 +178,14 @@ export default function OpportunityList({
                       {o.category} · {o.tier}
                     </div>
                   </div>
-
-                  {/* Confidence badge — fixed to right, never moves */}
                   <div className="shrink-0">
                     <ConfidenceBadge value={o.confidence} />
                   </div>
                 </div>
-
-                {/* ── Row 2: decision badge LEFT | impact+effort RIGHT | chevron FIXED ──
-                    Key fix: use a 3-part layout so chevron occupies its own fixed slot
-                    and never displaces impact/effort text regardless of active state */}
                 <div className="mt-2 flex items-center gap-2">
-
-                  {/* LEFT: decision badge — fixed width slot */}
                   <div className="w-24 shrink-0">
                     <DecisionBadge value={o.decision} />
                   </div>
-
-                  {/* MIDDLE: impact + effort — flex-1 so it fills space, text always right-aligned */}
                   <div className="flex-1 flex items-center justify-end gap-3 text-[10px] text-muted">
                     <span>
                       Impact <span className="text-text font-medium">{o.impact}/10</span>
@@ -210,9 +194,6 @@ export default function OpportunityList({
                       Effort <span className="text-text font-medium">{o.effort}/10</span>
                     </span>
                   </div>
-
-                  {/* RIGHT: chevron — always occupies same fixed width slot (invisible when not active)
-                      This ensures impact/effort NEVER shift when row becomes active */}
                   <div className="w-4 shrink-0 flex items-center justify-end">
                     {active
                       ? <ChevronRight size={12} className="text-accent" />
@@ -230,8 +211,7 @@ export default function OpportunityList({
       <div className="border-t border-border shrink-0">
         <button
           onClick={onCreate}
-          className="w-full px-4 py-2.5 text-xs text-text bg-panel2 hover:bg-border/40 flex items-center gap-1.5 transition-colors"
-        >
+          className="w-full px-4 py-2.5 text-xs text-text bg-panel2 hover:bg-border/40 flex items-center gap-1.5 transition-colors">
           <span className="text-accent font-bold text-sm">+</span>
           <span>Create New Opportunity</span>
           <ChevronRight size={14} className="ml-auto text-muted" />
