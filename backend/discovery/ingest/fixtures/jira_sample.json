@@ -1,0 +1,36 @@
+{
+  "_meta": {
+    "description": "SF-2.1 Jira fixture — crafted for D7 cross-system echo (Jira side)",
+    "instance": "synthetic-enterprise.atlassian.net",
+    "project_key": "CRM",
+    "window_days": 90,
+    "generated": "2026-04-13",
+    "note": "62 of 280 CRM issues reference Salesforce CS- case IDs. Echo score = 62/280 = 0.22 — contributes to D7 cross-system signal."
+  },
+
+  "issue_metrics": {
+    "total_issues_90d": 280,
+    "project": "CRM",
+    "salesforce_label_count": 62,
+    "jira_echo_score": 0.22,
+    "issue_type_breakdown": [
+      { "type": "Bug",         "count": 95 },
+      { "type": "Task",        "count": 87 },
+      { "type": "Story",       "count": 68 },
+      { "type": "Sub-task",    "count": 30 }
+    ],
+    "sample_cross_references": [
+      { "issue_key": "JIRA-4421", "sf_reference": "CS-1023", "field": "description", "summary": "Fix account sync — see Salesforce case CS-1023" },
+      { "issue_key": "JIRA-4489", "sf_reference": "CS-1078", "field": "description", "summary": "CRM integration bug — linked to SF CS-1078" },
+      { "issue_key": "JIRA-4501", "sf_reference": "CS-1101", "field": "comment",     "summary": "Customer escalation tracked in CS-1101" },
+      { "issue_key": "JIRA-4612", "sf_reference": "CS-1189", "field": "description", "summary": "Duplicate of Salesforce case CS-1189" },
+      { "issue_key": "JIRA-4788", "sf_reference": "CS-1255", "field": "description", "summary": "API failure — see CS-1255 for full trace" }
+    ]
+  },
+
+  "sprint_velocity": [
+    { "sprint_name": "CRM Sprint 14", "completed_points": 42, "salesforce_issue_count": 18, "velocity_trend": "stable" },
+    { "sprint_name": "CRM Sprint 15", "completed_points": 38, "salesforce_issue_count": 22, "velocity_trend": "declining" },
+    { "sprint_name": "CRM Sprint 16", "completed_points": 35, "salesforce_issue_count": 22, "velocity_trend": "declining" }
+  ]
+}

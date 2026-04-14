@@ -4,10 +4,12 @@ from ..types import DetectorResult
 
 THRESHOLD = 0.6
 
-def detect(ingested: Dict[str, Any]) -> List[DetectorResult]:
+def detect(sf_data: Dict[str, Any], sn_data: Dict[str, Any], jira_data: Dict[str, Any]) -> List[DetectorResult]:
     # Ingestion contract:
     # Preferred: provide flow_activity_score per flow.
     # Fallback: provide records_per_day_proxy + active_flows_on_object to compute the score.
+
+    ingested = sf_data
 
     flows = ingested.get("salesforce_flow_inventory") or []
     out: List[DetectorResult] = []
