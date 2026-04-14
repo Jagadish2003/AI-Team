@@ -27,7 +27,6 @@ export default function DiscoveryRunPage() {
     };
   }, [connectors, uploadedFiles, sampleWorkspaceEnabled]);
 
-  // Auto-start ONLY if we do not have a runId yet.
   useEffect(() => {
     if (runId) return;
     void startRun(inputs);
@@ -74,6 +73,7 @@ export default function DiscoveryRunPage() {
     <div className="min-h-screen text-text">
       <TopNav />
       <div className="px-8 py-6">
+
         {/* HEADER */}
         <div className="mb-6 flex items-center justify-between">
           <div>
@@ -91,17 +91,8 @@ export default function DiscoveryRunPage() {
           </div>
 
           <div className="flex items-center gap-2">
-            <label className="flex cursor-pointer items-center gap-2 rounded-md border border-border bg-bg/20 px-3 py-2 text-sm text-text">
-              <input
-                type="checkbox"
-                checked={autoScroll}
-                onChange={(e) => setAutoScroll(e.target.checked)}
-              />
-              Auto-scroll
-            </label>
-
             <button
-              className="rounded-md border border-border bg-bg/20 px-3 py-2 text-sm text-text hover:bg-panel2 disabled:cursor-not-allowed disabled:opacity-50 transition"
+             className="rounded-md border border-border bg-panel px-3 py-2 text-sm font-medium text-text hover:bg-buttonhoverbg transition disabled:cursor-not-allowed disabled:opacity-50"
               onClick={() => void restartRun()}
               disabled={!started}
             >
@@ -109,7 +100,7 @@ export default function DiscoveryRunPage() {
             </button>
 
             <button
-              className="rounded-md bg-accent px-3 py-2 text-sm text-bg hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50 transition"
+              className="rounded-md bg-accent px-3 py-2 text-sm text-bg font-medium hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50 transition"
               onClick={() => nav('/partial-results')}
               disabled={!started}
             >
@@ -118,11 +109,11 @@ export default function DiscoveryRunPage() {
           </div>
         </div>
 
-        {/* MAIN GRID */}
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
+
           {/* Run Inputs */}
           <div className="rounded-xl border border-border bg-panel p-4">
-            <div className="text-sm font-semibold">Run Inputs</div>
+            <div className="text-lg font-semibold">Run Inputs</div>
             <div className="mt-3 space-y-3 text-sm text-muted">
               <div>
                 <div className="font-semibold text-text">Connected sources</div>
@@ -151,16 +142,28 @@ export default function DiscoveryRunPage() {
 
           {/* Discovery Log */}
           <div className="lg:col-span-2 rounded-xl border border-border bg-panel p-4">
-            <div className="flex items-center justify-between">
-              <div className="text-sm font-semibold">Discovery Log</div>
-              <button
-                className="rounded-md border border-border bg-bg/20 px-3 py-2 text-sm text-text hover:bg-panel2 transition"
-                onClick={() => refetch()}
-              >
-                Refresh
-              </button>
+            {/* Header with Auto-scroll */}
+           <div className="flex items-center justify-between">
+            <div className="flex items-center gap-5">
+              <div className="text-lg font-semibold">Discovery Log</div>
+              <label className="flex items-center gap-2 text-sm text-text">
+                Auto-scroll
+                  <input
+                  type="checkbox" 
+                  checked={autoScroll}
+                  onChange={(e) => setAutoScroll(e.target.checked)}
+                  className="accent-[#00B4B4] cursor-pointer"/>
+              </label>
             </div>
+            <button
+              className="rounded-md border border-border bg-bg/20 px-3 py-2 text-sm text-text font-semibold hover:bg-panel2 transition"
+              onClick={() => refetch()}
+            >
+              Refresh
+            </button>
+          </div>
 
+            {/* Log Content */}
             <div className="mt-3 max-h-[420px] overflow-auto rounded-lg border border-border bg-bg/10 p-3">
               {events.length === 0 ? (
                 <div className="text-sm text-muted">No events yet.</div>
