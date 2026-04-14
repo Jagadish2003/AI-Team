@@ -4,7 +4,8 @@ from ..types import DetectorResult
 
 THRESHOLD = 10.0
 
-def detect(ingested: Dict[str, Any]) -> List[DetectorResult]:
+def detect(sf_data: Dict[str, Any], sn_data: Dict[str, Any], jira_data: Dict[str, Any]) -> List[DetectorResult]:
+    ingested = sf_data
     rows = ingested.get("salesforce_permission_bottlenecks") or []
     out: List[DetectorResult] = []
     for r in rows:

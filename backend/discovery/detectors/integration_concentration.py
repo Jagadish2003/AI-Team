@@ -4,7 +4,8 @@ from ..types import DetectorResult
 
 THRESHOLD = 3
 
-def detect(ingested: Dict[str, Any]) -> List[DetectorResult]:
+def detect(sf_data: Dict[str, Any], sn_data: Dict[str, Any], jira_data: Dict[str, Any]) -> List[DetectorResult]:
+    ingested = sf_data
     creds = ingested.get("salesforce_named_credentials") or []
     out: List[DetectorResult] = []
     for c in creds:

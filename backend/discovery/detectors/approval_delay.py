@@ -4,7 +4,8 @@ from ..types import DetectorResult
 
 THRESHOLD_DAYS = 3.0
 
-def detect(ingested: Dict[str, Any]) -> List[DetectorResult]:
+def detect(sf_data: Dict[str, Any], sn_data: Dict[str, Any], jira_data: Dict[str, Any]) -> List[DetectorResult]:
+    ingested = sf_data
     steps = ingested.get("salesforce_approval_pending") or []
     out: List[DetectorResult] = []
     for s in steps:
