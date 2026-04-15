@@ -6,6 +6,7 @@ module.exports = {
       colors: {
         bg: "#21335c",
         panel: "#0F1A3D",
+        buttonhoverbg:"#12204a",
         panel2: "#121F36",
         border: "#1D2B45",
         text: "#E6EEF9",

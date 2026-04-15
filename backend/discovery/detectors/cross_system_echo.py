@@ -4,7 +4,8 @@ from ..types import DetectorResult
 
 THRESHOLD = 0.15
 
-def detect(ingested: Dict[str, Any]) -> List[DetectorResult]:
+def detect(sf_data: Dict[str, Any], sn_data: Dict[str, Any], jira_data: Dict[str, Any]) -> List[DetectorResult]:
+    ingested = sf_data
     sf = ingested.get("salesforce_cross_system_references") or {}
     sn = ingested.get("servicenow_cross_system_references") or {}
     score = float(sf.get("echo_score") or 0.0)

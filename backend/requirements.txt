@@ -23,6 +23,5 @@ starlette==0.38.6
 typing_extensions==4.15.0
 urllib3==2.6.3
 uvicorn==0.30.6
-uvloop==0.22.1
 watchfiles==1.1.1
 websockets==16.0

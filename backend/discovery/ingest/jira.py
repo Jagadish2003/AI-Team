@@ -1,5 +1,6 @@
 from __future__ import annotations
 import json
+import logging
 import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -8,15 +9,18 @@ import requests
 from ..types import IngestError
 from ..log import warn
 
-FIXTURE = Path(__file__).parent / "fixtures" / "jira_mock.json"
+from . import is_live
+
+logger = logging.getLogger(__name__)
+FIXTURE_PATH = Path(__file__).parent / "fixtures" / "jira_sample.json"
 
 def _mode() -> str:
     return os.getenv("INGEST_MODE", "offline").lower()
 
 def _load_fixture() -> Dict[str, Any]:
-    if not FIXTURE.exists():
-        raise IngestError(f"Missing Jira fixture: {FIXTURE}. Provide it or remove jira from --systems.")
-    return json.loads(FIXTURE.read_text(encoding="utf-8"))
+    if not FIXTURE_PATH.exists():
+        raise IngestError(f"Missing Jira fixture: {FIXTURE_PATH}. Provide it or remove jira from --systems.")
+    return json.loads(FIXTURE_PATH.read_text(encoding="utf-8"))
 
 def _get_env(name: str) -> Optional[str]:
     v = os.getenv(name)
@@ -78,3 +82,18 @@ def get_sprint_velocity() -> List[Dict[str, Any]]:
         #   GET /rest/agile/1.0/sprint/{sprint_id}/issue
         # These fields remain None until that extension is implemented.
         return [{"sprint_name": s.get("name"), "completed_points": None, "salesforce_issue_count": None} for s in sprints]
+
+def ingest(client=None) -> Dict[str, Any]:
+    """Return Jira signals. SF-2.4 implements the live branch."""
+    jira_url = os.getenv("JIRA_URL")
+    if is_live() and not jira_url:
+        logger.warning("JIRA_URL not set — skipping Jira ingestion")
+        return {}
+    if is_live():
+        raise NotImplementedError("Live Jira ingestion — implement in SF-2.4")
+    if not FIXTURE_PATH.exists():
+        logger.warning("Jira fixture not found — returning empty")
+        return {}
+    logger.info("Jira ingestion: offline mode")
+    with open(FIXTURE_PATH, encoding="utf-8") as f:
+        return json.load(f)
