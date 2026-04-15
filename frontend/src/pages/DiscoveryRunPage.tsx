@@ -92,7 +92,7 @@ export default function DiscoveryRunPage() {
 
           <div className="flex items-center gap-2">
             <button
-             className="rounded-md border border-border bg-panel px-3 py-2 text-sm font-medium text-text hover:bg-buttonhoverbg transition disabled:cursor-not-allowed disabled:opacity-50"
+             className="rounded-md border border-border bg-buttonbg px-3 py-2 text-sm font-medium text-text hover:bg-panel transition disabled:cursor-not-allowed disabled:opacity-50"
               onClick={() => void restartRun()}
               disabled={!started}
             >

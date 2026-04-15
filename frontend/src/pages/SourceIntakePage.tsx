@@ -154,7 +154,7 @@ export default function SourceIntakePage() {
                 <Button
                   variant="secondary"
                   onClick={() => nav('/integration-hub')}
-                  className="w-40 border border-white/40 relative flex items-center justify-center">
+                  className="w-40 bg-buttonbg text-text hover:bg-panel transition relative flex items-center justify-center">
                   <span className="absolute left-4 flex items-center">
                     <ChevronLeft size={16} strokeWidth={2.5} />
                   </span>
