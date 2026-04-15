@@ -1,36 +1,41 @@
 {
   "_meta": {
-    "description": "SF-2.1 Jira fixture — crafted for D7 cross-system echo (Jira side)",
-    "instance": "synthetic-enterprise.atlassian.net",
-    "project_key": "CRM",
+    "description": "SF-2.1 ServiceNow fixture — crafted for D7 cross-system echo detection",
+    "instance": "synthetic-enterprise.service-now.com",
     "window_days": 90,
     "generated": "2026-04-13",
-    "note": "62 of 280 CRM issues reference Salesforce CS- case IDs. Echo score = 62/280 = 0.22 — contributes to D7 cross-system signal."
+    "note": "INC-10001 through INC-10500 window. 80 incidents reference CS- Salesforce case IDs. Echo score = 80/500 = 0.16 — fires D7 from SN side."
   },
 
-  "issue_metrics": {
-    "total_issues_90d": 280,
-    "project": "CRM",
-    "salesforce_label_count": 62,
-    "jira_echo_score": 0.22,
-    "issue_type_breakdown": [
-      { "type": "Bug",         "count": 95 },
-      { "type": "Task",        "count": 87 },
-      { "type": "Story",       "count": 68 },
-      { "type": "Sub-task",    "count": 30 }
-    ],
-    "sample_cross_references": [
-      { "issue_key": "JIRA-4421", "sf_reference": "CS-1023", "field": "description", "summary": "Fix account sync — see Salesforce case CS-1023" },
-      { "issue_key": "JIRA-4489", "sf_reference": "CS-1078", "field": "description", "summary": "CRM integration bug — linked to SF CS-1078" },
-      { "issue_key": "JIRA-4501", "sf_reference": "CS-1101", "field": "comment",     "summary": "Customer escalation tracked in CS-1101" },
-      { "issue_key": "JIRA-4612", "sf_reference": "CS-1189", "field": "description", "summary": "Duplicate of Salesforce case CS-1189" },
-      { "issue_key": "JIRA-4788", "sf_reference": "CS-1255", "field": "description", "summary": "API failure — see CS-1255 for full trace" }
+  "incident_metrics": {
+    "total_incidents_90d": 500,
+    "avg_resolution_hours": 18.4,
+    "avg_reassignment_count": 1.3,
+    "category_breakdown": [
+      { "category": "Software",  "volume": 180, "avg_resolution_hours": 14.2 },
+      { "category": "Hardware",  "volume": 120, "avg_resolution_hours": 22.1 },
+      { "category": "Network",   "volume": 110, "avg_resolution_hours": 19.8 },
+      { "category": "Access",    "volume": 90,  "avg_resolution_hours": 16.3 }
     ]
   },
 
-  "sprint_velocity": [
-    { "sprint_name": "CRM Sprint 14", "completed_points": 42, "salesforce_issue_count": 18, "velocity_trend": "stable" },
-    { "sprint_name": "CRM Sprint 15", "completed_points": 38, "salesforce_issue_count": 22, "velocity_trend": "declining" },
-    { "sprint_name": "CRM Sprint 16", "completed_points": 35, "salesforce_issue_count": 22, "velocity_trend": "declining" }
+  "cross_system_references": {
+    "sn_match_count": 80,
+    "sn_total_incidents": 500,
+    "sn_echo_score": 0.16,
+    "matched_pattern": "CS-",
+    "sample_matches": [
+      { "incident_id": "INC-10042", "pattern": "CS-1001", "field": "description", "short_description": "Follow-up on Salesforce case CS-1001 — customer escalation" },
+      { "incident_id": "INC-10091", "pattern": "CS-1007", "field": "description", "short_description": "Linked to SF case CS-1007 per account team request" },
+      { "incident_id": "INC-10103", "pattern": "CS-1045", "field": "work_notes",  "short_description": "CS-1045 triaged to network team" },
+      { "incident_id": "INC-10211", "pattern": "CS-1078", "field": "description", "short_description": "Duplicate of Salesforce CS-1078 — closing SN side" },
+      { "incident_id": "INC-10388", "pattern": "CS-1230", "field": "description", "short_description": "Customer reported via Salesforce CS-1230" }
+    ]
+  },
+
+  "assignment_groups": [
+    { "group_name": "Level 1 Support",  "incident_count": 220, "avg_handle_time_hrs": 12.1 },
+    { "group_name": "Level 2 Support",  "incident_count": 180, "avg_handle_time_hrs": 21.4 },
+    { "group_name": "Network Ops",      "incident_count": 100, "avg_handle_time_hrs": 28.7 }
   ]
 }
