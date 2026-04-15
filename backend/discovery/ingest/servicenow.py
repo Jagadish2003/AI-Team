@@ -1,5 +1,6 @@
 from __future__ import annotations
 import json
+import logging
 import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -8,15 +9,18 @@ import requests
 from ..types import IngestError
 from ..log import warn
 
-FIXTURE = Path(__file__).parent / "fixtures" / "servicenow_mock.json"
+from . import is_live
+
+logger = logging.getLogger(__name__)
+FIXTURE_PATH = Path(__file__).parent / "fixtures" / "servicenow_sample.json"
 
 def _mode() -> str:
     return os.getenv("INGEST_MODE", "offline").lower()
 
 def _load_fixture() -> Dict[str, Any]:
-    if not FIXTURE.exists():
-        raise IngestError(f"Missing ServiceNow fixture: {FIXTURE}. Provide it or remove servicenow from --systems.")
-    return json.loads(FIXTURE.read_text(encoding="utf-8"))
+    if not FIXTURE_PATH.exists():
+        raise IngestError(f"Missing ServiceNow fixture: {FIXTURE_PATH}. Provide it or remove servicenow from --systems.")
+    return json.loads(FIXTURE_PATH.read_text(encoding="utf-8"))
 
 def _get_env(name: str) -> Optional[str]:
     v = os.getenv(name)
@@ -96,3 +100,18 @@ def get_cross_system_references(external_pattern: str = "SF-") -> Dict[str, Any]
         return {"match_count": match_count, "total_count": total_count, "echo_score": echo_score}
     except Exception as e:
         raise IngestError(f"ServiceNow get_cross_system_references failed: {e}") from e
+
+def ingest(client=None) -> Dict[str, Any]:
+    """Return ServiceNow signals. SF-2.3 implements the live branch."""
+    sn_url = os.getenv("SERVICENOW_URL")
+    if is_live() and not sn_url:
+        logger.warning("SERVICENOW_URL not set — skipping ServiceNow ingestion")
+        return {}
+    if is_live():
+        raise NotImplementedError("Live ServiceNow ingestion — implement in SF-2.3")
+    if not FIXTURE_PATH.exists():
+        logger.warning("ServiceNow fixture not found — returning empty")
+        return {}
+    logger.info("ServiceNow ingestion: offline mode")
+    with open(FIXTURE_PATH, encoding="utf-8") as f:
+        return json.load(f)
