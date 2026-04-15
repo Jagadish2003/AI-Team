@@ -12,7 +12,7 @@ export default function TopQuickWins({ quickWins }: TopQuickWinsProps) {
   const { select } = useAnalystReviewContext();
 
   const handleOpenOpportunity = (id: string) => {
-    select(id); // persist selected opportunity in shared context
+    select(id);
     nav('/opportunity-map');
   };
 

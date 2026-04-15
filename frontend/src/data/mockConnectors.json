@@ -6,7 +6,7 @@
       "category": "ITSM \u00b7 CMDB",
       "tier": "recommended",
       "recommendedRank": 1,
-      "status": "connected",
+      "status": "not_connected",
       "metrics": [
         {
           "label": "Incidents",

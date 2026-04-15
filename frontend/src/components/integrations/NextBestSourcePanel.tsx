@@ -31,7 +31,7 @@ export default function NextBestSourcePanel({
 
         {/* Low */}
         <div className="flex items-center">
-          <div className={`h-2.5 w-2.5 rounded-full ${isLow ? 'bg-accent shadow-[0_0_8px_3px_rgba(0,255,200,0.35)]' : 'bg-muted/40'}`} />
+          <div className={`h-2.5 w-2.5 rounded-full ${isLow ? 'bg-accent' : 'bg-muted/40'}`} />
           <span className={`ml-2 ${isLow ? 'font-semibold text-text' : 'text-muted'}`}>Low</span>
         </div>
 
@@ -40,7 +40,7 @@ export default function NextBestSourcePanel({
 
         {/* Medium */}
         <div className="flex items-center">
-          <div className={`h-2.5 w-2.5 rounded-full ${isMedium ? 'bg-accent shadow-[0_0_8px_3px_rgba(0,255,200,0.35)]' : 'bg-muted/40'}`} />
+          <div className={`h-2.5 w-2.5 rounded-full ${isMedium ? 'bg-accent' : 'bg-muted/40'}`} />
           <span className={`ml-2 ${isMedium ? 'font-semibold text-text' : 'text-muted'}`}>Medium</span>
         </div>
 
@@ -49,7 +49,7 @@ export default function NextBestSourcePanel({
 
         {/* High */}
         <div className="flex items-center">
-          <div className={`h-2.5 w-2.5 rounded-full ${isHigh ? 'bg-accent shadow-[0_0_8px_3px_rgba(0,255,200,0.35)]' : 'bg-muted/40'}`} />
+          <div className={`h-2.5 w-2.5 rounded-full ${isHigh ? 'bg-accent' : 'bg-muted/40'}`} />
           <span className={`ml-2 ${isHigh ? 'font-semibold text-text' : 'text-muted'}`}>High</span>
         </div>
 
