@@ -1,0 +1,1 @@
+{"cross_system_references": {"sn_match_count": 80, "sn_total_incidents": 500, "sn_echo_score": 0.16, "matched_pattern": "CS-", "sample_matches": [{"incident_id": "INC-10042", "pattern": "CS-", "field": "description"}]}, "incident_metrics": {"total_incidents_90d": 500, "avg_resolution_hours": 18.4, "avg_reassignment_count": 0.0, "category_breakdown": []}}
