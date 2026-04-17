@@ -1,0 +1,441 @@
+{
+  "runId": "run_71ed2a45",
+  "orgId": "demo-org",
+  "mode": "offline",
+  "startedAt": "2026-04-17T07:04:15.185114+00:00",
+  "completedAt": "2026-04-17T07:04:15.317624+00:00",
+  "inputs": {
+    "sf_total_cases_90d": 300,
+    "sf_closed_cases_90d": 60,
+    "sf_owner_changes_90d": 480,
+    "sf_handoff_score": 1.6,
+    "sf_active_flows": 4,
+    "sf_flow_activity_score": 2.128,
+    "sf_pending_approvals": 60,
+    "sf_approval_processes": 1,
+    "sf_named_credentials": 2,
+    "sf_echo_score": 0.25,
+    "sn_echo_score": 0.16,
+    "jira_echo_score": 0.22,
+    "sources_connected": {
+      "salesforce": true,
+      "servicenow": true,
+      "jira": true
+    }
+  },
+  "opportunities": [
+    {
+      "runId": "run_71ed2a45",
+      "orgId": "demo-org",
+      "detector_id": "REPETITIVE_AUTOMATION",
+      "signal_source": "salesforce",
+      "metric_value": 2.128,
+      "threshold": 0.6,
+      "impact": 3,
+      "effort": 2,
+      "confidence": "HIGH",
+      "tier": "Quick Win",
+      "roadmap_stage": "NEXT_30",
+      "evidenceIds": [
+        "ev_sf_ed2a45_0001"
+      ],
+      "evidence": [
+        {
+          "id": "ev_sf_ed2a45_0001",
+          "tsLabel": "17 Apr 2026, 07:04",
+          "source": "Salesforce",
+          "evidenceType": "Config",
+          "title": "Multiple low-complexity AutoLaunchedFlows running on high-volume Case object",
+          "snippet": "4 active AutoLaunchedFlow(s) on the Case object. Avg element count: 5 (LOW complexity). 300 Case records processed in last 90 days (3.3/day). Flow activity score: 2.128 (threshold: 0.6).",
+          "entities": [
+            "ent_flow_case-notify"
+          ],
+          "confidence": "HIGH",
+          "decision": "UNREVIEWED"
+        }
+      ],
+      "raw_evidence": {
+        "flow_id": "301xx000001ABC1",
+        "flow_label": "Case-Notify",
+        "trigger_object": "Case",
+        "records_90d": 300,
+        "element_count": 5,
+        "active_flow_count_on_object": 4,
+        "flow_activity_score": 2.128
+      },
+      "score_debug": {
+        "impact_factors": {
+          "volume_pts": 2.0,
+          "friction_pts": 5.0,
+          "customer_pts": 3.0,
+          "revenue_pts": 2.0,
+          "external_pts": 1.0,
+          "raw_sum": 2.85
+        },
+        "effort_factors": {
+          "data_pts": 2.0,
+          "perm_pts": 2.0,
+          "sys_pts": 2.0,
+          "proc_pts": 2.0
+        },
+        "proxy_ratio": 3.5467
+      }
+    },
+    {
+      "runId": "run_71ed2a45",
+      "orgId": "demo-org",
+      "detector_id": "HANDOFF_FRICTION",
+      "signal_source": "salesforce",
+      "metric_value": 1.6,
+      "threshold": 1.5,
+      "impact": 3,
+      "effort": 2,
+      "confidence": "MEDIUM",
+      "tier": "Quick Win",
+      "roadmap_stage": "NEXT_30",
+      "evidenceIds": [
+        "ev_sf_ed2a45_0002"
+      ],
+      "evidence": [
+        {
+          "id": "ev_sf_ed2a45_0002",
+          "tsLabel": "17 Apr 2026, 07:04",
+          "source": "Salesforce",
+          "evidenceType": "Metric",
+          "title": "Elevated case owner reassignment rate detected",
+          "snippet": "480 owner changes recorded across 300 Cases in the last 90 days. Avg 1.6 owner changes per Case (threshold: 1.5). Top categories: Technical Issue (avg 4.0/case), Billing Inquiry (avg 3.8/case), Account Management (avg 3.5/case).",
+          "entities": [
+            "ent_case_all_categories",
+            "ent_casehistory_owner_changes"
+          ],
+          "confidence": "MEDIUM",
+          "decision": "UNREVIEWED"
+        }
+      ],
+      "raw_evidence": {
+        "owner_changes_90d": 480,
+        "total_cases_90d": 300,
+        "handoff_score": 1.6,
+        "top_categories": [
+          {
+            "category": "Technical Issue",
+            "handoff_score": 4.0
+          },
+          {
+            "category": "Billing Inquiry",
+            "handoff_score": 3.8
+          },
+          {
+            "category": "Account Management",
+            "handoff_score": 3.5
+          }
+        ]
+      },
+      "score_debug": {
+        "impact_factors": {
+          "volume_pts": 2.0,
+          "friction_pts": 5.0,
+          "customer_pts": 3.0,
+          "revenue_pts": 0.0,
+          "external_pts": 1.0,
+          "raw_sum": 2.55
+        },
+        "effort_factors": {
+          "data_pts": 2.0,
+          "perm_pts": 2.0,
+          "sys_pts": 2.0,
+          "proc_pts": 2.0
+        },
+        "proxy_ratio": 1.0667
+      }
+    },
+    {
+      "runId": "run_71ed2a45",
+      "orgId": "demo-org",
+      "detector_id": "APPROVAL_BOTTLENECK",
+      "signal_source": "salesforce",
+      "metric_value": 5.0,
+      "threshold": 3.0,
+      "impact": 3,
+      "effort": 3,
+      "confidence": "MEDIUM",
+      "tier": "Quick Win",
+      "roadmap_stage": "NEXT_30",
+      "evidenceIds": [
+        "ev_sf_ed2a45_0003"
+      ],
+      "evidence": [
+        {
+          "id": "ev_sf_ed2a45_0003",
+          "tsLabel": "17 Apr 2026, 07:04",
+          "source": "Salesforce",
+          "evidenceType": "Metric",
+          "title": "Approval records exceeding SLA due to high delay in 'Discount Approval'",
+          "snippet": "60 pending 'Discount Approval' records with average delay of 5.0 days (threshold: 3.0 days). Bottleneck score: 30.0 (threshold: 10). 2 approver(s) handling all pending items.",
+          "entities": [
+            "ent_approval_discount_approval"
+          ],
+          "confidence": "MEDIUM",
+          "decision": "UNREVIEWED"
+        }
+      ],
+      "raw_evidence": {
+        "process_name": "Discount Approval",
+        "pending_count": 60,
+        "avg_delay_days": 5.0,
+        "approver_count": 2,
+        "bottleneck_score": 30.0
+      },
+      "score_debug": {
+        "impact_factors": {
+          "volume_pts": 2.0,
+          "friction_pts": 8.0,
+          "customer_pts": 0.0,
+          "revenue_pts": 2.0,
+          "external_pts": 1.0,
+          "raw_sum": 3.0
+        },
+        "effort_factors": {
+          "data_pts": 2.0,
+          "perm_pts": 5.0,
+          "sys_pts": 2.0,
+          "proc_pts": 5.0
+        },
+        "proxy_ratio": 1.6667
+      }
+    },
+    {
+      "runId": "run_71ed2a45",
+      "orgId": "demo-org",
+      "detector_id": "KNOWLEDGE_GAP",
+      "signal_source": "salesforce",
+      "metric_value": 0.5,
+      "threshold": 0.4,
+      "impact": 3,
+      "effort": 2,
+      "confidence": "MEDIUM",
+      "tier": "Quick Win",
+      "roadmap_stage": "NEXT_30",
+      "evidenceIds": [
+        "ev_sf_ed2a45_0004"
+      ],
+      "evidence": [
+        {
+          "id": "ev_sf_ed2a45_0004",
+          "tsLabel": "17 Apr 2026, 07:04",
+          "source": "Salesforce",
+          "evidenceType": "Metric",
+          "title": "Significant knowledge gap in Case resolution \u2014 low KB article linkage",
+          "snippet": "30 of 60 closed Cases in the last 90 days have a linked Knowledge Article. Knowledge gap score: 0.5 (threshold: 0.4). 50.0% of Cases closed with KB reuse \u2014 30 resolved without KB linkage.",
+          "entities": [
+            "ent_case_closed",
+            "ent_knowledge_articles"
+          ],
+          "confidence": "MEDIUM",
+          "decision": "UNREVIEWED"
+        }
+      ],
+      "raw_evidence": {
+        "closed_cases_90d": 60,
+        "cases_with_kb_link": 30,
+        "knowledge_gap_score": 0.5
+      },
+      "score_debug": {
+        "impact_factors": {
+          "volume_pts": 2.0,
+          "friction_pts": 5.0,
+          "customer_pts": 3.0,
+          "revenue_pts": 0.0,
+          "external_pts": 1.0,
+          "raw_sum": 2.55
+        },
+        "effort_factors": {
+          "data_pts": 2.0,
+          "perm_pts": 2.0,
+          "sys_pts": 2.0,
+          "proc_pts": 2.0
+        },
+        "proxy_ratio": 1.25
+      }
+    },
+    {
+      "runId": "run_71ed2a45",
+      "orgId": "demo-org",
+      "detector_id": "INTEGRATION_CONCENTRATION",
+      "signal_source": "salesforce",
+      "metric_value": 3.0,
+      "threshold": 3.0,
+      "impact": 1,
+      "effort": 3,
+      "confidence": "MEDIUM",
+      "tier": "Quick Win",
+      "roadmap_stage": "NEXT_30",
+      "evidenceIds": [
+        "ev_sf_ed2a45_0005"
+      ],
+      "evidence": [
+        {
+          "id": "ev_sf_ed2a45_0005",
+          "tsLabel": "17 Apr 2026, 07:04",
+          "source": "Salesforce",
+          "evidenceType": "Config",
+          "title": "Multiple Flows referencing the same Named Credential 'ServiceNow Integration'",
+          "snippet": "3 active Flow(s) reference the 'ServiceNow Integration' Named Credential (threshold: 3 distinct flows). Match type: name. Referencing flow IDs: 301xx000001ABC2, 301xx000001ABC3, 301xx000001ABC4.",
+          "entities": [
+            "ent_credential_servicenow_integration"
+          ],
+          "confidence": "MEDIUM",
+          "decision": "UNREVIEWED"
+        }
+      ],
+      "raw_evidence": {
+        "credential_name": "ServiceNow Integration",
+        "credential_developer_name": "ServiceNow_Integration",
+        "flow_reference_count": 3,
+        "referencing_flow_ids": [
+          "301xx000001ABC2",
+          "301xx000001ABC3",
+          "301xx000001ABC4"
+        ],
+        "match_type": "name"
+      },
+      "score_debug": {
+        "impact_factors": {
+          "volume_pts": 2.0,
+          "friction_pts": 2.0,
+          "customer_pts": 0.0,
+          "revenue_pts": 0.0,
+          "external_pts": 3.0,
+          "raw_sum": 1.4
+        },
+        "effort_factors": {
+          "data_pts": 2.0,
+          "perm_pts": 2.0,
+          "sys_pts": 5.0,
+          "proc_pts": 2.0
+        },
+        "proxy_ratio": 1.0
+      }
+    },
+    {
+      "runId": "run_71ed2a45",
+      "orgId": "demo-org",
+      "detector_id": "PERMISSION_BOTTLENECK",
+      "signal_source": "salesforce",
+      "metric_value": 30.0,
+      "threshold": 10.0,
+      "impact": 3,
+      "effort": 3,
+      "confidence": "MEDIUM",
+      "tier": "Quick Win",
+      "roadmap_stage": "NEXT_30",
+      "evidenceIds": [
+        "ev_sf_ed2a45_0006"
+      ],
+      "evidence": [
+        {
+          "id": "ev_sf_ed2a45_0006",
+          "tsLabel": "17 Apr 2026, 07:04",
+          "source": "Salesforce",
+          "evidenceType": "Metric",
+          "title": "Approval queue overloaded with limited approver capacity in 'Discount Approval'",
+          "snippet": "60 pending 'Discount Approval' records. Only 2 active approver(s) identified via ProcessInstanceWorkitem. Bottleneck score: 30.0 pending per approver (threshold: 10.0).",
+          "entities": [
+            "ent_approval_discount_approval",
+            "ent_user_approvers"
+          ],
+          "confidence": "MEDIUM",
+          "decision": "UNREVIEWED"
+        }
+      ],
+      "raw_evidence": {
+        "process_name": "Discount Approval",
+        "pending_count": 60,
+        "approver_count": 2,
+        "bottleneck_score": 30.0
+      },
+      "score_debug": {
+        "impact_factors": {
+          "volume_pts": 2.0,
+          "friction_pts": 8.0,
+          "customer_pts": 0.0,
+          "revenue_pts": 2.0,
+          "external_pts": 1.0,
+          "raw_sum": 3.0
+        },
+        "effort_factors": {
+          "data_pts": 2.0,
+          "perm_pts": 5.0,
+          "sys_pts": 2.0,
+          "proc_pts": 5.0
+        },
+        "proxy_ratio": 3.0
+      }
+    },
+    {
+      "runId": "run_71ed2a45",
+      "orgId": "demo-org",
+      "detector_id": "CROSS_SYSTEM_ECHO",
+      "signal_source": "salesforce",
+      "metric_value": 0.25,
+      "threshold": 0.15,
+      "impact": 2,
+      "effort": 3,
+      "confidence": "MEDIUM",
+      "tier": "Quick Win",
+      "roadmap_stage": "NEXT_30",
+      "evidenceIds": [
+        "ev_sf_ed2a45_0007"
+      ],
+      "evidence": [
+        {
+          "id": "ev_sf_ed2a45_0007",
+          "tsLabel": "17 Apr 2026, 07:04",
+          "source": "Salesforce",
+          "evidenceType": "Ticket",
+          "title": "Cross-system ticket duplication detected across Salesforce and external systems",
+          "snippet": "75 of 300 Salesforce Cases reference external ticket IDs (SF echo score: 0.25, threshold: 0.15). 80 of 500 ServiceNow incidents reference Salesforce case IDs (SN echo score: 0.16). 62 of 280 Jira CRM issues reference Salesforce cases (Jira echo score: 0.22). Patterns matched: CS-, INC-, JIRA-.",
+          "entities": [
+            "ent_case_all_categories",
+            "ent_incident_servicenow_access"
+          ],
+          "confidence": "MEDIUM",
+          "decision": "UNREVIEWED"
+        }
+      ],
+      "raw_evidence": {
+        "sf_echo_count": 75,
+        "sf_total_cases": 300,
+        "sf_echo_score": 0.25,
+        "sn_match_count": 80,
+        "sn_total_incidents": 500,
+        "sn_echo_score": 0.16,
+        "matched_patterns": [
+          "CS-",
+          "INC-",
+          "JIRA-"
+        ],
+        "jira_sf_label_count": 62,
+        "jira_total_issues": 280,
+        "jira_echo_score": 0.22
+      },
+      "score_debug": {
+        "impact_factors": {
+          "volume_pts": 2.0,
+          "friction_pts": 5.0,
+          "customer_pts": 0.0,
+          "revenue_pts": 0.0,
+          "external_pts": 3.0,
+          "raw_sum": 2.15
+        },
+        "effort_factors": {
+          "data_pts": 2.0,
+          "perm_pts": 2.0,
+          "sys_pts": 5.0,
+          "proc_pts": 5.0
+        },
+        "proxy_ratio": 1.6667
+      }
+    }
+  ]
+}
