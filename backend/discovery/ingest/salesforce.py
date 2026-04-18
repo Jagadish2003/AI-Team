@@ -17,6 +17,7 @@ import json
 import logging
 import os
 import re
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -55,21 +56,20 @@ def _load_fixture() -> Dict[str, Any]:
 def _get_client() -> "SalesforceClient":
     """Build a minimal REST client from env vars."""
     instance_url = os.getenv("SF_INSTANCE_URL", "").rstrip("/")
-    access_token = os.getenv("SF_ACCESS_TOKEN", "")
-    if not instance_url or not access_token:
+
+    if not instance_url:
         raise IngestError(
             "Live mode requires SF_INSTANCE_URL and SF_ACCESS_TOKEN environment variables. "
             "Set INGEST_MODE=offline to run without credentials."
         )
-    return SalesforceClient(instance_url, access_token)
+    return SalesforceClient(instance_url)
 
 
 class SalesforceClient:
     """Thin wrapper around Salesforce REST APIs."""
 
-    def __init__(self, instance_url: str, access_token: str):
+    def __init__(self, instance_url: str):
         self.instance_url = instance_url
-        self.access_token = access_token
         self._session = None
 
     def _session_get(self):
@@ -78,7 +78,6 @@ class SalesforceClient:
             if self._session is None:
                 self._session = requests.Session()
                 self._session.headers.update({
-                    "Authorization": f"Bearer {self.access_token}",
                     "Content-Type": "application/json",
                 })
             return self._session
@@ -719,19 +718,42 @@ def ingest(sf_client: Optional[SalesforceClient] = None) -> Dict[str, Any]:
         sf_client = _get_client()
 
     try:
-        case_metrics = get_case_metrics(sf_client)
-        flow_inventory = get_flow_inventory(sf_client)
-        approval_processes = get_approval_pending(sf_client)
-        named_credentials_catalog = get_named_credentials(sf_client)
-        named_credentials = get_named_credential_flow_refs(named_credentials_catalog, sf_client)
-        cross_system_references = get_cross_system_references(sf_client)
+        def _timed(fn_name, fn_call):
+            """Execute an ingestion function with timing and governor limit logging."""
+            t0 = time.perf_counter()
+            try:
+                result = fn_call()
+                elapsed = int((time.perf_counter() - t0) * 1000)
+                rows = (
+                    len(result) if isinstance(result, list)
+                    else result.get("total_cases_90d",
+                         result.get("active_flow_count_on_object",
+                         result.get("sf_total_cases", len(result) if isinstance(result, dict) else 0)))
+                )
+                logger.info(
+                    f"INFO  [{fn_name}]{'':>3} rows={rows:<6} ms={elapsed:<6} status=OK"
+                )
+                return result
+            except IngestError as e:
+                elapsed = int((time.perf_counter() - t0) * 1000)
+                logger.error(
+                    f"ERROR [{fn_name}]{'':>3} ms={elapsed:<6} {str(e)[:120]}"
+                )
+                raise
+
+        case_metrics              = _timed("get_case_metrics",              lambda: get_case_metrics(sf_client))
+        flow_inventory            = _timed("get_flow_inventory",            lambda: get_flow_inventory(sf_client))
+        approval_processes        = _timed("get_approval_pending",          lambda: get_approval_pending(sf_client))
+        named_credentials_catalog = _timed("get_named_credentials",         lambda: get_named_credentials(sf_client))
+        named_credentials         = _timed("get_named_credential_flow_refs",lambda: get_named_credential_flow_refs(named_credentials_catalog, sf_client))
+        cross_system_references   = _timed("get_cross_system_references",   lambda: get_cross_system_references(sf_client))
 
         return {
-            "case_metrics": case_metrics,
-            "flow_inventory": flow_inventory,
-            "approval_processes": approval_processes,
-            "named_credentials": named_credentials,
-            "cross_system_references": cross_system_references,
+            "case_metrics":           case_metrics,
+            "flow_inventory":         flow_inventory,
+            "approval_processes":     approval_processes,
+            "named_credentials":      named_credentials,
+            "cross_system_references":cross_system_references,
         }
     except IngestError:
         raise
