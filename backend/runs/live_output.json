@@ -1,0 +1,302 @@
+{
+  "runId": "run_f0b72d0e",
+  "orgId": "demo-org",
+  "mode": "live",
+  "startedAt": "2026-04-19T14:56:46.049848+00:00",
+  "completedAt": "2026-04-19T14:56:53.267546+00:00",
+  "inputs": {
+    "sf_total_cases_90d": 306,
+    "sf_closed_cases_90d": 60,
+    "sf_owner_changes_90d": 480,
+    "sf_handoff_score": 1.5686274509803921,
+    "sf_active_flows": 5,
+    "sf_flow_activity_score": 0.016339869281045753,
+    "sf_pending_approvals": 70,
+    "sf_approval_processes": 2,
+    "sf_named_credentials": 4,
+    "sf_echo_score": 0,
+    "sn_echo_score": 0.0,
+    "jira_echo_score": 0.0,
+    "sources_connected": {
+      "salesforce": true,
+      "servicenow": false,
+      "jira": false
+    }
+  },
+  "opportunities": [
+    {
+      "runId": "run_f0b72d0e",
+      "orgId": "demo-org",
+      "detector_id": "HANDOFF_FRICTION",
+      "signal_source": "salesforce",
+      "metric_value": 1.5686,
+      "threshold": 1.5,
+      "impact": 3,
+      "effort": 2,
+      "confidence": "MEDIUM",
+      "tier": "Quick Win",
+      "roadmap_stage": "NEXT_30",
+      "evidenceIds": [
+        "ev_sf_b72d0e_0001"
+      ],
+      "evidence": [
+        {
+          "id": "ev_sf_b72d0e_0001",
+          "tsLabel": "19 Apr 2026, 14:56",
+          "source": "Salesforce",
+          "evidenceType": "Metric",
+          "title": "Elevated case owner reassignment rate detected",
+          "snippet": "480 owner changes recorded across 306 Cases in the last 90 days. Avg 1.5686274509803921 owner changes per Case (threshold: 1.5).",
+          "entities": [
+            "ent_case_all_categories",
+            "ent_casehistory_owner_changes"
+          ],
+          "confidence": "MEDIUM",
+          "decision": "UNREVIEWED"
+        }
+      ],
+      "raw_evidence": {
+        "owner_changes_90d": 480,
+        "total_cases_90d": 306,
+        "handoff_score": 1.5686274509803921,
+        "top_categories": []
+      },
+      "score_debug": {
+        "impact_factors": {
+          "volume_pts": 2.0,
+          "friction_pts": 5.0,
+          "customer_pts": 3.0,
+          "revenue_pts": 0.0,
+          "external_pts": 1.0,
+          "raw_sum": 2.55
+        },
+        "effort_factors": {
+          "data_pts": 2.0,
+          "perm_pts": 2.0,
+          "sys_pts": 2.0,
+          "proc_pts": 2.0
+        },
+        "proxy_ratio": 1.0457
+      }
+    },
+    {
+      "runId": "run_f0b72d0e",
+      "orgId": "demo-org",
+      "detector_id": "APPROVAL_BOTTLENECK",
+      "signal_source": "salesforce",
+      "metric_value": 13.0,
+      "threshold": 3.0,
+      "impact": 3,
+      "effort": 3,
+      "confidence": "MEDIUM",
+      "tier": "Quick Win",
+      "roadmap_stage": "NEXT_30",
+      "evidenceIds": [
+        "ev_sf_b72d0e_0002"
+      ],
+      "evidence": [
+        {
+          "id": "ev_sf_b72d0e_0002",
+          "tsLabel": "19 Apr 2026, 14:56",
+          "source": "Salesforce",
+          "evidenceType": "Metric",
+          "title": "Approval records exceeding SLA due to high delay in 'Discount Approval'",
+          "snippet": "60 pending 'Discount Approval' records with average delay of 13.0 days (threshold: 3.0 days). Bottleneck score: 30.0 (threshold: 10). 2 approver(s) handling all pending items.",
+          "entities": [
+            "ent_approval_discount_approval"
+          ],
+          "confidence": "MEDIUM",
+          "decision": "UNREVIEWED"
+        }
+      ],
+      "raw_evidence": {
+        "process_name": "Discount Approval",
+        "pending_count": 60,
+        "avg_delay_days": 13.0,
+        "approver_count": 2,
+        "bottleneck_score": 30.0
+      },
+      "score_debug": {
+        "impact_factors": {
+          "volume_pts": 2.0,
+          "friction_pts": 8.0,
+          "customer_pts": 0.0,
+          "revenue_pts": 2.0,
+          "external_pts": 1.0,
+          "raw_sum": 3.0
+        },
+        "effort_factors": {
+          "data_pts": 2.0,
+          "perm_pts": 5.0,
+          "sys_pts": 2.0,
+          "proc_pts": 5.0
+        },
+        "proxy_ratio": 4.3333
+      }
+    },
+    {
+      "runId": "run_f0b72d0e",
+      "orgId": "demo-org",
+      "detector_id": "APPROVAL_BOTTLENECK",
+      "signal_source": "salesforce",
+      "metric_value": 14.0,
+      "threshold": 3.0,
+      "impact": 3,
+      "effort": 3,
+      "confidence": "LOW",
+      "tier": "Strategic",
+      "roadmap_stage": "NEXT_60",
+      "evidenceIds": [
+        "ev_sf_b72d0e_0003"
+      ],
+      "evidence": [
+        {
+          "id": "ev_sf_b72d0e_0003",
+          "tsLabel": "19 Apr 2026, 14:56",
+          "source": "Salesforce",
+          "evidenceType": "Metric",
+          "title": "Approval records exceeding SLA due to high delay in 'Refund Approval'",
+          "snippet": "10 pending 'Refund Approval' records with average delay of 14.0 days (threshold: 3.0 days). Bottleneck score: 10.0 (threshold: 10). 1 approver(s) handling all pending items.",
+          "entities": [
+            "ent_approval_refund_approval"
+          ],
+          "confidence": "LOW",
+          "decision": "UNREVIEWED"
+        }
+      ],
+      "raw_evidence": {
+        "process_name": "Refund Approval",
+        "pending_count": 10,
+        "avg_delay_days": 14.0,
+        "approver_count": 1,
+        "bottleneck_score": 10.0
+      },
+      "score_debug": {
+        "impact_factors": {
+          "volume_pts": 2.0,
+          "friction_pts": 8.0,
+          "customer_pts": 0.0,
+          "revenue_pts": 2.0,
+          "external_pts": 1.0,
+          "raw_sum": 3.0
+        },
+        "effort_factors": {
+          "data_pts": 2.0,
+          "perm_pts": 5.0,
+          "sys_pts": 2.0,
+          "proc_pts": 5.0
+        },
+        "proxy_ratio": 4.6667
+      }
+    },
+    {
+      "runId": "run_f0b72d0e",
+      "orgId": "demo-org",
+      "detector_id": "KNOWLEDGE_GAP",
+      "signal_source": "salesforce",
+      "metric_value": 0.6,
+      "threshold": 0.4,
+      "impact": 3,
+      "effort": 2,
+      "confidence": "MEDIUM",
+      "tier": "Quick Win",
+      "roadmap_stage": "NEXT_30",
+      "evidenceIds": [
+        "ev_sf_b72d0e_0004"
+      ],
+      "evidence": [
+        {
+          "id": "ev_sf_b72d0e_0004",
+          "tsLabel": "19 Apr 2026, 14:56",
+          "source": "Salesforce",
+          "evidenceType": "Metric",
+          "title": "Significant knowledge gap in Case resolution \u2014 low KB article linkage",
+          "snippet": "24 of 60 closed Cases in the last 90 days have a linked Knowledge Article. Knowledge gap score: 0.6 (threshold: 0.4). 40.0% of Cases closed with KB reuse \u2014 36 resolved without KB linkage.",
+          "entities": [
+            "ent_case_closed",
+            "ent_knowledge_articles"
+          ],
+          "confidence": "MEDIUM",
+          "decision": "UNREVIEWED"
+        }
+      ],
+      "raw_evidence": {
+        "closed_cases_90d": 60,
+        "cases_with_kb_link": 24,
+        "knowledge_gap_score": 0.6
+      },
+      "score_debug": {
+        "impact_factors": {
+          "volume_pts": 2.0,
+          "friction_pts": 5.0,
+          "customer_pts": 3.0,
+          "revenue_pts": 0.0,
+          "external_pts": 1.0,
+          "raw_sum": 2.55
+        },
+        "effort_factors": {
+          "data_pts": 2.0,
+          "perm_pts": 2.0,
+          "sys_pts": 2.0,
+          "proc_pts": 2.0
+        },
+        "proxy_ratio": 1.5
+      }
+    },
+    {
+      "runId": "run_f0b72d0e",
+      "orgId": "demo-org",
+      "detector_id": "PERMISSION_BOTTLENECK",
+      "signal_source": "salesforce",
+      "metric_value": 30.0,
+      "threshold": 10.0,
+      "impact": 3,
+      "effort": 3,
+      "confidence": "MEDIUM",
+      "tier": "Quick Win",
+      "roadmap_stage": "NEXT_30",
+      "evidenceIds": [
+        "ev_sf_b72d0e_0005"
+      ],
+      "evidence": [
+        {
+          "id": "ev_sf_b72d0e_0005",
+          "tsLabel": "19 Apr 2026, 14:56",
+          "source": "Salesforce",
+          "evidenceType": "Metric",
+          "title": "Approval queue overloaded with limited approver capacity in 'Discount Approval'",
+          "snippet": "60 pending 'Discount Approval' records. Only 2 active approver(s) identified via ProcessInstanceWorkitem. Bottleneck score: 30.0 pending per approver (threshold: 10.0).",
+          "entities": [
+            "ent_approval_discount_approval",
+            "ent_user_approvers"
+          ],
+          "confidence": "MEDIUM",
+          "decision": "UNREVIEWED"
+        }
+      ],
+      "raw_evidence": {
+        "process_name": "Discount Approval",
+        "pending_count": 60,
+        "approver_count": 2,
+        "bottleneck_score": 30.0
+      },
+      "score_debug": {
+        "impact_factors": {
+          "volume_pts": 2.0,
+          "friction_pts": 8.0,
+          "customer_pts": 0.0,
+          "revenue_pts": 2.0,
+          "external_pts": 1.0,
+          "raw_sum": 3.0
+        },
+        "effort_factors": {
+          "data_pts": 2.0,
+          "perm_pts": 5.0,
+          "sys_pts": 2.0,
+          "proc_pts": 5.0
+        },
+        "proxy_ratio": 3.0
+      }
+    }
+  ]
+}

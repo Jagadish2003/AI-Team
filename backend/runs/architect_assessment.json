@@ -1,0 +1,48 @@
+{
+  "_instructions": "Fill this file with your independent assessment of the org's automation opportunities BEFORE reading the algorithm output.",
+  "assessor": "Preetam (Acting Architect)",
+  "org_id": "demo-org",
+  "assessment_date": "2026-04-19",
+  "top_5":[
+    {
+      "rank": 1,
+      "label": "High manual routing",
+      "detector_match": "HANDOFF_FRICTION",
+      "architect_impact": 3,
+      "architect_effort": 2,
+      "is_real": true
+    },
+    {
+      "rank": 2,
+      "label": "Missing knowledge base links",
+      "detector_match": "KNOWLEDGE_GAP",
+      "architect_impact": 3,
+      "architect_effort": 2,
+      "is_real": true
+    },
+    {
+      "rank": 3,
+      "label": "Slow approvals",
+      "detector_match": "APPROVAL_BOTTLENECK",
+      "architect_impact": 3,
+      "architect_effort": 3,
+      "is_real": true
+    },
+    {
+      "rank": 4,
+      "label": "Permission issues",
+      "detector_match": "PERMISSION_BOTTLENECK",
+      "architect_impact": 3,
+      "architect_effort": 3,
+      "is_real": true
+    },
+    {
+      "rank": 5,
+      "label": "Second approval issue",
+      "detector_match": "APPROVAL_BOTTLENECK",
+      "architect_impact": 3,
+      "architect_effort": 3,
+      "is_real": true
+    }
+  ]
+}
