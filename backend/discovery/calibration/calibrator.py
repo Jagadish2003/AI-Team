@@ -488,19 +488,10 @@ def run_calibration(
     else:
         opps = []
 
-    # Production ranking function (must match product roadmap logic):
-    #   Primary:   tier order — Quick Win (1) > Strategic (2) > Complex (3)
-    #   Secondary: impact - effort desc within tier (quick-impact, low-effort first)
-    #   Tertiary:  effort asc (prefer lower delivery effort)
-    _TIER_ORDER = {"Quick Win": 1, "Strategic": 2, "Complex": 3}
-
-    def _rank_key(o):
-        tier_rank   = _TIER_ORDER.get(o.get("tier", "Complex"), 3)
-        net_value   = o.get("impact", 0) - o.get("effort", 10)   # higher = better
-        effort      = o.get("effort", 10)
-        return (tier_rank, -net_value, effort)
-
-    algo_ranked = sorted(opps, key=_rank_key)
+    # Production ranking — shared utility (SF-3.3). Single definition reused across
+    # calibrator.py, track_a_adapter.py, and runner.py. See calibration/ranking.py.
+    from .ranking import rank_opportunities
+    algo_ranked = rank_opportunities(opps)
     algo_top5 = algo_ranked[:5]
 
     # Score debug summary

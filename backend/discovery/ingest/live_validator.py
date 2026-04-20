@@ -284,7 +284,8 @@ def run_validation(check_only: bool = False) -> Dict[str, Any]:
 
     # ── Dimension A Gate 1: credentials present ───────────────────────────────
     instance_url = os.getenv("SF_INSTANCE_URL", "")
-    gates["credentials_present"] = True if instance_url else False
+    access_token = os.getenv("SF_ACCESS_TOKEN", "")
+    gates["credentials_present"] = bool(instance_url and access_token)
 
     if not gates["credentials_present"]:
         logger.error(
@@ -298,11 +299,12 @@ def run_validation(check_only: bool = False) -> Dict[str, Any]:
         client = _get_client()
         import requests
         session = requests.Session()
+        session.headers["Authorization"] = f"Bearer {access_token}"
 
         for attempt in range(MAX_RETRIES + 1):
             try:
                 resp = session.get(
-                    instance_url,
+                    f"{instance_url.rstrip('/')}/services/data/v59.0/limits/",
                     timeout=15,
                 )
                 if resp.status_code == 401:
