@@ -29,6 +29,8 @@ from __future__ import annotations
 import itertools
 from typing import Any, Dict, List, Optional
 
+from .calibration.ranking import rank_opportunities
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Title + category mapping per detector
 # ─────────────────────────────────────────────────────────────────────────────
@@ -293,7 +295,8 @@ def to_track_a_opportunities(
         }
         result.append(track_a_opp)
 
-    return result
+    # Apply shared ranking (SF-3.3) — seed order matches calibration
+    return rank_opportunities(result)
 
 
 def to_track_a_evidence(

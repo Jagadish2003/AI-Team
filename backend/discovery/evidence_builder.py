@@ -70,7 +70,7 @@ def _make_evidence(
 # ─────────────────────────────────────────────────────────────────────────────
 
 _VALID_SOURCES      = {"Salesforce", "ServiceNow", "Jira"}
-_VALID_TYPES        = {"Metric", "Config", "Ticket"}
+_VALID_TYPES        = {"Metric", "Log", "Document", "Survey"}
 _VALID_CONFIDENCE   = {"HIGH", "MEDIUM", "LOW"}
 _GENERIC_TITLES     = {"high volume detected", "signal detected", "pattern found", "issue detected"}
 
@@ -154,7 +154,7 @@ def _build_d1(
         id=_make_id(dr.signal_source, id_factory),
         ts_label=ts,
         source="Salesforce",
-        evidence_type="Config",   # metadata observation about flow configuration
+        evidence_type="Metric",   # flow count + activity score are computed metrics
         title=f"Multiple low-complexity AutoLaunchedFlows running on high-volume {obj} object",
         snippet=snippet,
         entities=[f"ent_flow_{label.lower().replace(' ','-').replace('_','-')}"],
@@ -271,7 +271,7 @@ def _build_d5(
         id=_make_id(dr.signal_source, id_factory),
         ts_label=ts,
         source="Salesforce",
-        evidence_type="Config",
+        evidence_type="Metric",   # flow reference count is a computed metric
         title=f"Multiple Flows referencing the same Named Credential '{cred}'",
         snippet=snippet,
         entities=[f"ent_credential_{cred_slug}"],
@@ -357,7 +357,7 @@ def _build_d7(
         id=_make_id(dr.signal_source, id_factory),
         ts_label=ts,
         source=source,
-        evidence_type="Ticket",   # pattern found in individual records
+        evidence_type="Log",      # cross-system echo found in individual records/tickets
         title="Cross-system ticket duplication detected across Salesforce and external systems",
         snippet=snippet,
         entities=["ent_case_all_categories", "ent_incident_servicenow_access"],
