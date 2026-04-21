@@ -154,7 +154,7 @@ export default function SourceIntakePage() {
                 <Button
                   variant="secondary"
                   onClick={() => nav('/integration-hub')}
-                  className="w-40 bg-buttonbg text-text hover:bg-panel transition relative flex items-center justify-center">
+                  className="w-40 rounded-md border border-border bg-buttonbg px-3 py-2 text-sm font-medium text-text hover:bg-panel transition disabled:cursor-not-allowed disabled:opacity-50 relative flex items-center justify-center">
                   <span className="absolute left-4 flex items-center">
                     <ChevronLeft size={16} strokeWidth={2.5} />
                   </span>
@@ -164,8 +164,7 @@ export default function SourceIntakePage() {
                   variant="primary"
                   disabled={!canBegin}
                   title={!canBegin ? 'Connect at least one source to continue' : undefined}
-                  onClick={() => nav('/discovery-run')}
-                >
+                  onClick={() => nav('/discovery-run')}>
                   Begin Discovery
                   <ChevronRight size={16} strokeWidth={2.5} />
                 </Button>
