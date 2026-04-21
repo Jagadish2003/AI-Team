@@ -18,20 +18,25 @@ const RunContext = createContext<RunContextValue | null>(null);
 const LS_KEY = "agentiq:lastRunId";
 
 export function RunProvider({ children }: { children: React.ReactNode }) {
-  const [runId, setRunIdState] = useState<string | null>(null);
-  useEffect(() => {
-    const url = new URL(window.location.href);
-    const fromUrl = url.searchParams.get("runId");
-    const fromLs = window.localStorage.getItem(LS_KEY);
-    const initial = fromUrl ?? (fromLs && fromLs.trim().length > 0 ? fromLs : null);
-    if (initial) {
-      setRunIdState(initial);
-      window.localStorage.setItem(LS_KEY, initial);
-      if (!fromUrl) {
-        url.searchParams.set("runId", initial);
-        window.history.replaceState({}, "", url.toString());
-      }
+  const [runId, setRunIdState] = useState<string | null>(() => {
+    try {
+      const fromUrl = new URL(window.location.href).searchParams.get("runId");
+      const fromLs = window.localStorage.getItem(LS_KEY);
+      return fromUrl ?? (fromLs && fromLs.trim().length > 0 ? fromLs : null);
+    } catch {
+      return null;
     }
+  });
+
+  // Sync URL on first render if runId came from localStorage only.
+  useEffect(() => {
+    if (!runId) return;
+    const url = new URL(window.location.href);
+    if (!url.searchParams.get("runId")) {
+      url.searchParams.set("runId", runId);
+      window.history.replaceState({}, "", url.toString());
+    }
+    window.localStorage.setItem(LS_KEY, runId);
   }, []);
   const setRunId = useCallback((id: string | null) => {
     setRunIdState(id);
