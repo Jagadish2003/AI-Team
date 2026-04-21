@@ -1,94 +1,94 @@
 {
   "sf32_gate_passed": true,
-  "report_time": "2026-04-19T14:58:48.867006+00:00",
+  "report_time": "2026-04-21T13:11:51.163564+00:00",
   "org_id": "demo-org",
-  "run_id": "run_f0b72d0e",
+  "run_id": "run_7ae782e9",
   "mode": "live",
   "calibration_summary_table": [
     {
       "rank": 1,
+      "detector_id": "REPETITIVE_AUTOMATION",
+      "algo_impact": 3,
+      "algo_effort": 2,
+      "algo_net": 1,
+      "algo_confidence": "HIGH",
+      "algo_tier": "Quick Win",
+      "arch_label": "Architect agrees: High flow activity on Case is the top priority.",
+      "arch_impact": 5,
+      "arch_effort": 2,
+      "arch_net": 3,
+      "arch_is_real": true,
+      "impact_delta": 2,
+      "effort_delta": 0,
+      "matched": true
+    },
+    {
+      "rank": 2,
       "detector_id": "HANDOFF_FRICTION",
       "algo_impact": 3,
       "algo_effort": 2,
       "algo_net": 1,
       "algo_confidence": "MEDIUM",
       "algo_tier": "Quick Win",
-      "arch_label": "High manual routing",
-      "arch_impact": 3,
+      "arch_label": "Architect agrees: Case handoffs are a significant issue.",
+      "arch_impact": 4,
       "arch_effort": 2,
-      "arch_net": 1,
+      "arch_net": 2,
       "arch_is_real": true,
-      "impact_delta": 0,
+      "impact_delta": 1,
       "effort_delta": 0,
       "matched": true
     },
     {
-      "rank": 2,
+      "rank": 3,
       "detector_id": "KNOWLEDGE_GAP",
       "algo_impact": 3,
       "algo_effort": 2,
       "algo_net": 1,
       "algo_confidence": "MEDIUM",
       "algo_tier": "Quick Win",
-      "arch_label": "Missing knowledge base links",
-      "arch_impact": 3,
+      "arch_label": "Architect now agrees this is a real issue.",
+      "arch_impact": 4,
       "arch_effort": 2,
-      "arch_net": 1,
+      "arch_net": 2,
       "arch_is_real": true,
-      "impact_delta": 0,
+      "impact_delta": 1,
       "effort_delta": 0,
       "matched": true
     },
     {
-      "rank": 3,
+      "rank": 4,
       "detector_id": "APPROVAL_BOTTLENECK",
       "algo_impact": 3,
       "algo_effort": 3,
       "algo_net": 0,
       "algo_confidence": "MEDIUM",
       "algo_tier": "Quick Win",
-      "arch_label": "Second approval issue",
-      "arch_impact": 3,
-      "arch_effort": 3,
+      "arch_label": "Architect disagrees: The refund approval delay is not a real issue.",
+      "arch_impact": 1,
+      "arch_effort": 1,
       "arch_net": 0,
       "arch_is_real": true,
-      "impact_delta": 0,
-      "effort_delta": 0,
+      "impact_delta": 2,
+      "effort_delta": 2,
       "matched": true
     },
     {
-      "rank": 4,
+      "rank": 5,
       "detector_id": "PERMISSION_BOTTLENECK",
       "algo_impact": 3,
       "algo_effort": 3,
       "algo_net": 0,
       "algo_confidence": "MEDIUM",
       "algo_tier": "Quick Win",
-      "arch_label": "Permission issues",
-      "arch_impact": 3,
-      "arch_effort": 3,
-      "arch_net": 0,
-      "arch_is_real": true,
-      "impact_delta": 0,
-      "effort_delta": 0,
-      "matched": true
-    },
-    {
-      "rank": 5,
-      "detector_id": "APPROVAL_BOTTLENECK",
-      "algo_impact": 3,
-      "algo_effort": 3,
-      "algo_net": 0,
-      "algo_confidence": "LOW",
-      "algo_tier": "Strategic",
-      "arch_label": "Second approval issue",
-      "arch_impact": 3,
-      "arch_effort": 3,
-      "arch_net": 0,
-      "arch_is_real": true,
-      "impact_delta": 0,
-      "effort_delta": 0,
-      "matched": true
+      "arch_label": "",
+      "arch_impact": null,
+      "arch_effort": null,
+      "arch_net": null,
+      "arch_is_real": null,
+      "impact_delta": null,
+      "effort_delta": null,
+      "matched": false
     }
   ],
   "org_readiness_checklist": [
@@ -108,7 +108,7 @@
     },
     {
       "check": "Active AutoLaunchedFlows on Case",
-      "current_value": 5,
+      "current_value": 4,
       "minimum": 2,
       "status": "\u2705 ok",
       "soql": "SELECT COUNT() FROM FlowVersionView WHERE Status='Active' AND ProcessType='AutoLaunchedFlow' LIMIT 200  [Tooling API]"
@@ -131,6 +131,14 @@
   "algo_top5": [
     {
       "rank": 1,
+      "detector_id": "REPETITIVE_AUTOMATION",
+      "impact": 3,
+      "effort": 2,
+      "confidence": "HIGH",
+      "tier": "Quick Win"
+    },
+    {
+      "rank": 2,
       "detector_id": "HANDOFF_FRICTION",
       "impact": 3,
       "effort": 2,
@@ -138,7 +146,7 @@
       "tier": "Quick Win"
     },
     {
-      "rank": 2,
+      "rank": 3,
       "detector_id": "KNOWLEDGE_GAP",
       "impact": 3,
       "effort": 2,
@@ -146,16 +154,8 @@
       "tier": "Quick Win"
     },
     {
-      "rank": 3,
-      "detector_id": "APPROVAL_BOTTLENECK",
-      "impact": 3,
-      "effort": 3,
-      "confidence": "MEDIUM",
-      "tier": "Quick Win"
-    },
-    {
       "rank": 4,
-      "detector_id": "PERMISSION_BOTTLENECK",
+      "detector_id": "APPROVAL_BOTTLENECK",
       "impact": 3,
       "effort": 3,
       "confidence": "MEDIUM",
@@ -163,14 +163,36 @@
     },
     {
       "rank": 5,
-      "detector_id": "APPROVAL_BOTTLENECK",
+      "detector_id": "PERMISSION_BOTTLENECK",
       "impact": 3,
       "effort": 3,
-      "confidence": "LOW",
-      "tier": "Strategic"
+      "confidence": "MEDIUM",
+      "tier": "Quick Win"
     }
   ],
   "score_debug_summary": [
+    {
+      "detector_id": "REPETITIVE_AUTOMATION",
+      "impact": 3,
+      "effort": 2,
+      "confidence": "HIGH",
+      "tier": "Quick Win",
+      "proxy_ratio": 3.7778,
+      "impact_factors": {
+        "volume_pts": 3.5,
+        "friction_pts": 5.0,
+        "customer_pts": 3.0,
+        "revenue_pts": 2.0,
+        "external_pts": 1.0,
+        "raw_sum": 3.375
+      },
+      "effort_factors": {
+        "data_pts": 2.0,
+        "perm_pts": 2.0,
+        "sys_pts": 2.0,
+        "proc_pts": 2.0
+      }
+    },
     {
       "detector_id": "HANDOFF_FRICTION",
       "impact": 3,
@@ -179,12 +201,12 @@
       "tier": "Quick Win",
       "proxy_ratio": 1.0457,
       "impact_factors": {
-        "volume_pts": 2.0,
+        "volume_pts": 3.5,
         "friction_pts": 5.0,
         "customer_pts": 3.0,
         "revenue_pts": 0.0,
         "external_pts": 1.0,
-        "raw_sum": 2.55
+        "raw_sum": 3.075
       },
       "effort_factors": {
         "data_pts": 2.0,
@@ -206,7 +228,7 @@
         "customer_pts": 3.0,
         "revenue_pts": 0.0,
         "external_pts": 1.0,
-        "raw_sum": 2.55
+        "raw_sum": 2.7
       },
       "effort_factors": {
         "data_pts": 2.0,
@@ -221,14 +243,14 @@
       "effort": 3,
       "confidence": "MEDIUM",
       "tier": "Quick Win",
-      "proxy_ratio": 4.3333,
+      "proxy_ratio": 4.7767,
       "impact_factors": {
         "volume_pts": 2.0,
         "friction_pts": 8.0,
         "customer_pts": 0.0,
         "revenue_pts": 2.0,
         "external_pts": 1.0,
-        "raw_sum": 3.0
+        "raw_sum": 3.3
       },
       "effort_factors": {
         "data_pts": 2.0,
@@ -250,7 +272,7 @@
         "customer_pts": 0.0,
         "revenue_pts": 2.0,
         "external_pts": 1.0,
-        "raw_sum": 3.0
+        "raw_sum": 3.3
       },
       "effort_factors": {
         "data_pts": 2.0,
@@ -265,14 +287,14 @@
       "effort": 3,
       "confidence": "LOW",
       "tier": "Strategic",
-      "proxy_ratio": 4.6667,
+      "proxy_ratio": 5.0,
       "impact_factors": {
         "volume_pts": 2.0,
         "friction_pts": 8.0,
         "customer_pts": 0.0,
         "revenue_pts": 2.0,
         "external_pts": 1.0,
-        "raw_sum": 3.0
+        "raw_sum": 3.3
       },
       "effort_factors": {
         "data_pts": 2.0,
@@ -283,15 +305,16 @@
     }
   ],
   "calibration_gate": {
-    "overlap_count": 5,
+    "overlap_count": 4,
     "matched_ids": [
+      "REPETITIVE_AUTOMATION",
       "HANDOFF_FRICTION",
       "KNOWLEDGE_GAP",
-      "APPROVAL_BOTTLENECK",
-      "PERMISSION_BOTTLENECK",
       "APPROVAL_BOTTLENECK"
     ],
-    "unmatched_ids": [],
+    "unmatched_ids": [
+      "PERMISSION_BOTTLENECK"
+    ],
     "false_positives_top5": [],
     "false_positives_other": [],
     "direction_issues": [],
@@ -353,5 +376,5 @@
     }
   ],
   "adjustments_log": [],
-  "summary": "SF-3.2 calibration gate PASSED | Overlap: 5/5 | False positives: 0 | Direction issues: 0 | Recommendations: 3"
+  "summary": "SF-3.2 calibration gate PASSED | Overlap: 4/5 | False positives: 0 | Direction issues: 0 | Recommendations: 3"
 }

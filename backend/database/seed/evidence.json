@@ -1,7 +1,7 @@
 [
   {
-    "id": "ev_sf_be48ca_0001",
-    "tsLabel": "20 Apr 2026, 11:02",
+    "id": "ev_sf_0c91b7_0001",
+    "tsLabel": "18 Apr 2026, 22:29",
     "source": "Salesforce",
     "evidenceType": "Metric",
     "title": "Multiple low-complexity AutoLaunchedFlows running on high-volume Case object",
@@ -13,8 +13,8 @@
     "decision": "UNREVIEWED"
   },
   {
-    "id": "ev_sf_be48ca_0002",
-    "tsLabel": "20 Apr 2026, 11:02",
+    "id": "ev_sf_0c91b7_0002",
+    "tsLabel": "18 Apr 2026, 22:29",
     "source": "Salesforce",
     "evidenceType": "Metric",
     "title": "Elevated case owner reassignment rate detected",
@@ -27,8 +27,8 @@
     "decision": "UNREVIEWED"
   },
   {
-    "id": "ev_sf_be48ca_0003",
-    "tsLabel": "20 Apr 2026, 11:02",
+    "id": "ev_sf_0c91b7_0003",
+    "tsLabel": "18 Apr 2026, 22:29",
     "source": "Salesforce",
     "evidenceType": "Metric",
     "title": "Approval records exceeding SLA due to high delay in 'Discount Approval'",
@@ -40,8 +40,8 @@
     "decision": "UNREVIEWED"
   },
   {
-    "id": "ev_sf_be48ca_0004",
-    "tsLabel": "20 Apr 2026, 11:02",
+    "id": "ev_sf_0c91b7_0004",
+    "tsLabel": "18 Apr 2026, 22:29",
     "source": "Salesforce",
     "evidenceType": "Metric",
     "title": "Significant knowledge gap in Case resolution \u2014 low KB article linkage",
@@ -54,8 +54,8 @@
     "decision": "UNREVIEWED"
   },
   {
-    "id": "ev_sf_be48ca_0005",
-    "tsLabel": "20 Apr 2026, 11:02",
+    "id": "ev_sf_0c91b7_0005",
+    "tsLabel": "18 Apr 2026, 22:29",
     "source": "Salesforce",
     "evidenceType": "Metric",
     "title": "Multiple Flows referencing the same Named Credential 'ServiceNow Integration'",
@@ -67,8 +67,8 @@
     "decision": "UNREVIEWED"
   },
   {
-    "id": "ev_sf_be48ca_0006",
-    "tsLabel": "20 Apr 2026, 11:02",
+    "id": "ev_sf_0c91b7_0006",
+    "tsLabel": "18 Apr 2026, 22:29",
     "source": "Salesforce",
     "evidenceType": "Metric",
     "title": "Approval queue overloaded with limited approver capacity in 'Discount Approval'",
@@ -76,20 +76,6 @@
     "entities": [
       "ent_approval_discount_approval",
       "ent_user_approvers"
-    ],
-    "confidence": "MEDIUM",
-    "decision": "UNREVIEWED"
-  },
-  {
-    "id": "ev_sf_be48ca_0007",
-    "tsLabel": "20 Apr 2026, 11:02",
-    "source": "Salesforce",
-    "evidenceType": "Log",
-    "title": "Cross-system ticket duplication detected across Salesforce and external systems",
-    "snippet": "75 of 300 Salesforce Cases reference external ticket IDs (SF echo score: 0.25, threshold: 0.15). 80 of 500 ServiceNow incidents reference Salesforce case IDs (SN echo score: 0.16). 62 of 280 Jira CRM issues reference Salesforce cases (Jira echo score: 0.22). Patterns matched: CS-, INC-, JIRA-.",
-    "entities": [
-      "ent_case_all_categories",
-      "ent_incident_servicenow_access"
     ],
     "confidence": "MEDIUM",
     "decision": "UNREVIEWED"

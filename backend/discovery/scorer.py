@@ -30,19 +30,22 @@ Tier       = Literal["Quick Win", "Strategic", "Complex"]
 # Impact factor weights  (SF-1.4 Section 3)
 # ─────────────────────────────────────────────────────────────────────────────
 
-_W_VOLUME      = 0.30
-_W_FRICTION    = 0.25
+_W_VOLUME      = 0.25   # reduced: volume was over-dominating at low org scale
+_W_FRICTION    = 0.30   # increased: pain signal matters more than raw count
 _W_CUSTOMER    = 0.20
 _W_REVENUE     = 0.15
 _W_EXTERNAL    = 0.10
 
 
 def _volume_pts(weekly_rate: float) -> float:
-    if weekly_rate < 50:   return 2.0
-    if weekly_rate < 200:  return 5.0
-    if weekly_rate < 500:  return 7.0
-    return 9.0
-
+    """ Maps weekly record volume to impact points.    Bands calibrated to real org scale (SF-3.2 live calibration, April 2026).    OVERFIT GUARD: validate at 200/week before applying — should score 6.5, not 9.0.
+    """
+    if weekly_rate < 10:   return 2.0   # genuinely tiny / empty org
+    if weekly_rate < 30:   return 3.5   # dev org / sandbox range (was: < 50 → 2.0)
+    if weekly_rate < 75:   return 5.0   # small enterprise
+    if weekly_rate < 200:  return 6.5   # mid-size enterprise
+    if weekly_rate < 500:  return 8.0   # large enterprise
+    return 9.0                          # very high volume
 
 def _friction_pts_delay(days: float) -> float:
     """Maps avg_delay_days → friction score."""

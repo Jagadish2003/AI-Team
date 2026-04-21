@@ -11,7 +11,7 @@ os.environ["INGEST_MODE"] = "offline"
 
 @pytest.fixture
 def jira_data():
-    from backend.discovery.ingest.jira import ingest
+    from discovery.ingest.jira import ingest
     return ingest()
 
 
@@ -90,14 +90,14 @@ class TestKnownFixesApplied:
 
 class TestIndividualFunctions:
     def test_get_issue_metrics_offline(self):
-        from backend.discovery.ingest.jira import get_issue_metrics
+        from discovery.ingest.jira import get_issue_metrics
         result = get_issue_metrics()
         assert result["total_issues_90d"] == 280
         assert result["salesforce_label_count"] == 62
         assert result["jira_echo_score"] == 0.2214
 
     def test_get_sprint_velocity_offline(self):
-        from backend.discovery.ingest.jira import get_sprint_velocity
+        from discovery.ingest.jira import get_sprint_velocity
         result = get_sprint_velocity()
         assert len(result) == 3
         assert result[0]["sprint_name"] == "CRM Sprint 14"
@@ -105,30 +105,30 @@ class TestIndividualFunctions:
         assert result[0]["salesforce_issue_count"] == 18
 
     def test_extract_story_points(self):
-        from backend.discovery.ingest.jira import _extract_story_points
+        from discovery.ingest.jira import _extract_story_points
         assert _extract_story_points({"fields": {"customfield_10016": 5.0}}) == 5.0
         assert _extract_story_points({"fields": {"customfield_10002": 3}}) == 3.0
         assert _extract_story_points({"fields": {}}) is None
         assert _extract_story_points({"fields": {"customfield_10016": None}}) is None
 
     def test_extract_sf_case_id(self):
-        from backend.discovery.ingest.jira import _extract_sf_case_id
+        from discovery.ingest.jira import _extract_sf_case_id
         assert _extract_sf_case_id("Fix account sync — see Salesforce case CS-1023") == "CS-1023"
         assert _extract_sf_case_id("No case reference here") == ""
         assert _extract_sf_case_id("CS-9999 is the ticket") == "CS-9999"
 
     def test_is_salesforce_related_by_label(self):
-        from backend.discovery.ingest.jira import _is_salesforce_related
+        from discovery.ingest.jira import _is_salesforce_related
         issue = {"fields": {"labels": [{"name": "Salesforce"}], "summary": "some task"}}
         assert _is_salesforce_related(issue) is True
 
     def test_is_salesforce_related_by_summary(self):
-        from backend.discovery.ingest.jira import _is_salesforce_related
+        from discovery.ingest.jira import _is_salesforce_related
         issue = {"fields": {"labels": [], "summary": "Fix CS-1234 integration bug"}}
         assert _is_salesforce_related(issue) is True
 
     def test_is_not_salesforce_related(self):
-        from backend.discovery.ingest.jira import _is_salesforce_related
+        from discovery.ingest.jira import _is_salesforce_related
         issue = {"fields": {"labels": [{"name": "backend"}], "summary": "Refactor DB layer"}}
         assert _is_salesforce_related(issue) is False
 
@@ -137,7 +137,7 @@ class TestIndividualFunctions:
 
 class TestErrorHandling:
     def test_missing_fixture_raises(self, tmp_path, monkeypatch):
-        from backend.discovery.ingest import jira as jira_mod
+        from discovery.ingest import jira as jira_mod
         monkeypatch.setattr(jira_mod, "FIXTURE_PATH", tmp_path / "missing.json")
         with pytest.raises(jira_mod.JiraIngestError, match="fixture not found"):
             jira_mod.ingest()
@@ -147,8 +147,8 @@ class TestErrorHandling:
         monkeypatch.setenv("INGEST_MODE", "live")
         monkeypatch.delenv("JIRA_URL", raising=False)
         import importlib
-        import backend.discovery.ingest as pkg
-        import backend.discovery.ingest.jira as jira_mod
+        import discovery.ingest as pkg
+        import discovery.ingest.jira as jira_mod
         importlib.reload(pkg)
         importlib.reload(jira_mod)
         result = jira_mod.ingest()
@@ -161,8 +161,8 @@ class TestErrorHandling:
         monkeypatch.delenv("JIRA_TOKEN", raising=False)
         monkeypatch.delenv("JIRA_USER", raising=False)
         import importlib
-        import backend.discovery.ingest as pkg
-        import backend.discovery.ingest.jira as jira_mod
+        import discovery.ingest as pkg
+        import discovery.ingest.jira as jira_mod
         importlib.reload(pkg)
         importlib.reload(jira_mod)
         with pytest.raises(jira_mod.JiraIngestError, match="JIRA_TOKEN"):

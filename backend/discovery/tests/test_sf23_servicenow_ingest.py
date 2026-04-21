@@ -11,7 +11,7 @@ os.environ["INGEST_MODE"] = "offline"
 
 @pytest.fixture
 def sn_data():
-    from backend.discovery.ingest.servicenow import ingest
+    from discovery.ingest.servicenow import ingest
     return ingest()
 
 
@@ -64,13 +64,13 @@ class TestD7Readiness:
 
 class TestIndividualFunctions:
     def test_get_incident_metrics_offline(self):
-        from backend.discovery.ingest.servicenow import get_incident_metrics
+        from discovery.ingest.servicenow import get_incident_metrics
         result = get_incident_metrics()
         assert result["total_incidents_90d"] == 500
         assert result["avg_resolution_hours"] == 18.4
 
     def test_get_cross_system_references_offline(self):
-        from backend.discovery.ingest.servicenow import get_cross_system_references
+        from discovery.ingest.servicenow import get_cross_system_references
         result = get_cross_system_references()
         assert result["sn_echo_score"] == 0.16
         assert result["sn_match_count"] == 80
@@ -78,7 +78,7 @@ class TestIndividualFunctions:
 
     def test_echo_score_not_hardcoded_zero(self):
         """Regression test: ensures the known SF-2.3 bug is fixed."""
-        from backend.discovery.ingest.servicenow import get_cross_system_references
+        from discovery.ingest.servicenow import get_cross_system_references
         result = get_cross_system_references()
         assert result["sn_echo_score"] != 0.0, \
             "echo_score is 0.0 — the hardcoded-total_count bug has re-appeared"
@@ -88,7 +88,7 @@ class TestIndividualFunctions:
 
 class TestErrorHandling:
     def test_missing_fixture_raises(self, tmp_path, monkeypatch):
-        from backend.discovery.ingest import servicenow as sn_mod
+        from discovery.ingest import servicenow as sn_mod
         monkeypatch.setattr(sn_mod, "FIXTURE_PATH", tmp_path / "missing.json")
         with pytest.raises(sn_mod.ServiceNowIngestError, match="fixture not found"):
             sn_mod.ingest()
@@ -98,8 +98,8 @@ class TestErrorHandling:
         monkeypatch.setenv("INGEST_MODE", "live")
         monkeypatch.delenv("SERVICENOW_URL", raising=False)
         import importlib
-        import backend.discovery.ingest as pkg
-        import backend.discovery.ingest.servicenow as sn_mod
+        import discovery.ingest as pkg
+        import discovery.ingest.servicenow as sn_mod
         importlib.reload(pkg)
         importlib.reload(sn_mod)
         result = sn_mod.ingest()

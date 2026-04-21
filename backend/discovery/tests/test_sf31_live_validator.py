@@ -17,7 +17,7 @@ os.environ["INGEST_MODE"] = "offline"
 class TestIngestionShapes:
 
     def test_get_case_metrics_shape(self):
-        from backend.discovery.ingest.salesforce import get_case_metrics
+        from discovery.ingest.salesforce import get_case_metrics
         data = get_case_metrics()
         for k in ["total_cases_90d", "closed_cases_90d", "owner_changes_90d",
                   "handoff_score", "cases_with_kb_link", "knowledge_gap_score",
@@ -25,7 +25,7 @@ class TestIngestionShapes:
             assert k in data
 
     def test_get_case_metrics_types(self):
-        from backend.discovery.ingest.salesforce import get_case_metrics
+        from discovery.ingest.salesforce import get_case_metrics
         data = get_case_metrics()
         assert isinstance(data["total_cases_90d"],    int)
         assert isinstance(data["handoff_score"],       float)
@@ -33,7 +33,7 @@ class TestIngestionShapes:
         assert isinstance(data["category_breakdown"],  list)
 
     def test_get_flow_inventory_shape(self):
-        from backend.discovery.ingest.salesforce import get_flow_inventory
+        from discovery.ingest.salesforce import get_flow_inventory
         data = get_flow_inventory()
         for k in ["active_flow_count_on_object", "avg_element_count",
                   "flow_activity_score", "trigger_object", "flows"]:
@@ -41,7 +41,7 @@ class TestIngestionShapes:
         assert isinstance(data["flows"], list)
 
     def test_get_approval_pending_is_list(self):
-        from backend.discovery.ingest.salesforce import get_approval_pending
+        from discovery.ingest.salesforce import get_approval_pending
         data = get_approval_pending()
         assert isinstance(data, list)
         if data:
@@ -51,19 +51,19 @@ class TestIngestionShapes:
 
     def test_get_approval_pending_empty_is_valid(self):
         """Empty list from approval_pending is a valid response — do not fail."""
-        from backend.discovery.ingest.live_validator import _validate_shape
+        from discovery.ingest.live_validator import _validate_shape
         passed, issues = _validate_shape("get_approval_pending", [])
         assert passed
         assert issues == []
 
     def test_get_knowledge_coverage_shape(self):
-        from backend.discovery.ingest.salesforce import get_knowledge_coverage
+        from discovery.ingest.salesforce import get_knowledge_coverage
         data = get_knowledge_coverage()
         for k in ["closed_cases_90d", "cases_with_kb_link", "knowledge_gap_score"]:
             assert k in data
 
     def test_get_named_credentials_is_list(self):
-        from backend.discovery.ingest.salesforce import get_named_credentials
+        from discovery.ingest.salesforce import get_named_credentials
         data = get_named_credentials()
         assert isinstance(data, list)
         if data:
@@ -71,7 +71,7 @@ class TestIngestionShapes:
                 assert k in data[0]
 
     def test_get_named_credential_flow_refs_shape(self):
-        from backend.discovery.ingest.salesforce import (
+        from discovery.ingest.salesforce import (
             get_named_credentials, get_named_credential_flow_refs
         )
         creds = get_named_credentials()
@@ -82,19 +82,19 @@ class TestIngestionShapes:
                 assert k in data[0]
 
     def test_get_cross_system_references_shape(self):
-        from backend.discovery.ingest.salesforce import get_cross_system_references
+        from discovery.ingest.salesforce import get_cross_system_references
         data = get_cross_system_references()
         for k in ["sf_echo_count", "sf_total_cases", "sf_echo_score",
                   "matched_patterns", "sample_matches"]:
             assert k in data
 
     def test_cross_system_score_valid_ratio(self):
-        from backend.discovery.ingest.salesforce import get_cross_system_references
+        from discovery.ingest.salesforce import get_cross_system_references
         data = get_cross_system_references()
         assert 0.0 <= data["sf_echo_score"] <= 1.0
 
     def test_ingest_top_level_keys(self):
-        from backend.discovery.ingest.salesforce import ingest
+        from discovery.ingest.salesforce import ingest
         data = ingest()
         for k in ["case_metrics", "flow_inventory", "approval_processes",
                   "named_credentials", "cross_system_references"]:
@@ -109,27 +109,27 @@ class TestDimensionSplit:
     """EMPTY status is a Dimension B warning — NOT a Dimension A failure."""
 
     def test_empty_result_does_not_block_sprint(self):
-        from backend.discovery.ingest.live_validator import FunctionResult
+        from discovery.ingest.live_validator import FunctionResult
         r = FunctionResult("get_approval_pending")
         r.status = "EMPTY"
         assert not r.is_hard_failure   # EMPTY never blocks
         assert r.is_empty_warning      # but it does warn
 
     def test_error_is_hard_failure(self):
-        from backend.discovery.ingest.live_validator import FunctionResult
+        from discovery.ingest.live_validator import FunctionResult
         r = FunctionResult("get_flow_inventory")
         r.status = "ERROR"
         assert r.is_hard_failure
         assert not r.is_empty_warning
 
     def test_shape_error_is_hard_failure(self):
-        from backend.discovery.ingest.live_validator import FunctionResult
+        from discovery.ingest.live_validator import FunctionResult
         r = FunctionResult("get_case_metrics")
         r.status = "SHAPE_ERROR"
         assert r.is_hard_failure
 
     def test_ok_is_not_hard_failure(self):
-        from backend.discovery.ingest.live_validator import FunctionResult
+        from discovery.ingest.live_validator import FunctionResult
         r = FunctionResult("get_case_metrics")
         r.status = "OK"
         assert not r.is_hard_failure
@@ -143,37 +143,37 @@ class TestDimensionSplit:
 class TestShapeValidator:
 
     def test_case_metrics_valid_shape(self):
-        from backend.discovery.ingest.live_validator import _validate_shape
-        from backend.discovery.ingest.salesforce import get_case_metrics
+        from discovery.ingest.live_validator import _validate_shape
+        from discovery.ingest.salesforce import get_case_metrics
         passed, issues = _validate_shape("get_case_metrics", get_case_metrics())
         assert passed, f"Shape issues: {issues}"
 
     def test_flow_inventory_valid_shape(self):
-        from backend.discovery.ingest.live_validator import _validate_shape
-        from backend.discovery.ingest.salesforce import get_flow_inventory
+        from discovery.ingest.live_validator import _validate_shape
+        from discovery.ingest.salesforce import get_flow_inventory
         passed, issues = _validate_shape("get_flow_inventory", get_flow_inventory())
         assert passed, f"Shape issues: {issues}"
 
     def test_cross_system_valid_shape(self):
-        from backend.discovery.ingest.live_validator import _validate_shape
-        from backend.discovery.ingest.salesforce import get_cross_system_references
+        from discovery.ingest.live_validator import _validate_shape
+        from discovery.ingest.salesforce import get_cross_system_references
         passed, issues = _validate_shape("get_cross_system_references", get_cross_system_references())
         assert passed, f"Shape issues: {issues}"
 
     def test_invalid_shape_detected(self):
-        from backend.discovery.ingest.live_validator import _validate_shape
+        from discovery.ingest.live_validator import _validate_shape
         passed, issues = _validate_shape("get_case_metrics", {"wrong_key": 1})
         assert not passed
         assert len(issues) > 0
 
     def test_empty_list_passes_shape_check(self):
-        from backend.discovery.ingest.live_validator import _validate_shape
+        from discovery.ingest.live_validator import _validate_shape
         # Empty list is correct shape for list-type functions
         passed, issues = _validate_shape("get_approval_pending", [])
         assert passed
 
     def test_empty_list_for_named_credentials_is_valid(self):
-        from backend.discovery.ingest.live_validator import _validate_shape
+        from discovery.ingest.live_validator import _validate_shape
         passed, issues = _validate_shape("get_named_credentials", [])
         assert passed
 
@@ -185,7 +185,7 @@ class TestShapeValidator:
 class TestFunctionResult:
 
     def test_ok_log_line_has_checkmark(self):
-        from backend.discovery.ingest.live_validator import FunctionResult
+        from discovery.ingest.live_validator import FunctionResult
         r = FunctionResult("get_case_metrics")
         r.status, r.row_count, r.elapsed_ms = "OK", 300, 412
         line = r.log_line()
@@ -195,7 +195,7 @@ class TestFunctionResult:
         assert "status=OK" in line
 
     def test_empty_log_line_has_warning_symbol(self):
-        from backend.discovery.ingest.live_validator import FunctionResult
+        from discovery.ingest.live_validator import FunctionResult
         r = FunctionResult("get_approval_pending")
         r.status, r.row_count, r.elapsed_ms = "EMPTY", 0, 88
         line = r.log_line()
@@ -203,7 +203,7 @@ class TestFunctionResult:
         assert "EMPTY" in line
 
     def test_error_log_line_has_cross(self):
-        from backend.discovery.ingest.live_validator import FunctionResult
+        from discovery.ingest.live_validator import FunctionResult
         r = FunctionResult("get_flow_inventory")
         r.status = "ERROR"
         r.error = "SOQL query failed: connection timeout"
@@ -212,14 +212,14 @@ class TestFunctionResult:
         assert "get_flow_inventory" in line
 
     def test_retry_count_in_log_line(self):
-        from backend.discovery.ingest.live_validator import FunctionResult
+        from discovery.ingest.live_validator import FunctionResult
         r = FunctionResult("get_case_metrics")
         r.status, r.retries = "OK", 2
         line = r.log_line()
         assert "retries=2" in line
 
     def test_to_dict_completeness(self):
-        from backend.discovery.ingest.live_validator import FunctionResult
+        from discovery.ingest.live_validator import FunctionResult
         r = FunctionResult("get_cross_system_references")
         r.status = "OK"
         d = r.to_dict()
@@ -238,7 +238,7 @@ class TestValidatorGates:
         monkeypatch.delenv("SF_INSTANCE_URL", raising=False)
         monkeypatch.delenv("SF_ACCESS_TOKEN",  raising=False)
         monkeypatch.setenv("INGEST_MODE", "live")
-        from backend.discovery.ingest.live_validator import run_validation
+        from discovery.ingest.live_validator import run_validation
         report = run_validation()
         assert not report["sf31_passed"]
         assert not report["dim_a_passed"]
@@ -247,14 +247,14 @@ class TestValidatorGates:
     def test_report_has_dim_a_and_dim_b_fields(self, monkeypatch):
         monkeypatch.delenv("SF_INSTANCE_URL", raising=False)
         monkeypatch.delenv("SF_ACCESS_TOKEN",  raising=False)
-        from backend.discovery.ingest.live_validator import run_validation
+        from discovery.ingest.live_validator import run_validation
         report = run_validation()
         assert "dim_a_passed" in report
         assert "dim_b_passed" in report
         assert "sf31_passed" in report
 
     def test_seed_instructions_low_volume(self):
-        from backend.discovery.ingest.live_validator import _build_seed_instructions
+        from discovery.ingest.live_validator import _build_seed_instructions
         instructions = _build_seed_instructions(
             5, 0,
             {"minimum_volume_cases": False, "volume_cases_sufficient": False,
@@ -265,7 +265,7 @@ class TestValidatorGates:
         assert any("Flow" in i for i in instructions)
 
     def test_seed_instructions_sufficient_volume(self):
-        from backend.discovery.ingest.live_validator import _build_seed_instructions
+        from discovery.ingest.live_validator import _build_seed_instructions
         instructions = _build_seed_instructions(
             300, 4,
             {"volume_cases_sufficient": True, "volume_flows_sufficient": True}
@@ -275,13 +275,13 @@ class TestValidatorGates:
     def test_summary_contains_status(self, monkeypatch):
         monkeypatch.delenv("SF_INSTANCE_URL", raising=False)
         monkeypatch.delenv("SF_ACCESS_TOKEN",  raising=False)
-        from backend.discovery.ingest.live_validator import run_validation
+        from discovery.ingest.live_validator import run_validation
         report = run_validation()
         assert "SF-3.1" in report["summary"]
         assert "FAILED" in report["summary"] or "PASSED" in report["summary"]
 
     def test_summary_warns_on_low_volume(self):
-        from backend.discovery.ingest.live_validator import _build_summary
+        from discovery.ingest.live_validator import _build_summary
         summary = _build_summary(
             {"volume_cases_sufficient": False}, [], False, False
         )
@@ -296,8 +296,8 @@ class TestRetryWrapper:
 
     def test_retries_on_429(self, monkeypatch):
         """Function that fails with 429 on first call succeeds on second."""
-        from backend.discovery.ingest.salesforce import IngestError
-        from backend.discovery.ingest.live_validator import _with_retry, FunctionResult
+        from discovery.ingest.salesforce import IngestError
+        from discovery.ingest.live_validator import _with_retry, FunctionResult
 
         call_count = [0]
         def flaky():
@@ -307,7 +307,7 @@ class TestRetryWrapper:
             return {"result": "ok"}
 
         monkeypatch.setattr(
-            "backend.discovery.ingest.live_validator.RETRY_BACKOFF", [0.0, 0.0]
+            "discovery.ingest.live_validator.RETRY_BACKOFF", [0.0, 0.0]
         )
         result = FunctionResult("test_fn")
         data = _with_retry("test_fn", flaky, result)
@@ -316,8 +316,8 @@ class TestRetryWrapper:
 
     def test_non_transient_error_not_retried(self, monkeypatch):
         """SOQL field error should NOT be retried."""
-        from backend.discovery.ingest.salesforce import IngestError
-        from backend.discovery.ingest.live_validator import _with_retry, FunctionResult
+        from discovery.ingest.salesforce import IngestError
+        from discovery.ingest.live_validator import _with_retry, FunctionResult
 
         call_count = [0]
         def broken():
@@ -325,7 +325,7 @@ class TestRetryWrapper:
             raise IngestError("INVALID_FIELD: field does not exist")
 
         monkeypatch.setattr(
-            "backend.discovery.ingest.live_validator.RETRY_BACKOFF", [0.0, 0.0]
+            "discovery.ingest.live_validator.RETRY_BACKOFF", [0.0, 0.0]
         )
         result = FunctionResult("test_fn")
         with pytest.raises(IngestError):
@@ -335,8 +335,8 @@ class TestRetryWrapper:
 
     def test_exhaust_retries_then_raise(self, monkeypatch):
         """After MAX_RETRIES, the last exception is raised."""
-        from backend.discovery.ingest.salesforce import IngestError
-        from backend.discovery.ingest.live_validator import (
+        from discovery.ingest.salesforce import IngestError
+        from discovery.ingest.live_validator import (
             _with_retry, FunctionResult, MAX_RETRIES
         )
 
@@ -346,7 +346,7 @@ class TestRetryWrapper:
             raise IngestError("503 service unavailable")
 
         monkeypatch.setattr(
-            "backend.discovery.ingest.live_validator.RETRY_BACKOFF", [0.0, 0.0]
+            "discovery.ingest.live_validator.RETRY_BACKOFF", [0.0, 0.0]
         )
         result = FunctionResult("test_fn")
         with pytest.raises(IngestError):
@@ -362,12 +362,12 @@ class TestOfflineRegression:
 
     def test_offline_ingest_still_works(self):
         os.environ["INGEST_MODE"] = "offline"
-        from backend.discovery.ingest.salesforce import ingest
+        from discovery.ingest.salesforce import ingest
         data = ingest()
         assert data["case_metrics"]["total_cases_90d"] > 0
 
     def test_full_pipeline_7_detectors_unaffected(self):
         os.environ["INGEST_MODE"] = "offline"
-        from backend.discovery.runner import run
+        from discovery.runner import run
         payload = run(mode="offline", run_id="sf31-regression")
         assert len(payload["opportunities"]) >= 7

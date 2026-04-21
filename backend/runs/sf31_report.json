@@ -1,8 +1,8 @@
 {
   "sf31_passed": true,
   "dim_a_passed": true,
-  "dim_b_passed": false,
-  "report_time": "2026-04-18T19:34:03.389779+00:00",
+  "dim_b_passed": true,
+  "report_time": "2026-04-21T08:41:32.418217+00:00",
   "gates": {
     "credentials_present": true,
     "api_connected": true,
@@ -11,51 +11,45 @@
     "case_metrics_executed": true,
     "flow_inventory_executed": true,
     "cross_system_refs_executed": true,
-    "volume_cases_sufficient": false,
-    "volume_flows_sufficient": false
+    "volume_cases_sufficient": true,
+    "volume_flows_sufficient": true
   },
   "function_results": [
     {
       "function": "get_case_metrics",
-      "status": "EMPTY",
-      "row_count": 0,
-      "elapsed_ms": 2253,
+      "status": "OK",
+      "row_count": 306,
+      "elapsed_ms": 20154,
       "retries": 0,
       "error": "",
       "shape_issues": [],
-      "warnings": [
-        "Returned empty dataset \u2014 valid in a blank org. See seeding instructions to enable detector firing."
-      ]
+      "warnings": []
     },
     {
       "function": "get_flow_inventory",
-      "status": "EMPTY",
-      "row_count": 0,
-      "elapsed_ms": 305,
+      "status": "OK",
+      "row_count": 5,
+      "elapsed_ms": 34453,
       "retries": 0,
       "error": "",
       "shape_issues": [],
-      "warnings": [
-        "Returned empty dataset \u2014 valid in a blank org. See seeding instructions to enable detector firing."
-      ]
+      "warnings": []
     },
     {
       "function": "get_approval_pending",
-      "status": "EMPTY",
-      "row_count": 0,
-      "elapsed_ms": 921,
+      "status": "OK",
+      "row_count": 2,
+      "elapsed_ms": 3781,
       "retries": 0,
       "error": "",
       "shape_issues": [],
-      "warnings": [
-        "Returned empty dataset \u2014 valid in a blank org. See seeding instructions to enable detector firing."
-      ]
+      "warnings": []
     },
     {
       "function": "get_knowledge_coverage",
       "status": "OK",
       "row_count": 3,
-      "elapsed_ms": 1843,
+      "elapsed_ms": 21611,
       "retries": 0,
       "error": "",
       "shape_issues": [],
@@ -63,44 +57,37 @@
     },
     {
       "function": "get_named_credentials",
-      "status": "EMPTY",
-      "row_count": 0,
-      "elapsed_ms": 409,
+      "status": "OK",
+      "row_count": 4,
+      "elapsed_ms": 5076,
       "retries": 0,
       "error": "",
       "shape_issues": [],
-      "warnings": [
-        "Returned empty dataset \u2014 valid in a blank org. See seeding instructions to enable detector firing."
-      ]
+      "warnings": []
     },
     {
       "function": "get_named_credential_flow_refs",
-      "status": "EMPTY",
-      "row_count": 0,
-      "elapsed_ms": 717,
+      "status": "OK",
+      "row_count": 4,
+      "elapsed_ms": 31385,
       "retries": 0,
       "error": "",
       "shape_issues": [],
-      "warnings": [
-        "Returned empty dataset \u2014 valid in a blank org. See seeding instructions to enable detector firing."
-      ]
+      "warnings": []
     },
     {
       "function": "get_cross_system_references",
-      "status": "EMPTY",
-      "row_count": 0,
-      "elapsed_ms": 1022,
+      "status": "OK",
+      "row_count": 306,
+      "elapsed_ms": 13926,
       "retries": 0,
       "error": "",
       "shape_issues": [],
-      "warnings": [
-        "Returned empty dataset \u2014 valid in a blank org. See seeding instructions to enable detector firing."
-      ]
+      "warnings": []
     }
   ],
   "seed_instructions": [
-    "Case volume: 0 cases in last 90 days (minimum 20 for meaningful D2/D4/D7 signal). Create 20 more Cases. Then reassign 20+ of them between users to generate CaseHistory owner-change records.",
-    "No active AutoLaunchedFlow on Case found. Create 2-3 AutoLaunchedFlows in Setup > Flows > New Flow > Record-Triggered (Case object, on Create). Even a single-assignment-element flow counts."
+    "Org volume is sufficient. No seeding required before SF-3.2."
   ],
-  "summary": "SF-3.1 PASSED | Functions: 1 \u2705 OK, 6 \u26a0 empty (valid), 0 \u274c errors | \u26a0 Volume low \u2014 seed org before SF-3.2"
+  "summary": "SF-3.1 PASSED | Functions: 7 \u2705 OK, 0 \u26a0 empty (valid), 0 \u274c errors"
 }

@@ -14,7 +14,7 @@ os.environ["INGEST_MODE"] = "offline"
 
 @pytest.fixture
 def sf_data():
-    from backend.discovery.ingest.salesforce import ingest
+    from discovery.ingest.salesforce import ingest
     return ingest()
 
 
@@ -134,33 +134,33 @@ class TestDetectorReadiness:
 
 class TestIndividualFunctions:
     def test_get_case_metrics_offline(self):
-        from backend.discovery.ingest.salesforce import get_case_metrics
+        from discovery.ingest.salesforce import get_case_metrics
         result = get_case_metrics()
         assert result["total_cases_90d"] == 300
         assert result["handoff_score"] == 1.6
 
     def test_get_flow_inventory_offline(self):
-        from backend.discovery.ingest.salesforce import get_flow_inventory
+        from discovery.ingest.salesforce import get_flow_inventory
         result = get_flow_inventory()
         assert result["flow_activity_score"] == 2.128
         assert len(result["flows"]) == 4
 
     def test_get_approval_pending_offline(self):
-        from backend.discovery.ingest.salesforce import get_approval_pending
+        from discovery.ingest.salesforce import get_approval_pending
         result = get_approval_pending()
         assert len(result) >= 1
         assert result[0]["process_name"] == "Discount Approval"
         assert result[0]["bottleneck_score"] == 30.0
 
     def test_get_knowledge_coverage_offline(self):
-        from backend.discovery.ingest.salesforce import get_knowledge_coverage
+        from discovery.ingest.salesforce import get_knowledge_coverage
         result = get_knowledge_coverage()
         assert result["knowledge_gap_score"] == 0.5
         assert result["closed_cases_90d"] == 60
 
     def test_get_named_credentials_offline(self):
         """get_named_credentials returns catalog with flow refs in offline mode (fixture is pre-merged)."""
-        from backend.discovery.ingest.salesforce import get_named_credentials
+        from discovery.ingest.salesforce import get_named_credentials
         result = get_named_credentials()
         sn_cred = next((c for c in result if "ServiceNow" in c["credential_name"]), None)
         assert sn_cred is not None
@@ -168,7 +168,7 @@ class TestIndividualFunctions:
 
     def test_get_named_credential_flow_refs_offline(self):
         """In offline mode, flow_refs returns the fixture list unchanged."""
-        from backend.discovery.ingest.salesforce import (
+        from discovery.ingest.salesforce import (
             get_named_credentials, get_named_credential_flow_refs
         )
         catalog = get_named_credentials()
@@ -178,13 +178,13 @@ class TestIndividualFunctions:
 
     def test_match_type_is_name(self):
         """match_type field is always 'name' (v1 heuristic)."""
-        from backend.discovery.ingest.salesforce import get_named_credentials
+        from discovery.ingest.salesforce import get_named_credentials
         result = get_named_credentials()
         for nc in result:
             assert nc.get("match_type") == "name"
 
     def test_get_cross_system_references_offline(self):
-        from backend.discovery.ingest.salesforce import get_cross_system_references
+        from discovery.ingest.salesforce import get_cross_system_references
         result = get_cross_system_references()
         assert result["sf_echo_score"] == 0.25
         assert "INC-" in result["matched_patterns"]
@@ -194,7 +194,7 @@ class TestIndividualFunctions:
 
 class TestErrorHandling:
     def test_missing_fixture_raises_ingest_error(self, tmp_path, monkeypatch):
-        from backend.discovery.ingest import salesforce as sf_mod
+        from discovery.ingest import salesforce as sf_mod
         monkeypatch.setattr(sf_mod, "FIXTURE_PATH", tmp_path / "nonexistent.json")
         monkeypatch.setenv("INGEST_MODE", "offline")
         with pytest.raises(sf_mod.IngestError, match="Fixture file not found"):
@@ -204,10 +204,10 @@ class TestErrorHandling:
         monkeypatch.setenv("INGEST_MODE", "live")
         monkeypatch.delenv("SF_INSTANCE_URL", raising=False)
         monkeypatch.delenv("SF_ACCESS_TOKEN", raising=False)
-        from backend.discovery.ingest import salesforce as sf_mod
+        from discovery.ingest import salesforce as sf_mod
         # Reload to pick up env change
         import importlib
-        import backend.discovery.ingest as ingest_pkg
+        import discovery.ingest as ingest_pkg
         importlib.reload(ingest_pkg)
         importlib.reload(sf_mod)
         with pytest.raises(sf_mod.IngestError, match="SF_INSTANCE_URL"):
