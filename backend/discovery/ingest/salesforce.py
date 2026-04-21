@@ -94,18 +94,22 @@ class SalesforceClient:
         params = {"q": query}
         try:
             resp = session.get(url, params=params, timeout=30)
-            resp.raise_for_status()
+            if not resp.ok:
+                raise IngestError(f"HTTP {resp.status_code}: {resp.text}\nQuery: {query}")
             data = resp.json()
-            records = data.get("records", [])
+            records = data.get("records",[])
             # Handle pagination
             next_url = data.get("nextRecordsUrl")
             while next_url:
                 resp2 = session.get(f"{self.instance_url}{next_url}", timeout=30)
-                resp2.raise_for_status()
+                if not resp2.ok:
+                    raise IngestError(f"HTTP {resp2.status_code}: {resp2.text}")
                 page = resp2.json()
-                records.extend(page.get("records", []))
+                records.extend(page.get("records",[]))
                 next_url = page.get("nextRecordsUrl")
             return records
+        except IngestError:
+            raise
         except Exception as e:
             raise IngestError(f"SOQL query failed: {e}\nQuery: {query}")
 
@@ -121,9 +125,10 @@ class SalesforceClient:
         url = f"{self.instance_url}/services/data/{API_VERSION}/tooling/query/"
         try:
             resp = session.get(url, params={"q": query}, timeout=60)
-            resp.raise_for_status()
+            if not resp.ok:
+                raise IngestError(f"HTTP {resp.status_code}: {resp.text}\nQuery: {query}")
             data = resp.json()
-            records = data.get("records", [])
+            records = data.get("records",[])
             next_url = data.get("nextRecordsUrl")
             while next_url:
                 if len(records) >= max_records:
@@ -134,9 +139,10 @@ class SalesforceClient:
                 resp2 = session.get(
                     f"{self.instance_url}{next_url}", timeout=60
                 )
-                resp2.raise_for_status()
+                if not resp2.ok:
+                    raise IngestError(f"HTTP {resp2.status_code}: {resp2.text}")
                 page = resp2.json()
-                records.extend(page.get("records", []))
+                records.extend(page.get("records",[]))
                 next_url = page.get("nextRecordsUrl")
             return records
         except IngestError:
@@ -162,7 +168,7 @@ def get_case_metrics(client: Optional[SalesforceClient] = None) -> Dict[str, Any
         WHERE Field = 'Owner' AND CreatedDate = LAST_N_DAYS:90
 
         -- Cases with linked Knowledge Articles
-        SELECT COUNT(DISTINCT CaseId) linked FROM CaseArticle
+        SELECT COUNT_DISTINCT(CaseId) linked FROM CaseArticle
         WHERE CreatedDate = LAST_N_DAYS:90
 
         -- Closed cases in window
@@ -196,7 +202,7 @@ def get_case_metrics(client: Optional[SalesforceClient] = None) -> Dict[str, Any
     closed_cases = closed_recs[0].get("expr0", 0) if closed_recs else 0
 
     kb_recs = client.soql(
-        "SELECT COUNT(DISTINCT CaseId) FROM CaseArticle "
+        "SELECT COUNT_DISTINCT(CaseId) FROM CaseArticle "
         "WHERE CreatedDate = LAST_N_DAYS:90"
     )
     cases_with_kb = kb_recs[0].get("expr0", 0) if kb_recs else 0
@@ -209,7 +215,7 @@ def get_case_metrics(client: Optional[SalesforceClient] = None) -> Dict[str, Any
         "SELECT Reason, COUNT(Id) FROM Case "
         "WHERE CreatedDate = LAST_N_DAYS:90 GROUP BY Reason"
     )
-    category_breakdown = [
+    category_breakdown =[
         {"category": r.get("Reason", "Unknown"), "volume": r.get("expr0", 0),
          "handoff_score": 0.0, "avg_age_days": 0.0}
         for r in cat_recs
@@ -228,15 +234,15 @@ def get_case_metrics(client: Optional[SalesforceClient] = None) -> Dict[str, Any
 
 def get_flow_inventory(client: Optional[SalesforceClient] = None) -> Dict[str, Any]:
     """
-    Pull active AutoLaunchedFlows on high-volume objects via Tooling API.
+    Pull active AutoLaunchedFlows on high-volume objects.
 
-    SME Tooling API queries:
+    SME SOQL queries:
         -- Active flows
-        SELECT Id, MasterLabel, ProcessType, TriggerType,
-               TriggerObjectOrEventLabel, Status
-        FROM FlowVersionView WHERE Status = 'Active'
+        SELECT ActiveVersionId, Label, ProcessType, TriggerType,
+               TriggerObjectOrEventLabel FROM FlowDefinitionView
+        WHERE IsActive = true
 
-        -- Element count from Flow Metadata (heavy — paginate)
+        -- Element count from Flow Metadata (heavy — paginate via Tooling API)
         SELECT Id, MasterLabel, Metadata FROM Flow WHERE Status = 'Active'
 
     Returns: flow_inventory dict matching salesforce_sample.json shape
@@ -244,41 +250,56 @@ def get_flow_inventory(client: Optional[SalesforceClient] = None) -> Dict[str, A
     if not is_live():
         return _load_fixture()["flow_inventory"]
 
-    flow_recs = client.tooling_soql(
-        "SELECT Id, MasterLabel, ProcessType, TriggerType, "
-        "TriggerObjectOrEventLabel, Status FROM FlowVersionView "
-        "WHERE Status = 'Active'"
+    # FlowDefinitionView holds the Trigger properties, not FlowVersionView
+    flow_recs = client.soql(
+        "SELECT ActiveVersionId, Label, ProcessType, TriggerType, "
+        "TriggerObjectOrEventLabel FROM FlowDefinitionView "
+        "WHERE IsActive = true"
     )
 
-    auto_launched = [
+    auto_launched =[
         r for r in flow_recs
         if r.get("ProcessType") == "AutoLaunchedFlow"
         and r.get("TriggerObjectOrEventLabel") == "Case"
+        and (r.get("TriggerType") == "RecordAfterSave" or r.get("TriggerType") == "RecordBeforeSave" or r.get("TriggerType") == "null")
     ]
 
     # Element counts from Metadata (best-effort; may be slow on large orgs)
-    element_counts = []
+    element_counts =[]
     for r in auto_launched:
         try:
+            flow_version_id = r.get("ActiveVersionId")
+            if not flow_version_id:
+                element_counts.append(0)
+                continue
+
             meta_recs = client.tooling_soql(
                 f"SELECT Id, MasterLabel, Metadata FROM Flow "
-                f"WHERE Id = '{r['Id']}'"
+                f"WHERE Id = '{flow_version_id}'"
             )
             if meta_recs and meta_recs[0].get("Metadata"):
                 meta = meta_recs[0]["Metadata"]
                 # Count all element arrays in flow metadata
                 count = sum(
                     len(meta.get(k, []))
-                    for k in ["decisions", "loops", "recordCreates",
+                    for k in["decisions", "loops", "recordCreates",
                                "recordDeletes", "recordLookups", "recordUpdates",
                                "assignments", "subflows", "actionCalls"]
                 )
                 element_counts.append(count)
+            else:
+                element_counts.append(0)
         except Exception:
             element_counts.append(0)
 
     avg_elements = round(sum(element_counts) / len(element_counts), 2) if element_counts else 0.0
-    records_90d = _load_fixture()["case_metrics"].get("total_cases_90d", 0)  # from case query
+
+    try:
+        case_recs = client.soql("SELECT COUNT(Id) FROM Case WHERE CreatedDate = LAST_N_DAYS:90")
+        records_90d = case_recs[0].get("expr0", 0) if case_recs else 0
+    except Exception:
+        records_90d = 0
+
     flow_activity_score = round(
         (records_90d / 90) * (len(auto_launched) / max(avg_elements, 1)), 4
     ) if auto_launched else 0.0
@@ -289,11 +310,11 @@ def get_flow_inventory(client: Optional[SalesforceClient] = None) -> Dict[str, A
         "flow_activity_score": flow_activity_score,
         "trigger_object": "Case",
         "records_90d": records_90d,
-        "flows": [
+        "flows":[
             {
-                "flow_id": r["Id"],
-                "flow_label": r["MasterLabel"],
-                "process_type": r["ProcessType"],
+                "flow_id": r.get("ActiveVersionId") or "",
+                "flow_label": r.get("Label") or "",
+                "process_type": r.get("ProcessType") or "",
                 "element_count": element_counts[i] if i < len(element_counts) else 0,
                 "trigger_object": r.get("TriggerObjectOrEventLabel", ""),
             }
@@ -312,8 +333,8 @@ def get_approval_pending(client: Optional[SalesforceClient] = None) -> List[Dict
         FROM ProcessInstance WHERE Status = 'Pending' LIMIT 1000
 
         -- Approvers per pending instance
-        SELECT ProcessInstanceId, ActorId, StepStatus
-        FROM ProcessInstanceWorkitem WHERE StepStatus = 'Pending'
+        SELECT ProcessInstanceId, ActorId, Actor.Type
+        FROM ProcessInstanceWorkitem
 
     Returns: list of approval process dicts matching salesforce_sample.json shape
     """
@@ -343,7 +364,7 @@ def get_approval_pending(client: Optional[SalesforceClient] = None) -> List[Dict
         if name not in by_process:
             by_process[name] = {
                 "process_name": name, "pending_count": 0,
-                "total_age_days": 0.0, "pi_ids": [],
+                "total_age_days": 0.0, "pi_ids":[],
             }
         by_process[name]["pending_count"] += 1
         by_process[name]["total_age_days"] += age_days
@@ -353,8 +374,8 @@ def get_approval_pending(client: Optional[SalesforceClient] = None) -> List[Dict
     # approver_count = distinct ActorId values — may undercount human capacity
     # when Roles/Queues are used. approver_type_notes flags this explicitly.
     wi_recs = client.soql(
-        "SELECT ProcessInstanceId, ActorId, Actor.Type, StepStatus "
-        "FROM ProcessInstanceWorkitem WHERE StepStatus = 'Pending'"
+        "SELECT ProcessInstanceId, ActorId, Actor.Type "
+        "FROM ProcessInstanceWorkitem"
     )
 
     # Map: process_name -> {actor_id -> actor_type}
@@ -372,7 +393,7 @@ def get_approval_pending(client: Optional[SalesforceClient] = None) -> List[Dict
         if proc_name and actor_id:
             actor_map.setdefault(proc_name, {})[actor_id] = actor_type
 
-    results = []
+    results =[]
     for name, info in by_process.items():
         cnt = info["pending_count"]
         avg_delay = round(info["total_age_days"] / cnt, 2) if cnt > 0 else 0.0
@@ -452,7 +473,7 @@ def get_named_credentials(client: Optional[SalesforceClient] = None) -> List[Dic
         "SELECT Id, DeveloperName, MasterLabel, Endpoint, PrincipalType "
         "FROM NamedCredential"
     )
-    return [
+    return[
         {
             "credential_name": r.get("MasterLabel", ""),
             "credential_developer_name": r.get("DeveloperName", ""),
@@ -468,7 +489,7 @@ def get_named_credentials(client: Optional[SalesforceClient] = None) -> List[Dic
 # Exact Metadata sub-fields where Salesforce stores Named Credential references.
 # Each entry is (parent_array_key, child_dict_key_that_holds_credential_devname).
 # These are the ONLY fields inspected — no broad string scan of full Metadata.
-_NC_FIELD_PATHS: List[tuple] = [
+_NC_FIELD_PATHS: List[tuple] =[
     # HTTP Callout Actions in flows (most common — Flow Builder external service)
     ("actionCalls", "connector"),            # actionCalls[*].connector = devName
     ("actionCalls", "namedCredential"),      # alternative field name used in some API versions
@@ -509,7 +530,7 @@ def _flow_references_credential(
         return ""
 
     for array_key, field_key in _NC_FIELD_PATHS:
-        items = metadata.get(array_key) or []
+        items = metadata.get(array_key) or[]
         if not isinstance(items, list):
             continue
         for item in items:
@@ -525,96 +546,178 @@ def _flow_references_credential(
     return ""
 
 
+# def get_named_credential_flow_refs(
+#     named_credentials: List[Dict[str, Any]],
+#     client: Optional[SalesforceClient] = None,
+# ) -> List[Dict[str, Any]]:
+#     """
+#     Scan active Flow.Metadata for references to each Named Credential (D5 signal).
+#
+#     DETECTION STRATEGY — v1 field-level inspection (NOT full-JSON string scan):
+#     Rather than serialising the entire Metadata blob and string-searching it
+#     (which produces false positives from DeveloperNames in unrelated fields),
+#     this function inspects only the known Salesforce Metadata sub-fields where
+#     Named Credential references actually live:
+#
+#         actionCalls[*].connector
+#         actionCalls[*].namedCredential
+#         apexPluginCalls[*].namedCredential
+#         externalServiceActions[*].namedCredential
+#
+#     Match types returned (stored in match_type field):
+#         "field_exact"  — dev_name matched in a known field (highest confidence)
+#         "label_field"  — MasterLabel matched in a known field (medium confidence)
+#         "none"         — no match found
+#
+#     KNOWN LIMITATIONS (documented explicitly so SF-3.2 can extend):
+#         - Apex actions that build credential names dynamically at runtime
+#           cannot be detected statically.
+#         - Platform Event triggered flows that reference credentials indirectly
+#           will be missed.
+#         - Named Credentials referenced only in Screen Flow HTTP actions
+#           (not AutoLaunchedFlow) are included — they inflate D5 if present.
+#         - Managed package flows with null Metadata are skipped silently and
+#           logged at DEBUG level.
+#         - The _NC_FIELD_PATHS list is fixed for Salesforce API v59.0 — later
+#           API versions may add new field paths. Review at each API version bump.
+#
+#     In offline mode: returns named_credentials list unchanged (fixture already
+#     contains flow_reference_count and referencing_flow_ids).
+#
+#     SME Tooling API query:
+#         SELECT Id, MasterLabel, Metadata FROM Flow WHERE Status = 'Active'
+#         (paginated — large orgs may have 500+ active flows)
+#     """
+#     if not is_live():
+#         return named_credentials
+#
+#     flow_meta: List[Dict] =[]
+#     try:
+#         active_flows = client.tooling_soql("SELECT Id, MasterLabel FROM Flow WHERE Status='Active'")
+#         for f in active_flows:
+#             try:
+#                 meta_recs = client.tooling_soql(f"SELECT Id, MasterLabel, Metadata FROM Flow WHERE Id='{f['Id']}'")
+#                 if meta_recs:
+#                     flow_meta.extend(meta_recs)
+#             except Exception as e:
+#                 logger.debug(f"Skipping Flow {f['Id']} metadata: {e}")
+#     except Exception as e:
+#         raise IngestError(f"Flow metadata fetch failed: {e}")
+#
+#     logger.info(f"Flow metadata: {len(flow_meta)} active flows fetched for credential scan")
+#
+#     results =[]
+#     for nc in named_credentials:
+#         dev_name = nc.get("credential_developer_name", "")
+#         label = nc.get("credential_name", "")
+#         referencing_ids: List[str] =[]
+#         match_types: List[str] =[]
+#
+#         for fm in flow_meta:
+#             metadata = fm.get("Metadata")
+#             if not metadata:
+#                 logger.debug(f"Flow {fm.get('Id')} has null Metadata — skipped in NC scan")
+#                 continue
+#             mtype = _flow_references_credential(metadata, dev_name, label)
+#             if mtype:
+#                 referencing_ids.append(fm["Id"])
+#                 match_types.append(mtype)
+#
+#         # Dominant match type: field_exact > label_field > none
+#         dominant = "field_exact" if "field_exact" in match_types else \
+#                    "label_field" if "label_field" in match_types else "none"
+#
+#         results.append({
+#             **nc,
+#             "flow_reference_count": len(referencing_ids),
+#             "referencing_flow_ids": referencing_ids,
+#             "match_type": dominant,
+#         })
+#
+#     return results
+
+
+# ── Named credential field inspection helpers ─────────────────────────────────
+
+# Note: Old _NC_FIELD_PATHS, _NC_FALSE_POSITIVE_TOKENS, and _flow_references_credential
+# functions have been removed. We now use the MetadataComponentDependency API.
+
 def get_named_credential_flow_refs(
     named_credentials: List[Dict[str, Any]],
     client: Optional[SalesforceClient] = None,
 ) -> List[Dict[str, Any]]:
     """
-    Scan active Flow.Metadata for references to each Named Credential (D5 signal).
-
-    DETECTION STRATEGY — v1 field-level inspection (NOT full-JSON string scan):
-    Rather than serialising the entire Metadata blob and string-searching it
-    (which produces false positives from DeveloperNames in unrelated fields),
-    this function inspects only the known Salesforce Metadata sub-fields where
-    Named Credential references actually live:
-
-        actionCalls[*].connector
-        actionCalls[*].namedCredential
-        apexPluginCalls[*].namedCredential
-        externalServiceActions[*].namedCredential
-
-    Match types returned (stored in match_type field):
-        "field_exact"  — dev_name matched in a known field (highest confidence)
-        "label_field"  — MasterLabel matched in a known field (medium confidence)
-        "none"         — no match found
-
-    KNOWN LIMITATIONS (documented explicitly so SF-3.2 can extend):
-        - Apex actions that build credential names dynamically at runtime
-          cannot be detected statically.
-        - Platform Event triggered flows that reference credentials indirectly
-          will be missed.
-        - Named Credentials referenced only in Screen Flow HTTP actions
-          (not AutoLaunchedFlow) are included — they inflate D5 if present.
-        - Managed package flows with null Metadata are skipped silently and
-          logged at DEBUG level.
-        - The _NC_FIELD_PATHS list is fixed for Salesforce API v59.0 — later
-          API versions may add new field paths. Review at each API version bump.
-
-    In offline mode: returns named_credentials list unchanged (fixture already
-    contains flow_reference_count and referencing_flow_ids).
-
-    SME Tooling API query:
-        SELECT Id, MasterLabel, Metadata FROM Flow WHERE Status = 'Active'
-        (paginated — large orgs may have 500+ active flows)
+    Detects both Direct and Indirect references (Flow -> Apex -> Named Credential).
     """
     if not is_live():
         return named_credentials
 
-    # Paginated fetch — Tooling API also supports nextRecordsUrl
-    flow_meta: List[Dict] = []
-    url = (
-        f"{client.instance_url}/services/data/{API_VERSION}/tooling/query/"
-        f"?q=SELECT+Id,MasterLabel,Metadata+FROM+Flow+WHERE+Status='Active'"
-    )
-    session = client._session_get()
-    while url:
+    # --- STEP 1: Scan Apex Classes for Named Credential hardcoding ---
+    # We map: { "NC_Developer_Name": ["Class_A", "Class_B"] }
+    nc_to_apex_classes: Dict[str, List[str]] = {nc['credential_developer_name']: [] for nc in named_credentials}
+
+    try:
+        # Note: We query Name and Body. Body is where the code is.
+        all_classes = client.tooling_soql("SELECT Name, Body FROM ApexClass")
+
+        for apex in all_classes:
+            class_name = apex.get('Name')
+            body = apex.get('Body', '')
+            if not body: continue
+
+            for nc_name in nc_to_apex_classes.keys():
+                if nc_name in body:
+                    nc_to_apex_classes[nc_name].append(class_name)
+    except Exception as e:
+        print(f"   Warning: Could not scan Apex Classes: {e}")
+
+    # --- STEP 2: Scan Flows for Direct NC references OR Indirect Apex calls ---
+    try:
+        active_flows = client.tooling_soql("SELECT Id, MasterLabel FROM Flow WHERE Status = 'Active'")
+    except Exception as e:
+        print(f"Error fetching flows: {e}")
+        return named_credentials
+
+    nc_to_flows: Dict[str, List[str]] = {nc['credential_developer_name']: [] for nc in named_credentials}
+
+    for flow in active_flows:
+        flow_id = flow['Id']
+        flow_label = flow.get('MasterLabel', 'Unknown')
+
         try:
-            resp = session.get(url, timeout=60)
-            resp.raise_for_status()
-            page = resp.json()
-            flow_meta.extend(page.get("records", []))
-            next_rel = page.get("nextRecordsUrl")
-            url = f"{client.instance_url}{next_rel}" if next_rel else None
+            meta_recs = client.tooling_soql(f"SELECT Metadata FROM Flow WHERE Id = '{flow_id}'")
+            if not meta_recs or not meta_recs[0].get("Metadata"):
+                continue
+
+            metadata_str = json.dumps(meta_recs[0]["Metadata"])
+
+            for nc_dev_name in nc_to_flows.keys():
+                # Check A: Direct reference
+                direct_found = nc_dev_name in metadata_str
+
+                # Check B: Indirect reference via any Apex Class found in Step 1
+                suspect_classes = nc_to_apex_classes.get(nc_dev_name, [])
+                indirect_found = any(cls_name in metadata_str for cls_name in suspect_classes)
+
+                if direct_found or indirect_found:
+                    nc_to_flows[nc_dev_name].append(flow_id)
+                    reason = "DIRECT" if direct_found else f"INDIRECT via Apex ({[c for c in suspect_classes if c in metadata_str]})"
+
         except Exception as e:
-            raise IngestError(f"Flow metadata fetch failed: {e}")
+            print(f"   Skipping Flow {flow_label}: {e}")
 
-    logger.info(f"Flow metadata: {len(flow_meta)} active flows fetched for credential scan")
-
+    # --- STEP 3: Build Payload ---
     results = []
     for nc in named_credentials:
         dev_name = nc.get("credential_developer_name", "")
-        label = nc.get("credential_name", "")
-        referencing_ids: List[str] = []
-        match_types: List[str] = []
-
-        for fm in flow_meta:
-            metadata = fm.get("Metadata")
-            if not metadata:
-                logger.debug(f"Flow {fm.get('Id')} has null Metadata — skipped in NC scan")
-                continue
-            mtype = _flow_references_credential(metadata, dev_name, label)
-            if mtype:
-                referencing_ids.append(fm["Id"])
-                match_types.append(mtype)
-
-        # Dominant match type: field_exact > label_field > none
-        dominant = "field_exact" if "field_exact" in match_types else                    "label_field" if "label_field" in match_types else "none"
+        referencing_ids = nc_to_flows.get(dev_name, [])
+        count = len(referencing_ids)
 
         results.append({
             **nc,
-            "flow_reference_count": len(referencing_ids),
+            "flow_reference_count": count,
             "referencing_flow_ids": referencing_ids,
-            "match_type": dominant,
+            "match_type": "apex_flow_trace_scan" if count > 0 else "none",
         })
 
     return results
@@ -640,12 +743,12 @@ def get_cross_system_references(
     SME SOQL query:
         -- Cases with INC- references (run once per pattern)
         SELECT COUNT(Id) FROM Case
-        WHERE (Subject LIKE '%INC-%' OR Description LIKE '%INC-%')
+        WHERE Subject LIKE '%INC-%'
         AND CreatedDate = LAST_N_DAYS:90
 
         -- Sample matches for evidence
-        SELECT Id, Subject, Description FROM Case
-        WHERE (Subject LIKE '%INC-%' OR Description LIKE '%INC-%')
+        SELECT Id, Subject FROM Case
+        WHERE Subject LIKE '%INC-%'
         AND CreatedDate = LAST_N_DAYS:90 LIMIT 20
 
     Returns: cross_system_references dict matching salesforce_sample.json shape
@@ -662,14 +765,14 @@ def get_cross_system_references(
     total_cases = total_recs[0].get("expr0", 0) if total_recs else 0
 
     echo_count = 0
-    sample_matches = []
-    matched_patterns = []
+    sample_matches =[]
+    matched_patterns =[]
 
     for pattern in patterns:
         like = f"%{pattern}%"
         cnt_recs = client.soql(
             f"SELECT COUNT(Id) FROM Case WHERE "
-            f"(Subject LIKE '{like}' OR Description LIKE '{like}') "
+            f"Subject LIKE '{like}' "
             f"AND CreatedDate = LAST_N_DAYS:90"
         )
         cnt = cnt_recs[0].get("expr0", 0) if cnt_recs else 0
@@ -679,14 +782,14 @@ def get_cross_system_references(
             # Sample matches for evidence snippet
             sample_recs = client.soql(
                 f"SELECT Id, Subject FROM Case WHERE "
-                f"(Subject LIKE '{like}' OR Description LIKE '{like}') "
+                f"Subject LIKE '{like}' "
                 f"AND CreatedDate = LAST_N_DAYS:90 LIMIT 5"
             )
             for r in sample_recs:
                 sample_matches.append({
                     "case_id": r.get("Id", ""),
                     "pattern": pattern,
-                    "field": "Subject" if pattern in r.get("Subject", "") else "Description",
+                    "field": "Subject",
                 })
 
     sf_echo_score = round(echo_count / total_cases, 4) if total_cases > 0 else 0.0
@@ -733,7 +836,7 @@ def ingest(sf_client: Optional[SalesforceClient] = None) -> Dict[str, Any]:
                          result.get("sf_total_cases", len(result) if isinstance(result, dict) else 0)))
                 )
                 logger.info(
-                    f"INFO  [{fn_name}]{'':>3} rows={rows:<6} ms={elapsed:<6} status=OK"
+                    f"INFO[{fn_name}]{'':>3} rows={rows:<6} ms={elapsed:<6} status=OK"
                 )
                 return result
             except IngestError as e:

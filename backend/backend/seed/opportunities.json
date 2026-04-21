@@ -10,7 +10,7 @@
     "confidence": "HIGH",
     "aiRationale": "4 active low-complexity AutoLaunchedFlow(s) are processing 300 Case records in 90 days (activity score 2.13, threshold 0.6). These flows perform high-volume repetitive logic with fewer than 5 elements each \u2014 a strong candidate for an Agentforce agent that handles decisioning and exception routing rather than a static flow.",
     "evidenceIds": [
-      "ev_sf_11db44_0001"
+      "ev_sf_c048a8_0001"
     ],
     "requiredPermissions": [
       "Salesforce: read FlowVersionView (Tooling API)",
@@ -34,7 +34,7 @@
     "confidence": "MEDIUM",
     "aiRationale": "480 owner changes recorded across 300 Cases in 90 days \u2014 an average of 1.6 reassignments per case (threshold 1.5). Agents are manually re-routing cases that pattern analysis could route correctly on first assignment. An intelligent routing agent would reduce time-to-resolution and eliminate repetitive escalation cycles.",
     "evidenceIds": [
-      "ev_sf_11db44_0002"
+      "ev_sf_c048a8_0002"
     ],
     "requiredPermissions": [
       "Salesforce: read CaseHistory",
@@ -58,7 +58,7 @@
     "confidence": "MEDIUM",
     "aiRationale": "60 Cases closed in 90 days \u2014 only 30 had a linked Knowledge Article (knowledge gap score 0.50, threshold 0.4). Resolution agents are not consistently reusing KB content, increasing handle time and reducing deflection. An Agentforce agent could surface relevant KB articles during resolution and auto-link them on close.",
     "evidenceIds": [
-      "ev_sf_11db44_0004"
+      "ev_sf_c048a8_0004"
     ],
     "requiredPermissions": [
       "Salesforce: read Case",
@@ -82,7 +82,7 @@
     "confidence": "MEDIUM",
     "aiRationale": "60 records are pending in the 'Discount Approval' approval process with an average delay of 5.0 days (threshold 3.0 days). 2 approver(s) are handling all pending items (bottleneck score 30.0). An automation agent could pre-validate submissions, surface approval context, and escalate stale approvals automatically.",
     "evidenceIds": [
-      "ev_sf_11db44_0003"
+      "ev_sf_c048a8_0003"
     ],
     "requiredPermissions": [
       "Salesforce: read ProcessInstance",
@@ -107,7 +107,7 @@
     "confidence": "MEDIUM",
     "aiRationale": "60 records are queued in 'Discount Approval' with only 2 approver(s) \u2014 a bottleneck score of 30.0 pending items per approver (threshold 10.0). This approval concentration creates a single point of failure. An automation layer could distribute assignments intelligently or escalate to backup approvers when the queue exceeds acceptable depth.",
     "evidenceIds": [
-      "ev_sf_11db44_0006"
+      "ev_sf_c048a8_0006"
     ],
     "requiredPermissions": [
       "Salesforce: read ProcessInstance",
@@ -126,12 +126,12 @@
     "category": "Sync Automation",
     "tier": "Quick Win",
     "decision": "UNREVIEWED",
-    "impact": 2,
+    "impact": 3,
     "effort": 3,
     "confidence": "MEDIUM",
     "aiRationale": "Cross-system echo detected: 75 Salesforce Cases reference external ticket IDs (SF echo score 0.25), 80 ServiceNow incidents reference SF cases (SN score 0.16), 62 Jira issues reference SF cases (Jira score 0.22). Agents are manually duplicating the same issue across systems \u2014 a pattern that agent-based bidirectional sync would eliminate, reducing manual effort and improving resolution continuity across teams.",
     "evidenceIds": [
-      "ev_sf_11db44_0007"
+      "ev_sf_c048a8_0007"
     ],
     "requiredPermissions": [
       "Salesforce: read Case",
@@ -156,7 +156,7 @@
     "confidence": "MEDIUM",
     "aiRationale": "3 active Flow(s) independently call the 'ServiceNow Integration' Named Credential (threshold 3 distinct flows). These flows contain duplicated integration callout logic with no shared error handling or governance layer. An agent-based orchestration pattern would centralise the integration, add retry/fallback handling, and reduce maintenance risk.",
     "evidenceIds": [
-      "ev_sf_11db44_0005"
+      "ev_sf_c048a8_0005"
     ],
     "requiredPermissions": [
       "Salesforce: read NamedCredential (Tooling API)",

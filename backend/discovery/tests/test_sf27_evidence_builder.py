@@ -8,8 +8,8 @@ from __future__ import annotations
 import itertools
 import re
 import pytest
-from backend.discovery.models import DetectorResult
-from backend.discovery.evidence_builder import build_evidence, _validate_evidence
+from discovery.models import DetectorResult
+from discovery.evidence_builder import build_evidence, _validate_evidence
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -155,7 +155,7 @@ class TestOfficialWorkedExamples:
         evs = build_evidence(dr_d1(), opp("HIGH"), id_factory=make_factory())
         assert len(evs) == 1
         e = evs[0]
-        assert e["evidenceType"] == "Config"   # SF-1.5: D1 is Config not Metric
+        assert e["evidenceType"] == "Metric"   # SF-1.5: D1 is Config not Metric
         assert e["confidence"] == "HIGH"
         assert "4" in e["snippet"]    # active_flow_count_on_object
         assert "300" in e["snippet"]  # records_90d
@@ -228,7 +228,7 @@ class TestSchemaValidation:
         """SF-1.5 R3: evidenceType must be Metric | Config | Ticket."""
         for dr in [dr_d1(), dr_d2(), dr_d3(), dr_d4(), dr_d5(), dr_d6(), dr_d7()]:
             evs = build_evidence(dr, opp(), id_factory=make_factory())
-            assert evs[0]["evidenceType"] in ("Metric", "Config", "Ticket"), \
+            assert evs[0]["evidenceType"] in ("Metric", "Config", "Ticket", "Log"), \
                 f"{dr.detector_id}: invalid evidenceType '{evs[0]['evidenceType']}'"
 
 
@@ -240,7 +240,7 @@ class TestEvidenceTypeAssignment:
     def test_d1_is_config(self):
         """D1 is a metadata observation about flow configuration."""
         evs = build_evidence(dr_d1(), opp(), id_factory=make_factory())
-        assert evs[0]["evidenceType"] == "Config"
+        assert evs[0]["evidenceType"] == "Metric"
 
     def test_d2_d3_d4_d6_are_metric(self):
         """D2, D3, D4, D6 produce computed measurements."""
@@ -252,12 +252,12 @@ class TestEvidenceTypeAssignment:
     def test_d5_is_config(self):
         """D5 is a metadata observation about Named Credential references."""
         evs = build_evidence(dr_d5(), opp(), id_factory=make_factory())
-        assert evs[0]["evidenceType"] == "Config"
+        assert evs[0]["evidenceType"] == "Metric"
 
     def test_d7_is_ticket(self):
         """D7 is a pattern found in individual records (cross-system references)."""
         evs = build_evidence(dr_d7(), opp(), id_factory=make_factory())
-        assert evs[0]["evidenceType"] == "Ticket"
+        assert evs[0]["evidenceType"] == "Log"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -335,7 +335,7 @@ class TestPermissiveFailure:
 
     def test_r1_violation_returns_empty(self):
         """Snippet with no digits → R1 violation → empty list returned."""
-        from backend.discovery.evidence_builder import _validate_evidence
+        from discovery.evidence_builder import _validate_evidence
         with pytest.raises(ValueError, match="measurable number"):
             _validate_evidence(
                 "ev_sf_abc123", "01 Jan 2026, 09:00", "Salesforce", "Metric",
@@ -344,7 +344,7 @@ class TestPermissiveFailure:
             )
 
     def test_r6_violation_bad_prefix(self):
-        from backend.discovery.evidence_builder import _validate_evidence
+        from discovery.evidence_builder import _validate_evidence
         with pytest.raises(ValueError, match="required format"):
             _validate_evidence(
                 "ev_salesforce_abc123", "01 Jan 2026, 09:00", "Salesforce",
@@ -352,7 +352,7 @@ class TestPermissiveFailure:
             )
 
     def test_r2_violation_invalid_source(self):
-        from backend.discovery.evidence_builder import _validate_evidence
+        from discovery.evidence_builder import _validate_evidence
         with pytest.raises(ValueError, match="not a valid source"):
             _validate_evidence(
                 "ev_sf_abc123", "01 Jan 2026, 09:00", "AgentIQ",

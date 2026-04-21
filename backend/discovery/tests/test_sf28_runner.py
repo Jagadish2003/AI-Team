@@ -17,31 +17,31 @@ os.environ["INGEST_MODE"] = "offline"
 class TestRunnerOffline:
 
     def test_run_returns_payload_shape(self):
-        from backend.discovery.runner import run
+        from discovery.runner import run
         payload = run(mode="offline", run_id="test-run-001")
         for key in ("runId", "orgId", "mode", "startedAt", "completedAt",
                     "inputs", "opportunities"):
             assert key in payload, f"Missing top-level key: {key}"
 
     def test_run_id_preserved(self):
-        from backend.discovery.runner import run
+        from discovery.runner import run
         payload = run(mode="offline", run_id="my-explicit-run-id")
         assert payload["runId"] == "my-explicit-run-id"
 
     def test_mode_recorded(self):
-        from backend.discovery.runner import run
+        from discovery.runner import run
         payload = run(mode="offline", run_id="test-mode")
         assert payload["mode"] == "offline"
 
     def test_produces_seven_or_more_opportunities(self):
         """All 7 detectors fire on standard fixture — 7+ opportunities."""
-        from backend.discovery.runner import run
+        from discovery.runner import run
         payload = run(mode="offline", run_id="test-opps")
         opps = payload["opportunities"]
-        assert len(opps) >= 7, f"Expected >= 7 opportunities, got {len(opps)}"
+        assert len(opps) >= 7, f"Expected >= 7 opportunities, got 0"
 
     def test_all_detectors_represented(self):
-        from backend.discovery.runner import run
+        from discovery.runner import run
         payload = run(mode="offline", run_id="test-detectors")
         fired_ids = {o["detector_id"] for o in payload["opportunities"]}
         expected = {
@@ -56,7 +56,7 @@ class TestOpportunityCandidateShape:
 
     @pytest.fixture
     def opportunities(self):
-        from backend.discovery.runner import run
+        from discovery.runner import run
         return run(mode="offline", run_id="test-shape")["opportunities"]
 
     def test_all_required_keys_present(self, opportunities):
@@ -124,7 +124,7 @@ class TestOpportunityCandidateShape:
 class TestRunnerInputs:
 
     def test_inputs_context_present(self):
-        from backend.discovery.runner import run
+        from discovery.runner import run
         payload = run(mode="offline", run_id="test-ctx")
         inputs = payload["inputs"]
         assert "sf_total_cases_90d" in inputs
@@ -132,14 +132,14 @@ class TestRunnerInputs:
         assert inputs["sources_connected"]["salesforce"] is True
 
     def test_timestamps_present(self):
-        from backend.discovery.runner import run
+        from discovery.runner import run
         payload = run(mode="offline", run_id="test-ts")
         assert payload["startedAt"]
         assert payload["completedAt"]
 
     def test_json_serialisable(self):
         """Full payload must serialise to JSON — no datetime objects etc."""
-        from backend.discovery.runner import run
+        from discovery.runner import run
         payload = run(mode="offline", run_id="test-json")
         try:
             json.dumps(payload)
@@ -156,7 +156,7 @@ class TestDemoSeeder:
     def test_dry_run_sf_returns_count(self, monkeypatch):
         monkeypatch.setenv("SF_INSTANCE_URL", "https://test.salesforce.com")
         monkeypatch.setenv("SF_ACCESS_TOKEN", "test_token")
-        from backend.discovery.seed.demo_seeder import seed_salesforce, SeedState
+        from discovery.seed.demo_seeder import seed_salesforce, SeedState
         state = SeedState()
         count = seed_salesforce(state, dry_run=True)
         assert count == 10   # 10 clusters
@@ -165,7 +165,7 @@ class TestDemoSeeder:
     def test_dry_run_sn_returns_count(self, monkeypatch):
         monkeypatch.setenv("SERVICENOW_URL", "https://test.service-now.com")
         monkeypatch.setenv("SERVICENOW_TOKEN", "test_token")
-        from backend.discovery.seed.demo_seeder import seed_servicenow, SeedState
+        from discovery.seed.demo_seeder import seed_servicenow, SeedState
         state = SeedState()
         count = seed_servicenow(state, dry_run=True)
         assert count == 10
@@ -174,7 +174,7 @@ class TestDemoSeeder:
     def test_dry_run_jira_returns_count(self, monkeypatch):
         monkeypatch.setenv("JIRA_URL", "https://test.atlassian.net")
         monkeypatch.setenv("JIRA_TOKEN", "test_token")
-        from backend.discovery.seed.demo_seeder import seed_jira, SeedState
+        from discovery.seed.demo_seeder import seed_jira, SeedState
         state = SeedState()
         count = seed_jira(state, dry_run=True)
         assert count == 10
@@ -183,13 +183,13 @@ class TestDemoSeeder:
     def test_missing_sf_creds_returns_zero(self, monkeypatch):
         monkeypatch.delenv("SF_INSTANCE_URL", raising=False)
         monkeypatch.delenv("SF_ACCESS_TOKEN", raising=False)
-        from backend.discovery.seed.demo_seeder import seed_salesforce, SeedState
+        from discovery.seed.demo_seeder import seed_salesforce, SeedState
         count = seed_salesforce(SeedState(), dry_run=False)
         assert count == 0
 
     def test_cross_system_consistency(self):
         """All clusters must have cs, inc, and jira references."""
-        from backend.discovery.seed.demo_seeder import CROSS_SYSTEM_CLUSTERS
+        from discovery.seed.demo_seeder import CROSS_SYSTEM_CLUSTERS
         for c in CROSS_SYSTEM_CLUSTERS:
             assert c["cs"].startswith("CS-")
             assert c["inc"].startswith("INC-")
@@ -198,9 +198,9 @@ class TestDemoSeeder:
                 f"CS ID not in snippet: {c['cs']}"
 
     def test_seed_state_save_load(self, tmp_path, monkeypatch):
-        from backend.discovery.seed import demo_seeder as ds_mod
+        from discovery.seed import demo_seeder as ds_mod
         monkeypatch.setattr(ds_mod, "SEED_STATE_PATH", tmp_path / "state.json")
-        from backend.discovery.seed.demo_seeder import SeedState
+        from discovery.seed.demo_seeder import SeedState
         state = SeedState(
             sf_case_ids=["sf1","sf2"],
             sn_incident_sys_ids=["sn1"],
@@ -219,7 +219,7 @@ class TestDemoSeeder:
         monkeypatch.setenv("SERVICENOW_TOKEN", "t")
         monkeypatch.setenv("JIRA_URL", "https://test.atlassian.net")
         monkeypatch.setenv("JIRA_TOKEN", "t")
-        from backend.discovery.seed.demo_seeder import seed_all
+        from discovery.seed.demo_seeder import seed_all
         state = seed_all(systems=["all"], dry_run=True)
         # Dry run stores nothing
         assert len(state.sf_case_ids) == 0
@@ -235,8 +235,8 @@ class TestTrackAAdapter:
 
     @pytest.fixture
     def track_a_payload(self):
-        from backend.discovery.runner import run
-        from backend.discovery.track_a_adapter import export_track_a_seed
+        from discovery.runner import run
+        from discovery.track_a_adapter import export_track_a_seed
         import itertools
         payload = run(mode="offline", run_id="test-ta-adapt")
         return export_track_a_seed(payload, id_counter=itertools.count(1))
@@ -319,7 +319,7 @@ class TestSystemsFlag:
     """Feedback 1 — --systems flag makes ingestion deterministic."""
 
     def test_salesforce_only_still_produces_d1_d2(self):
-        from backend.discovery.runner import run
+        from discovery.runner import run
         payload = run(mode="offline", run_id="test-sf-only", systems=["salesforce"])
         fired = {o["detector_id"] for o in payload["opportunities"]}
         # D1-D6 are all Salesforce-side — should all fire
@@ -327,7 +327,7 @@ class TestSystemsFlag:
         assert "HANDOFF_FRICTION" in fired
 
     def test_systems_list_limits_ingestion(self):
-        from backend.discovery.runner import run
+        from discovery.runner import run
         # With only salesforce, D7 may still fire (sf_echo_score side)
         # but SN/Jira data should be empty
         payload = run(mode="offline", run_id="test-sf-only-2", systems=["salesforce"])
@@ -335,7 +335,7 @@ class TestSystemsFlag:
         assert payload["inputs"]["sources_connected"]["jira"] is False
 
     def test_all_systems_default_unchanged(self):
-        from backend.discovery.runner import run
+        from discovery.runner import run
         payload = run(mode="offline", run_id="test-all-sys")
         assert payload["inputs"]["sources_connected"]["salesforce"] is True
 
@@ -344,7 +344,7 @@ class TestOfflineExport:
     """Feedback 2 & 3 — offline_export.py is the documented one-command path."""
 
     def test_dry_run_no_files_written(self, tmp_path):
-        from backend.discovery.offline_export import export
+        from discovery.offline_export import export
         result = export(out_dir=str(tmp_path / "seed"), dry_run=True)
         # Dry run — no files
         assert not (tmp_path / "seed" / "opportunities.json").exists()
@@ -352,14 +352,14 @@ class TestOfflineExport:
         assert len(result["opportunities"]) >= 7
 
     def test_export_writes_two_json_files(self, tmp_path):
-        from backend.discovery.offline_export import export
+        from discovery.offline_export import export
         export(out_dir=str(tmp_path / "seed"), dry_run=False)
         assert (tmp_path / "seed" / "opportunities.json").exists()
         assert (tmp_path / "seed" / "evidence.json").exists()
 
     def test_exported_opportunities_are_track_a_shape(self, tmp_path):
         import json
-        from backend.discovery.offline_export import export
+        from discovery.offline_export import export
         export(out_dir=str(tmp_path / "seed"))
         opps = json.loads((tmp_path / "seed" / "opportunities.json").read_text())
         required = {"id", "title", "category", "tier", "decision", "impact",
@@ -372,14 +372,14 @@ class TestOfflineExport:
     def test_debug_fields_stripped_from_clean_export(self, tmp_path):
         """_debug namespace should not appear in the seed file."""
         import json
-        from backend.discovery.offline_export import export
+        from discovery.offline_export import export
         export(out_dir=str(tmp_path / "seed"))
         opps = json.loads((tmp_path / "seed" / "opportunities.json").read_text())
         for opp in opps:
             assert "_debug" not in opp, "_debug leaked into Track A seed file"
 
     def test_export_with_systems_filter(self, tmp_path):
-        from backend.discovery.offline_export import export
+        from discovery.offline_export import export
         result = export(
             out_dir=str(tmp_path / "seed"),
             systems=["salesforce"],
@@ -389,7 +389,7 @@ class TestOfflineExport:
 
     def test_evidence_file_has_correct_shape(self, tmp_path):
         import json
-        from backend.discovery.offline_export import export
+        from discovery.offline_export import export
         export(out_dir=str(tmp_path / "seed"))
         evs = json.loads((tmp_path / "seed" / "evidence.json").read_text())
         assert len(evs) >= 7
