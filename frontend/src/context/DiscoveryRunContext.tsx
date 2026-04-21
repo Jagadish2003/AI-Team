@@ -2,7 +2,7 @@
  * DiscoveryRunContext — run-scoped API wiring for Screen 3 (Task 11 Phase 1).
  * Requires RunContext (runId persistence) to already exist.
  */
-import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import type { DiscoveryRun, RunEvent, RunInputs } from '../types/discoveryRun';
 import { fetchRun, fetchRunEvents, replayRun, startRun as apiStartRun } from '../api/runApi';
 import { useRunContext } from './RunContext';
@@ -21,7 +21,7 @@ type DiscoveryRunContextValue = {
 const Ctx = createContext<DiscoveryRunContextValue | null>(null);
 
 export function DiscoveryRunProvider({ children }: { children: React.ReactNode }) {
-  const { runId, setRunId } = useRunContext();
+  const { runId, setRunId, clearRunId } = useRunContext();
   const [run, setRun] = useState<DiscoveryRun | null>(null);
   const [events, setEvents] = useState<RunEvent[]>([]);
   const [loading, setLoading] = useState(false);
@@ -29,6 +29,7 @@ export function DiscoveryRunProvider({ children }: { children: React.ReactNode }
   const [started, setStarted] = useState(false);
   const [fetchCount, setFetchCount] = useState(0);
 
+  const startingRef = useRef(false);
   const refetch = useCallback(() => setFetchCount((c) => c + 1), []);
 
   useEffect(() => {
@@ -45,6 +46,10 @@ export function DiscoveryRunProvider({ children }: { children: React.ReactNode }
         setStarted(true);
       } catch (e: any) {
         if (cancelled) return;
+        if (e?.status === 404) {
+          clearRunId();
+          return;
+        }
         setError(e?.message ?? 'Failed to load run');
       } finally {
         if (!cancelled) setLoading(false);
@@ -54,7 +59,8 @@ export function DiscoveryRunProvider({ children }: { children: React.ReactNode }
   }, [runId, fetchCount]);
 
   const startRun = useCallback(async (inputs: RunInputs) => {
-    if (runId) return;
+    if (runId || startingRef.current) return;
+    startingRef.current = true;
     setLoading(true);
     setError(null);
     try {
@@ -64,6 +70,8 @@ export function DiscoveryRunProvider({ children }: { children: React.ReactNode }
     } catch (e: any) {
       setError(e?.message ?? 'Failed to start run');
       setLoading(false);
+    } finally {
+      startingRef.current = false;
     }
   }, [setRunId, runId]);
 
