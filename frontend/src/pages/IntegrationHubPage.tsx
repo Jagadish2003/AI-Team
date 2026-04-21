@@ -9,6 +9,7 @@ import RightPanel from '../components/integrations/RightPanel';
 import DiscoveryStartBar from '../components/integrations/DiscoveryStartBar';
 import { useToast } from '../components/common/Toast';
 import { useConnectorContext } from '../context/ConnectorContext';
+import { useRunContext } from '../context/RunContext';
 
 export default function IntegrationHubPage() {
   const {
@@ -28,6 +29,7 @@ export default function IntegrationHubPage() {
 
   const { push } = useToast();
   const navigate = useNavigate();
+  const { clearRunId } = useRunContext();
 
   useEffect(() => {
     if (!loading && !selectedConnectorId && recommended && recommended.length > 0) {
@@ -134,7 +136,7 @@ export default function IntegrationHubPage() {
             recommendedTotal={3}
             recommended={recommended} 
             canStart={canStart}
-            onStart={() => navigate('/discovery-run')}
+            onStart={() => { clearRunId(); navigate('/discovery-run'); }}
             onUpload={() => navigate('/source-intake')}
           />
         </>
