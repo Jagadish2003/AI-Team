@@ -79,9 +79,9 @@ export default function DiscoveryRunPage() {
           <div>
             <h1 className="text-xl font-semibold">Discovery Run</h1>
             <p className="mt-1 text-sm text-muted">
-              Run ID: <span className="font-mono text-text">{run?.id ?? runId ?? '—'}</span>
+              Run ID: <span  className="font-semibold text-text">{run?.id ?? runId ?? '—'}</span>
               {' · '}
-              Status: <span className="font-mono text-text">{run?.status ?? '—'}</span>
+              Status: <span className="font-semibold text-text">{run?.status ?? '—'}</span>
             </p>
             {run?.startedAt && (
               <p className="mt-1 text-xs text-muted">
@@ -100,20 +100,19 @@ export default function DiscoveryRunPage() {
             </button>
 
             <button
-              className="rounded-md bg-accent px-3 py-2 text-sm text-bg font-medium hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50 transition"
-              onClick={() => nav('/partial-results')}
-              disabled={!started}
-            >
-              Next: Partial Results
-            </button>
+            className="rounded-md bg-accent px-3 py-2 text-sm font-medium text-bg hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50 transition"
+            onClick={() => nav('/partial-results')}
+            disabled={!started}
+          >
+            Next: Partial Results
+          </button>
           </div>
         </div>
-
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
 
           {/* Run Inputs */}
           <div className="rounded-xl border border-border bg-panel p-4">
-            <div className="text-lg font-semibold">Run Inputs</div>
+            <div className="text-lg font-semibold">Run Summary</div>
             <div className="mt-3 space-y-3 text-sm text-muted">
               <div>
                 <div className="font-semibold text-text">Connected sources</div>

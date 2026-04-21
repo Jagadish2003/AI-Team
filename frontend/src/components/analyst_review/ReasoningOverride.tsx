@@ -105,7 +105,7 @@ export default function ReasoningOverride({
             <div className="border-t border-border shrink-0" />
 
             <div className="flex flex-col shrink-0">
-              <div className="text-xs font-semibold text-text mb-2">Architect Override</div>
+              <div className="text-xs font-semibold text-text mb-2">Override rationale</div>
               <textarea
                 ref={textareaRef}
                 className="w-full rounded-lg border border-border bg-bg/30 text-xs p-3 text-text
