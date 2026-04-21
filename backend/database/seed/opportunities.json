@@ -146,6 +146,53 @@
     }
   },
   {
+    "id": "opp_008",
+    "title": "Build unified cross-system incident triage agent",
+    "category": "Strategic Automation",
+    "tier": "Strategic",
+    "decision": "UNREVIEWED",
+    "impact": 4,
+    "effort": 3,
+    "confidence": "MEDIUM",
+    "aiRationale": "Incidents span Salesforce, ServiceNow, and Jira with no unified triage layer. A strategic agent could correlate signals across all three systems, prioritise by SLA risk, and route to the correct resolver without manual handoffs.",
+    "evidenceIds": [],
+    "requiredPermissions": [
+      "Salesforce: read Case",
+      "ServiceNow: read incident",
+      "Jira: read issues"
+    ],
+    "override": {
+      "isLocked": false,
+      "rationaleOverride": "",
+      "overrideReason": "",
+      "updatedAt": null
+    }
+  },
+  {
+    "id": "opp_009",
+    "title": "Enterprise-wide autonomous workflow governance platform",
+    "category": "Governance",
+    "tier": "Complex",
+    "decision": "UNREVIEWED",
+    "impact": 5,
+    "effort": 5,
+    "confidence": "LOW",
+    "aiRationale": "The organisation has 300+ active flows across multiple systems with no centralised governance or audit layer. A complex multi-agent platform would monitor flow health, enforce naming conventions, detect redundant logic, and surface compliance risks — requiring deep system access and a phased rollout.",
+    "evidenceIds": [],
+    "requiredPermissions": [
+      "Salesforce: read FlowVersionView (Tooling API)",
+      "Salesforce: read Flow Metadata (Tooling API)",
+      "ServiceNow: admin read",
+      "Jira: admin read"
+    ],
+    "override": {
+      "isLocked": false,
+      "rationaleOverride": "",
+      "overrideReason": "",
+      "updatedAt": null
+    }
+  },
+  {
     "id": "opp_005",
     "title": "Consolidate flows referencing 'ServiceNow Integration'",
     "category": "Integration Governance",
