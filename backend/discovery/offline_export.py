@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 
 def export(
-    out_dir: str = "backend/seed",
+    out_dir: str = "discovery/seed",
     systems: list = None,
     dry_run: bool = False,
     run_id: str = None,
