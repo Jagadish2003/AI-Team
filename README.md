@@ -34,16 +34,11 @@ npm -v
 2. Run the following commands to clone the repository and set up the dependencies:
 
 ```shell
-# Clone the repository
 git clone https://github.com/Jagadish2003/AgentIQ.git
-
-# Set up the Backend
 cd AgentIQ/backend
-py -m venv .venv
-.venv/bin/activate
+python -m venv .venv
+.venv/scripts/activate
 pip install -r requirements.txt
-
-# Set up the Frontend
 cd ..
 cd frontend
 npm install
