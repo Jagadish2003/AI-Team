@@ -14,11 +14,11 @@ from .run_store import start_run_, read_run, read_run_events
 from .roadmap_engine import build_roadmap
 from .replay import replay_run as replay_run_
 
-from .routes_sprint4_t1 import register_sprint4_t1_routes
+from .routes_sprint4_t2 import register_sprint4_t2_routes
 
 app = FastAPI(title="AgentIQ Layer 1 API Skeleton", version="0.1.0")
 
-register_sprint4_t1_routes(app)
+register_sprint4_t2_routes(app)
 
 origins = [o.strip() for o in os.getenv("CORS_ORIGINS", "http://localhost:5173").split(",") if o.strip()]
 app.add_middleware(
@@ -107,9 +107,9 @@ def add_upload(body: Dict[str, Any]) -> Dict[str, Any]:
     upsert("uploads", item["id"], item)
     return item
 
-@app.post("/api/runs/start", dependencies=[Depends(require_auth)])
-def start_run(body: Dict[str, Any]) -> Dict[str, Any]:
-    return start_run_(body)
+# @app.post("/api/runs/start", dependencies=[Depends(require_auth)])
+# def start_run(body: Dict[str, Any]) -> Dict[str, Any]:
+#     return start_run_(body)
 
 @app.get("/api/runs/{run_id}", dependencies=[Depends(require_auth)])
 def get_run(run_id: str) -> Dict[str, Any]:
