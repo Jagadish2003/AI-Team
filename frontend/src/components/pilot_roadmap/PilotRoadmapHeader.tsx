@@ -13,7 +13,7 @@ export default function PilotRoadmapHeader({ onExport }: Props) {
       </div>
  
       <button
-        className="rounded-lg border border-border bg-panel2 px-4 py-2 text-sm font-medium text-text hover:bg-panel"
+        className="rounded-lg border border-border bg-buttonbg  px-4 py-2 text-sm font-medium text-text hover:bg-panel"
         onClick={onExport}
       >
         Export Report

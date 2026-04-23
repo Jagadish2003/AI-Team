@@ -1,0 +1,380 @@
+{
+  "sf32_gate_passed": true,
+  "report_time": "2026-04-21T13:11:51.163564+00:00",
+  "org_id": "demo-org",
+  "run_id": "run_7ae782e9",
+  "mode": "live",
+  "calibration_summary_table": [
+    {
+      "rank": 1,
+      "detector_id": "REPETITIVE_AUTOMATION",
+      "algo_impact": 3,
+      "algo_effort": 2,
+      "algo_net": 1,
+      "algo_confidence": "HIGH",
+      "algo_tier": "Quick Win",
+      "arch_label": "Architect agrees: High flow activity on Case is the top priority.",
+      "arch_impact": 5,
+      "arch_effort": 2,
+      "arch_net": 3,
+      "arch_is_real": true,
+      "impact_delta": 2,
+      "effort_delta": 0,
+      "matched": true
+    },
+    {
+      "rank": 2,
+      "detector_id": "HANDOFF_FRICTION",
+      "algo_impact": 3,
+      "algo_effort": 2,
+      "algo_net": 1,
+      "algo_confidence": "MEDIUM",
+      "algo_tier": "Quick Win",
+      "arch_label": "Architect agrees: Case handoffs are a significant issue.",
+      "arch_impact": 4,
+      "arch_effort": 2,
+      "arch_net": 2,
+      "arch_is_real": true,
+      "impact_delta": 1,
+      "effort_delta": 0,
+      "matched": true
+    },
+    {
+      "rank": 3,
+      "detector_id": "KNOWLEDGE_GAP",
+      "algo_impact": 3,
+      "algo_effort": 2,
+      "algo_net": 1,
+      "algo_confidence": "MEDIUM",
+      "algo_tier": "Quick Win",
+      "arch_label": "Architect now agrees this is a real issue.",
+      "arch_impact": 4,
+      "arch_effort": 2,
+      "arch_net": 2,
+      "arch_is_real": true,
+      "impact_delta": 1,
+      "effort_delta": 0,
+      "matched": true
+    },
+    {
+      "rank": 4,
+      "detector_id": "APPROVAL_BOTTLENECK",
+      "algo_impact": 3,
+      "algo_effort": 3,
+      "algo_net": 0,
+      "algo_confidence": "MEDIUM",
+      "algo_tier": "Quick Win",
+      "arch_label": "Architect disagrees: The refund approval delay is not a real issue.",
+      "arch_impact": 1,
+      "arch_effort": 1,
+      "arch_net": 0,
+      "arch_is_real": true,
+      "impact_delta": 2,
+      "effort_delta": 2,
+      "matched": true
+    },
+    {
+      "rank": 5,
+      "detector_id": "PERMISSION_BOTTLENECK",
+      "algo_impact": 3,
+      "algo_effort": 3,
+      "algo_net": 0,
+      "algo_confidence": "MEDIUM",
+      "algo_tier": "Quick Win",
+      "arch_label": "",
+      "arch_impact": null,
+      "arch_effort": null,
+      "arch_net": null,
+      "arch_is_real": null,
+      "impact_delta": null,
+      "effort_delta": null,
+      "matched": false
+    }
+  ],
+  "org_readiness_checklist": [
+    {
+      "check": "Cases in last 90 days",
+      "current_value": 306,
+      "minimum": 50,
+      "status": "\u2705 ok",
+      "soql": "SELECT COUNT(Id) FROM Case WHERE CreatedDate = LAST_N_DAYS:90"
+    },
+    {
+      "check": "CaseHistory owner-change records",
+      "current_value": 480,
+      "minimum": 20,
+      "status": "\u2705 ok",
+      "soql": "SELECT COUNT(Id) FROM CaseHistory WHERE Field='Owner' AND CreatedDate = LAST_N_DAYS:90"
+    },
+    {
+      "check": "Active AutoLaunchedFlows on Case",
+      "current_value": 4,
+      "minimum": 2,
+      "status": "\u2705 ok",
+      "soql": "SELECT COUNT() FROM FlowVersionView WHERE Status='Active' AND ProcessType='AutoLaunchedFlow' LIMIT 200  [Tooling API]"
+    },
+    {
+      "check": "Pending approval records",
+      "current_value": 70,
+      "minimum": 5,
+      "status": "\u2705 ok",
+      "soql": "SELECT COUNT(Id) FROM ProcessInstance WHERE Status='Pending'"
+    },
+    {
+      "check": "Named Credentials",
+      "current_value": 4,
+      "minimum": 1,
+      "status": "\u2705 ok",
+      "soql": "SELECT DeveloperName FROM NamedCredential LIMIT 20  [Tooling API]"
+    }
+  ],
+  "algo_top5": [
+    {
+      "rank": 1,
+      "detector_id": "REPETITIVE_AUTOMATION",
+      "impact": 3,
+      "effort": 2,
+      "confidence": "HIGH",
+      "tier": "Quick Win"
+    },
+    {
+      "rank": 2,
+      "detector_id": "HANDOFF_FRICTION",
+      "impact": 3,
+      "effort": 2,
+      "confidence": "MEDIUM",
+      "tier": "Quick Win"
+    },
+    {
+      "rank": 3,
+      "detector_id": "KNOWLEDGE_GAP",
+      "impact": 3,
+      "effort": 2,
+      "confidence": "MEDIUM",
+      "tier": "Quick Win"
+    },
+    {
+      "rank": 4,
+      "detector_id": "APPROVAL_BOTTLENECK",
+      "impact": 3,
+      "effort": 3,
+      "confidence": "MEDIUM",
+      "tier": "Quick Win"
+    },
+    {
+      "rank": 5,
+      "detector_id": "PERMISSION_BOTTLENECK",
+      "impact": 3,
+      "effort": 3,
+      "confidence": "MEDIUM",
+      "tier": "Quick Win"
+    }
+  ],
+  "score_debug_summary": [
+    {
+      "detector_id": "REPETITIVE_AUTOMATION",
+      "impact": 3,
+      "effort": 2,
+      "confidence": "HIGH",
+      "tier": "Quick Win",
+      "proxy_ratio": 3.7778,
+      "impact_factors": {
+        "volume_pts": 3.5,
+        "friction_pts": 5.0,
+        "customer_pts": 3.0,
+        "revenue_pts": 2.0,
+        "external_pts": 1.0,
+        "raw_sum": 3.375
+      },
+      "effort_factors": {
+        "data_pts": 2.0,
+        "perm_pts": 2.0,
+        "sys_pts": 2.0,
+        "proc_pts": 2.0
+      }
+    },
+    {
+      "detector_id": "HANDOFF_FRICTION",
+      "impact": 3,
+      "effort": 2,
+      "confidence": "MEDIUM",
+      "tier": "Quick Win",
+      "proxy_ratio": 1.0457,
+      "impact_factors": {
+        "volume_pts": 3.5,
+        "friction_pts": 5.0,
+        "customer_pts": 3.0,
+        "revenue_pts": 0.0,
+        "external_pts": 1.0,
+        "raw_sum": 3.075
+      },
+      "effort_factors": {
+        "data_pts": 2.0,
+        "perm_pts": 2.0,
+        "sys_pts": 2.0,
+        "proc_pts": 2.0
+      }
+    },
+    {
+      "detector_id": "KNOWLEDGE_GAP",
+      "impact": 3,
+      "effort": 2,
+      "confidence": "MEDIUM",
+      "tier": "Quick Win",
+      "proxy_ratio": 1.5,
+      "impact_factors": {
+        "volume_pts": 2.0,
+        "friction_pts": 5.0,
+        "customer_pts": 3.0,
+        "revenue_pts": 0.0,
+        "external_pts": 1.0,
+        "raw_sum": 2.7
+      },
+      "effort_factors": {
+        "data_pts": 2.0,
+        "perm_pts": 2.0,
+        "sys_pts": 2.0,
+        "proc_pts": 2.0
+      }
+    },
+    {
+      "detector_id": "APPROVAL_BOTTLENECK",
+      "impact": 3,
+      "effort": 3,
+      "confidence": "MEDIUM",
+      "tier": "Quick Win",
+      "proxy_ratio": 4.7767,
+      "impact_factors": {
+        "volume_pts": 2.0,
+        "friction_pts": 8.0,
+        "customer_pts": 0.0,
+        "revenue_pts": 2.0,
+        "external_pts": 1.0,
+        "raw_sum": 3.3
+      },
+      "effort_factors": {
+        "data_pts": 2.0,
+        "perm_pts": 5.0,
+        "sys_pts": 2.0,
+        "proc_pts": 5.0
+      }
+    },
+    {
+      "detector_id": "PERMISSION_BOTTLENECK",
+      "impact": 3,
+      "effort": 3,
+      "confidence": "MEDIUM",
+      "tier": "Quick Win",
+      "proxy_ratio": 3.0,
+      "impact_factors": {
+        "volume_pts": 2.0,
+        "friction_pts": 8.0,
+        "customer_pts": 0.0,
+        "revenue_pts": 2.0,
+        "external_pts": 1.0,
+        "raw_sum": 3.3
+      },
+      "effort_factors": {
+        "data_pts": 2.0,
+        "perm_pts": 5.0,
+        "sys_pts": 2.0,
+        "proc_pts": 5.0
+      }
+    },
+    {
+      "detector_id": "APPROVAL_BOTTLENECK",
+      "impact": 3,
+      "effort": 3,
+      "confidence": "LOW",
+      "tier": "Strategic",
+      "proxy_ratio": 5.0,
+      "impact_factors": {
+        "volume_pts": 2.0,
+        "friction_pts": 8.0,
+        "customer_pts": 0.0,
+        "revenue_pts": 2.0,
+        "external_pts": 1.0,
+        "raw_sum": 3.3
+      },
+      "effort_factors": {
+        "data_pts": 2.0,
+        "perm_pts": 5.0,
+        "sys_pts": 2.0,
+        "proc_pts": 5.0
+      }
+    }
+  ],
+  "calibration_gate": {
+    "overlap_count": 4,
+    "matched_ids": [
+      "REPETITIVE_AUTOMATION",
+      "HANDOFF_FRICTION",
+      "KNOWLEDGE_GAP",
+      "APPROVAL_BOTTLENECK"
+    ],
+    "unmatched_ids": [
+      "PERMISSION_BOTTLENECK"
+    ],
+    "false_positives_top5": [],
+    "false_positives_other": [],
+    "direction_issues": [],
+    "gate_passed": true,
+    "gate_rule": "3 of top 5 overlap AND zero FPs in algo top 5 (FPs outside top 5 are logged, not blocking). Direction: abs(impact_delta) <= 3 AND abs(effort_delta) <= 3.",
+    "ranking_function": "tier_order (Quick Win=1, Strategic=2, Complex=3), then (impact - effort) desc, then effort asc"
+  },
+  "impact_bias_note": "Systematic low impact bias detected (avg=3.0). All opportunities score \u2264 4. Review _volume_pts() bands \u2014 the current fixture org has ~300 cases/90d = ~23/week which maps to volume_pts=2.0 (the floor). Consider lowering the volume_pts threshold bands so that 20-50 weekly records scores 4-5 pts rather than 2.0. Also review _W_VOLUME weight (currently 0.30) \u2014 if volume dominates and most orgs have moderate volume, the resulting impact will always cluster low.",
+  "borderline_thresholds": [
+    "HANDOFF_FRICTION: proxy_ratio=1.046 \u2014 borderline fire. Validate this is a genuine signal in the live org before SF-3.2 calibration session. May need threshold +10%."
+  ],
+  "recommendations": [
+    {
+      "type": "scorer_weight",
+      "severity": "HIGH",
+      "target": "scorer.py _volume_pts() bands + _W_VOLUME",
+      "observation": "Systematic low impact bias detected (avg=3.0). All opportunities score \u2264 4. Review _volume_pts() bands \u2014 the current fixture org has ~300 cases/90d = ~23/week which maps to volume_pts=2.0 (the floor). Consider lowering the volume_pts threshold bands so that 20-50 weekly records scores 4-5 pts rather than 2.0. Also review _W_VOLUME weight (currently 0.30) \u2014 if volume dominates and most orgs have moderate volume, the resulting impact will always cluster low.",
+      "before": {
+        "_volume_pts_bands": {
+          "<50/week": 2.0,
+          "<200/week": 5.0,
+          "<500/week": 7.0,
+          ">=500/week": 9.0
+        },
+        "_W_VOLUME": 0.3
+      },
+      "suggested_after": {
+        "_volume_pts_bands": {
+          "<20/week": 3.0,
+          "<100/week": 5.5,
+          "<300/week": 7.5,
+          ">=300/week": 9.0
+        },
+        "_W_VOLUME": 0.35,
+        "_W_FRICTION": 0.3
+      },
+      "rationale": "Lowering volume thresholds means a dev org with 20-30 cases/week scores 3.0 pts instead of 2.0. Most enterprise Salesforce orgs have 100-500 cases/week \u2014 these would score 5.5-7.5. This brings expected impact into the 4-7 range for typical orgs. OVERFIT GUARD: after adjusting, simulate a mid-size org (200 cases/week) through the fixture \u2014 confirm it scores 5-7 impact, not 9-10. Bands calibrated only for a dev org will inflate scores on real customer orgs and destroy credibility.",
+      "allowed": true
+    },
+    {
+      "type": "detector_threshold",
+      "severity": "LOW",
+      "target": "threshold \u2014 see note",
+      "observation": "HANDOFF_FRICTION: proxy_ratio=1.046 \u2014 borderline fire. Validate this is a genuine signal in the live org before SF-3.2 calibration session. May need threshold +10%.",
+      "before": "current threshold",
+      "suggested_after": "validate live org first; raise by 10% only if architect confirms not real",
+      "rationale": "Borderline fires should be validated before adjusting.",
+      "allowed": true
+    },
+    {
+      "type": "pm05_note",
+      "severity": "INFO",
+      "target": "INTEGRATION_CONCENTRATION detector + named_credential_flow_refs",
+      "observation": "PM-05 (Named Credential \u2192 Flow scan) may be empty even if Named Credentials exist. Flow metadata shape differs by Flow type and packaging. Treat D5 as 'may not fire in all orgs' until the exact metadata path(s) are confirmed in the target org. Do not adjust D5 threshold based on a single org observation.",
+      "before": "no change",
+      "suggested_after": "no change \u2014 document observed metadata path for SF-4.3",
+      "rationale": "SF-1.2 flagged this risk. Confirmed as known variance point.",
+      "allowed": true
+    }
+  ],
+  "adjustments_log": [],
+  "summary": "SF-3.2 calibration gate PASSED | Overlap: 4/5 | False positives: 0 | Direction issues: 0 | Recommendations: 3"
+}

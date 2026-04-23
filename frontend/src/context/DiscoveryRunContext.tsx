@@ -2,9 +2,9 @@
  * DiscoveryRunContext — run-scoped API wiring for Screen 3 (Task 11 Phase 1).
  * Requires RunContext (runId persistence) to already exist.
  */
-import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import type { DiscoveryRun, RunEvent, RunInputs } from '../types/discoveryRun';
-import { fetchRun, fetchRunEvents, replayRun, startRun as apiStartRun } from '../api/runApi';
+import { fetchRun, fetchRunEvents, replayRun, startRun as apiStartRun, triggerCompute, fetchRunStatus } from '../api/runApi';
 import { useRunContext } from './RunContext';
 
 type DiscoveryRunContextValue = {
@@ -13,6 +13,7 @@ type DiscoveryRunContextValue = {
   loading: boolean;
   error: string | null;
   started: boolean;
+  computing: boolean;
   startRun: (inputs: RunInputs) => Promise<void>;
   restartRun: () => Promise<void>;
   refetch: () => void;
@@ -21,14 +22,16 @@ type DiscoveryRunContextValue = {
 const Ctx = createContext<DiscoveryRunContextValue | null>(null);
 
 export function DiscoveryRunProvider({ children }: { children: React.ReactNode }) {
-  const { runId, setRunId } = useRunContext();
+  const { runId, setRunId, clearRunId } = useRunContext();
   const [run, setRun] = useState<DiscoveryRun | null>(null);
   const [events, setEvents] = useState<RunEvent[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [started, setStarted] = useState(false);
+  const [computing, setComputing] = useState(false);
   const [fetchCount, setFetchCount] = useState(0);
 
+  const startingRef = useRef(false);
   const refetch = useCallback(() => setFetchCount((c) => c + 1), []);
 
   useEffect(() => {
@@ -45,6 +48,10 @@ export function DiscoveryRunProvider({ children }: { children: React.ReactNode }
         setStarted(true);
       } catch (e: any) {
         if (cancelled) return;
+        if (e?.status === 404) {
+          clearRunId();
+          return;
+        }
         setError(e?.message ?? 'Failed to load run');
       } finally {
         if (!cancelled) setLoading(false);
@@ -53,17 +60,51 @@ export function DiscoveryRunProvider({ children }: { children: React.ReactNode }
     return () => { cancelled = true; };
   }, [runId, fetchCount]);
 
+  // Poll status while compute is running.
+  useEffect(() => {
+    if (!runId || !computing) return;
+    let cancelled = false;
+    const interval = setInterval(async () => {
+      try {
+        const { status } = await fetchRunStatus(runId);
+        if (cancelled) return;
+        if (status === 'complete' || status === 'completed' || status === 'COMPLETED') {
+          setComputing(false);
+          clearInterval(interval);
+          setFetchCount(c => c + 1);
+        }
+      } catch (e: any) {
+        if (e?.status === 404) {
+          // /status endpoint not registered — abort polling
+          setComputing(false);
+          clearInterval(interval);
+        }
+        // other transient errors: keep polling
+      }
+    }, 3000);
+    return () => { cancelled = true; clearInterval(interval); };
+  }, [runId, computing]);
+
   const startRun = useCallback(async (inputs: RunInputs) => {
-    if (runId) return;
+    if (runId || startingRef.current) return;
+    startingRef.current = true;
     setLoading(true);
     setError(null);
     try {
       const res = await apiStartRun(inputs);
       setRunId(res.runId);
-      // load() runs via the effect once runId is set.
+      // Fire compute; only enter polling state if the endpoint exists.
+      try {
+        await triggerCompute(res.runId);
+        setComputing(true);
+      } catch {
+        // /compute not yet registered — skip compute gate, proceed normally.
+      }
     } catch (e: any) {
       setError(e?.message ?? 'Failed to start run');
       setLoading(false);
+    } finally {
+      startingRef.current = false;
     }
   }, [setRunId, runId]);
 
@@ -82,8 +123,8 @@ export function DiscoveryRunProvider({ children }: { children: React.ReactNode }
   }, [runId, refetch]);
 
   const value = useMemo(
-    () => ({ run, events, loading, error, started, startRun, restartRun, refetch }),
-    [run, events, loading, error, started, startRun, restartRun, refetch]
+    () => ({ run, events, loading, error, started, computing, startRun, restartRun, refetch }),
+    [run, events, loading, error, started, computing, startRun, restartRun, refetch]
   );
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;

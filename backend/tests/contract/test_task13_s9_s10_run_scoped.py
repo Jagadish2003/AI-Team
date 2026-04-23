@@ -1,6 +1,6 @@
 import os
 from fastapi.testclient import TestClient
-from backend.app.main import app
+from app.main import app
 
 def _auth_headers():
     token = os.getenv("DEV_JWT", "dev-token-change-me")

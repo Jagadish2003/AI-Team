@@ -42,17 +42,17 @@ export default function DiscoveryStartBar({
           {/* Confidence dots */}
           <div className="flex items-center text-sm">
             <div className="flex items-center">
-              <div className={`h-2.5 w-2.5 rounded-full ${isLow ? 'bg-accent shadow-[0_0_8px_3px_rgba(0,255,200,0.35)]' : 'bg-muted/40'}`} />
+              <div className={`h-2.5 w-2.5 rounded-full ${isLow ? 'bg-accent' : 'bg-muted/40'}`} />
               <span className={`ml-2 ${isLow ? 'font-semibold text-text' : 'text-muted'}`}>Low</span>
             </div>
             <div className={`mx-3 h-[1px] w-16 transition-colors ${isMedium || isHigh ? 'bg-accent/50' : 'bg-border'}`} />
             <div className="flex items-center">
-              <div className={`h-2.5 w-2.5 rounded-full ${isMedium ? 'bg-accent shadow-[0_0_8px_3px_rgba(0,255,200,0.35)]' : 'bg-muted/40'}`} />
+              <div className={`h-2.5 w-2.5 rounded-full ${isMedium ? 'bg-accent' : 'bg-muted/40'}`} />
               <span className={`ml-2 ${isMedium ? 'font-semibold text-text' : 'text-muted'}`}>Medium</span>
             </div>
             <div className={`mx-3 h-[1px] w-16 transition-colors ${isHigh ? 'bg-accent/50' : 'bg-border'}`} />
             <div className="flex items-center">
-              <div className={`h-2.5 w-2.5 rounded-full ${isHigh ? 'bg-accent shadow-[0_0_8px_3px_rgba(0,255,200,0.35)]' : 'bg-muted/40'}`} />
+              <div className={`h-2.5 w-2.5 rounded-full ${isHigh ? 'bg-accent' : 'bg-muted/40'}`} />
               <span className={`ml-2 ${isHigh ? 'font-semibold text-text' : 'text-muted'}`}>High</span>
             </div>
           </div>
@@ -73,18 +73,17 @@ export default function DiscoveryStartBar({
             <MoveRight size={18} strokeWidth={2} />
           </button>
         </div>
-
-        {/* ── Row 2: Upload + Dynamic connector status chips + Confidence label ── */}
         <div className="mt-2 flex flex-wrap items-center justify-between gap-4">
           <div className="flex flex-wrap items-center gap-3">
 
             {/* Upload button */}
             <button
-  onClick={onUpload}
-  className="rounded-md border border-muted bg-bg px-4 py-2 text-sm text-text transition hover:bg-panel2"
->
-  Upload Files Instead
-</button>
+            onClick={onUpload}
+            className="rounded-md  bg-buttonbg px-4 py-2 text-sm font-medium text-text 
+                      shadow-sm transition-all 
+                      hover:bg-panel">
+             Upload Files Instead
+           </button>
 
             {/* ── Dynamic connector status chips ── */}
             <div className="flex items-center gap-2 rounded-md border border-slate-400 px-3 py-1.5 text-sm">
@@ -92,8 +91,6 @@ export default function DiscoveryStartBar({
                 const isConnected = connector.status === 'connected';
                 return (
                   <React.Fragment key={connector.id}>
-
-                    {/* Divider between chips (not before the first one) */}
                     {index > 0 && (
                       <span className="text-slate-400">|</span>
                     )}
@@ -120,7 +117,6 @@ export default function DiscoveryStartBar({
                         {isConnected ? 'Connected' : 'Not Connected'}
                       </span>
                     </span>
-
                   </React.Fragment>
                 );
               })}
@@ -136,7 +132,6 @@ export default function DiscoveryStartBar({
           {/* Microcopy hint */}
           <div className="rounded-md bg-panel2 px-3 py-1.5 text-sm">{microcopy}</div>
         </div>
-
       </div>
     </div>
   );

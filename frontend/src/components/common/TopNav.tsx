@@ -7,10 +7,10 @@ const items = [
   { to: '/integration-hub', label: 'Integration Hub', runScoped: false },
   { to: '/source-intake', label: 'Source Intake', runScoped: false },
 
-  // ✅ run-scoped screens
+  //  run-scoped screens
   { to: '/discovery-run', label: 'Discovery Run', runScoped: true },
-  { to: '/normalization', label: 'Normalization', runScoped: true },
   { to: '/partial-results', label: 'Partial Results', runScoped: true },
+  { to: '/normalization', label: 'Normalization', runScoped: true }, 
   { to: '/analyst-review', label: 'Analyst Review', runScoped: true },
   { to: '/opportunity-map', label: 'Opportunity Map', runScoped: true },
   { to: '/pilot-roadmap', label: 'Pilot Roadmap', runScoped: true },
@@ -36,7 +36,7 @@ export default function TopNav() {
           {items.map((i, idx) => {
             const isActive = loc.pathname === i.to;
 
-            // ✅ Preserve runId only for run-scoped pages
+            // Preserve runId only for run-scoped pages
             const to = i.runScoped && runId
               ? `${i.to}?runId=${runId}`
               : i.to;
@@ -78,7 +78,6 @@ export default function TopNav() {
             <User className="h-4 w-4 text-slate-400" />
           </div>
         </div>
-
       </div>
     </div>
   );

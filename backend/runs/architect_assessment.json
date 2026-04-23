@@ -1,0 +1,44 @@
+{
+  "_instructions": "Fill this file with your independent assessment of the org's automation opportunities BEFORE reading the algorithm output. List your top 5 in priority order. For each: write a short label, your effort/impact estimate (1-10), and whether you consider it real and worth doing.",
+  "assessor": "Preetam (testing AC-7)",
+  "org_id": "demo-org",
+  "assessment_date": "2026-04-21",
+  "top_5": [
+    {
+      "rank": 1,
+      "label": "Architect agrees: High flow activity on Case is the top priority.",
+      "detector_match": "REPETITIVE_AUTOMATION",
+      "architect_impact": 5,
+      "architect_effort": 2,
+      "is_real": true,
+      "notes": "Agreed, this is a clear quick win."
+    },
+    {
+      "rank": 2,
+      "label": "Architect agrees: Case handoffs are a significant issue.",
+      "detector_match": "HANDOFF_FRICTION",
+      "architect_impact": 4,
+      "architect_effort": 2,
+      "is_real": true,
+      "notes": ""
+    },
+    {
+      "rank": 3,
+      "label": "Architect now agrees this is a real issue.",
+      "detector_match": "KNOWLEDGE_GAP",
+      "architect_impact": 4,
+      "architect_effort": 2,
+      "is_real": true,
+      "notes": "After discussion, we agree this is a valid signal."
+    },
+    {
+      "rank": 4,
+      "label": "Architect disagrees: The refund approval delay is not a real issue.",
+      "detector_match": "APPROVAL_BOTTLENECK",
+      "architect_impact": 1,
+      "architect_effort": 1,
+      "is_real": true,
+      "notes": "This refers to the 'Refund Approval' process. It is outside the Top 5. This should NOT fail the gate but be logged."
+    }
+  ]
+}

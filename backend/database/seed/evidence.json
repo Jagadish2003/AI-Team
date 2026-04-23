@@ -1,57 +1,83 @@
 [
   {
-    "id": "ev1",
-    "source": "ServiceNow",
-    "title": "Incident bounce loop (L2\u2192L3\u2192L2)",
-    "snippet": "Incident INC-10492 reassigned 5 times before resolution.",
-    "decision": "UNREVIEWED",
+    "id": "ev_sf_0c91b7_0001",
+    "tsLabel": "18 Apr 2026, 22:29",
+    "source": "Salesforce",
+    "evidenceType": "Metric",
+    "title": "Multiple low-complexity AutoLaunchedFlows running on high-volume Case object",
+    "snippet": "4 active AutoLaunchedFlow(s) on the Case object. Avg element count: 5 (LOW complexity). 300 Case records processed in last 90 days (3.3/day). Flow activity score: 2.128 (threshold: 0.6).",
+    "entities": [
+      "ent_flow_case-notify"
+    ],
     "confidence": "HIGH",
-    "tsLabel": "18 Mar 2026, 10:14",
-    "evidenceType": "Ticket",
-    "entities": [
-      "ent_app_sn",
-      "ent_work_inc"
-    ]
+    "decision": "UNREVIEWED"
   },
   {
-    "id": "ev2",
-    "source": "Jira",
-    "title": "Ticket wait on approval",
-    "snippet": "Issue DEV-883 blocked 3 days waiting for change approval.",
-    "decision": "UNREVIEWED",
+    "id": "ev_sf_0c91b7_0002",
+    "tsLabel": "18 Apr 2026, 22:29",
+    "source": "Salesforce",
+    "evidenceType": "Metric",
+    "title": "Elevated case owner reassignment rate detected",
+    "snippet": "480 owner changes recorded across 300 Cases in the last 90 days. Avg 1.6 owner changes per Case (threshold: 1.5). Top categories: Technical Issue (avg 4.0/case), Billing Inquiry (avg 3.8/case), Account Management (avg 3.5/case).",
+    "entities": [
+      "ent_case_all_categories",
+      "ent_casehistory_owner_changes"
+    ],
     "confidence": "MEDIUM",
-    "tsLabel": "18 Mar 2026, 10:15",
-    "evidenceType": "Ticket",
-    "entities": [
-      "ent_app_jira",
-      "ent_obj_change"
-    ]
+    "decision": "UNREVIEWED"
   },
   {
-    "id": "ev3",
-    "source": "ServiceNow",
-    "title": "Rejected: low-signal duplicate",
-    "snippet": "Multiple identical updates with no action outcome.",
-    "decision": "REJECTED",
-    "confidence": "LOW",
-    "tsLabel": "18 Mar 2026, 10:16",
-    "evidenceType": "Ticket",
+    "id": "ev_sf_0c91b7_0003",
+    "tsLabel": "18 Apr 2026, 22:29",
+    "source": "Salesforce",
+    "evidenceType": "Metric",
+    "title": "Approval records exceeding SLA due to high delay in 'Discount Approval'",
+    "snippet": "60 pending 'Discount Approval' records with average delay of 5.0 days (threshold: 3.0 days). Bottleneck score: 30.0 (threshold: 10). 2 approver(s) handling all pending items.",
     "entities": [
-      "ent_app_sn",
-      "ent_work_inc"
-    ]
-  },
-  {
-    "id": "ev4",
-    "source": "Confluence",
-    "title": "Runbook mismatch",
-    "snippet": "Runbook step names differ across teams for same workflow.",
-    "decision": "UNREVIEWED",
+      "ent_approval_discount_approval"
+    ],
     "confidence": "MEDIUM",
-    "tsLabel": "18 Mar 2026, 10:17",
-    "evidenceType": "Document",
+    "decision": "UNREVIEWED"
+  },
+  {
+    "id": "ev_sf_0c91b7_0004",
+    "tsLabel": "18 Apr 2026, 22:29",
+    "source": "Salesforce",
+    "evidenceType": "Metric",
+    "title": "Significant knowledge gap in Case resolution \u2014 low KB article linkage",
+    "snippet": "30 of 60 closed Cases in the last 90 days have a linked Knowledge Article. Knowledge gap score: 0.5 (threshold: 0.4). 50.0% of Cases closed with KB reuse \u2014 30 resolved without KB linkage.",
     "entities": [
-      "ent_work_inc"
-    ]
+      "ent_case_closed",
+      "ent_knowledge_articles"
+    ],
+    "confidence": "MEDIUM",
+    "decision": "UNREVIEWED"
+  },
+  {
+    "id": "ev_sf_0c91b7_0005",
+    "tsLabel": "18 Apr 2026, 22:29",
+    "source": "Salesforce",
+    "evidenceType": "Metric",
+    "title": "Multiple Flows referencing the same Named Credential 'ServiceNow Integration'",
+    "snippet": "3 active Flow(s) reference the 'ServiceNow Integration' Named Credential (threshold: 3 distinct flows). Match type: name. Referencing flow IDs: 301xx000001ABC2, 301xx000001ABC3, 301xx000001ABC4.",
+    "entities": [
+      "ent_credential_servicenow_integration"
+    ],
+    "confidence": "MEDIUM",
+    "decision": "UNREVIEWED"
+  },
+  {
+    "id": "ev_sf_0c91b7_0006",
+    "tsLabel": "18 Apr 2026, 22:29",
+    "source": "Salesforce",
+    "evidenceType": "Metric",
+    "title": "Approval queue overloaded with limited approver capacity in 'Discount Approval'",
+    "snippet": "60 pending 'Discount Approval' records. Only 2 active approver(s) identified via ProcessInstanceWorkitem. Bottleneck score: 30.0 pending per approver (threshold: 10.0).",
+    "entities": [
+      "ent_approval_discount_approval",
+      "ent_user_approvers"
+    ],
+    "confidence": "MEDIUM",
+    "decision": "UNREVIEWED"
   }
 ]

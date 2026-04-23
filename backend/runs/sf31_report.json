@@ -1,0 +1,93 @@
+{
+  "sf31_passed": true,
+  "dim_a_passed": true,
+  "dim_b_passed": true,
+  "report_time": "2026-04-21T08:41:32.418217+00:00",
+  "gates": {
+    "credentials_present": true,
+    "api_connected": true,
+    "all_functions_succeed": true,
+    "all_shapes_correct": true,
+    "case_metrics_executed": true,
+    "flow_inventory_executed": true,
+    "cross_system_refs_executed": true,
+    "volume_cases_sufficient": true,
+    "volume_flows_sufficient": true
+  },
+  "function_results": [
+    {
+      "function": "get_case_metrics",
+      "status": "OK",
+      "row_count": 306,
+      "elapsed_ms": 20154,
+      "retries": 0,
+      "error": "",
+      "shape_issues": [],
+      "warnings": []
+    },
+    {
+      "function": "get_flow_inventory",
+      "status": "OK",
+      "row_count": 5,
+      "elapsed_ms": 34453,
+      "retries": 0,
+      "error": "",
+      "shape_issues": [],
+      "warnings": []
+    },
+    {
+      "function": "get_approval_pending",
+      "status": "OK",
+      "row_count": 2,
+      "elapsed_ms": 3781,
+      "retries": 0,
+      "error": "",
+      "shape_issues": [],
+      "warnings": []
+    },
+    {
+      "function": "get_knowledge_coverage",
+      "status": "OK",
+      "row_count": 3,
+      "elapsed_ms": 21611,
+      "retries": 0,
+      "error": "",
+      "shape_issues": [],
+      "warnings": []
+    },
+    {
+      "function": "get_named_credentials",
+      "status": "OK",
+      "row_count": 4,
+      "elapsed_ms": 5076,
+      "retries": 0,
+      "error": "",
+      "shape_issues": [],
+      "warnings": []
+    },
+    {
+      "function": "get_named_credential_flow_refs",
+      "status": "OK",
+      "row_count": 4,
+      "elapsed_ms": 31385,
+      "retries": 0,
+      "error": "",
+      "shape_issues": [],
+      "warnings": []
+    },
+    {
+      "function": "get_cross_system_references",
+      "status": "OK",
+      "row_count": 306,
+      "elapsed_ms": 13926,
+      "retries": 0,
+      "error": "",
+      "shape_issues": [],
+      "warnings": []
+    }
+  ],
+  "seed_instructions": [
+    "Org volume is sufficient. No seeding required before SF-3.2."
+  ],
+  "summary": "SF-3.1 PASSED | Functions: 7 \u2705 OK, 0 \u26a0 empty (valid), 0 \u274c errors"
+}

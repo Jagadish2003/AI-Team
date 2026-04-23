@@ -1,26 +1,50 @@
+"""
+D2 — HANDOFF_FRICTION
+
+Fires when: handoff_score > 1.5
+            AND total_cases_90d >= 50 (volume guard)
+
+SF-1.3 thresholds:
+    handoff_score threshold: 1.5
+    min_cases: 50
+"""
 from __future__ import annotations
 from typing import Any, Dict, List
-from ..types import DetectorResult
+from ..models import DetectorResult
 
+DETECTOR_ID = "HANDOFF_FRICTION"
 THRESHOLD = 1.5
+MIN_CASES = 50
 
-def detect(sf_data: Dict[str, Any], sn_data: Dict[str, Any], jira_data: Dict[str, Any]) -> List[DetectorResult]:
-    ingested = sf_data
-    rows = ingested.get("salesforce_case_metrics") or []
-    out: List[DetectorResult] = []
-    for r in rows:
-        volume = float(r.get("volume") or 0)
-        avg_re = float(r.get("avg_reassignments") or 0)
-        if volume < 50:
-            continue
-        if avg_re > THRESHOLD:
-            out.append(DetectorResult(
-                detector_id="HANDOFF_FRICTION",
-                signal_source="Salesforce.CaseHistory",
-                metric_name="avg_reassignments",
-                metric_value=avg_re,
-                threshold=THRESHOLD,
-                label="HANDOFF_FRICTION",
-                raw_evidence={"category": r.get("category"), "volume": volume, "avg_reassignments": avg_re}
-            ))
-    return out
+
+def detect(
+    sf_data: Dict[str, Any],
+    sn_data: Dict[str, Any] = None,
+    jira_data: Dict[str, Any] = None,
+) -> List[DetectorResult]:
+    cm = sf_data.get("case_metrics") or {}
+    score = float(cm.get("handoff_score", 0.0))
+    total_cases = int(cm.get("total_cases_90d", 0))
+    owner_changes = int(cm.get("owner_changes_90d", 0))
+
+    if total_cases < MIN_CASES:
+        return []
+    if score <= THRESHOLD:
+        return []
+
+    return [DetectorResult(
+        detector_id=DETECTOR_ID,
+        signal_source="salesforce",
+        metric_value=round(score, 4),
+        threshold=THRESHOLD,
+        raw_evidence={
+            "owner_changes_90d": owner_changes,
+            "total_cases_90d": total_cases,
+            "handoff_score": score,
+            "top_categories": [
+                {"category": c.get("category"), "handoff_score": c.get("handoff_score", 0)}
+                for c in (cm.get("category_breakdown") or [])
+                if float(c.get("handoff_score", 0)) > THRESHOLD
+            ],
+        },
+    )]
