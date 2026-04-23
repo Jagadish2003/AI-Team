@@ -170,3 +170,12 @@ def kv_set(key: str, value: Any) -> None:
     )
     con.commit()
     con.close()
+
+def run_kv_get(key: str, run_id: str, default: Any = None) -> Any:
+    """Helper to get run-scoped key-value data."""
+    value = kv_get(f"{key}:{run_id}")
+    return value if value is not None else default
+
+def run_kv_set(key: str, run_id: str, value: Any) -> None:
+    """Helper to set run-scoped key-value data."""
+    kv_set(f"{key}:{run_id}", value)
