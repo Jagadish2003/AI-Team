@@ -18,6 +18,14 @@ export function replayRun(runId: string): Promise<{ ok: boolean; runId?: string 
   return apiPost<{ ok: boolean; runId?: string }>(`/api/runs/${runId}/replay`, {});
 }
 
+export function triggerCompute(runId: string): Promise<{ ok: boolean }> {
+  return apiPost<{ ok: boolean }>(`/api/runs/${runId}/compute`, {});
+}
+
+export function fetchRunStatus(runId: string): Promise<{ status: string }> {
+  return apiGet<{ status: string }>(`/api/runs/${runId}/status`);
+}
+
 export function fetchEvidence(runId: string): Promise<EvidenceReview[]> {
   return apiGet<EvidenceReview[]>(`/api/runs/${runId}/evidence`);
 }
