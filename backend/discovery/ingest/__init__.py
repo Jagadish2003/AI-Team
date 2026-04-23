@@ -6,7 +6,7 @@ INGEST_MODE environment variable controls data source:
 """
 import os
 
-INGEST_MODE = os.getenv("INGEST_MODE", "offline").lower()
-
 def is_live() -> bool:
-    return INGEST_MODE == "live"
+    INGEST_MODE = os.getenv("INGEST_MODE", "").strip().lower()
+    IS_LIVE = (INGEST_MODE == "live")
+    return IS_LIVE
