@@ -188,7 +188,8 @@ def list_opportunities(run_id: str) -> List[Dict[str, Any]]:
         read_run(run_id)
     except KeyError:
         raise HTTPException(404, "run not found")
-    return get_all("opportunities")
+    run_opps = run_kv_get("opps", run_id)
+    return run_opps if run_opps is not None else get_all("opportunities")
 
 @app.post("/api/runs/{run_id}/opportunities/{opp_id}/decision", dependencies=[Depends(require_auth)])
 def set_opp_decision(run_id: str, opp_id: str, body: Dict[str, Any]) -> Dict[str, Any]:
@@ -256,6 +257,9 @@ def get_roadmap(run_id: str) -> Dict[str, Any]:
         read_run(run_id)
     except KeyError:
         raise HTTPException(404, "run not found")
+    run_roadmap = run_kv_get("roadmap", run_id)
+    if run_roadmap is not None:
+        return run_roadmap
     return build_roadmap(get_all("opportunities"))
 
 @app.get("/api/runs/{run_id}/executive-report", dependencies=[Depends(require_auth)])
@@ -264,6 +268,10 @@ def get_exec_report(run_id: str) -> Dict[str, Any]:
         run = read_run(run_id)
     except KeyError:
         raise HTTPException(404, "run not found")
+
+    run_exec = run_kv_get("executive_report", run_id)
+    if run_exec is not None:
+        return run_exec
 
     # sourcesAnalyzed MUST derive from run inputs (not live connector state)
     inputs = run.get("inputs") or {}
