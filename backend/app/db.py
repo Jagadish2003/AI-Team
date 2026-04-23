@@ -78,12 +78,21 @@ def upsert_run(run_id: str, payload: Dict[str, Any]) -> None:
     con.close()
 
 def count_runs() -> int:
+    """Return the highest run number seen (not the count), so new IDs never collide."""
     con = connect()
     cur = con.cursor()
-    cur.execute("SELECT COUNT(*) FROM runs")
-    row = cur.fetchone()
+    cur.execute("SELECT id FROM runs")
+    rows = cur.fetchall()
     con.close()
-    return row[0] if row else 0
+    max_n = 0
+    for (run_id,) in rows:
+        try:
+            parts = run_id.split("_")
+            if len(parts) == 2:
+                max_n = max(max_n, int(parts[1]))
+        except (ValueError, IndexError):
+            pass
+    return max_n
 
 def require_run_exists(run_id: str) -> Dict[str, Any]:
     r = get_run(run_id)
@@ -161,3 +170,12 @@ def kv_set(key: str, value: Any) -> None:
     )
     con.commit()
     con.close()
+
+def run_kv_get(key: str, run_id: str, default: Any = None) -> Any:
+    """Helper to get run-scoped key-value data."""
+    value = kv_get(f"{key}:{run_id}")
+    return value if value is not None else default
+
+def run_kv_set(key: str, run_id: str, value: Any) -> None:
+    """Helper to set run-scoped key-value data."""
+    kv_set(f"{key}:{run_id}", value)

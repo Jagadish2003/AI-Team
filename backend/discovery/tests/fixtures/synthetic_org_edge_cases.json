@@ -1,0 +1,27 @@
+{
+  "_meta": {"description": "Edge cases — detectors near threshold or missing data"},
+  "case_metrics": {
+    "total_cases_90d": 45, "closed_cases_90d": 10,
+    "owner_changes_90d": 70, "handoff_score": 1.56,
+    "cases_with_kb_link": 5, "knowledge_gap_score": 0.50,
+    "category_breakdown": []
+  },
+  "flow_inventory": {
+    "active_flow_count_on_object": 1, "avg_element_count": 6.0,
+    "flow_activity_score": 0.61, "trigger_object": "Case", "records_90d": 45,
+    "flows": [
+      {"flow_id": "301edge1", "flow_label": "Edge-Flow", "process_type": "AutoLaunchedFlow", "element_count": 6, "trigger_object": "Case"}
+    ]
+  },
+  "approval_processes": [
+    {"process_name": "Low Bottleneck Process", "pending_count": 5, "avg_delay_days": 2.0, "approver_count": 2, "bottleneck_score": 2.5, "approver_ids": ["005bbb1","005bbb2"]},
+    {"process_name": "Severe Delay Process", "pending_count": 3, "avg_delay_days": 8.0, "approver_count": 1, "bottleneck_score": 3.0, "approver_ids": ["005bbb3"]}
+  ],
+  "named_credentials": [
+    {"credential_name": "Low Ref Cred", "credential_developer_name": "Low_Ref_Cred", "flow_reference_count": 2, "referencing_flow_ids": ["301edge1"], "match_type": "none"}
+  ],
+  "cross_system_references": {
+    "sf_echo_count": 5, "sf_total_cases": 45, "sf_echo_score": 0.11,
+    "matched_patterns": ["INC-"], "sample_matches": []
+  }
+}

@@ -1,0 +1,97 @@
+[
+  {
+    "id": "ev_sf_c048a8_0001",
+    "tsLabel": "21 Apr 2026, 15:42",
+    "source": "Salesforce",
+    "evidenceType": "Metric",
+    "title": "Multiple low-complexity AutoLaunchedFlows running on high-volume Case object",
+    "snippet": "4 active AutoLaunchedFlow(s) on the Case object. Avg element count: 5 (LOW complexity). 300 Case records processed in last 90 days (3.3/day). Flow activity score: 2.128 (threshold: 0.6).",
+    "entities": [
+      "ent_flow_case-notify"
+    ],
+    "confidence": "HIGH",
+    "decision": "UNREVIEWED"
+  },
+  {
+    "id": "ev_sf_c048a8_0002",
+    "tsLabel": "21 Apr 2026, 15:42",
+    "source": "Salesforce",
+    "evidenceType": "Metric",
+    "title": "Elevated case owner reassignment rate detected",
+    "snippet": "480 owner changes recorded across 300 Cases in the last 90 days. Avg 1.6 owner changes per Case (threshold: 1.5). Top categories: Technical Issue (avg 4.0/case), Billing Inquiry (avg 3.8/case), Account Management (avg 3.5/case).",
+    "entities": [
+      "ent_case_all_categories",
+      "ent_casehistory_owner_changes"
+    ],
+    "confidence": "MEDIUM",
+    "decision": "UNREVIEWED"
+  },
+  {
+    "id": "ev_sf_c048a8_0003",
+    "tsLabel": "21 Apr 2026, 15:42",
+    "source": "Salesforce",
+    "evidenceType": "Metric",
+    "title": "Approval records exceeding SLA due to high delay in 'Discount Approval'",
+    "snippet": "60 pending 'Discount Approval' records with average delay of 5.0 days (threshold: 3.0 days). Bottleneck score: 30.0 (threshold: 10). 2 approver(s) handling all pending items.",
+    "entities": [
+      "ent_approval_discount_approval"
+    ],
+    "confidence": "MEDIUM",
+    "decision": "UNREVIEWED"
+  },
+  {
+    "id": "ev_sf_c048a8_0004",
+    "tsLabel": "21 Apr 2026, 15:42",
+    "source": "Salesforce",
+    "evidenceType": "Metric",
+    "title": "Significant knowledge gap in Case resolution \u2014 low KB article linkage",
+    "snippet": "30 of 60 closed Cases in the last 90 days have a linked Knowledge Article. Knowledge gap score: 0.5 (threshold: 0.4). 50.0% of Cases closed with KB reuse \u2014 30 resolved without KB linkage.",
+    "entities": [
+      "ent_case_closed",
+      "ent_knowledge_articles"
+    ],
+    "confidence": "MEDIUM",
+    "decision": "UNREVIEWED"
+  },
+  {
+    "id": "ev_sf_c048a8_0005",
+    "tsLabel": "21 Apr 2026, 15:42",
+    "source": "Salesforce",
+    "evidenceType": "Metric",
+    "title": "Multiple Flows referencing the same Named Credential 'ServiceNow Integration'",
+    "snippet": "3 active Flow(s) reference the 'ServiceNow Integration' Named Credential (threshold: 3 distinct flows). Match type: name. Referencing flow IDs: 301xx000001ABC2, 301xx000001ABC3, 301xx000001ABC4.",
+    "entities": [
+      "ent_credential_servicenow_integration"
+    ],
+    "confidence": "MEDIUM",
+    "decision": "UNREVIEWED"
+  },
+  {
+    "id": "ev_sf_c048a8_0006",
+    "tsLabel": "21 Apr 2026, 15:42",
+    "source": "Salesforce",
+    "evidenceType": "Metric",
+    "title": "Approval queue overloaded with limited approver capacity in 'Discount Approval'",
+    "snippet": "60 pending 'Discount Approval' records. Only 2 active approver(s) identified via ProcessInstanceWorkitem. Bottleneck score: 30.0 pending per approver (threshold: 10.0).",
+    "entities": [
+      "ent_approval_discount_approval",
+      "ent_user_approvers"
+    ],
+    "confidence": "MEDIUM",
+    "decision": "UNREVIEWED"
+  },
+  {
+    "id": "ev_sf_c048a8_0007",
+    "tsLabel": "21 Apr 2026, 15:42",
+    "source": "Salesforce",
+    "evidenceType": "Log",
+    "title": "Cross-system ticket duplication detected across Salesforce and external systems",
+    "snippet": "75 of 300 Salesforce Cases reference external ticket IDs (SF echo score: 0.25, threshold: 0.15). 80 of 500 ServiceNow incidents reference Salesforce case IDs (SN echo score: 0.16). 62 of 280 Jira CRM issues reference Salesforce cases (Jira echo score: 0.22). Patterns matched: CS-, INC-, JIRA-.",
+    "entities": [
+      "ent_case_all_categories",
+      "ent_incident_servicenow_access"
+    ],
+    "confidence": "MEDIUM",
+    "decision": "UNREVIEWED"
+  }
+]

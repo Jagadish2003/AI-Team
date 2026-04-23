@@ -18,27 +18,40 @@ def overall_readiness(perms: List[PermissionItem]) -> str:
         return "Moderate"
     return "High"
 
-def uniq_permissions_merge(perms: List[PermissionItem]) -> List[PermissionItem]:
+def uniq_permissions_merge(perms: List[Any]) -> List[PermissionItem]:
     # Merge by label: required = OR, satisfied = AND
     merged: Dict[str, PermissionItem] = {}
     for p in perms:
-        label = str(p.get("label", "")).strip()
+        # FIX: Handle cases where the permission is just a string instead of a dictionary
+        if isinstance(p, str):
+            label = p.strip()
+            req = True       # Default assumptions for plain strings
+            sat = False
+            pid = f"perm_{len(merged)+1:03d}"
+        else:
+            label = str(p.get("label", "")).strip()
+            req = bool(p.get("required", False))
+            sat = bool(p.get("satisfied", False))
+            pid = p.get("id", f"perm_{len(merged)+1:03d}")
+
         if not label:
             continue
+
         if label not in merged:
             merged[label] = {
-                "id": p.get("id", f"perm_{len(merged)+1:03d}"),
+                "id": pid,
                 "label": label,
-                "required": bool(p.get("required", False)),
-                "satisfied": bool(p.get("satisfied", False)),
+                "required": req,
+                "satisfied": sat,
             }
         else:
-            merged[label]["required"] = bool(merged[label].get("required", False)) or bool(p.get("required", False))
-            merged[label]["satisfied"] = bool(merged[label].get("satisfied", False)) and bool(p.get("satisfied", False))
-    out: List[PermissionItem] = []
-    for p in merged.values():
-        p["readiness"] = readiness_from_permission(p)
-        out.append(p)
+            merged[label]["required"] = bool(merged[label].get("required", False)) or req
+            merged[label]["satisfied"] = bool(merged[label].get("satisfied", False)) and sat
+
+    out: List[PermissionItem] =[]
+    for p_obj in merged.values():
+        p_obj["readiness"] = readiness_from_permission(p_obj)
+        out.append(p_obj)
     return out
 
 def build_roadmap(opps: List[OpportunityCandidate]) -> PilotRoadmapModel:

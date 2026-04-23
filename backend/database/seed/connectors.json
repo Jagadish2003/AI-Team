@@ -5,7 +5,7 @@
     "category": "ITSM · CMDB",
     "tier": "recommended",
     "recommendedRank": 1,
-    "status": "connected",
+    "status": "disconnected",
     "metrics":[
       { "label": "Incidents", "value": "2847" },
       { "label": "CMDB Items", "value": "312" }
@@ -20,7 +20,7 @@
     "category": "Delivery · Knowledge",
     "tier": "recommended",
     "recommendedRank": 2,
-    "status": "connected",
+    "status": "disconnected",
     "metrics":[
       { "label": "Issues", "value": "5847" },
       { "label": "Confluence Pages", "value": "1120" }

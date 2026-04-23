@@ -1,32 +1,55 @@
+"""
+D3 — APPROVAL_BOTTLENECK
+
+Fires when: (avg_delay_days > 3 AND bottleneck_score > 10)
+            OR avg_delay_days > 7 (severe delay alone)
+
+SF-1.3 thresholds:
+    delay_threshold: 3 days
+    bottleneck_threshold: 10
+    severe_delay_threshold: 7 days
+"""
 from __future__ import annotations
 from typing import Any, Dict, List
-from ..types import DetectorResult
+from ..models import DetectorResult
 
-THRESHOLD_DAYS = 3.0
+DETECTOR_ID = "APPROVAL_BOTTLENECK"
+DELAY_THRESHOLD = 3.0
+BOTTLENECK_THRESHOLD = 10.0
+SEVERE_DELAY = 7.0
 
-def detect(sf_data: Dict[str, Any], sn_data: Dict[str, Any], jira_data: Dict[str, Any]) -> List[DetectorResult]:
-    ingested = sf_data
-    steps = ingested.get("salesforce_approval_pending") or []
-    out: List[DetectorResult] = []
-    for s in steps:
-        pending = float(s.get("pending_count") or 0)
-        avg_age = float(s.get("avg_age_days") or 0.0)
-        if pending <= 0:
+
+def detect(
+    sf_data: Dict[str, Any],
+    sn_data: Dict[str, Any] = None,
+    jira_data: Dict[str, Any] = None,
+) -> List[DetectorResult]:
+    approval_processes = sf_data.get("approval_processes") or []
+    results = []
+
+    for ap in approval_processes:
+        delay = float(ap.get("avg_delay_days", 0.0))
+        b_score = float(ap.get("bottleneck_score", 0.0))
+        pending = int(ap.get("pending_count", 0))
+
+        combined_fires = delay > DELAY_THRESHOLD and b_score > BOTTLENECK_THRESHOLD
+        severe_fires = delay > SEVERE_DELAY
+
+        if not (combined_fires or severe_fires):
             continue
-        if avg_age > THRESHOLD_DAYS:
-            out.append(DetectorResult(
-                detector_id="APPROVAL_BOTTLENECK",
-                signal_source="Salesforce.ProcessInstance",
-                metric_name="avg_pending_age_days",
-                metric_value=avg_age,
-                threshold=THRESHOLD_DAYS,
-                label="APPROVAL_BOTTLENECK",
-                raw_evidence={
-                    "process": s.get("process_name"),
-                    "step": s.get("step_name"),
-                    "pending_count": pending,
-                    "avg_age_days": avg_age,
-                    "approver_count": s.get("approver_count"),
-                }
-            ))
-    return out
+
+        results.append(DetectorResult(
+            detector_id=DETECTOR_ID,
+            signal_source="salesforce",
+            metric_value=round(delay, 2),
+            threshold=DELAY_THRESHOLD,
+            raw_evidence={
+                "process_name": ap.get("process_name", ""),
+                "pending_count": pending,
+                "avg_delay_days": delay,
+                "approver_count": int(ap.get("approver_count", 0)),
+                "bottleneck_score": b_score,
+            },
+        ))
+
+    return results

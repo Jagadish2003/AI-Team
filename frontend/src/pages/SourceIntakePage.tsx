@@ -12,10 +12,12 @@ import Button from '../components/common/Button';
 import { useToast } from '../components/common/Toast';
 import { useConnectorContext } from '../context/ConnectorContext';
 import { useSourceIntakeContext } from '../context/SourceIntakeContext';
+import { useRunContext } from '../context/RunContext';
  
 export default function SourceIntakePage() {
   const { push } = useToast();
   const nav = useNavigate();
+  const { clearRunId } = useRunContext();
  
   const singleFileInputRef = useRef<HTMLInputElement | null>(null);
   const { all } = useConnectorContext();
@@ -154,7 +156,7 @@ export default function SourceIntakePage() {
                 <Button
                   variant="secondary"
                   onClick={() => nav('/integration-hub')}
-                  className="w-40 border border-white/40 relative flex items-center justify-center">
+                  className="w-40 rounded-md border border-border bg-buttonbg px-3 py-2 text-sm font-medium text-text hover:bg-panel transition disabled:cursor-not-allowed disabled:opacity-50 relative flex items-center justify-center">
                   <span className="absolute left-4 flex items-center">
                     <ChevronLeft size={16} strokeWidth={2.5} />
                   </span>
@@ -164,8 +166,7 @@ export default function SourceIntakePage() {
                   variant="primary"
                   disabled={!canBegin}
                   title={!canBegin ? 'Connect at least one source to continue' : undefined}
-                  onClick={() => nav('/discovery-run')}
-                >
+                  onClick={() => { clearRunId(); nav('/discovery-run'); }}>
                   Begin Discovery
                   <ChevronRight size={16} strokeWidth={2.5} />
                 </Button>

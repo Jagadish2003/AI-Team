@@ -1,0 +1,36 @@
+{
+  "_meta": {"description": "Standard enterprise org — all 7 detectors fire"},
+  "case_metrics": {
+    "total_cases_90d": 300, "closed_cases_90d": 60,
+    "owner_changes_90d": 480, "handoff_score": 1.6,
+    "cases_with_kb_link": 30, "knowledge_gap_score": 0.5,
+    "category_breakdown": [
+      {"category": "Technical Issue", "volume": 120, "handoff_score": 4.0, "avg_age_days": 3.2}
+    ]
+  },
+  "flow_inventory": {
+    "active_flow_count_on_object": 4, "avg_element_count": 6.25,
+    "flow_activity_score": 2.128, "trigger_object": "Case", "records_90d": 300,
+    "flows": [
+      {"flow_id": "301abc1", "flow_label": "Case-Notify", "process_type": "AutoLaunchedFlow", "element_count": 5, "trigger_object": "Case"},
+      {"flow_id": "301abc2", "flow_label": "Update-case-rec", "process_type": "AutoLaunchedFlow", "element_count": 7, "trigger_object": "Case"},
+      {"flow_id": "301abc3", "flow_label": "Named-credential-flow", "process_type": "AutoLaunchedFlow", "element_count": 6, "trigger_object": "Case"},
+      {"flow_id": "301abc4", "flow_label": "Case-and-OPP-Flow", "process_type": "AutoLaunchedFlow", "element_count": 7, "trigger_object": "Case"}
+    ]
+  },
+  "approval_processes": [
+    {"process_name": "Discount Approval", "pending_count": 60, "avg_delay_days": 5.0, "approver_count": 2, "bottleneck_score": 30.0, "approver_ids": ["005aaa1", "005aaa2"]}
+  ],
+  "named_credentials": [
+    {"credential_name": "ServiceNow Integration", "credential_developer_name": "ServiceNow_Integration", "flow_reference_count": 3, "referencing_flow_ids": ["301abc2","301abc3","301abc4"], "match_type": "field_exact"},
+    {"credential_name": "Jira Connector", "credential_developer_name": "Jira_Connector", "flow_reference_count": 2, "referencing_flow_ids": ["301abc1","301abc2"], "match_type": "field_exact"}
+  ],
+  "cross_system_references": {
+    "sf_echo_count": 75, "sf_total_cases": 300, "sf_echo_score": 0.25,
+    "matched_patterns": ["INC-", "JIRA-"],
+    "sample_matches": [
+      {"case_id": "CS-1001", "pattern": "INC-10042", "field": "Description"},
+      {"case_id": "CS-1007", "pattern": "JIRA-4421", "field": "Subject"}
+    ]
+  }
+}

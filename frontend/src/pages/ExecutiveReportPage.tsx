@@ -117,21 +117,21 @@ export default function ExecutiveReportPage() {
 
           <div className="flex items-center gap-2 shrink-0">
             <button
-              className="rounded-lg border border-border bg-panel2 px-4 py-2 text-sm font-medium text-text hover:bg-panel"
+              className="rounded-lg border border-border bg-buttonbg px-4 py-2 text-sm font-medium text-text hover:bg-panel"
               onClick={() => push('Downloading PDF...')}
             >
               Download PDF
             </button>
 
             <button
-              className="rounded-lg border border-border bg-panel2 px-4 py-2 text-sm font-medium text-text hover:bg-panel"
+              className="rounded-lg border border-border bg-buttonbg  px-4 py-2 text-sm font-medium text-text hover:bg-panel"
               onClick={() => push('Downloading PPTX...')}
             >
               Download PPTX
             </button>
 
             <button
-              className="rounded-lg border border-border bg-panel2 px-4 py-2 text-sm font-medium text-text hover:bg-panel"
+              className="rounded-lg border border-border bg-buttonbg  px-4 py-2 text-sm font-medium text-text hover:bg-panel"
               onClick={() => push('Downloading XLSX...')}
             >
               Download XLSX
