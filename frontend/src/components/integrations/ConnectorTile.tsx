@@ -22,20 +22,25 @@ export default function ConnectorTile({
   return (
     <div
       onClick={onSelect}
-      className={`h-[140px] cursor-pointer rounded-xl border-2 ${
+      className={`h-[190px] cursor-pointer rounded-xl border-2 ${
         selected ? 'border-accent bg-panel2' : 'border-border bg-panel'
-      } p-3 hover:border-accent/60 hover:bg-panel2`}
+      } p-4 hover:border-accent/60 hover:bg-panel2`}
     >
+      {/* Header */}
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0">
           <div className="flex items-center gap-2 text-base font-semibold text-text">
             {icon}
             {connector.name}
           </div>
-          <div className="mt-0.5 truncate text-xs text-muted">{connector.category}</div>
+          <div className="mt-0.5 truncate text-xs text-muted">
+            {connector.category}
+          </div>
         </div>
         <Badge status={connector.status} />
       </div>
+
+      {/* Tags */}
       <div className="mt-2 flex flex-wrap gap-1">
         {connector.reads.slice(0, 2).map((r) => (
           <span
@@ -46,16 +51,24 @@ export default function ConnectorTile({
           </span>
         ))}
       </div>
+
+      {/* Signal */}
       <div className="mt-2 flex items-center justify-between text-xs text-muted">
         <span>
           Signal: <span className="text-text">{connector.signalStrength}</span>
         </span>
         <span>{isConnected ? `Synced ${connector.lastSynced}` : '—'}</span>
       </div>
-      <div className="mt-2">
+
+      {/* Button */}
+      <div className="mt-5 pb-1">
         <Button
           variant={isConnected ? 'secondary' : 'primary'}
-          className={`w-full ${isConnected ? '!border-[#00B4B4]/50 !text-[#00B4B4]' : ''}`}
+          className={`w-full ${
+            isConnected
+              ? '!text-[#00B4B4] !border-[#00B4B4]/50'
+              : ''
+          }`}
           onClick={(e: React.MouseEvent<HTMLButtonElement>) => {
             e.stopPropagation();
             onPrimary();
