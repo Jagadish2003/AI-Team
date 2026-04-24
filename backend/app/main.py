@@ -141,26 +141,40 @@ def get_events(run_id: str) -> List[Dict[str, Any]]:
 
 @app.get("/api/runs/{run_id}/evidence", dependencies=[Depends(require_auth)])
 def list_evidence(run_id: str) -> List[Dict[str, Any]]:
-    try:
-        read_run(run_id)
-    except KeyError:
-        raise HTTPException(404, "run not found")
-    return get_all("evidence")
+    run_get(run_id)  # raises 404 if not found
+    run_ev = run_kv_get("evidence", run_id, None)
+    if run_ev is None:
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                f"No evidence found for run '{run_id}'. "
+                "Ensure PATCH_materialize_t2.py has been applied "
+                "and the run has completed successfully."
+            ),
+        )
+    return run_ev
 
 @app.post("/api/runs/{run_id}/evidence/{evidence_id}/decision", dependencies=[Depends(require_auth)])
 def set_evidence_decision(run_id: str, evidence_id: str, body: Dict[str, Any]) -> Dict[str, Any]:
-    try:
-        read_run(run_id)
-    except KeyError:
-        raise HTTPException(404, "run not found")
-    e = get_one("evidence", evidence_id)
-    if not e:
+    run_get(run_id)  # raises 404 if run not found
+
+    # Read from run-scoped KV (not global seed table)
+    run_ev = run_kv_get("evidence", run_id, None)
+    if run_ev is None:
+        raise HTTPException(404, "evidence not found for this run")
+
+    idx = next((i for i, e in enumerate(run_ev) if e["id"] == evidence_id), None)
+    if idx is None:
         raise HTTPException(404, "evidence not found")
+
     decision = body.get("decision")
     if decision not in ("APPROVED", "REJECTED", "UNREVIEWED"):
         raise HTTPException(400, "invalid decision")
-    e["decision"] = decision
-    upsert("evidence", evidence_id, e)
+
+    run_ev[idx] = {**run_ev[idx], "decision": decision}
+    run_kv_set("evidence", run_id, run_ev)      # write back to run KV
+    e = run_ev[idx]
+
     audit_event = {
         "id": f"audit_{uuid4().hex[:8]}",
         "tsLabel": now_iso(),
@@ -280,14 +294,20 @@ def list_audit(run_id: str) -> List[Dict[str, Any]]:
 
 @app.get("/api/runs/{run_id}/roadmap", dependencies=[Depends(require_auth)])
 def get_roadmap(run_id: str) -> Dict[str, Any]:
-    try:
-        read_run(run_id)
-    except KeyError:
-        raise HTTPException(404, "run not found")
-    run_roadmap = run_kv_get("roadmap", run_id)
+    run_get(run_id)  # raises 404 if not found
+    run_roadmap = run_kv_get("roadmap", run_id, None)
     if run_roadmap is not None:
         return run_roadmap
-    return build_roadmap(get_all("opportunities"))
+    opps = run_kv_get("opps", run_id, None)
+    if opps is None:
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                f"No opportunities for run '{run_id}'. "
+                "T2 materialisation has not completed for this run."
+            ),
+        )
+    return build_roadmap(opps)
 
 @app.get("/api/runs/{run_id}/executive-report", dependencies=[Depends(require_auth)])
 def get_exec_report(run_id: str) -> Dict[str, Any]:
@@ -296,9 +316,7 @@ def get_exec_report(run_id: str) -> Dict[str, Any]:
     except KeyError:
         raise HTTPException(404, "run not found")
 
-    run_exec = run_kv_get("executive_report", run_id)
-    if run_exec is not None:
-        return run_exec
+    # --- REMOVED THE run_exec CACHE CHECK FROM HERE ---
 
     # sourcesAnalyzed MUST derive from run inputs (not live connector state)
     inputs = run.get("inputs") or {}
@@ -318,20 +336,28 @@ def get_exec_report(run_id: str) -> Dict[str, Any]:
         "sampleWorkspaceEnabled": sample_enabled,
     }
 
-    rep = get_one("executive_reports", "exec_001")
-    if rep:
-        rep["sourcesAnalyzed"] = sources_analyzed
-        return rep
+    opps = run_kv_get("opps", run_id, None)
+    if opps is None:
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                f"No opportunities for run '{run_id}'. "
+                "T2 materialisation has not completed."
+            ),
+        )
 
+    quick_wins = [o for o in opps if o.get("tier") == "Quick Win"]
+
+    # This return block ensures roadmapHighlights is a DICTIONARY, fixing the test error.
     return {
-        "confidence": "MODERATE",
+        "confidence":      "MODERATE",
         "sourcesAnalyzed": sources_analyzed,
-        "topQuickWins": [],
+        "topQuickWins":    quick_wins,
         "snapshotBubbles": [],
         "roadmapHighlights": {
-            "next30Count": 3,
-            "next60Count": 2,
-            "next90Count": 1,
-            "blockerCount": 0
-        }
+            "next30Count":  sum(1 for o in opps if o.get("tier") == "Quick Win"),
+            "next60Count":  sum(1 for o in opps if o.get("tier") == "Strategic"),
+            "next90Count":  sum(1 for o in opps if o.get("tier") == "Complex"),
+            "blockerCount": 0,
+        },
     }
