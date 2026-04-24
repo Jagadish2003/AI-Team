@@ -4,6 +4,7 @@ from .security import require_auth
 from . import db
 from .models_t2 import StartRunRequest, StartRunResponse, StatusResponse
 from .materialize_t2 import set_status, get_status, run_trackb_and_persist
+from .replay import seed_events
 
 ALL_SYSTEMS = ["salesforce", "servicenow", "jira"]
 def _epoch() -> int:
@@ -31,6 +32,8 @@ def register_sprint4_t2_routes(app):
         },
         }
         db.run_set(run_id, run)
+        # Seed event stream so replay determinism holds: replay resets to these same events.
+        db.kv_set(f"events:{run_id}", seed_events())
 
         # Status document is separate from the run record to keep status polling cheap.
         set_status(

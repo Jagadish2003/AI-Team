@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Windows Git Bash compatibility: use python if python3 is not available
+if ! python3 --version &>/dev/null 2>&1; then
+  python3() { PYTHONIOENCODING=utf-8 python "$@"; }
+fi
+
 BASE_URL="${BASE_URL:-http://localhost:8000}"
 TOKEN="${DEV_JWT:-dev-token-change-me}"
 
@@ -90,7 +95,7 @@ EOF
 curl -sS "${hdr[@]}" -X POST "${BASE_URL}/api/runs/${RUN_ID}/opportunities/${OPP_ID}/override" \
   -H "Content-Type: application/json" -d "${OVERRIDE_JSON}" >/dev/null
 OPPS_AFTER_OVERRIDE=$(curl -sS "${hdr[@]}" "${BASE_URL}/api/runs/${RUN_ID}/opportunities")
-python3 - <<PY
+python3 - "$OPPS_AFTER_OVERRIDE" "$OPP_ID" <<'PY'
 import json,sys
 opps=json.loads(sys.argv[1])
 opp=next(o for o in opps if o["id"]==sys.argv[2])
@@ -98,11 +103,11 @@ ov=opp.get("override") or {}
 assert "rationaleOverride" in ov, "override object missing"
 assert ov.get("rationaleOverride","").startswith("Override:"), "override rationale not persisted"
 print("✅ Override persisted and visible in opportunities payload")
-PY "$OPPS_AFTER_OVERRIDE" "$OPP_ID"
+PY
 
 echo "== Audit newest-first check =="
 AUDIT=$(curl -sS "${hdr[@]}" "${BASE_URL}/api/runs/${RUN_ID}/audit")
-python3 - <<PY
+python3 - "$AUDIT" <<'PY'
 import json,sys
 a=json.loads(sys.argv[1])
 assert isinstance(a,list) and len(a)>0
@@ -110,4 +115,4 @@ epochs=[int(e.get("tsEpoch",0)) for e in a]
 assert any(ep>0 for ep in epochs), "no tsEpoch values in audit entries"
 assert epochs==sorted(epochs, reverse=True), "audit not newest-first by tsEpoch"
 print("✅ Audit is newest-first by tsEpoch")
-PY "$AUDIT"
+PY
