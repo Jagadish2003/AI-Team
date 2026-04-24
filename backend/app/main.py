@@ -17,9 +17,11 @@ from .replay import replay_run as replay_run_
 from .routes_sprint4_t1 import register_sprint4_t1_routes
 from .routes_sprint4_t2 import register_sprint4_t2_routes
 from .routes_sprint4_t3 import register_sprint4_t3_routes
+from .routes_sprint4_t4 import register_sprint4_t4_routes
 
 app = FastAPI(title="AgentIQ Layer 1 API Skeleton", version="0.1.0")
 
+register_sprint4_t4_routes(app)
 register_sprint4_t3_routes(app)
 register_sprint4_t2_routes(app)
 register_sprint4_t1_routes(app)
@@ -129,12 +131,13 @@ def get_events(run_id: str) -> List[Dict[str, Any]]:
     except KeyError:
         raise HTTPException(404, "run not found")
 
-@app.post("/api/runs/{run_id}/replay", dependencies=[Depends(require_auth)])
-def replay_run(run_id: str) -> Dict[str, Any]:
-    try:
-        return replay_run_(run_id)
-    except KeyError:
-        raise HTTPException(404, "run not found")
+# Replay is now handled by routes_sprint4_t4 (registered above)
+# @app.post("/api/runs/{run_id}/replay", dependencies=[Depends(require_auth)])
+# def replay_run(run_id: str) -> Dict[str, Any]:
+#     try:
+#         return replay_run_(run_id)
+#     except KeyError:
+#         raise HTTPException(404, "run not found")
 
 @app.get("/api/runs/{run_id}/evidence", dependencies=[Depends(require_auth)])
 def list_evidence(run_id: str) -> List[Dict[str, Any]]:
