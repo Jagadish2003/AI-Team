@@ -62,7 +62,8 @@ def register_sprint4_t2_routes(app):
 
     @app.get("/api/runs/{run_id}/status", response_model=StatusResponse, dependencies=[Depends(require_auth)])
     def run_status(run_id: str):
-        db.run_get(run_id)
+        run = db.run_get(run_id)          # ← capture the run record (still raises 404 if missing)
         s = get_status(run_id)
         s["runId"] = run_id
+        s["isReplay"] = run.get("isReplay", False)   # ← add isReplay from run record
         return s

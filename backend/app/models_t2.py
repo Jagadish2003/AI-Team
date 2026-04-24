@@ -42,3 +42,4 @@ class StatusResponse(BaseModel):
     counts: Dict[str, int] = Field(default_factory=dict)
     errors: Dict[str, str] = Field(default_factory=dict)
     updatedAt: Optional[str] = None
+    isReplay: bool = False
