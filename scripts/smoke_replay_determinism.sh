@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Windows Git Bash compatibility: use python if python3 is not available
+if ! python3 --version &>/dev/null 2>&1; then
+  python3() { PYTHONIOENCODING=utf-8 python "$@"; }
+fi
+
 BASE_URL="${BASE_URL:-http://localhost:8000}"
 TOKEN="${DEV_JWT:-dev-token-change-me}"
 hdr=(-H "Authorization: Bearer ${TOKEN}" -H "Content-Type: application/json")
