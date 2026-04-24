@@ -197,14 +197,23 @@ def set_opp_decision(run_id: str, opp_id: str, body: Dict[str, Any]) -> Dict[str
         read_run(run_id)
     except KeyError:
         raise HTTPException(404, "run not found")
-    o = get_one("opportunities", opp_id)
-    if not o:
-        raise HTTPException(404, "opportunity not found")
     decision = body.get("decision")
     if decision not in ("APPROVED", "REJECTED", "UNREVIEWED"):
         raise HTTPException(400, "invalid decision")
-    o["decision"] = decision
-    upsert("opportunities", opp_id, o)
+    run_opps = run_kv_get("opps", run_id)
+    if run_opps is not None:
+        idx = next((i for i, o in enumerate(run_opps) if o["id"] == opp_id), None)
+        if idx is None:
+            raise HTTPException(404, "opportunity not found")
+        run_opps[idx] = {**run_opps[idx], "decision": decision}
+        run_kv_set("opps", run_id, run_opps)
+        o = run_opps[idx]
+    else:
+        o = get_one("opportunities", opp_id)
+        if not o:
+            raise HTTPException(404, "opportunity not found")
+        o["decision"] = decision
+        upsert("opportunities", opp_id, o)
     event = {
         "id": f"audit_{uuid4().hex[:8]}",
         "tsLabel": now_iso(),
@@ -223,16 +232,27 @@ def set_opp_override(run_id: str, opp_id: str, body: Dict[str, Any]) -> Dict[str
         read_run(run_id)
     except KeyError:
         raise HTTPException(404, "run not found")
-    o = get_one("opportunities", opp_id)
-    if not o:
-        raise HTTPException(404, "opportunity not found")
+    run_opps = run_kv_get("opps", run_id)
+    if run_opps is not None:
+        idx = next((i for i, o in enumerate(run_opps) if o["id"] == opp_id), None)
+        if idx is None:
+            raise HTTPException(404, "opportunity not found")
+        o = dict(run_opps[idx])
+    else:
+        o = get_one("opportunities", opp_id)
+        if not o:
+            raise HTTPException(404, "opportunity not found")
     override = o.get("override") or {}
-    override["rationaleOverride"] = body.get("rationaleOverride", override.get("rationaleOverride",""))
-    override["overrideReason"] = body.get("overrideReason", override.get("overrideReason",""))
+    override["rationaleOverride"] = body.get("rationaleOverride", override.get("rationaleOverride", ""))
+    override["overrideReason"] = body.get("overrideReason", override.get("overrideReason", ""))
     override["isLocked"] = bool(body.get("isLocked", override.get("isLocked", False)))
     override["updatedAt"] = now_iso()
     o["override"] = override
-    upsert("opportunities", opp_id, o)
+    if run_opps is not None:
+        run_opps[idx] = o
+        run_kv_set("opps", run_id, run_opps)
+    else:
+        upsert("opportunities", opp_id, o)
     event = {
         "id": f"audit_{uuid4().hex[:8]}",
         "tsLabel": now_iso(),
