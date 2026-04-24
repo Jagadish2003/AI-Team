@@ -172,7 +172,7 @@ def main():
     # Parse systems string into a list if provided
     systems_list = None
     if args.systems:
-        systems_list = [s.strip().lower() for s in args.systems.split(",") if s.strip()]
+        systems_list =[s.strip().lower() for s in args.systems.split(",") if s.strip()]
 
     payload = run(
         mode=args.mode,

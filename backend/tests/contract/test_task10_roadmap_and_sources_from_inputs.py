@@ -14,6 +14,14 @@ def test_roadmap_and_sources_from_run_inputs(client):
     assert r.status_code == 200
     run_id = r.json()["runId"]
 
+    # --- ADD THIS POLLING LOOP ---
+    import time
+    for _ in range(30):
+        st = client.get(f"/api/runs/{run_id}/status", headers=_auth_headers()).json()
+        if st.get("status") in ("complete", "partial", "failed"): break
+        time.sleep(1)
+    # -----------------------------
+
     rm = client.get(f"/api/runs/{run_id}/roadmap", headers=_auth_headers()).json()
     assert "stages" in rm and isinstance(rm["stages"], list) and len(rm["stages"]) == 3
 
