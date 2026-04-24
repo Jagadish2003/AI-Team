@@ -205,12 +205,35 @@ def list_mappings(run_id: str) -> List[Dict[str, Any]]:
 
 @app.get("/api/runs/{run_id}/opportunities", dependencies=[Depends(require_auth)])
 def list_opportunities(run_id: str) -> List[Dict[str, Any]]:
+    # 1. Validate the run exists and handle if not found
     try:
         read_run(run_id)
     except KeyError:
         raise HTTPException(404, "run not found")
-    run_opps = run_kv_get("opps", run_id)
-    return run_opps if run_opps is not None else get_all("opportunities")
+
+    # 2. Get opportunities from run-scoped storage (no fallback to seed data)
+    opps = run_kv_get("opps", run_id, None)
+    if opps is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No opportunities for run '{run_id}'. T2 materialisation may not have completed."
+        )
+
+    # 3. S7 MAP FIX: Add Deterministic Jitter
+    # This prevents items with identical integer scores from overlapping perfectly on the UI.
+    for opp in opps:
+        if "impact" in opp and "effort" in opp:
+            # Use the opportunity ID to generate a stable, deterministic offset.
+            # This ensures the layout is the same every time and passes replay tests.
+            _id = str(opp.get("id", "0"))
+            stable_offset = (sum(ord(c) for c in _id) % 5) * 0.15
+
+            # Apply the small offset to separate the bubbles
+            opp["impact"] = float(opp["impact"]) + stable_offset
+            opp["effort"] = float(opp["effort"]) + stable_offset
+
+    # 4. Return the modified list of opportunities
+    return opps
 
 @app.post("/api/runs/{run_id}/opportunities/{opp_id}/decision", dependencies=[Depends(require_auth)])
 def set_opp_decision(run_id: str, opp_id: str, body: Dict[str, Any]) -> Dict[str, Any]:
