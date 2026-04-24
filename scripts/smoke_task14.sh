@@ -18,9 +18,8 @@ echo "RunId: ${RUN_ID}"
 echo "== Run-scoped reads =="
 for ep in \
   "/api/runs/${RUN_ID}" \
-  "/api/runs/${RUN_ID}/events"
+  "/api/runs/${RUN_ID}/events" \
   "/api/runs/${RUN_ID}/audit" \
-  "" \
   "/api/runs/${RUN_ID}/opportunities" \
   "/api/runs/${RUN_ID}/roadmap" \
   "/api/runs/${RUN_ID}/executive-report"
@@ -58,11 +57,9 @@ test "$DEC" = "APPROVED" || { echo "❌ decision did not persist"; exit 1; }
 echo "✅ decision persisted"
 
 echo "== Replay determinism (events) =="
-EV_BEFORE=$(curl -sS "${hdr[@]}" "${BASE_URL}/api/runs/${RUN_ID}/events"
-  "/api/runs/${RUN_ID}/audit")
+EV_BEFORE=$(curl -sS "${hdr[@]}" "${BASE_URL}/api/runs/${RUN_ID}/events")
 curl -sS "${hdr[@]}" -X POST "${BASE_URL}/api/runs/${RUN_ID}/replay" -d '{}' >/dev/null
-EV_AFTER=$(curl -sS "${hdr[@]}" "${BASE_URL}/api/runs/${RUN_ID}/events"
-  "/api/runs/${RUN_ID}/audit")
+EV_AFTER=$(curl -sS "${hdr[@]}" "${BASE_URL}/api/runs/${RUN_ID}/events")
 test "$EV_BEFORE" = "$EV_AFTER" || { echo "❌ replay events not deterministic"; exit 1; }
 echo "✅ replay deterministic (events)"
 
