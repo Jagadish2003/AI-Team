@@ -32,7 +32,7 @@ from typing import Any, Dict, List
 
 import pytest
 from fastapi.testclient import TestClient
-from backend.app.main import app
+from app.main import app
 
 
 def _auth() -> Dict[str, str]:
@@ -120,23 +120,30 @@ def completed_run_id(client):
 
 
 @pytest.fixture(scope="session")
-def unmaterialised_run_id(client):
+def unmaterialised_run_id():
     """
-    Fix 2: Create a run via /api/runs/start but never call /compute.
-    The run record exists in the DB but opps KV key is absent.
-    Used to test the second 404 path on replay.
+    Fix 2: Insert a run record directly into the DB without going through
+    /api/runs/start, which would trigger the background materialisation task
+    and populate the opps KV key. The run record exists but opps:{run_id}
+    is deliberately absent — tests the second 404 path on replay.
     """
-    body = {
-        "connectedSources":       [],
-        "uploadedFiles":          [],
-        "sampleWorkspaceEnabled": False,
-        "mode": "offline",
+    import time
+    from app import db
+
+    run_id = f"run_bare_{int(time.time())}"
+    run = {
+        "id": run_id,
+        "status": "running",
+        "startedAt": db.now_iso(),
+        "updatedAt": db.now_iso(),
+        "inputs": {
+            "connectedSources": [],
+            "uploadedFiles": [],
+            "sampleWorkspaceEnabled": False,
+        },
     }
-    r = client.post("/api/runs/start", headers=_auth(), json=body)
-    assert r.status_code in (200, 201), f"start failed: {r.text}"
-    run_id = r.json().get("runId") or r.json().get("id")
-    assert run_id
-    # Deliberately NOT calling /compute — opps KV key is never written
+    db.run_set(run_id, run)
+    # opps:{run_id} KV key intentionally never written
     return run_id
 
 
