@@ -44,6 +44,18 @@ do
 done
 echo "✅ no fallback rule holds (404 on unknown runId)"
 
+echo "== Wait for run to complete =="
+STATUS=""
+for i in $(seq 1 30); do
+  ST=$(curl -sS "${hdr[@]}" "${BASE_URL}/api/runs/${RUN_ID}/status")
+  STATUS=$(echo "$ST" | python3 -c "import sys,json; print(json.load(sys.stdin).get('status',''))")
+  echo "   status=$STATUS"
+  if [ "$STATUS" = "complete" ] || [ "$STATUS" = "partial" ] || [ "$STATUS" = "failed" ]; then break; fi
+  sleep 1
+done
+test "$STATUS" != "failed" || { echo "❌ run failed"; exit 1; }
+echo "✅ run status: ${STATUS}"
+
 echo "== Persist decision (one opportunity) =="
 OPPS=$(curl -sS "${hdr[@]}" "${BASE_URL}/api/runs/${RUN_ID}/opportunities")
 OPP_ID=$(echo "$OPPS" | python3 -c 'import sys,json; print(json.load(sys.stdin)[0]["id"])')
