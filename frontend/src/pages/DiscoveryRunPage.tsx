@@ -13,7 +13,7 @@ export default function DiscoveryRunPage() {
   const { connectors } = useConnectorContext();
   const { uploadedFiles, sampleWorkspaceEnabled } = useSourceIntakeContext();
 
-  const { run, events, loading, error, started, startRun, restartRun, refetch } =
+  const { run, events, loading, error, started, computing, startRun, restartRun, refetch } =
     useDiscoveryRunContext();
 
   const inputs = useMemo(() => {
@@ -79,9 +79,14 @@ export default function DiscoveryRunPage() {
           <div>
             <h1 className="text-xl font-semibold">Discovery Run</h1>
             <p className="mt-1 text-sm text-muted">
-              Run ID: <span  className="font-semibold text-text">{run?.id ?? runId ?? '—'}</span>
+              Run ID: <span className="font-semibold text-text">{run?.id ?? runId ?? '—'}</span>
               {' · '}
-              Status: <span className="font-semibold text-text">{run?.status ?? '—'}</span>
+              Status: <span className="font-semibold text-text">{computing ? 'computing' : (run?.status ?? '—')}</span>
+              {computing && (
+                <span className="ml-2 inline-flex items-center gap-1 rounded-full bg-accent/20 px-2 py-0.5 text-xs font-medium text-accent">
+                  <span className="animate-pulse">●</span> Computing…
+                </span>
+              )}
             </p>
             {run?.startedAt && (
               <p className="mt-1 text-xs text-muted">
@@ -102,9 +107,10 @@ export default function DiscoveryRunPage() {
             <button
             className="rounded-md bg-accent px-3 py-2 text-sm font-medium text-bg hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50 transition"
             onClick={() => nav('/partial-results')}
-            disabled={!started}
+            disabled={!started || computing}
+            title={computing ? 'Waiting for compute to finish…' : undefined}
           >
-            Next: Partial Results
+            {computing ? 'Computing…' : 'Next: Partial Results'}
           </button>
           </div>
         </div>

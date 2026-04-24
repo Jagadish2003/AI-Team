@@ -1,38 +1,63 @@
-import requests
-import base64
-import hashlib
 import os
+import requests
+from dotenv import load_dotenv
 
-def generate_pkce():
-    code_verifier = base64.urlsafe_b64encode(os.urandom(40)).decode().rstrip('=')
+class CustomApexAuthenticator:
+    def __init__(self, apex_endpoint_url):
+        self.apex_endpoint_url = apex_endpoint_url
 
-    code_challenge = base64.urlsafe_b64encode(
-        hashlib.sha256(code_verifier.encode()).digest()
-    ).decode().rstrip('=')
+    def request_token_from_apex(self, instance_url_to_send):
+        """
+        Hits the Apex class via GET request and passes the INSTANCE URL as a query parameter.
+        """
+        # This will be appended to the URL like: ?instanceUrl=https://...
+        params = {
+            "instanceUrl": instance_url_to_send
+        }
 
-    return code_verifier, code_challenge
+        headers = {
+            "Content-Type": "application/json"
+        }
 
-print("Generating PKCE...")
+        try:
+            print(f"Hitting Apex Endpoint: {self.apex_endpoint_url}")
+            print(f"Sending GET Parameters: {params}\n")
 
-code_verifier, code_challenge = generate_pkce()
+            # CHANGED: Using requests.get() and params=params
+            response = requests.get(self.apex_endpoint_url, params=params, headers=headers)
 
-print("Code Challenge Generated!")
+            response.raise_for_status()
 
-url = "https://test.salesforce.com/services/oauth2/authorize"
+            # Read the response from Salesforce
+            token_response = response.json()
 
-params = {
-    "response_type": "code",
-    "client_id": "3MVG9f8UqMdVrN_c_H._ZgevKKqRxjvd4X6fXlEYwGbwC7mij5Nzsi47sYLvEPkaaYXS3EYROFARpAUJia5Pc",
-    "redirect_uri": "https://oauth.pstmn.io/v1/browser-callback",
-    "code_challenge": code_challenge,
-    "code_challenge_method": "S256"
-}
+            print("✅ Successfully hit the Apex Class!")
+            return token_response
 
-print("Sending request to the URL...")
+        except requests.exceptions.HTTPError as err:
+            print(f"❌ HTTP Error: {response.status_code}")
+            print(f"Response Body: {response.text}")
+        except Exception as e:
+            print(f"❌ An error occurred: {e}")
 
-response = requests.get(url, params=params)
+        return None
 
-print("Response Received!")
+# ==========================================
+# EXECUTION LOGIC
+# ==========================================
+if __name__ == "__main__":
+    load_dotenv()
 
-print("URL:", response.url)
-print("Response:", response.text)
+    # Get variables from .env
+    APEX_URL = os.getenv("APEX_REST_URL")
+    TARGET_INSTANCE_URL = os.getenv("TARGET_INSTANCE_URL")
+
+    if not APEX_URL or not TARGET_INSTANCE_URL:
+        print("❌ ERROR: Please define APEX_REST_URL and TARGET_INSTANCE_URL in your .env file.")
+        exit(1)
+
+    apex_auth = CustomApexAuthenticator(APEX_URL)
+    result = apex_auth.request_token_from_apex(TARGET_INSTANCE_URL)
+
+    if result:
+        print(f"\n🔑 Token returned from Apex: {result}")
