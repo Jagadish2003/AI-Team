@@ -19,6 +19,14 @@ def test_s9_roadmap_and_s10_exec_report_are_run_scoped():
     run_id = r.json().get("runId") or r.json().get("id")
     assert run_id
 
+    # --- ADD THIS POLLING LOOP ---
+    import time
+    for _ in range(30):
+        st = client.get(f"/api/runs/{run_id}/status", headers=_auth_headers()).json()
+        if st.get("status") in ("complete", "partial", "failed"): break
+        time.sleep(1)
+    # -----------------------------
+
     rr = client.get(f"/api/runs/{run_id}/roadmap", headers=_auth_headers())
     assert rr.status_code == 200
     roadmap = rr.json()

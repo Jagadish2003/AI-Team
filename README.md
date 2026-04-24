@@ -35,8 +35,10 @@ cd frontend
 npm install
 ```
 3. Add the `.env` file to the `AgentIQ/backend` folder.
-> **Note:** The `.env` file is not included in the repository. Obtain it from AgentIQ team and place it at `AgentIQ/backend/.env` before proceeding.
-4. Generate the local database by running the following command from the `AgentIQ/backend` directory:
+> **Note:** The `backend/.env` file is not included in the repository. Obtain it from the AgentIQ team and place it at `AgentIQ/backend/.env` before proceeding.
+4. Add the `.env` file to the `AgentIQ/frontend` folder.
+> **Note:** The `frontend/.env` file is not included in the repository. Obtain it from the AgentIQ team and place it at `AgentIQ/frontend/.env` before proceeding.
+5. Generate the local database by running the following command from the `AgentIQ/backend` directory:
 ```shell
 python database/seed_loader.py
 ```

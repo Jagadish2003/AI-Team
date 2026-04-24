@@ -12,7 +12,16 @@ def set_status(run_id: str, payload: Dict[str, Any]) -> None:
 
 
 def get_status(run_id: str) -> Dict[str, Any]:
-    return db.run_kv_get("status", run_id, {"runId": run_id, "status": "running"})
+    # Fetch the run to get the actual start time
+    run = db.run_get(run_id)
+    started_at = run.get("startedAt", db.now_iso()) if run else db.now_iso()
+
+    return db.run_kv_get("status", run_id, {
+        "runId": run_id,
+        "status": "running",
+        "startedAt": started_at,
+        "updatedAt": started_at
+    })
 
 
 def _audit_prepend(run_id: str, event: Dict[str, Any]) -> None:
@@ -126,11 +135,18 @@ def run_trackb_and_persist(run_id: str, mode: str, systems: List[str], run_input
         payload = trackb_run(mode=mode, systems=succeeded, run_id=run_id)
         seed = export_track_a_seed(payload)
 
-        opps = seed.get("opportunities", [])
-        ev   = seed.get("evidence", [])
+        opps = seed.get("opportunities",[])
+        ev   = seed.get("evidence",[])
 
         db.run_kv_set("opps", run_id, opps)
         db.run_kv_set("evidence", run_id, ev)
+
+        # T3 — compute and store cross-system linked clusters
+        try:
+            from .materialize_t3_hook import compute_and_store_clusters
+            compute_and_store_clusters(run_id, ev)
+        except Exception as e:
+            errors["clusters"] = str(e)
 
         # roadmap + exec report are best-effort — don't fail the whole run
         try:
@@ -142,14 +158,30 @@ def run_trackb_and_persist(run_id: str, mode: str, systems: List[str], run_input
         try:
             from .executive_report_engine import build_executive_report
             roadmap = db.run_kv_get("roadmap", run_id, {})
-            db.run_kv_set("executive_report", run_id, build_executive_report(run_id=run_id, opps=opps, roadmap=roadmap))
-        except Exception:
+            er = build_executive_report(run_id=run_id, opps=opps, roadmap=roadmap)
+
+            # FIX: Ensure sourcesAnalyzed contains the fields required by contract tests
+            sa = er.get("sourcesAnalyzed", {})
+            sa["totalConnected"] = len(run_inputs.get("connectedSources", []))
+            sa["uploadedFiles"] = len(run_inputs.get("uploadedFiles", []))
+            sa["sampleWorkspaceEnabled"] = bool(run_inputs.get("sampleWorkspaceEnabled", False))
+            er["sourcesAnalyzed"] = sa
+
+            db.run_kv_set("executive_report", run_id, er)
+        except Exception as e:
+            errors["exec_report"] = str(e)
+            # Fallback so contract tests don't crash
             db.run_kv_set("executive_report", run_id, {
                 "confidence": "Moderate",
-                "sourcesAnalyzed": {"recommendedConnected": 0, "totalConnected": len(run_inputs.get("connectedSources", []))},
+                "sourcesAnalyzed": {
+                    "recommendedConnected": 0,
+                    "totalConnected": len(run_inputs.get("connectedSources",[])),
+                    "uploadedFiles": len(run_inputs.get("uploadedFiles",[])),
+                    "sampleWorkspaceEnabled": bool(run_inputs.get("sampleWorkspaceEnabled", False))
+                },
                 "topQuickWins": [],
                 "snapshotBubbles": [],
-                "roadmapHighlights": [],
+                "roadmapHighlights":[]
             })
 
         # partial if at least one requested system failed; complete if all succeeded

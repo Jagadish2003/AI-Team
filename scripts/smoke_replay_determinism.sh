@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Windows Git Bash compatibility: use python if python3 is not available
-if ! python3 --version &>/dev/null 2>&1; then
-  python3() { PYTHONIOENCODING=utf-8 python "$@"; }
+# Windows Git Bash compatibility: use python if python is not available
+if ! python --version &>/dev/null 2>&1; then
+  python() { PYTHONIOENCODING=utf-8 python "$@"; }
 fi
 
 BASE_URL="${BASE_URL:-http://localhost:8000}"
@@ -11,12 +11,12 @@ TOKEN="${DEV_JWT:-dev-token-change-me}"
 hdr=(-H "Authorization: Bearer ${TOKEN}" -H "Content-Type: application/json")
 
 echo "== Health =="
-curl -sS "${BASE_URL}/health" | python3 -c 'import sys,json; o=json.load(sys.stdin); assert o.get("ok") is True; print("✅ /health ok")'
+curl -sS "${BASE_URL}/health" | python -c 'import sys,json; o=json.load(sys.stdin); assert o.get("ok") is True; print("✅ /health ok")'
 
 echo "== Start run =="
 RUN_JSON=$(curl -sS "${hdr[@]}" -X POST "${BASE_URL}/api/runs/start" \
   -d '{"connectedSources":["ServiceNow"],"uploadedFiles":[],"sampleWorkspaceEnabled":false}')
-RUN_ID=$(echo "$RUN_JSON" | python3 -c "import sys,json; print(json.load(sys.stdin)['runId'])")
+RUN_ID=$(echo "$RUN_JSON" | python -c "import sys,json; print(json.load(sys.stdin)['runId'])")
 echo "RunId: ${RUN_ID}"
 
 echo "== Fetch events before replay =="
