@@ -1,18 +1,4 @@
-/**
- * Sprint 4 T7 — OpportunityDetails with LLM summary in detail panel (S7)  v1.1
- *
- * Changes from v1.0:
- *   Fix 5: console.warn added to catch block so failed enrichment fetches
- *          are visible in browser DevTools during integration debugging.
- *   Fix 6: summary fallback chain extended to include selected.title as
- *          last resort so the "Why this matters" panel never silently
- *          disappears if aiRationale is absent from a future payload shape.
- *
- * RunContext compatibility confirmed against actual codebase:
- *   RunContext.tsx exposes { runId, setRunId, clearRunId }.
- *   useRunContext() returns this shape exactly.
- *   const { runId } = useRunContext() is correct.
- */
+
 import React, { useEffect, useState } from 'react';
 import { OpportunityCandidate, OpportunityTier } from '../../types/analystReview';
 import { fetchOppEnrichment, OppEnrichment } from '../../api/enrichmentApi';
@@ -115,10 +101,10 @@ export default function OpportunityDetails({
           {/* T7: AI summary panel — only rendered when summary is non-null */}
           {summary && (
             <div className="mt-4">
-              <div className="flex items-center gap-2 mb-2">
+              <div className="flex items-center justify-between mb-2">
                 <span className="text-xs font-semibold text-text">Why this matters</span>
                 {isLlm && (
-                  <span className="text-xs border border-border rounded px-1.5 py-0.5 text-muted">
+                  <span className="text-xs border border-bg rounded px-1.5 py-0.5 text-text">
                     Claude
                   </span>
                 )}
@@ -135,7 +121,7 @@ export default function OpportunityDetails({
               onClick={onGoToReview}
               className="w-full rounded-md border border-border bg-bg/20 px-3 py-2 text-left text-xs text-text hover:bg-panel2 transition-colors"
             >
-              Open in Analyst Review →
+              Open in Analyst Review 
             </button>
             <button
               onClick={onViewAnalysis}

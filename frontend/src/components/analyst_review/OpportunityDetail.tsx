@@ -1,22 +1,7 @@
-/**
- * Sprint 4 T7 — OpportunityDetail with LLM enrichment (S6)
- *
- * Changes from original:
- *   - Fetches enrichment for the selected opportunity via T6 API
- *   - Shows AI Summary, Why Bullets, Risks, and Suggested Next Steps
- *   - Falls back gracefully to existing aiRationale when:
- *       (a) enrichment not yet available (available=false)
- *       (b) llmGenerated=false (no API key or fallback mode)
- *   - No loading spinner for enrichment — shows template text instantly,
- *     replaces with LLM content when loaded
- *   - Existing sections (Evidence, Permissions, Audit) unchanged
- */
 import React, { useEffect, useState } from 'react';
 import { OpportunityCandidate, ReviewAuditEvent } from '../../types/analystReview';
 import { fetchOppEnrichment, OppEnrichment } from '../../api/enrichmentApi';
 import { useRunContext } from '../../context/RunContext';
-
-// ── Bullet list sub-component ────────────────────────────────────────────────
 
 function BulletList({
   items,
@@ -42,7 +27,7 @@ function BulletList({
   );
 }
 
-// ── LLM enrichment panel ─────────────────────────────────────────────────────
+// ── LLM enrichment panel 
 
 function EnrichmentPanel({
   opp,
@@ -60,10 +45,10 @@ function EnrichmentPanel({
     <div className="space-y-4">
       {/* AI Summary */}
       <div>
-        <div className="flex items-center gap-2 mb-2">
+        <div className="flex items-center justify-between gap-2 mb-2">
           <span className="text-xs font-semibold text-text">AI Analysis</span>
           {isLlm && (
-            <span className="text-xs border border-border rounded px-1.5 py-0.5 text-muted">
+            <span className="text-xs border border-bg rounded px-1.5 py-0.5 text-text">
               Claude
             </span>
           )}

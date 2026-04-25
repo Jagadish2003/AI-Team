@@ -1,16 +1,4 @@
-/**
- * Sprint 4 T7 — KeyInsights with LLM executive summary (S10)
- *
- * Changes from original:
- *   - Fetches run enrichment via T6 API (GET /llm-enrichment)
- *   - Shows aiExecutiveSummary as the lead paragraph when available
- *   - Falls back gracefully to static template text when:
- *       (a) no runId
- *       (b) enrichment not available
- *       (c) executiveSummary is empty
- *   - Static "what leadership should do next" bullets preserved unchanged
- *   - "Claude" badge shown when LLM summary is displayed
- */
+
 import React, { useEffect, useState } from 'react';
 import { ArrowRight, Lightbulb } from 'lucide-react';
 import { fetchRunEnrichment, RunEnrichment } from '../../api/enrichmentApi';
@@ -48,7 +36,7 @@ export default function KeyInsights() {
       <div className="flex items-center justify-between mb-2">
         <div className="text-sm font-semibold text-text">Key Insights</div>
         {llmSummary && (
-          <span className="text-xs border border-border rounded px-1.5 py-0.5 text-muted">
+          <span className="text-xs border border-bg rounded px-1.5 py-0.5 text-text">
             Claude
           </span>
         )}
