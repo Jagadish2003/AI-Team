@@ -1,5 +1,112 @@
-import React from 'react';
+/**
+ * Sprint 4 T7 — OpportunityDetail with LLM enrichment (S6)
+ *
+ * Changes from original:
+ *   - Fetches enrichment for the selected opportunity via T6 API
+ *   - Shows AI Summary, Why Bullets, Risks, and Suggested Next Steps
+ *   - Falls back gracefully to existing aiRationale when:
+ *       (a) enrichment not yet available (available=false)
+ *       (b) llmGenerated=false (no API key or fallback mode)
+ *   - No loading spinner for enrichment — shows template text instantly,
+ *     replaces with LLM content when loaded
+ *   - Existing sections (Evidence, Permissions, Audit) unchanged
+ */
+import React, { useEffect, useState } from 'react';
 import { OpportunityCandidate, ReviewAuditEvent } from '../../types/analystReview';
+import { fetchOppEnrichment, OppEnrichment } from '../../api/enrichmentApi';
+import { useRunContext } from '../../context/RunContext';
+
+// ── Bullet list sub-component ────────────────────────────────────────────────
+
+function BulletList({
+  items,
+  emptyText,
+}: {
+  items: string[];
+  emptyText?: string;
+}) {
+  if (!items || items.length === 0) {
+    return emptyText
+      ? <p className="text-xs text-muted italic">{emptyText}</p>
+      : null;
+  }
+  return (
+    <ul className="space-y-1.5">
+      {items.map((item, i) => (
+        <li key={i} className="flex items-start gap-2 text-xs text-text">
+          <span className="mt-0.5 shrink-0 text-muted">›</span>
+          <span className="leading-relaxed">{item}</span>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+// ── LLM enrichment panel ─────────────────────────────────────────────────────
+
+function EnrichmentPanel({
+  opp,
+  enrichment,
+}: {
+  opp: OpportunityCandidate;
+  enrichment: OppEnrichment | null;
+}) {
+  const isLlm = enrichment?.llmGenerated === true;
+
+  // Use LLM summary if available, fall back to aiRationale
+  const summary = enrichment?.aiSummary || opp.aiRationale;
+
+  return (
+    <div className="space-y-4">
+      {/* AI Summary */}
+      <div>
+        <div className="flex items-center gap-2 mb-2">
+          <span className="text-xs font-semibold text-text">AI Analysis</span>
+          {isLlm && (
+            <span className="text-xs border border-border rounded px-1.5 py-0.5 text-muted">
+              Claude
+            </span>
+          )}
+        </div>
+        <div className="rounded-lg border border-border bg-bg/30 p-3 text-xs text-text leading-relaxed">
+          {summary}
+        </div>
+      </div>
+
+      {/* Why bullets — only when LLM generated */}
+      {isLlm && enrichment.aiWhyBullets.length > 0 && (
+        <div>
+          <div className="text-xs font-semibold text-text mb-2">Why This Matters</div>
+          <div className="rounded-lg border border-border bg-bg/30 p-3">
+            <BulletList items={enrichment.aiWhyBullets} />
+          </div>
+        </div>
+      )}
+
+      {/* Risks — only when LLM generated */}
+      {isLlm && enrichment.aiRisks.length > 0 && (
+        <div>
+          <div className="text-xs font-semibold text-text mb-2">Risks if Not Addressed</div>
+          <div className="rounded-lg border border-border bg-bg/30 p-3">
+            <BulletList items={enrichment.aiRisks} />
+          </div>
+        </div>
+      )}
+
+      {/* Suggested next steps — only when LLM generated */}
+      {isLlm && enrichment.aiSuggestedNextSteps.length > 0 && (
+        <div>
+          <div className="text-xs font-semibold text-text mb-2">Suggested Next Steps</div>
+          <div className="rounded-lg border border-border bg-bg/30 p-3">
+            <BulletList items={enrichment.aiSuggestedNextSteps} />
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Main component ────────────────────────────────────────────────────────────
 
 export default function OpportunityDetail({
   opp,
@@ -10,6 +117,25 @@ export default function OpportunityDetail({
   audit: ReviewAuditEvent[];
   onNavigate?: () => void;
 }) {
+  const { runId } = useRunContext();
+  const [enrichment, setEnrichment] = useState<OppEnrichment | null>(null);
+
+  // Fetch enrichment when selected opportunity changes
+  useEffect(() => {
+    if (!runId || !opp?.id) {
+      setEnrichment(null);
+      return;
+    }
+    let cancelled = false;
+    fetchOppEnrichment(runId, opp.id)
+      .then(data => { if (!cancelled) setEnrichment(data); })
+      .catch((err) => {
+        if (!cancelled) setEnrichment(null);
+        console.warn('[T7] OpportunityDetail enrichment fetch failed:', err);
+      });
+    return () => { cancelled = true; };
+  }, [runId, opp?.id]);
+
   if (!opp) {
     return (
       <div className="flex flex-col rounded-xl border border-border bg-panel h-full items-center justify-center">
@@ -72,15 +198,10 @@ export default function OpportunityDetail({
 
         <div className="border-t border-border" />
 
-        {/* AI Rationale */}
-        <div>
-          <div className="text-xs font-semibold text-text mb-2">AI Rationale</div>
-          <div className="rounded-lg border border-border bg-bg/30 p-3 text-xs text-text leading-relaxed">
-            {opp.aiRationale}
-          </div>
-        </div>
+        {/* T7: LLM enrichment panel — replaces static AI Rationale section */}
+        <EnrichmentPanel opp={opp} enrichment={enrichment} />
 
-        {/* Required Data Permissions */}
+        {/* Required Data Permissions — unchanged */}
         {opp.permissions && opp.permissions.length > 0 && (
           <div>
             <div className="text-xs font-semibold text-text mb-2">Required Data Permissions</div>
@@ -124,7 +245,7 @@ export default function OpportunityDetail({
           </div>
         )}
 
-        {/* Audit Trail */}
+        {/* Audit Trail — unchanged */}
         <div>
           <div className="text-xs font-semibold text-text mb-2">Audit Trail</div>
           <div className="rounded-lg border border-border overflow-hidden">
