@@ -26,11 +26,11 @@ export default function DiscoveryStartBar({
   const isHigh = step === 'high';
 
   const microcopy =
-    confidence === 'LOW'
-      ? 'Connect at least 1 source to start.'
-      : confidence === 'MEDIUM'
-        ? 'Connect one more source to reach HIGH'
-        : 'High confidence ready.';
+    recommendedConnectedCount === 0
+      ? 'Connect at least one source to start discovery.'
+      : recommendedConnectedCount === 2
+        ? 'Connect one more source to reach HIGH confidence.'
+        : null;
 
   return (
     <div className="fixed bottom-0 left-0 right-0 z-40 border-t border-border bg-bg/80 shadow-[0_-4px_12px_rgba(0,0,0,0.15)] backdrop-blur">
@@ -130,7 +130,9 @@ export default function DiscoveryStartBar({
           </div>
 
           {/* Microcopy hint */}
-          <div className="rounded-md bg-panel2 px-3 py-1.5 text-sm">{microcopy}</div>
+          {microcopy && (
+            <div className="rounded-md bg-panel2 px-3 py-1.5 text-sm text-muted">{microcopy}</div>
+          )}
         </div>
       </div>
     </div>
