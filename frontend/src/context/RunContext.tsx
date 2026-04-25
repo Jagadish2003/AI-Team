@@ -6,6 +6,7 @@ import React, {
   useMemo,
   useState,
 } from "react";
+import { useSearchParams } from "react-router-dom";
 
 type RunContextValue = {
   runId: string | null;
@@ -15,62 +16,80 @@ type RunContextValue = {
 
 const RunContext = createContext<RunContextValue | null>(null);
 
-const LS_KEY = "agentiq:lastRunId";
+const LS_KEY = "agentiq_run_id";
+const BASE_URL = (import.meta.env.VITE_API_BASE_URL as string | undefined) ?? "http://localhost:8000";
+const TOKEN   = (import.meta.env.VITE_DEV_JWT    as string | undefined) ?? "dev-token-change-me";
+
+async function validateRunId(id: string): Promise<boolean> {
+  try {
+    const res = await fetch(`${BASE_URL}/api/runs/${id}`, {
+      headers: { Authorization: `Bearer ${TOKEN}` },
+    });
+    return res.ok;
+  } catch {
+    // Network error — treat as valid so we don't clear a good runId offline
+    return true;
+  }
+}
 
 export function RunProvider({ children }: { children: React.ReactNode }) {
-  const [runId, setRunIdState] = useState<string | null>(() => {
-    try {
-      const fromUrl = new URL(window.location.href).searchParams.get("runId");
-      const fromLs = window.localStorage.getItem(LS_KEY);
-      return fromUrl ?? (fromLs && fromLs.trim().length > 0 ? fromLs : null);
-    } catch {
-      return null;
-    }
-  });
+  const [searchParams, setSearchParams] = useSearchParams();
+  const urlRunId = searchParams.get("runId");
 
-  // Sync URL on first render if runId came from localStorage only.
+  // Start null — run-scoped pages show RunRequiredEmptyState on first render,
+  // then resolve after validation below.
+  const [runId, _setRunId] = useState<string | null>(null);
+
+  // Re-run whenever URL ?runId changes. Validates the candidate against the
+  // backend: unknown runIds resolve to null so pages show RunRequiredEmptyState
+  // instead of an error panel.
   useEffect(() => {
-    if (!runId) return;
-    const url = new URL(window.location.href);
-    if (!url.searchParams.get("runId")) {
-      url.searchParams.set("runId", runId);
-      window.history.replaceState({}, "", url.toString());
-    }
-    window.localStorage.setItem(LS_KEY, runId);
-  }, []);
-  const setRunId = useCallback((id: string | null) => {
-    setRunIdState(id);
+    const fromUrl = urlRunId && urlRunId.trim() ? urlRunId : null;
+    const stored  = (() => { try { return localStorage.getItem(LS_KEY); } catch { return null; } })();
+    const fromLs  = stored && stored.trim() ? stored : null;
+    const candidate = fromUrl ?? fromLs;
 
-    const url = new URL(window.location.href);
-
-    if (id) {
-      url.searchParams.set("runId", id);
-      window.localStorage.setItem(LS_KEY, id);
-    } else {
-      url.searchParams.delete("runId");
-      window.localStorage.removeItem(LS_KEY);
+    if (!candidate) {
+      _setRunId(null);
+      return;
     }
 
-    window.history.replaceState({}, "", url.toString());
-  }, []);
+    validateRunId(candidate).then((valid) => {
+      if (valid) {
+        _setRunId(candidate);
+        try { localStorage.setItem(LS_KEY, candidate); } catch {}
+      } else {
+        // Run not found — clear so RunRequiredEmptyState is shown
+        _setRunId(null);
+        try { localStorage.removeItem(LS_KEY); } catch {}
+        // Remove stale ?runId from URL
+        const next = new URLSearchParams(searchParams);
+        next.delete("runId");
+        setSearchParams(next, { replace: true });
+      }
+    });
+  }, [urlRunId]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const clearRunId = useCallback(() => {
-    setRunIdState(null);
+  const setRunId = useCallback(
+    (id: string | null) => {
+      _setRunId(id);
+      const next = new URLSearchParams(searchParams);
+      if (id) {
+        next.set("runId", id);
+        try { localStorage.setItem(LS_KEY, id); } catch {}
+      } else {
+        next.delete("runId");
+        try { localStorage.removeItem(LS_KEY); } catch {}
+      }
+      setSearchParams(next, { replace: true });
+    },
+    [searchParams, setSearchParams]
+  );
 
-    const url = new URL(window.location.href);
-    url.searchParams.delete("runId");
-
-    window.localStorage.removeItem(LS_KEY);
-
-    window.history.replaceState({}, "", url.toString());
-  }, []);
+  const clearRunId = useCallback(() => setRunId(null), [setRunId]);
 
   const value = useMemo(
-    () => ({
-      runId,
-      setRunId,
-      clearRunId,
-    }),
+    () => ({ runId, setRunId, clearRunId }),
     [runId, setRunId, clearRunId]
   );
 
@@ -78,9 +97,7 @@ export function RunProvider({ children }: { children: React.ReactNode }) {
 }
 
 export function useRunContext() {
-  const context = useContext(RunContext);
-  if (!context) {
-    throw new Error("useRunContext must be used within RunProvider");
-  }
-  return context;
+  const ctx = useContext(RunContext);
+  if (!ctx) throw new Error("useRunContext must be used within RunProvider");
+  return ctx;
 }

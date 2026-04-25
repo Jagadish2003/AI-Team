@@ -8,13 +8,13 @@ export function RunRequiredEmptyState({ onStart }: { onStart: () => void }) {
           No discovery run selected
         </h2>
         <p className="text-sm text-muted mb-6 leading-relaxed">
-          This screen depends on a discovery run. Start one from{" "}
-          <span className="font-medium text-text">Discovery Run</span> to continue.
+          This screen is tied to a specific discovery run. Start a run from the{" "}
+          <span className="font-medium text-text">Discovery Run</span> page to continue.
         </p>
         <button
           onClick={onStart}
           className="px-6 py-2.5 text-sm font-medium text-white bg-accent rounded-lg hover:opacity-90 hover:scale-[1.02] active:scale-[0.98] transition-all duration-200">
-          Start Discovery Run
+          Go to Discovery Run
         </button>
       </div>
     </div>
