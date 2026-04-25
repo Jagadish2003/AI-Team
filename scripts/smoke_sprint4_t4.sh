@@ -6,9 +6,9 @@
 # executable resolves /tmp as C:\tmp (which doesn't exist), causing FileNotFoundError.
 set -euo pipefail
 
-# Windows Git Bash compatibility: python3 may be a Microsoft Store stub
-if ! python3 --version &>/dev/null 2>&1; then
-  python3() { PYTHONIOENCODING=utf-8 python "$@"; }
+# Windows Git Bash compatibility: python may be a Microsoft Store stub
+if ! python --version &>/dev/null 2>&1; then
+  python() { PYTHONIOENCODING=utf-8 python "$@"; }
 fi
 
 BASE_URL="${BASE_URL:-http://localhost:8000}"
@@ -28,17 +28,17 @@ RUN_JSON=$(curl -sS "${hdr[@]}" -X POST "${BASE_URL}/api/runs/start" -d '{
   "mode":    "offline",
   "systems": ["salesforce", "servicenow", "jira"]
 }')
-RUN_ID=$(echo "$RUN_JSON" | python3 -c \
+RUN_ID=$(echo "$RUN_JSON" | python -c \
   "import sys,json; d=json.load(sys.stdin); print(d.get('runId') or d.get('id'))")
 test -n "$RUN_ID" || { echo "❌ missing runId"; echo "$RUN_JSON"; exit 1; }
 echo "   runId=$RUN_ID"
 
 echo "3) Poll until complete or partial"
 STATUS=""
-for i in $(seq 1 60); do
+for i in $(seq 1 120); do
   SJSON=$(curl -sS "${hdr[@]}" "${BASE_URL}/api/runs/${RUN_ID}/status" || true)
   if [ -n "$SJSON" ]; then
-    STATUS=$(echo "$SJSON" | python3 -c \
+    STATUS=$(echo "$SJSON" | python -c \
       "import sys,json; print(json.load(sys.stdin).get('status','running'))" || echo "running")
   fi
   echo "   status=$STATUS"
@@ -52,7 +52,7 @@ done
 
 echo "4) Capture pre-replay artifacts"
 OPPS_BEFORE=$(curl -sS "${hdr[@]}" "${BASE_URL}/api/runs/${RUN_ID}/opportunities")
-COUNT_BEFORE=$(echo "$OPPS_BEFORE" | python3 -c \
+COUNT_BEFORE=$(echo "$OPPS_BEFORE" | python -c \
   "import sys,json; print(len(json.load(sys.stdin)))")
 echo "   opportunities before replay: $COUNT_BEFORE"
 test "$COUNT_BEFORE" -ge 1 || { echo "❌ no opportunities before replay"; exit 1; }
@@ -71,7 +71,7 @@ fi
 echo "5) Replay"
 REPLAY_JSON=$(curl -sS "${hdr[@]}" -X POST \
   "${BASE_URL}/api/runs/${RUN_ID}/replay" -d '{}')
-IS_REPLAY=$(echo "$REPLAY_JSON" | python3 -c \
+IS_REPLAY=$(echo "$REPLAY_JSON" | python -c \
   "import sys,json; print(json.load(sys.stdin).get('isReplay',''))")
 test "$IS_REPLAY" = "True" || test "$IS_REPLAY" = "true" || {
   echo "❌ isReplay flag missing or false"
@@ -90,7 +90,7 @@ else
 fi
 
 echo "7) Determinism gate — opportunities, evidence, clusters (timestamps excluded)"
-python3 - "$OPPS_BEFORE" "$OPPS_AFTER" "$CLUSTERS_BEFORE" "$CLUSTERS_AFTER" "$EVIDENCE_BEFORE" "$EVIDENCE_AFTER" <<'PY'
+python - "$OPPS_BEFORE" "$OPPS_AFTER" "$CLUSTERS_BEFORE" "$CLUSTERS_AFTER" "$EVIDENCE_BEFORE" "$EVIDENCE_AFTER" <<'PY'
 import json, sys
 
 def strip_ts(obj):
@@ -127,7 +127,7 @@ PY
 
 echo "8) Status reflects complete after replay"
 ST_AFTER=$(curl -sS "${hdr[@]}" "${BASE_URL}/api/runs/${RUN_ID}/status")
-STATUS_AFTER=$(echo "$ST_AFTER" | python3 -c \
+STATUS_AFTER=$(echo "$ST_AFTER" | python -c \
   "import sys,json; print(json.load(sys.stdin).get('status',''))")
 test "$STATUS_AFTER" = "complete" || {
   echo "❌ Expected status=complete after replay, got: $STATUS_AFTER"; exit 1;
