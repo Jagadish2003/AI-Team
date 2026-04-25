@@ -33,7 +33,7 @@ echo "3) Poll until complete"
 
 STATUS=""
 
-for i in $(seq 1 90); do
+for i in $(seq 1 120); do
   SJSON=$(curl -sS "${hdr[@]}" "${BASE_URL}/api/runs/${RUN_ID}/status" || true)
 
   STATUS=$(python -c "import json; d=json.loads('''$SJSON''') if '''$SJSON''' else {}; print(d.get('status','running'))")

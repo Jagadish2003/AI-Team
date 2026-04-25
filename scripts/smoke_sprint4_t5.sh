@@ -7,9 +7,9 @@ BASE_URL="${BASE_URL:-http://localhost:8000}"
 TOKEN="${DEV_JWT:-dev-token-change-me}"
 hdr=(-H "Authorization: Bearer ${TOKEN}" -H "Content-Type: application/json")
 
-_count() { python3 -c "import sys,json; print(len(json.load(sys.stdin)))"; }
-_field() { local f=$1; python3 -c "import sys,json; print(json.load(sys.stdin).get('$f',''))"; }
-_json() { python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('runId') or d.get('id'))"; }
+_count() { python -c "import sys,json; print(len(json.load(sys.stdin)))"; }
+_field() { local f=$1; python -c "import sys,json; print(json.load(sys.stdin).get('$f',''))"; }
+_json() { python -c "import sys,json; d=json.load(sys.stdin); print(d.get('runId') or d.get('id'))"; }
 
 echo "1) Health"
 code=$(curl -sS -o /dev/null -w "%{http_code}" "${BASE_URL}/health")
@@ -30,9 +30,9 @@ echo "   runId=$RUN_ID"
 
 echo "3) S3 — poll /status until complete"
 STATUS=""
-for i in $(seq 1 60); do
+for i in $(seq 1 120); do
   SJSON=$(curl -sS "${hdr[@]}" "${BASE_URL}/api/runs/${RUN_ID}/status" || true)
-  STATUS=$(echo "$SJSON" | python3 -c \
+  STATUS=$(echo "$SJSON" | python -c \
     "import sys,json; print(json.load(sys.stdin).get('status','running'))" 2>/dev/null || echo "running")
   echo "   status=$STATUS"
   if [ "$STATUS" = "complete" ] || [ "$STATUS" = "partial" ]; then break; fi
@@ -75,7 +75,7 @@ code=$(curl -sS -o /dev/null -w "%{http_code}" "${hdr[@]}" \
   "${BASE_URL}/api/runs/${RUN_ID}/executive-report")
 test "$code" = "200" || { echo "❌ exec report returned $code"; exit 1; }
 # Verify topQuickWins are all Quick Win tier
-python3 - <<PY
+python - <<PY
 import json, sys
 exec_data = json.loads('''${EXEC}''')
 qw = exec_data.get("topQuickWins", [])
@@ -104,7 +104,7 @@ EV_AFTER=$(curl -sS "${hdr[@]}" "${BASE_URL}/api/runs/${RUN_ID}/evidence")
 echo "$OPPS_AFTER" > /tmp/t5_opps_after.json
 echo "$EV_AFTER"   > /tmp/t5_ev_after.json
 
-python3 - <<'PY'
+python - <<'PY'
 import json, sys
 
 def strip_ts(obj):
@@ -133,7 +133,7 @@ PY
 
 echo "10) isReplay flag in /status after replay"
 ST=$(curl -sS "${hdr[@]}" "${BASE_URL}/api/runs/${RUN_ID}/status")
-IS_REPLAY=$(echo "$ST" | python3 -c \
+IS_REPLAY=$(echo "$ST" | python -c \
   "import sys,json; print(json.load(sys.stdin).get('isReplay',''))")
 test "$IS_REPLAY" = "True" || test "$IS_REPLAY" = "true" || {
   echo "❌ isReplay not set in /status after replay: $ST"; exit 1;

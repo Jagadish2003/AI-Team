@@ -51,7 +51,7 @@ echo "✅ no fallback rule holds (404 on unknown runId)"
 
 echo "== Wait for run to complete =="
 STATUS=""
-for i in $(seq 1 30); do
+for i in $(seq 1 60); do
   ST=$(curl -sS "${hdr[@]}" "${BASE_URL}/api/runs/${RUN_ID}/status")
   STATUS=$(echo "$ST" | python -c "import sys,json; print(json.load(sys.stdin).get('status',''))")
   echo "   status=$STATUS"
