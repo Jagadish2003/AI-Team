@@ -42,7 +42,7 @@ export default function DiscoveryRunPage() {
       <div className="min-h-screen text-text">
         <TopNav />
         <div className="flex items-center justify-center h-[75vh]">
-          <div className="rounded-xl border border-white/20 bg-panel p-8 py-12 text-center shadow-xl shadow-black/20">
+          <div className="rounded-xl border border-white/20 bg-panel p-8 py-12 text-center shadow-xl shadow-black/20 w-[550px]">
             <h2 className="text-xl font-semibold text-text mb-4">No Active Run</h2>
             <p className="text-sm text-muted mb-6">Start a new discovery run to continue.</p>
             <button
