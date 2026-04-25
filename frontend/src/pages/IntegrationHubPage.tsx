@@ -29,7 +29,7 @@ export default function IntegrationHubPage() {
 
   const { push } = useToast();
   const navigate = useNavigate();
-  const { clearRunId } = useRunContext();
+  const { runId } = useRunContext();
 
   useEffect(() => {
     if (!loading && !selectedConnectorId && recommended && recommended.length > 0) {
@@ -134,9 +134,15 @@ export default function IntegrationHubPage() {
             confidence={confidence}
             recommendedConnectedCount={recommendedConnectedCount}
             recommendedTotal={3}
-            recommended={recommended} 
+            recommended={recommended}
             canStart={canStart}
-            onStart={() => { clearRunId(); navigate('/discovery-run'); }}
+            onStart={() => {
+              if (runId) {
+                navigate(`/discovery-run?runId=${runId}`);
+              } else {
+                navigate('/discovery-run', { state: { autoStart: true } });
+              }
+            }}
             onUpload={() => navigate('/source-intake')}
           />
         </>

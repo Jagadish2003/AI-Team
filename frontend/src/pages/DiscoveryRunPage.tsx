@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useLocation } from 'react-router-dom';
 import TopNav from '../components/common/TopNav';
 import { useDiscoveryRunContext } from '../context/DiscoveryRunContext';
 import { useConnectorContext } from '../context/ConnectorContext';
@@ -9,6 +9,8 @@ import { useRunContext } from '../context/RunContext';
 export default function DiscoveryRunPage() {
   const [autoScroll, setAutoScroll] = useState(true);
   const nav = useNavigate();
+  const location = useLocation();
+  const autoStartRequested = (location.state as { autoStart?: boolean } | null)?.autoStart === true;
   const { runId } = useRunContext();
   const { connectors } = useConnectorContext();
   const { uploadedFiles, sampleWorkspaceEnabled } = useSourceIntakeContext();
@@ -27,12 +29,36 @@ export default function DiscoveryRunPage() {
     };
   }, [connectors, uploadedFiles, sampleWorkspaceEnabled]);
 
+  // Auto-start when navigated here with { state: { autoStart: true } } and no active run.
   useEffect(() => {
-    if (runId) return;
-    void startRun(inputs);
-  }, [runId, startRun, inputs]);
+    if (!runId && autoStartRequested && !loading) {
+      void startRun(inputs);
+    }
+  }, [runId, autoStartRequested]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  if (loading) {
+  // Show explicit panel when there is no active run and no auto-start was requested.
+  if (!runId && !autoStartRequested) {
+    return (
+      <div className="min-h-screen text-text">
+        <TopNav />
+        <div className="flex items-center justify-center h-[75vh]">
+          <div className="rounded-xl border border-white/20 bg-panel p-8 py-12 text-center shadow-xl shadow-black/20">
+            <h2 className="text-xl font-semibold text-text mb-4">No Active Run</h2>
+            <p className="text-sm text-muted mb-6">Start a new discovery run to continue.</p>
+            <button
+              onClick={() => void startRun(inputs)}
+              disabled={loading}
+              className="px-6 py-2.5 text-sm font-medium text-white bg-accent rounded-lg hover:opacity-90 hover:scale-[1.02] active:scale-[0.98] transition-all duration-200 disabled:opacity-50"
+            >
+              {loading ? 'Starting…' : 'Start New Discovery Run'}
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (loading || (!runId && autoStartRequested)) {
     return (
       <div className="min-h-screen text-text">
         <TopNav />

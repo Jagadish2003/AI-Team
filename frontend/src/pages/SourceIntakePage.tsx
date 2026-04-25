@@ -17,8 +17,8 @@ import { useRunContext } from '../context/RunContext';
 export default function SourceIntakePage() {
   const { push } = useToast();
   const nav = useNavigate();
-  const { clearRunId } = useRunContext();
- 
+  const { runId } = useRunContext();
+
   const singleFileInputRef = useRef<HTMLInputElement | null>(null);
   const { all } = useConnectorContext();
  
@@ -166,7 +166,13 @@ export default function SourceIntakePage() {
                   variant="primary"
                   disabled={!canBegin}
                   title={!canBegin ? 'Connect at least one source to continue' : undefined}
-                  onClick={() => { clearRunId(); nav('/discovery-run'); }}>
+                  onClick={() => {
+                    if (runId) {
+                      nav(`/discovery-run?runId=${runId}`);
+                    } else {
+                      nav('/discovery-run', { state: { autoStart: true } });
+                    }
+                  }}>
                   Begin Discovery
                   <ChevronRight size={16} strokeWidth={2.5} />
                 </Button>
