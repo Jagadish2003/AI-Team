@@ -1,15 +1,4 @@
-/**
- * Sprint 4 T7 — LLM Enrichment API client
- *
- * Calls the two T6 endpoints:
- *   GET /api/runs/{runId}/llm-enrichment
- *   GET /api/runs/{runId}/opportunities/{oppId}/enrichment
- *
- * Both endpoints always return usable data:
- *   - available: false  → enrichment not yet generated (show template text)
- *   - llmGenerated: false → fallback mode (aiSummary = aiRationale template)
- *   - llmGenerated: true  → Claude-generated content
- */
+
 import { apiGet } from '../lib/apiClient';
 
 export interface OppEnrichment {

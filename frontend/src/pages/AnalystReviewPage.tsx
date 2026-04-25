@@ -82,13 +82,13 @@ export default function AnalystReviewPage() {
             items={opportunities}
             selectedId={selectedId}
             onSelect={select}
-            onCreate={() => push('Create Opportunity will be available in Sprint 2.')}
+            onCreate={() => push('Create Opportunity will be available in later Sprint.')}
           />
 
           <OpportunityDetail
             opp={selected}
             audit={audit}
-            onNavigate={() => push('Full detail view coming in Sprint 2.')}
+            onNavigate={() => push('Full detail view coming in later Sprint.')}
           />
 
           <ReasoningOverride

@@ -82,7 +82,7 @@ export default function IntegrationHubPage() {
                         push('Connector connected.');
                       }
                     }}
-                    onSecondary={() => push('Data preview available in Sprint 2.')}
+                    onSecondary={() => push('Data preview available in later Sprint.')}
                   />
                 </div>
 
@@ -96,7 +96,7 @@ export default function IntegrationHubPage() {
                       if (!c) return;
 
                       if (c.status === 'connected') {
-                        push('Data preview available in Sprint 2.');
+                        push('Data preview available in later Sprint.');
                       } else if (c.status === 'coming_soon') {
                         push('Connector coming soon.');
                       } else {

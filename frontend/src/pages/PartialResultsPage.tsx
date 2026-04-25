@@ -109,17 +109,6 @@ export default function PartialResultsPage() {
               Run ID: <span className="font-semibold text-text">{runId}</span>
             </div>
           </div>
-          {/* <div className="flex justify-end">
-            <div className="flex items-center gap-2 px-3 py-2 rounded-full bg-accent/20 text-white text-xs font-medium">
-              <span className="w-2 h-2 rounded-full bg-accent animate-pulse"></span>
-              <span>
-                {run?.status === 'RUNNING' ? 'RUNNING...' : (run?.status ?? '—')}
-              </span>
-              <span className="opacity-80">
-                {run?.progress?.percent ?? 0}%
-              </span>
-            </div>
-          </div> */}
         </div>
 
         <TabsHeader tab={activeTab} onTab={setActiveTab} />
