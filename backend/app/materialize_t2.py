@@ -12,7 +12,6 @@ def set_status(run_id: str, payload: Dict[str, Any]) -> None:
 
 
 def get_status(run_id: str) -> Dict[str, Any]:
-    # Fetch the run to get the actual start time
     run = db.run_get(run_id)
     started_at = run.get("startedAt", db.now_iso()) if run else db.now_iso()
 
@@ -36,13 +35,6 @@ def _audit_event(action: str, by: str = "System") -> Dict[str, Any]:
 def _probe_systems(
     systems: List[str], mode: str
 ) -> Tuple[Dict[str, str], List[str], Dict[str, str]]:
-    """
-    Attempt ingestion for each requested system independently.
-    Returns (per_system, succeeded, errors).
-    - per_system: {system: "ok" | "failed" | "skipped"}
-    - succeeded:  systems that returned non-empty data
-    - errors:     {system: error message} for failed systems
-    """
     import os
     os.environ["INGEST_MODE"] = mode
 
@@ -118,9 +110,6 @@ def run_trackb_and_persist(run_id: str, mode: str, systems: List[str], run_input
     errors: Dict[str, str] = {}
 
     try:
-        # Probe each system individually so we can track per-system success/failure.
-        # Systems with missing/bad credentials will be marked "failed" and excluded
-        # from the pipeline run, allowing a PARTIAL result instead of total failure.
         per_system, succeeded, probe_errors = _probe_systems(systems, mode)
         errors.update(probe_errors)
 
@@ -135,8 +124,8 @@ def run_trackb_and_persist(run_id: str, mode: str, systems: List[str], run_input
         payload = trackb_run(mode=mode, systems=succeeded, run_id=run_id)
         seed = export_track_a_seed(payload)
 
-        opps = seed.get("opportunities",[])
-        ev   = seed.get("evidence",[])
+        opps = seed.get("opportunities", [])
+        ev   = seed.get("evidence", [])
 
         db.run_kv_set("opps", run_id, opps)
         db.run_kv_set("evidence", run_id, ev)
@@ -148,19 +137,19 @@ def run_trackb_and_persist(run_id: str, mode: str, systems: List[str], run_input
         except Exception as e:
             errors["clusters"] = str(e)
 
-        # roadmap + exec report are best-effort — don't fail the whole run
+        # roadmap
         try:
             from .roadmap_engine import build_roadmap
             db.run_kv_set("roadmap", run_id, build_roadmap(opps))
         except Exception as e:
             errors["roadmap"] = str(e)
 
+        # executive report
         try:
             from .executive_report_engine import build_executive_report
             roadmap = db.run_kv_get("roadmap", run_id, {})
             er = build_executive_report(run_id=run_id, opps=opps, roadmap=roadmap)
 
-            # FIX: Ensure sourcesAnalyzed contains the fields required by contract tests
             sa = er.get("sourcesAnalyzed", {})
             sa["totalConnected"] = len(run_inputs.get("connectedSources", []))
             sa["uploadedFiles"] = len(run_inputs.get("uploadedFiles", []))
@@ -170,21 +159,35 @@ def run_trackb_and_persist(run_id: str, mode: str, systems: List[str], run_input
             db.run_kv_set("executive_report", run_id, er)
         except Exception as e:
             errors["exec_report"] = str(e)
-            # Fallback so contract tests don't crash
             db.run_kv_set("executive_report", run_id, {
                 "confidence": "Moderate",
                 "sourcesAnalyzed": {
                     "recommendedConnected": 0,
-                    "totalConnected": len(run_inputs.get("connectedSources",[])),
-                    "uploadedFiles": len(run_inputs.get("uploadedFiles",[])),
+                    "totalConnected": len(run_inputs.get("connectedSources", [])),
+                    "uploadedFiles": len(run_inputs.get("uploadedFiles", [])),
                     "sampleWorkspaceEnabled": bool(run_inputs.get("sampleWorkspaceEnabled", False))
                 },
                 "topQuickWins": [],
                 "snapshotBubbles": [],
-                "roadmapHighlights":[]
+                "roadmapHighlights": []
             })
 
-        # partial if at least one requested system failed; complete if all succeeded
+        # T6 — LLM enrichment (post-processing, non-blocking)
+        try:
+            from .llm_enrichment import run_llm_enrichment, KV_LLM_ENRICHMENT
+            exec_report = db.run_kv_get("executive_report", run_id, {})
+            sources_analyzed = exec_report.get("sourcesAnalyzed", {})
+            enrichment = run_llm_enrichment(
+                run_id=run_id, opps=opps, evidence=ev,
+                sources_analyzed=sources_analyzed,
+            )
+            db.run_kv_set(KV_LLM_ENRICHMENT, run_id, enrichment)
+            if enrichment.get("executiveSummary"):
+                exec_report["aiExecutiveSummary"] = enrichment["executiveSummary"]
+                db.run_kv_set("executive_report", run_id, exec_report)
+        except Exception as e:
+            errors["llm_enrichment"] = str(e)
+
         status = "complete" if len(succeeded) == len(systems) else "partial"
         audit_action = "DISCOVERY_MATERIALIZED" if status == "complete" else "DISCOVERY_PARTIAL"
         _finalise(run_id, run, status, mode, systems, per_system,
