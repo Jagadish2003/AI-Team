@@ -19,3 +19,4 @@ Thumbs.db
 .idea/
 *.db
 backend/.env
+frontend/.env
