@@ -19,9 +19,12 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+from dotenv import load_dotenv
 
 # Track A adapter
 from .track_a_adapter import export_track_a_seed
+
+load_dotenv()
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s  %(message)s")
 logger = logging.getLogger(__name__)

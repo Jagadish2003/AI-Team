@@ -27,15 +27,18 @@ import logging
 import os
 import time
 from typing import Any, Dict, List, Optional
+from dotenv import load_dotenv
 
 logger = logging.getLogger(__name__)
 
-MODEL            = "claude-sonnet-4-5-20251022"
+MODEL            = "claude-sonnet-4-5"
 MAX_TOKENS_OPP   = 1024
 MAX_TOKENS_EXEC  = 512
 API_URL          = "https://api.anthropic.com/v1/messages"
 API_VERSION      = "2023-06-01"
 KV_LLM_ENRICHMENT = "llm_enrichment"
+
+load_dotenv()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
