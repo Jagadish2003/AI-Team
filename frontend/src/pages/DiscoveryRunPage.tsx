@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState, useRef } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import TopNav from '../components/common/TopNav';
 import { useDiscoveryRunContext } from '../context/DiscoveryRunContext';
@@ -17,6 +17,33 @@ export default function DiscoveryRunPage() {
 
   const { run, events, loading, error, started, computing, startRun, restartRun, refetch } =
     useDiscoveryRunContext();
+
+  const TOTAL_STAGES = 10; // QUEUE, INGEST, NORMALIZE, EXTRACT, SCORE, LINK, CONFIDENCE, ROADMAP, REPORT, DONE
+
+  const isComplete = run?.status === 'complete' || run?.status === 'completed' || run?.status === 'COMPLETED';
+
+  // Animated percentage counter while running
+  const [displayPct, setDisplayPct] = useState(0);
+  const targetPct = useMemo(() => {
+    if (isComplete) return 100;
+    if (!computing) return 0;
+    const seen = new Set(events.map((e: any) => e.stage).filter(Boolean));
+    return Math.min(Math.round((seen.size / TOTAL_STAGES) * 100), 99);
+  }, [isComplete, computing, events]);
+
+  const animFrameRef = useRef<number | null>(null);
+  useEffect(() => {
+    if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current);
+    const step = () => {
+      setDisplayPct((prev) => {
+        if (prev < targetPct) { animFrameRef.current = requestAnimationFrame(step); return prev + 1; }
+        if (prev > targetPct) { animFrameRef.current = requestAnimationFrame(step); return prev - 1; }
+        return prev;
+      });
+    };
+    animFrameRef.current = requestAnimationFrame(step);
+    return () => { if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current); };
+  }, [targetPct]);
 
   const inputs = useMemo(() => {
     const connectedSources = connectors
@@ -107,7 +134,14 @@ export default function DiscoveryRunPage() {
             <p className="mt-1 text-sm text-muted">
               Run ID: <span className="font-semibold text-text">{run?.id ?? runId ?? '—'}</span>
               {' · '}
-              Status: <span className="font-semibold text-text">{computing ? 'computing' : (run?.status ?? '—')}</span>
+              Status:{' '}
+              <span className="font-semibold text-text">
+                {computing
+                  ? `Running (${displayPct}%)`
+                  : isComplete
+                  ? `Complete (100%)`
+                  : (run?.status ?? '—')}
+              </span>
               {computing && (
                 <span className="ml-2 inline-flex items-center gap-1 rounded-full bg-accent/20 px-2 py-0.5 text-xs font-medium text-accent">
                   <span className="animate-pulse">●</span> Computing…
@@ -215,9 +249,6 @@ export default function DiscoveryRunPage() {
               )}
             </div>
 
-            <div className="mt-3 text-xs text-muted">
-              Phase 1 read-only view. Decisions happen in Screen 6 (Analyst Review).
-            </div>
           </div>
         </div>
       </div>
