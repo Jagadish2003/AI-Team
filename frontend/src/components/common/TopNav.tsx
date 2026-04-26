@@ -9,7 +9,7 @@ const items = [
 
   //  run-scoped screens
   { to: '/discovery-run', label: 'Discovery Run', runScoped: true },
-  { to: '/partial-results', label: 'Partial Results', runScoped: true },
+  { to: '/partial-results', label: 'Evidence Collection', runScoped: true },
   { to: '/normalization', label: 'Normalization', runScoped: true }, 
   { to: '/analyst-review', label: 'Analyst Review', runScoped: true },
   { to: '/opportunity-map', label: 'Opportunity Map', runScoped: true },
