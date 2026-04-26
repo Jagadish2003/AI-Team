@@ -1,11 +1,36 @@
 {
   "recommended": [
     {
+      "id": "salesforce",
+      "name": "Salesforce",
+      "category": "CRM \u00b7 Revenue",
+      "tier": "recommended",
+      "recommendedRank": 1,
+      "status": "not_connected",
+      "metrics": [
+        {
+          "label": "Accounts",
+          "value": "1240"
+        },
+        {
+          "label": "Opportunities",
+          "value": "856"
+        }
+      ],
+      "lastSynced": "\u2014",
+      "reads": [
+        "Accounts",
+        "Opportunities",
+        "Cases"
+      ],
+      "signalStrength": 91
+    },
+    {
       "id": "servicenow",
       "name": "ServiceNow",
       "category": "ITSM \u00b7 CMDB",
       "tier": "recommended",
-      "recommendedRank": 1,
+      "recommendedRank": 2,
       "status": "not_connected",
       "metrics": [
         {
@@ -30,7 +55,7 @@
       "name": "Jira & Confluence",
       "category": "Delivery \u00b7 Knowledge",
       "tier": "recommended",
-      "recommendedRank": 2,
+      "recommendedRank": 3,
       "status": "not_connected",
       "metrics": [
         {
@@ -49,31 +74,6 @@
         "Runbooks / Pages"
       ],
       "signalStrength": 88
-    },
-    {
-      "id": "microsoft_365",
-      "name": "Microsoft 365",
-      "category": "Comms \u00b7 Collaboration",
-      "tier": "recommended",
-      "recommendedRank": 3,
-      "status": "not_connected",
-      "metrics": [
-        {
-          "label": "Mailboxes",
-          "value": "\u2014"
-        },
-        {
-          "label": "Teams Channels",
-          "value": "\u2014"
-        }
-      ],
-      "lastSynced": "\u2014",
-      "reads": [
-        "Shared Inbox",
-        "Teams Channels",
-        "Meeting Transcripts"
-      ],
-      "signalStrength": 55
     }
   ],
   "connectors": [

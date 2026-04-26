@@ -1,10 +1,25 @@
-[  
+[
+  {
+    "id": "salesforce",
+    "name": "Salesforce",
+    "category": "CRM · Revenue",
+    "tier": "recommended",
+    "recommendedRank": 1,
+    "status": "disconnected",
+    "metrics":[
+      { "label": "Accounts", "value": "1240" },
+      { "label": "Opportunities", "value": "856" }
+    ],
+    "lastSynced": "—",
+    "reads": ["Accounts", "Opportunities", "Cases"],
+    "signalStrength": 91
+  },
   {
     "id": "servicenow",
     "name": "ServiceNow",
     "category": "ITSM · CMDB",
     "tier": "recommended",
-    "recommendedRank": 1,
+    "recommendedRank": 2,
     "status": "disconnected",
     "metrics":[
       { "label": "Incidents", "value": "2847" },
@@ -19,7 +34,7 @@
     "name": "Jira & Confluence",
     "category": "Delivery · Knowledge",
     "tier": "recommended",
-    "recommendedRank": 2,
+    "recommendedRank": 3,
     "status": "disconnected",
     "metrics":[
       { "label": "Issues", "value": "5847" },
@@ -28,21 +43,6 @@
     "lastSynced": "2 hrs ago",
     "reads":["Issues", "Transitions", "Runbooks / Pages"],
     "signalStrength": 88
-  },
-  {
-    "id": "microsoft_365",
-    "name": "Microsoft 365",
-    "category": "Comms · Collaboration",
-    "tier": "recommended",
-    "recommendedRank": 3,
-    "status": "disconnected",
-    "metrics":[
-      { "label": "Mailboxes", "value": "—" },
-      { "label": "Teams Channels", "value": "—" }
-    ],
-    "lastSynced": "—",
-    "reads":["Shared Inbox", "Teams Channels", "Meeting Transcripts"],
-    "signalStrength": 55
   },
   {
     "id": "sap",

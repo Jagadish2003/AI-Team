@@ -1,7 +1,8 @@
 import React from 'react';
-import { Settings, Kanban, LayoutGrid, Box, Github, MessageSquare, Database } from 'lucide-react';
+import { Settings, Kanban, LayoutGrid, Box, Github, MessageSquare, Database, Cloud } from 'lucide-react';
 
 export const connectorIcons: Record<string, React.ReactNode> = {
+  Salesforce: <Cloud size={18} strokeWidth={2} className="text-[#94A3B8]" />,
   ServiceNow: <Settings size={18} strokeWidth={2} className="text-[#94A3B8]" />,
   'Jira & Confluence': <Kanban size={18} strokeWidth={2} className="text-[#94A3B8]" />,
   'Microsoft 365': <LayoutGrid size={18} strokeWidth={2} className="text-[#94A3B8]" />,
