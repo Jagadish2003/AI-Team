@@ -139,7 +139,7 @@ class JiraClient:
 
         while True:
             data = self.get(
-                f"/rest/api/{JIRA_API_VERSION}/search",
+                f"/rest/api/{JIRA_API_VERSION}/search/jql",
                 params={
                     "jql": jql,
                     "startAt": start_at,
@@ -288,7 +288,7 @@ def get_issue_metrics(
         return _load_fixture()["issue_metrics"]
 
     if not project_key:
-        project_key = os.getenv("JIRA_PROJECT_KEY", "CRM")
+        project_key = os.getenv("JIRA_PROJECT_KEY", "AGF")
 
     # Total issues in window
     all_issues = client.search_issues(
@@ -378,7 +378,7 @@ def get_sprint_velocity(
         return _load_fixture()["sprint_velocity"]
 
     if not project_key:
-        project_key = os.getenv("JIRA_PROJECT_KEY", "CRM")
+        project_key = os.getenv("JIRA_PROJECT_KEY", "AGF")
 
     # Find the board for this project
     boards = client.get_boards(project_key)
