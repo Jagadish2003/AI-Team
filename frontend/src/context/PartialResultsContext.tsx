@@ -1,6 +1,7 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import { EvidenceReview, ExtractedEntity, EntityType, ReviewDecision } from '../types/partialResults';
 import { fetchEvidence, fetchEntities } from '../api/runApi';
+import { postEvidenceDecision } from '../api/evidenceApi';
 import { useRunContext } from './RunContext';
 
 type PartialResultsContextValue = {
@@ -171,7 +172,7 @@ export function PartialResultsProvider({ children }: { children: React.ReactNode
   }, [filteredEvidence]);
 
   const setDecisionForSelected = useCallback((decision: ReviewDecision) => {
-    if (!selectedEvidenceId) return false;
+    if (!selectedEvidenceId || !runId) return false;
 
     const currentEvidence = evidence.find(ev => ev.id === selectedEvidenceId);
     if (!currentEvidence) return false;
@@ -180,13 +181,20 @@ export function PartialResultsProvider({ children }: { children: React.ReactNode
       return false;
     }
 
+    // Optimistic local update
     setEvidence(prev => prev.map(ev => ev.id === selectedEvidenceId ? { ...ev, decision } : ev));
+
+    // Persist to backend so decision survives page refresh
+    postEvidenceDecision(runId, selectedEvidenceId, decision as any).catch(() => {
+      // Roll back on failure
+      setEvidence(prev => prev.map(ev => ev.id === selectedEvidenceId ? { ...ev, decision: 'UNREVIEWED' } : ev));
+    });
 
     const idx = currentIndex;
     if (idx >= 0) goNextUnreviewed(idx);
 
     return true;
-  }, [selectedEvidenceId, evidence, currentIndex, goNextUnreviewed]);
+  }, [selectedEvidenceId, runId, evidence, currentIndex, goNextUnreviewed]);
 
   const approveSelected = useCallback(() => setDecisionForSelected('APPROVED'), [setDecisionForSelected]);
   const rejectSelected = useCallback(() => setDecisionForSelected('REJECTED'), [setDecisionForSelected]);
