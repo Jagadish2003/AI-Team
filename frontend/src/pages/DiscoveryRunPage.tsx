@@ -166,11 +166,11 @@ export default function DiscoveryRunPage() {
 
             <button
             className="rounded-md bg-accent px-3 py-2 text-sm font-medium text-bg hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50 transition"
-            onClick={() => nav('/partial-results')}
+            onClick={() => nav('/Evidence Collection')}
             disabled={!started || computing}
             title={computing ? 'Waiting for compute to finish…' : undefined}
           >
-            {computing ? 'Computing…' : 'Next: Partial Results'}
+            {computing ? 'Computing…' : 'Next: Evidence Collection'}
           </button>
           </div>
         </div>
