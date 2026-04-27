@@ -20,3 +20,5 @@ Thumbs.db
 *.db
 backend/.env
 frontend/.env
+backend/token_generation/server.key
+backend/token_generation/sf_token.json
