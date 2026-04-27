@@ -104,6 +104,9 @@ export default function PartialResultsPage() {
         <div className="mb-6 flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
           <div>
             <div className="text-2xl font-semibold">Evidence Collection</div>
+              <div className="mt-1 text-sm text-muted mb-2">
+               Evidence collection acts as the trust layer for discovery, enabling enterprise transparency by clearly showing what evidence was inferred, from which source, and with what level of confidence.
+               </div>
             <div className="mt-1 text-sm text-muted">
               Run ID: <span className="font-semibold text-text">{runId}</span>
             </div>

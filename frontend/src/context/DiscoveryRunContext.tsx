@@ -1,7 +1,4 @@
-/**
- * DiscoveryRunContext — run-scoped API wiring for Screen 3 (Task 11 Phase 1).
- * Requires RunContext (runId persistence) to already exist.
- */
+
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import type { DiscoveryRun, RunEvent, RunInputs } from '../types/discoveryRun';
 import { fetchRun, fetchRunEvents, replayRun, startRun as apiStartRun, triggerCompute, fetchRunStatus } from '../api/runApi';

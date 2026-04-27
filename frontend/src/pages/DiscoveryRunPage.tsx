@@ -18,7 +18,7 @@ export default function DiscoveryRunPage() {
   const { run, events, loading, error, started, computing, startRun, restartRun, refetch } =
     useDiscoveryRunContext();
 
-  const TOTAL_STAGES = 10; // QUEUE, INGEST, NORMALIZE, EXTRACT, SCORE, LINK, CONFIDENCE, ROADMAP, REPORT, DONE
+  const TOTAL_STAGES = 10; 
 
   const isComplete = run?.status === 'complete' || run?.status === 'completed' || run?.status === 'COMPLETED';
 
@@ -55,15 +55,11 @@ export default function DiscoveryRunPage() {
       sampleWorkspaceEnabled,
     };
   }, [connectors, uploadedFiles, sampleWorkspaceEnabled]);
-
-  // Auto-start when navigated here with { state: { autoStart: true } } and no active run.
   useEffect(() => {
     if (!runId && autoStartRequested && !loading) {
       void startRun(inputs);
     }
-  }, [runId, autoStartRequested]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // Show explicit panel when there is no active run and no auto-start was requested.
+  }, [runId, autoStartRequested]); 
   if (!runId && !autoStartRequested) {
     return (
       <div className="min-h-screen text-text">
@@ -130,7 +126,10 @@ export default function DiscoveryRunPage() {
         {/* HEADER */}
         <div className="mb-6 flex items-center justify-between">
           <div>
-            <h1 className="text-xl font-semibold">Discovery Run</h1>
+            <h1 className="text-2xl font-semibold">Discovery Run</h1>
+             <div className="mt-1 text-sm text-muted mb-2">
+              The Discovery Run provides a clear, step-by-step view of progress with live logs and a continuously updated summary of detected applications, workflows, and opportunities.
+             </div>
             <p className="mt-1 text-sm text-muted">
               Run ID: <span className="font-semibold text-text">{run?.id ?? runId ?? '—'}</span>
               {' · '}
