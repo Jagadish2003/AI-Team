@@ -20,7 +20,7 @@ export default function DiscoveryRunPage() {
 
   const TOTAL_STAGES = 10; 
 
-  const isComplete = run?.status === 'complete' || run?.status === 'completed' || run?.status === 'COMPLETED';
+  const isComplete = run?.status === 'complete';
 
   // Animated percentage counter while running
   const [displayPct, setDisplayPct] = useState(0);
