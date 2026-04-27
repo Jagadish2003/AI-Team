@@ -52,7 +52,7 @@ export default function HeroConnectorCard({
           <div key={m.label} className="min-w-0 rounded-lg border border-border bg-bg/30 p-3">
             <div className="truncate text-xs text-muted">{m.label}</div>
             <div className="mt-1 truncate text-lg font-semibold text-text">
-              {isConfigured ? m.value : '—'}
+              {isConfigured ? m.value : '0'}
             </div>
           </div>
         ))}
