@@ -82,7 +82,7 @@ export default function UploadPanel({
       <div className="overflow-hidden rounded-lg border border-border bg-bg/5">
         <div className="h-[216px] overflow-y-auto scrollbar-thin scrollbar-thumb-slate-800 scrollbar-track-transparent">
           {files.length === 0 ? (
-            <div className="flex h-full flex-col items-center justify-center p-4 text-sm italic text-muted">
+            <div className="flex h-full flex-col items-center justify-center p-4 text-sm text-muted">
               <FileText size={32} className="mb-2 opacity-20" />
               No files uploaded yet.
             </div>
