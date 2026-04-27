@@ -6,6 +6,7 @@
     "tier": "recommended",
     "recommendedRank": 1,
     "status": "disconnected",
+    "configured": false,
     "metrics":[
       { "label": "Accounts", "value": "1240" },
       { "label": "Opportunities", "value": "856" }
@@ -21,11 +22,12 @@
     "tier": "recommended",
     "recommendedRank": 2,
     "status": "disconnected",
+    "configured": false,
     "metrics":[
       { "label": "Incidents", "value": "2847" },
       { "label": "CMDB Items", "value": "312" }
     ],
-    "lastSynced": "4 min ago",
+    "lastSynced": "—",
     "reads": ["CMDB Records", "Incident Tickets", "Change Logs"],
     "signalStrength": 94
   },
@@ -36,11 +38,12 @@
     "tier": "recommended",
     "recommendedRank": 3,
     "status": "disconnected",
+    "configured": false,
     "metrics":[
       { "label": "Issues", "value": "5847" },
       { "label": "Confluence Pages", "value": "1120" }
     ],
-    "lastSynced": "2 hrs ago",
+    "lastSynced": "—",
     "reads":["Issues", "Transitions", "Runbooks / Pages"],
     "signalStrength": 88
   },
@@ -49,12 +52,13 @@
     "name": "SAP",
     "category": "ERP · Process",
     "tier": "standard",
-    "status": "connected",
+    "status": "disconnected",
+    "configured": false,
     "metrics":[
-      { "label": "Systems", "value": "6" },
-      { "label": "Change Docs", "value": "1420" }
+      { "label": "Change Documents", "value": "1420" },
+      { "label": "Approvals", "value": "312" }
     ],
-    "lastSynced": "1 day ago",
+    "lastSynced": "—",
     "reads": ["Change Documents", "Approvals", "Transports (if available)"],
     "signalStrength": 76
   },
@@ -63,12 +67,13 @@
     "name": "GitHub",
     "category": "Engineering · Delivery",
     "tier": "standard",
-    "status": "connected",
+    "status": "disconnected",
+    "configured": false,
     "metrics":[
-      { "label": "PRs (30d)", "value": "248" },
-      { "label": "Reviews (30d)", "value": "913" }
+      { "label": "Pull Requests", "value": "248" },
+      { "label": "Review Comments", "value": "913" }
     ],
-    "lastSynced": "30 min ago",
+    "lastSynced": "—",
     "reads": ["Pull Requests", "Review Comments", "Commits"],
     "signalStrength": 81
   },
@@ -77,12 +82,13 @@
     "name": "Slack",
     "category": "Comms · Ops",
     "tier": "standard",
-    "status": "connected",
+    "status": "disconnected",
+    "configured": false,
     "metrics":[
       { "label": "Channels", "value": "34" },
       { "label": "Messages (7d)", "value": "12840" }
     ],
-    "lastSynced": "10 min ago",
+    "lastSynced": "—",
     "reads":["Channels", "Threads", "Mentions"],
     "signalStrength": 79
   },
@@ -92,9 +98,10 @@
     "category": "Data · Platform",
     "tier": "standard",
     "status": "disconnected",
+    "configured": false,
     "metrics":[
-      { "label": "Jobs", "value": "—" },
-      { "label": "Pipelines", "value": "—" }
+      { "label": "Job Runs", "value": "184" },
+      { "label": "Pipelines", "value": "27" }
     ],
     "lastSynced": "—",
     "reads": ["Job Runs", "Pipelines", "Notebooks"],

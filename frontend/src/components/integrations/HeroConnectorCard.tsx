@@ -19,8 +19,12 @@ export default function HeroConnectorCard({
   onSecondary: () => void;
 }) {
   const isConnected = connector.status === 'connected';
+  const isConfigured = connector.configured;
   const primaryLabel =
-    isConnected ? 'Configure & Sync' : connector.status === 'coming_soon' ? 'Coming soon' : 'Connect';
+    isConnected && isConfigured ? 'Re-sync'
+    : isConnected ? 'Configure & Sync'
+    : connector.status === 'coming_soon' ? 'Coming soon'
+    : 'Connect';
 
   return (
     <div
@@ -47,13 +51,15 @@ export default function HeroConnectorCard({
         {connector.metrics.slice(0, 2).map((m) => (
           <div key={m.label} className="min-w-0 rounded-lg border border-border bg-bg/30 p-3">
             <div className="truncate text-xs text-muted">{m.label}</div>
-            <div className="mt-1 truncate text-lg font-semibold text-text">{m.value}</div>
+            <div className="mt-1 truncate text-lg font-semibold text-text">
+              {isConfigured ? m.value : '—'}
+            </div>
           </div>
         ))}
       </div>
       <div className="mt-4 flex flex-wrap items-center justify-between gap-2 text-xs text-muted">
         <div className="truncate">
-          Last synced: <span className="text-text">{isConnected ? connector.lastSynced : '—'}</span>
+          Last synced: <span className="text-text">{isConfigured ? connector.lastSynced : '—'}</span>
         </div>
         <div>
           Signal: <span className="text-text">{connector.signalStrength}</span>

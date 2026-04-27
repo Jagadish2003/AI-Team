@@ -86,7 +86,19 @@ def connect_connector(connector_id: str, body: Dict[str, Any]) -> Dict[str, Any]
         raise HTTPException(404, "connector not found")
     status = body.get("status", "connected")
     c["status"] = status
-    c["lastSynced"] = "Just now" if status == "connected" else c.get("lastSynced", "Not connected")
+    c["lastSynced"] = c.get("lastSynced", "—")
+    upsert("connectors", connector_id, c)
+    return c
+
+@app.post("/api/connectors/{connector_id}/configure", dependencies=[Depends(require_auth)])
+def configure_connector(connector_id: str) -> Dict[str, Any]:
+    c = get_one("connectors", connector_id)
+    if not c:
+        raise HTTPException(404, "connector not found")
+    if c.get("status") != "connected":
+        raise HTTPException(400, "connector must be connected before configuring")
+    c["configured"] = True
+    c["lastSynced"] = "Just now"
     upsert("connectors", connector_id, c)
     return c
 

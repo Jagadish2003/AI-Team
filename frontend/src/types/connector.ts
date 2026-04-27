@@ -13,6 +13,7 @@ export interface Connector {
   tier: ConnectorTier;
   recommendedRank?: number;
   status: ConnectorStatus;
+  configured: boolean;
   metrics: Metric[];
   lastSynced: string;
   reads: string[];
