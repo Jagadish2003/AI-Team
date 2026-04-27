@@ -76,10 +76,10 @@ export default function IntegrationHubPage() {
                       const c = recommended.find(x => x.id === id);
                       if (c?.status === 'connected') {
                         configureSync(id);
-                        push('Sync configured (mock).');
+                        push('Configuration complete. Data is now synced.');
                       } else {
                         connectConnector(id);
-                        push('Connector connected.');
+                        push('Connector connected. Click Configure & Sync to load data.');
                       }
                     }}
                     onSecondary={() => push('Data preview available in later Sprint.')}
@@ -103,6 +103,7 @@ export default function IntegrationHubPage() {
                         connectConnector(id);
                         push('Connector connected.');
                       }
+
                     }}
                   />
                 </div>
@@ -114,7 +115,7 @@ export default function IntegrationHubPage() {
                   onConfigure={() => {
                     if (!selected) return;
                     configureSync(selected.id);
-                    push('Sync configured (mock).');
+                    push('Configuration complete. Data is now synced.');
                   }}
                   confidence={confidence}
                   recommendedConnectedCount={recommendedConnectedCount}

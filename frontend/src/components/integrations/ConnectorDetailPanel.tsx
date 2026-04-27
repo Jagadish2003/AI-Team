@@ -24,6 +24,7 @@ export default function ConnectorDetailPanel({
   }
 
   const isConnected = connector.status === 'connected';
+  const isConfigured = connector.configured;
 
   return (
     <div className="rounded-xl border border-border bg-panel p-5">
@@ -47,7 +48,7 @@ export default function ConnectorDetailPanel({
         <div>
           Last sync:{' '}
           <span className="text-text">
-            {isConnected ? connector.lastSynced : '—'}
+            {isConfigured ? connector.lastSynced : '—'}
           </span>
         </div>
 
@@ -93,9 +94,10 @@ export default function ConnectorDetailPanel({
           variant="primary"
           className="w-full whitespace-nowrap"
           onClick={onConfigure}
-          disabled={connector.status === 'coming_soon'}
+          disabled={!isConnected || connector.status === 'coming_soon'}
+          title={!isConnected ? 'Connect this source first' : undefined}
         >
-          Configure & Sync
+          {isConfigured ? 'Re-sync' : 'Configure & Sync'}
         </Button>
       </div>
 

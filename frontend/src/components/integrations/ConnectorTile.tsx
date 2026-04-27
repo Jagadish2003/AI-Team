@@ -17,6 +17,7 @@ export default function ConnectorTile({
   onPrimary: () => void;
 }) {
   const isConnected = connector.status === 'connected';
+  const isConfigured = connector.configured;
   const actionLabel = isConnected ? 'View data' : 'Connect';
 
   return (
@@ -57,7 +58,7 @@ export default function ConnectorTile({
         <span>
           Signal: <span className="text-text">{connector.signalStrength}</span>
         </span>
-        <span>{isConnected ? `Synced ${connector.lastSynced}` : '—'}</span>
+        <span>{isConfigured ? `Synced ${connector.lastSynced}` : '—'}</span>
       </div>
 
       {/* Button */}
