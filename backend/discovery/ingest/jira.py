@@ -288,7 +288,7 @@ def get_issue_metrics(
         return _load_fixture()["issue_metrics"]
 
     if not project_key:
-        project_key = os.getenv("JIRA_PROJECT_KEY", "AGF")
+        project_key = os.getenv("JIRA_PROJECT_KEY", "GNTQ")
 
     # Total issues in window
     all_issues = client.search_issues(
@@ -378,7 +378,7 @@ def get_sprint_velocity(
         return _load_fixture()["sprint_velocity"]
 
     if not project_key:
-        project_key = os.getenv("JIRA_PROJECT_KEY", "AGF")
+        project_key = os.getenv("JIRA_PROJECT_KEY", "GNTQ")
 
     # Find the board for this project
     boards = client.get_boards(project_key)
