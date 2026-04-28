@@ -31,7 +31,7 @@ export default function TopQuickWins({
             <button
               key={o.id}
               onClick={() => onSelect(o.id)}
-              className="w-full rounded-lg border border-border bg-bg/20 p-3 text-left hover:bg-panel2 hover:border-[#00B4B4]/40 transition-colors"
+              className="w-full rounded-lg border border-border bg-bg/20 p-3 text-left hover:bg-panel2 hover:border-[#0D55D7]/40 transition-colors"
             >
               <div className="flex items-start justify-between gap-2">
                 <div className="min-w-0">
