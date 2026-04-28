@@ -37,7 +37,7 @@ export default function EntitiesSidebar({
           value={query}
           onChange={(e) => onQuery(e.target.value)}
           placeholder="Search entities…"
-          className="w-full rounded-md border border-border bg-bg/50 px-3 py-2 pr-10 text-sm text-text placeholder:text-muted hover:border-[#00B4B4]/50 transition-colors focus:outline-none focus:border-[#00B4B4] focus:ring-2 focus:ring-[#00B4B4]/50 appearance-none"
+          className="w-full rounded-md border border-border bg-bg/50 px-3 py-2 pr-10 text-sm text-text placeholder:text-muted hover:border-[#0D55D7]/50 transition-colors focus:outline-none focus:border-[#0D55D7] focus:ring-2 focus:ring-[#0D55D7]/50 appearance-none"
         />
         <Search className="absolute right-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted pointer-events-none" />
       </div>
@@ -51,7 +51,7 @@ export default function EntitiesSidebar({
               <span className="flex items-center gap-2">
                 <input
                   type="checkbox"
-                  className="accent-[#00B4B4]"
+                  className="accent-[#0D55D7]"
                   checked={enabledTypes[t]}
                   onChange={(e) => onTypeToggle(t, e.target.checked)}
                 />
@@ -62,10 +62,12 @@ export default function EntitiesSidebar({
           ))}
         </div>
       </div>
+
       <div className="mt-4 flex items-center justify-between">
         <div className="text-md font-semibold text-text">Top Entities</div>
         <Button variant="ghost" onClick={onClear} className="text-xs">Clear</Button>
       </div>
+
       <div className="mt-2 max-h-[320px] overflow-y-auto space-y-2 pr-1 mb-2">
         {entities.slice(0, 12).map((e) => {
           const selected = selectedEntityIds.includes(e.id);
@@ -74,7 +76,9 @@ export default function EntitiesSidebar({
               key={e.id}
               onClick={() => onToggleEntity(e.id)}
               className={`cursor-pointer rounded-lg border p-2 ${
-                selected ? 'border-accent/60 bg-panel2' : 'border-border bg-bg/20 hover:bg-panel2'
+                selected 
+                  ? 'border-accent/60 bg-activenav' 
+                  : 'border-border bg-bg/20 hover:bg-panel2'
               }`}
             >
               <div className="flex items-center justify-between gap-2">

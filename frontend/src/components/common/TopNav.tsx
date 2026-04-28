@@ -2,6 +2,8 @@ import React from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { User, ChevronDown } from 'lucide-react';
 import { useRunContext } from "../../context/RunContext";
+import logo from "../../../images/AgentIQ-logo.svg";
+// added
 
 const items = [
   { to: '/integration-hub', label: 'Integration Hub', runScoped: false },
@@ -22,13 +24,14 @@ export default function TopNav() {
   const { runId } = useRunContext();
 
   return (
-    <div className="sticky top-0 z-40 border-b border-border bg-bg/80 shadow-[0_2px_8px_rgba(0,0,0,0.15)] backdrop-blur">
+    <div className="sticky top-0 z-40 border-b border-border bg-bgheader shadow-[0_2px_8px_rgba(0,0,0,0.15)] backdrop-blur">
       <div className="mx-auto flex w-full items-center px-6 py-3">
 
         {/* Brand */}
-        <div className="flex items-center gap-2 shrink-0">
-          <div className="h-7 w-7 rounded-md bg-accent/20" />
-          <div className="text-[22px] font-semibold text-text">AgentIQ</div>
+        <div className="flex items-center gap-1 shrink-0">
+          <div className="h-7 w-7 rounded-md"/>
+          {/* Added Logo and changed header color */}
+          <div className="text-[22px] font-semibold text-text"><img src={logo} alt="AgentIQ Logo" className="w-auto"/></div>
         </div>
 
         {/* Nav items */}
@@ -47,24 +50,18 @@ export default function TopNav() {
                   to={to}
                   className={`whitespace-nowrap rounded-md px-2.5 py-1.5 font-medium transition-colors ${
                     isActive
-                      ? 'bg-panel2 text-text'
-                      : 'text-muted hover:bg-panel2 hover:text-text'
+                      ? 'border-navborder border-t-2 text-text bg-gradient-to-b from-activenav '
+                      : 'text-muted hover:bg-navhover hover:text-text'
                   }`}
-                  style={{ fontSize: '14px' }}
+                  style={{ fontSize: '14px', padding: '6px 12px', borderRadius: '100px' }}
                 >
                   {i.label}
                 </Link>
-
-                {idx < items.length - 1 && (
-                  <span className="h-4 w-px bg-muted/30" />
-                )}
               </React.Fragment>
             );
           })}
-
-          <span className="h-4 w-px bg-muted/30 mx-1" />
           {/* Profile */}
-          <div className="flex h-7 w-7 cursor-pointer items-center justify-center rounded-full transition-colors hover:bg-panel2 hover:text-text">
+          <div className="flex h-7 w-7 cursor-pointer items-center justify-center rounded-full transition-colors hover:bg-navhover hover:text-text">
             <User className="h-4 w-4 text-slate-400" />
           </div>
         </div>

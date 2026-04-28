@@ -24,7 +24,7 @@ export default function ManagedAgentPanel({
 
       <div className="mb-5 rounded-lg border border-border bg-bg/5 p-4">
         <div className="mb-4 flex items-center gap-2 text-white/90">
-          <Info size={14} className="text-teal-400" />
+          <Info size={14} className="text-accent" />
           <span className="text-sm font-semibold">What it does</span>
         </div>
 
@@ -35,7 +35,7 @@ export default function ManagedAgentPanel({
             'Useful for SAP / Oracle / MES and restricted systems.'
           ].map((text, i) => (
             <li key={i} className="flex items-start gap-3">
-              <Check size={14} className="mt-0.5 shrink-0 text-teal-400" />
+              <Check size={14} className="mt-0.5 shrink-0 text-accent" />
               <span className="text-[13px] leading-snug text-slate-300">{text}</span>
             </li>
           ))}

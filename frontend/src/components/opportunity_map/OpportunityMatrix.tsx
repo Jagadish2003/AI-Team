@@ -79,11 +79,11 @@ export default function OpportunityMatrix({
             const isHover    = p.o.id === hoverId;
 
             const fill =
-              isSelected ? 'rgba(0,180,180,0.30)' :
+              isSelected ? 'rgba(77, 77, 137, 0.34)' :
               isHover    ? 'rgba(255,255,255,0.12)' :
                            'rgba(10,22,46,0.85)';
             const stroke =
-              isSelected ? '#00B4B4' :
+              isSelected ? '#0D55D7' :
               isHover    ? 'rgba(255,255,255,0.50)' :
                            'rgb(90,110,145)';
 
@@ -137,7 +137,7 @@ export default function OpportunityMatrix({
                 x={p.x}
                 y={p.y - p.r - 7}
                 fontSize="10"
-                fill={isSelected ? '#00B4B4' : 'rgba(255,255,255,0.80)'}
+                fill={isSelected ? '#0D55D7' : 'rgba(255,255,255,0.80)'}
                 textAnchor="middle"
                 pointerEvents="none"
               >

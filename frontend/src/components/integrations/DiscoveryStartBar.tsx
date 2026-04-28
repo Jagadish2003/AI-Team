@@ -67,7 +67,7 @@ export default function DiscoveryStartBar({
             onClick={onStart}
             disabled={!canStart}
             
-            className="flex items-center gap-2 whitespace-nowrap rounded-lg bg-accent px-6 py-2 text-sm font-medium text-bg transition-all hover:bg-accent/90 disabled:opacity-50"
+            className="flex items-center gap-2 whitespace-nowrap rounded-lg bg-accent px-6 py-2 text-sm font-medium text-textwhite transition-all hover:bg-accent/90 disabled:opacity-50"
           >
             Start Discovery Run
             <MoveRight size={18} strokeWidth={2} />

@@ -67,7 +67,7 @@ export default function ConnectorTile({
           variant={isConnected ? 'secondary' : 'primary'}
           className={`w-full ${
             isConnected
-              ? '!text-[#00B4B4] !border-[#00B4B4]/50'
+              ? '!text-[#0D55D7] !border-[#0D55D7]/50'
               : ''
           }`}
           onClick={(e: React.MouseEvent<HTMLButtonElement>) => {
