@@ -1,8 +1,0 @@
-{
-  "level": "MEDIUM",
-  "why": "Missing communication signals for handoff + knowledge loops",
-  "missingSignals": [
-    "Microsoft 365 (emails, meetings)"
-  ],
-  "nextAction": "Connect Microsoft 365 to reach High confidence"
-}

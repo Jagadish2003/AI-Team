@@ -111,9 +111,28 @@ def confidence_explanation() -> Dict[str, Any]:
         "recommendedNextSourceId": "m365"
     }
 
+# ✅ ADDED FOR FRONTEND MOCK REMOVAL
+@app.get("/api/confidence", dependencies=[Depends(require_auth)])
+def get_confidence() -> Dict[str, Any]:
+    rows = get_all("confidence")
+    if rows:
+        return rows[0]
+
+    return {
+        "level": "MEDIUM",
+        "why": ["Missing Microsoft 365 signals"],
+        "nextAction": "Connect Microsoft 365 to reach High confidence",
+        "recommendedNextSourceId": "m365"
+    }
+
 @app.get("/api/permissions", dependencies=[Depends(require_auth)])
 def list_permissions() -> List[Dict[str, Any]]:
     return get_all("permissions")
+
+# ✅ ADDED FOR FRONTEND MOCK REMOVAL
+@app.get("/api/mappings", dependencies=[Depends(require_auth)])
+def get_mappings() -> List[Dict[str, Any]]:
+    return get_all("mappings")
 
 @app.get("/api/uploads", dependencies=[Depends(require_auth)])
 def list_uploads() -> List[Dict[str, Any]]:
@@ -327,20 +346,16 @@ def get_roadmap(run_id: str) -> Dict[str, Any]:
 
 @app.get("/api/runs/{run_id}/executive-report", dependencies=[Depends(require_auth)])
 def get_exec_report(run_id: str) -> Dict[str, Any]:
-    # 1. Check if the run exists
     try:
         run = read_run(run_id)
     except KeyError:
         raise HTTPException(404, "run not found")
 
-    # 2. Try to fetch the persisted executive report (which includes the T6 aiExecutiveSummary)
     er = run_kv_get("executive_report", run_id, None)
-    
-    # 3. If it exists, return it (this satisfies the test requirement)
+
     if er:
         return er
 
-    # 4. Fallback: If not found, generate the report manually (as you had before)
     inputs = run.get("inputs") or {}
     connected_sources = inputs.get("connectedSources") or []
     uploaded_files = inputs.get("uploadedFiles") or []
@@ -367,17 +382,14 @@ def get_exec_report(run_id: str) -> Dict[str, Any]:
     quick_wins = [o for o in opps if o.get("tier") == "Quick Win"]
 
     return {
-        "confidence":      "MODERATE",
+        "confidence": "MODERATE",
         "sourcesAnalyzed": sources_analyzed,
-        "topQuickWins":    quick_wins,
+        "topQuickWins": quick_wins,
         "snapshotBubbles": [],
         "roadmapHighlights": {
-            "next30Count":  sum(1 for o in opps if o.get("tier") == "Quick Win"),
-            "next60Count":  sum(1 for o in opps if o.get("tier") == "Strategic"),
-            "next90Count":  sum(1 for o in opps if o.get("tier") == "Complex"),
+            "next30Count": sum(1 for o in opps if o.get("tier") == "Quick Win"),
+            "next60Count": sum(1 for o in opps if o.get("tier") == "Strategic"),
+            "next90Count": sum(1 for o in opps if o.get("tier") == "Complex"),
             "blockerCount": 0,
         },
     }
- 
-
-   
