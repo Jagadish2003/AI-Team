@@ -34,5 +34,5 @@ export function fetchMappings(): Promise<MappingRow[]> {
 }
 
 export function fetchConfidence(): Promise<ConfidenceExplanation> {
-  return apiGet<ConfidenceExplanation>("/api/confidence");
+  return apiGet<ConfidenceExplanation>("/api/confidence/explanation");
 }
