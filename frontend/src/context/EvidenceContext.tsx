@@ -3,6 +3,7 @@ import { useRunContext } from "./RunContext";
 import { fetchEvidence, postEvidenceDecision } from "../api/evidenceApi";
 import type { EvidenceReview } from "../types/evidence";
 import type { Decision } from "../types/common";
+import { isRunNotFoundError, runScopedErrorMessage } from "../utils/apiErrors";
 
 type EvidenceContextValue = {
   loading: boolean;
@@ -16,7 +17,7 @@ type EvidenceContextValue = {
 const Ctx = createContext<EvidenceContextValue | null>(null);
 
 export function EvidenceProvider({ children }: { children: React.ReactNode }) {
-  const { runId } = useRunContext();
+  const { runId, clearRunId } = useRunContext();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [fetchCount, setFetchCount] = useState(0);
@@ -25,7 +26,12 @@ export function EvidenceProvider({ children }: { children: React.ReactNode }) {
   const refetch = useCallback(() => setFetchCount((c) => c + 1), []);
 
   useEffect(() => {
-    if (!runId) return;
+    if (!runId) {
+      setEvidence([]);
+      setLoading(false);
+      setError(null);
+      return;
+    }
     let cancelled = false;
 
     (async () => {
@@ -35,14 +41,19 @@ export function EvidenceProvider({ children }: { children: React.ReactNode }) {
         const data = await fetchEvidence(runId);
         if (!cancelled) setEvidence(data);
       } catch (e: any) {
-        if (!cancelled) setError(e?.message ?? "Failed to load evidence");
+        if (cancelled) return;
+        if (isRunNotFoundError(e)) {
+          clearRunId();
+          return;
+        }
+        setError(runScopedErrorMessage(e, "Failed to load evidence"));
       } finally {
         if (!cancelled) setLoading(false);
       }
     })();
 
     return () => { cancelled = true; };
-  }, [runId, fetchCount]);
+  }, [runId, fetchCount, clearRunId]);
 
   const setEvidenceDecision = useCallback(
     async (evidenceId: string, decision: Decision) => {

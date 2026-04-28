@@ -23,7 +23,6 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from . import is_live
-from token_generation import token_generator
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +36,18 @@ API_VERSION = "v59.0"
 
 class IngestError(Exception):
     """Raised when live ingestion fails with a clear, actionable message."""
+
+
+def _generate_salesforce_token() -> tuple[str, str]:
+    try:
+        from token_generation import token_generator
+    except ImportError as exc:
+        raise IngestError(
+            "Live mode requires backend/token_generation/token_generator.py "
+            "or SF_INSTANCE_URL/SF_ACCESS_TOKEN credentials. Set INGEST_MODE=offline "
+            "to run without Salesforce credentials."
+        ) from exc
+    return token_generator.main()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -74,7 +85,7 @@ def _get_client() -> "SalesforceClient":
         access_token = sf_token.get("access_token")
 
     else:
-        access_token, instance_url = token_generator.main()
+        access_token, instance_url = _generate_salesforce_token()
 
     # -----------------------------
     # 2. VALIDATION CHECK
@@ -89,7 +100,7 @@ def _get_client() -> "SalesforceClient":
     # 3. TOKEN EXPIRY CHECK
     # -----------------------------
     if is_access_token_expired(instance_url, access_token):
-        access_token, instance_url = token_generator.main()
+        access_token, instance_url = _generate_salesforce_token()
 
     # -----------------------------
     # 4. RETURN CLIENT

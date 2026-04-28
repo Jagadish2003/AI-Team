@@ -86,20 +86,9 @@ def main():
     for u in load_file(FILES["uploads"]):
         upsert(conn, "uploads", u["id"], u)
 
-    # run
-    r = load_file(FILES["runs"])
-    upsert(conn, "runs", r["id"], r)
-
-    # events
-    ev = load_file(FILES["run_events"])
-    cur = conn.cursor()
-    for i, e in enumerate(ev):
-        cur.execute(
-            "INSERT INTO run_events (run_id, seq, payload) VALUES (?, ?, ?) "
-            "ON CONFLICT(run_id, seq) DO UPDATE SET payload=excluded.payload",
-            (r["id"], i, json.dumps(e))
-        )
-    conn.commit()
+    # Fresh dev DBs should not contain a run yet. Runtime run IDs start at RUN_001.
+    # events.json is still available as the deterministic event template used
+    # when /api/runs/start creates a real run.
 
     # evidence
     for e in load_file(FILES["evidence"]):

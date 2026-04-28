@@ -1,6 +1,7 @@
 import React from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAnalystReviewContext } from '../../context/AnalystReviewContext';
+import { useRunContext } from '../../context/RunContext';
 import { OpportunityCandidate } from '../../types/analystReview';
 
 interface TopQuickWinsProps {
@@ -10,10 +11,11 @@ interface TopQuickWinsProps {
 export default function TopQuickWins({ quickWins }: TopQuickWinsProps) {
   const nav = useNavigate();
   const { select } = useAnalystReviewContext();
+  const { runId } = useRunContext();
 
   const handleOpenOpportunity = (id: string) => {
     select(id);
-    nav('/opportunity-map');
+    nav(runId ? `/opportunity-map?runId=${runId}` : '/opportunity-map');
   };
 
   return (

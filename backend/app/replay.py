@@ -28,7 +28,7 @@ def seed_events() -> List[Dict[str, Any]]:
         {"id":"ev_run_005","tsLabel": _FALLBACK_TS, "stage":"SCORE",     "message":"Opportunities scored",    "level":"INFO"},
     ]
     data = _load_seed_json("events.json", fallback)
-    return data if isinstance(data, list) else fallback
+    return data if isinstance(data, list) and data else fallback
 
 def replay_run(run_id: str) -> Dict[str, Any]:
     """Backend-only replay reset.

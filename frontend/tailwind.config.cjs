@@ -18,11 +18,17 @@ module.exports = {
         activenav:"#0A3D98",
         textwhite:"#ffffff",
       },
-      // fontFamily: {
-      //   sans: ['Inter', 'sans-serif'],
-      //   heading: ['Poppins', 'sans-serif'],
-      //   mono: ['Fira Code', 'monospace'],
-      // }
+      fontFamily: {
+        sans: [
+          "ui-sans-serif",
+          "system-ui",
+          "sans-serif",
+          '"Apple Color Emoji"',
+          '"Segoe UI Emoji"',
+          '"Segoe UI Symbol"',
+          '"Noto Color Emoji"',
+        ],
+      }
     }
   },
   plugins: []

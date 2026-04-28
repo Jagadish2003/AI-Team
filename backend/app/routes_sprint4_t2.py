@@ -1,5 +1,4 @@
-import time
-from fastapi import Depends, BackgroundTasks, Body
+from fastapi import Depends, BackgroundTasks
 from .security import require_auth
 from . import db
 from .models_t2 import StartRunRequest, StartRunResponse, StatusResponse
@@ -7,9 +6,6 @@ from .materialize_t2 import set_status, get_status, run_trackb_and_persist
 from .replay import seed_events
 
 ALL_SYSTEMS = ["salesforce", "servicenow", "jira"]
-def _epoch() -> int:
-    return int(time.time())
-
 def register_sprint4_t2_routes(app):
 
     @app.post("/api/runs/start", response_model=StartRunResponse, dependencies=[Depends(require_auth)])
@@ -18,7 +14,7 @@ def register_sprint4_t2_routes(app):
         Creates a new run record, marks it RUNNING, and schedules Track B materialization
         in the background. Returns immediately with runId.
         """
-        run_id = f"run_{_epoch()}"
+        run_id = db.next_run_id()
 
         run = {
         "id": run_id,

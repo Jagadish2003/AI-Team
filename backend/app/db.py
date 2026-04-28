@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
@@ -7,6 +8,7 @@ from typing import Any, Dict, List, Optional
 from fastapi import HTTPException
 
 DB_PATH = Path(os.getenv("DB_PATH", "database/dev.db"))
+RUN_ID_RE = re.compile(r"^RUN_(\d+)$")
 
 def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -78,7 +80,8 @@ def upsert_run(run_id: str, payload: Dict[str, Any]) -> None:
     con.close()
 
 def count_runs() -> int:
-    """Return the highest run number seen (not the count), so new IDs never collide."""
+    """Return the highest canonical RUN_### number, ignoring legacy run_* IDs."""
+    init_tables()
     con = connect()
     cur = con.cursor()
     cur.execute("SELECT id FROM runs")
@@ -86,13 +89,13 @@ def count_runs() -> int:
     con.close()
     max_n = 0
     for (run_id,) in rows:
-        try:
-            parts = run_id.split("_")
-            if len(parts) == 2:
-                max_n = max(max_n, int(parts[1]))
-        except (ValueError, IndexError):
-            pass
+        match = RUN_ID_RE.match(str(run_id))
+        if match:
+            max_n = max(max_n, int(match.group(1)))
     return max_n
+
+def next_run_id() -> str:
+    return f"RUN_{count_runs() + 1:03d}"
 
 def require_run_exists(run_id: str) -> Dict[str, Any]:
     r = get_run(run_id)

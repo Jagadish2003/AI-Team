@@ -1,4 +1,5 @@
 import os
+import re
 import time
 import pytest
 from fastapi.testclient import TestClient
@@ -100,7 +101,7 @@ def test_start_run_and_run_scoped_reads():
     r = client.post("/api/runs/start", headers=auth_headers(), json=payload)
     assert r.status_code == 200
     body = r.json()
-    assert "runId" in body and body["runId"].startswith("run_")
+    assert "runId" in body and re.fullmatch(r"RUN_\d{3,}", body["runId"])
     assert body["status"] == "running"
     assert "startedAt" in body
 
@@ -348,3 +349,30 @@ def test_roadmap_stage90_not_empty():
     assert isinstance(next90.get("opportunities", []), list), (
         "NEXT_90 opportunities must be a list"
     )
+
+
+def test_start_run_ignores_legacy_lowercase_run_ids():
+    from app import db
+
+    legacy_id = "run_9999999999"
+    db.run_set(
+        legacy_id,
+        {
+            "id": legacy_id,
+            "status": "running",
+            "startedAt": db.now_iso(),
+            "updatedAt": db.now_iso(),
+            "inputs": {},
+        },
+    )
+
+    r = client.post(
+        "/api/runs/start",
+        headers=auth_headers(),
+        json={"connectedSources": [], "uploadedFiles": [], "sampleWorkspaceEnabled": False},
+    )
+
+    assert r.status_code == 200
+    run_id = r.json()["runId"]
+    assert re.fullmatch(r"RUN_\d{3,}", run_id)
+    assert int(run_id.split("_")[1]) < 9999999999
