@@ -256,16 +256,15 @@ export default function DiscoveryRunPage() {
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-5">
                 <div className="text-lg font-semibold">Discovery Log</div>
-                <label className="flex items-center gap-2 text-sm text-text">
-                  Auto-scroll
+              <label className="flex items-center gap-2 text-sm text-text">
+                Auto-scroll
                   <input
-                    type="checkbox"
-                    checked={autoScroll}
-                    onChange={(e) => setAutoScroll(e.target.checked)}
-                    className="cursor-pointer accent-[#00B4B4]"
-                  />
-                </label>
-              </div>
+                  type="checkbox"
+                  checked={autoScroll}
+                  onChange={(e) => setAutoScroll(e.target.checked)}
+                  className="accent-accent cursor-pointer"/>
+              </label>
+            </div>
               <button
                 className="rounded-md border border-border bg-bg/20 px-3 py-2 text-sm font-semibold text-text transition hover:bg-panel2"
                 onClick={() => refetch()}

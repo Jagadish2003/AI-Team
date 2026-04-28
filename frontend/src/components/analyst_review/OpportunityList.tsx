@@ -90,12 +90,12 @@ export default function OpportunityList({
   };
 
   const dropdownBtn =
-    'flex items-center gap-2 px-3 py-1.5 rounded-lg border border-border bg-panel2 text-xs text-text hover:border-[#00B4B4]/50 hover:text-[#00B4B4] transition-colors cursor-pointer w-full';
+    'flex items-center gap-2 px-3 py-1.5 rounded-lg border border-border bg-panel2 text-xs text-text hover:border-[#0D55D7]/50 hover:text-[#0D55D7] transition-colors cursor-pointer w-full';
   const dropdownPanel =
     'absolute top-full left-0 z-50 mt-1 w-full rounded-lg border border-border bg-panel shadow-lg overflow-hidden';
   const dropdownItem = (active: boolean) =>
     `px-3 py-2 text-xs cursor-pointer transition-colors ${
-      active ? 'bg-[#00B4B4] font-medium text-[#0d1117]' : 'text-text hover:bg-[#00B4B4]/15 hover:text-[#00B4B4]'
+      active ? 'bg-[#0D55D7] font-medium text-[#0d1117]' : 'text-text hover:bg-[#0D55D7]/15 hover:text-[#0D55D7]'
     }`;
 
   return (
@@ -114,7 +114,7 @@ export default function OpportunityList({
             value={query}
             onChange={e => setQuery(e.target.value)}
             placeholder="Search opportunities..."
-            className="w-full rounded-md border border-border bg-bg/50 px-3 py-2 pr-10 text-sm text-text placeholder:text-muted hover:border-[#00B4B4]/50 transition-colors focus:outline-none focus:border-[#00B4B4] focus:ring-2 focus:ring-[#00B4B4]/50"
+            className="w-full rounded-md border border-border bg-bg/50 px-3 py-2 pr-10 text-sm text-text placeholder:text-muted hover:border-[#0D55D7]/50 transition-colors focus:outline-none focus:border-[#00B4B4] focus:ring-2 focus:ring-[#00B4B4]/50"
           />
           <Search className="absolute right-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted pointer-events-none" />
         </div>
