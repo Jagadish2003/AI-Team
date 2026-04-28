@@ -26,7 +26,7 @@ export default function SampleWorkspacePanel({
 
       <div className="mb-5 rounded-lg border border-border bg-bg/5 p-4">
         <div className="mb-4 flex items-center gap-2 text-white/90">
-          <Database size={14} className="text-teal-400" />
+          <Database size={14} className="text-accent" />
           <span className="text-sm font-semibold">Sample sources</span>
         </div>
 
@@ -37,7 +37,7 @@ export default function SampleWorkspacePanel({
             'Microsoft 365 (Inbox + Teams)'
           ].map((text, i) => (
             <li key={i} className="flex items-start gap-3">
-              <Check size={14} className="mt-0.5 shrink-0 text-teal-400" />
+              <Check size={14} className="mt-0.5 shrink-0 text-accent" />
               <span className="text-[13px] leading-snug text-slate-300">{text}</span>
             </li>
           ))}
@@ -46,7 +46,7 @@ export default function SampleWorkspacePanel({
 
       <div className="flex flex-col items-center">
         <Button
-          className="flex w-full items-center justify-center gap-2 py-3 text-sm shadow-lg shadow-teal-500/10"
+          className="flex w-full items-center justify-center gap-2 py-3 text-sm shadow-lg shadow-accent-500/10"
           onClick={onEnable}
           disabled={enabled}
         >

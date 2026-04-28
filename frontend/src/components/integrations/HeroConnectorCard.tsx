@@ -83,7 +83,7 @@ export default function HeroConnectorCard({
             onSecondary();
           }}
           variant="secondary"
-          className={`min-w-[120px] flex-1 ${isConnected ? '!border-[#00B4B4]/50 !text-[#00B4B4]' : ''}`}
+          className={`min-w-[120px] flex-1 ${isConnected ? '!border-[#0D55D7]/50 !text-[#0D55D7]' : ''}`}
           disabled={!isConnected}
           title={!isConnected ? 'Connect to enable data preview' : undefined}
         >
