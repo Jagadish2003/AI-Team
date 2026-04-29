@@ -19,8 +19,7 @@ const items = [
   //  run-scoped screens
   { to: '/discovery-run', label: 'Discovery Run', runScoped: true },
   { to: '/partial-results', label: 'Evidence Collection', runScoped: true },
-{ to: '/analyst-review', label: 'Analyst Review', runScoped: true },
-  { to: '/opportunity-map', label: 'Opportunity Map', runScoped: true },
+  { to: '/opportunity-review', label: 'Opportunity Review', runScoped: true, sfOnly: false },
   { to: '/agentforce-blueprint', label: 'Agentforce Blueprint', runScoped: true, sfOnly: true },
   { to: '/executive-report', label: 'Executive Report', runScoped: true },
 ] satisfies NavItem[];
