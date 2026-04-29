@@ -1,0 +1,73 @@
+[
+  {
+    "id": "ev1",
+    "tsLabel": "Today, 10:26 AM",
+    "source": "ServiceNow",
+    "evidenceType": "Ticket",
+    "title": "Change request opened for Confluence access",
+    "snippet": "A change request was initiated to provide new developer access to Confluence. Linked to Jira ONB-123 for onboarding workflow.",
+    "entities": [
+      "ent_confluence",
+      "ent_change_req",
+      "ent_onboarding",
+      "ent_jira"
+    ],
+    "confidence": "MEDIUM",
+    "decision": "UNREVIEWED"
+  },
+  {
+    "id": "ev2",
+    "tsLabel": "Today, 9:21 AM",
+    "source": "Jira",
+    "evidenceType": "Ticket",
+    "title": "Unable to access Jira API",
+    "snippet": "Integration job failed with 401 while calling Jira API. Manual triage required by support engineer.",
+    "entities": [
+      "ent_jira"
+    ],
+    "confidence": "LOW",
+    "decision": "UNREVIEWED"
+  },
+  {
+    "id": "ev3",
+    "tsLabel": "Today, 9:14 AM",
+    "source": "ServiceNow",
+    "evidenceType": "Log",
+    "title": "Routine change logged for Atlassian JSM",
+    "snippet": "Change log indicates configuration update in Atlassian JSM. Reviewed by platform team for compliance.",
+    "entities": [
+      "ent_jsm"
+    ],
+    "confidence": "MEDIUM",
+    "decision": "UNREVIEWED"
+  },
+  {
+    "id": "ev4",
+    "tsLabel": "Yesterday, 6:44 PM",
+    "source": "Slack",
+    "evidenceType": "Chat",
+    "title": "Onboarding handoff: access requests",
+    "snippet": "Thread shows repeated handoffs for access approvals. People ask where the SOP is and who approves Confluence access.",
+    "entities": [
+      "ent_onboarding",
+      "ent_confluence",
+      "ent_access"
+    ],
+    "confidence": "MEDIUM",
+    "decision": "UNREVIEWED"
+  },
+  {
+    "id": "ev5",
+    "tsLabel": "Yesterday, 5:10 PM",
+    "source": "Confluence",
+    "evidenceType": "Doc",
+    "title": "Runbook: onboarding checklist",
+    "snippet": "Runbook describes onboarding checklist steps but is outdated; references old Jira project keys and missing owners.",
+    "entities": [
+      "ent_onboarding",
+      "ent_jira"
+    ],
+    "confidence": "HIGH",
+    "decision": "UNREVIEWED"
+  }
+]

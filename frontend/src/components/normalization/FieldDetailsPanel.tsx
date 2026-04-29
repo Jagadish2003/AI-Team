@@ -36,7 +36,6 @@ export default function FieldDetailsPanel() {
                 <div className="truncate text-sm text-text">
                   {selectedRow.commonField}
                 </div>
-
                 {selectedRow.notes && (
                   <div className="mt-1 text-xs text-muted">
                     {selectedRow.notes}
@@ -51,9 +50,8 @@ export default function FieldDetailsPanel() {
             <div className="mb-2 text-xs font-semibold text-muted">
               Sample values:
             </div>
-
             <div className="space-y-1 text-sm text-text">
-              {(selectedRow.sampleValues || []).map((value, index) => (
+              {selectedRow.sampleValues.map((value, index) => (
                 <div key={index}>{value}</div>
               ))}
             </div>
@@ -76,13 +74,13 @@ export default function FieldDetailsPanel() {
               </span>
             </div>
 
-            {(relevantPermissions || []).length === 0 ? (
+            {relevantPermissions.length === 0 ? (
               <div className="mt-3 text-sm text-muted">
                 No permissions defined for this source yet.
               </div>
             ) : (
               <div className="mt-2 border-t border-border pt-3 space-y-3">
-                {(relevantPermissions || []).map((permission) => (
+                {relevantPermissions.map((permission) => (
                   <div
                     key={permission.id}
                     className="flex items-center gap-3 text-sm text-text"
@@ -100,7 +98,6 @@ export default function FieldDetailsPanel() {
                         className="text-white shrink-0"
                       />
                     )}
-
                     <span>{permission.label}</span>
                   </div>
                 ))}

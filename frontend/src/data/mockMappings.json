@@ -1,0 +1,321 @@
+[
+  {
+    "id": "map_001",
+    "sourceSystem": "ServiceNow",
+    "sourceType": "CMDB",
+    "sourceField": "cmdb_ci.name",
+    "commonEntity": "Application",
+    "commonField": "Application.name",
+    "status": "MAPPED",
+    "confidence": "HIGH",
+    "sampleValues": [
+      "Jira Service Management",
+      "Confluence Cloud",
+      "SAP S/4HANA"
+    ],
+    "notes": "Direct name mapping"
+  },
+  {
+    "id": "map_002",
+    "sourceSystem": "ServiceNow",
+    "sourceType": "CMDB",
+    "sourceField": "cmdb_ci.owner",
+    "commonEntity": "Application",
+    "commonField": "Application.owner",
+    "status": "AMBIGUOUS",
+    "confidence": "MEDIUM",
+    "sampleValues": [
+      "Platform Eng",
+      "IT Ops",
+      "Unknown"
+    ],
+    "notes": "Owner appears as group name; needs resolution"
+  },
+  {
+    "id": "map_003",
+    "sourceSystem": "Jira",
+    "sourceType": "Tickets",
+    "sourceField": "issue.summary",
+    "commonEntity": "Workflow",
+    "commonField": "Workflow.summary",
+    "status": "MAPPED",
+    "confidence": "MEDIUM",
+    "sampleValues": [
+      "Unable to access Jira API",
+      "New onboarding automations"
+    ],
+    "notes": "Text field used as workflow signal"
+  },
+  {
+    "id": "map_004",
+    "sourceSystem": "Databricks",
+    "sourceType": "Assets",
+    "sourceField": "job_id",
+    "commonEntity": "Service",
+    "commonField": "Service.asset_identifier",
+    "status": "MAPPED",
+    "confidence": "HIGH",
+    "sampleValues": [
+      "1249",
+      "1302",
+      "1441"
+    ],
+    "notes": "Stable numeric id"
+  },
+  {
+    "id": "map_005",
+    "sourceSystem": "ServiceNow",
+    "sourceType": "Tickets",
+    "sourceField": "incident.category",
+    "commonEntity": "",
+    "commonField": "—",
+    "status": "UNMAPPED",
+    "confidence": "LOW",
+    "sampleValues": [
+      "Access",
+      "Integration",
+      "Data Quality"
+    ],
+    "notes": "Candidate: Workflow.category or Service.category"
+  },
+  {
+    "id": "map_006",
+    "sourceSystem": "Databricks",
+    "sourceType": "Assets",
+    "sourceField": "cluster_id",
+    "commonEntity": "Application",
+    "commonField": "Application.name",
+    "status": "MAPPED",
+    "confidence": "MEDIUM",
+    "sampleValues": [
+      "notebook:34",
+      "workspace:7",
+      "job:1249"
+    ],
+    "notes": "Direct mapping"
+  },
+  {
+    "id": "map_007",
+    "sourceSystem": "Jira",
+    "sourceType": "Tickets",
+    "sourceField": "issue.component",
+    "commonEntity": "Workflow",
+    "commonField": "Workflow.summary",
+    "status": "AMBIGUOUS",
+    "confidence": "MEDIUM",
+    "sampleValues": [
+      "RLS-102",
+      "API-401",
+      "ONB-123"
+    ],
+    "notes": "Candidate mapping needs review"
+  },
+  {
+    "id": "map_008",
+    "sourceSystem": "Slack",
+    "sourceType": "Chat",
+    "sourceField": "message.text",
+    "commonEntity": "Application",
+    "commonField": "Application.name",
+    "status": "MAPPED",
+    "confidence": "HIGH",
+    "sampleValues": [
+      "handoff thread",
+      "SOP link missing",
+      "who approves?"
+    ],
+    "notes": "Direct mapping"
+  },
+  {
+    "id": "map_009",
+    "sourceSystem": "ServiceNow",
+    "sourceType": "Tickets",
+    "sourceField": "change.requested_by",
+    "commonEntity": "DataObject",
+    "commonField": "DataObject.name",
+    "status": "MAPPED",
+    "confidence": "MEDIUM",
+    "sampleValues": [
+      "cmdb_ci:Jira",
+      "INC001234",
+      "assignment_group:ITOps"
+    ],
+    "notes": "Direct mapping"
+  },
+  {
+    "id": "map_010",
+    "sourceSystem": "ServiceNow",
+    "sourceType": "CMDB",
+    "sourceField": "cmdb_ci.owner",
+    "commonEntity": "Workflow",
+    "commonField": "Workflow.category",
+    "status": "MAPPED",
+    "confidence": "MEDIUM",
+    "sampleValues": [
+      "assignment_group:ITOps",
+      "cmdb_ci:Jira",
+      "INC001234"
+    ],
+    "notes": "Direct mapping"
+  },
+  {
+    "id": "map_011",
+    "sourceSystem": "Confluence",
+    "sourceType": "Docs",
+    "sourceField": "page.title",
+    "commonEntity": "Application",
+    "commonField": "Application.name",
+    "status": "AMBIGUOUS",
+    "confidence": "MEDIUM",
+    "sampleValues": [
+      "runbook onboarding",
+      "change calendar",
+      "incident triage guide"
+    ],
+    "notes": "Candidate mapping needs review"
+  },
+  {
+    "id": "map_012",
+    "sourceSystem": "ServiceNow",
+    "sourceType": "CMDB",
+    "sourceField": "cmdb_ci.owner",
+    "commonEntity": "Workflow",
+    "commonField": "Workflow.category",
+    "status": "MAPPED",
+    "confidence": "MEDIUM",
+    "sampleValues": [
+      "cmdb_ci:SAP",
+      "CHG000456",
+      "assignment_group:ITOps"
+    ],
+    "notes": "Direct mapping"
+  },
+  {
+    "id": "map_013",
+    "sourceSystem": "Databricks",
+    "sourceType": "Assets",
+    "sourceField": "cluster_id",
+    "commonEntity": "Service",
+    "commonField": "Service.asset_identifier",
+    "status": "AMBIGUOUS",
+    "confidence": "HIGH",
+    "sampleValues": [
+      "pipe:18",
+      "notebook:34",
+      "workspace:7"
+    ],
+    "notes": "Candidate mapping needs review"
+  },
+  {
+    "id": "map_014",
+    "sourceSystem": "Slack",
+    "sourceType": "Chat",
+    "sourceField": "user.displayName",
+    "commonEntity": "",
+    "commonField": "—",
+    "status": "UNMAPPED",
+    "confidence": "LOW",
+    "sampleValues": [
+      "triage loop",
+      "handoff thread",
+      "SOP link missing"
+    ],
+    "notes": "Candidate mapping needs review"
+  },
+  {
+    "id": "map_015",
+    "sourceSystem": "ServiceNow",
+    "sourceType": "Tickets",
+    "sourceField": "incident.category",
+    "commonEntity": "",
+    "commonField": "—",
+    "status": "UNMAPPED",
+    "confidence": "LOW",
+    "sampleValues": [
+      "cmdb_ci:SAP",
+      "assignment_group:ITOps",
+      "CHG000456"
+    ],
+    "notes": "Candidate mapping needs review"
+  },
+  {
+    "id": "map_016",
+    "sourceSystem": "Databricks",
+    "sourceType": "Assets",
+    "sourceField": "workspace_id",
+    "commonEntity": "Other",
+    "commonField": "Other.category",
+    "status": "MAPPED",
+    "confidence": "MEDIUM",
+    "sampleValues": [
+      "pipe:18",
+      "job:1249",
+      "notebook:34"
+    ],
+    "notes": "Direct mapping"
+  },
+  {
+    "id": "map_017",
+    "sourceSystem": "ServiceNow",
+    "sourceType": "Tickets",
+    "sourceField": "change.risk",
+    "commonEntity": "Application",
+    "commonField": "Application.owner",
+    "status": "AMBIGUOUS",
+    "confidence": "HIGH",
+    "sampleValues": [
+      "assignment_group:ITOps",
+      "cmdb_ci:SAP",
+      "CHG000456"
+    ],
+    "notes": "Candidate mapping needs review"
+  },
+  {
+    "id": "map_018",
+    "sourceSystem": "Jira",
+    "sourceType": "Tickets",
+    "sourceField": "issue.summary",
+    "commonEntity": "Service",
+    "commonField": "Service.asset_identifier",
+    "status": "MAPPED",
+    "confidence": "MEDIUM",
+    "sampleValues": [
+      "CMP-22",
+      "RLS-102",
+      "API-401"
+    ],
+    "notes": "Direct mapping"
+  },
+  {
+    "id": "map_019",
+    "sourceSystem": "Jira",
+    "sourceType": "Tickets",
+    "sourceField": "issue.status",
+    "commonEntity": "",
+    "commonField": "—",
+    "status": "UNMAPPED",
+    "confidence": "LOW",
+    "sampleValues": [
+      "ONB-123",
+      "API-401",
+      "RLS-102"
+    ],
+    "notes": "Candidate mapping needs review"
+  },
+  {
+    "id": "map_020",
+    "sourceSystem": "Jira",
+    "sourceType": "Tickets",
+    "sourceField": "issue.component",
+    "commonEntity": "Application",
+    "commonField": "Application.name",
+    "status": "MAPPED",
+    "confidence": "HIGH",
+    "sampleValues": [
+      "ONB-123",
+      "PLAT-77",
+      "RLS-102"
+    ],
+    "notes": "Direct mapping"
+  }
+]
