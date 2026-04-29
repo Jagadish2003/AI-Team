@@ -101,7 +101,7 @@ def test_start_run_and_run_scoped_reads():
     r = client.post("/api/runs/start", headers=auth_headers(), json=payload)
     assert r.status_code == 200
     body = r.json()
-    assert "runId" in body and re.fullmatch(r"RUN_\d{3,}", body["runId"])
+    assert "runId" in body and re.fullmatch(r"run_[0-9a-f]{8,}", body["runId"])
     assert body["status"] == "running"
     assert "startedAt" in body
 
@@ -351,14 +351,14 @@ def test_roadmap_stage90_not_empty():
     )
 
 
-def test_start_run_ignores_legacy_lowercase_run_ids():
+def test_start_run_uses_runner_style_run_ids():
     from app import db
 
-    legacy_id = "run_9999999999"
+    existing_id = "run_99999999"
     db.run_set(
-        legacy_id,
+        existing_id,
         {
-            "id": legacy_id,
+            "id": existing_id,
             "status": "running",
             "startedAt": db.now_iso(),
             "updatedAt": db.now_iso(),
@@ -374,5 +374,5 @@ def test_start_run_ignores_legacy_lowercase_run_ids():
 
     assert r.status_code == 200
     run_id = r.json()["runId"]
-    assert re.fullmatch(r"RUN_\d{3,}", run_id)
-    assert int(run_id.split("_")[1]) < 9999999999
+    assert re.fullmatch(r"run_[0-9a-f]{8,}", run_id)
+    assert run_id != existing_id

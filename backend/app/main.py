@@ -19,6 +19,7 @@ from .routes_sprint4_t2 import register_sprint4_t2_routes
 from .routes_sprint4_t3 import register_sprint4_t3_routes
 from .routes_sprint4_t4 import register_sprint4_t4_routes
 from .routes_sprint4_t6 import register_sprint4_t6_routes
+from .routes_sprint41_blueprint import register_blueprint_routes
 
 app = FastAPI(title="AgentIQ Layer 1 API Skeleton", version="0.1.0")
 
@@ -28,6 +29,7 @@ register_sprint4_t4_routes(app)
 register_sprint4_t3_routes(app)
 register_sprint4_t2_routes(app)
 register_sprint4_t1_routes(app)
+register_blueprint_routes(app)
 
 origins = [o.strip() for o in os.getenv("CORS_ORIGINS", "http://localhost:5173,http://localhost:5174,http://localhost:5175,http://localhost:5176").split(",") if o.strip()]
 app.add_middleware(

@@ -18,7 +18,7 @@ export default function ConnectorTile({
 }) {
   const isConnected = connector.status === 'connected';
   const isConfigured = connector.configured;
-  const actionLabel = isConnected ? 'View data' : 'Connect';
+  const actionLabel = isConnected && !isConfigured ? 'Configure & Sync' : isConnected ? 'View data' : 'Connect';
 
   return (
     <div

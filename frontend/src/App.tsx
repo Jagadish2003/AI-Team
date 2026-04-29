@@ -18,6 +18,7 @@ import NormalizationInspectorPage from './pages/NormalizationInspectorPage';
 import AnalystReviewPage from './pages/AnalystReviewPage';
 import OpportunityMapPage from './pages/OpportunityMapPage';
 import PilotRoadmapPage from './pages/PilotRoadmapPage';
+import BlueprintPage from './pages/BlueprintPage';
 import ExecutiveReportPage from './pages/ExecutiveReportPage';
 
 export default function App() {
@@ -41,6 +42,7 @@ export default function App() {
                     <Route path="/analyst-review" element={<AnalystReviewPage />} />
                     <Route path="/opportunity-map" element={<OpportunityMapPage />} />
                     <Route path="/pilot-roadmap" element={<PilotRoadmapPage />} />
+                    <Route path="/agentforce-blueprint" element={<BlueprintPage />} />
                     <Route path="/executive-report" element={<ExecutiveReportPage />} />
                     <Route path="*" element={<Navigate to="/integration-hub" replace />} />
                   </Routes>

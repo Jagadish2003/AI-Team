@@ -7,7 +7,7 @@ export default function UploadPanel({
   onBrowse,
   onAddMock,
   onRemove,
-  onDrop
+  onDrop,
 }: {
   files: UploadedFile[];
   onBrowse: () => void;
@@ -27,7 +27,10 @@ export default function UploadPanel({
     const readEntry = (entry: any): Promise<void> => {
       if (entry.isFile) {
         return new Promise((resolve) => {
-          entry.file((file: File) => { collected.push(file); resolve(); });
+          entry.file((file: File) => {
+            collected.push(file);
+            resolve();
+          });
         });
       }
       if (entry.isDirectory) {
@@ -99,7 +102,7 @@ export default function UploadPanel({
                     <div className="flex min-w-0 flex-col">
                       <div className="truncate text-sm font-semibold leading-tight text-text">{file.name}</div>
                       <div className="mt-1 text-[11px] text-muted">
-                        {file.sizeLabel} · {file.uploadedLabel}
+                        {file.sizeLabel} {'\u00b7'} {file.uploadedLabel}
                       </div>
                     </div>
                   </div>
@@ -119,7 +122,7 @@ export default function UploadPanel({
 
       <div className="flex flex-1 min-h-[90px] items-center justify-center">
         <p className="text-center text-[10px] leading-tight text-muted/60">
-          Begin Discovery enabled when ≥1 source connected or ≥1 file uploaded.
+          Begin Discovery also stays available when at least one file is uploaded.
         </p>
       </div>
     </div>

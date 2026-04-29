@@ -2,6 +2,7 @@ import json
 import os
 import re
 import sqlite3
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -80,7 +81,7 @@ def upsert_run(run_id: str, payload: Dict[str, Any]) -> None:
     con.close()
 
 def count_runs() -> int:
-    """Return the highest canonical RUN_### number, ignoring legacy run_* IDs."""
+    """Return the highest legacy RUN_### number."""
     init_tables()
     con = connect()
     cur = con.cursor()
@@ -95,7 +96,13 @@ def count_runs() -> int:
     return max_n
 
 def next_run_id() -> str:
-    return f"RUN_{count_runs() + 1:03d}"
+    """Generate the runtime run ID used by the discovery runner."""
+    init_tables()
+    for _ in range(10):
+        run_id = f"run_{uuid.uuid4().hex[:8]}"
+        if get_run(run_id) is None:
+            return run_id
+    return f"run_{uuid.uuid4().hex}"
 
 def require_run_exists(run_id: str) -> Dict[str, Any]:
     r = get_run(run_id)

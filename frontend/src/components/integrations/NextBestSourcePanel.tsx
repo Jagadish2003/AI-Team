@@ -55,28 +55,28 @@ export default function NextBestSourcePanel({
 
       </div>
 
-      {/* Connected count */}
+      {/* Ready count */}
       <div className="mt-3 text-xs text-muted">
-        Connected : <span className="text-text">{recommendedConnectedCount}</span> of <span className="text-text">{recommendedTotal}</span> recommended
+        Ready : <span className="text-text">{recommendedConnectedCount}</span> of <span className="text-text">{recommendedTotal}</span> recommended
       </div>
 
       {/* Next best source box */}
       <div className="mt-3 rounded-lg border border-border bg-bg/30 p-3">
         {next ? (
           <>
-            <div className="text-xs text-muted">Next best source to connect</div>
+            <div className="text-xs text-muted">Next best source to prepare</div>
             <div className="mt-1 text-sm font-semibold text-text">{next.name}</div>
             <div className="mt-1 text-xs text-muted">
               Adds signals from: <span className="text-text">{next.category}</span>
             </div>
             <div className="mt-3">
               <Button className="w-full" onClick={onConnectNext}>
-                Connect {next.name}
+                {next.status === 'connected' ? `Configure & Sync ${next.name}` : `Connect ${next.name}`}
               </Button>
             </div>
           </>
         ) : (
-          <div className="text-sm text-text">All recommended sources connected.</div>
+          <div className="text-sm text-text">All recommended sources are ready.</div>
         )}
       </div>
 
