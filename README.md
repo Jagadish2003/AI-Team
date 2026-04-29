@@ -22,22 +22,22 @@ npm -v
 > **Not installed?** Download and install here: [Node v22.22.2 (x64)](https://nodejs.org/dist/v22.22.2/node-v22.22.2-x64.msi)
 ---
 ## ⚙️ Installation & Setup
-1. Open **CMD** in the directory where you want to save the project.
+1. Open **Bash** in the directory where you want to save the project.
 2. Run the following commands to clone the repository and set up the dependencies:
 ```shell
 git clone https://github.com/Jagadish2003/AgentIQ.git
 cd AgentIQ/backend
 python -m venv .venv
-.venv/scripts/activate
+source .venv/scripts/activate
 pip install -r requirements.txt
 cd ..
 cd frontend
 npm install
 ```
-3. Add the `.env` file to the `AgentIQ/backend` folder.
-> **Note:** The `backend/.env` file is not included in the repository. Obtain it from the AgentIQ team and place it at `AgentIQ/backend/.env` before proceeding.
-4. Add the `.env` file to the `AgentIQ/frontend` folder.
-> **Note:** The `frontend/.env` file is not included in the repository. Obtain it from the AgentIQ team and place it at `AgentIQ/frontend/.env` before proceeding.
+3. Add the `.env` files to both the `AgentIQ/backend` and `AgentIQ/frontend` folders.
+> **Note:** The `backend/.env` and `frontend/.env` files are not included in the repository. Obtain them from the AgentIQ team and place them at `AgentIQ/backend/.env` and `AgentIQ/frontend/.env` respectively before proceeding.
+4. Add the `server.key` file to the `AgentIQ/backend/token_generation` folder.
+> **Note:** The `server.key` file is not included in the repository. Obtain it from the AgentIQ team and place it at `AgentIQ/backend/token_generation/server.key` before proceeding.
 5. Generate the local database by running the following command from the `AgentIQ/backend` directory:
 ```shell
 python database/seed_loader.py
@@ -45,15 +45,15 @@ python database/seed_loader.py
 > This creates the `dev.db` file required by the backend. You only need to run this once after cloning.
 ---
 ## 🏃‍♂️ Running the WebApp
-> ⚠️ **Important:** You will need to keep **two** separate terminal windows open to run both the backend and frontend servers simultaneously.
+> ⚠️ **Important:** You will need to keep **two** separate Bash terminal windows open to run both the backend and frontend servers simultaneously.
 ### Step 1: Start the Backend Server
-Open **Git Bash** from the `AgentIQ\backend` directory (do not close this window):
+Open **Bash** from the `AgentIQ\backend` directory (do not close this window):
 ```shell
 source .venv/scripts/activate
 ./run.sh
 ```
 ### Step 2: Start the Frontend Server
-Open **CMD** from the `AgentIQ\frontend` directory (do not close this window):
+Open **Bash** from the `AgentIQ\frontend` directory (do not close this window):
 ```shell
 npm run dev
 ```
