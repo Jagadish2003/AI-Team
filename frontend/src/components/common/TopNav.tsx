@@ -36,16 +36,16 @@ export default function TopNav() {
   );
 
   return (
-    <div className="sticky top-0 z-40 h-[76px] w-full overflow-hidden border-b border-border bg-bgheader shadow-[0_2px_8px_rgba(0,0,0,0.15)] backdrop-blur">
-      <div className="flex h-full w-full items-center gap-3 px-3">
+    <div className="sticky top-0 z-40 h-[58px] w-full border-b border-border bg-bgheader shadow-[0_2px_8px_rgba(0,0,0,0.15)] backdrop-blur">
+      <div className="flex h-full w-full items-center gap-2 px-2">
 
         {/* Brand */}
         <div className="flex shrink-0 items-center">
-          <img src={logo} alt="AgentIQ Logo" className="h-[46px] w-auto" />
+          <img src={logo} alt="AgentIQ Logo" className="h-[32px] w-auto" />
         </div>
 
         {/* Nav items */}
-        <div className="ml-3 flex min-w-0 items-center justify-start gap-2.5 overflow-hidden pl-2 pr-2">
+        <div className="flex flex-1 items-center justify-between overflow-x-auto px-2" style={{ scrollbarWidth: 'none' }}>
           {items.map((i) => {
             const isActive = loc.pathname === i.to;
 
@@ -58,12 +58,12 @@ export default function TopNav() {
               <React.Fragment key={i.to}>
                 <Link
                   to={to}
-                  className={`shrink-0 whitespace-nowrap rounded-md px-2.5 py-1.5 font-medium transition-colors ${
+                  className={`shrink-0 whitespace-nowrap font-medium transition-colors ${
                     isActive
                       ? 'border-navborder border-t-2 text-textwhite bg-gradient-to-b from-activenav '
                       : 'text-textwhite/70 hover:bg-navhover hover:text-textwhite'
                   }`}
-                  style={{ fontSize: '13.8px', padding: '5px 8px', borderRadius: '100px' }}
+                  style={{ fontSize: '11.5px', padding: '4px 6px', borderRadius: '100px' }}
                 >
                   {i.label}
                   {i.sfOnly && !salesforceConnected && (
@@ -79,12 +79,12 @@ export default function TopNav() {
           })}
         </div>
 
-        <div className="ml-auto flex shrink-0 items-center pr-4">
+        <div className="flex shrink-0 items-center pr-2">
           <button
             type="button"
             title="Profile"
             aria-label="Profile"
-            className="flex h-8 w-8 items-center justify-center rounded-full text-textwhite/75 transition-colors hover:bg-navhover hover:text-textwhite"
+            className="flex h-7 w-7 items-center justify-center rounded-full text-textwhite/75 transition-colors hover:bg-navhover hover:text-textwhite"
           >
             <User className="h-4 w-4" />
           </button>
