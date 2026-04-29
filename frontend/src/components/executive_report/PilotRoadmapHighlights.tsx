@@ -1,6 +1,7 @@
 import React from 'react';
 import { useNavigate } from 'react-router-dom';
 import { ArrowRight, Map } from 'lucide-react';
+import { useRunContext } from '../../context/RunContext';
  
 interface Stage {
   opportunities: unknown[];
@@ -19,6 +20,7 @@ export default function PilotRoadmapHighlights({
   overallReadiness,
 }: PilotRoadmapHighlightsProps) {
   const nav = useNavigate();
+  const { runId } = useRunContext();
  
   return (
     <div className="rounded-xl border border-border bg-panel p-4">
@@ -57,7 +59,7 @@ export default function PilotRoadmapHighlights({
       </ul>
       <button
         className="mt-3 w-full rounded-md border border-border bg-bg/20 px-3 py-2 text-sm hover:bg-panel2"
-        onClick={() => nav('/pilot-roadmap')}
+        onClick={() => nav(runId ? `/pilot-roadmap?runId=${runId}` : '/pilot-roadmap')}
       >
         Open Pilot Roadmap
       </button>

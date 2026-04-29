@@ -38,6 +38,18 @@ class IngestError(Exception):
     """Raised when live ingestion fails with a clear, actionable message."""
 
 
+def _generate_salesforce_token() -> tuple[str, str]:
+    try:
+        from token_generation import token_generator
+    except ImportError as exc:
+        raise IngestError(
+            "Live mode requires backend/token_generation/token_generator.py "
+            "or SF_INSTANCE_URL/SF_ACCESS_TOKEN credentials. Set INGEST_MODE=offline "
+            "to run without Salesforce credentials."
+        ) from exc
+    return token_generator.main()
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Offline fixture loader
 # ─────────────────────────────────────────────────────────────────────────────
@@ -55,13 +67,44 @@ def _load_fixture() -> Dict[str, Any]:
 
 def _get_client() -> "SalesforceClient":
     """Build a minimal REST client from env vars."""
-    instance_url = os.getenv("SF_INSTANCE_URL", "").rstrip("/")
-    access_token = os.getenv("SF_ACCESS_TOKEN", "")
+
+    ACCESS_TOKEN_PATH = (
+        Path(__file__).parent.parent.parent /
+        "token_generation" /
+        "sf_token.json"
+    )
+
+    # -----------------------------
+    # 1. LOAD TOKEN FROM FILE OR GENERATE
+    # -----------------------------
+    if ACCESS_TOKEN_PATH.exists():
+        with open(ACCESS_TOKEN_PATH, encoding="utf-8") as f:
+            sf_token = json.load(f)
+
+        instance_url = sf_token.get("instance_url")
+        access_token = sf_token.get("access_token")
+
+    else:
+        access_token, instance_url = _generate_salesforce_token()
+
+    # -----------------------------
+    # 2. VALIDATION CHECK
+    # -----------------------------
     if not instance_url or not access_token:
         raise IngestError(
-            "Live mode requires SF_INSTANCE_URL and SF_ACCESS_TOKEN environment variables. "
+            "Live mode requires valid SF_INSTANCE_URL and SF_ACCESS_TOKEN. "
             "Set INGEST_MODE=offline to run without credentials."
         )
+
+    # -----------------------------
+    # 3. TOKEN EXPIRY CHECK
+    # -----------------------------
+    if is_access_token_expired(instance_url, access_token):
+        access_token, instance_url = _generate_salesforce_token()
+
+    # -----------------------------
+    # 4. RETURN CLIENT
+    # -----------------------------
     return SalesforceClient(instance_url, access_token)
 
 
@@ -864,3 +907,28 @@ def ingest(sf_client: Optional[SalesforceClient] = None) -> Dict[str, Any]:
         raise
     except Exception as e:
         raise IngestError(f"Salesforce ingestion failed unexpectedly: {e}") from e
+
+def is_access_token_expired(instance_url: str, access_token: str) -> bool:
+    """
+    Returns True if the Salesforce access token is expired or invalid.
+    """
+    import requests
+
+    try:
+        url = f"{instance_url}/services/oauth2/userinfo"
+
+        response = requests.get(
+            url,
+            headers={"Authorization": f"Bearer {access_token}"},
+            timeout=5
+        )
+
+        # 401 = invalid/expired token
+        if response.status_code == 401:
+            return True
+
+        return False
+
+    except Exception:
+        # If we cannot verify (network issue etc.), assume expired for safety
+        return True

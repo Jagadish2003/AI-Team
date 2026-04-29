@@ -1,7 +1,9 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import { EvidenceReview, ExtractedEntity, EntityType, ReviewDecision } from '../types/partialResults';
 import { fetchEvidence, fetchEntities } from '../api/runApi';
+import { postEvidenceDecision } from '../api/evidenceApi';
 import { useRunContext } from './RunContext';
+import { isRunNotFoundError, runScopedErrorMessage } from '../utils/apiErrors';
 
 type PartialResultsContextValue = {
   entities: ExtractedEntity[];
@@ -59,7 +61,7 @@ const defaultTypes: Record<EntityType, boolean> = {
 };
 
 export function PartialResultsProvider({ children }: { children: React.ReactNode }) {
-  const { runId } = useRunContext();
+  const { runId, clearRunId } = useRunContext();
   const [entities, setEntities] = useState<ExtractedEntity[]>([]);
   const [evidence, setEvidence] = useState<EvidenceReview[]>([]);
   const [selectedEvidenceId, setSelectedEvidenceId] = useState<string | null>(null);
@@ -69,7 +71,14 @@ export function PartialResultsProvider({ children }: { children: React.ReactNode
   const refetch = useCallback(() => setFetchCount((c) => c + 1), []);
 
   useEffect(() => {
-    if (!runId) return;
+    if (!runId) {
+      setEntities([]);
+      setEvidence([]);
+      setSelectedEvidenceId(null);
+      setLoading(false);
+      setError(null);
+      return;
+    }
     let cancelled = false;
     setLoading(true);
     setError(null);
@@ -82,13 +91,17 @@ export function PartialResultsProvider({ children }: { children: React.ReactNode
         setSelectedEvidenceId(ev[0]?.id ?? null);
       } catch (e: any) {
         if (cancelled) return;
-        setError(e?.message ?? 'Failed to load partial results');
+        if (isRunNotFoundError(e)) {
+          clearRunId();
+          return;
+        }
+        setError(runScopedErrorMessage(e, 'Failed to load partial results'));
       } finally {
         if (!cancelled) setLoading(false);
       }
     })();
     return () => { cancelled = true; };
-  }, [runId, fetchCount]);
+  }, [runId, fetchCount, clearRunId]);
 
   const [selectedEntityIds, setSelectedEntityIds] = useState<string[]>([]);
   const [entityTypes, setEntityTypes] = useState(defaultTypes);
@@ -171,7 +184,7 @@ export function PartialResultsProvider({ children }: { children: React.ReactNode
   }, [filteredEvidence]);
 
   const setDecisionForSelected = useCallback((decision: ReviewDecision) => {
-    if (!selectedEvidenceId) return false;
+    if (!selectedEvidenceId || !runId) return false;
 
     const currentEvidence = evidence.find(ev => ev.id === selectedEvidenceId);
     if (!currentEvidence) return false;
@@ -180,13 +193,20 @@ export function PartialResultsProvider({ children }: { children: React.ReactNode
       return false;
     }
 
+    // Optimistic local update
     setEvidence(prev => prev.map(ev => ev.id === selectedEvidenceId ? { ...ev, decision } : ev));
+
+    // Persist to backend so decision survives page refresh
+    postEvidenceDecision(runId, selectedEvidenceId, decision as any).catch(() => {
+      // Roll back on failure
+      setEvidence(prev => prev.map(ev => ev.id === selectedEvidenceId ? { ...ev, decision: 'UNREVIEWED' } : ev));
+    });
 
     const idx = currentIndex;
     if (idx >= 0) goNextUnreviewed(idx);
 
     return true;
-  }, [selectedEvidenceId, evidence, currentIndex, goNextUnreviewed]);
+  }, [selectedEvidenceId, runId, evidence, currentIndex, goNextUnreviewed]);
 
   const approveSelected = useCallback(() => setDecisionForSelected('APPROVED'), [setDecisionForSelected]);
   const rejectSelected = useCallback(() => setDecisionForSelected('REJECTED'), [setDecisionForSelected]);

@@ -1,11 +1,8 @@
-/**
- * DiscoveryRunContext — run-scoped API wiring for Screen 3 (Task 11 Phase 1).
- * Requires RunContext (runId persistence) to already exist.
- */
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import type { DiscoveryRun, RunEvent, RunInputs } from '../types/discoveryRun';
-import { fetchRun, fetchRunEvents, replayRun, startRun as apiStartRun, triggerCompute, fetchRunStatus } from '../api/runApi';
+import { fetchRun, fetchRunEvents, replayRun, startRun as apiStartRun, fetchRunStatus } from '../api/runApi';
 import { useRunContext } from './RunContext';
+import { isRunNotFoundError, runScopedErrorMessage } from '../utils/apiErrors';
 
 type DiscoveryRunContextValue = {
   run: DiscoveryRun | null;
@@ -21,6 +18,11 @@ type DiscoveryRunContextValue = {
 
 const Ctx = createContext<DiscoveryRunContextValue | null>(null);
 
+function isTerminalStatus(status: string | undefined) {
+  const normalized = status?.toLowerCase();
+  return normalized === 'complete' || normalized === 'completed' || normalized === 'partial' || normalized === 'failed';
+}
+
 export function DiscoveryRunProvider({ children }: { children: React.ReactNode }) {
   const { runId, setRunId, clearRunId } = useRunContext();
   const [run, setRun] = useState<DiscoveryRun | null>(null);
@@ -35,7 +37,16 @@ export function DiscoveryRunProvider({ children }: { children: React.ReactNode }
   const refetch = useCallback(() => setFetchCount((c) => c + 1), []);
 
   useEffect(() => {
-    if (!runId) return;
+    if (!runId) {
+      setRun(null);
+      setEvents([]);
+      setStarted(false);
+      setComputing(false);
+      setError(null);
+      setLoading(false);
+      return;
+    }
+
     let cancelled = false;
     (async () => {
       setLoading(true);
@@ -46,21 +57,23 @@ export function DiscoveryRunProvider({ children }: { children: React.ReactNode }
         setRun(r);
         setEvents(ev);
         setStarted(true);
+        setComputing(!isTerminalStatus(r.status));
       } catch (e: any) {
         if (cancelled) return;
-        if (e?.status === 404) {
+        if (isRunNotFoundError(e)) {
           clearRunId();
           return;
         }
-        setError(e?.message ?? 'Failed to load run');
+        setError(runScopedErrorMessage(e, 'Failed to load run'));
       } finally {
         if (!cancelled) setLoading(false);
       }
     })();
-    return () => { cancelled = true; };
-  }, [runId, fetchCount]);
+    return () => {
+      cancelled = true;
+    };
+  }, [runId, fetchCount, clearRunId]);
 
-  // Poll status while compute is running.
   useEffect(() => {
     if (!runId || !computing) return;
     let cancelled = false;
@@ -68,22 +81,24 @@ export function DiscoveryRunProvider({ children }: { children: React.ReactNode }
       try {
         const { status } = await fetchRunStatus(runId);
         if (cancelled) return;
-        if (status === 'complete' || status === 'completed' || status === 'COMPLETED') {
+        if (isTerminalStatus(status)) {
           setComputing(false);
           clearInterval(interval);
-          setFetchCount(c => c + 1);
+          setFetchCount((c) => c + 1);
         }
       } catch (e: any) {
-        if (e?.status === 404) {
-          // /status endpoint not registered — abort polling
+        if (isRunNotFoundError(e)) {
+          clearRunId();
           setComputing(false);
           clearInterval(interval);
         }
-        // other transient errors: keep polling
       }
     }, 3000);
-    return () => { cancelled = true; clearInterval(interval); };
-  }, [runId, computing]);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [runId, computing, clearRunId]);
 
   const startRun = useCallback(async (inputs: RunInputs) => {
     if (runId || startingRef.current) return;
@@ -93,15 +108,9 @@ export function DiscoveryRunProvider({ children }: { children: React.ReactNode }
     try {
       const res = await apiStartRun(inputs);
       setRunId(res.runId);
-      // Fire compute; only enter polling state if the endpoint exists.
-      try {
-        await triggerCompute(res.runId);
-        setComputing(true);
-      } catch {
-        // /compute not yet registered — skip compute gate, proceed normally.
-      }
+      setComputing(true);
     } catch (e: any) {
-      setError(e?.message ?? 'Failed to start run');
+      setError(runScopedErrorMessage(e, 'Failed to start run'));
       setLoading(false);
     } finally {
       startingRef.current = false;
@@ -116,7 +125,7 @@ export function DiscoveryRunProvider({ children }: { children: React.ReactNode }
       await replayRun(runId);
       refetch();
     } catch (e: any) {
-      setError(e?.message ?? 'Failed to replay run');
+      setError(runScopedErrorMessage(e, 'Failed to replay run'));
     } finally {
       setLoading(false);
     }

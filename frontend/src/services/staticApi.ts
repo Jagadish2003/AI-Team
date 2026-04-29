@@ -13,6 +13,10 @@ export function connectConnectorApi(connectorId: string): Promise<Connector> {
   return apiPost<Connector>(`/api/connectors/${connectorId}/connect`, { status: "connected" });
 }
 
+export function configureSyncApi(connectorId: string): Promise<Connector> {
+  return apiPost<Connector>(`/api/connectors/${connectorId}/configure`, {});
+}
+
 export function fetchUploads(): Promise<UploadedFile[]> {
   return apiGet<UploadedFile[]>("/api/uploads");
 }
@@ -30,5 +34,5 @@ export function fetchMappings(): Promise<MappingRow[]> {
 }
 
 export function fetchConfidence(): Promise<ConfidenceExplanation> {
-  return apiGet<ConfidenceExplanation>("/api/confidence");
+  return apiGet<ConfidenceExplanation>("/api/confidence/explanation");
 }

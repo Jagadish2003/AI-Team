@@ -2,7 +2,8 @@ import React, { createContext, useCallback, useContext, useEffect, useMemo, useS
 import { Connector } from '../types/connector';
 import { computeConfidence, Confidence } from '../utils/confidence';
 import { getNextBestRecommended } from '../utils/nextBest';
-import { connectConnectorApi, fetchConnectors } from '../services/staticApi';
+import { isDiscoveryReadyConnector } from '../utils/sourceReadiness';
+import { connectConnectorApi, configureSyncApi, fetchConnectors } from '../services/staticApi';
 
 type ConnectorContextValue = {
   all: Connector[];                
@@ -80,7 +81,7 @@ export function ConnectorProvider({ children }: { children: React.ReactNode }) {
   );
 
   const recommendedConnectedCount = useMemo(
-    () => recommended.filter((c) => c.status === 'connected').length,
+    () => recommended.filter(isDiscoveryReadyConnector).length,
     [recommended]
   );
 
@@ -106,13 +107,14 @@ export function ConnectorProvider({ children }: { children: React.ReactNode }) {
     }
   },[refetch]);
 
-  const configureSync = useCallback((id: string) => {
-    setAll((prev) =>
-      prev.map((c) =>
-        c.id === id ? { ...c, lastSynced: 'just now' } : c
-      )
-    );
-  },[]);
+  const configureSync = useCallback(async (id: string) => {
+    try {
+      await configureSyncApi(id);
+      refetch();
+    } catch (e: any) {
+      setError(e?.message ?? 'Failed to configure sync');
+    }
+  }, [refetch]);
 
   const value: ConnectorContextValue = useMemo(() => ({
     all,                    

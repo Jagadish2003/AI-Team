@@ -1,7 +1,16 @@
 import React from 'react';
 import { Link, useLocation } from 'react-router-dom';
-import { User, ChevronDown } from 'lucide-react';
+import { User, Zap } from 'lucide-react';
 import { useRunContext } from "../../context/RunContext";
+import { useConnectorContext } from "../../context/ConnectorContext";
+import logo from "../../../images/AgentIQ-logo.svg";
+
+type NavItem = {
+  to: string;
+  label: string;
+  runScoped: boolean;
+  sfOnly?: boolean;
+};
 
 const items = [
   { to: '/integration-hub', label: 'Integration Hub', runScoped: false },
@@ -9,31 +18,32 @@ const items = [
 
   //  run-scoped screens
   { to: '/discovery-run', label: 'Discovery Run', runScoped: true },
-  { to: '/partial-results', label: 'Partial Results', runScoped: true },
-  { to: '/normalization', label: 'Normalization', runScoped: true }, 
-  { to: '/analyst-review', label: 'Analyst Review', runScoped: true },
-  { to: '/opportunity-map', label: 'Opportunity Map', runScoped: true },
-  { to: '/pilot-roadmap', label: 'Pilot Roadmap', runScoped: true },
+  { to: '/partial-results', label: 'Evidence Collection', runScoped: true },
+  { to: '/opportunity-review', label: 'Opportunity Review', runScoped: true, sfOnly: false },
+  { to: '/agentforce-blueprint', label: 'Agentforce Blueprint', runScoped: true, sfOnly: true },
   { to: '/executive-report', label: 'Executive Report', runScoped: true },
-];
+] satisfies NavItem[];
 
 export default function TopNav() {
   const loc = useLocation();
   const { runId } = useRunContext();
+  const { all: connectors } = useConnectorContext();
+  const salesforceConnected = connectors.some(
+    (c) => c.id === 'salesforce' && c.status === 'connected',
+  );
 
   return (
-    <div className="sticky top-0 z-40 border-b border-border bg-bg/80 shadow-[0_2px_8px_rgba(0,0,0,0.15)] backdrop-blur">
-      <div className="mx-auto flex w-full items-center px-6 py-3">
+    <div className="sticky top-0 z-40 h-[58px] w-full border-b border-border bg-bgheader shadow-[0_2px_8px_rgba(0,0,0,0.15)] backdrop-blur">
+      <div className="flex h-full w-full items-center gap-2 px-2">
 
         {/* Brand */}
-        <div className="flex items-center gap-2 shrink-0">
-          <div className="h-7 w-7 rounded-md bg-accent/20" />
-          <div className="text-[22px] font-semibold text-text">AgentIQ</div>
+        <div className="flex shrink-0 items-center pl-4">
+          <img src={logo} alt="AgentIQ Logo" className="h-[32px] w-auto" />
         </div>
 
         {/* Nav items */}
-        <div className="ml-auto flex items-center gap-1">
-          {items.map((i, idx) => {
+        <div className="flex flex-1 items-center justify-end gap-1 overflow-x-auto px-2" style={{ scrollbarWidth: 'none' }}>
+          {items.map((i) => {
             const isActive = loc.pathname === i.to;
 
             // Preserve runId only for run-scoped pages
@@ -45,28 +55,36 @@ export default function TopNav() {
               <React.Fragment key={i.to}>
                 <Link
                   to={to}
-                  className={`whitespace-nowrap rounded-md px-2.5 py-1.5 font-medium transition-colors ${
+                  className={`shrink-0 whitespace-nowrap font-medium transition-colors ${
                     isActive
-                      ? 'bg-panel2 text-text'
-                      : 'text-muted hover:bg-panel2 hover:text-text'
+                      ? 'border-navborder border-t-2 text-textwhite bg-gradient-to-b from-activenav '
+                      : 'text-textwhite/70 hover:bg-navhover hover:text-textwhite'
                   }`}
-                  style={{ fontSize: '14px' }}
+                  style={{ fontSize: '11.5px', padding: '4px 12px', borderRadius: '100px' }}
                 >
                   {i.label}
+                  {i.sfOnly && !salesforceConnected && (
+                    <Zap
+                      size={10}
+                      className="ml-1 inline-block shrink-0 text-amber-400"
+                      aria-label="Requires Salesforce"
+                    />
+                  )}
                 </Link>
-
-                {idx < items.length - 1 && (
-                  <span className="h-4 w-px bg-muted/30" />
-                )}
               </React.Fragment>
             );
           })}
+        </div>
 
-          <span className="h-4 w-px bg-muted/30 mx-1" />
-          {/* Profile */}
-          <div className="flex h-7 w-7 cursor-pointer items-center justify-center rounded-full transition-colors hover:bg-panel2 hover:text-text">
-            <User className="h-4 w-4 text-slate-400" />
-          </div>
+        <div className="flex shrink-0 items-center pr-2">
+          <button
+            type="button"
+            title="Profile"
+            aria-label="Profile"
+            className="flex h-7 w-7 items-center justify-center rounded-full text-textwhite/75 transition-colors hover:bg-navhover hover:text-textwhite"
+          >
+            <User className="h-4 w-4" />
+          </button>
         </div>
       </div>
     </div>

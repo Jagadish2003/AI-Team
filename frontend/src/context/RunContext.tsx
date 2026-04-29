@@ -6,6 +6,8 @@ import React, {
   useMemo,
   useState,
 } from "react";
+import { useSearchParams } from "react-router-dom";
+import { cleanRunId, isCanonicalRunId } from "../utils/runIds";
 
 type RunContextValue = {
   runId: string | null;
@@ -15,62 +17,115 @@ type RunContextValue = {
 
 const RunContext = createContext<RunContextValue | null>(null);
 
-const LS_KEY = "agentiq:lastRunId";
+const LS_KEY = "agentiq_run_id";
+const BASE_URL = (import.meta.env.VITE_API_BASE_URL as string | undefined) ?? "http://localhost:8000";
+const TOKEN = (import.meta.env.VITE_DEV_JWT as string | undefined) ?? "dev-token-change-me";
+
+async function validateRunId(id: string): Promise<boolean> {
+  if (!isCanonicalRunId(id)) return false;
+  try {
+    const res = await fetch(`${BASE_URL}/api/runs/${id}`, {
+      headers: { Authorization: `Bearer ${TOKEN}` },
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
 
 export function RunProvider({ children }: { children: React.ReactNode }) {
-  const [runId, setRunIdState] = useState<string | null>(() => {
-    try {
-      const fromUrl = new URL(window.location.href).searchParams.get("runId");
-      const fromLs = window.localStorage.getItem(LS_KEY);
-      return fromUrl ?? (fromLs && fromLs.trim().length > 0 ? fromLs : null);
-    } catch {
-      return null;
-    }
-  });
+  const [searchParams, setSearchParams] = useSearchParams();
+  const urlRunId = searchParams.get("runId");
+  const [runId, _setRunId] = useState<string | null>(null);
 
-  // Sync URL on first render if runId came from localStorage only.
   useEffect(() => {
-    if (!runId) return;
-    const url = new URL(window.location.href);
-    if (!url.searchParams.get("runId")) {
-      url.searchParams.set("runId", runId);
-      window.history.replaceState({}, "", url.toString());
+    let cancelled = false;
+    const fromUrl = cleanRunId(urlRunId);
+    const stored = (() => {
+      try {
+        return localStorage.getItem(LS_KEY);
+      } catch {
+        return null;
+      }
+    })();
+    const fromLs = cleanRunId(stored);
+    const candidate = fromUrl ?? fromLs;
+
+    const clearStoredRunId = () => {
+      _setRunId(null);
+      try {
+        localStorage.removeItem(LS_KEY);
+      } catch {}
+    };
+
+    const clearUrlRunId = () => {
+      setSearchParams((prev) => {
+        const next = new URLSearchParams(prev);
+        next.delete("runId");
+        return next;
+      }, { replace: true });
+    };
+
+    if (!candidate) {
+      _setRunId(null);
+      return () => {
+        cancelled = true;
+      };
     }
-    window.localStorage.setItem(LS_KEY, runId);
-  }, []);
-  const setRunId = useCallback((id: string | null) => {
-    setRunIdState(id);
 
-    const url = new URL(window.location.href);
-
-    if (id) {
-      url.searchParams.set("runId", id);
-      window.localStorage.setItem(LS_KEY, id);
-    } else {
-      url.searchParams.delete("runId");
-      window.localStorage.removeItem(LS_KEY);
+    if (!isCanonicalRunId(candidate)) {
+      clearStoredRunId();
+      if (fromUrl) clearUrlRunId();
+      return () => {
+        cancelled = true;
+      };
     }
 
-    window.history.replaceState({}, "", url.toString());
-  }, []);
+    _setRunId((current) => (current === candidate ? current : null));
 
-  const clearRunId = useCallback(() => {
-    setRunIdState(null);
+    validateRunId(candidate).then((valid) => {
+      if (cancelled) return;
+      if (valid) {
+        _setRunId(candidate);
+        try {
+          localStorage.setItem(LS_KEY, candidate);
+        } catch {}
+      } else {
+        clearStoredRunId();
+        if (fromUrl) clearUrlRunId();
+      }
+    });
 
-    const url = new URL(window.location.href);
-    url.searchParams.delete("runId");
+    return () => {
+      cancelled = true;
+    };
+  }, [urlRunId, setSearchParams]);
 
-    window.localStorage.removeItem(LS_KEY);
+  const setRunId = useCallback(
+    (id: string | null) => {
+      const nextId = id && isCanonicalRunId(id) ? id : null;
+      _setRunId(nextId);
+      const next = new URLSearchParams(searchParams);
+      if (nextId) {
+        next.set("runId", nextId);
+        try {
+          localStorage.setItem(LS_KEY, nextId);
+        } catch {}
+      } else {
+        next.delete("runId");
+        try {
+          localStorage.removeItem(LS_KEY);
+        } catch {}
+      }
+      setSearchParams(next, { replace: true });
+    },
+    [searchParams, setSearchParams]
+  );
 
-    window.history.replaceState({}, "", url.toString());
-  }, []);
+  const clearRunId = useCallback(() => setRunId(null), [setRunId]);
 
   const value = useMemo(
-    () => ({
-      runId,
-      setRunId,
-      clearRunId,
-    }),
+    () => ({ runId, setRunId, clearRunId }),
     [runId, setRunId, clearRunId]
   );
 
@@ -78,9 +133,7 @@ export function RunProvider({ children }: { children: React.ReactNode }) {
 }
 
 export function useRunContext() {
-  const context = useContext(RunContext);
-  if (!context) {
-    throw new Error("useRunContext must be used within RunProvider");
-  }
-  return context;
+  const ctx = useContext(RunContext);
+  if (!ctx) throw new Error("useRunContext must be used within RunProvider");
+  return ctx;
 }

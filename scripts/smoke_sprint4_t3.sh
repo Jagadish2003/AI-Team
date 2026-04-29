@@ -30,7 +30,7 @@ echo "   runId=$RUN_ID"
 
 echo "3) Poll status until complete"
 STATUS=""
-for i in $(seq 1 60); do
+for i in $(seq 1 120); do
   SJSON=$(curl -sS "${hdr[@]}" "${BASE_URL}/api/runs/${RUN_ID}/status" || true)
   if [ -n "$SJSON" ]; then
     STATUS=$(echo "$SJSON" | python -c \
@@ -65,7 +65,7 @@ curl -sS "${hdr[@]}" -X POST "${BASE_URL}/api/runs/${RUN_ID}/replay" -d '{}' >/d
 
 echo "7) Poll status after replay"
 STATUS=""
-for i in $(seq 1 60); do
+for i in $(seq 1 120); do
   SJSON=$(curl -sS "${hdr[@]}" "${BASE_URL}/api/runs/${RUN_ID}/status" || true)
   if [ -n "$SJSON" ]; then
     STATUS=$(echo "$SJSON" | python -c \

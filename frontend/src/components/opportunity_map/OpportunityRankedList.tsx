@@ -45,7 +45,7 @@ export default function OpportunityRankedList({
                 className={`cursor-pointer rounded-lg border p-3 transition-colors
                   ${active
                     ? 'border-accent/60 bg-panel2'
-                    : 'border-border bg-bg/20 hover:bg-panel2 hover:border-[#00B4B4]/40'
+                    : 'border-border bg-bg/20 hover:bg-panel2 hover:border-[#0D55D7]/40'
                   }`}
               >
 

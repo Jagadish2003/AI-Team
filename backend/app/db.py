@@ -1,12 +1,15 @@
 import json
 import os
+import re
 import sqlite3
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 from fastapi import HTTPException
 
 DB_PATH = Path(os.getenv("DB_PATH", "database/dev.db"))
+RUN_ID_RE = re.compile(r"^RUN_(\d+)$")
 
 def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -78,7 +81,8 @@ def upsert_run(run_id: str, payload: Dict[str, Any]) -> None:
     con.close()
 
 def count_runs() -> int:
-    """Return the highest run number seen (not the count), so new IDs never collide."""
+    """Return the highest legacy RUN_### number."""
+    init_tables()
     con = connect()
     cur = con.cursor()
     cur.execute("SELECT id FROM runs")
@@ -86,13 +90,19 @@ def count_runs() -> int:
     con.close()
     max_n = 0
     for (run_id,) in rows:
-        try:
-            parts = run_id.split("_")
-            if len(parts) == 2:
-                max_n = max(max_n, int(parts[1]))
-        except (ValueError, IndexError):
-            pass
+        match = RUN_ID_RE.match(str(run_id))
+        if match:
+            max_n = max(max_n, int(match.group(1)))
     return max_n
+
+def next_run_id() -> str:
+    """Generate the runtime run ID used by the discovery runner."""
+    init_tables()
+    for _ in range(10):
+        run_id = f"run_{uuid.uuid4().hex[:8]}"
+        if get_run(run_id) is None:
+            return run_id
+    return f"run_{uuid.uuid4().hex}"
 
 def require_run_exists(run_id: str) -> Dict[str, Any]:
     r = get_run(run_id)

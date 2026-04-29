@@ -60,7 +60,7 @@ export default function OpportunityMapPage() {
 
   const openReview = (id: string) => {
     select(id);
-    nav('/analyst-review');
+    nav(runId ? `/analyst-review?runId=${runId}` : '/analyst-review');
   };
 
   if (!runId) {

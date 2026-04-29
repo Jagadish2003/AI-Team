@@ -48,7 +48,7 @@ function SourceDropdown({ sources, value, onChange }: {
               key={s}
               onClick={() => { onChange(s); setOpen(false); }}
               className={`cursor-pointer px-4 py-2 text-sm transition-colors ${
-                s === value ? 'bg-[#00B4B4] font-medium text-[#0d1117]' : 'text-text hover:bg-[#00B4B4]/15 hover:text-[#00B4B4]'
+                s === value ? 'bg-[#0D55D7] font-medium text-[#0d1117]' : 'text-text hover:bg-[#0D55D7]/15 hover:text-[#0D55D7]'
               }`}
             >
               {s}
@@ -91,7 +91,7 @@ export default function EvidenceList({
           <span className="flex items-center gap-2">
             <input
               type="checkbox"
-              className="accent-[#00B4B4]"
+              className="accent-[#0D55D7]"
               checked={saveDraftEnabled}
               onChange={(e) => onSaveDraftEnabled(e.target.checked)}
             />
@@ -107,7 +107,7 @@ export default function EvidenceList({
             value={query}
             onChange={(e) => onQuery(e.target.value)}
             placeholder="Search evidence…"
-            className="w-full rounded-md border border-border bg-bg/30 px-3 py-2 pr-10 text-sm text-text placeholder:text-muted transition-colors hover:bg-bg/50 hover:border-[#00B4B4]/50 focus:outline-none focus:border-[#00B4B4] focus:ring-2 focus:ring-[#00B4B4]/50 appearance-none"
+            className="w-full rounded-md border border-border bg-bg/30 px-3 py-2 pr-10 text-sm text-text placeholder:text-muted transition-colors hover:bg-bg/50 hover:border-[#0D55D7]/50 focus:outline-none focus:border-[#0D55D7] focus:ring-2 focus:ring-[#0D55D7]/50 appearance-none"
           />
           <Search className="absolute right-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted pointer-events-none" />
         </div>
@@ -121,7 +121,7 @@ export default function EvidenceList({
               key={ev.id}
               onClick={() => onSelect(ev.id)}
               className={`cursor-pointer border-b border-border/50 p-3 ${
-                selected ? 'border-l-2 border-l-[#00B4B4] bg-[#00B4B4]/10' : 'hover:bg-panel2'
+                selected ? 'border-l-2 border-l-[#0D55D7] bg-[#0D55D7]/10' : 'hover:bg-panel2'
               }`}
             >
               <div className="flex items-center justify-between text-xs text-muted">

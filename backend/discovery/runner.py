@@ -19,9 +19,12 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+from dotenv import load_dotenv
 
 # Track A adapter
 from .track_a_adapter import export_track_a_seed
+
+load_dotenv()
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s  %(message)s")
 logger = logging.getLogger(__name__)
@@ -56,14 +59,18 @@ def build_org_context(sf_data: Dict, sn_data: Dict, jira_data: Dict) -> Dict[str
     }
 
 def run(
-    mode: str = "offline",
+    mode: Optional[str] = None,
     run_id: Optional[str] = None,
     org_id: str = "demo-org",
     systems: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
     # Default to all systems if None
-    _systems = set(systems) if systems else {"salesforce", "servicenow", "jira"}
+    if mode is None:
+        mode = os.environ.get("INGEST_MODE", "offline").strip().lower()
+        if mode not in ("offline", "live"):
+            mode = "offline"
 
+    _systems = set(systems) if systems else {"salesforce", "servicenow", "jira"}
     os.environ["INGEST_MODE"] = mode
     if run_id is None:
         run_id = f"run_{uuid.uuid4().hex[:8]}"
@@ -160,7 +167,13 @@ def _empty_run(run_id: str, org_id: str, mode: str, started_at: str) -> Dict:
 
 def main():
     parser = argparse.ArgumentParser(description="AgentIQ discovery runner")
-    parser.add_argument("--mode", choices=["offline", "live"], default="offline")
+
+    # Dynamically read INGEST_MODE from environment, fallback to "offline"
+    default_mode = os.environ.get("INGEST_MODE", "offline").strip().lower()
+    if default_mode not in ("offline", "live"):
+        default_mode = "offline"
+
+    parser.add_argument("--mode", choices=["offline", "live"], default=default_mode)
     parser.add_argument("--systems", help="Comma-separated list of systems (e.g. salesforce,jira)")
     parser.add_argument("--output", help="Output JSON file path")
     parser.add_argument("--run-id", help="Explicit run ID")
@@ -194,3 +207,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+ 

@@ -18,18 +18,24 @@ from .routes_sprint4_t1 import register_sprint4_t1_routes
 from .routes_sprint4_t2 import register_sprint4_t2_routes
 from .routes_sprint4_t3 import register_sprint4_t3_routes
 from .routes_sprint4_t4 import register_sprint4_t4_routes
+from .routes_sprint4_t6 import register_sprint4_t6_routes
+from .routes_sprint41_blueprint import register_blueprint_routes
 
 app = FastAPI(title="AgentIQ Layer 1 API Skeleton", version="0.1.0")
 
+# Register routes in order
+register_sprint4_t6_routes(app)
 register_sprint4_t4_routes(app)
 register_sprint4_t3_routes(app)
 register_sprint4_t2_routes(app)
 register_sprint4_t1_routes(app)
+register_blueprint_routes(app)
 
-origins = [o.strip() for o in os.getenv("CORS_ORIGINS", "http://localhost:5173").split(",") if o.strip()]
+origins = [o.strip() for o in os.getenv("CORS_ORIGINS", "http://localhost:5173,http://localhost:5174,http://localhost:5175,http://localhost:5176").split(",") if o.strip()]
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
+    allow_origin_regex=r"http://localhost:\d+",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -82,7 +88,19 @@ def connect_connector(connector_id: str, body: Dict[str, Any]) -> Dict[str, Any]
         raise HTTPException(404, "connector not found")
     status = body.get("status", "connected")
     c["status"] = status
-    c["lastSynced"] = "Just now" if status == "connected" else c.get("lastSynced", "Not connected")
+    c["lastSynced"] = c.get("lastSynced", "—")
+    upsert("connectors", connector_id, c)
+    return c
+
+@app.post("/api/connectors/{connector_id}/configure", dependencies=[Depends(require_auth)])
+def configure_connector(connector_id: str) -> Dict[str, Any]:
+    c = get_one("connectors", connector_id)
+    if not c:
+        raise HTTPException(404, "connector not found")
+    if c.get("status") != "connected":
+        raise HTTPException(400, "connector must be connected before configuring")
+    c["configured"] = True
+    c["lastSynced"] = "Just now"
     upsert("connectors", connector_id, c)
     return c
 
@@ -95,9 +113,28 @@ def confidence_explanation() -> Dict[str, Any]:
         "recommendedNextSourceId": "m365"
     }
 
+# ✅ ADDED FOR FRONTEND MOCK REMOVAL
+@app.get("/api/confidence", dependencies=[Depends(require_auth)])
+def get_confidence() -> Dict[str, Any]:
+    rows = get_all("confidence")
+    if rows:
+        return rows[0]
+
+    return {
+        "level": "MEDIUM",
+        "why": ["Missing Microsoft 365 signals"],
+        "nextAction": "Connect Microsoft 365 to reach High confidence",
+        "recommendedNextSourceId": "m365"
+    }
+
 @app.get("/api/permissions", dependencies=[Depends(require_auth)])
 def list_permissions() -> List[Dict[str, Any]]:
     return get_all("permissions")
+
+# ✅ ADDED FOR FRONTEND MOCK REMOVAL
+@app.get("/api/mappings", dependencies=[Depends(require_auth)])
+def get_mappings() -> List[Dict[str, Any]]:
+    return get_all("mappings")
 
 @app.get("/api/uploads", dependencies=[Depends(require_auth)])
 def list_uploads() -> List[Dict[str, Any]]:
@@ -113,10 +150,6 @@ def add_upload(body: Dict[str, Any]) -> Dict[str, Any]:
     upsert("uploads", item["id"], item)
     return item
 
-# @app.post("/api/runs/start", dependencies=[Depends(require_auth)])
-# def start_run(body: Dict[str, Any]) -> Dict[str, Any]:
-#     return start_run_(body)
-
 @app.get("/api/runs/{run_id}", dependencies=[Depends(require_auth)])
 def get_run(run_id: str) -> Dict[str, Any]:
     try:
@@ -131,17 +164,9 @@ def get_events(run_id: str) -> List[Dict[str, Any]]:
     except KeyError:
         raise HTTPException(404, "run not found")
 
-# Replay is now handled by routes_sprint4_t4 (registered above)
-# @app.post("/api/runs/{run_id}/replay", dependencies=[Depends(require_auth)])
-# def replay_run(run_id: str) -> Dict[str, Any]:
-#     try:
-#         return replay_run_(run_id)
-#     except KeyError:
-#         raise HTTPException(404, "run not found")
-
 @app.get("/api/runs/{run_id}/evidence", dependencies=[Depends(require_auth)])
 def list_evidence(run_id: str) -> List[Dict[str, Any]]:
-    run_get(run_id)  # raises 404 if not found
+    run_get(run_id)
     run_ev = run_kv_get("evidence", run_id, None)
     if run_ev is None:
         raise HTTPException(
@@ -156,9 +181,7 @@ def list_evidence(run_id: str) -> List[Dict[str, Any]]:
 
 @app.post("/api/runs/{run_id}/evidence/{evidence_id}/decision", dependencies=[Depends(require_auth)])
 def set_evidence_decision(run_id: str, evidence_id: str, body: Dict[str, Any]) -> Dict[str, Any]:
-    run_get(run_id)  # raises 404 if run not found
-
-    # Read from run-scoped KV (not global seed table)
+    run_get(run_id)
     run_ev = run_kv_get("evidence", run_id, None)
     if run_ev is None:
         raise HTTPException(404, "evidence not found for this run")
@@ -172,7 +195,7 @@ def set_evidence_decision(run_id: str, evidence_id: str, body: Dict[str, Any]) -
         raise HTTPException(400, "invalid decision")
 
     run_ev[idx] = {**run_ev[idx], "decision": decision}
-    run_kv_set("evidence", run_id, run_ev)      # write back to run KV
+    run_kv_set("evidence", run_id, run_ev)
     e = run_ev[idx]
 
     audit_event = {
@@ -205,13 +228,11 @@ def list_mappings(run_id: str) -> List[Dict[str, Any]]:
 
 @app.get("/api/runs/{run_id}/opportunities", dependencies=[Depends(require_auth)])
 def list_opportunities(run_id: str) -> List[Dict[str, Any]]:
-    # 1. Validate the run exists and handle if not found
     try:
         read_run(run_id)
     except KeyError:
         raise HTTPException(404, "run not found")
 
-    # 2. Get opportunities from run-scoped storage (no fallback to seed data)
     opps = run_kv_get("opps", run_id, None)
     if opps is None:
         raise HTTPException(
@@ -219,20 +240,13 @@ def list_opportunities(run_id: str) -> List[Dict[str, Any]]:
             detail=f"No opportunities for run '{run_id}'. T2 materialisation may not have completed."
         )
 
-    # 3. S7 MAP FIX: Add Deterministic Jitter
-    # This prevents items with identical integer scores from overlapping perfectly on the UI.
     for opp in opps:
         if "impact" in opp and "effort" in opp:
-            # Use the opportunity ID to generate a stable, deterministic offset.
-            # This ensures the layout is the same every time and passes replay tests.
             _id = str(opp.get("id", "0"))
             stable_offset = (sum(ord(c) for c in _id) % 5) * 0.15
-
-            # Apply the small offset to separate the bubbles
             opp["impact"] = float(opp["impact"]) + stable_offset
             opp["effort"] = float(opp["effort"]) + stable_offset
 
-    # 4. Return the modified list of opportunities
     return opps
 
 @app.post("/api/runs/{run_id}/opportunities/{opp_id}/decision", dependencies=[Depends(require_auth)])
@@ -272,6 +286,18 @@ def set_opp_decision(run_id: str, opp_id: str, body: Dict[str, Any]) -> Dict[str
 
 @app.post("/api/runs/{run_id}/opportunities/{opp_id}/override", dependencies=[Depends(require_auth)])
 def set_opp_override(run_id: str, opp_id: str, body: Dict[str, Any]) -> Dict[str, Any]:
+    # --- VALIDATION START ---
+    rationale = body.get("rationaleOverride", "").strip()
+    reason = body.get("overrideReason", "").strip()
+
+    # Validation: If rationale is provided, a reason must be provided.
+    # Exception: If both are empty, it's a "reset" and should be allowed (as per test 15).
+    if rationale and not reason:
+        raise HTTPException(
+            status_code=400,
+            detail="An override reason is required when providing a rationale override."
+        )
+    # --- VALIDATION END ---
     try:
         read_run(run_id)
     except KeyError:
@@ -311,13 +337,13 @@ def set_opp_override(run_id: str, opp_id: str, body: Dict[str, Any]) -> Dict[str
 
 @app.get("/api/runs/{run_id}/audit", dependencies=[Depends(require_auth)])
 def list_audit(run_id: str) -> List[Dict[str, Any]]:
-    run_get(run_id)  # raises 404 if missing
+    run_get(run_id)
     audit = run_kv_get("audit", run_id, default_audit())
     return sorted(audit, key=lambda e: int(e.get("tsEpoch", 0)), reverse=True)
 
 @app.get("/api/runs/{run_id}/roadmap", dependencies=[Depends(require_auth)])
 def get_roadmap(run_id: str) -> Dict[str, Any]:
-    run_get(run_id)  # raises 404 if not found
+    run_get(run_id)
     run_roadmap = run_kv_get("roadmap", run_id, None)
     if run_roadmap is not None:
         return run_roadmap
@@ -339,15 +365,16 @@ def get_exec_report(run_id: str) -> Dict[str, Any]:
     except KeyError:
         raise HTTPException(404, "run not found")
 
-    # --- REMOVED THE run_exec CACHE CHECK FROM HERE ---
+    er = run_kv_get("executive_report", run_id, None)
 
-    # sourcesAnalyzed MUST derive from run inputs (not live connector state)
+    if er:
+        return er
+
     inputs = run.get("inputs") or {}
     connected_sources = inputs.get("connectedSources") or []
     uploaded_files = inputs.get("uploadedFiles") or []
     sample_enabled = bool(inputs.get("sampleWorkspaceEnabled", False))
 
-    # Determine recommended count from connector catalog
     connectors = get_all("connectors")
     name_to_tier = {c.get("name"): c.get("tier") for c in connectors}
     recommended_connected = sum(1 for n in connected_sources if name_to_tier.get(n) == "recommended")
@@ -363,24 +390,20 @@ def get_exec_report(run_id: str) -> Dict[str, Any]:
     if opps is None:
         raise HTTPException(
             status_code=404,
-            detail=(
-                f"No opportunities for run '{run_id}'. "
-                "T2 materialisation has not completed."
-            ),
+            detail=f"No opportunities for run '{run_id}'. T2 materialisation has not completed."
         )
 
     quick_wins = [o for o in opps if o.get("tier") == "Quick Win"]
 
-    # This return block ensures roadmapHighlights is a DICTIONARY, fixing the test error.
     return {
-        "confidence":      "MODERATE",
+        "confidence": "MODERATE",
         "sourcesAnalyzed": sources_analyzed,
-        "topQuickWins":    quick_wins,
+        "topQuickWins": quick_wins,
         "snapshotBubbles": [],
         "roadmapHighlights": {
-            "next30Count":  sum(1 for o in opps if o.get("tier") == "Quick Win"),
-            "next60Count":  sum(1 for o in opps if o.get("tier") == "Strategic"),
-            "next90Count":  sum(1 for o in opps if o.get("tier") == "Complex"),
+            "next30Count": sum(1 for o in opps if o.get("tier") == "Quick Win"),
+            "next60Count": sum(1 for o in opps if o.get("tier") == "Strategic"),
+            "next90Count": sum(1 for o in opps if o.get("tier") == "Complex"),
             "blockerCount": 0,
         },
     }

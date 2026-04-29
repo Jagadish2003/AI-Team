@@ -1,6 +1,5 @@
 import React from 'react';
 import TopNav from '../components/common/TopNav';
-import TabsHeader from '../components/partial_results/TabsHeader';
 import EntitiesSidebar from '../components/partial_results/EntitiesSidebar';
 import EvidenceList from '../components/partial_results/EvidenceList';
 import EvidenceViewer from '../components/partial_results/EvidenceViewer';
@@ -104,25 +103,16 @@ export default function PartialResultsPage() {
       <div className="w-full px-8 py-6 pb-10">
         <div className="mb-6 flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
           <div>
-            <div className="text-2xl font-semibold">Partial Results</div>
+            <div className="text-2xl font-semibold">Evidence Collection</div>
+              <div className="mt-1 text-sm text-muted mb-2">
+               Evidence collection acts as the trust layer for discovery, enabling enterprise transparency by clearly showing what evidence was inferred, from which source, and with what level of confidence.
+               </div>
             <div className="mt-1 text-sm text-muted">
               Run ID: <span className="font-semibold text-text">{runId}</span>
             </div>
           </div>
-          {/* <div className="flex justify-end">
-            <div className="flex items-center gap-2 px-3 py-2 rounded-full bg-accent/20 text-white text-xs font-medium">
-              <span className="w-2 h-2 rounded-full bg-accent animate-pulse"></span>
-              <span>
-                {run?.status === 'RUNNING' ? 'RUNNING...' : (run?.status ?? '—')}
-              </span>
-              <span className="opacity-80">
-                {run?.progress?.percent ?? 0}%
-              </span>
-            </div>
-          </div> */}
         </div>
 
-        <TabsHeader tab={activeTab} onTab={setActiveTab} />
         <div className="mt-4 grid grid-cols-1 gap-6 lg:grid-cols-[0.9fr_1.4fr_0.9fr]">
           <EntitiesSidebar
             entities={filteredEntities}

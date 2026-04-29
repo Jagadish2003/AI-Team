@@ -12,12 +12,13 @@ import { useRunContext } from '../context/RunContext';
 import { RunRequiredEmptyState } from '../components/common/RunRequiredEmptyState';
 import { fetchRunRoadmap } from '../api/runScopedS9S10Api';
 import type { PilotRoadmapModel } from '../types/pilotRoadmap';
+import { isRunNotFoundError, runScopedErrorMessage } from '../utils/apiErrors';
 
 export default function PilotRoadmapPage() {
   const { select } = useAnalystReviewContext();
   const { push } = useToast();
   const nav = useNavigate();
-  const { runId } = useRunContext();
+  const { runId, clearRunId } = useRunContext();
 
   const [model, setModel] = useState<PilotRoadmapModel | null>(null);
   const [loading, setLoading] = useState(false);
@@ -27,7 +28,12 @@ export default function PilotRoadmapPage() {
   const refetch = useCallback(() => setFetchCount(c => c + 1), []);
 
   useEffect(() => {
-    if (!runId) return;
+    if (!runId) {
+      setModel(null);
+      setLoading(false);
+      setError(null);
+      return;
+    }
     let cancelled = false;
 
     (async () => {
@@ -37,18 +43,23 @@ export default function PilotRoadmapPage() {
         const data = await fetchRunRoadmap(runId);
         if (!cancelled) setModel(data);
       } catch (e: any) {
-        if (!cancelled) setError(e?.message ?? 'Failed to load roadmap');
+        if (cancelled) return;
+        if (isRunNotFoundError(e)) {
+          clearRunId();
+          return;
+        }
+        setError(runScopedErrorMessage(e, 'Failed to load roadmap'));
       } finally {
         if (!cancelled) setLoading(false);
       }
     })();
 
     return () => { cancelled = true; };
-  }, [runId, fetchCount]);
+  }, [runId, fetchCount, clearRunId]);
 
   const openReview = (id: string) => {
     select(id);
-    nav('/analyst-review');
+    nav(runId ? `/analyst-review?runId=${runId}` : '/analyst-review');
   };
 
   if (!runId) {
