@@ -2,10 +2,14 @@ import React from 'react';
 import { Check, MoveRight, X } from 'lucide-react';
 import { Confidence } from '../../utils/confidence';
 import { Connector } from '../../types/connector';
+import {
+  DISCOVERY_SOURCE_REQUIREMENT_MESSAGE,
+  isDiscoveryReadyConnector,
+} from '../../utils/sourceReadiness';
 
 export default function DiscoveryStartBar({
   confidence,
-  recommendedConnectedCount,
+  recommendedReadyCount,
   recommendedTotal,
   recommended,
   canStart,
@@ -13,7 +17,7 @@ export default function DiscoveryStartBar({
   onUpload,
 }: {
   confidence: Confidence;
-  recommendedConnectedCount: number;
+  recommendedReadyCount: number;
   recommendedTotal: number;
   recommended: Connector[];
   canStart: boolean;
@@ -26,10 +30,10 @@ export default function DiscoveryStartBar({
   const isHigh = step === 'high';
 
   const microcopy =
-    recommendedConnectedCount === 0
-      ? 'Connect at least one source to start discovery.'
-      : recommendedConnectedCount === 2
-        ? 'Connect one more source to reach HIGH confidence.'
+    !canStart
+      ? DISCOVERY_SOURCE_REQUIREMENT_MESSAGE
+      : recommendedReadyCount === 2
+        ? 'Connect and configure one more source to reach HIGH confidence.'
         : null;
 
   return (
@@ -54,7 +58,7 @@ export default function DiscoveryStartBar({
           </div>
 
           <div className="text-sm text-muted">
-            Connected : <span className="text-text">{recommendedConnectedCount}</span> of{' '}
+            Ready : <span className="text-text">{recommendedReadyCount}</span> of{' '}
             <span className="text-text">{recommendedTotal}</span> recommended
           </div>
 
@@ -79,19 +83,24 @@ export default function DiscoveryStartBar({
 
             <div className="flex items-center gap-2 rounded-md border border-slate-400 px-3 py-1.5 text-sm">
               {recommended.map((connector, index) => {
-                const isConnected = connector.status === 'connected';
+                const isReady = isDiscoveryReadyConnector(connector);
+                const statusLabel = isReady
+                  ? 'Ready'
+                  : connector.status === 'connected'
+                    ? 'Needs Sync'
+                    : 'Not Connected';
                 return (
                   <React.Fragment key={connector.id}>
                     {index > 0 && <span className="text-slate-400">|</span>}
                     <span className="flex items-center gap-1.5">
-                      {isConnected ? (
+                      {isReady ? (
                         <Check size={14} strokeWidth={2.5} className="shrink-0 text-accent" />
                       ) : (
                         <X size={14} strokeWidth={2.5} className="shrink-0 text-muted" />
                       )}
-                      <span className={isConnected ? 'text-text' : 'text-muted'}>{connector.name}</span>
-                      <span className={`text-xs ${isConnected ? 'text-accent' : 'text-muted'}`}>
-                        {isConnected ? 'Connected' : 'Not Connected'}
+                      <span className={isReady ? 'text-text' : 'text-muted'}>{connector.name}</span>
+                      <span className={`text-xs ${isReady ? 'text-accent' : 'text-muted'}`}>
+                        {statusLabel}
                       </span>
                     </span>
                   </React.Fragment>

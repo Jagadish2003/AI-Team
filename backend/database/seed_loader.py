@@ -86,7 +86,8 @@ def main():
     for u in load_file(FILES["uploads"]):
         upsert(conn, "uploads", u["id"], u)
 
-    # Fresh dev DBs should not contain a run yet. Runtime run IDs start at RUN_001.
+    # Fresh dev DBs should not contain a run yet. Runtime run IDs are created
+    # by the discovery runner using the run_<hex> format.
     # events.json is still available as the deterministic event template used
     # when /api/runs/start creates a real run.
 

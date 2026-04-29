@@ -1,10 +1,15 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
+import { InfoPanel } from '../components/common/InfoPanel';
 import TopNav from '../components/common/TopNav';
 import { useDiscoveryRunContext } from '../context/DiscoveryRunContext';
 import { useConnectorContext } from '../context/ConnectorContext';
 import { useSourceIntakeContext } from '../context/SourceIntakeContext';
 import { useRunContext } from '../context/RunContext';
+import {
+  DISCOVERY_SOURCE_REQUIREMENT_MESSAGE,
+  isDiscoveryReadyConnector,
+} from '../utils/sourceReadiness';
 
 function RunStatusPill({
   computing,
@@ -86,7 +91,7 @@ export default function DiscoveryRunPage() {
 
   const inputs = useMemo(() => {
     const connectedSources = connectors
-      .filter((c) => c.status === 'connected')
+      .filter(isDiscoveryReadyConnector)
       .map((c) => c.name);
     return {
       connectedSources,
@@ -124,24 +129,19 @@ export default function DiscoveryRunPage() {
     return (
       <div className="min-h-screen text-text">
         <TopNav />
-        <div className="flex h-[75vh] items-center justify-center">
-          <div className="w-[550px] rounded-xl border border-white/20 bg-panel p-8 py-12 text-center shadow-xl shadow-black/20">
-            <h2 className="mb-4 text-xl font-semibold text-text">No Active Run</h2>
-            <p className="mb-6 text-sm text-muted">Start a new discovery run to continue.</p>
-            <button
-              onClick={() => void startRun(inputs)}
-              disabled={!hasAtLeastOneSource}
-              className="rounded-lg bg-accent px-6 py-2.5 text-sm font-medium text-white transition-all duration-200 hover:scale-[1.02] hover:opacity-90 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:scale-100"
-            >
-              Start New Discovery Run
-            </button>
-            {!hasAtLeastOneSource && (
-              <div className="mt-3 text-center text-sm font-medium text-muted">
-                Connect Atleast One Source To Start Discovery
-              </div>
-            )}
-          </div>
-        </div>
+        <InfoPanel
+          title="No Active Run"
+          message="Start a new discovery run to continue."
+          actionLabel="Start New Discovery Run"
+          actionDisabled={!hasAtLeastOneSource}
+          onAction={() => void startRun(inputs)}
+        >
+          {!hasAtLeastOneSource && (
+            <div className="mt-3 text-center text-sm font-medium text-muted">
+              {DISCOVERY_SOURCE_REQUIREMENT_MESSAGE}
+            </div>
+          )}
+        </InfoPanel>
       </div>
     );
   }

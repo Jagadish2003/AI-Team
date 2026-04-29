@@ -2,6 +2,7 @@ import React, { createContext, useCallback, useContext, useEffect, useMemo, useS
 import { Connector } from '../types/connector';
 import { computeConfidence, Confidence } from '../utils/confidence';
 import { getNextBestRecommended } from '../utils/nextBest';
+import { isDiscoveryReadyConnector } from '../utils/sourceReadiness';
 import { connectConnectorApi, configureSyncApi, fetchConnectors } from '../services/staticApi';
 
 type ConnectorContextValue = {
@@ -80,7 +81,7 @@ export function ConnectorProvider({ children }: { children: React.ReactNode }) {
   );
 
   const recommendedConnectedCount = useMemo(
-    () => recommended.filter((c) => c.status === 'connected').length,
+    () => recommended.filter(isDiscoveryReadyConnector).length,
     [recommended]
   );
 

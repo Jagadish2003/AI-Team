@@ -10,6 +10,8 @@ import DiscoveryStartBar from '../components/integrations/DiscoveryStartBar';
 import { useToast } from '../components/common/Toast';
 import { useConnectorContext } from '../context/ConnectorContext';
 import { useRunContext } from '../context/RunContext';
+import { useSourceIntakeContext } from '../context/SourceIntakeContext';
+import { isDiscoveryReadyConnector } from '../utils/sourceReadiness';
 
 export default function IntegrationHubPage() {
   const {
@@ -30,6 +32,7 @@ export default function IntegrationHubPage() {
   const { push } = useToast();
   const navigate = useNavigate();
   const { runId } = useRunContext();
+  const { uploadedFiles, sampleWorkspaceEnabled } = useSourceIntakeContext();
 
   useEffect(() => {
     if (!loading && !selectedConnectorId && recommended && recommended.length > 0) {
@@ -48,7 +51,12 @@ export default function IntegrationHubPage() {
     [recommended, nextBestRecommendedId]
   );
 
-  const canStart = recommendedConnectedCount >= 1;
+  const readyConnectorCount = useMemo(
+    () => [...recommended, ...standard].filter(isDiscoveryReadyConnector).length,
+    [recommended, standard]
+  );
+
+  const canStart = readyConnectorCount > 0 || uploadedFiles.length > 0 || sampleWorkspaceEnabled;
 
   return (
     <div className="min-h-screen text-text">
@@ -95,7 +103,10 @@ export default function IntegrationHubPage() {
                       const c = standard.find((x) => x.id === id);
                       if (!c) return;
 
-                      if (c.status === 'connected') {
+                      if (c.status === 'connected' && !c.configured) {
+                        configureSync(id);
+                        push('Configuration complete. Data is now synced.');
+                      } else if (c.status === 'connected') {
                         push('Data preview available in later Sprint.');
                       } else if (c.status === 'coming_soon') {
                         push('Connector coming soon.');
@@ -123,8 +134,13 @@ export default function IntegrationHubPage() {
                   next={next}
                   onConnectNext={() => {
                     if (!next) return;
-                    connectConnector(next.id);
-                    push('Connected next best source.');
+                    if (next.status === 'connected') {
+                      configureSync(next.id);
+                      push('Configuration complete. Data is now synced.');
+                    } else {
+                      connectConnector(next.id);
+                      push('Connected next best source.');
+                    }
                   }}
                 />
               </div>
@@ -133,7 +149,7 @@ export default function IntegrationHubPage() {
 
           <DiscoveryStartBar
             confidence={confidence}
-            recommendedConnectedCount={recommendedConnectedCount}
+            recommendedReadyCount={recommendedConnectedCount}
             recommendedTotal={3}
             recommended={recommended}
             canStart={canStart}

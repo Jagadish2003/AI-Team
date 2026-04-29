@@ -1,9 +1,16 @@
 import React from 'react';
 import { Link, useLocation } from 'react-router-dom';
-import { User, ChevronDown } from 'lucide-react';
+import { User, Zap } from 'lucide-react';
 import { useRunContext } from "../../context/RunContext";
+import { useConnectorContext } from "../../context/ConnectorContext";
 import logo from "../../../images/AgentIQ-logo.svg";
-// added
+
+type NavItem = {
+  to: string;
+  label: string;
+  runScoped: boolean;
+  sfOnly?: boolean;
+};
 
 const items = [
   { to: '/integration-hub', label: 'Integration Hub', runScoped: false },
@@ -16,27 +23,30 @@ const items = [
   { to: '/analyst-review', label: 'Analyst Review', runScoped: true },
   { to: '/opportunity-map', label: 'Opportunity Map', runScoped: true },
   { to: '/pilot-roadmap', label: 'Pilot Roadmap', runScoped: true },
+  { to: '/agentforce-blueprint', label: 'Agentforce Blueprint', runScoped: true, sfOnly: true },
   { to: '/executive-report', label: 'Executive Report', runScoped: true },
-];
+] satisfies NavItem[];
 
 export default function TopNav() {
   const loc = useLocation();
   const { runId } = useRunContext();
+  const { all: connectors } = useConnectorContext();
+  const salesforceConnected = connectors.some(
+    (c) => c.id === 'salesforce' && c.status === 'connected',
+  );
 
   return (
-    <div className="sticky top-0 z-40 border-b border-border bg-bgheader shadow-[0_2px_8px_rgba(0,0,0,0.15)] backdrop-blur">
-      <div className="mx-auto flex w-full items-center px-6 py-3">
+    <div className="sticky top-0 z-40 h-[76px] w-full overflow-hidden border-b border-border bg-bgheader shadow-[0_2px_8px_rgba(0,0,0,0.15)] backdrop-blur">
+      <div className="flex h-full w-full items-center gap-3 px-3">
 
         {/* Brand */}
-        <div className="flex items-center gap-1 shrink-0">
-          <div className="h-7 w-7 rounded-md"/>
-          {/* Added Logo and changed header color */}
-          <div className="text-[22px] font-semibold text-text"><img src={logo} alt="AgentIQ Logo" className="w-auto"/></div>
+        <div className="flex shrink-0 items-center">
+          <img src={logo} alt="AgentIQ Logo" className="h-[46px] w-auto" />
         </div>
 
         {/* Nav items */}
-        <div className="ml-auto flex items-center gap-1">
-          {items.map((i, idx) => {
+        <div className="ml-3 flex min-w-0 items-center justify-start gap-2.5 overflow-hidden pl-2 pr-2">
+          {items.map((i) => {
             const isActive = loc.pathname === i.to;
 
             // Preserve runId only for run-scoped pages
@@ -48,22 +58,36 @@ export default function TopNav() {
               <React.Fragment key={i.to}>
                 <Link
                   to={to}
-                  className={`whitespace-nowrap rounded-md px-2.5 py-1.5 font-medium transition-colors ${
+                  className={`shrink-0 whitespace-nowrap rounded-md px-2.5 py-1.5 font-medium transition-colors ${
                     isActive
-                      ? 'border-navborder border-t-2 text-text bg-gradient-to-b from-activenav '
-                      : 'text-muted hover:bg-navhover hover:text-text'
+                      ? 'border-navborder border-t-2 text-textwhite bg-gradient-to-b from-activenav '
+                      : 'text-textwhite/70 hover:bg-navhover hover:text-textwhite'
                   }`}
-                  style={{ fontSize: '14px', padding: '6px 12px', borderRadius: '100px' }}
+                  style={{ fontSize: '13.8px', padding: '5px 8px', borderRadius: '100px' }}
                 >
                   {i.label}
+                  {i.sfOnly && !salesforceConnected && (
+                    <Zap
+                      size={10}
+                      className="ml-1 inline-block shrink-0 text-amber-400"
+                      aria-label="Requires Salesforce"
+                    />
+                  )}
                 </Link>
               </React.Fragment>
             );
           })}
-          {/* Profile */}
-          <div className="flex h-7 w-7 cursor-pointer items-center justify-center rounded-full transition-colors hover:bg-navhover hover:text-text">
-            <User className="h-4 w-4 text-slate-400" />
-          </div>
+        </div>
+
+        <div className="ml-auto flex shrink-0 items-center pr-4">
+          <button
+            type="button"
+            title="Profile"
+            aria-label="Profile"
+            className="flex h-8 w-8 items-center justify-center rounded-full text-textwhite/75 transition-colors hover:bg-navhover hover:text-textwhite"
+          >
+            <User className="h-4 w-4" />
+          </button>
         </div>
       </div>
     </div>

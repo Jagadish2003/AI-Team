@@ -13,7 +13,11 @@ import { useToast } from '../components/common/Toast';
 import { useConnectorContext } from '../context/ConnectorContext';
 import { useSourceIntakeContext } from '../context/SourceIntakeContext';
 import { useRunContext } from '../context/RunContext';
- 
+import {
+  DISCOVERY_SOURCE_REQUIREMENT_MESSAGE,
+  isDiscoveryReadyConnector,
+} from '../utils/sourceReadiness';
+
 export default function SourceIntakePage() {
   const { push } = useToast();
   const nav = useNavigate();
@@ -21,7 +25,7 @@ export default function SourceIntakePage() {
 
   const singleFileInputRef = useRef<HTMLInputElement | null>(null);
   const { all } = useConnectorContext();
- 
+
   const {
     uploadedFiles,
     sampleWorkspaceEnabled,
@@ -31,41 +35,41 @@ export default function SourceIntakePage() {
     addMockFile,
     addFilesFromSelection,
     removeFile,
-    setSampleWorkspaceEnabled
+    setSampleWorkspaceEnabled,
   } = useSourceIntakeContext();
- 
-  const connected = useMemo(
-    () => all.filter((c) => c.status === 'connected'),
+
+  const readyConnectors = useMemo(
+    () => all.filter(isDiscoveryReadyConnector),
     [all]
   );
- 
-  const connectedNames = useMemo(
-    () =>[...new Set(connected.map((c) => c.name))],
-    [connected]
+
+  const readySourceNames = useMemo(
+    () => [...new Set(readyConnectors.map((c) => c.name))],
+    [readyConnectors]
   );
- 
-  const canBegin = connected.length > 0 || uploadedFiles.length > 0 || sampleWorkspaceEnabled;
- 
+
+  const canBegin = readyConnectors.length > 0 || uploadedFiles.length > 0 || sampleWorkspaceEnabled;
+
   const handleSingleFileSelected = (event: React.ChangeEvent<HTMLInputElement>) => {
-    const selected = Array.from(event.target.files ??[]);
+    const selected = Array.from(event.target.files ?? []);
     if (selected.length === 0) return;
- 
+
     const { addedCount } = addFilesFromSelection(selected);
- 
+
     if (addedCount > 0) {
       push(`Added ${addedCount} file${addedCount === 1 ? '' : 's'}.`);
     } else {
       push('Only CSV or Excel files are allowed.');
     }
- 
+
     event.target.value = '';
   };
- 
+
   const isValidFile = (file: File) => {
     const lower = file.name.toLowerCase();
     return lower.endsWith('.csv') || lower.endsWith('.xls') || lower.endsWith('.xlsx');
   };
- 
+
   const handleDrop = (files: File[]) => {
     const valid = files.filter(isValidFile);
     if (valid.length === 0) {
@@ -75,18 +79,16 @@ export default function SourceIntakePage() {
     const { addedCount } = addFilesFromSelection(valid);
     push(`Added ${addedCount} file${addedCount === 1 ? '' : 's'}.`);
   };
- 
+
   return (
     <div className="min-h-screen text-text">
       <TopNav />
- 
-      {/* DoD: Loading and Error States */}
+
       {loading && <LoadingPanel />}
       {error && !loading && <ErrorPanel message={error} onRetry={refetch} />}
- 
+
       {!loading && !error && (
         <>
-          {/* Hidden Inputs */}
           <input
             ref={singleFileInputRef}
             type="file"
@@ -95,18 +97,16 @@ export default function SourceIntakePage() {
             className="hidden"
             onChange={handleSingleFileSelected}
           />
- 
+
           <div className="w-full px-8 py-6 pb-28">
-            {/* Header */}
             <div className="mb-6">
               <div className="text-2xl font-semibold">Source Intake</div>
               <div className="mt-1 text-sm text-muted">
-                <span className="font-semibold text-text">{connected.length}</span>{' '}
-                sources already connected via Integration Hub. Add files for additional coverage.
+                <span className="font-semibold text-text">{readyConnectors.length}</span>{' '}
+                sources ready via Integration Hub. Add files for additional coverage.
               </div>
             </div>
- 
-            {/* Panels */}
+
             <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
               <UploadPanel
                 files={uploadedFiles}
@@ -121,12 +121,12 @@ export default function SourceIntakePage() {
                 }}
                 onDrop={handleDrop}
               />
- 
+
               <ManagedAgentPanel
                 onDownload={() => push('Agent download available in later sprint.')}
                 onGuide={() => push('Installation guide available in later sprint.')}
               />
- 
+
               <SampleWorkspacePanel
                 enabled={sampleWorkspaceEnabled}
                 onEnable={() => {
@@ -136,27 +136,26 @@ export default function SourceIntakePage() {
                 onLearnMore={() => push('More details available later sprint.')}
               />
             </div>
- 
-            {/* Summary */}
+
             <div className="mt-4">
               <ReadySourcesSummary
-                connectedNames={connectedNames}
+                connectedNames={readySourceNames}
                 fileCount={uploadedFiles.length}
                 sampleEnabled={sampleWorkspaceEnabled}
               />
- 
+
               <div className="mt-2 text-xs text-muted">
-                Begin Discovery is enabled when ≥1 source connected OR ≥1 file uploaded OR Sample Workspace selected.
+                Begin Discovery is enabled when at least one source is connected and configured, at least one file is uploaded, or Sample Workspace is selected.
               </div>
             </div>
- 
-            {/* Footer */}
+
             <div className="fixed bottom-0 left-0 right-0 z-40 border-t border-border bg-bg/90 shadow-[0_-2px_6px_rgba(0,0,0,0.12)] backdrop-blur">
               <div className="mx-auto flex w-full max-w-none items-center justify-between gap-2 px-8 py-3">
                 <Button
                   variant="secondary"
                   onClick={() => nav('/integration-hub')}
-                  className="w-40 rounded-md border border-border bg-buttonbg px-3 py-2 text-sm font-medium text-text hover:bg-panel transition disabled:cursor-not-allowed disabled:opacity-50 relative flex items-center justify-center">
+                  className="w-40 rounded-md border border-border bg-buttonbg px-3 py-2 text-sm font-medium text-text hover:bg-panel transition disabled:cursor-not-allowed disabled:opacity-50 relative flex items-center justify-center"
+                >
                   <span className="absolute left-4 flex items-center">
                     <ChevronLeft size={16} strokeWidth={2.5} />
                   </span>
@@ -165,14 +164,15 @@ export default function SourceIntakePage() {
                 <Button
                   variant="primary"
                   disabled={!canBegin}
-                  title={!canBegin ? 'Connect at least one source to continue' : undefined}
+                  title={!canBegin ? DISCOVERY_SOURCE_REQUIREMENT_MESSAGE : undefined}
                   onClick={() => {
                     if (runId) {
                       nav(`/discovery-run?runId=${runId}`);
                     } else {
                       nav('/discovery-run', { state: { autoStart: true } });
                     }
-                  }}>
+                  }}
+                >
                   Begin Discovery
                   <ChevronRight size={16} strokeWidth={2.5} />
                 </Button>

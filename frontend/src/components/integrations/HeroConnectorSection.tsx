@@ -1,6 +1,7 @@
 import React from 'react';
 import { Connector } from '../../types/connector';
 import HeroConnectorCard from './HeroConnectorCard';
+import { DISCOVERY_SOURCE_REQUIREMENT_MESSAGE } from '../../utils/sourceReadiness';
 
 export default function HeroConnectorSection({
   connectors,
@@ -19,7 +20,7 @@ export default function HeroConnectorSection({
     <div>
       <div className="mb-4">
         <div className="text-xl font-semibold text-text">Connection Hub</div>
-        <div className="text-xs text-muted pb-3 pt-3">Connect at least 1 source to start discovery.</div>
+        <div className="text-xs text-muted pb-3 pt-3">{DISCOVERY_SOURCE_REQUIREMENT_MESSAGE}</div>
       </div>
       <div className="grid grid-cols-1 gap-6 md:grid-cols-3">
         {connectors.map((c) => (

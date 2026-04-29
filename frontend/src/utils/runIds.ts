@@ -1,4 +1,4 @@
-export const RUN_ID_PATTERN = /^RUN_\d{3,}$/;
+export const RUN_ID_PATTERN = /^(?:run_[A-Za-z0-9_]+|RUN_\d{3,})$/;
 
 export function cleanRunId(value: string | null | undefined): string | null {
   const trimmed = value?.trim();
@@ -8,4 +8,3 @@ export function cleanRunId(value: string | null | undefined): string | null {
 export function isCanonicalRunId(value: string | null | undefined): value is string {
   return RUN_ID_PATTERN.test(value ?? "");
 }
-

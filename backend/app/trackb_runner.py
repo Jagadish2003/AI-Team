@@ -52,6 +52,8 @@ def _run_subprocess(*, mode: str, systems: List[str], run_context: Dict[str, Any
         "--systems",
         ",".join(systems),
     ]
+    if run_context.get("runId"):
+        cmd.extend(["--run-id", str(run_context["runId"])])
     env = os.environ.copy()
     ctx_path = env.get("TRACKB_RUN_CONTEXT_PATH", "/tmp/trackb_run_context.json")
     with open(ctx_path, "w", encoding="utf-8") as f:
