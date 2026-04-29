@@ -35,16 +35,14 @@ export default function HeroConnectorCard({
       p-5 shadow-sm hover:border-accent/40 hover:bg-panel2
     `}
     >
-      <div className="flex min-w-0 items-center justify-between gap-2">
-        <div className="min-w-0 flex-1">
-          <div className="flex min-w-0 items-center gap-2 text-base font-semibold text-text">
-            <span className="shrink-0">{connectorIcons[connector.name] || <Settings size={18} className="text-slate-500" />}</span>
-            <span className="min-w-0 break-words leading-tight">{connector.name}</span>
-          </div>
-          <div className="mt-1 truncate text-sm text-muted">{connector.category}</div>
+      <div className="min-w-0">
+        <div className="flex min-w-0 items-center gap-2 text-base font-semibold text-text">
+          <span className="shrink-0">{connectorIcons[connector.name] || <Settings size={18} className="text-slate-500" />}</span>
+          <span className="leading-snug">{connector.name}</span>
         </div>
-        <div className="shrink-0 self-start">
-          <Badge status={connector.status} />
+        <div className="mt-1 flex items-center justify-between gap-2">
+          <div className="truncate text-sm text-muted">{connector.category}</div>
+          <div className="shrink-0"><Badge status={connector.status} /></div>
         </div>
       </div>
       <div className="mt-4 grid grid-cols-2 gap-4">

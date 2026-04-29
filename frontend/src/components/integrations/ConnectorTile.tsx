@@ -28,17 +28,15 @@ export default function ConnectorTile({
       } p-4 hover:border-accent/60 hover:bg-panel2`}
     >
       {/* Header */}
-      <div className="flex items-start justify-between gap-2">
-        <div className="min-w-0">
-          <div className="flex items-center gap-2 text-base font-semibold text-text">
-            {icon}
-            {connector.name}
-          </div>
-          <div className="mt-0.5 truncate text-xs text-muted">
-            {connector.category}
-          </div>
+      <div className="min-w-0">
+        <div className="flex items-center gap-2 text-base font-semibold text-text">
+          <span className="shrink-0">{icon}</span>
+          <span className="leading-snug">{connector.name}</span>
         </div>
-        <Badge status={connector.status} />
+        <div className="mt-0.5 flex items-center justify-between gap-2">
+          <div className="truncate text-xs text-muted">{connector.category}</div>
+          <div className="shrink-0"><Badge status={connector.status} /></div>
+        </div>
       </div>
 
       {/* Tags */}
