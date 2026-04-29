@@ -1,0 +1,37 @@
+[
+  {
+    "id": "perm_001",
+    "label": "View Jira Issues",
+    "required": true,
+    "satisfied": true,
+    "sourceSystem": "Jira"
+  },
+  {
+    "id": "perm_002",
+    "label": "View Jira Users",
+    "required": true,
+    "satisfied": false,
+    "sourceSystem": "Jira"
+  },
+  {
+    "id": "perm_003",
+    "label": "View ServiceNow CMDB Items",
+    "required": true,
+    "satisfied": true,
+    "sourceSystem": "ServiceNow"
+  },
+  {
+    "id": "perm_004",
+    "label": "View ServiceNow Users",
+    "required": true,
+    "satisfied": false,
+    "sourceSystem": "ServiceNow"
+  },
+  {
+    "id": "perm_005",
+    "label": "View Databricks Jobs/Assets",
+    "required": false,
+    "satisfied": false,
+    "sourceSystem": "Databricks"
+  }
+]

@@ -1,0 +1,217 @@
+[
+  {
+    "id": "opp_001",
+    "identifier": "THI DF Q20",
+    "title": "Automate Ticket Routing",
+    "category": "Routing Orchestrator",
+    "tier": "Quick Win",
+    "impact": 8,
+    "effort": 3,
+    "confidence": "MEDIUM",
+    "aiRationale": "High-value ITSM workflows rely on ServiceNow ticket routing. Automating assignment by category can reduce triage time by 40%. Moderate effort is required to test and validate workflows.",
+    "evidenceIds": ["ev1", "ev2", "ev4"],
+    "evidenceItems": [
+      { "id": "ev1", "label": "Ev1. Affected 1585 tickets month" },
+      { "id": "ev2", "label": "Ev2. Avg triage time is 12 hours" },
+      { "id": "ev4", "label": "Ev4. Only 5,763 of 12,945 ServiceNow tickets are categorized." }
+    ],
+    "permissions": [
+      { "label": "View ServiceNow Tickets (S)", "required": true, "satisfied": true },
+      { "label": "View ServiceNow Users (S)", "required": true, "satisfied": true },
+      { "label": "View ServiceNow Workflow Configs (S)", "required": false, "satisfied": true }
+    ],
+    "decision": "UNREVIEWED",
+    "override": {
+      "isLocked": false,
+      "rationaleOverride": "Routing ServiceNow support tickets based on category would significantly reduce incident resolution time. Automate assignment to ensure tickets reach the right teams promptly. Moderate development effort is required, primarily for testing and validation.",
+      "overrideReason": "",
+      "updatedAt": null
+    }
+  },
+  {
+    "id": "opp_002",
+    "identifier": "THI DF Q21",
+    "title": "Orchestrate Onboarding Tasks",
+    "category": "Task Orchestrator",
+    "tier": "Strategic",
+    "impact": 7,
+    "effort": 5,
+    "confidence": "HIGH",
+    "aiRationale": "Onboarding tasks are fragmented across multiple systems. Orchestration can reduce time-to-productivity for new hires.",
+    "evidenceIds": ["ev1", "ev3"],
+    "evidenceItems": [
+      { "id": "ev1", "label": "Ev1. 42 onboarding tickets created per month" },
+      { "id": "ev3", "label": "Ev3. Avg onboarding completion is 14 days" }
+    ],
+    "permissions": [
+      { "label": "View ServiceNow Tickets (S)", "required": true, "satisfied": true },
+      { "label": "View Jira Projects (S)", "required": true, "satisfied": false }
+    ],
+    "decision": "APPROVED",
+    "override": {
+      "isLocked": false,
+      "rationaleOverride": "",
+      "overrideReason": "",
+      "updatedAt": null
+    }
+  },
+  {
+    "id": "opp_003",
+    "identifier": "THI DF Q22",
+    "title": "Recommend ServiceNow KB Articles",
+    "category": "Knowledge Copilot",
+    "tier": "Quick Win",
+    "impact": 6,
+    "effort": 2,
+    "confidence": "HIGH",
+    "aiRationale": "Agents spend time searching for KB articles. Auto-suggesting relevant articles at ticket creation can reduce resolution time significantly.",
+    "evidenceIds": ["ev2"],
+    "evidenceItems": [
+      { "id": "ev2", "label": "Ev2. 68% of tickets have a matching KB article" }
+    ],
+    "permissions": [
+      { "label": "View ServiceNow Tickets (S)", "required": true, "satisfied": true },
+      { "label": "Read Confluence KB (S)", "required": true, "satisfied": true }
+    ],
+    "decision": "UNREVIEWED",
+    "override": {
+      "isLocked": false,
+      "rationaleOverride": "",
+      "overrideReason": "",
+      "updatedAt": null
+    }
+  },
+  {
+    "id": "opp_004",
+    "identifier": "THI DF Q23",
+    "title": "Sync Managed Assets to CMDB",
+    "category": "Data Sync",
+    "tier": "Complex",
+    "impact": 9,
+    "effort": 7,
+    "confidence": "MEDIUM",
+    "aiRationale": "CMDB data is outdated and causes incorrect routing. Syncing managed assets automatically improves downstream accuracy.",
+    "evidenceIds": ["ev3", "ev5"],
+    "evidenceItems": [
+      { "id": "ev3", "label": "Ev3. 34% of CMDB records are stale" },
+      { "id": "ev5", "label": "Ev5. Asset sync runs manually once a week" }
+    ],
+    "permissions": [
+      { "label": "View ServiceNow CMDB (S)", "required": true, "satisfied": false },
+      { "label": "Read Asset Management API (S)", "required": true, "satisfied": false }
+    ],
+    "decision": "UNREVIEWED",
+    "override": {
+      "isLocked": false,
+      "rationaleOverride": "",
+      "overrideReason": "",
+      "updatedAt": null
+    }
+  },
+  {
+    "id": "opp_005",
+    "identifier": "THI DF Q24",
+    "title": "Generate Pilot Summary Reports",
+    "category": "Document Copilot",
+    "tier": "Strategic",
+    "impact": 6,
+    "effort": 4,
+    "confidence": "LOW",
+    "aiRationale": "Pilot summaries are written manually from ticket data. An agent can auto-generate draft reports saving analyst time.",
+    "evidenceIds": ["ev4"],
+    "evidenceItems": [
+      { "id": "ev4", "label": "Ev4. Reports take avg 3 hours to produce manually" }
+    ],
+    "permissions": [
+      { "label": "Read ServiceNow Reports (S)", "required": true, "satisfied": true },
+      { "label": "Write to Confluence (S)", "required": false, "satisfied": false }
+    ],
+    "decision": "UNREVIEWED",
+    "override": {
+      "isLocked": false,
+      "rationaleOverride": "",
+      "overrideReason": "",
+      "updatedAt": null
+    }
+  },
+  {
+    "id": "opp_006",
+    "identifier": "THI DF Q25",
+    "title": "Optimize SAP Approvals Workflow",
+    "category": "Compliance Review",
+    "tier": "Complex",
+    "impact": 8,
+    "effort": 8,
+    "confidence": "LOW",
+    "aiRationale": "SAP approval workflows involve many manual steps. Automating routing and escalation can reduce cycle time but requires deep SAP integration.",
+    "evidenceIds": ["ev3", "ev1"],
+    "evidenceItems": [
+      { "id": "ev3", "label": "Ev3. Avg approval cycle is 5.2 days" },
+      { "id": "ev1", "label": "Ev1. 18% of approvals are escalated manually" }
+    ],
+    "permissions": [
+      { "label": "Read SAP Workflow API (S)", "required": true, "satisfied": false },
+      { "label": "View ServiceNow Changes (S)", "required": true, "satisfied": true }
+    ],
+    "decision": "APPROVED",
+    "override": {
+      "isLocked": false,
+      "rationaleOverride": "",
+      "overrideReason": "",
+      "updatedAt": null
+    }
+  },
+  {
+    "id": "opp_007",
+    "identifier": "THI DF Q26",
+    "title": "Recommend Jira Ticket Priorities",
+    "category": "Knowledge Copilot",
+    "tier": "Quick Win",
+    "impact": 5,
+    "effort": 2,
+    "confidence": "MEDIUM",
+    "aiRationale": "Jira tickets are inconsistently prioritized. An ML model can suggest priorities based on historical patterns.",
+    "evidenceIds": ["ev2", "ev4"],
+    "evidenceItems": [
+      { "id": "ev2", "label": "Ev2. 55% of tickets lack a priority label" },
+      { "id": "ev4", "label": "Ev4. High-priority bugs avg 2x resolution time" }
+    ],
+    "permissions": [
+      { "label": "Read Jira Issues (S)", "required": true, "satisfied": true },
+      { "label": "Read Jira Project Config (S)", "required": false, "satisfied": false }
+    ],
+    "decision": "APPROVED",
+    "override": {
+      "isLocked": true,
+      "rationaleOverride": "Priority recommendations based on Jira patterns will reduce triage overhead. Implement as suggestion-only in first phase.",
+      "overrideReason": "Adjusted for phased rollout",
+      "updatedAt": "2026-03-11T10:10:00Z"
+    }
+  },
+  {
+    "id": "opp_008",
+    "identifier": "THI DF Q27",
+    "title": "Propose Custom Alerts",
+    "category": "Incident Orchestrator",
+    "tier": "Strategic",
+    "impact": 7,
+    "effort": 5,
+    "confidence": "MEDIUM",
+    "aiRationale": "Monitoring alerts are generic and cause alert fatigue. Custom alerting rules based on service ownership can improve response rates.",
+    "evidenceIds": ["ev5"],
+    "evidenceItems": [
+      { "id": "ev5", "label": "Ev5. 72% of alerts are dismissed without action" }
+    ],
+    "permissions": [
+      { "label": "Read Monitoring API (S)", "required": true, "satisfied": false },
+      { "label": "View ServiceNow Groups (S)", "required": false, "satisfied": true }
+    ],
+    "decision": "UNREVIEWED",
+    "override": {
+      "isLocked": false,
+      "rationaleOverride": "",
+      "overrideReason": "",
+      "updatedAt": null
+    }
+  }
+]
