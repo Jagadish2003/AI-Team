@@ -286,6 +286,18 @@ def set_opp_decision(run_id: str, opp_id: str, body: Dict[str, Any]) -> Dict[str
 
 @app.post("/api/runs/{run_id}/opportunities/{opp_id}/override", dependencies=[Depends(require_auth)])
 def set_opp_override(run_id: str, opp_id: str, body: Dict[str, Any]) -> Dict[str, Any]:
+    # --- VALIDATION START ---
+    rationale = body.get("rationaleOverride", "").strip()
+    reason = body.get("overrideReason", "").strip()
+
+    # Validation: If rationale is provided, a reason must be provided.
+    # Exception: If both are empty, it's a "reset" and should be allowed (as per test 15).
+    if rationale and not reason:
+        raise HTTPException(
+            status_code=400,
+            detail="An override reason is required when providing a rationale override."
+        )
+    # --- VALIDATION END ---
     try:
         read_run(run_id)
     except KeyError:

@@ -17,6 +17,7 @@ import PartialResultsPage from './pages/PartialResultsPage';
 import NormalizationInspectorPage from './pages/NormalizationInspectorPage';
 import AnalystReviewPage from './pages/AnalystReviewPage';
 import OpportunityMapPage from './pages/OpportunityMapPage';
+import OpportunityReviewPage from './pages/OpportunityReviewPage'; // T41-2
 import PilotRoadmapPage from './pages/PilotRoadmapPage';
 import BlueprintPage from './pages/BlueprintPage';
 import ExecutiveReportPage from './pages/ExecutiveReportPage';
@@ -38,8 +39,9 @@ export default function App() {
                     <Route path="/source-intake" element={<SourceIntakePage />} />
                     <Route path="/discovery-run" element={<DiscoveryRunPage />} />
                     <Route path="/partial-results" element={<PartialResultsPage />} />
-                    <Route path="/analyst-review" element={<AnalystReviewPage />} />
-                    <Route path="/opportunity-map" element={<OpportunityMapPage />} />
+                    <Route path="/analyst-review" element={<Navigate to="/opportunity-review" replace />} />
+                    <Route path="/opportunity-map" element={<Navigate to="/opportunity-review" replace />} />
+                    <Route path="/opportunity-review" element={<OpportunityReviewPage />} />
                     <Route path="/agentforce-blueprint" element={<BlueprintPage />} />
                     <Route path="/executive-report" element={<ExecutiveReportPage />} />
                     <Route path="*" element={<Navigate to="/integration-hub" replace />} />
