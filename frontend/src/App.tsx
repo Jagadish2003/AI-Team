@@ -38,10 +38,8 @@ export default function App() {
                     <Route path="/source-intake" element={<SourceIntakePage />} />
                     <Route path="/discovery-run" element={<DiscoveryRunPage />} />
                     <Route path="/partial-results" element={<PartialResultsPage />} />
-                    <Route path="/normalization" element={<NormalizationInspectorPage />} />
                     <Route path="/analyst-review" element={<AnalystReviewPage />} />
                     <Route path="/opportunity-map" element={<OpportunityMapPage />} />
-                    <Route path="/pilot-roadmap" element={<PilotRoadmapPage />} />
                     <Route path="/agentforce-blueprint" element={<BlueprintPage />} />
                     <Route path="/executive-report" element={<ExecutiveReportPage />} />
                     <Route path="*" element={<Navigate to="/integration-hub" replace />} />

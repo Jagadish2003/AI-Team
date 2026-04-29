@@ -19,10 +19,8 @@ const items = [
   //  run-scoped screens
   { to: '/discovery-run', label: 'Discovery Run', runScoped: true },
   { to: '/partial-results', label: 'Evidence Collection', runScoped: true },
-  { to: '/normalization', label: 'Normalization', runScoped: true }, 
-  { to: '/analyst-review', label: 'Analyst Review', runScoped: true },
+{ to: '/analyst-review', label: 'Analyst Review', runScoped: true },
   { to: '/opportunity-map', label: 'Opportunity Map', runScoped: true },
-  { to: '/pilot-roadmap', label: 'Pilot Roadmap', runScoped: true },
   { to: '/agentforce-blueprint', label: 'Agentforce Blueprint', runScoped: true, sfOnly: true },
   { to: '/executive-report', label: 'Executive Report', runScoped: true },
 ] satisfies NavItem[];
@@ -40,12 +38,12 @@ export default function TopNav() {
       <div className="flex h-full w-full items-center gap-2 px-2">
 
         {/* Brand */}
-        <div className="flex shrink-0 items-center">
+        <div className="flex shrink-0 items-center pl-4">
           <img src={logo} alt="AgentIQ Logo" className="h-[32px] w-auto" />
         </div>
 
         {/* Nav items */}
-        <div className="flex flex-1 items-center justify-between overflow-x-auto px-2" style={{ scrollbarWidth: 'none' }}>
+        <div className="flex flex-1 items-center justify-end gap-1 overflow-x-auto px-2" style={{ scrollbarWidth: 'none' }}>
           {items.map((i) => {
             const isActive = loc.pathname === i.to;
 
@@ -63,7 +61,7 @@ export default function TopNav() {
                       ? 'border-navborder border-t-2 text-textwhite bg-gradient-to-b from-activenav '
                       : 'text-textwhite/70 hover:bg-navhover hover:text-textwhite'
                   }`}
-                  style={{ fontSize: '11.5px', padding: '4px 6px', borderRadius: '100px' }}
+                  style={{ fontSize: '11.5px', padding: '4px 12px', borderRadius: '100px' }}
                 >
                   {i.label}
                   {i.sfOnly && !salesforceConnected && (
