@@ -68,7 +68,11 @@ export default function OpportunityMapPage() {
       <div className="min-h-screen text-text">
         <TopNav />
         <div className="px-8 py-6">
-          <RunRequiredEmptyState onStart={() => nav('/discovery-run')} />
+          <RunRequiredEmptyState
+            pageTitle="Opportunity Map"
+            pageDescription="Portfolio view: browse, compare, shortlist. Open Analyst Review only when you're ready to govern decisions."
+            onStart={() => nav('/discovery-run')}
+          />
         </div>
       </div>
     );

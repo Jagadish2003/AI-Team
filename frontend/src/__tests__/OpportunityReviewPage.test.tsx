@@ -32,10 +32,12 @@ import React from 'react';
 import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
 import { MemoryRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { vi, describe, it, expect, beforeEach } from 'vitest';
+import type { Decision } from '../types/common';
+import type { OpportunityCandidate } from '../types/analystReview';
 
 // ── Fixtures ──────────────────────────────────────────────────────────────────
 
-const OPP_1 = {
+const OPP_1: OpportunityCandidate = {
   id: 'opp_001',
   title: 'Accelerate quote approvals',
   category: 'Approval Automation',
@@ -51,7 +53,7 @@ const OPP_1 = {
   requiredPermissions: ['Salesforce: read ProcessInstance'],
 };
 
-const OPP_2 = {
+const OPP_2: OpportunityCandidate = {
   id: 'opp_002',
   title: 'Reduce case routing friction',
   category: 'Ticket Routing',
@@ -69,10 +71,10 @@ const OPP_2 = {
 
 // ── Mutable context state (allows tests to verify optimistic updates) ─────────
 
-let mockOpportunities = [OPP_1, OPP_2];
+let mockOpportunities: OpportunityCandidate[] = [OPP_1, OPP_2];
 let mockSelectedId: string | null = OPP_1.id;
 
-const mockSetDecision = vi.fn().mockImplementation(async (oppId: string, decision: string) => {
+const mockSetDecision = vi.fn().mockImplementation(async (oppId: string, decision: Decision) => {
   // Simulate optimistic update — modify the shared array
   mockOpportunities = mockOpportunities.map((o) =>
   o.id === oppId ? { ...o, decision } : o,
