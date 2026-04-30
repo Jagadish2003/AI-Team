@@ -1,15 +1,15 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { useLocation, useNavigate } from 'react-router-dom';
-import { InfoPanel } from '../components/common/InfoPanel';
-import TopNav from '../components/common/TopNav';
-import { useDiscoveryRunContext } from '../context/DiscoveryRunContext';
-import { useConnectorContext } from '../context/ConnectorContext';
-import { useSourceIntakeContext } from '../context/SourceIntakeContext';
-import { useRunContext } from '../context/RunContext';
+import React, { useEffect, useMemo, useRef, useState } from "react";
+import { useLocation, useNavigate } from "react-router-dom";
+import { InfoPanel } from "../components/common/InfoPanel";
+import TopNav from "../components/common/TopNav";
+import { useDiscoveryRunContext } from "../context/DiscoveryRunContext";
+import { useConnectorContext } from "../context/ConnectorContext";
+import { useSourceIntakeContext } from "../context/SourceIntakeContext";
+import { useRunContext } from "../context/RunContext";
 import {
   DISCOVERY_SOURCE_REQUIREMENT_MESSAGE,
   isDiscoveryReadyConnector,
-} from '../utils/sourceReadiness';
+} from "../utils/sourceReadiness";
 
 function RunStatusPill({
   computing,
@@ -25,16 +25,18 @@ function RunStatusPill({
   const label = computing
     ? `Running (${displayPct}%)`
     : isComplete
-      ? 'Complete (100%)'
-      : (status ?? '-');
+      ? "Complete (100%)"
+      : (status ?? "-");
   const cls = computing
-    ? 'border-accent/40 bg-accent/10 text-blue-200'
+    ? "border-accent/40 bg-accent/10 text-blue-200"
     : isComplete
-      ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-200'
-      : 'border-border bg-bg/30 text-muted';
+      ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-200"
+      : "border-border bg-bg/30 text-muted";
 
   return (
-    <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-xs whitespace-nowrap ${cls}`}>
+    <span
+      className={`inline-flex items-center rounded-full border px-2 py-0.5 text-xs whitespace-nowrap ${cls}`}
+    >
       {label}
     </span>
   );
@@ -44,20 +46,32 @@ export default function DiscoveryRunPage() {
   const [autoScroll, setAutoScroll] = useState(true);
   const nav = useNavigate();
   const location = useLocation();
-  const autoStartRequested = (location.state as { autoStart?: boolean } | null)?.autoStart === true;
+  const autoStartRequested =
+    (location.state as { autoStart?: boolean } | null)?.autoStart === true;
   const { runId } = useRunContext();
   const { connectors } = useConnectorContext();
   const { uploadedFiles, sampleWorkspaceEnabled } = useSourceIntakeContext();
 
-  const { run, events, loading, error, started, computing, startRun, restartRun, refetch } =
-    useDiscoveryRunContext();
+  const {
+    run,
+    events,
+    loading,
+    error,
+    started,
+    computing,
+    startRun,
+    restartRun,
+    refetch,
+  } = useDiscoveryRunContext();
 
   const TOTAL_STAGES = 10;
 
   const status = run?.status?.toLowerCase();
-  const isMaterialized = status === 'complete' || status === 'completed' || status === 'partial';
-  const isComplete = status === 'complete' || status === 'completed';
-  const runScopedPath = (path: string) => runId ? `${path}?runId=${runId}` : path;
+  const isMaterialized =
+    status === "complete" || status === "completed" || status === "partial";
+  const isComplete = status === "complete" || status === "completed";
+  const runScopedPath = (path: string) =>
+    runId ? `${path}?runId=${runId}` : path;
 
   const [displayPct, setDisplayPct] = useState(0);
   const targetPct = useMemo(() => {
@@ -97,6 +111,7 @@ export default function DiscoveryRunPage() {
       connectedSources,
       uploadedFiles: uploadedFiles.map((f) => f.name),
       sampleWorkspaceEnabled,
+      mode: "live" as const,
     };
   }, [connectors, uploadedFiles, sampleWorkspaceEnabled]);
 
@@ -109,7 +124,14 @@ export default function DiscoveryRunPage() {
     if (!runId && autoStartRequested && !loading && hasAtLeastOneSource) {
       void startRun(inputs);
     }
-  }, [runId, autoStartRequested, loading, startRun, inputs, hasAtLeastOneSource]);
+  }, [
+    runId,
+    autoStartRequested,
+    loading,
+    startRun,
+    inputs,
+    hasAtLeastOneSource,
+  ]);
 
   if (loading || (!runId && autoStartRequested && hasAtLeastOneSource)) {
     return (
@@ -117,7 +139,9 @@ export default function DiscoveryRunPage() {
         <TopNav />
         <div className="mx-auto max-w-3xl px-6 py-10">
           <div className="rounded-xl border border-border bg-panel p-6">
-            <div className="text-lg font-semibold">Starting discovery run...</div>
+            <div className="text-lg font-semibold">
+              Starting discovery run...
+            </div>
             <div className="mt-2 text-sm text-muted">Please wait...</div>
           </div>
         </div>
@@ -185,12 +209,17 @@ export default function DiscoveryRunPage() {
           <div>
             <h1 className="text-2xl font-semibold">Discovery Run</h1>
             <div className="mb-2 mt-1 text-sm text-muted">
-              The Discovery Run provides a clear, step-by-step view of progress with live logs and a continuously updated summary of detected applications, workflows, and opportunities.
+              The Discovery Run provides a clear, step-by-step view of progress
+              with live logs and a continuously updated summary of detected
+              applications, workflows, and opportunities.
             </div>
             <p className="mt-1 text-sm text-muted">
-              Run ID: <span className="font-semibold text-text">{run?.id ?? runId ?? '-'}</span>
-              {' - '}
-              Status:{' '}
+              Run ID:{" "}
+              <span className="font-semibold text-text">
+                {run?.id ?? runId ?? "-"}
+              </span>
+              {" - "}
+              Status:{" "}
               <RunStatusPill
                 computing={computing}
                 isComplete={isComplete}
@@ -215,18 +244,22 @@ export default function DiscoveryRunPage() {
               className="rounded-md border border-border bg-buttonbg px-3 py-2 text-sm font-medium text-text transition hover:bg-panel disabled:cursor-not-allowed disabled:opacity-50"
               onClick={() => void restartRun()}
               disabled={!started || !isMaterialized || computing || loading}
-              title={!isMaterialized ? 'Replay is available after this run finishes.' : undefined}
+              title={
+                !isMaterialized
+                  ? "Replay is available after this run finishes."
+                  : undefined
+              }
             >
               Replay Run
             </button>
 
             <button
               className="rounded-md bg-accent px-3 py-2 text-sm font-medium text-textwhite transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
-              onClick={() => nav(runScopedPath('/partial-results'))}
+              onClick={() => nav(runScopedPath("/partial-results"))}
               disabled={!started || !isMaterialized || computing}
-              title={computing ? 'Waiting for compute to finish...' : undefined}
+              title={computing ? "Waiting for compute to finish..." : undefined}
             >
-              {computing ? 'Computing...' : 'Next: Evidence Collection'}
+              {computing ? "Computing..." : "Next: Evidence Collection"}
             </button>
           </div>
         </div>
@@ -239,22 +272,22 @@ export default function DiscoveryRunPage() {
                 <div className="font-semibold text-text">Connected sources</div>
                 <div className="mt-0.5">
                   {inputs.connectedSources.length
-                    ? inputs.connectedSources.join(' - ')
-                    : 'None'}
+                    ? inputs.connectedSources.join(" - ")
+                    : "None"}
                 </div>
               </div>
               <div>
                 <div className="font-semibold text-text">Uploaded files</div>
                 <div className="mt-0.5">
                   {inputs.uploadedFiles.length
-                    ? inputs.uploadedFiles.join(' - ')
-                    : 'None'}
+                    ? inputs.uploadedFiles.join(" - ")
+                    : "None"}
                 </div>
               </div>
               <div>
                 <div className="font-semibold text-text">Sample workspace</div>
                 <div className="mt-0.5">
-                  {inputs.sampleWorkspaceEnabled ? 'Enabled' : 'Disabled'}
+                  {inputs.sampleWorkspaceEnabled ? "Enabled" : "Disabled"}
                 </div>
               </div>
             </div>
@@ -264,15 +297,16 @@ export default function DiscoveryRunPage() {
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-5">
                 <div className="text-lg font-semibold">Discovery Log</div>
-              <label className="flex items-center gap-2 text-sm text-text">
-                Auto-scroll
+                <label className="flex items-center gap-2 text-sm text-text">
+                  Auto-scroll
                   <input
-                  type="checkbox"
-                  checked={autoScroll}
-                  onChange={(e) => setAutoScroll(e.target.checked)}
-                  className="accent-accent cursor-pointer"/>
-              </label>
-            </div>
+                    type="checkbox"
+                    checked={autoScroll}
+                    onChange={(e) => setAutoScroll(e.target.checked)}
+                    className="accent-accent cursor-pointer"
+                  />
+                </label>
+              </div>
               <button
                 className="rounded-md border border-border bg-bg/20 px-3 py-2 text-sm font-semibold text-text transition hover:bg-panel2"
                 onClick={() => refetch()}
@@ -289,10 +323,10 @@ export default function DiscoveryRunPage() {
                   {events.map((e, i) => (
                     <div key={e.id ?? i} className="flex gap-3">
                       <div className="w-40 shrink-0 font-mono text-xs text-muted">
-                        {e.tsLabel ?? e.ts ?? ''}
+                        {e.tsLabel ?? e.ts ?? ""}
                       </div>
                       <div className="w-28 shrink-0 font-mono text-xs text-muted">
-                        {e.stage ?? ''}
+                        {e.stage ?? ""}
                       </div>
                       <div className="text-text">{e.message}</div>
                     </div>

@@ -1,29 +1,29 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { useNavigate, useSearchParams } from 'react-router-dom';
-import { Zap } from 'lucide-react';
-import TopNav from '../components/common/TopNav';
+import React, { useEffect, useMemo, useState, useCallback } from "react";
+import { useNavigate } from "react-router-dom";
+import { Zap } from "lucide-react";
+import TopNav from "../components/common/TopNav";
 import OpportunityToolbar, {
   ConfidenceFilter,
   DecisionFilter,
   TierFilter,
-} from '../components/opportunity_map/OpportunityToolbar';
-import OpportunityMatrix from '../components/opportunity_map/OpportunityMatrix';
-import TopQuickWins from '../components/opportunity_map/TopQuickWins';
-import OpportunityRankedList from '../components/opportunity_map/OpportunityRankedList';
-import OpportunityDetail from '../components/analyst_review/OpportunityDetail';
-import ReasoningOverride from '../components/analyst_review/ReasoningOverride';
-import LoadingPanel from '../components/common/LoadingPanel';
-import ErrorPanel from '../components/common/ErrorPanel';
-import { RunRequiredEmptyState } from '../components/common/RunRequiredEmptyState';
-import { useAnalystReviewContext } from '../context/AnalystReviewContext';
-import { useConnectorContext } from '../context/ConnectorContext';
-import { useRunContext } from '../context/RunContext';
-import { useToast } from '../components/common/Toast';
+} from "../components/opportunity_map/OpportunityToolbar";
+import OpportunityMatrix from "../components/opportunity_map/OpportunityMatrix";
+import TopQuickWins from "../components/opportunity_map/TopQuickWins";
+import OpportunityRankedList from "../components/opportunity_map/OpportunityRankedList";
+import OpportunityDetail from "../components/analyst_review/OpportunityDetail";
+import ReasoningOverride from "../components/analyst_review/ReasoningOverride";
+import LoadingPanel from "../components/common/LoadingPanel";
+import ErrorPanel from "../components/common/ErrorPanel";
+import { RunRequiredEmptyState } from "../components/common/RunRequiredEmptyState";
+import { useAnalystReviewContext } from "../context/AnalystReviewContext";
+import { useConnectorContext } from "../context/ConnectorContext";
+import { useRunContext } from "../context/RunContext";
+import { useToast } from "../components/common/Toast";
 
 export default function OpportunityReviewPage() {
   const {
     opportunities,
-    selectedId: contextSelectedId,
+    selectedId,
     select,
     audit,
     setDecision,
@@ -38,38 +38,57 @@ export default function OpportunityReviewPage() {
   const { push } = useToast();
   const nav = useNavigate();
   const [searchParams] = useSearchParams();
-  const requestedOppId = searchParams.get('oppId');
+  const requestedOppId = searchParams.get("oppId");
 
-  const [q, setQ] = useState('');
-  const [tier, setTier] = useState<TierFilter>('All');
-  const [conf, setConf] = useState<ConfidenceFilter>('All');
-  const [decisionF, setDecisionF] = useState<DecisionFilter>('All');
-  const [selectedId, setSelectedId] = useState<string | null>(contextSelectedId || null);
+  const [q, setQ] = useState("");
+  const [tier, setTier] = useState<TierFilter>("All");
+  const [conf, setConf] = useState<ConfidenceFilter>("All");
+  const [decisionF, setDecisionF] = useState<DecisionFilter>("All");
+  const [selectedId, setSelectedId] = useState<string | null>(
+    contextSelectedId || null,
+  );
 
   const salesforceConnected = connectors.some(
-    (c) => c.id === 'salesforce' && c.status === 'connected',
+    (c) => c.id === "salesforce" && c.status === "connected",
   );
 
   const filtered = useMemo(() => {
     const query = q.trim().toLowerCase();
     return opportunities
-      .filter((o) => tier === 'All' || o.tier === tier)
-      .filter((o) => conf === 'All' || o.confidence === conf)
-      .filter((o) => decisionF === 'All' || o.decision === decisionF)
-      .filter((o) => !query || o.title.toLowerCase().includes(query) || o.category.toLowerCase().includes(query));
+      .filter((o) => tier === "All" || o.tier === tier)
+      .filter((o) => conf === "All" || o.confidence === conf)
+      .filter((o) => decisionF === "All" || o.decision === decisionF)
+      .filter(
+        (o) =>
+          !query ||
+          o.title.toLowerCase().includes(query) ||
+          o.category.toLowerCase().includes(query),
+      );
   }, [opportunities, q, tier, conf, decisionF]);
 
   const ranked = useMemo(
-    () => filtered.slice().sort((a, b) => b.impact - b.effort - (a.impact - a.effort) || b.impact - a.impact),
+    () =>
+      filtered
+        .slice()
+        .sort(
+          (a, b) =>
+            b.impact - b.effort - (a.impact - a.effort) || b.impact - a.impact,
+        ),
     [filtered],
   );
 
-  const quickWins = useMemo(() => ranked.filter((o) => o.tier === 'Quick Win'), [ranked]);
+  const quickWins = useMemo(
+    () => ranked.filter((o) => o.tier === "Quick Win"),
+    [ranked],
+  );
 
-  const handleSelect = useCallback((id: string) => {
-    setSelectedId(id);
-    select(id);
-  }, [select]);
+  const handleSelect = useCallback(
+    (id: string) => {
+      setSelectedId(id);
+      select(id);
+    },
+    [select],
+  );
 
   useEffect(() => {
     if (filtered.length > 0) {
@@ -100,7 +119,7 @@ export default function OpportunityReviewPage() {
           <RunRequiredEmptyState
             pageTitle="Opportunity Review"
             pageDescription="Prioritize, approve, and understand automation opportunities from one review workspace."
-            onStart={() => nav('/discovery-run')}
+            onStart={() => nav("/discovery-run")}
           />
         </div>
       </div>
@@ -135,9 +154,12 @@ export default function OpportunityReviewPage() {
 
       <div className="w-full px-8 py-6 pb-10">
         <div className="mb-3">
-          <div className="text-2xl font-semibold text-text">Opportunity Review</div>
+          <div className="text-2xl font-semibold text-text">
+            Opportunity Review
+          </div>
           <div className="mt-1 text-sm text-muted">
-            Prioritize, approve, and understand automation opportunities from one review workspace.
+            Prioritize, approve, and understand automation opportunities from
+            one review workspace.
           </div>
         </div>
 
@@ -155,7 +177,11 @@ export default function OpportunityReviewPage() {
 
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,1fr)_490px] lg:items-start">
           <div className="space-y-4">
-            <OpportunityMatrix filtered={filtered} selectedId={selectedId} onSelect={handleSelect} />
+            <OpportunityMatrix
+              filtered={filtered}
+              selectedId={selectedId}
+              onSelect={handleSelect}
+            />
           </div>
 
           <div className="space-y-4">
@@ -166,7 +192,7 @@ export default function OpportunityReviewPage() {
               onNavigate={() => {
                 if (selected) {
                   select(selected.id);
-                  nav('/executive-report');
+                  nav("/executive-report");
                 }
               }}
             />
@@ -176,20 +202,26 @@ export default function OpportunityReviewPage() {
               audit={audit}
               onSave={async (rationaleOverride, overrideReason, isLocked) => {
                 if (!selectedId) return;
-                const r = await saveOverride(selectedId, rationaleOverride, overrideReason, isLocked);
-                if (!r.ok) push(r.error || 'Unable to save override.');
-                else push('Override saved.');
+                const r = await saveOverride(
+                  selectedId,
+                  rationaleOverride,
+                  overrideReason,
+                  isLocked,
+                );
+                if (!r.ok) push(r.error || "Unable to save override.");
+                else push("Override saved.");
               }}
               onViewEvidence={() => {
                 if (selected) {
                   select(selected.id);
-                  nav('/partial-results');
+                  nav("/partial-results");
                 }
               }}
               onDecision={async (d) => {
                 if (!selectedId) return;
                 const result = await setDecision(selectedId, d);
-                if (!result.ok) push(result.error || 'Unable to update decision.');
+                if (!result.ok)
+                  push(result.error || "Unable to update decision.");
                 else push(`Decision set to ${d}.`);
               }}
             />
@@ -201,7 +233,9 @@ export default function OpportunityReviewPage() {
                     data-testid="blueprint-button-active"
                     onClick={() => {
                       select(selected.id);
-                      nav(`/agentforce-blueprint?oppId=${encodeURIComponent(selected.id)}`);
+                      nav(
+                        `/agentforce-blueprint?oppId=${encodeURIComponent(selected.id)}`,
+                      );
                     }}
                     className="flex w-full items-center justify-center gap-2 rounded-md bg-accent px-4 py-3 text-sm font-medium text-white transition hover:opacity-90"
                   >
@@ -225,11 +259,19 @@ export default function OpportunityReviewPage() {
         </div>
 
         <div className="mt-4">
-          <TopQuickWins quickWins={quickWins} selectedId={selectedId} onSelect={handleSelect} />
+          <TopQuickWins
+            quickWins={quickWins}
+            selectedId={selectedId}
+            onSelect={handleSelect}
+          />
         </div>
 
         <div className="mt-4">
-          <OpportunityRankedList ranked={ranked} selectedId={selectedId} onSelect={handleSelect} />
+          <OpportunityRankedList
+            ranked={ranked}
+            selectedId={selectedId}
+            onSelect={handleSelect}
+          />
         </div>
       </div>
     </div>
