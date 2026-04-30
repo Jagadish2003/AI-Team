@@ -27,13 +27,13 @@ export default function OpportunityRankedList({
   onSelect: (id: string) => void;
 }) {
   return (
-    <div className="flex flex-col rounded-xl border border-border bg-panel p-4">
+    <div className="flex h-full min-h-0 flex-col rounded-xl border border-border bg-panel p-4">
       <div className="flex shrink-0 items-center justify-between">
         <div className="pb-2 text-xl font-semibold text-text">Opportunity List</div>
         <div className="text-xs text-muted">Ranked</div>
       </div>
 
-      <div className="mt-3 max-h-[520px] overflow-auto rounded-lg border border-border bg-bg/20">
+      <div className="mt-3 min-h-0 flex-1 overflow-auto rounded-lg border border-border bg-bg/20">
         {ranked.length === 0 ? (
           <div className="px-3 py-4 text-sm text-muted">No opportunities match the current filters.</div>
         ) : (
@@ -48,7 +48,7 @@ export default function OpportunityRankedList({
                 }`}
               >
                 <div className="min-w-0">
-                  <div className={`truncate text-sm font-semibold ${active ? 'text-accent' : 'text-text'}`}>
+                  <div className={`text-sm font-semibold leading-snug ${active ? 'text-accent' : 'text-text'}`}>
                     {o.title}
                   </div>
                   <div className="mt-1 text-xs text-muted">{o.category}</div>

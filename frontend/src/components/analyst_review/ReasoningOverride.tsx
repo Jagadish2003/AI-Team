@@ -30,8 +30,8 @@ export default function ReasoningOverride({
   const relevantAuditCount = opp ? audit.filter((a) => !a.opportunityId || a.opportunityId === opp.id).length : 0;
 
   return (
-    <div className="rounded-xl border border-border bg-panel p-4">
-      <div className="flex items-center justify-between">
+    <div className="flex h-full min-h-0 flex-col rounded-xl border border-border bg-panel p-4">
+      <div className="flex shrink-0 items-center justify-between">
         <div className="pb-2 text-xl font-semibold text-text">Reasoning Override</div>
         <div className="text-xs text-muted">{relevantAuditCount} audit item(s)</div>
       </div>
@@ -41,7 +41,7 @@ export default function ReasoningOverride({
           Select an opportunity to review.
         </div>
       ) : (
-        <div className="mt-3 space-y-3">
+        <div className="mt-3 min-h-0 flex-1 space-y-3 overflow-y-auto pr-1">
           <div className="grid grid-cols-2 gap-2">
             <button
               type="button"

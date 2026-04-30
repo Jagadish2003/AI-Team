@@ -64,14 +64,20 @@ export default function OpportunityMatrix({
   const scoresCollapsed = filtered.length > 1 && (impacts.size === 1 || efforts.size === 1);
 
   return (
-    <div className="rounded-xl border border-border bg-panel p-4">
-      <div className="mb-3 flex items-center justify-between">
+    <div className="flex h-full min-h-0 flex-col rounded-xl border border-border bg-panel p-4">
+      <div className="mb-3 flex shrink-0 items-center justify-between">
         <div className="pb-2 text-xl font-semibold text-text">Effort vs Impact</div>
         <div className="text-xs text-muted">Click a bubble to preview details</div>
       </div>
 
-      <div className="overflow-hidden rounded-lg border border-border bg-bg/10">
-        <svg viewBox={`0 0 ${VW} ${VH}`} width="100%" style={{ display: 'block' }}>
+      <div className="aspect-[860/620] min-h-[320px] flex-1 overflow-hidden rounded-lg border border-border bg-bg/10 lg:aspect-auto lg:min-h-0">
+        <svg
+          viewBox={`0 0 ${VW} ${VH}`}
+          width="100%"
+          height="100%"
+          preserveAspectRatio="xMidYMid meet"
+          style={{ display: 'block' }}
+        >
           <rect x={LEFT} y={TOP} width={CX - LEFT} height={CY - TOP} fill="rgba(13,85,215,0.06)" />
           <rect x={CX} y={TOP} width={RX - CX} height={CY - TOP} fill="rgba(255,255,255,0.01)" />
           <rect x={LEFT} y={CY} width={CX - LEFT} height={BY - CY} fill="rgba(255,255,255,0.01)" />
@@ -90,17 +96,17 @@ export default function OpportunityMatrix({
           <line x1={CX} y1={TOP} x2={CX} y2={BY} stroke="rgba(255,255,255,0.15)" strokeWidth="1" />
           <line x1={LEFT} y1={CY} x2={RX} y2={CY} stroke="rgba(255,255,255,0.15)" strokeWidth="1" />
 
-          <text x={LEFT - 8} y={TOP + 14} fontSize="11" fill="rgba(255,255,255,0.50)" textAnchor="end">
+          <text x={LEFT - 8} y={TOP + 18} fontSize="18" fontWeight="600" fill="rgba(255,255,255,0.62)" textAnchor="end">
             HIGH IMPACT
           </text>
-          <text x={LEFT - 8} y={BY - 6} fontSize="11" fill="rgba(255,255,255,0.50)" textAnchor="end">
+          <text x={LEFT - 8} y={BY - 6} fontSize="18" fontWeight="600" fill="rgba(255,255,255,0.62)" textAnchor="end">
             LOW IMPACT
           </text>
 
-          <text x={LEFT} y={VH - 8} fontSize="11" fill="rgba(255,255,255,0.50)">
+          <text x={LEFT} y={VH - 8} fontSize="18" fontWeight="600" fill="rgba(255,255,255,0.62)">
             LOW EFFORT
           </text>
-          <text x={RX} y={VH - 8} fontSize="11" fill="rgba(255,255,255,0.50)" textAnchor="end">
+          <text x={RX} y={VH - 8} fontSize="18" fontWeight="600" fill="rgba(255,255,255,0.62)" textAnchor="end">
             HIGH EFFORT
           </text>
 
@@ -139,8 +145,8 @@ export default function OpportunityMatrix({
             { x: CX + 14, y: CY + 24, label: 'LONG TERM', fill: 'rgba(255,255,255,0.40)', w: 94 },
           ].map(({ x, y, label, fill, w }) => (
             <g key={label} pointerEvents="none">
-              <rect x={x - 6} y={y - 14} width={w} height={20} rx={3} fill="rgba(10,18,40,0.55)" />
-              <text x={x} y={y} fontSize="11" fontWeight="700" letterSpacing="1.2" fill={fill}>
+              <rect x={x - 8} y={y - 19} width={w + 30} height={28} rx={4} fill="rgba(10,18,40,0.65)" />
+              <text x={x} y={y} fontSize="18" fontWeight="700" letterSpacing="1.2" fill={fill}>
                 {label}
               </text>
             </g>
@@ -150,14 +156,15 @@ export default function OpportunityMatrix({
             const isSelected = p.o.id === selectedId;
             const isHover = p.o.id === hoverId;
             if (!isHover && !isSelected) return null;
-            const title = p.o.title.length > 26 ? `${p.o.title.slice(0, 26)}...` : p.o.title;
+            const title = p.o.title.length > 32 ? `${p.o.title.slice(0, 32)}...` : p.o.title;
             return (
               <text
                 key={`label-${p.o.id}`}
                 x={p.x}
-                y={p.y - p.r - 7}
-                fontSize="10"
-                fill={isSelected ? '#0D55D7' : 'rgba(255,255,255,0.80)'}
+                y={p.y - p.r - 18}
+                fontSize="17"
+                fontWeight="700"
+                fill={isSelected ? '#0D55D7' : 'rgba(255,255,255,0.82)'}
                 textAnchor="middle"
                 pointerEvents="none"
               >
@@ -170,14 +177,14 @@ export default function OpportunityMatrix({
 
       {scoresCollapsed ? (
         <div
-          className="mt-3 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-300"
+          className="mt-3 shrink-0 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-300"
           data-testid="score-collapse-warning"
         >
           All opportunities have identical scores - the quadrant cannot show meaningful spread.
           Apply T41-6 scorer recalibration to produce distinct impact and effort values.
         </div>
       ) : (
-        <div className="mt-3 text-xs text-muted">
+        <div className="mt-3 shrink-0 text-xs text-muted">
           Approve or reject an opportunity in the detail panel - the bubble color updates in real time.
         </div>
       )}

@@ -109,11 +109,13 @@ export default function OpportunityDetail({
   audit,
   onNavigate,
   suppressPermissions = false,
+  footer,
 }: {
   opp: OpportunityCandidate | null;
   audit: ReviewAuditEvent[];
   onNavigate?: () => void;
   suppressPermissions?: boolean;
+  footer?: React.ReactNode;
 }) {
   const { runId } = useRunContext();
   const [enrichment, setEnrichment] = useState<OppEnrichment | null>(null);
@@ -154,10 +156,10 @@ export default function OpportunityDetail({
   }
 
   return (
-    <div className="flex flex-col rounded-xl border border-border bg-panel overflow-hidden max-h-full w-full">
+    <div className="flex h-full min-h-0 w-full flex-col overflow-hidden rounded-xl border border-border bg-panel">
       {/* Title bar */}
       <div className="flex items-center justify-between px-5 py-4 border-b border-border bg-panel shrink-0">
-        <h2 className="text-lg font-semibold text-text truncate pr-4">
+        <h2 className="pr-4 text-lg font-semibold leading-snug text-text">
           {opp.title}
         </h2>
         {onNavigate && (
@@ -170,7 +172,7 @@ export default function OpportunityDetail({
         )}
       </div>
 
-      <div className="flex-1 overflow-y-auto px-5 py-5 space-y-5">
+      <div className="min-h-0 flex-1 overflow-y-auto px-5 py-5 space-y-5">
         {/* Identifier */}
         {opp.identifier && (
           <div className="flex items-center gap-4 text-sm">
@@ -344,6 +346,11 @@ export default function OpportunityDetail({
           </div>
         </div>
       </div>
+      {footer && (
+        <div className="shrink-0 border-t border-border px-5 py-4">
+          {footer}
+        </div>
+      )}
     </div>
   );
 }

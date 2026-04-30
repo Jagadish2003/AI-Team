@@ -75,7 +75,7 @@ export default function OpportunityReviewPage() {
   );
 
   const quickWins = useMemo(
-    () => ranked.filter((o) => o.tier === "Quick Win").slice(0, 5),
+    () => ranked.filter((o) => o.tier === "Quick Win"),
     [ranked],
   );
 
@@ -105,6 +105,36 @@ export default function OpportunityReviewPage() {
     () => filtered.find((o) => o.id === selectedId) || null,
     [filtered, selectedId],
   );
+
+  const blueprintAction = selected ? (
+    <div data-testid="blueprint-button-container">
+      {salesforceConnected ? (
+        <button
+          data-testid="blueprint-button-active"
+          onClick={() => {
+            select(selected.id);
+            nav(
+              `/agentforce-blueprint?oppId=${encodeURIComponent(selected.id)}`,
+            );
+          }}
+          className="flex w-full items-center justify-center gap-2 rounded-md bg-accent px-4 py-3 text-sm font-medium text-white transition hover:opacity-90"
+        >
+          <Zap size={15} />
+          View Agentforce Blueprint
+        </button>
+      ) : (
+        <button
+          data-testid="blueprint-button-disabled"
+          disabled
+          className="flex w-full cursor-not-allowed items-center justify-center gap-2 rounded-md border border-border bg-bg/30 px-4 py-3 text-sm font-medium text-muted opacity-60"
+          title="Connect Salesforce on Integration Hub to enable Agentforce Blueprint"
+        >
+          <Zap size={15} />
+          Agentforce Blueprint (connect Salesforce)
+        </button>
+      )}
+    </div>
+  ) : null;
 
   if (!runId) {
     return (
@@ -170,102 +200,67 @@ export default function OpportunityReviewPage() {
           totalShown={filtered.length}
         />
 
-        <div className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,1fr)_490px] lg:items-start">
-          <div className="space-y-4">
-            <OpportunityMatrix
-              filtered={filtered}
-              selectedId={selectedId}
-              onSelect={handleSelect}
-            />
-          </div>
+        <div className="grid grid-cols-1 gap-4 lg:h-[590px] lg:grid-cols-[minmax(0,1.12fr)_minmax(420px,0.88fr)] lg:items-stretch xl:grid-cols-[minmax(760px,1.12fr)_minmax(520px,0.88fr)]">
+          <OpportunityMatrix
+            filtered={filtered}
+            selectedId={selectedId}
+            onSelect={handleSelect}
+          />
 
-          <div className="space-y-4">
-            <OpportunityDetail
-              opp={selected}
-              audit={audit}
-              suppressPermissions={true}
-              onNavigate={() => {
-                if (selected) {
-                  select(selected.id);
-                  nav("/executive-report");
-                }
-              }}
-            />
-
-            <ReasoningOverride
-              opp={selected}
-              audit={audit}
-              onSave={async (rationaleOverride, overrideReason, isLocked) => {
-                if (!selectedId) return;
-                const r = await saveOverride(
-                  selectedId,
-                  rationaleOverride,
-                  overrideReason,
-                  isLocked,
-                );
-                if (!r.ok) push(r.error || "Unable to save override.");
-                else push("Override saved.");
-              }}
-              onViewEvidence={() => {
-                if (selected) {
-                  select(selected.id);
-                  nav("/partial-results");
-                }
-              }}
-              onDecision={async (d) => {
-                if (!selectedId) return;
-                const result = await setDecision(selectedId, d);
-                if (!result.ok)
-                  push(result.error || "Unable to update decision.");
-                else push(`Decision set to ${d}.`);
-              }}
-            />
-
-            {selected && (
-              <div data-testid="blueprint-button-container">
-                {salesforceConnected ? (
-                  <button
-                    data-testid="blueprint-button-active"
-                    onClick={() => {
-                      select(selected.id);
-                      nav(
-                        `/agentforce-blueprint?oppId=${encodeURIComponent(selected.id)}`,
-                      );
-                    }}
-                    className="flex w-full items-center justify-center gap-2 rounded-md bg-accent px-4 py-3 text-sm font-medium text-white transition hover:opacity-90"
-                  >
-                    <Zap size={15} />
-                    View Agentforce Blueprint
-                  </button>
-                ) : (
-                  <button
-                    data-testid="blueprint-button-disabled"
-                    disabled
-                    className="flex w-full cursor-not-allowed items-center justify-center gap-2 rounded-md border border-border bg-bg/30 px-4 py-3 text-sm font-medium text-muted opacity-60"
-                    title="Connect Salesforce on Integration Hub to enable Agentforce Blueprint"
-                  >
-                    <Zap size={15} />
-                    Agentforce Blueprint (connect Salesforce)
-                  </button>
-                )}
-              </div>
-            )}
-          </div>
+          <OpportunityDetail
+            opp={selected}
+            audit={audit}
+            suppressPermissions={true}
+            footer={blueprintAction}
+            onNavigate={() => {
+              if (selected) {
+                select(selected.id);
+                nav("/executive-report");
+              }
+            }}
+          />
         </div>
 
-        <div className="mt-4">
+        <div className="mt-4 grid grid-cols-1 gap-4 lg:h-[430px] lg:grid-cols-3 lg:items-stretch">
           <TopQuickWins
             quickWins={quickWins}
             selectedId={selectedId}
             onSelect={handleSelect}
           />
-        </div>
 
-        <div className="mt-4">
           <OpportunityRankedList
             ranked={ranked}
             selectedId={selectedId}
             onSelect={handleSelect}
+          />
+
+          <ReasoningOverride
+            opp={selected}
+            audit={audit}
+            onSave={async (rationaleOverride, overrideReason, isLocked) => {
+              if (!selectedId) return;
+              const r = await saveOverride(
+                selectedId,
+                rationaleOverride,
+                overrideReason,
+                isLocked,
+              );
+              if (!r.ok) push(r.error || "Unable to save override.");
+              else push("Override saved.");
+            }}
+            onViewEvidence={() => {
+              if (selected) {
+                select(selected.id);
+                nav("/partial-results");
+              }
+            }}
+            onDecision={async (d) => {
+              if (!selectedId) return;
+              const result = await setDecision(selectedId, d);
+              if (!result.ok)
+                push(result.error || "Unable to update decision.");
+              else push(`Decision set to ${d}.`);
+            }}
           />
         </div>
       </div>

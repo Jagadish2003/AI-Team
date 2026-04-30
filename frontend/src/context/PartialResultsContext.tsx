@@ -3,6 +3,7 @@ import { EvidenceReview, ExtractedEntity, EntityType, ReviewDecision } from '../
 import { fetchEvidence, fetchEntities } from '../api/runApi';
 import { postEvidenceDecision } from '../api/evidenceApi';
 import { useRunContext } from './RunContext';
+import { useDiscoveryRunContext } from './DiscoveryRunContext';
 import { isRunNotFoundError, runScopedErrorMessage } from '../utils/apiErrors';
 
 type PartialResultsContextValue = {
@@ -51,6 +52,11 @@ type PartialResultsContextValue = {
 
 const Ctx = createContext<PartialResultsContextValue | null>(null);
 
+function hasMaterializedArtifacts(status: string | undefined): boolean {
+  const normalized = status?.toLowerCase();
+  return normalized === 'complete' || normalized === 'completed' || normalized === 'partial';
+}
+
 const defaultTypes: Record<EntityType, boolean> = {
   Application: true,
   Workflow: true,
@@ -62,6 +68,8 @@ const defaultTypes: Record<EntityType, boolean> = {
 
 export function PartialResultsProvider({ children }: { children: React.ReactNode }) {
   const { runId, clearRunId } = useRunContext();
+  const { run } = useDiscoveryRunContext();
+  const runStatus = run?.status?.toLowerCase();
   const [entities, setEntities] = useState<ExtractedEntity[]>([]);
   const [evidence, setEvidence] = useState<EvidenceReview[]>([]);
   const [selectedEvidenceId, setSelectedEvidenceId] = useState<string | null>(null);
@@ -77,6 +85,14 @@ export function PartialResultsProvider({ children }: { children: React.ReactNode
       setSelectedEvidenceId(null);
       setLoading(false);
       setError(null);
+      return;
+    }
+    if (!hasMaterializedArtifacts(runStatus)) {
+      setEntities([]);
+      setEvidence([]);
+      setSelectedEvidenceId(null);
+      setLoading(runStatus !== 'failed');
+      setError(runStatus === 'failed' ? 'Discovery run failed before evidence was generated.' : null);
       return;
     }
     let cancelled = false;
@@ -101,7 +117,7 @@ export function PartialResultsProvider({ children }: { children: React.ReactNode
       }
     })();
     return () => { cancelled = true; };
-  }, [runId, fetchCount, clearRunId]);
+  }, [runId, runStatus, fetchCount, clearRunId]);
 
   const [selectedEntityIds, setSelectedEntityIds] = useState<string[]>([]);
   const [entityTypes, setEntityTypes] = useState(defaultTypes);

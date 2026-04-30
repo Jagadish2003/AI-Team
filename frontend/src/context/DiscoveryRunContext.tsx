@@ -23,6 +23,13 @@ function isTerminalStatus(status: string | undefined) {
   return normalized === 'complete' || normalized === 'completed' || normalized === 'partial' || normalized === 'failed';
 }
 
+function sameEvents(a: RunEvent[], b: RunEvent[]) {
+  if (a.length !== b.length) return false;
+  const lastA = a[a.length - 1];
+  const lastB = b[b.length - 1];
+  return (lastA?.id ?? lastA?.tsLabel ?? lastA?.message) === (lastB?.id ?? lastB?.tsLabel ?? lastB?.message);
+}
+
 export function DiscoveryRunProvider({ children }: { children: React.ReactNode }) {
   const { runId, setRunId, clearRunId } = useRunContext();
   const [run, setRun] = useState<DiscoveryRun | null>(null);
@@ -77,23 +84,29 @@ export function DiscoveryRunProvider({ children }: { children: React.ReactNode }
   useEffect(() => {
     if (!runId || !computing) return;
     let cancelled = false;
-    const interval = setInterval(async () => {
+    const pollRunProgress = async () => {
       try {
-        const { status } = await fetchRunStatus(runId);
+        const [statusPayload, latestEvents] = await Promise.all([
+          fetchRunStatus(runId),
+          fetchRunEvents(runId),
+        ]);
         if (cancelled) return;
+        const { status } = statusPayload;
+        setEvents((prev) => (sameEvents(prev, latestEvents) ? prev : latestEvents));
+        setRun((prev) => (prev ? { ...prev, status: status as DiscoveryRun['status'] } : prev));
         if (isTerminalStatus(status)) {
           setComputing(false);
-          clearInterval(interval);
           setFetchCount((c) => c + 1);
         }
       } catch (e: any) {
         if (isRunNotFoundError(e)) {
           clearRunId();
           setComputing(false);
-          clearInterval(interval);
         }
       }
-    }, 3000);
+    };
+    void pollRunProgress();
+    const interval = setInterval(pollRunProgress, 1500);
     return () => {
       cancelled = true;
       clearInterval(interval);
