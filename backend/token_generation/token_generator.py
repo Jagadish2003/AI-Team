@@ -69,10 +69,10 @@ def get_new_token():
     return access_token, instance_url
 
 
-def get_token():
+def get_token(force_refresh=False):
     token_data = load_token()
 
-    if not token_data:
+    if not token_data or force_refresh:
         return get_new_token()
 
     if time.time() - token_data["timestamp"] > 7000:
@@ -101,8 +101,8 @@ def make_request(url, access_token):
     return response, access_token, None
 
 
-def main():
-    access_token, instance_url = get_token()
+def main(force_refresh=False):
+    access_token, instance_url = get_token(force_refresh=force_refresh)
 
     query = "SELECT Id, Name FROM ApexClass LIMIT 5"
     tooling_url = (

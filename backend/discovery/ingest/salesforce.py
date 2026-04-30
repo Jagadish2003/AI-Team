@@ -11,6 +11,7 @@ Environment variables for live mode:
 SME-authored queries are documented inline per function.
 All seven functions return data in the same shape regardless of mode.
 """
+
 from __future__ import annotations
 
 import json
@@ -34,11 +35,12 @@ API_VERSION = "v59.0"
 # Custom exception
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 class IngestError(Exception):
     """Raised when live ingestion fails with a clear, actionable message."""
 
 
-def _generate_salesforce_token() -> tuple[str, str]:
+def _generate_salesforce_token(force_refresh: bool = False) -> tuple[str, str]:
     try:
         from token_generation import token_generator
     except ImportError as exc:
@@ -47,12 +49,13 @@ def _generate_salesforce_token() -> tuple[str, str]:
             "or SF_INSTANCE_URL/SF_ACCESS_TOKEN credentials. Set INGEST_MODE=offline "
             "to run without Salesforce credentials."
         ) from exc
-    return token_generator.main()
+    return token_generator.main(force_refresh=force_refresh)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Offline fixture loader
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 def _load_fixture() -> Dict[str, Any]:
     if not FIXTURE_PATH.exists():
@@ -65,13 +68,12 @@ def _load_fixture() -> Dict[str, Any]:
 # Live HTTP helpers
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 def _get_client() -> "SalesforceClient":
     """Build a minimal REST client from env vars."""
 
     ACCESS_TOKEN_PATH = (
-        Path(__file__).parent.parent.parent /
-        "token_generation" /
-        "sf_token.json"
+        Path(__file__).parent.parent.parent / "token_generation" / "sf_token.json"
     )
 
     # -----------------------------
@@ -99,8 +101,11 @@ def _get_client() -> "SalesforceClient":
     # -----------------------------
     # 3. TOKEN EXPIRY CHECK
     # -----------------------------
+    access_token = access_token.strip() if access_token else None
     if is_access_token_expired(instance_url, access_token):
-        access_token, instance_url = _generate_salesforce_token()
+        logger.info("Salesforce token expired or invalid format. Refreshing...")
+        access_token, instance_url = _generate_salesforce_token(force_refresh=True)
+        access_token = access_token.strip() if access_token else None
 
     # -----------------------------
     # 4. RETURN CLIENT
@@ -113,34 +118,43 @@ class SalesforceClient:
 
     def __init__(self, instance_url: str, access_token: str):
         self.instance_url = instance_url
-        self.access_token = access_token
+        self.access_token = access_token.strip() if access_token else ""
         self._session = None
 
     def _session_get(self):
         try:
             import requests
+
             if self._session is None:
                 self._session = requests.Session()
-                self._session.headers.update({
-                    "Authorization": f"Bearer {self.access_token}",
-                    "Content-Type": "application/json",
-                })
+                self._session.headers.update(
+                    {
+                        "Authorization": f"Bearer {self.access_token}",
+                        "Content-Type": "application/json",
+                    }
+                )
             return self._session
+
         except ImportError:
-            raise IngestError("requests library required for live mode: pip install requests")
+            raise IngestError(
+                "requests library required for live mode: pip install requests"
+            )
 
     def soql(self, query: str) -> List[Dict]:
         """Execute a SOQL query. Returns records list."""
         import urllib.parse
+
         session = self._session_get()
         url = f"{self.instance_url}/services/data/{API_VERSION}/query/"
         params = {"q": query}
         try:
             resp = session.get(url, params=params, timeout=30)
             if not resp.ok:
-                raise IngestError(f"HTTP {resp.status_code}: {resp.text}\nQuery: {query}")
+                raise IngestError(
+                    f"HTTP {resp.status_code}: {resp.text}\nQuery: {query}"
+                )
             data = resp.json()
-            records = data.get("records",[])
+            records = data.get("records", [])
             # Handle pagination
             next_url = data.get("nextRecordsUrl")
             while next_url:
@@ -148,7 +162,7 @@ class SalesforceClient:
                 if not resp2.ok:
                     raise IngestError(f"HTTP {resp2.status_code}: {resp2.text}")
                 page = resp2.json()
-                records.extend(page.get("records",[]))
+                records.extend(page.get("records", []))
                 next_url = page.get("nextRecordsUrl")
             return records
         except IngestError:
@@ -169,9 +183,11 @@ class SalesforceClient:
         try:
             resp = session.get(url, params={"q": query}, timeout=60)
             if not resp.ok:
-                raise IngestError(f"HTTP {resp.status_code}: {resp.text}\nQuery: {query}")
+                raise IngestError(
+                    f"HTTP {resp.status_code}: {resp.text}\nQuery: {query}"
+                )
             data = resp.json()
-            records = data.get("records",[])
+            records = data.get("records", [])
             next_url = data.get("nextRecordsUrl")
             while next_url:
                 if len(records) >= max_records:
@@ -179,13 +195,11 @@ class SalesforceClient:
                         f"Tooling API result exceeded {max_records} records. "
                         f"Add a WHERE clause to narrow the query."
                     )
-                resp2 = session.get(
-                    f"{self.instance_url}{next_url}", timeout=60
-                )
+                resp2 = session.get(f"{self.instance_url}{next_url}", timeout=60)
                 if not resp2.ok:
                     raise IngestError(f"HTTP {resp2.status_code}: {resp2.text}")
                 page = resp2.json()
-                records.extend(page.get("records",[]))
+                records.extend(page.get("records", []))
                 next_url = page.get("nextRecordsUrl")
             return records
         except IngestError:
@@ -197,6 +211,7 @@ class SalesforceClient:
 # ─────────────────────────────────────────────────────────────────────────────
 # Seven ingestion functions
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 def get_case_metrics(client: Optional[SalesforceClient] = None) -> Dict[str, Any]:
     """
@@ -251,16 +266,22 @@ def get_case_metrics(client: Optional[SalesforceClient] = None) -> Dict[str, Any
     cases_with_kb = kb_recs[0].get("expr0", 0) if kb_recs else 0
 
     handoff_score = round(owner_changes / total_cases, 4) if total_cases > 0 else 0.0
-    knowledge_gap_score = round(1 - (cases_with_kb / closed_cases), 4) if closed_cases > 0 else 0.0
+    knowledge_gap_score = (
+        round(1 - (cases_with_kb / closed_cases), 4) if closed_cases > 0 else 0.0
+    )
 
     # Category breakdown
     cat_recs = client.soql(
         "SELECT Reason, COUNT(Id) FROM Case "
         "WHERE CreatedDate = LAST_N_DAYS:90 GROUP BY Reason"
     )
-    category_breakdown =[
-        {"category": r.get("Reason", "Unknown"), "volume": r.get("expr0", 0),
-         "handoff_score": 0.0, "avg_age_days": 0.0}
+    category_breakdown = [
+        {
+            "category": r.get("Reason", "Unknown"),
+            "volume": r.get("expr0", 0),
+            "handoff_score": 0.0,
+            "avg_age_days": 0.0,
+        }
         for r in cat_recs
     ]
 
@@ -300,15 +321,20 @@ def get_flow_inventory(client: Optional[SalesforceClient] = None) -> Dict[str, A
         "WHERE IsActive = true"
     )
 
-    auto_launched =[
-        r for r in flow_recs
+    auto_launched = [
+        r
+        for r in flow_recs
         if r.get("ProcessType") == "AutoLaunchedFlow"
         and r.get("TriggerObjectOrEventLabel") == "Case"
-        and (r.get("TriggerType") == "RecordAfterSave" or r.get("TriggerType") == "RecordBeforeSave" or r.get("TriggerType") == "null")
+        and (
+            r.get("TriggerType") == "RecordAfterSave"
+            or r.get("TriggerType") == "RecordBeforeSave"
+            or r.get("TriggerType") == "null"
+        )
     ]
 
     # Element counts from Metadata (best-effort; may be slow on large orgs)
-    element_counts =[]
+    element_counts = []
     for r in auto_launched:
         try:
             flow_version_id = r.get("ActiveVersionId")
@@ -325,9 +351,17 @@ def get_flow_inventory(client: Optional[SalesforceClient] = None) -> Dict[str, A
                 # Count all element arrays in flow metadata
                 count = sum(
                     len(meta.get(k, []))
-                    for k in["decisions", "loops", "recordCreates",
-                               "recordDeletes", "recordLookups", "recordUpdates",
-                               "assignments", "subflows", "actionCalls"]
+                    for k in [
+                        "decisions",
+                        "loops",
+                        "recordCreates",
+                        "recordDeletes",
+                        "recordLookups",
+                        "recordUpdates",
+                        "assignments",
+                        "subflows",
+                        "actionCalls",
+                    ]
                 )
                 element_counts.append(count)
             else:
@@ -335,17 +369,23 @@ def get_flow_inventory(client: Optional[SalesforceClient] = None) -> Dict[str, A
         except Exception:
             element_counts.append(0)
 
-    avg_elements = round(sum(element_counts) / len(element_counts), 2) if element_counts else 0.0
+    avg_elements = (
+        round(sum(element_counts) / len(element_counts), 2) if element_counts else 0.0
+    )
 
     try:
-        case_recs = client.soql("SELECT COUNT(Id) FROM Case WHERE CreatedDate = LAST_N_DAYS:90")
+        case_recs = client.soql(
+            "SELECT COUNT(Id) FROM Case WHERE CreatedDate = LAST_N_DAYS:90"
+        )
         records_90d = case_recs[0].get("expr0", 0) if case_recs else 0
     except Exception:
         records_90d = 0
 
-    flow_activity_score = round(
-        (records_90d / 90) * (len(auto_launched) / max(avg_elements, 1)), 4
-    ) if auto_launched else 0.0
+    flow_activity_score = (
+        round((records_90d / 90) * (len(auto_launched) / max(avg_elements, 1)), 4)
+        if auto_launched
+        else 0.0
+    )
 
     return {
         "active_flow_count_on_object": len(auto_launched),
@@ -353,7 +393,7 @@ def get_flow_inventory(client: Optional[SalesforceClient] = None) -> Dict[str, A
         "flow_activity_score": flow_activity_score,
         "trigger_object": "Case",
         "records_90d": records_90d,
-        "flows":[
+        "flows": [
             {
                 "flow_id": r.get("ActiveVersionId") or "",
                 "flow_label": r.get("Label") or "",
@@ -366,7 +406,9 @@ def get_flow_inventory(client: Optional[SalesforceClient] = None) -> Dict[str, A
     }
 
 
-def get_approval_pending(client: Optional[SalesforceClient] = None) -> List[Dict[str, Any]]:
+def get_approval_pending(
+    client: Optional[SalesforceClient] = None,
+) -> List[Dict[str, Any]]:
     """
     Pull pending ProcessInstance records with step age and approver count.
 
@@ -406,8 +448,10 @@ def get_approval_pending(client: Optional[SalesforceClient] = None) -> List[Dict
                 pass
         if name not in by_process:
             by_process[name] = {
-                "process_name": name, "pending_count": 0,
-                "total_age_days": 0.0, "pi_ids":[],
+                "process_name": name,
+                "pending_count": 0,
+                "total_age_days": 0.0,
+                "pi_ids": [],
             }
         by_process[name]["pending_count"] += 1
         by_process[name]["total_age_days"] += age_days
@@ -417,15 +461,12 @@ def get_approval_pending(client: Optional[SalesforceClient] = None) -> List[Dict
     # approver_count = distinct ActorId values — may undercount human capacity
     # when Roles/Queues are used. approver_type_notes flags this explicitly.
     wi_recs = client.soql(
-        "SELECT ProcessInstanceId, ActorId, Actor.Type "
-        "FROM ProcessInstanceWorkitem"
+        "SELECT ProcessInstanceId, ActorId, Actor.Type FROM ProcessInstanceWorkitem"
     )
 
     # Map: process_name -> {actor_id -> actor_type}
     pi_to_process = {
-        pi_id: name
-        for name, info in by_process.items()
-        for pi_id in info["pi_ids"]
+        pi_id: name for name, info in by_process.items() for pi_id in info["pi_ids"]
     }
     actor_map: Dict[str, Dict[str, str]] = {}  # process_name -> {actor_id: actor_type}
     for w in wi_recs:
@@ -436,7 +477,7 @@ def get_approval_pending(client: Optional[SalesforceClient] = None) -> List[Dict
         if proc_name and actor_id:
             actor_map.setdefault(proc_name, {})[actor_id] = actor_type
 
-    results =[]
+    results = []
     for name, info in by_process.items():
         cnt = info["pending_count"]
         avg_delay = round(info["total_age_days"] / cnt, 2) if cnt > 0 else 0.0
@@ -457,18 +498,22 @@ def get_approval_pending(client: Optional[SalesforceClient] = None) -> List[Dict
             else "All actors are User type — approver_count is reliable."
         )
 
-        bottleneck_score = round(cnt / approver_count, 2) if approver_count > 0 else float(cnt)
+        bottleneck_score = (
+            round(cnt / approver_count, 2) if approver_count > 0 else float(cnt)
+        )
 
-        results.append({
-            "process_name": name,
-            "pending_count": cnt,
-            "avg_delay_days": avg_delay,
-            "approver_count": approver_count,
-            "bottleneck_score": bottleneck_score,
-            "approver_ids": list(actors.keys()),
-            "approver_type_breakdown": type_counts,
-            "approver_type_notes": approver_type_notes,
-        })
+        results.append(
+            {
+                "process_name": name,
+                "pending_count": cnt,
+                "avg_delay_days": avg_delay,
+                "approver_count": approver_count,
+                "bottleneck_score": bottleneck_score,
+                "approver_ids": list(actors.keys()),
+                "approver_type_breakdown": type_counts,
+                "approver_type_notes": approver_type_notes,
+            }
+        )
 
     return results
 
@@ -496,7 +541,9 @@ def get_knowledge_coverage(client: Optional[SalesforceClient] = None) -> Dict[st
     }
 
 
-def get_named_credentials(client: Optional[SalesforceClient] = None) -> List[Dict[str, Any]]:
+def get_named_credentials(
+    client: Optional[SalesforceClient] = None,
+) -> List[Dict[str, Any]]:
     """
     Pull the Named Credential catalog from the org via Tooling API.
 
@@ -516,7 +563,7 @@ def get_named_credentials(client: Optional[SalesforceClient] = None) -> List[Dic
         "SELECT Id, DeveloperName, MasterLabel, Endpoint, PrincipalType "
         "FROM NamedCredential"
     )
-    return[
+    return [
         {
             "credential_name": r.get("MasterLabel", ""),
             "credential_developer_name": r.get("DeveloperName", ""),
@@ -532,10 +579,13 @@ def get_named_credentials(client: Optional[SalesforceClient] = None) -> List[Dic
 # Exact Metadata sub-fields where Salesforce stores Named Credential references.
 # Each entry is (parent_array_key, child_dict_key_that_holds_credential_devname).
 # These are the ONLY fields inspected — no broad string scan of full Metadata.
-_NC_FIELD_PATHS: List[tuple] =[
+_NC_FIELD_PATHS: List[tuple] = [
     # HTTP Callout Actions in flows (most common — Flow Builder external service)
-    ("actionCalls", "connector"),            # actionCalls[*].connector = devName
-    ("actionCalls", "namedCredential"),      # alternative field name used in some API versions
+    ("actionCalls", "connector"),  # actionCalls[*].connector = devName
+    (
+        "actionCalls",
+        "namedCredential",
+    ),  # alternative field name used in some API versions
     # Apex actions that receive Named Credential as input variable
     ("apexPluginCalls", "namedCredential"),
     # ExternalService-backed action calls
@@ -544,8 +594,16 @@ _NC_FIELD_PATHS: List[tuple] =[
 
 # False-positive guard: these strings appear in many flows and are NOT credentials.
 _NC_FALSE_POSITIVE_TOKENS = {
-    "null", "true", "false", "Id", "Name", "Status", "OwnerId",
-    "CreatedDate", "LastModifiedDate", "IsActive",
+    "null",
+    "true",
+    "false",
+    "Id",
+    "Name",
+    "Status",
+    "OwnerId",
+    "CreatedDate",
+    "LastModifiedDate",
+    "IsActive",
 }
 
 
@@ -573,7 +631,7 @@ def _flow_references_credential(
         return ""
 
     for array_key, field_key in _NC_FIELD_PATHS:
-        items = metadata.get(array_key) or[]
+        items = metadata.get(array_key) or []
         if not isinstance(items, list):
             continue
         for item in items:
@@ -685,6 +743,7 @@ def _flow_references_credential(
 # Note: Old _NC_FIELD_PATHS, _NC_FALSE_POSITIVE_TOKENS, and _flow_references_credential
 # functions have been removed. We now use the MetadataComponentDependency API.
 
+
 def get_named_credential_flow_refs(
     named_credentials: List[Dict[str, Any]],
     client: Optional[SalesforceClient] = None,
@@ -697,16 +756,19 @@ def get_named_credential_flow_refs(
 
     # --- STEP 1: Scan Apex Classes for Named Credential hardcoding ---
     # We map: { "NC_Developer_Name": ["Class_A", "Class_B"] }
-    nc_to_apex_classes: Dict[str, List[str]] = {nc['credential_developer_name']: [] for nc in named_credentials}
+    nc_to_apex_classes: Dict[str, List[str]] = {
+        nc["credential_developer_name"]: [] for nc in named_credentials
+    }
 
     try:
         # Note: We query Name and Body. Body is where the code is.
         all_classes = client.tooling_soql("SELECT Name, Body FROM ApexClass")
 
         for apex in all_classes:
-            class_name = apex.get('Name')
-            body = apex.get('Body', '')
-            if not body: continue
+            class_name = apex.get("Name")
+            body = apex.get("Body", "")
+            if not body:
+                continue
 
             for nc_name in nc_to_apex_classes.keys():
                 if nc_name in body:
@@ -716,19 +778,25 @@ def get_named_credential_flow_refs(
 
     # --- STEP 2: Scan Flows for Direct NC references OR Indirect Apex calls ---
     try:
-        active_flows = client.tooling_soql("SELECT Id, MasterLabel FROM Flow WHERE Status = 'Active'")
+        active_flows = client.tooling_soql(
+            "SELECT Id, MasterLabel FROM Flow WHERE Status = 'Active'"
+        )
     except Exception as e:
         print(f"Error fetching flows: {e}")
         return named_credentials
 
-    nc_to_flows: Dict[str, List[str]] = {nc['credential_developer_name']: [] for nc in named_credentials}
+    nc_to_flows: Dict[str, List[str]] = {
+        nc["credential_developer_name"]: [] for nc in named_credentials
+    }
 
     for flow in active_flows:
-        flow_id = flow['Id']
-        flow_label = flow.get('MasterLabel', 'Unknown')
+        flow_id = flow["Id"]
+        flow_label = flow.get("MasterLabel", "Unknown")
 
         try:
-            meta_recs = client.tooling_soql(f"SELECT Metadata FROM Flow WHERE Id = '{flow_id}'")
+            meta_recs = client.tooling_soql(
+                f"SELECT Metadata FROM Flow WHERE Id = '{flow_id}'"
+            )
             if not meta_recs or not meta_recs[0].get("Metadata"):
                 continue
 
@@ -740,11 +808,17 @@ def get_named_credential_flow_refs(
 
                 # Check B: Indirect reference via any Apex Class found in Step 1
                 suspect_classes = nc_to_apex_classes.get(nc_dev_name, [])
-                indirect_found = any(cls_name in metadata_str for cls_name in suspect_classes)
+                indirect_found = any(
+                    cls_name in metadata_str for cls_name in suspect_classes
+                )
 
                 if direct_found or indirect_found:
                     nc_to_flows[nc_dev_name].append(flow_id)
-                    reason = "DIRECT" if direct_found else f"INDIRECT via Apex ({[c for c in suspect_classes if c in metadata_str]})"
+                    reason = (
+                        "DIRECT"
+                        if direct_found
+                        else f"INDIRECT via Apex ({[c for c in suspect_classes if c in metadata_str]})"
+                    )
 
         except Exception as e:
             print(f"   Skipping Flow {flow_label}: {e}")
@@ -756,17 +830,21 @@ def get_named_credential_flow_refs(
         referencing_ids = nc_to_flows.get(dev_name, [])
         count = len(referencing_ids)
 
-        results.append({
-            **nc,
-            "flow_reference_count": count,
-            "referencing_flow_ids": referencing_ids,
-            "match_type": "apex_flow_trace_scan" if count > 0 else "none",
-        })
+        results.append(
+            {
+                **nc,
+                "flow_reference_count": count,
+                "referencing_flow_ids": referencing_ids,
+                "match_type": "apex_flow_trace_scan" if count > 0 else "none",
+            }
+        )
 
     return results
 
 
-def get_permission_bottlenecks(client: Optional[SalesforceClient] = None) -> List[Dict[str, Any]]:
+def get_permission_bottlenecks(
+    client: Optional[SalesforceClient] = None,
+) -> List[Dict[str, Any]]:
     """
     Alias for get_approval_pending — D6 uses the same data as D3.
     The bottleneck_score field is the primary D6 signal.
@@ -808,8 +886,8 @@ def get_cross_system_references(
     total_cases = total_recs[0].get("expr0", 0) if total_recs else 0
 
     echo_count = 0
-    sample_matches =[]
-    matched_patterns =[]
+    sample_matches = []
+    matched_patterns = []
 
     for pattern in patterns:
         like = f"%{pattern}%"
@@ -829,11 +907,13 @@ def get_cross_system_references(
                 f"AND CreatedDate = LAST_N_DAYS:90 LIMIT 5"
             )
             for r in sample_recs:
-                sample_matches.append({
-                    "case_id": r.get("Id", ""),
-                    "pattern": pattern,
-                    "field": "Subject",
-                })
+                sample_matches.append(
+                    {
+                        "case_id": r.get("Id", ""),
+                        "pattern": pattern,
+                        "field": "Subject",
+                    }
+                )
 
     sf_echo_score = round(echo_count / total_cases, 4) if total_cases > 0 else 0.0
 
@@ -849,6 +929,7 @@ def get_cross_system_references(
 # ─────────────────────────────────────────────────────────────────────────────
 # Main ingest() — called by runner.py
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 def ingest(sf_client: Optional[SalesforceClient] = None) -> Dict[str, Any]:
     """
@@ -866,6 +947,7 @@ def ingest(sf_client: Optional[SalesforceClient] = None) -> Dict[str, Any]:
         sf_client = _get_client()
 
     try:
+
         def _timed(fn_name, fn_call):
             """Execute an ingestion function with timing and governor limit logging."""
             t0 = time.perf_counter()
@@ -873,10 +955,18 @@ def ingest(sf_client: Optional[SalesforceClient] = None) -> Dict[str, Any]:
                 result = fn_call()
                 elapsed = int((time.perf_counter() - t0) * 1000)
                 rows = (
-                    len(result) if isinstance(result, list)
-                    else result.get("total_cases_90d",
-                         result.get("active_flow_count_on_object",
-                         result.get("sf_total_cases", len(result) if isinstance(result, dict) else 0)))
+                    len(result)
+                    if isinstance(result, list)
+                    else result.get(
+                        "total_cases_90d",
+                        result.get(
+                            "active_flow_count_on_object",
+                            result.get(
+                                "sf_total_cases",
+                                len(result) if isinstance(result, dict) else 0,
+                            ),
+                        ),
+                    )
                 )
                 logger.info(
                     f"INFO[{fn_name}]{'':>3} rows={rows:<6} ms={elapsed:<6} status=OK"
@@ -884,47 +974,71 @@ def ingest(sf_client: Optional[SalesforceClient] = None) -> Dict[str, Any]:
                 return result
             except IngestError as e:
                 elapsed = int((time.perf_counter() - t0) * 1000)
-                logger.error(
-                    f"ERROR [{fn_name}]{'':>3} ms={elapsed:<6} {str(e)[:120]}"
-                )
+                logger.error(f"ERROR [{fn_name}]{'':>3} ms={elapsed:<6} {str(e)[:120]}")
                 raise
 
-        case_metrics              = _timed("get_case_metrics",              lambda: get_case_metrics(sf_client))
-        flow_inventory            = _timed("get_flow_inventory",            lambda: get_flow_inventory(sf_client))
-        approval_processes        = _timed("get_approval_pending",          lambda: get_approval_pending(sf_client))
-        named_credentials_catalog = _timed("get_named_credentials",         lambda: get_named_credentials(sf_client))
-        named_credentials         = _timed("get_named_credential_flow_refs",lambda: get_named_credential_flow_refs(named_credentials_catalog, sf_client))
-        cross_system_references   = _timed("get_cross_system_references",   lambda: get_cross_system_references(sf_client))
+        case_metrics = _timed("get_case_metrics", lambda: get_case_metrics(sf_client))
+        flow_inventory = _timed(
+            "get_flow_inventory", lambda: get_flow_inventory(sf_client)
+        )
+        approval_processes = _timed(
+            "get_approval_pending", lambda: get_approval_pending(sf_client)
+        )
+        named_credentials_catalog = _timed(
+            "get_named_credentials", lambda: get_named_credentials(sf_client)
+        )
+        named_credentials = _timed(
+            "get_named_credential_flow_refs",
+            lambda: get_named_credential_flow_refs(
+                named_credentials_catalog, sf_client
+            ),
+        )
+        cross_system_references = _timed(
+            "get_cross_system_references",
+            lambda: get_cross_system_references(sf_client),
+        )
 
         return {
-            "case_metrics":           case_metrics,
-            "flow_inventory":         flow_inventory,
-            "approval_processes":     approval_processes,
-            "named_credentials":      named_credentials,
-            "cross_system_references":cross_system_references,
+            "case_metrics": case_metrics,
+            "flow_inventory": flow_inventory,
+            "approval_processes": approval_processes,
+            "named_credentials": named_credentials,
+            "cross_system_references": cross_system_references,
         }
     except IngestError:
         raise
     except Exception as e:
         raise IngestError(f"Salesforce ingestion failed unexpectedly: {e}") from e
 
+
 def is_access_token_expired(instance_url: str, access_token: str) -> bool:
     """
     Returns True if the Salesforce access token is expired or invalid.
+    Checks the Data API root which is more reliable for checking API access.
     """
     import requests
 
+    if not access_token:
+        return True
+
     try:
-        url = f"{instance_url}/services/oauth2/userinfo"
+        # Use Data API root instead of userinfo for more robust API check
+        url = f"{instance_url}/services/data/{API_VERSION}/"
 
         response = requests.get(
-            url,
-            headers={"Authorization": f"Bearer {access_token}"},
-            timeout=5
+            url, headers={"Authorization": f"Bearer {access_token.strip()}"}, timeout=10
         )
 
-        # 401 = invalid/expired token
+        # 401 = invalid/expired token.
+        # Also catch specific error messages that indicate a bad token format
         if response.status_code == 401:
+            return True
+
+        # If the body contains INVALID_JWT_FORMAT even with non-401 (unlikely but safe)
+        if (
+            "INVALID_JWT_FORMAT" in response.text
+            or "INVALID_AUTH_HEADER" in response.text
+        ):
             return True
 
         return False
