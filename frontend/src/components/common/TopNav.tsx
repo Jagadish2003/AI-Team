@@ -33,16 +33,16 @@ export default function TopNav() {
   );
 
   return (
-    <div className="sticky top-0 z-40 h-[58px] w-full border-b border-border bg-bgheader shadow-[0_2px_8px_rgba(0,0,0,0.15)] backdrop-blur">
-      <div className="flex h-full w-full items-center gap-2 px-2">
+    <div className="sticky top-0 z-40 h-[70px] w-full border-b border-border bg-bgheader shadow-[0_2px_8px_rgba(0,0,0,0.15)] backdrop-blur">
+      <div className="flex h-full w-full items-center gap-4 px-5">
 
         {/* Brand */}
-        <div className="flex shrink-0 items-center pl-4">
-          <img src={logo} alt="AgentIQ Logo" className="h-[32px] w-auto" />
+        <div className="flex shrink-0 items-center">
+          <img src={logo} alt="AgentIQ Logo" className="h-[43px] w-auto" />
         </div>
 
         {/* Nav items */}
-        <div className="flex flex-1 items-center justify-end gap-1 overflow-x-auto px-2" style={{ scrollbarWidth: 'none' }}>
+        <div className="flex flex-1 items-center justify-end gap-1.5 overflow-x-auto px-2" style={{ scrollbarWidth: 'none' }}>
           {items.map((i) => {
             const isActive = loc.pathname === i.to;
 
@@ -57,15 +57,15 @@ export default function TopNav() {
                   to={to}
                   className={`shrink-0 whitespace-nowrap font-medium transition-colors ${
                     isActive
-                      ? 'border-navborder border-t-2 text-textwhite bg-gradient-to-b from-activenav '
+                      ? 'border-navborder border-t-2 text-textwhite bg-gradient-to-b from-activenav'
                       : 'text-textwhite/70 hover:bg-navhover hover:text-textwhite'
                   }`}
-                  style={{ fontSize: '11.5px', padding: '4px 12px', borderRadius: '100px' }}
+                  style={{ fontSize: '14px', lineHeight: '18px', padding: '7px 13px', borderRadius: '100px' }}
                 >
                   {i.label}
                   {i.sfOnly && !salesforceConnected && (
                     <Zap
-                      size={10}
+                      size={12}
                       className="ml-1 inline-block shrink-0 text-amber-400"
                       aria-label="Requires Salesforce"
                     />
@@ -76,14 +76,14 @@ export default function TopNav() {
           })}
         </div>
 
-        <div className="flex shrink-0 items-center pr-2">
+        <div className="flex shrink-0 items-center">
           <button
             type="button"
             title="Profile"
             aria-label="Profile"
-            className="flex h-7 w-7 items-center justify-center rounded-full text-textwhite/75 transition-colors hover:bg-navhover hover:text-textwhite"
+            className="flex h-9 w-9 items-center justify-center rounded-full text-textwhite/75 transition-colors hover:bg-navhover hover:text-textwhite"
           >
-            <User className="h-4 w-4" />
+            <User className="h-5 w-5" />
           </button>
         </div>
       </div>

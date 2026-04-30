@@ -82,7 +82,11 @@ export default function ExecutiveReportPage() {
       <div className="min-h-screen text-text">
         <TopNav />
         <div className="px-8 py-6">
-          <RunRequiredEmptyState onStart={() => nav('/discovery-run')} />
+          <RunRequiredEmptyState
+            pageTitle="Executive Report"
+            pageDescription="Internal Demo Gate stub: exports are toasts; narrative is hardcoded."
+            onStart={() => nav('/discovery-run')}
+          />
         </div>
       </div>
     );

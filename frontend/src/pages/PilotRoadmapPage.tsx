@@ -67,7 +67,11 @@ export default function PilotRoadmapPage() {
       <div className="min-h-screen text-text">
         <TopNav />
         <div className="px-8 py-6">
-          <RunRequiredEmptyState onStart={() => nav('/discovery-run')} />
+          <RunRequiredEmptyState
+            pageTitle="Pilot Roadmap"
+            pageDescription="30/60/90-day plan. Pilots fail due to access - this page makes readiness explicit."
+            onStart={() => nav('/discovery-run')}
+          />
         </div>
       </div>
     );

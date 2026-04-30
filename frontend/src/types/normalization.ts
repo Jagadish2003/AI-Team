@@ -24,7 +24,8 @@ export interface PermissionRequirement {
 
 export interface ConfidenceExplanation {
   level: Confidence;
-  why: string;
+  why: string[];
   missingSignals: string[];
   nextAction: string;
+  recommendedNextSourceId?: string;
 }

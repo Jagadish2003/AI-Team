@@ -31,7 +31,7 @@ function buildPoints(opportunities: OpportunityCandidate[]) {
 const QUADRANT_LABELS = [
   { x: LEFT + 14, y: TOP + 24,  label: 'QUICK WINS',       fill: 'rgba(255,255,255,0.60)', w: 102 },
   { x: CX   + 14, y: TOP + 24,  label: 'HIGH VALUE',        fill: 'rgba(255,255,255,0.60)', w: 98  },
-  { x: LEFT + 14, y: CY  + 24,  label: 'LOW HANGING FRUIT', fill: 'rgba(255,255,255,0.40)', w: 162 },
+  { x: LEFT + 14, y: CY  + 24,  label: 'FOUNDATION',         fill: 'rgba(255,255,255,0.40)', w: 100 },
   { x: CX   + 14, y: CY  + 24,  label: 'LONG TERM',         fill: 'rgba(255,255,255,0.40)', w: 94  },
 ] as const;
 

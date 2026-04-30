@@ -129,19 +129,27 @@ export default function DiscoveryRunPage() {
     return (
       <div className="min-h-screen text-text">
         <TopNav />
-        <InfoPanel
-          title="No Active Run"
-          message="Start a new discovery run to continue."
-          actionLabel="Start New Discovery Run"
-          actionDisabled={!hasAtLeastOneSource}
-          onAction={() => void startRun(inputs)}
-        >
-          {!hasAtLeastOneSource && (
-            <div className="mt-3 text-center text-sm font-medium text-muted">
-              {DISCOVERY_SOURCE_REQUIREMENT_MESSAGE}
+        <div className="px-8 py-6">
+          <div className="mb-4">
+            <div className="text-2xl font-semibold text-text">Discovery Run</div>
+            <div className="mt-1 text-sm text-muted">
+              The Discovery Run provides a clear, step-by-step view of progress with live logs and a continuously updated summary of detected applications, workflows, and opportunities.
             </div>
-          )}
-        </InfoPanel>
+          </div>
+          <InfoPanel
+            title="No Active Run"
+            message="Start a new discovery run to continue."
+            actionLabel="Start New Discovery Run"
+            actionDisabled={!hasAtLeastOneSource}
+            onAction={() => void startRun(inputs)}
+          >
+            {!hasAtLeastOneSource && (
+              <div className="mt-3 text-center text-sm font-medium text-muted">
+                {DISCOVERY_SOURCE_REQUIREMENT_MESSAGE}
+              </div>
+            )}
+          </InfoPanel>
+        </div>
       </div>
     );
   }

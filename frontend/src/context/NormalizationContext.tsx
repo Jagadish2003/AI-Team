@@ -47,6 +47,7 @@ export function NormalizationProvider({ children }: { children: React.ReactNode 
   const [confidence, setConfidence] = useState<ConfidenceExplanation>({
     level: 'MEDIUM',
     why: [],
+    missingSignals: [],
     nextAction: '',
     recommendedNextSourceId: '',
   });
