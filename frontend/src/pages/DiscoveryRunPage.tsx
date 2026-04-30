@@ -88,27 +88,20 @@ export default function DiscoveryRunPage() {
     return Math.min(Math.round((seen.size / TOTAL_STAGES) * 100), 99);
   }, [isComplete, computing, events]);
 
-  const animFrameRef = useRef<number | null>(null);
+  // FIX: Safe requestAnimationFrame implementation
   useEffect(() => {
-    if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current);
-    const step = () => {
+    if (displayPct === targetPct) return;
+
+    const id = requestAnimationFrame(() => {
       setDisplayPct((prev) => {
-        if (prev < targetPct) {
-          animFrameRef.current = requestAnimationFrame(step);
-          return prev + 1;
-        }
-        if (prev > targetPct) {
-          animFrameRef.current = requestAnimationFrame(step);
-          return prev - 1;
-        }
+        if (prev < targetPct) return prev + 1;
+        if (prev > targetPct) return prev - 1;
         return prev;
       });
-    };
-    animFrameRef.current = requestAnimationFrame(step);
-    return () => {
-      if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current);
-    };
-  }, [targetPct]);
+    });
+
+    return () => cancelAnimationFrame(id);
+  }, [displayPct, targetPct]);
 
   const inputs = useMemo(() => {
     const connectedSources = connectors
@@ -170,9 +163,13 @@ export default function DiscoveryRunPage() {
         <TopNav />
         <div className="px-8 py-6">
           <div className="mb-4">
-            <div className="text-2xl font-semibold text-text">Discovery Run</div>
+            <div className="text-2xl font-semibold text-text">
+              Discovery Run
+            </div>
             <div className="mt-1 text-sm text-muted">
-              The Discovery Run provides a clear, step-by-step view of progress with live logs and a continuously updated summary of detected applications, workflows, and opportunities.
+              The Discovery Run provides a clear, step-by-step view of progress
+              with live logs and a continuously updated summary of detected
+              applications, workflows, and opportunities.
             </div>
           </div>
           <InfoPanel
@@ -302,7 +299,9 @@ export default function DiscoveryRunPage() {
               <div className="rounded-lg border border-border bg-bg/10 p-3">
                 <div className="font-semibold text-text">Sample workspace</div>
                 <div className="mt-1 max-h-28 overflow-auto break-words pr-1">
-                  {summaryInputs.sampleWorkspaceEnabled ? "Enabled" : "Disabled"}
+                  {summaryInputs.sampleWorkspaceEnabled
+                    ? "Enabled"
+                    : "Disabled"}
                 </div>
               </div>
             </div>
