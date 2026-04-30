@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState, useCallback } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { Zap } from "lucide-react";
 import TopNav from "../components/common/TopNav";
 import OpportunityToolbar, {
@@ -44,9 +44,6 @@ export default function OpportunityReviewPage() {
   const [tier, setTier] = useState<TierFilter>("All");
   const [conf, setConf] = useState<ConfidenceFilter>("All");
   const [decisionF, setDecisionF] = useState<DecisionFilter>("All");
-  const [selectedId, setSelectedId] = useState<string | null>(
-    contextSelectedId || null,
-  );
 
   const salesforceConnected = connectors.some(
     (c) => c.id === "salesforce" && c.status === "connected",
@@ -78,13 +75,12 @@ export default function OpportunityReviewPage() {
   );
 
   const quickWins = useMemo(
-    () => ranked.filter((o) => o.tier === "Quick Win"),
+    () => ranked.filter((o) => o.tier === "Quick Win").slice(0, 5),
     [ranked],
   );
 
   const handleSelect = useCallback(
     (id: string) => {
-      setSelectedId(id);
       select(id);
     },
     [select],
@@ -94,15 +90,14 @@ export default function OpportunityReviewPage() {
     if (filtered.length > 0) {
       const isCurrentValid = filtered.some((o) => o.id === selectedId);
       if (!selectedId || !isCurrentValid) {
-        setSelectedId(filtered[0].id);
+        select(filtered[0].id);
       }
     }
-  }, [filtered, selectedId]);
+  }, [filtered, selectedId, select]);
 
   useEffect(() => {
     if (!requestedOppId) return;
     if (!opportunities.some((o) => o.id === requestedOppId)) return;
-    setSelectedId(requestedOppId);
     select(requestedOppId);
   }, [requestedOppId, opportunities, select]);
 
