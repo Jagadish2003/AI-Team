@@ -9,6 +9,7 @@ import {
 import type { OpportunityCandidate, ReviewAuditEvent } from "../types/analystReview";
 import type { Decision } from "../types/common";
 import { isRunNotFoundError, runScopedErrorMessage } from "../utils/apiErrors";
+import { useDiscoveryRunContext } from "./DiscoveryRunContext";
 
 type AnalystReviewContextValue = {
   loading: boolean;
@@ -32,6 +33,11 @@ type AnalystReviewContextValue = {
 
 const Ctx = createContext<AnalystReviewContextValue | null>(null);
 
+function hasMaterializedArtifacts(status: string | undefined): boolean {
+  const normalized = status?.toLowerCase();
+  return normalized === "complete" || normalized === "completed" || normalized === "partial";
+}
+
 function nowLabel(): string {
   const d = new Date();
   const dd = String(d.getDate()).padStart(2, "0");
@@ -48,6 +54,8 @@ function uid(prefix: string): string {
 
 export function AnalystReviewProvider({ children }: { children: React.ReactNode }) {
   const { runId, clearRunId } = useRunContext();
+  const { run } = useDiscoveryRunContext();
+  const runStatus = run?.status?.toLowerCase();
 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -67,6 +75,14 @@ export function AnalystReviewProvider({ children }: { children: React.ReactNode 
       setSelectedId(null);
       setLoading(false);
       setError(null);
+      return;
+    }
+    if (!hasMaterializedArtifacts(runStatus)) {
+      setOpportunities([]);
+      setAudit([]);
+      setSelectedId(null);
+      setLoading(runStatus !== "failed");
+      setError(runStatus === "failed" ? "Discovery run failed before opportunities were generated." : null);
       return;
     }
     let cancelled = false;
@@ -93,7 +109,7 @@ export function AnalystReviewProvider({ children }: { children: React.ReactNode 
     })();
 
     return () => { cancelled = true; };
-  }, [runId, fetchCount, clearRunId]);
+  }, [runId, runStatus, fetchCount, clearRunId]);
 
   const setDecision = useCallback(
     async (oppId: string, decision: Decision) => {

@@ -19,13 +19,13 @@ export default function TopQuickWins({
   onSelect: (id: string) => void;
 }) {
   return (
-    <div className="rounded-xl border border-border bg-panel p-4">
-      <div className="flex items-center justify-between">
+    <div className="flex h-full min-h-0 flex-col rounded-xl border border-border bg-panel p-4">
+      <div className="flex shrink-0 items-center justify-between">
         <div className="pb-2 text-xl font-semibold text-text">Top Quick Wins</div>
         <div className="text-xs text-muted">Impact - Effort</div>
       </div>
 
-      <div className="mt-3 max-h-[445px] overflow-y-auto rounded-lg border border-border bg-bg/20">
+      <div className="mt-3 min-h-0 flex-1 overflow-y-auto rounded-lg border border-border bg-bg/20">
         {quickWins.length === 0 ? (
           <div className="px-3 py-4 text-sm text-muted">No quick wins match the current filters.</div>
         ) : (
@@ -41,7 +41,7 @@ export default function TopQuickWins({
               >
                 <div className="flex items-start justify-between gap-2">
                   <div className="min-w-0">
-                    <div className={`truncate text-sm font-semibold ${active ? 'text-accent' : 'text-text'}`}>
+                    <div className={`text-sm font-semibold leading-snug ${active ? 'text-accent' : 'text-text'}`}>
                       {o.title}
                     </div>
                     <div className="mt-1 text-xs text-muted">{o.category} - Confidence {o.confidence}</div>

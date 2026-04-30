@@ -42,8 +42,15 @@ function RunStatusPill({
   );
 }
 
+function formatRunTimestamp(value?: string | null) {
+  if (!value) return "";
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
+}
+
 export default function DiscoveryRunPage() {
   const [autoScroll, setAutoScroll] = useState(true);
+  const logScrollRef = useRef<HTMLDivElement | null>(null);
   const nav = useNavigate();
   const location = useLocation();
   const autoStartRequested =
@@ -114,6 +121,7 @@ export default function DiscoveryRunPage() {
       mode: "live" as const,
     };
   }, [connectors, uploadedFiles, sampleWorkspaceEnabled]);
+  const summaryInputs = run?.inputs ?? inputs;
 
   const hasAtLeastOneSource =
     inputs.connectedSources.length > 0 ||
@@ -132,6 +140,13 @@ export default function DiscoveryRunPage() {
     inputs,
     hasAtLeastOneSource,
   ]);
+
+  useEffect(() => {
+    if (!autoScroll) return;
+    const el = logScrollRef.current;
+    if (!el) return;
+    el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
+  }, [events, autoScroll]);
 
   if (loading || (!runId && autoStartRequested && hasAtLeastOneSource)) {
     return (
@@ -234,7 +249,7 @@ export default function DiscoveryRunPage() {
             </p>
             {run?.startedAt && (
               <p className="mt-1 text-xs text-muted">
-                Started: {new Date(run.startedAt).toLocaleString()}
+                Started: {formatRunTimestamp(run.startedAt)}
               </p>
             )}
           </div>
@@ -264,37 +279,37 @@ export default function DiscoveryRunPage() {
           </div>
         </div>
 
-        <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
-          <div className="rounded-xl border border-border bg-panel p-4">
-            <div className="text-lg font-semibold">Run Summary</div>
-            <div className="mt-3 space-y-3 text-sm text-muted">
-              <div>
+        <div className="grid grid-cols-1 items-start gap-4 lg:grid-cols-3">
+          <div className="flex h-[460px] min-h-0 flex-col rounded-xl border border-border bg-panel p-4 lg:h-[520px]">
+            <div className="shrink-0 text-lg font-semibold">Run Summary</div>
+            <div className="mt-3 min-h-0 flex-1 space-y-3 overflow-auto pr-1 text-sm text-muted">
+              <div className="rounded-lg border border-border bg-bg/10 p-3">
                 <div className="font-semibold text-text">Connected sources</div>
-                <div className="mt-0.5">
-                  {inputs.connectedSources.length
-                    ? inputs.connectedSources.join(" - ")
+                <div className="mt-1 max-h-28 overflow-auto break-words pr-1">
+                  {summaryInputs.connectedSources.length
+                    ? summaryInputs.connectedSources.join(" - ")
                     : "None"}
                 </div>
               </div>
-              <div>
+              <div className="rounded-lg border border-border bg-bg/10 p-3">
                 <div className="font-semibold text-text">Uploaded files</div>
-                <div className="mt-0.5">
-                  {inputs.uploadedFiles.length
-                    ? inputs.uploadedFiles.join(" - ")
+                <div className="mt-1 max-h-28 overflow-auto break-words pr-1">
+                  {summaryInputs.uploadedFiles.length
+                    ? summaryInputs.uploadedFiles.join(" - ")
                     : "None"}
                 </div>
               </div>
-              <div>
+              <div className="rounded-lg border border-border bg-bg/10 p-3">
                 <div className="font-semibold text-text">Sample workspace</div>
-                <div className="mt-0.5">
-                  {inputs.sampleWorkspaceEnabled ? "Enabled" : "Disabled"}
+                <div className="mt-1 max-h-28 overflow-auto break-words pr-1">
+                  {summaryInputs.sampleWorkspaceEnabled ? "Enabled" : "Disabled"}
                 </div>
               </div>
             </div>
           </div>
 
-          <div className="rounded-xl border border-border bg-panel p-4 lg:col-span-2">
-            <div className="flex items-center justify-between">
+          <div className="flex h-[460px] min-h-0 flex-col rounded-xl border border-border bg-panel p-4 lg:col-span-2 lg:h-[520px]">
+            <div className="flex shrink-0 items-center justify-between">
               <div className="flex items-center gap-5">
                 <div className="text-lg font-semibold">Discovery Log</div>
                 <label className="flex items-center gap-2 text-sm text-text">
@@ -315,7 +330,10 @@ export default function DiscoveryRunPage() {
               </button>
             </div>
 
-            <div className="mt-3 max-h-[420px] overflow-auto rounded-lg border border-border bg-bg/10 p-3">
+            <div
+              ref={logScrollRef}
+              className="mt-3 min-h-0 flex-1 overflow-auto rounded-lg border border-border bg-bg/10 p-3"
+            >
               {events.length === 0 ? (
                 <div className="text-sm text-muted">No events yet.</div>
               ) : (
@@ -323,7 +341,7 @@ export default function DiscoveryRunPage() {
                   {events.map((e, i) => (
                     <div key={e.id ?? i} className="flex gap-3">
                       <div className="w-40 shrink-0 font-mono text-xs text-muted">
-                        {e.tsLabel ?? e.ts ?? ""}
+                        {formatRunTimestamp(e.tsLabel ?? e.ts)}
                       </div>
                       <div className="w-28 shrink-0 font-mono text-xs text-muted">
                         {e.stage ?? ""}
