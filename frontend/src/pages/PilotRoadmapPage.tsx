@@ -68,8 +68,8 @@ export default function PilotRoadmapPage() {
         <TopNav />
         <div className="px-8 py-6">
           <RunRequiredEmptyState
-            pageTitle="Pilot Roadmap"
-            pageDescription="30/60/90-day plan. Pilots fail due to access - this page makes readiness explicit."
+            pageTitle="Agent Roadmap"
+            pageDescription="Your prioritised Agentforce implementation plan - grounded in discovery findings."
             onStart={() => nav('/discovery-run')}
           />
         </div>
@@ -81,7 +81,7 @@ export default function PilotRoadmapPage() {
     return (
       <div className="min-h-screen text-text">
         <TopNav />
-        <LoadingPanel title="Loading pilot roadmap…" />
+        <LoadingPanel title="Loading agent roadmap..." />
       </div>
     );
   }

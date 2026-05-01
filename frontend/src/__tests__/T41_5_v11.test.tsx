@@ -41,10 +41,16 @@ vi.mock('../context/ConnectorContext', () => ({
   }),
 }));
 
+vi.mock('../context/RunContext', () => ({
+  useRunContext: () => ({ runId: 'run_001' }),
+}));
+
 vi.mock('../components/pilot_roadmap/ReadinessPill', () => ({ default: ({ status }: any) => <span>{status}</span> }));
 
 import StageCard from '../components/pilot_roadmap/StageCard';
 import StagesGrid from '../components/pilot_roadmap/StagesGrid';
+import PilotRoadmapHeader from '../components/pilot_roadmap/PilotRoadmapHeader';
+import TopNav from '../components/common/TopNav';
 
 // ── Fixtures ──────────────────────────────────────────────────────────────────
 
@@ -67,6 +73,11 @@ const OPP_B = makeOpp('opp_002', 'Reduce case routing');
 const STAGE_TWO_OPPS = makeStage('NEXT_30', [OPP_A, OPP_B]);
 const STAGE_ONE_OPP  = makeStage('NEXT_30', [OPP_A]);
 const STAGE_EMPTY    = makeStage('NEXT_30', []);
+const STAGES_ALL = [
+  makeStage('NEXT_30', [OPP_A]),
+  makeStage('NEXT_60', [OPP_B]),
+  makeStage('NEXT_90', []),
+];
 
 function renderCard(stage: any, renderBlueprintLink?: (id: string) => React.ReactNode) {
   return render(
@@ -140,21 +151,47 @@ describe('StagesGrid — T41-5 v1.1', () => {
 
   beforeEach(() => { vi.clearAllMocks(); mockSFConnected = false; });
 
-  it('AR2: no 30/60/90 day language in headings', () => {
-    renderGrid([STAGE_TWO_OPPS]);
-    expect(screen.queryByText(/30 DAYS/i)).toBeNull();
+  it('AR1: header says Agent Roadmap and not Pilot Roadmap', () => {
+    render(<PilotRoadmapHeader onExport={vi.fn()} />);
+    expect(screen.getByText('Agent Roadmap')).toBeTruthy();
+    expect(screen.queryByText('Pilot Roadmap')).toBeNull();
   });
 
-  it('AR3: Phase 1 heading present', () => {
-    renderGrid([makeStage('NEXT_30', [OPP_A])]);
+  it('AR1: nav label is Agent Roadmap while route path remains /pilot-roadmap', () => {
+    render(
+      <MemoryRouter>
+        <TopNav />
+      </MemoryRouter>,
+    );
+    const link = screen.getByRole('link', { name: 'Agent Roadmap' });
+    expect(link).toBeTruthy();
+    expect(link.getAttribute('href')).toContain('/pilot-roadmap');
+    expect(screen.queryByText('Pilot Roadmap')).toBeNull();
+  });
+
+  it('AR2: no 30/60/90 day language in phase headings', () => {
+    renderGrid(STAGES_ALL);
+    const headingText = STAGES_ALL
+      .map((stage) => screen.getByTestId(`phase-heading-${stage.id}`).textContent ?? '')
+      .join(' ');
+    expect(headingText).not.toMatch(/30 DAYS|60 DAYS|90 DAYS|NEXT 30|NEXT 60|NEXT 90/i);
+  });
+
+  it('AR3: Phase 1/2/3 headings present with Agent roadmap labels', () => {
+    renderGrid(STAGES_ALL);
     expect(screen.getByTestId('phase-heading-NEXT_30').textContent).toContain('Phase 1');
+    expect(screen.getByTestId('phase-heading-NEXT_30').textContent).toContain('Starter Agents');
+    expect(screen.getByTestId('phase-heading-NEXT_60').textContent).toContain('Phase 2');
+    expect(screen.getByTestId('phase-heading-NEXT_60').textContent).toContain('Connected Agents');
+    expect(screen.getByTestId('phase-heading-NEXT_90').textContent).toContain('Phase 3');
+    expect(screen.getByTestId('phase-heading-NEXT_90').textContent).toContain('Orchestrated Agents');
   });
 
   it('AR4: Blueprint links visible when Salesforce connected', () => {
     mockSFConnected = true;
     renderGrid([STAGE_TWO_OPPS]);
-    expect(screen.getByTestId('blueprint-link-opp_001')).toBeTruthy();
-    expect(screen.getByTestId('blueprint-link-opp_002')).toBeTruthy();
+    expect(within(screen.getByTestId('opp-row-opp_001')).getByTestId('blueprint-link-opp_001')).toBeTruthy();
+    expect(within(screen.getByTestId('opp-row-opp_002')).getByTestId('blueprint-link-opp_002')).toBeTruthy();
   });
 
   it('AR5: Blueprint links absent when Salesforce not connected', () => {
@@ -168,8 +205,10 @@ describe('StagesGrid — T41-5 v1.1', () => {
     mockSFConnected = true;
     renderGrid([STAGE_TWO_OPPS]);
     fireEvent.click(screen.getByTestId('blueprint-link-opp_001'));
+    expect(mockSelect).toHaveBeenCalledWith('opp_001');
     expect(mockNavigate).toHaveBeenCalledWith(expect.stringContaining('oppId=opp_001'));
     fireEvent.click(screen.getByTestId('blueprint-link-opp_002'));
+    expect(mockSelect).toHaveBeenCalledWith('opp_002');
     expect(mockNavigate).toHaveBeenCalledWith(expect.stringContaining('oppId=opp_002'));
   });
 
