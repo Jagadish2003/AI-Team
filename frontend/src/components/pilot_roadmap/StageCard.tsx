@@ -1,3 +1,21 @@
+/**
+ * T41-5 v1.1 — StageCard.tsx
+ *
+ * Changes from original:
+ *   - Props extended with optional renderBlueprintLink render prop.
+ *     When provided, it is called with each opportunity's id and the
+ *     returned node is rendered INSIDE the opportunity button, below
+ *     the category/tier/confidence meta line.
+ *   - All other rendering unchanged — zero regression risk.
+ *
+ * The render prop pattern keeps Blueprint-link logic in StagesGrid
+ * where the Salesforce gating check lives, not in StageCard which
+ * has no awareness of connector state.
+ *
+ * Issue 1 fix: link is now card-bound — visually and structurally
+ * attached to each individual opportunity row, not a detached list
+ * below the card.
+ */
 import React from 'react';
 import { useState } from 'react';
 import { RoadmapStage, RoadmapDependency, Readiness } from '../../types/pilotRoadmap';
@@ -9,6 +27,10 @@ import { ChevronRight } from 'lucide-react';
 interface Props {
   stage: RoadmapStage;
   onOpenReview: (id: string) => void;
+  /** Optional render prop — receives oppId, returns a node rendered
+   *  inside that opportunity's card row. Used by StagesGrid to inject
+   *  the Agentforce Blueprint link when Salesforce is connected. */
+  renderBlueprintLink?: (oppId: string) => React.ReactNode;
 }
 
 function permRowStyle(p: PermissionItem) {
@@ -31,7 +53,10 @@ function countsFromStatuses<T extends { status: Readiness }>(items: T[]) {
     { ready: 0, pending: 0, missing: 0 }
   );
 }
-function ReadinessCounts({ ready, pending, missing }: { ready: number; pending: number; missing: number }) {
+
+function ReadinessCounts({ ready, pending, missing }: {
+  ready: number; pending: number; missing: number;
+}) {
   return (
     <span className="text-xs flex items-center gap-1">
       <span className="font-semibold text-emerald-300">{ready} READY</span>
@@ -43,19 +68,17 @@ function ReadinessCounts({ ready, pending, missing }: { ready: number; pending: 
   );
 }
 
-export default function StageCard({ stage, onOpenReview }: Props) {
+export default function StageCard({
+  stage,
+  onOpenReview,
+  renderBlueprintLink,
+}: Props) {
   const [showDependencies, setShowDependencies] = useState(false);
 
   const required = stage.requiredPermissions.filter(p => p.required);
-  const readyCount = stage.requiredPermissions.filter(
-    p => readinessFromPermission(p) === 'READY'
-  ).length;
-  const pendingCount = stage.requiredPermissions.filter(
-    p => readinessFromPermission(p) === 'PENDING'
-  ).length;
-  const missingCount = required.filter(
-    p => readinessFromPermission(p) === 'MISSING'
-  ).length;
+  const readyCount   = stage.requiredPermissions.filter(p => readinessFromPermission(p) === 'READY').length;
+  const pendingCount = stage.requiredPermissions.filter(p => readinessFromPermission(p) === 'PENDING').length;
+  const missingCount = required.filter(p => readinessFromPermission(p) === 'MISSING').length;
 
   const gate = stageReadiness(stage.requiredPermissions);
   const dependencyCounts = countsFromStatuses(stage.dependencies);
@@ -84,6 +107,7 @@ export default function StageCard({ stage, onOpenReview }: Props) {
         .opp-scroll::-webkit-scrollbar-button:start { background: #132043; height: 10px; display: block; }
         .opp-scroll::-webkit-scrollbar-button:end { background: #132043; height: 10px; display: block; }
       `}</style>
+
       <div className="flex items-center justify-between">
         <div className="text-xl font-semibold text-text">Stage Readiness</div>
         <ReadinessPill status={gate} />
@@ -100,15 +124,23 @@ export default function StageCard({ stage, onOpenReview }: Props) {
               key={o.id}
               className="w-full rounded-md border border-border bg-bg/20 px-3 py-2 text-left hover:bg-panel2"
               onClick={() => onOpenReview(o.id)}
+              data-testid={`opp-row-${o.id}`}
             >
               <div className="text-sm font-semibold text-text">{o.title}</div>
               <div className="mt-1 text-xs text-muted">
                 {o.category} · Tier {o.tier} · Confidence {o.confidence}
               </div>
+              {/* Issue 1 fix: Blueprint link rendered INSIDE the opportunity row,
+                  card-bound and visually associated with this specific opportunity.
+                  e.stopPropagation() is handled inside the BlueprintLink component
+                  via the render prop — the outer button's onClick still fires for
+                  the review navigation unless stopPropagation is called. */}
+              {renderBlueprintLink?.(o.id)}
             </button>
           ))}
         </div>
       </div>
+
       <div className="mt-3 rounded-lg border border-border bg-bg/20 p-3">
         <div className="flex items-center justify-between">
           <div className="text-sm font-semibold text-text">Required Data Permissions</div>
@@ -134,6 +166,7 @@ export default function StageCard({ stage, onOpenReview }: Props) {
           Required permissions drive gate readiness. Recommended permissions influence quality and confidence.
         </div>
       </div>
+
       <div className="mt-3 rounded-lg border border-border bg-bg/20 p-3">
         <button
           className="flex w-full items-start justify-between gap-3 text-left"

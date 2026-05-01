@@ -31,6 +31,7 @@ const items = [
     runScoped: true,
     sfOnly: false,
   },
+  { to: "/pilot-roadmap", label: "Agent Roadmap", runScoped: true },
   {
     to: "/agentforce-blueprint",
     label: "Agentforce Blueprint",
