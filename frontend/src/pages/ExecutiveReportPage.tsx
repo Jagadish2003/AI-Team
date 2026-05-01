@@ -155,14 +155,14 @@ export default function ExecutiveReportPage() {
         </div>
 
         <div className="mb-4 rounded-xl bg-panel px-4 py-3 text-sm text-muted">
-          Overview of confidence, sources, and prioritized quick wins across the roadmap.
+          Overview of confidence, sources, and prioritized quick wins across the Agent Roadmap.
         </div>
 
         <div className="grid grid-cols-1 gap-4 md:grid-cols-4">
           <StatCard title="Overall Confidence" value={roadmap.overallReadiness} />
           <StatCard title="Sources Analyzed" value={sourcesLabel} />
           <StatCard title="Top Opportunities" value={`${quickWins.length} Quick Wins`} />
-          <StatCard title="Pilot Roadmap" value="30/60/90 Days" />
+          <StatCard title="Agent Roadmap" value="Phase 1/2/3" />
         </div>
 
         <div className="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-[2fr_1fr]">

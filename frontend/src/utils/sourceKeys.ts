@@ -24,10 +24,7 @@ export const SOURCE_KEY_MAP: Record<string, string> = {
   salesforce: "Salesforce",
   servicenow: "ServiceNow",
 
-  // Fix: connector ID is 'jira_confluence' in ConnectorContext.
-  // Backend writes 'Jira' (evidence_builder.py L353).
-  jira_confluence: "Jira",
-  jira: "Jira", // kept for future split if needed
+  jira: "Jira",
   confluence: "Confluence",
 
   // ── Sprint 6+ connectors ─────────────────────────────────────────────────
@@ -45,9 +42,15 @@ export const SOURCE_KEY_MAP: Record<string, string> = {
   sap: "SAP",
 };
 
+const CONNECTOR_ID_ALIASES: Record<string, keyof typeof SOURCE_KEY_MAP> = {
+  // Current seed data uses a bundled delivery connector; source rows still use Jira.
+  jira_confluence: "jira",
+};
+
 /** Returns the canonical sourceSystem string for a given connector.id. */
 export function sourceKeyForConnector(connectorId: string): string {
-  return SOURCE_KEY_MAP[connectorId] ?? connectorId;
+  const canonicalConnectorId = CONNECTOR_ID_ALIASES[connectorId] ?? connectorId;
+  return SOURCE_KEY_MAP[canonicalConnectorId] ?? connectorId;
 }
 
 /** Reverse lookup — returns the connector.id for a given sourceSystem string, or null. */

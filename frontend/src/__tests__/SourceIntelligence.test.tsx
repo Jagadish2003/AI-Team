@@ -1,5 +1,5 @@
 /**
- * T41-4 v1.2 — Source Intelligence tests
+ * T41-4 v1.3 — Source Intelligence tests
  *
  * New tests added for three fixes:
  *   Issue 1: Connector ID as join key — source rows keyed by connectorId not name
@@ -10,6 +10,7 @@ import React from 'react';
 import { render, screen, fireEvent } from '@testing-library/react';
 import { MemoryRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { vi, describe, it, expect, beforeEach } from 'vitest';
+import type { MappingRow, PermissionRequirement } from '../types/normalization';
 
 // ── Fixtures ──────────────────────────────────────────────────────────────────
 
@@ -37,6 +38,12 @@ const AMBIGUOUS_JIRA = {
   commonField: 'Workflow.owner', status: 'AMBIGUOUS' as const,
   confidence: 'MEDIUM' as const, sampleValues: ['alice', 'bob'],
 };
+const UNMAPPED_SLACK = {
+  id: 'map_005', sourceSystem: 'Slack', sourceType: 'Messages',
+  sourceField: 'thread.topic', commonEntity: 'Workflow',
+  commonField: 'Workflow.topic', status: 'UNMAPPED' as const,
+  confidence: 'LOW' as const, sampleValues: ['handoff delay'],
+};
 
 // Slack connected but zero signals — Issue 1 test case
 const CONNECTORS = [
@@ -51,12 +58,18 @@ const PERMISSIONS_OK = [
 const PERMISSIONS_WARN = [
   { id: 'p2', label: 'Read incidents', sourceSystem: 'Jira', required: true, satisfied: false },
 ];
+const PERMISSIONS_SLACK_OK = [
+  { id: 'p3', label: 'Read channels', sourceSystem: 'Slack', required: true, satisfied: true },
+];
+const PERMISSIONS_SLACK_WARN = [
+  { id: 'p4', label: 'Read channels', sourceSystem: 'Slack', required: true, satisfied: false },
+];
 
 // ── Mocks ─────────────────────────────────────────────────────────────────────
 
-let mockRows = [MAPPED_SN, MAPPED_JIRA, AMBIGUOUS_SN];
+let mockRows: MappingRow[] = [MAPPED_SN, MAPPED_JIRA, AMBIGUOUS_SN];
 let mockCounts = { MAPPED: 2, UNMAPPED: 0, AMBIGUOUS: 1 };
-let mockPermissions = PERMISSIONS_OK;
+let mockPermissions: PermissionRequirement[] = PERMISSIONS_OK;
 let mockPermissionsLoading = false;
 let mockPermissionsError: string | null = null;
 
@@ -110,7 +123,7 @@ function renderPage(path = '/source-intelligence') {
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
-describe('SourceIntelligencePage v1.2 — T41-4', () => {
+describe('SourceIntelligencePage v1.3 — T41-4', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -154,7 +167,44 @@ describe('SourceIntelligencePage v1.2 — T41-4', () => {
   it('I1: Slack row appears despite zero signals (connected-but-empty)', () => {
     renderPage();
     const slackRow = screen.getByTestId('source-row-slack');
-    expect(slackRow.textContent).toContain('No signals ingested');
+    expect(slackRow.textContent).toContain('Status unknown');
+  });
+
+  it('SI2: Permission-limited sub-state shown for zero-signal permission warning', () => {
+    mockRows = [MAPPED_SN, MAPPED_JIRA];
+    mockCounts = { MAPPED: 2, UNMAPPED: 0, AMBIGUOUS: 0 };
+    mockPermissions = PERMISSIONS_SLACK_WARN;
+    renderPage();
+    expect(screen.getByTestId('zero-signal-slack').textContent).toContain('Permission-limited');
+  });
+
+  it('SI3: No signals detected shown when zero-signal source is confirmed', () => {
+    mockRows = [MAPPED_SN, MAPPED_JIRA];
+    mockCounts = { MAPPED: 2, UNMAPPED: 0, AMBIGUOUS: 0 };
+    mockPermissions = PERMISSIONS_SLACK_OK;
+    renderPage();
+    expect(screen.getByTestId('zero-signal-slack').textContent).toContain('No signals detected');
+  });
+
+  it('SI4: Checking shown while permissions are loading', () => {
+    mockRows = [MAPPED_SN, MAPPED_JIRA];
+    mockCounts = { MAPPED: 2, UNMAPPED: 0, AMBIGUOUS: 0 };
+    mockPermissionsLoading = true;
+    renderPage();
+    expect(screen.getByTestId('zero-signal-slack').textContent).toContain('Checking');
+  });
+
+  it('SI4: Not yet fully analyzed shown when a zero-signal source has unmapped fields', () => {
+    mockRows = [MAPPED_SN, MAPPED_JIRA, UNMAPPED_SLACK];
+    mockCounts = { MAPPED: 2, UNMAPPED: 1, AMBIGUOUS: 0 };
+    mockPermissions = PERMISSIONS_SLACK_OK;
+    renderPage();
+    expect(screen.getByTestId('zero-signal-slack').textContent).toContain('Not yet fully analyzed');
+  });
+
+  it('SI5: no zero-reason element rendered for sources with mapped signals', () => {
+    renderPage();
+    expect(screen.queryByTestId('zero-signal-servicenow')).toBeNull();
   });
 
   it('I1: ServiceNow row shows Permissions confirmed (joined via sourceKey)', () => {

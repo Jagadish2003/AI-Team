@@ -26,20 +26,20 @@ export default function PilotRoadmapHighlights({
     <div className="rounded-xl border border-border bg-panel p-4">
       <div className="flex items-center gap-2 text-sm font-semibold text-text">
         <Map className="h-4 w-4 shrink-0" />
-        <span>Pilot Roadmap Highlights</span>
+        <span>Agent Roadmap Highlights</span>
       </div>
       <ul className="mt-3 space-y-2">
         <li className="flex items-start gap-2 text-sm text-text">
           <ArrowRight className="mt-0.5 h-4 w-4 shrink-0 opacity-70" />
-          <span>{stages[0].opportunities.length} opportunities planned for the next 30 days.</span>
+          <span>{stages[0].opportunities.length} opportunities planned for Phase 1.</span>
         </li>
         <li className="flex items-start gap-2 text-sm text-text">
           <ArrowRight className="mt-0.5 h-4 w-4 shrink-0 opacity-70" />
-          <span>{stages[1].opportunities.length} opportunities planned for the next 60 days.</span>
+          <span>{stages[1].opportunities.length} opportunities planned for Phase 2.</span>
         </li>
         <li className="flex items-start gap-2 text-sm text-text">
           <ArrowRight className="mt-0.5 h-4 w-4 shrink-0 opacity-70" />
-          <span>{stages[2].opportunities.length} opportunities planned for the next 90 days.</span>
+          <span>{stages[2].opportunities.length} opportunities planned for Phase 3.</span>
         </li>
         {blockerCount > 0 && (
           <li className="flex items-start gap-2 text-sm text-text">
@@ -61,7 +61,7 @@ export default function PilotRoadmapHighlights({
         className="mt-3 w-full rounded-md border border-border bg-bg/20 px-3 py-2 text-sm hover:bg-panel2"
         onClick={() => nav(runId ? `/pilot-roadmap?runId=${runId}` : '/pilot-roadmap')}
       >
-        Open Pilot Roadmap
+        Open Agent Roadmap
       </button>
     </div>
   );

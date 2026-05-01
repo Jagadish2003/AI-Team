@@ -64,7 +64,7 @@ function BlueprintLink({ oppId }: { oppId: string }) {
       aria-label={`View Agentforce Blueprint for this opportunity`}
     >
       <Zap size={9} />
-      View Agentforce Blueprint
+      View Agentforce Blueprint →
     </button>
   );
 }
