@@ -16,6 +16,7 @@ from .db import get_all, get_one, kv_get, kv_set, run_get, upsert
 from .normalization_enrichment import enrich_ambiguous_mappings
 from .replay import replay_run as replay_run_
 from .roadmap_engine import build_roadmap
+from .routes_normalization import register_normalization_routes
 from .routes_sprint4_t1 import register_sprint4_t1_routes
 from .routes_sprint4_t2 import register_sprint4_t2_routes
 from .routes_sprint4_t3 import register_sprint4_t3_routes
@@ -34,6 +35,7 @@ register_sprint4_t3_routes(app)
 register_sprint4_t2_routes(app)
 register_sprint4_t1_routes(app)
 register_blueprint_routes(app)
+register_normalization_routes(app)
 
 origins = [
     o.strip()

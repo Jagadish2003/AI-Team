@@ -82,20 +82,15 @@ def _get_client() -> "SalesforceClient":
     instance_url = os.getenv("SF_INSTANCE_URL")
     access_token = os.getenv("SF_ACCESS_TOKEN")
 
-    # In live mode, we only want to check environment variables.
-    # If not in live mode, we can fall back to the cached file.
-    if not is_live() and (not instance_url or not access_token):
+    if not instance_url or not access_token:
         if ACCESS_TOKEN_PATH.exists():
             with open(ACCESS_TOKEN_PATH, encoding="utf-8") as f:
                 sf_token = json.load(f)
             instance_url = sf_token.get("instance_url")
             access_token = sf_token.get("access_token")
-
-    # If still not found and we are forced to generate:
-    if not instance_url or not access_token:
-        # Only attempt to generate if not explicitly forbidden by testing or lack of config
-        # This will be handled by the IngestError check below.
-        pass
+        else:
+            # If no env vars and no file, try generating (which also checks credentials)
+            access_token, instance_url = _generate_salesforce_token()
 
     # -----------------------------
     # 2. VALIDATION CHECK
