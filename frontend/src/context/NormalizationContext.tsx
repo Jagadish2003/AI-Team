@@ -1,9 +1,24 @@
-import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
-import { MappingRow, PermissionRequirement, ConfidenceExplanation } from '../types/normalization';
-import { fetchMappings, fetchConfidence, fetchPermissions } from '../services/staticApi';
+import React, {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useState,
+} from "react";
+import {
+  MappingRow,
+  PermissionRequirement,
+  ConfidenceExplanation,
+} from "../types/normalization";
+import {
+  fetchMappings,
+  fetchConfidence,
+  fetchPermissions,
+} from "../services/staticApi";
 
-export type Tab = 'MAPPED' | 'UNMAPPED' | 'AMBIGUOUS';
-type SortMode = 'Confidence High→Low' | 'Source A→Z';
+export type Tab = "MAPPED" | "UNMAPPED" | "AMBIGUOUS";
+type SortMode = "Confidence High→Low" | "Source A→Z";
 
 type NormalizationContextValue = {
   rows: MappingRow[];
@@ -42,14 +57,18 @@ type NormalizationContextValue = {
 
 const Ctx = createContext<NormalizationContextValue | null>(null);
 
-export function NormalizationProvider({ children }: { children: React.ReactNode }) {
+export function NormalizationProvider({
+  children,
+}: {
+  children: React.ReactNode;
+}) {
   const [rows, setRows] = useState<MappingRow[]>([]);
   const [confidence, setConfidence] = useState<ConfidenceExplanation>({
-    level: 'MEDIUM',
+    level: "MEDIUM",
     why: [],
     missingSignals: [],
-    nextAction: '',
-    recommendedNextSourceId: '',
+    nextAction: "",
+    recommendedNextSourceId: "",
   });
 
   const [permissions, setPermissions] = useState<PermissionRequirement[]>([]);
@@ -57,17 +76,20 @@ export function NormalizationProvider({ children }: { children: React.ReactNode 
   const [permissionsError, setPermissionsError] = useState<string | null>(null);
   const [permFetchCount, setPermFetchCount] = useState<number>(0);
 
-  const refetchPermissions = useCallback(() => setPermFetchCount(c => c + 1), []);
+  const refetchPermissions = useCallback(
+    () => setPermFetchCount((c) => c + 1),
+    [],
+  );
 
   // ✅ Load mappings + confidence from DB API
   useEffect(() => {
     fetchMappings()
       .then((data) => setRows(data))
-      .catch((e) => console.error('Failed to load mappings', e));
+      .catch((e) => console.error("Failed to load mappings", e));
 
     fetchConfidence()
       .then((data) => setConfidence(data))
-      .catch((e) => console.error('Failed to load confidence', e));
+      .catch((e) => console.error("Failed to load confidence", e));
   }, []);
 
   // ✅ Load permissions from DB API
@@ -83,7 +105,7 @@ export function NormalizationProvider({ children }: { children: React.ReactNode 
       })
       .catch((e) => {
         if (!alive) return;
-        setPermissionsError(e?.message ?? 'Failed to load permissions');
+        setPermissionsError(e?.message ?? "Failed to load permissions");
       })
       .finally(() => alive && setPermissionsLoading(false));
 
@@ -92,11 +114,11 @@ export function NormalizationProvider({ children }: { children: React.ReactNode 
     };
   }, [permFetchCount]);
 
-  const [activeTab, setActiveTab] = useState<Tab>('MAPPED');
-  const [search, setSearch] = useState('');
-  const [sourceFilter, setSourceFilter] = useState('All Sources');
-  const [entityFilter, setEntityFilter] = useState('All Entities');
-  const [sortMode, setSortMode] = useState<SortMode>('Confidence High→Low');
+  const [activeTab, setActiveTab] = useState<Tab>("MAPPED");
+  const [search, setSearch] = useState("");
+  const [sourceFilter, setSourceFilter] = useState("All Sources");
+  const [entityFilter, setEntityFilter] = useState("All Entities");
+  const [sortMode, setSortMode] = useState<SortMode>("Confidence High→Low");
   const [selectedRowId, setSelectedRowId] = useState<string | null>(null);
 
   // ✅ Auto select first row after rows load
@@ -107,22 +129,37 @@ export function NormalizationProvider({ children }: { children: React.ReactNode 
   }, [rows, selectedRowId]);
 
   const sources = useMemo(
-    () => ['All Sources', ...Array.from(new Set(rows.map(r => r.sourceSystem))).sort()],
-    [rows]
+    () => [
+      "All Sources",
+      ...Array.from(new Set(rows.map((r) => r.sourceSystem))).sort(),
+    ],
+    [rows],
   );
 
   const entities = useMemo(
-    () => ['All Entities', ...Array.from(new Set(rows.map(r => r.commonEntity))).sort()],
-    [rows]
+    () => [
+      "All Entities",
+      ...Array.from(new Set(rows.map((r) => r.commonEntity))).sort(),
+    ],
+    [rows],
   );
 
   const counts = useMemo(() => {
-    const activeSources = sourceFilter === 'All Sources' ? [] : sourceFilter.split(',');
-    const activeEntities = entityFilter === 'All Entities' ? [] : entityFilter.split(',');
+    const activeSources =
+      sourceFilter === "All Sources" ? [] : sourceFilter.split(",");
+    const activeEntities =
+      entityFilter === "All Entities" ? [] : entityFilter.split(",");
 
     const filtered = rows
-      .filter(r => activeSources.length === 0 || activeSources.includes(r.sourceSystem))
-      .filter(r => activeEntities.length === 0 || activeEntities.includes(r.commonEntity));
+      .filter(
+        (r) =>
+          activeSources.length === 0 || activeSources.includes(r.sourceSystem),
+      )
+      .filter(
+        (r) =>
+          activeEntities.length === 0 ||
+          activeEntities.includes(r.commonEntity),
+      );
 
     const c: Record<Tab, number> = {
       MAPPED: 0,
@@ -138,36 +175,51 @@ export function NormalizationProvider({ children }: { children: React.ReactNode 
   }, [rows, sourceFilter, entityFilter]);
 
   const selectedRow = useMemo(
-    () => rows.find(r => r.id === selectedRowId) ?? null,
-    [rows, selectedRowId]
+    () => rows.find((r) => r.id === selectedRowId) ?? null,
+    [rows, selectedRowId],
   );
 
   const relevantPermissions = useMemo(() => {
     if (!selectedRow) return [];
-    return permissions.filter(p => p.sourceSystem === selectedRow.sourceSystem);
+    return permissions.filter(
+      (p) => p.sourceSystem === selectedRow.sourceSystem,
+    );
   }, [permissions, selectedRow]);
 
   const filteredRows = useMemo(() => {
     const q = search.trim().toLowerCase();
-    const activeSources = sourceFilter === 'All Sources' ? [] : sourceFilter.split(',');
-    const activeEntities = entityFilter === 'All Entities' ? [] : entityFilter.split(',');
+    const activeSources =
+      sourceFilter === "All Sources" ? [] : sourceFilter.split(",");
+    const activeEntities =
+      entityFilter === "All Entities" ? [] : entityFilter.split(",");
 
     let list = rows
-      .filter(r => r.status === activeTab)
-      .filter(r => activeSources.length === 0 || activeSources.includes(r.sourceSystem))
-      .filter(r => activeEntities.length === 0 || activeEntities.includes(r.commonEntity))
+      .filter((r) => r.status === activeTab)
       .filter(
-        r =>
+        (r) =>
+          activeSources.length === 0 || activeSources.includes(r.sourceSystem),
+      )
+      .filter(
+        (r) =>
+          activeEntities.length === 0 ||
+          activeEntities.includes(r.commonEntity),
+      )
+      .filter(
+        (r) =>
           !q ||
           r.sourceField.toLowerCase().includes(q) ||
-          r.commonField.toLowerCase().includes(q)
+          r.commonField.toLowerCase().includes(q),
       );
 
-    if (sortMode === 'Confidence High→Low') {
-      const score = (c: string) => (c === 'HIGH' ? 3 : c === 'MEDIUM' ? 2 : 1);
-      list = list.slice().sort((a, b) => score(b.confidence) - score(a.confidence));
+    if (sortMode === "Confidence High→Low") {
+      const score = (c: string) => (c === "HIGH" ? 3 : c === "MEDIUM" ? 2 : 1);
+      list = list
+        .slice()
+        .sort((a, b) => score(b.confidence) - score(a.confidence));
     } else {
-      list = list.slice().sort((a, b) => a.sourceSystem.localeCompare(b.sourceSystem));
+      list = list
+        .slice()
+        .sort((a, b) => a.sourceSystem.localeCompare(b.sourceSystem));
     }
 
     return list;
@@ -227,7 +279,7 @@ export function NormalizationProvider({ children }: { children: React.ReactNode 
       filteredRows,
       selectedRow,
       relevantPermissions,
-    ]
+    ],
   );
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
@@ -236,7 +288,9 @@ export function NormalizationProvider({ children }: { children: React.ReactNode 
 export function useNormalizationContext() {
   const ctx = useContext(Ctx);
   if (!ctx) {
-    throw new Error('useNormalizationContext must be used inside NormalizationProvider');
+    throw new Error(
+      "useNormalizationContext must be used inside NormalizationProvider",
+    );
   }
   return ctx;
 }

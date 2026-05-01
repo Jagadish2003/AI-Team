@@ -11,7 +11,9 @@ from fastapi.middleware.cors import CORSMiddleware
 
 load_dotenv()
 
+from . import db
 from .db import get_all, get_one, kv_get, kv_set, run_get, upsert
+from .normalization_enrichment import enrich_ambiguous_mappings
 from .replay import replay_run as replay_run_
 from .roadmap_engine import build_roadmap
 from .routes_sprint4_t1 import register_sprint4_t1_routes
@@ -268,7 +270,9 @@ def list_mappings(run_id: str) -> List[Dict[str, Any]]:
         read_run(run_id)
     except KeyError:
         raise HTTPException(404, "run not found")
-    return get_all("mappings")
+
+    raw_mappings = get_all("mappings")
+    return enrich_ambiguous_mappings(run_id, raw_mappings, db)
 
 
 @app.get("/api/runs/{run_id}/opportunities", dependencies=[Depends(require_auth)])
