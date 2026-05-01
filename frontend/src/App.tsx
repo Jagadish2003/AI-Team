@@ -83,6 +83,10 @@ export default function App() {
                           element={<OpportunityReviewPage />}
                         />
                         <Route
+                          path="/pilot-roadmap"
+                          element={<PilotRoadmapPage />}
+                        />
+                        <Route
                           path="/agentforce-blueprint"
                           element={<BlueprintPage />}
                         />

@@ -40,34 +40,7 @@ import MappingTable from "../components/normalization/MappingTable";
 import FieldDetailsPanel from "../components/normalization/FieldDetailsPanel";
 import type { MappingRow, PermissionRequirement } from "../types/normalization";
 import type { Connector } from "../types/connector";
-
-// ── Issue 1 fix: stable source key registry ───────────────────────────────────
-//
-// Maps connector.id (stable, defined in codebase) to the sourceSystem string
-// used in MappingRow.sourceSystem and PermissionRequirement.sourceSystem.
-//
-// When a new connector is added, add its entry here.
-// Display name for rendering is taken from connector.name — never used for joins.
-
-const SOURCE_KEY_MAP: Record<string, string> = {
-  salesforce: "Salesforce",
-  servicenow: "ServiceNow",
-  jira: "Jira",
-  confluence: "Confluence",
-  slack: "Slack",
-  databricks: "Databricks",
-  microsoft_365: "Microsoft 365",
-  github: "GitHub",
-  azure_devops: "Azure DevOps",
-  gitlab: "GitLab",
-  datadog: "Datadog",
-  splunk: "Splunk",
-  d365: "Dynamics 365",
-};
-
-function sourceKeyForConnector(connectorId: string): string {
-  return SOURCE_KEY_MAP[connectorId] ?? connectorId;
-}
+import { sourceKeyForConnector, zeroSignalReason, ZERO_SIGNAL_LABELS } from "../utils/sourceKeys";
 
 // ── Source health derivation — Issue 1 fix ────────────────────────────────────
 
@@ -491,11 +464,16 @@ export default function SourceIntelligencePage() {
                     <div className="text-sm font-semibold text-text">
                       {s.displayName}
                     </div>
-                    {s.signalCount === 0 && (
-                      <div className="text-[10px] text-amber-400 mt-0.5">
-                        No signals ingested
-                      </div>
-                    )}
+                    {s.signalCount === 0 && (() => {
+                      const key = zeroSignalReason(s.permState, s.ambiguousCount, s.unmappedCount);
+                      const { label, color } = ZERO_SIGNAL_LABELS[key];
+                      return (
+                        <div className={`text-[10px] mt-0.5 ${color === 'amber' ? 'text-amber-400' : 'text-muted'}`}
+                          data-testid={`zero-signal-${s.connectorId}`}>
+                          {label}
+                        </div>
+                      );
+                    })()}
                   </div>
 
                   {/* Signal bar */}
