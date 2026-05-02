@@ -25,6 +25,7 @@ Usage:
         --architect    runs/architect_assessment.json \\
         --report-path  runs/sf32_calibration_report.json
 """
+
 from __future__ import annotations
 
 import argparse
@@ -60,18 +61,19 @@ ARCHITECT_TEMPLATE = {
             "rank": 1,
             "label": "Short description of opportunity (e.g. 'Case routing is manual')",
             "detector_match": "HANDOFF_FRICTION",  # best-match detector ID or null
-            "architect_impact": 8,                 # 1-10
-            "architect_effort": 3,                 # 1-10
-            "is_real": True,                       # would you actually pilot this?
-            "notes": "optional free text"
+            "architect_impact": 8,  # 1-10
+            "architect_effort": 3,  # 1-10
+            "is_real": True,  # would you actually pilot this?
+            "notes": "optional free text",
         },
-    ]
+    ],
 }
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Calibration gate evaluation
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 def evaluate_overlap(
     algo_top5: List[Dict],
@@ -86,9 +88,11 @@ def evaluate_overlap(
         unmatched_ids   list   — algorithm top 5 not in architect list
     """
     algo_ids = [o.get("detector_id", "") for o in algo_top5]
-    arch_ids = [a.get("detector_match", "") for a in arch_top5 if a.get("detector_match")]
+    arch_ids = [
+        a.get("detector_match", "") for a in arch_top5 if a.get("detector_match")
+    ]
 
-    matched   = [aid for aid in algo_ids if aid in arch_ids]
+    matched = [aid for aid in algo_ids if aid in arch_ids]
     unmatched = [aid for aid in algo_ids if aid not in arch_ids]
     return len(matched), matched, unmatched
 
@@ -120,11 +124,13 @@ def check_false_positives(
     }
     top5_ids = {o.get("detector_id", "") for o in algo_top5}
 
-    gate_fps        = [did for did in false_positive_detectors if did in top5_ids]
+    gate_fps = [did for did in false_positive_detectors if did in top5_ids]
     review_later_fps = []
     if all_algo_opps:
         non_top5_ids = {o.get("detector_id", "") for o in all_algo_opps} - top5_ids
-        review_later_fps = [did for did in false_positive_detectors if did in non_top5_ids]
+        review_later_fps = [
+            did for did in false_positive_detectors if did in non_top5_ids
+        ]
 
     return gate_fps, review_later_fps
 
@@ -138,9 +144,7 @@ def check_direction(
     Returns list of discrepancies.
     """
     arch_by_detector = {
-        a["detector_match"]: a
-        for a in arch_top5
-        if a.get("detector_match")
+        a["detector_match"]: a for a in arch_top5 if a.get("detector_match")
     }
     discrepancies = []
     for opp in algo_top5:
@@ -164,28 +168,31 @@ def check_direction(
         effort_gap = abs(algo_effort - arch_effort)
 
         if impact_gap > 3 or effort_gap > 3:
-            discrepancies.append({
-                "detector_id":        did,
-                "algo_impact":        algo_impact,
-                "arch_impact":        arch_impact,
-                "impact_gap":         impact_gap,
-                "impact_gap_ok":      impact_gap <= 3,
-                "algo_effort":        algo_effort,
-                "arch_effort":        arch_effort,
-                "effort_gap":         effort_gap,
-                "effort_gap_ok":      effort_gap <= 3,
-                "direction_formula":  (
-                    "abs(impact_algo - impact_arch) <= 3 "
-                    "AND abs(effort_algo - effort_arch) <= 3"
-                ),
-                "severity":           "HIGH" if max(impact_gap, effort_gap) > 4 else "MEDIUM",
-            })
+            discrepancies.append(
+                {
+                    "detector_id": did,
+                    "algo_impact": algo_impact,
+                    "arch_impact": arch_impact,
+                    "impact_gap": impact_gap,
+                    "impact_gap_ok": impact_gap <= 3,
+                    "algo_effort": algo_effort,
+                    "arch_effort": arch_effort,
+                    "effort_gap": effort_gap,
+                    "effort_gap_ok": effort_gap <= 3,
+                    "direction_formula": (
+                        "abs(impact_algo - impact_arch) <= 3 "
+                        "AND abs(effort_algo - effort_arch) <= 3"
+                    ),
+                    "severity": "HIGH" if max(impact_gap, effort_gap) > 4 else "MEDIUM",
+                }
+            )
     return discrepancies
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Adjustment recommendations
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 def _analyse_impact_bias(algo_opps: List[Dict]) -> Optional[str]:
     """
@@ -202,11 +209,8 @@ def _analyse_impact_bias(algo_opps: List[Dict]) -> Optional[str]:
             f"Systematic low impact bias detected (avg={avg_impact:.1f}). "
             "All opportunities score ≤ 4. Review _volume_pts() bands — the "
             "current fixture org has ~300 cases/90d = ~23/week which maps to "
-            "volume_pts=2.0 (the floor). Consider lowering the volume_pts "
-            "threshold bands so that 20-50 weekly records scores 4-5 pts "
-            "rather than 2.0. Also review _W_VOLUME weight (currently 0.30) — "
-            "if volume dominates and most orgs have moderate volume, the "
-            "resulting impact will always cluster low."
+            "volume_pts=3.5 (T41-6). Consider lowering the volume_pts "
+            "threshold bands further if most orgs have moderate volume."
         )
     if avg_impact > 8.0:
         return (
@@ -239,52 +243,54 @@ def _build_org_readiness_checklist(inputs: Dict[str, Any]) -> List[Dict]:
     Checks inputs dict (from runner org_context) for known signals.
     Each item has: check, current_value, minimum, soql, status.
     """
-    total_cases   = inputs.get("sf_total_cases_90d", 0)
+    total_cases = inputs.get("sf_total_cases_90d", 0)
     owner_changes = inputs.get("sf_owner_changes_90d", 0)
-    active_flows  = inputs.get("sf_active_flows", 0)
+    active_flows = inputs.get("sf_active_flows", 0)
     pending_approvals = inputs.get("sf_pending_approvals", 0)
-    named_creds   = inputs.get("sf_named_credentials", 0)
+    named_creds = inputs.get("sf_named_credentials", 0)
 
     def _status(current, minimum):
-        if current == 0:     return "❌ missing"
-        if current < minimum: return "⚠  low"
+        if current == 0:
+            return "❌ missing"
+        if current < minimum:
+            return "⚠  low"
         return "✅ ok"
 
     return [
         {
-            "check":         "Cases in last 90 days",
+            "check": "Cases in last 90 days",
             "current_value": total_cases,
-            "minimum":       50,
-            "status":        _status(total_cases, 50),
-            "soql":          "SELECT COUNT(Id) FROM Case WHERE CreatedDate = LAST_N_DAYS:90",
+            "minimum": 50,
+            "status": _status(total_cases, 50),
+            "soql": "SELECT COUNT(Id) FROM Case WHERE CreatedDate = LAST_N_DAYS:90",
         },
         {
-            "check":         "CaseHistory owner-change records",
+            "check": "CaseHistory owner-change records",
             "current_value": owner_changes,
-            "minimum":       20,
-            "status":        _status(owner_changes, 20),
-            "soql":          "SELECT COUNT(Id) FROM CaseHistory WHERE Field='Owner' AND CreatedDate = LAST_N_DAYS:90",
+            "minimum": 20,
+            "status": _status(owner_changes, 20),
+            "soql": "SELECT COUNT(Id) FROM CaseHistory WHERE Field='Owner' AND CreatedDate = LAST_N_DAYS:90",
         },
         {
-            "check":         "Active AutoLaunchedFlows on Case",
+            "check": "Active AutoLaunchedFlows on Case",
             "current_value": active_flows,
-            "minimum":       2,
-            "status":        _status(active_flows, 2),
-            "soql":          "SELECT COUNT() FROM FlowVersionView WHERE Status='Active' AND ProcessType='AutoLaunchedFlow' LIMIT 200  [Tooling API]",
+            "minimum": 2,
+            "status": _status(active_flows, 2),
+            "soql": "SELECT COUNT() FROM FlowVersionView WHERE Status='Active' AND ProcessType='AutoLaunchedFlow' LIMIT 200  [Tooling API]",
         },
         {
-            "check":         "Pending approval records",
+            "check": "Pending approval records",
             "current_value": pending_approvals,
-            "minimum":       5,
-            "status":        _status(pending_approvals, 5),
-            "soql":          "SELECT COUNT(Id) FROM ProcessInstance WHERE Status='Pending'",
+            "minimum": 5,
+            "status": _status(pending_approvals, 5),
+            "soql": "SELECT COUNT(Id) FROM ProcessInstance WHERE Status='Pending'",
         },
         {
-            "check":         "Named Credentials",
+            "check": "Named Credentials",
             "current_value": named_creds,
-            "minimum":       1,
-            "status":        _status(named_creds, 1),
-            "soql":          "SELECT DeveloperName FROM NamedCredential LIMIT 20  [Tooling API]",
+            "minimum": 1,
+            "status": _status(named_creds, 1),
+            "soql": "SELECT DeveloperName FROM NamedCredential LIMIT 20  [Tooling API]",
         },
     ]
 
@@ -297,9 +303,7 @@ def _build_summary_table(
     Good-to-have A: one-glance comparison table for calibration meetings.
     Returns a list of rows with algo and architect data side by side.
     """
-    arch_by_detector = {
-        a.get("detector_match", ""): a for a in arch_top5
-    }
+    arch_by_detector = {a.get("detector_match", ""): a for a in arch_top5}
     rows = []
     for i, opp in enumerate(algo_top5):
         did = opp.get("detector_id", "")
@@ -307,24 +311,32 @@ def _build_summary_table(
         algo_net = opp.get("impact", 0) - opp.get("effort", 0)
         arch_impact = arch.get("architect_impact")
         arch_effort = arch.get("architect_effort")
-        arch_net = (arch_impact - arch_effort) if (arch_impact and arch_effort) else None
-        rows.append({
-            "rank":           i + 1,
-            "detector_id":    did,
-            "algo_impact":    opp.get("impact"),
-            "algo_effort":    opp.get("effort"),
-            "algo_net":       algo_net,
-            "algo_confidence":opp.get("confidence"),
-            "algo_tier":      opp.get("tier"),
-            "arch_label":     arch.get("label", ""),
-            "arch_impact":    arch_impact,
-            "arch_effort":    arch_effort,
-            "arch_net":       arch_net,
-            "arch_is_real":   arch.get("is_real"),
-            "impact_delta":   abs(opp.get("impact", 0) - arch_impact) if arch_impact else None,
-            "effort_delta":   abs(opp.get("effort", 0) - arch_effort) if arch_effort else None,
-            "matched":        bool(arch),
-        })
+        arch_net = (
+            (arch_impact - arch_effort) if (arch_impact and arch_effort) else None
+        )
+        rows.append(
+            {
+                "rank": i + 1,
+                "detector_id": did,
+                "algo_impact": opp.get("impact"),
+                "algo_effort": opp.get("effort"),
+                "algo_net": algo_net,
+                "algo_confidence": opp.get("confidence"),
+                "algo_tier": opp.get("tier"),
+                "arch_label": arch.get("label", ""),
+                "arch_impact": arch_impact,
+                "arch_effort": arch_effort,
+                "arch_net": arch_net,
+                "arch_is_real": arch.get("is_real"),
+                "impact_delta": abs(opp.get("impact", 0) - arch_impact)
+                if arch_impact
+                else None,
+                "effort_delta": abs(opp.get("effort", 0) - arch_effort)
+                if arch_effort
+                else None,
+                "matched": bool(arch),
+            }
+        )
     return rows
 
 
@@ -343,107 +355,125 @@ def generate_recommendations(
     # Impact bias
     bias_note = _analyse_impact_bias(algo_opps)
     if bias_note:
-        recommendations.append({
-            "type":        "scorer_weight",
-            "severity":    "HIGH",
-            "target":      "scorer.py _volume_pts() bands + _W_VOLUME",
-            "observation": bias_note,
-            "before":      {
-                "_volume_pts_bands": {"<50/week": 2.0, "<200/week": 5.0,
-                                      "<500/week": 7.0, ">=500/week": 9.0},
-                "_W_VOLUME": 0.30,
-            },
-            "suggested_after": {
-                "_volume_pts_bands": {"<20/week": 3.0, "<100/week": 5.5,
-                                      "<300/week": 7.5, ">=300/week": 9.0},
-                "_W_VOLUME": 0.35,
-                "_W_FRICTION": 0.30,
-            },
-            "rationale": (
-                "Lowering volume thresholds means a dev org with 20-30 cases/week "
-                "scores 3.0 pts instead of 2.0. Most enterprise Salesforce orgs "
-                "have 100-500 cases/week — these would score 5.5-7.5. "
-                "This brings expected impact into the 4-7 range for typical orgs. "
-                "OVERFIT GUARD: after adjusting, simulate a mid-size org "
-                "(200 cases/week) through the fixture — confirm it scores 5-7 "
-                "impact, not 9-10. Bands calibrated only for a dev org will "
-                "inflate scores on real customer orgs and destroy credibility."
-            ),
-            "allowed": True,
-        })
+        recommendations.append(
+            {
+                "type": "scorer_weight",
+                "severity": "HIGH",
+                "target": "scorer.py _volume_pts() bands + _W_VOLUME",
+                "observation": bias_note,
+                "before": {
+                    "_volume_pts_bands": {
+                        "<50/week": 2.0,
+                        "<200/week": 5.0,
+                        "<500/week": 7.0,
+                        ">=500/week": 9.0,
+                    },
+                    "_W_VOLUME": 0.30,
+                },
+                "suggested_after": {
+                    "_volume_pts_bands": {
+                        "<20/week": 3.0,
+                        "<100/week": 5.5,
+                        "<300/week": 7.5,
+                        ">=300/week": 9.0,
+                    },
+                    "_W_VOLUME": 0.35,
+                    "_W_FRICTION": 0.30,
+                },
+                "rationale": (
+                    "Lowering volume thresholds means a dev org with 20-30 cases/week "
+                    "scores 3.0 pts instead of 2.0. Most enterprise Salesforce orgs "
+                    "have 100-500 cases/week — these would score 5.5-7.5. "
+                    "This brings expected impact into the 4-7 range for typical orgs. "
+                    "OVERFIT GUARD: after adjusting, simulate a mid-size org "
+                    "(200 cases/week) through the fixture — confirm it scores 5-7 "
+                    "impact, not 9-10. Bands calibrated only for a dev org will "
+                    "inflate scores on real customer orgs and destroy credibility."
+                ),
+                "allowed": True,
+            }
+        )
 
     # False positives
     # false_positives here is the gate_fps list (top-5 only)
-    for fp in (false_positives or []):
-        recommendations.append({
-            "type":        "detector_threshold",
-            "severity":    "HIGH",
-            "target":      f"detectors/{fp.lower()}.py — threshold value",
-            "observation": (
-                f"{fp} fired but architect rated this as NOT real / not worth doing. "
-                "This is a false positive. Raise the threshold so this org configuration "
-                "does not trigger the detector."
-            ),
-            "before":      "current threshold (read from detectors file)",
-            "suggested_after": "raise by 20-30% — document the specific live org values that prompted this",
-            "rationale":   "Eliminating false positives is the highest-priority calibration action.",
-            "allowed": True,
-        })
+    for fp in false_positives or []:
+        recommendations.append(
+            {
+                "type": "detector_threshold",
+                "severity": "HIGH",
+                "target": f"detectors/{fp.lower()}.py — threshold value",
+                "observation": (
+                    f"{fp} fired but architect rated this as NOT real / not worth doing. "
+                    "This is a false positive. Raise the threshold so this org configuration "
+                    "does not trigger the detector."
+                ),
+                "before": "current threshold (read from detectors file)",
+                "suggested_after": "raise by 20-30% — document the specific live org values that prompted this",
+                "rationale": "Eliminating false positives is the highest-priority calibration action.",
+                "allowed": True,
+            }
+        )
 
     # Direction discrepancies
     for disc in direction_issues:
         did = disc["detector_id"]
         if disc["impact_gap"] > 3:
-            recommendations.append({
-                "type":        "scorer_factor",
-                "severity":    disc["severity"],
-                "target":      f"scorer.py _impact_factors() for {did}",
-                "observation": (
-                    f"{did}: algorithm impact={disc['algo_impact']}, "
-                    f"architect says {disc['arch_impact']} (gap={disc['impact_gap']}). "
-                    "Impact factor mapping does not match expert judgment."
-                ),
-                "before":      f"current _impact_factors({did}) mapping",
-                "suggested_after": (
-                    f"Review which of volume/friction/customer/revenue/external pts "
-                    f"are under- or over-estimated for {did}. Adjust the relevant "
-                    f"sub-function (e.g. _friction_pts_handoff) bands."
-                ),
-                "rationale": "Architect impact estimate is ground truth for calibration.",
-                "allowed": True,
-            })
+            recommendations.append(
+                {
+                    "type": "scorer_factor",
+                    "severity": disc["severity"],
+                    "target": f"scorer.py _impact_factors() for {did}",
+                    "observation": (
+                        f"{did}: algorithm impact={disc['algo_impact']}, "
+                        f"architect says {disc['arch_impact']} (gap={disc['impact_gap']}). "
+                        "Impact factor mapping does not match expert judgment."
+                    ),
+                    "before": f"current _impact_factors({did}) mapping",
+                    "suggested_after": (
+                        f"Review which of volume/friction/customer/revenue/external pts "
+                        f"are under- or over-estimated for {did}. Adjust the relevant "
+                        f"sub-function (e.g. _friction_pts_handoff) bands."
+                    ),
+                    "rationale": "Architect impact estimate is ground truth for calibration.",
+                    "allowed": True,
+                }
+            )
 
     # Borderline thresholds
     borderline = _analyse_threshold_coverage(algo_opps)
     for note in borderline:
-        recommendations.append({
-            "type":        "detector_threshold",
-            "severity":    "LOW",
-            "target":      "threshold — see note",
-            "observation": note,
-            "before":      "current threshold",
-            "suggested_after": "validate live org first; raise by 10% only if architect confirms not real",
-            "rationale":   "Borderline fires should be validated before adjusting.",
-            "allowed": True,
-        })
+        recommendations.append(
+            {
+                "type": "detector_threshold",
+                "severity": "LOW",
+                "target": "threshold — see note",
+                "observation": note,
+                "before": "current threshold",
+                "suggested_after": "validate live org first; raise by 10% only if architect confirms not real",
+                "rationale": "Borderline fires should be validated before adjusting.",
+                "allowed": True,
+            }
+        )
 
     # PM-05 NC scan note (from SF-3.2 context)
-    recommendations.append({
-        "type":        "pm05_note",
-        "severity":    "INFO",
-        "target":      "INTEGRATION_CONCENTRATION detector + named_credential_flow_refs",
-        "observation": (
-            "PM-05 (Named Credential → Flow scan) may be empty even if Named "
-            "Credentials exist. Flow metadata shape differs by Flow type and "
-            "packaging. Treat D5 as 'may not fire in all orgs' until the exact "
-            "metadata path(s) are confirmed in the target org. "
-            "Do not adjust D5 threshold based on a single org observation."
-        ),
-        "before":      "no change",
-        "suggested_after": "no change — document observed metadata path for SF-4.3",
-        "rationale":   "SF-1.2 flagged this risk. Confirmed as known variance point.",
-        "allowed": True,
-    })
+    recommendations.append(
+        {
+            "type": "pm05_note",
+            "severity": "INFO",
+            "target": "INTEGRATION_CONCENTRATION detector + named_credential_flow_refs",
+            "observation": (
+                "PM-05 (Named Credential → Flow scan) may be empty even if Named "
+                "Credentials exist. Flow metadata shape differs by Flow type and "
+                "packaging. Treat D5 as 'may not fire in all orgs' until the exact "
+                "metadata path(s) are confirmed in the target org. "
+                "Do not adjust D5 threshold based on a single org observation."
+            ),
+            "before": "no change",
+            "suggested_after": "no change — document observed metadata path for SF-4.3",
+            "rationale": "SF-1.2 flagged this risk. Confirmed as known variance point.",
+            "allowed": True,
+        }
+    )
 
     return recommendations
 
@@ -451,6 +481,7 @@ def generate_recommendations(
 # ─────────────────────────────────────────────────────────────────────────────
 # Main calibration run
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 def run_calibration(
     run_output: Dict[str, Any],
@@ -491,6 +522,7 @@ def run_calibration(
     # Production ranking — shared utility (SF-3.3). Single definition reused across
     # calibrator.py, track_a_adapter.py, and runner.py. See calibration/ranking.py.
     from .ranking import rank_opportunities
+
     algo_ranked = rank_opportunities(opps)
     algo_top5 = algo_ranked[:5]
 
@@ -498,33 +530,37 @@ def run_calibration(
     score_debug_summary = []
     for opp in algo_ranked:
         sd = opp.get("score_debug", {})
-        score_debug_summary.append({
-            "detector_id":    opp.get("detector_id", ""),
-            "impact":         opp.get("impact", 0),
-            "effort":         opp.get("effort", 0),
-            "confidence":     opp.get("confidence", ""),
-            "tier":           opp.get("tier", ""),
-            "proxy_ratio":    sd.get("proxy_ratio", 0),
-            "impact_factors": sd.get("impact_factors", {}),
-            "effort_factors": sd.get("effort_factors", {}),
-        })
+        score_debug_summary.append(
+            {
+                "detector_id": opp.get("detector_id", ""),
+                "impact": opp.get("impact", 0),
+                "effort": opp.get("effort", 0),
+                "confidence": opp.get("confidence", ""),
+                "tier": opp.get("tier", ""),
+                "proxy_ratio": sd.get("proxy_ratio", 0),
+                "impact_factors": sd.get("impact_factors", {}),
+                "effort_factors": sd.get("effort_factors", {}),
+            }
+        )
 
     # Impact bias analysis (always run)
     impact_bias = _analyse_impact_bias(algo_ranked)
     threshold_coverage = _analyse_threshold_coverage(algo_ranked)
 
     # Architect comparison (only if assessment provided)
-    overlap_count   = 0
-    matched_ids     = []
-    unmatched_ids   = []
+    overlap_count = 0
+    matched_ids = []
+    unmatched_ids = []
     false_positives = []
-    direction_issues= []
-    gate_passed     = None
-    arch_top5       = []
+    direction_issues = []
+    gate_passed = None
+    arch_top5 = []
 
     if architect_assessment:
         arch_top5 = architect_assessment.get("top_5", [])
-        overlap_count, matched_ids, unmatched_ids = evaluate_overlap(algo_top5, arch_top5)
+        overlap_count, matched_ids, unmatched_ids = evaluate_overlap(
+            algo_top5, arch_top5
+        )
         false_positives, review_later_fps = check_false_positives(
             algo_top5, arch_top5, algo_ranked
         )
@@ -540,39 +576,43 @@ def run_calibration(
     )
 
     # Good-to-have A: one-glance calibration summary table
-    summary_table = _build_summary_table(algo_top5, arch_top5 if architect_assessment else [])
+    summary_table = _build_summary_table(
+        algo_top5, arch_top5 if architect_assessment else []
+    )
 
     # Good-to-have B: minimum org state checklist with verification queries
-    org_readiness_checklist = _build_org_readiness_checklist(run_output.get("inputs", {}))
+    org_readiness_checklist = _build_org_readiness_checklist(
+        run_output.get("inputs", {})
+    )
 
     return {
-        "sf32_gate_passed":     gate_passed,    # None if no architect assessment
-        "report_time":          report_time,
-        "org_id":               run_output.get("orgId", run_output.get("org_id", "")),
-        "run_id":               run_output.get("runId", run_output.get("run_id", "")),
-        "mode":                 run_output.get("mode", ""),
+        "sf32_gate_passed": gate_passed,  # None if no architect assessment
+        "report_time": report_time,
+        "org_id": run_output.get("orgId", run_output.get("org_id", "")),
+        "run_id": run_output.get("runId", run_output.get("run_id", "")),
+        "mode": run_output.get("mode", ""),
         "calibration_summary_table": summary_table,
-        "org_readiness_checklist":   org_readiness_checklist,
+        "org_readiness_checklist": org_readiness_checklist,
         "algo_top5": [
             {
-                "rank":       i + 1,
-                "detector_id":o.get("detector_id", ""),
-                "impact":     o.get("impact", 0),
-                "effort":     o.get("effort", 0),
+                "rank": i + 1,
+                "detector_id": o.get("detector_id", ""),
+                "impact": o.get("impact", 0),
+                "effort": o.get("effort", 0),
                 "confidence": o.get("confidence", ""),
-                "tier":       o.get("tier", ""),
+                "tier": o.get("tier", ""),
             }
             for i, o in enumerate(algo_top5)
         ],
-        "score_debug_summary":  score_debug_summary,
+        "score_debug_summary": score_debug_summary,
         "calibration_gate": {
-            "overlap_count":         overlap_count,
-            "matched_ids":           matched_ids,
-            "unmatched_ids":         unmatched_ids,
-            "false_positives_top5":  false_positives,     # gate-blocking
+            "overlap_count": overlap_count,
+            "matched_ids": matched_ids,
+            "unmatched_ids": unmatched_ids,
+            "false_positives_top5": false_positives,  # gate-blocking
             "false_positives_other": review_later_fps if architect_assessment else [],
-            "direction_issues":      direction_issues,
-            "gate_passed":           gate_passed,
+            "direction_issues": direction_issues,
+            "gate_passed": gate_passed,
             "gate_rule": (
                 "3 of top 5 overlap "
                 "AND zero FPs in algo top 5 (FPs outside top 5 are logged, not blocking). "
@@ -583,20 +623,28 @@ def run_calibration(
                 "then (impact - effort) desc, then effort asc"
             ),
         },
-        "impact_bias_note":     impact_bias,
-        "borderline_thresholds":threshold_coverage,
-        "recommendations":      recommendations,
-        "adjustments_log":      [],   # filled by team during calibration session
-        "summary":              _build_summary(
-            gate_passed, overlap_count, false_positives,
-            direction_issues, recommendations, architect_assessment is not None
+        "impact_bias_note": impact_bias,
+        "borderline_thresholds": threshold_coverage,
+        "recommendations": recommendations,
+        "adjustments_log": [],  # filled by team during calibration session
+        "summary": _build_summary(
+            gate_passed,
+            overlap_count,
+            false_positives,
+            direction_issues,
+            recommendations,
+            architect_assessment is not None,
         ),
     }
 
 
 def _build_summary(
-    gate_passed, overlap_count, false_positives,
-    direction_issues, recommendations, has_architect
+    gate_passed,
+    overlap_count,
+    false_positives,
+    direction_issues,
+    recommendations,
+    has_architect,
 ) -> str:
     if not has_architect:
         return (
@@ -618,6 +666,7 @@ def _build_summary(
 # CLI
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 def main():
     logging.basicConfig(level=logging.INFO, format="%(levelname)s  %(message)s")
 
@@ -636,20 +685,22 @@ def main():
         ),
     )
     parser.add_argument(
-        "--run-output", required=True,
-        help="Path to JSON output from runner.py (--output flag)"
+        "--run-output",
+        required=True,
+        help="Path to JSON output from runner.py (--output flag)",
     )
     parser.add_argument(
-        "--architect", default=None,
-        help="Path to architect_assessment.json (optional — if omitted runs analysis-only)"
+        "--architect",
+        default=None,
+        help="Path to architect_assessment.json (optional — if omitted runs analysis-only)",
     )
     parser.add_argument(
-        "--report-path", default=None,
-        help="Write calibration report JSON to this path"
+        "--report-path", default=None, help="Write calibration report JSON to this path"
     )
     parser.add_argument(
-        "--write-template", default=None,
-        help="Write architect_assessment_template.json to this path and exit"
+        "--write-template",
+        default=None,
+        help="Write architect_assessment_template.json to this path and exit",
     )
     args = parser.parse_args()
 
@@ -659,7 +710,9 @@ def main():
             json.dumps(ARCHITECT_TEMPLATE, indent=2), encoding="utf-8"
         )
         print(f"Template written to {args.write_template}")
-        print("Share with the architect BEFORE running the algorithm against their org.")
+        print(
+            "Share with the architect BEFORE running the algorithm against their org."
+        )
         return 0
 
     run_output_path = Path(args.run_output)
@@ -713,7 +766,9 @@ def main():
         print()
         print(f"Recommendations ({len(report['recommendations'])}):")
         for i, rec in enumerate(report["recommendations"], 1):
-            sev_icon = {"HIGH": "🔴", "MEDIUM": "🟡", "LOW": "🟢", "INFO": "ℹ"}.get(rec["severity"], "?")
+            sev_icon = {"HIGH": "🔴", "MEDIUM": "🟡", "LOW": "🟢", "INFO": "ℹ"}.get(
+                rec["severity"], "?"
+            )
             print(f"  {i}. {sev_icon} [{rec['type']}] {rec['target']}")
 
     if args.report_path:
