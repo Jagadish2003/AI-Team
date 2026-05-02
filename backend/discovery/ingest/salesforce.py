@@ -82,36 +82,43 @@ def _get_client() -> "SalesforceClient":
     instance_url = os.getenv("SF_INSTANCE_URL")
     access_token = os.getenv("SF_ACCESS_TOKEN")
 
-    # In live mode, we only want to check environment variables.
-    # If they are missing, we fail immediately to satisfy test expectations.
-    if is_live() and (not instance_url or not access_token):
-        raise IngestError(
-            "Live mode requires valid SF_INSTANCE_URL and SF_ACCESS_TOKEN. "
-            "Set INGEST_MODE=offline to run without credentials."
-        )
-
     # -----------------------------
-    # 2. FALLBACK TO FILE OR GENERATION (if still missing)
+    # 2. FALLBACK TO FILE OR GENERATION (if missing from env)
     # -----------------------------
     if not instance_url or not access_token:
         if ACCESS_TOKEN_PATH.exists():
-            with open(ACCESS_TOKEN_PATH, encoding="utf-8") as f:
-                sf_token = json.load(f)
-            instance_url = sf_token.get("instance_url")
-            access_token = sf_token.get("access_token")
-        else:
+            try:
+                with open(ACCESS_TOKEN_PATH, encoding="utf-8") as f:
+                    sf_token = json.load(f)
+                instance_url = instance_url or sf_token.get("instance_url")
+                access_token = access_token or sf_token.get("access_token")
+            except Exception as e:
+                logger.warning(f"Failed to read Salesforce token file: {e}")
+
+        if not instance_url or not access_token:
             # Try generating (which also checks credentials)
-            access_token, instance_url = _generate_salesforce_token()
+            try:
+                gen_token, gen_url = _generate_salesforce_token()
+                instance_url = instance_url or gen_url
+                access_token = access_token or gen_token
+            except Exception as e:
+                # If we are in live mode and everything failed, we must raise.
+                if is_live():
+                    raise IngestError(
+                        f"Live mode requires valid SF_INSTANCE_URL and SF_ACCESS_TOKEN. "
+                        f"Fallback generation also failed: {e}"
+                    ) from e
 
     # -----------------------------
     # 3. FINAL VALIDATION
     # -----------------------------
     if not instance_url or not access_token:
-        raise IngestError(
-            "Could not find or generate Salesforce credentials. "
-            "Check SF_INSTANCE_URL and SF_ACCESS_TOKEN env vars."
-        )
-
+        if is_live():
+            raise IngestError(
+                "Live mode requires valid SF_INSTANCE_URL and SF_ACCESS_TOKEN. "
+                "Set INGEST_MODE=offline to run without credentials."
+            )
+        return None
     # -----------------------------
     # 3. TOKEN EXPIRY CHECK
     # -----------------------------

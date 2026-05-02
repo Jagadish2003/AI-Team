@@ -14,7 +14,9 @@ export default function DiscoveryStartBar({
   recommended,
   canStart,
   onStart,
-  onUpload,
+  // T41-8: onUpload removed — file upload is now in the Integration Hub
+  // right panel (SourceConfigPanel). Prop kept for backward compat only.
+  onUpload: _onUpload,
 }: {
   confidence: Confidence;
   recommendedReadyCount: number;
@@ -22,7 +24,8 @@ export default function DiscoveryStartBar({
   recommended: Connector[];
   canStart: boolean;
   onStart: () => void;
-  onUpload: () => void;
+  /** @deprecated T41-8: use SourceConfigPanel in Integration Hub right panel */
+  onUpload?: () => void;
 }) {
   const step = confidence.toLowerCase();
   const isLow = step === 'low';
@@ -74,12 +77,8 @@ export default function DiscoveryStartBar({
 
         <div className="mt-2 flex flex-wrap items-center justify-between gap-4">
           <div className="flex flex-wrap items-center gap-3">
-            <button
-              onClick={onUpload}
-              className="rounded-md bg-buttonbg px-4 py-2 text-sm font-medium text-text shadow-sm transition-all hover:bg-panel"
-            >
-              Upload Files Instead
-            </button>
+            {/* T41-8: "Upload Files Instead" button removed — upload is in
+                the Integration Hub right panel (SourceConfigPanel). */}
 
             <div className="flex items-center gap-2 rounded-md border border-slate-400 px-3 py-1.5 text-sm">
               {recommended.map((connector, index) => {
