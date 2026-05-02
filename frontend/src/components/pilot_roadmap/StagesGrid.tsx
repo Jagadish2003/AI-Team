@@ -86,15 +86,15 @@ export default function StagesGrid({ stages, onOpenReview }: Props) {
   );
 
   return (
-    <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
+    <div className="grid grid-cols-1 gap-4 lg:h-full lg:min-h-0 lg:grid-cols-3">
       {stages.map((s) => {
         const { phase, description } = phaseLabel(s.id);
         const subtitle = phaseSubtitle(s);
 
         return (
-          <div key={s.id} className="space-y-2">
+          <div key={s.id} className="flex min-h-0 flex-col">
             {/* Phase heading replacing 30/60/90 */}
-            <div className="text-center" data-testid={`phase-heading-${s.id}`}>
+            <div className="shrink-0 pb-2 text-center" data-testid={`phase-heading-${s.id}`}>
               <div className="text-sm font-bold uppercase tracking-wide text-muted">
                 {phase} — {description}
               </div>
@@ -106,15 +106,17 @@ export default function StagesGrid({ stages, onOpenReview }: Props) {
             {/* Issue 1 fix: pass renderBlueprintLink as render prop.
                 StageCard calls it with each oppId and renders the result
                 INSIDE the opportunity row button — card-bound. */}
-            <StageCard
-              stage={s}
-              onOpenReview={onOpenReview}
-              renderBlueprintLink={
-                salesforceConnected
-                  ? (oppId) => <BlueprintLink oppId={oppId} />
-                  : undefined
-              }
-            />
+            <div className="min-h-0 flex-1">
+              <StageCard
+                stage={s}
+                onOpenReview={onOpenReview}
+                renderBlueprintLink={
+                  salesforceConnected
+                    ? (oppId) => <BlueprintLink oppId={oppId} />
+                    : undefined
+                }
+              />
+            </div>
           </div>
         );
       })}

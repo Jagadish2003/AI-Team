@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { InfoPanel } from "../components/common/InfoPanel";
+import LoadingPanel from "../components/common/LoadingPanel";
 import TopNav from "../components/common/TopNav";
 import { useDiscoveryRunContext } from "../context/DiscoveryRunContext";
 import { useConnectorContext } from "../context/ConnectorContext";
@@ -145,13 +146,21 @@ export default function DiscoveryRunPage() {
     return (
       <div className="min-h-screen text-text">
         <TopNav />
-        <div className="mx-auto max-w-3xl px-6 py-10">
-          <div className="rounded-xl border border-border bg-panel p-6">
-            <div className="text-lg font-semibold">
-              Starting discovery run...
+        <div className="px-8 py-6">
+          <div className="mb-4">
+            <div className="text-2xl font-semibold text-text">
+              Discovery Run
             </div>
-            <div className="mt-2 text-sm text-muted">Please wait...</div>
+            <div className="mt-1 text-sm text-muted">
+              The Discovery Run provides a clear, step-by-step view of progress
+              with live logs and a continuously updated summary of detected
+              applications, workflows, and opportunities.
+            </div>
           </div>
+          <LoadingPanel
+            title="Starting discovery run"
+            subtitle="Preparing the run and connecting the selected sources."
+          />
         </div>
       </div>
     );

@@ -4,6 +4,7 @@ import TopNav from '../components/common/TopNav';
 import EntitiesSidebar from '../components/partial_results/EntitiesSidebar';
 import EvidenceCard from '../components/partial_results/EvidenceCard';
 import EvidenceViewer from '../components/partial_results/EvidenceViewer';
+import LoadingPanel from '../components/common/LoadingPanel';
 
 import { usePartialResultsContext } from '../context/PartialResultsContext';
 import { useRunContext } from '../context/RunContext';
@@ -70,11 +71,17 @@ export default function PartialResultsPage() {
     return (
       <div className="min-h-screen text-text">
         <TopNav />
-        <div className="mx-auto max-w-3xl px-8 py-10">
-          <div className="rounded-xl border border-border bg-panel p-6">
-            <div className="text-lg font-semibold">Loading partial results...</div>
-            <div className="mt-2 text-sm text-muted">Please wait...</div>
+        <div className="px-8 py-6">
+          <div className="mb-4">
+            <div className="text-2xl font-semibold text-text">Evidence Collection</div>
+            <div className="mt-1 text-sm text-muted">
+              Evidence collection acts as the trust layer for discovery, enabling enterprise transparency by clearly showing what evidence was inferred, from which source, and with what level of confidence.
+            </div>
           </div>
+          <LoadingPanel
+            title="Loading Evidence Collection"
+            subtitle="Waiting for evidence and entities to become available for this discovery run."
+          />
         </div>
       </div>
     );
