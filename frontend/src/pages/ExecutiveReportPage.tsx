@@ -6,6 +6,7 @@ import { useToast } from '../components/common/Toast';
 import { useAnalystReviewContext } from '../context/AnalystReviewContext';
 import { useNavigate } from 'react-router-dom';
 import { useRunContext } from '../context/RunContext';
+import { useDiscoveryRunContext } from '../context/DiscoveryRunContext';
 import { RunRequiredEmptyState } from '../components/common/RunRequiredEmptyState';
 import { buildPilotRoadmap } from '../utils/buildRoadmap';
 import { fetchRunExecutiveReport, type ExecutiveReport } from '../api/runScopedS9S10Api';
@@ -21,6 +22,8 @@ export default function ExecutiveReportPage() {
   const { opportunities } = useAnalystReviewContext();
   const nav = useNavigate();
   const { runId, clearRunId } = useRunContext();
+  const { run, computing } = useDiscoveryRunContext();
+  const runStatus = run?.status?.toLowerCase();
 
   const [report, setReport] = useState<ExecutiveReport | null>(null);
   const [loading, setLoading] = useState(false);
@@ -28,6 +31,12 @@ export default function ExecutiveReportPage() {
   const [fetchCount, setFetchCount] = useState(0);
 
   const refetch = useCallback(() => setFetchCount(c => c + 1), []);
+  const runHasMaterializedResults =
+    runStatus === 'complete' || runStatus === 'completed' || runStatus === 'partial';
+  const resultsPreparing =
+    computing ||
+    (Boolean(run) && !runHasMaterializedResults) ||
+    /still being prepared/i.test(error ?? '');
 
   useEffect(() => {
     if (!runId) {
@@ -59,6 +68,12 @@ export default function ExecutiveReportPage() {
     return () => { cancelled = true; };
   }, [runId, fetchCount, clearRunId]);
 
+  useEffect(() => {
+    if (!runId || !resultsPreparing || loading) return;
+    const timer = window.setTimeout(() => refetch(), 1500);
+    return () => window.clearTimeout(timer);
+  }, [runId, resultsPreparing, loading, refetch]);
+
   const roadmap = useMemo(() => buildPilotRoadmap(opportunities), [opportunities]);
 
   const blockerCount = useMemo(() => {
@@ -77,6 +92,15 @@ export default function ExecutiveReportPage() {
       .slice(0, 5)
   ), [opportunities]);
 
+  const pageHeader = (
+    <div className="mb-4">
+      <div className="text-2xl font-semibold text-text">Executive Report</div>
+      <div className="mt-1 text-sm text-muted">
+        Internal Demo Gate stub: exports are toasts; narrative is hardcoded.
+      </div>
+    </div>
+  );
+
   if (!runId) {
     return (
       <div className="min-h-screen text-text">
@@ -92,11 +116,17 @@ export default function ExecutiveReportPage() {
     );
   }
 
-  if (loading) {
+  if (loading || resultsPreparing) {
     return (
       <div className="min-h-screen text-text">
         <TopNav />
-        <LoadingPanel title="Loading executive report…" />
+        <div className="px-8 py-6">
+          {pageHeader}
+          <LoadingPanel
+            title="Loading Executive Report"
+            subtitle="Waiting for executive report results to become available for this discovery run."
+          />
+        </div>
       </div>
     );
   }
