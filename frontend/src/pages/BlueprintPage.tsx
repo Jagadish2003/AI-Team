@@ -7,12 +7,12 @@ import {
   ChevronRight,
   FileText,
   Link2,
-  Loader2,
   Settings,
   Shield,
   Zap,
 } from 'lucide-react';
 import { InfoPanel } from '../components/common/InfoPanel';
+import LoadingPanel from '../components/common/LoadingPanel';
 import TopNav from '../components/common/TopNav';
 import { useConnectorContext } from '../context/ConnectorContext';
 import { useAnalystReviewContext } from '../context/AnalystReviewContext';
@@ -95,10 +95,9 @@ function EmptyPanel({
 
 function LoadingState() {
   return (
-    <EmptyPanel
-      icon={<Loader2 size={24} className="animate-spin" />}
+    <LoadingPanel
       title="Loading blueprint"
-      message="Fetching the Agentforce Blueprint for the selected opportunity."
+      subtitle="Fetching the Agentforce Blueprint for the selected opportunity."
     />
   );
 }
@@ -173,7 +172,9 @@ function SectionBlock({
   );
 }
 
-function BlueprintContent({ blueprint }: { blueprint: BlueprintResponse }) {
+// T41-7: exported for direct unit testing of the permissions section rendering.
+// BlueprintPage remains the single consumer in production.
+export function BlueprintContent({ blueprint }: { blueprint: BlueprintResponse }) {
   const actions = blueprint.suggestedActions ?? [];
   const guardrails = blueprint.guardrails ?? [];
   const permissions = blueprint.agentforcePermissions ?? [];
@@ -246,14 +247,22 @@ function BlueprintContent({ blueprint }: { blueprint: BlueprintResponse }) {
         </SectionBlock>
 
         <SectionBlock icon={<Settings size={16} />} title="Agentforce Permissions Required">
+          {/* T41-7: forward-looking framing — agent-specific, future tense.
+              No checked/missing status. This is what the agent WILL need,
+              not what was required for the discovery run that already succeeded. */}
           {permissions.length > 0 ? (
-            <div className="space-y-2">
-              {permissions.map((permission, index) => (
-                <div key={`${permission}-${index}`} className="flex items-center gap-2 text-sm text-text">
-                  <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-accent" />
-                  <span>{permission}</span>
-                </div>
-              ))}
+            <div className="space-y-3">
+              <p className="text-xs text-muted leading-relaxed">
+                To implement this Agentforce agent, the agent user profile will need:
+              </p>
+              <div className="space-y-2">
+                {permissions.map((permission, index) => (
+                  <div key={`${permission}-${index}`} className="flex items-center gap-2 text-sm text-text">
+                    <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-accent" />
+                    <span>{permission}</span>
+                  </div>
+                ))}
+              </div>
             </div>
           ) : (
             <p className="text-sm text-muted">Permissions assessment is not yet available for this opportunity.</p>
@@ -284,7 +293,7 @@ function EvidencePanel({
   runId: string | null;
 }) {
   const nav = useNavigate();
-  const analystReviewPath = runId ? `/analyst-review?runId=${runId}` : '/analyst-review';
+  const opportunityReviewPath = runId ? `/opportunity-review?runId=${runId}` : '/opportunity-review';
   const evidenceIds = blueprint.evidenceIds ?? [];
   const prevOpp = selectedIdx > 0 ? opportunities[selectedIdx - 1] : null;
   const nextOpp = selectedIdx < opportunities.length - 1 ? opportunities[selectedIdx + 1] : null;
@@ -316,11 +325,11 @@ function EvidencePanel({
 
       <div className="border-t border-border p-4">
         <button
-          onClick={() => nav(analystReviewPath)}
+          onClick={() => nav(opportunityReviewPath)}
           className="mb-3 flex w-full items-center gap-2 rounded-md border border-border bg-bg/20 px-3 py-2 text-left text-sm text-text transition hover:bg-panel2"
         >
           <Link2 size={14} className="text-accent" />
-          View in Analyst Review
+          View in Opportunity Review
         </button>
 
         <div className="flex items-center justify-between text-sm text-text">
@@ -423,9 +432,9 @@ export default function BlueprintPage() {
       return (
         <EmptyPanel
           title="Select an opportunity"
-          message="Choose an opportunity in Analyst Review to view its Agentforce Blueprint."
-          actionLabel="Go to Analyst Review"
-          onAction={() => nav(runId ? `/analyst-review?runId=${runId}` : '/analyst-review')}
+          message="Choose an opportunity in Opportunity Review to view its Agentforce Blueprint."
+          actionLabel="Go to Opportunity Review"
+          onAction={() => nav(runId ? `/opportunity-review?runId=${runId}` : '/opportunity-review')}
         />
       );
     }

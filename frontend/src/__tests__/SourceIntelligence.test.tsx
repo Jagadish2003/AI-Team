@@ -68,6 +68,7 @@ const PERMISSIONS_SLACK_WARN = [
 // ── Mocks ─────────────────────────────────────────────────────────────────────
 
 let mockRows: MappingRow[] = [MAPPED_SN, MAPPED_JIRA, AMBIGUOUS_SN];
+let mockRowsLoading = false;
 let mockCounts = { MAPPED: 2, UNMAPPED: 0, AMBIGUOUS: 1 };
 let mockPermissions: PermissionRequirement[] = PERMISSIONS_OK;
 let mockPermissionsLoading = false;
@@ -76,6 +77,7 @@ let mockPermissionsError: string | null = null;
 vi.mock('../context/NormalizationContext', () => ({
   useNormalizationContext: () => ({
     get rows() { return mockRows; },
+    get rowsLoading() { return mockRowsLoading; },
     get counts() { return mockCounts; },
     confidence: { level: 'MEDIUM', why: '', missingSignals: [], nextAction: '' },
     get permissions() { return mockPermissions; },
@@ -128,6 +130,7 @@ describe('SourceIntelligencePage v1.3 — T41-4', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockRows = [MAPPED_SN, MAPPED_JIRA, AMBIGUOUS_SN];
+    mockRowsLoading = false;
     mockCounts = { MAPPED: 2, UNMAPPED: 0, AMBIGUOUS: 1 };
     mockPermissions = PERMISSIONS_OK;
     mockPermissionsLoading = false;
@@ -144,6 +147,15 @@ describe('SourceIntelligencePage v1.3 — T41-4', () => {
   it('SI1: /normalization redirects to /source-intelligence', () => {
     renderPage('/normalization');
     expect(screen.getByTestId('page-title').textContent).toBe('Source Intelligence');
+  });
+
+  it('SI1: loading state keeps Source Intelligence heading and subtext visible', () => {
+    mockRowsLoading = true;
+    renderPage();
+    expect(screen.getByTestId('page-title').textContent).toBe('Source Intelligence');
+    expect(screen.getByText(/How AgentIQ understood your connected sources/)).toBeTruthy();
+    expect(screen.getByText('Loading Source Intelligence')).toBeTruthy();
+    expect(screen.getByText(/Reading source mappings/)).toBeTruthy();
   });
 
   it('SI2: three stat cards render with correct labels', () => {

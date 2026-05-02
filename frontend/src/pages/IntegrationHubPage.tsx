@@ -1,4 +1,4 @@
-import React, { useMemo, useEffect } from 'react';
+import React, { useMemo, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import TopNav from '../components/common/TopNav';
 import LoadingPanel from '../components/common/LoadingPanel';
@@ -33,12 +33,35 @@ export default function IntegrationHubPage() {
   const navigate = useNavigate();
   const { runId } = useRunContext();
   const { uploadedFiles, sampleWorkspaceEnabled } = useSourceIntakeContext();
+  const [metricAnimation, setMetricAnimation] = useState<{
+    connectorId: string;
+    key: number;
+  } | null>(null);
+
+  const triggerMetricAnimation = (connectorId: string) => {
+    setMetricAnimation((current) => ({
+      connectorId,
+      key: (current?.key ?? 0) + 1,
+    }));
+  };
 
   useEffect(() => {
     if (!loading && !selectedConnectorId && recommended && recommended.length > 0) {
       selectConnector(recommended[0].id);
     }
   }, [loading, selectedConnectorId, recommended, selectConnector]);
+
+  useEffect(() => {
+    if (loading || !metricAnimation) return;
+
+    const timeoutId = window.setTimeout(() => {
+      setMetricAnimation((current) =>
+        current?.key === metricAnimation.key ? null : current,
+      );
+    }, 2200);
+
+    return () => window.clearTimeout(timeoutId);
+  }, [loading, metricAnimation]);
   // -------------------------
 
   const selected = useMemo(
@@ -80,9 +103,11 @@ export default function IntegrationHubPage() {
                     connectors={recommended}
                     selectedId={selectedConnectorId}
                     onSelect={selectConnector}
+                    metricAnimation={metricAnimation}
                     onPrimary={(id) => {
                       const c = recommended.find(x => x.id === id);
                       if (c?.status === 'connected') {
+                        triggerMetricAnimation(id);
                         configureSync(id);
                         push('Configuration complete. Data is now synced.');
                       } else {
@@ -125,6 +150,7 @@ export default function IntegrationHubPage() {
                   selected={selected}
                   onConfigure={() => {
                     if (!selected) return;
+                    triggerMetricAnimation(selected.id);
                     configureSync(selected.id);
                     push('Configuration complete. Data is now synced.');
                   }}
@@ -135,6 +161,7 @@ export default function IntegrationHubPage() {
                   onConnectNext={() => {
                     if (!next) return;
                     if (next.status === 'connected') {
+                      triggerMetricAnimation(next.id);
                       configureSync(next.id);
                       push('Configuration complete. Data is now synced.');
                     } else {

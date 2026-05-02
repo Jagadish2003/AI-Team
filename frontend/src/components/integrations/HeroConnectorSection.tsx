@@ -8,13 +8,15 @@ export default function HeroConnectorSection({
   selectedId,
   onSelect,
   onPrimary,
-  onSecondary
+  onSecondary,
+  metricAnimation,
 }: {
   connectors: Connector[];
   selectedId: string | null;
   onSelect: (id: string) => void;
   onPrimary: (id: string) => void;
   onSecondary: (id: string) => void;
+  metricAnimation?: { connectorId: string; key: number } | null;
 }) {
   return (
     <div>
@@ -31,6 +33,9 @@ export default function HeroConnectorSection({
             onSelect={() => onSelect(c.id)}
             onPrimary={() => onPrimary(c.id)}
             onSecondary={() => onSecondary(c.id)}
+            metricAnimationKey={
+              metricAnimation?.connectorId === c.id ? metricAnimation.key : 0
+            }
           />
         ))}
       </div>

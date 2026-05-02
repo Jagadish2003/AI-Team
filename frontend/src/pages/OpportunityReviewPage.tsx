@@ -155,7 +155,16 @@ export default function OpportunityReviewPage() {
     return (
       <div className="min-h-screen text-text">
         <TopNav />
-        <div className="px-8 py-10">
+        <div className="px-8 py-6">
+          <div className="mb-4">
+            <div className="text-2xl font-semibold text-text">
+              Opportunity Review
+            </div>
+            <div className="mt-1 text-sm text-muted">
+              Prioritize, approve, and understand automation opportunities from
+              one review workspace.
+            </div>
+          </div>
           <LoadingPanel title="Loading Opportunity Review..." />
         </div>
       </div>

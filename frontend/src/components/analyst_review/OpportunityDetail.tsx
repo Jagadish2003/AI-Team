@@ -108,19 +108,28 @@ export default function OpportunityDetail({
   opp,
   audit,
   onNavigate,
+  // T41-7: suppressPermissions is DEPRECATED — the Required Permissions section
+  // was removed in T41-7. This prop is retained only for backward compatibility
+  // with existing call sites (OpportunityReviewPage.tsx line 213). It has no
+  // effect on rendering. Do NOT add it to new call sites.
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   suppressPermissions = false,
   footer,
 }: {
   opp: OpportunityCandidate | null;
   audit: ReviewAuditEvent[];
   onNavigate?: () => void;
+  /** @deprecated T41-7: has no effect. Permissions section removed from this component. */
   suppressPermissions?: boolean;
   footer?: React.ReactNode;
 }) {
   const { runId } = useRunContext();
   const [enrichment, setEnrichment] = useState<OppEnrichment | null>(null);
 
-  // Fetch enrichment when selected opportunity changes
+  // Fetch enrichment when selected opportunity changes.
+  // T41-7: suppressPermissions removed from deps — it is deprecated and
+  // has no effect on rendering. Including it was causing spurious refetches
+  // when callers toggled it, which was misleading and wasteful.
   useEffect(() => {
     // FIX: Guard against network fetches during tests.
     // This prevents ECONNREFUSED errors from crashing Vitest act() blocks.
@@ -143,7 +152,7 @@ export default function OpportunityDetail({
     return () => {
       cancelled = true;
     };
-  }, [runId, opp?.id, suppressPermissions]);
+  }, [runId, opp?.id]);
 
   if (!opp) {
     return (
@@ -231,60 +240,11 @@ export default function OpportunityDetail({
         {/* T7: LLM enrichment panel */}
         <EnrichmentPanel opp={opp} enrichment={enrichment} />
 
-        {/* Required Data Permissions */}
-        {!suppressPermissions &&
-          opp.permissions &&
-          opp.permissions.length > 0 && (
-            <div>
-              <div className="text-xs font-semibold text-text mb-2">
-                Required Data Permissions
-              </div>
-              <div className="rounded-lg border border-border overflow-hidden">
-                {opp.permissions.map((p, i) => (
-                  <div
-                    key={i}
-                    className={`flex items-center px-3 py-2 gap-3 text-xs ${i !== 0 ? "border-t border-border" : ""}`}
-                  >
-                    {p.satisfied ? (
-                      <span className="w-4 h-4 rounded-full bg-emerald-500/20 border border-emerald-500/50 flex items-center justify-center shrink-0">
-                        <svg
-                          className="w-2.5 h-2.5 text-emerald-400"
-                          fill="none"
-                          stroke="currentColor"
-                          viewBox="0 0 24 24"
-                        >
-                          <path
-                            strokeLinecap="round"
-                            strokeLinejoin="round"
-                            strokeWidth={3}
-                            d="M5 13l4 4L19 7"
-                          />
-                        </svg>
-                      </span>
-                    ) : (
-                      <span className="w-4 h-4 rounded-full bg-amber-500/10 border border-amber-500/40 flex items-center justify-center shrink-0">
-                        <span className="text-amber-400 text-xs leading-none">
-                          !
-                        </span>
-                      </span>
-                    )}
-                    <span className="flex-1 text-text">{p.label}</span>
-                    {p.satisfied ? (
-                      <span className="text-emerald-400 text-xs">
-                        ✓ Granted
-                      </span>
-                    ) : p.required ? (
-                      <span className="text-amber-400 text-xs">◇ Missing</span>
-                    ) : (
-                      <span className="text-xs border border-border rounded px-1.5 py-0.5 text-muted">
-                        Recommended
-                      </span>
-                    )}
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
+        {/* T41-7: Required Permissions section removed from Opportunity Review.
+            Permissions are now shown on the Agentforce Blueprint screen in
+            forward-looking framing: "To implement this agent, the agent user
+            profile will need:". The suppressPermissions prop is retained for
+            backward-compat but the section no longer renders anywhere. */}
 
         {/* Audit Trail - REDESIGNED */}
         <div>

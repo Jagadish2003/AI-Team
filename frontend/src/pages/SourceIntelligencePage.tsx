@@ -31,6 +31,7 @@ import {
   Loader2,
 } from "lucide-react";
 import TopNav from "../components/common/TopNav";
+import LoadingPanel from "../components/common/LoadingPanel";
 import { useNormalizationContext } from "../context/NormalizationContext";
 import { useConnectorContext } from "../context/ConnectorContext";
 import { useRunContext } from "../context/RunContext";
@@ -41,6 +42,14 @@ import FieldDetailsPanel from "../components/normalization/FieldDetailsPanel";
 import type { MappingRow, PermissionRequirement } from "../types/normalization";
 import type { Connector } from "../types/connector";
 import { sourceKeyForConnector, zeroSignalReason, ZERO_SIGNAL_LABELS } from "../utils/sourceKeys";
+
+const SOURCE_INTELLIGENCE_TITLE = "Source Intelligence";
+const SOURCE_INTELLIGENCE_DESCRIPTION = (
+  <>
+    How AgentIQ understood your connected sources &mdash; and what needs your
+    attention.
+  </>
+);
 
 // ── Source health derivation — Issue 1 fix ────────────────────────────────────
 
@@ -225,6 +234,23 @@ function StatCard({
 
 // ── Ambiguous decision card ───────────────────────────────────────────────────
 
+function SourceIntelligenceHeader({
+  className = "mb-4",
+}: {
+  className?: string;
+}) {
+  return (
+    <div className={className}>
+      <div className="text-2xl font-semibold text-text" data-testid="page-title">
+        {SOURCE_INTELLIGENCE_TITLE}
+      </div>
+      <div className="mt-1 text-sm text-muted">
+        {SOURCE_INTELLIGENCE_DESCRIPTION}
+      </div>
+    </div>
+  );
+}
+
 const ENTITY_OPTIONS = [
   "Application",
   "Service",
@@ -321,8 +347,14 @@ function resolvedState(
 // ── Main page ─────────────────────────────────────────────────────────────────
 
 export default function SourceIntelligencePage() {
-  const { rows, counts, permissions, permissionsLoading, permissionsError } =
-    useNormalizationContext();
+  const {
+    rows,
+    rowsLoading,
+    counts,
+    permissions,
+    permissionsLoading,
+    permissionsError,
+  } = useNormalizationContext();
 
   const { all: connectors } = useConnectorContext();
   const { runId } = useRunContext();
@@ -369,7 +401,26 @@ export default function SourceIntelligencePage() {
       <div className="min-h-screen text-text">
         <TopNav />
         <div className="px-8 py-6">
-          <RunRequiredEmptyState onStart={() => nav("/discovery-run")} />
+          <RunRequiredEmptyState
+            pageTitle={SOURCE_INTELLIGENCE_TITLE}
+            pageDescription={SOURCE_INTELLIGENCE_DESCRIPTION}
+            onStart={() => nav("/discovery-run")}
+          />
+        </div>
+      </div>
+    );
+  }
+
+  if (rowsLoading) {
+    return (
+      <div className="min-h-screen text-text">
+        <TopNav />
+        <div className="px-8 py-6">
+          <SourceIntelligenceHeader />
+          <LoadingPanel
+            title="Loading Source Intelligence"
+            subtitle="Reading source mappings, confidence signals, and permission context for this discovery run."
+          />
         </div>
       </div>
     );
@@ -381,18 +432,7 @@ export default function SourceIntelligencePage() {
       <div className="w-full px-8 py-6 pb-10">
         {/* Header */}
         <div className="mb-6 flex items-start justify-between">
-          <div>
-            <div
-              className="text-2xl font-semibold text-text"
-              data-testid="page-title"
-            >
-              Source Intelligence
-            </div>
-            <div className="mt-1 text-sm text-muted">
-              How AgentIQ understood your connected sources — and what needs
-              your attention.
-            </div>
-          </div>
+          <SourceIntelligenceHeader className="" />
           <button
             onClick={() => setShowDetail((v) => !v)}
             className="flex items-center gap-1.5 text-xs text-muted hover:text-text transition-colors"

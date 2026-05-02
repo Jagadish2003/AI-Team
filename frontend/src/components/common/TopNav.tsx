@@ -51,7 +51,7 @@ export default function TopNav() {
 
   return (
     <div className="sticky top-0 z-40 h-[70px] w-full border-b border-border bg-bgheader shadow-[0_2px_8px_rgba(0,0,0,0.15)] backdrop-blur">
-      <div className="flex h-full w-full items-center gap-4 px-5">
+      <div className="flex h-full w-full items-center gap-3 px-5">
         {/* Brand */}
         <div className="flex shrink-0 items-center">
           <img src={logo} alt="AgentIQ Logo" className="h-[43px] w-auto" />
@@ -59,7 +59,7 @@ export default function TopNav() {
 
         {/* Nav items */}
         <div
-          className="flex flex-1 items-center justify-end gap-1.5 overflow-x-auto px-2"
+          className="flex flex-1 items-center justify-end gap-1 overflow-x-auto pl-4 pr-0"
           style={{ scrollbarWidth: "none" }}
         >
           {items.map((i) => {
