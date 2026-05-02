@@ -45,7 +45,9 @@ export default function App() {
                         />
                         <Route
                           path="/source-intake"
-                          element={<SourceIntakePage />}
+                          // T41-8: Source Intake merged into Integration Hub.
+                          // Redirect preserved for backward compatibility.
+                          element={<Navigate to="/integration-hub" replace />}
                         />
                         <Route
                           path="/discovery-run"
