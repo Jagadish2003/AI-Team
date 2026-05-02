@@ -1,5 +1,5 @@
 """
-SF-2.6 — Scorer
+SF-2.6 — Scorer  (patched: T41-6 Scorer Recalibration)
 
 Converts a DetectorResult into four scored outputs:
     Impact      (1–10, integer)
@@ -10,6 +10,25 @@ Converts a DetectorResult into four scored outputs:
 Rules: SF-1.4 scoring rubric v1.0 (Final).
 This is a pure function — no DB, no network, no side effects.
 Same input always produces same output.
+
+T41-6 CHANGE LOG
+----------------
+Root cause: weighted-sum formula has a mathematical ceiling of ~6.1 (max possible
+raw_sum across all detectors and pts bands).  Round(raw_sum) therefore compresses
+all live scores into the 3–4 band regardless of organisation scale.
+
+Fix: add a post-sum linear rescaling step inside _compute_impact() that maps
+the full theoretical raw range [_RAW_IMPACT_MIN, _RAW_IMPACT_MAX] onto the full
+target range [1, 10].  All factor derivation and weight logic is unchanged.
+
+Constants introduced (all named, all testable):
+    _RAW_IMPACT_MIN  — minimum possible weighted sum (near-empty org, no friction)
+    _RAW_IMPACT_MAX  — maximum possible weighted sum (all factors at ceiling)
+
+The rescaled value is clamped to [1, 10] and rounded to int — identical contract
+to the original function, only the internal mapping changes.
+
+No other functions are modified.
 """
 from __future__ import annotations
 
@@ -35,6 +54,38 @@ _W_FRICTION    = 0.30   # increased: pain signal matters more than raw count
 _W_CUSTOMER    = 0.20
 _W_REVENUE     = 0.15
 _W_EXTERNAL    = 0.10
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# T41-6: Impact rescaling constants
+#
+# _RAW_IMPACT_MIN: minimum weighted sum — near-empty org (volume<10 → 2pts),
+#   no friction (2pts), no customer/revenue signals, 1 external pt.
+#   = 2*0.25 + 2*0.30 + 0*0.20 + 0*0.15 + 1*0.10 = 1.20
+#
+# _RAW_IMPACT_MAX: maximum weighted sum — volume ≥500 (9pts), max friction (8pts),
+#   customer-facing (3pts), revenue touch (2pts), multi-system external (3pts).
+#   = 9*0.25 + 8*0.30 + 3*0.20 + 2*0.15 + 3*0.10 = 2.25+2.40+0.60+0.30+0.30 = 5.85
+#   Using 6.1 as the ceiling to account for floating point and future band changes.
+#
+# These constants must be updated if _W_* weights or pts band ceilings change.
+# ─────────────────────────────────────────────────────────────────────────────
+
+_RAW_IMPACT_MIN: float = 1.20   # T41-6
+_RAW_IMPACT_MAX: float = 6.10   # T41-6
+
+
+def _rescale_impact(raw: float) -> int:
+    """
+    T41-6: Linear rescale raw weighted sum from [_RAW_IMPACT_MIN, _RAW_IMPACT_MAX]
+    onto [1, 10].  Clamp then round — identical output contract to original round().
+
+    Formula:
+        scaled = (raw - MIN) / (MAX - MIN) * 9 + 1
+    """
+    span = _RAW_IMPACT_MAX - _RAW_IMPACT_MIN
+    scaled = (raw - _RAW_IMPACT_MIN) / span * 9.0 + 1.0
+    return max(1, min(10, round(scaled)))
 
 
 def _volume_pts(weekly_rate: float) -> float:
@@ -177,11 +228,16 @@ def _impact_factors(dr: DetectorResult) -> Tuple[float, float, float, float, flo
 
 
 def _compute_impact(dr: DetectorResult) -> int:
-    """Compute Impact score per SF-1.4 formula. Clamp to [1,10], round to int."""
+    """
+    Compute Impact score per SF-1.4 formula.
+
+    T41-6 patch: apply _rescale_impact() instead of direct round() to map
+    the full theoretical raw range onto [1, 10].  Factor derivation is unchanged.
+    """
     v, f, c, r, e = _impact_factors(dr)
     raw = (v * _W_VOLUME + f * _W_FRICTION + c * _W_CUSTOMER +
            r * _W_REVENUE + e * _W_EXTERNAL)
-    return max(1, min(10, round(raw)))
+    return _rescale_impact(raw)  # T41-6: was max(1, min(10, round(raw)))
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -366,7 +422,7 @@ def score(dr: DetectorResult) -> Dict[str, Any]:
 
     # Debug / calibration breakdown
     v, f, c, r, e = _impact_factors(dr)
-    ev = dr.raw_evidence
+    raw_sum = v*_W_VOLUME + f*_W_FRICTION + c*_W_CUSTOMER + r*_W_REVENUE + e*_W_EXTERNAL
 
     score_debug = {
         "impact_factors": {
@@ -375,8 +431,10 @@ def score(dr: DetectorResult) -> Dict[str, Any]:
             "customer_pts": c,
             "revenue_pts":  r,
             "external_pts": e,
-            "raw_sum":      round(v*_W_VOLUME + f*_W_FRICTION + c*_W_CUSTOMER +
-                                  r*_W_REVENUE + e*_W_EXTERNAL, 4),
+            "raw_sum":      round(raw_sum, 4),
+            # T41-6: expose rescaling inputs for calibration visibility
+            "raw_impact_min": _RAW_IMPACT_MIN,
+            "raw_impact_max": _RAW_IMPACT_MAX,
         },
         "effort_factors": {
             "data_pts":    2.0,

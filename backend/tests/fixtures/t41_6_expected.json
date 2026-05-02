@@ -1,0 +1,44 @@
+[
+  {
+    "detector_id": "HANDOFF_FRICTION",
+    "impact": 5,
+    "effort": 2,
+    "confidence": "MEDIUM",
+    "tier": "Quick Win"
+  },
+  {
+    "detector_id": "APPROVAL_BOTTLENECK",
+    "impact": 6,
+    "effort": 3,
+    "confidence": "HIGH",
+    "tier": "Quick Win"
+  },
+  {
+    "detector_id": "KNOWLEDGE_GAP",
+    "impact": 5,
+    "effort": 2,
+    "confidence": "MEDIUM",
+    "tier": "Quick Win"
+  },
+  {
+    "detector_id": "REPETITIVE_AUTOMATION",
+    "impact": 6,
+    "effort": 2,
+    "confidence": "HIGH",
+    "tier": "Quick Win"
+  },
+  {
+    "detector_id": "PERMISSION_BOTTLENECK",
+    "impact": 6,
+    "effort": 3,
+    "confidence": "HIGH",
+    "tier": "Quick Win"
+  },
+  {
+    "detector_id": "CROSS_SYSTEM_ECHO",
+    "impact": 7,
+    "effort": 3,
+    "confidence": "HIGH",
+    "tier": "Quick Win"
+  }
+]

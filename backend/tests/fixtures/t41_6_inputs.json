@@ -1,0 +1,72 @@
+[
+  {
+    "_comment": "HANDOFF_FRICTION — small org (38 cases/90d), high handoff_score. Expected: impact=5, effort=2, confidence=MEDIUM",
+    "detector_id": "HANDOFF_FRICTION",
+    "signal_source": "salesforce",
+    "metric_value": 2.8,
+    "threshold": 2.0,
+    "raw_evidence": {
+      "total_cases_90d": 38,
+      "handoff_score": 2.8
+    }
+  },
+  {
+    "_comment": "APPROVAL_BOTTLENECK — medium org (180 pending), delay >3 days, proxy 2.8x. Expected: impact=6, effort=3, confidence=HIGH",
+    "detector_id": "APPROVAL_BOTTLENECK",
+    "signal_source": "salesforce",
+    "metric_value": 8.4,
+    "threshold": 3.0,
+    "raw_evidence": {
+      "pending_count": 180,
+      "avg_delay_days": 4.2,
+      "approver_count": 3
+    }
+  },
+  {
+    "_comment": "KNOWLEDGE_GAP — small org (65 cases), gap_score 0.71 (HIGH band >0.6). Expected: impact=5, effort=2, confidence=MEDIUM",
+    "detector_id": "KNOWLEDGE_GAP",
+    "signal_source": "salesforce",
+    "metric_value": 0.71,
+    "threshold": 0.5,
+    "raw_evidence": {
+      "closed_cases_90d": 65,
+      "knowledge_gap_score": 0.71
+    }
+  },
+  {
+    "_comment": "REPETITIVE_AUTOMATION — large org (650 records/90d = 50/wk), Case trigger, proxy 2.6x. Expected: impact=6, effort=2, confidence=HIGH",
+    "detector_id": "REPETITIVE_AUTOMATION",
+    "signal_source": "salesforce",
+    "metric_value": 2.1,
+    "threshold": 0.8,
+    "raw_evidence": {
+      "records_90d": 650,
+      "flow_activity_score": 2.1,
+      "trigger_object": "Case"
+    }
+  },
+  {
+    "_comment": "PERMISSION_BOTTLENECK — medium org (170 pending), bottleneck_score 24 (HIGH band >20), proxy 2.4x. Expected: impact=6, effort=3, confidence=HIGH",
+    "detector_id": "PERMISSION_BOTTLENECK",
+    "signal_source": "salesforce",
+    "metric_value": 24.0,
+    "threshold": 10.0,
+    "raw_evidence": {
+      "pending_count": 170,
+      "bottleneck_score": 24.0
+    }
+  },
+  {
+    "_comment": "CROSS_SYSTEM_ECHO — large org (1100 cases/90d = 84.6/wk), echo_score HIGH, multi-system. Expected: impact=7, effort=3, confidence=HIGH",
+    "detector_id": "CROSS_SYSTEM_ECHO",
+    "signal_source": "servicenow",
+    "metric_value": 0.38,
+    "threshold": 0.15,
+    "raw_evidence": {
+      "sf_total_cases": 1100,
+      "sf_echo_score": 0.38,
+      "sn_echo_score": 0.29,
+      "jira_echo_score": 0.0
+    }
+  }
+]
