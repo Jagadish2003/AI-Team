@@ -123,6 +123,17 @@ def register_sprint4_t1_routes(app: FastAPI) -> None:
         if run is None:
             raise HTTPException(status_code=404, detail=f"Run '{run_id}' not found")
 
+        # SN-CONNECT-1 + JIRA-CONNECT-1: run connector health checks at run start.
+        # Results stored in KV — S1 reads these to show Live/Fixture badges.
+        # Health checks are non-blocking — a failed check never prevents a run.
+        try:
+            from discovery.ingest.connector_health import check_all_connectors
+            connector_health = check_all_connectors()
+            if hasattr(db, "run_kv_set"):
+                db.run_kv_set("connector_health", run_id, connector_health)
+        except Exception as _e:
+            logger.warning("Connector health check failed (non-blocking): %s", _e)
+
         # Mark status running and return immediately.
         _set_status(run_id, "running", counts={"opportunities": 0, "evidence": 0})
         background_tasks.add_task(_run_trackb_and_persist, run_id, body.mode, body.systems)
@@ -151,3 +162,43 @@ def register_sprint4_t1_routes(app: FastAPI) -> None:
             st = {"runId": run_id, "status": run.get("status") or "running", "startedAt": run.get("startedAt") or _now_iso(), "updatedAt": _now_iso(), "counts": {}}
 
         return RunStatus(**st)
+
+    @app.get(
+        "/api/runs/{run_id}/connector-health",
+        dependencies=[Depends(require_auth)],
+    )
+    async def get_connector_health(run_id: str) -> Dict[str, Any]:
+        """
+        SN-CONNECT-1 + JIRA-CONNECT-1: Return connector health for S1 Live badges.
+
+        Returns the health check results stored at run start.
+        If not yet available, runs checks on demand.
+
+        Response shape:
+          {
+            "ServiceNow": {"system": "ServiceNow", "status": "live"|"fixture"|"error",
+                           "message": "...", "latencyMs": 42, "isLive": true},
+            "Jira":        {"system": "Jira", "status": "live"|"fixture"|"error",
+                           "message": "...", "latencyMs": 38, "isLive": true},
+          }
+        """
+        # Try stored health from run start first
+        if hasattr(db, "run_kv_get"):
+            stored = db.run_kv_get("connector_health", run_id, None)
+            if stored:
+                return stored
+
+        # Not stored yet — run on demand
+        try:
+            from discovery.ingest.connector_health import check_all_connectors
+            health = check_all_connectors()
+            if hasattr(db, "run_kv_set"):
+                db.run_kv_set("connector_health", run_id, health)
+            return health
+        except Exception as e:
+            return {
+                "ServiceNow": {"system": "ServiceNow", "status": "error",
+                               "message": str(e), "isLive": False},
+                "Jira":        {"system": "Jira", "status": "error",
+                               "message": str(e), "isLive": False},
+            }
