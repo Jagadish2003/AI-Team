@@ -1,5 +1,5 @@
 """
-Sprint 4.1 Fix Pack — Task 4
+SHARED-2 — Sprint 5 — nCino Lending Entity Extension
 GET /api/runs/{runId}/normalization
 
 Returns normalization mapping rows for a specific run.
@@ -28,18 +28,8 @@ from pydantic import BaseModel
 from .security import require_auth
 from . import db
 
-KV_NORMALIZATION = "normalization"
-KV_EVIDENCE      = "evidence"
-
-# ── Canonical source key registry (backend side) ─────────────────────────────
-# Must match frontend/src/utils/sourceKeys.ts SOURCE_KEY_MAP values exactly.
-# Sprint 5 task: move to source_keys.py and import from there.
-
-CANONICAL_SOURCES = {
-    "salesforce": "Salesforce",
-    "servicenow": "ServiceNow",
-    "jira":       "Jira",
-}
+from .normalization_enrichment import KV_NORMALIZATION  # shared key — Issue 1 fix
+KV_EVIDENCE = "evidence"
 
 # ── Response models ───────────────────────────────────────────────────────────
 
@@ -63,6 +53,50 @@ class NormalizationResponse(BaseModel):
     source: str   # "stored" | "derived" — tells frontend how data was produced
 
 
+# ── Entity type derivation ────────────────────────────────────────────────────
+# SHARED-2 Issue 3 fix: derive lending entity type from detector_id, not from
+# fragile source string conventions. The detector_id is set explicitly by each
+# nCino detector and is always present on evidence items.
+
+_DETECTOR_ENTITY_MAP: dict = {
+    # nCino lending detectors → lending canonical entity types
+    "LOAN_ORIGINATION_ROUTING_FRICTION": "Loan",
+    "STAGE_DURATION_OVERRUN":            "Loan",
+    "COVENANT_TRACKING_GAP":             "Covenant",
+    "CHECKLIST_BOTTLENECK":              "Checklist",
+    "SPREADING_BOTTLENECK":              "SpreadPeriod",
+    "APPROVAL_BOTTLENECK":               "LendingApproval",
+    # Service Cloud detectors → Service Cloud entity types (original)
+    "CASE_ROUTING_FRICTION":             "Workflow",
+    "REPEATED_ESCALATIONS":              "Workflow",
+    "PERMISSION_BOTTLENECK":             "Application",
+    "REPETITIVE_AUTOMATION":             "Service",
+}
+
+_SOURCE_ENTITY_MAP: dict = {
+    # Fallback: source-level entity type when no detector_id match
+    "Salesforce":  "Workflow",
+    "ServiceNow":  "Application",
+    "Jira":        "Workflow",
+    "Databricks":  "Service",
+}
+
+
+def _entity_from_detector(detector_id_or_ev_type: str, source: str) -> str:
+    """
+    Derive canonical entity type from detector_id (preferred) or source (fallback).
+
+    Issue 3 fix: detector_id is explicit and not fragile. Source-string
+    conventions (nCino:Loan etc.) are no longer required.
+    """
+    # Try detector_id first (explicit, reliable)
+    entity = _DETECTOR_ENTITY_MAP.get(detector_id_or_ev_type)
+    if entity:
+        return entity
+    # Fall back to source-level map (Service Cloud behaviour preserved)
+    return _SOURCE_ENTITY_MAP.get(source, "DataObject")
+
+
 # ── Derivation from evidence ──────────────────────────────────────────────────
 
 def _derive_from_evidence(run_id: str) -> List[Dict[str, Any]]:
@@ -84,7 +118,10 @@ def _derive_from_evidence(run_id: str) -> List[Dict[str, Any]]:
 
     for ev in evidence:
         source = ev.get("source", "")
-        ev_type = ev.get("evidenceType", "Metric")
+        # Issue 2 fix: evidenceType is always "Metric"/"Log" — not a detector ID.
+        # Read detectorId if present (set by nCino evidence enrichment path),
+        # fall back to evidenceType for backward compat with Service Cloud evidence.
+        ev_type = ev.get("detectorId") or ev.get("evidenceType", "Metric")
         title = ev.get("title", "")
         confidence = ev.get("confidence", "MEDIUM")
         ev_id = ev.get("id", "")
@@ -108,14 +145,12 @@ def _derive_from_evidence(run_id: str) -> List[Dict[str, Any]]:
         }
         source_type = source_type_map.get(ev_type, ev_type)
 
-        # Derive entity type from source
-        entity_map = {
-            "Salesforce":  "Workflow",
-            "ServiceNow":  "Application",
-            "Jira":        "Workflow",
-            "Databricks":  "Service",
-        }
-        entity = entity_map.get(source, "DataObject")
+        # Derive entity type.
+        # SHARED-2 Issue 3 fix: use detector_id (from evidenceType field) to
+        # derive lending entity type. This is explicit and not fragile — the
+        # detector_id is set by the nCino detector and does not depend on
+        # source string conventions.
+        entity = _entity_from_detector(ev_type, source)
 
         rows.append({
             "id":           f"norm_{ev_id}",
@@ -162,8 +197,16 @@ def register_normalization_routes(app) -> None:
 
         # Priority 1: stored normalization data
         stored = db.run_kv_get(KV_NORMALIZATION, run_id, None)
-        if stored and isinstance(stored, list) and len(stored) > 0:
-            rows = stored
+        # Issue 1 fix: stored may be a dict {"rows": [...], ...metadata}
+        # or a legacy list. Handle both.
+        stored_rows = None
+        if stored:
+            if isinstance(stored, dict) and stored.get("rows"):
+                stored_rows = stored["rows"]
+            elif isinstance(stored, list) and len(stored) > 0:
+                stored_rows = stored  # legacy list shape
+        if stored_rows:
+            rows = stored_rows
             data_source = "stored"
         else:
             # Priority 2: derive from evidence
