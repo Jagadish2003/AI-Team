@@ -310,10 +310,14 @@ def to_track_a_evidence(
     evidence: List[Dict[str, Any]] = []
     seen_ids = set()
     for opp in runner_payload.get("opportunities", []):
+        detector_id = opp.get("detector_id", "")
         for ev in opp.get("evidence", []):
             eid = ev.get("id")
             if eid and eid not in seen_ids:
-                evidence.append(ev)
+                # SHARED-2: add detectorId to each evidence item so
+                # routes_normalization._derive_from_evidence can derive
+                # the correct canonical entity type (Issue 2 fix).
+                evidence.append({**ev, "detectorId": detector_id})
                 seen_ids.add(eid)
     return evidence
 
