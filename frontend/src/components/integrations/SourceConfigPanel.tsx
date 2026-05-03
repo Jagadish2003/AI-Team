@@ -16,12 +16,12 @@
  * bottom of IntegrationHubPage — unchanged from before T41-8.
  */
 
-import React, { useRef } from 'react';
-import { Upload, FileText, ChevronDown, ChevronUp } from 'lucide-react';
-import { useSourceIntakeContext } from '../../context/SourceIntakeContext';
-import { useToast } from '../common/Toast';
+import React, { useRef } from "react";
+import { Upload, FileText, ChevronDown, ChevronUp } from "lucide-react";
+import { useSourceIntakeContext } from "../../context/SourceIntakeContext";
+import { useToast } from "../common/Toast";
 
-const VALID_EXTENSIONS = ['.csv', '.xls', '.xlsx'];
+const VALID_EXTENSIONS = [".csv", ".xls", ".xlsx"];
 
 function isValidFile(file: File): boolean {
   const lower = file.name.toLowerCase();
@@ -33,11 +33,8 @@ export default function SourceConfigPanel() {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [expanded, setExpanded] = React.useState(false);
 
-  const {
-    uploadedFiles,
-    addFilesFromSelection,
-    removeFile,
-  } = useSourceIntakeContext();
+  const { uploadedFiles, addFilesFromSelection, removeFile } =
+    useSourceIntakeContext();
 
   const handleBrowse = () => fileInputRef.current?.click();
 
@@ -46,11 +43,11 @@ export default function SourceConfigPanel() {
     if (selected.length === 0) return;
     const { addedCount } = addFilesFromSelection(selected);
     if (addedCount > 0) {
-      push(`Added ${addedCount} file${addedCount === 1 ? '' : 's'}.`);
+      push(`Added ${addedCount} file${addedCount === 1 ? "" : "s"}.`);
     } else {
-      push('Only CSV or Excel files are supported.');
+      push("Only CSV or Excel files are supported.");
     }
-    e.target.value = '';
+    e.target.value = "";
   };
 
   const handleDragOver = (e: React.DragEvent) => {
@@ -66,7 +63,10 @@ export default function SourceConfigPanel() {
     const readEntry = (entry: any): Promise<void> => {
       if (entry.isFile) {
         return new Promise((resolve) => {
-          entry.file((file: File) => { collected.push(file); resolve(); });
+          entry.file((file: File) => {
+            collected.push(file);
+            resolve();
+          });
         });
       }
       if (entry.isDirectory) {
@@ -88,18 +88,17 @@ export default function SourceConfigPanel() {
 
     const valid = collected.filter(isValidFile);
     if (valid.length === 0) {
-      push('Only CSV or Excel files are supported.');
+      push("Only CSV or Excel files are supported.");
       return;
     }
     const { addedCount } = addFilesFromSelection(valid);
-    push(`Added ${addedCount} file${addedCount === 1 ? '' : 's'}.`);
+    push(`Added ${addedCount} file${addedCount === 1 ? "" : "s"}.`);
   };
 
   const hasFiles = uploadedFiles.length > 0;
 
   return (
     <div className="mt-3 rounded-xl border border-border bg-panel overflow-hidden">
-
       {/* Collapsible header */}
       <button
         type="button"
@@ -117,16 +116,16 @@ export default function SourceConfigPanel() {
             </span>
           )}
         </div>
-        {expanded
-          ? <ChevronUp size={14} className="text-muted shrink-0" />
-          : <ChevronDown size={14} className="text-muted shrink-0" />
-        }
+        {expanded ? (
+          <ChevronUp size={14} className="text-muted shrink-0" />
+        ) : (
+          <ChevronDown size={14} className="text-muted shrink-0" />
+        )}
       </button>
 
       {/* Expandable body */}
       {expanded && (
         <div className="border-t border-border px-4 pb-4 pt-3">
-
           <input
             ref={fileInputRef}
             type="file"
@@ -145,12 +144,10 @@ export default function SourceConfigPanel() {
           >
             <Upload className="mb-2 text-muted/50" size={22} />
             <p className="text-xs text-muted">
-              Drag & drop or{' '}
+              Drag & drop or{" "}
               <span className="text-accent font-medium">browse</span>
             </p>
-            <p className="mt-1 text-[10px] text-muted/60">
-              CSV, XLS, XLSX
-            </p>
+            <p className="mt-1 text-[10px] text-muted/60">CSV, XLS, XLSX</p>
           </div>
 
           {/* File list */}
@@ -175,7 +172,7 @@ export default function SourceConfigPanel() {
                       onClick={(e) => {
                         e.stopPropagation();
                         removeFile(file.id);
-                        push('File removed.');
+                        push("File removed.");
                       }}
                       className="shrink-0 rounded border border-red-500/30 px-2 py-0.5 text-[10px] text-red-400 hover:border-red-400/60 hover:text-red-300 transition-colors"
                     >

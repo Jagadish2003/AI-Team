@@ -1,36 +1,158 @@
 {
   "_meta": {
-    "description": "SF-2.1 Jira fixture — crafted for D7 cross-system echo (Jira side)",
+    "description": "SF-2.1 Jira fixture \u2014 crafted for D7 cross-system echo (Jira side)",
     "instance": "synthetic-enterprise.atlassian.net",
     "project_key": "CRM",
     "window_days": 90,
     "generated": "2026-04-13",
-    "note": "62 of 280 CRM issues reference Salesforce CS- case IDs. Echo score = 62/280 = 0.22 — contributes to D7 cross-system signal."
+    "note": "62 of 280 CRM issues reference Salesforce CS- case IDs. Echo score = 62/280 = 0.22 \u2014 contributes to D7 cross-system signal."
   },
-
   "issue_metrics": {
     "total_issues_90d": 280,
     "project": "CRM",
     "salesforce_label_count": 62,
     "jira_echo_score": 0.22,
     "issue_type_breakdown": [
-      { "type": "Bug",         "count": 95 },
-      { "type": "Task",        "count": 87 },
-      { "type": "Story",       "count": 68 },
-      { "type": "Sub-task",    "count": 30 }
+      {
+        "type": "Bug",
+        "count": 95
+      },
+      {
+        "type": "Task",
+        "count": 87
+      },
+      {
+        "type": "Story",
+        "count": 68
+      },
+      {
+        "type": "Sub-task",
+        "count": 30
+      }
     ],
     "sample_cross_references": [
-      { "issue_key": "JIRA-4421", "sf_reference": "CS-1023", "field": "description", "summary": "Fix account sync — see Salesforce case CS-1023" },
-      { "issue_key": "JIRA-4489", "sf_reference": "CS-1078", "field": "description", "summary": "CRM integration bug — linked to SF CS-1078" },
-      { "issue_key": "JIRA-4501", "sf_reference": "CS-1101", "field": "comment",     "summary": "Customer escalation tracked in CS-1101" },
-      { "issue_key": "JIRA-4612", "sf_reference": "CS-1189", "field": "description", "summary": "Duplicate of Salesforce case CS-1189" },
-      { "issue_key": "JIRA-4788", "sf_reference": "CS-1255", "field": "description", "summary": "API failure — see CS-1255 for full trace" }
+      {
+        "issue_key": "JIRA-4421",
+        "sf_reference": "CS-1023",
+        "field": "description",
+        "summary": "Fix account sync \u2014 see Salesforce case CS-1023"
+      },
+      {
+        "issue_key": "JIRA-4489",
+        "sf_reference": "CS-1078",
+        "field": "description",
+        "summary": "CRM integration bug \u2014 linked to SF CS-1078"
+      },
+      {
+        "issue_key": "JIRA-4501",
+        "sf_reference": "CS-1101",
+        "field": "comment",
+        "summary": "Customer escalation tracked in CS-1101"
+      },
+      {
+        "issue_key": "JIRA-4612",
+        "sf_reference": "CS-1189",
+        "field": "description",
+        "summary": "Duplicate of Salesforce case CS-1189"
+      },
+      {
+        "issue_key": "JIRA-4788",
+        "sf_reference": "CS-1255",
+        "field": "description",
+        "summary": "API failure \u2014 see CS-1255 for full trace"
+      }
+    ],
+    "issues": [
+      {
+        "id": "LOAN-001",
+        "key": "LOAN-001",
+        "summary": "Underwriting assignment process broken for CRE loans",
+        "description": "CRE loans routed to wrong underwriter. Multiple reassignments per deal adding 3-5 days to origination cycle.",
+        "labels": [
+          "loan",
+          "underwriting",
+          "routing"
+        ],
+        "priority": "High",
+        "status": "Open",
+        "project": "LOAN"
+      },
+      {
+        "id": "LOAN-002",
+        "key": "LOAN-002",
+        "summary": "Covenant review reminders not triggering in nCino \u2014 compliance risk",
+        "description": "Automated covenant due date alerts not firing. Compliance team discovering overdue covenants manually.",
+        "labels": [
+          "covenant",
+          "compliance",
+          "exception"
+        ],
+        "priority": "High",
+        "status": "Open",
+        "project": "LOAN"
+      },
+      {
+        "id": "LOAN-003",
+        "key": "LOAN-003",
+        "summary": "Pre-close document checklist delays blocking loan closings",
+        "description": "Checklist items stuck in To Do status 2-3 weeks past expected completion.",
+        "labels": [
+          "closing",
+          "exception",
+          "loan"
+        ],
+        "priority": "Medium",
+        "status": "Open",
+        "project": "LOAN"
+      },
+      {
+        "id": "LOAN-004",
+        "key": "LOAN-004",
+        "summary": "Credit analyst spreading queue 3 weeks behind \u2014 deals stalled",
+        "description": "Spread statement periods remaining unlocked 20+ days. Three CRE deals waiting on spreading.",
+        "labels": [
+          "spreading",
+          "underwriting",
+          "credit-review"
+        ],
+        "priority": "High",
+        "status": "Open",
+        "project": "LOAN"
+      },
+      {
+        "id": "LOAN-005",
+        "key": "LOAN-005",
+        "summary": "Loan approval stuck \u2014 credit committee not receiving notifications",
+        "description": "Salesforce approval process not notifying credit committee. Loans in Pending status with no action.",
+        "labels": [
+          "loan",
+          "approval",
+          "underwriting"
+        ],
+        "priority": "High",
+        "status": "Open",
+        "project": "LOAN"
+      }
     ]
   },
-
   "sprint_velocity": [
-    { "sprint_name": "CRM Sprint 14", "completed_points": 42, "salesforce_issue_count": 18, "velocity_trend": "stable" },
-    { "sprint_name": "CRM Sprint 15", "completed_points": 38, "salesforce_issue_count": 22, "velocity_trend": "declining" },
-    { "sprint_name": "CRM Sprint 16", "completed_points": 35, "salesforce_issue_count": 22, "velocity_trend": "declining" }
+    {
+      "sprint_name": "CRM Sprint 14",
+      "completed_points": 42,
+      "salesforce_issue_count": 18,
+      "velocity_trend": "stable"
+    },
+    {
+      "sprint_name": "CRM Sprint 15",
+      "completed_points": 38,
+      "salesforce_issue_count": 22,
+      "velocity_trend": "declining"
+    },
+    {
+      "sprint_name": "CRM Sprint 16",
+      "completed_points": 35,
+      "salesforce_issue_count": 22,
+      "velocity_trend": "declining"
+    }
   ]
 }
