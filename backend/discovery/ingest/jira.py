@@ -485,7 +485,14 @@ def ingest(jira_client: Optional[JiraClient] = None) -> Dict[str, Any]:
     """
     if not is_live():
         logger.info("Jira ingestion: offline mode (fixture)")
-        return _load_fixture()
+        fixture = _load_fixture()
+        # Add lending correlation from fixture issues
+        raw_issues = fixture.get("issue_metrics", {}).get("issues",
+                     fixture.get("issue_metrics", {}).get("recent_issues", []))
+        fixture["lending_correlation"] = get_lending_correlation(
+            fixture_issues=raw_issues
+        )
+        return fixture
 
     jira_url = os.getenv("JIRA_URL", "")
     if not jira_url:
@@ -503,11 +510,189 @@ def ingest(jira_client: Optional[JiraClient] = None) -> Dict[str, Any]:
         issue_metrics = get_issue_metrics(jira_client)
         sprint_velocity = get_sprint_velocity(jira_client)
 
+        lending_correlation = get_lending_correlation(client)
+
         return {
-            "issue_metrics": issue_metrics,
-            "sprint_velocity": sprint_velocity,
+            "issue_metrics":        issue_metrics,
+            "sprint_velocity":      sprint_velocity,
+            "lending_correlation":  lending_correlation,
         }
     except JiraIngestError:
         raise
     except Exception as e:
         raise JiraIngestError(f"Jira ingestion failed unexpectedly: {e}") from e
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# ENG-AIQ-NC-2 — Jira Lending Correlation
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Keywords that map Jira issues to nCino lending detectors.
+# Each entry: (keyword_list, detector_id, banking_label)
+LENDING_KEYWORD_MAP = [
+    (["routing", "underwriting", "assignment", "origination"],
+     "LOAN_ORIGINATION_ROUTING_FRICTION",
+     "Loan origination routing"),
+    (["covenant", "compliance", "exception", "breach"],
+     "COVENANT_TRACKING_GAP",
+     "Covenant compliance"),
+    (["checklist", "closing", "document", "pre-close"],
+     "CHECKLIST_BOTTLENECK",
+     "Document checklist"),
+    (["spreading", "credit-review", "analyst", "spread"],
+     "SPREADING_BOTTLENECK",
+     "Financial spreading"),
+    (["approval", "credit committee", "credit-committee"],
+     "APPROVAL_BOTTLENECK",
+     "Loan approval"),
+]
+
+# All lending keywords combined for initial broad filter
+ALL_LENDING_KEYWORDS = [
+    kw for entry in LENDING_KEYWORD_MAP for kw in entry[0]
+] + ["loan", "nCino", "ncino", "lending", "borrower"]
+
+
+def _issue_matches_keywords(issue: Dict[str, Any], keywords: List[str]) -> bool:
+    """
+    Weighted keyword match to reduce false positives.
+
+    Scoring:
+      label match   = 2 points  (explicit tagging — high confidence)
+      summary match = 1 point   (title-level signal)
+      description   = 0.5 pts   (body text — lower confidence)
+
+    Threshold: score >= 1.5 to fire.
+    This requires either:
+      - 1 label match (score=2), OR
+      - 1 summary + 1 description match (score=1.5), OR
+      - 2+ summary matches (score=2+)
+
+    Single keyword hit in description only (score=0.5) does NOT fire.
+    Generic IT keywords like "approval" or "routing" without a
+    lending-specific label or summary match will not reach threshold.
+    """
+    score = 0.0
+    labels_text = " ".join(issue.get("labels", [])).lower()
+    summary_text = issue.get("summary", "").lower()
+    desc_text = (issue.get("description", "") or "").lower()
+
+    for kw in keywords:
+        kw_lower = kw.lower()
+        if kw_lower in labels_text:
+            score += 2.0
+        elif kw_lower in summary_text:
+            score += 1.0
+        elif kw_lower in desc_text:
+            score += 0.5
+
+    return score >= 1.5
+
+
+def _detector_for_issue(issue: Dict[str, Any]) -> Optional[tuple]:
+    """Return (detector_id, banking_label) for the best-matching detector, or None."""
+    for keywords, detector_id, label in LENDING_KEYWORD_MAP:
+        if _issue_matches_keywords(issue, keywords):
+            return detector_id, label
+    return None
+
+
+def _build_lending_snippet(issue: Dict[str, Any], label: str) -> str:
+    """Build a banking-language evidence snippet from a Jira issue."""
+    summary = issue.get("summary", "Jira issue")
+    priority = issue.get("priority", "")
+    status = issue.get("status", "")
+    parts = [f"{label}: {summary}"]
+    if priority:
+        parts.append(f"Priority: {priority}")
+    if status:
+        parts.append(f"Status: {status}")
+    return ". ".join(parts) + "."
+
+
+def get_lending_correlation(
+    client: Optional["JiraClient"] = None,
+    fixture_issues: Optional[List[Dict[str, Any]]] = None,
+) -> Dict[str, Any]:
+    """
+    ENG-AIQ-NC-2: Detect lending-related Jira issues and map them to
+    nCino detector IDs for use as corroborating evidence in S4.
+
+    Returns:
+      lending_issues: list of matched issues with detector_id and snippet
+      by_detector:    dict mapping detector_id → list of snippets
+      total_matched:  int
+    """
+    # Get issues — from fixture or live
+    issues: List[Dict[str, Any]] = []
+
+    if fixture_issues is not None:
+        issues = fixture_issues
+    elif not is_live():
+        try:
+            fixture = _load_fixture()
+            # Try to get issues from fixture — may be in issue_metrics
+            raw = fixture.get("issue_metrics", {})
+            issues = raw.get("issues", raw.get("recent_issues", []))
+        except Exception:
+            issues = []
+    else:
+        if client is None:
+            try:
+                client = _get_client()
+            except Exception:
+                return {"lending_issues": [], "by_detector": {}, "total_matched": 0}
+        try:
+            # Fetch recent issues with lending keywords via JQL
+            kw_jql = " OR ".join(
+                f'text ~ "{kw}"' for kw in ALL_LENDING_KEYWORDS[:10]
+            )
+            jql = f"({kw_jql}) AND created >= -{WINDOW_DAYS}d ORDER BY created DESC"
+            result = client.get(
+                f"/rest/api/{JIRA_API_VERSION}/search",
+                params={"jql": jql, "maxResults": 50,
+                        "fields": "summary,description,labels,priority,status,project"},
+            )
+            raw_issues = result.get("issues", [])
+            for ri in raw_issues:
+                fields = ri.get("fields", {})
+                issues.append({
+                    "id":          ri.get("id", ""),
+                    "key":         ri.get("key", ""),
+                    "summary":     fields.get("summary", ""),
+                    "description": fields.get("description") or "",
+                    "labels":      fields.get("labels", []),
+                    "priority":    (fields.get("priority") or {}).get("name", ""),
+                    "status":      (fields.get("status") or {}).get("name", ""),
+                    "project":     (fields.get("project") or {}).get("key", ""),
+                })
+        except Exception as e:
+            logger.warning("Jira lending correlation fetch failed: %s", e)
+            return {"lending_issues": [], "by_detector": {}, "total_matched": 0}
+
+    # Match issues to detectors
+    lending_issues: List[Dict[str, Any]] = []
+    by_detector: Dict[str, List[str]] = {}
+
+    for issue in issues:
+        match = _detector_for_issue(issue)
+        if match is None:
+            continue
+        detector_id, label = match
+        snippet = _build_lending_snippet(issue, label)
+        lending_issues.append({
+            "issue_id":    issue.get("key") or issue.get("id", ""),
+            "detector_id": detector_id,
+            "label":       label,
+            "snippet":     snippet,
+            "source":      "Jira",
+            "detectorId":  detector_id,
+        })
+        by_detector.setdefault(detector_id, []).append(snippet)
+
+    logger.info("Jira lending correlation: %d issues matched", len(lending_issues))
+    return {
+        "lending_issues": lending_issues,
+        "by_detector":    by_detector,
+        "total_matched":  len(lending_issues),
+    }

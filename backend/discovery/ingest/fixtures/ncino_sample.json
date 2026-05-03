@@ -1,0 +1,49 @@
+{
+  "_meta": {
+    "story": "SF-NC-4",
+    "description": "Banking-language opportunity labels for nCino lending patterns.",
+    "status": "SME APPROVED",
+    "blocks": "ENG-AIQ-NC-5",
+    "note": "Replace any value below with SME-approved text once SF-NC-4 is signed off."
+  },
+  "LOAN_ORIGINATION_ROUTING_FRICTION": {
+    "s6_title":    "Reduce loan origination delays with intelligent routing",
+    "s6_desc":     "Automate underwriter assignment to eliminate manual routing delays and reduce origination cycle time.",
+    "s7_category": "Loan Origination",
+    "s9_roadmap":  "30-day pilot: Implement intelligent routing for CRE and Commercial loans. Track reduction in stage handoffs and overall origination cycle time.",
+    "s10_exec":    "Origination routing friction is adding days to your loan cycle. An AI routing agent can reduce handoffs and accelerate time-to-close.",
+    "compliance_guardrail": null
+  },
+  "COVENANT_TRACKING_GAP": {
+    "s6_title":    "Automate covenant monitoring to eliminate compliance risk",
+    "s6_desc":     "Replace manual covenant tracking with automated alerts and compliance scoring to prevent breaches before they occur.",
+    "s7_category": "Covenant Compliance",
+    "s9_roadmap":  "30-day pilot: deploy covenant monitoring agent for top 20 commercial loans. Alerts surface to relationship manager — no automated credit decisions.",
+    "s10_exec":    "Overdue covenants create significant regulatory and credit risk. Automated monitoring and timely alerts to relationship managers help prevent breaches.",
+    "compliance_guardrail": "Agent surfaces covenant alerts to relationship manager only. No automated credit decisions. Human escalation required."
+  },
+  "CHECKLIST_BOTTLENECK": {
+    "s6_title":    "Accelerate loan closing by resolving checklist bottlenecks",
+    "s6_desc":     "Identify and resolve document checklist stalls that delay closing, reducing cycle time and improving borrower experience.",
+    "s7_category": "Loan Closing",
+    "s9_roadmap":  "30-day pilot: deploy checklist monitoring for loans in closing stage. Measure: reduction in average overrun days and stalled checklist items.",
+    "s10_exec":    "Document checklist delays are one of the most visible borrower frustrations. Resolving stalls in closing stage directly improves relationship outcomes.",
+    "compliance_guardrail": null
+  },
+  "SPREADING_BOTTLENECK": {
+    "s6_title":    "Reduce financial spreading time with intelligent automation",
+    "s6_desc":     "Identify and clear spreading backlogs by tracking unlocked periods and analyst workload to speed up credit analysis.",
+    "s7_category": "Credit Analysis",
+    "s9_roadmap":  "30-day pilot: deploy spreading backlog monitor for CRE portfolio. Measure: reduction in unlocked spread periods and analyst backlog days.",
+    "s10_exec":    "Spreading backlogs delay credit decisions and frustrate commercial borrowers. Intelligent workload management can clear analyst queues and compress decision timelines.",
+    "compliance_guardrail": null
+  },
+  "APPROVAL_BOTTLENECK": {
+    "s6_title":    "Accelerate credit approvals with intelligent workflow automation",
+    "s6_desc":     "Monitor approval cycle times and proactively escalate stalled approvals to reduce pending queue and improve decision velocity.",
+    "s7_category": "Credit Approval",
+    "s9_roadmap":  "30-day pilot: deploy approval monitoring for commercial loan pipeline. Escalation alerts go to credit committee — no automated decisions.",
+    "s10_exec":    "Stalled approvals are a leading cause of borrower attrition. Proactive escalation and cycle time monitoring can materially improve credit committee throughput.",
+    "compliance_guardrail": "Agent monitors and escalates to credit committee only. No automated credit decisions. Human decision required."
+  }
+}
