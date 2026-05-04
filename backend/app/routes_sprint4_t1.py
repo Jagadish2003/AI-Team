@@ -23,6 +23,7 @@ from discovery.track_a_adapter import export_track_a_seed
 class ComputeRequest(BaseModel):
     mode: str = Field(default="offline", pattern="^(offline|live)$")
     systems: List[str] = Field(default_factory=lambda: ["salesforce", "servicenow", "jira"])
+    pack: Optional[str] = Field(default=None, description="Pack ID: service_cloud or ncino")
 
 
 class ComputeResponse(BaseModel):
@@ -79,14 +80,14 @@ def _get_status(run_id: str) -> Dict[str, Any]:
     return run.get("status") or {}
 
 
-def _run_trackb_and_persist(run_id: str, mode: str, systems: List[str]) -> None:
+def _run_trackb_and_persist(run_id: str, mode: str, systems: List[str], pack: Optional[str] = None) -> None:
     """Background task: execute Track B and persist Track A-shaped artifacts."""
     try:
         # Build run_context for Track B runner (primarily runId)
         run = db.run_get(run_id)  # may raise HTTPException(404) in Track A backend
         run_context = {"runId": run_id, "inputs": run.get("inputs") or {}}
 
-        payload = run_trackb(mode=mode, systems=systems, run_context=run_context)
+        payload = run_trackb(mode=mode, systems=systems, run_context=run_context, pack=pack)
 
         # Convert Track B payload -> Track A seed shapes (opportunities + flattened evidence)
         seed = export_track_a_seed(payload, id_counter=itertools.count(1))
@@ -136,7 +137,7 @@ def register_sprint4_t1_routes(app: FastAPI) -> None:
 
         # Mark status running and return immediately.
         _set_status(run_id, "running", counts={"opportunities": 0, "evidence": 0})
-        background_tasks.add_task(_run_trackb_and_persist, run_id, body.mode, body.systems)
+        background_tasks.add_task(_run_trackb_and_persist, run_id, body.mode, body.systems, body.pack)
 
         return ComputeResponse(
             ok=True,
