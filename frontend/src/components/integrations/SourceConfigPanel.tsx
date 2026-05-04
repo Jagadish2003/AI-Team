@@ -1,20 +1,3 @@
-/**
- * T41-8 — SourceConfigPanel
- *
- * Merged from SourceIntakePage into the Integration Hub right panel.
- * Shows only production-ready functionality:
- *   - File upload (CSV / Excel) with drag-and-drop
- *   - Uploaded file list with remove
- *
- * Deliberately excluded from this panel (T41-8 decisions):
- *   - "Add mock file" button — engineering testing aid, not user-facing
- *   - SampleWorkspacePanel — demo-framing language removed from product
- *   - ManagedAgentPanel ("Launch Managed Agent") — future capability,
- *     surfaces when customers request it, not on a sprint schedule
- *
- * The "Begin Discovery" trigger remains in DiscoveryStartBar at the
- * bottom of IntegrationHubPage — unchanged from before T41-8.
- */
 
 import React, { useRef } from "react";
 import { Upload, FileText, ChevronDown, ChevronUp } from "lucide-react";

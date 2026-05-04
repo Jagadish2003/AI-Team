@@ -1,25 +1,4 @@
-/**
- * T41-4 — Source Intelligence Page v1.2
- *
- * Changes from v1.1:
- *
- *   Issue 1 fix — stable connector ID as join key, not display name string.
- *     SOURCE_KEY_MAP maps connector.id (stable) to the sourceSystem string
- *     used in MappingRow.sourceSystem and PermissionRequirement.sourceSystem.
- *     deriveSourceHealth joins on connector ID, never on display name.
- *     Display name used only for rendering.
- *
- *   Issue 2 fix — "resolved" vs "reviewed" distinction.
- *     Track whether any dismiss action occurred.
- *     When all remaining cards are cleared:
- *       - If all were resolved (confirmed) → "All ambiguous fields resolved"
- *       - If any were dismissed → "All ambiguous fields reviewed"
- *     The word "resolved" appears only when the user actually confirmed
- *     a mapping. Dismiss does not imply resolution.
- *
- *   Issue 3 fix — in backend only (normalization_enrichment.py v1.2).
- *     No frontend change required for Issue 3.
- */
+
 import React, { useMemo, useState } from "react";
 import {
   Database,
@@ -46,19 +25,17 @@ import { sourceKeyForConnector, zeroSignalReason, ZERO_SIGNAL_LABELS } from "../
 const SOURCE_INTELLIGENCE_TITLE = "Source Intelligence";
 const SOURCE_INTELLIGENCE_DESCRIPTION = (
   <>
-    How AgentIQ understood your connected sources &mdash; and what needs your
+    How AgentIQ understood your connected sources - and what needs your
     attention.
   </>
 );
-
-// ── Source health derivation — Issue 1 fix ────────────────────────────────────
 
 type PermState = "confirmed" | "warning" | "loading" | "unknown";
 
 interface SourceHealth {
   connectorId: string;
-  sourceKey: string; // canonical key used for row joins
-  displayName: string; // from connector.name — display only
+  sourceKey: string; 
+  displayName: string; 
   signalCount: number;
   ambiguousCount: number;
   unmappedCount: number;
@@ -143,7 +120,7 @@ function deriveSourceHealth(
     .sort((a, b) => b.signalCount - a.signalCount);
 }
 
-// ── UI helpers ────────────────────────────────────────────────────────────────
+
 
 function ConfBadge({ level }: { level: SourceHealth["confidence"] }) {
   if (level === "NONE") {
@@ -231,8 +208,6 @@ function StatCard({
     </div>
   );
 }
-
-// ── Ambiguous decision card ───────────────────────────────────────────────────
 
 function SourceIntelligenceHeader({
   className = "mb-4",
@@ -328,7 +303,7 @@ function AmbiguousCard({
   );
 }
 
-// ── Issue 2 fix: resolved vs reviewed state ───────────────────────────────────
+
 
 type ReviewedState = "resolved" | "reviewed" | null;
 
@@ -344,7 +319,6 @@ function resolvedState(
   return "reviewed"; // some dismissed
 }
 
-// ── Main page ─────────────────────────────────────────────────────────────────
 
 export default function SourceIntelligencePage() {
   const {
