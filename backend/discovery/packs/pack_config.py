@@ -61,10 +61,10 @@ PACK_REGISTRY: Dict[str, Dict[str, Any]] = {
         "pack_domain":   "ncino",
         "detectors": [
             "discovery.detectors.loan_origination_routing_friction",
-            "discovery.detectors.covenant_tracking_gap",
+            "discovery.detectors.covenant_tracking_gap", 
             "discovery.detectors.checklist_bottleneck",
             "discovery.detectors.spreading_bottleneck",
-            "discovery.detectors.approval_bottleneck",
+            "discovery.detectors.approval_bottleneck", 
         ],
         "ui_labels_path": str(_PACKS_DIR / "ncino_ui_labels.json"),
         "llm_context": (
