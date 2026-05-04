@@ -25,7 +25,10 @@ function AnimatedMetricValue({
   delayMs?: number;
 }) {
   const target = useMemo(() => parseMetricTarget(value), [value]);
-  const [display, setDisplay] = useState(active ? value : '0');
+  const shouldAnimate = active && animationKey > 0 && target !== null;
+  const [display, setDisplay] = useState(() =>
+    shouldAnimate ? '0' : active ? value : '0',
+  );
 
   useEffect(() => {
     if (!active) {

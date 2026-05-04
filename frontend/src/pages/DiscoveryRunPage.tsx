@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
+import { Loader2 } from "lucide-react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { InfoPanel } from "../components/common/InfoPanel";
 import LoadingPanel from "../components/common/LoadingPanel";
@@ -23,22 +24,53 @@ function RunStatusPill({
   displayPct: number;
   status?: string;
 }) {
+  const normalizedStatus = status?.toLowerCase();
+  const isPartial = normalizedStatus === "partial";
+  const isFinished = isComplete || isPartial;
   const label = computing
     ? `Running (${displayPct}%)`
-    : isComplete
-      ? "Complete (100%)"
-      : (status ?? "-");
+    : isFinished
+      ? "Completed 100%"
+        : (status ?? "-");
   const cls = computing
-    ? "border-accent/40 bg-accent/10 text-blue-200"
-    : isComplete
+    ? "border-accent/40 bg-accent/10 text-blue-100"
+    : isFinished
       ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-200"
-      : "border-border bg-bg/30 text-muted";
+        : "border-border bg-bg/30 text-muted";
+  const dotCls = computing
+    ? "bg-accent"
+    : isFinished
+      ? "bg-emerald-400"
+        : "bg-muted/50";
 
   return (
     <span
-      className={`inline-flex items-center rounded-full border px-2 py-0.5 text-xs whitespace-nowrap ${cls}`}
+      className={`inline-flex h-7 items-center gap-2 whitespace-nowrap rounded-full border px-3 text-[13px] font-semibold leading-none align-middle ${cls}`}
     >
+      <span className={`h-1.5 w-1.5 rounded-full ${dotCls}`} />
       {label}
+    </span>
+  );
+}
+
+function ComputingPill() {
+  return (
+    <span className="inline-flex h-7 items-center gap-2 rounded-full border border-accent/30 bg-accent/10 px-3 text-[13px] font-semibold leading-none text-blue-100 shadow-[0_0_0_1px_rgba(37,99,235,0.08)]">
+      <Loader2
+        size={14}
+        strokeWidth={2.5}
+        className="shrink-0 animate-spin text-accent"
+      />
+      <span>Computing</span>
+    </span>
+  );
+}
+
+function PartialResultsPill() {
+  return (
+    <span className="inline-flex h-7 items-center gap-2 rounded-full border border-accent/30 bg-accent/10 px-3 text-[13px] font-semibold leading-none text-blue-100 shadow-[0_0_0_1px_rgba(37,99,235,0.08)]">
+      <span className="h-1.5 w-1.5 rounded-full bg-accent" />
+      Evidence collection ready
     </span>
   );
 }
@@ -78,6 +110,7 @@ export default function DiscoveryRunPage() {
   const isMaterialized =
     status === "complete" || status === "completed" || status === "partial";
   const isComplete = status === "complete" || status === "completed";
+  const isPartial = status === "partial";
   const runScopedPath = (path: string) =>
     runId ? `${path}?runId=${runId}` : path;
 
@@ -146,7 +179,7 @@ export default function DiscoveryRunPage() {
     return (
       <div className="min-h-screen text-text">
         <TopNav />
-        <div className="px-8 py-6">
+        <div className="px-8 py-8">
           <div className="mb-4">
             <div className="text-2xl font-semibold text-text">
               Discovery Run
@@ -234,24 +267,23 @@ export default function DiscoveryRunPage() {
               with live logs and a continuously updated summary of detected
               applications, workflows, and opportunities.
             </div>
-            <p className="mt-1 text-sm text-muted">
-              Run ID:{" "}
-              <span className="font-semibold text-text">
-                {run?.id ?? runId ?? "-"}
+            <p className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-muted">
+              <span>
+                Run ID:{" "}
+                <span className="font-semibold text-text">
+                  {run?.id ?? runId ?? "-"}
+                </span>
               </span>
-              {" - "}
-              Status:{" "}
+              <span className="text-muted">-</span>
+              <span>Status:</span>
               <RunStatusPill
                 computing={computing}
                 isComplete={isComplete}
                 displayPct={displayPct}
                 status={run?.status}
               />
-              {computing && (
-                <span className="ml-2 inline-flex items-center gap-1 rounded-full bg-accent/20 px-2 py-0.5 text-xs font-medium text-accent">
-                  <span className="animate-pulse">o</span> Computing...
-                </span>
-              )}
+              {computing && <ComputingPill />}
+              {!computing && isPartial && <PartialResultsPill />}
             </p>
             {run?.startedAt && (
               <p className="mt-1 text-xs text-muted">
@@ -288,7 +320,7 @@ export default function DiscoveryRunPage() {
         <div className="grid grid-cols-1 items-start gap-4 lg:grid-cols-3">
           <div className="flex h-[460px] min-h-0 flex-col rounded-xl border border-border bg-panel p-4 lg:h-[520px]">
             <div className="shrink-0 text-lg font-semibold">Run Summary</div>
-            <div className="mt-3 min-h-0 flex-1 space-y-3 overflow-auto pr-1 text-sm text-muted">
+            <div className="mt-3 min-h-0 flex-1 space-y-8 overflow-auto pr-1 text-sm text-muted">
               <div className="rounded-lg border border-border bg-bg/10 p-3">
                 <div className="font-semibold text-text">Connected sources</div>
                 <div className="mt-1 max-h-28 overflow-auto break-words pr-1">
