@@ -264,11 +264,14 @@ def run_trackb_and_persist(
 
             exec_report = db.run_kv_get("executive_report", run_id, {})
             sources_analyzed = exec_report.get("sourcesAnalyzed", {})
+            # ENG-AIQ-NC-5: pass pack_id for banking language prompts
+            pack_id = run.get("inputs", {}).get("packId") if run else None
             enrichment = run_llm_enrichment(
                 run_id=run_id,
                 opps=opps,
                 evidence=ev,
                 sources_analyzed=sources_analyzed,
+                pack_id=pack_id,
             )
             db.run_kv_set(KV_LLM_ENRICHMENT, run_id, enrichment)
             if enrichment.get("executiveSummary"):
