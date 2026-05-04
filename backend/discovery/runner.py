@@ -120,17 +120,55 @@ def run(
         logger.error("Salesforce data unavailable — cannot run detectors. Aborting.")
         return _empty_run(run_id, org_id, mode, started_at)
 
+    # 2a. nCino ingest — if ncino pack, fetch lending signals from nCino objects
+    from .packs.pack_config import is_ncino_pack as _is_ncino
+    if _is_ncino(pack_id) and "salesforce" in _systems:
+        try:
+            from .ingest.ncino import ingest as ncino_ingest
+            ncino_data = ncino_ingest()
+            # Merge ncino data into sf_data so detectors can find it
+            if sf_data is None:
+                sf_data = {}
+            sf_data["ncino"] = ncino_data
+            logger.info("nCino ingestion: OK — %d lending metrics", len(ncino_data))
+        except Exception as e:
+            logger.warning("nCino ingestion failed (non-blocking): %s", e)
+
     # 2. Context
     org_ctx = build_org_context(sf_data, sn_data, jira_data)
 
-    # 3. Detect
-    from .detectors import (
-        repetition, handoff_friction, approval_delay,
-        knowledge_gap, integration_concentration,
-        permission_bottleneck, cross_system_echo,
-    )
-    all_detectors = [repetition, handoff_friction, approval_delay, knowledge_gap,
-                     integration_concentration, permission_bottleneck, cross_system_echo]
+    # 3. Detect — ENG-AIQ-NC-4: pack-driven detector selection
+    # Replaces hardcoded Service Cloud detector list.
+    # pack_config.py (ENG-SHARED-1) defines which detectors each pack activates.
+    from .packs.pack_config import is_ncino_pack
+
+    if is_ncino_pack(pack_id):
+        # nCino lending detectors — confirmed objects from SF-NC-2
+        from .detectors import (
+            loan_origination_routing_friction,
+            covenant_tracking_gap,
+            checklist_bottleneck,
+            spreading_bottleneck,
+            approval_bottleneck,
+        )
+        all_detectors = [
+            loan_origination_routing_friction,
+            covenant_tracking_gap,
+            checklist_bottleneck,
+            spreading_bottleneck,
+            approval_bottleneck,
+        ]
+        logger.info("Pack: ncino — 5 lending detectors active")
+    else:
+        # Service Cloud detectors — default
+        from .detectors import (
+            repetition, handoff_friction, approval_delay,
+            knowledge_gap, integration_concentration,
+            permission_bottleneck, cross_system_echo,
+        )
+        all_detectors = [repetition, handoff_friction, approval_delay, knowledge_gap,
+                         integration_concentration, permission_bottleneck, cross_system_echo]
+        logger.info("Pack: service_cloud — 7 SC detectors active")
 
     detector_results = []
     for det in all_detectors:
@@ -144,17 +182,77 @@ def run(
         logger.info(f"  {name}: {status}")
 
     # 4. Score + Evidence
-    from .scorer import score
+    # ENG-AIQ-NC-4: use lending_scorer for ncino pack, SC scorer for service_cloud
+    from .scorer import score as sc_score
+    from .lending_scorer import score_lending, is_lending_detector
     from .evidence_builder import build_evidence
     id_counter = itertools.count(1)
     def id_factory() -> str: return f"{run_id[-6:]}_{next(id_counter):04d}"
 
+    # Issue 3 fix: collect Jira/SN lending correlation by detector for ncino pack.
+    # Wave 2 (ENG-AIQ-NC-2/NC-3) built lending_correlation — wire it into evidence here.
+    jira_by_detector: Dict[str, List[str]] = {}
+    sn_by_detector:   Dict[str, List[str]] = {}
+    if is_ncino_pack(pack_id):
+        if jira_data:
+            jira_by_detector = (
+                jira_data.get("lending_correlation", {}).get("by_detector", {})
+            )
+        if sn_data:
+            sn_by_detector = (
+                sn_data.get("lending_correlation", {}).get("by_detector", {})
+            )
+
     opportunities = []
     for dr in detector_results:
-        scored = score(dr)
+        # Select scorer based on pack
+        if is_ncino_pack(pack_id) and is_lending_detector(dr.detector_id):
+            scored = score_lending(dr)
+        else:
+            scored = sc_score(dr)
         evidence_list = build_evidence(dr, scored, id_factory=id_factory)
+
+        # Issue 3 fix: attach Jira/SN corroboration evidence for ncino pack.
+        # These appear as additional evidence items in S4 alongside nCino evidence.
+        # Does not yet modulate confidence — deferred to post-Sprint 5.
+        if is_ncino_pack(pack_id):
+            corroboration_count = 0
+            for snippet in jira_by_detector.get(dr.detector_id, []):
+                ev_id = id_factory()
+                evidence_list.append({
+                    "id":          ev_id,
+                    "tsLabel":     "",
+                    "source":      "Jira",
+                    "detectorId":  dr.detector_id,
+                    "evidenceType":"Metric",
+                    "title":       f"Jira corroboration: {dr.detector_id}",
+                    "snippet":     snippet,
+                    "entities":    [],
+                    "confidence":  "MEDIUM",
+                    "decision":    "UNREVIEWED",
+                })
+                corroboration_count += 1
+            for snippet in sn_by_detector.get(dr.detector_id, []):
+                ev_id = id_factory()
+                evidence_list.append({
+                    "id":          ev_id,
+                    "tsLabel":     "",
+                    "source":      "ServiceNow",
+                    "detectorId":  dr.detector_id,
+                    "evidenceType":"Metric",
+                    "title":       f"ServiceNow corroboration: {dr.detector_id}",
+                    "snippet":     snippet,
+                    "entities":    [],
+                    "confidence":  "MEDIUM",
+                    "decision":    "UNREVIEWED",
+                })
+                corroboration_count += 1
+            if corroboration_count > 0:
+                logger.info("  %s: +%d corroborating evidence items (Jira/SN)",
+                            dr.detector_id, corroboration_count)
         opp = {
             "runId": run_id, "orgId": org_id, "detector_id": dr.detector_id,
+            "packId": pack_id,
             "signal_source": dr.signal_source, "metric_value": dr.metric_value,
             "threshold": dr.threshold, "impact": scored["impact"], "effort": scored["effort"],
             "confidence": scored["confidence"], "tier": scored["tier"],
