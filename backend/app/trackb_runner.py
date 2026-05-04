@@ -22,14 +22,14 @@ DEFAULT_SYSTEMS = ["salesforce", "servicenow", "jira"]
 def _runner_mode() -> str:
     return os.getenv("TRACKB_RUNNER_MODE", "in_process").lower().strip()
 
-def run_trackb(*, mode: str, systems: Optional[List[str]] = None, run_context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+def run_trackb(*, mode: str, systems: Optional[List[str]] = None, run_context: Optional[Dict[str, Any]] = None, pack: Optional[str] = None) -> Dict[str, Any]:
     systems = systems or DEFAULT_SYSTEMS
     run_context = run_context or {}
     if _runner_mode() == "subprocess":
-        return _run_subprocess(mode=mode, systems=systems, run_context=run_context)
-    return _run_in_process(mode=mode, systems=systems, run_context=run_context)
+        return _run_subprocess(mode=mode, systems=systems, run_context=run_context, pack=pack)
+    return _run_in_process(mode=mode, systems=systems, run_context=run_context, pack=pack)
 
-def _run_in_process(*, mode: str, systems: List[str], run_context: Dict[str, Any]) -> Dict[str, Any]:
+def _run_in_process(*, mode: str, systems: List[str], run_context: Dict[str, Any], pack: Optional[str] = None) -> Dict[str, Any]:
     try:
         # Adjust import path to your Track B runner
         from discovery.runner import run  # type: ignore
@@ -39,7 +39,7 @@ def _run_in_process(*, mode: str, systems: List[str], run_context: Dict[str, Any
             "Set TRACKB_RUNNER_MODE=subprocess or fix PYTHONPATH."
         ) from e
 
-    payload = run(mode=mode, systems=systems, run_id=run_context.get("runId"))
+    payload = run(mode=mode, systems=systems, run_id=run_context.get("runId"), pack=pack)
     return payload
 
 def _run_subprocess(*, mode: str, systems: List[str], run_context: Dict[str, Any]) -> Dict[str, Any]:

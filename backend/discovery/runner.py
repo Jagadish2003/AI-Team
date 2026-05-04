@@ -1,11 +1,12 @@
 """
-SF-2.8 — Runner CLI
+SF-2.8 — Runner CLI — ENG-SHARED-1 pack selector added
 
 Full pipeline: ingest → detect → score → build_evidence → OpportunityCandidate[]
 
 Usage:
     python -m backend.discovery.runner --mode offline
-    python -m backend.discovery.runner --mode live --systems salesforce,jira
+    python -m backend.discovery.runner --mode offline --pack ncino
+    python -m backend.discovery.runner --mode live --systems salesforce,jira --pack ncino
 """
 from __future__ import annotations
 
@@ -63,7 +64,14 @@ def run(
     run_id: Optional[str] = None,
     org_id: str = "demo-org",
     systems: Optional[List[str]] = None,
+    pack: Optional[str] = None,
 ) -> Dict[str, Any]:
+    # ENG-SHARED-1: resolve pack config — replaces temporary is_ncino_pack conditional
+    from .packs.pack_config import get_pack, get_pack_domain, is_ncino_pack
+    pack_config = get_pack(pack)
+    pack_id     = pack_config["packId"]
+    pack_domain = pack_config["pack_domain"]
+
     # Default to all systems if None
     if mode is None:
         mode = os.environ.get("INGEST_MODE", "offline").strip().lower()
@@ -76,7 +84,7 @@ def run(
         run_id = f"run_{uuid.uuid4().hex[:8]}"
 
     started_at = datetime.now(timezone.utc).isoformat()
-    logger.info(f"AgentIQ discovery runner — mode={mode} run_id={run_id}")
+    logger.info(f"AgentIQ discovery runner — mode={mode} run_id={run_id} pack={pack_id}")
 
     # 1. Ingest
     from .ingest import salesforce, servicenow, jira as jira_mod
@@ -157,6 +165,7 @@ def run(
 
     return {
         "runId": run_id, "orgId": org_id, "mode": mode,
+        "packId": pack_id,
         "startedAt": started_at, "completedAt": datetime.now(timezone.utc).isoformat(),
         "inputs": org_ctx, "opportunities": opportunities,
     }
@@ -175,6 +184,7 @@ def main():
 
     parser.add_argument("--mode", choices=["offline", "live"], default=default_mode)
     parser.add_argument("--systems", help="Comma-separated list of systems (e.g. salesforce,jira)")
+    parser.add_argument("--pack", default=None, help="Pack ID: service_cloud (default) or ncino")
     parser.add_argument("--output", help="Output JSON file path")
     parser.add_argument("--run-id", help="Explicit run ID")
     parser.add_argument("--org-id", default="demo-org")
@@ -191,7 +201,8 @@ def main():
         mode=args.mode,
         run_id=args.run_id,
         org_id=args.org_id,
-        systems=systems_list
+        systems=systems_list,
+        pack=args.pack,
     )
 
     if args.output_format == "track_a_seed":
