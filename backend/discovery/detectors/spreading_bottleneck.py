@@ -9,12 +9,12 @@ Confirmed fields on LLC_BI__Spread_Statement_Period__c:
   LLC_BI__Is_Locked__c   — False = not finalised (the confirmed bottleneck signal)
   LLC_BI__Is_Annual__c   — confirmed exists
   LLC_BI__Spread__c      — parent spread header (use to resolve loan via two hops)
-  CreatedById            — analyst proxy (LLC_BI__Analyst__c does NOT exist)
+  LLC_BI__Analyst__c     — analyst assignment
+  CreatedById            — fallback analyst proxy
   CreatedDate            — period age calculation
 
 Corrected fields (were assumed, do NOT exist):
   LLC_BI__Loan__c        — NOT on period, is on LLC_BI__Spread__c (parent)
-  LLC_BI__Analyst__c     — NOT on period OR on spread header
   LLC_BI__Statement_Date__c — NOT in FIELDS(ALL)
   LLC_BI__Source__c      — NOT in FIELDS(ALL)
   LLC_BI__Year__c        — NOT in FIELDS(ALL)
@@ -58,7 +58,7 @@ def detect(sf_data: Dict[str, Any], sn_data=None, jira_data=None) -> List[Detect
             "analyst_bottlenecks": metrics.get("analyst_bottlenecks", []),
             "primary_object":      "LLC_BI__Spread_Statement_Period__c",
             "loan_join_via":       "LLC_BI__Spread__c.LLC_BI__Loan__c",
-            "analyst_field":       "CreatedById (proxy — LLC_BI__Analyst__c does not exist)",
+            "analyst_field":       "LLC_BI__Analyst__c, fallback CreatedById",
             "signal_field":        "LLC_BI__Is_Locked__c",
         },
     )]

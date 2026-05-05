@@ -159,7 +159,7 @@ def _fetch_stage_history(client: NcinoClient) -> List[Dict[str, Any]]:
     """
     rows = client.query(f"""
         SELECT Id, ParentId, Field, OldValue, NewValue,
-               CreatedDate, CreatedByIdId
+               CreatedDate, CreatedById
         FROM LLC_BI__Loan__History
         WHERE Field = 'LLC_BI__Stage__c'
         AND CreatedDate = LAST_N_DAYS:{WINDOW_DAYS}
@@ -236,7 +236,7 @@ def _fetch_spread_periods(client: NcinoClient) -> List[Dict[str, Any]]:
 
     Confirmed from real Org 2 metadata — May 2026:
       - NO LLC_BI__Loan__c field on this object (two-hop relationship)
-      - NO LLC_BI__Analyst__c field on either Spread or SpreadStatementPeriod
+      - LLC_BI__Analyst__c CONFIRMED Lookup(User) on this object
       - NO LLC_BI__Statement_Date__c on this object
       - LLC_BI__Is_Locked__c CONFIRMED — primary bottleneck signal
       - LLC_BI__Spread__c CONFIRMED on this object — the parent spread header
@@ -245,9 +245,6 @@ def _fetch_spread_periods(client: NcinoClient) -> List[Dict[str, Any]]:
       LLC_BI__Loan__c → LLC_BI__Spread__c → LLC_BI__Spread_Statement_Period__c
       Join: WHERE LLC_BI__Spread__c IN (SELECT Id FROM LLC_BI__Spread__c
             WHERE LLC_BI__Loan__c IN [...])
-
-    Analyst field: LLC_BI__Analyst__c — CONFIRMED Lookup(User) on this object.
-    Also fetch CreatedById as fallback when Analyst__c is null.
 
     Signal: LLC_BI__Is_Locked__c = false AND CreatedDate > 14 days ago.
     """
@@ -351,7 +348,10 @@ def _build_origination_metrics(
             high_friction.append({
                 "loan_id": lid, "transitions": transitions,
                 "owner_changes": owner_changes,
-                "loan_type": loan.get("LLC_BI__Loan_Type__c", ""),
+                "loan_type": (
+                    loan.get("LLC_BI__Loan_Type_Code__c")
+                    or loan.get("LLC_BI__Loan_Type__c", "")
+                ),
                 "amount": loan.get("LLC_BI__Amount__c"),
             })
 
@@ -500,7 +500,8 @@ def _build_spreading_metrics(
     Confirmed fields (real Org 2 metadata — May 2026):
       LLC_BI__Is_Locked__c  — confirmed bottleneck signal (false = not finalised)
       LLC_BI__Spread__c     — parent spread header
-      CreatedById           — analyst proxy (no LLC_BI__Analyst__c on this object)
+      LLC_BI__Analyst__c    — analyst assignment
+      CreatedById           — fallback analyst proxy
       CreatedDate           — period created date
 
     Two-hop loan resolution:

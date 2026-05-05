@@ -1,6 +1,7 @@
 **/__pycache__/
 **/.pytest_cache/
 **/.venv/
+**/.smoke_tmp/
 .ipynb_checkpoints/
 build/
 dist/
@@ -21,6 +22,7 @@ Thumbs.db
 .vscode/
 .idea/
 *.db
+backend/test_report_artifacts/
 backend/.env
 frontend/.env
 backend/token_generation/server.key

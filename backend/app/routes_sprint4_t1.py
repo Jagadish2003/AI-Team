@@ -8,6 +8,7 @@ Adds:
 from __future__ import annotations
 
 import itertools
+import logging
 import time
 from typing import Any, Dict, List, Optional
 
@@ -18,6 +19,8 @@ from .security import require_auth
 from . import db
 from .trackb_runner import run_trackb
 from discovery.track_a_adapter import export_track_a_seed
+
+logger = logging.getLogger(__name__)
 
 
 class ComputeRequest(BaseModel):
@@ -181,6 +184,8 @@ def register_sprint4_t1_routes(app: FastAPI) -> None:
                            "message": "...", "latencyMs": 42, "isLive": true},
             "Jira":        {"system": "Jira", "status": "live"|"fixture"|"error",
                            "message": "...", "latencyMs": 38, "isLive": true},
+            "nCino":       {"system": "nCino", "status": "live"|"fixture"|"error",
+                           "message": "...", "latencyMs": 40, "isLive": true},
           }
         """
         # Try stored health from run start first
@@ -201,5 +206,7 @@ def register_sprint4_t1_routes(app: FastAPI) -> None:
                 "ServiceNow": {"system": "ServiceNow", "status": "error",
                                "message": str(e), "isLive": False},
                 "Jira":        {"system": "Jira", "status": "error",
+                               "message": str(e), "isLive": False},
+                "nCino":       {"system": "nCino", "status": "error",
                                "message": str(e), "isLive": False},
             }

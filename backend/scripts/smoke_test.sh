@@ -17,6 +17,18 @@ echo "== Start run"
 RUN_JSON=$(curl -sS "${hdr[@]}" -X POST "${BASE_URL}/api/runs/start" -d '{"connectedSources":["ServiceNow"],"uploadedFiles":[],"sampleWorkspaceEnabled":true}')
 RUN_ID=$(echo "$RUN_JSON" | python -c "import sys, json; print(json.load(sys.stdin)['runId'])")
 
+echo "== Wait for run completion"
+STATUS=""
+for i in $(seq 1 120); do
+  STATUS_JSON=$(curl -sS "${hdr[@]}" "${BASE_URL}/api/runs/${RUN_ID}/status" || true)
+  STATUS=$(echo "$STATUS_JSON" | python -c "import sys,json; print(json.load(sys.stdin).get('status','running'))" 2>/dev/null || echo "running")
+  echo "   status=$STATUS"
+  if [ "$STATUS" = "complete" ] || [ "$STATUS" = "partial" ]; then break; fi
+  if [ "$STATUS" = "failed" ]; then echo "Run failed"; exit 1; fi
+  sleep 1
+done
+test "$STATUS" = "complete" || test "$STATUS" = "partial"
+
 echo "== Run scoped endpoints"
 curl -sS "${hdr[@]}" "${BASE_URL}/api/runs/${RUN_ID}" >/dev/null
 curl -sS "${hdr[@]}" "${BASE_URL}/api/runs/${RUN_ID}/events" >/dev/null
