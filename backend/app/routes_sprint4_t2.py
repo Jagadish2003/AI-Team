@@ -52,7 +52,6 @@ def register_sprint4_t2_routes(app):
                 "updatedAt": db.now_iso(),
             },
         )
-
         background_tasks.add_task(
             run_trackb_and_persist,
             run_id,

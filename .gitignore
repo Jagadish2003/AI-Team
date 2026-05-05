@@ -27,3 +27,5 @@ backend/.env
 frontend/.env
 backend/token_generation/server.key
 backend/token_generation/sf_token.json
+backend/token_generation/ncino/server_ncino.key
+backend/token_generation/ncino/ncino_token.json
