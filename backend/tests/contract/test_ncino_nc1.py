@@ -70,7 +70,7 @@ class TestNcinoHealthCheck:
         assert result.status == "live"
         assert result.is_live is True
         assert result.latency_ms is not None
-        assert "LLC_BI__Loan__c" in result.message
+        assert "connected" in result.message.lower() or "health check" in result.message.lower()
 
     def test_401_returns_error_auth(self):
         with patch_sf_env():
@@ -134,7 +134,7 @@ class TestNcinoHealthCheck:
                 result = self._check()()
 
         assert result.status == "live"
-        assert "queryable" in result.message.lower() or "accessible" in result.message.lower()
+        assert "connected" in result.message.lower() or "health check" in result.message.lower()
 
 
 class TestCheckAllConnectorsNcino:

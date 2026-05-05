@@ -62,7 +62,7 @@ export default function RunSummaryPanel({
           {run.inputs.uploadedFiles.length > 0 && (
             <li>• {run.inputs.uploadedFiles.length} Uploaded Files</li>
           )}
-          {run.inputs.sampleWorkspaceEnabled && <li>• Sample Workspace</li>}
+          {/* T41-8: Sample Workspace removed from visible run summary */}
         </ul>
       </div>
  
