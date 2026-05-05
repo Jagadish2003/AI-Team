@@ -101,10 +101,15 @@ def _run_trackb_and_persist(run_id: str, mode: str, systems: List[str], pack: Op
         if hasattr(db, "run_kv_set"):
             db.run_kv_set("opps", run_id, opps)
             db.run_kv_set("evidence", run_id, evidence)
+            # Store packId so normalization and other endpoints can detect pack
+            if pack:
+                db.run_kv_set("pack_id", run_id, pack)
         else:
             # Fallback: attach to run record
             run["opps"] = opps
             run["evidence"] = evidence
+            if pack:
+                run["packId"] = pack
             db.run_set(run_id, run)
 
         _set_status(run_id, "complete", counts={"opportunities": len(opps), "evidence": len(evidence)})
