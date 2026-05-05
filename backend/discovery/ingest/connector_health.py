@@ -106,7 +106,7 @@ def check_servicenow() -> ConnectorHealth:
             return ConnectorHealth(
                 system="ServiceNow",
                 status="live",
-                message=f"Connected to {sn_url}",
+                message=f"Connected to {sn_url} — health check passed (shallow check: object reachable + authenticated)",
                 latency_ms=latency_ms,
             )
         elif resp.status_code == 401:
@@ -204,7 +204,7 @@ def check_jira() -> ConnectorHealth:
             return ConnectorHealth(
                 system="Jira",
                 status="live",
-                message=f"Connected to {jira_url} as {display_name}",
+                message=f"Connected to {jira_url} as {display_name} — health check passed (shallow check: authenticated)",
                 latency_ms=latency_ms,
             )
         elif resp.status_code == 401:
@@ -318,10 +318,7 @@ def check_ncino() -> ConnectorHealth:
                 return ConnectorHealth(
                     system="nCino",
                     status="live",
-                    message=(
-                        f"Connected to {sf_url} - LLC_BI__Loan__c accessible "
-                        "and queryable"
-                    ),
+                    message=f"Connected to {sf_url} — health check passed (SOQL queryable)",
                     latency_ms=latency_ms,
                 )
 

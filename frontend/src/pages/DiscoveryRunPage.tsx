@@ -90,7 +90,7 @@ export default function DiscoveryRunPage() {
     (location.state as { autoStart?: boolean } | null)?.autoStart === true;
   const { runId } = useRunContext();
   const { connectors } = useConnectorContext();
-  const { uploadedFiles, sampleWorkspaceEnabled } = useSourceIntakeContext();
+  const { uploadedFiles } = useSourceIntakeContext(); // T41-8: sampleWorkspaceEnabled removed
 
   const {
     run,
@@ -144,16 +144,14 @@ export default function DiscoveryRunPage() {
     return {
       connectedSources,
       uploadedFiles: uploadedFiles.map((f) => f.name),
-      sampleWorkspaceEnabled,
       mode: "live" as const,
     };
-  }, [connectors, uploadedFiles, sampleWorkspaceEnabled]);
+  }, [connectors, uploadedFiles]); // T41-8: sampleWorkspaceEnabled removed
   const summaryInputs = run?.inputs ?? inputs;
 
   const hasAtLeastOneSource =
     inputs.connectedSources.length > 0 ||
-    inputs.uploadedFiles.length > 0 ||
-    inputs.sampleWorkspaceEnabled;
+    inputs.uploadedFiles.length > 0; // T41-8: sampleWorkspaceEnabled removed
 
   useEffect(() => {
     if (!runId && autoStartRequested && !loading && hasAtLeastOneSource) {
@@ -337,14 +335,7 @@ export default function DiscoveryRunPage() {
                     : "None"}
                 </div>
               </div>
-              <div className="rounded-lg border border-border bg-bg/10 p-3">
-                <div className="font-semibold text-text">Sample workspace</div>
-                <div className="mt-1 max-h-28 overflow-auto break-words pr-1">
-                  {summaryInputs.sampleWorkspaceEnabled
-                    ? "Enabled"
-                    : "Disabled"}
-                </div>
-              </div>
+              {/* T41-8: Sample workspace panel removed */}
             </div>
           </div>
 

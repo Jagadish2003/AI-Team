@@ -296,14 +296,30 @@ def _validate_opp_fields(parsed: Dict[str, Any], opp_id: str) -> bool:
 # Per-opportunity enrichment
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _fallback(opp: Dict[str, Any]) -> Dict[str, Any]:
+def _fallback(opp: Dict[str, Any], pack_id: Optional[str] = None) -> Dict[str, Any]:
+    """
+    Pack-aware fallback when LLM enrichment is unavailable.
+    nCino pack uses banking-language fallback summary.
+    Service Cloud uses original aiRationale text.
+    Issue 6 fix: prevents nCino screens showing generic SC language on fallback.
+    """
+    from discovery.packs.pack_config import is_ncino_pack
+    if is_ncino_pack(pack_id) and not opp.get("aiRationale"):
+        title = opp.get("title", "Lending friction detected")
+        summary = (
+            f"{title}. Connect to the Anthropic API to generate a full banking "
+            f"operations analysis with evidence-backed insights for this pattern."
+        )
+    else:
+        summary = opp.get("aiRationale", "")
     return {
-        "aiSummary":             opp.get("aiRationale", ""),
+        "aiSummary":             summary,
         "aiWhyBullets":          [],
         "aiRisks":               [],
         "aiSuggestedNextSteps":  [],
         "llmGenerated":          False,
         "llmModel":              None,
+        "complianceGuardrailApplied": is_ncino_pack(pack_id) if pack_id else False,
     }
 
 
@@ -313,7 +329,7 @@ def _enrich_opportunity(
     pack_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     opp_id   = opp.get("id", "unknown")
-    fb       = _fallback(opp)
+    fb       = _fallback(opp, pack_id=pack_id)
     prompt   = _opp_prompt(opp, evidence, pack_id=pack_id)
     raw      = _call_claude(prompt, MAX_TOKENS_OPP)
 
@@ -351,10 +367,11 @@ def _enrich_opportunity(
 def _enrich_executive_summary(
     opps: List[Dict[str, Any]],
     sources_analyzed: Dict[str, Any],
+    pack_id: Optional[str] = None,
 ) -> str:
     if not opps:
         return ""
-    raw = _call_claude(_exec_summary_prompt(opps, sources_analyzed), MAX_TOKENS_EXEC)
+    raw = _call_claude(_exec_summary_prompt(opps, sources_analyzed, pack_id=pack_id), MAX_TOKENS_EXEC)
     if raw is None:
         return ""
     # Executive summary is plain text — reject if it looks like JSON
