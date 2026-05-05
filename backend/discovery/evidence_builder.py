@@ -367,16 +367,145 @@ def _build_d7(
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Dispatch table
+
+# ─────────────────────────────────────────────────────────────────────────────
+# nCino Lending Evidence Builders — ENG-AIQ-NC-4 hotfix
+# Each maps to a lending detector and produces banking-language evidence
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _build_ncino_routing(
+    dr: DetectorResult, confidence: str, ts: str, id_factory
+) -> Dict[str, Any]:
+    ev = dr.raw_evidence
+    total = ev.get("total_loans", 0)
+    max_trans = ev.get("max_stage_transitions", 0)
+    high_friction = ev.get("high_friction_count", 0)
+    snippet = (
+        f"{high_friction} of {total} loans show {max_trans}+ stage transitions "
+        f"(threshold: {int(dr.threshold)}). Excessive routing handoffs are "
+        f"extending the origination cycle."
+    )
+    return _make_evidence(
+        id=_make_id(dr.signal_source, id_factory),
+        ts_label=ts, source="Salesforce", evidence_type="Metric",
+        title=f"Loan origination routing friction — {high_friction} loans above threshold",
+        snippet=snippet, entities=["ent_loan_origination"], confidence=confidence,
+    )
+
+
+def _build_ncino_covenant(
+    dr: DetectorResult, confidence: str, ts: str, id_factory
+) -> Dict[str, Any]:
+    ev = dr.raw_evidence
+    overdue = ev.get("overdue_count", 0)
+    breached = ev.get("breached_count", 0)
+    max_days = ev.get("max_days_past_evaluation", 0)
+    compliance = ev.get("compliance_override", False)
+    prefix = "⚠ COMPLIANCE OVERRIDE — " if compliance else ""
+    snippet = (
+        f"{prefix}{overdue} overdue covenants detected. "
+        f"{breached} covenant(s) breached. "
+        f"Max days past evaluation: {int(max_days)}. "
+        f"{'Immediate escalation to relationship manager required.' if compliance else 'Automated monitoring can prevent breach escalation.'}"
+    )
+    return _make_evidence(
+        id=_make_id(dr.signal_source, id_factory),
+        ts_label=ts, source="Salesforce", evidence_type="Metric",
+        title=f"Covenant compliance gap — {overdue} overdue, {breached} breached",
+        snippet=snippet, entities=["ent_covenant_compliance"], confidence=confidence,
+    )
+
+
+def _build_ncino_checklist(
+    dr: DetectorResult, confidence: str, ts: str, id_factory
+) -> Dict[str, Any]:
+    ev = dr.raw_evidence
+    total = ev.get("total_checklists", 0)
+    overrun = ev.get("overrun_count", 0)
+    stalled = ev.get("stalled_count", 0)
+    max_overrun = ev.get("max_overrun_days", 0)
+    avg_overrun = ev.get("avg_overrun_days", 0)
+    snippet = (
+        f"{overrun} of {total} loan checklists overrunning expected duration "
+        f"(max: {int(max_overrun)} days, avg: {int(avg_overrun)} days). "
+        f"{stalled} checklist(s) stalled. Closing delays are impacting borrower experience."
+    )
+    return _make_evidence(
+        id=_make_id(dr.signal_source, id_factory),
+        ts_label=ts, source="Salesforce", evidence_type="Metric",
+        title=f"Checklist bottleneck — {overrun} overruns detected (max {int(max_overrun)} days)",
+        snippet=snippet, entities=["ent_loan_checklist"], confidence=confidence,
+    )
+
+
+def _build_ncino_spreading(
+    dr: DetectorResult, confidence: str, ts: str, id_factory
+) -> Dict[str, Any]:
+    ev = dr.raw_evidence
+    unlocked = ev.get("unlocked_count", 0)
+    max_days = ev.get("max_days_unlocked", 0)
+    analyst_backlog = ev.get("analyst_backlog_count", 0)
+    snippet = (
+        f"{unlocked} spread periods remain unlocked (max: {int(max_days)} days). "
+        f"{analyst_backlog} analyst(s) have 2+ unlocked periods. "
+        f"Financial spreading backlog is delaying credit decisions."
+    )
+    return _make_evidence(
+        id=_make_id(dr.signal_source, id_factory),
+        ts_label=ts, source="Salesforce", evidence_type="Metric",
+        title=f"Spreading bottleneck — {unlocked} unlocked periods (max {int(max_days)} days)",
+        snippet=snippet, entities=["ent_spreading_analyst"], confidence=confidence,
+    )
+
+
+def _build_ncino_approval(
+    dr: DetectorResult, confidence: str, ts: str, id_factory
+) -> Dict[str, Any]:
+    ev = dr.raw_evidence
+    pending = ev.get("pending_count", 0)
+    total = ev.get("total_instances", 0)
+    max_days = ev.get("max_cycle_days", 0)
+    avg_days = ev.get("avg_cycle_days", 0)
+    # Cap unrealistic cycle days from non-loan approvals to avoid confusion
+    display_max = min(int(max_days), 365)
+    snippet = (
+        f"{pending} loan approval(s) currently pending out of {total} total. "
+        f"Approval cycle: avg {int(avg_days)} days, max {display_max} days. "
+        f"Proactive escalation to credit committee can reduce approval backlog."
+    )
+    return _make_evidence(
+        id=_make_id(dr.signal_source, id_factory),
+        ts_label=ts, source="Salesforce", evidence_type="Metric",
+        title=f"Approval bottleneck — {pending} pending loan approval(s)",
+        snippet=snippet, entities=["ent_loan_approval"], confidence=confidence,
+    )
+
 # ─────────────────────────────────────────────────────────────────────────────
 
 _BUILDERS = {
-    "REPETITIVE_AUTOMATION":    _build_d1,
-    "HANDOFF_FRICTION":         _build_d2,
-    "APPROVAL_BOTTLENECK":      _build_d3,
-    "KNOWLEDGE_GAP":            _build_d4,
-    "INTEGRATION_CONCENTRATION":_build_d5,
-    "PERMISSION_BOTTLENECK":    _build_d6,
-    "CROSS_SYSTEM_ECHO":        _build_d7,
+    # Service Cloud detectors
+    "REPETITIVE_AUTOMATION":            _build_d1,
+    "HANDOFF_FRICTION":                 _build_d2,
+    "APPROVAL_BOTTLENECK":              _build_d3,   # SC approval — used as fallback
+    "KNOWLEDGE_GAP":                    _build_d4,
+    "INTEGRATION_CONCENTRATION":        _build_d5,
+    "PERMISSION_BOTTLENECK":            _build_d6,
+    "CROSS_SYSTEM_ECHO":                _build_d7,
+    # nCino lending detectors — ENG-AIQ-NC-4 hotfix
+    "LOAN_ORIGINATION_ROUTING_FRICTION": _build_ncino_routing,
+    "COVENANT_TRACKING_GAP":             _build_ncino_covenant,
+    "CHECKLIST_BOTTLENECK":              _build_ncino_checklist,
+    "SPREADING_BOTTLENECK":              _build_ncino_spreading,
+    "APPROVAL_BOTTLENECK_NCINO":         _build_ncino_approval,
+}
+
+# nCino lending detectors use banking-language builders
+_NCINO_BUILDERS = {
+    "LOAN_ORIGINATION_ROUTING_FRICTION": _build_ncino_routing,
+    "COVENANT_TRACKING_GAP":             _build_ncino_covenant,
+    "CHECKLIST_BOTTLENECK":              _build_ncino_checklist,
+    "SPREADING_BOTTLENECK":              _build_ncino_spreading,
+    "APPROVAL_BOTTLENECK":               _build_ncino_approval,
 }
 
 
@@ -419,9 +548,14 @@ def build_evidence(
     confidence = str(opportunity.get("confidence", "LOW"))
     ts = _now_utc_label()
 
-    builder = _BUILDERS.get(detector_result.detector_id)
+    # Use nCino banking-language builders for lending detectors
+    pack_id = opportunity.get("packId", "")
+    if pack_id == "ncino" and detector_result.detector_id in _NCINO_BUILDERS:
+        builder = _NCINO_BUILDERS[detector_result.detector_id]
+    else:
+        builder = _BUILDERS.get(detector_result.detector_id)
+
     if builder is None:
-        # Unknown detector — return empty (caller downgrades confidence)
         return []
 
     try:

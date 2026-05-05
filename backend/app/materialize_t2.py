@@ -50,6 +50,8 @@ def _probe_systems(
 
     os.environ["INGEST_MODE"] = mode
 
+    import logging
+
     from discovery.ingest import jira as _jira
     from discovery.ingest import salesforce as _sf
     from discovery.ingest import servicenow as _sn
@@ -57,14 +59,13 @@ def _probe_systems(
     from discovery.ingest.salesforce import IngestError as SFError
     from discovery.ingest.servicenow import ServiceNowIngestError as SNError
 
-    print(f"SYSTEMS: {systems}")
+    logger = logging.getLogger(__name__)
 
     _ingest_map = {
         "salesforce": (_sf.ingest, (SFError,)),
         "servicenow": (_sn.ingest, (SNError,)),
         "jira": (_jira.ingest, (JiraIngestError,)),
     }
-    print(f"_INGEST_MAP: {_ingest_map}")
     per_system: Dict[str, str] = {
         s: "skipped" for s in ["salesforce", "servicenow", "jira"]
     }
@@ -72,15 +73,14 @@ def _probe_systems(
     succeeded: List[str] = []
 
     for system in systems:
-        print(f"SYSTEM: {system}")
+        logger.info(f"SYSTEM: {system}")
         if system not in _ingest_map:
             continue
         ingest_fn, _ = _ingest_map[system]
         try:
-            print(f"STARTED INGEST SYSTEM: {system}")
+            logger.info(f"STARTED INGEST SYSTEM: {system}")
             data = ingest_fn()
-            print(f"DATA: {data}")
-            print(f"ENDED INGEST SYSTEM: {system}")
+            logger.info(f"ENDED INGEST SYSTEM: {system}")
             if data:
                 per_system[system] = "ok"
                 succeeded.append(system)

@@ -210,7 +210,9 @@ def run(
             scored = score_lending(dr)
         else:
             scored = sc_score(dr)
-        evidence_list = build_evidence(dr, scored, id_factory=id_factory)
+        # Pass packId so build_evidence uses nCino banking-language builders
+        scored_with_pack = {**scored, "packId": pack_id}
+        evidence_list = build_evidence(dr, scored_with_pack, id_factory=id_factory)
 
         # Issue 3 fix: attach Jira/SN corroboration evidence for ncino pack.
         # These appear as additional evidence items in S4 alongside nCino evidence.

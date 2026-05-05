@@ -85,6 +85,7 @@ export default function RunSummaryPanel({
         >
           Normalization
         </button>
+        {/* View Partial Results hidden — Evidence Collection page hidden Sprint 5.1
         <button
           className="w-full rounded-lg border border-border bg-bg/40 px-4 py-2 text-sm font-medium text-text transition-colors hover:bg-bg/60 disabled:cursor-not-allowed disabled:opacity-40"
           onClick={onViewPartial}
@@ -92,7 +93,7 @@ export default function RunSummaryPanel({
           title={!canViewPartial ? 'Available after Entity Extraction starts' : undefined}
         >
           View Partial Results
-        </button>
+        </button> */}
         <button
           className="w-full rounded-lg border border-border bg-bg/40 px-4 py-2 text-sm font-medium text-text transition-colors hover:bg-bg/60 disabled:cursor-not-allowed disabled:opacity-40"
           disabled={!canDownload}

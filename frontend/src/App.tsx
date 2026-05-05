@@ -53,10 +53,11 @@ export default function App() {
                           path="/discovery-run"
                           element={<DiscoveryRunPage />}
                         />
+                        {/* Evidence Collection hidden — Sprint 5.1
                         <Route
                           path="/partial-results"
                           element={<PartialResultsPage />}
-                        />
+                        /> */}
                         <Route
                           path="/normalization"
                           element={
