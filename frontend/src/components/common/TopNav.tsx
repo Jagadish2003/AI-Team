@@ -20,7 +20,7 @@ const items = [
 
   //  run-scoped screens
   { to: "/discovery-run", label: "Discovery Run", runScoped: true },
-  { to: "/partial-results", label: "Evidence Collection", runScoped: true },
+  // { to: "/partial-results", label: "Evidence Collection", runScoped: true }, // Hidden — Sprint 5.1
   {
     to: "/source-intelligence",
     label: "Source Intelligence",

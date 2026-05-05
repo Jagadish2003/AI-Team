@@ -683,18 +683,21 @@ def get_lending_correlation(
             except Exception:
                 return {"lending_issues": [], "by_detector": {}, "total_matched": 0}
         try:
-            # Fetch recent issues with lending keywords via JQL
+            # Use search_issues() which correctly uses /rest/api/3/search/jql
             kw_jql = " OR ".join(f'text ~ "{kw}"' for kw in ALL_LENDING_KEYWORDS[:10])
             jql = f"({kw_jql}) AND created >= -{WINDOW_DAYS}d ORDER BY created DESC"
-            result = client.get(
-                f"/rest/api/{JIRA_API_VERSION}/search",
-                params={
-                    "jql": jql,
-                    "maxResults": 50,
-                    "fields": "summary,description,labels,priority,status,project",
-                },
+            raw_issues = client.search_issues(
+                jql=jql,
+                fields=[
+                    "summary",
+                    "description",
+                    "labels",
+                    "priority",
+                    "status",
+                    "project",
+                ],
+                max_results=50,
             )
-            raw_issues = result.get("issues", [])
             for ri in raw_issues:
                 fields = ri.get("fields", {})
                 issues.append(

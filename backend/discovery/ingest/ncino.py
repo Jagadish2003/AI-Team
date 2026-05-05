@@ -700,6 +700,11 @@ def _build_approval_metrics(
     today = _today()
     TERMINAL = {"Approved", "Rejected", "Recalled", "Removed"}
 
+    # -------------------------------------------------------------
+    # SPRINT 4 FIX 3: Cap cycle days at 365 to exclude stale records
+    # -------------------------------------------------------------
+    CYCLE_DAY_CAP = 365
+
     # Filter to loan-related instances
     loan_instances = [
         p for p in process_instances if p.get("TargetObjectId", "") in loan_ids
@@ -723,7 +728,7 @@ def _build_approval_metrics(
             cycle_days = 0
 
         if cycle_days > 0:
-            cycle_days_list.append(cycle_days)
+            cycle_days_list.append(min(cycle_days, CYCLE_DAY_CAP))
 
         if is_pending:
             pending.append(
@@ -744,6 +749,8 @@ def _build_approval_metrics(
         else 0.0,
         "max_cycle_days": max(cycle_days_list) if cycle_days_list else 0,
         "pending_records": pending[:10],
+        "primary_object": "ProcessInstance",
+        "approval_note": f"Cycle days capped at {CYCLE_DAY_CAP} days to exclude stale migration records.",
     }
 
 

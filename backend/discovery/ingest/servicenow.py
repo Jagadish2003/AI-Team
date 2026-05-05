@@ -590,18 +590,18 @@ def get_lending_correlation(
                 for kw in SN_ALL_LENDING_KEYWORDS[:6]
             )
             query = f"active=true^{kw_filter}^ORDERBYDESCsys_created_on"
-            result = client.get(
-                "/api/now/table/incident",
+            result = client.table_query(
+                "incident",
                 params={
                     "sysparm_query": query,
-                    "sysparm_limit": "50",
+                    "sysparm_limit": 50,
                     "sysparm_fields": (
                         "sys_id,number,short_description,description,"
                         "category,subcategory,priority,state,sys_created_on"
                     ),
                 },
             )
-            for inc in result.get("result", []):
+            for inc in result:
                 incidents.append(
                     {
                         "id": inc.get("sys_id", ""),
