@@ -74,16 +74,14 @@ export default function TopNav() {
               <React.Fragment key={i.to}>
                 <Link
                   to={to}
-                  className={`shrink-0 whitespace-nowrap font-medium transition-colors ${
+                  className={`shrink-0 whitespace-nowrap rounded-full px-3 pb-1.5 pt-1 font-medium transition-colors ${
                     isActive
-                      ? "border-navborder border-t-2 text-textwhite bg-gradient-to-b from-activenav"
+                      ? "border-t-2 border-navborder text-navtext bg-gradient-to-b from-activenav"
                       : "text-textwhite/70 hover:bg-navhover hover:text-textwhite"
                   }`}
                   style={{
-                    fontSize: "14px",
+                    fontSize: "13px",
                     lineHeight: "18px",
-                    padding: "7px 13px",
-                    borderRadius: "100px",
                   }}
                 >
                   {i.label}
