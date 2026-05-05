@@ -20,6 +20,7 @@ D7 signal produced:
 
 AgentIQ is READ-ONLY. No data is written to Jira under any circumstances.
 """
+
 from __future__ import annotations
 
 import json
@@ -41,6 +42,7 @@ JIRA_API_VERSION = "3"
 # Custom exception
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 class JiraIngestError(Exception):
     """Raised when live Jira ingestion fails with a clear, actionable message."""
 
@@ -48,6 +50,7 @@ class JiraIngestError(Exception):
 # ─────────────────────────────────────────────────────────────────────────────
 # Offline loader
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 def _load_fixture() -> Dict[str, Any]:
     if not FIXTURE_PATH.exists():
@@ -59,6 +62,7 @@ def _load_fixture() -> Dict[str, Any]:
 # ─────────────────────────────────────────────────────────────────────────────
 # Jira REST client
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 class JiraClient:
     """
@@ -84,10 +88,12 @@ class JiraClient:
             )
         if self._session is None:
             self._session = requests.Session()
-            self._session.headers.update({
-                "Accept": "application/json",
-                "Content-Type": "application/json",
-            })
+            self._session.headers.update(
+                {
+                    "Accept": "application/json",
+                    "Content-Type": "application/json",
+                }
+            )
             if self.user and self.token:
                 # Jira Cloud: basic auth with email + API token
                 self._session.auth = (self.user, self.token)
@@ -132,9 +138,15 @@ class JiraClient:
         all_issues: List[Dict] = []
 
         default_fields = fields or [
-            "summary", "status", "issuetype", "labels",
-            "story_points", "customfield_10016",  # story points field (cloud + server)
-            "created", "resolutiondate", "assignee",
+            "summary",
+            "status",
+            "issuetype",
+            "labels",
+            "story_points",
+            "customfield_10016",  # story points field (cloud + server)
+            "created",
+            "resolutiondate",
+            "assignee",
         ]
 
         while True:
@@ -237,6 +249,7 @@ def _get_client() -> JiraClient:
 # Story points extraction helper
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 def _extract_story_points(issue: Dict) -> Optional[float]:
     """
     Extract story points from a Jira issue.
@@ -263,6 +276,7 @@ def _extract_story_points(issue: Dict) -> Optional[float]:
 # ─────────────────────────────────────────────────────────────────────────────
 # Ingestion functions
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 def get_issue_metrics(
     client: Optional[JiraClient] = None,
@@ -293,8 +307,15 @@ def get_issue_metrics(
     # Total issues in window
     all_issues = client.search_issues(
         jql=f"project = {project_key} AND created >= -{WINDOW_DAYS}d",
-        fields=["summary", "status", "issuetype", "labels",
-                "customfield_10016", "customfield_10002", "customfield_10004"],
+        fields=[
+            "summary",
+            "status",
+            "issuetype",
+            "labels",
+            "customfield_10016",
+            "customfield_10002",
+            "customfield_10004",
+        ],
     )
 
     total = len(all_issues)
@@ -310,7 +331,7 @@ def get_issue_metrics(
     sf_issues = client.search_issues(
         jql=(
             f"project = {project_key} AND created >= -{WINDOW_DAYS}d "
-            f"AND (summary ~ \"CS-\" OR labels = \"Salesforce\" OR labels = \"salesforce-case\")"
+            f'AND (summary ~ "CS-" OR labels = "Salesforce" OR labels = "salesforce-case")'
         ),
         fields=["summary", "labels"],
         max_results=500,
@@ -323,12 +344,14 @@ def get_issue_metrics(
     for issue in sf_issues[:5]:
         fields = issue.get("fields") or {}
         summary = fields.get("summary", "")
-        sample_cross_refs.append({
-            "issue_key": issue.get("key", ""),
-            "sf_reference": _extract_sf_case_id(summary),
-            "field": "summary",
-            "summary": summary[:120],
-        })
+        sample_cross_refs.append(
+            {
+                "issue_key": issue.get("key", ""),
+                "sf_reference": _extract_sf_case_id(summary),
+                "field": "summary",
+                "summary": summary[:120],
+            }
+        )
 
     return {
         "total_issues_90d": total,
@@ -345,6 +368,7 @@ def get_issue_metrics(
 def _extract_sf_case_id(text: str) -> str:
     """Extract the first CS-NNNN pattern from a string."""
     import re
+
     m = re.search(r"CS-\d+", text)
     return m.group(0) if m else ""
 
@@ -408,9 +432,10 @@ def get_sprint_velocity(
 
         # Completed issues (status = Done)
         completed_issues = [
-            i for i in sprint_issues
-            if (i.get("fields") or {}).get("status", {}).get("name", "").lower() in
-               ("done", "closed", "resolved", "complete")
+            i
+            for i in sprint_issues
+            if (i.get("fields") or {}).get("status", {}).get("name", "").lower()
+            in ("done", "closed", "resolved", "complete")
         ]
 
         # Story points — try to sum, fall back to issue count
@@ -430,18 +455,17 @@ def get_sprint_velocity(
             )
 
         # Salesforce-related issues in this sprint
-        sf_count = sum(
-            1 for i in sprint_issues
-            if _is_salesforce_related(i)
-        )
+        sf_count = sum(1 for i in sprint_issues if _is_salesforce_related(i))
 
-        results.append({
-            "sprint_name": sprint_name,
-            "completed_points": round(completed_points, 1),
-            "salesforce_issue_count": sf_count,
-            "velocity_unit": velocity_unit,
-            "velocity_trend": _compute_trend(results),
-        })
+        results.append(
+            {
+                "sprint_name": sprint_name,
+                "completed_points": round(completed_points, 1),
+                "salesforce_issue_count": sf_count,
+                "velocity_unit": velocity_unit,
+                "velocity_trend": _compute_trend(results),
+            }
+        )
 
     return results
 
@@ -473,6 +497,7 @@ def _compute_trend(previous_sprints: List[Dict]) -> str:
 # Main ingest()
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 def ingest(jira_client: Optional[JiraClient] = None) -> Dict[str, Any]:
     """
     Orchestrate Jira ingestion. Returns combined payload.
@@ -487,8 +512,9 @@ def ingest(jira_client: Optional[JiraClient] = None) -> Dict[str, Any]:
         logger.info("Jira ingestion: offline mode (fixture)")
         fixture = _load_fixture()
         # Add lending correlation from fixture issues
-        raw_issues = fixture.get("issue_metrics", {}).get("issues",
-                     fixture.get("issue_metrics", {}).get("recent_issues", []))
+        raw_issues = fixture.get("issue_metrics", {}).get(
+            "issues", fixture.get("issue_metrics", {}).get("recent_issues", [])
+        )
         fixture["lending_correlation"] = get_lending_correlation(
             fixture_issues=raw_issues
         )
@@ -510,12 +536,12 @@ def ingest(jira_client: Optional[JiraClient] = None) -> Dict[str, Any]:
         issue_metrics = get_issue_metrics(jira_client)
         sprint_velocity = get_sprint_velocity(jira_client)
 
-        lending_correlation = get_lending_correlation(client)
+        lending_correlation = get_lending_correlation(jira_client)
 
         return {
-            "issue_metrics":        issue_metrics,
-            "sprint_velocity":      sprint_velocity,
-            "lending_correlation":  lending_correlation,
+            "issue_metrics": issue_metrics,
+            "sprint_velocity": sprint_velocity,
+            "lending_correlation": lending_correlation,
         }
     except JiraIngestError:
         raise
@@ -530,27 +556,41 @@ def ingest(jira_client: Optional[JiraClient] = None) -> Dict[str, Any]:
 # Keywords that map Jira issues to nCino lending detectors.
 # Each entry: (keyword_list, detector_id, banking_label)
 LENDING_KEYWORD_MAP = [
-    (["routing", "underwriting", "assignment", "origination"],
-     "LOAN_ORIGINATION_ROUTING_FRICTION",
-     "Loan origination routing"),
-    (["covenant", "compliance", "exception", "breach"],
-     "COVENANT_TRACKING_GAP",
-     "Covenant compliance"),
-    (["checklist", "closing", "document", "pre-close"],
-     "CHECKLIST_BOTTLENECK",
-     "Document checklist"),
-    (["spreading", "credit-review", "analyst", "spread"],
-     "SPREADING_BOTTLENECK",
-     "Financial spreading"),
-    (["approval", "credit committee", "credit-committee"],
-     "APPROVAL_BOTTLENECK",
-     "Loan approval"),
+    (
+        ["routing", "underwriting", "assignment", "origination"],
+        "LOAN_ORIGINATION_ROUTING_FRICTION",
+        "Loan origination routing",
+    ),
+    (
+        ["covenant", "compliance", "exception", "breach"],
+        "COVENANT_TRACKING_GAP",
+        "Covenant compliance",
+    ),
+    (
+        ["checklist", "closing", "document", "pre-close"],
+        "CHECKLIST_BOTTLENECK",
+        "Document checklist",
+    ),
+    (
+        ["spreading", "credit-review", "analyst", "spread"],
+        "SPREADING_BOTTLENECK",
+        "Financial spreading",
+    ),
+    (
+        ["approval", "credit committee", "credit-committee"],
+        "APPROVAL_BOTTLENECK",
+        "Loan approval",
+    ),
 ]
 
 # All lending keywords combined for initial broad filter
-ALL_LENDING_KEYWORDS = [
-    kw for entry in LENDING_KEYWORD_MAP for kw in entry[0]
-] + ["loan", "nCino", "ncino", "lending", "borrower"]
+ALL_LENDING_KEYWORDS = [kw for entry in LENDING_KEYWORD_MAP for kw in entry[0]] + [
+    "loan",
+    "nCino",
+    "ncino",
+    "lending",
+    "borrower",
+]
 
 
 def _issue_matches_keywords(issue: Dict[str, Any], keywords: List[str]) -> bool:
@@ -644,28 +684,31 @@ def get_lending_correlation(
                 return {"lending_issues": [], "by_detector": {}, "total_matched": 0}
         try:
             # Fetch recent issues with lending keywords via JQL
-            kw_jql = " OR ".join(
-                f'text ~ "{kw}"' for kw in ALL_LENDING_KEYWORDS[:10]
-            )
+            kw_jql = " OR ".join(f'text ~ "{kw}"' for kw in ALL_LENDING_KEYWORDS[:10])
             jql = f"({kw_jql}) AND created >= -{WINDOW_DAYS}d ORDER BY created DESC"
             result = client.get(
                 f"/rest/api/{JIRA_API_VERSION}/search",
-                params={"jql": jql, "maxResults": 50,
-                        "fields": "summary,description,labels,priority,status,project"},
+                params={
+                    "jql": jql,
+                    "maxResults": 50,
+                    "fields": "summary,description,labels,priority,status,project",
+                },
             )
             raw_issues = result.get("issues", [])
             for ri in raw_issues:
                 fields = ri.get("fields", {})
-                issues.append({
-                    "id":          ri.get("id", ""),
-                    "key":         ri.get("key", ""),
-                    "summary":     fields.get("summary", ""),
-                    "description": fields.get("description") or "",
-                    "labels":      fields.get("labels", []),
-                    "priority":    (fields.get("priority") or {}).get("name", ""),
-                    "status":      (fields.get("status") or {}).get("name", ""),
-                    "project":     (fields.get("project") or {}).get("key", ""),
-                })
+                issues.append(
+                    {
+                        "id": ri.get("id", ""),
+                        "key": ri.get("key", ""),
+                        "summary": fields.get("summary", ""),
+                        "description": fields.get("description") or "",
+                        "labels": fields.get("labels", []),
+                        "priority": (fields.get("priority") or {}).get("name", ""),
+                        "status": (fields.get("status") or {}).get("name", ""),
+                        "project": (fields.get("project") or {}).get("key", ""),
+                    }
+                )
         except Exception as e:
             logger.warning("Jira lending correlation fetch failed: %s", e)
             return {"lending_issues": [], "by_detector": {}, "total_matched": 0}
@@ -680,19 +723,21 @@ def get_lending_correlation(
             continue
         detector_id, label = match
         snippet = _build_lending_snippet(issue, label)
-        lending_issues.append({
-            "issue_id":    issue.get("key") or issue.get("id", ""),
-            "detector_id": detector_id,
-            "label":       label,
-            "snippet":     snippet,
-            "source":      "Jira",
-            "detectorId":  detector_id,
-        })
+        lending_issues.append(
+            {
+                "issue_id": issue.get("key") or issue.get("id", ""),
+                "detector_id": detector_id,
+                "label": label,
+                "snippet": snippet,
+                "source": "Jira",
+                "detectorId": detector_id,
+            }
+        )
         by_detector.setdefault(detector_id, []).append(snippet)
 
     logger.info("Jira lending correlation: %d issues matched", len(lending_issues))
     return {
         "lending_issues": lending_issues,
-        "by_detector":    by_detector,
-        "total_matched":  len(lending_issues),
+        "by_detector": by_detector,
+        "total_matched": len(lending_issues),
     }

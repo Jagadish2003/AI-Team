@@ -17,6 +17,7 @@ Known fix applied (vs earlier stub):
 D7 signal produced:
     sn_echo_score = incidents referencing SF case IDs / total incidents in window
 """
+
 from __future__ import annotations
 
 import json
@@ -38,6 +39,7 @@ WINDOW_DAYS = 90
 # Custom exception
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 class ServiceNowIngestError(Exception):
     """Raised when live ServiceNow ingestion fails."""
 
@@ -45,6 +47,7 @@ class ServiceNowIngestError(Exception):
 # ─────────────────────────────────────────────────────────────────────────────
 # Offline loader
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 def _load_fixture() -> Dict[str, Any]:
     if not FIXTURE_PATH.exists():
@@ -57,6 +60,7 @@ def _load_fixture() -> Dict[str, Any]:
 # ServiceNow REST client
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 class ServiceNowClient:
     """
     Minimal ServiceNow Table API client with pagination support.
@@ -66,7 +70,9 @@ class ServiceNowClient:
       2. Basic auth (SERVICENOW_USER + SERVICENOW_PASS)
     """
 
-    def __init__(self, instance_url: str, token: str = "", user: str = "", password: str = ""):
+    def __init__(
+        self, instance_url: str, token: str = "", user: str = "", password: str = ""
+    ):
         self.instance_url = instance_url.rstrip("/")
         self.token = token
         self.user = user
@@ -82,10 +88,12 @@ class ServiceNowClient:
             )
         if self._session is None:
             self._session = requests.Session()
-            self._session.headers.update({
-                "Accept": "application/json",
-                "Content-Type": "application/json",
-            })
+            self._session.headers.update(
+                {
+                    "Accept": "application/json",
+                    "Content-Type": "application/json",
+                }
+            )
             if self.token:
                 self._session.headers["Authorization"] = f"Bearer {self.token}"
             elif self.user and self.password:
@@ -162,11 +170,7 @@ class ServiceNowClient:
             resp.raise_for_status()
             data = resp.json()
             # Response shape: {"result": {"stats": {"count": "500"}}}
-            count_str = (
-                data.get("result", {})
-                    .get("stats", {})
-                    .get("count", "0")
-            )
+            count_str = data.get("result", {}).get("stats", {}).get("count", "0")
             return int(count_str)
         except ServiceNowIngestError:
             raise
@@ -193,6 +197,7 @@ def _get_client() -> ServiceNowClient:
 # ─────────────────────────────────────────────────────────────────────────────
 # Ingestion functions
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 def get_incident_metrics(client: Optional[ServiceNowClient] = None) -> Dict[str, Any]:
     """
@@ -237,7 +242,11 @@ def get_incident_metrics(client: Optional[ServiceNowClient] = None) -> Dict[str,
     for r in records:
         cat = r.get("category") or "uncategorized"
         if cat not in category_map:
-            category_map[cat] = {"category": cat, "volume": 0, "avg_resolution_hours": 0.0}
+            category_map[cat] = {
+                "category": cat,
+                "volume": 0,
+                "avg_resolution_hours": 0.0,
+            }
         category_map[cat]["volume"] += 1
 
         resolved_at = r.get("resolved_at", "")
@@ -245,22 +254,29 @@ def get_incident_metrics(client: Optional[ServiceNowClient] = None) -> Dict[str,
         if resolved_at and created:
             try:
                 from datetime import datetime
+
                 # SN format: "2026-01-15 09:22:31"
                 fmt = "%Y-%m-%d %H:%M:%S"
-                delta = datetime.strptime(resolved_at, fmt) - datetime.strptime(created, fmt)
+                delta = datetime.strptime(resolved_at, fmt) - datetime.strptime(
+                    created, fmt
+                )
                 hours = delta.total_seconds() / 3600
                 category_map[cat]["avg_resolution_hours"] = round(
                     (category_map[cat].get("_total_hours", 0.0) + hours)
                     / (category_map[cat]["volume"]),
                     1,
                 )
-                category_map[cat]["_total_hours"] = category_map[cat].get("_total_hours", 0.0) + hours
+                category_map[cat]["_total_hours"] = (
+                    category_map[cat].get("_total_hours", 0.0) + hours
+                )
                 total_resolution_hours += hours
                 resolved_count += 1
             except Exception:
                 pass
 
-    avg_resolution = round(total_resolution_hours / resolved_count, 1) if resolved_count > 0 else 0.0
+    avg_resolution = (
+        round(total_resolution_hours / resolved_count, 1) if resolved_count > 0 else 0.0
+    )
 
     # Remove internal tracking key
     for v in category_map.values():
@@ -333,12 +349,14 @@ def get_cross_system_references(
 
     for pattern in patterns:
         # Build OR query across all four description fields
-        field_conditions = "^OR".join([
-            f"short_descriptionCONTAINS{pattern}",
-            f"descriptionCONTAINS{pattern}",
-            f"work_notesCONTAINS{pattern}",
-            f"commentsCONTAINS{pattern}",
-        ])
+        field_conditions = "^OR".join(
+            [
+                f"short_descriptionCONTAINS{pattern}",
+                f"descriptionCONTAINS{pattern}",
+                f"work_notesCONTAINS{pattern}",
+                f"commentsCONTAINS{pattern}",
+            ]
+        )
         full_query = f"{window_query}^({field_conditions})"
 
         # Count matches — aggregate first, then fetch samples
@@ -357,16 +375,23 @@ def get_cross_system_references(
             for r in sample_recs[:5]:
                 # Determine which field contained the match
                 match_field = "short_description"
-                for fld in ("short_description", "description", "work_notes", "comments"):
+                for fld in (
+                    "short_description",
+                    "description",
+                    "work_notes",
+                    "comments",
+                ):
                     if pattern in (r.get(fld) or ""):
                         match_field = fld
                         break
-                sample_matches.append({
-                    "incident_id": r.get("number", ""),
-                    "pattern": pattern,
-                    "field": match_field,
-                    "short_description": (r.get("short_description") or "")[:120],
-                })
+                sample_matches.append(
+                    {
+                        "incident_id": r.get("number", ""),
+                        "pattern": pattern,
+                        "field": match_field,
+                        "short_description": (r.get("short_description") or "")[:120],
+                    }
+                )
 
     # echo_score: correctly derived from real total_count
     sn_echo_score = round(match_count / total, 4) if total > 0 else 0.0
@@ -384,6 +409,7 @@ def get_cross_system_references(
 # Main ingest()
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 def ingest(sn_client: Optional[ServiceNowClient] = None) -> Dict[str, Any]:
     """
     Orchestrate ServiceNow ingestion. Returns combined payload.
@@ -396,8 +422,9 @@ def ingest(sn_client: Optional[ServiceNowClient] = None) -> Dict[str, Any]:
     if not is_live():
         logger.info("ServiceNow ingestion: offline mode (fixture)")
         fixture = _load_fixture()
-        raw_incidents = fixture.get("incident_metrics", {}).get("incidents",
-                        fixture.get("incident_metrics", {}).get("recent_incidents", []))
+        raw_incidents = fixture.get("incident_metrics", {}).get(
+            "incidents", fixture.get("incident_metrics", {}).get("recent_incidents", [])
+        )
         fixture["lending_correlation"] = get_lending_correlation(
             fixture_incidents=raw_incidents
         )
@@ -419,12 +446,12 @@ def ingest(sn_client: Optional[ServiceNowClient] = None) -> Dict[str, Any]:
         incident_metrics = get_incident_metrics(sn_client)
         cross_system_references = get_cross_system_references(sn_client)
 
-        lending_correlation = get_lending_correlation(client)
+        lending_correlation = get_lending_correlation(sn_client)
 
         return {
-            "incident_metrics":       incident_metrics,
+            "incident_metrics": incident_metrics,
             "cross_system_references": cross_system_references,
-            "lending_correlation":    lending_correlation,
+            "lending_correlation": lending_correlation,
         }
     except ServiceNowIngestError:
         raise
@@ -437,21 +464,31 @@ def ingest(sn_client: Optional[ServiceNowClient] = None) -> Dict[str, Any]:
 # ─────────────────────────────────────────────────────────────────────────────
 
 SN_LENDING_KEYWORD_MAP = [
-    (["covenant", "compliance", "breach", "covenant status"],
-     "COVENANT_TRACKING_GAP",
-     "Covenant compliance"),
-    (["checklist", "document exception", "closing", "pre-close"],
-     "CHECKLIST_BOTTLENECK",
-     "Document checklist"),
-    (["routing", "origination", "reassignment", "underwriting assignment"],
-     "LOAN_ORIGINATION_ROUTING_FRICTION",
-     "Loan origination routing"),
-    (["spreading", "spread", "analyst", "credit analyst"],
-     "SPREADING_BOTTLENECK",
-     "Financial spreading"),
-    (["approval", "credit committee", "loan approval", "approval notification"],
-     "APPROVAL_BOTTLENECK",
-     "Loan approval"),
+    (
+        ["covenant", "compliance", "breach", "covenant status"],
+        "COVENANT_TRACKING_GAP",
+        "Covenant compliance",
+    ),
+    (
+        ["checklist", "document exception", "closing", "pre-close"],
+        "CHECKLIST_BOTTLENECK",
+        "Document checklist",
+    ),
+    (
+        ["routing", "origination", "reassignment", "underwriting assignment"],
+        "LOAN_ORIGINATION_ROUTING_FRICTION",
+        "Loan origination routing",
+    ),
+    (
+        ["spreading", "spread", "analyst", "credit analyst"],
+        "SPREADING_BOTTLENECK",
+        "Financial spreading",
+    ),
+    (
+        ["approval", "credit committee", "loan approval", "approval notification"],
+        "APPROVAL_BOTTLENECK",
+        "Loan approval",
+    ),
 ]
 
 SN_ALL_LENDING_KEYWORDS = [
@@ -474,12 +511,14 @@ def _sn_incident_matches(incident: Dict[str, Any], keywords: List[str]) -> bool:
     short_description match will not reach threshold.
     """
     score = 0.0
-    cat_text = " ".join([
-        incident.get("category", ""),
-        incident.get("subcategory", "") or "",
-    ]).lower()
+    cat_text = " ".join(
+        [
+            incident.get("category", ""),
+            incident.get("subcategory", "") or "",
+        ]
+    ).lower()
     short_text = incident.get("short_description", "").lower()
-    desc_text  = (incident.get("description", "") or "").lower()
+    desc_text = (incident.get("description", "") or "").lower()
 
     for kw in keywords:
         kw_lower = kw.lower()
@@ -563,16 +602,18 @@ def get_lending_correlation(
                 },
             )
             for inc in result.get("result", []):
-                incidents.append({
-                    "id":                inc.get("sys_id", ""),
-                    "number":            inc.get("number", ""),
-                    "short_description": inc.get("short_description", ""),
-                    "description":       inc.get("description", "") or "",
-                    "category":          inc.get("category", ""),
-                    "subcategory":       inc.get("subcategory", "") or "",
-                    "priority":          inc.get("priority", ""),
-                    "state":             inc.get("state", ""),
-                })
+                incidents.append(
+                    {
+                        "id": inc.get("sys_id", ""),
+                        "number": inc.get("number", ""),
+                        "short_description": inc.get("short_description", ""),
+                        "description": inc.get("description", "") or "",
+                        "category": inc.get("category", ""),
+                        "subcategory": inc.get("subcategory", "") or "",
+                        "priority": inc.get("priority", ""),
+                        "state": inc.get("state", ""),
+                    }
+                )
         except Exception as e:
             logger.warning("ServiceNow lending correlation fetch failed: %s", e)
             return {"lending_incidents": [], "by_detector": {}, "total_matched": 0}
@@ -587,19 +628,21 @@ def get_lending_correlation(
             continue
         detector_id, label = match
         snippet = _sn_build_lending_snippet(incident, label)
-        lending_incidents.append({
-            "incident_id": incident.get("number") or incident.get("id", ""),
-            "detector_id": detector_id,
-            "label":       label,
-            "snippet":     snippet,
-            "source":      "ServiceNow",
-            "detectorId":  detector_id,
-        })
+        lending_incidents.append(
+            {
+                "incident_id": incident.get("number") or incident.get("id", ""),
+                "detector_id": detector_id,
+                "label": label,
+                "snippet": snippet,
+                "source": "ServiceNow",
+                "detectorId": detector_id,
+            }
+        )
         by_detector.setdefault(detector_id, []).append(snippet)
 
     logger.info("SN lending correlation: %d incidents matched", len(lending_incidents))
     return {
         "lending_incidents": lending_incidents,
-        "by_detector":       by_detector,
-        "total_matched":     len(lending_incidents),
+        "by_detector": by_detector,
+        "total_matched": len(lending_incidents),
     }

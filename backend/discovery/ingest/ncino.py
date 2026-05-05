@@ -21,11 +21,14 @@ Confirmed objects (from real org metadata — May 2026):
   LLC_BI__Spread_Statement_Period__c ✓ financial spread periods per analyst
   ProcessInstance                    ✓ standard Salesforce approval workflow
 """
+
 from __future__ import annotations
 
 import json
 import logging
 import os
+import re
+import time
 from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -35,25 +38,47 @@ from . import is_live
 logger = logging.getLogger(__name__)
 
 FIXTURE_PATH = Path(__file__).parent / "fixtures" / "ncino_sample.json"
-API_VERSION  = "v59.0"
-WINDOW_DAYS  = 90
+API_VERSION = "v59.0"
+WINDOW_DAYS = 90
 
 # Stage duration benchmarks (SME to confirm per org — defaults below)
 STAGE_DURATION_BENCHMARKS: Dict[str, int] = {
-    "Application":       3,
+    "Application": 3,
     "Pre-Qualification": 2,
-    "Underwriting":     10,
-    "Credit Review":     7,
-    "Approval":          5,
-    "Commitment":        3,
-    "Closing":           7,
-    "Post-Close":        5,
-    "__DEFAULT__":      14,
+    "Underwriting": 10,
+    "Credit Review": 7,
+    "Approval": 5,
+    "Commitment": 3,
+    "Closing": 7,
+    "Post-Close": 5,
+    "__DEFAULT__": 14,
 }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Custom exception
+# ─────────────────────────────────────────────────────────────────────────────
 
 
 class NcinoIngestError(Exception):
     pass
+
+
+def _generate_ncino_token(force_refresh: bool = False) -> tuple[str, str]:
+    try:
+        from token_generation.ncino import token_ncino
+    except ImportError as exc:
+        raise NcinoIngestError(
+            "Live mode requires backend/token_generation/token_ncino.py "
+            "or NCINO_INSTANCE_URL/NCINO_ACCESS_TOKEN credentials. Set INGEST_MODE=offline "
+            "to run without credentials."
+        ) from exc
+    return token_ncino.main(force_refresh=force_refresh)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Offline fixture loader
+# ─────────────────────────────────────────────────────────────────────────────
 
 
 def _load_fixture() -> Dict[str, Any]:
@@ -63,10 +88,85 @@ def _load_fixture() -> Dict[str, Any]:
         return json.load(f)
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Live HTTP helpers
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def _get_client() -> "NcinoClient":
+    """Build a minimal REST client from env vars."""
+
+    ACCESS_TOKEN_PATH = (
+        Path(__file__).parent.parent.parent
+        / "token_generation"
+        / "ncino"
+        / "ncino_token.json"
+    )
+
+    # -----------------------------
+    # 1. PRIORITIZE ENV VARS
+    # -----------------------------
+    # Fallback to SF_ vars if NCINO_ vars aren't strictly defined
+    instance_url = os.getenv("NCINO_INSTANCE_URL") or os.getenv("SF_INSTANCE_URL")
+    access_token = os.getenv("NCINO_ACCESS_TOKEN") or os.getenv("SF_ACCESS_TOKEN")
+
+    # -----------------------------
+    # 2. FALLBACK TO FILE OR GENERATION (if missing from env)
+    # -----------------------------
+    if not instance_url or not access_token:
+        if ACCESS_TOKEN_PATH.exists():
+            try:
+                with open(ACCESS_TOKEN_PATH, encoding="utf-8") as f:
+                    ncino_token = json.load(f)
+                instance_url = instance_url or ncino_token.get("instance_url")
+                access_token = access_token or ncino_token.get("access_token")
+            except Exception as e:
+                logger.warning(f"Failed to read nCino token file: {e}")
+
+        if not instance_url or not access_token:
+            # Try generating (which also checks credentials)
+            try:
+                gen_token, gen_url = _generate_ncino_token()
+                instance_url = instance_url or gen_url
+                access_token = access_token or gen_token
+            except Exception as e:
+                # If we are in live mode and everything failed, we must raise.
+                if is_live():
+                    raise NcinoIngestError(
+                        f"Live mode requires valid NCINO_INSTANCE_URL and NCINO_ACCESS_TOKEN. "
+                        f"Fallback generation also failed: {e}"
+                    ) from e
+
+    # -----------------------------
+    # 3. FINAL VALIDATION
+    # -----------------------------
+    if not instance_url or not access_token:
+        if is_live():
+            raise NcinoIngestError(
+                "Live mode requires valid NCINO_INSTANCE_URL and NCINO_ACCESS_TOKEN. "
+                "Set INGEST_MODE=offline to run without credentials."
+            )
+        return None
+
+    # -----------------------------
+    # 4. TOKEN EXPIRY CHECK
+    # -----------------------------
+    access_token = access_token.strip() if access_token else None
+    if is_access_token_expired(instance_url, access_token):
+        logger.info("nCino token expired or invalid format. Refreshing...")
+        access_token, instance_url = _generate_ncino_token(force_refresh=True)
+        access_token = access_token.strip() if access_token else None
+
+    # -----------------------------
+    # 5. RETURN CLIENT
+    # -----------------------------
+    return NcinoClient(instance_url, access_token)
+
+
 class NcinoClient:
     def __init__(self, instance_url: str, access_token: str):
         self.instance_url = instance_url.rstrip("/")
-        self.access_token = access_token
+        self.access_token = access_token.strip() if access_token else ""
         self._session = None
 
     def _get_session(self):
@@ -76,10 +176,12 @@ class NcinoClient:
             raise NcinoIngestError("requests library required")
         if self._session is None:
             self._session = __import__("requests").Session()
-            self._session.headers.update({
-                "Authorization": f"Bearer {self.access_token}",
-                "Content-Type": "application/json",
-            })
+            self._session.headers.update(
+                {
+                    "Authorization": f"Bearer {self.access_token}",
+                    "Content-Type": "application/json",
+                }
+            )
         return self._session
 
     def query(self, soql: str) -> List[Dict[str, Any]]:
@@ -101,16 +203,6 @@ class NcinoClient:
             url = f"{self.instance_url}{next_url}"
             params = {}
         return records
-
-
-def _get_client() -> NcinoClient:
-    instance_url = os.getenv("SF_INSTANCE_URL", "").rstrip("/")
-    access_token = os.getenv("SF_ACCESS_TOKEN", "")
-    if not instance_url or not access_token:
-        raise NcinoIngestError(
-            "Live mode requires SF_INSTANCE_URL and SF_ACCESS_TOKEN."
-        )
-    return NcinoClient(instance_url, access_token)
 
 
 def _today() -> date:
@@ -137,6 +229,7 @@ def _days_since(d: Optional[date]) -> Optional[int]:
 # ─────────────────────────────────────────────────────────────────────────────
 # FETCH FUNCTIONS — live org
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 def _fetch_loans(client: NcinoClient) -> List[Dict[str, Any]]:
     rows = client.query(f"""
@@ -249,7 +342,7 @@ def _fetch_spread_periods(client: NcinoClient) -> List[Dict[str, Any]]:
     Signal: LLC_BI__Is_Locked__c = false AND CreatedDate > 14 days ago.
     """
     rows = client.query(f"""
-        SELECT Id, LLC_BI__Spread__c,
+        SELECT Id,
                LLC_BI__Analyst__c,
                LLC_BI__Is_Locked__c, LLC_BI__Is_Annual__c,
                CreatedDate, LastModifiedDate,
@@ -304,6 +397,7 @@ def _fetch_approval_instances(client: NcinoClient) -> List[Dict[str, Any]]:
 # METRIC BUILDERS
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 def _build_origination_metrics(
     loans: List[Dict[str, Any]],
     stage_history: List[Dict[str, Any]],
@@ -314,9 +408,12 @@ def _build_origination_metrics(
     """
     if not loans:
         return {
-            "total_loans": 0, "avg_stage_transitions": 0.0,
-            "max_stage_transitions": 0, "avg_owner_changes": 0.0,
-            "max_owner_changes": 0, "high_friction_loans": [],
+            "total_loans": 0,
+            "avg_stage_transitions": 0.0,
+            "max_stage_transitions": 0,
+            "avg_owner_changes": 0.0,
+            "max_owner_changes": 0,
+            "high_friction_loans": [],
             "owner_change_source": "LOAN_HISTORY_CREATEDBY",
         }
 
@@ -345,24 +442,31 @@ def _build_origination_metrics(
         transitions_list.append(transitions)
         owner_changes_list.append(owner_changes)
         if transitions >= 4 or owner_changes >= 2:
-            high_friction.append({
-                "loan_id": lid, "transitions": transitions,
-                "owner_changes": owner_changes,
-                "loan_type": (
-                    loan.get("LLC_BI__Loan_Type_Code__c")
-                    or loan.get("LLC_BI__Loan_Type__c", "")
-                ),
-                "amount": loan.get("LLC_BI__Amount__c"),
-            })
+            high_friction.append(
+                {
+                    "loan_id": lid,
+                    "transitions": transitions,
+                    "owner_changes": owner_changes,
+                    "loan_type": (
+                        loan.get("LLC_BI__Loan_Type_Code__c")
+                        or loan.get("LLC_BI__Loan_Type__c", "")
+                    ),
+                    "amount": loan.get("LLC_BI__Amount__c"),
+                }
+            )
 
     return {
-        "total_loans":           len(loans),
-        "avg_stage_transitions": round(sum(transitions_list) / len(transitions_list), 1),
+        "total_loans": len(loans),
+        "avg_stage_transitions": round(
+            sum(transitions_list) / len(transitions_list), 1
+        ),
         "max_stage_transitions": max(transitions_list),
-        "avg_owner_changes":     round(sum(owner_changes_list) / len(owner_changes_list), 1),
-        "max_owner_changes":     max(owner_changes_list),
-        "high_friction_loans":   high_friction[:10],
-        "owner_change_source":   "LOAN_HISTORY_CREATEDBY",
+        "avg_owner_changes": round(
+            sum(owner_changes_list) / len(owner_changes_list), 1
+        ),
+        "max_owner_changes": max(owner_changes_list),
+        "high_friction_loans": high_friction[:10],
+        "owner_change_source": "LOAN_HISTORY_CREATEDBY",
     }
 
 
@@ -385,43 +489,50 @@ def _build_covenant_metrics(
     """
     if not covenant_compliance:
         return {
-            "total_covenants": 0, "overdue_count": 0, "breached_count": 0,
-            "compliance_override": False, "max_days_past_evaluation": 0,
+            "total_covenants": 0,
+            "overdue_count": 0,
+            "breached_count": 0,
+            "compliance_override": False,
+            "max_days_past_evaluation": 0,
             "overdue_records": [],
         }
 
     overdue_records = []
-    breached_count  = 0
-    max_days_past   = 0
+    breached_count = 0
+    max_days_past = 0
 
     for cov in covenant_compliance:
-        overdue  = bool(cov.get("LLC_BI__Overdue__c",  False))
+        overdue = bool(cov.get("LLC_BI__Overdue__c", False))
         breached = bool(cov.get("LLC_BI__Breached__c", False))
         days_past = float(cov.get("LLC_BI__Days_Past_Next_Evaluation__c") or 0)
 
         if breached:
             breached_count += 1
         if overdue or breached:
-            overdue_records.append({
-                "covenant_id":     cov.get("Id"),
-                "account_id":      cov.get("LLC_BI__Account__c"),
-                "overdue":         overdue,
-                "breached":        breached,
-                "days_past":       days_past,
-                "last_evaluation": cov.get("LLC_BI__Last_Evaluation_Date__c"),
-                "status":          cov.get("LLC_BI__Covenant_Status__c", ""),
-                "frequency":       cov.get("LLC_BI__Frequency__c", ""),
-            })
+            overdue_records.append(
+                {
+                    "covenant_id": cov.get("Id"),
+                    "account_id": cov.get("LLC_BI__Account__c"),
+                    "overdue": overdue,
+                    "breached": breached,
+                    "days_past": days_past,
+                    "last_evaluation": cov.get("LLC_BI__Last_Evaluation_Date__c"),
+                    "status": cov.get("LLC_BI__Covenant_Status__c", ""),
+                    "frequency": cov.get("LLC_BI__Frequency__c", ""),
+                }
+            )
             max_days_past = max(max_days_past, days_past)
 
     return {
-        "total_covenants":          len(covenant_compliance),
-        "overdue_count":            len(overdue_records),
-        "breached_count":           breached_count,
-        "compliance_override":      breached_count > 0,
+        "total_covenants": len(covenant_compliance),
+        "overdue_count": len(overdue_records),
+        "breached_count": breached_count,
+        "compliance_override": breached_count > 0,
         "max_days_past_evaluation": max_days_past,
-        "overdue_records":          overdue_records[:10],
+        "overdue_records": overdue_records[:10],
     }
+
+
 def _build_checklist_metrics(
     checklists: List[Dict[str, Any]],
 ) -> Dict[str, Any]:
@@ -436,8 +547,11 @@ def _build_checklist_metrics(
     """
     if not checklists:
         return {
-            "total_checklists": 0, "overrun_count": 0, "stalled_count": 0,
-            "max_overrun_days": 0, "avg_overrun_days": 0.0,
+            "total_checklists": 0,
+            "overrun_count": 0,
+            "stalled_count": 0,
+            "max_overrun_days": 0,
+            "avg_overrun_days": 0.0,
             "overrun_records": [],
         }
 
@@ -446,10 +560,10 @@ def _build_checklist_metrics(
     today = _today()
 
     for cl in checklists:
-        actual   = float(cl.get("LLC_BI__Actual_Duration_Days__c") or 0)
+        actual = float(cl.get("LLC_BI__Actual_Duration_Days__c") or 0)
         expected = float(cl.get("LLC_BI__Expected_Duration_Days__c") or 0)
-        status   = cl.get("LLC_BI__Status__c", "")
-        created  = _parse_date(cl.get("CreatedDate"))
+        status = cl.get("LLC_BI__Status__c", "")
+        created = _parse_date(cl.get("CreatedDate"))
         days_open = _days_since(created) or 0
 
         overrun_days = max(0, actual - expected) if expected > 0 else 0
@@ -457,36 +571,38 @@ def _build_checklist_metrics(
         # To Do, Under Review, On Hold
         # In Progress, Complete, Rejected are NOT stall states.
         _STALL_STATUSES = {"to do", "todo", "under review", "on hold", "not started"}
-        is_stalled = (
-            status.lower() in _STALL_STATUSES
-            and days_open >= 14
-        )
+        is_stalled = status.lower() in _STALL_STATUSES and days_open >= 14
 
         if is_stalled:
             stalled_count += 1
 
         if overrun_days > 0 or is_stalled:
-            overrun_records.append({
-                "loan_id":      cl.get("LLC_BI__Loan__c"),
-                "checklist_id": cl.get("Id"),
-                "actual_days":  actual,
-                "expected_days": expected,
-                "overrun_days": overrun_days,
-                "status":       status,
-                "days_open":    days_open,
-                "stalled":      is_stalled,
-                "category":     cl.get("LLC_BI__Category__c", ""),
-            })
+            overrun_records.append(
+                {
+                    "loan_id": cl.get("LLC_BI__Loan__c"),
+                    "checklist_id": cl.get("Id"),
+                    "actual_days": actual,
+                    "expected_days": expected,
+                    "overrun_days": overrun_days,
+                    "status": status,
+                    "days_open": days_open,
+                    "stalled": is_stalled,
+                    "category": cl.get("LLC_BI__Category__c", ""),
+                }
+            )
 
-    overrun_days_list = [r["overrun_days"] for r in overrun_records if r["overrun_days"] > 0]
+    overrun_days_list = [
+        r["overrun_days"] for r in overrun_records if r["overrun_days"] > 0
+    ]
     return {
         "total_checklists": len(checklists),
-        "overrun_count":    len([r for r in overrun_records if r["overrun_days"] > 0]),
-        "stalled_count":    stalled_count,
+        "overrun_count": len([r for r in overrun_records if r["overrun_days"] > 0]),
+        "stalled_count": stalled_count,
         "max_overrun_days": max(overrun_days_list) if overrun_days_list else 0,
         "avg_overrun_days": round(sum(overrun_days_list) / len(overrun_days_list), 1)
-                            if overrun_days_list else 0.0,
-        "overrun_records":  overrun_records[:10],
+        if overrun_days_list
+        else 0.0,
+        "overrun_records": overrun_records[:10],
     }
 
 
@@ -509,15 +625,17 @@ def _build_spreading_metrics(
     """
     if not spread_periods:
         return {
-            "total_periods": 0, "unlocked_count": 0,
-            "max_days_unlocked": 0, "avg_days_unlocked": 0.0,
-            "analyst_bottlenecks": [], "bottleneck_records": [],
+            "total_periods": 0,
+            "unlocked_count": 0,
+            "max_days_unlocked": 0,
+            "avg_days_unlocked": 0.0,
+            "analyst_bottlenecks": [],
+            "bottleneck_records": [],
         }
 
     # Build spread_id → loan_id index from spread headers
     spread_to_loan: Dict[str, str] = {
-        s["Id"]: s.get("LLC_BI__Loan__c", "")
-        for s in spreads if s.get("Id")
+        s["Id"]: s.get("LLC_BI__Loan__c", "") for s in spreads if s.get("Id")
     }
 
     unlocked = []
@@ -533,18 +651,24 @@ def _build_spreading_metrics(
             continue
 
         spread_id = sp.get("LLC_BI__Spread__c", "")
-        loan_id   = spread_to_loan.get(spread_id, spread_id)  # fall back to spread_id if no header
-        analyst   = sp.get("LLC_BI__Analyst__c") or sp.get("CreatedById", "unknown")  # Analyst__c confirmed, CreatedById as fallback
+        loan_id = spread_to_loan.get(
+            spread_id, spread_id
+        )  # fall back to spread_id if no header
+        analyst = sp.get("LLC_BI__Analyst__c") or sp.get(
+            "CreatedById", "unknown"
+        )  # Analyst__c confirmed, CreatedById as fallback
 
         analyst_map[analyst] = analyst_map.get(analyst, 0) + 1
-        unlocked.append({
-            "loan_id":        loan_id,
-            "spread_id":      spread_id,
-            "period_id":      sp.get("Id"),
-            "analyst_id":     analyst,
-            "days_unlocked":  days_open,
-            "is_annual":      sp.get("LLC_BI__Is_Annual__c", False),
-        })
+        unlocked.append(
+            {
+                "loan_id": loan_id,
+                "spread_id": spread_id,
+                "period_id": sp.get("Id"),
+                "analyst_id": analyst,
+                "days_unlocked": days_open,
+                "is_annual": sp.get("LLC_BI__Is_Annual__c", False),
+            }
+        )
 
     days_list = [r["days_unlocked"] for r in unlocked]
     analyst_bottlenecks = [
@@ -553,13 +677,17 @@ def _build_spreading_metrics(
     ]
 
     return {
-        "total_periods":       len(spread_periods),
-        "unlocked_count":      len(unlocked),
-        "max_days_unlocked":   max(days_list) if days_list else 0,
-        "avg_days_unlocked":   round(sum(days_list) / len(days_list), 1) if days_list else 0.0,
+        "total_periods": len(spread_periods),
+        "unlocked_count": len(unlocked),
+        "max_days_unlocked": max(days_list) if days_list else 0,
+        "avg_days_unlocked": round(sum(days_list) / len(days_list), 1)
+        if days_list
+        else 0.0,
         "analyst_bottlenecks": analyst_bottlenecks[:5],
-        "bottleneck_records":  unlocked[:10],
+        "bottleneck_records": unlocked[:10],
     }
+
+
 def _build_approval_metrics(
     process_instances: List[Dict[str, Any]],
     loan_ids: set,
@@ -574,8 +702,7 @@ def _build_approval_metrics(
 
     # Filter to loan-related instances
     loan_instances = [
-        p for p in process_instances
-        if p.get("TargetObjectId", "") in loan_ids
+        p for p in process_instances if p.get("TargetObjectId", "") in loan_ids
     ]
 
     pending = []
@@ -599,20 +726,23 @@ def _build_approval_metrics(
             cycle_days_list.append(cycle_days)
 
         if is_pending:
-            pending.append({
-                "loan_id":    pi.get("TargetObjectId"),
-                "instance_id": pi.get("Id"),
-                "status":     status,
-                "days_open":  cycle_days,
-                "submitted_by": pi.get("SubmittedById"),
-            })
+            pending.append(
+                {
+                    "loan_id": pi.get("TargetObjectId"),
+                    "instance_id": pi.get("Id"),
+                    "status": status,
+                    "days_open": cycle_days,
+                    "submitted_by": pi.get("SubmittedById"),
+                }
+            )
 
     return {
         "total_instances": len(loan_instances),
-        "pending_count":   len(pending),
-        "avg_cycle_days":  round(sum(cycle_days_list) / len(cycle_days_list), 1)
-                           if cycle_days_list else 0.0,
-        "max_cycle_days":  max(cycle_days_list) if cycle_days_list else 0,
+        "pending_count": len(pending),
+        "avg_cycle_days": round(sum(cycle_days_list) / len(cycle_days_list), 1)
+        if cycle_days_list
+        else 0.0,
+        "max_cycle_days": max(cycle_days_list) if cycle_days_list else 0,
         "pending_records": pending[:10],
     }
 
@@ -620,6 +750,7 @@ def _build_approval_metrics(
 # ─────────────────────────────────────────────────────────────────────────────
 # STAGE DURATION METRICS
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 def _parse_dt(val: Any) -> Optional[date]:
     return _parse_date(val)
@@ -631,9 +762,12 @@ def _build_stage_duration_metrics(
 ) -> Dict[str, Any]:
     if not stage_history:
         return {
-            "total_stages_analyzed": 0, "overrun_count": 0,
-            "max_overrun_days": 0, "avg_overrun_days": 0.0,
-            "overrun_by_stage": {}, "overrun_records": [],
+            "total_stages_analyzed": 0,
+            "overrun_count": 0,
+            "max_overrun_days": 0,
+            "avg_overrun_days": 0.0,
+            "overrun_by_stage": {},
+            "overrun_records": [],
         }
 
     by_loan: Dict[str, List] = {}
@@ -650,8 +784,11 @@ def _build_stage_duration_metrics(
         for i, h in enumerate(history):
             stage = h.get("NewValue", "__DEFAULT__") or "__DEFAULT__"
             entered = _parse_dt(h.get("CreatedDate"))
-            next_dt = _parse_dt(history[i + 1].get("CreatedDate")) \
-                      if i + 1 < len(history) else None
+            next_dt = (
+                _parse_dt(history[i + 1].get("CreatedDate"))
+                if i + 1 < len(history)
+                else None
+            )
             end = next_dt if next_dt else _today()
             actual_days = max(0, (end - entered).days) if entered else 0
             benchmark = STAGE_DURATION_BENCHMARKS.get(
@@ -660,28 +797,34 @@ def _build_stage_duration_metrics(
             overrun = max(0, actual_days - benchmark)
             total += 1
             if overrun >= 5:
-                overrun_records.append({
-                    "loan_id": lid, "stage_name": stage,
-                    "actual_days": actual_days, "overrun_days": overrun,
-                    "benchmark": benchmark,
-                })
+                overrun_records.append(
+                    {
+                        "loan_id": lid,
+                        "stage_name": stage,
+                        "actual_days": actual_days,
+                        "overrun_days": overrun,
+                        "benchmark": benchmark,
+                    }
+                )
                 overrun_by_stage[stage] = overrun_by_stage.get(stage, 0) + 1
 
     days_list = [r["overrun_days"] for r in overrun_records]
     return {
         "total_stages_analyzed": total,
-        "overrun_count":        len(overrun_records),
-        "max_overrun_days":     max(days_list) if days_list else 0,
-        "avg_overrun_days":     round(sum(days_list) / len(days_list), 1) if days_list else 0.0,
-        "overrun_by_stage":     overrun_by_stage,
-        "overrun_records":      overrun_records[:10],
+        "overrun_count": len(overrun_records),
+        "max_overrun_days": max(days_list) if days_list else 0,
+        "avg_overrun_days": round(sum(days_list) / len(days_list), 1)
+        if days_list
+        else 0.0,
+        "overrun_by_stage": overrun_by_stage,
+        "overrun_records": overrun_records[:10],
     }
-
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # HELPER FUNCTIONS — exported for unit testing
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 def derive_stage_duration_days(
     stage_entered: Any,
@@ -689,7 +832,7 @@ def derive_stage_duration_days(
 ) -> int:
     """Days a loan spent in a stage. 0 if dates unavailable."""
     start = _parse_date(stage_entered)
-    end   = _parse_date(next_transition) if next_transition else _today()
+    end = _parse_date(next_transition) if next_transition else _today()
     if start is None:
         return 0
     return max(0, (end - start).days)
@@ -713,44 +856,95 @@ def derive_approval_cycle_days(submitted_date: Any, completed_date: Any = None) 
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# TOKEN EXPIRY HELPER
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def is_access_token_expired(instance_url: str, access_token: str) -> bool:
+    """
+    Returns True if the nCino (Salesforce) access token is expired or invalid.
+    Checks the Data API root which is more reliable for checking API access.
+    """
+    import requests
+
+    if not access_token:
+        return True
+
+    try:
+        # Use Data API root instead of userinfo for more robust API check
+        url = f"{instance_url.rstrip('/')}/services/data/{API_VERSION}/"
+
+        response = requests.get(
+            url, headers={"Authorization": f"Bearer {access_token.strip()}"}, timeout=10
+        )
+
+        # 401 = invalid/expired token.
+        if response.status_code == 401:
+            return True
+
+        if (
+            "INVALID_JWT_FORMAT" in response.text
+            or "INVALID_AUTH_HEADER" in response.text
+        ):
+            return True
+
+        return False
+
+    except Exception:
+        # If we cannot verify (network issue etc.), assume expired for safety
+        return True
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # MAIN ENTRY POINT
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 def ingest() -> Dict[str, Any]:
     if is_live():
-        client              = _get_client()
-        loans               = _fetch_loans(client)
-        stage_history       = _fetch_stage_history(client)
-        covenant_compliance = _fetch_covenant_compliance(client)
-        checklists          = _fetch_checklists(client)
-        spreads            = _fetch_spreads(client)
-        spread_periods      = _fetch_spread_periods(client)
-        process_instances   = _fetch_approval_instances(client)
+        client = _get_client()
+
+        def _safe_fetch(fn, label, default=None):
+            """Fetch with per-query fault isolation. One bad SOQL never kills all detectors."""
+            try:
+                return fn(client)
+            except Exception as e:
+                logger.warning("nCino %s fetch failed (non-blocking): %s", label, e)
+                return default if default is not None else []
+
+        loans = _safe_fetch(_fetch_loans, "loans")
+        stage_history = _safe_fetch(_fetch_stage_history, "stage_history")
+        covenant_compliance = _safe_fetch(
+            _fetch_covenant_compliance, "covenant_compliance"
+        )
+        checklists = _safe_fetch(_fetch_checklists, "checklists")
+        spreads = _safe_fetch(_fetch_spreads, "spreads")
+        spread_periods = _safe_fetch(_fetch_spread_periods, "spread_periods")
+        process_instances = _safe_fetch(_fetch_approval_instances, "process_instances")
     else:
-        fixture             = _load_fixture()
-        loans               = fixture.get("loans", [])
-        stage_history       = fixture.get("loan_stage_history", [])
+        fixture = _load_fixture()
+        loans = fixture.get("loans", [])
+        stage_history = fixture.get("loan_stage_history", [])
         covenant_compliance = fixture.get("covenant_compliance", [])
-        checklists          = fixture.get("checklists", [])
-        spreads            = fixture.get("spreads", [])
-        spread_periods      = fixture.get("spread_periods", [])
-        process_instances   = fixture.get("process_instances", [])
+        checklists = fixture.get("checklists", [])
+        spreads = fixture.get("spreads", [])
+        spread_periods = fixture.get("spread_periods", [])
+        process_instances = fixture.get("process_instances", [])
 
     loan_ids = {l["Id"] for l in loans}
 
     return {
-        "loans":               loans,
-        "loan_stage_history":  stage_history,
+        "loans": loans,
+        "loan_stage_history": stage_history,
         "covenant_compliance": covenant_compliance,
-        "checklists":          checklists,
-        "spreads":             spreads,
-        "spread_periods":      spread_periods,
-        "process_instances":   process_instances,
-
-        "origination_metrics":     _build_origination_metrics(loans, stage_history),
-        "covenant_metrics":        _build_covenant_metrics(covenant_compliance),
-        "checklist_metrics":       _build_checklist_metrics(checklists),
-        "spreading_metrics":       _build_spreading_metrics(spread_periods, spreads),
-        "approval_metrics":        _build_approval_metrics(process_instances, loan_ids),
-        "stage_duration_metrics":  _build_stage_duration_metrics(loans, stage_history),
+        "checklists": checklists,
+        "spreads": spreads,
+        "spread_periods": spread_periods,
+        "process_instances": process_instances,
+        "origination_metrics": _build_origination_metrics(loans, stage_history),
+        "covenant_metrics": _build_covenant_metrics(covenant_compliance),
+        "checklist_metrics": _build_checklist_metrics(checklists),
+        "spreading_metrics": _build_spreading_metrics(spread_periods, spreads),
+        "approval_metrics": _build_approval_metrics(process_instances, loan_ids),
+        "stage_duration_metrics": _build_stage_duration_metrics(loans, stage_history),
     }
