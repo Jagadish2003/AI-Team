@@ -210,7 +210,7 @@ class TestRunnerNCinoPackDetectors:
             from discovery.runner import run
             result = run(mode="offline", pack="ncino")
             opps = result.get("opportunities", [])
-            assert len(opps) == 0, "ncino pack should produce opportunities from fixture"
+            assert len(opps) > 0, "ncino pack should produce opportunities from fixture"
         finally:
             os.environ.pop("INGEST_MODE", None)
 

@@ -2,7 +2,7 @@
 SN-CONNECT-1 + JIRA-CONNECT-1 — Live Connector Health Checks
 Sprint 5 — Track C
 
-Provides connection health check functions for ServiceNow and Jira.
+Provides connection health check functions for ServiceNow, Jira, and nCino.
 Called at run start to determine:
   - whether live credentials are configured
   - whether the remote API is reachable
@@ -10,7 +10,7 @@ Called at run start to determine:
 
 Returns a ConnectorHealth object with:
   status:    "live" | "fixture" | "error"
-  system:    "ServiceNow" | "Jira"
+  system:    "ServiceNow" | "Jira" | "nCino"
   message:   human-readable status message
   latency_ms: round-trip time if live (None if fixture/error)
 """
@@ -247,15 +247,150 @@ def check_jira() -> ConnectorHealth:
         )
 
 
+def check_ncino() -> ConnectorHealth:
+    """
+    ENG-AIQ-NC-1: Test nCino / Salesforce connectivity.
+
+    Env vars required for live mode:
+      SF_INSTANCE_URL    e.g. https://myorg.my.salesforce.com
+      SF_ACCESS_TOKEN    OAuth bearer token
+
+    Health endpoint: GET /services/data/v59.0/sobjects/LLC_BI__Loan__c/
+    Returns ConnectorHealth with status "live", "fixture", or "error".
+    """
+    sf_url = os.getenv("SF_INSTANCE_URL", "").rstrip("/")
+    sf_token = os.getenv("SF_ACCESS_TOKEN", "")
+
+    if not sf_url:
+        return ConnectorHealth(
+            system="nCino",
+            status="fixture",
+            message="SF_INSTANCE_URL not set - using fixture data",
+        )
+
+    if not sf_token:
+        return ConnectorHealth(
+            system="nCino",
+            status="fixture",
+            message="SF_ACCESS_TOKEN not set - using fixture data",
+        )
+
+    try:
+        import requests
+    except ImportError:
+        return ConnectorHealth(
+            system="nCino",
+            status="error",
+            message="requests library not installed",
+        )
+
+    url = f"{sf_url}/services/data/v59.0/sobjects/LLC_BI__Loan__c/"
+    headers = {
+        "Authorization": f"Bearer {sf_token}",
+        "Accept": "application/json",
+    }
+
+    try:
+        t0 = time.monotonic()
+        resp = requests.get(url, headers=headers, timeout=10)
+        latency_ms = int((time.monotonic() - t0) * 1000)
+
+        if resp.status_code == 200:
+            soql_url = f"{sf_url}/services/data/v59.0/query"
+            try:
+                soql_resp = requests.get(
+                    soql_url,
+                    headers=headers,
+                    params={"q": "SELECT Id FROM LLC_BI__Loan__c LIMIT 1"},
+                    timeout=10,
+                )
+            except Exception:
+                logger.info("ENG-AIQ-NC-1: nCino object reachable - %dms", latency_ms)
+                return ConnectorHealth(
+                    system="nCino",
+                    status="live",
+                    message=f"Connected to {sf_url} - LLC_BI__Loan__c object reachable",
+                    latency_ms=latency_ms,
+                )
+
+            if soql_resp.status_code == 200:
+                logger.info("ENG-AIQ-NC-1: nCino live and queryable - %dms", latency_ms)
+                return ConnectorHealth(
+                    system="nCino",
+                    status="live",
+                    message=(
+                        f"Connected to {sf_url} - LLC_BI__Loan__c accessible "
+                        "and queryable"
+                    ),
+                    latency_ms=latency_ms,
+                )
+
+            return ConnectorHealth(
+                system="nCino",
+                status="error",
+                message=(
+                    f"LLC_BI__Loan__c object exists but SOQL query failed "
+                    f"(HTTP {soql_resp.status_code}) - check field-level permissions"
+                ),
+            )
+
+        if resp.status_code == 401:
+            return ConnectorHealth(
+                system="nCino",
+                status="error",
+                message="Authentication failed - check SF_ACCESS_TOKEN",
+            )
+        if resp.status_code == 404:
+            return ConnectorHealth(
+                system="nCino",
+                status="error",
+                message="LLC_BI__Loan__c not found - nCino may not be installed on this org",
+            )
+        if resp.status_code == 429:
+            return ConnectorHealth(
+                system="nCino",
+                status="error",
+                message="Rate limited by Salesforce - retry later",
+            )
+
+        return ConnectorHealth(
+            system="nCino",
+            status="error",
+            message=f"Salesforce returned HTTP {resp.status_code}",
+        )
+
+    except requests.exceptions.ConnectionError:
+        return ConnectorHealth(
+            system="nCino",
+            status="error",
+            message=f"Cannot reach {sf_url} - check SF_INSTANCE_URL",
+        )
+    except requests.exceptions.Timeout:
+        return ConnectorHealth(
+            system="nCino",
+            status="error",
+            message="nCino health check timed out (10s)",
+        )
+    except Exception as e:
+        logger.warning("nCino health check error: %s", e)
+        return ConnectorHealth(
+            system="nCino",
+            status="error",
+            message=f"Unexpected error: {e}",
+        )
+
+
 def check_all_connectors() -> dict:
     """
-    Run health checks for both connectors.
+    Run health checks for all configured connectors.
     Returns dict keyed by system name.
     Called at run start — results stored in run KV under 'connector_health'.
     """
     sn = check_servicenow()
     jira = check_jira()
+    ncino = check_ncino()
     return {
         "ServiceNow": sn.to_dict(),
         "Jira": jira.to_dict(),
+        "nCino": ncino.to_dict(),
     }

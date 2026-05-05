@@ -6,6 +6,8 @@ set -euo pipefail
 BASE_URL="${BASE_URL:-http://localhost:8000}"
 TOKEN="${DEV_JWT:-dev-token-change-me}"
 hdr=(-H "Authorization: Bearer ${TOKEN}" -H "Content-Type: application/json")
+TMP_DIR="${TMP_DIR:-.smoke_tmp}"
+mkdir -p "$TMP_DIR"
 
 _count() { python -c "import sys,json; print(len(json.load(sys.stdin)))"; }
 _field() { local f=$1; python -c "import sys,json; print(json.load(sys.stdin).get('$f',''))"; }
@@ -93,16 +95,16 @@ PY
 
 echo "9) T4 replay — determinism gate"
 # Capture before
-echo "$OPPS" > /tmp/t5_opps_before.json
-echo "$EV"   > /tmp/t5_ev_before.json
+echo "$OPPS" > "$TMP_DIR/t5_opps_before.json"
+echo "$EV"   > "$TMP_DIR/t5_ev_before.json"
 
 curl -sS "${hdr[@]}" -X POST "${BASE_URL}/api/runs/${RUN_ID}/replay" -d '{}' > /dev/null
 
 # Capture after
 OPPS_AFTER=$(curl -sS "${hdr[@]}" "${BASE_URL}/api/runs/${RUN_ID}/opportunities")
 EV_AFTER=$(curl -sS "${hdr[@]}" "${BASE_URL}/api/runs/${RUN_ID}/evidence")
-echo "$OPPS_AFTER" > /tmp/t5_opps_after.json
-echo "$EV_AFTER"   > /tmp/t5_ev_after.json
+echo "$OPPS_AFTER" > "$TMP_DIR/t5_opps_after.json"
+echo "$EV_AFTER"   > "$TMP_DIR/t5_ev_after.json"
 
 python - <<'PY'
 import json, sys
@@ -127,8 +129,8 @@ def check(label, f_before, f_after):
         sys.exit(1)
     print(f"   ✅ {label}: deterministic after replay ({len(before)} items)")
 
-check("opportunities", "/tmp/t5_opps_before.json", "/tmp/t5_opps_after.json")
-check("evidence",      "/tmp/t5_ev_before.json",   "/tmp/t5_ev_after.json")
+check("opportunities", ".smoke_tmp/t5_opps_before.json", ".smoke_tmp/t5_opps_after.json")
+check("evidence",      ".smoke_tmp/t5_ev_before.json",   ".smoke_tmp/t5_ev_after.json")
 PY
 
 echo "10) isReplay flag in /status after replay"
