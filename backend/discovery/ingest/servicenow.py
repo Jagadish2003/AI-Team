@@ -529,7 +529,7 @@ def _sn_incident_matches(incident: Dict[str, Any], keywords: List[str]) -> bool:
         elif kw_lower in desc_text:
             score += 0.5
 
-    return score >= 1.5
+    return score >= 1.0  # Lowered from 1.5 — single keyword in title is sufficient signal
 
 
 def _sn_detector_for_incident(incident: Dict[str, Any]) -> Optional[tuple]:
