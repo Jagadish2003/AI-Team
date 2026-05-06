@@ -626,7 +626,7 @@ def _issue_matches_keywords(issue: Dict[str, Any], keywords: List[str]) -> bool:
         elif kw_lower in desc_text:
             score += 0.5
 
-    return score >= 1.5
+    return score >= 1.0  # Lowered from 1.5 — single keyword in title is sufficient signal
 
 
 def _detector_for_issue(issue: Dict[str, Any]) -> Optional[tuple]:
