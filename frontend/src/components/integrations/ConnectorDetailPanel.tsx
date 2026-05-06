@@ -20,21 +20,29 @@ const CONNECTION_HEALTH_LABELS: Record<string, string[]> = {
     'Read User records',
     'Read OpportunityLineItem records',
   ],
+  // nCino lending — used when Salesforce category contains "nCino"
+  salesforce_ncino: [
+    'Read LLC_BI__Loan__c records',
+    'Read LLC_BI__Covenant2__c records',
+    'Read LLC_BI__Checklist__c records',
+    'Read LLC_BI__Spread_Statement_Period__c records',
+    'Read ProcessInstance records',
+  ],
   servicenow: [
     'Read Incident records',
-    'Read Change Request records',
+    'Read lending corroboration signals',
     'Read SLA definitions',
-  ],
-  jira: [
-    'Read Issue records',
-    'Read Project configuration',
-    'Read Sprint data',
   ],
   jira_confluence: [
     'Read Issue records',
+    'Read lending corroboration signals',
     'Read Project configuration',
     'Read Space content',
-    'Read Page metadata',
+  ],
+  jira: [
+    'Read Issue records',
+    'Read lending corroboration signals',
+    'Read Sprint data',
   ],
   confluence: [
     'Read Space content',
@@ -42,17 +50,22 @@ const CONNECTION_HEALTH_LABELS: Record<string, string[]> = {
   ],
   ncino: [
     'Read LLC_BI__Loan__c records',
-    'Read LLC_BI__Covenant__c records',
-    'Read LLC_BI__Spreading__c records',
+    'Read LLC_BI__Covenant2__c records',
+    'Read LLC_BI__Spread_Statement_Period__c records',
   ],
 };
 
 function ConnectionHealthSection({ connector }: { connector: Connector }) {
   if (connector.status !== 'connected') return null;
 
-  // Use connector-specific health labels, falling back to reads array
+  // Use nCino-specific labels when Salesforce is connected as nCino Lending
+  const healthKey =
+    connector.id === 'salesforce' && connector.category?.includes('nCino')
+      ? 'salesforce_ncino'
+      : connector.id;
+
   const items =
-    CONNECTION_HEALTH_LABELS[connector.id] ??
+    CONNECTION_HEALTH_LABELS[healthKey] ??
     connector.reads.map((r) => `Read ${r} records`);
 
   return (

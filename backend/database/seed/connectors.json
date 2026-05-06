@@ -28,19 +28,19 @@
   {
     "id": "servicenow",
     "name": "ServiceNow",
-    "category": "ITSM \u00b7 CMDB",
+    "category": "Operations \u00b7 Incidents",
     "tier": "recommended",
     "recommendedRank": 2,
     "status": "disconnected",
     "configured": false,
     "metrics": [
       {
-        "label": "Incidents",
-        "value": "0"
+        "label": "Incidents (90d)",
+        "value": "\u2014"
       },
       {
-        "label": "CMDB Items",
-        "value": "0"
+        "label": "Lending signals",
+        "value": "\u2014"
       }
     ],
     "lastSynced": "\u2014",
@@ -49,7 +49,7 @@
       "Incident Tickets",
       "Change Logs"
     ],
-    "signalStrength": 0
+    "signalStrength": 88
   },
   {
     "id": "jira_confluence",
@@ -61,12 +61,12 @@
     "configured": false,
     "metrics": [
       {
-        "label": "Issues",
-        "value": "0"
+        "label": "Issues (90d)",
+        "value": "\u2014"
       },
       {
-        "label": "Confluence Pages",
-        "value": "0"
+        "label": "Lending signals",
+        "value": "\u2014"
       }
     ],
     "lastSynced": "\u2014",
@@ -75,7 +75,7 @@
       "Transitions",
       "Runbooks / Pages"
     ],
-    "signalStrength": 0
+    "signalStrength": 85
   },
   {
     "id": "sap",

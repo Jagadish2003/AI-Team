@@ -425,11 +425,11 @@ export default function SourceIntelligencePage() {
           <StatCard
             label="Connected sources"
             value={sourceHealth.length}
-            sub={`${rows.filter((r) => r.status === "MAPPED").length} fields mapped total`}
+            sub={`${rows.filter((r) => r.status === "MAPPED").length} signals mapped total`}
             accent
           />
           <StatCard
-            label="Fields mapped with HIGH confidence"
+            label="Signals mapped with HIGH confidence"
             value={highMappedCount}
             sub="Used directly in detection"
             accent
@@ -523,7 +523,7 @@ export default function SourceIntelligencePage() {
                           ? `${s.ambiguousCount} field${s.ambiguousCount !== 1 ? "s" : ""} found but could not be mapped`
                           : s.unmappedCount > 0
                             ? `${s.unmappedCount} field${s.unmappedCount !== 1 ? "s" : ""} could not be mapped`
-                            : "Connected — awaiting discovery run"}
+                            : "Connected — corroboration signals will appear after next run"}
                       </div>
                     )}
                   </div>
