@@ -206,24 +206,17 @@ def register_normalization_routes(app) -> None:
             elif isinstance(stored, list) and len(stored) > 0:
                 stored_rows = stored  # legacy list shape
 
-        # nCino hotfix: for ncino pack runs always derive from evidence.
-        # packId is stored in KV by _run_trackb_and_persist.
-        # Also fall back to deriving whenever evidence has multi-source items
-        # (Jira/SN rows) that stored normalization does not cover.
-        pack_id = db.run_kv_get("pack_id", run_id, "") or ""
-
-        # Additional fallback: if evidence has Jira or SN items but stored
-        # rows have no Jira/SN rows, always derive to show correct signals.
-        if stored_rows and pack_id != "ncino":
+        # Source Intelligence v3: derive from evidence when stored
+        # normalization does not cover every evidence source.
+        if stored_rows:
             stored_sources = {r.get("sourceSystem", "") for r in stored_rows}
-            evidence_check = db.run_kv_get("evidence", run_id, []) or []
+            evidence_check = db.run_kv_get(KV_EVIDENCE, run_id, []) or []
             evidence_sources = {e.get("source", "") for e in evidence_check}
-            multi_source = evidence_sources - {"Salesforce", ""}
-            if multi_source and not (multi_source & stored_sources):
-                # Evidence has Jira/SN but stored rows don't — force derive
+            extra_sources = evidence_sources - stored_sources - {""}
+            if extra_sources:
                 stored_rows = None
 
-        if stored_rows and pack_id != "ncino":
+        if stored_rows:
             rows = stored_rows
             data_source = "stored"
         else:

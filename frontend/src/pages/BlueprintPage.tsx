@@ -18,8 +18,10 @@ import { useConnectorContext } from '../context/ConnectorContext';
 import { useAnalystReviewContext } from '../context/AnalystReviewContext';
 import { useRunContext } from '../context/RunContext';
 import { fetchBlueprint } from '../api/blueprintApi';
+import { fetchEvidence } from '../api/runApi';
 import type { BlueprintResponse } from '../utils/blueprintTypes';
 import type { OpportunityCandidate } from '../types/analystReview';
+import type { EvidenceReview } from '../types/partialResults';
 
 function TierBadge({ tier }: { tier?: string }) {
   const t = tier ?? 'Unknown';
@@ -295,8 +297,39 @@ function EvidencePanel({
   const nav = useNavigate();
   const opportunityReviewPath = runId ? `/opportunity-review?runId=${runId}` : '/opportunity-review';
   const evidenceIds = blueprint.evidenceIds ?? [];
+  const evidenceKey = evidenceIds.join(',');
+  const [evidenceMap, setEvidenceMap] = useState<Record<string, EvidenceReview>>({});
   const prevOpp = selectedIdx > 0 ? opportunities[selectedIdx - 1] : null;
   const nextOpp = selectedIdx < opportunities.length - 1 ? opportunities[selectedIdx + 1] : null;
+
+  useEffect(() => {
+    let active = true;
+
+    if (evidenceIds.length === 0 || !runId) {
+      setEvidenceMap({});
+      return () => {
+        active = false;
+      };
+    }
+
+    setEvidenceMap({});
+    fetchEvidence(runId)
+      .then((all) => {
+        if (!active) return;
+        const map: Record<string, EvidenceReview> = {};
+        all.forEach((ev) => {
+          map[ev.id] = ev;
+        });
+        setEvidenceMap(map);
+      })
+      .catch(() => {
+        if (active) setEvidenceMap({});
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [runId, evidenceKey]);
 
   return (
     <div className="flex h-full flex-col overflow-hidden rounded-xl border border-border bg-panel">
@@ -310,12 +343,35 @@ function EvidencePanel({
 
       <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-4">
         {evidenceIds.length > 0 ? (
-          evidenceIds.map((id) => (
-            <div key={id} className="rounded-lg border border-border bg-bg/20 p-3">
-              <div className="font-mono text-xs text-muted">{id}</div>
-              <div className="mt-1 text-sm text-text">Evidence record linked to this opportunity.</div>
-            </div>
-          ))
+          evidenceIds.map((id) => {
+            const ev = evidenceMap[id];
+            return (
+              <div key={id} className="rounded-lg border border-border bg-bg/20 p-3">
+                {ev ? (
+                  <>
+                    <div className="mb-1 flex items-center gap-2">
+                      <span className="text-xs font-semibold text-accent">{ev.source}</span>
+                      <span className="text-xs text-muted">- {ev.evidenceType}</span>
+                      <span
+                        className={`ml-auto text-xs font-semibold ${
+                          ev.confidence === 'HIGH' ? 'text-green-400' : 'text-yellow-400'
+                        }`}
+                      >
+                        {ev.confidence}
+                      </span>
+                    </div>
+                    <div className="mb-1 text-sm font-medium text-text">{ev.title}</div>
+                    {ev.snippet && <div className="text-xs leading-relaxed text-muted">{ev.snippet}</div>}
+                  </>
+                ) : (
+                  <>
+                    <div className="font-mono text-xs text-muted">{id}</div>
+                    <div className="mt-1 text-sm text-text">Loading evidence...</div>
+                  </>
+                )}
+              </div>
+            );
+          })
         ) : (
           <div className="rounded-lg border border-border bg-bg/20 p-4 text-sm text-muted">
             No evidence items linked to this opportunity.
