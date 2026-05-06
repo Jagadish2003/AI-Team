@@ -180,7 +180,7 @@ class JiraClient:
         try:
             data = self.get(
                 "/rest/agile/1.0/board",
-                params={"projectKeyOrId": project_key, "type": "scrum"},
+                params={"projectKeyOrId": project_key},
             )
             return data.get("values", [])
         except JiraIngestError:
@@ -302,7 +302,7 @@ def get_issue_metrics(
         return _load_fixture()["issue_metrics"]
 
     if not project_key:
-        project_key = os.getenv("JIRA_PROJECT_KEY", "GNTQ")
+        project_key = os.getenv("JIRA_PROJECT_KEY", "AIC")
 
     # Total issues in window
     all_issues = client.search_issues(
@@ -402,7 +402,7 @@ def get_sprint_velocity(
         return _load_fixture()["sprint_velocity"]
 
     if not project_key:
-        project_key = os.getenv("JIRA_PROJECT_KEY", "GNTQ")
+        project_key = os.getenv("JIRA_PROJECT_KEY", "AIC")
 
     # Find the board for this project
     boards = client.get_boards(project_key)
@@ -592,6 +592,23 @@ ALL_LENDING_KEYWORDS = [kw for entry in LENDING_KEYWORD_MAP for kw in entry[0]] 
     "borrower",
 ]
 
+def _extract_adf_text(adf: Any) -> str:
+    """
+    Recursively extract plain text from an Atlassian Document Format (ADF) node.
+
+    Jira API v3 returns description as ADF JSON, not a plain string.
+    ADF structure: {"type": "doc", "content": [{"type": "paragraph",
+                    "content": [{"type": "text", "text": "..."}, ...]}]}
+    """
+    if not adf or not isinstance(adf, dict):
+        return ""
+    # Leaf text node
+    if adf.get("type") == "text":
+        return adf.get("text", "")
+    # Recurse into content children
+    parts = [_extract_adf_text(child) for child in (adf.get("content") or [])]
+    return " ".join(p for p in parts if p)
+
 
 def _issue_matches_keywords(issue: Dict[str, Any], keywords: List[str]) -> bool:
     """
@@ -613,9 +630,20 @@ def _issue_matches_keywords(issue: Dict[str, Any], keywords: List[str]) -> bool:
     lending-specific label or summary match will not reach threshold.
     """
     score = 0.0
-    labels_text = " ".join(issue.get("labels", [])).lower()
+    
+    # Labels can be plain strings OR Jira API dicts {"name": "..."}
+    raw_labels = issue.get("labels") or []
+    labels_text = " ".join(
+        l["name"] if isinstance(l, dict) else str(l) for l in raw_labels
+    ).lower()
+
     summary_text = issue.get("summary", "").lower()
-    desc_text = (issue.get("description", "") or "").lower()
+
+    # Description is ADF (dict) in Jira API v3 — extract plain text first
+    desc_raw = issue.get("description") or ""
+    desc_text = (
+        _extract_adf_text(desc_raw) if isinstance(desc_raw, dict) else desc_raw
+    ).lower()
 
     for kw in keywords:
         kw_lower = kw.lower()
@@ -685,7 +713,8 @@ def get_lending_correlation(
         try:
             # Use search_issues() which correctly uses /rest/api/3/search/jql
             kw_jql = " OR ".join(f'text ~ "{kw}"' for kw in ALL_LENDING_KEYWORDS[:10])
-            jql = f"({kw_jql}) AND created >= -{WINDOW_DAYS}d ORDER BY created DESC"
+            # jql = f"({kw_jql}) AND created >= -{WINDOW_DAYS}d ORDER BY created DESC"
+            jql = f'project = {os.getenv("JIRA_PROJECT_KEY", "AIC")} AND ({kw_jql}) AND created >= -{WINDOW_DAYS}d ORDER BY created DESC'
             raw_issues = client.search_issues(
                 jql=jql,
                 fields=[
@@ -700,12 +729,18 @@ def get_lending_correlation(
             )
             for ri in raw_issues:
                 fields = ri.get("fields", {})
+                desc_raw = fields.get("description") or ""
                 issues.append(
                     {
                         "id": ri.get("id", ""),
                         "key": ri.get("key", ""),
                         "summary": fields.get("summary", ""),
-                        "description": fields.get("description") or "",
+                        # Extract plain text from ADF at ingest time
+                        "description": (
+                            _extract_adf_text(desc_raw)
+                            if isinstance(desc_raw, dict)
+                            else desc_raw
+                        ),
                         "labels": fields.get("labels", []),
                         "priority": (fields.get("priority") or {}).get("name", ""),
                         "status": (fields.get("status") or {}).get("name", ""),
@@ -713,7 +748,12 @@ def get_lending_correlation(
                     }
                 )
         except Exception as e:
-            logger.warning("Jira lending correlation fetch failed: %s", e)
+            # logger.warning("Jira lending correlation fetch failed: %s", e)
+            logger.warning(
+                "Jira lending correlation fetch failed: %s: %r | jql=%s",
+                type(e).__name__, e, jql,
+            )
+            logger.exception("Jira lending correlation traceback")
             return {"lending_issues": [], "by_detector": {}, "total_matched": 0}
 
     # Match issues to detectors
@@ -721,7 +761,11 @@ def get_lending_correlation(
     by_detector: Dict[str, List[str]] = {}
 
     for issue in issues:
-        match = _detector_for_issue(issue)
+        try:
+            match = _detector_for_issue(issue)
+        except Exception as exc:
+            logger.warning("_detector_for_issue failed for %s: %s", issue.get("key", "?"), exc)
+            continue
         if match is None:
             continue
         detector_id, label = match
