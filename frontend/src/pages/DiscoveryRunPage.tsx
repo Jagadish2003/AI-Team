@@ -144,6 +144,7 @@ export default function DiscoveryRunPage() {
     return {
       connectedSources,
       uploadedFiles: uploadedFiles.map((f) => f.name),
+      sampleWorkspaceEnabled: false,
       mode: "live" as const,
     };
   }, [connectors, uploadedFiles]); // T41-8: sampleWorkspaceEnabled removed
