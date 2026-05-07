@@ -201,6 +201,11 @@ def run_trackb_and_persist(
         db.run_kv_set("opps", run_id, opps)
         db.run_kv_set("evidence", run_id, ev)
 
+        # Keep Integration Hub connector cards in sync with the actual run data.
+        from .connector_metrics import update_connector_metrics_from_run
+
+        update_connector_metrics_from_run(payload, succeeded)
+
         _emit_event(
             run_id,
             "SCORE",
