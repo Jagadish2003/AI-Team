@@ -8,7 +8,7 @@ export default function FieldDetailsPanel() {
   const { push } = useToast(); // ✅ added
 
   return (
-    <div className="rounded-xl border border-border bg-panel p-4 h-full flex flex-col">
+    <div className="flex h-full min-w-0 flex-col overflow-y-auto rounded-xl border border-border bg-panel p-4">
       
       <div className="text-xl font-semibold text-text mb-3">
         Field Details
@@ -21,11 +21,11 @@ export default function FieldDetailsPanel() {
       ) : (
         <>
           {/* Header */}
-          <div className="text-sm font-semibold text-text">
+          <div className="break-all text-sm font-semibold leading-snug text-text">
             {selectedRow.sourceSystem}.{selectedRow.sourceField}
           </div>
 
-          <div className="mt-1 text-xs text-muted">
+          <div className="mt-1 break-all text-xs leading-snug text-muted">
             Source: {selectedRow.sourceSystem} · {selectedRow.sourceType}
           </div>
 
@@ -33,12 +33,12 @@ export default function FieldDetailsPanel() {
           <div className="mt-4 rounded-lg border border-border bg-bg/20 px-3 py-2">
             <div className="flex items-center justify-between gap-3">
               <div className="min-w-0">
-                <div className="truncate text-sm text-text">
+                <div className="break-all text-sm leading-snug text-text">
                   {selectedRow.commonField}
                 </div>
 
                 {selectedRow.notes && (
-                  <div className="mt-1 text-xs text-muted">
+                  <div className="mt-1 text-xs leading-relaxed text-muted">
                     {selectedRow.notes}
                   </div>
                 )}
@@ -52,7 +52,7 @@ export default function FieldDetailsPanel() {
               Sample values:
             </div>
 
-            <div className="space-y-1 text-sm text-text">
+            <div className="space-y-1 break-words text-sm text-text">
               {(selectedRow.sampleValues || []).map((value, index) => (
                 <div key={index}>{value}</div>
               ))}
@@ -101,7 +101,7 @@ export default function FieldDetailsPanel() {
                       />
                     )}
 
-                    <span>{permission.label}</span>
+                    <span className="min-w-0 break-words">{permission.label}</span>
                   </div>
                 ))}
               </div>

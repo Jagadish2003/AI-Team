@@ -123,22 +123,22 @@ export default function HeroConnectorCard({
     <div
       onClick={onSelect}
       className={`
-      flex min-h-[240px] min-w-0 cursor-pointer flex-col justify-between overflow-hidden rounded-xl border
+      flex min-h-[220px] min-w-0 cursor-pointer flex-col justify-between overflow-hidden rounded-xl border
       ${selected ? 'border-accent bg-panel2' : 'border-border bg-panel'}
-      p-5 shadow-sm hover:border-accent/40 hover:bg-panel2
+      p-4 shadow-sm hover:border-accent/40 hover:bg-panel2 xl:p-5
     `}
     >
       <div className="min-w-0">
-        <div className="flex min-w-0 items-center gap-2 text-base font-semibold text-text">
+        <div className="flex min-w-0 items-center gap-2 text-sm font-semibold text-text xl:text-base">
           <span className="shrink-0">{connectorIcons[connector.name] || <Settings size={18} className="text-slate-500" />}</span>
-          <span className="leading-snug">{connector.name}</span>
+          <span className="min-w-0 leading-snug">{connector.name}</span>
         </div>
         <div className="mt-1 flex items-center justify-between gap-2">
           <div className="truncate text-sm text-muted">{connector.category}</div>
           <div className="shrink-0"><Badge status={connector.status} /></div>
         </div>
       </div>
-      <div className="mt-4 grid grid-cols-2 gap-4">
+      <div className="mt-3 grid grid-cols-2 gap-3 xl:mt-4 xl:gap-4">
         {connector.metrics.slice(0, 2).map((m, index) => (
           <div key={m.label} className="min-w-0 rounded-lg border border-border bg-bg/30 p-3">
             <div className="truncate text-xs text-muted">{m.label}</div>
@@ -153,7 +153,7 @@ export default function HeroConnectorCard({
           </div>
         ))}
       </div>
-      <div className="mt-4 flex flex-wrap items-center justify-between gap-2 text-xs text-muted">
+      <div className="mt-3 flex flex-wrap items-center justify-between gap-2 text-xs text-muted xl:mt-4">
         <div className="truncate">
           Last synced: <span className="text-text">{isConfigured ? connector.lastSynced : '—'}</span>
         </div>
@@ -161,7 +161,7 @@ export default function HeroConnectorCard({
           Signal: <span className="text-text">{connector.signalStrength}</span>
         </div>
       </div>
-      <div className="mt-5 flex flex-wrap gap-3">
+      <div className="mt-4 grid grid-cols-2 gap-2 xl:mt-5 xl:gap-3">
         <Button
           onClick={(e: React.MouseEvent<HTMLButtonElement>) => {
             e.stopPropagation();
@@ -169,7 +169,7 @@ export default function HeroConnectorCard({
           }}
           disabled={connector.status === 'coming_soon'}
           variant="primary"
-          className="min-w-[120px] flex-1"
+          className="min-w-0 px-2"
         >
           {primaryLabel}
         </Button>
@@ -179,7 +179,7 @@ export default function HeroConnectorCard({
             onSecondary();
           }}
           variant="secondary"
-          className={`min-w-[120px] flex-1 ${isConnected ? '!border-[#0D55D7]/50 !text-[#0D55D7]' : ''}`}
+          className={`min-w-0 px-2 ${isConnected ? '!border-[#0D55D7]/50 !text-[#0D55D7]' : ''}`}
           disabled={!isConnected}
           title={!isConnected ? 'Connect to enable data preview' : undefined}
         >

@@ -7,10 +7,10 @@ function clamp(n: number, a: number, b: number) {
 
 const VW = 860;
 const VH = 620;
-const LEFT = 110;
-const RIGHT = 20;
-const TOP = 20;
-const BOT = 30;
+const LEFT = 150;
+const RIGHT = 24;
+const TOP = 28;
+const BOT = 38;
 
 const CX = LEFT + (VW - LEFT - RIGHT) / 2;
 const CY = TOP + (VH - TOP - BOT) / 2;
@@ -96,17 +96,17 @@ export default function OpportunityMatrix({
           <line x1={CX} y1={TOP} x2={CX} y2={BY} stroke="rgba(255,255,255,0.15)" strokeWidth="1" />
           <line x1={LEFT} y1={CY} x2={RX} y2={CY} stroke="rgba(255,255,255,0.15)" strokeWidth="1" />
 
-          <text x={LEFT - 8} y={TOP + 18} fontSize="18" fontWeight="600" fill="rgba(255,255,255,0.62)" textAnchor="end">
+          <text x={LEFT - 10} y={TOP + 18} fontSize="16" fontWeight="600" fill="rgba(255,255,255,0.62)" textAnchor="end">
             HIGH IMPACT
           </text>
-          <text x={LEFT - 8} y={BY - 6} fontSize="18" fontWeight="600" fill="rgba(255,255,255,0.62)" textAnchor="end">
+          <text x={LEFT - 10} y={BY - 6} fontSize="16" fontWeight="600" fill="rgba(255,255,255,0.62)" textAnchor="end">
             LOW IMPACT
           </text>
 
-          <text x={LEFT} y={VH - 8} fontSize="18" fontWeight="600" fill="rgba(255,255,255,0.62)">
+          <text x={LEFT} y={VH - 10} fontSize="16" fontWeight="600" fill="rgba(255,255,255,0.62)">
             LOW EFFORT
           </text>
-          <text x={RX} y={VH - 8} fontSize="18" fontWeight="600" fill="rgba(255,255,255,0.62)" textAnchor="end">
+          <text x={RX} y={VH - 10} fontSize="16" fontWeight="600" fill="rgba(255,255,255,0.62)" textAnchor="end">
             HIGH EFFORT
           </text>
 
@@ -157,10 +157,11 @@ export default function OpportunityMatrix({
             const isHover = p.o.id === hoverId;
             if (!isHover && !isSelected) return null;
             const title = p.o.title.length > 32 ? `${p.o.title.slice(0, 32)}...` : p.o.title;
+            const labelX = clamp(p.x, LEFT + 92, RX - 92);
             return (
               <text
                 key={`label-${p.o.id}`}
-                x={p.x}
+                x={labelX}
                 y={p.y - p.r - 18}
                 fontSize="17"
                 fontWeight="700"

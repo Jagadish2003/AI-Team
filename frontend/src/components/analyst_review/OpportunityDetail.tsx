@@ -3,6 +3,7 @@ import {
   OpportunityCandidate,
   ReviewAuditEvent,
 } from "../../types/analystReview";
+import { ArrowRight } from "lucide-react";
 import { fetchOppEnrichment, OppEnrichment } from "../../api/enrichmentApi";
 import { useRunContext } from "../../context/RunContext";
 
@@ -168,15 +169,16 @@ export default function OpportunityDetail({
     <div className="flex h-full min-h-0 w-full flex-col overflow-hidden rounded-xl border border-border bg-panel">
       {/* Title bar */}
       <div className="flex items-center justify-between px-5 py-4 border-b border-border bg-panel shrink-0">
-        <h2 className="pr-4 text-lg font-semibold leading-snug text-text">
+        <h2 className="min-w-0 pr-4 text-lg font-semibold leading-snug text-text">
           {opp.title}
         </h2>
         {onNavigate && (
           <button
             onClick={onNavigate}
-            className="w-7 h-7 border border-border rounded-md flex items-center justify-center text-muted hover:bg-panel2 hover:text-text text-sm transition-colors shrink-0"
+            className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-border text-muted transition-colors hover:bg-panel2 hover:text-text"
+            aria-label="Open opportunity report"
           >
-            →
+            <ArrowRight size={14} />
           </button>
         )}
       </div>

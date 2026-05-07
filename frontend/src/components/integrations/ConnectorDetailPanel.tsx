@@ -86,7 +86,7 @@ function ConnectionHealthSection({ connector }: { connector: Connector }) {
               size={14}
               className="shrink-0 text-emerald-400"
             />
-            <span className="flex-1">{label}</span>
+            <span className="min-w-0 flex-1 break-words">{label}</span>
             <span className="text-emerald-400 text-[10px] font-medium">✓</span>
           </div>
         ))}
@@ -123,11 +123,11 @@ export default function ConnectorDetailPanel({
       
       {/* Header */}
       <div className="flex items-start justify-between gap-2">
-        <div>
-          <div className="text-xl font-semibold text-text">
+        <div className="min-w-0">
+          <div className="break-words text-xl font-semibold leading-snug text-text">
             {connector.name} Integration
           </div>
-          <div className="mt-1 text-sm text-muted">
+          <div className="mt-1 break-words text-sm text-muted">
             {connector.category}
           </div>
         </div>
@@ -166,14 +166,14 @@ export default function ConnectorDetailPanel({
               key={r}
               className="flex items-center justify-between rounded-md border border-border px-3 py-2 hover:bg-panel2"
             >
-              <div className="flex items-center gap-2 text-sm text-text">
+              <div className="flex min-w-0 items-center gap-2 text-sm text-text">
                 <div className="flex h-5 w-5 items-center justify-center rounded bg-accent/20">
                   {accessIcons[r] || accessIcons.fallback}
                 </div>
-                {r}
+                <span className="min-w-0 break-words">{r}</span>
               </div>
 
-              <span className="text-muted">›</span>
+              <span className="shrink-0 text-muted">›</span>
             </div>
           ))}
         </div>

@@ -20,7 +20,7 @@ export default function ConnectorGridSection({
       <div className="text-xl font-semibold text-text">Add more coverage</div>
       <div className="text-xs text-muted pb-3 pt-3">Add sources to improve confidence and evidence coverage.</div>
 
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 2xl:grid-cols-3">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:gap-4">
         {connectors.map((c) => (
           <ConnectorTile
             key={c.id}

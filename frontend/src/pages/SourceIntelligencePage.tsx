@@ -402,13 +402,17 @@ export default function SourceIntelligencePage() {
       actions={
           <button
             onClick={() => setShowDetail((v) => !v)}
-            className="flex items-center gap-1.5 text-xs text-muted hover:text-text transition-colors"
+            className={`inline-flex items-center gap-2 rounded-md border px-3 py-2 text-xs font-medium shadow-sm transition-all ${
+              showDetail
+                ? "border-accent/50 bg-accent/10 text-text hover:bg-accent/15"
+                : "border-border bg-panel text-muted hover:border-accent/40 hover:bg-panel2 hover:text-text"
+            }`}
             data-testid="toggle-detail"
           >
             {showDetail ? "Hide" : "View"} field mapping detail
             <ChevronRight
               size={12}
-              className={`transition-transform ${showDetail ? "rotate-90" : ""}`}
+              className={`text-accent transition-transform ${showDetail ? "rotate-90" : ""}`}
             />
           </button>
       }
@@ -621,11 +625,11 @@ export default function SourceIntelligencePage() {
                 <X size={14} />
               </button>
             </div>
-            <div className="flex min-h-[420px] flex-col gap-4 lg:h-[min(600px,calc(100vh-220px))] lg:flex-row">
-              <div className="flex-1 overflow-hidden">
+            <div className="flex min-h-[420px] min-w-0 flex-col gap-4 lg:h-[min(600px,calc(100vh-220px))] lg:flex-row">
+              <div className="min-w-0 flex-1 overflow-hidden">
                 <MappingTable />
               </div>
-              <div className="min-h-[320px] overflow-hidden lg:w-72 lg:shrink-0">
+              <div className="min-h-[320px] min-w-0 overflow-hidden lg:w-80 lg:shrink-0 xl:w-[360px]">
                 <FieldDetailsPanel />
               </div>
             </div>
