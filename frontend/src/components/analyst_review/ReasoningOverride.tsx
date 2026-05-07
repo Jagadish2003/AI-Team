@@ -1,8 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Check, X } from 'lucide-react';
 import { OpportunityCandidate, ReviewAuditEvent } from '../../types/analystReview';
 import type { Decision } from '../../types/common';
-
+ 
 export default function ReasoningOverride({
   opp,
   audit,
@@ -20,33 +19,23 @@ export default function ReasoningOverride({
   const [rationaleOverride, setRationaleOverride] = useState(opp?.override.rationaleOverride ?? '');
   const [overrideReason, setOverrideReason] = useState(opp?.override.overrideReason ?? '');
   const [isLocked, setIsLocked] = useState(opp?.override.isLocked ?? false);
-
+ 
   useEffect(() => {
     setRationaleOverride(opp?.override.rationaleOverride ?? '');
     setOverrideReason(opp?.override.overrideReason ?? '');
     setIsLocked(opp?.override.isLocked ?? false);
   }, [opp?.id]);
-
+ 
   const isDecisionFinalized = !!opp && opp.decision !== 'UNREVIEWED';
   const relevantAuditCount = opp ? audit.filter((a) => !a.opportunityId || a.opportunityId === opp.id).length : 0;
-  const decisionButtonBase =
-    'flex w-full items-center justify-center gap-1.5 rounded-md border px-3 py-2.5 text-sm font-medium transition-all disabled:cursor-not-allowed disabled:opacity-70';
-  const approveClass =
-    opp?.decision === 'APPROVED'
-      ? 'border-accent bg-accent text-white shadow-[0_0_0_1px_rgba(13,85,215,0.25)]'
-      : 'border-accent/35 bg-accent/10 text-text hover:border-accent/60 hover:bg-accent/15';
-  const rejectClass =
-    opp?.decision === 'REJECTED'
-      ? 'border-accent/70 bg-panel2 text-text shadow-[0_0_0_1px_rgba(13,85,215,0.20)]'
-      : 'border-border bg-bg/30 text-muted hover:border-accent/50 hover:bg-panel2 hover:text-text';
-
+ 
   return (
     <div className="flex h-full min-h-0 flex-col rounded-xl border border-border bg-panel p-4">
       <div className="flex shrink-0 items-center justify-between">
         <div className="pb-2 text-xl font-semibold text-text">Reasoning Override</div>
         <div className="text-xs text-muted">{relevantAuditCount} audit item(s)</div>
       </div>
-
+ 
       {!opp ? (
         <div className="mt-3 rounded-lg border border-border bg-bg/20 px-3 py-4 text-sm text-muted">
           Select an opportunity to review.
@@ -58,29 +47,35 @@ export default function ReasoningOverride({
               type="button"
               onClick={() => onDecision('APPROVED')}
               disabled={isDecisionFinalized}
-              className={`${decisionButtonBase} ${approveClass}`}
+              className={`flex w-full items-center justify-center gap-1.5 rounded-md border px-3 py-2.5 text-sm font-medium transition disabled:cursor-not-allowed disabled:opacity-50 ${
+                opp.decision === 'APPROVED'
+                  ? 'border-emerald-500/60 bg-emerald-500/20 text-emerald-300'
+                  : 'border-emerald-500/25 bg-emerald-500/5 text-emerald-100 hover:border-emerald-500/50 hover:bg-emerald-500/15 hover:text-emerald-300'
+              }`}
             >
-              <Check size={14} strokeWidth={2.5} />
               {opp.decision === 'APPROVED' ? 'Approved' : 'Approve'}
             </button>
-
+ 
             <button
               type="button"
               onClick={() => onDecision('REJECTED')}
               disabled={isDecisionFinalized}
-              className={`${decisionButtonBase} ${rejectClass}`}
+              className={`flex w-full items-center justify-center gap-1.5 rounded-md border px-3 py-2.5 text-sm font-medium transition disabled:cursor-not-allowed disabled:opacity-50 ${
+                opp.decision === 'REJECTED'
+                  ? 'border-red-500/60 bg-red-500/20 text-red-300'
+                  : 'border-red-500/25 bg-red-500/5 text-red-100 hover:border-red-500/50 hover:bg-red-500/15 hover:text-red-300'
+              }`}
             >
-              <X size={14} strokeWidth={2.5} />
               {opp.decision === 'REJECTED' ? 'Rejected' : 'Reject'}
             </button>
           </div>
-
+ 
           {opp.override.updatedAt && (
             <div className="text-xs text-muted">
               Last updated: {new Date(opp.override.updatedAt).toLocaleString()}
             </div>
           )}
-
+ 
           <div>
             <div className="mb-2 text-xs font-semibold text-text">Override rationale</div>
             <textarea
@@ -92,7 +87,7 @@ export default function ReasoningOverride({
               disabled={isLocked}
             />
           </div>
-
+ 
           <div>
             <div className="mb-2 text-xs font-semibold text-text">Override reason</div>
             <input
@@ -104,7 +99,7 @@ export default function ReasoningOverride({
               disabled={isLocked}
             />
           </div>
-
+ 
           <div className="grid grid-cols-2 gap-2">
             <button
               type="button"
@@ -114,7 +109,7 @@ export default function ReasoningOverride({
             >
               Save Override
             </button>
-
+ 
             <button
               type="button"
               onClick={onViewEvidence}
@@ -123,7 +118,7 @@ export default function ReasoningOverride({
               View Evidence
             </button>
           </div>
-
+ 
           <button
             type="button"
             onClick={() => setIsLocked((locked) => !locked)}
@@ -140,3 +135,5 @@ export default function ReasoningOverride({
     </div>
   );
 }
+ 
+ 

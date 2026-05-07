@@ -1,7 +1,8 @@
 import React from 'react';
+import Button from '../common/Button';
 import { EvidenceReview } from '../../types/partialResults';
-import { Check, Monitor, X } from 'lucide-react';
-
+import { Monitor } from 'lucide-react';
+ 
 interface EvidenceViewerProps {
   evidence: EvidenceReview | null;
   positionLabel: string;
@@ -10,7 +11,7 @@ interface EvidenceViewerProps {
   onApprove: () => void;
   onReject: () => void;
 }
-
+ 
 const EvidenceViewer: React.FC<EvidenceViewerProps> = ({
   evidence,
   positionLabel,
@@ -20,16 +21,14 @@ const EvidenceViewer: React.FC<EvidenceViewerProps> = ({
   onReject
 }) => {
   const isFinalized = !!evidence && evidence.decision !== 'UNREVIEWED';
-  const decisionButtonBase =
-    'flex w-full items-center justify-center gap-1.5 rounded-lg border py-2.5 text-xs font-semibold transition-all disabled:cursor-not-allowed disabled:opacity-70';
-
+ 
   return (
     <div className="flex h-full flex-col rounded-xl border border-border bg-panel p-5">
       <div className="flex items-center justify-between border-b border-border pb-4">
         <div className="text-xl font-semibold text-text pb-3">Evidence Viewer</div>
         <Monitor className="h-5 w-5 text-slate-400" />
       </div>
-
+ 
       {!evidence ? (
         <div className="mt-4 text-sm text-muted">Select an evidence snippet to view details.</div>
       ) : (
@@ -38,7 +37,7 @@ const EvidenceViewer: React.FC<EvidenceViewerProps> = ({
             <div className="mb-1 text-xs text-muted">{evidence.tsLabel}</div>
             <div className="text-sm font-semibold leading-snug text-text">{evidence.title}</div>
           </div>
-
+ 
           <div className="flex items-center gap-3 rounded-lg border border-border bg-bg/40 px-3 py-2 text-xs text-muted">
             <span>
               Source: <span className="font-semibold text-text">{evidence.source}</span>
@@ -47,7 +46,7 @@ const EvidenceViewer: React.FC<EvidenceViewerProps> = ({
               Confidence: <span className="font-semibold text-text">{evidence.confidence}</span>
             </span>
           </div>
-
+ 
           <div className="rounded-lg border border-border bg-bg/40 px-3 py-2 text-xs text-muted">
             Evidence Source Type : {evidence.evidenceType}
           </div>
@@ -67,42 +66,50 @@ const EvidenceViewer: React.FC<EvidenceViewerProps> = ({
             <button
               onClick={onApprove}
               disabled={isFinalized}
-              className={`${decisionButtonBase}
+              className={`flex items-center justify-center gap-1.5 py-2.5 text-xs font-semibold rounded-lg border transition-all w-full disabled:cursor-not-allowed
                 ${evidence.decision === 'APPROVED'
-                  ? 'border-accent bg-accent text-white shadow-[0_0_0_1px_rgba(13,85,215,0.25)]'
-                  : 'border-accent/35 bg-accent/10 text-text hover:border-accent/60 hover:bg-accent/15'
+                  ? 'bg-emerald-500/20 border-emerald-500/60 text-emerald-300'
+                  : 'bg-emerald-500/5 border-emerald-500/25 text-emerald-100 hover:bg-emerald-500/15 hover:border-emerald-500/50 hover:text-emerald-300'
                 }`}
             >
               {evidence.decision === 'APPROVED' ? (
                 <>
-                  <Check size={14} strokeWidth={2.5} />
+                  <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
+                  </svg>
                   Approved
                 </>
               ) : (
                 <>
-                  <Check size={14} strokeWidth={2.5} />
+                  <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                  </svg>
                   Approve
                 </>
               )}
             </button>
-
+ 
             <button
               onClick={onReject}
               disabled={isFinalized}
-              className={`${decisionButtonBase}
+              className={`flex items-center justify-center gap-1.5 py-2.5 text-xs font-semibold rounded-lg border transition-all w-full disabled:cursor-not-allowed
                 ${evidence.decision === 'REJECTED'
-                  ? 'border-accent/70 bg-panel2 text-text shadow-[0_0_0_1px_rgba(13,85,215,0.20)]'
-                  : 'border-border bg-bg/30 text-muted hover:border-accent/50 hover:bg-panel2 hover:text-text'
+                  ? 'bg-red-500/20 border-red-500/60 text-red-300'
+                  : 'bg-red-500/5 border-red-500/25 text-red-100 hover:bg-red-500/15 hover:border-red-500/50 hover:text-red-300'
                 }`}
             >
               {evidence.decision === 'REJECTED' ? (
                 <>
-                  <X size={14} strokeWidth={2.5} />
+                  <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M6 18L18 6M6 6l12 12" />
+                  </svg>
                   Rejected
                 </>
               ) : (
                 <>
-                  <X size={14} strokeWidth={2.5} />
+                  <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                  </svg>
                   Reject
                 </>
               )}
@@ -113,5 +120,6 @@ const EvidenceViewer: React.FC<EvidenceViewerProps> = ({
     </div>
   );
 };
-
+ 
 export default EvidenceViewer;
+ 
