@@ -1,7 +1,6 @@
 import React from 'react';
-import Button from '../common/Button';
 import { EvidenceReview } from '../../types/partialResults';
-import { Monitor } from 'lucide-react';
+import { Check, Monitor, X } from 'lucide-react';
 
 interface EvidenceViewerProps {
   evidence: EvidenceReview | null;
@@ -21,6 +20,8 @@ const EvidenceViewer: React.FC<EvidenceViewerProps> = ({
   onReject
 }) => {
   const isFinalized = !!evidence && evidence.decision !== 'UNREVIEWED';
+  const decisionButtonBase =
+    'flex w-full items-center justify-center gap-1.5 rounded-lg border py-2.5 text-xs font-semibold transition-all disabled:cursor-not-allowed disabled:opacity-70';
 
   return (
     <div className="flex h-full flex-col rounded-xl border border-border bg-panel p-5">
@@ -66,24 +67,20 @@ const EvidenceViewer: React.FC<EvidenceViewerProps> = ({
             <button
               onClick={onApprove}
               disabled={isFinalized}
-              className={`flex items-center justify-center gap-1.5 py-2.5 text-xs font-semibold rounded-lg border transition-all w-full disabled:cursor-not-allowed
+              className={`${decisionButtonBase}
                 ${evidence.decision === 'APPROVED'
-                  ? 'bg-emerald-500/20 border-emerald-500/60 text-emerald-300'
-                  : 'bg-emerald-500/5 border-emerald-500/25 text-emerald-100 hover:bg-emerald-500/15 hover:border-emerald-500/50 hover:text-emerald-300'
+                  ? 'border-accent bg-accent text-white shadow-[0_0_0_1px_rgba(13,85,215,0.25)]'
+                  : 'border-accent/35 bg-accent/10 text-text hover:border-accent/60 hover:bg-accent/15'
                 }`}
             >
               {evidence.decision === 'APPROVED' ? (
                 <>
-                  <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
-                  </svg>
+                  <Check size={14} strokeWidth={2.5} />
                   Approved
                 </>
               ) : (
                 <>
-                  <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-                  </svg>
+                  <Check size={14} strokeWidth={2.5} />
                   Approve
                 </>
               )}
@@ -92,24 +89,20 @@ const EvidenceViewer: React.FC<EvidenceViewerProps> = ({
             <button
               onClick={onReject}
               disabled={isFinalized}
-              className={`flex items-center justify-center gap-1.5 py-2.5 text-xs font-semibold rounded-lg border transition-all w-full disabled:cursor-not-allowed
+              className={`${decisionButtonBase}
                 ${evidence.decision === 'REJECTED'
-                  ? 'bg-red-500/20 border-red-500/60 text-red-300'
-                  : 'bg-red-500/5 border-red-500/25 text-red-100 hover:bg-red-500/15 hover:border-red-500/50 hover:text-red-300'
+                  ? 'border-accent/70 bg-panel2 text-text shadow-[0_0_0_1px_rgba(13,85,215,0.20)]'
+                  : 'border-border bg-bg/30 text-muted hover:border-accent/50 hover:bg-panel2 hover:text-text'
                 }`}
             >
               {evidence.decision === 'REJECTED' ? (
                 <>
-                  <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M6 18L18 6M6 6l12 12" />
-                  </svg>
+                  <X size={14} strokeWidth={2.5} />
                   Rejected
                 </>
               ) : (
                 <>
-                  <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                  </svg>
+                  <X size={14} strokeWidth={2.5} />
                   Reject
                 </>
               )}
