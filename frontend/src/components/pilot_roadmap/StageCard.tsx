@@ -44,12 +44,12 @@ function ReadinessCounts({
   missing: number;
 }) {
   return (
-    <span className="flex items-center gap-1 text-xs">
-      <span className="font-semibold text-emerald-300">{ready} READY</span>
+    <span className="flex flex-wrap items-center justify-end gap-x-1 gap-y-0.5 text-xs">
+      <span className="whitespace-nowrap font-semibold text-emerald-300">{ready} READY</span>
       <span className="opacity-10">&middot;</span>
-      <span className="font-semibold text-amber-300">{pending} PENDING</span>
+      <span className="whitespace-nowrap font-semibold text-amber-300">{pending} PENDING</span>
       <span className="opacity-10">&middot;</span>
-      <span className="font-semibold text-red-300">{missing} MISSING</span>
+      <span className="whitespace-nowrap font-semibold text-red-300">{missing} MISSING</span>
     </span>
   );
 }
@@ -70,26 +70,13 @@ export default function StageCard({ stage, onOpenReview, renderBlueprintLink }: 
 
   const permScrollStyle = {
     height: '180px',
-    scrollbarWidth: 'thin' as const,
-    scrollbarColor: '#9e9fa3 #132043',
   };
   const depsScrollStyle = {
     height: '148px',
-    scrollbarWidth: 'thin' as const,
-    scrollbarColor: '#9e9fa3 #132043',
   };
 
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden rounded-xl border border-border bg-panel p-4">
-      <style>{`
-        .opp-scroll::-webkit-scrollbar { width: 6px; }
-        .opp-scroll::-webkit-scrollbar-track { background: #132043; border-radius: 6px; }
-        .opp-scroll::-webkit-scrollbar-thumb { background: #9e9fa3; border-radius: 6px; min-height: 40px; }
-        .opp-scroll::-webkit-scrollbar-thumb:hover { background: #c0c1c5; }
-        .opp-scroll::-webkit-scrollbar-button:start { background: #132043; height: 10px; display: block; }
-        .opp-scroll::-webkit-scrollbar-button:end { background: #132043; height: 10px; display: block; }
-      `}</style>
-
       <div className="flex shrink-0 items-center justify-between">
         <div className="text-xl font-semibold text-text">Stage Readiness</div>
         <ReadinessPill status={gate} />
@@ -98,7 +85,7 @@ export default function StageCard({ stage, onOpenReview, renderBlueprintLink }: 
       <div className="opp-scroll mt-4 min-h-0 flex-1 space-y-3 overflow-y-auto pr-1">
         <div className="rounded-lg border border-border bg-bg/20 p-3">
           <div className="text-sm font-semibold text-text">Selected Opportunities</div>
-          <div className="mt-2 max-h-[190px] min-h-[190px] space-y-2 overflow-y-auto pr-1">
+          <div className="mt-2 h-[190px] space-y-2 overflow-y-auto pr-1">
             {stage.opportunities.length === 0 && (
               <div className="text-sm text-muted">No opportunities assigned to this stage yet.</div>
             )}
@@ -120,7 +107,7 @@ export default function StageCard({ stage, onOpenReview, renderBlueprintLink }: 
         </div>
 
         <div className="rounded-lg border border-border bg-bg/20 p-3">
-          <div className="flex items-center justify-between">
+          <div className="flex flex-wrap items-start justify-between gap-2">
             <div className="text-sm font-semibold text-text">Required Data Permissions</div>
             <ReadinessCounts ready={readyCount} pending={pendingCount} missing={missingCount} />
           </div>
@@ -147,7 +134,7 @@ export default function StageCard({ stage, onOpenReview, renderBlueprintLink }: 
 
         <div className="rounded-lg border border-border bg-bg/20 p-3">
           <button
-            className="flex w-full items-start justify-between gap-3 text-left"
+            className="flex w-full flex-wrap items-start justify-between gap-3 text-left"
             onClick={() => setShowDependencies(!showDependencies)}
           >
             <span className="flex items-center gap-2 text-sm font-semibold text-text">

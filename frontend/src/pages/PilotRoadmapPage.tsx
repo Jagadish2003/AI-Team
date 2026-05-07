@@ -1,7 +1,6 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import TopNav from '../components/common/TopNav';
-import PilotRoadmapHeader from '../components/pilot_roadmap/PilotRoadmapHeader';
+import PageShell from '../components/common/PageShell';
 import RoadmapSummaryBar from '../components/pilot_roadmap/RoadmapSummaryBar';
 import StagesGrid from '../components/pilot_roadmap/StagesGrid';
 import LoadingPanel from '../components/common/LoadingPanel';
@@ -74,82 +73,74 @@ export default function PilotRoadmapPage() {
   }, [runId, resultsPreparing, loading, refetch]);
 
   const pageHeader = (
-    <div className="mb-4">
-      <div className="text-2xl font-semibold text-text">Agent Roadmap</div>
-      <div className="mt-1 text-sm text-muted">
-        Your prioritised Agentforce implementation plan - grounded in discovery findings.
-      </div>
-    </div>
+    <PageShell
+      title="Agent Roadmap"
+      description="Your prioritised Agentforce implementation plan, grounded in discovery findings."
+    >
+      <LoadingPanel
+        title="Loading Agent Roadmap"
+        subtitle="Waiting for roadmap results to become available for this discovery run."
+      />
+    </PageShell>
   );
 
   const openReview = (id: string) => {
     select(id);
-    nav(runId ? `/analyst-review?runId=${runId}` : '/analyst-review');
+    nav(runId ? `/opportunity-review?runId=${runId}` : '/opportunity-review');
   };
 
   if (!runId) {
     return (
-      <div className="min-h-screen text-text">
-        <TopNav />
-        <div className="px-8 py-6">
-          <RunRequiredEmptyState
-            pageTitle="Agent Roadmap"
-            pageDescription="Your prioritised Agentforce implementation plan - grounded in discovery findings."
-            onStart={() => nav('/discovery-run')}
-          />
-        </div>
-      </div>
+      <PageShell
+        title="Agent Roadmap"
+        description="Your prioritised Agentforce implementation plan, grounded in discovery findings."
+      >
+        <RunRequiredEmptyState onStart={() => nav('/discovery-run')} />
+      </PageShell>
     );
   }
 
   if (loading || resultsPreparing) {
-    return (
-      <div className="min-h-screen text-text">
-        <TopNav />
-        <div className="px-8 py-6">
-          {pageHeader}
-          <LoadingPanel
-            title="Loading Agent Roadmap"
-            subtitle="Waiting for roadmap results to become available for this discovery run."
-          />
-        </div>
-      </div>
-    );
+    return pageHeader;
   }
 
   if (error) {
     return (
-      <div className="min-h-screen text-text">
-        <TopNav />
+      <PageShell
+        title="Agent Roadmap"
+        description="Your prioritised Agentforce implementation plan, grounded in discovery findings."
+      >
         <ErrorPanel message={error} onRetry={refetch} title="Failed to load roadmap" />
-      </div>
+      </PageShell>
     );
   }
 
   if (!model) return null;
 
   return (
-    <div className="min-h-screen text-text lg:h-screen lg:overflow-hidden">
-      <TopNav />
-
-      <div className="w-full px-8 py-6 lg:flex lg:h-[calc(100vh-70px)] lg:flex-col lg:overflow-hidden">
-
-        <PilotRoadmapHeader
-          onExport={() => push('Export will be wired in Screen 10 (stub).')}
-        />
-
-        <div className="mt-4 shrink-0">
+    <PageShell
+      title="Agent Roadmap"
+      description="Your prioritised Agentforce implementation plan, grounded in discovery findings."
+      actions={
+        <button
+          className="rounded-lg border border-border bg-buttonbg px-4 py-2 text-sm font-medium text-text hover:bg-panel"
+          onClick={() => push('Export will be wired in Screen 10.')}
+        >
+          Export Report
+        </button>
+      }
+    >
+        <div className="shrink-0">
           <RoadmapSummaryBar model={model} />
         </div>
 
-        <div className="mt-2 lg:min-h-0 lg:flex-1 lg:overflow-hidden">
+        <div className="mt-2 lg:h-[680px] lg:flex-none">
           <StagesGrid
             stages={model.stages}
             onOpenReview={openReview}
           />
         </div>
 
-      </div>
-    </div>
+    </PageShell>
   );
 }

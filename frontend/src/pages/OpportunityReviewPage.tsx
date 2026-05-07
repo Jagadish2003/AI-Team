@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState, useCallback } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { Zap } from "lucide-react";
-import TopNav from "../components/common/TopNav";
+import PageShell from "../components/common/PageShell";
 import OpportunityToolbar, {
   ConfidenceFilter,
   DecisionFilter,
@@ -44,6 +44,8 @@ export default function OpportunityReviewPage() {
   const [tier, setTier] = useState<TierFilter>("All");
   const [conf, setConf] = useState<ConfidenceFilter>("All");
   const [decisionF, setDecisionF] = useState<DecisionFilter>("All");
+  const pageDescription =
+    "Prioritize, approve, and understand automation opportunities from one review workspace.";
 
   const salesforceConnected = connectors.some(
     (c) => c.id === "salesforce" && c.status === "connected",
@@ -138,65 +140,30 @@ export default function OpportunityReviewPage() {
 
   if (!runId) {
     return (
-      <div className="min-h-screen text-text">
-        <TopNav />
-        <div className="px-8 py-6">
-          <RunRequiredEmptyState
-            pageTitle="Opportunity Review"
-            pageDescription="Prioritize, approve, and understand automation opportunities from one review workspace."
-            onStart={() => nav("/discovery-run")}
-          />
-        </div>
-      </div>
+      <PageShell title="Opportunity Review" description={pageDescription}>
+        <RunRequiredEmptyState onStart={() => nav("/discovery-run")} />
+      </PageShell>
     );
   }
 
   if (loading) {
     return (
-      <div className="min-h-screen text-text">
-        <TopNav />
-        <div className="px-8 py-6">
-          <div className="mb-4">
-            <div className="text-2xl font-semibold text-text">
-              Opportunity Review
-            </div>
-            <div className="mt-1 text-sm text-muted">
-              Prioritize, approve, and understand automation opportunities from
-              one review workspace.
-            </div>
-          </div>
-          <LoadingPanel title="Loading Opportunity Review..." />
-        </div>
-      </div>
+      <PageShell title="Opportunity Review" description={pageDescription}>
+        <LoadingPanel title="Loading Opportunity Review..." />
+      </PageShell>
     );
   }
 
   if (error) {
     return (
-      <div className="min-h-screen text-text">
-        <TopNav />
-        <div className="px-8 py-10">
-          <ErrorPanel message={error} onRetry={refetch} />
-        </div>
-      </div>
+      <PageShell title="Opportunity Review" description={pageDescription}>
+        <ErrorPanel message={error} onRetry={refetch} />
+      </PageShell>
     );
   }
 
   return (
-    <div className="min-h-screen text-text">
-      <TopNav />
-
-      <div className="w-full px-8 py-6 pb-10">
-        <div className="mb-3">
-          <div className="text-2xl font-semibold text-text">
-            Opportunity Review
-          </div>
-          <div className="mt-1 text-sm text-muted">
-            Prioritize, approve, and understand automation opportunities from
-            one review workspace.
-          </div>
-        </div>
-
+    <PageShell title="Opportunity Review" description={pageDescription}>
         <OpportunityToolbar
           q={q}
           onQ={setQ}
@@ -209,7 +176,7 @@ export default function OpportunityReviewPage() {
           totalShown={filtered.length}
         />
 
-        <div className="grid grid-cols-1 gap-4 lg:h-[590px] lg:grid-cols-[minmax(0,1.12fr)_minmax(420px,0.88fr)] lg:items-stretch xl:grid-cols-[minmax(760px,1.12fr)_minmax(520px,0.88fr)]">
+        <div className="grid grid-cols-1 gap-4 lg:h-[620px] lg:grid-cols-[minmax(0,1.12fr)_minmax(420px,0.88fr)] lg:items-stretch xl:grid-cols-[minmax(720px,1.12fr)_minmax(520px,0.88fr)]">
           <OpportunityMatrix
             filtered={filtered}
             selectedId={selectedId}
@@ -230,7 +197,7 @@ export default function OpportunityReviewPage() {
           />
         </div>
 
-        <div className="mt-4 grid grid-cols-1 gap-4 lg:h-[430px] lg:grid-cols-3 lg:items-stretch">
+        <div className="mt-4 grid grid-cols-1 gap-4 lg:h-[460px] lg:grid-cols-3 lg:items-stretch">
           <TopQuickWins
             quickWins={quickWins}
             selectedId={selectedId}
@@ -272,7 +239,6 @@ export default function OpportunityReviewPage() {
             }}
           />
         </div>
-      </div>
-    </div>
+    </PageShell>
   );
 }

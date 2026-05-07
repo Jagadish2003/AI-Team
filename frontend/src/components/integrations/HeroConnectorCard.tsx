@@ -123,7 +123,7 @@ export default function HeroConnectorCard({
     <div
       onClick={onSelect}
       className={`
-      flex min-h-[240px] min-w-0 cursor-pointer flex-col justify-between overflow-hidden rounded-xl border-2
+      flex min-h-[240px] min-w-0 cursor-pointer flex-col justify-between overflow-hidden rounded-xl border
       ${selected ? 'border-accent bg-panel2' : 'border-border bg-panel'}
       p-5 shadow-sm hover:border-accent/40 hover:bg-panel2
     `}

@@ -65,7 +65,7 @@ export default function OpportunityMatrix({
 
   return (
     <div className="flex h-full min-h-0 flex-col rounded-xl border border-border bg-panel p-4">
-      <div className="mb-3 flex shrink-0 items-center justify-between">
+      <div className="mb-3 flex shrink-0 flex-wrap items-center justify-between gap-2">
         <div className="pb-2 text-xl font-semibold text-text">Effort vs Impact</div>
         <div className="text-xs text-muted">Click a bubble to preview details</div>
       </div>

@@ -21,6 +21,33 @@ body {
   color: #e6eef9;
 }
 
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #7782a0 transparent;
+}
+
+*::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+*::-webkit-scrollbar-thumb {
+  background: #7782a0;
+  border-radius: 999px;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background: #a2abc5;
+}
+
+*::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
 @keyframes slideInRight {
   from {
     opacity: 0;
