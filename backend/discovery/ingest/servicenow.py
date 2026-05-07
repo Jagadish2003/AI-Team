@@ -594,7 +594,6 @@ def get_lending_correlation(
             ]
             kw_filter = "^NQ".join(kw_groups)
             query = f"active=true^{kw_filter}"
-            print("SN Lending Correlation query:", query)
             result = client.table_query(
                 "incident",
                 params={
