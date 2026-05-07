@@ -3,7 +3,7 @@ import {
   OpportunityCandidate,
   ReviewAuditEvent,
 } from "../../types/analystReview";
-import { ArrowRight } from "lucide-react";
+import { ArrowRight, Hash } from "lucide-react";
 import { fetchOppEnrichment, OppEnrichment } from "../../api/enrichmentApi";
 import { useRunContext } from "../../context/RunContext";
 
@@ -104,6 +104,37 @@ function EnrichmentPanel({
 }
 
 // ── Main component ────────────────────────────────────────────────────────────
+
+function EvidenceIdsBox({ ids }: { ids: string[] }) {
+  const hasOverflow = ids.length > 4;
+
+  return (
+    <div className="rounded-lg border border-border bg-bg/20 p-3">
+      <div className="mb-2 flex items-center justify-between gap-3">
+        <div className="flex items-center gap-2 text-xs font-semibold text-text">
+          Evidence IDs
+        </div>
+        <span className="shrink-0 rounded border border-bg px-1.5 py-0.5 text-xs text-text">
+          {ids.length} linked
+        </span>
+      </div>
+
+      <div className={hasOverflow ? "max-h-[74px] overflow-y-auto pr-1" : ""}>
+        <div className="grid grid-cols-1 gap-1.5 sm:grid-cols-2">
+          {ids.map((id) => (
+            <div
+              key={id}
+              title={id}
+              className="min-w-0 rounded-md border border-border/60 bg-panel/60 px-2.5 py-1.5 font-mono text-[11px] leading-tight text-text"
+            >
+              <span className="block truncate">{id}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
 
 export default function OpportunityDetail({
   opp,
@@ -224,18 +255,7 @@ export default function OpportunityDetail({
         )}
         {opp.evidenceIds &&
           opp.evidenceIds.length > 0 &&
-          !opp.evidenceItems && (
-            <div className="flex items-start gap-4 text-sm">
-              <span className="text-muted w-24 shrink-0 pt-0.5">
-                Evidence IDs
-              </span>
-              <div className="space-y-1 text-xs text-text font-mono">
-                {opp.evidenceIds.map((id) => (
-                  <div key={id}>{id}</div>
-                ))}
-              </div>
-            </div>
-          )}
+          !opp.evidenceItems && <EvidenceIdsBox ids={opp.evidenceIds} />}
 
         <div className="border-t border-border" />
 
