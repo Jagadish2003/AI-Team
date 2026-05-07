@@ -585,11 +585,16 @@ def get_lending_correlation(
                 return {"lending_incidents": [], "by_detector": {}, "total_matched": 0}
         try:
             # Fetch recent incidents with lending keywords
-            kw_filter = "^".join(
+            # Build query using ^NQ (new query) to OR between keyword groups
+            # ^NQ is ServiceNow's separator for OR between filter groups
+            # Using ^ (AND) between groups returned 0 results
+            kw_groups = [
                 f"short_descriptionLIKE{kw}^ORdescriptionLIKE{kw}"
-                for kw in SN_ALL_LENDING_KEYWORDS[:6]
-            )
-            query = f"active=true^{kw_filter}^ORDERBYDESCsys_created_on"
+                for kw in SN_ALL_LENDING_KEYWORDS[:8]
+            ]
+            kw_filter = "^NQ".join(kw_groups)
+            query = f"active=true^{kw_filter}"
+            print("SN Lending Correlation query:", query)
             result = client.table_query(
                 "incident",
                 params={
