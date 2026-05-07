@@ -14,8 +14,8 @@ export default function DiscoveryStartBar({
   recommended,
   canStart,
   onStart,
-  // T41-8: onUpload removed — file upload is now in the Integration Hub
-  // right panel (SourceConfigPanel). Prop kept for backward compat only.
+  // T41-8: onUpload removed. File upload is now in the Integration Hub
+  // right panel (SourceConfigPanel). Prop kept for backward compatibility.
   onUpload: _onUpload,
 }: {
   confidence: Confidence;
@@ -39,69 +39,58 @@ export default function DiscoveryStartBar({
       : null;
 
   return (
-    <div className="fixed bottom-0 left-0 right-0 z-40 border-t border-border bg-bg/80 shadow-[0_-4px_12px_rgba(0,0,0,0.15)] backdrop-blur">
-      <div className="w-full px-6 py-4">
-        <div className="flex flex-wrap items-center justify-between gap-6">
-          <div className="flex items-center text-sm">
-            <div className="flex items-center">
+    <div className="fixed bottom-0 left-0 right-0 z-40 max-h-[46vh] overflow-y-auto border-t border-border bg-bg/90 shadow-[0_-4px_12px_rgba(0,0,0,0.15)] backdrop-blur">
+      <div className="w-full px-4 py-3 sm:px-6">
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div className="min-w-0">
+            <div className="flex min-w-0 flex-wrap items-center gap-y-2 text-sm">
+              <div className="flex items-center">
+                <div
+                  className={`h-2.5 w-2.5 rounded-full ${isLow ? "bg-accent" : "bg-muted/40"}`}
+                />
+                <span
+                  className={`ml-2 ${isLow ? "font-semibold text-text" : "text-muted"}`}
+                >
+                  Low
+                </span>
+              </div>
               <div
-                className={`h-2.5 w-2.5 rounded-full ${isLow ? "bg-accent" : "bg-muted/40"}`}
+                className={`mx-3 h-[1px] w-10 transition-colors sm:w-16 ${isMedium || isHigh ? "bg-accent/50" : "bg-border"}`}
               />
-              <span
-                className={`ml-2 ${isLow ? "font-semibold text-text" : "text-muted"}`}
-              >
-                Low
-              </span>
+              <div className="flex items-center">
+                <div
+                  className={`h-2.5 w-2.5 rounded-full ${isMedium ? "bg-accent" : "bg-muted/40"}`}
+                />
+                <span
+                  className={`ml-2 ${isMedium ? "font-semibold text-text" : "text-muted"}`}
+                >
+                  Medium
+                </span>
+              </div>
+              <div
+                className={`mx-3 h-[1px] w-10 transition-colors sm:w-16 ${isHigh ? "bg-accent/50" : "bg-border"}`}
+              />
+              <div className="flex items-center">
+                <div
+                  className={`h-2.5 w-2.5 rounded-full ${isHigh ? "bg-accent" : "bg-muted/40"}`}
+                />
+                <span
+                  className={`ml-2 ${isHigh ? "font-semibold text-text" : "text-muted"}`}
+                >
+                  High
+                </span>
+              </div>
             </div>
-            <div
-              className={`mx-3 h-[1px] w-16 transition-colors ${isMedium || isHigh ? "bg-accent/50" : "bg-border"}`}
-            />
-            <div className="flex items-center">
-              <div
-                className={`h-2.5 w-2.5 rounded-full ${isMedium ? "bg-accent" : "bg-muted/40"}`}
-              />
-              <span
-                className={`ml-2 ${isMedium ? "font-semibold text-text" : "text-muted"}`}
-              >
-                Medium
-              </span>
-            </div>
-            <div
-              className={`mx-3 h-[1px] w-16 transition-colors ${isHigh ? "bg-accent/50" : "bg-border"}`}
-            />
-            <div className="flex items-center">
-              <div
-                className={`h-2.5 w-2.5 rounded-full ${isHigh ? "bg-accent" : "bg-muted/40"}`}
-              />
-              <span
-                className={`ml-2 ${isHigh ? "font-semibold text-text" : "text-muted"}`}
-              >
-                High
-              </span>
+
+            <div className="mt-5 whitespace-nowrap text-sm text-muted">
+              Ready : <span className="text-text">{recommendedReadyCount}</span>{" "}
+              of <span className="text-text">{recommendedTotal}</span>{" "}
+              recommended
             </div>
           </div>
 
-          <div className="text-sm text-muted">
-            Ready : <span className="text-text">{recommendedReadyCount}</span>{" "}
-            of <span className="text-text">{recommendedTotal}</span> recommended
-          </div>
-
-          <button
-            onClick={onStart}
-            disabled={!canStart}
-            className="flex items-center gap-2 whitespace-nowrap rounded-lg bg-accent px-6 py-2 text-sm font-medium text-textwhite transition-all hover:bg-accent/90 disabled:opacity-50"
-          >
-            Start Discovery Run
-            <MoveRight size={18} strokeWidth={2} />
-          </button>
-        </div>
-
-        <div className="mt-2 flex flex-wrap items-center justify-between gap-4">
-          <div className="flex flex-wrap items-center gap-3">
-            {/* T41-8: "Upload Files Instead" button removed — upload is in
-                the Integration Hub right panel (SourceConfigPanel). */}
-
-            <div className="flex items-center gap-2 rounded-md border border-slate-400 px-3 py-1.5 text-sm">
+          <div className="min-w-0">
+            <div className="flex max-w-full flex-wrap items-center gap-x-2 gap-y-1 rounded-md border border-slate-400 px-3 py-1.5 text-sm">
               {recommended.map((connector, index) => {
                 const isReady = isDiscoveryReadyConnector(connector);
                 const statusLabel = isReady
@@ -111,7 +100,9 @@ export default function DiscoveryStartBar({
                     : "Not Connected";
                 return (
                   <React.Fragment key={connector.id}>
-                    {index > 0 && <span className="text-slate-400">|</span>}
+                    {index > 0 && (
+                      <span className="hidden text-slate-400 sm:inline">|</span>
+                    )}
                     <span className="flex items-center gap-1.5">
                       {isReady ? (
                         <Check
@@ -140,7 +131,7 @@ export default function DiscoveryStartBar({
               })}
             </div>
 
-            <div className="whitespace-nowrap text-sm text-muted">
+            <div className="mt-3 whitespace-nowrap text-sm text-muted">
               CONFIDENCE:{" "}
               <span className="font-semibold uppercase text-text">
                 {confidence}
@@ -148,12 +139,23 @@ export default function DiscoveryStartBar({
             </div>
           </div>
 
-          {microcopy && (
+          <button
+            onClick={onStart}
+            disabled={!canStart}
+            className="flex items-center gap-2 whitespace-nowrap rounded-lg bg-accent px-5 py-2 text-sm font-medium text-textwhite transition-all hover:bg-accent/90 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            Start Discovery Run
+            <MoveRight size={18} strokeWidth={2} />
+          </button>
+        </div>
+
+        {microcopy && (
+          <div className="mt-2 flex justify-end">
             <div className="rounded-md bg-panel2 px-3 py-1.5 text-sm text-muted">
               {microcopy}
             </div>
-          )}
-        </div>
+          </div>
+        )}
       </div>
     </div>
   );

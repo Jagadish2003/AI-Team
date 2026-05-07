@@ -9,7 +9,7 @@ import {
   WifiOff,
   Loader2,
 } from "lucide-react";
-import TopNav from "../components/common/TopNav";
+import PageShell from "../components/common/PageShell";
 import LoadingPanel from "../components/common/LoadingPanel";
 import { useNormalizationContext } from "../context/NormalizationContext";
 import { useConnectorContext } from "../context/ConnectorContext";
@@ -372,41 +372,34 @@ export default function SourceIntelligencePage() {
 
   if (!runId) {
     return (
-      <div className="min-h-screen text-text">
-        <TopNav />
-        <div className="px-8 py-6">
-          <RunRequiredEmptyState
-            pageTitle={SOURCE_INTELLIGENCE_TITLE}
-            pageDescription={SOURCE_INTELLIGENCE_DESCRIPTION}
-            onStart={() => nav("/discovery-run")}
-          />
-        </div>
-      </div>
+      <PageShell
+        title={SOURCE_INTELLIGENCE_TITLE}
+        description={SOURCE_INTELLIGENCE_DESCRIPTION}
+      >
+        <RunRequiredEmptyState onStart={() => nav("/discovery-run")} />
+      </PageShell>
     );
   }
 
   if (rowsLoading) {
     return (
-      <div className="min-h-screen text-text">
-        <TopNav />
-        <div className="px-8 py-6">
-          <SourceIntelligenceHeader />
-          <LoadingPanel
-            title="Loading Source Intelligence"
-            subtitle="Reading source mappings, confidence signals, and permission context for this discovery run."
-          />
-        </div>
-      </div>
+      <PageShell
+        title={SOURCE_INTELLIGENCE_TITLE}
+        description={SOURCE_INTELLIGENCE_DESCRIPTION}
+      >
+        <LoadingPanel
+          title="Loading Source Intelligence"
+          subtitle="Reading source mappings, confidence signals, and permission context for this discovery run."
+        />
+      </PageShell>
     );
   }
 
   return (
-    <div className="min-h-screen text-text">
-      <TopNav />
-      <div className="w-full px-8 py-6 pb-10">
-        {/* Header */}
-        <div className="mb-6 flex items-start justify-between">
-          <SourceIntelligenceHeader className="" />
+    <PageShell
+      title={SOURCE_INTELLIGENCE_TITLE}
+      description={SOURCE_INTELLIGENCE_DESCRIPTION}
+      actions={
           <button
             onClick={() => setShowDetail((v) => !v)}
             className="flex items-center gap-1.5 text-xs text-muted hover:text-text transition-colors"
@@ -418,10 +411,11 @@ export default function SourceIntelligencePage() {
               className={`transition-transform ${showDetail ? "rotate-90" : ""}`}
             />
           </button>
-        </div>
+      }
+    >
 
         {/* Section 1 — Stat cards */}
-        <div className="grid grid-cols-3 gap-4 mb-6" data-testid="stat-cards">
+        <div className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3" data-testid="stat-cards">
           <StatCard
             label="Connected sources"
             value={sourceHealth.length}
@@ -470,11 +464,11 @@ export default function SourceIntelligencePage() {
               {sourceHealth.map((s) => (
                 <div
                   key={s.connectorId}
-                  className="flex items-center gap-4 px-5 py-3"
+                  className="flex flex-wrap items-center gap-4 px-5 py-3 xl:flex-nowrap"
                   data-testid={`source-row-${s.connectorId}`}
                 >
                   {/* Display name — rendering only, not used for joins */}
-                  <div className="w-36 shrink-0">
+                  <div className="min-w-[9rem] shrink-0">
                     <div className="text-sm font-semibold text-text">
                       {s.displayName}
                     </div>
@@ -491,7 +485,7 @@ export default function SourceIntelligencePage() {
                   </div>
 
                   {/* Signal bar */}
-                  <div className="flex-1">
+                  <div className="min-w-[220px] flex-1">
                     {s.signalCount > 0 ? (
                       <div className="flex items-center gap-2">
                         <div className="flex-1 h-1.5 rounded-full bg-border overflow-hidden">
@@ -555,7 +549,7 @@ export default function SourceIntelligencePage() {
               </span>
             </div>
             <div
-              className="grid grid-cols-2 gap-3"
+              className="grid grid-cols-1 gap-3 xl:grid-cols-2"
               data-testid="ambiguous-cards"
             >
               {ambiguousRows.map((row) => (
@@ -627,11 +621,11 @@ export default function SourceIntelligencePage() {
                 <X size={14} />
               </button>
             </div>
-            <div className="flex gap-4" style={{ height: "600px" }}>
+            <div className="flex min-h-[420px] flex-col gap-4 lg:h-[min(600px,calc(100vh-220px))] lg:flex-row">
               <div className="flex-1 overflow-hidden">
                 <MappingTable />
               </div>
-              <div className="w-72 shrink-0 overflow-hidden">
+              <div className="min-h-[320px] overflow-hidden lg:w-72 lg:shrink-0">
                 <FieldDetailsPanel />
               </div>
             </div>
@@ -639,7 +633,7 @@ export default function SourceIntelligencePage() {
         )}
 
         {/* Counts footer */}
-        <div className="flex items-center gap-8 rounded-xl border border-border bg-panel px-6 py-3 text-sm">
+        <div className="flex flex-wrap items-center gap-x-8 gap-y-3 rounded-xl border border-border bg-panel px-6 py-3 text-sm">
           <div className="flex items-center gap-2">
             <span className="h-2.5 w-2.5 rounded-sm bg-accent" />
             <span className="font-semibold text-text">Mapped</span>
@@ -653,14 +647,13 @@ export default function SourceIntelligencePage() {
             <span className="font-semibold text-muted">{counts.AMBIGUOUS}</span>
             <span className="text-muted">Ambiguous</span>
           </div>
-          <div className="ml-auto flex items-center gap-2">
+          <div className="flex items-center gap-2 sm:ml-auto">
             <span className="text-muted">Total fields</span>
             <span className="font-bold text-text">
               {counts.MAPPED + counts.AMBIGUOUS + counts.UNMAPPED}
             </span>
           </div>
         </div>
-      </div>
-    </div>
+    </PageShell>
   );
 }

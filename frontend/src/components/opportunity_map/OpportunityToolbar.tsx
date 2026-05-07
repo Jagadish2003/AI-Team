@@ -111,7 +111,7 @@ export default function OpportunityToolbar({
 }) {
   return (
     <div className="mb-4 rounded-xl border border-border bg-panel p-3">
-      <div className="grid grid-cols-1 gap-2 md:grid-cols-[1fr_200px_200px_200px]">
+      <div className="grid grid-cols-1 gap-2 lg:grid-cols-[minmax(220px,1fr)_minmax(160px,200px)_minmax(160px,200px)_minmax(160px,200px)]">
  
         {/* Search */}
         <div className="relative">

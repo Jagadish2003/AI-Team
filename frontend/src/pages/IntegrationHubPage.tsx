@@ -1,6 +1,6 @@
 import React, { useMemo, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import TopNav from "../components/common/TopNav";
+import PageShell from "../components/common/PageShell";
 import LoadingPanel from "../components/common/LoadingPanel";
 import ErrorPanel from "../components/common/ErrorPanel";
 import HeroConnectorSection from "../components/integrations/HeroConnectorSection";
@@ -95,25 +95,18 @@ export default function IntegrationHubPage() {
   }, [loading, metricAnimation]);
 
   return (
-    <div className="min-h-screen text-text">
-      <TopNav />
+    <>
+      <PageShell
+        title="Integration Hub"
+        description="Connect enterprise systems and optional file sources to provide data for discovery."
+        contentClassName="pb-[190px] xl:pb-28"
+      >
+        {loading && <LoadingPanel />}
+        {error && !loading && <ErrorPanel message={error} onRetry={refetch} />}
 
-      {loading && <LoadingPanel />}
-      {error && !loading && <ErrorPanel message={error} onRetry={refetch} />}
-
-      {!loading && !error && (
-        <>
-          <div className="w-full px-8 pb-[170px] pt-6 xl:pb-24">
-            <div className="mb-6">
-              <div className="text-2xl font-semibold">Integration Hub</div>
-              <div className="mt-1 text-sm text-muted">
-                The Integration Hub is where users connect enterprise systems to
-                provide data sources for the discovery process.
-              </div>
-            </div>
-
-            <div className="flex items-start gap-6">
-              <div className="flex flex-[0.7] flex-col gap-6">
+        {!loading && !error && (
+            <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_360px]">
+              <div className="flex min-w-0 flex-col gap-6">
                 <div className="rounded-xl border border-border bg-panel p-6 shadow-sm">
                   <HeroConnectorSection
                     connectors={recommended}
@@ -165,7 +158,7 @@ export default function IntegrationHubPage() {
                 </div>
               </div>
 
-              <div className="flex-[0.3]">
+              <div className="min-w-0">
                 <RightPanel
                   selected={selected}
                   onConfigure={() => {
@@ -191,8 +184,9 @@ export default function IntegrationHubPage() {
                 />
               </div>
             </div>
-          </div>
-
+        )}
+      </PageShell>
+      {!loading && !error && (
           <DiscoveryStartBar
             confidence={confidence}
             recommendedReadyCount={recommendedConnectedCount}
@@ -207,8 +201,7 @@ export default function IntegrationHubPage() {
               }
             }}
           />
-        </>
       )}
-    </div>
+    </>
   );
 }

@@ -3,7 +3,7 @@ import { Loader2 } from "lucide-react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { InfoPanel } from "../components/common/InfoPanel";
 import LoadingPanel from "../components/common/LoadingPanel";
-import TopNav from "../components/common/TopNav";
+import PageShell from "../components/common/PageShell";
 import { useDiscoveryRunContext } from "../context/DiscoveryRunContext";
 import { useConnectorContext } from "../context/ConnectorContext";
 import { useSourceIntakeContext } from "../context/SourceIntakeContext";
@@ -154,6 +154,9 @@ export default function DiscoveryRunPage() {
     inputs.connectedSources.length > 0 ||
     inputs.uploadedFiles.length > 0; // T41-8: sampleWorkspaceEnabled removed
 
+  const pageDescription =
+    "Monitor discovery progress, live logs, and the run summary for connected sources and uploaded files.";
+
   useEffect(() => {
     if (!runId && autoStartRequested && !loading && hasAtLeastOneSource) {
       void startRun(inputs);
@@ -176,71 +179,44 @@ export default function DiscoveryRunPage() {
 
   if (loading || (!runId && autoStartRequested && hasAtLeastOneSource)) {
     return (
-      <div className="min-h-screen text-text">
-        <TopNav />
-        <div className="px-8 py-8">
-          <div className="mb-4">
-            <div className="text-2xl font-semibold text-text">
-              Discovery Run
-            </div>
-            <div className="mt-1 text-sm text-muted">
-              The Discovery Run provides a clear, step-by-step view of progress
-              with live logs and a continuously updated summary of detected
-              applications, workflows, and opportunities.
-            </div>
-          </div>
-          <LoadingPanel
-            title="Starting discovery run"
-            subtitle="Preparing the run and connecting the selected sources."
-          />
-        </div>
-      </div>
+      <PageShell title="Discovery Run" description={pageDescription}>
+        <LoadingPanel
+          title="Starting discovery run"
+          subtitle="Preparing the run and connecting the selected sources."
+        />
+      </PageShell>
     );
   }
 
   if (!runId) {
     return (
-      <div className="min-h-screen text-text">
-        <TopNav />
-        <div className="px-8 py-6">
-          <div className="mb-4">
-            <div className="text-2xl font-semibold text-text">
-              Discovery Run
+      <PageShell title="Discovery Run" description={pageDescription}>
+        <InfoPanel
+          title="No Active Run"
+          message="Start a new discovery run to continue."
+          actionLabel="Start New Discovery Run"
+          actionDisabled={!hasAtLeastOneSource}
+          onAction={() => void startRun(inputs)}
+        >
+          {!hasAtLeastOneSource && (
+            <div className="mt-3 text-center text-sm font-medium text-muted">
+              {DISCOVERY_SOURCE_REQUIREMENT_MESSAGE}
             </div>
-            <div className="mt-1 text-sm text-muted">
-              The Discovery Run provides a clear, step-by-step view of progress
-              with live logs and a continuously updated summary of detected
-              applications, workflows, and opportunities.
-            </div>
-          </div>
-          <InfoPanel
-            title="No Active Run"
-            message="Start a new discovery run to continue."
-            actionLabel="Start New Discovery Run"
-            actionDisabled={!hasAtLeastOneSource}
-            onAction={() => void startRun(inputs)}
-          >
-            {!hasAtLeastOneSource && (
-              <div className="mt-3 text-center text-sm font-medium text-muted">
-                {DISCOVERY_SOURCE_REQUIREMENT_MESSAGE}
-              </div>
-            )}
-          </InfoPanel>
-        </div>
-      </div>
+          )}
+        </InfoPanel>
+      </PageShell>
     );
   }
 
   if (error) {
     return (
-      <div className="min-h-screen text-text">
-        <TopNav />
-        <div className="mx-auto max-w-3xl px-6 py-10">
+      <PageShell title="Discovery Run" description={pageDescription}>
+        <div className="mx-auto max-w-3xl">
           <div className="rounded-xl border border-border bg-panel p-6">
             <div className="text-lg font-semibold">Discovery run failed</div>
             <div className="mt-2 text-sm text-red-300">{error}</div>
             <button
-              className="mt-4 rounded-md bg-accent px-3 py-2 text-sm text-bg hover:opacity-90"
+              className="mt-4 rounded-md bg-accent px-3 py-2 text-sm font-medium text-textwhite hover:opacity-90"
               onClick={() => {
                 if (runId) refetch();
                 else if (hasAtLeastOneSource) void startRun(inputs);
@@ -250,23 +226,42 @@ export default function DiscoveryRunPage() {
             </button>
           </div>
         </div>
-      </div>
+      </PageShell>
     );
   }
 
   return (
-    <div className="min-h-screen text-text">
-      <TopNav />
-      <div className="px-8 py-6">
-        <div className="mb-6 flex items-center justify-between">
-          <div>
-            <h1 className="text-2xl font-semibold">Discovery Run</h1>
-            <div className="mb-2 mt-1 text-sm text-muted">
-              The Discovery Run provides a clear, step-by-step view of progress
-              with live logs and a continuously updated summary of detected
-              applications, workflows, and opportunities.
-            </div>
-            <p className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-muted">
+    <PageShell
+      title="Discovery Run"
+      description={pageDescription}
+      actions={
+        <>
+          <button
+            className="rounded-md border border-border bg-buttonbg px-3 py-2 text-sm font-medium text-text transition hover:bg-panel disabled:cursor-not-allowed disabled:opacity-50"
+            onClick={() => void restartRun()}
+            disabled={!started || !isMaterialized || computing || loading}
+            title={
+              !isMaterialized
+                ? "Replay is available after this run finishes."
+                : undefined
+            }
+          >
+            Replay Run
+          </button>
+
+          <button
+            className="rounded-md bg-accent px-3 py-2 text-sm font-medium text-textwhite transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+            onClick={() => nav(runScopedPath("/source-intelligence"))}
+            disabled={!started || !isMaterialized || computing}
+            title={computing ? "Waiting for compute to finish..." : undefined}
+          >
+            {computing ? "Computing..." : "Next: Source Intelligence"}
+          </button>
+        </>
+      }
+    >
+        <div className="mb-5 rounded-xl border border-border bg-panel px-4 py-3">
+            <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-muted">
               <span>
                 Run ID:{" "}
                 <span className="font-semibold text-text">
@@ -289,37 +284,12 @@ export default function DiscoveryRunPage() {
                 Started: {formatRunTimestamp(run.startedAt)}
               </p>
             )}
-          </div>
-
-          <div className="flex items-center gap-2">
-            <button
-              className="rounded-md border border-border bg-buttonbg px-3 py-2 text-sm font-medium text-text transition hover:bg-panel disabled:cursor-not-allowed disabled:opacity-50"
-              onClick={() => void restartRun()}
-              disabled={!started || !isMaterialized || computing || loading}
-              title={
-                !isMaterialized
-                  ? "Replay is available after this run finishes."
-                  : undefined
-              }
-            >
-              Replay Run
-            </button>
-
-            <button
-              className="rounded-md bg-accent px-3 py-2 text-sm font-medium text-textwhite transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
-              onClick={() => nav(runScopedPath("/partial-results"))}
-              disabled={!started || !isMaterialized || computing}
-              title={computing ? "Waiting for compute to finish..." : undefined}
-            >
-              {computing ? "Computing..." : "Next: Evidence Collection"}
-            </button>
-          </div>
         </div>
 
         <div className="grid grid-cols-1 items-start gap-4 lg:grid-cols-3">
-          <div className="flex h-[460px] min-h-0 flex-col rounded-xl border border-border bg-panel p-4 lg:h-[520px]">
+          <div className="flex h-[460px] min-h-0 flex-col rounded-xl border border-border bg-panel p-4 lg:h-[560px]">
             <div className="shrink-0 text-lg font-semibold">Run Summary</div>
-            <div className="mt-3 min-h-0 flex-1 space-y-8 overflow-auto pr-1 text-sm text-muted">
+            <div className="mt-3 min-h-0 flex-1 space-y-4 overflow-auto pr-1 text-sm text-muted">
               <div className="rounded-lg border border-border bg-bg/10 p-3">
                 <div className="font-semibold text-text">Connected sources</div>
                 <div className="mt-1 max-h-28 overflow-auto break-words pr-1">
@@ -340,7 +310,7 @@ export default function DiscoveryRunPage() {
             </div>
           </div>
 
-          <div className="flex h-[460px] min-h-0 flex-col rounded-xl border border-border bg-panel p-4 lg:col-span-2 lg:h-[520px]">
+          <div className="flex h-[460px] min-h-0 flex-col rounded-xl border border-border bg-panel p-4 lg:col-span-2 lg:h-[560px]">
             <div className="flex shrink-0 items-center justify-between">
               <div className="flex items-center gap-5">
                 <div className="text-lg font-semibold">Discovery Log</div>
@@ -386,7 +356,6 @@ export default function DiscoveryRunPage() {
             </div>
           </div>
         </div>
-      </div>
-    </div>
+    </PageShell>
   );
 }

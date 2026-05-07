@@ -1,6 +1,6 @@
-import React from "react";
+import React, { useEffect, useState } from "react";
 import { Link, useLocation } from "react-router-dom";
-import { User, Zap } from "lucide-react";
+import { Menu, User, Zap } from "lucide-react";
 import { useRunContext } from "../../context/RunContext";
 import { useConnectorContext } from "../../context/ConnectorContext";
 import logo from "../../../images/AgentIQ-logo.svg";
@@ -45,11 +45,16 @@ const items = [
 
 export default function TopNav() {
   const loc = useLocation();
+  const [menuOpen, setMenuOpen] = useState(false);
   const { runId } = useRunContext();
   const { all: connectors } = useConnectorContext();
   const salesforceConnected = connectors.some(
     (c) => c.id === "salesforce" && c.status === "connected",
   );
+
+  useEffect(() => {
+    setMenuOpen(false);
+  }, [loc.pathname]);
 
   return (
     <div className="sticky top-0 z-40 h-[70px] w-full border-b border-border bg-bgheader shadow-[0_2px_8px_rgba(0,0,0,0.15)] backdrop-blur">
@@ -60,8 +65,9 @@ export default function TopNav() {
         </div>
 
         {/* Nav items */}
-        <div
-          className="flex flex-1 items-center justify-end gap-1.5 overflow-x-auto px-2"
+        <nav
+          aria-label="Primary"
+          className="hidden flex-1 items-center justify-end gap-1.5 overflow-x-auto px-2 lg:flex"
           style={{ scrollbarWidth: "none" }}
         >
           {items.map((i) => {
@@ -74,9 +80,10 @@ export default function TopNav() {
               <React.Fragment key={i.to}>
                 <Link
                   to={to}
-                  className={`shrink-0 whitespace-nowrap rounded-full px-3 pb-1.5 pt-1 font-medium transition-colors ${
+                  aria-current={isActive ? "page" : undefined}
+                  className={`shrink-0 whitespace-nowrap rounded-full px-3 pb-1.5 pt-1 font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-accent/50 ${
                     isActive
-                      ? "border-t-2 border-navborder text-navtext bg-gradient-to-b from-activenav"
+                      ? "border-t-2 border-navborder bg-gradient-to-b from-activenav text-textwhite"
                       : "text-textwhite/70 hover:bg-navhover hover:text-textwhite"
                   }`}
                   style={{
@@ -96,9 +103,20 @@ export default function TopNav() {
               </React.Fragment>
             );
           })}
-        </div>
+        </nav>
 
-        <div className="flex shrink-0 items-center">
+        <div className="ml-auto flex shrink-0 items-center gap-2 lg:ml-0">
+          <button
+            type="button"
+            title="Menu"
+            aria-label="Open navigation menu"
+            aria-expanded={menuOpen}
+            onClick={() => setMenuOpen((open) => !open)}
+            className="flex h-9 w-9 items-center justify-center rounded-full border border-border bg-buttonbg text-textwhite/80 transition-colors hover:bg-navhover hover:text-textwhite focus:outline-none focus:ring-2 focus:ring-accent/50 lg:hidden"
+          >
+            <Menu className="h-5 w-5" />
+          </button>
+
           <button
             type="button"
             title="Profile"
@@ -109,6 +127,43 @@ export default function TopNav() {
           </button>
         </div>
       </div>
+
+      {menuOpen && (
+        <nav
+          aria-label="Mobile navigation"
+          className="absolute left-0 right-0 top-[70px] border-b border-border bg-bgheader/95 px-4 py-3 shadow-lg backdrop-blur lg:hidden"
+        >
+          <div className="grid gap-1">
+            {items.map((i) => {
+              const isActive = loc.pathname === i.to;
+              const to = i.runScoped && runId ? `${i.to}?runId=${runId}` : i.to;
+
+              return (
+                <Link
+                  key={i.to}
+                  to={to}
+                  aria-current={isActive ? "page" : undefined}
+                  onClick={() => setMenuOpen(false)}
+                  className={`flex items-center justify-between rounded-md border px-3 py-2 text-sm font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-accent/50 ${
+                    isActive
+                      ? "border-accent/40 bg-activenav/80 text-textwhite"
+                      : "border-transparent text-textwhite/75 hover:border-border hover:bg-navhover hover:text-textwhite"
+                  }`}
+                >
+                  <span>{i.label}</span>
+                  {i.sfOnly && !salesforceConnected && (
+                    <Zap
+                      size={13}
+                      className="shrink-0 text-amber-400"
+                      aria-label="Requires Salesforce"
+                    />
+                  )}
+                </Link>
+              );
+            })}
+          </div>
+        </nav>
+      )}
     </div>
   );
 }

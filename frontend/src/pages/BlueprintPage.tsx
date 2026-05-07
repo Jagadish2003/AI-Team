@@ -13,7 +13,7 @@ import {
 } from 'lucide-react';
 import { InfoPanel } from '../components/common/InfoPanel';
 import LoadingPanel from '../components/common/LoadingPanel';
-import TopNav from '../components/common/TopNav';
+import PageShell from '../components/common/PageShell';
 import { useConnectorContext } from '../context/ConnectorContext';
 import { useAnalystReviewContext } from '../context/AnalystReviewContext';
 import { useRunContext } from '../context/RunContext';
@@ -157,17 +157,22 @@ function OpportunitySelectorPanel({
 function SectionBlock({
   icon,
   title,
+  headerRight,
   children,
 }: {
   icon: React.ReactNode;
   title: string;
+  headerRight?: React.ReactNode;
   children: React.ReactNode;
 }) {
   return (
     <section className="rounded-lg border border-border bg-bg/20 p-4">
-      <div className="mb-3 flex items-center gap-2">
-        <span className="text-accent">{icon}</span>
-        <span className="text-sm font-semibold text-text">{title}</span>
+      <div className="mb-3 flex items-center justify-between gap-2">
+        <div className="flex items-center gap-2">
+          <span className="text-accent">{icon}</span>
+          <span className="text-sm font-semibold text-text">{title}</span>
+        </div>
+        {headerRight}
       </div>
       {children}
     </section>
@@ -195,14 +200,17 @@ export function BlueprintContent({ blueprint }: { blueprint: BlueprintResponse }
       </div>
 
       <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-4">
-        <SectionBlock icon={<FileText size={16} />} title="Agent Purpose">
-          <div className="mb-2 flex items-center gap-2">
-            {blueprint.agentTopicIsLlm && (
-              <span className="rounded-full border border-border bg-bg/30 px-2 py-0.5 text-xs text-muted">
+        <SectionBlock
+          icon={<FileText size={16} />}
+          title="Agent Purpose"
+          headerRight={
+            blueprint.agentTopicIsLlm ? (
+              <span className="text-xs border border-bg rounded px-1.5 py-0.5 text-text">
                 Claude
               </span>
-            )}
-          </div>
+            ) : null
+          }
+        >
           <p className="text-sm leading-relaxed text-text">
             {blueprint.agentTopic?.trim()
               ? blueprint.agentTopic
@@ -512,12 +520,7 @@ export default function BlueprintPage() {
 
     return (
       <div
-        className="grid gap-6"
-        style={{
-          gridTemplateColumns: '27.5% minmax(0, 43%) 27.5%',
-          height: 'calc(100vh - 190px)',
-          minHeight: '640px',
-        }}
+        className="grid gap-4 lg:h-[calc(100vh-190px)] lg:min-h-[640px] lg:grid-cols-[minmax(250px,0.8fr)_minmax(360px,1.2fr)_minmax(250px,0.8fr)] xl:gap-6"
       >
         <OpportunitySelectorPanel opportunities={opportunities} selectedId={selectedId} onSelect={select} />
         <BlueprintContent blueprint={blueprint} />
@@ -533,26 +536,18 @@ export default function BlueprintPage() {
   };
 
   return (
-    <div className="min-h-screen bg-bg text-text">
-      <TopNav />
-
-      <div className="w-full px-8 py-6 pb-10">
-        <div className="mb-4 flex items-start justify-between gap-4">
-          <div>
-            <div className="text-2xl font-semibold text-text">Agentforce Blueprint</div>
-            <div className="mt-1 text-sm text-muted">
-              Agent design generated from the selected opportunity and its discovery evidence.
-            </div>
-          </div>
-
-          <div className="flex shrink-0 items-center gap-2">
-            <StatusPill connected={salesforceConnected} />
-            {selectedOpp && <TierBadge tier={selectedOpp.tier} />}
-          </div>
-        </div>
-
+    <PageShell
+      title="Agentforce Blueprint"
+      description="Agent design generated from the selected opportunity and its discovery evidence."
+      className="bg-bg"
+      actions={
+        <>
+          <StatusPill connected={salesforceConnected} />
+          {selectedOpp && <TierBadge tier={selectedOpp.tier} />}
+        </>
+      }
+    >
         {renderContent()}
-      </div>
-    </div>
+    </PageShell>
   );
 }

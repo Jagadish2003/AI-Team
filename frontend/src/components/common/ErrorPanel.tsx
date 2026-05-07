@@ -12,14 +12,14 @@ export default function ErrorPanel({
   title?: string;
 }) {
   return (
-    <div className="flex items-center justify-center h-[85vh]">
+    <div className="flex min-h-[min(620px,75vh)] items-center justify-center px-4">
       
       <div className="w-full max-w-lg rounded-2xl 
         border border-red-400/20 
         bg-gradient-to-br from-red-500/10 to-red-500/5 
         backdrop-blur-xl 
         shadow-xl shadow-red-900/20 
-        px-8 py-5 text-center space-y-5
+        px-6 py-8 text-center space-y-5 sm:px-8
         transition-all duration-300"
       >
         <div className="flex justify-center">

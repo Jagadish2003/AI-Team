@@ -291,7 +291,7 @@ export default function OpportunityDetail({
                         <span className="font-medium text-text leading-tight">
                           {e.action}
                         </span>
-                        <span className="text-muted shrink-0 bg-panel border border-border px-2 py-0.5 rounded text-[10px]">
+                        <span className="text-xs border border-bg rounded px-1.5 py-0.5 text-text shrink-0">
                           {e.by}
                         </span>
                       </div>

@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import TopNav from '../components/common/TopNav';
+import PageShell from '../components/common/PageShell';
 import LoadingPanel from '../components/common/LoadingPanel';
 import ErrorPanel from '../components/common/ErrorPanel';
 import { useToast } from '../components/common/Toast';
@@ -93,50 +93,40 @@ export default function ExecutiveReportPage() {
   ), [opportunities]);
 
   const pageHeader = (
-    <div className="mb-4">
-      <div className="text-2xl font-semibold text-text">Executive Report</div>
-      <div className="mt-1 text-sm text-muted">
-        Internal Demo Gate stub: exports are toasts; narrative is hardcoded.
-      </div>
-    </div>
+    <PageShell
+      title="Executive Report"
+      description="Board-ready summary of source coverage, confidence, opportunity value, and implementation readiness."
+    >
+      <LoadingPanel
+        title="Loading Executive Report"
+        subtitle="Waiting for executive report results to become available for this discovery run."
+      />
+    </PageShell>
   );
 
   if (!runId) {
     return (
-      <div className="min-h-screen text-text">
-        <TopNav />
-        <div className="px-8 py-6">
-          <RunRequiredEmptyState
-            pageTitle="Executive Report"
-            pageDescription="Internal Demo Gate stub: exports are toasts; narrative is hardcoded."
-            onStart={() => nav('/discovery-run')}
-          />
-        </div>
-      </div>
+      <PageShell
+        title="Executive Report"
+        description="Board-ready summary of source coverage, confidence, opportunity value, and implementation readiness."
+      >
+        <RunRequiredEmptyState onStart={() => nav('/discovery-run')} />
+      </PageShell>
     );
   }
 
   if (loading || resultsPreparing) {
-    return (
-      <div className="min-h-screen text-text">
-        <TopNav />
-        <div className="px-8 py-6">
-          {pageHeader}
-          <LoadingPanel
-            title="Loading Executive Report"
-            subtitle="Waiting for executive report results to become available for this discovery run."
-          />
-        </div>
-      </div>
-    );
+    return pageHeader;
   }
 
   if (error) {
     return (
-      <div className="min-h-screen text-text">
-        <TopNav />
+      <PageShell
+        title="Executive Report"
+        description="Board-ready summary of source coverage, confidence, opportunity value, and implementation readiness."
+      >
         <ErrorPanel message={error} onRetry={refetch} title="Failed to load executive report" />
-      </div>
+      </PageShell>
     );
   }
 
@@ -147,20 +137,11 @@ export default function ExecutiveReportPage() {
     : '— Connected';
 
   return (
-    <div className="min-h-screen text-text">
-      <TopNav />
-
-      <div className="w-full px-8 py-6 pb-10">
-
-        <div className="mb-3 flex items-start justify-between">
-          <div>
-            <div className="text-2xl font-semibold">Executive Report</div>
-            <div className="mt-1 text-sm text-muted">
-              Internal Demo Gate stub: exports are toasts; narrative is hardcoded.
-            </div>
-          </div>
-
-          <div className="flex items-center gap-2 shrink-0">
+    <PageShell
+      title="Executive Report"
+      description="Board-ready summary of source coverage, confidence, opportunity value, and implementation readiness."
+      actions={
+          <>
             <button
               className="rounded-lg border border-border bg-buttonbg px-4 py-2 text-sm font-medium text-text hover:bg-panel"
               onClick={() => push('Downloading PDF...')}
@@ -181,11 +162,12 @@ export default function ExecutiveReportPage() {
             >
               Download XLSX
             </button>
-          </div>
-        </div>
+          </>
+      }
+    >
 
-        <div className="mb-4 rounded-xl bg-panel px-4 py-3 text-sm text-muted">
-          Overview of confidence, sources, and prioritized quick wins across the Agent Roadmap.
+        <div className="mb-4 rounded-xl border border-border bg-panel px-4 py-3 text-sm text-muted">
+          Overview of confidence, source coverage, and prioritized quick wins across the Agent Roadmap.
         </div>
 
         <div className="grid grid-cols-1 gap-4 md:grid-cols-4">
@@ -210,7 +192,6 @@ export default function ExecutiveReportPage() {
             />
           </div>
         </div>
-      </div>
-    </div>
+    </PageShell>
   );
 }

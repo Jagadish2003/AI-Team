@@ -86,13 +86,13 @@ export default function StagesGrid({ stages, onOpenReview }: Props) {
   );
 
   return (
-    <div className="grid grid-cols-1 gap-4 lg:h-full lg:min-h-0 lg:grid-cols-3">
+    <div className="grid grid-cols-1 gap-4 lg:h-full lg:grid-cols-3">
       {stages.map((s) => {
         const { phase, description } = phaseLabel(s.id);
         const subtitle = phaseSubtitle(s);
 
         return (
-          <div key={s.id} className="flex min-h-0 flex-col">
+          <div key={s.id} className="flex h-[680px] min-h-0 flex-col lg:h-full">
             {/* Phase heading replacing 30/60/90 */}
             <div className="shrink-0 pb-2 text-center" data-testid={`phase-heading-${s.id}`}>
               <div className="text-sm font-bold uppercase tracking-wide text-muted">
