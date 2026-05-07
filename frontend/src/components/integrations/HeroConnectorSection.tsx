@@ -24,7 +24,7 @@ export default function HeroConnectorSection({
         <div className="text-xl font-semibold text-text">Connection Hub</div>
         <div className="text-xs text-muted pb-3 pt-3">{DISCOVERY_SOURCE_REQUIREMENT_MESSAGE}</div>
       </div>
-      <div className="grid grid-cols-1 gap-4 md:grid-cols-2 2xl:grid-cols-3">
+      <div className="grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-3 xl:gap-4">
         {connectors.map((c) => (
           <HeroConnectorCard
             key={c.id}
