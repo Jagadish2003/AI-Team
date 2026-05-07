@@ -17,6 +17,7 @@ from pydantic import BaseModel, Field
 
 from .security import require_auth
 from . import db
+from .connector_metrics import update_connector_metrics_from_run
 from .trackb_runner import run_trackb
 from discovery.track_a_adapter import export_track_a_seed
 
@@ -113,6 +114,7 @@ def _run_trackb_and_persist(run_id: str, mode: str, systems: List[str], pack: Op
             db.run_set(run_id, run)
 
         _set_status(run_id, "complete", counts={"opportunities": len(opps), "evidence": len(evidence)})
+        update_connector_metrics_from_run(payload, systems)
 
     except Exception as e:  # noqa: BLE001
         _set_status(run_id, "failed", error=str(e))

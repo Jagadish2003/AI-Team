@@ -36,8 +36,11 @@ def build_org_context(sf_data: Dict, sn_data: Dict, jira_data: Dict) -> Dict[str
     aps = sf_data.get("approval_processes") or []
     ncs = sf_data.get("named_credentials") or []
     csr_sf = sf_data.get("cross_system_references") or {}
+    sn_im = (sn_data or {}).get("incident_metrics") or {}
     csr_sn = (sn_data or {}).get("cross_system_references") or {}
+    sn_lc = (sn_data or {}).get("lending_correlation") or {}
     jira_im = (jira_data or {}).get("issue_metrics") or {}
+    jira_lc = (jira_data or {}).get("lending_correlation") or {}
 
     return {
         "sf_total_cases_90d":    cm.get("total_cases_90d", 0),
@@ -51,7 +54,11 @@ def build_org_context(sf_data: Dict, sn_data: Dict, jira_data: Dict) -> Dict[str
         "sf_named_credentials":  len(ncs),
         "sf_echo_score":         csr_sf.get("sf_echo_score", 0.0),
         "sn_echo_score":         csr_sn.get("sn_echo_score", 0.0),
+        "sn_total_incidents_90d": sn_im.get("total_incidents_90d", csr_sn.get("sn_total_incidents", 0)),
+        "sn_lending_signal_count": sn_lc.get("total_matched", 0),
         "jira_echo_score":       jira_im.get("jira_echo_score", 0.0),
+        "jira_total_issues_90d":  jira_im.get("total_issues_90d", 0),
+        "jira_lending_signal_count": jira_lc.get("total_matched", 0),
         "sources_connected": {
             "salesforce":  bool(sf_data),
             "servicenow":  bool(sn_data),
