@@ -23,7 +23,7 @@ export default function ConnectorTile({
   return (
     <div
       onClick={onSelect}
-      className={`h-[190px] cursor-pointer rounded-xl border-2 ${
+      className={`h-[190px] cursor-pointer rounded-xl border ${
         selected ? 'border-accent bg-panel2' : 'border-border bg-panel'
       } p-4 hover:border-accent/60 hover:bg-panel2`}
     >

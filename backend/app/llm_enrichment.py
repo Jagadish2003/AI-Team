@@ -45,7 +45,14 @@ load_dotenv()
 # Prompt builders
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _opp_prompt(opp: Dict[str, Any], evidence: List[Dict[str, Any]]) -> str:
+def _opp_prompt(opp: Dict[str, Any], evidence: List[Dict[str, Any]],
+                pack_id: Optional[str] = None) -> str:
+    """
+    ENG-AIQ-NC-5: pack-aware opportunity prompt.
+    ncino pack uses banking operations language and compliance instruction.
+    service_cloud pack uses original SC prompt unchanged.
+    """
+    from discovery.packs.pack_config import is_ncino_pack, get_llm_context
     ev_snippets = [
         e.get("snippet", "")
         for e in evidence
@@ -53,7 +60,59 @@ def _opp_prompt(opp: Dict[str, Any], evidence: List[Dict[str, Any]]) -> str:
         and e.get("snippet")
     ]
     debug = opp.get("_debug", {})
-    return f"""You are an AI analyst generating business explanations for a Salesforce automation discovery report.
+
+    if is_ncino_pack(pack_id):
+        # nCino banking-language prompt — SF-NC-4 approved labels
+        llm_ctx = get_llm_context("ncino")
+        # Separate nCino evidence from Jira/SN corroboration
+        ncino_snippets = [s for s in ev_snippets if "Jira" not in s and "ServiceNow" not in s]
+        corr_snippets  = [s for s in ev_snippets if "Jira" in s or "ServiceNow" in s]
+
+        return f"""You are a commercial banking operations analyst writing insights for a Head of Commercial Lending or CRO.
+
+## Context
+{llm_ctx}
+
+## Lending Pattern Detected
+Title: {opp.get("title", "")}
+Category: {opp.get("category", "")}
+Tier: {opp.get("tier", "")}
+Impact: {opp.get("impact", "")}/10
+Confidence: {opp.get("confidence", "")}
+Detector: {debug.get("detector_id", "")}
+
+## nCino Evidence (from Salesforce/nCino data)
+{chr(10).join(f"- {s}" for s in ncino_snippets) if ncino_snippets else "- No nCino signals available"}
+
+## Corroborating Evidence (from Jira / ServiceNow)
+{chr(10).join(f"- {s}" for s in corr_snippets) if corr_snippets else "- No corroborating evidence"}
+
+## Instructions
+You are writing for a CRO or Head of Commercial Lending — not a Salesforce admin.
+Use banking operations language: loan origination, covenant compliance, credit analysis.
+NEVER suggest automated credit decisions. All credit decisions require human approval.
+Return a JSON object with exactly these four fields. No preamble, no markdown — JSON only.
+
+{{
+  "aiSummary": "2-4 sentences in plain banking operations language. What the lending friction is and how an Agentforce agent addresses it — without making credit decisions.",
+  "aiWhyBullets": [
+    "Specific measured lending friction fact from nCino evidence",
+    "Corroborating signal from Jira or ServiceNow if available",
+    "Business impact in banking terms (loan cycle time, compliance risk, borrower experience)"
+  ],
+  "aiRisks": [
+    "What specifically happens to loan pipeline or compliance if not addressed",
+    "Regulatory or relationship risk of inaction"
+  ],
+  "aiSuggestedNextSteps": [
+    "Specific Agentforce capability for this lending pattern",
+    "Concrete next action — escalation path or pilot scope"
+  ]
+}}"""
+
+    else:
+        # Original Service Cloud prompt — unchanged
+        return f"""You are an AI analyst generating business explanations for a Salesforce automation discovery report.
 
 ## Opportunity Data (read-only — do not change any values)
 Title: {opp.get("title", "")}
@@ -91,13 +150,36 @@ Return a JSON object with exactly these four fields. No preamble, no markdown �
 }}"""
 
 
-def _exec_summary_prompt(opps: List[Dict[str, Any]], sources_analyzed: Dict[str, Any]) -> str:
+def _exec_summary_prompt(opps: List[Dict[str, Any]], sources_analyzed: Dict[str, Any],
+                          pack_id: Optional[str] = None) -> str:
+    """ENG-AIQ-NC-5: pack-aware executive summary prompt."""
+    from discovery.packs.pack_config import is_ncino_pack
     top_opps = opps[:3]
     opp_lines = "\n".join(
         f"- {o.get('title', '')} (Impact {o.get('impact', '')}/10, {o.get('tier', '')})"
         for o in top_opps
     )
-    return f"""You are writing a one-paragraph executive summary for a Salesforce automation discovery report.
+
+    if is_ncino_pack(pack_id):
+        return f"""You are writing a one-paragraph executive summary for a commercial banking CRO or Head of Commercial Lending.
+
+## Discovery Context
+Sources analyzed: {sources_analyzed.get("totalConnected", 0)} connected systems (Salesforce nCino, Jira, ServiceNow)
+Top lending friction patterns:
+{opp_lines}
+
+## Instructions
+Write exactly one paragraph (3-5 sentences) for a CRO audience.
+- Use commercial banking language: loan origination, covenant compliance, credit decisions
+- Open with the most significant lending friction detected
+- Reference the number of systems that corroborate the finding
+- Include projected outcome using "could reduce" / "estimated" language
+- Close with a recommended next step for the commercial lending team
+- NEVER suggest automated credit decisions — humans make all credit decisions
+- Return only the paragraph text, nothing else"""
+
+    else:
+        return f"""You are writing a one-paragraph executive summary for a Salesforce automation discovery report.
 
 ## Discovery Context
 Sources analyzed: {sources_analyzed.get("totalConnected", 0)} connected systems
@@ -214,24 +296,41 @@ def _validate_opp_fields(parsed: Dict[str, Any], opp_id: str) -> bool:
 # Per-opportunity enrichment
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _fallback(opp: Dict[str, Any]) -> Dict[str, Any]:
+def _fallback(opp: Dict[str, Any], pack_id: Optional[str] = None) -> Dict[str, Any]:
+    """
+    Pack-aware fallback when LLM enrichment is unavailable.
+    nCino pack uses banking-language fallback summary.
+    Service Cloud uses original aiRationale text.
+    Issue 6 fix: prevents nCino screens showing generic SC language on fallback.
+    """
+    from discovery.packs.pack_config import is_ncino_pack
+    if is_ncino_pack(pack_id) and not opp.get("aiRationale"):
+        title = opp.get("title", "Lending friction detected")
+        summary = (
+            f"{title}. Connect to the Anthropic API to generate a full banking "
+            f"operations analysis with evidence-backed insights for this pattern."
+        )
+    else:
+        summary = opp.get("aiRationale", "")
     return {
-        "aiSummary":             opp.get("aiRationale", ""),
+        "aiSummary":             summary,
         "aiWhyBullets":          [],
         "aiRisks":               [],
         "aiSuggestedNextSteps":  [],
         "llmGenerated":          False,
         "llmModel":              None,
+        "complianceGuardrailApplied": is_ncino_pack(pack_id) if pack_id else False,
     }
 
 
 def _enrich_opportunity(
     opp: Dict[str, Any],
     evidence: List[Dict[str, Any]],
+    pack_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     opp_id   = opp.get("id", "unknown")
-    fb       = _fallback(opp)
-    prompt   = _opp_prompt(opp, evidence)
+    fb       = _fallback(opp, pack_id=pack_id)
+    prompt   = _opp_prompt(opp, evidence, pack_id=pack_id)
     raw      = _call_claude(prompt, MAX_TOKENS_OPP)
 
     if raw is None:
@@ -254,6 +353,10 @@ def _enrich_opportunity(
         "aiSuggestedNextSteps":  [str(b) for b in parsed["aiSuggestedNextSteps"][:2]],
         "llmGenerated":          True,
         "llmModel":              MODEL,
+        # ENG-AIQ-NC-5: Sprint 5 compliance approach.
+        # Guardrail is prompt-instruction only — not post-validated.
+        # Post-generation validation of prohibited phrases is deferred to post-Sprint 5.
+        "complianceGuardrailApplied": pack_id == "ncino",
     }
 
 
@@ -264,10 +367,11 @@ def _enrich_opportunity(
 def _enrich_executive_summary(
     opps: List[Dict[str, Any]],
     sources_analyzed: Dict[str, Any],
+    pack_id: Optional[str] = None,
 ) -> str:
     if not opps:
         return ""
-    raw = _call_claude(_exec_summary_prompt(opps, sources_analyzed), MAX_TOKENS_EXEC)
+    raw = _call_claude(_exec_summary_prompt(opps, sources_analyzed, pack_id=pack_id), MAX_TOKENS_EXEC)
     if raw is None:
         return ""
     # Executive summary is plain text — reject if it looks like JSON
@@ -288,7 +392,13 @@ def run_llm_enrichment(
     opps: List[Dict[str, Any]],
     evidence: List[Dict[str, Any]],
     sources_analyzed: Optional[Dict[str, Any]] = None,
+    pack_id: Optional[str] = None,
 ) -> Dict[str, Any]:
+    """
+    ENG-AIQ-NC-5: pack_id parameter added.
+    When pack_id='ncino', uses banking-language prompts and nCino UI labels.
+    When pack_id='service_cloud' or None, uses original SC prompts unchanged.
+    """
     """
     Synchronous post-processing enrichment step.
 
@@ -310,7 +420,7 @@ def run_llm_enrichment(
     for opp in opps:
         opp_id = opp.get("id", "")
         try:
-            result = _enrich_opportunity(opp, evidence)
+            result = _enrich_opportunity(opp, evidence, pack_id=pack_id)
             per_opp[opp_id] = result
             if result.get("llmGenerated"):
                 enriched += 1
@@ -323,7 +433,7 @@ def run_llm_enrichment(
 
     exec_summary = ""
     try:
-        exec_summary = _enrich_executive_summary(opps, sources_analyzed or {})
+        exec_summary = _enrich_executive_summary(opps, sources_analyzed or {}, pack_id=pack_id)
     except Exception as e:
         logger.error("Executive summary error: %s", e)
 

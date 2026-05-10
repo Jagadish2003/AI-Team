@@ -7,19 +7,21 @@ import {
   ChevronRight,
   FileText,
   Link2,
-  Loader2,
   Settings,
   Shield,
   Zap,
 } from 'lucide-react';
 import { InfoPanel } from '../components/common/InfoPanel';
-import TopNav from '../components/common/TopNav';
+import LoadingPanel from '../components/common/LoadingPanel';
+import PageShell from '../components/common/PageShell';
 import { useConnectorContext } from '../context/ConnectorContext';
 import { useAnalystReviewContext } from '../context/AnalystReviewContext';
 import { useRunContext } from '../context/RunContext';
 import { fetchBlueprint } from '../api/blueprintApi';
+import { fetchEvidence } from '../api/runApi';
 import type { BlueprintResponse } from '../utils/blueprintTypes';
 import type { OpportunityCandidate } from '../types/analystReview';
+import type { EvidenceReview } from '../types/partialResults';
 
 function TierBadge({ tier }: { tier?: string }) {
   const t = tier ?? 'Unknown';
@@ -95,10 +97,9 @@ function EmptyPanel({
 
 function LoadingState() {
   return (
-    <EmptyPanel
-      icon={<Loader2 size={24} className="animate-spin" />}
+    <LoadingPanel
       title="Loading blueprint"
-      message="Fetching the Agentforce Blueprint for the selected opportunity."
+      subtitle="Fetching the Agentforce Blueprint for the selected opportunity."
     />
   );
 }
@@ -156,24 +157,31 @@ function OpportunitySelectorPanel({
 function SectionBlock({
   icon,
   title,
+  headerRight,
   children,
 }: {
   icon: React.ReactNode;
   title: string;
+  headerRight?: React.ReactNode;
   children: React.ReactNode;
 }) {
   return (
     <section className="rounded-lg border border-border bg-bg/20 p-4">
-      <div className="mb-3 flex items-center gap-2">
-        <span className="text-accent">{icon}</span>
-        <span className="text-sm font-semibold text-text">{title}</span>
+      <div className="mb-3 flex items-center justify-between gap-2">
+        <div className="flex items-center gap-2">
+          <span className="text-accent">{icon}</span>
+          <span className="text-sm font-semibold text-text">{title}</span>
+        </div>
+        {headerRight}
       </div>
       {children}
     </section>
   );
 }
 
-function BlueprintContent({ blueprint }: { blueprint: BlueprintResponse }) {
+// T41-7: exported for direct unit testing of the permissions section rendering.
+// BlueprintPage remains the single consumer in production.
+export function BlueprintContent({ blueprint }: { blueprint: BlueprintResponse }) {
   const actions = blueprint.suggestedActions ?? [];
   const guardrails = blueprint.guardrails ?? [];
   const permissions = blueprint.agentforcePermissions ?? [];
@@ -192,14 +200,17 @@ function BlueprintContent({ blueprint }: { blueprint: BlueprintResponse }) {
       </div>
 
       <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-4">
-        <SectionBlock icon={<FileText size={16} />} title="Agent Purpose">
-          <div className="mb-2 flex items-center gap-2">
-            {blueprint.agentTopicIsLlm && (
-              <span className="rounded-full border border-border bg-bg/30 px-2 py-0.5 text-xs text-muted">
+        <SectionBlock
+          icon={<FileText size={16} />}
+          title="Agent Purpose"
+          headerRight={
+            blueprint.agentTopicIsLlm ? (
+              <span className="text-xs border border-bg rounded px-1.5 py-0.5 text-text">
                 Claude
               </span>
-            )}
-          </div>
+            ) : null
+          }
+        >
           <p className="text-sm leading-relaxed text-text">
             {blueprint.agentTopic?.trim()
               ? blueprint.agentTopic
@@ -246,14 +257,22 @@ function BlueprintContent({ blueprint }: { blueprint: BlueprintResponse }) {
         </SectionBlock>
 
         <SectionBlock icon={<Settings size={16} />} title="Agentforce Permissions Required">
+          {/* T41-7: forward-looking framing — agent-specific, future tense.
+              No checked/missing status. This is what the agent WILL need,
+              not what was required for the discovery run that already succeeded. */}
           {permissions.length > 0 ? (
-            <div className="space-y-2">
-              {permissions.map((permission, index) => (
-                <div key={`${permission}-${index}`} className="flex items-center gap-2 text-sm text-text">
-                  <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-accent" />
-                  <span>{permission}</span>
-                </div>
-              ))}
+            <div className="space-y-3">
+              <p className="text-xs text-muted leading-relaxed">
+                To implement this Agentforce agent, the agent user profile will need:
+              </p>
+              <div className="space-y-2">
+                {permissions.map((permission, index) => (
+                  <div key={`${permission}-${index}`} className="flex items-center gap-2 text-sm text-text">
+                    <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-accent" />
+                    <span>{permission}</span>
+                  </div>
+                ))}
+              </div>
             </div>
           ) : (
             <p className="text-sm text-muted">Permissions assessment is not yet available for this opportunity.</p>
@@ -284,10 +303,41 @@ function EvidencePanel({
   runId: string | null;
 }) {
   const nav = useNavigate();
-  const analystReviewPath = runId ? `/analyst-review?runId=${runId}` : '/analyst-review';
+  const opportunityReviewPath = runId ? `/opportunity-review?runId=${runId}` : '/opportunity-review';
   const evidenceIds = blueprint.evidenceIds ?? [];
+  const evidenceKey = evidenceIds.join(',');
+  const [evidenceMap, setEvidenceMap] = useState<Record<string, EvidenceReview>>({});
   const prevOpp = selectedIdx > 0 ? opportunities[selectedIdx - 1] : null;
   const nextOpp = selectedIdx < opportunities.length - 1 ? opportunities[selectedIdx + 1] : null;
+
+  useEffect(() => {
+    let active = true;
+
+    if (evidenceIds.length === 0 || !runId) {
+      setEvidenceMap({});
+      return () => {
+        active = false;
+      };
+    }
+
+    setEvidenceMap({});
+    fetchEvidence(runId)
+      .then((all) => {
+        if (!active) return;
+        const map: Record<string, EvidenceReview> = {};
+        all.forEach((ev) => {
+          map[ev.id] = ev;
+        });
+        setEvidenceMap(map);
+      })
+      .catch(() => {
+        if (active) setEvidenceMap({});
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [runId, evidenceKey]);
 
   return (
     <div className="flex h-full flex-col overflow-hidden rounded-xl border border-border bg-panel">
@@ -301,12 +351,35 @@ function EvidencePanel({
 
       <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-4">
         {evidenceIds.length > 0 ? (
-          evidenceIds.map((id) => (
-            <div key={id} className="rounded-lg border border-border bg-bg/20 p-3">
-              <div className="font-mono text-xs text-muted">{id}</div>
-              <div className="mt-1 text-sm text-text">Evidence record linked to this opportunity.</div>
-            </div>
-          ))
+          evidenceIds.map((id) => {
+            const ev = evidenceMap[id];
+            return (
+              <div key={id} className="rounded-lg border border-border bg-bg/20 p-3">
+                {ev ? (
+                  <>
+                    <div className="mb-1 flex items-center gap-2">
+                      <span className="text-xs font-semibold text-accent">{ev.source}</span>
+                      <span className="text-xs text-muted">- {ev.evidenceType}</span>
+                      <span
+                        className={`ml-auto text-xs font-semibold ${
+                          ev.confidence === 'HIGH' ? 'text-green-400' : 'text-yellow-400'
+                        }`}
+                      >
+                        {ev.confidence}
+                      </span>
+                    </div>
+                    <div className="mb-1 text-sm font-medium text-text">{ev.title}</div>
+                    {ev.snippet && <div className="text-xs leading-relaxed text-muted">{ev.snippet}</div>}
+                  </>
+                ) : (
+                  <>
+                    <div className="font-mono text-xs text-muted">{id}</div>
+                    <div className="mt-1 text-sm text-text">Loading evidence...</div>
+                  </>
+                )}
+              </div>
+            );
+          })
         ) : (
           <div className="rounded-lg border border-border bg-bg/20 p-4 text-sm text-muted">
             No evidence items linked to this opportunity.
@@ -316,11 +389,11 @@ function EvidencePanel({
 
       <div className="border-t border-border p-4">
         <button
-          onClick={() => nav(analystReviewPath)}
+          onClick={() => nav(opportunityReviewPath)}
           className="mb-3 flex w-full items-center gap-2 rounded-md border border-border bg-bg/20 px-3 py-2 text-left text-sm text-text transition hover:bg-panel2"
         >
           <Link2 size={14} className="text-accent" />
-          View in Analyst Review
+          View in Opportunity Review
         </button>
 
         <div className="flex items-center justify-between text-sm text-text">
@@ -423,9 +496,9 @@ export default function BlueprintPage() {
       return (
         <EmptyPanel
           title="Select an opportunity"
-          message="Choose an opportunity in Analyst Review to view its Agentforce Blueprint."
-          actionLabel="Go to Analyst Review"
-          onAction={() => nav(runId ? `/analyst-review?runId=${runId}` : '/analyst-review')}
+          message="Choose an opportunity in Opportunity Review to view its Agentforce Blueprint."
+          actionLabel="Go to Opportunity Review"
+          onAction={() => nav(runId ? `/opportunity-review?runId=${runId}` : '/opportunity-review')}
         />
       );
     }
@@ -447,12 +520,7 @@ export default function BlueprintPage() {
 
     return (
       <div
-        className="grid gap-6"
-        style={{
-          gridTemplateColumns: '27.5% minmax(0, 43%) 27.5%',
-          height: 'calc(100vh - 190px)',
-          minHeight: '640px',
-        }}
+        className="grid gap-4 lg:h-[calc(100vh-190px)] lg:min-h-[640px] lg:grid-cols-[minmax(250px,0.8fr)_minmax(360px,1.2fr)_minmax(250px,0.8fr)] xl:gap-6"
       >
         <OpportunitySelectorPanel opportunities={opportunities} selectedId={selectedId} onSelect={select} />
         <BlueprintContent blueprint={blueprint} />
@@ -468,26 +536,18 @@ export default function BlueprintPage() {
   };
 
   return (
-    <div className="min-h-screen bg-bg text-text">
-      <TopNav />
-
-      <div className="w-full px-8 py-6 pb-10">
-        <div className="mb-4 flex items-start justify-between gap-4">
-          <div>
-            <div className="text-2xl font-semibold text-text">Agentforce Blueprint</div>
-            <div className="mt-1 text-sm text-muted">
-              Agent design generated from the selected opportunity and its discovery evidence.
-            </div>
-          </div>
-
-          <div className="flex shrink-0 items-center gap-2">
-            <StatusPill connected={salesforceConnected} />
-            {selectedOpp && <TierBadge tier={selectedOpp.tier} />}
-          </div>
-        </div>
-
+    <PageShell
+      title="Agentforce Blueprint"
+      description="Agent design generated from the selected opportunity and its discovery evidence."
+      className="bg-bg"
+      actions={
+        <>
+          <StatusPill connected={salesforceConnected} />
+          {selectedOpp && <TierBadge tier={selectedOpp.tier} />}
+        </>
+      }
+    >
         {renderContent()}
-      </div>
-    </div>
+    </PageShell>
   );
 }

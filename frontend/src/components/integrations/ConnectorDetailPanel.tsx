@@ -4,7 +4,99 @@ import Badge from '../common/Badge';
 import Button from '../common/Button';
 import { accessIcons } from './AccessIcons';
 import { useToast } from '../common/Toast';
-import { ExternalLink } from 'lucide-react';
+import { ExternalLink, CheckCircle2 } from 'lucide-react';
+
+// ── T41-7: Connection Health — configured read scope for this connector.
+// Shows what AgentIQ is configured to read from this source.
+// Derived deterministically from connector.id (CONNECTION_HEALTH_LABELS map).
+// IMPORTANT: reflects configured read scope, NOT proven last-sync results.
+// Sprint 6 will wire this to real sync telemetry (Connection Health v2).
+
+const CONNECTION_HEALTH_LABELS: Record<string, string[]> = {
+  salesforce: [
+    'Read Case records',
+    'Read Flow metadata',
+    'Read Approval history',
+    'Read User records',
+    'Read OpportunityLineItem records',
+  ],
+  // nCino lending — used when Salesforce category contains "nCino"
+  salesforce_ncino: [
+    'Read LLC_BI__Loan__c records',
+    'Read LLC_BI__Covenant2__c records',
+    'Read LLC_BI__Checklist__c records',
+    'Read LLC_BI__Spread_Statement_Period__c records',
+    'Read ProcessInstance records',
+  ],
+  servicenow: [
+    'Read Incident records',
+    'Read lending corroboration signals',
+    'Read SLA definitions',
+  ],
+  jira_confluence: [
+    'Read Issue records',
+    'Read lending corroboration signals',
+    'Read Project configuration',
+    'Read Space content',
+  ],
+  jira: [
+    'Read Issue records',
+    'Read lending corroboration signals',
+    'Read Sprint data',
+  ],
+  confluence: [
+    'Read Space content',
+    'Read Page metadata',
+  ],
+  ncino: [
+    'Read LLC_BI__Loan__c records',
+    'Read LLC_BI__Covenant2__c records',
+    'Read LLC_BI__Spread_Statement_Period__c records',
+  ],
+};
+
+function ConnectionHealthSection({ connector }: { connector: Connector }) {
+  if (connector.status !== 'connected') return null;
+
+  // Use nCino-specific labels when Salesforce is connected as nCino Lending
+  const healthKey =
+    connector.id === 'salesforce' && connector.category?.includes('nCino')
+      ? 'salesforce_ncino'
+      : connector.id;
+
+  const items =
+    CONNECTION_HEALTH_LABELS[healthKey] ??
+    connector.reads.map((r) => `Read ${r} records`);
+
+  return (
+    <div className="mt-4">
+      <div className="mb-2 flex items-center justify-between gap-2">
+        <div className="text-sm font-medium text-text">Connection Health</div>
+        <div className="text-[10px] font-medium uppercase tracking-wide text-muted">
+          Configured Read Scope
+        </div>
+      </div>
+      <div className="space-y-1.5">
+        {items.map((label) => (
+          <div
+            key={label}
+            className="flex items-center gap-2 rounded-md border border-border bg-bg/20 px-3 py-2 text-xs text-text"
+          >
+            <CheckCircle2
+              size={14}
+              className="shrink-0 text-emerald-400"
+            />
+            <span className="min-w-0 flex-1 break-words">{label}</span>
+            <span className="text-emerald-400 text-[10px] font-medium">✓</span>
+          </div>
+        ))}
+      </div>
+      <p className="mt-2 text-[10px] text-muted leading-relaxed">
+        Configured read scope for this connector. Actual sync results available in Sprint 6.
+      </p>
+    </div>
+  );
+}
 
 export default function ConnectorDetailPanel({
   connector,
@@ -31,11 +123,11 @@ export default function ConnectorDetailPanel({
       
       {/* Header */}
       <div className="flex items-start justify-between gap-2">
-        <div>
-          <div className="text-xl font-semibold text-text">
+        <div className="min-w-0">
+          <div className="break-words text-xl font-semibold leading-snug text-text">
             {connector.name} Integration
           </div>
-          <div className="mt-1 text-sm text-muted">
+          <div className="mt-1 break-words text-sm text-muted">
             {connector.category}
           </div>
         </div>
@@ -52,7 +144,6 @@ export default function ConnectorDetailPanel({
           </span>
         </div>
 
-        {/* Toast on click */}
         <button
           onClick={() => push('More details available in later sprint.')}
           className="flex items-center gap-1 text-accent hover:underline"
@@ -75,18 +166,21 @@ export default function ConnectorDetailPanel({
               key={r}
               className="flex items-center justify-between rounded-md border border-border px-3 py-2 hover:bg-panel2"
             >
-              <div className="flex items-center gap-2 text-sm text-text">
+              <div className="flex min-w-0 items-center gap-2 text-sm text-text">
                 <div className="flex h-5 w-5 items-center justify-center rounded bg-accent/20">
                   {accessIcons[r] || accessIcons.fallback}
                 </div>
-                {r}
+                <span className="min-w-0 break-words">{r}</span>
               </div>
 
-              <span className="text-muted">›</span>
+              <span className="shrink-0 text-muted">›</span>
             </div>
           ))}
         </div>
       </div>
+
+      {/* T41-7: Connection Health — shown only when connected */}
+      <ConnectionHealthSection connector={connector} />
 
       {/* CTA */}
       <div className="mt-5">

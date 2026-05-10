@@ -6,17 +6,26 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+
 from fastapi import HTTPException
 
 DB_PATH = Path(os.getenv("DB_PATH", "database/dev.db"))
 RUN_ID_RE = re.compile(r"^RUN_(\d+)$")
 
+
 def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
+
 def connect() -> sqlite3.Connection:
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    return sqlite3.connect(str(DB_PATH))
+    # timeout: how long a connection should wait for the lock to go away before raising an error.
+    # check_same_thread: allow the same connection to be used in multiple threads (FastAPI threads).
+    con = sqlite3.connect(str(DB_PATH), timeout=20.0, check_same_thread=False)
+    # WAL mode allows multiple readers and one writer concurrently.
+    con.execute("PRAGMA journal_mode=WAL")
+    return con
+
 
 def get_one(table: str, id_: str) -> Optional[Dict[str, Any]]:
     con = connect()
@@ -28,6 +37,7 @@ def get_one(table: str, id_: str) -> Optional[Dict[str, Any]]:
         return None
     return json.loads(row[0])
 
+
 def get_all(table: str) -> List[Dict[str, Any]]:
     con = connect()
     cur = con.cursor()
@@ -35,6 +45,7 @@ def get_all(table: str) -> List[Dict[str, Any]]:
     rows = cur.fetchall()
     con.close()
     return [json.loads(r[0]) for r in rows]
+
 
 def upsert(table: str, id_: str, payload: Dict[str, Any]) -> None:
     con = connect()
@@ -47,10 +58,13 @@ def upsert(table: str, id_: str, payload: Dict[str, Any]) -> None:
     con.commit()
     con.close()
 
+
 def init_tables() -> None:
     con = connect()
     cur = con.cursor()
-    cur.execute("CREATE TABLE IF NOT EXISTS runs (id TEXT PRIMARY KEY, payload TEXT NOT NULL)")
+    cur.execute(
+        "CREATE TABLE IF NOT EXISTS runs (id TEXT PRIMARY KEY, payload TEXT NOT NULL)"
+    )
     # Migrate run_events if it exists with the old single-key schema
     cur.execute("PRAGMA table_info(run_events)")
     existing_cols = {row[1] for row in cur.fetchall()}
@@ -62,6 +76,7 @@ def init_tables() -> None:
     con.commit()
     con.close()
 
+
 def get_run(run_id: str) -> Optional[Dict[str, Any]]:
     con = connect()
     cur = con.cursor()
@@ -69,6 +84,7 @@ def get_run(run_id: str) -> Optional[Dict[str, Any]]:
     row = cur.fetchone()
     con.close()
     return None if not row else json.loads(row[0])
+
 
 def upsert_run(run_id: str, payload: Dict[str, Any]) -> None:
     con = connect()
@@ -79,6 +95,7 @@ def upsert_run(run_id: str, payload: Dict[str, Any]) -> None:
     )
     con.commit()
     con.close()
+
 
 def count_runs() -> int:
     """Return the highest legacy RUN_### number."""
@@ -95,6 +112,7 @@ def count_runs() -> int:
             max_n = max(max_n, int(match.group(1)))
     return max_n
 
+
 def next_run_id() -> str:
     """Generate the runtime run ID used by the discovery runner."""
     init_tables()
@@ -104,17 +122,21 @@ def next_run_id() -> str:
             return run_id
     return f"run_{uuid.uuid4().hex}"
 
+
 def require_run_exists(run_id: str) -> Dict[str, Any]:
     r = get_run(run_id)
     if not r:
         raise HTTPException(status_code=404, detail="run not found")
     return r
+
+
 def delete_run_events(run_id: str) -> None:
     con = connect()
     cur = con.cursor()
     cur.execute("DELETE FROM run_events WHERE run_id = ?", (run_id,))
     con.commit()
     con.close()
+
 
 def insert_run_events(run_id: str, events: List[Dict[str, Any]]) -> None:
     con = connect()
@@ -127,34 +149,44 @@ def insert_run_events(run_id: str, events: List[Dict[str, Any]]) -> None:
     con.commit()
     con.close()
 
+
 def get_run_events(run_id: str) -> List[Dict[str, Any]]:
     con = connect()
     cur = con.cursor()
-    cur.execute("SELECT payload FROM run_events WHERE run_id = ? ORDER BY seq ASC", (run_id,))
+    cur.execute(
+        "SELECT payload FROM run_events WHERE run_id = ? ORDER BY seq ASC", (run_id,)
+    )
     rows = cur.fetchall()
     con.close()
     return [json.loads(r[0]) for r in rows]
 
+
 # --- replay.py db API ---
+
 
 def run_get(run_id: str) -> Dict[str, Any]:
     """Get run by ID, raises HTTP 404 if not found."""
     return require_run_exists(run_id)
 
+
 def run_set(run_id: str, run: Dict[str, Any]) -> None:
     """Persist run metadata."""
     upsert_run(run_id, run)
 
+
 def _init_kv_table() -> None:
     con = connect()
     cur = con.cursor()
-    cur.execute("CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, payload TEXT NOT NULL)")
+    cur.execute(
+        "CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, payload TEXT NOT NULL)"
+    )
     con.commit()
     con.close()
 
+
 def kv_get(key: str) -> Any:
     if key.startswith("events:"):
-        run_id = key[len("events:"):]
+        run_id = key[len("events:") :]
         return get_run_events(run_id)
     _init_kv_table()
     con = connect()
@@ -164,9 +196,10 @@ def kv_get(key: str) -> Any:
     con.close()
     return json.loads(row[0]) if row else None
 
+
 def kv_set(key: str, value: Any) -> None:
     if key.startswith("events:"):
-        run_id = key[len("events:"):]
+        run_id = key[len("events:") :]
         delete_run_events(run_id)
         if isinstance(value, list):
             insert_run_events(run_id, value)
@@ -181,10 +214,12 @@ def kv_set(key: str, value: Any) -> None:
     con.commit()
     con.close()
 
+
 def run_kv_get(key: str, run_id: str, default: Any = None) -> Any:
     """Helper to get run-scoped key-value data."""
     value = kv_get(f"{key}:{run_id}")
     return value if value is not None else default
+
 
 def run_kv_set(key: str, run_id: str, value: Any) -> None:
     """Helper to set run-scoped key-value data."""

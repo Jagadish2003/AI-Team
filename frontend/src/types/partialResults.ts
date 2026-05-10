@@ -9,7 +9,7 @@ export interface ExtractedEntity {
   confidence: Confidence;
 }
 
-export type EvidenceType = 'Email' | 'Ticket' | 'Chat' | 'Doc' | 'Log';
+export type EvidenceType = 'Email' | 'Ticket' | 'Chat' | 'Doc' | 'Log' | 'Metric';
 export type ReviewDecision = 'UNREVIEWED' | 'APPROVED' | 'REJECTED';
 
 export interface EvidenceReview {

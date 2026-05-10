@@ -1,0 +1,111 @@
+{
+  "loans": [
+    {
+      "Id": "loan_001",
+      "Name": "Commercial Term Loan - Acme Manufacturing",
+      "OwnerId": "user_rm_001",
+      "LLC_BI__Stage__c": "Credit Review",
+      "LLC_BI__Amount__c": 2500000,
+      "LLC_BI__Closed_Date__c": null,
+      "LLC_BI__Loan_Type_Code__c": "TERM",
+      "CreatedDate": "2026-03-01T10:00:00Z",
+      "LastModifiedDate": "2026-04-28T15:30:00Z"
+    }
+  ],
+  "loan_stage_history": [
+    {
+      "Id": "hist_001",
+      "ParentId": "loan_001",
+      "Field": "LLC_BI__Stage__c",
+      "OldValue": "Application",
+      "NewValue": "Pre-Qualification",
+      "CreatedDate": "2026-03-02T09:00:00Z",
+      "CreatedById": "user_rm_001"
+    },
+    {
+      "Id": "hist_002",
+      "ParentId": "loan_001",
+      "Field": "LLC_BI__Stage__c",
+      "OldValue": "Pre-Qualification",
+      "NewValue": "Underwriting",
+      "CreatedDate": "2026-03-08T09:00:00Z",
+      "CreatedById": "user_uw_001"
+    },
+    {
+      "Id": "hist_003",
+      "ParentId": "loan_001",
+      "Field": "LLC_BI__Stage__c",
+      "OldValue": "Underwriting",
+      "NewValue": "Credit Review",
+      "CreatedDate": "2026-03-18T09:00:00Z",
+      "CreatedById": "user_credit_001"
+    },
+    {
+      "Id": "hist_004",
+      "ParentId": "loan_001",
+      "Field": "LLC_BI__Stage__c",
+      "OldValue": "Credit Review",
+      "NewValue": "Approval",
+      "CreatedDate": "2026-04-02T09:00:00Z",
+      "CreatedById": "user_approver_001"
+    }
+  ],
+  "covenant_compliance": [
+    {
+      "Id": "cov_001",
+      "Name": "Debt Service Coverage Ratio",
+      "LLC_BI__Account__c": "acct_001",
+      "LLC_BI__Active__c": true,
+      "LLC_BI__Due_Date__c": "2026-04-01",
+      "LLC_BI__Overdue__c": true,
+      "LLC_BI__Breached__c": true,
+      "LLC_BI__Days_Past_Next_Evaluation__c": 21,
+      "LLC_BI__Last_Evaluation_Date__c": "2026-03-01",
+      "LLC_BI__Last_Evaluation_Status__c": "Breached",
+      "LLC_BI__Covenant_Status__c": "Past Due",
+      "LLC_BI__Frequency__c": "Monthly"
+    }
+  ],
+  "checklists": [
+    {
+      "Id": "chk_001",
+      "LLC_BI__Loan__c": "loan_001",
+      "LLC_BI__Status__c": "To Do",
+      "LLC_BI__Actual_Duration_Days__c": 20,
+      "LLC_BI__Expected_Duration_Days__c": 5,
+      "LLC_BI__Category__c": "Pre-close documents",
+      "LLC_BI__Context_Type__c": "LLC_BI__Loan__c",
+      "CreatedDate": "2026-04-01T09:00:00Z"
+    }
+  ],
+  "spreads": [
+    {
+      "Id": "spread_001",
+      "LLC_BI__Loan__c": "loan_001",
+      "LLC_BI__Underwriting_Summary__c": "Awaiting final analyst lock",
+      "CreatedDate": "2026-03-15T09:00:00Z"
+    }
+  ],
+  "spread_periods": [
+    {
+      "Id": "period_001",
+      "LLC_BI__Spread__c": "spread_001",
+      "LLC_BI__Analyst__c": "user_analyst_001",
+      "LLC_BI__Is_Locked__c": false,
+      "LLC_BI__Is_Annual__c": true,
+      "CreatedDate": "2026-04-01T09:00:00Z",
+      "LastModifiedDate": "2026-04-15T09:00:00Z",
+      "CreatedById": "user_analyst_001"
+    }
+  ],
+  "process_instances": [
+    {
+      "Id": "pi_001",
+      "TargetObjectId": "loan_001",
+      "Status": "Pending",
+      "CreatedDate": "2026-04-01T09:00:00Z",
+      "CompletedDate": null,
+      "SubmittedById": "user_rm_001"
+    }
+  ]
+}

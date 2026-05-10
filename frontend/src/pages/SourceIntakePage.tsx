@@ -48,7 +48,8 @@ export default function SourceIntakePage() {
     [readyConnectors]
   );
 
-  const canBegin = readyConnectors.length > 0 || uploadedFiles.length > 0 || sampleWorkspaceEnabled;
+  // T41-8: sampleWorkspaceEnabled no longer gates Begin Discovery
+  const canBegin = readyConnectors.length > 0 || uploadedFiles.length > 0;
 
   const handleSingleFileSelected = (event: React.ChangeEvent<HTMLInputElement>) => {
     const selected = Array.from(event.target.files ?? []);
@@ -145,7 +146,7 @@ export default function SourceIntakePage() {
               />
 
               <div className="mt-2 text-xs text-muted">
-                Begin Discovery is enabled when at least one source is connected and configured, at least one file is uploaded, or Sample Workspace is selected.
+                Begin Discovery is enabled when at least one source is connected and configured, or at least one file is uploaded.
               </div>
             </div>
 

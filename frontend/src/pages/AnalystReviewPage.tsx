@@ -35,7 +35,11 @@ export default function AnalystReviewPage() {
       <div className="min-h-screen bg-bg text-text flex flex-col">
         <TopNav />
         <div className="px-8 py-6">
-          <RunRequiredEmptyState onStart={() => nav('/discovery-run')} />
+          <RunRequiredEmptyState
+            pageTitle="Analyst Review"
+            pageDescription="Deep-dive trust layer: validate and override AI rationale per opportunity before executive reporting."
+            onStart={() => nav('/discovery-run')}
+          />
         </div>
       </div>
     );

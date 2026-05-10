@@ -3,6 +3,8 @@ import { useNormalizationContext } from '../../context/NormalizationContext';
 import { ChevronDown, ChevronLeft, ChevronRight, Search, ArrowRight } from 'lucide-react';
 
 const PAGE_SIZE = 8;
+const tableGridClass =
+  'grid-cols-[minmax(0,1.85fr)_minmax(0,1.2fr)_40px_minmax(0,1.25fr)_96px]';
 
 type Tab = 'MAPPED' | 'UNMAPPED' | 'AMBIGUOUS';
 type SortMode = 'Confidence High→Low' | 'Source A→Z';
@@ -91,7 +93,7 @@ export default function MappingTable() {
           {tabButton('AMBIGUOUS', 'Ambiguous')}
         </div>
 
-        <div className="grid grid-cols-[minmax(0,1.8fr)_minmax(220px,1fr)] gap-3">
+        <div className="grid grid-cols-1 gap-3 md:grid-cols-[minmax(0,1.8fr)_minmax(220px,1fr)]">
           
           {/* Search */}
           <div className="relative">
@@ -109,9 +111,9 @@ export default function MappingTable() {
             <button
               type="button"
               onClick={() => setSortOpen(v => !v)}
-              className="flex w-full items-center gap-2 rounded-md border border-border bg-bg/30 px-3 py-2 text-sm text-text hover:bg-bg/50 hover:border-accent/50"
+              className="flex w-full min-w-0 items-center gap-2 rounded-md border border-border bg-bg/30 px-3 py-2 text-sm text-text hover:bg-bg/50 hover:border-accent/50"
             >
-              <span className="flex-1 text-left">Sort: {sortMode}</span>
+              <span className="min-w-0 flex-1 truncate text-left">Sort: {sortMode}</span>
               <ChevronDown size={14} className={`transition ${sortOpen ? 'rotate-180' : ''}`} />
             </button>
 
@@ -137,14 +139,14 @@ export default function MappingTable() {
       </div>
 
       {/* Header */}
-      <div className="mt-3 grid grid-cols-[1.6fr_0.9fr_0.25fr_1.3fr_0.7fr] gap-2 items-center bg-bg/20 px-3 py-2 text-xs font-semibold text-text rounded-t-lg border border-border">
-        <div>Source Field</div>
-        <div>Source Type</div>
+      <div className={`mt-3 grid ${tableGridClass} items-center gap-2 rounded-t-lg border border-border bg-bg/20 px-4 py-2 text-xs font-semibold text-text`}>
+        <div className="min-w-0 pl-2">Source Field</div>
+        <div className="min-w-0 pl-2">Source Type</div>
         <div className="flex justify-center">
           <ArrowRight className="h-4 w-4 text-muted" />
         </div>
-        <div>Common Field</div>
-        <div>Confidence</div>
+        <div className="min-w-0 pl-2">Common Field</div>
+        <div className="min-w-0 pl-2">Confidence</div>
       </div>
 
       {/* Rows */}
@@ -156,24 +158,27 @@ export default function MappingTable() {
             <div
               key={row.id}
               onClick={() => setSelectedRowId(row.id)}
-              className={`cursor-pointer border-b border-border/50 p-3 ${
+              className={`cursor-pointer border-b border-border/50 px-4 py-3 ${
                 active
                   ? 'bg-accent/10 border-l-2 border-l-accent'
                   : 'hover:bg-panel2 border-l-2 border-l-transparent'
               }`}
             >
-              <div className="grid grid-cols-[2fr_1fr_0.3fr_1.5fr_0.8fr] gap-2 items-center">
+              <div className={`grid ${tableGridClass} items-center gap-2`}>
                 
-                <div className="min-w-0">
-                  <div className={`truncate text-sm font-semibold ${active ? 'text-accent' : 'text-text'}`}>
+                <div className="min-w-0 pl-2">
+                  <div
+                    className={`break-all text-sm font-semibold leading-snug ${active ? 'text-accent' : 'text-text'}`}
+                    title={`${row.sourceSystem}.${row.sourceField}`}
+                  >
                     {row.sourceSystem}.{row.sourceField}
                   </div>
-                  <div className="text-xs text-muted truncate">
+                  <div className="mt-1 break-all text-xs leading-snug text-muted">
                     {row.commonEntity}
                   </div>
                 </div>
 
-                <div className="text-sm text-muted">
+                <div className="min-w-0 break-all pl-2 text-sm leading-snug text-muted" title={row.sourceType}>
                   {row.sourceType}
                 </div>
 
@@ -181,11 +186,11 @@ export default function MappingTable() {
                   <ArrowRight className="h-4 w-4" />
                 </div>
 
-                <div className="truncate text-sm text-text">
+                <div className="min-w-0 break-all pl-2 text-sm leading-snug text-text" title={row.commonField}>
                   {row.commonField}
                 </div>
 
-                <div>
+                <div className="flex min-w-0 justify-start pl-2">
                   {pill(row.confidence)}
                 </div>
 

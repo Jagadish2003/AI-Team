@@ -8,6 +8,7 @@ Adds:
 from __future__ import annotations
 
 import itertools
+import logging
 import time
 from typing import Any, Dict, List, Optional
 
@@ -16,13 +17,17 @@ from pydantic import BaseModel, Field
 
 from .security import require_auth
 from . import db
+from .connector_metrics import update_connector_metrics_from_run
 from .trackb_runner import run_trackb
 from discovery.track_a_adapter import export_track_a_seed
+
+logger = logging.getLogger(__name__)
 
 
 class ComputeRequest(BaseModel):
     mode: str = Field(default="offline", pattern="^(offline|live)$")
     systems: List[str] = Field(default_factory=lambda: ["salesforce", "servicenow", "jira"])
+    pack: Optional[str] = Field(default=None, description="Pack ID: service_cloud or ncino")
 
 
 class ComputeResponse(BaseModel):
@@ -79,14 +84,14 @@ def _get_status(run_id: str) -> Dict[str, Any]:
     return run.get("status") or {}
 
 
-def _run_trackb_and_persist(run_id: str, mode: str, systems: List[str]) -> None:
+def _run_trackb_and_persist(run_id: str, mode: str, systems: List[str], pack: Optional[str] = None) -> None:
     """Background task: execute Track B and persist Track A-shaped artifacts."""
     try:
         # Build run_context for Track B runner (primarily runId)
         run = db.run_get(run_id)  # may raise HTTPException(404) in Track A backend
         run_context = {"runId": run_id, "inputs": run.get("inputs") or {}}
 
-        payload = run_trackb(mode=mode, systems=systems, run_context=run_context)
+        payload = run_trackb(mode=mode, systems=systems, run_context=run_context, pack=pack)
 
         # Convert Track B payload -> Track A seed shapes (opportunities + flattened evidence)
         seed = export_track_a_seed(payload, id_counter=itertools.count(1))
@@ -97,13 +102,19 @@ def _run_trackb_and_persist(run_id: str, mode: str, systems: List[str]) -> None:
         if hasattr(db, "run_kv_set"):
             db.run_kv_set("opps", run_id, opps)
             db.run_kv_set("evidence", run_id, evidence)
+            # Store packId so normalization and other endpoints can detect pack
+            if pack:
+                db.run_kv_set("pack_id", run_id, pack)
         else:
             # Fallback: attach to run record
             run["opps"] = opps
             run["evidence"] = evidence
+            if pack:
+                run["packId"] = pack
             db.run_set(run_id, run)
 
         _set_status(run_id, "complete", counts={"opportunities": len(opps), "evidence": len(evidence)})
+        update_connector_metrics_from_run(payload, systems)
 
     except Exception as e:  # noqa: BLE001
         _set_status(run_id, "failed", error=str(e))
@@ -123,9 +134,20 @@ def register_sprint4_t1_routes(app: FastAPI) -> None:
         if run is None:
             raise HTTPException(status_code=404, detail=f"Run '{run_id}' not found")
 
+        # SN-CONNECT-1 + JIRA-CONNECT-1: run connector health checks at run start.
+        # Results stored in KV — S1 reads these to show Live/Fixture badges.
+        # Health checks are non-blocking — a failed check never prevents a run.
+        try:
+            from discovery.ingest.connector_health import check_all_connectors
+            connector_health = check_all_connectors()
+            if hasattr(db, "run_kv_set"):
+                db.run_kv_set("connector_health", run_id, connector_health)
+        except Exception as _e:
+            logger.warning("Connector health check failed (non-blocking): %s", _e)
+
         # Mark status running and return immediately.
         _set_status(run_id, "running", counts={"opportunities": 0, "evidence": 0})
-        background_tasks.add_task(_run_trackb_and_persist, run_id, body.mode, body.systems)
+        background_tasks.add_task(_run_trackb_and_persist, run_id, body.mode, body.systems, body.pack)
 
         return ComputeResponse(
             ok=True,
@@ -151,3 +173,47 @@ def register_sprint4_t1_routes(app: FastAPI) -> None:
             st = {"runId": run_id, "status": run.get("status") or "running", "startedAt": run.get("startedAt") or _now_iso(), "updatedAt": _now_iso(), "counts": {}}
 
         return RunStatus(**st)
+
+    @app.get(
+        "/api/runs/{run_id}/connector-health",
+        dependencies=[Depends(require_auth)],
+    )
+    async def get_connector_health(run_id: str) -> Dict[str, Any]:
+        """
+        SN-CONNECT-1 + JIRA-CONNECT-1: Return connector health for S1 Live badges.
+
+        Returns the health check results stored at run start.
+        If not yet available, runs checks on demand.
+
+        Response shape:
+          {
+            "ServiceNow": {"system": "ServiceNow", "status": "live"|"fixture"|"error",
+                           "message": "...", "latencyMs": 42, "isLive": true},
+            "Jira":        {"system": "Jira", "status": "live"|"fixture"|"error",
+                           "message": "...", "latencyMs": 38, "isLive": true},
+            "nCino":       {"system": "nCino", "status": "live"|"fixture"|"error",
+                           "message": "...", "latencyMs": 40, "isLive": true},
+          }
+        """
+        # Try stored health from run start first
+        if hasattr(db, "run_kv_get"):
+            stored = db.run_kv_get("connector_health", run_id, None)
+            if stored:
+                return stored
+
+        # Not stored yet — run on demand
+        try:
+            from discovery.ingest.connector_health import check_all_connectors
+            health = check_all_connectors()
+            if hasattr(db, "run_kv_set"):
+                db.run_kv_set("connector_health", run_id, health)
+            return health
+        except Exception as e:
+            return {
+                "ServiceNow": {"system": "ServiceNow", "status": "error",
+                               "message": str(e), "isLive": False},
+                "Jira":        {"system": "Jira", "status": "error",
+                               "message": str(e), "isLive": False},
+                "nCino":       {"system": "nCino", "status": "error",
+                               "message": str(e), "isLive": False},
+            }

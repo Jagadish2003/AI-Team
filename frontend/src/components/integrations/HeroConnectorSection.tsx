@@ -8,13 +8,15 @@ export default function HeroConnectorSection({
   selectedId,
   onSelect,
   onPrimary,
-  onSecondary
+  onSecondary,
+  metricAnimation,
 }: {
   connectors: Connector[];
   selectedId: string | null;
   onSelect: (id: string) => void;
   onPrimary: (id: string) => void;
   onSecondary: (id: string) => void;
+  metricAnimation?: { connectorId: string; key: number } | null;
 }) {
   return (
     <div>
@@ -22,7 +24,7 @@ export default function HeroConnectorSection({
         <div className="text-xl font-semibold text-text">Connection Hub</div>
         <div className="text-xs text-muted pb-3 pt-3">{DISCOVERY_SOURCE_REQUIREMENT_MESSAGE}</div>
       </div>
-      <div className="grid grid-cols-1 gap-6 md:grid-cols-3">
+      <div className="grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-3 xl:gap-4">
         {connectors.map((c) => (
           <HeroConnectorCard
             key={c.id}
@@ -31,6 +33,9 @@ export default function HeroConnectorSection({
             onSelect={() => onSelect(c.id)}
             onPrimary={() => onPrimary(c.id)}
             onSecondary={() => onSecondary(c.id)}
+            metricAnimationKey={
+              metricAnimation?.connectorId === c.id ? metricAnimation.key : 0
+            }
           />
         ))}
       </div>

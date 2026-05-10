@@ -198,6 +198,104 @@ _DETECTOR_META: Dict[str, Dict[str, Any]] = {
             "Agent must not expose data from one system in records of another system without data governance approval.",
         ],
     },
+    # nCino lending detectors.
+    "LOAN_ORIGINATION_ROUTING_FRICTION": {
+        "agent_name": "Loan Routing Agent",
+        "actions": [
+            {
+                "action": "Analyse loan attributes at origination",
+                "object": "LLC_BI__Loan__c",
+                "detail": "Agent reads loan type, amount, and requested terms to determine correct underwriter assignment.",
+            },
+            {
+                "action": "Assign loan to correct underwriter on first touch",
+                "object": "LLC_BI__Loan__c OwnerId",
+                "detail": "Agent sets underwriter assignment based on loan type and workload, eliminating manual routing steps.",
+            },
+            {
+                "action": "Monitor stage transition frequency and flag routing anomalies",
+                "object": "LLC_BI__Loan__History",
+                "detail": "Agent surfaces loans with excessive stage transitions (4+) to the origination manager for review.",
+            },
+        ],
+        "guardrails": [
+            "Agent must not make credit decisions or approve loans autonomously.",
+            "Agent must escalate to origination manager for any loan with unusual complexity or exception flags.",
+        ],
+    },
+    "COVENANT_TRACKING_GAP": {
+        "agent_name": "Covenant Monitoring Agent",
+        "actions": [
+            {
+                "action": "Monitor covenant evaluation dates across commercial loan portfolio",
+                "object": "LLC_BI__Covenant2__c",
+                "detail": "Agent checks upcoming covenant evaluation dates daily and surfaces at-risk covenants before they go overdue.",
+            },
+            {
+                "action": "Alert relationship manager when covenant is approaching overdue",
+                "object": "LLC_BI__Covenant2__c - LLC_BI__Overdue__c",
+                "detail": "Agent sends alert to relationship manager when evaluation date is within 5 business days. No automated action taken.",
+            },
+            {
+                "action": "Escalate immediately when breach is confirmed",
+                "object": "LLC_BI__Covenant2__c - LLC_BI__Breached__c",
+                "detail": "Agent escalates to Credit Risk Officer immediately when Breached__c = true. Creates audit trail entry.",
+            },
+        ],
+        "guardrails": [
+            "Agent surfaces alerts only. No automated credit decisions. Human escalation required for all covenant actions.",
+            "Agent must not modify covenant status, waive requirements, or grant extensions autonomously.",
+            "All breach escalations must be logged with timestamp and relationship manager acknowledgment.",
+        ],
+    },
+    "CHECKLIST_BOTTLENECK": {
+        "agent_name": "Loan Closing Agent",
+        "actions": [
+            {
+                "action": "Monitor pre-closing checklist progress for active loans",
+                "object": "LLC_BI__Checklist__c",
+                "detail": "Agent tracks checklist item status daily and identifies items overrunning expected duration.",
+            },
+            {
+                "action": "Notify responsible party when checklist item stalls",
+                "object": "LLC_BI__Checklist__c - LLC_BI__Status__c",
+                "detail": "Agent sends reminder to the assigned party when a checklist item enters stalled status (To Do, Under Review, On Hold) past the expected date.",
+            },
+            {
+                "action": "Escalate to loan officer when overrun exceeds threshold",
+                "object": "LLC_BI__Checklist__c - Overrun_Days__c",
+                "detail": "Agent escalates to loan officer when total overrun exceeds 14 days. Borrower impact is surfaced with context.",
+            },
+        ],
+        "guardrails": [
+            "Agent must not waive or remove checklist requirements autonomously.",
+            "Agent must not communicate directly with borrowers; escalation goes to the loan officer only.",
+        ],
+    },
+    "SPREADING_BOTTLENECK": {
+        "agent_name": "Spreading Queue Agent",
+        "actions": [
+            {
+                "action": "Monitor financial spreading workload per analyst",
+                "object": "LLC_BI__Spread_Statement_Period__c",
+                "detail": "Agent tracks unlocked spread periods per analyst and identifies backlog build-up.",
+            },
+            {
+                "action": "Alert credit manager when analyst backlog exceeds threshold",
+                "object": "LLC_BI__Analyst__c",
+                "detail": "Agent notifies credit manager when an analyst has 2+ unlocked periods older than 14 days.",
+            },
+            {
+                "action": "Surface spreading queue summary daily",
+                "object": "LLC_BI__Spread_Statement_Period__c",
+                "detail": "Agent produces a daily queue summary for the credit manager showing backlog by analyst.",
+            },
+        ],
+        "guardrails": [
+            "Agent must not reassign spreading work without credit manager approval.",
+            "Agent must not access or display the financial content of spread statements; workload metrics only.",
+        ],
+    },
 }
 
 _FALLBACK_META: Dict[str, Any] = {

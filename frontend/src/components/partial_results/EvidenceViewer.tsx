@@ -2,7 +2,7 @@ import React from 'react';
 import Button from '../common/Button';
 import { EvidenceReview } from '../../types/partialResults';
 import { Monitor } from 'lucide-react';
-
+ 
 interface EvidenceViewerProps {
   evidence: EvidenceReview | null;
   positionLabel: string;
@@ -11,7 +11,7 @@ interface EvidenceViewerProps {
   onApprove: () => void;
   onReject: () => void;
 }
-
+ 
 const EvidenceViewer: React.FC<EvidenceViewerProps> = ({
   evidence,
   positionLabel,
@@ -21,14 +21,14 @@ const EvidenceViewer: React.FC<EvidenceViewerProps> = ({
   onReject
 }) => {
   const isFinalized = !!evidence && evidence.decision !== 'UNREVIEWED';
-
+ 
   return (
     <div className="flex h-full flex-col rounded-xl border border-border bg-panel p-5">
       <div className="flex items-center justify-between border-b border-border pb-4">
         <div className="text-xl font-semibold text-text pb-3">Evidence Viewer</div>
         <Monitor className="h-5 w-5 text-slate-400" />
       </div>
-
+ 
       {!evidence ? (
         <div className="mt-4 text-sm text-muted">Select an evidence snippet to view details.</div>
       ) : (
@@ -37,7 +37,7 @@ const EvidenceViewer: React.FC<EvidenceViewerProps> = ({
             <div className="mb-1 text-xs text-muted">{evidence.tsLabel}</div>
             <div className="text-sm font-semibold leading-snug text-text">{evidence.title}</div>
           </div>
-
+ 
           <div className="flex items-center gap-3 rounded-lg border border-border bg-bg/40 px-3 py-2 text-xs text-muted">
             <span>
               Source: <span className="font-semibold text-text">{evidence.source}</span>
@@ -46,7 +46,7 @@ const EvidenceViewer: React.FC<EvidenceViewerProps> = ({
               Confidence: <span className="font-semibold text-text">{evidence.confidence}</span>
             </span>
           </div>
-
+ 
           <div className="rounded-lg border border-border bg-bg/40 px-3 py-2 text-xs text-muted">
             Evidence Source Type : {evidence.evidenceType}
           </div>
@@ -88,7 +88,7 @@ const EvidenceViewer: React.FC<EvidenceViewerProps> = ({
                 </>
               )}
             </button>
-
+ 
             <button
               onClick={onReject}
               disabled={isFinalized}
@@ -120,5 +120,6 @@ const EvidenceViewer: React.FC<EvidenceViewerProps> = ({
     </div>
   );
 };
-
+ 
 export default EvidenceViewer;
+ 

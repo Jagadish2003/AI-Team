@@ -20,9 +20,9 @@ export function InfoPanel({
   children?: React.ReactNode;
 }) {
   return (
-    <div className="flex h-[75vh] items-center justify-center px-6">
+    <div className="flex min-h-[min(620px,75vh)] items-center justify-center px-4 sm:px-6">
       <div
-        className="rounded-xl border border-border bg-panel p-8 py-12 text-center shadow-xl shadow-black/20"
+        className="rounded-xl border border-border bg-panel px-6 py-10 text-center shadow-xl shadow-black/20 sm:px-8 sm:py-12"
         style={{ width: '840px', maxWidth: 'calc(100vw - 64px)' }}
       >
         {icon && (

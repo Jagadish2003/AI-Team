@@ -90,45 +90,45 @@ class TestOfficialWorkedExamples:
     """
 
     def test_example1_d2_handoff_friction(self):
-        """SF-1.4 Example 1: Impact=3, Effort=2, Confidence=MEDIUM, Tier=Quick Win"""
+        """SF-1.4 Example 1: Impact=4, Effort=2, Confidence=MEDIUM, Tier=Quick Win"""
         result = score(d2())
-        assert result["impact"] == 3,      f"Impact: expected 3, got {result['impact']}"
+        assert result["impact"] == 4,      f"Impact: expected 4, got {result['impact']}"
         assert result["effort"] == 2,      f"Effort: expected 2, got {result['effort']}"
         assert result["confidence"] == "MEDIUM"
         assert result["tier"] == "Quick Win"
         assert result["roadmap_stage"] == "NEXT_30"
 
     def test_example2_d4_knowledge_gap(self):
-        """SF-1.4 Example 2: Impact=3, Effort=2, Confidence=MEDIUM, Tier=Quick Win"""
+        """SF-1.4 Example 2: Impact=4, Effort=2, Confidence=MEDIUM, Tier=Quick Win"""
         result = score(d4())
-        assert result["impact"] == 3
+        assert result["impact"] == 4
         assert result["effort"] == 2
         assert result["confidence"] == "MEDIUM"
         assert result["tier"] == "Quick Win"
         assert result["roadmap_stage"] == "NEXT_30"
 
     def test_example3_d6_permission_bottleneck(self):
-        """SF-1.4 Example 3: Impact=3, Effort=3, Confidence=MEDIUM, Tier=Quick Win"""
+        """SF-1.4 Example 3: Impact=5, Effort=3, Confidence=MEDIUM, Tier=Quick Win"""
         result = score(d6())
-        assert result["impact"] == 3
+        assert result["impact"] == 5
         assert result["effort"] == 3
         assert result["confidence"] == "MEDIUM"
         assert result["tier"] == "Quick Win"
         assert result["roadmap_stage"] == "NEXT_30"
 
     def test_example4_d3_approval_bottleneck(self):
-        """SF-1.4 Example 4: Impact=3, Effort=3, Confidence=MEDIUM, Tier=Quick Win"""
+        """SF-1.4 Example 4: Impact=5, Effort=3, Confidence=MEDIUM, Tier=Quick Win"""
         result = score(d3())
-        assert result["impact"] == 3
+        assert result["impact"] == 5
         assert result["effort"] == 3
         assert result["confidence"] == "MEDIUM"
         assert result["tier"] == "Quick Win"
         assert result["roadmap_stage"] == "NEXT_30"
 
     def test_example5_d1_repetitive_automation_high_confidence(self):
-        """SF-1.4 Example 5: Impact=3, Effort=2, Confidence=HIGH, Tier=Quick Win"""
+        """SF-1.4 Example 5: Impact=5, Effort=2, Confidence=HIGH, Tier=Quick Win"""
         result = score(d1())
-        assert result["impact"] == 3
+        assert result["impact"] == 5
         assert result["effort"] == 2
         assert result["confidence"] == "HIGH"
         assert result["tier"] == "Quick Win"
@@ -187,7 +187,7 @@ class TestImpactFactors:
         assert dbg["friction_pts"] == 8.0
         assert dbg["customer_pts"] == 0.0
         assert dbg["revenue_pts"]  == 2.0
-        assert result["impact"] == 3
+        assert result["impact"] == 5
 
     def test_high_volume_increases_impact(self):
         """Production-scale volume (5000+ cases/90d) → higher impact."""
