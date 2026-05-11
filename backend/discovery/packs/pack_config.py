@@ -78,7 +78,33 @@ PACK_REGISTRY: Dict[str, Dict[str, Any]] = {
         ),
     },
 
+
+    "strs_benefits": {
+        "packId":        "strs_benefits",
+        "packName":      "STRS Benefits Administration",
+        "domain":        "strs_benefits",
+        "pack_domain":   "strs_benefits",
+        "detectors": [
+            "discovery.detectors.application_stall",
+            "discovery.detectors.benefit_election_deadline",
+            "discovery.detectors.disbursement_overdue",
+            "discovery.detectors.disability_review_bottleneck",
+        ],
+        "ui_labels_path": str(_PACKS_DIR / "strs_benefits_ui_labels.json"),
+        "llm_context": (
+            "STRS public sector pension fund benefit administration analysis. "
+            "Focus on retirement application processing delays, benefit election "
+            "deadline misses, disbursement overdue situations, and disability "
+            "review bottlenecks. "
+            "Use member services language — not Salesforce admin language. "
+            "Reference Ohio Revised Code 3307 obligations where relevant. "
+            "IMPORTANT: agent surfaces alerts to member services staff only. "
+            "No automated benefit decisions. All benefit actions require human approval."
+        ),
+    },
+
     # CPQ pack slot — reserved for Sprint 6
+
     # "ncino_cpq": {
     #     "packId":   "ncino_cpq",
     #     "packName": "nCino CPQ",
@@ -134,6 +160,16 @@ def get_ui_labels(pack_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
 def get_llm_context(pack_id: Optional[str] = None) -> str:
     """Return the LLM context hint string for this pack."""
     return get_pack(pack_id)["llm_context"]
+
+
+
+
+def is_strs_benefits_pack(pack_id: Optional[str] = None) -> bool:
+    """
+    Returns True when the active pack is STRS Benefits Administration.
+    Used in runner.py, scorer, and evidence_builder for pack routing.
+    """
+    return get_pack(pack_id)["domain"] == "strs_benefits"
 
 
 def list_packs() -> List[str]:
