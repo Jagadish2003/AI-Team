@@ -1,0 +1,110 @@
+{
+  "_meta": {
+    "description": "STRS Benefits Administration offline fixture — Sprint 5.2",
+    "triggers": [
+      "APPLICATION_STALL — 2 applications stalled > 30 days",
+      "BENEFIT_ELECTION_DEADLINE — 1 assignment approved but election overdue",
+      "DISBURSEMENT_OVERDUE — 1 assignment with NextPayoutDate in the past",
+      "DISABILITY_REVIEW_BOTTLENECK — 1 disability case pending > 30 days with compliance_override"
+    ],
+    "sme_note": "SF-STRS-1 to confirm IndividualApplication.Status picklist values. Values below are assumed from PSS documentation."
+  },
+  "applications": [
+    {
+      "Id": "0ci000000000001AAA",
+      "Name": "Service Retirement Application — Member 10042",
+      "Status": "In Review",
+      "AppliedDate": "2026-02-01",
+      "ApprovedDate": null,
+      "IsSubmitted": true,
+      "PaymentDate": null,
+      "BenefitAssignmentId": null,
+      "ApplicationType": "Retirement",
+      "InternalStatus": "Pending Review",
+      "Description": "Service retirement application for 31-year member. Awaiting final documentation review."
+    },
+    {
+      "Id": "0ci000000000002AAA",
+      "Name": "Service Retirement Application — Member 10087",
+      "Status": "Returned",
+      "AppliedDate": "2026-01-15",
+      "ApprovedDate": null,
+      "IsSubmitted": true,
+      "PaymentDate": null,
+      "BenefitAssignmentId": null,
+      "ApplicationType": "Retirement",
+      "InternalStatus": "Returned to Member",
+      "Description": "Application returned — missing service credit documentation. No response from member in 35 days."
+    },
+    {
+      "Id": "0ci000000000003AAA",
+      "Name": "Service Retirement Application — Member 10099",
+      "Status": "Approved",
+      "AppliedDate": "2026-03-01",
+      "ApprovedDate": "2026-04-01",
+      "IsSubmitted": true,
+      "PaymentDate": "2026-05-01",
+      "BenefitAssignmentId": "0jL000000000001AAA",
+      "ApplicationType": "Retirement",
+      "InternalStatus": "Complete",
+      "Description": "Application approved and benefit payment scheduled."
+    }
+  ],
+  "benefit_assignments": [
+    {
+      "Id": "0jL000000000001AAA",
+      "Name": "Retirement Benefit — Member 10099",
+      "Status": "Approved",
+      "ApprovalStatus": "Approved",
+      "AssignmentDate": "2026-03-15",
+      "StartDateTime": "2026-05-01T00:00:00.000Z",
+      "EndDateTime": null,
+      "NextPayoutDate": "2026-03-01",
+      "PayoutFrequency": "Monthly",
+      "EntitlementAmount": 3200.00,
+      "EnrolleeId": "003000000000099AAA",
+      "ProgramEnrollmentId": "0eO000000000001AAA",
+      "RecertificationDueDate": null,
+      "RecertificationStatus": "Not Required",
+      "TotalApprovedAmount": 3200.00,
+      "TotalPaidAmount": 0.00,
+      "BenefitId": "0jK000000000001AAA",
+      "_fixture_note": "DISBURSEMENT_OVERDUE: NextPayoutDate 2026-03-01 is in the past, Status=Approved/Active. Proxy for missed disbursement."
+    },
+    {
+      "Id": "0jL000000000002AAA",
+      "Name": "Retirement Benefit — Member 10055",
+      "Status": "Approved",
+      "ApprovalStatus": "Approved",
+      "AssignmentDate": "2026-02-01",
+      "StartDateTime": null,
+      "EndDateTime": null,
+      "NextPayoutDate": null,
+      "PayoutFrequency": null,
+      "EntitlementAmount": 4100.00,
+      "EnrolleeId": "003000000000055AAA",
+      "ProgramEnrollmentId": "0eO000000000002AAA",
+      "RecertificationDueDate": null,
+      "RecertificationStatus": "Not Required",
+      "TotalApprovedAmount": 4100.00,
+      "TotalPaidAmount": 0.00,
+      "BenefitId": "0jK000000000002AAA",
+      "_fixture_note": "BENEFIT_ELECTION_DEADLINE: Approved 99 days ago, no NextPayoutDate set. Payment election not completed."
+    }
+  ],
+  "disability_cases": [
+    {
+      "Id": "5000000000001AAA",
+      "CaseNumber": "00001042",
+      "Status": "In Review",
+      "Type": "Disability",
+      "Origin": "Member Portal",
+      "CreatedDate": "2026-01-10T09:00:00.000Z",
+      "ClosedDate": null,
+      "Description": "Member filed disability retirement application. Stopped all teaching duties 2026-01-08. Awaiting Medical Review Board recommendation.",
+      "AccountId": "001000000000042AAA",
+      "ContactId": "003000000000042AAA",
+      "_fixture_note": "DISABILITY_REVIEW_BOTTLENECK: Created 120+ days ago, not closed. member_stopped_work=True (proxy: max_days >= 30)."
+    }
+  ]
+}

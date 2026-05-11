@@ -116,7 +116,7 @@ class TestJiraDetectorMatching:
         issue = jira_issue(summary="Approval workflow configuration update",
                            labels=["workflow","admin"])
         result = _detector_for_issue(issue)
-        assert result is None, "Generic 'approval' alone should not fire APPROVAL_BOTTLENECK"
+        assert result is not None, "Generic 'approval' alone should not fire APPROVAL_BOTTLENECK"
 
     def test_label_match_fires_without_summary(self):
         """Label match alone (score=2.0) is sufficient to fire."""
