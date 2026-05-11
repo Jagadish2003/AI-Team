@@ -391,3 +391,96 @@ def check_all_connectors() -> dict:
         "Jira": jira.to_dict(),
         "nCino": ncino.to_dict(),
     }
+
+def check_strs_benefits() -> ConnectorHealth:
+    """
+    ENG-STRS-1: Test STRS Benefits Administration / PSS Salesforce connectivity.
+
+    Env vars required for live mode (same as nCino — same Salesforce org):
+      SF_INSTANCE_URL    e.g. https://myorg.my.salesforce.com
+      SF_ACCESS_TOKEN    OAuth bearer token
+
+    Health check: probes IndividualApplication object reachability via
+    SOQL smoke query. Same pattern as check_ncino().
+
+    Returns ConnectorHealth with status "live", "fixture", or "error".
+    """
+    sf_url   = os.getenv("SF_INSTANCE_URL", "").rstrip("/")
+    sf_token = os.getenv("SF_ACCESS_TOKEN", "")
+
+    if not sf_url:
+        return ConnectorHealth(
+            system="STRS Benefits (PSS)",
+            status="fixture",
+            message="SF_INSTANCE_URL not set — using fixture data",
+        )
+
+    if not sf_token:
+        return ConnectorHealth(
+            system="STRS Benefits (PSS)",
+            status="fixture",
+            message="SF_ACCESS_TOKEN not set — using fixture data",
+        )
+
+    try:
+        import requests
+    except ImportError:
+        return ConnectorHealth(
+            system="STRS Benefits (PSS)",
+            status="error",
+            message="requests library not installed — pip install requests",
+        )
+
+    # Probe 1: IndividualApplication object reachability
+    url     = f"{sf_url}/services/data/v59.0/sobjects/IndividualApplication/"
+    headers = {
+        "Authorization": f"Bearer {sf_token}",
+        "Accept":        "application/json",
+    }
+
+    try:
+        t0   = time.monotonic()
+        resp = requests.get(url, headers=headers, timeout=10)
+        latency_ms = int((time.monotonic() - t0) * 1000)
+
+        if resp.status_code != 200:
+            return ConnectorHealth(
+                system="STRS Benefits (PSS)",
+                status="error",
+                message=f"IndividualApplication not accessible — HTTP {resp.status_code}. "
+                        "Confirm PSS is installed in this org.",
+            )
+
+        # Probe 2: SOQL smoke query on BenefitAssignment
+        soql_url = (
+            f"{sf_url}/services/data/v59.0/query"
+            f"?q=SELECT+Id,Status,NextPayoutDate+FROM+BenefitAssignment+LIMIT+1"
+        )
+        soql_resp = requests.get(soql_url, headers=headers, timeout=10)
+
+        if not soql_resp.ok:
+            return ConnectorHealth(
+                system="STRS Benefits (PSS)",
+                status="error",
+                message=(
+                    f"BenefitAssignment SOQL failed — HTTP {soql_resp.status_code}. "
+                    "Confirm PSS BenefitAssignment object is accessible."
+                ),
+            )
+
+        return ConnectorHealth(
+            system="STRS Benefits (PSS)",
+            status="live",
+            message=(
+                f"Connected to {sf_url} — health check passed "
+                "(IndividualApplication reachable, BenefitAssignment SOQL queryable)"
+            ),
+            latency_ms=latency_ms,
+        )
+
+    except Exception as exc:
+        return ConnectorHealth(
+            system="STRS Benefits (PSS)",
+            status="error",
+            message=f"Connection failed: {exc}",
+        )
