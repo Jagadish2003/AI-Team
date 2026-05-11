@@ -18,9 +18,10 @@ PRIVATE_KEY_PATH = "token_generation/ncino/server_ncino.key"
 TOKEN_FILE = "token_generation/ncino/ncino_token.json"
 
 if not os.path.exists(PRIVATE_KEY_PATH):
-    print("Private key file not found.")
-    print("Check path:", PRIVATE_KEY_PATH)
-    exit()
+    PRIVATE_KEY = ""
+else:
+    with open(PRIVATE_KEY_PATH, "r") as f:
+        PRIVATE_KEY = f.read()
 
 with open(PRIVATE_KEY_PATH, "r") as f:
     PRIVATE_KEY = f.read()
@@ -46,6 +47,9 @@ def load_token():
 
 
 def get_new_token():
+    if not PRIVATE_KEY:
+        raise Exception("Cannot generate token: Private key is missing.")
+    
     payload = {
         "iss": CLIENT_ID,
         "sub": USERNAME,

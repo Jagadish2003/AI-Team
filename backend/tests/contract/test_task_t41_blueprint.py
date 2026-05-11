@@ -231,6 +231,10 @@ def test_blueprint_detector_id_is_stable_constant(client, run_with_opps, first_o
         "INTEGRATION_CONCENTRATION",
         "PERMISSION_BOTTLENECK",
         "CROSS_SYSTEM_ECHO",
+        "LOAN_ORIGINATION_ROUTING_FRICTION",
+        "COVENANT_TRACKING_GAP",
+        "CHECKLIST_BOTTLENECK",
+        "SPREADING_BOTTLENECK",
         "UNKNOWN",
     }
     r = client.get(
