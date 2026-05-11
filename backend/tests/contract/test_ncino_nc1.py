@@ -289,23 +289,31 @@ class TestNcinoLiveModeCredentials:
         env = {
             k: v
             for k, v in os.environ.items()
-            if k not in ("SF_INSTANCE_URL", "SF_ACCESS_TOKEN")
+            if k not in ("SF_INSTANCE_URL", "SF_ACCESS_TOKEN", "NCINO_INSTANCE_URL", "NCINO_ACCESS_TOKEN")
         }
         env["INGEST_MODE"] = "live"
 
         with patch.dict(os.environ, env, clear=True):
             from discovery.ingest.ncino import NcinoIngestError, _get_client
-
-            with pytest.raises(NcinoIngestError):
-                _get_client()
+            
+            # Pretend the token file doesn't exist and generation fails
+            with patch("discovery.ingest.ncino.Path.exists", return_value=False), \
+                 patch("discovery.ingest.ncino._generate_ncino_token", side_effect=Exception("mocked fail")):
+                
+                with pytest.raises(NcinoIngestError):
+                    _get_client()
 
     def test_live_mode_requires_access_token(self):
-        env = {k: v for k, v in os.environ.items() if k != "SF_ACCESS_TOKEN"}
+        env = {k: v for k, v in os.environ.items() if k not in ("SF_ACCESS_TOKEN", "NCINO_ACCESS_TOKEN")}
         env["INGEST_MODE"] = "live"
         env["SF_INSTANCE_URL"] = "https://test.my.salesforce.com"
 
         with patch.dict(os.environ, env, clear=True):
             from discovery.ingest.ncino import NcinoIngestError, _get_client
 
-            with pytest.raises(NcinoIngestError):
-                _get_client()
+            # Pretend the token file doesn't exist and generation fails
+            with patch("discovery.ingest.ncino.Path.exists", return_value=False), \
+                 patch("discovery.ingest.ncino._generate_ncino_token", side_effect=Exception("mocked fail")):
+                
+                with pytest.raises(NcinoIngestError):
+                    _get_client()
