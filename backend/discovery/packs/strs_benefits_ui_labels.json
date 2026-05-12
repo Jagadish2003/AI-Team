@@ -1,0 +1,47 @@
+{
+  "_meta": {
+    "story": "SF-STRS-4",
+    "description": "Member services language opportunity labels for STRS Benefits Administration patterns.",
+    "status": "PRE-SME — SF-STRS-4 sign-off required before ENG-STRS-3 closes AC2",
+    "blocks": "ENG-STRS-3",
+    "note": "Replace any value below with SF-STRS-4 SME-approved text once signed off.",
+    "audience": "STRS Member Services Manager, Operations Director, or CIO",
+    "compliance_note": "Agent surfaces alerts to member services staff only. No automated benefit decisions. All benefit actions require human approval."
+  },
+
+  "APPLICATION_STALL": {
+    "s6_title": "Accelerate retirement application processing to protect member income timing",
+    "s6_desc": "Identify and resolve stalled retirement applications before processing deadlines are missed, ensuring members receive their first benefit payment on their expected retirement date.",
+    "s7_category": "Retirement Application",
+    "s9_roadmap": "30-day pilot: deploy application monitoring for all active retirement applications. Surface stalled applications to member services coordinators with days-pending count. Measure: reduction in average application processing time and number of applications requiring manual follow-up.",
+    "s10_exec": "Stalled retirement applications directly delay a member's first benefit payment — an income-critical event for educators who have planned their retirement around a specific date. Automated monitoring and timely coordinator alerts can materially reduce processing backlogs.",
+    "compliance_guardrail": null
+  },
+
+  "BENEFIT_ELECTION_DEADLINE": {
+    "s6_title": "Prevent irreversible default payment plan assignments through timely election alerts",
+    "s6_desc": "Alert member services coordinators when approved benefit recipients have not submitted their payment plan election within the required window, preventing default plan assignments they may not want.",
+    "s7_category": "Benefit Election",
+    "s9_roadmap": "30-day pilot: deploy election deadline monitoring for all newly approved benefit assignments. Automated reminder to member and coordinator when election is within 5 days of deadline. Measure: reduction in default plan assignments and member escalations.",
+    "s10_exec": "A missed benefit election deadline results in an irreversible default payment plan assignment — one of the most common sources of member grievances and appeal cases. Proactive alerts eliminate this with a simple process change and no system re-engineering.",
+    "compliance_guardrail": null
+  },
+
+  "DISBURSEMENT_OVERDUE": {
+    "s6_title": "Resolve overdue benefit disbursements to meet Ohio Revised Code 3307 obligations",
+    "s6_desc": "Detect benefit payments that have passed their scheduled disbursement date without being processed, triggering immediate escalation to the member services team to prevent regulatory non-compliance.",
+    "s7_category": "Benefit Disbursement",
+    "s9_roadmap": "30-day pilot: deploy disbursement monitoring across all active benefit assignments. Any payment overdue by 1+ days triggers immediate alert to member services coordinator and operations manager. Measure: reduction in overdue disbursements and time-to-resolution.",
+    "s10_exec": "Overdue benefit disbursements are a regulatory obligation under Ohio Revised Code 3307 — not an operational inconvenience. Each missed payment creates legal exposure and member hardship for retired educators who depend on their monthly benefit as primary income. Immediate detection and escalation is non-negotiable.",
+    "compliance_guardrail": "Agent surfaces overdue disbursement alerts to member services coordinator and operations manager only. No automated payment processing. Human review and approval required before any payment action is taken."
+  },
+
+  "DISABILITY_REVIEW_BOTTLENECK": {
+    "s6_title": "Expedite disability benefit reviews for members with no alternative income",
+    "s6_desc": "Identify disability benefit applications where the Medical Review Board process has stalled, with particular urgency for members who have already stopped working and have no employment income while waiting.",
+    "s7_category": "Disability Benefits",
+    "s9_roadmap": "30-day pilot: deploy disability review monitoring for all active disability applications. Surface cases pending Medical Review Board recommendation beyond 30 days. Flag member stopped-work status to escalate urgency to the review coordinator. Measure: reduction in average Medical Review Board cycle time.",
+    "s10_exec": "A disabled educator who has stopped teaching is receiving no income while their disability benefit application is under review. Every day of delay represents genuine financial hardship. Proactive monitoring and escalation of stalled Medical Review Board cases directly reduces that hardship and the risk of regulatory scrutiny around processing timelines.",
+    "compliance_guardrail": "Agent surfaces review bottleneck alerts to the disability review coordinator only. No automated benefit decisions. Medical Review Board recommendation and Retirement Board approval are required before any disability benefit is awarded. Agent must not communicate directly with the affected member."
+  }
+}

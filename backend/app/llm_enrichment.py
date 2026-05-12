@@ -52,7 +52,7 @@ def _opp_prompt(opp: Dict[str, Any], evidence: List[Dict[str, Any]],
     ncino pack uses banking operations language and compliance instruction.
     service_cloud pack uses original SC prompt unchanged.
     """
-    from discovery.packs.pack_config import is_ncino_pack, get_llm_context
+    from discovery.packs.pack_config import is_ncino_pack, is_strs_benefits_pack, get_llm_context
     ev_snippets = [
         e.get("snippet", "")
         for e in evidence
@@ -110,6 +110,55 @@ Return a JSON object with exactly these four fields. No preamble, no markdown �
   ]
 }}"""
 
+    elif is_strs_benefits_pack(pack_id):
+        # STRS Benefits Administration prompt — ENG-STRS-3
+        from discovery.packs.pack_config import get_llm_context as _glc
+        llm_ctx = _glc("strs_benefits")
+        pss_snippets  = [s for s in ev_snippets if "Jira" not in s and "ServiceNow" not in s]
+        corr_snippets = [s for s in ev_snippets if "Jira" in s or "ServiceNow" in s]
+        return f"""You are a public sector pension fund operations analyst writing insights for a STRS Member Services Director or Chief Operating Officer.
+
+## Context
+{llm_ctx}
+
+## Benefit Administration Pattern Detected
+Title: {opp.get("title", "")}
+Category: {opp.get("category", "")}
+Tier: {opp.get("tier", "")}
+Impact: {opp.get("impact", "")}/10
+Confidence: {opp.get("confidence", "")}
+Detector: {debug.get("detector_id", "")}
+
+## Salesforce PSS Evidence
+{chr(10).join(f"- {s}" for s in pss_snippets) if pss_snippets else "- No PSS evidence items"}
+
+## Corroborating Evidence (Jira / ServiceNow)
+{chr(10).join(f"- {s}" for s in corr_snippets) if corr_snippets else "- No corroborating evidence"}
+
+## Instructions
+Write for a pension fund operations audience — not a Salesforce admin.
+Use member services language: retirement applications, benefit elections, disbursements, disability reviews.
+Reference Ohio Revised Code 3307 when relevant to compliance-override patterns.
+NEVER suggest automated benefit decisions. All benefit actions require human approval.
+Return a JSON object with exactly these four fields. No preamble, no markdown — JSON only.
+
+{{
+  "aiSummary": "2-4 sentences in plain member services language. What the benefit administration friction is and how an Agentforce agent addresses it — surfacing alerts to staff, never making autonomous decisions.",
+  "aiWhyBullets": [
+    "Specific measured fact from PSS evidence (days pending, count affected)",
+    "Member impact in plain language (income delay, irreversible decision, legal obligation)",
+    "Corroborating signal from Jira or ServiceNow if available"
+  ],
+  "aiRisks": [
+    "What happens to the member if not addressed (financial hardship, regulatory breach)",
+    "Operational or legal risk of inaction for STRS"
+  ],
+  "aiSuggestedNextSteps": [
+    "Specific Agentforce capability for this benefit administration pattern",
+    "Concrete next action — escalation path or pilot scope with compliance guardrail"
+  ]
+}}"""
+
     else:
         # Original Service Cloud prompt — unchanged
         return f"""You are an AI analyst generating business explanations for a Salesforce automation discovery report.
@@ -153,7 +202,7 @@ Return a JSON object with exactly these four fields. No preamble, no markdown �
 def _exec_summary_prompt(opps: List[Dict[str, Any]], sources_analyzed: Dict[str, Any],
                           pack_id: Optional[str] = None) -> str:
     """ENG-AIQ-NC-5: pack-aware executive summary prompt."""
-    from discovery.packs.pack_config import is_ncino_pack
+    from discovery.packs.pack_config import is_ncino_pack, is_strs_benefits_pack
     top_opps = opps[:3]
     opp_lines = "\n".join(
         f"- {o.get('title', '')} (Impact {o.get('impact', '')}/10, {o.get('tier', '')})"
@@ -177,6 +226,25 @@ Write exactly one paragraph (3-5 sentences) for a CRO audience.
 - Close with a recommended next step for the commercial lending team
 - NEVER suggest automated credit decisions — humans make all credit decisions
 - Return only the paragraph text, nothing else"""
+
+    elif is_strs_benefits_pack(pack_id):
+        return f"""You are writing a one-paragraph executive summary for a STRS Executive Director or Board of Trustees.
+
+## Discovery Context
+Sources analyzed: {sources_analyzed.get("totalConnected", 0)} connected systems (Salesforce PSS, Jira, ServiceNow)
+Top benefit administration friction patterns:
+{opp_lines}
+
+## Instructions
+Write exactly one paragraph (3-5 sentences) for a pension fund executive audience.
+- Use member services language: retirement applications, benefit elections, disbursements, disability reviews
+- Open with the most significant member-impact finding
+- Reference ORC 3307 if any compliance-override pattern is present in the findings
+- Include projected outcome using "could reduce" / "estimated" language
+- Close with a recommended first step — always framing the agent as surfacing alerts to staff, never making autonomous decisions
+- Tone: measured, precise, focused on member outcomes and regulatory obligations
+
+Write the paragraph directly. No headings, no bullet points, no markdown."""
 
     else:
         return f"""You are writing a one-paragraph executive summary for a Salesforce automation discovery report.
@@ -303,8 +371,14 @@ def _fallback(opp: Dict[str, Any], pack_id: Optional[str] = None) -> Dict[str, A
     Service Cloud uses original aiRationale text.
     Issue 6 fix: prevents nCino screens showing generic SC language on fallback.
     """
-    from discovery.packs.pack_config import is_ncino_pack
-    if is_ncino_pack(pack_id) and not opp.get("aiRationale"):
+    from discovery.packs.pack_config import is_ncino_pack, is_strs_benefits_pack
+    if is_strs_benefits_pack(pack_id) and not opp.get("aiRationale"):
+        title = opp.get("title", "Benefit administration pattern detected")
+        summary = (
+            f"{title}. Connect to the Anthropic API to generate a full member services "
+            f"analysis with evidence-backed insights for this pension administration pattern."
+        )
+    elif is_ncino_pack(pack_id) and not opp.get("aiRationale"):
         title = opp.get("title", "Lending friction detected")
         summary = (
             f"{title}. Connect to the Anthropic API to generate a full banking "

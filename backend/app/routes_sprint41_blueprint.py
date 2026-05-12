@@ -368,7 +368,21 @@ def _build_blueprint(
     """
     # ── Read detector_id from _debug (stable) ────────────────────────────────
     debug = opp.get("_debug") or {}
-    detector_id = debug.get("detector_id", "UNKNOWN") or "UNKNOWN"
+    raw_detector_id = debug.get("detector_id", "UNKNOWN") or "UNKNOWN"
+
+    # ✅ STRICT contract-safe detector IDs
+    _ALLOWED_DETECTORS = {
+        "REPETITIVE_AUTOMATION",
+        "HANDOFF_FRICTION",
+        "APPROVAL_BOTTLENECK",
+        "KNOWLEDGE_GAP",
+        "INTEGRATION_CONCENTRATION",
+        "PERMISSION_BOTTLENECK",
+        "CROSS_SYSTEM_ECHO",
+    }
+
+    # Normalize to allowed set
+    detector_id = raw_detector_id if raw_detector_id in _ALLOWED_DETECTORS else "UNKNOWN"
 
     meta = _DETECTOR_META.get(detector_id, _FALLBACK_META)
 
