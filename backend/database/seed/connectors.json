@@ -2,26 +2,26 @@
   {
     "id": "salesforce",
     "name": "Salesforce",
-    "category": "CRM \u00b7 nCino Lending",
+    "category": "CRM \u00b7 PSS Benefits Administration",
     "tier": "recommended",
     "recommendedRank": 1,
     "status": "disconnected",
     "configured": false,
     "metrics": [
       {
-        "label": "Loans",
-        "value": "60"
+        "label": "Applications",
+        "value": "3"
       },
       {
-        "label": "Covenants",
-        "value": "65"
+        "label": "Benefit Assignments",
+        "value": "2"
       }
     ],
     "lastSynced": "\u2014",
     "reads": [
-      "LLC_BI__Loan__c",
-      "LLC_BI__Covenant2__c",
-      "LLC_BI__Checklist__c"
+      "IndividualApplication",
+      "BenefitAssignment",
+      "Case (Disability)"
     ],
     "signalStrength": 94
   },
@@ -36,18 +36,18 @@
     "metrics": [
       {
         "label": "Incidents (90d)",
-        "value": "\u2014"
+        "value": "5"
       },
       {
-        "label": "Lending signals",
-        "value": "\u2014"
+        "label": "Benefit signals",
+        "value": "5"
       }
     ],
     "lastSynced": "\u2014",
     "reads": [
-      "CMDB Records",
       "Incident Tickets",
-      "Change Logs"
+      "Benefit Operations",
+      "SLA Definitions"
     ],
     "signalStrength": 88
   },
@@ -62,17 +62,17 @@
     "metrics": [
       {
         "label": "Issues (90d)",
-        "value": "\u2014"
+        "value": "10"
       },
       {
-        "label": "Lending signals",
-        "value": "\u2014"
+        "label": "Benefit signals",
+        "value": "10"
       }
     ],
     "lastSynced": "\u2014",
     "reads": [
       "Issues",
-      "Transitions",
+      "Benefit Operations",
       "Runbooks / Pages"
     ],
     "signalStrength": 85
