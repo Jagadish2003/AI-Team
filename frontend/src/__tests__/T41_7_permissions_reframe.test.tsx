@@ -110,6 +110,32 @@ const CONNECTED_SALESFORCE_CONNECTOR: Connector = {
   signalStrength: 90,
 };
 
+const CONNECTED_STRS_SALESFORCE_CONNECTOR: Connector = {
+  id: 'salesforce',
+  name: 'Salesforce',
+  status: 'connected',
+  configured: true,
+  category: 'CRM - PSS Benefits Administration',
+  tier: 'recommended',
+  reads: ['IndividualApplication', 'BenefitAssignment', 'Case (Disability)'],
+  lastSynced: 'Just now',
+  metrics: [],
+  signalStrength: 94,
+};
+
+const CONNECTED_JIRA_CONNECTOR: Connector = {
+  id: 'jira_confluence',
+  name: 'Jira & Confluence',
+  status: 'connected',
+  configured: true,
+  category: 'Delivery - Knowledge',
+  tier: 'recommended',
+  reads: ['Issues', 'Benefit Operations', 'Runbooks / Pages'],
+  lastSynced: 'Just now',
+  metrics: [],
+  signalStrength: 85,
+};
+
 const DISCONNECTED_CONNECTOR: Connector = {
   id: 'servicenow',
   name: 'ServiceNow',
@@ -328,6 +354,31 @@ describe('AC3 — Connection Health section in ConnectorDetailPanel', () => {
     expect(screen.getByText('Read Case records')).toBeDefined();
     expect(screen.getByText('Read Flow metadata')).toBeDefined();
     expect(screen.getByText('Read Approval history')).toBeDefined();
+  });
+
+  it('shows STRS PSS read labels for a benefits Salesforce connector', () => {
+    renderWithRouter(
+      <ConnectorDetailPanel
+        connector={CONNECTED_STRS_SALESFORCE_CONNECTOR}
+        onConfigure={vi.fn()}
+      />
+    );
+    expect(screen.getByText('Read IndividualApplication records')).toBeDefined();
+    expect(screen.getByText('Read BenefitAssignment records')).toBeDefined();
+    expect(screen.getByText('Read Case records (Disability)')).toBeDefined();
+    expect(screen.getByText('Read Program records')).toBeDefined();
+    expect(screen.getByText('Read Contact records')).toBeDefined();
+  });
+
+  it('uses benefit operations signal language for Jira and Confluence', () => {
+    renderWithRouter(
+      <ConnectorDetailPanel
+        connector={CONNECTED_JIRA_CONNECTOR}
+        onConfigure={vi.fn()}
+      />
+    );
+    expect(screen.getByText('Read benefit operations signals')).toBeDefined();
+    expect(screen.queryByText('Read lending corroboration signals')).toBeNull();
   });
 
   it('does NOT render the section when connector is not_connected', () => {

@@ -195,7 +195,7 @@ describe('SourceIntelligencePage v1.3 — T41-4', () => {
     mockCounts = { MAPPED: 2, UNMAPPED: 0, AMBIGUOUS: 0 };
     mockPermissions = PERMISSIONS_SLACK_OK;
     renderPage();
-    expect(screen.getByTestId('zero-signal-slack').textContent).toContain('No signals detected');
+    expect(screen.getByTestId('zero-signal-slack').textContent).toContain('no signals detected');
   });
 
   it('SI4: Checking shown while permissions are loading', () => {
