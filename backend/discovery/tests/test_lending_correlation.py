@@ -368,3 +368,4 @@ class TestSNLendingCorrelation:
         ]
         result = sn_lending(fixture_incidents=incidents)
         assert result["total_matched"] == 1
+ 

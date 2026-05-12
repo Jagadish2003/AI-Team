@@ -183,3 +183,4 @@ def is_ncino_pack(pack_id: Optional[str] = None) -> bool:
     Returns True when the active pack is nCino domain.
     """
     return get_pack(pack_id)["domain"] == "ncino"
+ 
