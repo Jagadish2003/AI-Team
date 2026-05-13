@@ -312,7 +312,6 @@ def _build_application_metrics(
         "avg_days_stalled":     round(sum(stalled_days) / len(stalled_days), 1) if stalled_days else 0.0,
         "stall_threshold_days": APPLICATION_STALL_DAYS,
         "primary_object":       "IndividualApplication",
-        "sme_note":             "SF-STRS-1 to confirm Status picklist values and stall threshold",
     }
 
 
@@ -366,7 +365,6 @@ def _build_election_metrics(
         "election_deadline_days":   ELECTION_DEADLINE_DAYS,
         "default_plan_risk":        len(overdue) > 0,
         "primary_object":           "BenefitAssignment",
-        "sme_note":                 "SF-STRS-1 to confirm ApprovalStatus vs Status for election detection",
     }
 
 
@@ -464,7 +462,6 @@ def _build_disability_metrics(
         # compliance_override when member has stopped work — proxy: max_days >= 30
         "member_stopped_work":      max_days >= REVIEW_THRESHOLD_DAYS and len(pending) > 0,
         "primary_object":           "Case",
-        "sme_note":                 "SF-STRS-2 to confirm Case RecordType for disability and stage field",
     }
 
 
