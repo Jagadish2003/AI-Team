@@ -13,8 +13,8 @@ TOKEN_URL = LOGIN_URL + "/services/oauth2/token"
 
 CLIENT_ID = os.environ.get("SF_CLIENT_ID")
 USERNAME = os.environ.get("SF_USER")
-PRIVATE_KEY_PATH = "token_generation/server.key"
-TOKEN_FILE = "token_generation/sf_token.json"
+PRIVATE_KEY_PATH = "token_generation/salesforce/server_salesforce.key"
+TOKEN_FILE = "token_generation/salesforce/salesforce_token.json"
 
 with open(PRIVATE_KEY_PATH, "r") as f:
     PRIVATE_KEY = f.read()
@@ -40,6 +40,9 @@ def load_token():
 
 
 def get_new_token():
+    if not PRIVATE_KEY:
+        raise Exception("Cannot generate token: Private key is missing.")
+
     payload = {
         "iss": CLIENT_ID,
         "sub": USERNAME,
@@ -82,17 +85,12 @@ def get_token(force_refresh=False):
 
 
 def make_request(url, access_token):
-    headers = {
-        "Authorization": f"Bearer {access_token}",
-    }
-
+    headers = {"Authorization": f"Bearer {access_token}"}
     response = requests.get(url, headers=headers)
 
     if response.status_code == 401:
         print("Token expired. Refreshing...")
-
         access_token, instance_url = get_new_token()
-
         headers["Authorization"] = f"Bearer {access_token}"
         response = requests.get(url, headers=headers)
 
@@ -103,19 +101,6 @@ def make_request(url, access_token):
 
 def main(force_refresh=False):
     access_token, instance_url = get_token(force_refresh=force_refresh)
-
-    query = "SELECT Id, Name FROM ApexClass LIMIT 5"
-    tooling_url = (
-        instance_url
-        + "/services/data/v61.0/tooling/query/?q="
-        + query.replace(" ", "+")
-    )
-
-    response, access_token, new_instance = make_request(tooling_url, access_token)
-
-    if new_instance:
-        instance_url = new_instance
-
     return access_token, instance_url
 
 

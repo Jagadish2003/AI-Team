@@ -42,14 +42,14 @@ class IngestError(Exception):
 
 def _generate_salesforce_token(force_refresh: bool = False) -> tuple[str, str]:
     try:
-        from token_generation import token_generator
+        from token_generation.salesforce import token_salesforce
     except ImportError as exc:
         raise IngestError(
-            "Live mode requires backend/token_generation/token_generator.py "
+            "Live mode requires backend/token_generation/salesforce/token_salesforce.py "
             "or SF_INSTANCE_URL/SF_ACCESS_TOKEN credentials. Set INGEST_MODE=offline "
             "to run without Salesforce credentials."
         ) from exc
-    return token_generator.main(force_refresh=force_refresh)
+    return token_salesforce.main(force_refresh=force_refresh)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
