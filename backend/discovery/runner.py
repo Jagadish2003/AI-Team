@@ -237,6 +237,17 @@ def run(
             sn_by_detector = (
                 sn_data.get("lending_correlation", {}).get("by_detector", {})
             )
+    elif _is_strs(pack_id):
+        # STRS: use same Jira/SN corroboration — benefit operations keywords
+        # map to same corroboration structure as nCino lending
+        if jira_data:
+            jira_by_detector = (
+                jira_data.get("lending_correlation", {}).get("by_detector", {})
+            )
+        if sn_data:
+            sn_by_detector = (
+                sn_data.get("lending_correlation", {}).get("by_detector", {})
+            )
 
     opportunities = []
     for dr in detector_results:
@@ -254,7 +265,7 @@ def run(
         # Issue 3 fix: attach Jira/SN corroboration evidence for ncino pack.
         # These appear as additional evidence items in S4 alongside nCino evidence.
         # Does not yet modulate confidence — deferred to post-Sprint 5.
-        if is_ncino_pack(pack_id):
+        if is_ncino_pack(pack_id) or _is_strs(pack_id):
             corroboration_count = 0
             for snippet in jira_by_detector.get(dr.detector_id, []):
                 ev_id = id_factory()
@@ -313,6 +324,16 @@ def run(
             det_labels = ui_labels.get(dr.detector_id, {})
             opp["title"]       = det_labels.get("s6_title", dr.detector_id)
             opp["category"]    = det_labels.get("s7_category", "Lending")
+            opp["description"] = det_labels.get("s6_desc", "")
+            opp["s9_roadmap"]  = det_labels.get("s9_roadmap", "")
+            opp["s10_exec"]    = det_labels.get("s10_exec", "")
+            opp["compliance_guardrail"] = det_labels.get("compliance_guardrail")
+        elif _is_strs(pack_id):
+            from .packs.pack_config import get_ui_labels
+            ui_labels = get_ui_labels(pack_id) or {}
+            det_labels = ui_labels.get(dr.detector_id, {})
+            opp["title"]       = det_labels.get("s6_title", dr.detector_id)
+            opp["category"]    = det_labels.get("s7_category", "Benefit Administration")
             opp["description"] = det_labels.get("s6_desc", "")
             opp["s9_roadmap"]  = det_labels.get("s9_roadmap", "")
             opp["s10_exec"]    = det_labels.get("s10_exec", "")

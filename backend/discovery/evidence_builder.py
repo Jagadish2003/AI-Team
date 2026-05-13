@@ -500,6 +500,111 @@ _BUILDERS = {
 }
 
 # nCino lending detectors use banking-language builders
+
+# ─────────────────────────────────────────────────────────────────────────────
+# STRS Benefits Administration Evidence Builders — ENG-STRS-8
+# Each produces member services language from raw_evidence numeric fields
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _build_strs_application(
+    dr: DetectorResult, confidence: str, ts: str, id_factory
+) -> Dict[str, Any]:
+    ev = dr.raw_evidence
+    stalled   = ev.get("stalled_count", 0)
+    total     = ev.get("total_applications", 0)
+    max_days  = ev.get("max_days_stalled", 0)
+    avg_days  = ev.get("avg_days_stalled", 0)
+    threshold = ev.get("stall_threshold_days", 30)
+    snippet = (
+        f"{stalled} of {total} retirement applications stalled beyond {threshold} days "
+        f"(max: {int(max_days)} days, avg: {int(avg_days)} days). "
+        f"Stalled applications delay the member's first benefit payment date."
+    )
+    return _make_evidence(
+        id=_make_id(dr.signal_source, id_factory),
+        ts_label=ts, source="Salesforce", evidence_type="Metric",
+        title=f"Retirement application stall — {stalled} application(s) exceeding {threshold}-day threshold",
+        snippet=snippet, entities=["ent_individual_application"], confidence=confidence,
+    )
+
+
+def _build_strs_election(
+    dr: DetectorResult, confidence: str, ts: str, id_factory
+) -> Dict[str, Any]:
+    ev = dr.raw_evidence
+    overdue      = ev.get("overdue_election_count", 0)
+    total        = ev.get("total_assignments", 0)
+    max_days     = ev.get("max_days_overdue", 0)
+    deadline     = ev.get("election_deadline_days", 21)
+    default_risk = ev.get("default_plan_risk", False)
+    snippet = (
+        f"{overdue} of {total} approved benefit assignment(s) have not completed "
+        f"payment election within {deadline} days (max overdue: {int(max_days)} days). "
+        f"{'Default plan assignment risk active.' if default_risk else ''} "
+        f"Election deadline miss results in irreversible default plan assignment."
+    ).strip()
+    return _make_evidence(
+        id=_make_id(dr.signal_source, id_factory),
+        ts_label=ts, source="Salesforce", evidence_type="Metric",
+        title=f"Benefit election deadline — {overdue} assignment(s) overdue",
+        snippet=snippet, entities=["ent_benefit_assignment"], confidence=confidence,
+    )
+
+
+def _build_strs_disbursement(
+    dr: DetectorResult, confidence: str, ts: str, id_factory
+) -> Dict[str, Any]:
+    ev = dr.raw_evidence
+    overdue   = ev.get("overdue_count", 0)
+    total     = ev.get("total_assignments", 0)
+    max_days  = ev.get("max_days_overdue", 0)
+    proxy     = ev.get("proxy_field", "BenefitAssignment.NextPayoutDate")
+    snippet = (
+        f"{overdue} benefit payment(s) overdue (max: {int(max_days)} days past scheduled date). "
+        f"Detected via {proxy}. "
+        f"Ohio Revised Code 3307 requires timely benefit payment. "
+        f"Immediate escalation to member services coordinator required."
+    )
+    return _make_evidence(
+        id=_make_id(dr.signal_source, id_factory),
+        ts_label=ts, source="Salesforce", evidence_type="Metric",
+        title=f"Disbursement overdue — {overdue} payment(s) past scheduled date (ORC 3307)",
+        snippet=snippet, entities=["ent_benefit_disbursement"], confidence=confidence,
+    )
+
+
+def _build_strs_disability(
+    dr: DetectorResult, confidence: str, ts: str, id_factory
+) -> Dict[str, Any]:
+    ev = dr.raw_evidence
+    pending      = ev.get("pending_review_count", 0)
+    total        = ev.get("total_disability_cases", 0)
+    max_days     = ev.get("max_days_pending", 0)
+    avg_days     = ev.get("avg_days_pending", 0)
+    stopped_work = ev.get("member_stopped_work", False)
+    threshold    = ev.get("review_threshold_days", 30)
+    prefix = "COMPLIANCE: Member stopped work — no income during review. " if stopped_work else ""
+    snippet = (
+        f"{prefix}{pending} of {total} disability benefit review(s) pending beyond "
+        f"{threshold} days (max: {int(max_days)} days, avg: {int(avg_days)} days). "
+        f"Medical Review Board recommendation overdue. Immediate escalation to disability review coordinator required."
+    )
+    return _make_evidence(
+        id=_make_id(dr.signal_source, id_factory),
+        ts_label=ts, source="Salesforce", evidence_type="Metric",
+        title=f"Disability review bottleneck — {pending} case(s) pending {int(max_days)} days",
+        snippet=snippet, entities=["ent_disability_case"], confidence=confidence,
+    )
+
+
+# STRS Benefits builders dispatch dict
+_STRS_BUILDERS = {
+    "APPLICATION_STALL":           _build_strs_application,
+    "BENEFIT_ELECTION_DEADLINE":   _build_strs_election,
+    "DISBURSEMENT_OVERDUE":        _build_strs_disbursement,
+    "DISABILITY_REVIEW_BOTTLENECK": _build_strs_disability,
+}
+
 _NCINO_BUILDERS = {
     "LOAN_ORIGINATION_ROUTING_FRICTION": _build_ncino_routing,
     "COVENANT_TRACKING_GAP":             _build_ncino_covenant,
@@ -548,10 +653,12 @@ def build_evidence(
     confidence = str(opportunity.get("confidence", "LOW"))
     ts = _now_utc_label()
 
-    # Use nCino banking-language builders for lending detectors
+    # Use pack-specific builders for banking-language evidence
     pack_id = opportunity.get("packId", "")
     if pack_id == "ncino" and detector_result.detector_id in _NCINO_BUILDERS:
         builder = _NCINO_BUILDERS[detector_result.detector_id]
+    elif pack_id == "strs_benefits" and detector_result.detector_id in _STRS_BUILDERS:
+        builder = _STRS_BUILDERS[detector_result.detector_id]
     else:
         builder = _BUILDERS.get(detector_result.detector_id)
 
