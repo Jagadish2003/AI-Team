@@ -45,7 +45,7 @@ from . import is_live
 logger = logging.getLogger(__name__)
 
 FIXTURE_PATH = Path(__file__).parent / "fixtures" / "strs_benefits_sample.json"
-API_VERSION  = "v59.0"
+API_VERSION  = "v66.0"
 WINDOW_DAYS  = 90
 
 # ── Thresholds — SF-STRS-1 / SF-STRS-3 to confirm ───────────────────────────
@@ -55,25 +55,38 @@ ELECTION_DEADLINE_DAYS   = 21   # Days from BenefitAssignment approval to electi
 
 # IndividualApplication.Status values that indicate a stalled/incomplete application
 # SF-STRS-1 to confirm exact picklist values from PSS trial org
+# SF-STRS-1 CONFIRMED — cloudfulcrum PSS org — 12 May 2026
+# Query: SELECT Status FROM IndividualApplication LIMIT 200
+# Values observed: Draft, Submitted, In Review, Returned
 APPLICATION_STALL_STATUSES = frozenset([
     "Draft",
     "Returned",
     "In Review",
-    "Submitted",    # submitted but not progressing
+    "Submitted",    # submitted but not progressing past threshold days
 ])
 
 # BenefitAssignment.Status values that indicate approval
 # SF-STRS-1 to confirm exact picklist values
+# SF-STRS-1 CONFIRMED — cloudfulcrum PSS org — 12 May 2026
+# Query: SELECT ApprovalStatus, Status FROM BenefitAssignment LIMIT 200
+# ApprovalStatus observed: Approved | Status observed: Active
 BENEFIT_APPROVED_STATUSES = frozenset([
     "Approved",
-    "Active",
 ])
 
-# BenefitAssignment.Status values that indicate disbursement is active
-# (i.e. NextPayoutDate should be in the future — if in the past, overdue)
+# BenefitAssignment.Status values where disbursement should be running
 DISBURSEMENT_ACTIVE_STATUSES = frozenset([
     "Active",
     "Approved",
+])
+
+# Statuses that indicate election is pending (approved but payment not set up)
+# SF-STRS-1 to confirm exact values from trial org
+ELECTION_PENDING_STATUSES = frozenset([
+    "Under Review",
+    "Pending",
+    "Pending Election",
+    "Approved",  # Approved but NextPayoutDate/PayoutFrequency not set = pending election
 ])
 
 
@@ -86,18 +99,15 @@ class StrsIngestError(Exception):
 # ── Salesforce client (reuses SF credentials — same org as nCino) ─────────────
 
 def _get_client():
-    """
-    Returns a minimal Salesforce REST client using SF_INSTANCE_URL + SF_ACCESS_TOKEN.
-    STRS pack connects to a PSS-enabled Salesforce org — same credential pattern as nCino.
-    """
-    sf_url   = os.getenv("SF_INSTANCE_URL", "").rstrip("/")
-    sf_token = os.getenv("SF_ACCESS_TOKEN", "")
+    import requests
+    from token_generation.strs.token_strs import get_token
 
-    if not sf_url or not sf_token:
-        raise StrsIngestError(
-            "SF_INSTANCE_URL and SF_ACCESS_TOKEN required for STRS live mode. "
-            "Set INGEST_MODE=offline to use fixture data."
-        )
+    try:
+        access_token, instance_url = get_token()
+    except Exception as e:
+        raise StrsIngestError(f"STRS token load failed: {e}")
+
+    logger.info("STRS JWT token: OK — loaded from strs_token.json")
 
     class _SFClient:
         def __init__(self, base_url: str, token: str):
@@ -105,7 +115,6 @@ def _get_client():
             self.token    = token
 
         def query(self, soql: str) -> List[Dict[str, Any]]:
-            import requests
             url     = f"{self.base_url}/services/data/{API_VERSION}/query"
             headers = {
                 "Authorization": f"Bearer {self.token}",
@@ -115,12 +124,11 @@ def _get_client():
             resp    = requests.get(url, headers=headers, params=params, timeout=30)
             if not resp.ok:
                 raise StrsIngestError(
-                    f"SOQL failed ({resp.status_code}): {resp.text[:200]}"
+                    f"SOQL failed ({resp.status_code}): {resp.text}"
                 )
-            data = resp.json()
-            return data.get("records", [])
+            return resp.json().get("records", [])
 
-    return _SFClient(sf_url, sf_token)
+    return _SFClient(instance_url, access_token)
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -181,22 +189,19 @@ def _fetch_benefit_assignments(client) -> List[Dict[str, Any]]:
     """
     BenefitAssignment — approved benefit awards.
 
-    Confirmed fields (PSS metadata):
-      Status, ApprovalStatus, AssignmentDate, StartDateTime, EndDateTime,
-      NextPayoutDate, PayoutFrequency, EntitlementAmount, EnrolleeId,
-      ProgramEnrollmentId, RecertificationDueDate, RecertificationStatus,
-      TotalApprovedAmount, TotalPaidAmount, BenefitId
-
-    Used for:
-      - BENEFIT_ELECTION_DEADLINE: approved but election not submitted
-      - DISBURSEMENT_OVERDUE: NextPayoutDate < TODAY (proxy for BenefitDisbursement)
-
-    SF-STRS-1: confirm ApprovalStatus vs Status for election detection.
-    SF-STRS-3: confirm NextPayoutDate as disbursement proxy.
+    SF-STRS-1 CONFIRMED — cloudfulcrum PSS org — 12 May 2026:
+      ApprovalStatus observed: Approved
+      Status observed: Active
+    Used for BENEFIT_ELECTION_DEADLINE detection only.
+    DISBURSEMENT_OVERDUE now uses _fetch_disbursements() directly.
     """
+    # AssignmentDate,
+    # WHERE AssignmentDate = LAST_N_DAYS:{WINDOW_DAYS}
+    # RecertificationStatus,
+
     rows = client.query(f"""
         SELECT Id, Name, Status, ApprovalStatus, AssignmentDate,
-               StartDateTime, EndDateTime, NextPayoutDate, PayoutFrequency,
+               StartDateTime, EndDateTime, PayoutFrequency,
                EntitlementAmount, EnrolleeId, ProgramEnrollmentId,
                RecertificationDueDate, RecertificationStatus,
                TotalApprovedAmount, TotalPaidAmount, BenefitId
@@ -205,6 +210,44 @@ def _fetch_benefit_assignments(client) -> List[Dict[str, Any]]:
         LIMIT 5000
     """)
     logger.info("benefit_assignments=%d", len(rows))
+    return rows
+
+
+def _fetch_disbursements(client) -> List[Dict[str, Any]]:
+    """
+    BenefitDisbursement — individual benefit payments.
+
+    SF-STRS-3 CONFIRMED — cloudfulcrum PSS org — 12 May 2026:
+      Query: SELECT Id, ApprovalStatus, DisbursementStatus, PaymentStatus,
+             StartDate, EndDate, ActualCompletionDate, BenefitAssignmentId,
+             AdjustmentAmount, EntitlementAmount, PayoutAmount
+      FROM BenefitDisbursement — Total rows: 200
+
+    Confirmed fields:
+      ApprovalStatus:      Approved
+      DisbursementStatus:  Completed
+      PaymentStatus:       Paid
+      EndDate:             disbursement period end — used as scheduled payment date
+      ActualCompletionDate: when payment was made — null if not yet paid
+      PayoutAmount:        actual payment amount
+
+    Overdue logic: EndDate < TODAY AND PaymentStatus != 'Paid'
+    In trial org all records are Paid — detector correctly does not fire.
+    In a real STRS org with pending payments it will fire.
+
+    Note: ScheduledDate does NOT exist — EndDate is the payment due date.
+    Note: Amount field does NOT exist — PayoutAmount is the payment amount.
+    """
+    rows = client.query(f"""
+        SELECT Id, ApprovalStatus, DisbursementStatus, PaymentStatus,
+               StartDate, EndDate, ActualCompletionDate,
+               BenefitAssignmentId, AdjustmentAmount,
+               EntitlementAmount, PayoutAmount
+        FROM BenefitDisbursement
+        WHERE StartDate = LAST_N_DAYS:{WINDOW_DAYS}
+        LIMIT 5000
+    """)
+    logger.info("disbursements=%d", len(rows))
     return rows
 
 
@@ -291,13 +334,19 @@ def _build_election_metrics(
         assigned        = _parse_date(ba.get("AssignmentDate"))
         days_since      = _days_since(assigned) if assigned else None
 
-        # Approved but not yet active (election pending)
-        is_approved     = approval_status in BENEFIT_APPROVED_STATUSES or status in BENEFIT_APPROVED_STATUSES
-        is_not_active   = status not in DISBURSEMENT_ACTIVE_STATUSES
+        # Election overdue: approved AND no NextPayoutDate set AND past deadline
+        # NextPayoutDate null = payment method not elected yet
+        next_payout = ba.get("NextPayoutDate")
+        payout_freq = ba.get("PayoutFrequency")
+        is_approved = (
+            approval_status in BENEFIT_APPROVED_STATUSES
+            or status in BENEFIT_APPROVED_STATUSES
+        )
+        election_not_done = (not next_payout and not payout_freq)
 
         if (
             is_approved
-            and is_not_active
+            and election_not_done
             and days_since is not None
             and days_since >= ELECTION_DEADLINE_DAYS
         ):
@@ -322,53 +371,56 @@ def _build_election_metrics(
 
 
 def _build_disbursement_metrics(
-    benefit_assignments: List[Dict[str, Any]],
+    disbursements: List[Dict[str, Any]],
 ) -> Dict[str, Any]:
     """
     DISBURSEMENT_OVERDUE detector input.
 
-    PROXY DESIGN: BenefitDisbursement not in this org's PSS metadata.
-    Using BenefitAssignment.NextPayoutDate as disbursement proxy:
-      - If NextPayoutDate < TODAY AND Status is active = disbursement overdue
-      - This is the same pattern used for LLC_BI__Spread__c in nCino
+    SF-STRS-3 CONFIRMED — BenefitDisbursement exists in cloudfulcrum PSS org.
+    Proxy removed. Now queries BenefitDisbursement directly.
 
-    SF-STRS-3: confirm this proxy or provide BenefitDisbursement object
-    if available in the PSS trial org.
+    Overdue logic: EndDate < TODAY AND PaymentStatus != 'Paid'
+    Fields confirmed: EndDate (payment due date), PaymentStatus, PayoutAmount.
+
+    Note: In PSS trial org all 200 records are PaymentStatus=Paid and
+    DisbursementStatus=Completed — detector correctly does not fire against
+    clean trial data. It will fire in a real STRS org with pending payments.
     """
     today = _today()
+
+    PAID_STATUSES = frozenset(["Paid", "Completed"])
     overdue = []
 
-    for ba in benefit_assignments:
-        status       = ba.get("Status", "")
-        next_payout  = _parse_date(ba.get("NextPayoutDate"))
+    for d in disbursements:
+        payment_status  = d.get("PaymentStatus", "")
+        end_date        = _parse_date(d.get("EndDate"))
 
         if (
-            status in DISBURSEMENT_ACTIVE_STATUSES
-            and next_payout is not None
-            and next_payout < today
+            payment_status not in PAID_STATUSES
+            and end_date is not None
+            and end_date < today
         ):
-            days_overdue = (today - next_payout).days
+            days_overdue = (today - end_date).days
             overdue.append({
-                "id":           ba.get("Id"),
-                "next_payout":  str(next_payout),
+                "id":           d.get("Id"),
+                "end_date":     str(end_date),
                 "days_overdue": days_overdue,
-                "status":       status,
+                "payment_status": payment_status,
+                "disbursement_status": d.get("DisbursementStatus", ""),
+                "payout_amount": d.get("PayoutAmount", 0),
             })
 
     overdue_days = [o["days_overdue"] for o in overdue]
 
     return {
-        "total_assignments":    len(benefit_assignments),
+        "total_disbursements":  len(disbursements),
         "overdue_count":        len(overdue),
         "max_days_overdue":     max(overdue_days) if overdue_days else 0,
         "avg_days_overdue":     round(sum(overdue_days) / len(overdue_days), 1) if overdue_days else 0.0,
-        "proxy_field":          "BenefitAssignment.NextPayoutDate",
-        "proxy_note":           (
-            "BenefitDisbursement not in PSS metadata. "
-            "NextPayoutDate used as proxy. SF-STRS-3 to confirm."
-        ),
-        "primary_object":       "BenefitAssignment",
+        "primary_object":       "BenefitDisbursement",
+        "date_field_used":      "EndDate",
         "compliance_override":  True,   # Any overdue disbursement = regulatory obligation
+        "sme_confirmed":        "SF-STRS-3 — 12 May 2026",
     }
 
 
@@ -419,13 +471,14 @@ def _build_disability_metrics(
 def _build_strs_metrics(
     applications:       List[Dict[str, Any]],
     benefit_assignments: List[Dict[str, Any]],
+    disbursements:       List[Dict[str, Any]],
     disability_cases:   List[Dict[str, Any]],
 ) -> Dict[str, Any]:
     """Compose all 4 metric dicts from raw fetched data."""
     return {
         "application_metrics":  _build_application_metrics(applications),
         "election_metrics":     _build_election_metrics(benefit_assignments),
-        "disbursement_metrics": _build_disbursement_metrics(benefit_assignments),
+        "disbursement_metrics": _build_disbursement_metrics(disbursements),
         "disability_metrics":   _build_disability_metrics(disability_cases),
     }
 
@@ -453,15 +506,16 @@ def ingest() -> Dict[str, Any]:
 
         applications        = _safe_fetch(_fetch_applications,       client, "applications")
         benefit_assignments = _safe_fetch(_fetch_benefit_assignments, client, "benefit_assignments")
-        disability_cases    = _safe_fetch(_fetch_disability_cases,   client, "disability_cases")
+        disbursements       = _safe_fetch(_fetch_disbursements,       client, "disbursements")
+        disability_cases    = _safe_fetch(_fetch_disability_cases,    client, "disability_cases")
 
         metrics = _build_strs_metrics(
-            applications, benefit_assignments, disability_cases
+            applications, benefit_assignments, disbursements, disability_cases
         )
 
         logger.info(
-            "STRS ingestion: OK — applications=%d assignments=%d disability_cases=%d",
-            len(applications), len(benefit_assignments), len(disability_cases),
+            "STRS ingestion: OK — applications=%d assignments=%d disbursements=%d disability_cases=%d",
+            len(applications), len(benefit_assignments), len(disbursements), len(disability_cases),
         )
         return metrics
 
@@ -477,13 +531,14 @@ def ingest() -> Dict[str, Any]:
 
     applications        = fixture.get("applications", [])
     benefit_assignments = fixture.get("benefit_assignments", [])
+    disbursements       = fixture.get("disbursements", [])
     disability_cases    = fixture.get("disability_cases", [])
 
     logger.info(
-        "STRS ingestion: fixture — applications=%d assignments=%d disability_cases=%d",
-        len(applications), len(benefit_assignments), len(disability_cases),
+        "STRS ingestion: fixture — applications=%d assignments=%d disbursements=%d disability_cases=%d",
+        len(applications), len(benefit_assignments), len(disbursements), len(disability_cases),
     )
 
     return _build_strs_metrics(
-        applications, benefit_assignments, disability_cases
+        applications, benefit_assignments, disbursements, disability_cases
     )

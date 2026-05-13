@@ -113,23 +113,6 @@ def make_request(url, access_token):
 
 def main(force_refresh=False):
     access_token, instance_url = get_token(force_refresh=force_refresh)
-
-    query = "SELECT Id, Name FROM ApexClass LIMIT 5"
-    tooling_url = (
-        instance_url
-        + "/services/data/v61.0/tooling/query/?q="
-        + query.replace(" ", "+")
-    )
-
-    response, access_token, new_instance = make_request(tooling_url, access_token)
-
-    if new_instance:
-        instance_url = new_instance
-
-    print("\nTooling API Result")
-    print("--------------------------------------------------")
-    print(json.dumps(response.json(), indent=4))
-
     return access_token, instance_url
 
 
