@@ -21,7 +21,7 @@ import {
   SetupState, FocusId, IndustryId, TemplateId,
   SystemWeighting, SystemRole, SystemPriority, WorkflowFocusTag,
   ProgressStep, StepStatus, ConfidenceState, ConfidenceLevel,
-} from '../types/stack_builder';
+} from '../../types/stack_builder';
 
 // ── Default weighting assumptions per system ID ───────────────────────────────
 //
