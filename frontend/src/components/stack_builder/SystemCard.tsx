@@ -1,20 +1,59 @@
 /**
- * SystemCard — SB-1 Sprint 7
+ * SystemCard — SB-1 v1.1 Task 4 Sprint 7
  *
- * System selection card used in all group grids on Screen 2.
- * Shows: logo initials, system name, category tag, connection status dot,
- * and optional recommendation reason.
+ * System selection card used in all group grids on Screen 2 (Your Systems).
+ * Renders in Group A (primary platforms), Group B (operational systems),
+ * and Group C (data and engineering sources).
  *
- * Connection status dot:
- *   connected      → emerald dot
- *   needs_auth     → amber dot
- *   not_configured → muted/slate dot
+ * Visual states:
+ *   default      — border-border, bg-panel, muted category text
+ *   hover        — border-emerald-500/40 (standard), border-emerald-500/50 (recommended)
+ *   selected     — border-emerald-500, bg-emerald-500/[0.08]
+ *   recommended  — border-emerald-500/25, recommendation reason in emerald below category
+ *
+ * Connection status dot (top-right corner):
+ *   connected       — bg-emerald-500 (green)
+ *   needs_auth      — bg-amber-400 (amber)
+ *   not_configured  — bg-slate-300 (light grey — light background surface)
  *
  * Recommendation reason:
- *   Shown as small green text under the category tag when present.
- *   Format: "Recommended for [reason]"
+ *   Shows below the category tag when recommendationReason is provided.
+ *   Visible in both selected AND unselected states — wireframe shows
+ *   "Recommended for workflow signals" on selected Jira card.
+ *   Colour: text-emerald-600 (selected), text-emerald-500 (unselected recommended).
  *
- * States: default, hover, selected.
+ * Token note:
+ *   All selection and recommendation colours use the emerald/teal family.
+ *   The accent token (#0D55D7, blue) is not used — consistent with all
+ *   other selected states across the stack builder.
+ *
+ * tabIndex prop:
+ *   Defaults to 0. Pass tabIndex={-1} for keyboard-focus management at the
+ *   parent level. Sprint 8 story: roving focus within system groups.
+ *
+ * Accessibility:
+ *   role="checkbox" — parent group should have role="group" and a group label.
+ *   aria-checked reflects selection state.
+ *   tabIndex prop — see above.
+ *   Enter and Space toggle selection.
+ *   ConnectionDot has aria-label for screen readers.
+ *   Logo block is aria-hidden — decorative.
+ *
+ * Props:
+ *   system               — SystemCard type from stack_builder types
+ *   selected             — whether this system is currently selected
+ *   recommendationReason — optional string, shown below category tag
+ *   onToggle             — called with system.id when user toggles the card
+ *   tabIndex             — optional, defaults to 0
+ *
+ * Usage:
+ *   const { state, toggleSystem } = useSetupState();
+ *   <SystemCard
+ *     system={system}
+ *     selected={state.selectedSystemIds.includes(system.id)}
+ *     recommendationReason={getRecommendationReason(system.id, state.focusId)}
+ *     onToggle={toggleSystem}
+ *   />
  */
 
 import React from 'react';
@@ -25,29 +64,43 @@ interface Props {
   selected: boolean;
   recommendationReason?: string;
   onToggle: (id: string) => void;
+  /** Defaults to 0. Pass -1 for focus management at parent level (Sprint 8). */
+  tabIndex?: number;
 }
+
+// ── Connection status dot ─────────────────────────────────────────────────────
 
 function ConnectionDot({ status }: { status: ConnectionStatus }) {
   const classes: Record<ConnectionStatus, string> = {
-    connected: 'bg-emerald-500',
-    needs_auth: 'bg-amber-400',
-    not_configured: 'bg-slate-600',
+    connected:      'bg-emerald-500',
+    needs_auth:     'bg-amber-400',
+    not_configured: 'bg-slate-300',
   };
   const labels: Record<ConnectionStatus, string> = {
-    connected: 'Connected',
-    needs_auth: 'Credentials needed',
-    not_configured: 'Not configured',
+    connected:      'Connected',
+    needs_auth:     'Credentials needed',
+    not_configured: 'Not yet configured',
   };
   return (
     <div
       className={`h-2 w-2 rounded-full flex-shrink-0 ${classes[status]}`}
-      title={labels[status]}
       aria-label={labels[status]}
+      role="img"
     />
   );
 }
 
-export default function SystemCard({ system, selected, recommendationReason, onToggle }: Props) {
+// ── SystemCard ────────────────────────────────────────────────────────────────
+
+export default function SystemCard({
+  system,
+  selected,
+  recommendationReason,
+  onToggle,
+  tabIndex = 0,
+}: Props) {
+  const isRecommended = Boolean(recommendationReason);
+
   const handleKey = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' || e.key === ' ') {
       e.preventDefault();
@@ -59,40 +112,47 @@ export default function SystemCard({ system, selected, recommendationReason, onT
     <div
       role="checkbox"
       aria-checked={selected}
-      tabIndex={0}
+      tabIndex={tabIndex}
       onClick={() => onToggle(system.id)}
       onKeyDown={handleKey}
       className={[
-        'relative cursor-pointer rounded-lg border p-3 transition-colors',
-        'focus:outline-none focus:ring-2 focus:ring-accent/50',
+        'relative cursor-pointer rounded-lg border p-3 transition-colors duration-150',
+        'focus:outline-none focus:ring-2 focus:ring-emerald-500/50',
         selected
-          ? 'border-accent bg-panel2'
-          : recommendationReason
-          ? 'border-accent/30 bg-panel hover:border-accent/60'
-          : 'border-border bg-panel hover:border-border/80',
-      ].join(' ')}
+          ? 'border-emerald-500 bg-emerald-500/[0.08]'
+          : isRecommended
+          ? 'border-emerald-500/25 bg-panel hover:border-emerald-500/50'
+          : 'border-border bg-panel hover:border-emerald-500/40',
+      ].filter(Boolean).join(' ')}
     >
       {/* Connection status dot — top right */}
       <div className="absolute top-2 right-2">
         <ConnectionDot status={system.connectionStatus} />
       </div>
 
-      {/* Logo */}
-      <div className={`mb-2 h-8 w-8 rounded-lg ${system.logoColor} flex items-center justify-center`}>
-        <span className="text-xs font-semibold text-text/80">{system.logoInitials}</span>
+      {/* Logo initials block — decorative */}
+      <div
+        className={`mb-2 h-8 w-8 rounded-lg ${system.logoColor} flex items-center justify-center`}
+        aria-hidden="true"
+      >
+        <span className="text-xs font-semibold text-white/80">
+          {system.logoInitials}
+        </span>
       </div>
 
-      {/* Name */}
-      <div className={`text-sm font-medium leading-tight mb-0.5 ${selected ? 'text-text' : 'text-text'}`}>
+      {/* System name */}
+      <div className="text-sm font-medium leading-tight mb-0.5 text-text">
         {system.name}
       </div>
 
       {/* Category tag */}
       <div className="text-xs text-muted">{system.category}</div>
 
-      {/* Recommendation reason */}
-      {recommendationReason && !selected && (
-        <div className="mt-1.5 text-xs text-accent font-medium">
+      {/* Recommendation reason — visible in both selected and unselected states */}
+      {isRecommended && (
+        <div className={`mt-1.5 text-xs font-medium ${
+          selected ? 'text-emerald-600' : 'text-emerald-500'
+        }`}>
           {recommendationReason}
         </div>
       )}
