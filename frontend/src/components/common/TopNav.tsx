@@ -17,7 +17,7 @@ const items = [
   // T41-8: Source Intake removed from nav. Route /source-intake redirects to
   // /integration-hub for backward compatibility. Configuration merged into
   // Integration Hub right panel.
-
+  { to: "/stack-builder", label: "Stack Builder", runScoped: false },
   //  run-scoped screens
   { to: "/discovery-run", label: "Discovery Run", runScoped: true },
   // { to: "/partial-results", label: "Evidence Collection", runScoped: true }, // Hidden — Sprint 5.1

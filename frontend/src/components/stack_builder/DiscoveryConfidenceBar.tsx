@@ -1,17 +1,46 @@
 /**
- * DiscoveryConfidenceBar — SB-1 Sprint 7
+ * DiscoveryConfidenceBar — SB-1 v1.1 Task 7 Sprint 7
  *
- * Persistent confidence indicator shown from Screen 2 onward.
- * Updates as user makes selections and confirms source weighting.
+ * Persistent setup readiness indicator shown from Screen 2 onward.
+ * Updates in real time as the user makes selections and confirms weightings.
  *
- * Three threshold states:
- *   basic   (0-40%)   — amber fill, amber label
- *   good    (40-75%)  — blue fill, blue label
- *   strong  (75-100%) — green fill, green label
+ * Three threshold states — all use the UI label "Discovery confidence":
+ *
+ *   basic  (0–40%)  — amber fill (bg-amber-400), amber label (text-amber-500)
+ *                     neutral container (bg-panel border-border)
+ *
+ *   good   (40–75%) — amber-orange fill (bg-amber-500), amber label (text-amber-500)
+ *                     neutral container (bg-panel border-border)
+ *                     Wireframe Image 2: bar is clearly amber/orange — NOT blue.
+ *                     The accent token (#0D55D7) was incorrect here.
+ *
+ *   strong (75–100%) — emerald fill (bg-emerald-500), emerald label (text-emerald-500)
+ *                      subtle teal container (bg-emerald-500/[0.06] border-emerald-500/20)
+ *
+ * showSummary prop:
+ *   false (default) — shows hint text only (Screens 2 and 3)
+ *   true            — also shows state.summary sentence (Screen 4)
+ *
+ * Token note:
+ *   good state uses bg-amber-500 (not accent blue). The amber family covers
+ *   basic and good — basic is lighter (amber-400), good is richer (amber-500).
+ *   strong state uses emerald-500 throughout — consistent with all other
+ *   emerald elements in the stack builder.
+ *   accent token (#0D55D7) is not used in this component.
+ *
+ * Accessibility:
+ *   Track div has role="progressbar" with aria-valuenow, aria-valuemin,
+ *   aria-valuemax, and aria-label.
+ *   Container has no interactive role — purely informational.
  *
  * Props:
- *   state — ConfidenceState with level, fillPercent, hint, and optional summary
- *   showSummary — true on Screen 4 to show the "why this setup is strong" sentence
+ *   state       — ConfidenceState: { level, fillPercent, hint, summary? }
+ *   showSummary — show state.summary below hint (Screen 4 only)
+ *
+ * Usage:
+ *   const { confidenceState } = useSetupState();
+ *   <DiscoveryConfidenceBar state={confidenceState} />
+ *   <DiscoveryConfidenceBar state={confidenceState} showSummary />
  */
 
 import React from 'react';
@@ -24,44 +53,45 @@ interface Props {
 
 export default function DiscoveryConfidenceBar({ state, showSummary = false }: Props) {
   const trackFill: Record<string, string> = {
-    basic: 'bg-amber-400',
-    good: 'bg-accent',
+    basic:  'bg-amber-400',
+    good:   'bg-amber-500',
     strong: 'bg-emerald-500',
   };
 
   const labelColor: Record<string, string> = {
-    basic: 'text-amber-400',
-    good: 'text-accent',
-    strong: 'text-emerald-400',
+    basic:  'text-amber-500',
+    good:   'text-amber-500',
+    strong: 'text-emerald-500',
   };
 
-  const containerBg: Record<string, string> = {
-    basic: 'bg-panel border-border',
-    good: 'bg-panel border-border',
-    strong: 'bg-emerald-900/20 border-emerald-500/20',
+  const containerClass: Record<string, string> = {
+    basic:  'bg-panel border-border',
+    good:   'bg-panel border-border',
+    strong: 'bg-emerald-500/[0.06] border-emerald-500/20',
   };
 
   const levelLabel: Record<string, string> = {
-    basic: 'Basic',
-    good: 'Good',
+    basic:  'Basic',
+    good:   'Good',
     strong: 'Strong',
   };
 
   return (
-    <div className={`rounded-lg border px-4 py-3 mb-6 ${containerBg[state.level]}`}>
+    <div className={`rounded-lg border px-4 py-3 mb-6 ${containerClass[state.level]}`}>
+
+      {/* Bar row */}
       <div className="flex items-center gap-3 mb-1.5">
-        {state.level === 'strong' && (
-          <svg className="text-emerald-400 flex-shrink-0" width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
-            <circle cx="7" cy="7" r="6" stroke="currentColor" strokeWidth="1.2"/>
-            <path d="M4.5 7l2 2 3-3" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round"/>
-          </svg>
-        )}
         <span className="text-xs text-muted flex-shrink-0">Discovery confidence</span>
 
         {/* Track */}
-        <div className="flex-1 h-1 rounded-full bg-border overflow-hidden" role="progressbar"
-          aria-valuenow={state.fillPercent} aria-valuemin={0} aria-valuemax={100}
-          aria-label={`Discovery confidence: ${levelLabel[state.level]}`}>
+        <div
+          className="flex-1 h-1.5 rounded-full bg-border overflow-hidden"
+          role="progressbar"
+          aria-valuenow={state.fillPercent}
+          aria-valuemin={0}
+          aria-valuemax={100}
+          aria-label={`Discovery confidence: ${levelLabel[state.level]}`}
+        >
           <div
             className={`h-full rounded-full transition-all duration-500 ${trackFill[state.level]}`}
             style={{ width: `${state.fillPercent}%` }}
@@ -73,12 +103,12 @@ export default function DiscoveryConfidenceBar({ state, showSummary = false }: P
         </span>
       </div>
 
-      {/* Actionable hint — always shown */}
+      {/* Hint text */}
       <div className="text-xs text-muted leading-relaxed">
         {state.hint}
       </div>
 
-      {/* Summary sentence — Screen 4 only */}
+      {/* Summary — Screen 4 only */}
       {showSummary && state.summary && (
         <div className={`mt-1.5 text-xs font-medium leading-relaxed ${labelColor[state.level]}`}>
           {state.summary}

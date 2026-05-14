@@ -17,11 +17,12 @@ import PartialResultsPage from "./pages/PartialResultsPage";
 import NormalizationInspectorPage from "./pages/NormalizationInspectorPage";
 import AnalystReviewPage from "./pages/AnalystReviewPage";
 import OpportunityMapPage from "./pages/OpportunityMapPage";
-import OpportunityReviewPage from "./pages/OpportunityReviewPage"; // T41-2
+import OpportunityReviewPage from "./pages/OpportunityReviewPage";
 import SourceIntelligencePage from "./pages/SourceIntelligencePage";
 import PilotRoadmapPage from "./pages/PilotRoadmapPage";
 import BlueprintPage from "./pages/BlueprintPage";
 import ExecutiveReportPage from "./pages/ExecutiveReportPage";
+import StackBuilderPage from "./pages/StackBuilderPage";
 
 export default function App() {
   return (
@@ -48,6 +49,10 @@ export default function App() {
                           // T41-8: Source Intake merged into Integration Hub.
                           // Redirect preserved for backward compatibility.
                           element={<Navigate to="/integration-hub" replace />}
+                        />
+                        <Route
+                          path="/stack-builder"
+                          element={<StackBuilderPage />}
                         />
                         <Route
                           path="/discovery-run"
