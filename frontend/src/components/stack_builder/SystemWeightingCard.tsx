@@ -45,6 +45,8 @@
  *   Confirm button is a <button type="button">.
  *
  * Props:
+ *   id                 — DOM id for scroll targeting. Set to `weighting-card-${systemId}`.
+ *                        Used by SourceWeightingScreen.onConfirm to scroll to next card.
  *   systemName         — display name of the system
  *   logoInitials       — 2-letter abbreviation e.g. "SF", "JR"
  *   logoColor          — Tailwind bg class e.g. "bg-teal-600"
@@ -138,6 +140,8 @@ function WeightingBadge({ label, variant }: { label: string; variant: BadgeVaria
 // ── Main component ────────────────────────────────────────────────────────────
 
 interface Props {
+  /** DOM id for scroll targeting — set to `weighting-card-${systemId}` by parent. */
+  id: string;
   systemName: string;
   logoInitials: string;
   logoColor: string;
@@ -148,7 +152,7 @@ interface Props {
 }
 
 export default function SystemWeightingCard({
-  systemName, logoInitials, logoColor,
+  id, systemName, logoInitials, logoColor,
   weighting, showEngineeringRole, onChange, onConfirm,
 }: Props) {
   const [expanded, setExpanded] = useState(false);
@@ -184,7 +188,7 @@ export default function SystemWeightingCard({
     .join(' · ');
 
   return (
-    <div className="rounded-xl border border-border bg-panel overflow-hidden mb-3">
+    <div id={id} className="rounded-xl border border-border bg-panel overflow-hidden mb-3">
 
       {/* ── Collapsed header — always visible ── */}
       <button

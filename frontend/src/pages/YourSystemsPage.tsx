@@ -577,8 +577,9 @@ export default function YourSystemsPage({ setupState }: Props) {
               'inline-flex items-center gap-2 rounded-lg px-5 py-2.5',
               'text-sm font-medium transition-colors',
               canProceedFromStep2
-                ? 'bg-text text-paper hover:opacity-90 cursor-pointer'
-                : 'bg-border text-muted cursor-not-allowed opacity-60',
+                ? 'bg-white text-gray-900 hover:opacity-90 cursor-pointer' // Correct enabled state
+                // FIX: Use a dark, muted background with lighter text for the disabled state
+                : 'bg-slate-800 text-slate-500 cursor-not-allowed',
               'focus:outline-none focus:ring-2 focus:ring-emerald-500/50',
             ].join(' ')}
           >
