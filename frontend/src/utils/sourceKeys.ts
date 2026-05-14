@@ -67,7 +67,7 @@ export const ZERO_SIGNAL_LABELS = {
   checking: { label: "Checking…", color: "muted" },
   permissionLimited: { label: "Permission-limited", color: "amber" },
   notAnalyzed: { label: "Not yet fully analyzed", color: "muted" },
-  noSignals: { label: "Connected — no lending signals in this run", color: "muted" },
+  noSignals: { label: "Connected — no signals detected in this run", color: "muted" },
   unknown: { label: "Status unknown", color: "muted" },
 } as const;
 

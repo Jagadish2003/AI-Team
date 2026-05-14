@@ -25,7 +25,9 @@ Thumbs.db
 backend/test_report_artifacts/
 backend/.env
 frontend/.env
-backend/token_generation/server.key
-backend/token_generation/sf_token.json
+backend/token_generation/salesforce/server_salesforce.key
+backend/token_generation/salesforce/salesforce_token.json
 backend/token_generation/ncino/server_ncino.key
 backend/token_generation/ncino/ncino_token.json
+backend/token_generation/strs/server_strs.key
+backend/token_generation/strs/strs_token.json

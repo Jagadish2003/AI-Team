@@ -176,7 +176,7 @@ export default function OpportunityReviewPage() {
           totalShown={filtered.length}
         />
 
-        <div className="grid grid-cols-1 gap-4 lg:h-[620px] lg:grid-cols-[minmax(0,1.12fr)_minmax(420px,0.88fr)] lg:items-stretch xl:grid-cols-[minmax(720px,1.12fr)_minmax(520px,0.88fr)]">
+        <div className="grid grid-cols-1 gap-4 lg:h-[620px] lg:grid-cols-[minmax(0,1.12fr)_minmax(380px,0.88fr)] lg:items-stretch">
           <OpportunityMatrix
             filtered={filtered}
             selectedId={selectedId}

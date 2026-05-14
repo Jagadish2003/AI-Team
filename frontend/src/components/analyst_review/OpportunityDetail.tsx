@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import {
   OpportunityCandidate,
   ReviewAuditEvent,
@@ -157,6 +157,11 @@ export default function OpportunityDetail({
 }) {
   const { runId } = useRunContext();
   const [enrichment, setEnrichment] = useState<OppEnrichment | null>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (scrollRef.current) scrollRef.current.scrollTop = 0;
+  }, [opp?.id]);
 
   // Fetch enrichment when selected opportunity changes.
   // T41-7: suppressPermissions removed from deps — it is deprecated and
@@ -214,7 +219,7 @@ export default function OpportunityDetail({
         )}
       </div>
 
-      <div className="min-h-0 flex-1 overflow-y-auto px-5 py-5 space-y-5">
+      <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto px-5 py-5 space-y-5">
         {/* Identifier */}
         {opp.identifier && (
           <div className="flex items-center gap-4 text-sm">

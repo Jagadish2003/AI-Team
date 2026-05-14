@@ -271,3 +271,4 @@ def test_all_opportunities_produce_named_agents(client, run_with_opps, all_opps)
         assert "Agent" in agent_name, (
             f"agentName '{agent_name}' for opp {opp['id']} does not contain 'Agent'"
         )
+ 

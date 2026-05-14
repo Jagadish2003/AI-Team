@@ -317,3 +317,5 @@ class TestNcinoLiveModeCredentials:
                 
                 with pytest.raises(NcinoIngestError):
                     _get_client()
+
+ 

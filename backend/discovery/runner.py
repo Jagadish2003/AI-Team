@@ -141,6 +141,19 @@ def run(
         except Exception as e:
             logger.warning("nCino ingestion failed (non-blocking): %s", e)
 
+    # 2b. STRS Benefits ingest — if strs_benefits pack
+    from .packs.pack_config import is_strs_benefits_pack as _is_strs
+    if _is_strs(pack_id) and "salesforce" in _systems:
+        try:
+            from .ingest.strs_benefits import ingest as strs_ingest
+            strs_data = strs_ingest()
+            if sf_data is None:
+                sf_data = {}
+            sf_data["strs_benefits"] = strs_data
+            logger.info("STRS Benefits ingestion: OK — %d benefit metrics", len(strs_data))
+        except Exception as e:
+            logger.warning("STRS Benefits ingestion failed (non-blocking): %s", e)
+
     # 2. Context
     org_ctx = build_org_context(sf_data, sn_data, jira_data)
 
@@ -166,6 +179,20 @@ def run(
             approval_bottleneck,
         ]
         logger.info("Pack: ncino — 5 lending detectors active")
+    elif _is_strs(pack_id):
+        from .detectors import (
+            application_stall,
+            benefit_election_deadline,
+            disbursement_overdue,
+            disability_review_bottleneck,
+        )
+        all_detectors = [
+            application_stall,
+            benefit_election_deadline,
+            disbursement_overdue,
+            disability_review_bottleneck,
+        ]
+        logger.info("Pack: strs_benefits — 4 benefit detectors active")
     else:
         # Service Cloud detectors — default
         from .detectors import (
@@ -192,6 +219,7 @@ def run(
     # ENG-AIQ-NC-4: use lending_scorer for ncino pack, SC scorer for service_cloud
     from .scorer import score as sc_score
     from .lending_scorer import score_lending, is_lending_detector
+    from .strs_benefits_scorer import score_strs_benefits, is_strs_benefits_detector
     from .evidence_builder import build_evidence
     id_counter = itertools.count(1)
     def id_factory() -> str: return f"{run_id[-6:]}_{next(id_counter):04d}"
@@ -209,12 +237,25 @@ def run(
             sn_by_detector = (
                 sn_data.get("lending_correlation", {}).get("by_detector", {})
             )
+    elif _is_strs(pack_id):
+        # STRS: use same Jira/SN corroboration — benefit operations keywords
+        # map to same corroboration structure as nCino lending
+        if jira_data:
+            jira_by_detector = (
+                jira_data.get("lending_correlation", {}).get("by_detector", {})
+            )
+        if sn_data:
+            sn_by_detector = (
+                sn_data.get("lending_correlation", {}).get("by_detector", {})
+            )
 
     opportunities = []
     for dr in detector_results:
         # Select scorer based on pack
         if is_ncino_pack(pack_id) and is_lending_detector(dr.detector_id):
             scored = score_lending(dr)
+        elif _is_strs(pack_id) and is_strs_benefits_detector(dr.detector_id):
+            scored = score_strs_benefits(dr)
         else:
             scored = sc_score(dr)
         # Pass packId so build_evidence uses nCino banking-language builders
@@ -224,7 +265,7 @@ def run(
         # Issue 3 fix: attach Jira/SN corroboration evidence for ncino pack.
         # These appear as additional evidence items in S4 alongside nCino evidence.
         # Does not yet modulate confidence — deferred to post-Sprint 5.
-        if is_ncino_pack(pack_id):
+        if is_ncino_pack(pack_id) or _is_strs(pack_id):
             corroboration_count = 0
             for snippet in jira_by_detector.get(dr.detector_id, []):
                 ev_id = id_factory()
@@ -283,6 +324,16 @@ def run(
             det_labels = ui_labels.get(dr.detector_id, {})
             opp["title"]       = det_labels.get("s6_title", dr.detector_id)
             opp["category"]    = det_labels.get("s7_category", "Lending")
+            opp["description"] = det_labels.get("s6_desc", "")
+            opp["s9_roadmap"]  = det_labels.get("s9_roadmap", "")
+            opp["s10_exec"]    = det_labels.get("s10_exec", "")
+            opp["compliance_guardrail"] = det_labels.get("compliance_guardrail")
+        elif _is_strs(pack_id):
+            from .packs.pack_config import get_ui_labels
+            ui_labels = get_ui_labels(pack_id) or {}
+            det_labels = ui_labels.get(dr.detector_id, {})
+            opp["title"]       = det_labels.get("s6_title", dr.detector_id)
+            opp["category"]    = det_labels.get("s7_category", "Benefit Administration")
             opp["description"] = det_labels.get("s6_desc", "")
             opp["s9_roadmap"]  = det_labels.get("s9_roadmap", "")
             opp["s10_exec"]    = det_labels.get("s10_exec", "")

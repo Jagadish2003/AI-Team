@@ -1,18 +1,19 @@
 {
   "_meta": {
-    "description": "STRS Benefits Administration offline fixture — Sprint 5.2",
+    "description": "STRS Benefits Administration offline fixture \u2014 Sprint 5.2",
     "triggers": [
-      "APPLICATION_STALL — 2 applications stalled > 30 days",
-      "BENEFIT_ELECTION_DEADLINE — 1 assignment approved but election overdue",
-      "DISBURSEMENT_OVERDUE — 1 assignment with NextPayoutDate in the past",
-      "DISABILITY_REVIEW_BOTTLENECK — 1 disability case pending > 30 days with compliance_override"
+      "APPLICATION_STALL \u2014 2 applications stalled > 30 days",
+      "BENEFIT_ELECTION_DEADLINE \u2014 1 assignment approved but election overdue",
+      "DISBURSEMENT_OVERDUE \u2014 1 BenefitDisbursement with PaymentStatus=Pending AND EndDate in the past",
+      "DISABILITY_REVIEW_BOTTLENECK \u2014 1 disability case pending > 30 days with compliance_override"
     ],
-    "sme_note": "SF-STRS-1 to confirm IndividualApplication.Status picklist values. Values below are assumed from PSS documentation."
+    "sme_note": "SF-STRS-1 to confirm IndividualApplication.Status picklist values. Values below are assumed from PSS documentation.",
+    "sme_confirmed": "SF-STRS-3 confirmed 12 May 2026 \u2014 BenefitDisbursement fields: EndDate, PaymentStatus, DisbursementStatus, PayoutAmount"
   },
   "applications": [
     {
       "Id": "0ci000000000001AAA",
-      "Name": "Service Retirement Application — Member 10042",
+      "Name": "Service Retirement Application \u2014 Member 10042",
       "Status": "In Review",
       "AppliedDate": "2026-02-01",
       "ApprovedDate": null,
@@ -25,7 +26,7 @@
     },
     {
       "Id": "0ci000000000002AAA",
-      "Name": "Service Retirement Application — Member 10087",
+      "Name": "Service Retirement Application \u2014 Member 10087",
       "Status": "Returned",
       "AppliedDate": "2026-01-15",
       "ApprovedDate": null,
@@ -34,11 +35,11 @@
       "BenefitAssignmentId": null,
       "ApplicationType": "Retirement",
       "InternalStatus": "Returned to Member",
-      "Description": "Application returned — missing service credit documentation. No response from member in 35 days."
+      "Description": "Application returned \u2014 missing service credit documentation. No response from member in 35 days."
     },
     {
       "Id": "0ci000000000003AAA",
-      "Name": "Service Retirement Application — Member 10099",
+      "Name": "Service Retirement Application \u2014 Member 10099",
       "Status": "Approved",
       "AppliedDate": "2026-03-01",
       "ApprovedDate": "2026-04-01",
@@ -53,7 +54,7 @@
   "benefit_assignments": [
     {
       "Id": "0jL000000000001AAA",
-      "Name": "Retirement Benefit — Member 10099",
+      "Name": "Retirement Benefit \u2014 Member 10099",
       "Status": "Approved",
       "ApprovalStatus": "Approved",
       "AssignmentDate": "2026-03-15",
@@ -61,35 +62,35 @@
       "EndDateTime": null,
       "NextPayoutDate": "2026-03-01",
       "PayoutFrequency": "Monthly",
-      "EntitlementAmount": 3200.00,
+      "EntitlementAmount": 3200.0,
       "EnrolleeId": "003000000000099AAA",
       "ProgramEnrollmentId": "0eO000000000001AAA",
       "RecertificationDueDate": null,
       "RecertificationStatus": "Not Required",
-      "TotalApprovedAmount": 3200.00,
-      "TotalPaidAmount": 0.00,
+      "TotalApprovedAmount": 3200.0,
+      "TotalPaidAmount": 0.0,
       "BenefitId": "0jK000000000001AAA",
       "_fixture_note": "DISBURSEMENT_OVERDUE: NextPayoutDate 2026-03-01 is in the past, Status=Approved/Active. Proxy for missed disbursement."
     },
     {
       "Id": "0jL000000000002AAA",
-      "Name": "Retirement Benefit — Member 10055",
-      "Status": "Approved",
+      "Name": "Retirement Benefit \u2014 Member 10055",
+      "Status": "Under Review",
       "ApprovalStatus": "Approved",
       "AssignmentDate": "2026-02-01",
       "StartDateTime": null,
       "EndDateTime": null,
       "NextPayoutDate": null,
       "PayoutFrequency": null,
-      "EntitlementAmount": 4100.00,
+      "EntitlementAmount": 4100.0,
       "EnrolleeId": "003000000000055AAA",
       "ProgramEnrollmentId": "0eO000000000002AAA",
       "RecertificationDueDate": null,
       "RecertificationStatus": "Not Required",
-      "TotalApprovedAmount": 4100.00,
-      "TotalPaidAmount": 0.00,
+      "TotalApprovedAmount": 4100.0,
+      "TotalPaidAmount": 0.0,
       "BenefitId": "0jK000000000002AAA",
-      "_fixture_note": "BENEFIT_ELECTION_DEADLINE: Approved 99 days ago, no NextPayoutDate set. Payment election not completed."
+      "_fixture_note": "BENEFIT_ELECTION_DEADLINE: ApprovalStatus=Approved, Status=Under Review (election not completed), AssignmentDate > 21 days ago. overdue_election_count=1."
     }
   ],
   "disability_cases": [
@@ -105,6 +106,36 @@
       "AccountId": "001000000000042AAA",
       "ContactId": "003000000000042AAA",
       "_fixture_note": "DISABILITY_REVIEW_BOTTLENECK: Created 120+ days ago, not closed. member_stopped_work=True (proxy: max_days >= 30)."
+    }
+  ],
+  "disbursements": [
+    {
+      "Id": "0WdN0000003CxVUAU",
+      "ApprovalStatus": "Approved",
+      "DisbursementStatus": "Pending",
+      "PaymentStatus": "Pending",
+      "StartDate": "2026-04-01T00:00:00.000Z",
+      "EndDate": "2026-04-30T00:00:00.000Z",
+      "ActualCompletionDate": null,
+      "BenefitAssignmentId": "0jL000000000001AAA",
+      "AdjustmentAmount": 0,
+      "EntitlementAmount": 2700,
+      "PayoutAmount": 270,
+      "_fixture_note": "DISBURSEMENT_OVERDUE: EndDate 2026-04-30 is in the past, PaymentStatus=Pending. overdue_count=1."
+    },
+    {
+      "Id": "0WdN0000003CxWUAU",
+      "ApprovalStatus": "Approved",
+      "DisbursementStatus": "Completed",
+      "PaymentStatus": "Paid",
+      "StartDate": "2026-05-01T00:00:00.000Z",
+      "EndDate": "2026-05-31T00:00:00.000Z",
+      "ActualCompletionDate": "2026-05-11T00:00:00.000Z",
+      "BenefitAssignmentId": "0jL000000000001AAA",
+      "AdjustmentAmount": 0,
+      "EntitlementAmount": 2700,
+      "PayoutAmount": 270,
+      "_fixture_note": "Completed and Paid \u2014 should NOT trigger overdue."
     }
   ]
 }
