@@ -1,12 +1,7 @@
 /**
- * StackBuilderProgressBar — SB-1 Sprint 7
+ * StackBuilderProgressBar - SB-2 Sprint 7
  *
- * Step indicator for the 4-screen setup flow.
- * Three states: active (accent fill), completed (green check), needs_attention (amber !), pending (muted).
- * Used on all four screens with the same component.
- *
- * Props:
- *   steps — array of ProgressStep with status per step
+ * Four-step setup progress indicator for the guided discovery stack builder.
  */
 
 import React from 'react';
@@ -17,14 +12,23 @@ interface Props {
 }
 
 function StepDot({ step }: { step: ProgressStep }) {
-  const base = 'flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-full text-xs font-medium';
+  const base =
+    'flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-full text-xs font-medium transition-colors duration-200';
 
   if (step.status === 'completed') {
     return (
-      <div className={`${base} bg-emerald-600/20 border border-emerald-500/40 text-emerald-400`}
-        aria-label={`Step ${step.number} completed`}>
-        <svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true">
-          <path d="M2 6l3 3 5-5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+      <div
+        className={`${base} bg-emerald-500/15 border border-emerald-500/50 text-emerald-500`}
+        aria-label={`Step ${step.number}: ${step.label} — completed`}
+      >
+        <svg width="11" height="11" viewBox="0 0 11 11" fill="none" aria-hidden="true">
+          <path
+            d="M1.5 5.5L4 8l5-5"
+            stroke="currentColor"
+            strokeWidth="1.5"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
         </svg>
       </div>
     );
@@ -32,8 +36,11 @@ function StepDot({ step }: { step: ProgressStep }) {
 
   if (step.status === 'active') {
     return (
-      <div className={`${base} bg-accent text-white`}
-        aria-label={`Step ${step.number} active`}>
+      <div
+        className={`${base} bg-emerald-500 text-white`}
+        aria-label={`Step ${step.number}: ${step.label} — current step`}
+        aria-current="step"
+      >
         {step.number}
       </div>
     );
@@ -41,35 +48,57 @@ function StepDot({ step }: { step: ProgressStep }) {
 
   if (step.status === 'needs_attention') {
     return (
-      <div className={`${base} bg-amber-500/20 border border-amber-500/40 text-amber-400`}
-        aria-label={`Step ${step.number} needs attention`}>
-        <svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true">
-          <path d="M6 4v3M6 8.5v.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
+      <div
+        className={`${base} bg-amber-500/15 border border-amber-500/50 text-amber-500`}
+        aria-label={`Step ${step.number}: ${step.label} — needs attention`}
+      >
+        <svg width="11" height="11" viewBox="0 0 11 11" fill="none" aria-hidden="true">
+          <path
+            d="M5.5 3.5v3"
+            stroke="currentColor"
+            strokeWidth="1.5"
+            strokeLinecap="round"
+          />
+          <circle cx="5.5" cy="8" r="0.75" fill="currentColor" />
         </svg>
       </div>
     );
   }
 
-  // pending
   return (
-    <div className={`${base} border border-border text-muted`}
-      aria-label={`Step ${step.number} pending`}>
+    <div
+      className={`${base} border border-border text-muted`}
+      aria-label={`Step ${step.number}: ${step.label} — not yet reached`}
+    >
       {step.number}
     </div>
   );
 }
 
-function stepLabelColor(status: StepStatus): string {
-  if (status === 'completed') return 'text-emerald-400';
-  if (status === 'active') return 'text-accent font-medium';
-  if (status === 'needs_attention') return 'text-amber-400';
-  return 'text-muted';
+function stepLabelClass(status: StepStatus): string {
+  switch (status) {
+    case 'completed':
+      return 'text-emerald-500';
+    case 'active':
+      return 'text-emerald-500 font-medium';
+    case 'needs_attention':
+      return 'text-amber-500';
+    case 'pending':
+    default:
+      return 'text-muted';
+  }
 }
 
 function ConnectorLine({ fromStatus }: { fromStatus: StepStatus }) {
-  const done = fromStatus === 'completed';
+  const isCompleted = fromStatus === 'completed';
+
   return (
-    <div className={`h-px flex-1 ${done ? 'bg-emerald-500/30' : 'bg-border'}`} aria-hidden="true" />
+    <div
+      className={`h-px flex-1 transition-colors duration-200 ${
+        isCompleted ? 'bg-emerald-500/40' : 'bg-border'
+      }`}
+      aria-hidden="true"
+    />
   );
 }
 
@@ -78,15 +107,13 @@ export default function StackBuilderProgressBar({ steps }: Props) {
     <nav aria-label="Setup progress" className="flex items-center gap-2 mb-8">
       {steps.map((step, i) => (
         <React.Fragment key={step.number}>
-          <div className="flex items-center gap-2">
+          <div className="flex flex-shrink-0 items-center gap-2">
             <StepDot step={step} />
-            <span className={`text-xs ${stepLabelColor(step.status)}`}>
+            <span className={`text-xs whitespace-nowrap ${stepLabelClass(step.status)}`}>
               {step.label}
             </span>
           </div>
-          {i < steps.length - 1 && (
-            <ConnectorLine fromStatus={step.status} />
-          )}
+          {i < steps.length - 1 && <ConnectorLine fromStatus={step.status} />}
         </React.Fragment>
       ))}
     </nav>
