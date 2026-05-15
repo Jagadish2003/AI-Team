@@ -99,7 +99,7 @@ function LoadingState() {
   return (
     <LoadingPanel
       title="Loading blueprint"
-      subtitle="Fetching the Agentforce Blueprint for the selected opportunity."
+      subtitle="Fetching the Agent Blueprint for the selected opportunity."
     />
   );
 }
@@ -194,7 +194,7 @@ export function BlueprintContent({ blueprint }: { blueprint: BlueprintResponse }
   return (
     <div className="flex h-full flex-col overflow-hidden rounded-xl border border-border bg-panel">
       <div className="border-b border-border px-5 py-4">
-        <div className="text-xs font-semibold uppercase text-muted">Agentforce Agent</div>
+        <div className="text-xs font-semibold uppercase text-muted">Agent</div>
         <div className="mt-1 text-2xl font-semibold text-text">{blueprint.agentName ?? 'Custom Agent'}</div>
         <div className="mt-1 font-mono text-xs text-muted">{blueprint.detectorId ?? 'UNKNOWN'}</div>
       </div>
@@ -256,14 +256,14 @@ export function BlueprintContent({ blueprint }: { blueprint: BlueprintResponse }
           )}
         </SectionBlock>
 
-        <SectionBlock icon={<Settings size={16} />} title="Agentforce Permissions Required">
+        <SectionBlock icon={<Settings size={16} />} title="Agent Permissions Required">
           {/* T41-7: forward-looking framing — agent-specific, future tense.
               No checked/missing status. This is what the agent WILL need,
               not what was required for the discovery run that already succeeded. */}
           {permissions.length > 0 ? (
             <div className="space-y-3">
               <p className="text-xs text-muted leading-relaxed">
-                To implement this Agentforce agent, the agent user profile will need:
+                To implement this agent, the agent user profile will need:
               </p>
               <div className="space-y-2">
                 {permissions.map((permission, index) => (
@@ -473,7 +473,7 @@ export default function BlueprintPage() {
       return (
         <EmptyPanel
           title="Connect Salesforce"
-          message="Agentforce Blueprint is available when Salesforce is connected."
+          message="Agent Blueprint is available when Salesforce is connected."
           actionLabel="Go to Integration Hub"
           onAction={() => nav('/integration-hub')}
           tone="warning"
@@ -485,7 +485,7 @@ export default function BlueprintPage() {
       return (
         <EmptyPanel
           title="No discovery run selected"
-          message="Run a discovery first to generate Agentforce Blueprints."
+          message="Run a discovery first to generate Agent Blueprints."
           actionLabel="Go to Discovery Run"
           onAction={() => nav('/discovery-run')}
         />
@@ -496,7 +496,7 @@ export default function BlueprintPage() {
       return (
         <EmptyPanel
           title="Select an opportunity"
-          message="Choose an opportunity in Opportunity Review to view its Agentforce Blueprint."
+          message="Choose an opportunity in Opportunity Review to view its Agent Blueprint."
           actionLabel="Go to Opportunity Review"
           onAction={() => nav(runId ? `/opportunity-review?runId=${runId}` : '/opportunity-review')}
         />
@@ -537,7 +537,7 @@ export default function BlueprintPage() {
 
   return (
     <PageShell
-      title="Agentforce Blueprint"
+      title="Agent Blueprint"
       description="Agent design generated from the selected opportunity and its discovery evidence."
       className="bg-bg"
       actions={

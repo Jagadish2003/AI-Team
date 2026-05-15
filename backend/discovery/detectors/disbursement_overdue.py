@@ -46,6 +46,20 @@ def detect(
     if overdue_count == 0:
         return []
 
+    # ── ENG-STRS-CORR-1/2: Mark corroboration in raw_evidence ──────────────
+    # runner.py reads these flags to set jira_corroborated/sn_corroborated.
+    # jira_data and sn_data contain by_detector dicts from corroboration modules.
+    jira_corroborated = bool(
+        jira_data and
+        isinstance(jira_data, dict) and
+        jira_data.get("by_detector", {}).get("DISBURSEMENT_OVERDUE")
+    )
+    sn_corroborated = bool(
+        sn_data and
+        isinstance(sn_data, dict) and
+        sn_data.get("by_detector", {}).get("DISBURSEMENT_OVERDUE")
+    )
+
     return [DetectorResult(
         detector_id=DETECTOR_ID,
         signal_source="salesforce",
@@ -59,6 +73,8 @@ def detect(
             "compliance_override":  compliance_override,
             "proxy_field":          metrics.get("proxy_field", "BenefitAssignment.NextPayoutDate"),
             "proxy_note":           metrics.get("proxy_note", ""),
+            "jira_corroborated":    jira_corroborated,
+            "sn_corroborated":      sn_corroborated,
             "primary_object":       "BenefitAssignment",
         },
     )]

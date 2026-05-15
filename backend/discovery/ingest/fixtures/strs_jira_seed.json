@@ -1,0 +1,77 @@
+{
+  "_comment": "STRS Benefits Administration — Jira seed stories for corroboration testing. These represent realistic Jira issues a pension fund team would log. Used in offline mode and for integration testing.",
+  "issues": [
+    {
+      "key": "STRS-101",
+      "summary": "Retirement application processing backlog — 47 applications stalled in 'In Review' for 35+ days",
+      "description_text": "Member services team flagging significant backlog in retirement application processing. 47 applications have been sitting in In Review status for over 35 days, exceeding the 30-day ORC 3307 guideline. Root cause appears to be understaffing in the review queue following recent team restructure. Members are calling frequently to check status. Escalated to ops director.",
+      "status": "In Progress",
+      "created": "2026-04-15T09:23:00Z",
+      "priority": "High",
+      "labels": ["strs", "member-services", "benefits", "processing"]
+    },
+    {
+      "key": "STRS-102",
+      "summary": "Benefit election notification emails not delivered — member deadline at risk",
+      "description_text": "Automated election deadline notification emails are failing to deliver for a cohort of approximately 23 members. Investigation shows email template misconfiguration following the PSS upgrade in March. Members are approaching the 21-day election deadline with no system notification. Default plan assignment risk is HIGH for this cohort. Fix required urgently before end of week.",
+      "status": "Open",
+      "created": "2026-04-28T11:45:00Z",
+      "priority": "Critical",
+      "labels": ["strs", "notification", "benefit-election", "deadline", "payout"]
+    },
+    {
+      "key": "STRS-103",
+      "summary": "Application stall investigation — Draft applications not progressing after submission",
+      "description_text": "Investigating a pattern where applications submitted by members are reverting to Draft status rather than transitioning to Submitted. This is preventing the review queue from picking them up. Affects approximately 12 members who submitted in the last 2 weeks. Likely a PSS workflow automation issue. Member services are manually re-submitting but this is not scalable.",
+      "status": "In Progress",
+      "created": "2026-05-01T08:15:00Z",
+      "priority": "High",
+      "labels": ["strs", "application", "workflow", "automation", "member"]
+    },
+    {
+      "key": "STRS-104",
+      "summary": "Disability review queue capacity — team at 140% capacity for 6 consecutive weeks",
+      "description_text": "The disability benefits review team has been operating at 140% capacity for 6 consecutive weeks. Case queue has grown from 18 to 34 open disability reviews. Average time from submission to first review has increased from 12 days to 31 days, exceeding the 30-day guideline. Two senior reviewers on leave. HR escalation submitted for temporary resource. Members who have stopped work are directly affected.",
+      "status": "Open",
+      "created": "2026-04-20T14:30:00Z",
+      "priority": "High",
+      "labels": ["strs", "disability", "review", "bottleneck", "capacity", "backlog"]
+    },
+    {
+      "key": "STRS-105",
+      "summary": "Payment election reminder — members approaching deadline without response",
+      "description_text": "Report from member services showing 11 benefit assignments approved more than 21 days ago where the member has not completed payment election. These members risk being auto-assigned a default payment plan. Current process relies on manual outreach which is not tracking well. Need automated escalation workflow. Benefit election deadline management gap.",
+      "status": "Open",
+      "created": "2026-05-05T10:00:00Z",
+      "priority": "Medium",
+      "labels": ["strs", "election", "deadline", "payment", "enrollment", "benefit"]
+    },
+    {
+      "key": "STRS-106",
+      "summary": "Retirement application member portal — submission confirmation not generating",
+      "description_text": "Members who submit retirement applications through the member portal are not receiving submission confirmation. The application is being recorded in PSS (IndividualApplication.Status = Submitted) but the confirmation workflow is not firing. Members are calling to check if their application was received. Adds to call centre load and creates member anxiety. Application stall perception issue even when backend is processing.",
+      "status": "To Do",
+      "created": "2026-05-08T09:00:00Z",
+      "priority": "Medium",
+      "labels": ["strs", "application", "member", "portal", "confirmation", "notification"]
+    },
+    {
+      "key": "STRS-107",
+      "summary": "Disability case status tracking — case workers unable to see current review stage",
+      "description_text": "Case workers in the disability review team cannot see the current review stage for cases assigned to medical consultants. The status shows 'In Review' without stage granularity. This makes it impossible to identify which cases are truly blocked vs progressing. Disability review bottleneck is becoming invisible to team leads. Need stage-level visibility in the case management view.",
+      "status": "To Do",
+      "created": "2026-05-10T11:20:00Z",
+      "priority": "Medium",
+      "labels": ["strs", "disability", "case", "review", "bottleneck", "assessment"]
+    },
+    {
+      "key": "STRS-108",
+      "summary": "ORC 3307 compliance — disbursement payment delay audit trail required",
+      "description_text": "Compliance team requesting audit trail for any BenefitDisbursement where PaymentStatus was not Paid by EndDate. ORC 3307 obligation requires documentation of any delayed pension payment. Current system does not generate automatic compliance record when a disbursement is overdue. Need automated compliance record creation and notification to compliance officer. Regulatory requirement — treat as P1.",
+      "status": "Open",
+      "created": "2026-04-25T15:45:00Z",
+      "priority": "Critical",
+      "labels": ["strs", "disbursement", "compliance", "ORC", "regulatory", "payment", "overdue"]
+    }
+  ]
+}

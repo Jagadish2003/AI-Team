@@ -70,7 +70,7 @@ function PartialResultsPill() {
   return (
     <span className="inline-flex h-7 items-center gap-2 rounded-full border border-accent/30 bg-accent/10 px-3 text-[13px] font-semibold leading-none text-blue-100 shadow-[0_0_0_1px_rgba(37,99,235,0.08)]">
       <span className="h-1.5 w-1.5 rounded-full bg-accent" />
-      Source Intelligence Ready
+      Evidence collection ready
     </span>
   );
 }
@@ -83,7 +83,6 @@ function formatRunTimestamp(value?: string | null) {
 
 export default function DiscoveryRunPage() {
   const [autoScroll, setAutoScroll] = useState(true);
-  const [showAutoScroll, setShowAutoScroll] = useState(false);
   const logScrollRef = useRef<HTMLDivElement | null>(null);
   const nav = useNavigate();
   const location = useLocation();
@@ -149,7 +148,25 @@ export default function DiscoveryRunPage() {
       mode: "live" as const,
     };
   }, [connectors, uploadedFiles]); // T41-8: sampleWorkspaceEnabled removed
-  const summaryInputs = run?.inputs ?? inputs;
+
+  // Fix Pack Sprint 7: read connected sources from run record when available.
+  // Stack Builder runs store selectedSystemIds on the run record via the
+  // launch endpoint (routes_stack_builder_launch.py). Use those system IDs
+  // as the display source list so Discovery Run shows the actual systems
+  // used — not Integration Hub connector status (which shows None when
+  // systems are not yet authorized in Integration Hub).
+  const runSelectedSystems: string[] = (run as any)?.selectedSystemIds ?? [];
+  const summaryInputs = useMemo(() => {
+    if (runSelectedSystems.length > 0) {
+      return {
+        connectedSources: runSelectedSystems,
+        uploadedFiles: uploadedFiles.map((f) => f.name),
+        sampleWorkspaceEnabled: false,
+        mode: "live" as const,
+      };
+    }
+    return run?.inputs ?? inputs;
+  }, [run, runSelectedSystems, inputs, uploadedFiles]);
 
   const hasAtLeastOneSource =
     inputs.connectedSources.length > 0 ||
@@ -177,32 +194,6 @@ export default function DiscoveryRunPage() {
     if (!el) return;
     el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
   }, [events, autoScroll]);
-
-  useEffect(() => {
-    const el = logScrollRef.current;
-    if (!el) {
-      setShowAutoScroll(false);
-      return;
-    }
-
-    const updateVisibility = () => {
-      setShowAutoScroll(el.scrollHeight > el.clientHeight + 1);
-    };
-
-    updateVisibility();
-    window.addEventListener("resize", updateVisibility);
-
-    let resizeObserver: ResizeObserver | null = null;
-    if (typeof ResizeObserver !== "undefined") {
-      resizeObserver = new ResizeObserver(updateVisibility);
-      resizeObserver.observe(el);
-    }
-
-    return () => {
-      window.removeEventListener("resize", updateVisibility);
-      resizeObserver?.disconnect();
-    };
-  }, [events]);
 
   if (loading || (!runId && autoStartRequested && hasAtLeastOneSource)) {
     return (
@@ -341,17 +332,15 @@ export default function DiscoveryRunPage() {
             <div className="flex shrink-0 items-center justify-between">
               <div className="flex items-center gap-5">
                 <div className="text-lg font-semibold">Discovery Log</div>
-                {showAutoScroll && (
-                  <label className="flex items-center gap-2 text-sm text-text">
-                    Auto-scroll
-                    <input
-                      type="checkbox"
-                      checked={autoScroll}
-                      onChange={(e) => setAutoScroll(e.target.checked)}
-                      className="accent-accent cursor-pointer"
-                    />
-                  </label>
-                )}
+                <label className="flex items-center gap-2 text-sm text-text">
+                  Auto-scroll
+                  <input
+                    type="checkbox"
+                    checked={autoScroll}
+                    onChange={(e) => setAutoScroll(e.target.checked)}
+                    className="accent-accent cursor-pointer"
+                  />
+                </label>
               </div>
               <button
                 className="rounded-md border border-border bg-bg/20 px-3 py-2 text-sm font-semibold text-text transition hover:bg-panel2"
