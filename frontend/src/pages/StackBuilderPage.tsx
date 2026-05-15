@@ -279,9 +279,9 @@ export default function StackBuilderPage({
         credentials: 'omit',
         headers,
         body: JSON.stringify({
-          mode: 'offline',
+          mode: 'live',
           systems,
-          pack: packId,
+          pack: 'strs_benefits',
         }),
       }).catch((err) => {
         console.error('[StackBuilderPage] Compute trigger failed:', err);
