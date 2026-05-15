@@ -18,13 +18,11 @@ import { SystemCard } from '../components/stack_builder';
 import { useSetupState } from '../components/stack_builder';
 
 const PRIMARY_PLATFORMS: SystemCardType[] = [
-  { id: 'sap', name: 'SAP', category: 'ERP', group: 'primary_platform', connectionStatus: 'needs_auth', logoInitials: 'SAP', logoColor: 'bg-blue-700' },
+  { id: 'salesforce', name: 'Salesforce', category: 'CRM / industry', group: 'primary_platform', connectionStatus: 'connected', logoInitials: 'SF', logoColor: 'bg-sky-500', isSalesforce: true },
+  { id: 'sap', name: 'SAP', category: 'ERP', group: 'primary_platform', connectionStatus: 'not_configured', logoInitials: 'SAP', logoColor: 'bg-blue-700' },
   { id: 'oracle_ebs', name: 'Oracle EBS', category: 'Finance / HR', group: 'primary_platform', connectionStatus: 'not_configured', logoInitials: 'ORC', logoColor: 'bg-red-700' },
   { id: 'workday', name: 'Workday', category: 'HR / finance', group: 'primary_platform', connectionStatus: 'not_configured', logoInitials: 'WD', logoColor: 'bg-yellow-600' },
   { id: 'dynamics365', name: 'Dynamics 365', category: 'ERP / CRM', group: 'primary_platform', connectionStatus: 'not_configured', logoInitials: 'D365', logoColor: 'bg-blue-600' },
-  { id: 'salesforce', name: 'Salesforce', category: 'CRM / industry', group: 'primary_platform', connectionStatus: 'connected', logoInitials: 'SF', logoColor: 'bg-sky-500', isSalesforce: true },
-  { id: 'neospin', name: 'Neospin', category: 'Pension admin', group: 'primary_platform', connectionStatus: 'not_configured', logoInitials: 'NS', logoColor: 'bg-teal-700' },
-  { id: 'vitech', name: 'Vitech', category: 'Benefits admin', group: 'primary_platform', connectionStatus: 'not_configured', logoInitials: 'VT', logoColor: 'bg-green-700' },
 ];
 
 const SALESFORCE_CLOUDS: SalesforceCloud[] = [
@@ -49,7 +47,7 @@ const WORK_TRACKING: SystemCardType[] = [
 ];
 
 const COMMS_KNOWLEDGE: SystemCardType[] = [
-  { id: 'slack', name: 'Slack', category: 'Messaging', group: 'comms_knowledge', connectionStatus: 'needs_auth', logoInitials: 'SL', logoColor: 'bg-purple-600' },
+  { id: 'slack', name: 'Slack', category: 'Messaging', group: 'comms_knowledge', connectionStatus: 'not_configured', logoInitials: 'SL', logoColor: 'bg-purple-600' },
   { id: 'teams', name: 'Microsoft Teams', category: 'Comms / docs', group: 'comms_knowledge', connectionStatus: 'not_configured', logoInitials: 'MS', logoColor: 'bg-blue-700' },
   { id: 'confluence', name: 'Confluence', category: 'Docs / knowledge', group: 'comms_knowledge', connectionStatus: 'connected', logoInitials: 'CF', logoColor: 'bg-blue-500' },
   { id: 'sharepoint', name: 'SharePoint', category: 'Docs / intranet', group: 'comms_knowledge', connectionStatus: 'not_configured', logoInitials: 'SP', logoColor: 'bg-blue-600' },
