@@ -1,5 +1,5 @@
 /**
- * SystemCard — SB-1 v1.1 Task 4 Sprint 7
+ * SystemCard — SB-4 Sprint 7
  *
  * System selection card used in all group grids on Screen 2 (Your Systems).
  * Renders in Group A (primary platforms), Group B (operational systems),

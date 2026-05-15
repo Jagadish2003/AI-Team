@@ -1,5 +1,5 @@
 /**
- * DiscoveryConfidenceBar — SB-1 v1.1 Task 7 Sprint 7
+ * DiscoveryConfidenceBar — SB-7 Sprint 7
  *
  * Persistent setup readiness indicator shown from Screen 2 onward.
  * Updates in real time as the user makes selections and confirms weightings.

@@ -262,8 +262,8 @@ export function useSetupState() {
     setState(s => ({ ...s, currentStep: step }));
   }, []);
 
-  const restoreState = useCallback((nextState: SetupState) => {
-    setState(nextState);
+  const restoreState = useCallback((saved: Partial<SetupState>) => {
+    setState(s => ({ ...s, ...saved }));
   }, []);
 
   const canProceedFromStep1 = state.focusId !== null;
