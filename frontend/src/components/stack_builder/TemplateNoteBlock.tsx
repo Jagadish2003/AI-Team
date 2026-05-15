@@ -73,14 +73,14 @@ interface Props {
 
 export default function TemplateNoteBlock({ templateId, suggestedFocus }: Props) {
   return (
-    <div className="mt-3 rounded-r-lg border-l-2 border-emerald-500/40 bg-emerald-500/[0.05] px-3 py-2.5">
+    <div className="mt-3 rounded-r-lg border-l-2 border-accent/60 bg-accent/10 px-3 py-2.5">
       <p className="text-xs text-muted leading-relaxed mb-1.5">
         Templates preselect systems and suggest a default focus.{' '}
         <span className="text-text">
           Your selected discovery focus still takes priority.
         </span>
       </p>
-      <p className="text-xs text-emerald-600 font-medium">
+      <p className="text-xs text-blue-100 font-medium">
         ✦ {TEMPLATE_LABELS[templateId]} suggests:{' '}
         <span className="font-semibold">{FOCUS_LABELS[suggestedFocus]}</span>
       </p>

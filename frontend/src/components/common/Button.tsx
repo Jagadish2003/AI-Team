@@ -8,7 +8,8 @@ export default function Button({
   disabled,
   variant = 'primary',
   className = '',
-  title
+  title,
+  ariaLabel
 }: {
   children: React.ReactNode;
   onClick?: React.MouseEventHandler<HTMLButtonElement>;
@@ -16,6 +17,7 @@ export default function Button({
   variant?: Variant;
   className?: string;
   title?: string;
+  ariaLabel?: string;
 }) {
   const base = 'inline-flex min-h-9 items-center justify-center whitespace-nowrap rounded-md px-3 py-2 text-sm font-medium transition focus:outline-none focus:ring-2 focus:ring-accent/50 disabled:cursor-not-allowed disabled:opacity-40';
   const variants: Record<Variant, string> = {
@@ -27,6 +29,7 @@ export default function Button({
   return (
     <button
       title={title}
+      aria-label={ariaLabel}
       className={`${base} ${variants[variant] ?? ''} ${className}`}
       onClick={disabled ? undefined : onClick}
       disabled={disabled}

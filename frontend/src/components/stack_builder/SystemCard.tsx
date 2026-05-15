@@ -64,6 +64,7 @@ interface Props {
   selected: boolean;
   recommendationReason?: string;
   onToggle: (id: string) => void;
+  selectionRole?: 'checkbox' | 'radio';
   /** Defaults to 0. Pass -1 for focus management at parent level (Sprint 8). */
   tabIndex?: number;
 }
@@ -97,32 +98,26 @@ export default function SystemCard({
   selected,
   recommendationReason,
   onToggle,
+  selectionRole = 'checkbox',
   tabIndex = 0,
 }: Props) {
   const isRecommended = Boolean(recommendationReason);
 
-  const handleKey = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter' || e.key === ' ') {
-      e.preventDefault();
-      onToggle(system.id);
-    }
-  };
-
   return (
-    <div
-      role="checkbox"
+    <button
+      type="button"
+      role={selectionRole}
       aria-checked={selected}
       tabIndex={tabIndex}
       onClick={() => onToggle(system.id)}
-      onKeyDown={handleKey}
       className={[
-        'relative cursor-pointer rounded-lg border p-3 transition-colors duration-150',
-        'focus:outline-none focus:ring-2 focus:ring-emerald-500/50',
+        'relative w-full cursor-pointer rounded-lg border p-3 text-left transition-colors duration-150',
+        'focus:outline-none focus:ring-2 focus:ring-accent/50',
         selected
-          ? 'border-emerald-500 bg-emerald-500/[0.08]'
+          ? 'border-accent bg-accent/10 shadow-sm shadow-black/10'
           : isRecommended
-          ? 'border-emerald-500/25 bg-panel hover:border-emerald-500/50'
-          : 'border-border bg-panel hover:border-emerald-500/40',
+          ? 'border-accent/30 bg-panel hover:border-accent/60 hover:bg-panel2'
+          : 'border-border bg-panel hover:border-accent/50 hover:bg-panel2',
       ].filter(Boolean).join(' ')}
     >
       {/* Connection status dot — top right */}
@@ -151,11 +146,11 @@ export default function SystemCard({
       {/* Recommendation reason — visible in both selected and unselected states */}
       {isRecommended && (
         <div className={`mt-1.5 text-xs font-medium ${
-          selected ? 'text-emerald-600' : 'text-emerald-500'
+          selected ? 'text-blue-100' : 'text-accent'
         }`}>
           {recommendationReason}
         </div>
       )}
-    </div>
+    </button>
   );
 }

@@ -62,6 +62,15 @@
  */
 
 import React from 'react';
+import {
+  GitBranch,
+  Globe2,
+  ListChecks,
+  Settings,
+  ShieldCheck,
+  Shuffle,
+  Users,
+} from 'lucide-react';
 import { FocusCard as FocusCardType, FocusId } from '../../types/stack_builder';
 
 interface Props {
@@ -72,46 +81,46 @@ interface Props {
   tabIndex?: number;
 }
 
+const FOCUS_ICONS: Record<FocusId, React.ElementType> = {
+  member_customer_service: Users,
+  core_operations: Settings,
+  approvals_compliance: ShieldCheck,
+  cross_system_handoffs: Shuffle,
+  back_office_productivity: ListChecks,
+  engineering_change: GitBranch,
+  enterprise_wide: Globe2,
+};
+
 export default function FocusCard({ card, selected, onSelect, tabIndex = 0 }: Props) {
-  const handleKey = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter' || e.key === ' ') {
-      e.preventDefault();
-      onSelect(card.id);
-    }
-  };
+  const Icon = FOCUS_ICONS[card.id] ?? Settings;
 
   return (
-    <div
+    <button
+      type="button"
       role="radio"
       aria-checked={selected}
       tabIndex={tabIndex}
       onClick={() => onSelect(card.id)}
-      onKeyDown={handleKey}
       className={[
-        'cursor-pointer rounded-lg border p-4 transition-colors duration-150',
-        'focus:outline-none focus:ring-2 focus:ring-emerald-500/50',
-        card.wide ? 'col-span-2' : '',
+        'w-full cursor-pointer rounded-lg border p-4 text-left transition-colors duration-150',
+        'focus:outline-none focus:ring-2 focus:ring-accent/50',
+        card.wide ? 'md:col-span-2' : '',
         selected
-          ? 'border-emerald-500 bg-emerald-500/[0.08]'
-          : 'border-border bg-panel hover:border-emerald-500/40',
+          ? 'border-accent bg-accent/10 shadow-sm shadow-black/10'
+          : 'border-border bg-panel hover:border-accent/50 hover:bg-panel2',
       ].filter(Boolean).join(' ')}
     >
       {card.wide ? (
         <div className="flex items-start gap-4">
-          <i
-            className={`ti ${card.icon} text-xl flex-shrink-0 mt-0.5 ${
-              selected ? 'text-emerald-500' : 'text-muted'
-            }`}
-            aria-hidden="true"
-          />
+          <Icon size={20} strokeWidth={2.2} className={`mt-0.5 flex-shrink-0 ${selected ? 'text-accent' : 'text-muted'}`} aria-hidden="true" />
           <div>
             <div className={`text-sm font-medium mb-1 ${
-              selected ? 'text-emerald-500' : 'text-text'
+              selected ? 'text-text' : 'text-text'
             }`}>
               {card.title}
             </div>
             <div className={`text-xs leading-relaxed ${
-              selected ? 'text-emerald-500/80' : 'text-muted'
+              selected ? 'text-blue-100' : 'text-muted'
             }`}>
               {card.subtext}
             </div>
@@ -119,24 +128,19 @@ export default function FocusCard({ card, selected, onSelect, tabIndex = 0 }: Pr
         </div>
       ) : (
         <div>
-          <i
-            className={`ti ${card.icon} text-xl flex-shrink-0 block mb-2 ${
-              selected ? 'text-emerald-500' : 'text-muted'
-            }`}
-            aria-hidden="true"
-          />
+          <Icon size={20} strokeWidth={2.2} className={`mb-2 flex-shrink-0 ${selected ? 'text-accent' : 'text-muted'}`} aria-hidden="true" />
           <div className={`text-sm font-medium mb-1 ${
-            selected ? 'text-emerald-500' : 'text-text'
+            selected ? 'text-text' : 'text-text'
           }`}>
             {card.title}
           </div>
           <div className={`text-xs leading-relaxed ${
-            selected ? 'text-emerald-500/80' : 'text-muted'
+            selected ? 'text-blue-100' : 'text-muted'
           }`}>
             {card.subtext}
           </div>
         </div>
       )}
-    </div>
+    </button>
   );
 }
