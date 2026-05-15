@@ -42,9 +42,6 @@ from discovery.packs.industry_registry import (
     INDUSTRY_REGISTRY,
 )
 
-def _auth() -> Dict[str, str]:
-    return {"Authorization": f"Bearer {os.getenv('DEV_JWT', 'dev-token-change-me')}"}
-
 # ── Test client ───────────────────────────────────────────────────────────────
 
 @pytest.fixture
@@ -52,8 +49,8 @@ def client():
     return TestClient(app)
 
 
-def auth_headers():
-    return {"Authorization": "Bearer test-token"}
+def _auth() -> Dict[str, str]:
+    return {"Authorization": f"Bearer {os.getenv('DEV_JWT', 'dev-token-change-me')}"}
 
 
 # ══ Unit tests — industry_registry.py ════════════════════════════════════════
