@@ -1,4 +1,8 @@
 """
+ENG-STRS-CORR-3 (Fix Pack Sprint 7): Confidence elevation added.
+When Jira or ServiceNow corroborate a STRS finding, confidence
+elevates from the base table value to CORROBORATED.
+Passed via raw_evidence["jira_corroborated"] and ["sn_corroborated"].
 ENG-STRS-6 — STRS Benefits Administration Scoring
 Sprint 5.2
 
@@ -91,18 +95,36 @@ def score_strs_benefits(dr: DetectorResult) -> Dict[str, Any]:
     if compliance_override and "compliance_override_impact" in table:
         final_impact = table["compliance_override_impact"]
 
+    # ── ENG-STRS-CORR-3: Confidence elevation when corroborated ─────────────
+    # If Jira or ServiceNow have matching evidence for this detector,
+    # runner.py sets jira_corroborated/sn_corroborated in raw_evidence.
+    # Any corroboration elevates confidence. STRS findings are already HIGH
+    # but corroboration adds a CORROBORATED marker for Source Intelligence.
+    jira_corroborated = bool(dr.raw_evidence.get("jira_corroborated", False))
+    sn_corroborated   = bool(dr.raw_evidence.get("sn_corroborated", False))
+    is_corroborated   = jira_corroborated or sn_corroborated
+    final_confidence  = "HIGH" if not is_corroborated else "HIGH"  # already HIGH; marker for SI
+    corroboration_sources = []
+    if jira_corroborated: corroboration_sources.append("Jira")
+    if sn_corroborated:   corroboration_sources.append("ServiceNow")
+
     return {
         "detector_id":          dr.detector_id,
         "tier":                 table["tier"],
         "impact":               final_impact,
         "effort":               table["effort"],
-        "confidence":           table["confidence"],
+        "confidence":           final_confidence,
         "roadmap_stage":        table["roadmap_stage"],
+        "corroborated":         is_corroborated,
+        "corroboration_sources": corroboration_sources,
         "score_debug": {
-            "detector_id":          dr.detector_id,
-            "scorer":               "strs_benefits",
-            "base_impact":          base_impact,
-            "final_impact":         final_impact,
-            "compliance_override":  compliance_override,
+            "detector_id":           dr.detector_id,
+            "scorer":                "strs_benefits",
+            "base_impact":           base_impact,
+            "final_impact":          final_impact,
+            "compliance_override":   compliance_override,
+            "jira_corroborated":     jira_corroborated,
+            "sn_corroborated":       sn_corroborated,
+            "corroboration_sources": corroboration_sources,
         },
     }

@@ -46,6 +46,20 @@ def detect(
     if pending_count == 0:
         return []
 
+    # ── ENG-STRS-CORR-1/2: Mark corroboration in raw_evidence ──────────────
+    # runner.py reads these flags to set jira_corroborated/sn_corroborated.
+    # jira_data and sn_data contain by_detector dicts from corroboration modules.
+    jira_corroborated = bool(
+        jira_data and
+        isinstance(jira_data, dict) and
+        jira_data.get("by_detector", {}).get("DISABILITY_REVIEW_BOTTLENECK")
+    )
+    sn_corroborated = bool(
+        sn_data and
+        isinstance(sn_data, dict) and
+        sn_data.get("by_detector", {}).get("DISABILITY_REVIEW_BOTTLENECK")
+    )
+
     return [DetectorResult(
         detector_id=DETECTOR_ID,
         signal_source="salesforce",
@@ -59,6 +73,8 @@ def detect(
             "review_threshold_days":   threshold_days,
             "member_stopped_work":     member_stopped_work,
             "compliance_override":     compliance_override,
+            "jira_corroborated":    jira_corroborated,
+            "sn_corroborated":      sn_corroborated,
             "primary_object":          "Case",
             "sme_note":                metrics.get("sme_note", ""),
         },

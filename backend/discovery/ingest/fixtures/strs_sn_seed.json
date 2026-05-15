@@ -1,0 +1,82 @@
+{
+  "_comment": "STRS Benefits Administration — ServiceNow seed incidents for corroboration testing. Represents realistic incidents a pension fund ITSM would log. Used in offline mode and integration testing.",
+  "incidents": [
+    {
+      "number": "INC0042301",
+      "short_description": "STRS member services — retirement application status not updating",
+      "description": "Multiple members reporting that their retirement application status has not changed from 'Submitted' in over 4 weeks. Member services receiving approximately 15 calls per day on this issue. PSS system appears to have a queue processing issue. Applications are recorded but review assignment is delayed. Potential ORC 3307 compliance risk if processing exceeds 30 days.",
+      "state": "2",
+      "incident_state": "2",
+      "priority": "2",
+      "category": "Member Services",
+      "subcategory": "Benefits Processing",
+      "sys_created_on": "2026-04-18T10:30:00Z"
+    },
+    {
+      "number": "INC0042445",
+      "short_description": "Benefit election notification failure — members at deadline risk",
+      "description": "Automated benefit election notification system has failed for a cohort of approximately 20 members. Email delivery logs show failures starting April 25. Members are approaching the 21-day election deadline. If election is not completed by deadline, default payment plan will be auto-assigned. Escalated to P1 — regulatory and member impact. PSS notification workflow investigation underway.",
+      "state": "1",
+      "incident_state": "1",
+      "priority": "1",
+      "category": "Benefits Administration",
+      "subcategory": "Election Deadline",
+      "sys_created_on": "2026-04-28T08:15:00Z"
+    },
+    {
+      "number": "INC0042512",
+      "short_description": "Disability review team capacity — P2 escalation from operations director",
+      "description": "Operations director has escalated disability review capacity issue to ITSM. The disability review team has been at over 140% capacity for 6 weeks. Case queue is at 34 open reviews. Members who have stopped work are waiting beyond the 30-day guideline for initial review. Two reviewers on leave. IT to assess if any automation can support case triage. Compliance risk: members stopped work awaiting disability assessment.",
+      "state": "2",
+      "incident_state": "2",
+      "priority": "2",
+      "category": "Benefits Processing",
+      "subcategory": "Disability Review",
+      "sys_created_on": "2026-04-22T14:00:00Z"
+    },
+    {
+      "number": "INC0042601",
+      "short_description": "PSS application submission — confirmation workflow not firing",
+      "description": "Member portal application submission confirmation is not generating for newly submitted retirement applications. Applications are recorded in IndividualApplication table with Status=Submitted but automated confirmation email and acknowledgement letter workflow is not triggering. Approximately 12 members affected in last 2 weeks. Member services handling manual confirmation calls. Application processing delay risk.",
+      "state": "2",
+      "incident_state": "2",
+      "priority": "3",
+      "category": "Member Services",
+      "subcategory": "Application Processing",
+      "sys_created_on": "2026-05-02T09:45:00Z"
+    },
+    {
+      "number": "INC0042703",
+      "short_description": "ORC 3307 compliance — pension payment overdue reporting gap",
+      "description": "Compliance team has identified a gap: when a BenefitDisbursement EndDate passes without PaymentStatus=Paid, no automatic compliance notification is generated and no audit record is created. This is a regulatory obligation under ORC 3307. Current workaround is manual monthly review. Compliance officer requesting automated overdue detection and immediate notification workflow. Treat as P1 — regulatory requirement.",
+      "state": "1",
+      "incident_state": "1",
+      "priority": "1",
+      "category": "Compliance",
+      "subcategory": "Regulatory",
+      "sys_created_on": "2026-04-26T16:00:00Z"
+    },
+    {
+      "number": "INC0042788",
+      "short_description": "Payment election reminder — manual outreach backlog 11 members",
+      "description": "Member services team tracking 11 benefit assignments where payment election has not been completed and the 21-day deadline has passed. Manual outreach is in progress but team bandwidth is limited. Default plan assignment is imminent for 3 members. Election deadline management process needs automation to prevent recurring backlog. Payout frequency not set for affected members.",
+      "state": "2",
+      "incident_state": "2",
+      "priority": "2",
+      "category": "Benefits Administration",
+      "subcategory": "Payment Election",
+      "sys_created_on": "2026-05-06T11:00:00Z"
+    },
+    {
+      "number": "INC0042850",
+      "short_description": "Retirement application — 30-day processing SLA breach investigation",
+      "description": "Quality assurance team has flagged that 47 IndividualApplications have exceeded the 30-day processing guideline per ORC 3307 obligations. Breakdown: 31 in 'In Review', 12 in 'Submitted', 4 in 'Returned'. Average days stalled: 38 days. Maximum days stalled: 67 days. Root cause: staffing gap in review team plus PSS workflow issue causing some applications to bypass assignment queue. Compliance notification to board required.",
+      "state": "1",
+      "incident_state": "1",
+      "priority": "2",
+      "category": "Compliance",
+      "subcategory": "Application Processing",
+      "sys_created_on": "2026-05-09T08:30:00Z"
+    }
+  ]
+}

@@ -1,4 +1,16 @@
+/**
+ * StackBuilderPage — Sprint 7 Final Wiring + Sprint 8 Foundation
+ *
+ * Combines StackBuilderRouter and StackBuilderRouterPage into a single 
+ * page-level component. Owns useSetupState(), handles session persistence,
+ * routes between the 4 child pages, and translates state to /launch + /compute.
+ */
+
 import React, { useCallback, useEffect, useRef } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { useRunContext } from '../context/RunContext';
+
+// Import components and types
 import { CheckCircle2, Database, Layers3, Target } from 'lucide-react';
 import PageShell from '../components/common/PageShell';
 import {
@@ -6,10 +18,14 @@ import {
   StackBuilderProgressBar,
   useSetupState,
 } from '../components/stack_builder';
-import DiscoveryFocusPage from '../pages/DiscoveryFocusPage';
-import YourSystemsPage from '../pages/YourSystemsPage';
-import SourceWeightingPage from '../pages/SourceWeightingPage';
-import DiscoveryPlanPage from '../pages/DiscoveryPlanPage';
+
+// Import the 4 inner screens
+import DiscoveryFocusPage from './DiscoveryFocusPage';
+import YourSystemsPage from './YourSystemsPage';
+import SourceWeightingPage from './SourceWeightingPage';
+import DiscoveryPlanPage from './DiscoveryPlanPage';
+
+// ── Static Definitions ───────────────────────────────────────────────────────
 
 const INDUSTRY_PACK_HINTS: Record<string, string[]> = {
   financial_services: ['ncino', 'service_cloud'],
@@ -78,6 +94,8 @@ const SALESFORCE_CLOUD_IDS = new Set([
   'salesforce_hc',
 ]);
 
+// ── Helpers ──────────────────────────────────────────────────────────────────
+
 function buildAuthHeaders(token: string) {
   return {
     'Content-Type': 'application/json',
@@ -86,7 +104,23 @@ function buildAuthHeaders(token: string) {
 }
 
 function resolvePackId(state: ReturnType<typeof useSetupState>['state']): string {
-  if (!state.industryId) return 'service_cloud';
+  const CLOUD_PACK_REGISTRY: Record<string, string> = {
+    "salesforce_pss": "strs_benefits",
+    "salesforce_sc": "service_cloud",
+    "salesforce_ncino": "ncino",
+    "salesforce_fsc": "service_cloud"
+  };
+
+  if (!state.industryId) {
+    if (!state.selectedSalesforceClouds || state.selectedSalesforceClouds.length === 0) {
+      return 'service_cloud';
+    } else {
+      // Use the first selected cloud to determine the pack, fallback to service_cloud if not in dict
+      const selectedCloud = state.selectedSalesforceClouds[0];
+      return CLOUD_PACK_REGISTRY[selectedCloud] || 'service_cloud';
+    }
+  }
+
   const hints = INDUSTRY_PACK_HINTS[state.industryId];
   if (!hints || hints.length === 0) return 'service_cloud';
   return hints[0];
@@ -98,6 +132,8 @@ function normaliseSystems(selectedIds: string[]): string[] {
   );
   return [...new Set(normalised)];
 }
+
+// ── Session Persistence Hook ─────────────────────────────────────────────────
 
 function useStackBuilderPersistence(
   orgId: string,
@@ -118,7 +154,9 @@ function useStackBuilderPersistence(
       .then(r => r.ok ? r.json() : null)
       .then(data => {
         if (data?.state && setupState.state.currentStep === 1) {
-          setupState.restoreState(data.state);
+          if (setupState.restoreState) {
+            setupState.restoreState(data.state);
+          }
         }
       })
       .catch(() => {
@@ -166,6 +204,8 @@ function useStackBuilderPersistence(
 
   return { clearSession };
 }
+
+// ── Subcomponents ────────────────────────────────────────────────────────────
 
 function SummaryRow({
   label,
@@ -225,19 +265,23 @@ function StackBuilderSidePanel({
   );
 }
 
+// ── Main Page Component ──────────────────────────────────────────────────────
+
 interface Props {
-  orgId: string;
-  onComplete: (runId: string) => void;
   apiBase?: string;
   token?: string;
 }
 
 export default function StackBuilderPage({
-  orgId,
-  onComplete,
-  apiBase = '',
-  token = 'dev-token-change-me',
+  apiBase = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000',
+  token = import.meta.env.VITE_DEV_JWT || 'dev-token-change-me',
 }: Props) {
+  
+  // Stale Run Fix Part 1: Bring in the context and navigate hook
+  const { setRunId } = useRunContext();
+  const navigate = useNavigate();
+  const orgId = (import.meta.env.VITE_ORG_ID as string | undefined) ?? 'demo-org';
+
   const setupState = useSetupState();
   const { state, steps } = setupState;
   const { clearSession } = useStackBuilderPersistence(orgId, setupState, apiBase, token);
@@ -245,6 +289,7 @@ export default function StackBuilderPage({
 
   const handleLaunch = useCallback(async () => {
     const packId = resolvePackId(state);
+    console.log(`packId:`, packId);
     const systems = normaliseSystems(state.selectedSystemIds);
     const headers = buildAuthHeaders(token);
 
@@ -274,6 +319,7 @@ export default function StackBuilderPage({
       return;
     }
 
+    // Offline to Live Fix: Set mode to "live"
     void fetch(`${apiBase}/api/runs/${runId}/compute`, {
         method: 'POST',
         credentials: 'omit',
@@ -281,15 +327,19 @@ export default function StackBuilderPage({
         body: JSON.stringify({
           mode: 'live',
           systems,
-          pack: 'strs_benefits',
+          pack: packId,
         }),
       }).catch((err) => {
         console.error('[StackBuilderPage] Compute trigger failed:', err);
       });
 
     clearSession();
-    onComplete(runId);
-  }, [state, orgId, apiBase, clearSession, onComplete, token]);
+    
+    // Stale Run Fix Part 2: Update global context BEFORE navigating
+    setRunId(runId);
+    navigate(`/discovery-run?runId=${runId}`);
+    
+  }, [state, orgId, apiBase, clearSession, navigate, setRunId, token]);
 
   return (
     <PageShell

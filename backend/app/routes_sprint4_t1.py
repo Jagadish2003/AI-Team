@@ -103,46 +103,195 @@ def _append_event(run_id: str, stage: str, message: str, level: str = "INFO") ->
     events = db.kv_get(f"events:{run_id}") or []
     db.kv_set(f"events:{run_id}", [*events, event])
 
+from .materialize_t2 import _probe_systems, _finalise, _emit_event
 
 def _run_trackb_and_persist(run_id: str, mode: str, systems: List[str], pack: Optional[str] = None) -> None:
     """Background task: execute Track B and persist Track A-shaped artifacts."""
+    import logging
+    logger = logging.getLogger(__name__)
+    logger.info(f"Starting trackb materialization for run {run_id} in mode: {mode}")
+
+    _emit_event(run_id, "CONNECT", f"Connected sources: {', '.join(systems)}")
+
+    run = db.run_get(run_id)
+    if run is None:
+        raise RuntimeError(f"Run '{run_id}' not found — cannot materialise")
+
+    per_system: Dict[str, str] = {
+        s: "skipped" for s in ["salesforce", "servicenow", "jira"]
+    }
+    errors: Dict[str, str] = {}
+
     try:
-        _append_event(run_id, "COMPUTE", f"Discovery compute started for {len(systems)} system inputs.")
+        _emit_event(run_id, "INGEST", "Ingesting data from enterprise systems...")
+        per_system, succeeded, probe_errors = _probe_systems(systems, mode)
+        errors.update(probe_errors)
 
-        # Build run_context for Track B runner (primarily runId)
-        run = db.run_get(run_id)  # may raise HTTPException(404) in Track A backend
-        run_context = {"runId": run_id, "inputs": run.get("inputs") or {}}
+        if not succeeded:
+            _emit_event(
+                run_id,
+                "ERROR",
+                "No data could be ingested from any system",
+                level="ERROR",
+            )
+            _finalise(
+                run_id,
+                run,
+                "failed",
+                mode,
+                systems,
+                per_system,
+                {"opportunities": 0, "evidence": 0},
+                errors,
+                "DISCOVERY_FAILED",
+            )
+            return
 
-        payload = run_trackb(mode=mode, systems=systems, run_context=run_context, pack=pack)
-        _append_event(run_id, "INGEST", "Source ingestion and detector analysis completed.")
+        _emit_event(
+            run_id, "NORMALIZE", f"Successfully ingested from: {', '.join(succeeded)}"
+        )
 
-        # Convert Track B payload -> Track A seed shapes (opportunities + flattened evidence)
-        seed = export_track_a_seed(payload, id_counter=itertools.count(1))
-        opps = seed.get("opportunities") or []
-        evidence = seed.get("evidence") or []
+        from discovery.runner import run as trackb_run
+        from discovery.track_a_adapter import export_track_a_seed
 
-        # Persist under run-scoped KV
-        if hasattr(db, "run_kv_set"):
-            db.run_kv_set("opps", run_id, opps)
-            db.run_kv_set("evidence", run_id, evidence)
-            # Store packId so normalization and other endpoints can detect pack
-            if pack:
-                db.run_kv_set("pack_id", run_id, pack)
-        else:
-            # Fallback: attach to run record
-            run["opps"] = opps
-            run["evidence"] = evidence
-            if pack:
-                run["packId"] = pack
-            db.run_set(run_id, run)
+        _emit_event(
+            run_id, "EXTRACT", "Extracting entities and identifying patterns..."
+        )
+        payload = trackb_run(
+            mode=mode, systems=succeeded, run_id=run_id, pack=pack
+        )
+        seed = export_track_a_seed(payload)
 
-        _set_status(run_id, "complete", counts={"opportunities": len(opps), "evidence": len(evidence)})
-        _append_event(run_id, "COMPLETE", f"Discovery completed with {len(opps)} opportunities and {len(evidence)} evidence items.")
-        update_connector_metrics_from_run(payload, systems)
+        opps = seed.get("opportunities", [])
+        ev = seed.get("evidence", [])
 
-    except Exception as e:  # noqa: BLE001
-        _set_status(run_id, "failed", error=str(e))
-        _append_event(run_id, "FAILED", f"Discovery failed: {e}", level="ERROR")
+        db.run_kv_set("opps", run_id, opps)
+        db.run_kv_set("evidence", run_id, ev)
+
+        # Keep Integration Hub connector cards in sync with the actual run data.
+        from .connector_metrics import update_connector_metrics_from_run
+
+        update_connector_metrics_from_run(payload, succeeded)
+
+        _emit_event(
+            run_id,
+            "SCORE",
+            f"Found {len(opps)} opportunities and {len(ev)} evidence items",
+        )
+
+        # T3 — compute and store cross-system linked clusters
+        try:
+            _emit_event(run_id, "ANALYZE", "Clustering cross-system references...")
+            from .materialize_t3_hook import compute_and_store_clusters
+
+            compute_and_store_clusters(run_id, ev)
+        except Exception as e:
+            errors["clusters"] = str(e)
+
+        # roadmap
+        try:
+            _emit_event(run_id, "PLAN", "Generating implementation roadmap...")
+            from .roadmap_engine import build_roadmap
+
+            db.run_kv_set("roadmap", run_id, build_roadmap(opps))
+        except Exception as e:
+            errors["roadmap"] = str(e)
+
+        # executive report
+        run_inputs = run.get("inputs", {})
+        try:
+            _emit_event(run_id, "REPORT", "Building executive summary report...")
+            from .executive_report_engine import build_executive_report
+
+            roadmap = db.run_kv_get("roadmap", run_id, {})
+            er = build_executive_report(run_id=run_id, opps=opps, roadmap=roadmap)
+
+            sa = er.get("sourcesAnalyzed", {})
+            sa["totalConnected"] = len(run_inputs.get("connectedSources", []))
+            sa["uploadedFiles"] = len(run_inputs.get("uploadedFiles", []))
+            sa["sampleWorkspaceEnabled"] = bool(
+                run_inputs.get("sampleWorkspaceEnabled", False)
+            )
+            er["sourcesAnalyzed"] = sa
+
+            db.run_kv_set("executive_report", run_id, er)
+        except Exception as e:
+            errors["exec_report"] = str(e)
+            db.run_kv_set(
+                "executive_report",
+                run_id,
+                {
+                    "confidence": "Moderate",
+                    "sourcesAnalyzed": {
+                        "recommendedConnected": 0,
+                        "totalConnected": len(run_inputs.get("connectedSources", [])),
+                        "uploadedFiles": len(run_inputs.get("uploadedFiles", [])),
+                        "sampleWorkspaceEnabled": bool(
+                            run_inputs.get("sampleWorkspaceEnabled", False)
+                        ),
+                    },
+                    "topQuickWins": [],
+                    "snapshotBubbles": [],
+                    "roadmapHighlights": [],
+                },
+            )
+
+        # T6 — LLM enrichment (post-processing, non-blocking)
+        try:
+            _emit_event(
+                run_id, "AI_ANALYZE", "Starting AI-driven analysis and enrichment..."
+            )
+            from .llm_enrichment import KV_LLM_ENRICHMENT, run_llm_enrichment
+
+            exec_report = db.run_kv_get("executive_report", run_id, {})
+            sources_analyzed = exec_report.get("sourcesAnalyzed", {})
+            
+            enrichment = run_llm_enrichment(
+                run_id=run_id,
+                opps=opps,
+                evidence=ev,
+                sources_analyzed=sources_analyzed,
+                pack_id=pack,
+            )
+            db.run_kv_set(KV_LLM_ENRICHMENT, run_id, enrichment)
+            if enrichment.get("executiveSummary"):
+                exec_report["aiExecutiveSummary"] = enrichment["executiveSummary"]
+                db.run_kv_set("executive_report", run_id, exec_report)
+            _emit_event(run_id, "COMPLETE", "AI analysis and enrichment completed")
+        except Exception as e:
+            errors["llm_enrichment"] = str(e)
+            _emit_event(run_id, "AI_ERROR", f"AI analysis failed: {e}", level="WARNING")
+
+        status = "complete" if len(succeeded) == len(systems) else "partial"
+        audit_action = (
+            "DISCOVERY_MATERIALIZED" if status == "complete" else "DISCOVERY_PARTIAL"
+        )
+        _finalise(
+            run_id,
+            run,
+            status,
+            mode,
+            systems,
+            per_system,
+            {"opportunities": len(opps), "evidence": len(ev)},
+            errors,
+            audit_action,
+        )
+        _emit_event(run_id, "DONE", "Discovery run complete (100%)")
+
+    except Exception as e:
+        errors["exception"] = str(e)
+        _finalise(
+            run_id,
+            run,
+            "failed",
+            mode,
+            systems,
+            per_system,
+            {"opportunities": 0, "evidence": 0},
+            errors,
+            "DISCOVERY_FAILED",
+        )
 
 
 def register_sprint4_t1_routes(app: FastAPI) -> None:

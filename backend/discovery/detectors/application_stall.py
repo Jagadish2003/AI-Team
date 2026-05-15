@@ -40,6 +40,20 @@ def detect(
     if stalled_count == 0:
         return []
 
+    # ── ENG-STRS-CORR-1/2: Mark corroboration in raw_evidence ──────────────
+    # runner.py reads these flags to set jira_corroborated/sn_corroborated.
+    # jira_data and sn_data contain by_detector dicts from corroboration modules.
+    jira_corroborated = bool(
+        jira_data and
+        isinstance(jira_data, dict) and
+        jira_data.get("by_detector", {}).get("APPLICATION_STALL")
+    )
+    sn_corroborated = bool(
+        sn_data and
+        isinstance(sn_data, dict) and
+        sn_data.get("by_detector", {}).get("APPLICATION_STALL")
+    )
+
     return [DetectorResult(
         detector_id=DETECTOR_ID,
         signal_source="salesforce",
@@ -51,6 +65,8 @@ def detect(
             "max_days_stalled":     max_days_stalled,
             "avg_days_stalled":     avg_days_stalled,
             "stall_threshold_days": threshold_days,
+            "jira_corroborated":    jira_corroborated,
+            "sn_corroborated":      sn_corroborated,
             "primary_object":       "IndividualApplication",
             "sme_note":             metrics.get("sme_note", ""),
         },

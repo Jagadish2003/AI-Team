@@ -261,14 +261,21 @@ export function useSetupState() {
     setState(s => ({ ...s, currentStep: step }));
   }, []);
 
-  const restoreState = useCallback((saved: Partial<SetupState>) => {
-    setState(s => ({ ...s, ...saved }));
-  }, []);
-
   const canProceedFromStep1 = state.focusId !== null;
-  const canProceedFromStep2 = state.selectedSystemIds.length > 0 &&
-    state.selectedSystemIds.some(id => state.weightings[id]?.priority === 'primary');
-  console.log(`state:`, state);
+  // Fix Pack Sprint 7: canProceedFromStep2 must check selectedSystemIds
+  // against known primary platform IDs — NOT against weighting priority.
+  // Weighting priority is set on Screen 3, not Screen 2.
+  // 'salesforce' base ID MUST be included — selecting Salesforce card
+  // before cloud picker adds 'salesforce' (not 'salesforce_pss' etc.)
+  const PRIMARY_PLATFORM_IDS = [
+    'sap', 'oracle_ebs', 'workday', 'dynamics365',
+    'salesforce',        // base ID — cloud picker adds salesforce_pss etc. separately
+    'salesforce_pss', 'salesforce_sc', 'salesforce_ncino',
+    'salesforce_fsc', 'salesforce_rc', 'salesforce_hc',
+  ];
+  const canProceedFromStep2 = state.selectedSystemIds.some(id =>
+    PRIMARY_PLATFORM_IDS.includes(id)
+  );
 
   const confidence = useMemo(() => calcSetupReadiness(state), [state]);
   const steps = useMemo(() => calcStepStatuses(state), [state]);
@@ -290,6 +297,15 @@ export function useSetupState() {
     codeEngineeringSystems.includes(id)
   );
 
+  const restoreState = useCallback((saved: Partial<SetupState>) => {
+    // Merge saved state into current state.
+    // Partial — only fields present in the snapshot are restored.
+    // Fields absent from the snapshot retain their current (default) values.
+    // Sprint 8: add validation that saved systemIds still exist in registry.
+    setState(s => ({ ...s, ...saved }));
+  }, []);
+
+
   return {
     state,
     setFocus,
@@ -299,11 +315,11 @@ export function useSetupState() {
     toggleSalesforceCloud,
     updateWeighting,
     goTo,
-    restoreState,
     canProceedFromStep1,
     canProceedFromStep2,
     confidence,
     steps,
     showEngineeringRole,
+    restoreState,
   };
 }

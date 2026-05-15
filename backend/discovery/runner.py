@@ -237,16 +237,28 @@ def run(
             sn_by_detector = (
                 sn_data.get("lending_correlation", {}).get("by_detector", {})
             )
-    elif _is_strs(pack_id):
-        # STRS: use same Jira/SN corroboration — benefit operations keywords
-        # map to same corroboration structure as nCino lending
-        if jira_data:
-            jira_by_detector = (
-                jira_data.get("lending_correlation", {}).get("by_detector", {})
+
+    # ── STRS Benefits corroboration — ENG-STRS-CORR-1/2 (Fix Pack Sprint 7) ──
+    # Same pattern as nCino above. strs_benefits.py ingest() now returns
+    # jira_strs_correlation and sn_strs_correlation inside the metrics dict,
+    # which is merged into sf_data["strs_benefits"]. Extract by_detector here.
+    if _is_strs(pack_id):
+        strs_metrics = sf_data.get("strs_benefits", {})
+        jira_by_detector = (
+            strs_metrics.get("jira_strs_correlation", {}).get("by_detector", {})
+        )
+        sn_by_detector = (
+            strs_metrics.get("sn_strs_correlation", {}).get("by_detector", {})
+        )
+        if jira_by_detector:
+            logger.info(
+                "STRS Jira corroboration: %d detectors have Jira evidence",
+                len(jira_by_detector),
             )
-        if sn_data:
-            sn_by_detector = (
-                sn_data.get("lending_correlation", {}).get("by_detector", {})
+        if sn_by_detector:
+            logger.info(
+                "STRS ServiceNow corroboration: %d detectors have SN evidence",
+                len(sn_by_detector),
             )
 
     opportunities = []
@@ -324,16 +336,6 @@ def run(
             det_labels = ui_labels.get(dr.detector_id, {})
             opp["title"]       = det_labels.get("s6_title", dr.detector_id)
             opp["category"]    = det_labels.get("s7_category", "Lending")
-            opp["description"] = det_labels.get("s6_desc", "")
-            opp["s9_roadmap"]  = det_labels.get("s9_roadmap", "")
-            opp["s10_exec"]    = det_labels.get("s10_exec", "")
-            opp["compliance_guardrail"] = det_labels.get("compliance_guardrail")
-        elif _is_strs(pack_id):
-            from .packs.pack_config import get_ui_labels
-            ui_labels = get_ui_labels(pack_id) or {}
-            det_labels = ui_labels.get(dr.detector_id, {})
-            opp["title"]       = det_labels.get("s6_title", dr.detector_id)
-            opp["category"]    = det_labels.get("s7_category", "Benefit Administration")
             opp["description"] = det_labels.get("s6_desc", "")
             opp["s9_roadmap"]  = det_labels.get("s9_roadmap", "")
             opp["s10_exec"]    = det_labels.get("s10_exec", "")

@@ -1,9 +1,9 @@
 import React from "react";
 import { Routes, Route, Navigate } from "react-router-dom";
-import { useNavigate } from 'react-router-dom';
 import { ConnectorProvider } from "./context/ConnectorContext";
 import { SourceIntakeProvider } from "./context/SourceIntakeContext";
 import { RunProvider } from "./context/RunContext";
+import { useRunContext } from "./context/RunContext";
 import { DiscoveryRunProvider } from "./context/DiscoveryRunContext";
 import { PartialResultsProvider } from "./context/PartialResultsContext";
 import { NormalizationProvider } from "./context/NormalizationContext";
@@ -27,7 +27,6 @@ import ExecutiveReportPage from "./pages/ExecutiveReportPage";
 import StackBuilderPage from "./pages/StackBuilderPage";
 
 export default function App() {
-  const navigate = useNavigate();
   return (
     <ThemeProvider>
       <ToastProvider>
@@ -54,16 +53,9 @@ export default function App() {
                           // Redirect preserved for backward compatibility.
                           element={<Navigate to="/integration-hub" replace />}
                         />
-                        <Route 
-                          path="/stack-builder" 
-                          element={
-                            <StackBuilderPage
-                              orgId="demo-org" 
-                              onComplete={(runId) => navigate(`/discovery-run?runId=${runId}`)}
-                              apiBase={import.meta.env.VITE_API_BASE_URL || "http://localhost:8000"}
-                              token={import.meta.env.VITE_DEV_JWT || "dev-token-change-me"}
-                            />
-                          } 
+                        <Route
+                          path="/stack-builder"
+                          element={<StackBuilderPage />}
                         />
                         <Route
                           path="/discovery-run"
@@ -106,7 +98,7 @@ export default function App() {
                           element={<PilotRoadmapPage />}
                         />
                         <Route
-                          path="/agentforce-blueprint"
+                          path="/agent-blueprint"
                           element={<BlueprintPage />}
                         />
                         <Route
