@@ -4,20 +4,21 @@ module.exports = {
   theme: {
     extend: {
       colors: {
-        bgheader:"#07193A", /*added */
-        bg: "#21335c",
-        panel: "#0F1A3D",
-        buttonbg:"#12204a",
-        panel2: "#121F36",
-        navborder:"#1160EE", /*added */
-        border: "#1D2B45",
-        text: "#E6EEF9",
-        muted: "#9FB3C8",
-        accent: "#0D55D7",
-        danger: "#ef4444",
-        navhover:"#163265",
-        activenav:"#0A3D98",
-        textwhite:"#ffffff",
+        bgheader: "rgb(var(--color-bgheader) / <alpha-value>)",
+        bg: "rgb(var(--color-bg) / <alpha-value>)",
+        panel: "rgb(var(--color-panel) / <alpha-value>)",
+        buttonbg: "rgb(var(--color-buttonbg) / <alpha-value>)",
+        panel2: "rgb(var(--color-panel2) / <alpha-value>)",
+        navborder: "rgb(var(--color-navborder) / <alpha-value>)",
+        border: "rgb(var(--color-border) / <alpha-value>)",
+        text: "rgb(var(--color-text) / <alpha-value>)",
+        muted: "rgb(var(--color-muted) / <alpha-value>)",
+        accent: "rgb(var(--color-accent) / <alpha-value>)",
+        danger: "rgb(var(--color-danger) / <alpha-value>)",
+        navhover: "rgb(var(--color-navhover) / <alpha-value>)",
+        activenav: "rgb(var(--color-activenav) / <alpha-value>)",
+        textwhite: "rgb(var(--color-textwhite) / <alpha-value>)",
+        navtext: "rgb(var(--color-navtext) / <alpha-value>)",
       },
       fontFamily: {
         sans: [

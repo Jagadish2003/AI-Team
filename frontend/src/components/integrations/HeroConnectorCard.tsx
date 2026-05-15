@@ -1,9 +1,8 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Settings } from 'lucide-react';
 import { Connector } from '../../types/connector';
 import Badge from '../common/Badge';
 import Button from '../common/Button';
-import { connectorIcons } from './ConnectorIcons';
+import { connectorIcons, fallbackConnectorIcon } from './ConnectorIcons';
 
 function parseMetricTarget(value: string) {
   const trimmed = value.trim();
@@ -123,14 +122,14 @@ export default function HeroConnectorCard({
     <div
       onClick={onSelect}
       className={`
-      flex min-h-[220px] min-w-0 cursor-pointer flex-col justify-between overflow-hidden rounded-xl border
-      ${selected ? 'border-accent bg-panel2' : 'border-border bg-panel'}
+      connector-card flex min-h-[220px] min-w-0 cursor-pointer flex-col justify-between overflow-hidden rounded-xl border
+      ${selected ? 'connector-card-selected' : 'border-border bg-panel'}
       p-4 shadow-sm hover:border-accent/40 hover:bg-panel2 xl:p-5
     `}
     >
       <div className="min-w-0">
         <div className="flex min-w-0 items-center gap-2 text-sm font-semibold text-text xl:text-base">
-          <span className="shrink-0">{connectorIcons[connector.name] || <Settings size={18} className="text-slate-500" />}</span>
+          <span className="shrink-0">{connectorIcons[connector.name] || fallbackConnectorIcon}</span>
           <span className="min-w-0 leading-snug">{connector.name}</span>
         </div>
         <div className="mt-1 flex items-center justify-between gap-2">
@@ -179,7 +178,7 @@ export default function HeroConnectorCard({
             onSecondary();
           }}
           variant="secondary"
-          className={`min-w-0 px-2 ${isConnected ? '!border-[#0D55D7]/50 !text-[#0D55D7]' : ''}`}
+          className={`light-view-data-button min-w-0 px-2 ${isConnected ? '!border-accent/50 !text-accent' : ''}`}
           disabled={!isConnected}
           title={!isConnected ? 'Connect to enable data preview' : undefined}
         >

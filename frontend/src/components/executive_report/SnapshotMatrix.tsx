@@ -29,10 +29,10 @@ function buildPoints(opportunities: OpportunityCandidate[]) {
 }
 
 const QUADRANT_LABELS = [
-  { x: LEFT + 14, y: TOP + 24,  label: 'QUICK WINS',       fill: 'rgba(255,255,255,0.60)', w: 102 },
-  { x: CX   + 14, y: TOP + 24,  label: 'HIGH VALUE',        fill: 'rgba(255,255,255,0.60)', w: 98  },
-  { x: LEFT + 14, y: CY  + 24,  label: 'FOUNDATION',         fill: 'rgba(255,255,255,0.40)', w: 100 },
-  { x: CX   + 14, y: CY  + 24,  label: 'LONG TERM',         fill: 'rgba(255,255,255,0.40)', w: 94  },
+  { x: LEFT + 14, y: TOP + 24,  label: 'QUICK WINS',       fill: 'var(--opportunity-matrix-label-strong)', w: 102 },
+  { x: CX   + 14, y: TOP + 24,  label: 'HIGH VALUE',        fill: 'var(--opportunity-matrix-label-mid)', w: 98  },
+  { x: LEFT + 14, y: CY  + 24,  label: 'FOUNDATION',         fill: 'var(--opportunity-matrix-label-muted)', w: 100 },
+  { x: CX   + 14, y: CY  + 24,  label: 'LONG TERM',         fill: 'var(--opportunity-matrix-label-muted)', w: 94  },
 ] as const;
 
 interface SnapshotMatrixProps {
@@ -58,34 +58,34 @@ export default function SnapshotMatrix({ opportunities }: SnapshotMatrixProps) {
           style={{ display: 'block' }}
         >
           {/* Quadrant background fills */}
-          <rect x={LEFT} y={TOP} width={CX - LEFT} height={CY - TOP} fill="rgba(0,180,180,0.03)" />
-          <rect x={CX}   y={TOP} width={RX - CX}   height={CY - TOP} fill="rgba(255,255,255,0.01)" />
-          <rect x={LEFT} y={CY}  width={CX - LEFT} height={BY - CY}  fill="rgba(255,255,255,0.01)" />
-          <rect x={CX}   y={CY}  width={RX - CX}   height={BY - CY}  fill="rgba(255,255,255,0.01)" />
+          <rect x={LEFT} y={TOP} width={CX - LEFT} height={CY - TOP} fill="var(--opportunity-matrix-quadrant-primary)" />
+          <rect x={CX}   y={TOP} width={RX - CX}   height={CY - TOP} fill="var(--opportunity-matrix-quadrant-muted)" />
+          <rect x={LEFT} y={CY}  width={CX - LEFT} height={BY - CY}  fill="var(--opportunity-matrix-quadrant-muted)" />
+          <rect x={CX}   y={CY}  width={RX - CX}   height={BY - CY}  fill="var(--opportunity-matrix-quadrant-muted)" />
 
           {/* Outer border */}
           <rect
             x={LEFT} y={TOP} width={RX - LEFT} height={BY - TOP}
-            fill="none" stroke="rgba(255,255,255,0.15)" strokeWidth="1"
+            fill="none" stroke="var(--opportunity-matrix-grid)" strokeWidth="1"
           />
 
           {/* Quadrant dividers */}
-          <line x1={CX}   y1={TOP} x2={CX} y2={BY} stroke="rgba(255,255,255,0.15)" strokeWidth="1" />
-          <line x1={LEFT} y1={CY}  x2={RX} y2={CY} stroke="rgba(255,255,255,0.15)" strokeWidth="1" />
+          <line x1={CX}   y1={TOP} x2={CX} y2={BY} stroke="var(--opportunity-matrix-grid)" strokeWidth="1" />
+          <line x1={LEFT} y1={CY}  x2={RX} y2={CY} stroke="var(--opportunity-matrix-grid)" strokeWidth="1" />
 
           {/* Y-axis labels — match OpportunityMatrix exactly */}
-          <text x={LEFT - 8} y={TOP + 14} fontSize="11" fill="rgba(255,255,255,0.50)" textAnchor="end">
+          <text x={LEFT - 8} y={TOP + 14} fontSize="11" fill="var(--opportunity-matrix-axis-label)" textAnchor="end">
             HIGH IMPACT
           </text>
-          <text x={LEFT - 8} y={BY - 6} fontSize="11" fill="rgba(255,255,255,0.50)" textAnchor="end">
+          <text x={LEFT - 8} y={BY - 6} fontSize="11" fill="var(--opportunity-matrix-axis-label)" textAnchor="end">
             LOW IMPACT
           </text>
 
           {/* X-axis labels */}
-          <text x={LEFT} y={VH - 8} fontSize="11" fill="rgba(255,255,255,0.50)">
+          <text x={LEFT} y={VH - 8} fontSize="11" fill="var(--opportunity-matrix-axis-label)">
             LOW EFFORT
           </text>
-          <text x={RX} y={VH - 8} fontSize="11" fill="rgba(255,255,255,0.50)" textAnchor="end">
+          <text x={RX} y={VH - 8} fontSize="11" fill="var(--opportunity-matrix-axis-label)" textAnchor="end">
             HIGH EFFORT
           </text>
 
@@ -96,8 +96,8 @@ export default function SnapshotMatrix({ opportunities }: SnapshotMatrixProps) {
               cx={x}
               cy={y}
               r={r}
-              fill="rgba(10,22,46,0.85)"
-              stroke="rgb(90,110,145)"
+              fill="var(--opportunity-matrix-bubble-fill)"
+              stroke="var(--opportunity-matrix-bubble-stroke)"
               strokeWidth="1.5"
             />
           ))}
@@ -108,11 +108,11 @@ export default function SnapshotMatrix({ opportunities }: SnapshotMatrixProps) {
               <rect
                 x={x - 6} y={y - 14}
                 width={w} height={20}
-                rx={3} fill="rgba(10,18,40,0.55)"
+                rx={3} fill="var(--opportunity-matrix-label-bg)"
               />
               <text
                 x={x} y={y}
-                fontSize="11" fontWeight="700" letterSpacing="1.2" fill={fill}
+                fontSize="11" fontWeight="var(--opportunity-matrix-label-weight)" letterSpacing="1.2" fill={fill}
               >
                 {label}
               </text>

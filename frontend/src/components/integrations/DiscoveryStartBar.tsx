@@ -39,7 +39,7 @@ export default function DiscoveryStartBar({
       : null;
 
   return (
-    <div className="fixed bottom-0 left-0 right-0 z-40 max-h-[46vh] overflow-y-auto border-t border-border bg-bg/90 shadow-[0_-4px_12px_rgba(0,0,0,0.15)] backdrop-blur">
+    <div className="fixed bottom-0 left-0 right-0 z-40 max-h-[46vh] overflow-y-auto border-t border-border bg-panel/95 shadow-[0_-8px_24px_rgba(7,25,58,0.10)] backdrop-blur">
       <div className="w-full px-4 py-3 sm:px-6">
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div className="min-w-0">
@@ -90,7 +90,7 @@ export default function DiscoveryStartBar({
           </div>
 
           <div className="min-w-0">
-            <div className="flex max-w-full flex-wrap items-center gap-x-2 gap-y-1 rounded-md border border-slate-400 px-3 py-1.5 text-sm">
+            <div className="flex max-w-full flex-wrap items-center gap-x-2 gap-y-1 rounded-md border border-border px-3 py-1.5 text-sm">
               {recommended.map((connector, index) => {
                 const isReady = isDiscoveryReadyConnector(connector);
                 const statusLabel = isReady
@@ -101,7 +101,7 @@ export default function DiscoveryStartBar({
                 return (
                   <React.Fragment key={connector.id}>
                     {index > 0 && (
-                      <span className="hidden text-slate-400 sm:inline">|</span>
+                      <span className="hidden text-muted sm:inline">|</span>
                     )}
                     <span className="flex items-center gap-1.5">
                       {isReady ? (
