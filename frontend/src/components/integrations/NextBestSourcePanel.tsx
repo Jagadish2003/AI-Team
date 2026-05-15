@@ -22,7 +22,7 @@ export default function NextBestSourcePanel({
   const isHigh   = step === 'high';
 
   return (
-    <div className="mt-3 rounded-xl border border-border bg-panel p-4">
+    <div className="rounded-xl border border-border bg-panel p-6">
 
       <div className="text-xl font-semibold text-text">Confidence</div>
 

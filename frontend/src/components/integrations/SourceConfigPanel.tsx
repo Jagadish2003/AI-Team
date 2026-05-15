@@ -81,16 +81,16 @@ export default function SourceConfigPanel() {
   const hasFiles = uploadedFiles.length > 0;
 
   return (
-    <div className="mt-3 rounded-xl border border-border bg-panel overflow-hidden">
+    <div className="overflow-hidden rounded-xl border border-border bg-panel">
       {/* Collapsible header */}
       <button
         type="button"
         onClick={() => setExpanded((v) => !v)}
-        className="flex w-full items-center justify-between px-4 py-3 text-left hover:bg-panel2 transition-colors"
+        className="flex w-full items-center justify-between px-5 py-4 text-left transition-colors hover:bg-panel2"
       >
         <div className="flex items-center gap-2">
           <Upload size={14} className="text-accent shrink-0" />
-          <span className="text-sm font-medium text-text">
+          <span className="text-base font-semibold text-text">
             Upload Additional Data
           </span>
           {hasFiles && (
