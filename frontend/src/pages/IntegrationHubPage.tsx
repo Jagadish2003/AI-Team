@@ -105,84 +105,80 @@ export default function IntegrationHubPage() {
         {error && !loading && <ErrorPanel message={error} onRetry={refetch} />}
 
         {!loading && !error && (
-            <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_360px]">
-              <div className="flex min-w-0 flex-col gap-6">
-                <div className="rounded-xl border border-border bg-panel p-6 shadow-sm">
-                  <HeroConnectorSection
-                    connectors={recommended}
-                    selectedId={selectedConnectorId}
-                    onSelect={selectConnector}
-                    onPrimary={(id) => {
-                      const c = recommended.find((x) => x.id === id);
-                      if (c?.status === "connected") {
-                        syncConnector(id);
-                        push("Configuration complete. Data is now synced.");
-                      } else {
-                        setMetricAnimation(null);
-                        connectConnector(id);
-                        push(
-                          "Connector connected. Click Configure & Sync to load data.",
-                        );
-                      }
-                    }}
-                    onSecondary={() =>
-                      push("Data preview available in later Sprint.")
-                    }
-                    metricAnimation={metricAnimation}
-                  />
-                </div>
-
-                <div className="rounded-xl border border-border bg-panel p-6 shadow-sm">
-                  <ConnectorGridSection
-                    connectors={standard}
-                    selectedId={selectedConnectorId}
-                    onSelect={selectConnector}
-                    onPrimary={(id) => {
-                      const c = standard.find((x) => x.id === id);
-                      if (!c) return;
-
-                      if (c.status === "connected" && !c.configured) {
-                        syncConnector(id);
-                        push("Configuration complete. Data is now synced.");
-                      } else if (c.status === "connected") {
-                        push("Data preview available in later Sprint.");
-                      } else if (c.status === "coming_soon") {
-                        push("Connector coming soon.");
-                      } else {
-                        setMetricAnimation(null);
-                        connectConnector(id);
-                        push("Connector connected.");
-                      }
-                    }}
-                  />
-                </div>
-              </div>
-
-              <div className="min-w-0">
-                <RightPanel
-                  selected={selected}
-                  onConfigure={() => {
-                    if (!selected) return;
-                    syncConnector(selected.id);
-                    push("Configuration complete. Data is now synced.");
-                  }}
-                  confidence={confidence}
-                  recommendedConnectedCount={recommendedConnectedCount}
-                  recommendedTotal={3}
-                  next={next}
-                  onConnectNext={() => {
-                    if (!next) return;
-                    if (next.status === "connected") {
-                      syncConnector(next.id);
+            <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_360px] xl:items-stretch">
+              <div className="min-w-0 rounded-xl border border-border bg-panel p-6 shadow-sm xl:col-start-1 xl:row-start-1">
+                <HeroConnectorSection
+                  connectors={recommended}
+                  selectedId={selectedConnectorId}
+                  onSelect={selectConnector}
+                  onPrimary={(id) => {
+                    const c = recommended.find((x) => x.id === id);
+                    if (c?.status === "connected") {
+                      syncConnector(id);
                       push("Configuration complete. Data is now synced.");
                     } else {
                       setMetricAnimation(null);
-                      connectConnector(next.id);
-                      push("Connected next best source.");
+                      connectConnector(id);
+                      push(
+                        "Connector connected. Click Configure & Sync to load data.",
+                      );
+                    }
+                  }}
+                  onSecondary={() =>
+                    push("Data preview available in later Sprint.")
+                  }
+                  metricAnimation={metricAnimation}
+                />
+              </div>
+
+              <div className="min-w-0 rounded-xl border border-border bg-panel p-6 shadow-sm xl:col-start-1 xl:row-start-2">
+                <ConnectorGridSection
+                  connectors={standard}
+                  selectedId={selectedConnectorId}
+                  onSelect={selectConnector}
+                  onPrimary={(id) => {
+                    const c = standard.find((x) => x.id === id);
+                    if (!c) return;
+
+                    if (c.status === "connected" && !c.configured) {
+                      syncConnector(id);
+                      push("Configuration complete. Data is now synced.");
+                    } else if (c.status === "connected") {
+                      push("Data preview available in later Sprint.");
+                    } else if (c.status === "coming_soon") {
+                      push("Connector coming soon.");
+                    } else {
+                      setMetricAnimation(null);
+                      connectConnector(id);
+                      push("Connector connected.");
                     }
                   }}
                 />
               </div>
+
+              <RightPanel
+                selected={selected}
+                onConfigure={() => {
+                  if (!selected) return;
+                  syncConnector(selected.id);
+                  push("Configuration complete. Data is now synced.");
+                }}
+                confidence={confidence}
+                recommendedConnectedCount={recommendedConnectedCount}
+                recommendedTotal={3}
+                next={next}
+                onConnectNext={() => {
+                  if (!next) return;
+                  if (next.status === "connected") {
+                    syncConnector(next.id);
+                    push("Configuration complete. Data is now synced.");
+                  } else {
+                    setMetricAnimation(null);
+                    connectConnector(next.id);
+                    push("Connected next best source.");
+                  }
+                }}
+              />
             </div>
         )}
       </PageShell>
