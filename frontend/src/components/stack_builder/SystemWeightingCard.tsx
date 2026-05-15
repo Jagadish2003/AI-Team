@@ -1,5 +1,5 @@
 /**
- * SystemWeightingCard — SB-1 v1.1 Task 5 Sprint 7
+ * SystemWeightingCard — SB-5 Sprint 7
  *
  * Collapsed / expandable weighting card for Screen 3 (Source Weighting).
  * One card per selected system. Stacked vertically.

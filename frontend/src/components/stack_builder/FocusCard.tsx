@@ -1,5 +1,5 @@
 /**
- * FocusCard - SB-3 v1.1 Task 3 Sprint 7
+ * FocusCard — SB-3 Sprint 7
  *
  * Discovery Focus selection card for Screen 1.
  * Rendered in a 2-column grid: 6 standard cards plus one full-width

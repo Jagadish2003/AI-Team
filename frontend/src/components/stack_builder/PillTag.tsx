@@ -1,5 +1,5 @@
 /**
- * PillTag — SB-1 v1.1 Task 6 Sprint 7
+ * PillTag — SB-6 Sprint 7
  *
  * Reusable pill tag component used across all 4 screens:
  *   Screen 1 — Industry selector (single select)

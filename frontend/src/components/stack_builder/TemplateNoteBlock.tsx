@@ -1,5 +1,5 @@
 /**
- * TemplateNoteBlock — SB-1 v1.1 Task 7 Sprint 7
+ * TemplateNoteBlock — SB-7 Sprint 7
  *
  * Shown on Screen 1 when a template is selected.
  * Rendered below the template selector panel.

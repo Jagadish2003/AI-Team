@@ -11,7 +11,7 @@ export default function ConnectionStatusLegend() {
   const items = [
     { color: 'bg-emerald-500', label: 'Connected' },
     { color: 'bg-amber-400',   label: 'Credentials needed' },
-    { color: 'bg-slate-600',   label: 'Not yet configured' },
+    { color: 'bg-slate-300',   label: 'Not yet configured' },
   ];
 
   return (
