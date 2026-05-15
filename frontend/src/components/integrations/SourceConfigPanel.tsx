@@ -136,7 +136,7 @@ export default function SourceConfigPanel() {
           {/* File list */}
           {hasFiles && (
             <div className="rounded-lg border border-border overflow-hidden">
-              <div className="max-h-[160px] overflow-y-auto divide-y divide-border scrollbar-thin scrollbar-thumb-slate-800">
+              <div className="max-h-[160px] overflow-y-auto divide-y divide-border">
                 {uploadedFiles.map((file) => (
                   <div
                     key={file.id}

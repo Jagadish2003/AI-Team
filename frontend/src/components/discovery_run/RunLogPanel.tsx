@@ -1,4 +1,4 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { RunEvent } from '../../types/discoveryRun';
 
 export default function RunLogPanel({
@@ -11,25 +11,54 @@ export default function RunLogPanel({
   onToggleAutoScroll: (v: boolean) => void;
 }) {
   const ref = useRef<HTMLDivElement | null>(null);
+  const [showAutoScroll, setShowAutoScroll] = useState(false);
 
   useEffect(() => {
     if (!autoScroll) return;
     ref.current?.scrollTo({ top: ref.current.scrollHeight });
   }, [events, autoScroll]);
 
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) {
+      setShowAutoScroll(false);
+      return;
+    }
+
+    const updateVisibility = () => {
+      setShowAutoScroll(el.scrollHeight > el.clientHeight + 1);
+    };
+
+    updateVisibility();
+    window.addEventListener('resize', updateVisibility);
+
+    let resizeObserver: ResizeObserver | null = null;
+    if (typeof ResizeObserver !== 'undefined') {
+      resizeObserver = new ResizeObserver(updateVisibility);
+      resizeObserver.observe(el);
+    }
+
+    return () => {
+      window.removeEventListener('resize', updateVisibility);
+      resizeObserver?.disconnect();
+    };
+  }, [events]);
+
   return (
     <div className="rounded-xl border border-border bg-panel p-4">
       <div className="flex items-center justify-between">
         <div className="text-xl font-semibold text-text">Live Run Log</div>
-        <label className="flex items-center gap-2 text-xs text-muted">
-        <input
-          type="checkbox"
-          className="h-4 w-4 cursor-pointer appearance-auto accent-[#0D55D7] bg-[#0D55D7] border-[#0D55D7]"
-          checked={autoScroll}
-          onChange={(e) => onToggleAutoScroll(e.target.checked)}
-        />
-          Auto-scroll
-        </label>
+        {showAutoScroll && (
+          <label className="flex items-center gap-2 text-xs text-muted">
+            <input
+              type="checkbox"
+              className="h-4 w-4 cursor-pointer appearance-auto accent-accent"
+              checked={autoScroll}
+              onChange={(e) => onToggleAutoScroll(e.target.checked)}
+            />
+            Auto-scroll
+          </label>
+        )}
       </div>
 
       <div ref={ref} className="mt-3 h-[78vh] overflow-y-auto rounded-lg border border-border bg-bg/20 p-2">

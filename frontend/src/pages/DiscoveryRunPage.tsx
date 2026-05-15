@@ -83,6 +83,7 @@ function formatRunTimestamp(value?: string | null) {
 
 export default function DiscoveryRunPage() {
   const [autoScroll, setAutoScroll] = useState(true);
+  const [showAutoScroll, setShowAutoScroll] = useState(false);
   const logScrollRef = useRef<HTMLDivElement | null>(null);
   const nav = useNavigate();
   const location = useLocation();
@@ -176,6 +177,32 @@ export default function DiscoveryRunPage() {
     if (!el) return;
     el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
   }, [events, autoScroll]);
+
+  useEffect(() => {
+    const el = logScrollRef.current;
+    if (!el) {
+      setShowAutoScroll(false);
+      return;
+    }
+
+    const updateVisibility = () => {
+      setShowAutoScroll(el.scrollHeight > el.clientHeight + 1);
+    };
+
+    updateVisibility();
+    window.addEventListener("resize", updateVisibility);
+
+    let resizeObserver: ResizeObserver | null = null;
+    if (typeof ResizeObserver !== "undefined") {
+      resizeObserver = new ResizeObserver(updateVisibility);
+      resizeObserver.observe(el);
+    }
+
+    return () => {
+      window.removeEventListener("resize", updateVisibility);
+      resizeObserver?.disconnect();
+    };
+  }, [events]);
 
   if (loading || (!runId && autoStartRequested && hasAtLeastOneSource)) {
     return (
@@ -314,15 +341,17 @@ export default function DiscoveryRunPage() {
             <div className="flex shrink-0 items-center justify-between">
               <div className="flex items-center gap-5">
                 <div className="text-lg font-semibold">Discovery Log</div>
-                <label className="flex items-center gap-2 text-sm text-text">
-                  Auto-scroll
-                  <input
-                    type="checkbox"
-                    checked={autoScroll}
-                    onChange={(e) => setAutoScroll(e.target.checked)}
-                    className="accent-accent cursor-pointer"
-                  />
-                </label>
+                {showAutoScroll && (
+                  <label className="flex items-center gap-2 text-sm text-text">
+                    Auto-scroll
+                    <input
+                      type="checkbox"
+                      checked={autoScroll}
+                      onChange={(e) => setAutoScroll(e.target.checked)}
+                      className="accent-accent cursor-pointer"
+                    />
+                  </label>
+                )}
               </div>
               <button
                 className="rounded-md border border-border bg-bg/20 px-3 py-2 text-sm font-semibold text-text transition hover:bg-panel2"

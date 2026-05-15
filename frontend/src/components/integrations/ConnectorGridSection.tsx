@@ -1,8 +1,7 @@
 import React from 'react';
-import { Plug } from 'lucide-react';
 import { Connector } from '../../types/connector';
 import ConnectorTile from './ConnectorTile';
-import { connectorIcons } from './ConnectorIcons';
+import { connectorIcons, fallbackConnectorIcon } from './ConnectorIcons';
 
 export default function ConnectorGridSection({
   connectors,
@@ -25,7 +24,7 @@ export default function ConnectorGridSection({
           <ConnectorTile
             key={c.id}
             connector={c}
-            icon={connectorIcons[c.name] || <Plug size={18} className="text-slate-500" />}
+            icon={connectorIcons[c.name] || fallbackConnectorIcon}
             selected={selectedId === c.id}
             onSelect={() => onSelect(c.id)}
             onPrimary={() => onPrimary(c.id)}

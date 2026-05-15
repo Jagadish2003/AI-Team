@@ -5,6 +5,68 @@
 :root {
   color-scheme: dark;
   font-family: ui-sans-serif, system-ui, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol", "Noto Color Emoji";
+  --color-bgheader: 7 25 58;
+  --color-bg: 33 51 92;
+  --color-panel: 15 26 61;
+  --color-buttonbg: 18 32 74;
+  --color-panel2: 18 31 54;
+  --color-navborder: 17 96 238;
+  --color-border: 29 43 69;
+  --color-text: 230 238 249;
+  --color-muted: 159 179 200;
+  --color-accent: 13 85 215;
+  --color-danger: 239 68 68;
+  --color-navhover: 22 50 101;
+  --color-activenav: 10 61 152;
+  --color-textwhite: 255 255 255;
+  --color-navtext: 255 255 255;
+  --opportunity-matrix-grid: rgb(255 255 255 / 0.15);
+  --opportunity-matrix-axis-label: rgb(255 255 255 / 0.62);
+  --opportunity-matrix-quadrant-primary: rgb(13 85 215 / 0.06);
+  --opportunity-matrix-quadrant-muted: rgb(255 255 255 / 0.01);
+  --opportunity-matrix-label-bg: rgb(10 18 40 / 0.65);
+  --opportunity-matrix-label-weight: 700;
+  --opportunity-matrix-label-strong: rgb(255 255 255 / 0.70);
+  --opportunity-matrix-label-mid: rgb(255 255 255 / 0.60);
+  --opportunity-matrix-label-muted: rgb(255 255 255 / 0.40);
+  --opportunity-matrix-bubble-fill: rgb(10 22 46 / 0.85);
+  --opportunity-matrix-bubble-stroke: rgb(90 110 145);
+  --opportunity-matrix-hover-fill: rgb(255 255 255 / 0.12);
+  --opportunity-matrix-hover-stroke: rgb(255 255 255 / 0.50);
+  --opportunity-matrix-hover-label: rgb(255 255 255 / 0.82);
+}
+
+:root.theme-light {
+  color-scheme: light;
+  --color-bgheader: 255 255 255;
+  --color-bg: 230 238 249;
+  --color-panel: 255 255 255;
+  --color-buttonbg: 255 255 255;
+  --color-panel2: 242 247 253;
+  --color-navborder: 17 96 238;
+  --color-border: 159 179 200;
+  --color-text: 7 25 58;
+  --color-muted: 33 51 92;
+  --color-accent: 13 85 215;
+  --color-danger: 239 68 68;
+  --color-navhover: 232 240 249;
+  --color-activenav: 255 255 255;
+  --color-textwhite: 255 255 255;
+  --color-navtext: 7 25 58;
+  --opportunity-matrix-grid: rgb(92 112 145 / 0.62);
+  --opportunity-matrix-axis-label: rgb(64 78 105 / 0.86);
+  --opportunity-matrix-quadrant-primary: rgb(13 85 215 / 0.08);
+  --opportunity-matrix-quadrant-muted: rgb(13 85 215 / 0.015);
+  --opportunity-matrix-label-bg: rgb(66 82 112 / 0.58);
+  --opportunity-matrix-label-weight: 600;
+  --opportunity-matrix-label-strong: rgb(255 255 255 / 0.94);
+  --opportunity-matrix-label-mid: rgb(255 255 255 / 0.88);
+  --opportunity-matrix-label-muted: rgb(255 255 255 / 0.76);
+  --opportunity-matrix-bubble-fill: rgb(62 92 138 / 0.24);
+  --opportunity-matrix-bubble-stroke: rgb(66 93 132 / 0.62);
+  --opportunity-matrix-hover-fill: rgb(13 85 215 / 0.10);
+  --opportunity-matrix-hover-stroke: rgb(13 85 215 / 0.45);
+  --opportunity-matrix-hover-label: rgb(7 25 58 / 0.86);
 }
 
 html,
@@ -17,35 +79,270 @@ body,
 
 body {
   margin: 0;
-  background: #21335c;
-  color: #e6eef9;
+  background: rgb(var(--color-bg));
+  color: rgb(var(--color-text));
 }
 
-* {
+body * {
+  scrollbar-color: rgb(var(--color-muted) / 0.68) transparent;
   scrollbar-width: thin;
-  scrollbar-color: #7782a0 transparent;
 }
 
-*::-webkit-scrollbar {
+body *::-webkit-scrollbar {
   width: 6px;
   height: 6px;
 }
 
-*::-webkit-scrollbar-track {
+body *::-webkit-scrollbar-track {
   background: transparent;
 }
 
-*::-webkit-scrollbar-thumb {
-  background: #7782a0;
+body *::-webkit-scrollbar-thumb {
+  background-color: rgb(var(--color-muted) / 0.58);
+  background-clip: padding-box;
+  border: 1px solid transparent;
   border-radius: 999px;
 }
 
-*::-webkit-scrollbar-thumb:hover {
-  background: #a2abc5;
+body *::-webkit-scrollbar-thumb:hover {
+  background-color: rgb(var(--color-muted) / 0.82);
 }
 
-*::-webkit-scrollbar-corner {
+body *::-webkit-scrollbar-button {
+  display: none;
+  width: 0;
+  height: 0;
+}
+
+body *::-webkit-scrollbar-corner {
   background: transparent;
+}
+
+:root.theme-light {
+  --status-emerald-text: 4 120 87;
+  --status-emerald-bg: 16 185 129;
+  --status-emerald-border: 5 150 105;
+  --status-amber-text: 146 64 14;
+  --status-amber-bg: 245 158 11;
+  --status-amber-border: 217 119 6;
+  --status-red-text: 185 28 28;
+  --status-red-bg: 239 68 68;
+  --status-red-border: 220 38 38;
+  --status-blue-text: 29 78 216;
+  --status-blue-bg: 13 85 215;
+  --status-blue-border: 13 85 215;
+}
+
+:root.theme-light .text-emerald-100,
+:root.theme-light .text-emerald-200,
+:root.theme-light .text-emerald-300,
+:root.theme-light .text-emerald-400 {
+  color: rgb(var(--status-emerald-text)) !important;
+}
+
+:root.theme-light .text-amber-100,
+:root.theme-light .text-amber-200,
+:root.theme-light .text-amber-300,
+:root.theme-light .text-amber-400 {
+  color: rgb(var(--status-amber-text)) !important;
+}
+
+:root.theme-light .text-red-100,
+:root.theme-light .text-red-200,
+:root.theme-light .text-red-300,
+:root.theme-light .text-red-400 {
+  color: rgb(var(--status-red-text)) !important;
+}
+
+:root.theme-light .text-blue-100,
+:root.theme-light .text-blue-200,
+:root.theme-light .text-blue-300,
+:root.theme-light .text-blue-400 {
+  color: rgb(var(--status-blue-text)) !important;
+}
+
+:root.theme-light .hover\:text-emerald-300:hover {
+  color: rgb(var(--status-emerald-text)) !important;
+}
+
+:root.theme-light .hover\:text-amber-300:hover {
+  color: rgb(var(--status-amber-text)) !important;
+}
+
+:root.theme-light .hover\:text-red-300:hover {
+  color: rgb(var(--status-red-text)) !important;
+}
+
+:root.theme-light .bg-emerald-500\/5,
+:root.theme-light .bg-emerald-500\/10 {
+  background-color: rgb(var(--status-emerald-bg) / 0.14) !important;
+}
+
+:root.theme-light .bg-emerald-500\/15,
+:root.theme-light .bg-emerald-500\/20 {
+  background-color: rgb(var(--status-emerald-bg) / 0.22) !important;
+}
+
+:root.theme-light .bg-amber-500\/5,
+:root.theme-light .bg-amber-500\/10 {
+  background-color: rgb(var(--status-amber-bg) / 0.16) !important;
+}
+
+:root.theme-light .bg-amber-500\/15,
+:root.theme-light .bg-amber-500\/20 {
+  background-color: rgb(var(--status-amber-bg) / 0.24) !important;
+}
+
+:root.theme-light .bg-red-500\/5,
+:root.theme-light .bg-red-500\/10 {
+  background-color: rgb(var(--status-red-bg) / 0.12) !important;
+}
+
+:root.theme-light .bg-red-500\/15,
+:root.theme-light .bg-red-500\/20,
+:root.theme-light .bg-red-500\/25 {
+  background-color: rgb(var(--status-red-bg) / 0.20) !important;
+}
+
+:root.theme-light .bg-blue-500\/10,
+:root.theme-light .bg-blue-500\/15,
+:root.theme-light .bg-blue-500\/20,
+:root.theme-light .bg-accent\/10,
+:root.theme-light .bg-accent\/15,
+:root.theme-light .bg-accent\/20 {
+  background-color: rgb(var(--status-blue-bg) / 0.14) !important;
+}
+
+:root.theme-light .hover\:bg-emerald-500\/15:hover {
+  background-color: rgb(var(--status-emerald-bg) / 0.24) !important;
+}
+
+:root.theme-light .hover\:bg-red-500\/15:hover,
+:root.theme-light .hover\:bg-red-500\/25:hover {
+  background-color: rgb(var(--status-red-bg) / 0.24) !important;
+}
+
+:root.theme-light .border-emerald-500\/25,
+:root.theme-light .border-emerald-500\/30,
+:root.theme-light .border-emerald-500\/40,
+:root.theme-light .border-emerald-500\/50,
+:root.theme-light .border-emerald-500\/60 {
+  border-color: rgb(var(--status-emerald-border) / 0.55) !important;
+}
+
+:root.theme-light .border-amber-500\/25,
+:root.theme-light .border-amber-500\/30,
+:root.theme-light .border-amber-500\/40,
+:root.theme-light .border-amber-500\/50,
+:root.theme-light .border-amber-500\/60 {
+  border-color: rgb(var(--status-amber-border) / 0.58) !important;
+}
+
+:root.theme-light .border-red-400\/20,
+:root.theme-light .border-red-500\/25,
+:root.theme-light .border-red-500\/30,
+:root.theme-light .border-red-500\/40,
+:root.theme-light .border-red-500\/50,
+:root.theme-light .border-red-500\/60 {
+  border-color: rgb(var(--status-red-border) / 0.55) !important;
+}
+
+:root.theme-light .border-blue-400\/30,
+:root.theme-light .border-blue-500\/30,
+:root.theme-light .border-accent\/20,
+:root.theme-light .border-accent\/30,
+:root.theme-light .border-accent\/40,
+:root.theme-light .border-accent\/50,
+:root.theme-light .border-accent\/60 {
+  border-color: rgb(var(--status-blue-border) / 0.48) !important;
+}
+
+:root.theme-light .rounded-xl.border.bg-panel:not(.connector-card):not(.field-details-panel):not(.mapping-table-panel):not(.field-mapping-detail-panel),
+:root.theme-light .rounded-xl.border.bg-panel2:not(.connector-card):not(.field-details-panel):not(.mapping-table-panel):not(.field-mapping-detail-panel) {
+  border-color: transparent !important;
+}
+
+:root.theme-light .field-details-panel {
+  border-color: rgb(var(--color-border) / 0.65) !important;
+}
+
+:root.theme-light .mapping-table-panel {
+  border-color: rgb(var(--color-border) / 0.65) !important;
+}
+
+:root.theme-light .field-mapping-detail-panel {
+  border-color: rgb(var(--color-border) / 0.65) !important;
+  box-shadow: none !important;
+}
+
+:root.theme-light .rounded-xl.bg-panel:not(.field-mapping-detail-panel),
+:root.theme-light .rounded-xl.bg-panel2:not(.field-mapping-detail-panel),
+:root.theme-light .connector-card {
+  box-shadow:
+    0 18px 42px rgb(7 25 58 / 0.08),
+    0 4px 12px rgb(7 25 58 / 0.05),
+    inset 0 0 0 1px rgb(255 255 255 / 0.72);
+}
+
+.connector-card-selected {
+  background-color: rgb(18 31 54);
+  border-color: rgb(62 116 216);
+  box-shadow:
+    0 10px 24px rgb(0 0 0 / 0.22),
+    inset 0 0 0 1px rgb(125 175 255 / 0.1);
+}
+
+.connector-card-selected:hover {
+  background-color: rgb(20 38 78);
+  border-color: rgb(86 139 236);
+}
+
+:root.theme-light .connector-card-selected {
+  background-color: rgb(241 247 255);
+  border-color: rgb(147 183 246);
+}
+
+:root.theme-light .connector-card-selected:hover {
+  background-color: rgb(236 244 255);
+  border-color: rgb(128 169 241);
+}
+
+:root.theme-light .light-view-data-button {
+  background-color: rgb(var(--color-buttonbg)) !important;
+}
+
+:root.theme-light .light-view-data-button:hover,
+:root.theme-light .light-view-data-button:active {
+  background-color: rgb(var(--color-buttonbg)) !important;
+}
+
+.profile-menu-tooltip {
+  opacity: 0;
+  transform: translate(-50%, 0.25rem) scale(0.96);
+  transition:
+    opacity 600ms ease,
+    transform 600ms ease;
+}
+
+.profile-dropdown-item:hover .profile-menu-tooltip,
+.profile-dropdown-item:focus-within .profile-menu-tooltip {
+  animation: profileTooltipAutoHide 5.7s ease-out forwards;
+}
+
+@keyframes profileTooltipAutoHide {
+  0% {
+    opacity: 0;
+    transform: translate(-50%, 0.25rem) scale(0.96);
+  }
+  7%,
+  88% {
+    opacity: 1;
+    transform: translate(-50%, 0) scale(1);
+  }
+  100% {
+    opacity: 0;
+    transform: translate(-50%, 0.25rem) scale(0.96);
+  }
 }
 
 @keyframes slideInRight {

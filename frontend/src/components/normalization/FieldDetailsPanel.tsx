@@ -8,7 +8,7 @@ export default function FieldDetailsPanel() {
   const { push } = useToast(); // ✅ added
 
   return (
-    <div className="flex h-full min-w-0 flex-col overflow-y-auto rounded-xl border border-border bg-panel p-4">
+    <div className="field-details-panel flex h-full min-w-0 flex-col overflow-y-auto rounded-xl border border-border bg-panel p-4">
       
       <div className="text-xl font-semibold text-text mb-3">
         Field Details

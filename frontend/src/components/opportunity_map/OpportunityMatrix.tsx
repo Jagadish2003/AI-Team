@@ -42,10 +42,16 @@ function bubbleStyle(opportunity: OpportunityCandidate, isSelected: boolean, isH
   }
 
   if (isHover) {
-    return { fill: 'rgba(255,255,255,0.12)', stroke: 'rgba(255,255,255,0.50)' };
+    return {
+      fill: 'var(--opportunity-matrix-hover-fill)',
+      stroke: 'var(--opportunity-matrix-hover-stroke)',
+    };
   }
 
-  return { fill: 'rgba(10,22,46,0.85)', stroke: 'rgb(90,110,145)' };
+  return {
+    fill: 'var(--opportunity-matrix-bubble-fill)',
+    stroke: 'var(--opportunity-matrix-bubble-stroke)',
+  };
 }
 
 export default function OpportunityMatrix({
@@ -78,10 +84,10 @@ export default function OpportunityMatrix({
           preserveAspectRatio="xMidYMid meet"
           style={{ display: 'block' }}
         >
-          <rect x={LEFT} y={TOP} width={CX - LEFT} height={CY - TOP} fill="rgba(13,85,215,0.06)" />
-          <rect x={CX} y={TOP} width={RX - CX} height={CY - TOP} fill="rgba(255,255,255,0.01)" />
-          <rect x={LEFT} y={CY} width={CX - LEFT} height={BY - CY} fill="rgba(255,255,255,0.01)" />
-          <rect x={CX} y={CY} width={RX - CX} height={BY - CY} fill="rgba(255,255,255,0.01)" />
+          <rect x={LEFT} y={TOP} width={CX - LEFT} height={CY - TOP} fill="var(--opportunity-matrix-quadrant-primary)" />
+          <rect x={CX} y={TOP} width={RX - CX} height={CY - TOP} fill="var(--opportunity-matrix-quadrant-muted)" />
+          <rect x={LEFT} y={CY} width={CX - LEFT} height={BY - CY} fill="var(--opportunity-matrix-quadrant-muted)" />
+          <rect x={CX} y={CY} width={RX - CX} height={BY - CY} fill="var(--opportunity-matrix-quadrant-muted)" />
 
           <rect
             x={LEFT}
@@ -89,24 +95,24 @@ export default function OpportunityMatrix({
             width={RX - LEFT}
             height={BY - TOP}
             fill="none"
-            stroke="rgba(255,255,255,0.15)"
+            stroke="var(--opportunity-matrix-grid)"
             strokeWidth="1"
           />
 
-          <line x1={CX} y1={TOP} x2={CX} y2={BY} stroke="rgba(255,255,255,0.15)" strokeWidth="1" />
-          <line x1={LEFT} y1={CY} x2={RX} y2={CY} stroke="rgba(255,255,255,0.15)" strokeWidth="1" />
+          <line x1={CX} y1={TOP} x2={CX} y2={BY} stroke="var(--opportunity-matrix-grid)" strokeWidth="1" />
+          <line x1={LEFT} y1={CY} x2={RX} y2={CY} stroke="var(--opportunity-matrix-grid)" strokeWidth="1" />
 
-          <text x={LEFT - 10} y={TOP + 18} fontSize="16" fontWeight="600" fill="rgba(255,255,255,0.62)" textAnchor="end">
+          <text x={LEFT - 10} y={TOP + 18} fontSize="16" fontWeight="600" fill="var(--opportunity-matrix-axis-label)" textAnchor="end">
             HIGH IMPACT
           </text>
-          <text x={LEFT - 10} y={BY - 6} fontSize="16" fontWeight="600" fill="rgba(255,255,255,0.62)" textAnchor="end">
+          <text x={LEFT - 10} y={BY - 6} fontSize="16" fontWeight="600" fill="var(--opportunity-matrix-axis-label)" textAnchor="end">
             LOW IMPACT
           </text>
 
-          <text x={LEFT} y={VH - 10} fontSize="16" fontWeight="600" fill="rgba(255,255,255,0.62)">
+          <text x={LEFT} y={VH - 10} fontSize="16" fontWeight="600" fill="var(--opportunity-matrix-axis-label)">
             LOW EFFORT
           </text>
-          <text x={RX} y={VH - 10} fontSize="16" fontWeight="600" fill="rgba(255,255,255,0.62)" textAnchor="end">
+          <text x={RX} y={VH - 10} fontSize="16" fontWeight="600" fill="var(--opportunity-matrix-axis-label)" textAnchor="end">
             HIGH EFFORT
           </text>
 
@@ -139,14 +145,14 @@ export default function OpportunityMatrix({
           })}
 
           {[
-            { x: LEFT + 14, y: TOP + 24, label: 'QUICK WINS', fill: 'rgba(255,255,255,0.70)', w: 102 },
-            { x: CX + 14, y: TOP + 24, label: 'HIGH VALUE', fill: 'rgba(255,255,255,0.60)', w: 98 },
-            { x: LEFT + 14, y: CY + 24, label: 'FOUNDATION', fill: 'rgba(255,255,255,0.40)', w: 100 },
-            { x: CX + 14, y: CY + 24, label: 'LONG TERM', fill: 'rgba(255,255,255,0.40)', w: 94 },
+            { x: LEFT + 14, y: TOP + 24, label: 'QUICK WINS', fill: 'var(--opportunity-matrix-label-strong)', w: 102 },
+            { x: CX + 14, y: TOP + 24, label: 'HIGH VALUE', fill: 'var(--opportunity-matrix-label-mid)', w: 98 },
+            { x: LEFT + 14, y: CY + 24, label: 'FOUNDATION', fill: 'var(--opportunity-matrix-label-muted)', w: 100 },
+            { x: CX + 14, y: CY + 24, label: 'LONG TERM', fill: 'var(--opportunity-matrix-label-muted)', w: 94 },
           ].map(({ x, y, label, fill, w }) => (
             <g key={label} pointerEvents="none">
-              <rect x={x - 8} y={y - 19} width={w + 30} height={28} rx={4} fill="rgba(10,18,40,0.65)" />
-              <text x={x} y={y} fontSize="18" fontWeight="700" letterSpacing="1.2" fill={fill}>
+              <rect x={x - 8} y={y - 19} width={w + 30} height={28} rx={4} fill="var(--opportunity-matrix-label-bg)" />
+              <text x={x} y={y} fontSize="18" fontWeight="var(--opportunity-matrix-label-weight)" letterSpacing="1.2" fill={fill}>
                 {label}
               </text>
             </g>
@@ -165,7 +171,7 @@ export default function OpportunityMatrix({
                 y={p.y - p.r - 18}
                 fontSize="17"
                 fontWeight="700"
-                fill={isSelected ? '#0D55D7' : 'rgba(255,255,255,0.82)'}
+                fill={isSelected ? '#0D55D7' : 'var(--opportunity-matrix-hover-label)'}
                 textAnchor="middle"
                 pointerEvents="none"
               >

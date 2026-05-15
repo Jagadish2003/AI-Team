@@ -83,7 +83,7 @@ export default function MappingTable() {
   );
 
   return (
-    <div className="flex h-full flex-col rounded-xl border border-border bg-panel p-4">
+    <div className="mapping-table-panel flex h-full flex-col rounded-xl border border-border bg-panel p-4">
       
       {/* Tabs + Search */}
       <div className="flex flex-col gap-3">

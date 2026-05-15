@@ -409,12 +409,12 @@ export default function SourceIntelligencePage() {
           <SourceIntelligenceHeader className="" />
           <button
             onClick={() => setShowDetail((v) => !v)}
-            className="flex items-center gap-1.5 text-xs text-muted hover:text-text transition-colors"
+            className="inline-flex items-center gap-2 rounded-md border border-border bg-buttonbg px-3 py-2 text-sm font-medium text-text shadow-sm transition-colors hover:border-accent/50 hover:bg-panel2 focus:outline-none focus:ring-2 focus:ring-accent/50"
             data-testid="toggle-detail"
           >
             {showDetail ? "Hide" : "View"} field mapping detail
             <ChevronRight
-              size={12}
+              size={15}
               className={`transition-transform ${showDetail ? "rotate-90" : ""}`}
             />
           </button>
@@ -615,7 +615,7 @@ export default function SourceIntelligencePage() {
         {/* Developer detail panel */}
         {showDetail && (
           <div
-            className="rounded-xl border border-border bg-panel p-4 mb-4"
+            className="field-mapping-detail-panel rounded-xl border border-border bg-panel p-4 mb-4"
             data-testid="detail-panel"
           >
             <div className="text-sm font-semibold text-text mb-4 flex items-center justify-between">
