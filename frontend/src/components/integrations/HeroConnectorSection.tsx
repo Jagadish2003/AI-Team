@@ -20,11 +20,11 @@ export default function HeroConnectorSection({
 }) {
   return (
     <div>
-      <div className="mb-4">
-        <div className="text-xl font-semibold text-text">Connection Hub</div>
-        <div className="text-xs text-muted pb-3 pt-3">{DISCOVERY_SOURCE_REQUIREMENT_MESSAGE}</div>
+      <div className="mb-5 space-y-2">
+        <div className="text-xl font-semibold leading-tight text-text">Connection Hub</div>
+        <div className="max-w-3xl text-sm leading-relaxed text-muted">{DISCOVERY_SOURCE_REQUIREMENT_MESSAGE}</div>
       </div>
-      <div className="grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-3 xl:gap-4">
+      <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
         {connectors.map((c) => (
           <HeroConnectorCard
             key={c.id}

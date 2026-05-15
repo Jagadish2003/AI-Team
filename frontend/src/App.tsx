@@ -1,5 +1,6 @@
 import React from "react";
 import { Routes, Route, Navigate } from "react-router-dom";
+import { useNavigate } from 'react-router-dom';
 import { ConnectorProvider } from "./context/ConnectorContext";
 import { SourceIntakeProvider } from "./context/SourceIntakeContext";
 import { RunProvider } from "./context/RunContext";
@@ -9,6 +10,7 @@ import { NormalizationProvider } from "./context/NormalizationContext";
 import { ToastProvider } from "./components/common/Toast";
 import { AnalystReviewProvider } from "./context/AnalystReviewContext";
 import { EvidenceProvider } from "./context/EvidenceContext";
+import { ThemeProvider } from "./context/ThemeContext";
 
 import IntegrationHubPage from "./pages/IntegrationHubPage";
 import SourceIntakePage from "./pages/SourceIntakePage";
@@ -17,24 +19,27 @@ import PartialResultsPage from "./pages/PartialResultsPage";
 import NormalizationInspectorPage from "./pages/NormalizationInspectorPage";
 import AnalystReviewPage from "./pages/AnalystReviewPage";
 import OpportunityMapPage from "./pages/OpportunityMapPage";
-import OpportunityReviewPage from "./pages/OpportunityReviewPage"; // T41-2
+import OpportunityReviewPage from "./pages/OpportunityReviewPage";
 import SourceIntelligencePage from "./pages/SourceIntelligencePage";
 import PilotRoadmapPage from "./pages/PilotRoadmapPage";
 import BlueprintPage from "./pages/BlueprintPage";
 import ExecutiveReportPage from "./pages/ExecutiveReportPage";
+import StackBuilderPage from "./pages/StackBuilderPage";
 
 export default function App() {
+  const navigate = useNavigate();
   return (
-    <ToastProvider>
-      <ConnectorProvider>
-        <RunProvider>
-          <SourceIntakeProvider>
-            <DiscoveryRunProvider>
-              <PartialResultsProvider>
-                <NormalizationProvider>
-                  <AnalystReviewProvider>
-                    <EvidenceProvider>
-                      <Routes>
+    <ThemeProvider>
+      <ToastProvider>
+        <ConnectorProvider>
+          <RunProvider>
+            <SourceIntakeProvider>
+              <DiscoveryRunProvider>
+                <PartialResultsProvider>
+                  <NormalizationProvider>
+                    <AnalystReviewProvider>
+                      <EvidenceProvider>
+                        <Routes>
                         <Route
                           path="/"
                           element={<Navigate to="/integration-hub" replace />}
@@ -48,6 +53,17 @@ export default function App() {
                           // T41-8: Source Intake merged into Integration Hub.
                           // Redirect preserved for backward compatibility.
                           element={<Navigate to="/integration-hub" replace />}
+                        />
+                        <Route 
+                          path="/stack-builder" 
+                          element={
+                            <StackBuilderPage
+                              orgId="demo-org" 
+                              onComplete={(runId) => navigate(`/discovery-run?runId=${runId}`)}
+                              apiBase={import.meta.env.VITE_API_BASE_URL || "http://localhost:8000"}
+                              token={import.meta.env.VITE_DEV_JWT || "dev-token-change-me"}
+                            />
+                          } 
                         />
                         <Route
                           path="/discovery-run"
@@ -101,15 +117,16 @@ export default function App() {
                           path="*"
                           element={<Navigate to="/integration-hub" replace />}
                         />
-                      </Routes>
-                    </EvidenceProvider>
-                  </AnalystReviewProvider>
-                </NormalizationProvider>
-              </PartialResultsProvider>
-            </DiscoveryRunProvider>
-          </SourceIntakeProvider>
-        </RunProvider>
-      </ConnectorProvider>
-    </ToastProvider>
+                        </Routes>
+                      </EvidenceProvider>
+                    </AnalystReviewProvider>
+                  </NormalizationProvider>
+                </PartialResultsProvider>
+              </DiscoveryRunProvider>
+            </SourceIntakeProvider>
+          </RunProvider>
+        </ConnectorProvider>
+      </ToastProvider>
+    </ThemeProvider>
   );
 }

@@ -23,8 +23,8 @@ export default function ConnectorTile({
   return (
     <div
       onClick={onSelect}
-      className={`h-[190px] cursor-pointer rounded-xl border ${
-        selected ? 'border-accent bg-panel2' : 'border-border bg-panel'
+      className={`connector-card h-[190px] cursor-pointer rounded-xl border ${
+        selected ? 'connector-card-selected' : 'border-border bg-panel'
       } p-4 hover:border-accent/60 hover:bg-panel2`}
     >
       {/* Header */}
@@ -65,7 +65,7 @@ export default function ConnectorTile({
           variant={isConnected ? 'secondary' : 'primary'}
           className={`w-full ${
             isConnected
-              ? '!text-[#0D55D7] !border-[#0D55D7]/50'
+              ? 'light-view-data-button !border-accent/50 !text-accent'
               : ''
           }`}
           onClick={(e: React.MouseEvent<HTMLButtonElement>) => {

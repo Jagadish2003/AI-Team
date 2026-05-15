@@ -1,8 +1,7 @@
 import React from 'react';
-import { Plug } from 'lucide-react';
 import { Connector } from '../../types/connector';
 import ConnectorTile from './ConnectorTile';
-import { connectorIcons } from './ConnectorIcons';
+import { connectorIcons, fallbackConnectorIcon } from './ConnectorIcons';
 
 export default function ConnectorGridSection({
   connectors,
@@ -16,16 +15,18 @@ export default function ConnectorGridSection({
   onPrimary: (id: string) => void;
 }) {
   return (
-    <div className="mt-1 pb-2">
-      <div className="text-xl font-semibold text-text">Add more coverage</div>
-      <div className="text-xs text-muted pb-3 pt-3">Add sources to improve confidence and evidence coverage.</div>
+    <div>
+      <div className="mb-5 space-y-2">
+        <div className="text-xl font-semibold leading-tight text-text">Add more coverage</div>
+        <div className="max-w-3xl text-sm leading-relaxed text-muted">Add sources to improve confidence and evidence coverage.</div>
+      </div>
 
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:gap-4">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
         {connectors.map((c) => (
           <ConnectorTile
             key={c.id}
             connector={c}
-            icon={connectorIcons[c.name] || <Plug size={18} className="text-slate-500" />}
+            icon={connectorIcons[c.name] || fallbackConnectorIcon}
             selected={selectedId === c.id}
             onSelect={() => onSelect(c.id)}
             onPrimary={() => onPrimary(c.id)}

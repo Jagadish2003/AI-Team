@@ -21,9 +21,10 @@ def connect() -> sqlite3.Connection:
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     # timeout: how long a connection should wait for the lock to go away before raising an error.
     # check_same_thread: allow the same connection to be used in multiple threads (FastAPI threads).
-    con = sqlite3.connect(str(DB_PATH), timeout=20.0, check_same_thread=False)
-    # WAL mode allows multiple readers and one writer concurrently.
-    con.execute("PRAGMA journal_mode=WAL")
+    con = sqlite3.connect(str(DB_PATH), timeout=30.0, check_same_thread=False)
+    # Avoid changing journal mode on every request; that requires an exclusive
+    # lock and can fail under concurrent browser prefetches.
+    con.execute("PRAGMA busy_timeout=30000")
     return con
 
 

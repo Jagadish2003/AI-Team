@@ -46,13 +46,14 @@ npm install
 3. Add the `.env` files to both the `AgentIQ/backend` and `AgentIQ/frontend` folders.  
 > **Note:** The `backend/.env` and `frontend/.env` files are not included in the repository. Obtain them from the AgentIQ team and place them at `AgentIQ/backend/.env` and `AgentIQ/frontend/.env` respectively before proceeding.
 
-4. Add the `server.key` file to the `AgentIQ/backend/token_generation` folder.  
-> **Note:** The `server.key` file is not included in the repository. Obtain it from the AgentIQ team and place it at `AgentIQ/backend/token_generation/server.key` before proceeding.
+4. Add the required server key files to their respective folders under `AgentIQ/backend/token_generation`:
+   - `salesforce/server_salesforce.key`
+   - `ncino/server_ncino.key`
+   - `strs/server_strs.key`
 
-5. Add the `server_ncino.key` file to the `AgentIQ/backend/token_generation/ncino` folder.  
-> **Note:** The `server_ncino.key` file is not included in the repository. Obtain it from the AgentIQ team and place it at `AgentIQ/backend/token_generation/ncino/server_ncino.key` before proceeding.
+> **Note:** These server key files are not included in the repository. Ask the AgentIQ team for the server keys for `token_generation/salesforce`, `token_generation/ncino`, and `token_generation/strs`, then place them in their respective folders before proceeding.
 
-6. Generate the local database by running the following command from the `AgentIQ/backend` directory:
+5. Generate the local database by running the following command from the `AgentIQ/backend` directory:
 ```shell
 python database/seed_loader.py
 ```
