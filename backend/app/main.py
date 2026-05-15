@@ -18,6 +18,7 @@ from .replay import replay_run as replay_run_
 from .roadmap_engine import build_roadmap
 from .routes_normalization import register_normalization_routes
 from .routes_stack_builder import register_stack_builder_routes
+from .routes_stack_builder_launch import register_stack_builder_launch_routes
 from .routes_sprint4_t1 import register_sprint4_t1_routes
 from .routes_sprint4_t2 import register_sprint4_t2_routes
 from .routes_sprint4_t3 import register_sprint4_t3_routes
@@ -31,6 +32,7 @@ app = FastAPI(title="AgentIQ Layer 1 API Skeleton", version="0.1.0")
 
 # Register routes in order
 register_stack_builder_routes(app)
+register_stack_builder_launch_routes(app)
 register_sprint4_t6_routes(app)
 register_sprint4_t4_routes(app)
 register_sprint4_t3_routes(app)
