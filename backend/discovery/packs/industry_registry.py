@@ -114,8 +114,6 @@ INDUSTRY_REGISTRY: Dict[str, IndustryConfig] = {
             "salesforce":     SystemDefaultConfig("system_of_record",          "primary",   ["intake_requests", "approvals", "compliance_risk"]),
             "salesforce_pss": SystemDefaultConfig("system_of_record",          "primary",   ["intake_requests", "compliance_risk", "approvals"]),
             "salesforce_sc":  SystemDefaultConfig("system_of_record",          "primary",   ["service_casework", "intake_requests", "compliance_risk"]),
-            "neospin":        SystemDefaultConfig("system_of_record",          "primary",   ["intake_requests", "approvals", "compliance_risk"]),
-            "vitech":         SystemDefaultConfig("system_of_record",          "primary",   ["intake_requests", "approvals", "compliance_risk"]),
             "jira":           SystemDefaultConfig("operational_signal_source", "secondary", ["backlog_work_queues", "change_release"]),
             "servicenow":     SystemDefaultConfig("operational_signal_source", "secondary", ["compliance_risk", "backlog_work_queues"]),
             "confluence":     SystemDefaultConfig("documentation_system",      "secondary", ["documents_knowledge"]),

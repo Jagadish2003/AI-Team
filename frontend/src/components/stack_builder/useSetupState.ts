@@ -45,6 +45,7 @@ import {
 // Starting assumptions optimised for known packs — not cross-industry truths.
 
 const SYSTEM_DEFAULT_ASSUMPTIONS: Record<string, Partial<SystemWeighting>> = {
+  salesforce:        { role: 'system_of_record',         priority: 'primary',   workflowFocus: ['approvals', 'compliance_risk'] },
   salesforce_ncino:  { role: 'system_of_record',         priority: 'primary',   workflowFocus: ['intake_requests', 'approvals', 'compliance_risk'] },
   salesforce_sc:     { role: 'system_of_record',         priority: 'primary',   workflowFocus: ['service_casework', 'intake_requests', 'handoffs_routing'] },
   salesforce_pss:    { role: 'system_of_record',         priority: 'primary',   workflowFocus: ['intake_requests', 'approvals', 'compliance_risk'] },
@@ -54,8 +55,6 @@ const SYSTEM_DEFAULT_ASSUMPTIONS: Record<string, Partial<SystemWeighting>> = {
   oracle_ebs:        { role: 'system_of_record',         priority: 'primary',   workflowFocus: ['compliance_risk', 'approvals'] },
   workday:           { role: 'workflow_system',           priority: 'secondary', workflowFocus: ['intake_requests', 'compliance_risk'] },
   dynamics365:       { role: 'workflow_system',           priority: 'secondary', workflowFocus: ['intake_requests', 'handoffs_routing'] },
-  neospin:           { role: 'system_of_record',         priority: 'primary',   workflowFocus: ['compliance_risk', 'approvals', 'intake_requests'] },
-  vitech:            { role: 'system_of_record',         priority: 'primary',   workflowFocus: ['compliance_risk', 'approvals'] },
   jira:              { role: 'operational_signal_source', priority: 'secondary', workflowFocus: ['backlog_work_queues', 'change_release'] },
   servicenow:        { role: 'operational_signal_source', priority: 'secondary', workflowFocus: ['compliance_risk', 'backlog_work_queues'] },
   azure_devops:      { role: 'operational_signal_source', priority: 'secondary', workflowFocus: ['change_release', 'backlog_work_queues'] },
@@ -269,6 +268,7 @@ export function useSetupState() {
   const canProceedFromStep1 = state.focusId !== null;
   const canProceedFromStep2 = state.selectedSystemIds.length > 0 &&
     state.selectedSystemIds.some(id => state.weightings[id]?.priority === 'primary');
+  console.log(`state:`, state);
 
   const confidence = useMemo(() => calcSetupReadiness(state), [state]);
   const steps = useMemo(() => calcStepStatuses(state), [state]);
