@@ -191,7 +191,7 @@ def run_trackb_and_persist(
             run_id, "EXTRACT", "Extracting entities and identifying patterns..."
         )
         payload = trackb_run(
-            mode=mode, systems=succeeded, run_id=run_id, pack="ncino"
+            mode=mode, systems=succeeded, run_id=run_id, pack="strs_benefits"
         )  # added pack="ncino"
         seed = export_track_a_seed(payload)
 
