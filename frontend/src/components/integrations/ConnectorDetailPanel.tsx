@@ -111,18 +111,16 @@ function ConnectionHealthSection({ connector }: { connector: Connector }) {
 
 export default function ConnectorDetailPanel({
   connector,
-  onConfigure,
-  className = '',
+  onConfigure
 }: {
   connector: Connector | null;
   onConfigure: () => void;
-  className?: string;
 }) {
   const { push } = useToast(); 
 
   if (!connector) {
     return (
-      <div className={`rounded-xl border border-border bg-panel p-6 text-sm text-muted ${className}`}>
+      <div className="rounded-xl border border-border bg-panel p-4 text-sm text-muted">
         Select a connector to view details.
       </div>
     );
@@ -132,7 +130,7 @@ export default function ConnectorDetailPanel({
   const isConfigured = connector.configured;
 
   return (
-    <div className={`flex flex-col rounded-xl border border-border bg-panel p-6 ${className}`}>
+    <div className="rounded-xl border border-border bg-panel p-5">
       
       {/* Header */}
       <div className="flex items-start justify-between gap-2">
@@ -196,7 +194,7 @@ export default function ConnectorDetailPanel({
       <ConnectionHealthSection connector={connector} />
 
       {/* CTA */}
-      <div className="mt-auto pt-5">
+      <div className="mt-5">
         <Button
           variant="primary"
           className="w-full whitespace-nowrap"
