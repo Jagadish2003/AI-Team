@@ -49,9 +49,10 @@ import { ConfidenceState } from '../../types/stack_builder';
 interface Props {
   state: ConfidenceState;
   showSummary?: boolean;
+  className?: string;
 }
 
-export default function DiscoveryConfidenceBar({ state, showSummary = false }: Props) {
+export default function DiscoveryConfidenceBar({ state, showSummary = false, className = '' }: Props) {
   const trackFill: Record<string, string> = {
     basic:  'bg-amber-400',
     good:   'bg-amber-500',
@@ -77,7 +78,7 @@ export default function DiscoveryConfidenceBar({ state, showSummary = false }: P
   };
 
   return (
-    <div className={`rounded-lg border px-4 py-3 mb-6 ${containerClass[state.level]}`}>
+    <div className={`rounded-lg border px-4 py-3 ${containerClass[state.level]} ${className}`}>
 
       {/* Bar row */}
       <div className="flex items-center gap-3 mb-1.5">

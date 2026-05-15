@@ -70,6 +70,14 @@ def _set_status(run_id: str, status: str, counts: Optional[Dict[str, int]] = Non
     # Preferred: run_kv_set (run-scoped KV)
     if hasattr(db, "run_kv_set"):
         db.run_kv_set("status", run_id, payload)
+        try:
+            run = db.run_get(run_id)
+            if run:
+                run["status"] = status
+                run["updatedAt"] = payload["updatedAt"]
+                db.run_set(run_id, run)
+        except Exception:
+            logger.warning("Could not mirror status onto run record for %s", run_id, exc_info=True)
     else:
         # Fallback: store on run record if only run_set exists
         run = db.run_get(run_id)
@@ -84,14 +92,29 @@ def _get_status(run_id: str) -> Dict[str, Any]:
     return run.get("status") or {}
 
 
+def _append_event(run_id: str, stage: str, message: str, level: str = "INFO") -> None:
+    event = {
+        "id": f"ev_{int(time.time() * 1000)}_{stage}",
+        "tsLabel": _now_iso(),
+        "stage": stage,
+        "message": message,
+        "level": level,
+    }
+    events = db.kv_get(f"events:{run_id}") or []
+    db.kv_set(f"events:{run_id}", [*events, event])
+
+
 def _run_trackb_and_persist(run_id: str, mode: str, systems: List[str], pack: Optional[str] = None) -> None:
     """Background task: execute Track B and persist Track A-shaped artifacts."""
     try:
+        _append_event(run_id, "COMPUTE", f"Discovery compute started for {len(systems)} system inputs.")
+
         # Build run_context for Track B runner (primarily runId)
         run = db.run_get(run_id)  # may raise HTTPException(404) in Track A backend
         run_context = {"runId": run_id, "inputs": run.get("inputs") or {}}
 
         payload = run_trackb(mode=mode, systems=systems, run_context=run_context, pack=pack)
+        _append_event(run_id, "INGEST", "Source ingestion and detector analysis completed.")
 
         # Convert Track B payload -> Track A seed shapes (opportunities + flattened evidence)
         seed = export_track_a_seed(payload, id_counter=itertools.count(1))
@@ -114,10 +137,12 @@ def _run_trackb_and_persist(run_id: str, mode: str, systems: List[str], pack: Op
             db.run_set(run_id, run)
 
         _set_status(run_id, "complete", counts={"opportunities": len(opps), "evidence": len(evidence)})
+        _append_event(run_id, "COMPLETE", f"Discovery completed with {len(opps)} opportunities and {len(evidence)} evidence items.")
         update_connector_metrics_from_run(payload, systems)
 
     except Exception as e:  # noqa: BLE001
         _set_status(run_id, "failed", error=str(e))
+        _append_event(run_id, "FAILED", f"Discovery failed: {e}", level="ERROR")
 
 
 def register_sprint4_t1_routes(app: FastAPI) -> None:
@@ -147,6 +172,7 @@ def register_sprint4_t1_routes(app: FastAPI) -> None:
 
         # Mark status running and return immediately.
         _set_status(run_id, "running", counts={"opportunities": 0, "evidence": 0})
+        _append_event(run_id, "QUEUED", "Discovery run queued.")
         background_tasks.add_task(_run_trackb_and_persist, run_id, body.mode, body.systems, body.pack)
 
         return ComputeResponse(

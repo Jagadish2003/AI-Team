@@ -9,6 +9,7 @@ import { ProgressStep, StepStatus } from '../../types/stack_builder';
 
 interface Props {
   steps: ProgressStep[];
+  className?: string;
 }
 
 function StepDot({ step }: { step: ProgressStep }) {
@@ -18,7 +19,7 @@ function StepDot({ step }: { step: ProgressStep }) {
   if (step.status === 'completed') {
     return (
       <div
-        className={`${base} bg-emerald-500/15 border border-emerald-500/50 text-emerald-500`}
+        className={`${base} border border-accent/50 bg-accent/15 text-accent`}
         aria-label={`Step ${step.number}: ${step.label} — completed`}
       >
         <svg width="11" height="11" viewBox="0 0 11 11" fill="none" aria-hidden="true">
@@ -37,7 +38,7 @@ function StepDot({ step }: { step: ProgressStep }) {
   if (step.status === 'active') {
     return (
       <div
-        className={`${base} bg-emerald-500 text-white`}
+        className={`${base} bg-accent text-textwhite`}
         aria-label={`Step ${step.number}: ${step.label} — current step`}
         aria-current="step"
       >
@@ -78,9 +79,9 @@ function StepDot({ step }: { step: ProgressStep }) {
 function stepLabelClass(status: StepStatus): string {
   switch (status) {
     case 'completed':
-      return 'text-emerald-500';
+      return 'text-accent';
     case 'active':
-      return 'text-emerald-500 font-medium';
+      return 'font-medium text-text';
     case 'needs_attention':
       return 'text-amber-500';
     case 'pending':
@@ -95,16 +96,16 @@ function ConnectorLine({ fromStatus }: { fromStatus: StepStatus }) {
   return (
     <div
       className={`h-px flex-1 transition-colors duration-200 ${
-        isCompleted ? 'bg-emerald-500/40' : 'bg-border'
+        isCompleted ? 'bg-accent/50' : 'bg-border'
       }`}
       aria-hidden="true"
     />
   );
 }
 
-export default function StackBuilderProgressBar({ steps }: Props) {
+export default function StackBuilderProgressBar({ steps, className = '' }: Props) {
   return (
-    <nav aria-label="Setup progress" className="flex items-center gap-2 mb-8">
+    <nav aria-label="Setup progress" className={`flex min-w-0 items-center gap-2 overflow-x-auto pb-1 ${className}`}>
       {steps.map((step, i) => (
         <React.Fragment key={step.number}>
           <div className="flex flex-shrink-0 items-center gap-2">

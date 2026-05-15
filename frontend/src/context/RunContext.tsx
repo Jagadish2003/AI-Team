@@ -81,7 +81,7 @@ export function RunProvider({ children }: { children: React.ReactNode }) {
       };
     }
 
-    _setRunId((current) => (current === candidate ? current : null));
+    _setRunId((current) => (current === candidate ? current : candidate));
 
     validateRunId(candidate).then((valid) => {
       if (cancelled) return;
@@ -105,21 +105,19 @@ export function RunProvider({ children }: { children: React.ReactNode }) {
     (id: string | null) => {
       const nextId = id && isCanonicalRunId(id) ? id : null;
       _setRunId(nextId);
-      const next = new URLSearchParams(searchParams);
-      if (nextId) {
-        next.set("runId", nextId);
-        try {
-          localStorage.setItem(LS_KEY, nextId);
-        } catch {}
-      } else {
-        next.delete("runId");
-        try {
-          localStorage.removeItem(LS_KEY);
-        } catch {}
-      }
-      setSearchParams(next, { replace: true });
+      try {
+        if (nextId) localStorage.setItem(LS_KEY, nextId);
+        else localStorage.removeItem(LS_KEY);
+      } catch {}
+
+      setSearchParams((prev) => {
+        const next = new URLSearchParams(prev);
+        if (nextId) next.set("runId", nextId);
+        else next.delete("runId");
+        return next;
+      }, { replace: true });
     },
-    [searchParams, setSearchParams]
+    [setSearchParams]
   );
 
   const clearRunId = useCallback(() => setRunId(null), [setRunId]);

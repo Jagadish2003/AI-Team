@@ -87,8 +87,8 @@ export default function PillTag({
   const stateClasses = disabled
     ? 'border-border/50 bg-panel/50 text-muted/50 cursor-not-allowed'
     : selected
-    ? 'border-emerald-500 bg-emerald-500/15 text-emerald-600 cursor-pointer'
-    : 'border-border bg-panel text-muted hover:border-emerald-500/50 hover:text-text cursor-pointer';
+    ? 'border-accent bg-accent/15 text-blue-100 cursor-pointer'
+    : 'border-border bg-panel text-muted hover:border-accent/50 hover:text-text cursor-pointer';
 
   return (
     <button
@@ -102,7 +102,7 @@ export default function PillTag({
       onKeyDown={handleKey}
       className={[
         'inline-flex items-center rounded-full border font-medium leading-none transition-colors',
-        'focus:outline-none focus:ring-2 focus:ring-emerald-500/50',
+        'focus:outline-none focus:ring-2 focus:ring-accent/50',
         sizeClasses,
         stateClasses,
       ].join(' ')}

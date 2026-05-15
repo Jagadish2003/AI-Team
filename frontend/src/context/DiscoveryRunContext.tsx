@@ -59,12 +59,17 @@ export function DiscoveryRunProvider({ children }: { children: React.ReactNode }
       setLoading(true);
       setError(null);
       try {
-        const [r, ev] = await Promise.all([fetchRun(runId), fetchRunEvents(runId)]);
+        const [r, ev, statusPayload] = await Promise.all([
+          fetchRun(runId),
+          fetchRunEvents(runId),
+          fetchRunStatus(runId),
+        ]);
         if (cancelled) return;
-        setRun(r);
+        const status = (statusPayload.status ?? r.status) as DiscoveryRun['status'];
+        setRun({ ...r, status });
         setEvents(ev);
         setStarted(true);
-        setComputing(!isTerminalStatus(r.status));
+        setComputing(!isTerminalStatus(status));
       } catch (e: any) {
         if (cancelled) return;
         if (isRunNotFoundError(e)) {
@@ -96,7 +101,6 @@ export function DiscoveryRunProvider({ children }: { children: React.ReactNode }
         setRun((prev) => (prev ? { ...prev, status: status as DiscoveryRun['status'] } : prev));
         if (isTerminalStatus(status)) {
           setComputing(false);
-          setFetchCount((c) => c + 1);
         }
       } catch (e: any) {
         if (isRunNotFoundError(e)) {

@@ -127,7 +127,7 @@ type BadgeVariant = 'role' | 'secondary';
 
 function WeightingBadge({ label, variant }: { label: string; variant: BadgeVariant }) {
   const classes: Record<BadgeVariant, string> = {
-    role:      'bg-emerald-500/10 border-emerald-500/20 text-emerald-600',
+    role:      'border-accent/30 bg-accent/15 text-blue-100',
     secondary: 'bg-panel border-border text-muted',
   };
   return (
@@ -196,8 +196,8 @@ export default function SystemWeightingCard({
         onClick={() => setExpanded(e => !e)}
         className={[
           'w-full flex items-center gap-3 px-4 py-3 text-left transition-colors',
-          'focus:outline-none focus:ring-2 focus:ring-emerald-500/50 focus:ring-inset',
-          expanded ? 'bg-emerald-500/[0.03]' : 'hover:bg-emerald-500/[0.04]',
+          'focus:outline-none focus:ring-2 focus:ring-accent/50 focus:ring-inset',
+          expanded ? 'bg-accent/10' : 'hover:bg-panel2',
         ].join(' ')}
         aria-expanded={expanded}
       >
@@ -223,7 +223,7 @@ export default function SystemWeightingCard({
 
         {/* Confirmed label */}
         {weighting.confirmed && !expanded && (
-          <span className="flex items-center gap-1 text-xs text-emerald-500 font-medium flex-shrink-0 mr-2">
+          <span className="flex items-center gap-1 text-xs text-accent font-medium flex-shrink-0 mr-2">
             <svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true">
               <path d="M2 6l3 3 5-5" stroke="currentColor" strokeWidth="1.5"
                 strokeLinecap="round" strokeLinejoin="round"/>
@@ -324,8 +324,8 @@ export default function SystemWeightingCard({
               className={[
                 'inline-flex items-center gap-1.5 rounded-md px-4 py-2',
                 'text-sm font-medium text-white',
-                'bg-emerald-500 hover:bg-emerald-600 transition-colors',
-                'focus:outline-none focus:ring-2 focus:ring-emerald-500/50',
+                'bg-accent hover:bg-accent/90 transition-colors',
+                'focus:outline-none focus:ring-2 focus:ring-accent/50',
               ].join(' ')}
             >
               <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">

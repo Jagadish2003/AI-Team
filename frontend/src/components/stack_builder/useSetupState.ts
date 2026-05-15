@@ -262,6 +262,10 @@ export function useSetupState() {
     setState(s => ({ ...s, currentStep: step }));
   }, []);
 
+  const restoreState = useCallback((nextState: SetupState) => {
+    setState(nextState);
+  }, []);
+
   const canProceedFromStep1 = state.focusId !== null;
   const canProceedFromStep2 = state.selectedSystemIds.length > 0 &&
     state.selectedSystemIds.some(id => state.weightings[id]?.priority === 'primary');
@@ -295,6 +299,7 @@ export function useSetupState() {
     toggleSalesforceCloud,
     updateWeighting,
     goTo,
+    restoreState,
     canProceedFromStep1,
     canProceedFromStep2,
     confidence,
