@@ -203,13 +203,6 @@ export function BlueprintContent({ blueprint }: { blueprint: BlueprintResponse }
         <SectionBlock
           icon={<FileText size={16} />}
           title="Agent Purpose"
-          headerRight={
-            blueprint.agentTopicIsLlm ? (
-              <span className="text-xs border border-bg rounded px-1.5 py-0.5 text-text">
-                Claude
-              </span>
-            ) : null
-          }
         >
           <p className="text-sm leading-relaxed text-text">
             {blueprint.agentTopic?.trim()

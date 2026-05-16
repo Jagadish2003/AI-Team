@@ -35,11 +35,6 @@ export default function KeyInsights() {
       {/* Header */}
       <div className="flex items-center justify-between mb-2">
         <div className="text-sm font-semibold text-text">Key Insights</div>
-        {llmSummary && (
-          <span className="text-xs border border-bg rounded px-1.5 py-0.5 text-text">
-            Claude
-          </span>
-        )}
       </div>
 
       {/* Executive summary — LLM or static fallback */}
