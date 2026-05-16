@@ -1,5 +1,5 @@
 """
-T41-1d contract tests v1.2 — Agentforce Blueprint endpoint
+T41-1d contract tests v1.2 — Agent Blueprint endpoint
 
 Changes from v1.0:
   - Added test: detector_id is read from _debug.detector_id, not category

@@ -40,6 +40,20 @@ def detect(
     if overdue_count == 0:
         return []
 
+    # ── ENG-STRS-CORR-1/2: Mark corroboration in raw_evidence ──────────────
+    # runner.py reads these flags to set jira_corroborated/sn_corroborated.
+    # jira_data and sn_data contain by_detector dicts from corroboration modules.
+    jira_corroborated = bool(
+        jira_data and
+        isinstance(jira_data, dict) and
+        jira_data.get("by_detector", {}).get("BENEFIT_ELECTION_DEADLINE")
+    )
+    sn_corroborated = bool(
+        sn_data and
+        isinstance(sn_data, dict) and
+        sn_data.get("by_detector", {}).get("BENEFIT_ELECTION_DEADLINE")
+    )
+
     return [DetectorResult(
         detector_id=DETECTOR_ID,
         signal_source="salesforce",
@@ -51,6 +65,8 @@ def detect(
             "max_days_overdue":       max_days_overdue,
             "election_deadline_days": deadline_days,
             "default_plan_risk":      default_plan_risk,
+            "jira_corroborated":    jira_corroborated,
+            "sn_corroborated":      sn_corroborated,
             "primary_object":         "BenefitAssignment",
             "sme_note":               metrics.get("sme_note", ""),
         },

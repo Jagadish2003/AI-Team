@@ -29,6 +29,12 @@ Thresholds (pre-SME, to be confirmed by SF-STRS-1 / SF-STRS-3):
                                      to required payment election)
   DISBURSEMENT_OVERDUE_DAYS:     0  (any NextPayoutDate < TODAY = overdue)
   WINDOW_DAYS:                  90  (lookback window for all queries)
+
+Corroboration (Fix Pack Sprint 7 — ENG-STRS-CORR-1/2):
+  Jira and ServiceNow corroboration now wired in.
+  get_jira_strs_correlation() and get_sn_strs_correlation() build
+  by_detector dicts consumed by runner.py for evidence attachment.
+  Follows exact same pattern as nCino lending_correlation in jira.py/servicenow.py.
 """
 
 from __future__ import annotations
@@ -41,6 +47,14 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from . import is_live
+from .strs_jira_corroboration import (
+    get_strs_correlation as get_jira_strs_correlation,
+    fetch_strs_jira_issues,
+)
+from .strs_sn_corroboration import (
+    get_strs_correlation as get_sn_strs_correlation,
+    fetch_strs_sn_incidents,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -312,6 +326,7 @@ def _build_application_metrics(
         "avg_days_stalled":     round(sum(stalled_days) / len(stalled_days), 1) if stalled_days else 0.0,
         "stall_threshold_days": APPLICATION_STALL_DAYS,
         "primary_object":       "IndividualApplication",
+        "sme_note":             "SF-STRS-1 to confirm Status picklist values and stall threshold",
     }
 
 
@@ -365,6 +380,7 @@ def _build_election_metrics(
         "election_deadline_days":   ELECTION_DEADLINE_DAYS,
         "default_plan_risk":        len(overdue) > 0,
         "primary_object":           "BenefitAssignment",
+        "sme_note":                 "SF-STRS-1 to confirm ApprovalStatus vs Status for election detection",
     }
 
 
@@ -462,6 +478,7 @@ def _build_disability_metrics(
         # compliance_override when member has stopped work — proxy: max_days >= 30
         "member_stopped_work":      max_days >= REVIEW_THRESHOLD_DAYS and len(pending) > 0,
         "primary_object":           "Case",
+        "sme_note":                 "SF-STRS-2 to confirm Case RecordType for disability and stage field",
     }
 
 
@@ -514,6 +531,40 @@ def ingest() -> Dict[str, Any]:
             "STRS ingestion: OK — applications=%d assignments=%d disbursements=%d disability_cases=%d",
             len(applications), len(benefit_assignments), len(disbursements), len(disability_cases),
         )
+
+        # ── Jira corroboration ────────────────────────────────────────────
+        # Fetch STRS-relevant Jira issues and build by_detector correlation.
+        # Non-blocking — Jira failure does not abort STRS ingestion.
+        jira_strs_correlation = {"by_detector": {}, "total_matched": 0, "strs_issues": []}
+        try:
+            from .jira import _get_client as _get_jira_client
+            jira_client = _get_jira_client()
+            jira_issues = fetch_strs_jira_issues(jira_client)
+            jira_strs_correlation = get_jira_strs_correlation(jira_issues)
+            logger.info(
+                "Jira STRS correlation: %d issues matched",
+                jira_strs_correlation["total_matched"],
+            )
+        except Exception as e:
+            logger.warning("Jira STRS corroboration failed (non-blocking): %s", e)
+
+        # ── ServiceNow corroboration ──────────────────────────────────────
+        sn_strs_correlation = {"by_detector": {}, "total_matched": 0, "strs_incidents": []}
+        try:
+            from .servicenow import _get_client as _get_sn_client
+            sn_client = _get_sn_client()
+            sn_incidents = fetch_strs_sn_incidents(sn_client)
+            sn_strs_correlation = get_sn_strs_correlation(sn_incidents)
+            logger.info(
+                "ServiceNow STRS correlation: %d incidents matched",
+                sn_strs_correlation["total_matched"],
+            )
+        except Exception as e:
+            logger.warning("ServiceNow STRS corroboration failed (non-blocking): %s", e)
+
+        metrics["jira_strs_correlation"] = jira_strs_correlation
+        metrics["sn_strs_correlation"]   = sn_strs_correlation
+
         return metrics
 
     # ── Offline fixture path ──────────────────────────────────────────────────
@@ -536,6 +587,44 @@ def ingest() -> Dict[str, Any]:
         len(applications), len(benefit_assignments), len(disbursements), len(disability_cases),
     )
 
-    return _build_strs_metrics(
+    metrics = _build_strs_metrics(
         applications, benefit_assignments, disbursements, disability_cases
     )
+
+    # ── Offline corroboration — load from seed fixtures ───────────────────────
+    import json as _json
+    from pathlib import Path as _Path
+
+    _JIRA_SEED   = _Path(__file__).parent / "fixtures" / "strs_jira_seed.json"
+    _SN_SEED     = _Path(__file__).parent / "fixtures" / "strs_sn_seed.json"
+
+    jira_strs_correlation = {"by_detector": {}, "total_matched": 0, "strs_issues": []}
+    if _JIRA_SEED.exists():
+        try:
+            _jira_seed = _json.loads(_JIRA_SEED.read_text())
+            jira_issues = _jira_seed.get("issues", [])
+            jira_strs_correlation = get_jira_strs_correlation(jira_issues)
+            logger.info(
+                "Jira STRS correlation (offline seed): %d issues matched",
+                jira_strs_correlation["total_matched"],
+            )
+        except Exception as e:
+            logger.warning("Jira STRS seed load failed: %s", e)
+
+    sn_strs_correlation = {"by_detector": {}, "total_matched": 0, "strs_incidents": []}
+    if _SN_SEED.exists():
+        try:
+            _sn_seed = _json.loads(_SN_SEED.read_text())
+            sn_incidents = _sn_seed.get("incidents", [])
+            sn_strs_correlation = get_sn_strs_correlation(sn_incidents)
+            logger.info(
+                "ServiceNow STRS correlation (offline seed): %d incidents matched",
+                sn_strs_correlation["total_matched"],
+            )
+        except Exception as e:
+            logger.warning("ServiceNow STRS seed load failed: %s", e)
+
+    metrics["jira_strs_correlation"] = jira_strs_correlation
+    metrics["sn_strs_correlation"]   = sn_strs_correlation
+
+    return metrics

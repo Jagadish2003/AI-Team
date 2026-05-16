@@ -35,8 +35,8 @@ const items = [
   },
   { to: "/pilot-roadmap", label: "Agent Roadmap", runScoped: true },
   {
-    to: "/agentforce-blueprint",
-    label: "Agentforce Blueprint",
+    to: "/agent-blueprint",
+    label: "Agent Blueprint",
     runScoped: true,
     sfOnly: true,
   },

@@ -212,6 +212,8 @@ export default function YourSystemsPage({ setupState }: Props) {
     canProceedFromStep2,
   } = setupState;
 
+  console.log(`state:`, state);
+
   const selectedPrimaryId = PRIMARY_PLATFORMS.find(p =>
     state.selectedSystemIds.includes(p.id)
   )?.id ?? null;

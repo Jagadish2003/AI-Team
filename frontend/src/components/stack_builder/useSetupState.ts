@@ -1,21 +1,3 @@
-/**
- * useSetupState — SB-1 Sprint 7
- *
- * Central state management hook for the 4-screen setup flow.
- * Holds all setup state, navigation, and derived values.
- *
- * Used by:
- *   - DiscoveryFocusScreen (Screen 1)
- *   - YourSystemsScreen (Screen 2)
- *   - SourceWeightingScreen (Screen 3)
- *   - DiscoveryPlanScreen (Screen 4)
- *
- * Key design: state persists across all 4 screens.
- * Back navigation does NOT reset state.
- * Changing a selection on Screen 2 marks Screen 3 as needs_attention
- * if weighting was previously confirmed.
- */
-
 import { useState, useCallback, useMemo } from 'react';
 import {
   SetupState, FocusId, IndustryId, TemplateId,
@@ -23,26 +5,6 @@ import {
   ProgressStep, StepStatus, ConfidenceState, ConfidenceLevel,
 } from '../../types/stack_builder';
 
-// ── Default weighting assumptions per system ID ───────────────────────────────
-//
-// ARCHITECTURAL NOTE (Sprint 7 — confirmed by architect review May 2026):
-// These are recommendation seeds only. They are starting assumptions optimised
-// for the known AgentIQ packs (nCino, PSS). They are NOT hardcoded semantic
-// truths applicable across all industries or organisations.
-//
-// Examples of where defaults may be wrong:
-//   - Workday may be system-of-record in HR-primary organisations
-//   - SAP may be workflow-centric depending on module and use case
-//   - Dynamics 365 may be primary in non-Salesforce estates
-//   - ServiceNow may be system-of-record-like in certain operational contexts
-//
-// These defaults must remain editable by the user and extensible by pack.
-// A logistics customer's SAP is not the same as a pension fund's SAP.
-// Sprint 8 story: make defaults industry-registry-aware (pull from SB-3 IndustryConfig).
-//
-// Internal name: SYSTEM_DEFAULT_ASSUMPTIONS
-// Do not treat as authoritative business meaning.
-// Starting assumptions optimised for known packs — not cross-industry truths.
 
 const SYSTEM_DEFAULT_ASSUMPTIONS: Record<string, Partial<SystemWeighting>> = {
   salesforce:        { role: 'system_of_record',         priority: 'primary',   workflowFocus: ['approvals', 'compliance_risk'] },
@@ -81,28 +43,6 @@ function defaultWeighting(systemId: string): SystemWeighting {
     confirmed: false,
   };
 }
-
-// ── Setup readiness calculation ────────────────────────────────────────────────
-//
-// ARCHITECTURAL NOTE (Sprint 7 — confirmed by architect review May 2026):
-// This function calculates CONFIGURATION READINESS, not discovery confidence.
-// Internal name: calcSetupReadiness / SetupReadinessScore.
-//
-// What it measures:
-//   - Has the user selected a primary platform?         (+40%)
-//   - Have they added operational signal sources?       (+17% each, max 35%)
-//   - Have they added a documentation system?           (+15%)
-//   - Have they confirmed source weighting on Screen 3? (+10%)
-//
-// What it does NOT yet measure:
-//   - Source diversity or relevance
-//   - Actual authentication / connection state
-//   - Pack-specific signal coverage
-//   - Runtime discovery quality from previous runs
-//
-// UI label: "Discovery confidence" — retained as user-facing language.
-// Internal model: SetupReadinessScore.
-// This will evolve as runtime discovery quality signals become available (Sprint 9+).
 
 function calcSetupReadiness(state: SetupState): ConfidenceState {
   const { selectedSystemIds, weightings, currentStep } = state;
@@ -261,34 +201,37 @@ export function useSetupState() {
     setState(s => ({ ...s, currentStep: step }));
   }, []);
 
-  const restoreState = useCallback((saved: Partial<SetupState>) => {
-    setState(s => ({ ...s, ...saved }));
-  }, []);
-
   const canProceedFromStep1 = state.focusId !== null;
-  const canProceedFromStep2 = state.selectedSystemIds.length > 0 &&
-    state.selectedSystemIds.some(id => state.weightings[id]?.priority === 'primary');
-  console.log(`state:`, state);
+  // Fix Pack Sprint 7: canProceedFromStep2 must check selectedSystemIds
+  // against known primary platform IDs — NOT against weighting priority.
+  // Weighting priority is set on Screen 3, not Screen 2.
+  // 'salesforce' base ID MUST be included — selecting Salesforce card
+  // before cloud picker adds 'salesforce' (not 'salesforce_pss' etc.)
+  const PRIMARY_PLATFORM_IDS = [
+    'sap', 'oracle_ebs', 'workday', 'dynamics365',
+    'salesforce',        // base ID — cloud picker adds salesforce_pss etc. separately
+    'salesforce_pss', 'salesforce_sc', 'salesforce_ncino',
+    'salesforce_fsc', 'salesforce_rc', 'salesforce_hc',
+  ];
+  const canProceedFromStep2 = state.selectedSystemIds.some(id =>
+    PRIMARY_PLATFORM_IDS.includes(id)
+  );
 
   const confidence = useMemo(() => calcSetupReadiness(state), [state]);
   const steps = useMemo(() => calcStepStatuses(state), [state]);
-
-  // Engineering / change role relevance
-  // ARCHITECTURAL NOTE (Sprint 7 — confirmed by architect review May 2026):
-  // Current logic: tool-based only. Show Engineering/Change role when any of
-  // the listed code/engineering systems are present in the selected estate.
-  //
-  // This is a temporary first approximation. Known limitations:
-  //   - Azure DevOps is frequently used as work tracking, not engineering
-  //   - Jira can represent change activity in engineering-led organisations
-  //   - ServiceNow can be operational-system-of-record in some contexts
-  //
-  // Sprint 8 story: make showEngineeringRole focus-aware and domain-aware.
-  // Logic should consider: selected systems + chosen focus + industry context.
   const codeEngineeringSystems = ['github', 'gitlab', 'bitbucket', 'azure_repos', 'azure_devops'];
   const showEngineeringRole = state.selectedSystemIds.some(id =>
     codeEngineeringSystems.includes(id)
   );
+
+  const restoreState = useCallback((saved: Partial<SetupState>) => {
+    // Merge saved state into current state.
+    // Partial — only fields present in the snapshot are restored.
+    // Fields absent from the snapshot retain their current (default) values.
+    // Sprint 8: add validation that saved systemIds still exist in registry.
+    setState(s => ({ ...s, ...saved }));
+  }, []);
+
 
   return {
     state,
@@ -299,11 +242,11 @@ export function useSetupState() {
     toggleSalesforceCloud,
     updateWeighting,
     goTo,
-    restoreState,
     canProceedFromStep1,
     canProceedFromStep2,
     confidence,
     steps,
     showEngineeringRole,
+    restoreState,
   };
 }

@@ -99,7 +99,7 @@ export default function IntegrationHubPage() {
       <PageShell
         title="Integration Hub"
         description="Connect enterprise systems and optional file sources to provide data for discovery."
-        contentClassName="pb-[190px] xl:pb-28"
+        contentClassName="pb-[240px] xl:pb-40"
       >
         {loading && <LoadingPanel />}
         {error && !loading && <ErrorPanel message={error} onRetry={refetch} />}

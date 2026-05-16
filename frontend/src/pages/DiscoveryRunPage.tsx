@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Loader2 } from "lucide-react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { InfoPanel } from "../components/common/InfoPanel";
@@ -66,11 +66,11 @@ function ComputingPill() {
   );
 }
 
-function PartialResultsPill() {
+function SourceIntelligenceReadyPill() {
   return (
     <span className="inline-flex h-7 items-center gap-2 rounded-full border border-accent/30 bg-accent/10 px-3 text-[13px] font-semibold leading-none text-blue-100 shadow-[0_0_0_1px_rgba(37,99,235,0.08)]">
       <span className="h-1.5 w-1.5 rounded-full bg-accent" />
-      Source Intelligence Ready
+      Source Intelligence ready
     </span>
   );
 }
@@ -83,7 +83,7 @@ function formatRunTimestamp(value?: string | null) {
 
 export default function DiscoveryRunPage() {
   const [autoScroll, setAutoScroll] = useState(true);
-  const [showAutoScroll, setShowAutoScroll] = useState(false);
+  const [logHasOverflow, setLogHasOverflow] = useState(false);
   const logScrollRef = useRef<HTMLDivElement | null>(null);
   const nav = useNavigate();
   const location = useLocation();
@@ -111,7 +111,6 @@ export default function DiscoveryRunPage() {
   const isMaterialized =
     status === "complete" || status === "completed" || status === "partial";
   const isComplete = status === "complete" || status === "completed";
-  const isPartial = status === "partial";
   const runScopedPath = (path: string) =>
     runId ? `${path}?runId=${runId}` : path;
 
@@ -149,7 +148,25 @@ export default function DiscoveryRunPage() {
       mode: "live" as const,
     };
   }, [connectors, uploadedFiles]); // T41-8: sampleWorkspaceEnabled removed
-  const summaryInputs = run?.inputs ?? inputs;
+
+  // Fix Pack Sprint 7: read connected sources from run record when available.
+  // Stack Builder runs store selectedSystemIds on the run record via the
+  // launch endpoint (routes_stack_builder_launch.py). Use those system IDs
+  // as the display source list so Discovery Run shows the actual systems
+  // used — not Integration Hub connector status (which shows None when
+  // systems are not yet authorized in Integration Hub).
+  const runSelectedSystems: string[] = (run as any)?.selectedSystemIds ?? [];
+  const summaryInputs = useMemo(() => {
+    if (runSelectedSystems.length > 0) {
+      return {
+        connectedSources: runSelectedSystems,
+        uploadedFiles: uploadedFiles.map((f) => f.name),
+        sampleWorkspaceEnabled: false,
+        mode: "live" as const,
+      };
+    }
+    return run?.inputs ?? inputs;
+  }, [run, runSelectedSystems, inputs, uploadedFiles]);
 
   const hasAtLeastOneSource =
     inputs.connectedSources.length > 0 ||
@@ -178,31 +195,34 @@ export default function DiscoveryRunPage() {
     el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
   }, [events, autoScroll]);
 
-  useEffect(() => {
+  const updateLogOverflow = useCallback(() => {
     const el = logScrollRef.current;
     if (!el) {
-      setShowAutoScroll(false);
+      setLogHasOverflow(false);
       return;
     }
+    setLogHasOverflow(el.scrollHeight > el.clientHeight + 1);
+  }, []);
 
-    const updateVisibility = () => {
-      setShowAutoScroll(el.scrollHeight > el.clientHeight + 1);
-    };
+  useEffect(() => {
+    updateLogOverflow();
+  }, [events, updateLogOverflow]);
 
-    updateVisibility();
-    window.addEventListener("resize", updateVisibility);
+  useEffect(() => {
+    const el = logScrollRef.current;
+    if (!el) return;
 
-    let resizeObserver: ResizeObserver | null = null;
-    if (typeof ResizeObserver !== "undefined") {
-      resizeObserver = new ResizeObserver(updateVisibility);
-      resizeObserver.observe(el);
+    updateLogOverflow();
+
+    if (typeof ResizeObserver === "undefined") {
+      window.addEventListener("resize", updateLogOverflow);
+      return () => window.removeEventListener("resize", updateLogOverflow);
     }
 
-    return () => {
-      window.removeEventListener("resize", updateVisibility);
-      resizeObserver?.disconnect();
-    };
-  }, [events]);
+    const observer = new ResizeObserver(updateLogOverflow);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [updateLogOverflow]);
 
   if (loading || (!runId && autoStartRequested && hasAtLeastOneSource)) {
     return (
@@ -304,7 +324,7 @@ export default function DiscoveryRunPage() {
                 status={run?.status}
               />
               {computing && <ComputingPill />}
-              {!computing && isPartial && <PartialResultsPill />}
+              {!computing && isMaterialized && <SourceIntelligenceReadyPill />}
             </p>
             {run?.startedAt && (
               <p className="mt-1 text-xs text-muted">
@@ -341,7 +361,7 @@ export default function DiscoveryRunPage() {
             <div className="flex shrink-0 items-center justify-between">
               <div className="flex items-center gap-5">
                 <div className="text-lg font-semibold">Discovery Log</div>
-                {showAutoScroll && (
+                {logHasOverflow && (
                   <label className="flex items-center gap-2 text-sm text-text">
                     Auto-scroll
                     <input

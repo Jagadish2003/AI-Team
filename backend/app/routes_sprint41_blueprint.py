@@ -1,5 +1,5 @@
 """
-T41-1d — Agentforce Blueprint Backend Endpoint v1.2
+T41-1d — Agent Blueprint Backend Endpoint v1.2
 
 Changes from v1.0:
   - detector_id read from opp['_debug']['detector_id'] (actual persisted field)
@@ -471,7 +471,7 @@ def register_blueprint_routes(app) -> None:
     )
     def get_opportunity_blueprint(run_id: str, opp_id: str) -> BlueprintResponse:
         """
-        Get the Agentforce Blueprint for a specific opportunity.
+        Get the Agent Blueprint for a specific opportunity.
 
         Computed on read from existing run data.
         Deterministic: same run_id + opp_id always returns the same output.
