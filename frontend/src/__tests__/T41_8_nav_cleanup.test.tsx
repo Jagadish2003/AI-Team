@@ -125,12 +125,12 @@ describe("AC1 — Source Intake absent from TopNav", () => {
     );
     const expectedItems = [
       "Integration Hub",
+      "Stack Builder",
       "Discovery Run",
-      "Evidence Collection",
       "Source Intelligence",
       "Opportunity Review",
       "Agent Roadmap",
-      "Agentforce Blueprint",
+      "Agent Blueprint",
       "Executive Report",
     ];
     for (const label of expectedItems) {

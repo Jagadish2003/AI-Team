@@ -316,6 +316,16 @@ body *::-webkit-scrollbar-corner {
   background-color: rgb(var(--color-buttonbg)) !important;
 }
 
+.discovery-start-bar {
+  background-color: rgb(var(--color-bg) / 0.9);
+  box-shadow: 0 -4px 12px rgb(0 0 0 / 0.15);
+}
+
+:root.theme-light .discovery-start-bar {
+  background-color: rgb(var(--color-panel) / 0.95);
+  box-shadow: 0 -8px 24px rgb(7 25 58 / 0.1);
+}
+
 .profile-menu-tooltip {
   opacity: 0;
   transform: translate(-50%, 0.25rem) scale(0.96);

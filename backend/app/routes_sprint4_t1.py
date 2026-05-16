@@ -103,7 +103,12 @@ def _append_event(run_id: str, stage: str, message: str, level: str = "INFO") ->
     events = db.kv_get(f"events:{run_id}") or []
     db.kv_set(f"events:{run_id}", [*events, event])
 
-from .materialize_t2 import _probe_systems, _finalise, _emit_event
+from .materialize_t2 import (
+    _finalise,
+    _emit_event,
+    _probe_systems,
+    _selected_system_ids_for_report,
+)
 
 def _run_trackb_and_persist(run_id: str, mode: str, systems: List[str], pack: Optional[str] = None) -> None:
     """Background task: execute Track B and persist Track A-shaped artifacts."""
@@ -204,10 +209,18 @@ def _run_trackb_and_persist(run_id: str, mode: str, systems: List[str], pack: Op
             from .executive_report_engine import build_executive_report
 
             roadmap = db.run_kv_get("roadmap", run_id, {})
-            er = build_executive_report(run_id=run_id, opps=opps, roadmap=roadmap)
+            selected_system_ids = _selected_system_ids_for_report(
+                run_id, run, run_inputs, systems
+            )
+            er = build_executive_report(
+                run_id=run_id,
+                opps=opps,
+                roadmap=roadmap,
+                selected_system_ids=selected_system_ids,
+            )
 
             sa = er.get("sourcesAnalyzed", {})
-            sa["totalConnected"] = len(run_inputs.get("connectedSources", []))
+            sa["totalConnected"] = len(selected_system_ids)
             sa["uploadedFiles"] = len(run_inputs.get("uploadedFiles", []))
             sa["sampleWorkspaceEnabled"] = bool(
                 run_inputs.get("sampleWorkspaceEnabled", False)
@@ -224,7 +237,11 @@ def _run_trackb_and_persist(run_id: str, mode: str, systems: List[str], pack: Op
                     "confidence": "Moderate",
                     "sourcesAnalyzed": {
                         "recommendedConnected": 0,
-                        "totalConnected": len(run_inputs.get("connectedSources", [])),
+                        "totalConnected": len(
+                            _selected_system_ids_for_report(
+                                run_id, run, run_inputs, systems
+                            )
+                        ),
                         "uploadedFiles": len(run_inputs.get("uploadedFiles", [])),
                         "sampleWorkspaceEnabled": bool(
                             run_inputs.get("sampleWorkspaceEnabled", False)

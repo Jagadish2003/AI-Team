@@ -159,34 +159,52 @@ def fetch_strs_sn_incidents(sn_client) -> List[Dict[str, Any]]:
     Fetch ServiceNow incidents relevant to STRS benefit administration.
     Called from strs_benefits.py ingest() in live mode.
 
-    Uses same broad-then-filter pattern as nCino servicenow.py.
-    Queries incidents from last 90 days matching STRS keywords.
+    Uses ServiceNowClient.table_query(), matching the ServiceNow ingest client API.
+    The previous get_incidents() call did not exist on ServiceNowClient and was
+    swallowed by the non-blocking exception handler, producing no corroboration.
     """
     try:
-        # Build ServiceNow encoded query
-        # ^NQ separates OR conditions in ServiceNow
         keyword_sample = SN_ALL_STRS_KEYWORDS[:8]
-        or_clauses = "^NQ".join(
-            f"short_descriptionLIKE{kw}^ORdescriptionLIKE{kw}"
+        base_filter = "active=true^sys_created_on>=javascript:gs.daysAgo(90)"
+        keyword_groups = [
+            f"{base_filter}^short_descriptionLIKE{kw}^OR"
+            f"{base_filter}^descriptionLIKE{kw}"
             for kw in keyword_sample
-        )
-        encoded_query = (
-            f"({or_clauses})"
-            f"^sys_created_onONLast 90 days@javascript:gs.beginningOfLast90Days()"
-            f"@javascript:gs.endOfToday()"
+        ]
+        query = "^NQ".join(keyword_groups)
+
+        result = sn_client.table_query(
+            "incident",
+            params={
+                "sysparm_query": query,
+                "sysparm_limit": 200,
+                "sysparm_fields": (
+                    "sys_id,number,short_description,description,"
+                    "category,subcategory,priority,state,incident_state,"
+                    "sys_created_on,assigned_to,assignment_group"
+                ),
+            },
         )
 
-        incidents = sn_client.get_incidents(
-            query=encoded_query,
-            fields=["number", "short_description", "description",
-                    "state", "priority", "incident_state",
-                    "sys_created_on", "category", "subcategory",
-                    "assigned_to", "assignment_group"],
-            limit=200,
-        )
+        if isinstance(result, dict):
+            result = result.get("result", [])
 
-        if isinstance(incidents, dict):
-            incidents = incidents.get("result", [])
+        incidents = [
+            {
+                "number": inc.get("number", ""),
+                "short_description": inc.get("short_description", ""),
+                "description": inc.get("description", "") or "",
+                "state": inc.get("state", ""),
+                "priority": inc.get("priority", ""),
+                "incident_state": inc.get("incident_state", ""),
+                "sys_created_on": inc.get("sys_created_on", ""),
+                "category": inc.get("category", ""),
+                "subcategory": inc.get("subcategory", "") or "",
+                "assigned_to": inc.get("assigned_to", ""),
+                "assignment_group": inc.get("assignment_group", ""),
+            }
+            for inc in result
+        ]
 
         logger.info(
             "ServiceNow STRS fetch: %d incidents returned for correlation",

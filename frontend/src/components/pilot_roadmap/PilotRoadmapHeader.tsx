@@ -8,7 +8,7 @@ export default function PilotRoadmapHeader({ onExport }: Props) {
       <div>
         <div className="text-2xl font-semibold">Agent Roadmap</div>
         <div className="mt-1 text-sm text-muted">
-          Your prioritised Agentforce implementation plan — grounded in discovery findings.
+          Your prioritised AI agent implementation plan — grounded in discovery findings.
         </div>
       </div>
  

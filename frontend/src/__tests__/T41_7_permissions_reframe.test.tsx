@@ -7,8 +7,8 @@
  *      OpportunityDetail.tsx no longer renders the permissions block regardless
  *      of whether opp.permissions is populated.
  *
- * AC2: Agentforce Blueprint screen shows Agentforce Permissions Required with
- *      future-tense framing: "To implement this Agentforce agent, the agent user
+ * AC2: Agent Blueprint screen shows Agent Permissions Required with
+ *      future-tense framing: "To implement this agent, the agent user
  *      profile will need:". No checked/missing status icons.
  *
  * AC3: Integration Hub ConnectorDetailPanel shows Connection Health section
@@ -288,7 +288,7 @@ describe('AC2 — BlueprintContent renders future-tense permissions framing', ()
   it('renders forward-looking intro sentence when permissions are present', () => {
     renderWithRouter(<BlueprintContent blueprint={BLUEPRINT_WITH_PERMISSIONS} />);
     expect(
-      screen.getByText('To implement this Agentforce agent, the agent user profile will need:')
+      screen.getByText('To implement this agent, the agent user profile will need:')
     ).toBeDefined();
   });
 
@@ -308,13 +308,13 @@ describe('AC2 — BlueprintContent renders future-tense permissions framing', ()
       screen.getByText('Permissions assessment is not yet available for this opportunity.')
     ).toBeDefined();
     expect(
-      screen.queryByText('To implement this Agentforce agent, the agent user profile will need:')
+      screen.queryByText('To implement this agent, the agent user profile will need:')
     ).toBeNull();
   });
 
-  it('section heading reads "Agentforce Permissions Required" in the real component', () => {
+  it('section heading reads "Agent Permissions Required" in the real component', () => {
     renderWithRouter(<BlueprintContent blueprint={BLUEPRINT_WITH_PERMISSIONS} />);
-    expect(screen.getByText('Agentforce Permissions Required')).toBeDefined();
+    expect(screen.getByText('Agent Permissions Required')).toBeDefined();
   });
 
   it('other Blueprint sections still render alongside permissions (no regression)', () => {

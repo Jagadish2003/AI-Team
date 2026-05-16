@@ -268,7 +268,7 @@ export default function OpportunityDetail({
         <EnrichmentPanel opp={opp} enrichment={enrichment} />
 
         {/* T41-7: Required Permissions section removed from Opportunity Review.
-            Permissions are now shown on the Agentforce Blueprint screen in
+            Permissions are now shown on the Agent Blueprint screen in
             forward-looking framing: "To implement this agent, the agent user
             profile will need:". The suppressPermissions prop is retained for
             backward-compat but the section no longer renders anywhere. */}

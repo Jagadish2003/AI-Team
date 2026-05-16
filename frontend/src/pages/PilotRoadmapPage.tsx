@@ -75,7 +75,7 @@ export default function PilotRoadmapPage() {
   const pageHeader = (
     <PageShell
       title="Agent Roadmap"
-      description="Your prioritised Agentforce implementation plan, grounded in discovery findings."
+      description="Your prioritised AI agent implementation plan, grounded in discovery findings."
     >
       <LoadingPanel
         title="Loading Agent Roadmap"
@@ -93,7 +93,7 @@ export default function PilotRoadmapPage() {
     return (
       <PageShell
         title="Agent Roadmap"
-        description="Your prioritised Agentforce implementation plan, grounded in discovery findings."
+        description="Your prioritised AI agent implementation plan, grounded in discovery findings."
       >
         <RunRequiredEmptyState onStart={() => nav('/discovery-run')} />
       </PageShell>
@@ -108,7 +108,7 @@ export default function PilotRoadmapPage() {
     return (
       <PageShell
         title="Agent Roadmap"
-        description="Your prioritised Agentforce implementation plan, grounded in discovery findings."
+        description="Your prioritised AI agent implementation plan, grounded in discovery findings."
       >
         <ErrorPanel message={error} onRetry={refetch} title="Failed to load roadmap" />
       </PageShell>
@@ -120,7 +120,7 @@ export default function PilotRoadmapPage() {
   return (
     <PageShell
       title="Agent Roadmap"
-      description="Your prioritised Agentforce implementation plan, grounded in discovery findings."
+      description="Your prioritised AI agent implementation plan, grounded in discovery findings."
       actions={
         <button
           className="rounded-lg border border-border bg-buttonbg px-4 py-2 text-sm font-medium text-text hover:bg-panel"

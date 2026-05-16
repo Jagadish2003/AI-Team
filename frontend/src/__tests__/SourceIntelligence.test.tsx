@@ -26,6 +26,12 @@ const MAPPED_JIRA = {
   commonField: 'Workflow.summary', status: 'MAPPED' as const,
   confidence: 'MEDIUM' as const, sampleValues: [],
 };
+const MAPPED_SALESFORCE = {
+  id: 'map_006', sourceSystem: 'Salesforce', sourceType: 'CRM',
+  sourceField: 'case.subject', commonEntity: 'Workflow',
+  commonField: 'Workflow.summary', status: 'MAPPED' as const,
+  confidence: 'HIGH' as const, sampleValues: [],
+};
 const AMBIGUOUS_SN = {
   id: 'map_003', sourceSystem: 'ServiceNow', sourceType: 'CMDB',
   sourceField: 'cmdb_ci.owner', commonEntity: 'Application',
@@ -49,6 +55,7 @@ const UNMAPPED_SLACK = {
 const CONNECTORS = [
   { id: 'servicenow', name: 'ServiceNow', status: 'connected', tier: 'recommended' },
   { id: 'jira',       name: 'Jira',       status: 'connected', tier: 'standard'   },
+  { id: 'salesforce', name: 'Salesforce', status: 'connected', tier: 'recommended' },
   { id: 'slack',      name: 'Slack',      status: 'connected', tier: 'standard'   },
 ];
 
@@ -162,7 +169,7 @@ describe('SourceIntelligencePage v1.3 — T41-4', () => {
     renderPage();
     expect(screen.getAllByTestId('stat-card').length).toBe(3);
     expect(screen.getByText('Connected sources')).toBeTruthy();
-    expect(screen.getByText('Fields mapped with HIGH confidence')).toBeTruthy();
+    expect(screen.getByText('Signals mapped with HIGH confidence')).toBeTruthy();
     expect(screen.getByText('Fields needing your review')).toBeTruthy();
   });
 
@@ -217,6 +224,17 @@ describe('SourceIntelligencePage v1.3 — T41-4', () => {
   it('SI5: no zero-reason element rendered for sources with mapped signals', () => {
     renderPage();
     expect(screen.queryByTestId('zero-signal-servicenow')).toBeNull();
+  });
+
+  it('I1: mapped Salesforce row is confirmed even when static permissions omit Salesforce', () => {
+    mockRows = [MAPPED_SALESFORCE, MAPPED_SN, MAPPED_JIRA];
+    mockCounts = { MAPPED: 3, UNMAPPED: 0, AMBIGUOUS: 0 };
+    mockPermissions = PERMISSIONS_OK;
+    renderPage();
+    const sfRow = screen.getByTestId('source-row-salesforce');
+    expect(sfRow.textContent).toContain('Salesforce');
+    expect(sfRow.textContent).toContain('Confirmed');
+    expect(sfRow.textContent).not.toContain('Not assessed');
   });
 
   it('I1: ServiceNow row shows Permissions confirmed (joined via sourceKey)', () => {
@@ -293,14 +311,14 @@ describe('SourceIntelligencePage v1.3 — T41-4', () => {
 
   // ── Developer panel ───────────────────────────────────────────────────────
 
-  it('SI8: detail panel hidden by default', () => {
+  it('SI8: detail panel visible by default', () => {
     renderPage();
-    expect(screen.queryByTestId('detail-panel')).toBeNull();
+    expect(screen.getByTestId('detail-panel')).toBeTruthy();
   });
 
-  it('SI8: toggle shows detail panel', () => {
+  it('SI8: toggle hides detail panel', () => {
     renderPage();
     fireEvent.click(screen.getByTestId('toggle-detail'));
-    expect(screen.getByTestId('detail-panel')).toBeTruthy();
+    expect(screen.queryByTestId('detail-panel')).toBeNull();
   });
 });

@@ -97,7 +97,7 @@ function deriveSourceHealth(
           (p) => p.sourceSystem === sourceKey,
         );
         if (sourcePerms.length === 0) {
-          permState = "unknown";
+          permState = signalCount > 0 ? "confirmed" : "unknown";
         } else {
           const hasUnsatisfied = sourcePerms.some(
             (p) => p.required && !p.satisfied,

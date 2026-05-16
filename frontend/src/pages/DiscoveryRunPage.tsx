@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Loader2 } from "lucide-react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { InfoPanel } from "../components/common/InfoPanel";
@@ -66,11 +66,11 @@ function ComputingPill() {
   );
 }
 
-function PartialResultsPill() {
+function SourceIntelligenceReadyPill() {
   return (
     <span className="inline-flex h-7 items-center gap-2 rounded-full border border-accent/30 bg-accent/10 px-3 text-[13px] font-semibold leading-none text-blue-100 shadow-[0_0_0_1px_rgba(37,99,235,0.08)]">
       <span className="h-1.5 w-1.5 rounded-full bg-accent" />
-      Evidence collection ready
+      Source Intelligence ready
     </span>
   );
 }
@@ -83,6 +83,7 @@ function formatRunTimestamp(value?: string | null) {
 
 export default function DiscoveryRunPage() {
   const [autoScroll, setAutoScroll] = useState(true);
+  const [logHasOverflow, setLogHasOverflow] = useState(false);
   const logScrollRef = useRef<HTMLDivElement | null>(null);
   const nav = useNavigate();
   const location = useLocation();
@@ -110,7 +111,6 @@ export default function DiscoveryRunPage() {
   const isMaterialized =
     status === "complete" || status === "completed" || status === "partial";
   const isComplete = status === "complete" || status === "completed";
-  const isPartial = status === "partial";
   const runScopedPath = (path: string) =>
     runId ? `${path}?runId=${runId}` : path;
 
@@ -194,6 +194,35 @@ export default function DiscoveryRunPage() {
     if (!el) return;
     el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
   }, [events, autoScroll]);
+
+  const updateLogOverflow = useCallback(() => {
+    const el = logScrollRef.current;
+    if (!el) {
+      setLogHasOverflow(false);
+      return;
+    }
+    setLogHasOverflow(el.scrollHeight > el.clientHeight + 1);
+  }, []);
+
+  useEffect(() => {
+    updateLogOverflow();
+  }, [events, updateLogOverflow]);
+
+  useEffect(() => {
+    const el = logScrollRef.current;
+    if (!el) return;
+
+    updateLogOverflow();
+
+    if (typeof ResizeObserver === "undefined") {
+      window.addEventListener("resize", updateLogOverflow);
+      return () => window.removeEventListener("resize", updateLogOverflow);
+    }
+
+    const observer = new ResizeObserver(updateLogOverflow);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [updateLogOverflow]);
 
   if (loading || (!runId && autoStartRequested && hasAtLeastOneSource)) {
     return (
@@ -295,7 +324,7 @@ export default function DiscoveryRunPage() {
                 status={run?.status}
               />
               {computing && <ComputingPill />}
-              {!computing && isPartial && <PartialResultsPill />}
+              {!computing && isMaterialized && <SourceIntelligenceReadyPill />}
             </p>
             {run?.startedAt && (
               <p className="mt-1 text-xs text-muted">
@@ -332,15 +361,17 @@ export default function DiscoveryRunPage() {
             <div className="flex shrink-0 items-center justify-between">
               <div className="flex items-center gap-5">
                 <div className="text-lg font-semibold">Discovery Log</div>
-                <label className="flex items-center gap-2 text-sm text-text">
-                  Auto-scroll
-                  <input
-                    type="checkbox"
-                    checked={autoScroll}
-                    onChange={(e) => setAutoScroll(e.target.checked)}
-                    className="accent-accent cursor-pointer"
-                  />
-                </label>
+                {logHasOverflow && (
+                  <label className="flex items-center gap-2 text-sm text-text">
+                    Auto-scroll
+                    <input
+                      type="checkbox"
+                      checked={autoScroll}
+                      onChange={(e) => setAutoScroll(e.target.checked)}
+                      className="accent-accent cursor-pointer"
+                    />
+                  </label>
+                )}
               </div>
               <button
                 className="rounded-md border border-border bg-bg/20 px-3 py-2 text-sm font-semibold text-text transition hover:bg-panel2"
