@@ -49,13 +49,8 @@ function EnrichmentPanel({
     <div className="space-y-4">
       {/* AI Analysis */}
       <div>
-        <div className="flex items-center justify-between gap-2 mb-2">
+        <div className="mb-2">
           <span className="text-xs font-semibold text-text">AI Analysis</span>
-          {isLlm && (
-            <span className="text-xs border border-bg rounded px-1.5 py-0.5 text-text">
-              Claude
-            </span>
-          )}
         </div>
 
         {/* Added overflow-y-auto and max-h-[140px] to scroll after 6 lines */}
