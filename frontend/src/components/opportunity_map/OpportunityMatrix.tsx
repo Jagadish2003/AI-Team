@@ -147,7 +147,7 @@ export default function OpportunityMatrix({
           {[
             { x: LEFT + 14, y: TOP + 24, label: 'QUICK WINS', fill: 'var(--opportunity-matrix-label-strong)', w: 102 },
             { x: CX + 14, y: TOP + 24, label: 'HIGH VALUE', fill: 'var(--opportunity-matrix-label-mid)', w: 98 },
-            { x: LEFT + 14, y: CY + 24, label: 'FOUNDATION', fill: 'var(--opportunity-matrix-label-muted)', w: 100 },
+            { x: LEFT + 14, y: CY + 24, label: 'FOUNDATION', fill: 'var(--opportunity-matrix-label-muted)', w: 120 },
             { x: CX + 14, y: CY + 24, label: 'LONG TERM', fill: 'var(--opportunity-matrix-label-muted)', w: 94 },
           ].map(({ x, y, label, fill, w }) => (
             <g key={label} pointerEvents="none">
