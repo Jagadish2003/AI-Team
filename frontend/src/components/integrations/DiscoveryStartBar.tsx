@@ -39,7 +39,7 @@ export default function DiscoveryStartBar({
       : null;
 
   return (
-    <div className="fixed bottom-0 left-0 right-0 z-40 max-h-[46vh] overflow-y-auto border-t border-border bg-panel/95 shadow-[0_-8px_24px_rgba(7,25,58,0.10)] backdrop-blur">
+    <div className="discovery-start-bar fixed bottom-0 left-0 right-0 z-40 max-h-[46vh] overflow-y-auto border-t border-border backdrop-blur">
       <div className="w-full px-4 py-3 sm:px-6">
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div className="min-w-0">

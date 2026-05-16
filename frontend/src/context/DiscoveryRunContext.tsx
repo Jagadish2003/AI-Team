@@ -2,6 +2,7 @@ import React, { createContext, useCallback, useContext, useEffect, useMemo, useR
 import type { DiscoveryRun, RunEvent, RunInputs } from '../types/discoveryRun';
 import { fetchRun, fetchRunEvents, replayRun, startRun as apiStartRun, fetchRunStatus } from '../api/runApi';
 import { useRunContext } from './RunContext';
+import { useConnectorContext } from './ConnectorContext';
 import { isRunNotFoundError, runScopedErrorMessage } from '../utils/apiErrors';
 
 type DiscoveryRunContextValue = {
@@ -32,6 +33,7 @@ function sameEvents(a: RunEvent[], b: RunEvent[]) {
 
 export function DiscoveryRunProvider({ children }: { children: React.ReactNode }) {
   const { runId, setRunId, clearRunId } = useRunContext();
+  const { refetch: refetchConnectors } = useConnectorContext();
   const [run, setRun] = useState<DiscoveryRun | null>(null);
   const [events, setEvents] = useState<RunEvent[]>([]);
   const [loading, setLoading] = useState(false);
@@ -69,7 +71,9 @@ export function DiscoveryRunProvider({ children }: { children: React.ReactNode }
         setRun({ ...r, status });
         setEvents(ev);
         setStarted(true);
-        setComputing(!isTerminalStatus(status));
+        const isTerminal = isTerminalStatus(status);
+        setComputing(!isTerminal);
+        if (isTerminal) refetchConnectors();
       } catch (e: any) {
         if (cancelled) return;
         if (isRunNotFoundError(e)) {
@@ -84,7 +88,7 @@ export function DiscoveryRunProvider({ children }: { children: React.ReactNode }
     return () => {
       cancelled = true;
     };
-  }, [runId, fetchCount, clearRunId]);
+  }, [runId, fetchCount, clearRunId, refetchConnectors]);
 
   useEffect(() => {
     if (!runId || !computing) return;
@@ -101,6 +105,8 @@ export function DiscoveryRunProvider({ children }: { children: React.ReactNode }
         setRun((prev) => (prev ? { ...prev, status: status as DiscoveryRun['status'] } : prev));
         if (isTerminalStatus(status)) {
           setComputing(false);
+          setFetchCount((c) => c + 1);
+          refetchConnectors();
         }
       } catch (e: any) {
         if (isRunNotFoundError(e)) {
@@ -115,7 +121,7 @@ export function DiscoveryRunProvider({ children }: { children: React.ReactNode }
       cancelled = true;
       clearInterval(interval);
     };
-  }, [runId, computing, clearRunId]);
+  }, [runId, computing, clearRunId, refetchConnectors]);
 
   const startRun = useCallback(async (inputs: RunInputs) => {
     if (runId || startingRef.current) return;

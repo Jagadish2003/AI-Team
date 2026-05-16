@@ -14,7 +14,7 @@ import type { BlueprintResponse } from '../utils/blueprintTypes';
 export type { BlueprintResponse };
 
 /**
- * Fetch the Agentforce Blueprint for a specific opportunity.
+ * Fetch the Agent Blueprint for a specific opportunity.
  * Computed deterministically on the backend from existing run data.
  * Same runId + oppId always returns the same blueprint.
  *

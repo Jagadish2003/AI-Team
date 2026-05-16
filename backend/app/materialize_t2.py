@@ -136,6 +136,26 @@ def _emit_event(run_id: str, stage: str, message: str, level: str = "INFO") -> N
     db.kv_set(f"events:{run_id}", events + [event])
 
 
+def _selected_system_ids_for_report(
+    run_id: str,
+    run: Dict[str, Any],
+    run_inputs: Dict[str, Any],
+    systems: List[str],
+) -> List[str]:
+    setup_ctx = db.run_kv_get("setup_context", run_id, {})
+    candidates = [
+        setup_ctx.get("selected_system_ids") if isinstance(setup_ctx, dict) else None,
+        run.get("selectedSystemIds") if isinstance(run, dict) else None,
+        run_inputs.get("connectedSources") if isinstance(run_inputs, dict) else None,
+        systems,
+    ]
+
+    for candidate in candidates:
+        if isinstance(candidate, list) and candidate:
+            return candidate
+    return []
+
+
 def run_trackb_and_persist(
     run_id: str, mode: str, systems: List[str], run_inputs: Dict[str, Any]
 ) -> None:
@@ -236,10 +256,18 @@ def run_trackb_and_persist(
             from .executive_report_engine import build_executive_report
 
             roadmap = db.run_kv_get("roadmap", run_id, {})
-            er = build_executive_report(run_id=run_id, opps=opps, roadmap=roadmap)
+            selected_system_ids = _selected_system_ids_for_report(
+                run_id, run, run_inputs, systems
+            )
+            er = build_executive_report(
+                run_id=run_id,
+                opps=opps,
+                roadmap=roadmap,
+                selected_system_ids=selected_system_ids,
+            )
 
             sa = er.get("sourcesAnalyzed", {})
-            sa["totalConnected"] = len(run_inputs.get("connectedSources", []))
+            sa["totalConnected"] = len(selected_system_ids)
             sa["uploadedFiles"] = len(run_inputs.get("uploadedFiles", []))
             sa["sampleWorkspaceEnabled"] = bool(
                 run_inputs.get("sampleWorkspaceEnabled", False)
@@ -256,7 +284,11 @@ def run_trackb_and_persist(
                     "confidence": "Moderate",
                     "sourcesAnalyzed": {
                         "recommendedConnected": 0,
-                        "totalConnected": len(run_inputs.get("connectedSources", [])),
+                        "totalConnected": len(
+                            _selected_system_ids_for_report(
+                                run_id, run, run_inputs, systems
+                            )
+                        ),
                         "uploadedFiles": len(run_inputs.get("uploadedFiles", [])),
                         "sampleWorkspaceEnabled": bool(
                             run_inputs.get("sampleWorkspaceEnabled", False)

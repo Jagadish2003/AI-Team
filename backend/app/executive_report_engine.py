@@ -10,13 +10,14 @@ expects — confirmed from frontend/src/pages/ExecutiveReportPage.tsx.
 """
 from __future__ import annotations
 
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 
 def build_executive_report(
     run_id: str,
     opps: List[Dict[str, Any]],
     roadmap: Dict[str, Any],
+    selected_system_ids: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
     """
     Build executive report from run-scoped data.
@@ -47,7 +48,7 @@ def build_executive_report(
         "confidence": confidence,
         "sourcesAnalyzed": {
             "recommendedConnected": 0,
-            "totalConnected": 0,
+            "totalConnected": len(selected_system_ids or []),
             "uploadedFiles": 0,
             "sampleWorkspaceEnabled": False,
         },

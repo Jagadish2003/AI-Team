@@ -8,7 +8,7 @@
     "impact": 3,
     "effort": 2,
     "confidence": "HIGH",
-    "aiRationale": "4 active low-complexity AutoLaunchedFlow(s) are processing 300 Case records in 90 days (activity score 2.13, threshold 0.6). These flows perform high-volume repetitive logic with fewer than 5 elements each \u2014 a strong candidate for an Agentforce agent that handles decisioning and exception routing rather than a static flow.",
+    "aiRationale": "4 active low-complexity AutoLaunchedFlow(s) are processing 300 Case records in 90 days (activity score 2.13, threshold 0.6). These flows perform high-volume repetitive logic with fewer than 5 elements each \u2014 a strong candidate for an AI agent that handles decisioning and exception routing rather than a static flow.",
     "evidenceIds": [
       "ev_sf_0c91b7_0001"
     ],
@@ -56,7 +56,7 @@
     "impact": 3,
     "effort": 2,
     "confidence": "MEDIUM",
-    "aiRationale": "60 Cases closed in 90 days \u2014 only 30 had a linked Knowledge Article (knowledge gap score 0.50, threshold 0.4). Resolution agents are not consistently reusing KB content, increasing handle time and reducing deflection. An Agentforce agent could surface relevant KB articles during resolution and auto-link them on close.",
+    "aiRationale": "60 Cases closed in 90 days \u2014 only 30 had a linked Knowledge Article (knowledge gap score 0.50, threshold 0.4). Resolution agents are not consistently reusing KB content, increasing handle time and reducing deflection. An AI agent could surface relevant KB articles during resolution and auto-link them on close.",
     "evidenceIds": [
       "ev_sf_0c91b7_0004"
     ],

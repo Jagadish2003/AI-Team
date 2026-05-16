@@ -94,7 +94,7 @@ NEVER suggest automated credit decisions. All credit decisions require human app
 Return a JSON object with exactly these four fields. No preamble, no markdown — JSON only.
 
 {{
-  "aiSummary": "2-4 sentences in plain banking operations language. What the lending friction is and how an Agentforce agent addresses it — without making credit decisions.",
+  "aiSummary": "2-4 sentences in plain banking operations language. What the lending friction is and how an AI agent addresses it — without making credit decisions.",
   "aiWhyBullets": [
     "Specific measured lending friction fact from nCino evidence",
     "Corroborating signal from Jira or ServiceNow if available",
@@ -105,7 +105,7 @@ Return a JSON object with exactly these four fields. No preamble, no markdown �
     "Regulatory or relationship risk of inaction"
   ],
   "aiSuggestedNextSteps": [
-    "Specific Agentforce capability for this lending pattern",
+    "Specific AI agent capability for this lending pattern",
     "Concrete next action — escalation path or pilot scope"
   ]
 }}"""
@@ -143,7 +143,7 @@ NEVER suggest automated benefit decisions. All benefit actions require human app
 Return a JSON object with exactly these four fields. No preamble, no markdown — JSON only.
 
 {{
-  "aiSummary": "2-4 sentences in plain member services language. What the benefit administration friction is and how an Agentforce agent addresses it — surfacing alerts to staff, never making autonomous decisions.",
+  "aiSummary": "2-4 sentences in plain member services language. What the benefit administration friction is and how an AI agent addresses it — surfacing alerts to staff, never making autonomous decisions.",
   "aiWhyBullets": [
     "Specific measured fact from PSS evidence (days pending, count affected)",
     "Member impact in plain language (income delay, irreversible decision, legal obligation)",
@@ -154,7 +154,7 @@ Return a JSON object with exactly these four fields. No preamble, no markdown �
     "Operational or legal risk of inaction for STRS"
   ],
   "aiSuggestedNextSteps": [
-    "Specific Agentforce capability for this benefit administration pattern",
+    "Specific AI agent capability for this benefit administration pattern",
     "Concrete next action — escalation path or pilot scope with compliance guardrail"
   ]
 }}"""
@@ -182,7 +182,7 @@ Detector: {debug.get("detector_id", "")}
 Return a JSON object with exactly these four fields. No preamble, no markdown — JSON only.
 
 {{
-  "aiSummary": "2-4 sentences in plain business language. What the problem is and how an Agentforce agent fixes it.",
+  "aiSummary": "2-4 sentences in plain business language. What the problem is and how an AI agent fixes it.",
   "aiWhyBullets": [
     "Bullet with a specific measured fact from evidence",
     "Bullet with another fact or consequence",
@@ -193,7 +193,7 @@ Return a JSON object with exactly these four fields. No preamble, no markdown �
     "Downstream business consequence of inaction"
   ],
   "aiSuggestedNextSteps": [
-    "Specific Agentforce capability that addresses this",
+    "Specific AI agent capability that addresses this",
     "Concrete next action the team should take"
   ]
 }}"""

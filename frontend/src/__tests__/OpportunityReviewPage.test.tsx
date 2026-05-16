@@ -258,7 +258,7 @@ describe('OpportunityReviewPage v1.2 — T41-2 acceptance criteria', () => {
     if (btn) {
       await act(async () => { fireEvent.click(btn); });
       expect(mockNavigate).toHaveBeenCalledWith(
-        expect.stringMatching(/\/agentforce-blueprint\?oppId=opp_001/),
+        expect.stringMatching(/\/agent-blueprint\?oppId=opp_001/),
       );
     }
   });

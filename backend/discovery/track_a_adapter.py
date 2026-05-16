@@ -44,7 +44,7 @@ _DETECTOR_META: Dict[str, Dict[str, str]] = {
             "{records_90d} {trigger_object} records in 90 days (activity score "
             "{score:.2f}, threshold {threshold}). These flows perform high-volume "
             "repetitive logic with fewer than {element_count} elements each — "
-            "a strong candidate for an Agentforce agent that handles decisioning "
+            "a strong candidate for an AI agent that handles decisioning "
             "and exception routing rather than a static flow."
         ),
         "required_permissions": [
@@ -90,7 +90,7 @@ _DETECTOR_META: Dict[str, Dict[str, str]] = {
             "{closed} Cases closed in 90 days — only {linked} had a linked Knowledge "
             "Article (knowledge gap score {score:.2f}, threshold {threshold}). "
             "Resolution agents are not consistently reusing KB content, increasing "
-            "handle time and reducing deflection. An Agentforce agent could surface "
+            "handle time and reducing deflection. An AI agent could surface "
             "relevant KB articles during resolution and auto-link them on close."
         ),
         "required_permissions": [
