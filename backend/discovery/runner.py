@@ -321,7 +321,7 @@ def run(
             "roadmap_stage": scored["roadmap_stage"], "evidenceIds": [e["id"] for e in evidence_list],
             "evidence": evidence_list, "raw_evidence": dr.raw_evidence, "score_debug": scored["score_debug"],
         }
-        # ENG-AIQ-NC-5 Issue 1: inject approved UI labels from ncino_ui_labels.json
+        # ENG-AIQ-NC-5 Issue 1: inject approved UI labels from pack UI label files.
         # Deterministic config text — not LLM generated:
         #   title      → s6_title   (S6 opportunity card heading)
         #   category   → s7_category (S7 detail panel category)
@@ -330,12 +330,12 @@ def run(
         #   aiSummary / aiWhyBullets / aiRisks / aiSuggestedNextSteps → S4
         #   s9_roadmap label seeds the LLM blueprint prompt → S9
         #   s10_exec label seeds the LLM exec summary prompt → S10
-        if is_ncino_pack(pack_id):
-            from .packs.pack_config import get_ui_labels
-            ui_labels = get_ui_labels(pack_id) or {}
+        from .packs.pack_config import get_ui_labels
+        ui_labels = get_ui_labels(pack_id) or {}
+        if ui_labels:
             det_labels = ui_labels.get(dr.detector_id, {})
             opp["title"]       = det_labels.get("s6_title", dr.detector_id)
-            opp["category"]    = det_labels.get("s7_category", "Lending")
+            opp["category"]    = det_labels.get("s7_category", "Automation Opportunity")
             opp["description"] = det_labels.get("s6_desc", "")
             opp["s9_roadmap"]  = det_labels.get("s9_roadmap", "")
             opp["s10_exec"]    = det_labels.get("s10_exec", "")

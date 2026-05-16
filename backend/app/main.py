@@ -14,6 +14,12 @@ load_dotenv()
 from . import db
 from .db import get_all, get_one, kv_get, kv_set, run_get, upsert
 from .normalization_enrichment import enrich_ambiguous_mappings
+from .opportunity_display import (
+    with_display_title,
+    with_display_titles,
+    with_exec_report_display_titles,
+    with_roadmap_display_titles,
+)
 from .replay import replay_run as replay_run_
 from .roadmap_engine import build_roadmap
 from .routes_normalization import register_normalization_routes
@@ -294,6 +300,7 @@ def list_opportunities(run_id: str) -> List[Dict[str, Any]]:
             status_code=404,
             detail=f"No opportunities for run '{run_id}'. T2 materialisation may not have completed.",
         )
+    opps = with_display_titles(opps)
 
     for opp in opps:
         if "impact" in opp and "effort" in opp:
@@ -341,7 +348,7 @@ def set_opp_decision(run_id: str, opp_id: str, body: Dict[str, Any]) -> Dict[str
     }
     audit = run_kv_get("audit", run_id, default_audit())
     run_kv_set("audit", run_id, [event, *audit])
-    return o
+    return with_display_title(o)
 
 
 @app.post(
@@ -400,7 +407,7 @@ def set_opp_override(run_id: str, opp_id: str, body: Dict[str, Any]) -> Dict[str
     }
     audit = run_kv_get("audit", run_id, default_audit())
     run_kv_set("audit", run_id, [event, *audit])
-    return o
+    return with_display_title(o)
 
 
 @app.get("/api/runs/{run_id}/audit", dependencies=[Depends(require_auth)])
@@ -415,7 +422,7 @@ def get_roadmap(run_id: str) -> Dict[str, Any]:
     run_get(run_id)
     run_roadmap = run_kv_get("roadmap", run_id, None)
     if run_roadmap is not None:
-        return run_roadmap
+        return with_roadmap_display_titles(run_roadmap)
     opps = run_kv_get("opps", run_id, None)
     if opps is None:
         raise HTTPException(
@@ -425,7 +432,7 @@ def get_roadmap(run_id: str) -> Dict[str, Any]:
                 "T2 materialisation has not completed for this run."
             ),
         )
-    return build_roadmap(opps)
+    return build_roadmap(with_display_titles(opps))
 
 
 @app.get("/api/runs/{run_id}/executive-report", dependencies=[Depends(require_auth)])
@@ -438,7 +445,7 @@ def get_exec_report(run_id: str) -> Dict[str, Any]:
     er = run_kv_get("executive_report", run_id, None)
 
     if er:
-        return er
+        return with_exec_report_display_titles(er)
 
     inputs = run.get("inputs") or {}
     connected_sources = inputs.get("connectedSources") or []
@@ -465,6 +472,7 @@ def get_exec_report(run_id: str) -> Dict[str, Any]:
             detail=f"No opportunities for run '{run_id}'. T2 materialisation has not completed.",
         )
 
+    opps = with_display_titles(opps)
     quick_wins = [o for o in opps if o.get("tier") == "Quick Win"]
 
     return {
