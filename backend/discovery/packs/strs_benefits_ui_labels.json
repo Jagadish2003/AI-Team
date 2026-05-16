@@ -10,7 +10,7 @@
   },
 
   "APPLICATION_STALL": {
-    "s6_title": "Accelerate retirement application processing to protect member income timing",
+    "s6_title": "Retirement Application Monitor",
     "s6_desc": "Identify and resolve stalled retirement applications before processing deadlines are missed, ensuring members receive their first benefit payment on their expected retirement date.",
     "s7_category": "Retirement Application",
     "s9_roadmap": "30-day pilot: deploy application monitoring for all active retirement applications. Surface stalled applications to member services coordinators with days-pending count. Measure: reduction in average application processing time and number of applications requiring manual follow-up.",
@@ -19,7 +19,7 @@
   },
 
   "BENEFIT_ELECTION_DEADLINE": {
-    "s6_title": "Prevent irreversible default payment plan assignments through timely election alerts",
+    "s6_title": "Benefit Election Guardian",
     "s6_desc": "Alert member services coordinators when approved benefit recipients have not submitted their payment plan election within the required window, preventing default plan assignments they may not want.",
     "s7_category": "Benefit Election",
     "s9_roadmap": "30-day pilot: deploy election deadline monitoring for all newly approved benefit assignments. Automated reminder to member and coordinator when election is within 5 days of deadline. Measure: reduction in default plan assignments and member escalations.",
