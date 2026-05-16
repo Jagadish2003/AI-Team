@@ -145,6 +145,14 @@ _DETECTOR_META: Dict[str, Dict[str, str]] = {
             "Jira: read issues (if applicable)",
         ],
     },
+    "APPLICATION_STALL": {
+        "title_template": "Retirement Application Monitor",
+        "category": "Retirement Application",
+    },
+    "BENEFIT_ELECTION_DEADLINE": {
+        "title_template": "Benefit Election Guardian",
+        "category": "Benefit Election",
+    },
 }
 
 

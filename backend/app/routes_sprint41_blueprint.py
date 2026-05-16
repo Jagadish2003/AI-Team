@@ -27,6 +27,7 @@ from pydantic import BaseModel
 from .security import require_auth
 from . import db
 from .llm_enrichment import KV_LLM_ENRICHMENT
+from .opportunity_display import with_display_title
 
 
 # ── Detector metadata keyed by detector_id ───────────────────────────────────
@@ -494,6 +495,6 @@ def register_blueprint_routes(app) -> None:
             )
 
         enrichment = db.run_kv_get(KV_LLM_ENRICHMENT, run_id, None)
-        blueprint = _build_blueprint(opp, enrichment)
+        blueprint = _build_blueprint(with_display_title(opp), enrichment)
 
         return BlueprintResponse(**blueprint)
