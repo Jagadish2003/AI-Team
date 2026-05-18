@@ -5,6 +5,7 @@ import Button from '../common/Button';
 import { accessIcons } from './AccessIcons';
 import { useToast } from '../common/Toast';
 import { ExternalLink, CheckCircle2 } from 'lucide-react';
+import SalesforceProductPicker from './SalesforceProductPicker';
 
 // ── T41-7: Connection Health — configured read scope for this connector.
 // Shows what AgentIQ is configured to read from this source.
@@ -192,6 +193,12 @@ export default function ConnectorDetailPanel({
 
       {/* T41-7: Connection Health — shown only when connected */}
       <ConnectionHealthSection connector={connector} />
+
+      {/* ENG-IH-3 Sprint 9: Salesforce product declaration */}
+      {/* Shown after Salesforce is connected — workspace-level declaration */}
+      {connector.id === 'salesforce' && isConnected && (
+        <SalesforceProductPicker />
+      )}
 
       {/* CTA */}
       <div className="mt-5">

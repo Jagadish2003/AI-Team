@@ -6,7 +6,7 @@
  * routes between the 4 child pages, and translates state to /launch + /compute.
  */
 
-import React, { useCallback, useEffect, useRef } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useRunContext } from '../context/RunContext';
 
@@ -24,6 +24,7 @@ import DiscoveryFocusPage from './DiscoveryFocusPage';
 import YourSystemsPage from './YourSystemsPage';
 import SourceWeightingPage from './SourceWeightingPage';
 import DiscoveryPlanPage from './DiscoveryPlanPage';
+import { ConnectionStatus } from '../types/stack_builder';
 
 // ── Static Definitions ───────────────────────────────────────────────────────
 
@@ -272,6 +273,52 @@ interface Props {
   token?: string;
 }
 
+interface WorkspaceCatalogSystem {
+  system_id: string;
+  status: string;
+  products?: string[];
+}
+
+interface WorkspaceCatalogResponse {
+  primary_platforms: WorkspaceCatalogSystem[];
+  operational_systems: WorkspaceCatalogSystem[];
+  comms_knowledge: WorkspaceCatalogSystem[];
+  data_engineering: WorkspaceCatalogSystem[];
+}
+
+type ConnectionStatusMap = Partial<Record<string, ConnectionStatus>>;
+
+function toConnectionStatus(status: string): ConnectionStatus {
+  if (status === 'connected') return 'connected';
+  if (status === 'needs_auth') return 'needs_auth';
+  return 'not_configured';
+}
+
+function buildConnectionStatusMap(
+  catalog: WorkspaceCatalogResponse | null,
+): ConnectionStatusMap {
+  if (!catalog) return {};
+
+  const systems = [
+    ...catalog.primary_platforms,
+    ...catalog.operational_systems,
+    ...catalog.comms_knowledge,
+    ...catalog.data_engineering,
+  ];
+
+  return systems.reduce<ConnectionStatusMap>((acc, system) => {
+    const status = toConnectionStatus(system.status);
+    acc[system.system_id] = status;
+
+    if (system.system_id === 'jira_confluence') {
+      acc.jira = status;
+      acc.confluence = status;
+    }
+
+    return acc;
+  }, {});
+}
+
 export default function StackBuilderPage({
   apiBase = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000',
   token = import.meta.env.VITE_DEV_JWT || 'dev-token-change-me',
@@ -283,9 +330,33 @@ export default function StackBuilderPage({
   const orgId = (import.meta.env.VITE_ORG_ID as string | undefined) ?? 'demo-org';
 
   const setupState = useSetupState();
+  const [connectionStatuses, setConnectionStatuses] = useState<ConnectionStatusMap>({});
   const { state, steps } = setupState;
   const { clearSession } = useStackBuilderPersistence(orgId, setupState, apiBase, token);
   const copy = STEP_COPY[state.currentStep] ?? STEP_COPY[1];
+
+  useEffect(() => {
+    const headers = buildAuthHeaders(token);
+
+    fetch(`${apiBase}/api/integration-hub/workspace-catalog`, {
+      credentials: 'omit',
+      headers,
+    })
+      .then(r => r.ok ? r.json() : null)
+      .then((catalog: WorkspaceCatalogResponse | null) => {
+        setConnectionStatuses(buildConnectionStatusMap(catalog));
+        const salesforce = catalog?.primary_platforms?.find(
+          system => system.system_id === 'salesforce',
+        );
+        setupState.setSalesforceClouds(
+          Array.isArray(salesforce?.products) ? salesforce.products : [],
+        );
+      })
+      .catch(() => {
+        setConnectionStatuses({});
+        setupState.setSalesforceClouds([]);
+      });
+  }, [apiBase, token, setupState.setSalesforceClouds]);
 
   const handleLaunch = useCallback(async () => {
     const packId = resolvePackId(state);
@@ -362,7 +433,10 @@ export default function StackBuilderPage({
             <DiscoveryFocusPage setupState={setupState} />
           )}
           {state.currentStep === 2 && (
-            <YourSystemsPage setupState={setupState} />
+            <YourSystemsPage
+              setupState={setupState}
+              connectionStatuses={connectionStatuses}
+            />
           )}
           {state.currentStep === 3 && (
             <SourceWeightingPage setupState={setupState} />

@@ -75,7 +75,7 @@ export default function ConnectorGroupSection({
 
       {/* Connector tiles */}
       {hasConnectors ? (
-        <div className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4">
+        <div className="mt-4 grid grid-cols-[repeat(auto-fit,minmax(210px,210px))] gap-2">
           {group.connectors.map(c => (
             <ConnectorTile
               key={c.id}
