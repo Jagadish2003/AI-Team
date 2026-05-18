@@ -25,6 +25,7 @@ from .roadmap_engine import build_roadmap
 from .routes_normalization import register_normalization_routes
 from .routes_stack_builder import register_stack_builder_routes
 from .routes_stack_builder_launch import register_stack_builder_launch_routes
+from .routes_salesforce_products import register_salesforce_products_routes
 from .routes_sprint4_t1 import register_sprint4_t1_routes
 from .routes_sprint4_t2 import register_sprint4_t2_routes
 from .routes_sprint4_t3 import register_sprint4_t3_routes
@@ -40,6 +41,8 @@ app = FastAPI(title="AgentIQ Layer 1 API Skeleton", version="0.1.0")
 # Register routes in order
 register_stack_builder_routes(app)
 register_stack_builder_launch_routes(app)
+register_workspace_catalog_routes(app)
+register_salesforce_products_routes(app)
 register_sprint4_t6_routes(app)
 register_sprint4_t4_routes(app)
 register_sprint4_t3_routes(app)
@@ -47,7 +50,6 @@ register_sprint4_t2_routes(app)
 register_sprint4_t1_routes(app)
 register_blueprint_routes(app)
 register_normalization_routes(app)
-register_workspace_catalog_routes(app)
 
 origins = [
     o.strip()

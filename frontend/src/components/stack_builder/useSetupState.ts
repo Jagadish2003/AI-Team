@@ -178,14 +178,12 @@ export function useSetupState() {
     });
   }, []);
 
-  const toggleSalesforceCloud = useCallback((cloudId: string) => {
+  const setSalesforceClouds = useCallback((cloudIds: string[]) => {
     setState(s => {
-      const isSel = s.selectedSalesforceClouds.includes(cloudId);
+      const nextCloudIds = Array.from(new Set(cloudIds));
       return {
         ...s,
-        selectedSalesforceClouds: isSel
-          ? s.selectedSalesforceClouds.filter(c => c !== cloudId)
-          : [...s.selectedSalesforceClouds, cloudId],
+        selectedSalesforceClouds: nextCloudIds,
       };
     });
   }, []);
@@ -239,7 +237,7 @@ export function useSetupState() {
     setIndustry,
     setTemplate,
     toggleSystem,
-    toggleSalesforceCloud,
+    setSalesforceClouds,
     updateWeighting,
     goTo,
     canProceedFromStep1,

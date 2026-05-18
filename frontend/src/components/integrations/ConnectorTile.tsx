@@ -23,7 +23,7 @@ export default function ConnectorTile({
   return (
     <div
       onClick={onSelect}
-      className={`connector-card h-[190px] cursor-pointer rounded-xl border ${
+      className={`connector-card flex h-[215px] cursor-pointer flex-col rounded-xl border ${
         selected ? 'connector-card-selected' : 'border-border bg-panel'
       } p-4 hover:border-accent/60 hover:bg-panel2`}
     >
@@ -40,7 +40,7 @@ export default function ConnectorTile({
       </div>
 
       {/* Tags */}
-      <div className="mt-2 flex flex-wrap gap-1">
+      <div className="mt-2 flex flex-col items-start gap-1">
         {connector.reads.slice(0, 2).map((r) => (
           <span
             key={r}
@@ -60,7 +60,7 @@ export default function ConnectorTile({
       </div>
 
       {/* Button */}
-      <div className="mt-5 pb-1">
+      <div className="mt-auto pb-1 pt-4">
         <Button
           variant={isConnected ? 'secondary' : 'primary'}
           className={`w-full ${

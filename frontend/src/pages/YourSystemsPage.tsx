@@ -11,27 +11,18 @@ import {
 import Button from '../components/common/Button';
 import {
   SystemCard as SystemCardType,
-  SalesforceCloud,
+  ConnectionStatus,
   FocusId,
 } from '../types/stack_builder';
 import { SystemCard } from '../components/stack_builder';
 import { useSetupState } from '../components/stack_builder';
 
 const PRIMARY_PLATFORMS: SystemCardType[] = [
-  { id: 'salesforce', name: 'Salesforce', category: 'CRM / industry', group: 'primary_platform', connectionStatus: 'connected', logoInitials: 'SF', logoColor: 'bg-sky-500', isSalesforce: true },
+  { id: 'salesforce', name: 'Salesforce', category: 'CRM / industry', group: 'primary_platform', connectionStatus: 'not_configured', logoInitials: 'SF', logoColor: 'bg-sky-500', isSalesforce: true },
   { id: 'sap', name: 'SAP', category: 'ERP', group: 'primary_platform', connectionStatus: 'not_configured', logoInitials: 'SAP', logoColor: 'bg-blue-700' },
   { id: 'oracle_ebs', name: 'Oracle EBS', category: 'Finance / HR', group: 'primary_platform', connectionStatus: 'not_configured', logoInitials: 'ORC', logoColor: 'bg-red-700' },
   { id: 'workday', name: 'Workday', category: 'HR / finance', group: 'primary_platform', connectionStatus: 'not_configured', logoInitials: 'WD', logoColor: 'bg-yellow-600' },
   { id: 'dynamics365', name: 'Dynamics 365', category: 'ERP / CRM', group: 'primary_platform', connectionStatus: 'not_configured', logoInitials: 'D365', logoColor: 'bg-blue-600' },
-];
-
-const SALESFORCE_CLOUDS: SalesforceCloud[] = [
-  { id: 'salesforce_pss', name: 'Public Sector Solutions / Benefits' },
-  { id: 'salesforce_sc', name: 'Service Cloud' },
-  { id: 'salesforce_ncino', name: 'nCino' },
-  { id: 'salesforce_fsc', name: 'Financial Services Cloud' },
-  { id: 'salesforce_rc', name: 'Revenue Cloud' },
-  { id: 'salesforce_hc', name: 'Health Cloud' },
 ];
 
 const ADDITIONAL_PLATFORMS: SystemCardType[] = PRIMARY_PLATFORMS.filter(
@@ -39,8 +30,8 @@ const ADDITIONAL_PLATFORMS: SystemCardType[] = PRIMARY_PLATFORMS.filter(
 );
 
 const WORK_TRACKING: SystemCardType[] = [
-  { id: 'jira', name: 'Jira', category: 'Issues / backlog', group: 'work_tracking', connectionStatus: 'connected', logoInitials: 'JR', logoColor: 'bg-blue-600' },
-  { id: 'servicenow', name: 'ServiceNow', category: 'ITSM / operations', group: 'work_tracking', connectionStatus: 'connected', logoInitials: 'SN', logoColor: 'bg-green-700' },
+  { id: 'jira', name: 'Jira', category: 'Issues / backlog', group: 'work_tracking', connectionStatus: 'not_configured', logoInitials: 'JR', logoColor: 'bg-blue-600' },
+  { id: 'servicenow', name: 'ServiceNow', category: 'ITSM / operations', group: 'work_tracking', connectionStatus: 'not_configured', logoInitials: 'SN', logoColor: 'bg-green-700' },
   { id: 'azure_devops', name: 'Azure DevOps', category: 'ALM / CI/CD', group: 'work_tracking', connectionStatus: 'not_configured', logoInitials: 'ADO', logoColor: 'bg-blue-700' },
   { id: 'linear', name: 'Linear', category: 'Product / issues', group: 'work_tracking', connectionStatus: 'not_configured', logoInitials: 'LN', logoColor: 'bg-violet-600' },
   { id: 'zendesk', name: 'Zendesk', category: 'Support', group: 'work_tracking', connectionStatus: 'not_configured', logoInitials: 'ZD', logoColor: 'bg-green-600' },
@@ -49,7 +40,7 @@ const WORK_TRACKING: SystemCardType[] = [
 const COMMS_KNOWLEDGE: SystemCardType[] = [
   { id: 'slack', name: 'Slack', category: 'Messaging', group: 'comms_knowledge', connectionStatus: 'not_configured', logoInitials: 'SL', logoColor: 'bg-purple-600' },
   { id: 'teams', name: 'Microsoft Teams', category: 'Comms / docs', group: 'comms_knowledge', connectionStatus: 'not_configured', logoInitials: 'MS', logoColor: 'bg-blue-700' },
-  { id: 'confluence', name: 'Confluence', category: 'Docs / knowledge', group: 'comms_knowledge', connectionStatus: 'connected', logoInitials: 'CF', logoColor: 'bg-blue-500' },
+  { id: 'confluence', name: 'Confluence', category: 'Docs / knowledge', group: 'comms_knowledge', connectionStatus: 'not_configured', logoInitials: 'CF', logoColor: 'bg-blue-500' },
   { id: 'sharepoint', name: 'SharePoint', category: 'Docs / intranet', group: 'comms_knowledge', connectionStatus: 'not_configured', logoInitials: 'SP', logoColor: 'bg-blue-600' },
   { id: 'notion', name: 'Notion', category: 'Docs / wiki', group: 'comms_knowledge', connectionStatus: 'not_configured', logoInitials: 'NO', logoColor: 'bg-slate-700' },
 ];
@@ -170,12 +161,14 @@ function ConnectionStatusLegendCorrected() {
 function SystemGrid({
   label,
   systems,
+  connectionStatuses,
   selectedIds,
   onToggle,
   focusId,
 }: {
   label: string;
   systems: SystemCardType[];
+  connectionStatuses: ConnectionStatusMap;
   selectedIds: string[];
   onToggle: (id: string) => void;
   focusId?: FocusId | null;
@@ -189,7 +182,7 @@ function SystemGrid({
       {systems.map(system => (
         <SystemCard
           key={system.id}
-          system={system}
+          system={withConnectionStatus(system, connectionStatuses)}
           selected={selectedIds.includes(system.id)}
           recommendationReason={getRecommendationReason(system.id, focusId ?? null)}
           onToggle={onToggle}
@@ -199,15 +192,30 @@ function SystemGrid({
   );
 }
 
-interface Props {
-  setupState: ReturnType<typeof useSetupState>;
+type ConnectionStatusMap = Partial<Record<string, ConnectionStatus>>;
+
+function withConnectionStatus(
+  system: SystemCardType,
+  connectionStatuses: ConnectionStatusMap,
+): SystemCardType {
+  return {
+    ...system,
+    connectionStatus: connectionStatuses[system.id] ?? system.connectionStatus,
+  };
 }
 
-export default function YourSystemsPage({ setupState }: Props) {
+interface Props {
+  setupState: ReturnType<typeof useSetupState>;
+  connectionStatuses: ConnectionStatusMap;
+}
+
+export default function YourSystemsPage({
+  setupState,
+  connectionStatuses,
+}: Props) {
   const {
     state,
     toggleSystem,
-    toggleSalesforceCloud,
     goTo,
     canProceedFromStep2,
   } = setupState;
@@ -217,9 +225,6 @@ export default function YourSystemsPage({ setupState }: Props) {
   const selectedPrimaryId = PRIMARY_PLATFORMS.find(p =>
     state.selectedSystemIds.includes(p.id)
   )?.id ?? null;
-
-  const selectedPrimary = PRIMARY_PLATFORMS.find(p => p.id === selectedPrimaryId) ?? null;
-  const salesforceSelected = selectedPrimary?.isSalesforce === true;
 
   function handlePrimarySelect(systemId: string) {
     if (selectedPrimaryId === systemId) {
@@ -238,8 +243,7 @@ export default function YourSystemsPage({ setupState }: Props) {
   const countInGroup = (systems: SystemCardType[]) =>
     systems.filter(s => state.selectedSystemIds.includes(s.id)).length;
 
-  const totalSelected = state.selectedSystemIds.length
-    + (salesforceSelected ? state.selectedSalesforceClouds.length : 0);
+  const totalSelected = state.selectedSystemIds.length;
 
   return (
     <div className="space-y-5">
@@ -248,8 +252,7 @@ export default function YourSystemsPage({ setupState }: Props) {
       <section className="rounded-xl border border-border bg-panel p-5 shadow-sm">
         <h2 className="text-lg font-semibold text-text">Where your core operation runs</h2>
         <p className="mt-1 text-sm leading-relaxed text-muted">
-          Select the platform where your primary business workflows live. If you select
-          Salesforce, choose the products in use.
+          Select the platform where your primary business workflows live.
         </p>
 
         <div
@@ -260,7 +263,7 @@ export default function YourSystemsPage({ setupState }: Props) {
           {PRIMARY_PLATFORMS.map(system => (
             <SystemCard
               key={system.id}
-              system={system}
+              system={withConnectionStatus(system, connectionStatuses)}
               selected={state.selectedSystemIds.includes(system.id)}
               recommendationReason={getRecommendationReason(system.id, state.focusId)}
               onToggle={handlePrimarySelect}
@@ -269,39 +272,6 @@ export default function YourSystemsPage({ setupState }: Props) {
           ))}
         </div>
 
-        {salesforceSelected && (
-          <div className="mt-4 rounded-lg border border-accent/30 bg-accent/10 p-4">
-            <div className="mb-3 text-xs font-semibold uppercase tracking-wide text-blue-100">
-              Salesforce products
-            </div>
-            <div
-              role="group"
-              aria-label="Salesforce products"
-              className="flex flex-wrap gap-2"
-            >
-              {SALESFORCE_CLOUDS.map(cloud => {
-                const selected = state.selectedSalesforceClouds.includes(cloud.id);
-                return (
-                  <button
-                    key={cloud.id}
-                    type="button"
-                    onClick={() => toggleSalesforceCloud(cloud.id)}
-                    className={[
-                      'inline-flex items-center rounded-full border px-3 py-1.5 text-sm font-medium transition-colors',
-                      'focus:outline-none focus:ring-2 focus:ring-accent/50',
-                      selected
-                        ? 'border-accent bg-accent/20 text-blue-100'
-                        : 'border-border bg-panel text-muted hover:border-accent/50 hover:text-text',
-                    ].join(' ')}
-                    aria-pressed={selected}
-                  >
-                    {cloud.name}
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-        )}
       </section>
 
       <section className="rounded-xl border border-border bg-panel p-5 shadow-sm">
@@ -319,6 +289,7 @@ export default function YourSystemsPage({ setupState }: Props) {
         <SystemGrid
           label="Additional platforms"
           systems={availableAdditional}
+          connectionStatuses={connectionStatuses}
           selectedIds={state.selectedSystemIds}
           onToggle={toggleSystem}
         />
@@ -335,6 +306,7 @@ export default function YourSystemsPage({ setupState }: Props) {
         <SystemGrid
           label="Work tracking and operations systems"
           systems={WORK_TRACKING}
+          connectionStatuses={connectionStatuses}
           selectedIds={state.selectedSystemIds}
           onToggle={toggleSystem}
           focusId={state.focusId}
@@ -350,6 +322,7 @@ export default function YourSystemsPage({ setupState }: Props) {
         <SystemGrid
           label="Communications and knowledge systems"
           systems={COMMS_KNOWLEDGE}
+          connectionStatuses={connectionStatuses}
           selectedIds={state.selectedSystemIds}
           onToggle={toggleSystem}
           focusId={state.focusId}
@@ -367,6 +340,7 @@ export default function YourSystemsPage({ setupState }: Props) {
         <SystemGrid
           label="Code and engineering systems"
           systems={CODE_ENGINEERING}
+          connectionStatuses={connectionStatuses}
           selectedIds={state.selectedSystemIds}
           onToggle={toggleSystem}
         />
@@ -381,6 +355,7 @@ export default function YourSystemsPage({ setupState }: Props) {
         <SystemGrid
           label="Data and infrastructure systems"
           systems={DATA_INFRASTRUCTURE}
+          connectionStatuses={connectionStatuses}
           selectedIds={state.selectedSystemIds}
           onToggle={toggleSystem}
         />

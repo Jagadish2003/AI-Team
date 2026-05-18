@@ -23,7 +23,8 @@
       "BenefitAssignment",
       "Case (Disability)"
     ],
-    "signalStrength": 94
+    "signalStrength": 94,
+    "products": []
   },
   {
     "id": "servicenow",

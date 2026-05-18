@@ -27,6 +27,7 @@ SYSTEM_CATEGORY: Dict[str, str] = {
     "workday": "primary_platforms",
     "dynamics365": "primary_platforms",
     "jira": "operational_systems",
+    "jira_confluence": "operational_systems",
     "servicenow": "operational_systems",
     "azure_devops": "operational_systems",
     "linear": "operational_systems",
