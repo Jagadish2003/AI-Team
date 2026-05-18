@@ -32,6 +32,7 @@ from .routes_sprint4_t4 import register_sprint4_t4_routes
 from .routes_sprint4_t6 import register_sprint4_t6_routes
 from .routes_sprint41_blueprint import register_blueprint_routes
 from .run_store import read_run, read_run_events, start_run_
+from .routes_workspace_catalog import register_workspace_catalog_routes
 from .security import require_auth
 
 app = FastAPI(title="AgentIQ Layer 1 API Skeleton", version="0.1.0")
@@ -46,6 +47,7 @@ register_sprint4_t2_routes(app)
 register_sprint4_t1_routes(app)
 register_blueprint_routes(app)
 register_normalization_routes(app)
+register_workspace_catalog_routes(app)
 
 origins = [
     o.strip()
