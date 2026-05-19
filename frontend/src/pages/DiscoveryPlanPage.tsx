@@ -392,29 +392,9 @@ export default function DiscoveryPlanPage({ setupState, onLaunch }: Props) {
         </div>
       </section>
 
-      {recommendations.length > 0 && (
-        <section className="rounded-xl border border-border bg-panel p-5 shadow-sm">
-          <div className="mb-3 flex items-center gap-2">
-            <Clock3 size={16} className="text-accent" aria-hidden="true" />
-            <h2 className="text-sm font-semibold text-text">Recommended additions</h2>
-          </div>
-          <div className="space-y-4">
-            {recommendations.map(rec => (
-              <div key={rec.systemId} className="flex items-start gap-3">
-                <AdditionIcon systemId={rec.systemId} />
-                <div>
-                  <div className="mb-0.5 text-sm font-medium text-text">
-                    {rec.systemName}
-                  </div>
-                  <p className="text-xs leading-relaxed text-muted">
-                    {rec.reason}
-                  </p>
-                </div>
-              </div>
-            ))}
-          </div>
-        </section>
-      )}
+      {/* ENG-SB-1 Sprint 9 (0-pt sub-task): Recommended additions section removed.
+           Screen 2 (YourSystemsPage) now shows missing category prompts.
+           Screen 4 is summary and launch only. */}
 
       <section className="rounded-xl border border-accent/30 bg-accent/10 p-5 shadow-sm">
         <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">

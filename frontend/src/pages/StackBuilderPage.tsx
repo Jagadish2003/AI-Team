@@ -25,7 +25,6 @@ import DiscoveryFocusPage from './DiscoveryFocusPage';
 import YourSystemsPage from './YourSystemsPage';
 import SourceWeightingPage from './SourceWeightingPage';
 import DiscoveryPlanPage from './DiscoveryPlanPage';
-import { ConnectionStatus } from '../types/stack_builder';
 
 // ── Static Definitions ───────────────────────────────────────────────────────
 
@@ -129,9 +128,11 @@ function resolvePackId(state: ReturnType<typeof useSetupState>['state']): string
 }
 
 function normaliseSystems(selectedIds: string[]): string[] {
-  const normalised = selectedIds.map(id =>
-    SALESFORCE_CLOUD_IDS.has(id) ? 'salesforce' : id,
-  );
+  const normalised = selectedIds.map(id => {
+    if (SALESFORCE_CLOUD_IDS.has(id)) return 'salesforce';
+    if (id === 'jira_confluence') return 'jira';
+    return id;
+  });
   return [...new Set(normalised)];
 }
 
@@ -274,38 +275,6 @@ interface Props {
   token?: string;
 }
 
-type ConnectionStatusMap = Partial<Record<string, ConnectionStatus>>;
-
-function toConnectionStatus(status: string): ConnectionStatus {
-  if (status === 'connected') return 'connected';
-  if (status === 'needs_auth') return 'needs_auth';
-  return 'not_configured';
-}
-
-function buildConnectionStatusMap(
-  catalog: WorkspaceCatalogResponse | null,
-): ConnectionStatusMap {
-  if (!catalog) return {};
-
-  const systems = [
-    ...catalog.primary_platforms,
-    ...catalog.operational_systems,
-    ...catalog.comms_knowledge,
-    ...catalog.data_engineering,
-  ];
-
-  return systems.reduce<ConnectionStatusMap>((acc, system) => {
-    const status = toConnectionStatus(system.status);
-    acc[system.system_id] = status;
-
-    if (system.system_id === 'jira_confluence') {
-      acc.jira = status;
-      acc.confluence = status;
-    }
-
-    return acc;
-  }, {});
-}
 
 export default function StackBuilderPage({
   apiBase = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000',
@@ -318,7 +287,7 @@ export default function StackBuilderPage({
   const orgId = (import.meta.env.VITE_ORG_ID as string | undefined) ?? 'demo-org';
 
   const setupState = useSetupState();
-  const [connectionStatuses, setConnectionStatuses] = useState<ConnectionStatusMap>({});
+  const [catalog, setCatalog] = useState<WorkspaceCatalogResponse | null>(null);
   const [catalogLoading, setCatalogLoading] = useState(true);
   const [catalogError, setCatalogError] = useState<string | null>(null);
   const { state, steps } = setupState;
@@ -337,10 +306,10 @@ export default function StackBuilderPage({
         if (!r.ok) throw new Error(`Catalog fetch failed: ${r.status}`);
         return r.json();
       })
-      .then((catalog: WorkspaceCatalogResponse | null) => {
-        setConnectionStatuses(buildConnectionStatusMap(catalog));
+      .then((fetchedCatalog: WorkspaceCatalogResponse | null) => {
+        setCatalog(fetchedCatalog);
         setCatalogError(null);
-        const salesforce = catalog?.primary_platforms?.find(
+        const salesforce = fetchedCatalog?.primary_platforms?.find(
           system => system.system_id === 'salesforce',
         );
         setupState.setSalesforceClouds(
@@ -350,7 +319,7 @@ export default function StackBuilderPage({
       .catch((err) => {
         console.error('[StackBuilderPage] Catalog fetch failed:', err);
         setCatalogError('Could not load your connected systems. Please retry.');
-        setConnectionStatuses({});
+        setCatalog(null);
         setupState.setSalesforceClouds([]);
       })
       .finally(() => setCatalogLoading(false));
@@ -449,7 +418,7 @@ export default function StackBuilderPage({
             </div>
           )}
           {state.currentStep === 2 && !catalogLoading && !catalogError && (
-            <YourSystemsPage setupState={setupState} connectionStatuses={connectionStatuses} />
+            <YourSystemsPage setupState={setupState} catalog={catalog} />
           )}
           {state.currentStep === 3 && (
             <SourceWeightingPage setupState={setupState} />

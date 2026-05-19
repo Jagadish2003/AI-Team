@@ -127,6 +127,8 @@ export default function SalesforceProductPicker({ onSaved }: Props) {
           : 'Product declaration cleared.',
       );
       onSaved?.();
+      // Reload page to refresh catalog in Stack Builder
+      setTimeout(() => window.location.reload(), 500);
     } catch (error) {
       push(getSaveErrorMessage(error));
     } finally {
