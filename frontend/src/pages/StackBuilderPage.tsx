@@ -112,19 +112,20 @@ function resolvePackId(state: ReturnType<typeof useSetupState>['state']): string
     "salesforce_fsc": "service_cloud"
   };
 
-  if (!state.industryId) {
-    if (!state.selectedSalesforceClouds || state.selectedSalesforceClouds.length === 0) {
-      return 'service_cloud';
-    } else {
-      // Use the first selected cloud to determine the pack, fallback to service_cloud if not in dict
-      const selectedCloud = state.selectedSalesforceClouds[0];
-      return CLOUD_PACK_REGISTRY[selectedCloud] || 'service_cloud';
-    }
+  // Priority 1: Use selected Salesforce cloud product if available
+  if (state.selectedSalesforceClouds && state.selectedSalesforceClouds.length > 0) {
+    const selectedCloud = state.selectedSalesforceClouds[0];
+    return CLOUD_PACK_REGISTRY[selectedCloud] || 'service_cloud';
   }
 
-  const hints = INDUSTRY_PACK_HINTS[state.industryId];
-  if (!hints || hints.length === 0) return 'service_cloud';
-  return hints[0];
+  // Priority 2: Use industry hints if set
+  if (state.industryId) {
+    const hints = INDUSTRY_PACK_HINTS[state.industryId];
+    if (hints && hints.length > 0) return hints[0];
+  }
+
+  // Priority 3: Default to service_cloud
+  return 'service_cloud';
 }
 
 function normaliseSystems(selectedIds: string[]): string[] {
@@ -294,7 +295,7 @@ export default function StackBuilderPage({
   const { clearSession } = useStackBuilderPersistence(orgId, setupState, apiBase, token);
   const copy = STEP_COPY[state.currentStep] ?? STEP_COPY[1];
 
-  useEffect(() => {
+  const fetchCatalog = useCallback(() => {
     setCatalogLoading(true);
     const headers = buildAuthHeaders(token);
 
@@ -324,6 +325,27 @@ export default function StackBuilderPage({
       })
       .finally(() => setCatalogLoading(false));
   }, [apiBase, token, setupState.setSalesforceClouds]);
+
+  useEffect(() => {
+    fetchCatalog();
+  }, [fetchCatalog]);
+
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (!document.hidden) {
+        fetchCatalog();
+      }
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
+  }, [fetchCatalog]);
+
+  useEffect(() => {
+    if (catalog && setupState.initFromCatalog) {
+      setupState.initFromCatalog(catalog);
+    }
+  }, [catalog, setupState.initFromCatalog]);
 
   const handleLaunch = useCallback(async () => {
     const packId = resolvePackId(state);

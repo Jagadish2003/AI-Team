@@ -252,6 +252,13 @@ export function useSetupState(catalog?: WorkspaceCatalogResponse | null) {
     });
   }, []);
 
+  const setSalesforceClouds = useCallback((clouds: string[]) => {
+    setState(s => ({
+      ...s,
+      selectedSalesforceClouds: clouds,
+    }));
+  }, []);
+
   const updateWeighting = useCallback((updated: SystemWeighting) => {
     setState(s => ({
       ...s,
@@ -353,6 +360,7 @@ export function useSetupState(catalog?: WorkspaceCatalogResponse | null) {
     setTemplate,
     toggleSystem,
     toggleSalesforceCloud,
+    setSalesforceClouds,
     updateWeighting,
     goTo,
     canProceedFromStep1,
