@@ -278,11 +278,10 @@ def _fetch_disability_cases(client) -> List[Dict[str, Any]]:
     """
     rows = client.query(f"""
         SELECT Id, CaseNumber, Status, Type, Origin,
-               CreatedDate, ClosedDate, Description,
+               Created_Date__c, ClosedDate, Description,
                AccountId, ContactId
         FROM Case
-        WHERE CreatedDate = LAST_N_DAYS:{WINDOW_DAYS}
-        AND Type IN ('Disability', 'Disability Benefit', 'Disability Review')
+        WHERE Created_Date__c = LAST_N_DAYS:{WINDOW_DAYS}
         LIMIT 5000
     """)
     logger.info("disability_cases=%d", len(rows))
@@ -455,10 +454,9 @@ def _build_disability_metrics(
 
     for case in disability_cases:
         status      = case.get("Status", "")
-        created     = _parse_date(case.get("CreatedDate"))
+        created     = _parse_date(case.get("Created_Date__c"))
         days        = _days_since(created) if created else None
         is_closed   = "Closed" in status or "Resolved" in status
-
         if not is_closed and days is not None and days >= REVIEW_THRESHOLD_DAYS:
             pending.append({
                 "id":   case.get("Id"),
@@ -468,7 +466,7 @@ def _build_disability_metrics(
 
     pending_days = [p["days"] for p in pending]
     max_days = max(pending_days) if pending_days else 0
-
+    
     return {
         "total_disability_cases":   len(disability_cases),
         "pending_review_count":     len(pending),
