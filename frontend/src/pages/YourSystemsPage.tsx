@@ -285,11 +285,13 @@ function SubGroupHeader({
   icon, label, count,
 }: { icon: React.ReactNode; label: string; count: number }) {
   return (
-    <div className="mb-3 flex items-center gap-2">
-      <span className="text-accent" aria-hidden>{icon}</span>
-      <span className="text-sm font-semibold text-text">{label}</span>
+    <div className="mb-3 flex items-start justify-between gap-3">
+      <div className="flex min-w-0 items-center gap-2">
+        <span className="shrink-0 text-accent" aria-hidden>{icon}</span>
+        <span className="min-w-0 text-sm font-semibold text-text">{label}</span>
+      </div>
       {count > 0 && (
-        <span className="rounded-full border border-accent/30 bg-accent/10 px-2 py-0.5 text-xs font-medium text-blue-100">
+        <span className="shrink-0 rounded-full border border-accent/30 bg-accent/10 px-2.5 py-0.5 text-xs font-bold leading-5 text-accent">
           {count} selected
         </span>
       )}
@@ -381,7 +383,7 @@ export default function YourSystemsPage({ setupState, catalog }: Props) {
             Connect your systems in Integration Hub to start building your discovery stack.
           </p>
           <Button
-            variant="primary"
+            variant="tertiary"
             onClick={() => navigate('/integration-hub')}
           >
             Go to Integration Hub
@@ -390,12 +392,12 @@ export default function YourSystemsPage({ setupState, catalog }: Props) {
 
         <div className="rounded-xl border border-border bg-panel p-4 shadow-sm">
           <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
-            <Button variant="secondary" onClick={() => goTo(1)} className="gap-2">
+            <Button variant="tertiary" onClick={() => goTo(1)} className="gap-2">
               <ArrowLeft size={16} strokeWidth={2.2} aria-hidden />
               Back
             </Button>
             <span className="text-sm text-muted">0 systems selected</span>
-            <Button disabled className="gap-2">
+            <Button variant="tertiary" disabled className="gap-2">
               Continue to source weighting
               <MoveRight size={16} strokeWidth={2.2} aria-hidden />
             </Button>
@@ -484,7 +486,7 @@ export default function YourSystemsPage({ setupState, catalog }: Props) {
                     className={[
                       'flex items-center gap-1.5 text-xs text-accent',
                       'hover:underline focus:outline-none',
-                      'focus:ring-2 focus:ring-emerald-500/50 rounded',
+                      'focus:ring-2 focus:ring-accent/50 rounded',
                     ].join(' ')}
                   >
                     <PlusCircle size={13} strokeWidth={1.8} aria-hidden />
@@ -520,7 +522,7 @@ export default function YourSystemsPage({ setupState, catalog }: Props) {
       {/* ── Navigation ───────────────────────────────────────────────────── */}
       <div className="rounded-xl border border-border bg-panel p-4 shadow-sm">
         <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
-          <Button variant="secondary" onClick={() => goTo(1)} className="gap-2">
+          <Button variant="tertiary" onClick={() => goTo(1)} className="gap-2">
             <ArrowLeft size={16} strokeWidth={2.2} aria-hidden />
             Back
           </Button>
@@ -534,6 +536,7 @@ export default function YourSystemsPage({ setupState, catalog }: Props) {
           </span>
 
           <Button
+            variant="tertiary"
             onClick={() => canProceedFromStep2 && goTo(3)}
             disabled={!canProceedFromStep2}
             className="gap-2"

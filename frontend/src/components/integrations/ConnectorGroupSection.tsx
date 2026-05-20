@@ -29,7 +29,7 @@ import React from 'react';
 import { Connector } from '../../types/connector';
 import ConnectorTile from './ConnectorTile';
 import { connectorIcons, fallbackConnectorIcon } from './ConnectorIcons';
-import { PlusCircle } from 'lucide-react';
+import { CircleCheck, PlusCircle } from 'lucide-react';
 
 export interface GroupConfig {
   label:       string;
@@ -51,41 +51,57 @@ export default function ConnectorGroupSection({
   group, selectedId, onSelect, onPrimary, onAddSource,
 }: Props) {
   const hasConnectors = group.connectors.length > 0;
+  const shouldScrollConnectors = group.connectors.length > 6;
   const connectedCount = group.connectors.filter(
     c => c.status === 'connected'
   ).length;
+  const connectorGridClass = 'grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3';
+  const connectedLabel = `${connectedCount} connected`;
 
   return (
     <div className="rounded-xl border border-border bg-panel p-5 shadow-sm">
 
       {/* Group header */}
-      <div className="flex items-center justify-between mb-1">
-        <div>
-          <div className="text-xs font-semibold text-muted uppercase tracking-widest mb-0.5">
+      <div className="mb-1 flex items-start justify-between gap-4">
+        <div className="min-w-0">
+          <div className="mb-0.5 text-xs font-semibold uppercase tracking-widest text-text">
             {group.label}
           </div>
           <div className="text-xs text-muted">{group.subLabel}</div>
         </div>
         {connectedCount > 0 && (
-          <span className="text-xs text-emerald-500 font-medium">
-            {connectedCount} connected
+          <span className="inline-flex shrink-0 items-center gap-1.5 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2.5 py-1 text-[11px] font-semibold leading-none text-emerald-300 shadow-sm">
+            <CircleCheck size={13} strokeWidth={2.2} aria-hidden="true" />
+            {connectedLabel}
           </span>
         )}
       </div>
 
       {/* Connector tiles */}
       {hasConnectors ? (
-        <div className="mt-4 grid grid-cols-[repeat(auto-fit,minmax(210px,210px))] gap-2">
-          {group.connectors.map(c => (
-            <ConnectorTile
-              key={c.id}
-              connector={c}
-              icon={connectorIcons[c.name] ?? fallbackConnectorIcon}
-              selected={selectedId === c.id}
-              onSelect={() => onSelect(c.id)}
-              onPrimary={() => onPrimary(c.id)}
-            />
-          ))}
+        <div
+          className={[
+            'mt-4 min-h-0',
+            shouldScrollConnectors
+              ? 'connector-group-tile-scroll pr-2 focus:outline-none focus:ring-2 focus:ring-accent/40'
+              : '',
+          ].join(' ')}
+          role={shouldScrollConnectors ? 'region' : undefined}
+          aria-label={shouldScrollConnectors ? `${group.label} connectors` : undefined}
+          tabIndex={shouldScrollConnectors ? 0 : undefined}
+        >
+          <div className={connectorGridClass}>
+            {group.connectors.map(c => (
+              <ConnectorTile
+                key={c.id}
+                connector={c}
+                icon={connectorIcons[c.name] ?? fallbackConnectorIcon}
+                selected={selectedId === c.id}
+                onSelect={() => onSelect(c.id)}
+                onPrimary={() => onPrimary(c.id)}
+              />
+            ))}
+          </div>
         </div>
       ) : (
         <div className="mt-3 text-xs text-muted italic">
@@ -98,9 +114,9 @@ export default function ConnectorGroupSection({
         type="button"
         onClick={() => onAddSource(group.categoryId)}
         className={[
-          'mt-4 flex items-center gap-1.5 text-xs text-muted',
-          'hover:text-text transition-colors cursor-pointer',
-          'focus:outline-none focus:ring-2 focus:ring-emerald-500/50 rounded',
+          'mt-4 inline-flex items-center gap-1.5 rounded-md border border-accent/20 bg-accent/5 px-2.5 py-1.5 text-xs font-medium text-accent',
+          'transition-colors hover:border-accent/45 hover:bg-accent/10 cursor-pointer',
+          'focus:outline-none focus-visible:ring-1 focus-visible:ring-accent/40',
         ].join(' ')}
       >
         <PlusCircle size={13} strokeWidth={1.8} className="flex-shrink-0" />

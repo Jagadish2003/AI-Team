@@ -123,7 +123,7 @@ export default function PilotRoadmapPage() {
       description="Your prioritised AI agent implementation plan, grounded in discovery findings."
       actions={
         <button
-          className="rounded-lg border border-border bg-buttonbg px-4 py-2 text-sm font-medium text-text hover:bg-panel"
+          className="rounded-lg border border-accent/20 bg-accent/5 px-4 py-2 text-sm font-medium text-accent transition-colors hover:border-accent/45 hover:bg-accent/10 focus:outline-none focus-visible:ring-1 focus-visible:ring-accent/40"
           onClick={() => push('Export will be wired in Screen 10.')}
         >
           Export Report

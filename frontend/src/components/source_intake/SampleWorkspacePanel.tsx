@@ -46,7 +46,8 @@ export default function SampleWorkspacePanel({
 
       <div className="flex flex-col items-center">
         <Button
-          className="flex w-full items-center justify-center gap-2 py-3 text-sm shadow-lg shadow-accent-500/10"
+          variant="tertiary"
+          className="flex w-full items-center justify-center gap-2 py-3 text-sm"
           onClick={onEnable}
           disabled={enabled}
         >
@@ -56,7 +57,7 @@ export default function SampleWorkspacePanel({
 
         <button
           onClick={onLearnMore}
-          className="mt-4 text-[11px] font-medium text-muted transition-colors hover:text-white"
+          className="mt-4 inline-flex items-center justify-center rounded-md border border-accent/20 bg-accent/5 px-3 py-2 text-[11px] font-medium text-accent transition-colors hover:border-accent/45 hover:bg-accent/10 focus:outline-none focus-visible:ring-1 focus-visible:ring-accent/40"
         >
           Learn more about sample data
         </button>

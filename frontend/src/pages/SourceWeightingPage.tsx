@@ -136,12 +136,12 @@ export default function SourceWeightingPage({ setupState }: Props) {
 
       <div className="rounded-xl border border-border bg-panel p-4 shadow-sm">
         <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
-          <Button variant="secondary" onClick={() => goTo(2)} className="gap-2">
+          <Button variant="tertiary" onClick={() => goTo(2)} className="gap-2">
             <ArrowLeft size={16} strokeWidth={2.2} aria-hidden="true" />
             Back
           </Button>
 
-          <Button onClick={() => goTo(4)} className="gap-2">
+          <Button variant="tertiary" onClick={() => goTo(4)} className="gap-2">
             Continue to discovery plan
             <MoveRight size={16} strokeWidth={2.2} aria-hidden="true" />
           </Button>

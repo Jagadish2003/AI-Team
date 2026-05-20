@@ -263,7 +263,7 @@ export default function IntegrationHubPage() {
                   className={[
                     'transition-all duration-300',
                     highlightedCategory === group.categoryId
-                      ? 'ring-2 ring-emerald-500/50 rounded-xl'
+                      ? 'rounded-xl ring-2 ring-accent/45 ring-offset-2 ring-offset-bg'
                       : '',
                   ].join(' ')}
                 >

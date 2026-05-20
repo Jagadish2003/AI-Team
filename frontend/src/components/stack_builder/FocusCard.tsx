@@ -102,11 +102,11 @@ export default function FocusCard({ card, selected, onSelect, tabIndex = 0 }: Pr
       tabIndex={tabIndex}
       onClick={() => onSelect(card.id)}
       className={[
-        'w-full cursor-pointer rounded-lg border p-4 text-left transition-colors duration-150',
-        'focus:outline-none focus:ring-2 focus:ring-accent/50',
+        'w-full cursor-pointer rounded-lg border p-4 text-left transition-[border-color,background-color,box-shadow] duration-150',
+        'focus:outline-none focus-visible:ring-1 focus-visible:ring-accent/35',
         card.wide ? 'md:col-span-2' : '',
         selected
-          ? 'border-accent bg-accent/10 shadow-sm shadow-black/10'
+          ? 'border-accent bg-accent/10 shadow-[0_8px_22px_rgba(13,85,215,0.14)]'
           : 'border-border bg-panel hover:border-accent/50 hover:bg-panel2',
       ].filter(Boolean).join(' ')}
     >

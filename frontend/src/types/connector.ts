@@ -1,7 +1,12 @@
 export type ConnectorTier = 'recommended' | 'standard' | 'coming_soon';
-export type ConnectorStatus = 'connected' | 'not_connected' | 'coming_soon';
+export type ConnectorStatus =
+  | 'connected'
+  | 'not_connected'
+  | 'disconnected'
+  | 'not_configured'
+  | 'coming_soon';
 
-export interface ConnectRequest { status: 'connected' | 'not_connected'; }
+export interface ConnectRequest { status: 'connected' | 'not_connected' | 'disconnected' | 'not_configured'; }
 export type ConnectResponse = Connector;
 
 export interface Metric { label: string; value: string; }

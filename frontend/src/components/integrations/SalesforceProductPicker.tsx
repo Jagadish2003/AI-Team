@@ -179,18 +179,18 @@ export default function SalesforceProductPicker({ onSaved }: Props) {
               onClick={() => toggleProduct(product.id)}
               className={[
                 'w-full flex items-start gap-3 rounded-lg border px-3 py-2.5',
-                'text-left transition-colors cursor-pointer',
-                'focus:outline-none focus:ring-2 focus:ring-emerald-500/50',
+                'text-left transition-[border-color,background-color,box-shadow] cursor-pointer',
+                'focus:outline-none focus-visible:ring-1 focus-visible:ring-accent/35',
                 isSelected
-                  ? 'border-emerald-500 bg-emerald-500/[0.08]'
-                  : 'border-border bg-panel hover:border-emerald-500/40',
+                  ? 'border-accent bg-accent/10 shadow-[0_8px_22px_rgba(13,85,215,0.14)]'
+                  : 'border-border bg-panel hover:border-accent/40',
               ].join(' ')}
             >
               {/* Checkbox indicator */}
               <div className={[
                 'mt-0.5 h-3.5 w-3.5 flex-shrink-0 rounded border flex items-center justify-center',
                 isSelected
-                  ? 'border-emerald-500 bg-emerald-500'
+                  ? 'border-accent bg-accent'
                   : 'border-border',
               ].join(' ')}>
                 {isSelected && (
@@ -203,7 +203,7 @@ export default function SalesforceProductPicker({ onSaved }: Props) {
 
               <div className="min-w-0 flex-1">
                 <div className={`text-xs font-medium ${
-                  isSelected ? 'text-emerald-600' : 'text-text'
+                  isSelected ? 'text-accent' : 'text-text'
                 }`}>
                   {product.label}
                 </div>
@@ -223,8 +223,8 @@ export default function SalesforceProductPicker({ onSaved }: Props) {
         disabled={saving}
         className={[
           'mt-3 w-full rounded-lg px-4 py-2 text-sm font-medium',
-          'bg-emerald-500 hover:bg-emerald-600 text-white transition-colors',
-          'focus:outline-none focus:ring-2 focus:ring-emerald-500/50',
+          'border border-accent/20 bg-accent/5 text-accent transition-colors hover:border-accent/45 hover:bg-accent/10',
+          'focus:outline-none focus-visible:ring-1 focus-visible:ring-accent/40',
           saving ? 'opacity-60 cursor-not-allowed' : 'cursor-pointer',
         ].join(' ')}
       >
@@ -232,7 +232,7 @@ export default function SalesforceProductPicker({ onSaved }: Props) {
       </button>
 
       {selected.size > 0 && (
-        <p className="mt-2 text-[11px] text-emerald-500 text-center">
+        <p className="mt-2 text-center text-[11px] text-accent">
           {selected.size} product{selected.size > 1 ? 's' : ''} declared
         </p>
       )}
