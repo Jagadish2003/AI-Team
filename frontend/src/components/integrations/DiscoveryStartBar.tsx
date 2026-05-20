@@ -142,7 +142,7 @@ export default function DiscoveryStartBar({
           <button
             onClick={onStart}
             disabled={!canStart}
-            className="flex items-center gap-2 whitespace-nowrap rounded-lg bg-accent px-5 py-2 text-sm font-medium text-textwhite transition-all hover:bg-accent/90 disabled:cursor-not-allowed disabled:opacity-50"
+            className="flex items-center gap-2 whitespace-nowrap rounded-lg border border-accent/20 bg-accent/5 px-5 py-2 text-sm font-medium text-accent transition-all hover:border-accent/45 hover:bg-accent/10 focus:outline-none focus-visible:ring-1 focus-visible:ring-accent/40 disabled:cursor-not-allowed disabled:opacity-50"
           >
             Start Discovery Run
             <MoveRight size={18} strokeWidth={2} />

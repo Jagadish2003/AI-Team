@@ -383,7 +383,7 @@ function EvidencePanel({
       <div className="border-t border-border p-4">
         <button
           onClick={() => nav(opportunityReviewPath)}
-          className="mb-3 flex w-full items-center gap-2 rounded-md border border-border bg-bg/20 px-3 py-2 text-left text-sm text-text transition hover:bg-panel2"
+          className="mb-3 flex w-full items-center gap-2 rounded-md border border-accent/20 bg-accent/5 px-3 py-2 text-left text-sm font-medium text-accent transition-colors hover:border-accent/45 hover:bg-accent/10 focus:outline-none focus-visible:ring-1 focus-visible:ring-accent/40"
         >
           <Link2 size={14} className="text-accent" />
           View in Opportunity Review
@@ -394,7 +394,7 @@ function EvidencePanel({
             type="button"
             onClick={() => prevOpp && onNavigate(prevOpp.id)}
             disabled={!prevOpp}
-            className="flex items-center gap-1 rounded border border-border bg-bg/40 px-4 py-2 text-sm font-medium text-text transition-colors hover:bg-bg/60 disabled:cursor-not-allowed disabled:opacity-40"
+            className="flex items-center gap-1 rounded border border-accent/20 bg-accent/5 px-4 py-2 text-sm font-medium text-accent transition-colors hover:border-accent/45 hover:bg-accent/10 focus:outline-none focus-visible:ring-1 focus-visible:ring-accent/40 disabled:cursor-not-allowed disabled:opacity-40"
           >
             <ChevronLeft className="h-4 w-4" />
             Prev
@@ -406,7 +406,7 @@ function EvidencePanel({
             type="button"
             onClick={() => nextOpp && onNavigate(nextOpp.id)}
             disabled={!nextOpp}
-            className="flex items-center gap-1 rounded border border-border bg-bg/40 px-4 py-2 text-sm font-medium text-text transition-colors hover:bg-bg/60 disabled:cursor-not-allowed disabled:opacity-40"
+            className="flex items-center gap-1 rounded border border-accent/20 bg-accent/5 px-4 py-2 text-sm font-medium text-accent transition-colors hover:border-accent/45 hover:bg-accent/10 focus:outline-none focus-visible:ring-1 focus-visible:ring-accent/40 disabled:cursor-not-allowed disabled:opacity-40"
           >
             Next
             <ChevronRight className="h-4 w-4" />

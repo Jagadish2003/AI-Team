@@ -67,14 +67,14 @@ export default function UploadPanel({
         <div className="flex flex-wrap justify-center gap-2">
           <button
             onClick={onBrowse}
-            className="rounded-md border border-border bg-panel px-6 py-2 text-sm text-text transition-colors hover:bg-bg/50"
+            className="rounded-md border border-accent/20 bg-accent/5 px-6 py-2 text-sm font-medium text-accent transition-colors hover:border-accent/45 hover:bg-accent/10 focus:outline-none focus-visible:ring-1 focus-visible:ring-accent/40"
           >
             Browse my computer
           </button>
 
           <button
             onClick={onAddMock}
-            className="inline-flex items-center gap-2 rounded-md border border-border bg-panel px-4 py-2 text-sm text-text transition-colors hover:bg-bg/50"
+            className="inline-flex items-center gap-2 rounded-md border border-accent/20 bg-accent/5 px-4 py-2 text-sm font-medium text-accent transition-colors hover:border-accent/45 hover:bg-accent/10 focus:outline-none focus-visible:ring-1 focus-visible:ring-accent/40"
           >
             <CirclePlus size={14} />
             Add a mock file

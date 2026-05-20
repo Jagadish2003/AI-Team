@@ -153,9 +153,9 @@ export default function SourceIntakePage() {
             <div className="fixed bottom-0 left-0 right-0 z-40 border-t border-border bg-bg/90 shadow-[0_-2px_6px_rgba(0,0,0,0.12)] backdrop-blur">
               <div className="mx-auto flex w-full max-w-none items-center justify-between gap-2 px-8 py-3">
                 <Button
-                  variant="secondary"
+                  variant="tertiary"
                   onClick={() => nav('/integration-hub')}
-                  className="w-40 rounded-md border border-border bg-buttonbg px-3 py-2 text-sm font-medium text-text hover:bg-panel transition disabled:cursor-not-allowed disabled:opacity-50 relative flex items-center justify-center"
+                  className="relative flex w-40 items-center justify-center"
                 >
                   <span className="absolute left-4 flex items-center">
                     <ChevronLeft size={16} strokeWidth={2.5} />
@@ -163,7 +163,7 @@ export default function SourceIntakePage() {
                   Back
                 </Button>
                 <Button
-                  variant="primary"
+                  variant="tertiary"
                   disabled={!canBegin}
                   title={!canBegin ? DISCOVERY_SOURCE_REQUIREMENT_MESSAGE : undefined}
                   onClick={() => {

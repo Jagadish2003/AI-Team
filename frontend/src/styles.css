@@ -307,6 +307,40 @@ body *::-webkit-scrollbar-corner {
   border-color: rgb(128 169 241);
 }
 
+.connector-group-tile-scroll {
+  max-height: calc((215px * 2) + 0.5rem);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  scrollbar-color: rgb(var(--color-muted) / 0.62) transparent;
+  scrollbar-width: thin;
+}
+
+.connector-group-tile-scroll::-webkit-scrollbar {
+  width: 5px;
+}
+
+.connector-group-tile-scroll::-webkit-scrollbar-thumb {
+  background-color: rgb(var(--color-muted) / 0.52);
+  border-radius: 999px;
+}
+
+.connector-group-tile-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+@media (max-width: 1023px) {
+  .connector-group-tile-scroll {
+    max-height: calc((215px * 3) + 1rem);
+  }
+}
+
+@media (max-width: 639px) {
+  .connector-group-tile-scroll {
+    max-height: calc((215px * 4) + 1.5rem);
+  }
+}
+
 :root.theme-light .light-view-data-button {
   background-color: rgb(var(--color-buttonbg)) !important;
 }

@@ -409,6 +409,7 @@ export default function DiscoveryPlanPage({ setupState, onLaunch }: Props) {
           </div>
 
           <Button
+            variant="tertiary"
             onClick={onLaunch}
             ariaLabel={`Start discovery - confidence ${confidence.level}`}
             className="gap-2"
@@ -420,7 +421,7 @@ export default function DiscoveryPlanPage({ setupState, onLaunch }: Props) {
       </section>
 
       <div className="rounded-xl border border-border bg-panel p-4 shadow-sm">
-        <Button variant="secondary" onClick={() => setupState.goTo(3)} className="gap-2">
+        <Button variant="tertiary" onClick={() => setupState.goTo(3)} className="gap-2">
           <ArrowLeft size={16} strokeWidth={2.2} aria-hidden="true" />
           Back
         </Button>

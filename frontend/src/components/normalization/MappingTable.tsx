@@ -205,7 +205,7 @@ export default function MappingTable() {
         <button
           disabled={!canPrev}
           onClick={() => setCurrentPage(p => p - 1)}
-          className="flex items-center gap-1 rounded border border-border bg-bg/40 px-4 py-2 hover:bg-bg/60 disabled:opacity-40"
+          className="flex items-center gap-1 rounded border border-accent/20 bg-accent/5 px-4 py-2 text-accent transition-colors hover:border-accent/45 hover:bg-accent/10 focus:outline-none focus-visible:ring-1 focus-visible:ring-accent/40 disabled:opacity-40"
         >
           <ChevronLeft className="h-4 w-4" /> Prev
         </button>
@@ -215,7 +215,7 @@ export default function MappingTable() {
         <button
           disabled={!canNext}
           onClick={() => setCurrentPage(p => p + 1)}
-          className="flex items-center gap-1 rounded border border-border bg-bg/40 px-4 py-2 hover:bg-bg/60 disabled:opacity-40"
+          className="flex items-center gap-1 rounded border border-accent/20 bg-accent/5 px-4 py-2 text-accent transition-colors hover:border-accent/45 hover:bg-accent/10 focus:outline-none focus-visible:ring-1 focus-visible:ring-accent/40 disabled:opacity-40"
         >
           Next <ChevronRight className="h-4 w-4" />
         </button>

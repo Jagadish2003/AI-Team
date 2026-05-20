@@ -1,19 +1,37 @@
 import React from 'react';
 import {
-  AppWindow,
+  BookOpenText,
+  BriefcaseBusiness,
+  Building2,
   CloudCog,
+  Database,
+  FileText,
+  GitBranch,
+  GitPullRequest,
   Github,
+  Gitlab,
+  Kanban,
   Layers,
+  Mail,
+  MessagesSquare,
   PackageCheck,
+  PanelTop,
   Plug,
+  ServerCog,
+  Share2,
   Slack,
+  Snowflake,
   SquareKanban,
+  Table2,
+  Ticket,
+  Users,
+  Workflow,
 } from 'lucide-react';
 
 const iconProps = {
   size: 18,
   strokeWidth: 2,
-  className: 'text-muted',
+  className: 'connector-icon',
 };
 
 function ServiceNowConnectorIcon() {
@@ -21,7 +39,7 @@ function ServiceNowConnectorIcon() {
     <svg
       viewBox="0 0 24 24"
       aria-hidden="true"
-      className="h-[18px] w-[18px] text-muted"
+      className="connector-icon h-[18px] w-[18px]"
       fill="none"
       stroke="currentColor"
       strokeLinecap="round"
@@ -38,11 +56,33 @@ export const connectorIcons: Record<string, React.ReactNode> = {
   Salesforce: <CloudCog {...iconProps} />,
   ServiceNow: <ServiceNowConnectorIcon />,
   'Jira & Confluence': <SquareKanban {...iconProps} />,
-  'Microsoft 365': <AppWindow {...iconProps} />,
   SAP: <PackageCheck {...iconProps} />,
-  GitHub: <Github {...iconProps} />,
+  'Oracle EBS': <Building2 {...iconProps} />,
+  Workday: <Users {...iconProps} />,
+  'Dynamics 365': <BriefcaseBusiness {...iconProps} />,
+
+  Jira: <Kanban {...iconProps} />,
+  'Azure DevOps': <Workflow {...iconProps} />,
+  Linear: <GitPullRequest {...iconProps} />,
+  Zendesk: <Ticket {...iconProps} />,
+
+  'Microsoft Teams': <MessagesSquare {...iconProps} />,
+  'Microsoft 365': <Mail {...iconProps} />,
+  Confluence: <BookOpenText {...iconProps} />,
+  SharePoint: <Share2 {...iconProps} />,
+  Notion: <PanelTop {...iconProps} />,
   Slack: <Slack {...iconProps} />,
+
+  GitHub: <Github {...iconProps} />,
+  GitLab: <Gitlab {...iconProps} />,
+  Bitbucket: <GitBranch {...iconProps} />,
+  'Azure Repos': <GitBranch {...iconProps} />,
+  PostgreSQL: <Database {...iconProps} />,
+  'SQL Server': <ServerCog {...iconProps} />,
+  'Oracle DB': <Table2 {...iconProps} />,
   Databricks: <Layers {...iconProps} />,
+  Snowflake: <Snowflake {...iconProps} />,
+  dbt: <FileText {...iconProps} />,
 };
 
 export const fallbackConnectorIcon = <Plug {...iconProps} />;

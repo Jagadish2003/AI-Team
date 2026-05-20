@@ -117,6 +117,7 @@ export default function HeroConnectorCard({
     : isConnected ? 'Configure & Sync'
     : connector.status === 'coming_soon' ? 'Coming soon'
     : 'Connect';
+  const primaryVariant = isConnected ? 'tertiary' : 'primary';
 
   return (
     <div
@@ -129,7 +130,9 @@ export default function HeroConnectorCard({
     >
       <div className="min-w-0">
         <div className="flex min-w-0 items-center gap-2 text-sm font-semibold text-text xl:text-base">
-          <span className="shrink-0">{connectorIcons[connector.name] || fallbackConnectorIcon}</span>
+          <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border border-accent/20 bg-accent/10 text-accent">
+            {connectorIcons[connector.name] || fallbackConnectorIcon}
+          </span>
           <span className="min-w-0 leading-snug">{connector.name}</span>
         </div>
         <div className="mt-1 flex items-center justify-between gap-2">
@@ -167,7 +170,7 @@ export default function HeroConnectorCard({
             onPrimary();
           }}
           disabled={connector.status === 'coming_soon'}
-          variant="primary"
+          variant={primaryVariant}
           className="min-w-0 px-2"
         >
           {primaryLabel}

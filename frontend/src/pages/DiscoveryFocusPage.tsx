@@ -229,6 +229,7 @@ export default function DiscoveryFocusPage({ setupState }: Props) {
           </div>
 
           <Button
+            variant="tertiary"
             onClick={handleContinue}
             disabled={!canProceedFromStep1}
             className="gap-2"

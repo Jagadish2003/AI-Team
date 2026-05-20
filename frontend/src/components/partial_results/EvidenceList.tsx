@@ -148,7 +148,7 @@ export default function EvidenceList({
           type="button"
           disabled={!canPrev}
           onClick={onPrev}
-          className="flex items-center gap-1 rounded border border-border bg-bg/40 px-4 py-2 text-sm font-medium text-text transition-colors hover:bg-bg/60 disabled:cursor-not-allowed disabled:opacity-40"
+          className="flex items-center gap-1 rounded border border-accent/20 bg-accent/5 px-4 py-2 text-sm font-medium text-accent transition-colors hover:border-accent/45 hover:bg-accent/10 focus:outline-none focus-visible:ring-1 focus-visible:ring-accent/40 disabled:cursor-not-allowed disabled:opacity-40"
         >
           <ChevronLeft className="h-4 w-4" /> Prev
         </button>
@@ -157,7 +157,7 @@ export default function EvidenceList({
           type="button"
           disabled={!canNext}
           onClick={onNext}
-          className="flex items-center gap-1 rounded border border-border bg-bg/40 px-4 py-2 text-sm font-medium text-text transition-colors hover:bg-bg/60 disabled:cursor-not-allowed disabled:opacity-40"
+          className="flex items-center gap-1 rounded border border-accent/20 bg-accent/5 px-4 py-2 text-sm font-medium text-accent transition-colors hover:border-accent/45 hover:bg-accent/10 focus:outline-none focus-visible:ring-1 focus-visible:ring-accent/40 disabled:cursor-not-allowed disabled:opacity-40"
         >
           Next <ChevronRight className="h-4 w-4" />
         </button>

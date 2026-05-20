@@ -1,6 +1,6 @@
 import React from 'react';
 
-type Variant = 'primary' | 'secondary' | 'ghost' | 'danger';
+type Variant = 'primary' | 'secondary' | 'tertiary' | 'ghost' | 'danger';
 
 export default function Button({
   children,
@@ -19,11 +19,12 @@ export default function Button({
   title?: string;
   ariaLabel?: string;
 }) {
-  const base = 'inline-flex min-h-9 items-center justify-center whitespace-nowrap rounded-md px-3 py-2 text-sm font-medium transition focus:outline-none focus:ring-2 focus:ring-accent/50 disabled:cursor-not-allowed disabled:opacity-40';
+  const base = 'inline-flex min-h-9 items-center justify-center whitespace-nowrap rounded-md px-3 py-2 text-sm font-medium transition-[border-color,background-color,box-shadow,color,opacity] focus:outline-none focus-visible:ring-1 focus-visible:ring-accent/40 disabled:cursor-not-allowed disabled:opacity-40';
   const variants: Record<Variant, string> = {
-  primary: 'bg-accent text-textwhite hover:opacity-90',
-  secondary: 'border border-border bg-buttonbg text-text hover:bg-panel2',
-  ghost: 'text-text hover:bg-panel2',
+  primary: 'border border-accent bg-accent text-textwhite shadow-sm hover:bg-accent/90',
+  secondary: 'border border-accent/45 bg-buttonbg text-accent shadow-sm hover:bg-accent/10',
+  tertiary: 'border border-accent/20 bg-accent/5 text-accent hover:border-accent/45 hover:bg-accent/10',
+  ghost: 'border border-accent/20 bg-accent/5 text-accent hover:border-accent/45 hover:bg-accent/10',
   danger: 'border border-red-500/30 bg-red-500/15 text-red-300 hover:bg-red-500/25'
 };
   return (
