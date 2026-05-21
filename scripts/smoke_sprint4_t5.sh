@@ -122,8 +122,8 @@ def normalize(items):
                   key=lambda x: x.get("id") or json.dumps(x, sort_keys=True))
 
 def check(label, f_before, f_after):
-    before = normalize(json.loads(open(f_before).read()))
-    after  = normalize(json.loads(open(f_after).read()))
+    before = normalize(json.loads(open(f_before, encoding='utf-8').read()))
+    after  = normalize(json.loads(open(f_after, encoding='utf-8').read()))
     if before != after:
         print(f"❌ {label} changed after replay")
         sys.exit(1)
