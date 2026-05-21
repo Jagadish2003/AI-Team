@@ -59,7 +59,8 @@ export default function ManagedAgentPanel({
       </div>
 
       <Button
-        className="flex w-full items-center justify-center gap-2 py-3 text-sm shadow-lg shadow-teal-500/10"
+        variant="tertiary"
+        className="flex w-full items-center justify-center gap-2 py-3 text-sm"
         onClick={onDownload}
       >
         Download Connector Agent
@@ -68,7 +69,7 @@ export default function ManagedAgentPanel({
 
       <button
         onClick={onGuide}
-        className="mt-4 w-full text-[11px] font-medium text-muted transition-colors hover:text-white"
+        className="mt-4 inline-flex w-full items-center justify-center rounded-md border border-accent/20 bg-accent/5 px-3 py-2 text-[11px] font-medium text-accent transition-colors hover:border-accent/45 hover:bg-accent/10 focus:outline-none focus-visible:ring-1 focus-visible:ring-accent/40"
       >
         Installation Guide
       </button>

@@ -119,7 +119,7 @@ export default function OpportunityReviewPage() {
               `/agent-blueprint?oppId=${encodeURIComponent(selected.id)}`,
             );
           }}
-          className="flex w-full items-center justify-center gap-2 rounded-md bg-accent px-4 py-3 text-sm font-medium text-white transition hover:opacity-90"
+          className="flex w-full items-center justify-center gap-2 rounded-md border border-accent/20 bg-accent/5 px-4 py-3 text-sm font-medium text-accent transition-colors hover:border-accent/45 hover:bg-accent/10 focus:outline-none focus-visible:ring-1 focus-visible:ring-accent/40"
         >
           <Zap size={15} />
           View Agent Blueprint

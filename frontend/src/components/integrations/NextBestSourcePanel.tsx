@@ -70,7 +70,11 @@ export default function NextBestSourcePanel({
               Adds signals from: <span className="text-text">{next.category}</span>
             </div>
             <div className="mt-3">
-              <Button className="w-full" onClick={onConnectNext}>
+              <Button
+                variant={next.status === 'connected' ? 'tertiary' : 'primary'}
+                className="w-full"
+                onClick={onConnectNext}
+              >
                 {next.status === 'connected' ? `Configure & Sync ${next.name}` : `Connect ${next.name}`}
               </Button>
             </div>

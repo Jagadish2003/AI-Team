@@ -263,7 +263,7 @@ export default function DiscoveryRunPage() {
             <div className="text-lg font-semibold">Discovery run failed</div>
             <div className="mt-2 text-sm text-red-300">{error}</div>
             <button
-              className="mt-4 rounded-md bg-accent px-3 py-2 text-sm font-medium text-textwhite hover:opacity-90"
+              className="mt-4 rounded-md border border-accent/20 bg-accent/5 px-3 py-2 text-sm font-medium text-accent transition-colors hover:border-accent/45 hover:bg-accent/10 focus:outline-none focus-visible:ring-1 focus-visible:ring-accent/40"
               onClick={() => {
                 if (runId) refetch();
                 else if (hasAtLeastOneSource) void startRun(inputs);
@@ -284,7 +284,7 @@ export default function DiscoveryRunPage() {
       actions={
         <>
           <button
-            className="rounded-md border border-border bg-buttonbg px-3 py-2 text-sm font-medium text-text transition hover:bg-panel disabled:cursor-not-allowed disabled:opacity-50"
+            className="rounded-md border border-accent/20 bg-accent/5 px-3 py-2 text-sm font-medium text-accent transition-colors hover:border-accent/45 hover:bg-accent/10 focus:outline-none focus-visible:ring-1 focus-visible:ring-accent/40 disabled:cursor-not-allowed disabled:opacity-50"
             onClick={() => void restartRun()}
             disabled={!started || !isMaterialized || computing || loading}
             title={
@@ -297,7 +297,7 @@ export default function DiscoveryRunPage() {
           </button>
 
           <button
-            className="rounded-md bg-accent px-3 py-2 text-sm font-medium text-textwhite transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+            className="rounded-md border border-accent/20 bg-accent/5 px-3 py-2 text-sm font-medium text-accent transition-colors hover:border-accent/45 hover:bg-accent/10 focus:outline-none focus-visible:ring-1 focus-visible:ring-accent/40 disabled:cursor-not-allowed disabled:opacity-50"
             onClick={() => nav(runScopedPath("/source-intelligence"))}
             disabled={!started || !isMaterialized || computing}
             title={computing ? "Waiting for compute to finish..." : undefined}
@@ -374,7 +374,7 @@ export default function DiscoveryRunPage() {
                 )}
               </div>
               <button
-                className="rounded-md border border-border bg-bg/20 px-3 py-2 text-sm font-semibold text-text transition hover:bg-panel2"
+                className="rounded-md border border-accent/20 bg-accent/5 px-3 py-2 text-sm font-semibold text-accent transition-colors hover:border-accent/45 hover:bg-accent/10 focus:outline-none focus-visible:ring-1 focus-visible:ring-accent/40"
                 onClick={() => refetch()}
               >
                 Refresh
@@ -390,11 +390,11 @@ export default function DiscoveryRunPage() {
               ) : (
                 <div className="space-y-2 text-sm">
                   {events.map((e, i) => (
-                    <div key={e.id ?? i} className="flex gap-3">
-                      <div className="w-40 shrink-0 font-mono text-xs text-muted">
+                    <div key={e.id ?? i} className="flex gap-3 text-sm leading-6">
+                      <div className="w-40 shrink-0 tabular-nums text-muted">
                         {formatRunTimestamp(e.tsLabel ?? e.ts)}
                       </div>
-                      <div className="w-28 shrink-0 font-mono text-xs text-muted">
+                      <div className="w-28 shrink-0 text-xs font-semibold uppercase tracking-wide text-muted">
                         {e.stage ?? ""}
                       </div>
                       <div className="text-text">{e.message}</div>

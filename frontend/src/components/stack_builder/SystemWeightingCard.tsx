@@ -188,15 +188,23 @@ export default function SystemWeightingCard({
     .join(' · ');
 
   return (
-    <div id={id} className="rounded-xl border border-border bg-panel overflow-hidden mb-3">
+    <div
+      id={id}
+      className={[
+        'mb-3 rounded-xl border bg-panel transition-[border-color,box-shadow] duration-150',
+        expanded
+          ? 'border-accent shadow-[0_8px_22px_rgba(13,85,215,0.14)]'
+          : 'border-border shadow-sm',
+      ].join(' ')}
+    >
 
       {/* ── Collapsed header — always visible ── */}
       <button
         type="button"
         onClick={() => setExpanded(e => !e)}
         className={[
-          'w-full flex items-center gap-3 px-4 py-3 text-left transition-colors',
-          'focus:outline-none focus:ring-2 focus:ring-accent/50 focus:ring-inset',
+          'w-full flex items-center gap-3 rounded-t-xl px-4 py-3 text-left transition-colors',
+          'focus:outline-none focus-visible:ring-1 focus-visible:ring-accent/35 focus-visible:ring-inset',
           expanded ? 'bg-accent/10' : 'hover:bg-panel2',
         ].join(' ')}
         aria-expanded={expanded}
@@ -244,7 +252,7 @@ export default function SystemWeightingCard({
 
       {/* ── Expanded body ── */}
       {expanded && (
-        <div className="border-t border-border bg-panel px-4 py-4 space-y-5">
+        <div className="space-y-5 rounded-b-xl border-t border-border bg-panel px-4 py-4">
 
           {/* PRIMARY ROLE */}
           <div>
@@ -323,9 +331,9 @@ export default function SystemWeightingCard({
               onClick={handleConfirm}
               className={[
                 'inline-flex items-center gap-1.5 rounded-md px-4 py-2',
-                'text-sm font-medium text-white',
-                'bg-accent hover:bg-accent/90 transition-colors',
-                'focus:outline-none focus:ring-2 focus:ring-accent/50',
+                'border border-accent/20 bg-accent/5 text-sm font-medium text-accent',
+                'transition-colors hover:border-accent/45 hover:bg-accent/10',
+                'focus:outline-none focus-visible:ring-1 focus-visible:ring-accent/40',
               ].join(' ')}
             >
               <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">

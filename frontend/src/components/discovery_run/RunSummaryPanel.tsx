@@ -78,7 +78,7 @@ export default function RunSummaryPanel({
  
       <div className="mt-4 space-y-2">
         <button
-          className="w-full rounded-lg border border-border bg-bg/40 px-4 py-2 text-sm font-medium text-text transition-colors hover:bg-bg/60 disabled:cursor-not-allowed disabled:opacity-40"
+          className="w-full rounded-lg border border-accent/20 bg-accent/5 px-4 py-2 text-sm font-medium text-accent transition-colors hover:border-accent/45 hover:bg-accent/10 focus:outline-none focus-visible:ring-1 focus-visible:ring-accent/40 disabled:cursor-not-allowed disabled:opacity-40"
           onClick={onViewNormalization}
           disabled={!canViewNormalization}
           title={!canViewNormalization ? 'Available after Normalization starts' : undefined}
@@ -87,7 +87,7 @@ export default function RunSummaryPanel({
         </button>
         {/* View Partial Results hidden — Evidence Collection page hidden Sprint 5.1
         <button
-          className="w-full rounded-lg border border-border bg-bg/40 px-4 py-2 text-sm font-medium text-text transition-colors hover:bg-bg/60 disabled:cursor-not-allowed disabled:opacity-40"
+          className="w-full rounded-lg border border-accent/20 bg-accent/5 px-4 py-2 text-sm font-medium text-accent transition-colors hover:border-accent/45 hover:bg-accent/10 focus:outline-none focus-visible:ring-1 focus-visible:ring-accent/40 disabled:cursor-not-allowed disabled:opacity-40"
           onClick={onViewPartial}
           disabled={!canViewPartial}
           title={!canViewPartial ? 'Available after Entity Extraction starts' : undefined}
@@ -95,7 +95,7 @@ export default function RunSummaryPanel({
           View Partial Results
         </button> */}
         <button
-          className="w-full rounded-lg border border-border bg-bg/40 px-4 py-2 text-sm font-medium text-text transition-colors hover:bg-bg/60 disabled:cursor-not-allowed disabled:opacity-40"
+          className="w-full rounded-lg border border-accent/20 bg-accent/5 px-4 py-2 text-sm font-medium text-accent transition-colors hover:border-accent/45 hover:bg-accent/10 focus:outline-none focus-visible:ring-1 focus-visible:ring-accent/40 disabled:cursor-not-allowed disabled:opacity-40"
           disabled={!canDownload}
           onClick={() => {
             setShowDownloadModal(true);
@@ -105,7 +105,7 @@ export default function RunSummaryPanel({
           Download Summary
         </button>
         <button
-          className="w-full rounded-lg border border-border bg-bg/40 px-4 py-2 text-sm font-medium text-text transition-colors hover:bg-bg/60"
+          className="w-full rounded-lg border border-accent/20 bg-accent/5 px-4 py-2 text-sm font-medium text-accent transition-colors hover:border-accent/45 hover:bg-accent/10 focus:outline-none focus-visible:ring-1 focus-visible:ring-accent/40"
           onClick={onRestart}
         >
           Restart Run (mock)

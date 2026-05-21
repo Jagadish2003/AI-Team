@@ -409,7 +409,7 @@ export default function SourceIntelligencePage() {
           <SourceIntelligenceHeader className="" />
           <button
             onClick={() => setShowDetail((v) => !v)}
-            className="inline-flex items-center gap-2 rounded-md border border-border bg-buttonbg px-3 py-2 text-sm font-medium text-text shadow-sm transition-colors hover:border-accent/50 hover:bg-panel2 focus:outline-none focus:ring-2 focus:ring-accent/50"
+            className="inline-flex items-center gap-2 rounded-md border border-accent/20 bg-accent/5 px-3 py-2 text-sm font-medium text-accent transition-colors hover:border-accent/45 hover:bg-accent/10 focus:outline-none focus-visible:ring-1 focus-visible:ring-accent/40"
             data-testid="toggle-detail"
           >
             {showDetail ? "Hide" : "View"} field mapping detail

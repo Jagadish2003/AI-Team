@@ -1,10 +1,50 @@
+/**
+ * useSetupState — SB-1 Sprint 7
+ *
+ * Central state management hook for the 4-screen setup flow.
+ * Holds all setup state, navigation, and derived values.
+ *
+ * Used by:
+ *   - DiscoveryFocusScreen (Screen 1)
+ *   - YourSystemsScreen (Screen 2)
+ *   - SourceWeightingScreen (Screen 3)
+ *   - DiscoveryPlanScreen (Screen 4)
+ *
+ * Key design: state persists across all 4 screens.
+ * Back navigation does NOT reset state.
+ * Changing a selection on Screen 2 marks Screen 3 as needs_attention
+ * if weighting was previously confirmed.
+ */
+
 import { useState, useCallback, useMemo } from 'react';
+import type { WorkspaceCatalogResponse } from '../../types/workspace_catalog';
+import { getCatalogSystemIds, getCatalogSalesforceProducts } from '../../types/workspace_catalog';
 import {
   SetupState, FocusId, IndustryId, TemplateId,
   SystemWeighting, SystemRole, SystemPriority, WorkflowFocusTag,
   ProgressStep, StepStatus, ConfidenceState, ConfidenceLevel,
 } from '../../types/stack_builder';
 
+// ── Default weighting assumptions per system ID ───────────────────────────────
+//
+// ARCHITECTURAL NOTE (Sprint 7 — confirmed by architect review May 2026):
+// These are recommendation seeds only. They are starting assumptions optimised
+// for the known AgentIQ packs (nCino, PSS). They are NOT hardcoded semantic
+// truths applicable across all industries or organisations.
+//
+// Examples of where defaults may be wrong:
+//   - Workday may be system-of-record in HR-primary organisations
+//   - SAP may be workflow-centric depending on module and use case
+//   - Dynamics 365 may be primary in non-Salesforce estates
+//   - ServiceNow may be system-of-record-like in certain operational contexts
+//
+// These defaults must remain editable by the user and extensible by pack.
+// A logistics customer's SAP is not the same as a pension fund's SAP.
+// Sprint 8 story: make defaults industry-registry-aware (pull from SB-3 IndustryConfig).
+//
+// Internal name: SYSTEM_DEFAULT_ASSUMPTIONS
+// Do not treat as authoritative business meaning.
+// Starting assumptions optimised for known packs — not cross-industry truths.
 
 const SYSTEM_DEFAULT_ASSUMPTIONS: Record<string, Partial<SystemWeighting>> = {
   salesforce:        { role: 'system_of_record',         priority: 'primary',   workflowFocus: ['approvals', 'compliance_risk'] },
@@ -43,6 +83,28 @@ function defaultWeighting(systemId: string): SystemWeighting {
     confirmed: false,
   };
 }
+
+// ── Setup readiness calculation ────────────────────────────────────────────────
+//
+// ARCHITECTURAL NOTE (Sprint 7 — confirmed by architect review May 2026):
+// This function calculates CONFIGURATION READINESS, not discovery confidence.
+// Internal name: calcSetupReadiness / SetupReadinessScore.
+//
+// What it measures:
+//   - Has the user selected a primary platform?         (+40%)
+//   - Have they added operational signal sources?       (+17% each, max 35%)
+//   - Have they added a documentation system?           (+15%)
+//   - Have they confirmed source weighting on Screen 3? (+10%)
+//
+// What it does NOT yet measure:
+//   - Source diversity or relevance
+//   - Actual authentication / connection state
+//   - Pack-specific signal coverage
+//   - Runtime discovery quality from previous runs
+//
+// UI label: "Discovery confidence" — retained as user-facing language.
+// Internal model: SetupReadinessScore.
+// This will evolve as runtime discovery quality signals become available (Sprint 9+).
 
 function calcSetupReadiness(state: SetupState): ConfidenceState {
   const { selectedSystemIds, weightings, currentStep } = state;
@@ -138,9 +200,10 @@ const INITIAL: SetupState = {
   selectedSalesforceClouds: [],
   weightings: {},
   currentStep: 1,
+  templatePreselectedIds: [],
 };
 
-export function useSetupState() {
+export function useSetupState(catalog?: WorkspaceCatalogResponse | null) {
   const [state, setState] = useState<SetupState>(INITIAL);
 
   const setFocus = useCallback((id: FocusId) => {
@@ -153,12 +216,27 @@ export function useSetupState() {
 
   const setTemplate = useCallback((id: TemplateId | null, preselected: string[] = []) => {
     setState(s => {
-      const merged = Array.from(new Set([...s.selectedSystemIds, ...preselected]));
+      // Remove previous template-added systems
+      let systemIds = s.selectedSystemIds.filter(sid => !s.templatePreselectedIds.includes(sid));
+
+      // Add new template-added systems
+      if (preselected.length > 0) {
+        systemIds = Array.from(new Set([...systemIds, ...preselected]));
+      }
+
+      // Build weightings for new template systems
       const newWeightings = { ...s.weightings };
       preselected.forEach(sid => {
         if (!newWeightings[sid]) newWeightings[sid] = defaultWeighting(sid);
       });
-      return { ...s, templateId: id, selectedSystemIds: merged, weightings: newWeightings };
+
+      return {
+        ...s,
+        templateId: id,
+        selectedSystemIds: systemIds,
+        templatePreselectedIds: preselected,
+        weightings: newWeightings
+      };
     });
   }, []);
 
@@ -190,6 +268,13 @@ export function useSetupState() {
     });
   }, []);
 
+  const setSalesforceClouds = useCallback((clouds: string[]) => {
+    setState(s => ({
+      ...s,
+      selectedSalesforceClouds: clouds,
+    }));
+  }, []);
+
   const updateWeighting = useCallback((updated: SystemWeighting) => {
     setState(s => ({
       ...s,
@@ -219,19 +304,70 @@ export function useSetupState() {
 
   const confidence = useMemo(() => calcSetupReadiness(state), [state]);
   const steps = useMemo(() => calcStepStatuses(state), [state]);
+
+  // Engineering / change role relevance
+  // ARCHITECTURAL NOTE (Sprint 7 — confirmed by architect review May 2026):
+  // Current logic: tool-based only. Show Engineering/Change role when any of
+  // the listed code/engineering systems are present in the selected estate.
+  //
+  // This is a temporary first approximation. Known limitations:
+  //   - Azure DevOps is frequently used as work tracking, not engineering
+  //   - Jira can represent change activity in engineering-led organisations
+  //   - ServiceNow can be operational-system-of-record in some contexts
+  //
+  // Sprint 8 story: make showEngineeringRole focus-aware and domain-aware.
+  // Logic should consider: selected systems + chosen focus + industry context.
+  // ENG-SB-2 Sprint 9: derive showEngineeringRole from catalog when available.
+  // catalog.data_engineering reflects what is connected in Integration Hub —
+  // more accurate than checking selectedSystemIds (which includes unconnected
+  // manually added systems). Falls back to selectedSystemIds when catalog absent.
   const codeEngineeringSystems = ['github', 'gitlab', 'bitbucket', 'azure_repos', 'azure_devops'];
-  const showEngineeringRole = state.selectedSystemIds.some(id =>
-    codeEngineeringSystems.includes(id)
-  );
+  const showEngineeringRole = catalog
+    ? (catalog.data_engineering ?? []).length > 0
+    : state.selectedSystemIds.some(id => codeEngineeringSystems.includes(id));
 
   const restoreState = useCallback((saved: Partial<SetupState>) => {
-    // Merge saved state into current state.
-    // Partial — only fields present in the snapshot are restored.
-    // Fields absent from the snapshot retain their current (default) values.
-    // Sprint 8: add validation that saved systemIds still exist in registry.
-    setState(s => ({ ...s, ...saved }));
-  }, []);
+    // ENG-SB-2 Sprint 9: filter restored selectedSystemIds against catalog.
+    // A system disconnected from Integration Hub between sessions must not
+    // reappear as selected. If catalog is absent, restore as-is (safe fallback).
+    setState(s => {
+      if (catalog && saved.selectedSystemIds) {
+        const catalogIds = new Set(getCatalogSystemIds(catalog));
+        const filtered = saved.selectedSystemIds.filter(id => catalogIds.has(id));
+        return { ...s, ...saved, selectedSystemIds: filtered };
+      }
+      return { ...s, ...saved };
+    });
+  }, [catalog]);
 
+
+  // ENG-SB-2 Sprint 9: seed selectedSystemIds and selectedSalesforceClouds
+  // from workspace catalog. Called once by StackBuilderPage after catalog fetch.
+  // Idempotent — only applies when state is still at initial
+  // (currentStep === 1, no systems already selected). Prevents overwriting a
+  // restored session or user selections.
+  const initFromCatalog = useCallback((c: WorkspaceCatalogResponse) => {
+    setState(s => {
+      // Do not seed if user has already selected systems or moved past step 1
+      if (s.selectedSystemIds.length > 0 || s.currentStep > 1) return s;
+
+      const systemIds = getCatalogSystemIds(c);
+      const sfProducts = getCatalogSalesforceProducts(c);
+
+      // Build weightings for all pre-seeded systems
+      const newWeightings: Record<string, any> = { ...s.weightings };
+      systemIds.forEach(id => {
+        if (!newWeightings[id]) newWeightings[id] = defaultWeighting(id);
+      });
+
+      return {
+        ...s,
+        selectedSystemIds:        systemIds,
+        selectedSalesforceClouds: sfProducts,
+        weightings:               newWeightings,
+      };
+    });
+  }, []);
 
   return {
     state,
@@ -240,6 +376,7 @@ export function useSetupState() {
     setTemplate,
     toggleSystem,
     toggleSalesforceCloud,
+    setSalesforceClouds,
     updateWeighting,
     goTo,
     canProceedFromStep1,
@@ -248,5 +385,6 @@ export function useSetupState() {
     steps,
     showEngineeringRole,
     restoreState,
+    initFromCatalog,
   };
 }

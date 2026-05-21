@@ -23,7 +23,8 @@
       "BenefitAssignment",
       "Case (Disability)"
     ],
-    "signalStrength": 94
+    "signalStrength": 94,
+    "products": []
   },
   {
     "id": "servicenow",
@@ -50,32 +51,6 @@
       "SLA Definitions"
     ],
     "signalStrength": 88
-  },
-  {
-    "id": "jira_confluence",
-    "name": "Jira & Confluence",
-    "category": "Delivery \u00b7 Knowledge",
-    "tier": "recommended",
-    "recommendedRank": 3,
-    "status": "disconnected",
-    "configured": false,
-    "metrics": [
-      {
-        "label": "Issues (90d)",
-        "value": "10"
-      },
-      {
-        "label": "Benefit signals",
-        "value": "10"
-      }
-    ],
-    "lastSynced": "\u2014",
-    "reads": [
-      "Issues",
-      "Benefit Operations",
-      "Runbooks / Pages"
-    ],
-    "signalStrength": 85
   },
   {
     "id": "sap",
@@ -176,5 +151,325 @@
       "Notebooks"
     ],
     "signalStrength": 52
+  },
+  {
+    "id": "oracle_ebs",
+    "name": "Oracle EBS",
+    "category": "Finance / HR",
+    "tier": "standard",
+    "status": "not_configured",
+    "configured": false,
+    "metrics": [],
+    "lastSynced": "\u2014",
+    "reads": [
+      "GL Journals",
+      "AP Invoices",
+      "Cost Centers"
+    ],
+    "signalStrength": 72
+  },
+  {
+    "id": "workday",
+    "name": "Workday",
+    "category": "HR / finance",
+    "tier": "standard",
+    "status": "not_configured",
+    "configured": false,
+    "metrics": [],
+    "lastSynced": "\u2014",
+    "reads": [
+      "Workers",
+      "Business Processes",
+      "Compensation"
+    ],
+    "signalStrength": 68
+  },
+  {
+    "id": "dynamics365",
+    "name": "Dynamics 365",
+    "category": "ERP / CRM",
+    "tier": "standard",
+    "status": "not_configured",
+    "configured": false,
+    "metrics": [],
+    "lastSynced": "\u2014",
+    "reads": [
+      "Accounts",
+      "Opportunities",
+      "Work Orders"
+    ],
+    "signalStrength": 65
+  },
+  {
+    "id": "jira",
+    "name": "Jira",
+    "category": "Issues / backlog",
+    "tier": "standard",
+    "status": "not_configured",
+    "configured": false,
+    "metrics": [],
+    "lastSynced": "\u2014",
+    "reads": [
+      "Issues",
+      "Sprints",
+      "Epics"
+    ],
+    "signalStrength": 78
+  },
+  {
+    "id": "azure_devops",
+    "name": "Azure DevOps",
+    "category": "ALM / CI/CD",
+    "tier": "standard",
+    "status": "not_configured",
+    "configured": false,
+    "metrics": [],
+    "lastSynced": "\u2014",
+    "reads": [
+      "Work Items",
+      "Pipelines",
+      "Repos"
+    ],
+    "signalStrength": 62
+  },
+  {
+    "id": "linear",
+    "name": "Linear",
+    "category": "Product / issues",
+    "tier": "standard",
+    "status": "not_configured",
+    "configured": false,
+    "metrics": [],
+    "lastSynced": "\u2014",
+    "reads": [
+      "Issues",
+      "Projects",
+      "Cycles"
+    ],
+    "signalStrength": 55
+  },
+  {
+    "id": "zendesk",
+    "name": "Zendesk",
+    "category": "Support",
+    "tier": "standard",
+    "status": "not_configured",
+    "configured": false,
+    "metrics": [],
+    "lastSynced": "\u2014",
+    "reads": [
+      "Tickets",
+      "Agents",
+      "SLA Policies"
+    ],
+    "signalStrength": 60
+  },
+  {
+    "id": "teams",
+    "name": "Microsoft Teams",
+    "category": "Comms / docs",
+    "tier": "standard",
+    "status": "not_configured",
+    "configured": false,
+    "metrics": [],
+    "lastSynced": "\u2014",
+    "reads": [
+      "Channels",
+      "Messages",
+      "Meetings"
+    ],
+    "signalStrength": 50
+  },
+  {
+    "id": "m365",
+    "name": "Microsoft 365",
+    "category": "Comms / docs",
+    "tier": "standard",
+    "status": "not_configured",
+    "configured": false,
+    "metrics": [],
+    "lastSynced": "\u2014",
+    "reads": [
+      "Emails",
+      "Calendar",
+      "Documents"
+    ],
+    "signalStrength": 50
+  },
+  {
+    "id": "confluence",
+    "name": "Confluence",
+    "category": "Docs / knowledge",
+    "tier": "standard",
+    "status": "not_configured",
+    "configured": false,
+    "metrics": [],
+    "lastSynced": "\u2014",
+    "reads": [
+      "Pages",
+      "Spaces",
+      "Templates"
+    ],
+    "signalStrength": 58
+  },
+  {
+    "id": "sharepoint",
+    "name": "SharePoint",
+    "category": "Docs / intranet",
+    "tier": "standard",
+    "status": "not_configured",
+    "configured": false,
+    "metrics": [],
+    "lastSynced": "\u2014",
+    "reads": [
+      "Documents",
+      "Lists",
+      "Sites"
+    ],
+    "signalStrength": 52
+  },
+  {
+    "id": "notion",
+    "name": "Notion",
+    "category": "Docs / wiki",
+    "tier": "standard",
+    "status": "not_configured",
+    "configured": false,
+    "metrics": [],
+    "lastSynced": "\u2014",
+    "reads": [
+      "Pages",
+      "Databases",
+      "Blocks"
+    ],
+    "signalStrength": 45
+  },
+  {
+    "id": "gitlab",
+    "name": "GitLab",
+    "category": "DevOps",
+    "tier": "standard",
+    "status": "not_configured",
+    "configured": false,
+    "metrics": [],
+    "lastSynced": "\u2014",
+    "reads": [
+      "Merge Requests",
+      "Pipelines",
+      "Issues"
+    ],
+    "signalStrength": 60
+  },
+  {
+    "id": "bitbucket",
+    "name": "Bitbucket",
+    "category": "Source control",
+    "tier": "standard",
+    "status": "not_configured",
+    "configured": false,
+    "metrics": [],
+    "lastSynced": "\u2014",
+    "reads": [
+      "Pull Requests",
+      "Repos",
+      "Pipelines"
+    ],
+    "signalStrength": 55
+  },
+  {
+    "id": "azure_repos",
+    "name": "Azure Repos",
+    "category": "Source control",
+    "tier": "standard",
+    "status": "not_configured",
+    "configured": false,
+    "metrics": [],
+    "lastSynced": "\u2014",
+    "reads": [
+      "Commits",
+      "Pull Requests",
+      "Branches"
+    ],
+    "signalStrength": 55
+  },
+  {
+    "id": "postgresql",
+    "name": "PostgreSQL",
+    "category": "Database",
+    "tier": "standard",
+    "status": "not_configured",
+    "configured": false,
+    "metrics": [],
+    "lastSynced": "\u2014",
+    "reads": [
+      "Tables",
+      "Views",
+      "Query Logs"
+    ],
+    "signalStrength": 48
+  },
+  {
+    "id": "sql_server",
+    "name": "SQL Server",
+    "category": "Database",
+    "tier": "standard",
+    "status": "not_configured",
+    "configured": false,
+    "metrics": [],
+    "lastSynced": "\u2014",
+    "reads": [
+      "Tables",
+      "Stored Procedures",
+      "Query Plans"
+    ],
+    "signalStrength": 48
+  },
+  {
+    "id": "oracle_db",
+    "name": "Oracle DB",
+    "category": "Database",
+    "tier": "standard",
+    "status": "not_configured",
+    "configured": false,
+    "metrics": [],
+    "lastSynced": "\u2014",
+    "reads": [
+      "Tables",
+      "Procedures",
+      "AWR Reports"
+    ],
+    "signalStrength": 48
+  },
+  {
+    "id": "snowflake",
+    "name": "Snowflake",
+    "category": "Data warehouse",
+    "tier": "standard",
+    "status": "not_configured",
+    "configured": false,
+    "metrics": [],
+    "lastSynced": "\u2014",
+    "reads": [
+      "Schemas",
+      "Query History",
+      "Warehouses"
+    ],
+    "signalStrength": 50
+  },
+  {
+    "id": "dbt",
+    "name": "dbt",
+    "category": "Transforms",
+    "tier": "standard",
+    "status": "not_configured",
+    "configured": false,
+    "metrics": [],
+    "lastSynced": "\u2014",
+    "reads": [
+      "Models",
+      "Tests",
+      "Lineage"
+    ],
+    "signalStrength": 42
   }
 ]

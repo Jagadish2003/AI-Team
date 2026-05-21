@@ -5,6 +5,7 @@ import Button from '../common/Button';
 import { accessIcons } from './AccessIcons';
 import { useToast } from '../common/Toast';
 import { ExternalLink, CheckCircle2 } from 'lucide-react';
+import SalesforceProductPicker from './SalesforceProductPicker';
 
 // ── T41-7: Connection Health — configured read scope for this connector.
 // Shows what AgentIQ is configured to read from this source.
@@ -157,7 +158,7 @@ export default function ConnectorDetailPanel({
 
         <button
           onClick={() => push('More details available in later sprint.')}
-          className="flex items-center gap-1 text-accent hover:underline"
+          className="inline-flex items-center gap-1 rounded-md border border-accent/20 bg-accent/5 px-2 py-1 text-xs font-medium text-accent transition-colors hover:border-accent/45 hover:bg-accent/10 focus:outline-none focus-visible:ring-1 focus-visible:ring-accent/40"
         >
           Learn More <ExternalLink size={14} />
         </button>
@@ -193,10 +194,16 @@ export default function ConnectorDetailPanel({
       {/* T41-7: Connection Health — shown only when connected */}
       <ConnectionHealthSection connector={connector} />
 
+      {/* ENG-IH-3 Sprint 9: Salesforce product declaration */}
+      {/* Shown after Salesforce is connected — workspace-level declaration */}
+      {connector.id === 'salesforce' && isConnected && (
+        <SalesforceProductPicker />
+      )}
+
       {/* CTA */}
       <div className="mt-5">
         <Button
-          variant="primary"
+          variant="tertiary"
           className="w-full whitespace-nowrap"
           onClick={onConfigure}
           disabled={!isConnected || connector.status === 'coming_soon'}

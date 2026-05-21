@@ -1,17 +1,18 @@
 /**
  * StackBuilderPage — Sprint 7 Final Wiring + Sprint 8 Foundation
  *
- * Combines StackBuilderRouter and StackBuilderRouterPage into a single 
+ * Combines StackBuilderRouter and StackBuilderRouterPage into a single
  * page-level component. Owns useSetupState(), handles session persistence,
  * routes between the 4 child pages, and translates state to /launch + /compute.
  */
 
-import React, { useCallback, useEffect, useRef } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useRunContext } from '../context/RunContext';
 
 // Import components and types
-import { CheckCircle2, Database, Layers3, Target } from 'lucide-react';
+import { CheckCircle2, Database, Layers3, Loader2, Target } from 'lucide-react';
+import type { WorkspaceCatalogResponse } from '../types/workspace_catalog';
 import PageShell from '../components/common/PageShell';
 import {
   DiscoveryConfidenceBar,
@@ -111,25 +112,28 @@ function resolvePackId(state: ReturnType<typeof useSetupState>['state']): string
     "salesforce_fsc": "service_cloud"
   };
 
-  if (!state.industryId) {
-    if (!state.selectedSalesforceClouds || state.selectedSalesforceClouds.length === 0) {
-      return 'service_cloud';
-    } else {
-      // Use the first selected cloud to determine the pack, fallback to service_cloud if not in dict
-      const selectedCloud = state.selectedSalesforceClouds[0];
-      return CLOUD_PACK_REGISTRY[selectedCloud] || 'service_cloud';
-    }
+  // Priority 1: Use selected Salesforce cloud product if available
+  if (state.selectedSalesforceClouds && state.selectedSalesforceClouds.length > 0) {
+    const selectedCloud = state.selectedSalesforceClouds[0];
+    return CLOUD_PACK_REGISTRY[selectedCloud] || 'service_cloud';
   }
 
-  const hints = INDUSTRY_PACK_HINTS[state.industryId];
-  if (!hints || hints.length === 0) return 'service_cloud';
-  return hints[0];
+  // Priority 2: Use industry hints if set
+  if (state.industryId) {
+    const hints = INDUSTRY_PACK_HINTS[state.industryId];
+    if (hints && hints.length > 0) return hints[0];
+  }
+
+  // Priority 3: Default to service_cloud
+  return 'service_cloud';
 }
 
 function normaliseSystems(selectedIds: string[]): string[] {
-  const normalised = selectedIds.map(id =>
-    SALESFORCE_CLOUD_IDS.has(id) ? 'salesforce' : id,
-  );
+  const normalised = selectedIds.map(id => {
+    if (SALESFORCE_CLOUD_IDS.has(id)) return 'salesforce';
+    if (id === 'jira_confluence') return 'jira';
+    return id;
+  });
   return [...new Set(normalised)];
 }
 
@@ -272,20 +276,84 @@ interface Props {
   token?: string;
 }
 
+
 export default function StackBuilderPage({
   apiBase = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000',
   token = import.meta.env.VITE_DEV_JWT || 'dev-token-change-me',
 }: Props) {
-  
+
   // Stale Run Fix Part 1: Bring in the context and navigate hook
   const { setRunId } = useRunContext();
   const navigate = useNavigate();
   const orgId = (import.meta.env.VITE_ORG_ID as string | undefined) ?? 'demo-org';
 
   const setupState = useSetupState();
+  const [catalog, setCatalog] = useState<WorkspaceCatalogResponse | null>(null);
+  const [catalogLoading, setCatalogLoading] = useState(true);
+  const [catalogError, setCatalogError] = useState<string | null>(null);
   const { state, steps } = setupState;
   const { clearSession } = useStackBuilderPersistence(orgId, setupState, apiBase, token);
   const copy = STEP_COPY[state.currentStep] ?? STEP_COPY[1];
+
+  const fetchCatalog = useCallback(() => {
+    setCatalogLoading(true);
+    const headers = buildAuthHeaders(token);
+
+    fetch(`${apiBase}/api/integration-hub/workspace-catalog`, {
+      credentials: 'omit',
+      headers,
+    })
+      .then(r => {
+        if (!r.ok) throw new Error(`Catalog fetch failed: ${r.status}`);
+        return r.json();
+      })
+      .then((fetchedCatalog: WorkspaceCatalogResponse | null) => {
+        setCatalog(fetchedCatalog);
+        setCatalogError(null);
+        const salesforce = fetchedCatalog?.primary_platforms?.find(
+          system => system.system_id === 'salesforce',
+        );
+        setupState.setSalesforceClouds(
+          Array.isArray(salesforce?.products) ? salesforce.products : [],
+        );
+      })
+      .catch((err) => {
+        console.error('[StackBuilderPage] Catalog fetch failed:', err);
+        setCatalogError('Could not load your connected systems. Please retry.');
+        setCatalog(null);
+        setupState.setSalesforceClouds([]);
+      })
+      .finally(() => setCatalogLoading(false));
+  }, [apiBase, token, setupState.setSalesforceClouds]);
+
+  useEffect(() => {
+    fetchCatalog();
+  }, [fetchCatalog]);
+
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (!document.hidden) {
+        fetchCatalog();
+      }
+    };
+
+    const handleFocus = () => {
+      fetchCatalog();
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    window.addEventListener('focus', handleFocus);
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      window.removeEventListener('focus', handleFocus);
+    };
+  }, [fetchCatalog]);
+
+  useEffect(() => {
+    if (catalog && setupState.initFromCatalog) {
+      setupState.initFromCatalog(catalog);
+    }
+  }, [catalog, setupState.initFromCatalog]);
 
   const handleLaunch = useCallback(async () => {
     const packId = resolvePackId(state);
@@ -334,11 +402,11 @@ export default function StackBuilderPage({
       });
 
     clearSession();
-    
+
     // Stale Run Fix Part 2: Update global context BEFORE navigating
     setRunId(runId);
     navigate(`/discovery-run?runId=${runId}`);
-    
+
   }, [state, orgId, apiBase, clearSession, navigate, setRunId, token]);
 
   return (
@@ -361,8 +429,26 @@ export default function StackBuilderPage({
           {state.currentStep === 1 && (
             <DiscoveryFocusPage setupState={setupState} />
           )}
-          {state.currentStep === 2 && (
-            <YourSystemsPage setupState={setupState} />
+          {state.currentStep === 2 && catalogLoading && (
+            <div className="flex flex-col items-center justify-center gap-3 py-16 text-muted">
+              <Loader2 size={24} className="animate-spin text-emerald-500" aria-hidden />
+              <p className="text-sm">Loading your connected systems…</p>
+            </div>
+          )}
+          {state.currentStep === 2 && catalogError && !catalogLoading && (
+            <div className="rounded-xl border border-red-200 bg-red-50/10 px-5 py-4 text-sm text-red-400">
+              {catalogError}
+              <button
+                type="button"
+                onClick={() => window.location.reload()}
+                className="ml-2 underline hover:no-underline"
+              >
+                Retry
+              </button>
+            </div>
+          )}
+          {state.currentStep === 2 && !catalogLoading && !catalogError && (
+            <YourSystemsPage setupState={setupState} catalog={catalog} />
           )}
           {state.currentStep === 3 && (
             <SourceWeightingPage setupState={setupState} />

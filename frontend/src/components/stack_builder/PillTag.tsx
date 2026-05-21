@@ -87,7 +87,7 @@ export default function PillTag({
   const stateClasses = disabled
     ? 'border-border/50 bg-panel/50 text-muted/50 cursor-not-allowed'
     : selected
-    ? 'border-accent bg-accent/15 text-blue-100 cursor-pointer'
+    ? 'border-accent bg-accent/15 text-blue-100 shadow-[0_5px_14px_rgba(13,85,215,0.12)] cursor-pointer'
     : 'border-border bg-panel text-muted hover:border-accent/50 hover:text-text cursor-pointer';
 
   return (
@@ -101,8 +101,8 @@ export default function PillTag({
       onClick={disabled ? undefined : onToggle}
       onKeyDown={handleKey}
       className={[
-        'inline-flex items-center rounded-full border font-medium leading-none transition-colors',
-        'focus:outline-none focus:ring-2 focus:ring-accent/50',
+        'inline-flex items-center rounded-full border font-medium leading-none transition-[border-color,background-color,box-shadow,color]',
+        'focus:outline-none focus-visible:ring-1 focus-visible:ring-accent/35',
         sizeClasses,
         stateClasses,
       ].join(' ')}

@@ -42,7 +42,7 @@ export function InfoPanel({
           <button
             onClick={onAction}
             disabled={actionDisabled}
-            className="rounded-lg bg-accent px-6 py-2.5 text-sm font-medium text-textwhite transition-all duration-200 hover:scale-[1.02] hover:opacity-90 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:scale-100"
+            className="rounded-lg border border-accent/20 bg-accent/5 px-6 py-2.5 text-sm font-medium text-accent transition-colors hover:border-accent/45 hover:bg-accent/10 focus:outline-none focus-visible:ring-1 focus-visible:ring-accent/40 disabled:cursor-not-allowed disabled:opacity-50"
           >
             {actionLabel}
           </button>

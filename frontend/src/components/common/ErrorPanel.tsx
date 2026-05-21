@@ -36,11 +36,9 @@ export default function ErrorPanel({
         {onRetry && (
           <div className="pt-2">
             <Button
-              variant="secondary"
+              variant="tertiary"
               onClick={onRetry}
-              className="px-6 py-2 rounded-lg 
-                bg-red-500/60 hover:bg-red-500/70 
-                text-red-100 transition-all">
+              className="rounded-lg px-6 py-2">
               Retry
             </Button>
           </div>
