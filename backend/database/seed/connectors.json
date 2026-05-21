@@ -53,32 +53,6 @@
     "signalStrength": 88
   },
   {
-    "id": "jira_confluence",
-    "name": "Jira & Confluence",
-    "category": "Delivery \u00b7 Knowledge",
-    "tier": "recommended",
-    "recommendedRank": 3,
-    "status": "disconnected",
-    "configured": false,
-    "metrics": [
-      {
-        "label": "Issues (90d)",
-        "value": "10"
-      },
-      {
-        "label": "Benefit signals",
-        "value": "10"
-      }
-    ],
-    "lastSynced": "\u2014",
-    "reads": [
-      "Issues",
-      "Benefit Operations",
-      "Runbooks / Pages"
-    ],
-    "signalStrength": 85
-  },
-  {
     "id": "sap",
     "name": "SAP",
     "category": "ERP \u00b7 Process",
