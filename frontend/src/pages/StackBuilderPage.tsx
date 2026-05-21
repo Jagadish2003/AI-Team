@@ -337,8 +337,16 @@ export default function StackBuilderPage({
       }
     };
 
+    const handleFocus = () => {
+      fetchCatalog();
+    };
+
     document.addEventListener('visibilitychange', handleVisibilityChange);
-    return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
+    window.addEventListener('focus', handleFocus);
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      window.removeEventListener('focus', handleFocus);
+    };
   }, [fetchCatalog]);
 
   useEffect(() => {
