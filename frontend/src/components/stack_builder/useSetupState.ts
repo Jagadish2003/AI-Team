@@ -200,6 +200,7 @@ const INITIAL: SetupState = {
   selectedSalesforceClouds: [],
   weightings: {},
   currentStep: 1,
+  templatePreselectedIds: [],
 };
 
 export function useSetupState(catalog?: WorkspaceCatalogResponse | null) {
@@ -215,12 +216,27 @@ export function useSetupState(catalog?: WorkspaceCatalogResponse | null) {
 
   const setTemplate = useCallback((id: TemplateId | null, preselected: string[] = []) => {
     setState(s => {
-      const merged = Array.from(new Set([...s.selectedSystemIds, ...preselected]));
+      // Remove previous template-added systems
+      let systemIds = s.selectedSystemIds.filter(sid => !s.templatePreselectedIds.includes(sid));
+
+      // Add new template-added systems
+      if (preselected.length > 0) {
+        systemIds = Array.from(new Set([...systemIds, ...preselected]));
+      }
+
+      // Build weightings for new template systems
       const newWeightings = { ...s.weightings };
       preselected.forEach(sid => {
         if (!newWeightings[sid]) newWeightings[sid] = defaultWeighting(sid);
       });
-      return { ...s, templateId: id, selectedSystemIds: merged, weightings: newWeightings };
+
+      return {
+        ...s,
+        templateId: id,
+        selectedSystemIds: systemIds,
+        templatePreselectedIds: preselected,
+        weightings: newWeightings
+      };
     });
   }, []);
 
