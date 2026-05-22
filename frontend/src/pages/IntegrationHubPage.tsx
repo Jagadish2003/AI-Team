@@ -55,6 +55,7 @@ import { useConnectorContext } from '../context/ConnectorContext';
 import { useRunContext } from '../context/RunContext';
 import { useSourceIntakeContext } from '../context/SourceIntakeContext';
 import { isDiscoveryReadyConnector } from '../utils/sourceReadiness';
+import { computeConfidence } from '../utils/confidence';
 import { Connector } from '../types/connector';
 
 // ── Category → system ID membership ─────────────────────────────────────────
@@ -76,6 +77,8 @@ const CATEGORY_SYSTEMS: Record<string, string[]> = {
     'postgresql', 'sql_server', 'oracle_db', 'databricks', 'snowflake', 'dbt',
   ],
 };
+
+const START_BAR_SOURCE_IDS = ['salesforce', 'servicenow', 'jira'];
 
 // ── Group metadata ────────────────────────────────────────────────────────────
 
@@ -199,21 +202,20 @@ export default function IntegrationHubPage() {
   );
 
   const startBarStatusConnectors = useMemo(() => {
-    const seen = new Set<string>();
-    const connectorsForBar: Connector[] = [];
+    return START_BAR_SOURCE_IDS
+      .map(id => allConnectors.find(c => c.id === id))
+      .filter((connector): connector is Connector => Boolean(connector));
+  }, [allConnectors]);
 
-    for (const connector of recommended) {
-      seen.add(connector.id);
-      connectorsForBar.push(connector);
-    }
+  const startBarReadyCount = useMemo(
+    () => startBarStatusConnectors.filter(isDiscoveryReadyConnector).length,
+    [startBarStatusConnectors],
+  );
 
-    const jira = allConnectors.find(c => c.id === 'jira');
-    if (jira && !seen.has(jira.id) && jira.status === 'connected') {
-      connectorsForBar.push(jira);
-    }
-
-    return connectorsForBar;
-  }, [allConnectors, recommended]);
+  const startBarConfidence = useMemo(
+    () => computeConfidence(startBarReadyCount),
+    [startBarReadyCount],
+  );
 
   const canStart = readyConnectorCount > 0 || uploadedFiles.length > 0;
 
@@ -253,7 +255,7 @@ export default function IntegrationHubPage() {
       <PageShell
         title="Integration Hub"
         description="Connect enterprise systems to provide data for discovery. Manage credentials and connection status for your workspace."
-        contentClassName="pb-44 sm:pb-40 xl:pb-36"
+        contentClassName="pb-56 sm:pb-52 xl:pb-28"
       >
         {loading && <LoadingPanel />}
         {error && !loading && <ErrorPanel message={error} onRetry={refetch} />}
@@ -329,9 +331,9 @@ export default function IntegrationHubPage() {
       {/* Discovery start bar */}
       {!loading && !error && (
         <DiscoveryStartBar
-          confidence={confidence}
-          recommendedReadyCount={recommendedConnectedCount}
-          recommendedTotal={3}
+          confidence={startBarConfidence}
+          recommendedReadyCount={startBarReadyCount}
+          recommendedTotal={START_BAR_SOURCE_IDS.length}
           recommended={recommended}
           statusConnectors={startBarStatusConnectors}
           canStart={canStart}

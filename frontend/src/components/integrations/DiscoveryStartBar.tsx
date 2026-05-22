@@ -44,7 +44,7 @@ export default function DiscoveryStartBar({
   return (
     <div className="discovery-start-bar fixed bottom-0 left-0 right-0 z-40 max-h-[36vh] overflow-y-auto border-t border-border backdrop-blur">
       <div className="w-full px-4 py-4 sm:px-6">
-        <div className="grid gap-x-5 gap-y-2 xl:grid-cols-[minmax(280px,0.8fr)_minmax(320px,auto)_auto] xl:items-center">
+        <div className="grid gap-x-5 gap-y-2 xl:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] xl:items-center">
           <div className="flex min-w-0 flex-wrap items-center gap-y-1 text-sm">
             <div className="flex items-center">
               <div
@@ -84,7 +84,7 @@ export default function DiscoveryStartBar({
             </div>
           </div>
 
-          <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 rounded-md border border-border px-2.5 py-1 text-sm xl:justify-center">
+          <div className="flex min-w-0 flex-wrap items-center justify-center gap-x-2 gap-y-1 justify-self-start rounded-md border border-border px-2.5 py-1 text-sm xl:justify-self-center">
             {displayedConnectors.map((connector, index) => {
               const isReady = isDiscoveryReadyConnector(connector);
               const statusLabel = isReady
