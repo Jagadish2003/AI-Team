@@ -12,6 +12,7 @@ export default function DiscoveryStartBar({
   recommendedReadyCount,
   recommendedTotal,
   recommended,
+  statusConnectors,
   canStart,
   onStart,
   // T41-8: onUpload removed. File upload is now in the Integration Hub
@@ -22,6 +23,7 @@ export default function DiscoveryStartBar({
   recommendedReadyCount: number;
   recommendedTotal: number;
   recommended: Connector[];
+  statusConnectors?: Connector[];
   canStart: boolean;
   onStart: () => void;
   /** @deprecated T41-8: use SourceConfigPanel in Integration Hub right panel */
@@ -31,6 +33,7 @@ export default function DiscoveryStartBar({
   const isLow = step === "low";
   const isMedium = step === "medium";
   const isHigh = step === "high";
+  const displayedConnectors = statusConnectors ?? recommended;
 
   const microcopy = !canStart
     ? DISCOVERY_SOURCE_REQUIREMENT_MESSAGE
@@ -39,123 +42,119 @@ export default function DiscoveryStartBar({
       : null;
 
   return (
-    <div className="discovery-start-bar fixed bottom-0 left-0 right-0 z-40 max-h-[46vh] overflow-y-auto border-t border-border backdrop-blur">
-      <div className="w-full px-4 py-3 sm:px-6">
-        <div className="flex flex-wrap items-start justify-between gap-4">
-          <div className="min-w-0">
-            <div className="flex min-w-0 flex-wrap items-center gap-y-2 text-sm">
-              <div className="flex items-center">
-                <div
-                  className={`h-2.5 w-2.5 rounded-full ${isLow ? "bg-accent" : "bg-muted/40"}`}
-                />
-                <span
-                  className={`ml-2 ${isLow ? "font-semibold text-text" : "text-muted"}`}
-                >
-                  Low
-                </span>
-              </div>
+    <div className="discovery-start-bar fixed bottom-0 left-0 right-0 z-40 max-h-[36vh] overflow-y-auto border-t border-border backdrop-blur">
+      <div className="w-full px-4 py-4 sm:px-6">
+        <div className="grid gap-x-5 gap-y-2 xl:grid-cols-[minmax(280px,0.8fr)_minmax(320px,auto)_auto] xl:items-center">
+          <div className="flex min-w-0 flex-wrap items-center gap-y-1 text-sm">
+            <div className="flex items-center">
               <div
-                className={`mx-3 h-[1px] w-10 transition-colors sm:w-16 ${isMedium || isHigh ? "bg-accent/50" : "bg-border"}`}
+                className={`h-2.5 w-2.5 rounded-full ${isLow ? "bg-accent" : "bg-muted/40"}`}
               />
-              <div className="flex items-center">
-                <div
-                  className={`h-2.5 w-2.5 rounded-full ${isMedium ? "bg-accent" : "bg-muted/40"}`}
-                />
-                <span
-                  className={`ml-2 ${isMedium ? "font-semibold text-text" : "text-muted"}`}
-                >
-                  Medium
-                </span>
-              </div>
-              <div
-                className={`mx-3 h-[1px] w-10 transition-colors sm:w-16 ${isHigh ? "bg-accent/50" : "bg-border"}`}
-              />
-              <div className="flex items-center">
-                <div
-                  className={`h-2.5 w-2.5 rounded-full ${isHigh ? "bg-accent" : "bg-muted/40"}`}
-                />
-                <span
-                  className={`ml-2 ${isHigh ? "font-semibold text-text" : "text-muted"}`}
-                >
-                  High
-                </span>
-              </div>
+              <span
+                className={`ml-2 ${isLow ? "font-semibold text-text" : "text-muted"}`}
+              >
+                Low
+              </span>
             </div>
-
-            <div className="mt-5 whitespace-nowrap text-sm text-muted">
-              Ready : <span className="text-text">{recommendedReadyCount}</span>{" "}
-              of <span className="text-text">{recommendedTotal}</span>{" "}
-              recommended
+            <div
+              className={`mx-3 h-[1px] w-10 transition-colors sm:w-16 ${isMedium || isHigh ? "bg-accent/50" : "bg-border"}`}
+            />
+            <div className="flex items-center">
+              <div
+                className={`h-2.5 w-2.5 rounded-full ${isMedium ? "bg-accent" : "bg-muted/40"}`}
+              />
+              <span
+                className={`ml-2 ${isMedium ? "font-semibold text-text" : "text-muted"}`}
+              >
+                Medium
+              </span>
+            </div>
+            <div
+              className={`mx-3 h-[1px] w-10 transition-colors sm:w-16 ${isHigh ? "bg-accent/50" : "bg-border"}`}
+            />
+            <div className="flex items-center">
+              <div
+                className={`h-2.5 w-2.5 rounded-full ${isHigh ? "bg-accent" : "bg-muted/40"}`}
+              />
+              <span
+                className={`ml-2 ${isHigh ? "font-semibold text-text" : "text-muted"}`}
+              >
+                High
+              </span>
             </div>
           </div>
 
-          <div className="min-w-0">
-            <div className="flex max-w-full flex-wrap items-center gap-x-2 gap-y-1 rounded-md border border-border px-3 py-1.5 text-sm">
-              {recommended.map((connector, index) => {
-                const isReady = isDiscoveryReadyConnector(connector);
-                const statusLabel = isReady
-                  ? "Ready"
-                  : connector.status === "connected"
-                    ? "Needs Sync"
-                    : "Not Connected";
-                return (
-                  <React.Fragment key={connector.id}>
-                    {index > 0 && (
-                      <span className="hidden text-muted sm:inline">|</span>
+          <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 rounded-md border border-border px-2.5 py-1 text-sm xl:justify-center">
+            {displayedConnectors.map((connector, index) => {
+              const isReady = isDiscoveryReadyConnector(connector);
+              const statusLabel = isReady
+                ? "Ready"
+                : connector.status === "connected"
+                  ? "Needs Sync"
+                  : "Not Connected";
+              return (
+                <React.Fragment key={connector.id}>
+                  {index > 0 && (
+                    <span className="hidden text-muted sm:inline">|</span>
+                  )}
+                  <span className="flex items-center gap-1.5">
+                    {isReady ? (
+                      <Check
+                        size={14}
+                        strokeWidth={2.5}
+                        className="shrink-0 text-accent"
+                      />
+                    ) : (
+                      <X
+                        size={14}
+                        strokeWidth={2.5}
+                        className="shrink-0 text-muted"
+                      />
                     )}
-                    <span className="flex items-center gap-1.5">
-                      {isReady ? (
-                        <Check
-                          size={14}
-                          strokeWidth={2.5}
-                          className="shrink-0 text-accent"
-                        />
-                      ) : (
-                        <X
-                          size={14}
-                          strokeWidth={2.5}
-                          className="shrink-0 text-muted"
-                        />
-                      )}
-                      <span className={isReady ? "text-text" : "text-muted"}>
-                        {connector.name}
-                      </span>
-                      <span
-                        className={`text-xs ${isReady ? "text-accent" : "text-muted"}`}
-                      >
-                        {statusLabel}
-                      </span>
+                    <span className={isReady ? "text-text" : "text-muted"}>
+                      {connector.name}
                     </span>
-                  </React.Fragment>
-                );
-              })}
-            </div>
-
-            <div className="mt-3 whitespace-nowrap text-sm text-muted">
-              CONFIDENCE:{" "}
-              <span className="font-semibold uppercase text-text">
-                {confidence}
-              </span>
-            </div>
+                    <span
+                      className={`text-xs ${isReady ? "text-accent" : "text-muted"}`}
+                    >
+                      {statusLabel}
+                    </span>
+                  </span>
+                </React.Fragment>
+              );
+            })}
           </div>
 
           <button
             onClick={onStart}
             disabled={!canStart}
-            className="flex items-center gap-2 whitespace-nowrap rounded-lg border border-accent/20 bg-accent/5 px-5 py-2 text-sm font-medium text-accent transition-all hover:border-accent/45 hover:bg-accent/10 focus:outline-none focus-visible:ring-1 focus-visible:ring-accent/40 disabled:cursor-not-allowed disabled:opacity-50"
+            className="flex items-center gap-2 justify-self-start whitespace-nowrap rounded-md border border-accent/20 bg-accent/5 px-4 py-1.5 text-sm font-medium text-accent transition-all hover:border-accent/45 hover:bg-accent/10 focus:outline-none focus-visible:ring-1 focus-visible:ring-accent/40 disabled:cursor-not-allowed disabled:opacity-50 xl:justify-self-end"
           >
             Start Discovery Run
-            <MoveRight size={18} strokeWidth={2} />
+            <MoveRight size={17} strokeWidth={2} />
           </button>
-        </div>
 
-        {microcopy && (
-          <div className="mt-2 flex justify-end">
-            <div className="rounded-md bg-panel2 px-3 py-1.5 text-sm text-muted">
-              {microcopy}
+          <div className="flex min-w-0 flex-wrap items-center justify-between gap-x-4 gap-y-1 text-sm text-muted xl:col-span-3">
+            <div className="flex min-w-0 flex-wrap items-center gap-x-6 gap-y-1">
+              <span className="whitespace-nowrap">
+                Ready: <span className="text-text">{recommendedReadyCount}</span>{" "}
+                of <span className="text-text">{recommendedTotal}</span>{" "}
+                recommended
+              </span>
+              <span className="whitespace-nowrap">
+                CONFIDENCE:{" "}
+                <span className="font-semibold uppercase text-text">
+                  {confidence}
+                </span>
+              </span>
             </div>
+            {microcopy && (
+              <div className="rounded-md bg-panel2 px-2.5 py-1 text-sm text-muted">
+                {microcopy}
+              </div>
+            )}
           </div>
-        )}
+        </div>
       </div>
     </div>
   );

@@ -27,7 +27,7 @@
  *
  * WHAT DID NOT CHANGE:
  *   - Connect / Configure flow unchanged — same ConnectorTile, same handlers
- *   - DiscoveryStartBar unchanged
+ *   - DiscoveryStartBar flow unchanged
  *   - RightPanel unchanged
  *   - ConnectorContext unchanged
  *   - Dark theme preserved — bg-panel, border-border, text-muted tokens only
@@ -198,6 +198,23 @@ export default function IntegrationHubPage() {
     [allConnectors],
   );
 
+  const startBarStatusConnectors = useMemo(() => {
+    const seen = new Set<string>();
+    const connectorsForBar: Connector[] = [];
+
+    for (const connector of recommended) {
+      seen.add(connector.id);
+      connectorsForBar.push(connector);
+    }
+
+    const jira = allConnectors.find(c => c.id === 'jira');
+    if (jira && !seen.has(jira.id) && jira.status === 'connected') {
+      connectorsForBar.push(jira);
+    }
+
+    return connectorsForBar;
+  }, [allConnectors, recommended]);
+
   const canStart = readyConnectorCount > 0 || uploadedFiles.length > 0;
 
   // Connect / configure handler (same logic as pre-Sprint-9)
@@ -236,7 +253,7 @@ export default function IntegrationHubPage() {
       <PageShell
         title="Integration Hub"
         description="Connect enterprise systems to provide data for discovery. Manage credentials and connection status for your workspace."
-        contentClassName="pb-[190px] xl:pb-28"
+        contentClassName="pb-44 sm:pb-40 xl:pb-36"
       >
         {loading && <LoadingPanel />}
         {error && !loading && <ErrorPanel message={error} onRetry={refetch} />}
@@ -309,13 +326,14 @@ export default function IntegrationHubPage() {
         )}
       </PageShell>
 
-      {/* Discovery start bar — unchanged */}
+      {/* Discovery start bar */}
       {!loading && !error && (
         <DiscoveryStartBar
           confidence={confidence}
           recommendedReadyCount={recommendedConnectedCount}
           recommendedTotal={3}
           recommended={recommended}
+          statusConnectors={startBarStatusConnectors}
           canStart={canStart}
           onStart={() => {
             if (runId) {
