@@ -81,6 +81,10 @@ function formatRunTimestamp(value?: string | null) {
   return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
 }
 
+function formatRunMessage(message?: string | null) {
+  return (message ?? "").replace(/(\.\.\.|…)$/, "");
+}
+
 export default function DiscoveryRunPage() {
   const [autoScroll, setAutoScroll] = useState(true);
   const [logHasOverflow, setLogHasOverflow] = useState(false);
@@ -390,14 +394,14 @@ export default function DiscoveryRunPage() {
               ) : (
                 <div className="space-y-2 text-sm">
                   {events.map((e, i) => (
-                    <div key={e.id ?? i} className="flex gap-3 text-sm leading-6">
-                      <div className="w-40 shrink-0 tabular-nums text-muted">
+                    <div key={e.id ?? i} className="grid gap-x-3 gap-y-1 text-sm leading-6 sm:grid-cols-[10rem_7rem_minmax(0,1fr)]">
+                      <div className="text-muted">
                         {formatRunTimestamp(e.tsLabel ?? e.ts)}
                       </div>
-                      <div className="w-28 shrink-0 text-xs font-semibold uppercase tracking-wide text-muted">
+                      <div className="font-normal normal-case tracking-normal text-muted">
                         {e.stage ?? ""}
                       </div>
-                      <div className="text-text">{e.message}</div>
+                      <div className="min-w-0 whitespace-normal break-words text-text">{formatRunMessage(e.message)}</div>
                     </div>
                   ))}
                 </div>

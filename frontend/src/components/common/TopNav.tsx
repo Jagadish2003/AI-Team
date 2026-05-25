@@ -141,11 +141,9 @@ export default function TopNav() {
               aria-expanded={profileOpen}
               aria-label="User profile"
               onClick={() => setProfileOpen((open) => !open)}
-              className={`flex items-center justify-center rounded-full text-navtext/75 transition-colors hover:bg-navhover hover:text-navtext focus:outline-none focus:ring-2 focus:ring-accent/50 ${
-                theme === "light" ? "h-7 w-7 border border-border" : "h-6 w-6"
-              }`}
+              className="flex h-7 w-7 items-center justify-center rounded-full border border-border text-navtext/75 transition-colors hover:bg-navhover hover:text-navtext focus:outline-none focus:ring-2 focus:ring-accent/50"
             >
-              <User className={theme === "light" ? "h-5 w-5" : "h-4 w-4"} />
+              <User className="h-5 w-5" />
             </button>
 
             {profileOpen && (

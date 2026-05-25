@@ -234,7 +234,7 @@ export default function SystemWeightingCard({
 
         {/* Confirmed label */}
         {weighting.confirmed && !expanded && (
-          <span className="mr-2 inline-flex flex-shrink-0 items-center gap-1.5 rounded-full border border-emerald-500/40 bg-emerald-500/10 px-2 py-0.5 text-xs font-semibold text-emerald-600">
+          <span className="mr-2 inline-flex flex-shrink-0 items-center gap-1.5 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2 py-0.5 text-xs font-medium text-emerald-300 shadow-sm">
             <CircleCheck size={13} strokeWidth={2.2} aria-hidden="true" />
             Confirmed
           </span>
