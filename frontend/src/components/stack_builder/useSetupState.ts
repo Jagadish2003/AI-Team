@@ -352,16 +352,17 @@ export function useSetupState(catalog?: WorkspaceCatalogResponse | null) {
   // restored session or user selections.
   const initFromCatalog = useCallback((c: WorkspaceCatalogResponse) => {
     setState(s => {
-      // Do not seed if user has already selected systems or moved past step 1
-      if (s.selectedSystemIds.length > 0 || s.currentStep > 1) return s;
-
-      const systemIds = getCatalogSystemIds(c);
+      const catalogSystemIds = getCatalogSystemIds(c);
+      const catalogIdSet = new Set(catalogSystemIds);
       const sfProducts = getCatalogSalesforceProducts(c);
+      const restoredSystemIds = s.selectedSystemIds.filter(id => catalogIdSet.has(id));
+      const systemIds = s.selectedSystemIds.length === 0 && s.currentStep === 1
+        ? catalogSystemIds
+        : restoredSystemIds;
 
-      // Build weightings for all pre-seeded systems
-      const newWeightings: Record<string, any> = { ...s.weightings };
+      const newWeightings: Record<string, SystemWeighting> = {};
       systemIds.forEach(id => {
-        if (!newWeightings[id]) newWeightings[id] = defaultWeighting(id);
+        newWeightings[id] = s.weightings[id] ?? defaultWeighting(id);
       });
 
       return {
