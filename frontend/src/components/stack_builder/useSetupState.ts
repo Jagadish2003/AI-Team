@@ -331,12 +331,16 @@ export function useSetupState(catalog?: WorkspaceCatalogResponse | null) {
     // A system disconnected from Integration Hub between sessions must not
     // reappear as selected. If catalog is absent, restore as-is (safe fallback).
     setState(s => {
+      const restored = { ...saved };
+      delete restored.selectedSalesforceClouds;
+
       if (catalog && saved.selectedSystemIds) {
         const catalogIds = new Set(getCatalogSystemIds(catalog));
         const filtered = saved.selectedSystemIds.filter(id => catalogIds.has(id));
-        return { ...s, ...saved, selectedSystemIds: filtered };
+        return { ...s, ...restored, selectedSystemIds: filtered };
       }
-      return { ...s, ...saved };
+
+      return { ...s, ...restored };
     });
   }, [catalog]);
 
