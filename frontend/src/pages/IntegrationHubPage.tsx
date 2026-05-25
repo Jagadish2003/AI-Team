@@ -128,9 +128,6 @@ export default function IntegrationHubPage() {
     selectConnector,
     connectConnector,
     configureSync,
-    confidence,
-    recommendedConnectedCount,
-    nextBestRecommendedId,
     loading,
     error,
     refetch,
@@ -191,11 +188,6 @@ export default function IntegrationHubPage() {
     [allConnectors, selectedConnectorId],
   );
 
-  const next = useMemo(
-    () => recommended.find(c => c.id === nextBestRecommendedId) ?? null,
-    [recommended, nextBestRecommendedId],
-  );
-
   const readyConnectorCount = useMemo(
     () => allConnectors.filter(isDiscoveryReadyConnector).length,
     [allConnectors],
@@ -215,6 +207,11 @@ export default function IntegrationHubPage() {
   const startBarConfidence = useMemo(
     () => computeConfidence(startBarReadyCount),
     [startBarReadyCount],
+  );
+
+  const startBarNext = useMemo(
+    () => startBarStatusConnectors.find(c => !isDiscoveryReadyConnector(c)) ?? null,
+    [startBarStatusConnectors],
   );
 
   const canStart = readyConnectorCount > 0 || uploadedFiles.length > 0;
@@ -308,17 +305,17 @@ export default function IntegrationHubPage() {
                   configureSync(selected.id);
                   push('Configuration complete. Data is now synced.');
                 }}
-                confidence={confidence}
-                recommendedConnectedCount={recommendedConnectedCount}
+                confidence={startBarConfidence}
+                recommendedConnectedCount={startBarReadyCount}
                 recommendedTotal={3}
-                next={next}
+                next={startBarNext}
                 onConnectNext={() => {
-                  if (!next) return;
-                  if (next.status === 'connected') {
-                    configureSync(next.id);
+                  if (!startBarNext) return;
+                  if (startBarNext.status === 'connected') {
+                    configureSync(startBarNext.id);
                     push('Configuration complete. Data is now synced.');
                   } else {
-                    connectConnector(next.id);
+                    connectConnector(startBarNext.id);
                     push('Connected next best source.');
                   }
                 }}

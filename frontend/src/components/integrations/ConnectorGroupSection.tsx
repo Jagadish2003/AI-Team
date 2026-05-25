@@ -56,7 +56,7 @@ export default function ConnectorGroupSection({
     c => c.status === 'connected'
   ).length;
   const connectorGridClass = 'grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3';
-  const connectedLabel = `${connectedCount} connected`;
+  const connectedLabel = `${connectedCount} Connected`;
 
   return (
     <div className="rounded-xl border border-border bg-panel p-5 shadow-sm">
@@ -70,7 +70,7 @@ export default function ConnectorGroupSection({
           <div className="text-xs text-muted">{group.subLabel}</div>
         </div>
         {connectedCount > 0 && (
-          <span className="inline-flex shrink-0 items-center gap-1.5 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2.5 py-1 text-[11px] font-semibold leading-none text-emerald-300 shadow-sm">
+          <span className="inline-flex shrink-0 items-center gap-1.5 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2.5 py-1 text-xs font-medium leading-none text-emerald-300 shadow-sm">
             <CircleCheck size={13} strokeWidth={2.2} aria-hidden="true" />
             {connectedLabel}
           </span>
