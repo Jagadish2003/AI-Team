@@ -51,6 +51,7 @@ import React, { useMemo } from 'react';
 import {
   ArrowLeft,
   Code2,
+  CircleCheck,
   Database,
   Info,
   ListChecks,
@@ -291,7 +292,8 @@ function SubGroupHeader({
         <span className="min-w-0 text-sm font-semibold text-text">{label}</span>
       </div>
       {count > 0 && (
-        <span className="shrink-0 rounded-full border border-accent/30 bg-accent/10 px-2.5 py-0.5 text-xs font-bold leading-5 text-accent">
+        <span className="inline-flex shrink-0 items-center gap-1.5 rounded-full border border-emerald-500/40 bg-emerald-500/10 px-2.5 py-0.5 text-xs font-semibold leading-5 text-emerald-600">
+          <CircleCheck size={13} strokeWidth={2.2} aria-hidden="true" />
           {count} selected
         </span>
       )}
