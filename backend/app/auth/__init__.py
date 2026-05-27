@@ -17,8 +17,7 @@ from app.auth.oauth import (
     get_client_credentials_token,
     refresh_token,
 )
-
-# from app.auth.vault import get_token, store_token, revoke_token  # added in T5
+from app.auth.vault import get_token, revoke_token, store_token
 
 __all__ = [
     "ConnectorAuthConfig",
@@ -32,4 +31,7 @@ __all__ = [
     "exchange_code",
     "get_client_credentials_token",
     "refresh_token",
+    "get_token",
+    "store_token",
+    "revoke_token",
 ]

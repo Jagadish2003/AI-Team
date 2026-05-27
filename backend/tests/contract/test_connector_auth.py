@@ -754,3 +754,562 @@ def test_oauth_symbols_importable_from_package():
         get_client_credentials_token,
         refresh_token,
     )
+
+
+# ---------------------------------------------------------------------------
+# AT-76: Credential Vault (vault.py)
+# ---------------------------------------------------------------------------
+
+import sqlite3 as _sqlite3
+from datetime import timedelta as _timedelta
+from pathlib import Path as _Path
+from unittest.mock import AsyncMock as _AsyncMock
+from unittest.mock import patch as _patch
+
+
+# ---------------------------------------------------------------------------
+# Shared vault test fixtures and helpers
+# ---------------------------------------------------------------------------
+
+_VAULT_KEY = None  # set once per process in _ensure_vault_key()
+
+
+def _ensure_vault_key() -> str:
+    """Generate a test Fernet key once and cache it in CREDENTIAL_VAULT_KEY env var."""
+    global _VAULT_KEY
+    if _VAULT_KEY is None:
+        from cryptography.fernet import Fernet
+        _VAULT_KEY = Fernet.generate_key().decode()
+    _os.environ["CREDENTIAL_VAULT_KEY"] = _VAULT_KEY
+    return _VAULT_KEY
+
+
+def _vault_env():
+    """Return env dict containing the vault key (and secret for test connector)."""
+    key = _ensure_vault_key()
+    return {"CREDENTIAL_VAULT_KEY": key, "_TEST_OAUTH_SECRET": "s3cr3t"}
+
+
+def _db_path() -> _Path:
+    return _Path(_os.environ.get("DB_PATH", "database/dev.db"))
+
+
+def _clear_credentials() -> None:
+    """Truncate the credentials table between tests."""
+    con = _sqlite3.connect(str(_db_path()))
+    con.execute("DELETE FROM credentials")
+    con.commit()
+    con.close()
+
+
+def _raw_credentials(org_id: str, connector_id: str) -> tuple | None:
+    """Return raw DB row (access_token, refresh_token) without decryption."""
+    con = _sqlite3.connect(str(_db_path()))
+    cur = con.execute(
+        "SELECT access_token, refresh_token FROM credentials WHERE org_id=? AND connector_id=?",
+        (org_id, connector_id),
+    )
+    row = cur.fetchone()
+    con.close()
+    return row
+
+
+def _now_utc():
+    from datetime import timezone
+    return datetime.now(timezone.utc)
+
+
+def _token_response(
+    access_token: str = "plain-access-tok",
+    refresh_token: str | None = "plain-refresh-tok",
+    expires_in: int = 3600,
+) -> dict:
+    resp: dict = {"access_token": access_token, "expires_in": expires_in}
+    if refresh_token is not None:
+        resp["refresh_token"] = refresh_token
+    return resp
+
+
+# ---------------------------------------------------------------------------
+# Encryption tests (AC8)
+# ---------------------------------------------------------------------------
+
+
+def test_store_token_encrypts_access_token():
+    """store_token writes encrypted (not plaintext) access_token to DB."""
+    from backend.app.auth.vault import store_token
+
+    with _patch.dict(_os.environ, _vault_env()):
+        store_token("org-enc-1", "salesforce", _token_response(access_token="plain-secret"))
+
+    row = _raw_credentials("org-enc-1", "salesforce")
+    assert row is not None
+    assert row[0] != "plain-secret"
+    assert "plain-secret" not in row[0]
+    _clear_credentials()
+
+
+def test_store_token_encrypts_refresh_token():
+    """store_token writes encrypted (not plaintext) refresh_token to DB when present."""
+    from backend.app.auth.vault import store_token
+
+    with _patch.dict(_os.environ, _vault_env()):
+        store_token("org-enc-2", "jira", _token_response(refresh_token="plain-refresh"))
+
+    row = _raw_credentials("org-enc-2", "jira")
+    assert row is not None
+    assert row[1] is not None
+    assert row[1] != "plain-refresh"
+    assert "plain-refresh" not in row[1]
+    _clear_credentials()
+
+
+def test_get_token_returns_decrypted_access_token():
+    """get_token decrypts and returns the original plaintext access_token."""
+    import asyncio
+    from backend.app.auth.vault import store_token, get_token
+
+    with _patch.dict(_os.environ, _vault_env()):
+        store_token("org-dec-1", "github", _token_response(access_token="original-tok"))
+        record = asyncio.run(get_token("org-dec-1", "github"))
+
+    assert record.access_token == "original-tok"
+    _clear_credentials()
+
+
+def test_raw_db_record_does_not_contain_plaintext_token():
+    """Raw DB record must never contain the plaintext token (AC8)."""
+    from backend.app.auth.vault import store_token
+
+    plain = "super-secret-access-value"
+    with _patch.dict(_os.environ, _vault_env()):
+        store_token("org-raw-1", "slack", _token_response(access_token=plain))
+
+    row = _raw_credentials("org-raw-1", "slack")
+    assert row is not None
+    # Neither column should contain the plaintext
+    assert plain not in (row[0] or "")
+    assert plain not in (row[1] or "")
+    _clear_credentials()
+
+
+# ---------------------------------------------------------------------------
+# store_token tests
+# ---------------------------------------------------------------------------
+
+
+def test_store_token_inserts_new_record():
+    """store_token inserts a new record when none exists for (org_id, connector_id)."""
+    from backend.app.auth.vault import store_token
+
+    with _patch.dict(_os.environ, _vault_env()):
+        record = store_token("org-ins-1", "confluence", _token_response())
+
+    assert record.org_id == "org-ins-1"
+    assert record.connector_id == "confluence"
+    row = _raw_credentials("org-ins-1", "confluence")
+    assert row is not None
+    _clear_credentials()
+
+
+def test_store_token_upserts_existing_record():
+    """store_token updates the existing record on second call with same (org_id, connector_id)."""
+    from backend.app.auth.vault import store_token
+
+    with _patch.dict(_os.environ, _vault_env()):
+        store_token("org-ups-1", "github", _token_response(access_token="first-tok"))
+        record2 = store_token("org-ups-1", "github", _token_response(access_token="second-tok"))
+
+    assert record2.access_token == "second-tok"
+    # Composite unique means only one row should exist
+    con = _sqlite3.connect(str(_db_path()))
+    count = con.execute(
+        "SELECT COUNT(*) FROM credentials WHERE org_id=? AND connector_id=?",
+        ("org-ups-1", "github"),
+    ).fetchone()[0]
+    con.close()
+    assert count == 1
+    _clear_credentials()
+
+
+def test_store_token_expires_in_sets_utc_expires_at():
+    """store_token with expires_in calculates a UTC expires_at approximately correct."""
+    from datetime import timezone
+    from backend.app.auth.vault import store_token
+
+    with _patch.dict(_os.environ, _vault_env()):
+        before = datetime.now(timezone.utc)
+        record = store_token("org-exp-1", "jira", _token_response(expires_in=7200))
+        after = datetime.now(timezone.utc)
+
+    # expires_at should be ~2 hours from now
+    delta = (record.expires_at - before).total_seconds()
+    assert 7190 <= delta <= 7210, f"Unexpected delta: {delta}"
+    _clear_credentials()
+
+
+def test_store_token_handles_expires_at_absolute():
+    """store_token with expires_at (absolute timestamp) sets expires_at correctly."""
+    from datetime import timezone
+    from backend.app.auth.vault import store_token
+
+    future_ts = (_now_utc() + _timedelta(hours=2)).timestamp()
+    resp = {"access_token": "tok", "expires_at": future_ts}
+
+    with _patch.dict(_os.environ, _vault_env()):
+        record = store_token("org-abs-1", "servicenow", resp)
+
+    delta = (record.expires_at - _now_utc()).total_seconds()
+    assert 7100 <= delta <= 7300, f"Unexpected delta: {delta}"
+    _clear_credentials()
+
+
+def test_store_token_null_refresh_token_for_client_credentials():
+    """store_token stores refresh_token=None for client_credentials response."""
+    from backend.app.auth.vault import store_token
+
+    resp = {"access_token": "cc-tok", "expires_in": 3600}  # no refresh_token
+
+    with _patch.dict(_os.environ, _vault_env()):
+        record = store_token("org-cc-1", "sap", resp)
+
+    assert record.refresh_token is None
+    row = _raw_credentials("org-cc-1", "sap")
+    assert row[1] is None
+    _clear_credentials()
+
+
+# ---------------------------------------------------------------------------
+# get_token tests
+# ---------------------------------------------------------------------------
+
+
+def test_get_token_returns_valid_record_when_not_near_expiry():
+    """get_token returns a valid TokenRecord when the token is not near expiry (AC5)."""
+    import asyncio
+    from backend.app.auth.vault import store_token, get_token
+
+    with _patch.dict(_os.environ, _vault_env()):
+        store_token("org-get-1", "github", _token_response(expires_in=7200))
+        record = asyncio.run(get_token("org-get-1", "github"))
+
+    assert record.access_token == "plain-access-tok"
+    assert record.org_id == "org-get-1"
+    _clear_credentials()
+
+
+@pytest.mark.anyio
+async def test_get_token_auto_refreshes_near_expiry():
+    """get_token calls oauth.refresh_token when token is within REFRESH_THRESHOLD_SECONDS (AC6)."""
+    from backend.app.auth.vault import store_token, get_token
+
+    new_response = _token_response(access_token="refreshed-tok", refresh_token="new-refresh", expires_in=7200)
+    mock_refresh = _AsyncMock(return_value=new_response)
+
+    with _patch.dict(_os.environ, _vault_env()):
+        # Store a token that expires in 60s (well within 300s threshold)
+        store_token("org-ref-1", "salesforce", _token_response(access_token="old-tok", expires_in=60))
+
+        with _patch("app.auth.vault._oauth.refresh_token", mock_refresh), \
+             _patch("app.auth.vault.CONNECTOR_AUTH_CONFIGS", {"salesforce": _make_config(connector_id="salesforce")}):
+            record = await get_token("org-ref-1", "salesforce")
+
+    mock_refresh.assert_called_once()
+    assert record.access_token == "refreshed-tok"
+    _clear_credentials()
+
+
+@pytest.mark.anyio
+async def test_get_token_stores_refreshed_token():
+    """get_token stores the refreshed token before returning (AC6)."""
+    from backend.app.auth.vault import store_token, get_token
+
+    new_response = _token_response(access_token="stored-refreshed", refresh_token="new-ref", expires_in=7200)
+    mock_refresh = _AsyncMock(return_value=new_response)
+
+    with _patch.dict(_os.environ, _vault_env()):
+        store_token("org-ref-2", "salesforce", _token_response(access_token="old", expires_in=60))
+
+        with _patch("app.auth.vault._oauth.refresh_token", mock_refresh), \
+             _patch("app.auth.vault.CONNECTOR_AUTH_CONFIGS", {"salesforce": _make_config(connector_id="salesforce")}):
+            await get_token("org-ref-2", "salesforce")
+
+        # The DB should now contain the refreshed token (encrypted)
+        from cryptography.fernet import Fernet
+        row = _raw_credentials("org-ref-2", "salesforce")
+        decrypted = Fernet(_os.environ["CREDENTIAL_VAULT_KEY"].encode()).decrypt(row[0].encode()).decode()
+        assert decrypted == "stored-refreshed"
+
+    _clear_credentials()
+
+
+@pytest.mark.anyio
+async def test_get_token_returns_refreshed_value_after_auto_refresh():
+    """get_token returns the refreshed token value after auto-refresh."""
+    from backend.app.auth.vault import store_token, get_token
+
+    mock_refresh = _AsyncMock(return_value=_token_response(access_token="brand-new", expires_in=7200))
+
+    with _patch.dict(_os.environ, _vault_env()):
+        store_token("org-ref-3", "salesforce", _token_response(expires_in=60))
+
+        with _patch("app.auth.vault._oauth.refresh_token", mock_refresh), \
+             _patch("app.auth.vault.CONNECTOR_AUTH_CONFIGS", {"salesforce": _make_config(connector_id="salesforce")}):
+            record = await get_token("org-ref-3", "salesforce")
+
+    assert record.access_token == "brand-new"
+    _clear_credentials()
+
+
+@pytest.mark.anyio
+async def test_get_token_raises_when_no_token_exists():
+    """get_token raises ConnectorNotAuthenticatedError when no token exists (AC7)."""
+    from app.auth.models import ConnectorNotAuthenticatedError
+    from backend.app.auth.vault import get_token
+
+    with _patch.dict(_os.environ, _vault_env()):
+        with pytest.raises(ConnectorNotAuthenticatedError):
+            await get_token("org-missing", "salesforce")
+
+
+@pytest.mark.anyio
+async def test_get_token_raises_when_refresh_fails():
+    """get_token raises ConnectorNotAuthenticatedError when oauth.refresh_token raises OAuthError (AC7)."""
+    from app.auth.models import ConnectorNotAuthenticatedError
+    from app.auth.oauth import OAuthError
+    from backend.app.auth.vault import store_token, get_token
+
+    mock_refresh = _AsyncMock(side_effect=OAuthError("salesforce", 401))
+
+    with _patch.dict(_os.environ, _vault_env()):
+        store_token("org-fail-1", "salesforce", _token_response(expires_in=60))
+
+        with _patch("app.auth.vault._oauth.refresh_token", mock_refresh), \
+             _patch("app.auth.vault.CONNECTOR_AUTH_CONFIGS", {"salesforce": _make_config(connector_id="salesforce")}):
+            with pytest.raises(ConnectorNotAuthenticatedError):
+                await get_token("org-fail-1", "salesforce")
+
+    _clear_credentials()
+
+
+# ---------------------------------------------------------------------------
+# revoke_token tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.anyio
+async def test_revoke_token_calls_external_endpoint_when_revocation_url_present():
+    """revoke_token calls the external revocation endpoint when config.revocation_url is set (AC11)."""
+    from backend.app.auth.vault import store_token, revoke_token
+
+    transport = _MockTransport(200, {})
+    config = _make_config(connector_id="jira")
+    config_with_revocation = _make_config.__wrapped__(config) if hasattr(_make_config, "__wrapped__") else None
+
+    # Build a config that has revocation_url
+    from backend.app.auth.models import ConnectorAuthConfig
+    revocable_config = ConnectorAuthConfig(
+        connector_id="jira",
+        flow="authorization_code",
+        client_id="cid",
+        secret_key="_TEST_OAUTH_SECRET",
+        token_url="https://auth.atlassian.com/oauth/token",
+        scopes=["read"],
+        revocation_url="https://auth.atlassian.com/oauth/token/revoke",
+        redirect_uri="https://app.example.com/callback",
+        authorization_url="https://auth.atlassian.com/authorize",
+    )
+
+    with _patch.dict(_os.environ, _vault_env()):
+        store_token("org-rev-1", "jira", _token_response())
+        with _patch("app.auth.vault.CONNECTOR_AUTH_CONFIGS", {"jira": revocable_config}):
+            await revoke_token("org-rev-1", "jira", _revoke_transport=transport)
+
+    assert transport.last_request is not None  # external call was made
+    _clear_credentials()
+
+
+@pytest.mark.anyio
+async def test_revoke_token_skips_external_endpoint_when_no_revocation_url():
+    """revoke_token does not call external endpoint when config.revocation_url is None (AC12)."""
+    from backend.app.auth.vault import store_token, revoke_token
+
+    transport = _MockTransport(200, {})
+    from backend.app.auth.models import ConnectorAuthConfig
+    no_revoke_config = ConnectorAuthConfig(
+        connector_id="github",
+        flow="authorization_code",
+        client_id="cid",
+        secret_key="_TEST_OAUTH_SECRET",
+        token_url="https://github.com/login/oauth/access_token",
+        scopes=["repo"],
+        revocation_url=None,
+    )
+
+    with _patch.dict(_os.environ, _vault_env()):
+        store_token("org-rev-2", "github", _token_response())
+        with _patch("app.auth.vault.CONNECTOR_AUTH_CONFIGS", {"github": no_revoke_config}):
+            await revoke_token("org-rev-2", "github", _revoke_transport=transport)
+
+    assert transport.last_request is None  # no external call made
+    _clear_credentials()
+
+
+@pytest.mark.anyio
+async def test_revoke_token_deletes_local_record():
+    """revoke_token deletes the local DB record regardless of revocation_url."""
+    from backend.app.auth.vault import store_token, revoke_token
+
+    from backend.app.auth.models import ConnectorAuthConfig
+    config = ConnectorAuthConfig(
+        connector_id="slack",
+        flow="authorization_code",
+        client_id="cid",
+        secret_key="_TEST_OAUTH_SECRET",
+        token_url="https://slack.com/api/oauth.v2.access",
+        scopes=["read"],
+        revocation_url=None,
+    )
+
+    with _patch.dict(_os.environ, _vault_env()):
+        store_token("org-del-1", "slack", _token_response())
+        assert _raw_credentials("org-del-1", "slack") is not None
+
+        with _patch("app.auth.vault.CONNECTOR_AUTH_CONFIGS", {"slack": config}):
+            await revoke_token("org-del-1", "slack")
+
+    assert _raw_credentials("org-del-1", "slack") is None
+
+
+@pytest.mark.anyio
+async def test_revoke_token_step1_failure_logs_warning_still_deletes():
+    """Step 1 HTTP 500 from revocation endpoint: logs warning, deletes local record, does not raise (AC13)."""
+    from backend.app.auth.vault import store_token, revoke_token
+
+    from backend.app.auth.models import ConnectorAuthConfig
+    revocable = ConnectorAuthConfig(
+        connector_id="confluence",
+        flow="authorization_code",
+        client_id="cid",
+        secret_key="_TEST_OAUTH_SECRET",
+        token_url="https://auth.atlassian.com/oauth/token",
+        scopes=["read"],
+        revocation_url="https://auth.atlassian.com/oauth/token/revoke",
+    )
+
+    with _patch.dict(_os.environ, _vault_env()):
+        store_token("org-err-1", "confluence", _token_response())
+        with _patch("app.auth.vault.CONNECTOR_AUTH_CONFIGS", {"confluence": revocable}):
+            # Must not raise even though revocation endpoint returns 500
+            await revoke_token("org-err-1", "confluence", _revoke_transport=_MockTransport(500, {}))
+
+    assert _raw_credentials("org-err-1", "confluence") is None
+
+
+@pytest.mark.anyio
+async def test_revoke_token_step1_timeout_logs_warning_still_deletes():
+    """Step 1 timeout: logs warning, deletes local record, does not raise (AC13)."""
+    from backend.app.auth.vault import store_token, revoke_token
+
+    from backend.app.auth.models import ConnectorAuthConfig
+    revocable = ConnectorAuthConfig(
+        connector_id="confluence",
+        flow="authorization_code",
+        client_id="cid",
+        secret_key="_TEST_OAUTH_SECRET",
+        token_url="https://auth.atlassian.com/oauth/token",
+        scopes=["read"],
+        revocation_url="https://auth.atlassian.com/oauth/token/revoke",
+    )
+
+    with _patch.dict(_os.environ, _vault_env()):
+        store_token("org-to-1", "confluence", _token_response())
+        with _patch("app.auth.vault.CONNECTOR_AUTH_CONFIGS", {"confluence": revocable}):
+            await revoke_token("org-to-1", "confluence", _revoke_transport=_TimeoutTransport())
+
+    assert _raw_credentials("org-to-1", "confluence") is None
+
+
+@pytest.mark.anyio
+async def test_revoke_token_returns_none():
+    """revoke_token returns None (caller responds with HTTP 204)."""
+    from backend.app.auth.vault import store_token, revoke_token
+
+    from backend.app.auth.models import ConnectorAuthConfig
+    config = ConnectorAuthConfig(
+        connector_id="sap",
+        flow="client_credentials",
+        client_id="cid",
+        secret_key="_TEST_OAUTH_SECRET",
+        token_url="https://sap.example.com/token",
+        scopes=["read"],
+        revocation_url=None,
+    )
+
+    with _patch.dict(_os.environ, _vault_env()):
+        store_token("org-none-1", "sap", _token_response(refresh_token=None))
+        with _patch("app.auth.vault.CONNECTOR_AUTH_CONFIGS", {"sap": config}):
+            result = await revoke_token("org-none-1", "sap")
+
+    assert result is None
+    _clear_credentials()
+
+
+@pytest.mark.anyio
+async def test_revoke_token_is_idempotent():
+    """Calling revoke_token on an already-deleted token does not raise."""
+    from backend.app.auth.vault import revoke_token
+
+    from backend.app.auth.models import ConnectorAuthConfig
+    config = ConnectorAuthConfig(
+        connector_id="sap",
+        flow="client_credentials",
+        client_id="cid",
+        secret_key="_TEST_OAUTH_SECRET",
+        token_url="https://sap.example.com/token",
+        scopes=["read"],
+        revocation_url=None,
+    )
+
+    with _patch.dict(_os.environ, _vault_env()):
+        with _patch("app.auth.vault.CONNECTOR_AUTH_CONFIGS", {"sap": config}):
+            # No token stored — must not raise
+            await revoke_token("org-idem-1", "sap")
+            # Second call also must not raise
+            await revoke_token("org-idem-1", "sap")
+
+
+# ---------------------------------------------------------------------------
+# Multi-tenancy (AC8 — org isolation)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.anyio
+async def test_get_token_scoped_to_org_id():
+    """get_token for org_A cannot return the token belonging to org_B."""
+    import asyncio
+    from app.auth.models import ConnectorNotAuthenticatedError
+    from backend.app.auth.vault import store_token, get_token
+
+    with _patch.dict(_os.environ, _vault_env()):
+        store_token("org_A", "github", _token_response(access_token="org-a-token"))
+        # org_B has no token — must raise
+        with pytest.raises(ConnectorNotAuthenticatedError) as exc_info:
+            await get_token("org_B", "github")
+
+    assert exc_info.value.org_id == "org_B"
+    _clear_credentials()
+
+
+# ---------------------------------------------------------------------------
+# Import surface — AC18 (vault symbols)
+# ---------------------------------------------------------------------------
+
+
+def test_vault_symbols_importable_from_package():
+    """get_token, store_token, revoke_token importable from backend.app.auth (AC18)."""
+    from backend.app.auth import (  # noqa: F401
+        get_token,
+        revoke_token,
+        store_token,
+    )
