@@ -89,11 +89,10 @@ function getSystemName(id: string) {
 
 function calcQualityRows(
   selectedIds: string[],
-  weightings: Record<string, { role: SystemRole; workflowFocus: string[] }>,
+  weightings: Record<string, { role: SystemRole; priority?: string; workflowFocus: string[] }>,
 ): QualityRow[] {
   const hasPrimary = selectedIds.some(id =>
-    weightings[id]?.role === 'system_of_record' ||
-    weightings[id]?.role === 'workflow_system',
+    weightings[id]?.priority === 'primary',
   );
 
   const signalSources = selectedIds.filter(id =>
@@ -121,8 +120,8 @@ function calcQualityRows(
       label: 'Workflow bottleneck detection',
       level: hasPrimary ? 'strong' : 'limited',
       descriptor: hasPrimary
-        ? 'Strong - primary system of record connected'
-        : 'Limited - no primary platform selected',
+        ? 'Strong - primary source priority confirmed'
+        : 'Limited - no primary source selected',
     },
     {
       label: 'Cross-system corroboration',
@@ -279,8 +278,7 @@ export default function DiscoveryPlanPage({ setupState, onLaunch }: Props) {
   );
 
   const primaryIds = state.selectedSystemIds.filter(id =>
-    state.weightings[id]?.role === 'system_of_record' ||
-    state.weightings[id]?.role === 'workflow_system',
+    state.weightings[id]?.priority === 'primary',
   );
 
   const signalIds = state.selectedSystemIds.filter(id => !primaryIds.includes(id));
@@ -322,7 +320,7 @@ export default function DiscoveryPlanPage({ setupState, onLaunch }: Props) {
               value={String(state.selectedSystemIds.length)}
             />
             <SummaryRow
-              label="Primary platforms"
+              label="Primary systems"
               value={primaryIds.length > 0
                 ? `${primaryIds.length} - ${primaryIds.map(getSystemName).join(', ')}`
                 : '-'}
@@ -383,7 +381,7 @@ export default function DiscoveryPlanPage({ setupState, onLaunch }: Props) {
         <div className="flex flex-wrap items-center gap-4">
           <div className="flex items-center gap-1.5">
             <span className="h-2 w-2 flex-shrink-0 rounded-full bg-accent" aria-hidden="true" />
-            <span className="text-xs text-muted">Primary platform</span>
+            <span className="text-xs text-muted">Primary priority</span>
           </div>
           <div className="flex items-center gap-1.5">
             <span className="h-2 w-2 flex-shrink-0 rounded-full bg-muted" aria-hidden="true" />

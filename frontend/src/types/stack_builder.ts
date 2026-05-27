@@ -183,6 +183,7 @@ export interface SetupState {
   focusId: FocusId | null;
   industryId: IndustryId | null;
   templateId: TemplateId | null;
+  templatePreselectedIds: string[];
   selectedSystemIds: string[];
   selectedSalesforceClouds: string[];
   weightings: Record<string, SystemWeighting>;

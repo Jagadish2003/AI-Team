@@ -95,6 +95,15 @@ const SALESFORCE_CLOUD_IDS = new Set([
   'salesforce_hc',
 ]);
 
+const CLOUD_PACK_REGISTRY: Record<string, string> = {
+  salesforce_pss: 'strs_benefits',
+  salesforce_sc: 'service_cloud',
+  salesforce_ncino: 'ncino',
+  salesforce_fsc: 'service_cloud',
+  salesforce_rc: 'service_cloud',
+  salesforce_hc: 'service_cloud',
+};
+
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
 function buildAuthHeaders(token: string) {
@@ -104,18 +113,36 @@ function buildAuthHeaders(token: string) {
   };
 }
 
-function resolvePackId(state: ReturnType<typeof useSetupState>['state']): string {
-  const CLOUD_PACK_REGISTRY: Record<string, string> = {
-    "salesforce_pss": "strs_benefits",
-    "salesforce_sc": "service_cloud",
-    "salesforce_ncino": "ncino",
-    "salesforce_fsc": "service_cloud"
-  };
+function getCatalogSalesforceProducts(catalog: WorkspaceCatalogResponse | null): string[] {
+  const salesforce = catalog?.primary_platforms?.find(
+    system => system.system_id === 'salesforce',
+  );
+  return Array.isArray(salesforce?.products) ? salesforce.products : [];
+}
 
-  // Priority 1: Use selected Salesforce cloud product if available
-  if (state.selectedSalesforceClouds && state.selectedSalesforceClouds.length > 0) {
-    const selectedCloud = state.selectedSalesforceClouds[0];
-    return CLOUD_PACK_REGISTRY[selectedCloud] || 'service_cloud';
+function resolvePackId(
+  state: ReturnType<typeof useSetupState>['state'],
+  catalog: WorkspaceCatalogResponse | null,
+): string {
+  const selectedCloudFromCatalog = getCatalogSalesforceProducts(catalog)
+    .find(productId => CLOUD_PACK_REGISTRY[productId]);
+
+  if (selectedCloudFromCatalog) {
+    return CLOUD_PACK_REGISTRY[selectedCloudFromCatalog];
+  }
+
+  const selectedCloudFromSystems = state.selectedSystemIds
+    .find(systemId => SALESFORCE_CLOUD_IDS.has(systemId) && CLOUD_PACK_REGISTRY[systemId]);
+
+  if (selectedCloudFromSystems) {
+    return CLOUD_PACK_REGISTRY[selectedCloudFromSystems];
+  }
+
+  const selectedCloudFromState = state.selectedSalesforceClouds
+    .find(productId => CLOUD_PACK_REGISTRY[productId]);
+
+  if (selectedCloudFromState) {
+    return CLOUD_PACK_REGISTRY[selectedCloudFromState];
   }
 
   // Priority 2: Use industry hints if set
@@ -310,12 +337,7 @@ export default function StackBuilderPage({
       .then((fetchedCatalog: WorkspaceCatalogResponse | null) => {
         setCatalog(fetchedCatalog);
         setCatalogError(null);
-        const salesforce = fetchedCatalog?.primary_platforms?.find(
-          system => system.system_id === 'salesforce',
-        );
-        setupState.setSalesforceClouds(
-          Array.isArray(salesforce?.products) ? salesforce.products : [],
-        );
+        setupState.setSalesforceClouds(getCatalogSalesforceProducts(fetchedCatalog));
       })
       .catch((err) => {
         console.error('[StackBuilderPage] Catalog fetch failed:', err);
@@ -356,7 +378,7 @@ export default function StackBuilderPage({
   }, [catalog, setupState.initFromCatalog]);
 
   const handleLaunch = useCallback(async () => {
-    const packId = resolvePackId(state);
+    const packId = resolvePackId(state, catalog);
     console.log(`packId:`, packId);
     const systems = normaliseSystems(state.selectedSystemIds);
     const headers = buildAuthHeaders(token);
@@ -407,7 +429,7 @@ export default function StackBuilderPage({
     setRunId(runId);
     navigate(`/discovery-run?runId=${runId}`);
 
-  }, [state, orgId, apiBase, clearSession, navigate, setRunId, token]);
+  }, [state, catalog, orgId, apiBase, clearSession, navigate, setRunId, token]);
 
   return (
     <PageShell
