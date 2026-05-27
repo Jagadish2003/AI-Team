@@ -35,8 +35,18 @@ from .routes_sprint41_blueprint import register_blueprint_routes
 from .run_store import read_run, read_run_events, start_run_
 from .routes_workspace_catalog import register_workspace_catalog_routes
 from .security import require_auth
+from .auth.configs import CONNECTOR_AUTH_CONFIGS
+from .auth.secrets import validate_all_secrets
 
 app = FastAPI(title="AgentIQ Layer 1 API Skeleton", version="0.1.0")
+
+
+@app.on_event("startup")
+async def startup_event() -> None:
+    # Only enforce secret presence when REQUIRE_CONNECTOR_SECRETS=1 (production).
+    # Dev and test environments run without connector secrets set.
+    if os.getenv("REQUIRE_CONNECTOR_SECRETS") == "1":
+        validate_all_secrets(CONNECTOR_AUTH_CONFIGS)
 
 # Register routes in order
 register_stack_builder_routes(app)
