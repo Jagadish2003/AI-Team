@@ -27,7 +27,7 @@
  *
  * WHAT DID NOT CHANGE:
  *   - Connect / Configure flow unchanged — same ConnectorTile, same handlers
- *   - DiscoveryStartBar unchanged
+ *   - DiscoveryStartBar flow unchanged
  *   - RightPanel unchanged
  *   - ConnectorContext unchanged
  *   - Dark theme preserved — bg-panel, border-border, text-muted tokens only
@@ -55,6 +55,7 @@ import { useConnectorContext } from '../context/ConnectorContext';
 import { useRunContext } from '../context/RunContext';
 import { useSourceIntakeContext } from '../context/SourceIntakeContext';
 import { isDiscoveryReadyConnector } from '../utils/sourceReadiness';
+import { computeConfidence } from '../utils/confidence';
 import { Connector } from '../types/connector';
 
 // ── Category → system ID membership ─────────────────────────────────────────
@@ -76,6 +77,8 @@ const CATEGORY_SYSTEMS: Record<string, string[]> = {
     'postgresql', 'sql_server', 'oracle_db', 'databricks', 'snowflake', 'dbt',
   ],
 };
+
+const START_BAR_SOURCE_IDS = ['salesforce', 'servicenow', 'jira'];
 
 // ── Group metadata ────────────────────────────────────────────────────────────
 
@@ -125,9 +128,6 @@ export default function IntegrationHubPage() {
     selectConnector,
     connectConnector,
     configureSync,
-    confidence,
-    recommendedConnectedCount,
-    nextBestRecommendedId,
     loading,
     error,
     refetch,
@@ -188,14 +188,30 @@ export default function IntegrationHubPage() {
     [allConnectors, selectedConnectorId],
   );
 
-  const next = useMemo(
-    () => recommended.find(c => c.id === nextBestRecommendedId) ?? null,
-    [recommended, nextBestRecommendedId],
-  );
-
   const readyConnectorCount = useMemo(
     () => allConnectors.filter(isDiscoveryReadyConnector).length,
     [allConnectors],
+  );
+
+  const startBarStatusConnectors = useMemo(() => {
+    return START_BAR_SOURCE_IDS
+      .map(id => allConnectors.find(c => c.id === id))
+      .filter((connector): connector is Connector => Boolean(connector));
+  }, [allConnectors]);
+
+  const startBarReadyCount = useMemo(
+    () => startBarStatusConnectors.filter(isDiscoveryReadyConnector).length,
+    [startBarStatusConnectors],
+  );
+
+  const startBarConfidence = useMemo(
+    () => computeConfidence(startBarReadyCount),
+    [startBarReadyCount],
+  );
+
+  const startBarNext = useMemo(
+    () => startBarStatusConnectors.find(c => !isDiscoveryReadyConnector(c)) ?? null,
+    [startBarStatusConnectors],
   );
 
   const canStart = readyConnectorCount > 0 || uploadedFiles.length > 0;
@@ -236,7 +252,7 @@ export default function IntegrationHubPage() {
       <PageShell
         title="Integration Hub"
         description="Connect enterprise systems to provide data for discovery. Manage credentials and connection status for your workspace."
-        contentClassName="pb-[190px] xl:pb-28"
+        contentClassName="pb-56 sm:pb-52 xl:pb-28"
       >
         {loading && <LoadingPanel />}
         {error && !loading && <ErrorPanel message={error} onRetry={refetch} />}
@@ -289,17 +305,17 @@ export default function IntegrationHubPage() {
                   configureSync(selected.id);
                   push('Configuration complete. Data is now synced.');
                 }}
-                confidence={confidence}
-                recommendedConnectedCount={recommendedConnectedCount}
+                confidence={startBarConfidence}
+                recommendedConnectedCount={startBarReadyCount}
                 recommendedTotal={3}
-                next={next}
+                next={startBarNext}
                 onConnectNext={() => {
-                  if (!next) return;
-                  if (next.status === 'connected') {
-                    configureSync(next.id);
+                  if (!startBarNext) return;
+                  if (startBarNext.status === 'connected') {
+                    configureSync(startBarNext.id);
                     push('Configuration complete. Data is now synced.');
                   } else {
-                    connectConnector(next.id);
+                    connectConnector(startBarNext.id);
                     push('Connected next best source.');
                   }
                 }}
@@ -309,13 +325,14 @@ export default function IntegrationHubPage() {
         )}
       </PageShell>
 
-      {/* Discovery start bar — unchanged */}
+      {/* Discovery start bar */}
       {!loading && !error && (
         <DiscoveryStartBar
-          confidence={confidence}
-          recommendedReadyCount={recommendedConnectedCount}
-          recommendedTotal={3}
+          confidence={startBarConfidence}
+          recommendedReadyCount={startBarReadyCount}
+          recommendedTotal={START_BAR_SOURCE_IDS.length}
           recommended={recommended}
+          statusConnectors={startBarStatusConnectors}
           canStart={canStart}
           onStart={() => {
             if (runId) {

@@ -72,6 +72,7 @@
  */
 
 import React, { useState } from 'react';
+import { CircleCheck } from 'lucide-react';
 import {
   SystemWeighting, SystemRole, SystemPriority, WorkflowFocusTag
 } from '../../types/stack_builder';
@@ -194,6 +195,8 @@ export default function SystemWeightingCard({
         'mb-3 rounded-xl border bg-panel transition-[border-color,box-shadow] duration-150',
         expanded
           ? 'border-accent shadow-[0_8px_22px_rgba(13,85,215,0.14)]'
+          : weighting.confirmed
+          ? 'border-emerald-500/45 shadow-sm'
           : 'border-border shadow-sm',
       ].join(' ')}
     >
@@ -231,11 +234,8 @@ export default function SystemWeightingCard({
 
         {/* Confirmed label */}
         {weighting.confirmed && !expanded && (
-          <span className="flex items-center gap-1 text-xs text-accent font-medium flex-shrink-0 mr-2">
-            <svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true">
-              <path d="M2 6l3 3 5-5" stroke="currentColor" strokeWidth="1.5"
-                strokeLinecap="round" strokeLinejoin="round"/>
-            </svg>
+          <span className="mr-2 inline-flex flex-shrink-0 items-center gap-1.5 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2 py-0.5 text-xs font-medium text-emerald-300 shadow-sm">
+            <CircleCheck size={13} strokeWidth={2.2} aria-hidden="true" />
             Confirmed
           </span>
         )}
@@ -330,16 +330,12 @@ export default function SystemWeightingCard({
               type="button"
               onClick={handleConfirm}
               className={[
-                'inline-flex items-center gap-1.5 rounded-md px-4 py-2',
+                'inline-flex items-center rounded-md px-4 py-2',
                 'border border-accent/20 bg-accent/5 text-sm font-medium text-accent',
                 'transition-colors hover:border-accent/45 hover:bg-accent/10',
                 'focus:outline-none focus-visible:ring-1 focus-visible:ring-accent/40',
               ].join(' ')}
             >
-              <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
-                <path d="M2.5 7l3 3 6-6" stroke="currentColor" strokeWidth="1.5"
-                  strokeLinecap="round" strokeLinejoin="round"/>
-              </svg>
               Confirm
             </button>
           </div>
