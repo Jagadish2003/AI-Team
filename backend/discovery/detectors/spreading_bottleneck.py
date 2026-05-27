@@ -26,26 +26,34 @@ Fires when: unlocked_count >= 1 (periods open for 14+ days)
 """
 from __future__ import annotations
 from typing import Any, Dict, List
-from ..models import DetectorResult
+from ..models import (
+    DetectorResult,
+    detector_result_from_evaluation,
+    make_detector_evaluation,
+)
 
 DETECTOR_ID    = "SPREADING_BOTTLENECK"
 MIN_DAYS_OPEN  = 14  # unlocked for 14+ days = bottleneck
 
-def detect(sf_data: Dict[str, Any], sn_data=None, jira_data=None) -> List[DetectorResult]:
+SIGNAL_METRICS = [
+    "total_periods",      # spread statement period workload volume
+    "unlocked_count",     # count of unfinished spread periods
+    "max_days_unlocked",  # strongest open-period age signal
+    "avg_days_unlocked",  # average open-period age signal
+]
+
+
+def evaluate(sf_data: Dict[str, Any], sn_data=None, jira_data=None):
     ncino = sf_data.get("ncino") or sf_data
     metrics = ncino.get("spreading_metrics", {})
-    if not metrics:
-        return []
 
     unlocked_count  = int(metrics.get("unlocked_count", 0))
     total           = int(metrics.get("total_periods", 0))
     max_days        = float(metrics.get("max_days_unlocked", 0))
     avg_days        = float(metrics.get("avg_days_unlocked", 0))
 
-    if unlocked_count == 0:
-        return []
-
-    return [DetectorResult(
+    return make_detector_evaluation(
+        module_name=__name__,
         detector_id=DETECTOR_ID,
         signal_source="salesforce",
         metric_value=float(unlocked_count),
@@ -61,4 +69,10 @@ def detect(sf_data: Dict[str, Any], sn_data=None, jira_data=None) -> List[Detect
             "analyst_field":       "LLC_BI__Analyst__c, fallback CreatedById",
             "signal_field":        "LLC_BI__Is_Locked__c",
         },
-    )]
+        fired=bool(metrics) and unlocked_count > 0,
+    )
+
+
+def detect(sf_data: Dict[str, Any], sn_data=None, jira_data=None) -> List[DetectorResult]:
+    evaluation = evaluate(sf_data, sn_data, jira_data)
+    return [detector_result_from_evaluation(evaluation)] if evaluation.fired else []
