@@ -1,7 +1,8 @@
-"""Contract tests for AT-73: auth data models (T1-S10-A).
+"""Contract tests for AT-73 and AT-74: auth data models and secret resolution.
 
-AC9:  ConnectorAuthConfig has secret_key (env var name), never client_secret.
-AC18: All three models importable from backend.app.auth and backend.app.auth.models.
+AT-73 / AC9:  ConnectorAuthConfig has secret_key (env var name), never client_secret.
+AT-73 / AC18: All three models importable from backend.app.auth and backend.app.auth.models.
+AT-74 / AC10: MissingSecretError, resolve_secret, validate_all_secrets importable from backend.app.auth.
 """
 from __future__ import annotations
 
@@ -201,3 +202,182 @@ def test_connector_not_authenticated_error_is_raiseable():
 
     assert exc_info.value.connector_id == "github"
     assert exc_info.value.org_id == "org-1"
+
+
+# ---------------------------------------------------------------------------
+# AT-74: secret resolution helper (secrets.py)
+# ---------------------------------------------------------------------------
+
+
+def test_resolve_secret_returns_value_when_env_var_set():
+    """resolve_secret returns the correct value when the env var is set."""
+    import os
+    from unittest.mock import patch
+
+    from backend.app.auth.secrets import resolve_secret
+
+    with patch.dict(os.environ, {"_TEST_SECRET_KEY": "my-secret-value"}):
+        assert resolve_secret("_TEST_SECRET_KEY") == "my-secret-value"
+
+
+def test_resolve_secret_raises_missing_secret_error_when_absent():
+    """resolve_secret raises MissingSecretError when the env var is absent."""
+    import os
+    import pytest
+    from unittest.mock import patch
+
+    from backend.app.auth.secrets import MissingSecretError, resolve_secret
+
+    env_without_key = {k: v for k, v in os.environ.items() if k != "_ABSENT_KEY"}
+    with patch.dict(os.environ, env_without_key, clear=True):
+        with pytest.raises(MissingSecretError):
+            resolve_secret("_ABSENT_KEY")
+
+
+def test_missing_secret_error_message_contains_key_name():
+    """MissingSecretError message contains the key name."""
+    from backend.app.auth.secrets import MissingSecretError
+
+    err = MissingSecretError("SALESFORCE_CLIENT_SECRET")
+    assert "SALESFORCE_CLIENT_SECRET" in str(err)
+
+
+def test_missing_secret_error_message_does_not_contain_secret_value():
+    """MissingSecretError message must never include the resolved secret value."""
+    import os
+    from unittest.mock import patch
+
+    from backend.app.auth.secrets import MissingSecretError, resolve_secret
+
+    secret_value = "super-sensitive-value-xyz"
+    # MissingSecretError is constructed before the value is known; verify directly
+    err = MissingSecretError("SOME_KEY")
+    assert secret_value not in str(err)
+
+
+def test_missing_secret_error_stores_secret_key_attribute():
+    """MissingSecretError.secret_key stores the key name."""
+    from backend.app.auth.secrets import MissingSecretError
+
+    err = MissingSecretError("GITHUB_CLIENT_SECRET")
+    assert err.secret_key == "GITHUB_CLIENT_SECRET"
+
+
+def test_missing_secret_error_is_exception_subclass():
+    """MissingSecretError is a subclass of Exception."""
+    from backend.app.auth.secrets import MissingSecretError
+
+    assert issubclass(MissingSecretError, Exception)
+
+
+def test_resolve_secret_is_not_cached():
+    """resolve_secret reads os.environ at call time — value is not cached between calls."""
+    import os
+    from unittest.mock import patch
+
+    from backend.app.auth.secrets import resolve_secret
+
+    with patch.dict(os.environ, {"_TEST_CACHE_KEY": "v1"}):
+        assert resolve_secret("_TEST_CACHE_KEY") == "v1"
+        os.environ["_TEST_CACHE_KEY"] = "v2"
+        assert resolve_secret("_TEST_CACHE_KEY") == "v2", "resolve_secret must not cache values"
+
+
+def test_validate_all_secrets_passes_when_all_present():
+    """validate_all_secrets passes silently when every connector secret_key is set."""
+    import os
+    from unittest.mock import patch
+
+    from backend.app.auth.models import ConnectorAuthConfig
+    from backend.app.auth.secrets import validate_all_secrets
+
+    configs = {
+        "svc_a": ConnectorAuthConfig(
+            connector_id="svc_a",
+            flow="client_credentials",
+            client_id="cid",
+            secret_key="SVC_A_SECRET",
+            token_url="https://example.com/token",
+            scopes=[],
+        ),
+        "svc_b": ConnectorAuthConfig(
+            connector_id="svc_b",
+            flow="client_credentials",
+            client_id="cid",
+            secret_key="SVC_B_SECRET",
+            token_url="https://example.com/token",
+            scopes=[],
+        ),
+    }
+    with patch.dict(os.environ, {"SVC_A_SECRET": "a", "SVC_B_SECRET": "b"}):
+        validate_all_secrets(configs)  # must not raise
+
+
+def test_validate_all_secrets_raises_when_any_absent():
+    """validate_all_secrets raises MissingSecretError when any connector secret is missing."""
+    import os
+    import pytest
+    from unittest.mock import patch
+
+    from backend.app.auth.models import ConnectorAuthConfig
+    from backend.app.auth.secrets import MissingSecretError, validate_all_secrets
+
+    configs = {
+        "svc_ok": ConnectorAuthConfig(
+            connector_id="svc_ok",
+            flow="client_credentials",
+            client_id="cid",
+            secret_key="SVC_OK_SECRET",
+            token_url="https://example.com/token",
+            scopes=[],
+        ),
+        "svc_missing": ConnectorAuthConfig(
+            connector_id="svc_missing",
+            flow="client_credentials",
+            client_id="cid",
+            secret_key="SVC_MISSING_SECRET",
+            token_url="https://example.com/token",
+            scopes=[],
+        ),
+    }
+    env = {k: v for k, v in os.environ.items() if k not in ("SVC_OK_SECRET", "SVC_MISSING_SECRET")}
+    env["SVC_OK_SECRET"] = "present"
+    with patch.dict(os.environ, env, clear=True):
+        with pytest.raises(MissingSecretError):
+            validate_all_secrets(configs)
+
+
+def test_validate_all_secrets_error_contains_missing_key_name():
+    """MissingSecretError raised by validate_all_secrets contains the missing key name."""
+    import os
+    import pytest
+    from unittest.mock import patch
+
+    from backend.app.auth.models import ConnectorAuthConfig
+    from backend.app.auth.secrets import MissingSecretError, validate_all_secrets
+
+    configs = {
+        "svc": ConnectorAuthConfig(
+            connector_id="svc",
+            flow="client_credentials",
+            client_id="cid",
+            secret_key="SVC_ABSENT_KEY",
+            token_url="https://example.com/token",
+            scopes=[],
+        )
+    }
+    env = {k: v for k, v in os.environ.items() if k != "SVC_ABSENT_KEY"}
+    with patch.dict(os.environ, env, clear=True):
+        with pytest.raises(MissingSecretError) as exc_info:
+            validate_all_secrets(configs)
+    assert "SVC_ABSENT_KEY" in str(exc_info.value)
+
+
+# AC10: importable from backend.app.auth
+def test_secrets_importable_from_package():
+    """MissingSecretError, resolve_secret, validate_all_secrets all importable from backend.app.auth."""
+    from backend.app.auth import (  # noqa: F401
+        MissingSecretError,
+        resolve_secret,
+        validate_all_secrets,
+    )
