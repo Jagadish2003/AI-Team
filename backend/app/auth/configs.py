@@ -13,6 +13,8 @@ CONNECTOR_AUTH_CONFIGS: Dict[str, ConnectorAuthConfig] = {
         token_url="https://{instance}.salesforce.com/services/oauth2/token",
         revocation_url="https://{instance}.salesforce.com/services/oauth2/revoke",
         scopes=["api", "refresh_token", "offline_access"],
+        # {instance} substituted per-org at call time (A4 — resolved in vault layer)
+        authorization_url="https://login.salesforce.com/services/oauth2/authorize",
     ),
     "servicenow": ConnectorAuthConfig(
         connector_id="servicenow",
@@ -22,6 +24,8 @@ CONNECTOR_AUTH_CONFIGS: Dict[str, ConnectorAuthConfig] = {
         token_url="https://{instance}.service-now.com/oauth_token.do",
         revocation_url=None,
         scopes=["useraccount"],
+        # {instance} substituted per-org at call time (A4 — resolved in vault layer)
+        authorization_url="https://{instance}.service-now.com/oauth_auth.do",
     ),
     "jira": ConnectorAuthConfig(
         connector_id="jira",
@@ -31,6 +35,7 @@ CONNECTOR_AUTH_CONFIGS: Dict[str, ConnectorAuthConfig] = {
         token_url="https://auth.atlassian.com/oauth/token",
         revocation_url="https://auth.atlassian.com/oauth/token/revoke",
         scopes=["read:jira-work", "read:jira-user", "offline_access"],
+        authorization_url="https://auth.atlassian.com/authorize",
     ),
     "github": ConnectorAuthConfig(
         connector_id="github",
@@ -40,6 +45,7 @@ CONNECTOR_AUTH_CONFIGS: Dict[str, ConnectorAuthConfig] = {
         token_url="https://github.com/login/oauth/access_token",
         revocation_url=None,
         scopes=["repo", "read:user", "read:org"],
+        authorization_url="https://github.com/login/oauth/authorize",
     ),
     "confluence": ConnectorAuthConfig(
         connector_id="confluence",
@@ -49,6 +55,7 @@ CONNECTOR_AUTH_CONFIGS: Dict[str, ConnectorAuthConfig] = {
         token_url="https://auth.atlassian.com/oauth/token",
         revocation_url="https://auth.atlassian.com/oauth/token/revoke",
         scopes=["read:confluence-space.summary", "read:confluence-content.all", "offline_access"],
+        authorization_url="https://auth.atlassian.com/authorize",
     ),
     "slack": ConnectorAuthConfig(
         connector_id="slack",
@@ -58,6 +65,7 @@ CONNECTOR_AUTH_CONFIGS: Dict[str, ConnectorAuthConfig] = {
         token_url="https://slack.com/api/oauth.v2.access",
         revocation_url=None,  # Slack-specific revocation added in T1-S12-C
         scopes=["channels:read", "users:read", "team:read"],
+        authorization_url="https://slack.com/oauth/v2/authorize",
     ),
     "sap": ConnectorAuthConfig(
         connector_id="sap",
@@ -68,6 +76,7 @@ CONNECTOR_AUTH_CONFIGS: Dict[str, ConnectorAuthConfig] = {
         revocation_url=None,  # client_credentials — no user token
         scopes=["uaa.resource"],
         redirect_uri=None,
+        authorization_url=None,  # client_credentials — no browser redirect
     ),
     "d365": ConnectorAuthConfig(
         connector_id="d365",
@@ -78,5 +87,6 @@ CONNECTOR_AUTH_CONFIGS: Dict[str, ConnectorAuthConfig] = {
         revocation_url=None,  # client_credentials — no user token
         scopes=["https://dynamics.microsoft.com/.default"],
         redirect_uri=None,
+        authorization_url=None,  # client_credentials — no browser redirect
     ),
 }

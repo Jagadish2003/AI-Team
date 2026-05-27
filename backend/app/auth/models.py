@@ -19,8 +19,9 @@ class ConnectorAuthConfig:
     secret_key: str
     token_url: str
     scopes: List[str]
-    revocation_url: Optional[str] = None  # None when connector has no revocation endpoint
-    redirect_uri: Optional[str] = None    # None for client_credentials flows
+    revocation_url: Optional[str] = None      # None when connector has no revocation endpoint
+    redirect_uri: Optional[str] = None        # None for client_credentials flows
+    authorization_url: Optional[str] = None   # None for client_credentials flows; added in AT-75
 
 
 @dataclass

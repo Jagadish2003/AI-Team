@@ -381,3 +381,376 @@ def test_secrets_importable_from_package():
         resolve_secret,
         validate_all_secrets,
     )
+
+
+# ---------------------------------------------------------------------------
+# AT-75: OAuth flow implementation (oauth.py)
+# ---------------------------------------------------------------------------
+
+import json as _json
+import os as _os
+
+import httpx
+import pytest
+
+
+# ---------------------------------------------------------------------------
+# Helpers — lightweight mock transports (no external mock library required)
+# ---------------------------------------------------------------------------
+
+
+class _MockTransport(httpx.AsyncBaseTransport):
+    """Returns a fixed status_code + JSON body; captures the last request."""
+
+    def __init__(self, status_code: int, body: dict):
+        self.last_request: httpx.Request | None = None
+        self._status_code = status_code
+        self._body = body
+
+    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        self.last_request = request
+        content = _json.dumps(self._body).encode("utf-8")
+        return httpx.Response(
+            self._status_code,
+            content=content,
+            headers={"content-type": "application/json"},
+        )
+
+
+class _TimeoutTransport(httpx.AsyncBaseTransport):
+    """Raises httpx.ReadTimeout for every request."""
+
+    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        raise httpx.ReadTimeout("timed out", request=request)
+
+
+def _make_config(
+    connector_id: str = "test_connector",
+    flow: str = "authorization_code",
+    authorization_url: str = "https://provider.example.com/auth",
+    token_url: str = "https://provider.example.com/token",
+    scopes: list | None = None,
+) -> "ConnectorAuthConfig":
+    from backend.app.auth.models import ConnectorAuthConfig
+
+    return ConnectorAuthConfig(
+        connector_id=connector_id,
+        flow=flow,
+        client_id="test-client-id",
+        secret_key="_TEST_OAUTH_SECRET",
+        token_url=token_url,
+        scopes=scopes or ["read", "write"],
+        redirect_uri="https://app.example.com/callback",
+        authorization_url=authorization_url,
+    )
+
+
+# ---------------------------------------------------------------------------
+# build_auth_url
+# ---------------------------------------------------------------------------
+
+
+def test_build_auth_url_contains_required_params():
+    """build_auth_url URL contains client_id, redirect_uri, state, response_type=code, scopes."""
+    from urllib.parse import parse_qs, urlparse
+
+    from backend.app.auth.oauth import build_auth_url
+
+    config = _make_config(scopes=["read", "write"])
+    url = build_auth_url(config, state="csrf-nonce-abc")
+
+    parsed = urlparse(url)
+    qs = parse_qs(parsed.query)
+
+    assert qs["client_id"] == ["test-client-id"]
+    assert qs["redirect_uri"] == ["https://app.example.com/callback"]
+    assert qs["state"] == ["csrf-nonce-abc"]
+    assert qs["response_type"] == ["code"]
+    assert qs["scope"] == ["read write"]
+
+
+def test_build_auth_url_does_not_call_resolve_secret():
+    """build_auth_url succeeds even when the secret env var is absent."""
+    from unittest.mock import patch
+
+    from backend.app.auth.oauth import build_auth_url
+
+    config = _make_config()
+    env_without_secret = {k: v for k, v in _os.environ.items() if k != "_TEST_OAUTH_SECRET"}
+    with patch.dict(_os.environ, env_without_secret, clear=True):
+        url = build_auth_url(config, state="nonce")
+    assert url.startswith("https://provider.example.com/auth")
+
+
+# ---------------------------------------------------------------------------
+# exchange_code
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.anyio
+async def test_exchange_code_200_returns_json():
+    """exchange_code returns parsed JSON on HTTP 200."""
+    from unittest.mock import patch
+
+    from backend.app.auth.oauth import exchange_code
+
+    transport = _MockTransport(200, {"access_token": "tok", "token_type": "Bearer"})
+    config = _make_config()
+    with patch.dict(_os.environ, {"_TEST_OAUTH_SECRET": "s3cr3t"}):
+        result = await exchange_code(config, code="auth-code-xyz", _transport=transport)
+
+    assert result["access_token"] == "tok"
+
+
+@pytest.mark.anyio
+async def test_exchange_code_400_raises_oauth_error():
+    """exchange_code raises OAuthError on HTTP 400."""
+    from unittest.mock import patch
+
+    from backend.app.auth.oauth import OAuthError, exchange_code
+
+    transport = _MockTransport(400, {"error": "invalid_grant"})
+    config = _make_config()
+    with patch.dict(_os.environ, {"_TEST_OAUTH_SECRET": "s3cr3t"}):
+        with pytest.raises(OAuthError) as exc_info:
+            await exchange_code(config, code="bad-code", _transport=transport)
+
+    assert exc_info.value.reason == 400
+    assert exc_info.value.connector_id == "test_connector"
+
+
+@pytest.mark.anyio
+async def test_exchange_code_401_raises_oauth_error():
+    """exchange_code raises OAuthError on HTTP 401."""
+    from unittest.mock import patch
+
+    from backend.app.auth.oauth import OAuthError, exchange_code
+
+    transport = _MockTransport(401, {"error": "unauthorized"})
+    config = _make_config()
+    with patch.dict(_os.environ, {"_TEST_OAUTH_SECRET": "s3cr3t"}):
+        with pytest.raises(OAuthError) as exc_info:
+            await exchange_code(config, code="code", _transport=transport)
+
+    assert exc_info.value.reason == 401
+
+
+@pytest.mark.anyio
+async def test_exchange_code_500_raises_oauth_error():
+    """exchange_code raises OAuthError on HTTP 500."""
+    from unittest.mock import patch
+
+    from backend.app.auth.oauth import OAuthError, exchange_code
+
+    transport = _MockTransport(500, {"error": "server_error"})
+    config = _make_config()
+    with patch.dict(_os.environ, {"_TEST_OAUTH_SECRET": "s3cr3t"}):
+        with pytest.raises(OAuthError) as exc_info:
+            await exchange_code(config, code="code", _transport=transport)
+
+    assert exc_info.value.reason == 500
+
+
+@pytest.mark.anyio
+async def test_exchange_code_timeout_raises_oauth_error():
+    """exchange_code raises OAuthError with reason 'timeout' on httpx timeout."""
+    from unittest.mock import patch
+
+    from backend.app.auth.oauth import OAuthError, exchange_code
+
+    config = _make_config()
+    with patch.dict(_os.environ, {"_TEST_OAUTH_SECRET": "s3cr3t"}):
+        with pytest.raises(OAuthError) as exc_info:
+            await exchange_code(config, code="code", _transport=_TimeoutTransport())
+
+    assert exc_info.value.reason == "timeout"
+
+
+@pytest.mark.anyio
+async def test_exchange_code_error_does_not_contain_secret():
+    """OAuthError from exchange_code does not expose the secret value."""
+    from unittest.mock import patch
+
+    from backend.app.auth.oauth import OAuthError, exchange_code
+
+    transport = _MockTransport(401, {})
+    config = _make_config()
+    with patch.dict(_os.environ, {"_TEST_OAUTH_SECRET": "super-secret-value"}):
+        with pytest.raises(OAuthError) as exc_info:
+            await exchange_code(config, code="code", _transport=transport)
+
+    assert "super-secret-value" not in str(exc_info.value)
+
+
+@pytest.mark.anyio
+async def test_exchange_code_post_body_contains_required_fields():
+    """exchange_code POST body includes grant_type, code, client_id, redirect_uri."""
+    from unittest.mock import patch
+    from urllib.parse import parse_qs
+
+    from backend.app.auth.oauth import exchange_code
+
+    transport = _MockTransport(200, {"access_token": "tok"})
+    config = _make_config()
+    with patch.dict(_os.environ, {"_TEST_OAUTH_SECRET": "s3cr3t"}):
+        await exchange_code(config, code="mycode", _transport=transport)
+
+    body = parse_qs(transport.last_request.content.decode())
+    assert body["grant_type"] == ["authorization_code"]
+    assert body["code"] == ["mycode"]
+    assert body["client_id"] == ["test-client-id"]
+    assert body["redirect_uri"] == ["https://app.example.com/callback"]
+
+
+@pytest.mark.anyio
+async def test_exchange_code_post_body_includes_client_secret_from_env():
+    """exchange_code POST body includes client_secret resolved from env."""
+    from unittest.mock import patch
+    from urllib.parse import parse_qs
+
+    from backend.app.auth.oauth import exchange_code
+
+    transport = _MockTransport(200, {"access_token": "tok"})
+    config = _make_config()
+    with patch.dict(_os.environ, {"_TEST_OAUTH_SECRET": "resolved-secret"}):
+        await exchange_code(config, code="code", _transport=transport)
+
+    body = parse_qs(transport.last_request.content.decode())
+    # Verify the field was sent (value presence confirms env was resolved)
+    assert "client_secret" in body
+
+
+# ---------------------------------------------------------------------------
+# refresh_token
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.anyio
+async def test_refresh_token_200_returns_json():
+    """refresh_token returns parsed JSON on HTTP 200."""
+    from unittest.mock import patch
+
+    from backend.app.auth.oauth import refresh_token
+
+    transport = _MockTransport(200, {"access_token": "new-tok", "token_type": "Bearer"})
+    config = _make_config()
+    with patch.dict(_os.environ, {"_TEST_OAUTH_SECRET": "s3cr3t"}):
+        result = await refresh_token(config, refresh_token_value="ref-tok", _transport=transport)
+
+    assert result["access_token"] == "new-tok"
+
+
+@pytest.mark.anyio
+async def test_refresh_token_non_200_raises_oauth_error():
+    """refresh_token raises OAuthError on non-200."""
+    from unittest.mock import patch
+
+    from backend.app.auth.oauth import OAuthError, refresh_token
+
+    transport = _MockTransport(401, {"error": "invalid_token"})
+    config = _make_config()
+    with patch.dict(_os.environ, {"_TEST_OAUTH_SECRET": "s3cr3t"}):
+        with pytest.raises(OAuthError):
+            await refresh_token(config, refresh_token_value="old-tok", _transport=transport)
+
+
+@pytest.mark.anyio
+async def test_refresh_token_timeout_raises_oauth_error():
+    """refresh_token raises OAuthError with reason 'timeout' on httpx timeout."""
+    from unittest.mock import patch
+
+    from backend.app.auth.oauth import OAuthError, refresh_token
+
+    config = _make_config()
+    with patch.dict(_os.environ, {"_TEST_OAUTH_SECRET": "s3cr3t"}):
+        with pytest.raises(OAuthError) as exc_info:
+            await refresh_token(config, refresh_token_value="tok", _transport=_TimeoutTransport())
+
+    assert exc_info.value.reason == "timeout"
+
+
+@pytest.mark.anyio
+async def test_refresh_token_post_body_contains_grant_type_and_refresh_token():
+    """refresh_token POST body includes grant_type=refresh_token and refresh_token param."""
+    from unittest.mock import patch
+    from urllib.parse import parse_qs
+
+    from backend.app.auth.oauth import refresh_token
+
+    transport = _MockTransport(200, {"access_token": "tok"})
+    config = _make_config()
+    with patch.dict(_os.environ, {"_TEST_OAUTH_SECRET": "s3cr3t"}):
+        await refresh_token(config, refresh_token_value="my-refresh-tok", _transport=transport)
+
+    body = parse_qs(transport.last_request.content.decode())
+    assert body["grant_type"] == ["refresh_token"]
+    assert body["refresh_token"] == ["my-refresh-tok"]
+
+
+# ---------------------------------------------------------------------------
+# get_client_credentials_token
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.anyio
+async def test_get_client_credentials_token_200_returns_json():
+    """get_client_credentials_token returns parsed JSON on HTTP 200."""
+    from unittest.mock import patch
+
+    from backend.app.auth.oauth import get_client_credentials_token
+
+    transport = _MockTransport(200, {"access_token": "cc-tok", "token_type": "Bearer"})
+    config = _make_config(flow="client_credentials", authorization_url=None)
+    with patch.dict(_os.environ, {"_TEST_OAUTH_SECRET": "s3cr3t"}):
+        result = await get_client_credentials_token(config, _transport=transport)
+
+    assert result["access_token"] == "cc-tok"
+
+
+@pytest.mark.anyio
+async def test_get_client_credentials_token_non_200_raises_oauth_error():
+    """get_client_credentials_token raises OAuthError on non-200."""
+    from unittest.mock import patch
+
+    from backend.app.auth.oauth import OAuthError, get_client_credentials_token
+
+    transport = _MockTransport(403, {"error": "unauthorized_client"})
+    config = _make_config(flow="client_credentials", authorization_url=None)
+    with patch.dict(_os.environ, {"_TEST_OAUTH_SECRET": "s3cr3t"}):
+        with pytest.raises(OAuthError):
+            await get_client_credentials_token(config, _transport=transport)
+
+
+@pytest.mark.anyio
+async def test_get_client_credentials_token_post_body_fields():
+    """get_client_credentials_token POST body includes grant_type, scope, client_id."""
+    from unittest.mock import patch
+    from urllib.parse import parse_qs
+
+    from backend.app.auth.oauth import get_client_credentials_token
+
+    transport = _MockTransport(200, {"access_token": "tok"})
+    config = _make_config(flow="client_credentials", authorization_url=None, scopes=["api.read"])
+    with patch.dict(_os.environ, {"_TEST_OAUTH_SECRET": "s3cr3t"}):
+        await get_client_credentials_token(config, _transport=transport)
+
+    body = parse_qs(transport.last_request.content.decode())
+    assert body["grant_type"] == ["client_credentials"]
+    assert body["scope"] == ["api.read"]
+    assert body["client_id"] == ["test-client-id"]
+
+
+# ---------------------------------------------------------------------------
+# Import surface — AC10 (oauth symbols)
+# ---------------------------------------------------------------------------
+
+
+def test_oauth_symbols_importable_from_package():
+    """OAuthError, build_auth_url, exchange_code, refresh_token, get_client_credentials_token importable from backend.app.auth."""
+    from backend.app.auth import (  # noqa: F401
+        OAuthError,
+        build_auth_url,
+        exchange_code,
+        get_client_credentials_token,
+        refresh_token,
+    )
