@@ -1,3 +1,9 @@
+"""Temporal signal storage API surface.
+
+This module exposes temporal dataclasses and import-safe hooks used by runner
+and future persistence code without creating database-to-app circular imports.
+"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -6,15 +12,11 @@ from typing import Any
 
 try:
     from database.models.signal_snapshots import DetectorEvaluationLike, SignalSnapshot
-except ModuleNotFoundError:
-    try:
-        from backend.database.models.signal_snapshots import (
-            DetectorEvaluationLike,
-            SignalSnapshot,
-        )
-    except ModuleNotFoundError:
-        DetectorEvaluationLike = None  # type: ignore[assignment]
-        SignalSnapshot = None  # type: ignore[assignment]
+except ModuleNotFoundError:  # pragma: no cover - supports repo-root imports.
+    from backend.database.models.signal_snapshots import (
+        DetectorEvaluationLike,
+        SignalSnapshot,
+    )
 
 
 @dataclass
@@ -32,7 +34,7 @@ class DetectorEvaluation:
     metric_value: float
     threshold: float
     fired: bool
-    raw_evidence: dict
+    raw_evidence: dict[str, Any]
 
 
 def snapshot_signals(
@@ -53,6 +55,9 @@ def snapshot_signals(
     return None
 
 
-__all__ = ["DetectorEvaluation", "snapshot_signals"]
-if SignalSnapshot is not None:
-    __all__.extend(["DetectorEvaluationLike", "SignalSnapshot"])
+__all__ = [
+    "DetectorEvaluation",
+    "DetectorEvaluationLike",
+    "SignalSnapshot",
+    "snapshot_signals",
+]
