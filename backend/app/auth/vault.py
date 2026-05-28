@@ -16,6 +16,7 @@ from app.auth.configs import CONNECTOR_AUTH_CONFIGS
 from app.auth.models import ConnectorAuthConfig, ConnectorNotAuthenticatedError, TokenRecord
 from app.auth.secrets import MissingSecretError
 from database.models.credentials import (
+    ALTER_CREDENTIALS_ADD_REFRESH_FAILED,
     CREATE_CREDENTIALS_IDX_CONNECTOR,
     CREATE_CREDENTIALS_IDX_ORG,
     CREATE_CREDENTIALS_TABLE,
@@ -33,12 +34,20 @@ _OAUTH_HTTP_TIMEOUT = int(os.environ.get("OAUTH_HTTP_TIMEOUT_SECONDS", "30"))
 
 
 def _init_credentials_table() -> None:
-    """Create the credentials table and indexes if they don't exist yet."""
+    """Create the credentials table and indexes if they don't exist yet.
+
+    Also applies the refresh_failed column migration for pre-existing databases.
+    """
+    import sqlite3 as _sqlite3
     con = db.connect()
     try:
         con.execute(CREATE_CREDENTIALS_TABLE)
         con.execute(CREATE_CREDENTIALS_IDX_ORG)
         con.execute(CREATE_CREDENTIALS_IDX_CONNECTOR)
+        try:
+            con.execute(ALTER_CREDENTIALS_ADD_REFRESH_FAILED)
+        except _sqlite3.OperationalError:
+            pass  # Column already exists — idempotent
         con.commit()
     finally:
         con.close()
@@ -132,6 +141,19 @@ def _row_to_token_record(row: tuple) -> TokenRecord:
 # ---------------------------------------------------------------------------
 
 
+def _mark_refresh_failed(org_id: str, connector_id: str) -> None:
+    """Set refresh_failed=1 for an existing credential row.  No-op if row absent."""
+    con = db.connect()
+    try:
+        con.execute(
+            "UPDATE credentials SET refresh_failed=1 WHERE org_id=? AND connector_id=?",
+            (org_id, connector_id),
+        )
+        con.commit()
+    finally:
+        con.close()
+
+
 def store_token(org_id: str, connector_id: str, token_response: dict) -> TokenRecord:
     """Encrypt and upsert a token response for the given org+connector pair.
 
@@ -159,14 +181,15 @@ def store_token(org_id: str, connector_id: str, token_response: dict) -> TokenRe
         con.execute(
             """
             INSERT INTO credentials
-                (id, org_id, connector_id, access_token, refresh_token, expires_at, scopes, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                (id, org_id, connector_id, access_token, refresh_token, expires_at, scopes, created_at, updated_at, refresh_failed)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
             ON CONFLICT(org_id, connector_id) DO UPDATE SET
-                access_token = excluded.access_token,
-                refresh_token = excluded.refresh_token,
-                expires_at    = excluded.expires_at,
-                scopes        = excluded.scopes,
-                updated_at    = excluded.updated_at
+                access_token   = excluded.access_token,
+                refresh_token  = excluded.refresh_token,
+                expires_at     = excluded.expires_at,
+                scopes         = excluded.scopes,
+                updated_at     = excluded.updated_at,
+                refresh_failed = 0
             """,
             (record_id, org_id, connector_id, enc_access, enc_refresh, expires_iso, scopes_json, now_iso, now_iso),
         )
@@ -229,6 +252,11 @@ async def get_token(org_id: str, connector_id: str) -> TokenRecord:
             new_response = await _oauth.refresh_token(config, record.refresh_token)
         except _oauth.OAuthError as exc:
             logger.warning("Token refresh failed for %s/%s: %s", org_id, connector_id, exc.reason)
+            # Mark refresh_failed so token-status can return 'refresh_failed'
+            try:
+                _mark_refresh_failed(org_id, connector_id)
+            except Exception:
+                pass  # Never let flag-writing block the error propagation
             raise ConnectorNotAuthenticatedError(org_id, connector_id) from exc
 
         record = store_token(org_id, connector_id, new_response)
