@@ -18,6 +18,7 @@ from app.auth.oauth import (
     refresh_token,
 )
 from app.auth.vault import get_token, revoke_token, store_token
+from app.auth.configs import CONNECTOR_AUTH_CONFIGS
 
 __all__ = [
     "ConnectorAuthConfig",
@@ -34,4 +35,5 @@ __all__ = [
     "get_token",
     "store_token",
     "revoke_token",
+    "CONNECTOR_AUTH_CONFIGS",
 ]
