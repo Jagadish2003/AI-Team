@@ -28,7 +28,8 @@ except ModuleNotFoundError:  # pragma: no cover - supports repo-root imports.
     )
 
 
-BASELINE_MIN_RUNS = int(os.getenv("BASELINE_MIN_RUNS", "30"))
+BASELINE_MIN_RUNS = int(os.getenv("BASELINE_MIN_RUNS", "3"))
+PRIMARY_METRIC_NAME = "metric_value"
 
 
 class RunSignalSnapshotPayload(TypedDict):
@@ -264,17 +265,25 @@ def get_signal_history(
     signal_key: str,
     limit: int = 100,
 ) -> List[Dict[str, Any]]:
+    signal_filter = (signal_key or "").strip() or PRIMARY_METRIC_NAME
+    if "::" in signal_filter:
+        signal_clause = "signal_key = ?"
+        signal_value = signal_filter
+    else:
+        signal_clause = "metric_name = ?"
+        signal_value = signal_filter
+
     con = connect()
     try:
         cur = con.cursor()
         cur.execute(
             _signal_snapshot_select()
-            + """
-            WHERE org_id = ? AND detector_id = ? AND signal_key = ?
+            + f"""
+            WHERE org_id = ? AND detector_id = ? AND {signal_clause}
             ORDER BY captured_at DESC
             LIMIT ?
             """,
-            (org_id, detector_id, signal_key, limit),
+            (org_id, detector_id, signal_value, limit),
         )
         return _fetch_dicts(cur)
     finally:
@@ -291,6 +300,7 @@ def get_baseline(
         cur.execute(
             """
             SELECT
+                signal_key,
                 baseline_mean,
                 baseline_stddev,
                 baseline_window_days,
@@ -301,13 +311,14 @@ def get_baseline(
                     FROM signal_snapshots AS counted
                     WHERE counted.org_id = signal_snapshots.org_id
                       AND counted.detector_id = signal_snapshots.detector_id
+                      AND counted.signal_key = signal_snapshots.signal_key
                 ) AS run_count
             FROM signal_snapshots
-            WHERE org_id = ? AND detector_id = ?
+            WHERE org_id = ? AND detector_id = ? AND metric_name = ?
             ORDER BY captured_at DESC
             LIMIT 1
             """,
-            (org_id, detector_id),
+            (org_id, detector_id, PRIMARY_METRIC_NAME),
         )
         row = cur.fetchone()
         if not row:
@@ -331,18 +342,16 @@ def get_run_signals(
         cur.execute(
             _signal_snapshot_select()
             + """
-            WHERE run_id = ?
+            WHERE org_id = ? AND run_id = ?
             ORDER BY captured_at DESC
             """,
-            (run_id,),
+            (org_id, run_id),
         )
         results = _fetch_dicts(cur)
     finally:
         con.close()
 
     if not results:
-        raise HTTPException(status_code=404, detail="run not found")
-    if any(row["org_id"] != org_id for row in results):
         raise HTTPException(status_code=404, detail="run not found")
 
     return results

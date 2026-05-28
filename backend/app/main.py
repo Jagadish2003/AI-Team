@@ -34,12 +34,8 @@ from .routes_sprint4_t6 import register_sprint4_t6_routes
 from .routes_sprint41_blueprint import register_blueprint_routes
 from .run_store import read_run, read_run_events, start_run_
 from .routes_workspace_catalog import register_workspace_catalog_routes
+from .routes_temporal import register_temporal_routes
 from .security import require_auth
-from .temporal import (
-    get_baseline as get_temporal_baseline,
-    get_run_signals as get_temporal_run_signals,
-    get_signal_history as get_temporal_signal_history,
-)
 
 app = FastAPI(title="AgentIQ Layer 1 API Skeleton", version="0.1.0")
 
@@ -55,6 +51,7 @@ register_sprint4_t2_routes(app)
 register_sprint4_t1_routes(app)
 register_blueprint_routes(app)
 register_normalization_routes(app)
+register_temporal_routes(app)
 
 origins = [
     o.strip()
@@ -114,39 +111,6 @@ def health() -> Dict[str, Any]:
 @app.get("/api/health")
 def api_health() -> Dict[str, Any]:
     return {"ok": True, "ts": now_iso()}
-
-
-@app.get("/api/temporal/{detector_id}/history", dependencies=[Depends(require_auth)])
-def temporal_signal_history(
-    detector_id: str,
-    org_id: str = "org_default",
-    signal_key: str = "",
-    limit: int = 100,
-) -> List[Dict[str, Any]]:
-    key = signal_key or f"pack::{detector_id}::metric_value"
-    rows = get_temporal_signal_history(org_id, detector_id, key, limit)
-    if not rows:
-        raise HTTPException(status_code=404, detail="signal history not found")
-    return rows
-
-
-@app.get("/api/temporal/{detector_id}/baseline", dependencies=[Depends(require_auth)])
-def temporal_baseline(
-    detector_id: str,
-    org_id: str = "org_default",
-) -> Dict[str, Any]:
-    baseline = get_temporal_baseline(org_id, detector_id)
-    if baseline is None:
-        raise HTTPException(status_code=404, detail="baseline not found")
-    return baseline
-
-
-@app.get("/api/runs/{run_id}/signals", dependencies=[Depends(require_auth)])
-def run_signals(
-    run_id: str,
-    org_id: str = "org_default",
-) -> List[Dict[str, Any]]:
-    return get_temporal_run_signals(org_id, run_id)
 
 
 @app.get("/api/connectors", dependencies=[Depends(require_auth)])
