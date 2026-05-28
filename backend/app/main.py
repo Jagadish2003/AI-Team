@@ -41,6 +41,12 @@ from .routes_connector_auth import register_connector_auth_routes
 from .security import require_auth
 from .auth.configs import CONNECTOR_AUTH_CONFIGS
 from .auth.secrets import validate_all_secrets
+from .middleware.tenancy import register_tenancy
+from .rbac import require_role, seed_owner
+
+_DEV_USER = os.getenv("DEV_JWT", "dev-token-change-me")
+_DEV_ORG = "default"
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -48,10 +54,13 @@ async def lifespan(app: FastAPI):
     # Dev and test environments run without connector secrets set.
     if os.getenv("REQUIRE_CONNECTOR_SECRETS") == "1":
         validate_all_secrets(CONNECTOR_AUTH_CONFIGS)
+    # Seed the dev user as owner of the default org so existing routes pass RBAC.
+    seed_owner(_DEV_ORG, _DEV_USER)
     yield
 
 
 app = FastAPI(title="AgentIQ Layer 1 API Skeleton", version="0.1.0", lifespan=lifespan)
+register_tenancy(app)
 
 # Register routes in order
 register_stack_builder_routes(app)
@@ -128,13 +137,14 @@ def api_health() -> Dict[str, Any]:
     return {"ok": True, "ts": now_iso()}
 
 
-@app.get("/api/connectors", dependencies=[Depends(require_auth)])
+@app.get("/api/connectors", dependencies=[Depends(require_auth), Depends(require_role("viewer"))])
 def list_connectors() -> List[Dict[str, Any]]:
     return get_all("connectors")
 
 
 @app.post(
-    "/api/connectors/{connector_id}/connect", dependencies=[Depends(require_auth)]
+    "/api/connectors/{connector_id}/connect",
+    dependencies=[Depends(require_auth), Depends(require_role("analyst"))],
 )
 def connect_connector(connector_id: str, body: Dict[str, Any]) -> Dict[str, Any]:
     c = get_one("connectors", connector_id)
@@ -148,7 +158,8 @@ def connect_connector(connector_id: str, body: Dict[str, Any]) -> Dict[str, Any]
 
 
 @app.post(
-    "/api/connectors/{connector_id}/configure", dependencies=[Depends(require_auth)]
+    "/api/connectors/{connector_id}/configure",
+    dependencies=[Depends(require_auth), Depends(require_role("analyst"))],
 )
 def configure_connector(connector_id: str) -> Dict[str, Any]:
     c = get_one("connectors", connector_id)
@@ -308,7 +319,7 @@ def list_mappings(run_id: str) -> List[Dict[str, Any]]:
     return enrich_ambiguous_mappings(run_id, raw_mappings, db)
 
 
-@app.get("/api/runs/{run_id}/opportunities", dependencies=[Depends(require_auth)])
+@app.get("/api/runs/{run_id}/opportunities", dependencies=[Depends(require_auth), Depends(require_role("viewer"))])
 def list_opportunities(run_id: str) -> List[Dict[str, Any]]:
     try:
         read_run(run_id)
@@ -431,7 +442,7 @@ def set_opp_override(run_id: str, opp_id: str, body: Dict[str, Any]) -> Dict[str
     return with_display_title(o)
 
 
-@app.get("/api/runs/{run_id}/audit", dependencies=[Depends(require_auth)])
+@app.get("/api/runs/{run_id}/audit", dependencies=[Depends(require_auth), Depends(require_role("owner"))])
 def list_audit(run_id: str) -> List[Dict[str, Any]]:
     run_get(run_id)
     audit = run_kv_get("audit", run_id, default_audit())
@@ -508,3 +519,110 @@ def get_exec_report(run_id: str) -> Dict[str, Any]:
             "blockerCount": 0,
         },
     }
+
+
+# ---------------------------------------------------------------------------
+# Audit log viewer — AT-82 T8
+# ---------------------------------------------------------------------------
+
+@app.get(
+    "/api/audit-log",
+    dependencies=[Depends(require_auth), Depends(require_role("owner"))],
+)
+def list_audit_log(
+    limit: int = 100,
+    offset: int = 0,
+) -> List[Dict[str, Any]]:
+    """Return org-scoped audit log entries newest-first (owner only)."""
+    from .middleware.tenancy import get_current_org_id
+    from .middleware.audit import _ensure_table
+
+    _ensure_table()
+    org_id = get_current_org_id()
+    con = db.connect()
+    try:
+        cur = con.execute(
+            """
+            SELECT id, org_id, event_type, user_id, run_id, connector_id, payload, timestamp
+            FROM audit_log
+            WHERE org_id = ?
+            ORDER BY timestamp DESC
+            LIMIT ? OFFSET ?
+            """,
+            (org_id, limit, offset),
+        )
+        rows = cur.fetchall()
+    finally:
+        con.close()
+
+    import json as _json
+    return [
+        {
+            "id": r[0], "org_id": r[1], "event_type": r[2], "user_id": r[3],
+            "run_id": r[4], "connector_id": r[5],
+            "payload": _json.loads(r[6]) if r[6] else None,
+            "timestamp": r[7],
+        }
+        for r in rows
+    ]
+
+
+# ---------------------------------------------------------------------------
+# Workspace members — AT-82 T8
+# ---------------------------------------------------------------------------
+
+@app.get(
+    "/api/workspace/members",
+    dependencies=[Depends(require_auth), Depends(require_role("owner"))],
+)
+def list_members() -> List[Dict[str, Any]]:
+    """List workspace members (owner only)."""
+    from .middleware.tenancy import get_current_org_id
+    from .rbac import _ensure_members_table
+
+    _ensure_members_table()
+    org_id = get_current_org_id()
+    con = db.connect()
+    try:
+        cur = con.execute(
+            "SELECT org_id, user_id, role, created_at FROM workspace_members WHERE org_id = ?",
+            (org_id,),
+        )
+        rows = cur.fetchall()
+    finally:
+        con.close()
+    return [{"org_id": r[0], "user_id": r[1], "role": r[2], "created_at": r[3]} for r in rows]
+
+
+@app.post(
+    "/api/workspace/members",
+    dependencies=[Depends(require_auth), Depends(require_role("owner"))],
+)
+def add_member(body: Dict[str, Any]) -> Dict[str, Any]:
+    """Add or update a workspace member (owner only)."""
+    from .middleware.tenancy import get_current_org_id
+    from .rbac import _ensure_members_table
+
+    _ensure_members_table()
+    org_id = get_current_org_id()
+    user_id = body.get("user_id", "").strip()
+    role = body.get("role", "").strip()
+    if not user_id:
+        raise HTTPException(400, "user_id required")
+    if role not in ("owner", "analyst", "viewer"):
+        raise HTTPException(400, "role must be owner, analyst, or viewer")
+
+    con = db.connect()
+    try:
+        con.execute(
+            """
+            INSERT INTO workspace_members (org_id, user_id, role, created_at)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(org_id, user_id) DO UPDATE SET role = excluded.role
+            """,
+            (org_id, user_id, role, db.now_iso()),
+        )
+        con.commit()
+    finally:
+        con.close()
+    return {"org_id": org_id, "user_id": user_id, "role": role}

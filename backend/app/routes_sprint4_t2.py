@@ -2,7 +2,9 @@ from fastapi import BackgroundTasks, Depends
 
 from . import db
 from .materialize_t2 import get_status, run_trackb_and_persist, set_status
+from .middleware.audit import log_event
 from .models_t2 import StartRunRequest, StartRunResponse, StatusResponse
+from .rbac import require_role
 from .replay import seed_events
 from .security import require_auth
 
@@ -14,7 +16,7 @@ def register_sprint4_t2_routes(app):
     @app.post(
         "/api/runs/start",
         response_model=StartRunResponse,
-        dependencies=[Depends(require_auth)],
+        dependencies=[Depends(require_auth), Depends(require_role("analyst"))],
     )
     async def start_run(body: StartRunRequest, background_tasks: BackgroundTasks):
         """
@@ -58,6 +60,13 @@ def register_sprint4_t2_routes(app):
             body.mode,
             body.systems,
             run["inputs"],
+        )
+
+        log_event(
+            "run_started",
+            run_id=run_id,
+            pack_id=body.mode,
+            system_ids=body.systems,
         )
 
         return StartRunResponse(

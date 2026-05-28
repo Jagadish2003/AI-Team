@@ -25,6 +25,7 @@ from app import db
 from app.auth import build_auth_url, exchange_code, revoke_token, store_token
 from app.auth.configs import CONNECTOR_AUTH_CONFIGS
 from app.auth.vault import REFRESH_THRESHOLD_SECONDS
+from app.middleware.audit import log_event
 from app.security import require_auth
 from database.models.credentials import (
     ALTER_CREDENTIALS_ADD_REFRESH_FAILED,
@@ -188,6 +189,11 @@ def register_connector_auth_routes(app: FastAPI) -> None:
                 status_code=302,
             )
 
+        log_event(
+            "connector_connected",
+            connector_id=connector_id,
+            scopes_granted=config.scopes,
+        )
         # AC2/AC4: redirect target is a hardcoded constant; connector_id comes
         # from the server-side nonce store, not from state or query params.
         return RedirectResponse(
@@ -227,6 +233,7 @@ def register_connector_auth_routes(app: FastAPI) -> None:
     async def delete_token(connector_id: str) -> Response:
         """Revoke and delete the stored token for the given connector (AC11/AC12/AC13)."""
         await revoke_token(_DEFAULT_ORG_ID, connector_id)
+        log_event("connector_disconnected", connector_id=connector_id)
         return Response(status_code=204)
 
     @app.get(
