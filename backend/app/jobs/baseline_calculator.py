@@ -19,7 +19,7 @@ def calculate_baselines():
 
     # Get all org_id + signal_key combinations
     cur.execute("""
-        SELECT org_id, signal_key, value, captured_at
+        SELECT org_id, signal_key, metric_value, captured_at
         FROM signal_snapshots
         WHERE captured_at >= datetime('now', ? || ' days')
     """, (f"-{BASELINE_WINDOW_DAYS}",))

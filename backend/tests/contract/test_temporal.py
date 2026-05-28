@@ -1,6 +1,7 @@
 import os
 import sqlite3
 import statistics
+from uuid import uuid4
 
 import pytest
 from fastapi.testclient import TestClient
@@ -29,15 +30,21 @@ def insert_snapshot(con, org_id, detector_id, signal_key, run_id, value,
                     captured_at, baseline_mean=None, baseline_stddev=None,
                     baseline_window_days=None, calculated_at=None,
                     run_count=0, fired=True):
+    parts = signal_key.split("::")
+    pack_id = parts[0] if parts else "pack"
+    metric_name = parts[2] if len(parts) >= 3 else "metric_value"
     con.execute("""
         INSERT INTO signal_snapshots (
-            org_id, detector_id, signal_key, run_id, value,
-            baseline_mean, baseline_stddev, baseline_window_days,
-            calculated_at, run_count, captured_at, fired
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    """, (org_id, detector_id, signal_key, run_id, value,
-          baseline_mean, baseline_stddev, baseline_window_days,
-          calculated_at, run_count, captured_at, fired))
+            id, org_id, run_id, pack_id, detector_id, signal_key,
+            metric_name, metric_value, threshold, fired, signal_source,
+            captured_at, baseline_mean, baseline_stddev,
+            baseline_window_days, baseline_calculated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """, (
+        str(uuid4()), org_id, run_id, pack_id, detector_id, signal_key,
+        metric_name, value, None, fired, "test", captured_at,
+        baseline_mean, baseline_stddev, baseline_window_days, calculated_at,
+    ))
     con.commit()
 
 
@@ -52,11 +59,10 @@ def test_ac1_signal_snapshots_table_exists():
     con.close()
 
     required_cols = [
-        "id", "org_id", "detector_id", "signal_key", "run_id",
-        "value", "baseline_mean", "baseline_stddev",
-        "baseline_window_days", "calculated_at", "run_count",
-        "captured_at", "fired", "metric_name", "baseline_calculated_at",
-        "below_threshold"
+        "id", "org_id", "run_id", "pack_id", "detector_id",
+        "signal_key", "metric_name", "metric_value", "threshold",
+        "fired", "signal_source", "captured_at", "baseline_mean",
+        "baseline_stddev", "baseline_window_days", "baseline_calculated_at",
     ]
     for col in required_cols:
         assert col in cols, f"Missing column: {col}"
@@ -443,4 +449,4 @@ def test_ac21_snapshot_signals_importable():
         from app.temporal import snapshot_signals
         assert callable(snapshot_signals)
     except ImportError:
-        pytest.skip("snapshot_signals not yet implemented") 
+        pytest.skip("snapshot_signals not yet implemented")
