@@ -145,25 +145,33 @@ def _schema_discovery_result_to_response(
 def _discover_schema_for_connector(conn: Any, connector_id: str) -> SchemaDiscoveryResult:
     """Dispatch schema discovery to the correct driver implementation.
 
-    Only SQL Server is implemented in Sprint 10.  Other drivers return a
-    stub result rather than raising, so the route stays operational while
-    Oracle and PostgreSQL drivers are delivered in later tasks.
+    SQL Server, Oracle DB, and PostgreSQL are implemented.
+    Raises DBConnectionError if schema discovery fails.
     """
     if connector_id == "sqlserver":
-        # Import here to avoid circular imports and to keep the driver optional
         try:
             from backend.connectors.db.sqlserver import discover_schema_sqlserver  # noqa: PLC0415
-        except ModuleNotFoundError:  # Runtime inside backend/ where connectors is top-level.
+        except ModuleNotFoundError:
             from connectors.db.sqlserver import discover_schema_sqlserver  # type: ignore[no-redef] # noqa: PLC0415
-
         return discover_schema_sqlserver(conn)
 
-    # Stub for oracle_db / postgresql — Sprint 10 drivers not yet delivered
-    return SchemaDiscoveryResult(
-        schemas=[],
-        tables=[],
-        columns=[],
-        estimated_row_counts=None,
+    elif connector_id == "oracle_db":
+        try:
+            from backend.connectors.db.oracle import discover_schema_oracle  # noqa: PLC0415
+        except ModuleNotFoundError:
+            from connectors.db.oracle import discover_schema_oracle  # type: ignore[no-redef] # noqa: PLC0415
+        return discover_schema_oracle(conn)
+
+    elif connector_id == "postgresql":
+        try:
+            from backend.connectors.db.postgresql import discover_schema_postgresql  # noqa: PLC0415
+        except ModuleNotFoundError:
+            from connectors.db.postgresql import discover_schema_postgresql  # type: ignore[no-redef] # noqa: PLC0415
+        return discover_schema_postgresql(conn)
+
+    raise DBConnectionError(
+        f"Unknown connector type: {connector_id!r}",
+        error_code="unknown_connector",
     )
 
 
