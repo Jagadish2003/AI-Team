@@ -5,7 +5,7 @@ Database connector framework — AgentIQ T2-S10-A.
 Public surface area (locked after T2-S10-A merges):
     DBConnectorConfig, ScopeDeclaration, DBQueryResult, SchemaDiscoveryResult
     DBScopeViolationError, DBQueryRejectedError, DBConnectionError
-    validate_read_only, validate_scope
+    validate_read_only, validate_scope, execute_query
 """
 
 from .models import (
@@ -20,6 +20,7 @@ from .models import (
     DBConnectionError,
 )
 from .query_guard import validate_read_only, validate_scope
+from .execute_query import execute_query
 
 __all__ = [
     # Data models
@@ -36,4 +37,6 @@ __all__ = [
     # Query guard
     "validate_read_only",
     "validate_scope",
+    # Central data access path
+    "execute_query",
 ]
