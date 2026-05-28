@@ -25,6 +25,7 @@ from .opportunity_display import (
 from .replay import replay_run as replay_run_
 from .roadmap_engine import build_roadmap
 from .routes_normalization import register_normalization_routes
+from .routes_connector_auth import register_connector_auth_routes
 from .routes_stack_builder import register_stack_builder_routes
 from .routes_stack_builder_launch import register_stack_builder_launch_routes
 from .routes_salesforce_products import register_salesforce_products_routes
