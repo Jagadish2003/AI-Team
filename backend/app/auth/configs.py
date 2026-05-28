@@ -22,7 +22,7 @@ CONNECTOR_AUTH_CONFIGS: Dict[str, ConnectorAuthConfig] = {
         client_id="REPLACE_WITH_SERVICENOW_CLIENT_ID",
         secret_key="SERVICENOW_CLIENT_SECRET",
         token_url="https://{instance}.service-now.com/oauth_token.do",
-        revocation_url=None,
+        revocation_url="https://{instance}.service-now.com/oauth_revoke.do",
         scopes=["useraccount"],
         # {instance} substituted per-org at call time (A4 — resolved in vault layer)
         authorization_url="https://{instance}.service-now.com/oauth_auth.do",

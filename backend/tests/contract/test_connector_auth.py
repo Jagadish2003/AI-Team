@@ -1313,3 +1313,538 @@ def test_vault_symbols_importable_from_package():
         revoke_token,
         store_token,
     )
+
+
+# ===========================================================================
+# AT-77: OAuth callback and state security (routes_connector_auth.py)
+# ===========================================================================
+#
+# Coverage:
+#   AC1  — auth-url endpoint: valid URL, non-empty state, state contains no redirect_to
+#   AC2  — callback stores token and uses hardcoded OAUTH_SUCCESS_REDIRECT constant
+#   AC3  — state mismatch → 400; generic message; hmac.compare_digest used; redirect_to in state ignored
+#   AC4  — redirect_to as query param does not change redirect target
+#   AC13 — DELETE route returns 204 even when revocation endpoint is unreachable
+#   AC14 — token-status returns needs_refresh when within REFRESH_THRESHOLD_SECONDS
+#   AC15 — nonce is single-use: replay returns 400
+#   AC16 — CONNECTOR_AUTH_CONFIGS has 8 entries with correct flow types and revocation_url values
+#   AC17 — unauthenticated requests to auth-url, DELETE /token, token-status return 401
+#   AC18 — full import surface round-trip (already covered above)
+# ===========================================================================
+
+import hmac as _hmac_mod
+import secrets as _secrets_mod
+from unittest.mock import AsyncMock as _AsyncMock
+from unittest.mock import patch as _patch
+from urllib.parse import parse_qs as _parse_qs
+from urllib.parse import urlparse as _urlparse
+
+_AUTH_HEADERS = {"Authorization": "Bearer dev-token-change-me"}
+
+
+# ---------------------------------------------------------------------------
+# AC16: CONNECTOR_AUTH_CONFIGS has 8 entries, correct flows, correct revocation_url values
+# ---------------------------------------------------------------------------
+
+
+def test_connector_auth_configs_has_8_entries():
+    """CONNECTOR_AUTH_CONFIGS must have exactly 8 connectors (AC16)."""
+    from backend.app.auth.configs import CONNECTOR_AUTH_CONFIGS
+
+    assert len(CONNECTOR_AUTH_CONFIGS) == 8, (
+        f"Expected 8 connectors, got {len(CONNECTOR_AUTH_CONFIGS)}: "
+        f"{list(CONNECTOR_AUTH_CONFIGS)}"
+    )
+
+
+def test_connector_auth_configs_flow_types():
+    """authorization_code connectors: salesforce, servicenow, jira, confluence, github, slack.
+    client_credentials connectors: sap, d365. (AC16)
+    """
+    from backend.app.auth.configs import CONNECTOR_AUTH_CONFIGS
+
+    auth_code = {"salesforce", "servicenow", "jira", "confluence", "github", "slack"}
+    client_creds = {"sap", "d365"}
+
+    for cid in auth_code:
+        assert CONNECTOR_AUTH_CONFIGS[cid].flow == "authorization_code", (
+            f"{cid} should be authorization_code"
+        )
+    for cid in client_creds:
+        assert CONNECTOR_AUTH_CONFIGS[cid].flow == "client_credentials", (
+            f"{cid} should be client_credentials"
+        )
+
+
+def test_connector_auth_configs_revocation_url_values():
+    """Connectors with revocation_url set: salesforce, servicenow, jira, confluence.
+    Connectors with revocation_url=None: github, slack, sap, d365. (AC16)
+    """
+    from backend.app.auth.configs import CONNECTOR_AUTH_CONFIGS
+
+    has_revocation = {"salesforce", "servicenow", "jira", "confluence"}
+    no_revocation = {"github", "slack", "sap", "d365"}
+
+    for cid in has_revocation:
+        assert CONNECTOR_AUTH_CONFIGS[cid].revocation_url is not None, (
+            f"{cid} should have a revocation_url"
+        )
+    for cid in no_revocation:
+        assert CONNECTOR_AUTH_CONFIGS[cid].revocation_url is None, (
+            f"{cid} should have revocation_url=None"
+        )
+
+
+# ---------------------------------------------------------------------------
+# AC17: unauthenticated requests return 401
+# ---------------------------------------------------------------------------
+
+
+def test_auth_url_unauthenticated_returns_401(client):
+    """GET /api/connectors/salesforce/auth-url without Bearer token → 401 (AC17)."""
+    resp = client.get("/api/connectors/salesforce/auth-url")
+    assert resp.status_code == 401
+
+
+def test_delete_token_unauthenticated_returns_401(client):
+    """DELETE /api/connectors/salesforce/token without Bearer token → 401 (AC17)."""
+    resp = client.delete("/api/connectors/salesforce/token")
+    assert resp.status_code == 401
+
+
+def test_token_status_unauthenticated_returns_401(client):
+    """GET /api/connectors/salesforce/token-status without Bearer token → 401 (AC17)."""
+    resp = client.get("/api/connectors/salesforce/token-status")
+    assert resp.status_code == 401
+
+
+# ---------------------------------------------------------------------------
+# AC1: auth-url returns valid URL with correct params; state is non-empty and opaque
+# ---------------------------------------------------------------------------
+
+
+def test_auth_url_returns_salesforce_url_with_required_params(client):
+    """auth-url returns URL containing client_id, redirect_uri, non-empty state,
+    response_type=code, and at least one scope (AC1).
+    """
+    from backend.app.auth.configs import CONNECTOR_AUTH_CONFIGS
+
+    resp = client.get("/api/connectors/salesforce/auth-url", headers=_AUTH_HEADERS)
+    assert resp.status_code == 200
+
+    body = resp.json()
+    assert "auth_url" in body
+    assert body["connector_id"] == "salesforce"
+
+    parsed = _urlparse(body["auth_url"])
+    qs = _parse_qs(parsed.query)
+
+    config = CONNECTOR_AUTH_CONFIGS["salesforce"]
+    assert qs.get("client_id") == [config.client_id]
+    assert qs.get("response_type") == ["code"]
+    state_vals = qs.get("state", [])
+    assert state_vals and state_vals[0], "state must be non-empty"
+    scope_vals = qs.get("scope", [])
+    assert scope_vals, "scope must be present"
+
+
+def test_auth_url_state_contains_no_redirect_to_or_user_data(client):
+    """State nonce from auth-url contains no redirect_to field and no user data (AC1)."""
+    resp = client.get("/api/connectors/salesforce/auth-url", headers=_AUTH_HEADERS)
+    assert resp.status_code == 200
+
+    parsed = _urlparse(resp.json()["auth_url"])
+    qs = _parse_qs(parsed.query)
+    state = qs["state"][0]
+
+    assert "redirect_to" not in state
+    assert "redirect" not in state.lower()
+    assert "@" not in state  # no email
+    assert "user" not in state.lower()
+
+
+def test_auth_url_each_call_generates_unique_state(client):
+    """Two consecutive auth-url calls produce different state nonces (AC1)."""
+    r1 = client.get("/api/connectors/salesforce/auth-url", headers=_AUTH_HEADERS)
+    r2 = client.get("/api/connectors/salesforce/auth-url", headers=_AUTH_HEADERS)
+
+    s1 = _parse_qs(_urlparse(r1.json()["auth_url"]).query)["state"][0]
+    s2 = _parse_qs(_urlparse(r2.json()["auth_url"]).query)["state"][0]
+    assert s1 != s2, "Each auth-url request must produce a unique state"
+
+
+def test_auth_url_client_credentials_connector_returns_400(client):
+    """auth-url for a client_credentials connector (sap) returns 400 (not applicable)."""
+    resp = client.get("/api/connectors/sap/auth-url", headers=_AUTH_HEADERS)
+    assert resp.status_code == 400
+
+
+def test_auth_url_unknown_connector_returns_404(client):
+    """auth-url for unknown connector returns 404."""
+    resp = client.get("/api/connectors/nonexistent/auth-url", headers=_AUTH_HEADERS)
+    assert resp.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# AC2: callback stores token and redirects to hardcoded OAUTH_SUCCESS_REDIRECT
+# ---------------------------------------------------------------------------
+
+
+def test_callback_valid_state_redirects_to_success_url(client):
+    """Callback with valid code + matching state redirects to OAUTH_SUCCESS_REDIRECT (AC2)."""
+    # Step 1: generate a real nonce via auth-url
+    with _patch.dict(_os.environ, _vault_env()):
+        r = client.get("/api/connectors/salesforce/auth-url", headers=_AUTH_HEADERS)
+    assert r.status_code == 200
+    state = _parse_qs(_urlparse(r.json()["auth_url"]).query)["state"][0]
+
+    # Step 2: mock exchange_code to return a fake token; mock store_token to avoid vault key issues
+    fake_token = {
+        "access_token": "fake-access-tok",
+        "refresh_token": "fake-refresh-tok",
+        "expires_in": 3600,
+    }
+    with _patch.dict(_os.environ, _vault_env()), \
+         _patch("app.routes_connector_auth.exchange_code", new_callable=_AsyncMock, return_value=fake_token), \
+         _patch("app.routes_connector_auth.store_token", return_value=None):
+        resp = client.get(
+            f"/api/connectors/oauth/callback?code=auth-code&state={state}",
+            headers=_AUTH_HEADERS,
+            follow_redirects=False,
+        )
+
+    assert resp.status_code == 302
+    location = resp.headers["location"]
+    assert "connected=salesforce" in location
+
+
+def test_callback_success_redirect_is_hardcoded_constant(client):
+    """OAUTH_SUCCESS_REDIRECT is a hardcoded constant; no state content appears in the location (AC2/AC4)."""
+    from app.routes_connector_auth import OAUTH_SUCCESS_REDIRECT
+
+    # The constant must contain {connector_id} placeholder only — no user data slots
+    assert "{connector_id}" in OAUTH_SUCCESS_REDIRECT
+    assert "{state}" not in OAUTH_SUCCESS_REDIRECT
+    assert "{code}" not in OAUTH_SUCCESS_REDIRECT
+    assert "{redirect" not in OAUTH_SUCCESS_REDIRECT
+
+
+def test_callback_redirect_does_not_contain_state_value(client):
+    """The redirect location after a successful callback contains no state value (AC2/AC4)."""
+    with _patch.dict(_os.environ, _vault_env()):
+        r = client.get("/api/connectors/github/auth-url", headers=_AUTH_HEADERS)
+    state = _parse_qs(_urlparse(r.json()["auth_url"]).query)["state"][0]
+
+    fake_token = {"access_token": "tok", "expires_in": 3600}
+    with _patch.dict(_os.environ, _vault_env()), \
+         _patch("app.routes_connector_auth.exchange_code", new_callable=_AsyncMock, return_value=fake_token), \
+         _patch("app.routes_connector_auth.store_token", return_value=None):
+        resp = client.get(
+            f"/api/connectors/oauth/callback?code=c&state={state}",
+            headers=_AUTH_HEADERS,
+            follow_redirects=False,
+        )
+
+    location = resp.headers.get("location", "")
+    assert state not in location, "State value must not appear in redirect location"
+
+
+# ---------------------------------------------------------------------------
+# AC3: state mismatch → 400; generic message; hmac.compare_digest used; redirect_to ignored
+# ---------------------------------------------------------------------------
+
+
+def test_callback_mismatched_state_returns_400(client):
+    """Callback with wrong state returns HTTP 400 (AC3)."""
+    resp = client.get(
+        "/api/connectors/oauth/callback?code=mycode&state=totally-wrong-state",
+        headers=_AUTH_HEADERS,
+        follow_redirects=False,
+    )
+    assert resp.status_code == 400
+
+
+def test_callback_400_message_reveals_no_detail(client):
+    """400 body on state mismatch must not mention 'state', 'nonce', or 'hmac' (AC3)."""
+    resp = client.get(
+        "/api/connectors/oauth/callback?code=mycode&state=bogus",
+        headers=_AUTH_HEADERS,
+        follow_redirects=False,
+    )
+    assert resp.status_code == 400
+    body_text = resp.text.lower()
+    assert "state" not in body_text
+    assert "nonce" not in body_text
+    assert "hmac" not in body_text
+    assert "digest" not in body_text
+
+
+def test_hmac_compare_digest_used_for_state_comparison():
+    """_consume_nonce uses hmac.compare_digest (not ==) for state validation (AC3)."""
+    from app.routes_connector_auth import _store_nonce, _consume_nonce
+
+    nonce = "test-hmac-check-nonce-" + _secrets_mod.token_hex(4)
+    _store_nonce(nonce, "salesforce")
+
+    with _patch("app.routes_connector_auth.hmac.compare_digest", wraps=_hmac_mod.compare_digest) as mock_cd:
+        result = _consume_nonce(nonce)
+
+    assert mock_cd.called, "hmac.compare_digest must be called during nonce validation"
+    assert result == "salesforce"
+
+
+def test_callback_redirect_to_in_state_does_not_change_target(client):
+    """redirect_to embedded in state param does not affect the redirect target (AC3/AC4)."""
+    crafted_state = "redirect_to=https://evil.example.com"
+
+    resp = client.get(
+        f"/api/connectors/oauth/callback?code=c&state={crafted_state}",
+        headers=_AUTH_HEADERS,
+        follow_redirects=False,
+    )
+    # State mismatch (crafted state not in store) → 400; no open redirect
+    assert resp.status_code == 400
+    assert "evil.example.com" not in resp.headers.get("location", "")
+
+
+# ---------------------------------------------------------------------------
+# AC4: redirect_to as query param does not change redirect target
+# ---------------------------------------------------------------------------
+
+
+def test_callback_redirect_to_query_param_does_not_change_target(client):
+    """redirect_to as a query param on the callback is ignored (AC4)."""
+    with _patch.dict(_os.environ, _vault_env()):
+        r = client.get("/api/connectors/salesforce/auth-url", headers=_AUTH_HEADERS)
+    state = _parse_qs(_urlparse(r.json()["auth_url"]).query)["state"][0]
+
+    fake_token = {"access_token": "t", "expires_in": 3600}
+    with _patch.dict(_os.environ, _vault_env()), \
+         _patch("app.routes_connector_auth.exchange_code", new_callable=_AsyncMock, return_value=fake_token), \
+         _patch("app.routes_connector_auth.store_token", return_value=None):
+        resp = client.get(
+            f"/api/connectors/oauth/callback?code=c&state={state}"
+            "&redirect_to=https://evil.example.com",
+            headers=_AUTH_HEADERS,
+            follow_redirects=False,
+        )
+
+    location = resp.headers.get("location", "")
+    assert "evil.example.com" not in location
+    assert "connected=salesforce" in location
+
+
+# ---------------------------------------------------------------------------
+# AC13: DELETE route returns 204 even when revocation endpoint is unreachable
+# ---------------------------------------------------------------------------
+
+
+def test_delete_token_returns_204(client):
+    """DELETE /api/connectors/{connector_id}/token returns 204 (AC13)."""
+    with _patch("app.routes_connector_auth.revoke_token", new_callable=_AsyncMock, return_value=None):
+        resp = client.delete(
+            "/api/connectors/salesforce/token",
+            headers=_AUTH_HEADERS,
+        )
+    assert resp.status_code == 204
+
+
+def test_delete_token_unreachable_revocation_still_returns_204(client):
+    """DELETE returns 204 even when vault.revoke_token encounters an unreachable endpoint (AC13).
+
+    vault.revoke_token itself handles the failure gracefully (tested in AT-76 vault tests);
+    this test verifies the route layer propagates the 204 correctly.
+    """
+    from app.auth.vault import store_token as _store_token_vault
+    with _patch.dict(_os.environ, _vault_env()):
+        # Store a token so revoke_token has something to work with
+        from app.routes_connector_auth import _DEFAULT_ORG_ID
+        _store_token_vault(_DEFAULT_ORG_ID, "confluence", _token_response())
+
+        with _patch("app.routes_connector_auth.revoke_token", new_callable=_AsyncMock, return_value=None) as mock_revoke:
+            resp = client.delete(
+                "/api/connectors/confluence/token",
+                headers=_AUTH_HEADERS,
+            )
+
+    assert resp.status_code == 204
+    mock_revoke.assert_awaited_once()
+    _clear_credentials()
+
+
+# ---------------------------------------------------------------------------
+# AC14: token-status returns needs_refresh when within REFRESH_THRESHOLD_SECONDS
+# ---------------------------------------------------------------------------
+
+
+def test_token_status_returns_needs_auth_when_no_token(client):
+    """token-status returns needs_auth when no token is stored (AC14)."""
+    resp = client.get(
+        "/api/connectors/salesforce/token-status",
+        headers=_AUTH_HEADERS,
+    )
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "needs_auth"
+
+
+def test_token_status_returns_connected_for_fresh_token(client):
+    """token-status returns connected when token expiry is well beyond threshold (AC14)."""
+    from app.auth.vault import store_token as _store_token_vault
+    from app.routes_connector_auth import _DEFAULT_ORG_ID
+
+    with _patch.dict(_os.environ, _vault_env()):
+        _store_token_vault(_DEFAULT_ORG_ID, "salesforce", _token_response(expires_in=7200))
+        resp = client.get(
+            "/api/connectors/salesforce/token-status",
+            headers=_AUTH_HEADERS,
+        )
+
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "connected"
+    _clear_credentials()
+
+
+def test_token_status_returns_needs_refresh_when_within_threshold(client):
+    """token-status returns needs_refresh when token expires within REFRESH_THRESHOLD_SECONDS (AC14)."""
+    from app.auth.vault import store_token as _store_token_vault
+    from app.routes_connector_auth import _DEFAULT_ORG_ID
+
+    with _patch.dict(_os.environ, _vault_env()):
+        # Token expires in 60 seconds (well within default 300s threshold)
+        _store_token_vault(_DEFAULT_ORG_ID, "jira", _token_response(expires_in=60))
+        resp = client.get(
+            "/api/connectors/jira/token-status",
+            headers=_AUTH_HEADERS,
+        )
+
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "needs_refresh"
+    _clear_credentials()
+
+
+def test_token_status_returns_refresh_failed_when_flagged(client):
+    """token-status returns refresh_failed when refresh_failed flag is set and token is near expiry (AC14)."""
+    import sqlite3 as _sq
+    from app.auth.vault import store_token as _store_token_vault
+    from app.routes_connector_auth import _DEFAULT_ORG_ID
+
+    with _patch.dict(_os.environ, _vault_env()):
+        # Store a near-expiry token
+        _store_token_vault(_DEFAULT_ORG_ID, "confluence", _token_response(expires_in=60))
+        # Directly set refresh_failed=1 (simulating vault marking the flag after a failed refresh)
+        db_path = _os.environ.get("DB_PATH", "database/dev.db")
+        con = _sq.connect(db_path)
+        con.execute(
+            "UPDATE credentials SET refresh_failed=1 WHERE org_id=? AND connector_id=?",
+            (_DEFAULT_ORG_ID, "confluence"),
+        )
+        con.commit()
+        con.close()
+
+        resp = client.get(
+            "/api/connectors/confluence/token-status",
+            headers=_AUTH_HEADERS,
+        )
+
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "refresh_failed"
+    _clear_credentials()
+
+
+def test_token_status_returns_needs_auth_for_expired_token(client):
+    """token-status returns needs_auth when token has already expired (AC14)."""
+    from datetime import timedelta
+    from app.auth.vault import store_token as _store_token_vault
+    from app.routes_connector_auth import _DEFAULT_ORG_ID
+
+    with _patch.dict(_os.environ, _vault_env()):
+        # Store a token with a negative expires_in (effectively already expired)
+        resp_dict = {
+            "access_token": "expired-tok",
+            "expires_at": (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat(),
+        }
+        _store_token_vault(_DEFAULT_ORG_ID, "github", resp_dict)
+        resp = client.get(
+            "/api/connectors/github/token-status",
+            headers=_AUTH_HEADERS,
+        )
+
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "needs_auth"
+    _clear_credentials()
+
+
+# ---------------------------------------------------------------------------
+# AC15: state nonce is single-use; replay of used nonce returns 400
+# ---------------------------------------------------------------------------
+
+
+def test_nonce_single_use_replay_returns_400(client):
+    """Replay of a used nonce returns 400 (AC15)."""
+    with _patch.dict(_os.environ, _vault_env()):
+        r = client.get("/api/connectors/salesforce/auth-url", headers=_AUTH_HEADERS)
+    state = _parse_qs(_urlparse(r.json()["auth_url"]).query)["state"][0]
+
+    fake_token = {"access_token": "t", "expires_in": 3600}
+
+    # First callback — valid
+    with _patch.dict(_os.environ, _vault_env()), \
+         _patch("app.routes_connector_auth.exchange_code", new_callable=_AsyncMock, return_value=fake_token), \
+         _patch("app.routes_connector_auth.store_token", return_value=None):
+        r1 = client.get(
+            f"/api/connectors/oauth/callback?code=code1&state={state}",
+            headers=_AUTH_HEADERS,
+            follow_redirects=False,
+        )
+
+    assert r1.status_code == 302  # success redirect
+
+    # Second callback — replay of same state → 400
+    with _patch.dict(_os.environ, _vault_env()), \
+         _patch("app.routes_connector_auth.exchange_code", new_callable=_AsyncMock, return_value=fake_token), \
+         _patch("app.routes_connector_auth.store_token", return_value=None):
+        r2 = client.get(
+            f"/api/connectors/oauth/callback?code=code2&state={state}",
+            headers=_AUTH_HEADERS,
+            follow_redirects=False,
+        )
+
+    assert r2.status_code == 400, "Replay of a used nonce must return 400"
+    _clear_credentials()
+
+
+def test_nonce_replay_before_use_returns_400(client):
+    """A state value that was never issued returns 400 immediately (AC15)."""
+    fake_state = "never-issued-nonce-" + _secrets_mod.token_hex(8)
+    resp = client.get(
+        f"/api/connectors/oauth/callback?code=c&state={fake_state}",
+        headers=_AUTH_HEADERS,
+        follow_redirects=False,
+    )
+    assert resp.status_code == 400
+
+
+def test_callback_unauthenticated_returns_401(client):
+    """GET /api/connectors/oauth/callback without Bearer token → 401 (AC17)."""
+    resp = client.get(
+        "/api/connectors/oauth/callback?code=c&state=s",
+        follow_redirects=False,
+    )
+    assert resp.status_code == 401
+
+
+# ---------------------------------------------------------------------------
+# AT-77 import surface (AC18 extension)
+# ---------------------------------------------------------------------------
+
+
+def test_full_import_chain_no_circular_imports():
+    """from backend.app.auth import get_token, store_token, revoke_token,
+    ConnectorNotAuthenticatedError succeeds with no circular import error (AC18).
+    """
+    from backend.app.auth import (  # noqa: F401
+        ConnectorNotAuthenticatedError,
+        get_token,
+        revoke_token,
+        store_token,
+    )
