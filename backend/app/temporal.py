@@ -10,7 +10,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, TypedDict
 
 from fastapi import HTTPException
 
@@ -31,6 +31,14 @@ except ModuleNotFoundError:  # pragma: no cover - supports repo-root imports.
 BASELINE_MIN_RUNS = int(os.getenv("BASELINE_MIN_RUNS", "30"))
 
 
+class RunSignalSnapshotPayload(TypedDict):
+    pack_id: str
+    signal_count: int
+    detector_count: int
+    fired_count: int
+    below_threshold: int
+
+
 @dataclass
 class DetectorEvaluation:
     """
@@ -49,6 +57,112 @@ class DetectorEvaluation:
     raw_evidence: dict[str, Any]
 
 
+def record_event(
+    *,
+    org_id: str,
+    event_type: str,
+    source: str,
+    run_id: str,
+    success: bool,
+    count: int,
+    payload: RunSignalSnapshotPayload,
+) -> None:
+    """Import-safe bridge for T1-S10-C telemetry when it is available."""
+
+    try:
+        try:
+            from app.telemetry import record_event as telemetry_record_event
+        except ModuleNotFoundError:  # pragma: no cover - supports repo-root imports.
+            from backend.app.telemetry import record_event as telemetry_record_event
+    except ModuleNotFoundError:
+        return None
+
+    telemetry_record_event(
+        org_id=org_id,
+        event_type=event_type,
+        source=source,
+        run_id=run_id,
+        success=success,
+        count=count,
+        payload=payload,
+    )
+
+
+def _build_signal_snapshots(
+    *,
+    org_id: str,
+    run_id: str,
+    pack_id: str,
+    all_evaluated: list[DetectorEvaluation],
+    run_completed_at: datetime,
+) -> list[SignalSnapshot]:
+    snapshots: list[SignalSnapshot] = []
+    for evaluation in all_evaluated:
+        snapshots.append(
+            SignalSnapshot.from_primary_metric(
+                org_id=org_id,
+                run_id=run_id,
+                pack_id=pack_id,
+                evaluation=evaluation,
+                run_completed_at=run_completed_at,
+            )
+        )
+        snapshots.extend(
+            SignalSnapshot.from_signal_metrics(
+                org_id=org_id,
+                run_id=run_id,
+                pack_id=pack_id,
+                evaluation=evaluation,
+                run_completed_at=run_completed_at,
+            )
+        )
+    return snapshots
+
+
+def _insert_signal_snapshots(snapshots: list[SignalSnapshot]) -> None:
+    if not snapshots:
+        return None
+
+    columns = [
+        "id",
+        "org_id",
+        "run_id",
+        "pack_id",
+        "detector_id",
+        "signal_key",
+        "metric_name",
+        "metric_value",
+        "threshold",
+        "fired",
+        "signal_source",
+        "captured_at",
+        "baseline_mean",
+        "baseline_stddev",
+        "baseline_window_days",
+        "baseline_calculated_at",
+    ]
+    placeholders = ", ".join("?" for _ in columns)
+    sql = f"""
+        INSERT INTO signal_snapshots ({", ".join(columns)})
+        VALUES ({placeholders})
+    """
+
+    rows = [
+        tuple(snapshot.to_db_row()[column] for column in columns)
+        for snapshot in snapshots
+    ]
+    con = connect()
+    try:
+        cur = con.cursor()
+        cur.executemany(sql, rows)
+        con.commit()
+    except Exception:
+        con.rollback()
+        raise
+    finally:
+        con.close()
+
+
 def snapshot_signals(
     org_id: str,
     run_id: str,
@@ -58,11 +172,57 @@ def snapshot_signals(
     run_completed_at: datetime,
 ) -> None:
     """
-    Import-safe Task 4 hook.
+    Writes temporal signal snapshots for all evaluated detectors.
 
-    Task 4 owns persistence. Task 3 exposes the callable now so runner imports
-    from backend.app.temporal do not introduce circular dependencies.
+    This function is non-blocking by contract: storage or telemetry failures
+    are swallowed so discovery runs can complete even when temporal capture is
+    unavailable.
     """
+    try:
+        snapshots = _build_signal_snapshots(
+            org_id=org_id,
+            run_id=run_id,
+            pack_id=pack_id,
+            all_evaluated=all_evaluated,
+            run_completed_at=run_completed_at,
+        )
+        _insert_signal_snapshots(snapshots)
+
+        payload = RunSignalSnapshotPayload(
+            pack_id=pack_id,
+            signal_count=len(snapshots),
+            detector_count=len(
+                {evaluation.detector_id for evaluation in all_evaluated}
+            ),
+            fired_count=len(
+                {
+                    evaluation.detector_id
+                    for evaluation in all_evaluated
+                    if evaluation.fired
+                }
+            ),
+            below_threshold=len(
+                {
+                    evaluation.detector_id
+                    for evaluation in all_evaluated
+                    if not evaluation.fired
+                }
+            ),
+        )
+        try:
+            record_event(
+                org_id=org_id,
+                event_type="run.signal_snapshot",
+                source="temporal_engine",
+                run_id=run_id,
+                success=True,
+                count=len(snapshots),
+                payload=payload,
+            )
+        except Exception:
+            return None
+    except Exception:
+        return None
 
     return None
 
@@ -191,6 +351,7 @@ def get_run_signals(
 __all__ = [
     "DetectorEvaluation",
     "DetectorEvaluationLike",
+    "RunSignalSnapshotPayload",
     "SignalSnapshot",
     "get_baseline",
     "get_run_signals",
