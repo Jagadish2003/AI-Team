@@ -1,3 +1,5 @@
+from contextlib import asynccontextmanager
+import logging
 import os
 import time
 import uuid
@@ -10,6 +12,8 @@ from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
 load_dotenv()
+
+logger = logging.getLogger(__name__)
 
 from . import db
 from .db import get_all, get_one, kv_get, kv_set, run_get, upsert
@@ -37,7 +41,24 @@ from .routes_workspace_catalog import register_workspace_catalog_routes
 from .routes_temporal import register_temporal_routes
 from .security import require_auth
 
-app = FastAPI(title="AgentIQ Layer 1 API Skeleton", version="0.1.0")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    try:
+        from .jobs.baseline_calculator import start_scheduler
+
+        start_scheduler()
+    except Exception as exc:  # noqa: BLE001 - background jobs must not block API startup.
+        logger.warning("Baseline scheduler failed to start (non-blocking): %s", exc)
+
+    yield
+
+
+app = FastAPI(
+    title="AgentIQ Layer 1 API Skeleton",
+    version="0.1.0",
+    lifespan=lifespan,
+)
 
 # Register routes in order
 register_stack_builder_routes(app)
