@@ -31,6 +31,13 @@ from ..models import DetectorResult
 DETECTOR_ID              = "LOAN_ORIGINATION_ROUTING_FRICTION"
 OWNER_CHANGE_THRESHOLD   = 2    # SME-confirmed NC-2
 TRANSITION_THRESHOLD     = 4    # NC-1 retained
+SIGNAL_METRICS = {
+    "max_owner_changes":     "Highest owner-change count on a single loan; primary friction signal",
+    "avg_owner_changes":     "Average owner changes per loan; smoothed friction trend",
+    "max_stage_transitions": "Highest stage transition count; secondary friction signal",
+    "total_loans":           "Total loans evaluated; normalises friction counts as a rate",
+    "high_friction_count":   "Number of loans exceeding both thresholds; severity volume trend",
+}
 
 
 def detect(

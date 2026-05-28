@@ -17,6 +17,12 @@ from typing import Any, Dict, List
 from ..models import DetectorResult
 
 DETECTOR_ID = "COVENANT_TRACKING_GAP"
+SIGNAL_METRICS = {
+    "overdue_count":            "Number of covenants past evaluation date; primary volume trend",
+    "breached_count":           "Number of breached covenants; compliance severity indicator",
+    "max_days_past_evaluation": "Worst-case days past evaluation; tracks staleness of tracking",
+    "total_covenants":          "Total covenants evaluated; normalises overdue rate",
+}
 
 def detect(sf_data: Dict[str, Any], sn_data=None, jira_data=None) -> List[DetectorResult]:
     ncino = sf_data.get("ncino") or sf_data

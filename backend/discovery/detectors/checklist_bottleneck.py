@@ -28,6 +28,12 @@ STALL_DAYS        = 14  # Incomplete status for 14+ days = stalled
 # 'Under Review' and 'On Hold' also indicate no active progress.
 # 'In Progress', 'Complete', 'Rejected' are NOT stall states.
 STALL_STATUSES = frozenset(["To Do", "Under Review", "On Hold"])
+SIGNAL_METRICS = {
+    "overrun_count":    "Number of checklists exceeding expected duration; primary trend",
+    "stalled_count":    "Number of checklists in a stall status; tracks workflow blockage",
+    "max_overrun_days": "Worst-case overrun in days; tracks severity of longest delay",
+    "total_checklists": "Total checklists evaluated; normalises overrun_count as a rate",
+}
 
 def detect(sf_data: Dict[str, Any], sn_data=None, jira_data=None) -> List[DetectorResult]:
     ncino = sf_data.get("ncino") or sf_data

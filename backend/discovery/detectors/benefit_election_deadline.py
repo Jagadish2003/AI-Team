@@ -19,6 +19,11 @@ from typing import Any, Dict, List
 from ..models import DetectorResult
 
 DETECTOR_ID = "BENEFIT_ELECTION_DEADLINE"
+SIGNAL_METRICS = {
+    "overdue_election_count": "Number of elections past deadline; primary volume trend",
+    "max_days_overdue":       "Worst-case days overdue; tracks severity of missed deadlines",
+    "total_assignments":      "Total assignments evaluated; context for overdue rate",
+}
 
 
 def detect(

@@ -22,6 +22,12 @@ from typing import Any, Dict, List
 from ..models import DetectorResult
 
 DETECTOR_ID = "DISABILITY_REVIEW_BOTTLENECK"
+SIGNAL_METRICS = {
+    "pending_review_count":   "Number of disability cases pending review; primary volume trend",
+    "max_days_pending":       "Longest pending review in days; tracks worst-case backlog age",
+    "avg_days_pending":       "Average days pending; smoothed trend across all pending cases",
+    "total_disability_cases": "Total cases evaluated; normalises pending_review_count as a rate",
+}
 
 
 def detect(

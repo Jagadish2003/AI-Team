@@ -18,6 +18,12 @@ from ..models import DetectorResult
 DETECTOR_ID      = "APPROVAL_BOTTLENECK"
 PENDING_THRESHOLD = 1
 CYCLE_THRESHOLD   = 7  # days
+SIGNAL_METRICS = {
+    "pending_count":   "Number of approvals currently pending; primary volume trend",
+    "max_cycle_days":  "Longest approval cycle in days; tracks worst-case delay",
+    "avg_cycle_days":  "Average cycle days; smoothed trend across all approvals",
+    "total_instances": "Total approval instances evaluated; context for pending rate",
+}
 
 def detect(sf_data: Dict[str, Any], sn_data=None, jira_data=None) -> List[DetectorResult]:
     ncino = sf_data.get("ncino") or sf_data

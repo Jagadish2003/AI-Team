@@ -30,6 +30,12 @@ from ..models import DetectorResult
 
 DETECTOR_ID    = "SPREADING_BOTTLENECK"
 MIN_DAYS_OPEN  = 14  # unlocked for 14+ days = bottleneck
+SIGNAL_METRICS = {
+    "unlocked_count":    "Number of spread periods open 14+ days; primary bottleneck volume",
+    "max_days_unlocked": "Worst-case days unlocked; tracks severity of longest open period",
+    "avg_days_unlocked": "Average days unlocked; smoothed trend across all open periods",
+    "total_periods":     "Total periods evaluated; normalises unlocked_count as a rate",
+}
 
 def detect(sf_data: Dict[str, Any], sn_data=None, jira_data=None) -> List[DetectorResult]:
     ncino = sf_data.get("ncino") or sf_data
