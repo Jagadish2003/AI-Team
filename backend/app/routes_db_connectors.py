@@ -49,8 +49,21 @@ from .db_connectors.models import (
     SchemaDiscoveryResult,
     ScopeDeclaration,
 )
-from .middleware.audit import SCHEMA_DISCOVERED, SCOPE_DECLARED, log_event
+from .middleware.audit import SCHEMA_DISCOVERED, log_event
 from .security import require_auth, require_role
+
+try:
+    from backend.connectors.db.scope import (
+        get_scope as load_scope,
+        save_discovered_schema,
+        save_scope as persist_scope,
+    )
+except ModuleNotFoundError:  # Runtime inside backend/ where connectors is top-level.
+    from connectors.db.scope import (
+        get_scope as load_scope,
+        save_discovered_schema,
+        save_scope as persist_scope,
+    )
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -142,12 +155,31 @@ def _schema_discovery_result_to_response(
     )
 
 
+def _import_driver_for_connector(connector_id: str) -> None:
+    """Import a driver module so it registers with the pool factory."""
+    if connector_id == "sqlserver":
+        try:
+            from backend.connectors.db import sqlserver as _sqlserver  # noqa: F401, PLC0415
+        except ModuleNotFoundError:
+            from connectors.db import sqlserver as _sqlserver  # type: ignore[no-redef] # noqa: F401, PLC0415
+    elif connector_id == "oracle_db":
+        try:
+            from backend.connectors.db import oracle as _oracle  # noqa: F401, PLC0415
+        except ModuleNotFoundError:
+            from connectors.db import oracle as _oracle  # type: ignore[no-redef] # noqa: F401, PLC0415
+    elif connector_id == "postgresql":
+        try:
+            from backend.connectors.db import postgresql as _postgresql  # noqa: F401, PLC0415
+        except ModuleNotFoundError:
+            from connectors.db import postgresql as _postgresql  # type: ignore[no-redef] # noqa: F401, PLC0415
+
+
 def _discover_schema_for_connector(conn: Any, connector_id: str) -> SchemaDiscoveryResult:
     """Dispatch schema discovery to the correct driver implementation.
 
-    Only SQL Server is implemented in Sprint 10.  Other drivers return a
-    stub result rather than raising, so the route stays operational while
-    Oracle and PostgreSQL drivers are delivered in later tasks.
+    Known Sprint 10 drivers dispatch to their concrete catalogue queries.
+    Unknown connectors return a stub result so the route stays operational
+    while future drivers are delivered.
     """
     if connector_id == "sqlserver":
         # Import here to avoid circular imports and to keep the driver optional
@@ -158,7 +190,23 @@ def _discover_schema_for_connector(conn: Any, connector_id: str) -> SchemaDiscov
 
         return discover_schema_sqlserver(conn)
 
-    # Stub for oracle_db / postgresql — Sprint 10 drivers not yet delivered
+    if connector_id == "oracle_db":
+        try:
+            from backend.connectors.db.oracle import discover_schema_oracle  # noqa: PLC0415
+        except ModuleNotFoundError:  # Runtime inside backend/ where connectors is top-level.
+            from connectors.db.oracle import discover_schema_oracle  # type: ignore[no-redef] # noqa: PLC0415
+
+        return discover_schema_oracle(conn)
+
+    if connector_id == "postgresql":
+        try:
+            from backend.connectors.db.postgresql import discover_schema_postgresql  # noqa: PLC0415
+        except ModuleNotFoundError:  # Runtime inside backend/ where connectors is top-level.
+            from connectors.db.postgresql import discover_schema_postgresql  # type: ignore[no-redef] # noqa: PLC0415
+
+        return discover_schema_postgresql(conn)
+
+    # Stub for unknown future drivers.
     return SchemaDiscoveryResult(
         schemas=[],
         tables=[],
@@ -234,6 +282,7 @@ def get_schema(
         from connectors.db.connection_pool import get_or_create_pool  # type: ignore[no-redef] # noqa: PLC0415
 
     try:
+        _import_driver_for_connector(connector_id)
         pool = get_or_create_pool(config)
         conn = pool.acquire(timeout=config.connect_timeout_s)
     except DBConnectionError as exc:
@@ -260,6 +309,7 @@ def get_schema(
         schema_count=len(result.schemas),
         table_count=len(result.tables),
     )
+    save_discovered_schema(org_id, connector_id, result)
 
     return _schema_discovery_result_to_response(result)
 
@@ -287,7 +337,6 @@ def post_scope(
     _role: str = Depends(require_role("analyst")),
 ) -> Dict[str, Any]:
     org_id = body.org_id
-    now_iso = datetime.now(timezone.utc).isoformat()
 
     scope = ScopeDeclaration(
         org_id=org_id,
@@ -298,26 +347,8 @@ def post_scope(
         declared_by="analyst",  # Production: extract identity from JWT
     )
 
-    _db.kv_set(
-        _kv_scope_key(org_id, connector_id),
-        {
-            "org_id": scope.org_id,
-            "connector_id": scope.connector_id,
-            "schemas": scope.schemas,
-            "tables": scope.tables,
-            "declared_at": now_iso,
-            "declared_by": scope.declared_by,
-        },
-    )
-
-    # Emit audit event — fail-silent
-    log_event(
-        SCOPE_DECLARED,
-        org_id=org_id,
-        connector_id=connector_id,
-        schemas=scope.schemas,
-        tables=scope.tables,
-    )
+    # Persist validated scope; save_scope emits the scope_declared audit event.
+    persist_scope(scope)
 
     response.status_code = 201
     return {"status": "scope_saved", "connector_id": connector_id, "org_id": org_id}
@@ -343,20 +374,15 @@ def get_scope(
 ) -> ScopeResponse:
     org_id = _DEV_ORG_ID
 
-    raw: Optional[Dict[str, Any]] = _db.kv_get(_kv_scope_key(org_id, connector_id))
-    if raw is None:
-        raise HTTPException(
-            status_code=404,
-            detail=f"No scope declared for connector '{connector_id}' in org '{org_id}'.",
-        )
+    scope = load_scope(org_id, connector_id)
 
     return ScopeResponse(
-        org_id=raw["org_id"],
-        connector_id=raw["connector_id"],
-        schemas=raw["schemas"],
-        tables=raw["tables"],
-        declared_at=raw["declared_at"],
-        declared_by=raw["declared_by"],
+        org_id=scope.org_id,
+        connector_id=scope.connector_id,
+        schemas=scope.schemas,
+        tables=scope.tables,
+        declared_at=scope.declared_at.isoformat(),
+        declared_by=scope.declared_by,
     )
 
 
@@ -394,6 +420,7 @@ def get_connection_test(
     conn = None
     pool = None
     try:
+        _import_driver_for_connector(connector_id)
         pool = get_or_create_pool(config)
         conn = pool.acquire(timeout=config.connect_timeout_s)
         _run_test_query(conn, connector_id)
