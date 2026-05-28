@@ -31,9 +31,8 @@ uvicorn==0.30.6
 watchfiles==1.1.1
 websockets==16.0
 
-# ── T2-S10-A: Database driver Python packages ─────────────────────────────────
+# T2-S10-A: Database driver Python packages
 # System-level prerequisites for each driver are installed in the Dockerfile.
 # See deployment/README.md for full installation rationale.
-pyodbc>=5.0.1            # SQL Server — bridges Python to msodbcsql18 via ODBC
-oracledb>=2.0.0          # Oracle DB  — pure-Python; uses Oracle Instant Client 21 at runtime
-psycopg2-binary>=2.9.9   # PostgreSQL — libpq bundled; no system postgres-client needed
+oracledb>=2.0.0          # Oracle DB; uses Oracle Instant Client 21 at runtime.
+psycopg2-binary>=2.9.9   # PostgreSQL; libpq bundled, no postgres-client needed.
