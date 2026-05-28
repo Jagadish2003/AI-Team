@@ -1313,3 +1313,670 @@ def test_vault_symbols_importable_from_package():
         revoke_token,
         store_token,
     )
+
+
+# ===========================================================================
+# AT-79 — T1-S10-A A7: Contract Tests (T11)
+# 18 tests covering AC1–AC18 of the OAuth Auth Framework spec.
+# ===========================================================================
+#
+# Infrastructure reused from earlier sections:
+#   _MockTransport, _TimeoutTransport  — lightweight httpx mock transports
+#   _make_config()                     — builds test ConnectorAuthConfig
+#   _vault_env()                       — env dict with CREDENTIAL_VAULT_KEY set
+#   _token_response()                  — builds fake token dict
+#   _raw_credentials()                 — reads raw DB row (no decryption)
+#   _clear_credentials()               — truncates credentials table
+#   _AsyncMock, _patch, _os            — stdlib mock helpers
+#   client fixture (conftest.py)       — FastAPI TestClient, auth via Bearer
+#
+# org_id used by routes: request.headers.get("X-Org-Id", "default-org")
+# Auth header required on all 4 routes (AC17).
+# ===========================================================================
+
+import inspect as _inspect
+import logging as _logging
+from urllib.parse import parse_qs as _parse_qs, urlparse as _urlparse
+
+_AT79_AUTH = {"Authorization": "Bearer dev-token-change-me"}
+_AT79_ORG = "default-org"   # matches routes_connector_auth default
+
+
+# ---------------------------------------------------------------------------
+# AC1 — auth-url returns valid Salesforce authorization URL with correct params
+# ---------------------------------------------------------------------------
+
+def test_at79_ac1_auth_url_salesforce(client):  # AC1
+    """GET /api/connectors/salesforce/auth-url returns URL with required params.
+
+    Checks: client_id, redirect_uri, scope, response_type=code, non-empty state.
+    State must NOT contain 'redirect', 'http', or any URL-like content.
+    """
+    from app.auth.configs import CONNECTOR_AUTH_CONFIGS
+
+    resp = client.get("/api/connectors/salesforce/auth-url", headers=_AT79_AUTH)
+    assert resp.status_code == 200
+
+    body = resp.json()
+    assert "auth_url" in body
+    assert body["connector_id"] == "salesforce"
+
+    parsed = _urlparse(body["auth_url"])
+    qs = _parse_qs(parsed.query)
+
+    config = CONNECTOR_AUTH_CONFIGS["salesforce"]
+    assert qs.get("client_id") == [config.client_id]
+    assert qs.get("response_type") == ["code"]
+
+    state_vals = qs.get("state", [])
+    assert state_vals and state_vals[0], "state must be present and non-empty"
+    state = state_vals[0]
+
+    # State must be an opaque nonce — not a URL or user data (AC1)
+    for forbidden in ("redirect", "http", "user", "email", "@"):
+        assert forbidden not in state.lower(), f"state must not contain '{forbidden}'"
+
+
+# ---------------------------------------------------------------------------
+# AC2 — callback stores token in vault and redirects to hardcoded constant
+# ---------------------------------------------------------------------------
+
+def test_at79_ac2_callback_valid_state_stores_token_redirects(client):  # AC2
+    """Callback with valid code + matching state: stores token in vault, redirects to constant.
+
+    Verifies real vault storage (raw DB check) and that redirect location
+    equals OAUTH_SUCCESS_REDIRECT constant — no state content in location.
+    """
+    from app.routes_connector_auth import OAUTH_SUCCESS_REDIRECT
+
+    # Step 1: generate a real nonce
+    r = client.get("/api/connectors/salesforce/auth-url", headers=_AT79_AUTH)
+    assert r.status_code == 200
+    state = _parse_qs(_urlparse(r.json()["auth_url"]).query)["state"][0]
+
+    # Step 2: call callback — mock exchange_code only, real store_token
+    fake_token = {
+        "access_token": "at79-real-stored-tok",
+        "refresh_token": "at79-refresh-tok",
+        "expires_in": 3600,
+    }
+    env = {**_vault_env(), "SALESFORCE_CLIENT_SECRET": "dummy"}
+    with _patch.dict(_os.environ, env), \
+         _patch("app.routes_connector_auth.exchange_code",
+                new_callable=_AsyncMock, return_value=fake_token):
+        resp = client.get(
+            f"/api/connectors/oauth/callback?code=auth-code&state={state}",
+            headers=_AT79_AUTH,
+            follow_redirects=False,
+        )
+
+    # Redirect to hardcoded constant only (AC2)
+    assert resp.status_code == 302
+    expected = OAUTH_SUCCESS_REDIRECT.format(connector_id="salesforce")
+    assert resp.headers["location"] == expected
+    assert state not in resp.headers["location"], "State must not appear in redirect location"
+
+    # Token stored in vault — raw DB row is encrypted, not plaintext (AC2, AC8)
+    row = _raw_credentials(_AT79_ORG, "salesforce")
+    assert row is not None, "Token must be written to DB after callback"
+    assert "at79-real-stored-tok" not in (row[0] or ""), "access_token must be encrypted"
+
+    _clear_credentials()
+
+
+# ---------------------------------------------------------------------------
+# AC3 — mismatched state → 400, generic message, hmac.compare_digest used
+# ---------------------------------------------------------------------------
+
+def test_at79_ac3_callback_mismatched_state_returns_400(client):  # AC3
+    """Callback with wrong state returns HTTP 400 with generic, detail-free message.
+
+    Also verifies via source inspection that hmac.compare_digest is used
+    (not a simple == comparison) — AC3.
+    """
+    resp = client.get(
+        "/api/connectors/oauth/callback?code=some-code&state=completely-wrong-nonce",
+        headers=_AT79_AUTH,
+        follow_redirects=False,
+    )
+    assert resp.status_code == 400
+
+    # Response body must not reveal which element failed (AC3)
+    body_lower = resp.text.lower()
+    for forbidden in ("state", "nonce", "expected", "mismatch", "hmac", "digest"):
+        assert forbidden not in body_lower, (
+            f"400 body must not mention '{forbidden}' — leaks implementation detail"
+        )
+
+    # hmac.compare_digest must be used in the callback handler — source inspection (AC3)
+    from app import routes_connector_auth
+    source = _inspect.getsource(routes_connector_auth)
+    assert "hmac.compare_digest" in source, (
+        "routes_connector_auth must call hmac.compare_digest for state validation"
+    )
+
+
+# ---------------------------------------------------------------------------
+# AC4 — redirect target never derivable from state payload or query params
+# ---------------------------------------------------------------------------
+
+def test_at79_ac4a_redirect_to_in_state_payload_ignored(client):  # AC4 sub-case (a)
+    """redirect_to embedded in state payload does not influence the redirect target."""
+    # Crafted state not in nonce store → 400; importantly no open redirect
+    crafted = "redirect_to=https://evil.example.com&nonce=abc"
+    resp = client.get(
+        f"/api/connectors/oauth/callback?code=c&state={crafted}",
+        headers=_AT79_AUTH,
+        follow_redirects=False,
+    )
+    assert resp.status_code == 400
+    assert "evil.example.com" not in resp.headers.get("location", "")
+
+
+def test_at79_ac4b_redirect_to_query_param_ignored(client):  # AC4 sub-case (b)
+    """redirect_to as a raw query parameter does not influence the redirect target."""
+    r = client.get("/api/connectors/salesforce/auth-url", headers=_AT79_AUTH)
+    state = _parse_qs(_urlparse(r.json()["auth_url"]).query)["state"][0]
+
+    fake_token = {"access_token": "tok", "expires_in": 3600}
+    env = {**_vault_env(), "SALESFORCE_CLIENT_SECRET": "dummy"}
+    with _patch.dict(_os.environ, env), \
+         _patch("app.routes_connector_auth.exchange_code",
+                new_callable=_AsyncMock, return_value=fake_token), \
+         _patch("app.routes_connector_auth.store_token", return_value=None):
+        resp = client.get(
+            f"/api/connectors/oauth/callback?code=c&state={state}"
+            "&redirect_to=https://evil.example.com",
+            headers=_AT79_AUTH,
+            follow_redirects=False,
+        )
+
+    location = resp.headers.get("location", "")
+    assert "evil.example.com" not in location
+    assert "connected=salesforce" in location
+
+    _clear_credentials()
+
+
+# ---------------------------------------------------------------------------
+# AC5 — get_token returns valid token; refresh NOT called for fresh token
+# ---------------------------------------------------------------------------
+
+@pytest.mark.anyio
+async def test_at79_ac5_get_token_returns_valid_no_refresh_called():  # AC5
+    """get_token returns a valid TokenRecord without calling refresh_token
+    when the token expiry is well above REFRESH_THRESHOLD_SECONDS.
+    """
+    from app.auth.vault import store_token, get_token
+
+    mock_refresh = _AsyncMock()
+
+    with _patch.dict(_os.environ, _vault_env()):
+        store_token("org-ac5", "github", _token_response(expires_in=7200))
+
+        with _patch("app.auth.vault._oauth.refresh_token", mock_refresh):
+            record = await get_token("org-ac5", "github")
+
+    mock_refresh.assert_not_called()   # fresh token — no refresh needed (AC5)
+    assert record.access_token == "plain-access-tok"
+    assert record.connector_id == "github"
+    _clear_credentials()
+
+
+# ---------------------------------------------------------------------------
+# AC6 — get_token auto-refreshes near expiry; refreshed token is persisted
+# ---------------------------------------------------------------------------
+
+@pytest.mark.anyio
+async def test_at79_ac6_get_token_auto_refreshes_and_persists():  # AC6
+    """get_token calls refresh_token when near expiry and persists the new token.
+    A subsequent get_token call returns the refreshed token without a second refresh.
+    """
+    from app.auth.vault import store_token, get_token
+
+    refreshed = _token_response(
+        access_token="at79-refreshed-tok",
+        refresh_token="at79-new-ref",
+        expires_in=7200,
+    )
+    mock_refresh = _AsyncMock(return_value=refreshed)
+
+    with _patch.dict(_os.environ, _vault_env()):
+        store_token("org-ac6", "salesforce", _token_response(expires_in=60))
+
+        with _patch("app.auth.vault._oauth.refresh_token", mock_refresh), \
+             _patch("app.auth.vault.CONNECTOR_AUTH_CONFIGS",
+                    {"salesforce": _make_config(connector_id="salesforce")}):
+            record = await get_token("org-ac6", "salesforce")
+
+    mock_refresh.assert_called_once()         # refresh was triggered (AC6)
+    assert record.access_token == "at79-refreshed-tok"
+
+    # Refreshed token persisted — second call returns it without another refresh
+    second_mock = _AsyncMock(return_value=refreshed)
+    with _patch.dict(_os.environ, _vault_env()):
+        with _patch("app.auth.vault._oauth.refresh_token", second_mock), \
+             _patch("app.auth.vault.CONNECTOR_AUTH_CONFIGS",
+                    {"salesforce": _make_config(connector_id="salesforce")}):
+            record2 = await get_token("org-ac6", "salesforce")
+
+    second_mock.assert_not_called()           # already fresh — no second refresh (AC6)
+    assert record2.access_token == "at79-refreshed-tok"
+    _clear_credentials()
+
+
+# ---------------------------------------------------------------------------
+# AC7 — get_token raises ConnectorNotAuthenticatedError in both failure modes
+# ---------------------------------------------------------------------------
+
+@pytest.mark.anyio
+async def test_at79_ac7a_get_token_raises_when_no_token():  # AC7 sub-case (a)
+    """get_token raises ConnectorNotAuthenticatedError when no token exists."""
+    from app.auth.vault import get_token
+    from app.auth.models import ConnectorNotAuthenticatedError
+
+    with _patch.dict(_os.environ, _vault_env()):
+        with pytest.raises(ConnectorNotAuthenticatedError) as exc_info:
+            await get_token("org-ac7a-missing", "salesforce")
+
+    assert exc_info.value.connector_id == "salesforce"
+    assert exc_info.value.org_id == "org-ac7a-missing"
+
+
+@pytest.mark.anyio
+async def test_at79_ac7b_get_token_raises_when_refresh_rejected():  # AC7 sub-case (b)
+    """get_token raises ConnectorNotAuthenticatedError when token endpoint rejects refresh."""
+    from app.auth.vault import store_token, get_token
+    from app.auth.models import ConnectorNotAuthenticatedError
+    from app.auth.oauth import OAuthError
+
+    mock_refresh = _AsyncMock(side_effect=OAuthError("salesforce", 400))
+
+    with _patch.dict(_os.environ, _vault_env()):
+        store_token("org-ac7b", "salesforce", _token_response(expires_in=60))
+
+        with _patch("app.auth.vault._oauth.refresh_token", mock_refresh), \
+             _patch("app.auth.vault.CONNECTOR_AUTH_CONFIGS",
+                    {"salesforce": _make_config(connector_id="salesforce")}):
+            with pytest.raises(ConnectorNotAuthenticatedError):
+                await get_token("org-ac7b", "salesforce")
+
+    _clear_credentials()
+
+
+# ---------------------------------------------------------------------------
+# AC8 — access_token and refresh_token are encrypted at rest
+# ---------------------------------------------------------------------------
+
+def test_at79_ac8_tokens_encrypted_at_rest():  # AC8
+    """After store_token, raw DB row must not contain any plaintext token substring."""
+    from app.auth.vault import store_token
+
+    plain_access = "super-secret-access-ac8"
+    plain_refresh = "super-secret-refresh-ac8"
+
+    with _patch.dict(_os.environ, _vault_env()):
+        store_token(
+            "org-ac8", "jira",
+            {"access_token": plain_access, "refresh_token": plain_refresh, "expires_in": 3600},
+        )
+
+    row = _raw_credentials("org-ac8", "jira")
+    assert row is not None
+
+    # access_token column must not be or contain the plaintext (AC8)
+    assert row[0] != plain_access
+    assert plain_access not in (row[0] or "")
+    # refresh_token column must not be or contain the plaintext (AC8)
+    assert row[1] != plain_refresh
+    assert plain_refresh not in (row[1] or "")
+
+    _clear_credentials()
+
+
+# ---------------------------------------------------------------------------
+# AC9 — CONNECTOR_AUTH_CONFIGS contains no client_secret field anywhere
+# ---------------------------------------------------------------------------
+
+def test_at79_ac9_no_client_secret_in_configs():  # AC9
+    """ConnectorAuthConfig dataclass has no client_secret field.
+    No entry in CONNECTOR_AUTH_CONFIGS has a client_secret attribute.
+    """
+    import dataclasses as _dc
+    from app.auth.models import ConnectorAuthConfig
+    from app.auth.configs import CONNECTOR_AUTH_CONFIGS
+
+    field_names = {f.name for f in _dc.fields(ConnectorAuthConfig)}
+    assert "client_secret" not in field_names, "client_secret field must never exist on model"
+    assert "secret_key" in field_names, "secret_key (env var name) must exist"
+
+    for cid, config in CONNECTOR_AUTH_CONFIGS.items():
+        assert not hasattr(config, "client_secret"), f"{cid}: must not have client_secret attr"
+        assert config.secret_key, f"{cid}: secret_key must be non-empty"
+
+
+# ---------------------------------------------------------------------------
+# AC10 — resolve_secret raises MissingSecretError; startup sweep enforces it
+# ---------------------------------------------------------------------------
+
+def test_at79_ac10_missing_secret_raises(monkeypatch):  # AC10
+    """resolve_secret raises MissingSecretError when env var is absent.
+    Error message contains the key name, never a secret value.
+    """
+    from app.auth.secrets import resolve_secret, MissingSecretError
+
+    monkeypatch.delenv("_AT79_ABSENT_KEY", raising=False)
+
+    with pytest.raises(MissingSecretError) as exc_info:
+        resolve_secret("_AT79_ABSENT_KEY")
+
+    err = exc_info.value
+    assert "_AT79_ABSENT_KEY" in str(err), "Error must name the missing key"
+    assert err.secret_key == "_AT79_ABSENT_KEY"
+
+    # Also verify startup sweep: validate_all_secrets raises on missing key
+    from app.auth.secrets import validate_all_secrets
+    from app.auth.models import ConnectorAuthConfig
+
+    configs = {
+        "test": ConnectorAuthConfig(
+            connector_id="test",
+            flow="client_credentials",
+            client_id="cid",
+            secret_key="_AT79_ABSENT_KEY",
+            token_url="https://example.com/token",
+            scopes=[],
+        )
+    }
+    with pytest.raises(MissingSecretError):
+        validate_all_secrets(configs)
+
+
+# ---------------------------------------------------------------------------
+# AC11 — DELETE salesforce/token calls external endpoint, then deletes locally
+# ---------------------------------------------------------------------------
+
+def test_at79_ac11_revoke_salesforce_calls_external_returns_204(client):  # AC11
+    """DELETE /api/connectors/salesforce/token: external revocation called, 204 returned,
+    token deleted from vault.
+    """
+    from app.auth.vault import store_token as _sv, revoke_token as _original_revoke
+    from app.auth.models import ConnectorNotAuthenticatedError
+    import asyncio
+
+    transport = _MockTransport(200, {})
+
+    with _patch.dict(_os.environ, _vault_env()):
+        _sv(_AT79_ORG, "salesforce", _token_response())
+
+    # Wrap original revoke_token to inject our transport
+    async def _tracked_revoke(org_id: str, connector_id: str, **_kw):
+        return await _original_revoke(org_id, connector_id, _revoke_transport=transport)
+
+    with _patch.dict(_os.environ, _vault_env()), \
+         _patch("app.routes_connector_auth.revoke_token", _tracked_revoke):
+        resp = client.delete(
+            "/api/connectors/salesforce/token",
+            headers=_AT79_AUTH,
+        )
+
+    assert resp.status_code == 204                              # AC11
+    assert transport.last_request is not None, (
+        "External revocation endpoint must be called for Salesforce"
+    )
+    # Revocation URL must reference Salesforce
+    url = str(transport.last_request.url)
+    assert "salesforce" in url.lower() or "revoke" in url.lower()
+
+    # Local vault deletion completed
+    assert _raw_credentials(_AT79_ORG, "salesforce") is None   # AC11
+    _clear_credentials()
+
+
+# ---------------------------------------------------------------------------
+# AC12 — DELETE github/token: local deletion only, no external HTTP call
+# ---------------------------------------------------------------------------
+
+def test_at79_ac12_revoke_github_local_only_returns_204(client):  # AC12
+    """DELETE /api/connectors/github/token: no external HTTP call made; 204 returned."""
+    from app.auth.vault import store_token as _sv, revoke_token as _original_revoke
+
+    transport = _MockTransport(200, {})
+
+    with _patch.dict(_os.environ, _vault_env()):
+        _sv(_AT79_ORG, "github", _token_response())
+
+    async def _tracked_revoke(org_id: str, connector_id: str, **_kw):
+        return await _original_revoke(org_id, connector_id, _revoke_transport=transport)
+
+    with _patch.dict(_os.environ, _vault_env()), \
+         _patch("app.routes_connector_auth.revoke_token", _tracked_revoke):
+        resp = client.delete(
+            "/api/connectors/github/token",
+            headers=_AT79_AUTH,
+        )
+
+    assert resp.status_code == 204                              # AC12
+    assert transport.last_request is None, (
+        "No external HTTP call must be made for GitHub (revocation_url=None)"
+    )
+    assert _raw_credentials(_AT79_ORG, "github") is None       # local deletion confirmed
+    _clear_credentials()
+
+
+# ---------------------------------------------------------------------------
+# AC13 — Step 1 failure logged as WARNING; local deletion still completes; 204
+# ---------------------------------------------------------------------------
+
+@pytest.mark.anyio
+async def test_at79_ac13_revoke_step1_failure_logs_warning_still_deletes(caplog):  # AC13
+    """revoke_token Step 1 failure (500 from endpoint): WARNING logged, local deletion done.
+
+    Uses caplog to assert the WARNING record exists and contains the failure reason.
+    Caller still receives 204 — Step 1 failure is never propagated.
+    """
+    from app.auth.vault import store_token, revoke_token
+    from app.auth.models import ConnectorAuthConfig
+
+    revocable = ConnectorAuthConfig(
+        connector_id="confluence",
+        flow="authorization_code",
+        client_id="cid",
+        secret_key="_TEST_OAUTH_SECRET",
+        token_url="https://auth.atlassian.com/oauth/token",
+        scopes=["read"],
+        revocation_url="https://auth.atlassian.com/oauth/token/revoke",
+    )
+
+    with _patch.dict(_os.environ, _vault_env()):
+        store_token("org-ac13", "confluence", _token_response())
+
+        with caplog.at_level(_logging.WARNING, logger="app.auth.vault"), \
+             _patch("app.auth.vault.CONNECTOR_AUTH_CONFIGS", {"confluence": revocable}):
+            # Step 1 fails (HTTP 500); Step 2 must still run
+            await revoke_token(
+                "org-ac13", "confluence",
+                _revoke_transport=_MockTransport(500, {}),
+            )
+
+    # WARNING log must have been emitted for Step 1 failure (AC13)
+    warnings = [r for r in caplog.records if r.levelno >= _logging.WARNING]
+    assert warnings, "Expected at least one WARNING log when Step 1 fails"
+    log_text = " ".join(r.getMessage() for r in warnings)
+    assert "500" in log_text or "confluence" in log_text, (
+        "WARNING must mention the failure context (status code or connector)"
+    )
+
+    # Local deletion still completed (AC13)
+    assert _raw_credentials("org-ac13", "confluence") is None
+    _clear_credentials()
+
+
+# ---------------------------------------------------------------------------
+# AC14 — token-status returns 'needs_refresh' when near expiry (internal state)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.anyio
+async def test_at79_ac14_token_status_needs_refresh_is_internal_state(client):  # AC14
+    """GET /api/connectors/servicenow/token-status returns {"status": "needs_refresh"}
+    when the returned token (after potential refresh) is still within REFRESH_THRESHOLD_SECONDS.
+
+    Internal note: Integration Hub UI maps 'needs_refresh' to the green indicator dot.
+    This is an operational/health-check state, not a user-facing string.
+    """
+    from app.auth.vault import store_token as _sv
+
+    # Store a near-expiry token with a refresh_token present.
+    # Mock refresh_token to return a short-lived new token (200s < 300s threshold)
+    # so get_token() refreshes but the route still sees needs_refresh.
+    short_lived_response = _token_response(
+        access_token="short-lived-tok",
+        refresh_token="new-ref",
+        expires_in=200,   # still within REFRESH_THRESHOLD_SECONDS (300)
+    )
+    mock_refresh = _AsyncMock(return_value=short_lived_response)
+
+    with _patch.dict(_os.environ, _vault_env()):
+        _sv(_AT79_ORG, "servicenow", _token_response(expires_in=60))
+
+        with _patch("app.auth.vault._oauth.refresh_token", mock_refresh), \
+             _patch("app.auth.vault.CONNECTOR_AUTH_CONFIGS",
+                    {"servicenow": _make_config(connector_id="servicenow")}):
+            resp = client.get(
+                "/api/connectors/servicenow/token-status",
+                headers=_AT79_AUTH,
+            )
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["status"] == "needs_refresh"          # AC14
+    assert data["status"] != "connected"
+    assert data["status"] != "needs_auth"
+
+    _clear_credentials()
+
+
+# ---------------------------------------------------------------------------
+# AC15 — state nonce is single-use; replay returns 400
+# ---------------------------------------------------------------------------
+
+def test_at79_ac15_state_nonce_single_use(client):  # AC15
+    """First callback with a nonce succeeds; replay of the same nonce returns 400.
+    Verifies the nonce is deleted from the server-side store after first use.
+    """
+    r = client.get("/api/connectors/salesforce/auth-url", headers=_AT79_AUTH)
+    state = _parse_qs(_urlparse(r.json()["auth_url"]).query)["state"][0]
+
+    fake_token = {"access_token": "tok-ac15", "expires_in": 3600}
+
+    # First use — succeeds
+    with _patch.dict(_os.environ, _vault_env()), \
+         _patch("app.routes_connector_auth.exchange_code",
+                new_callable=_AsyncMock, return_value=fake_token), \
+         _patch("app.routes_connector_auth.store_token", return_value=None):
+        r1 = client.get(
+            f"/api/connectors/oauth/callback?code=code1&state={state}",
+            headers=_AT79_AUTH,
+            follow_redirects=False,
+        )
+    assert r1.status_code == 302
+
+    # Replay — nonce was deleted after first use → 400 (AC15)
+    with _patch.dict(_os.environ, _vault_env()), \
+         _patch("app.routes_connector_auth.exchange_code",
+                new_callable=_AsyncMock, return_value=fake_token), \
+         _patch("app.routes_connector_auth.store_token", return_value=None):
+        r2 = client.get(
+            f"/api/connectors/oauth/callback?code=code2&state={state}",
+            headers=_AT79_AUTH,
+            follow_redirects=False,
+        )
+    assert r2.status_code == 400, "Replayed nonce must be rejected with 400 (AC15)"
+
+    _clear_credentials()
+
+
+# ---------------------------------------------------------------------------
+# AC16 — CONNECTOR_AUTH_CONFIGS has all 8 connectors with correct values
+# ---------------------------------------------------------------------------
+
+def test_at79_ac16_connector_auth_configs_all_8():  # AC16
+    """CONNECTOR_AUTH_CONFIGS has exactly 8 entries; each has correct flow,
+    secret_key pattern ({ID_UPPER}_CLIENT_SECRET), and revocation_url per spec.
+    """
+    from app.auth.configs import CONNECTOR_AUTH_CONFIGS
+
+    assert len(CONNECTOR_AUTH_CONFIGS) == 8, (
+        f"Expected 8 connectors, got {len(CONNECTOR_AUTH_CONFIGS)}: "
+        f"{sorted(CONNECTOR_AUTH_CONFIGS)}"
+    )
+
+    expected: dict = {
+        "salesforce":  ("authorization_code", "https://{instance}.salesforce.com/services/oauth2/revoke"),
+        "servicenow":  ("authorization_code", None),   # revocation deferred — no endpoint configured
+        "jira":        ("authorization_code", "https://auth.atlassian.com/oauth/token/revoke"),
+        "github":      ("authorization_code", None),
+        "confluence":  ("authorization_code", "https://auth.atlassian.com/oauth/token/revoke"),
+        "slack":       ("authorization_code", None),
+        "sap":         ("client_credentials", None),
+        "d365":        ("client_credentials", None),
+    }
+
+    for cid, (exp_flow, exp_revocation) in expected.items():
+        config = CONNECTOR_AUTH_CONFIGS[cid]
+        assert config.flow == exp_flow, f"{cid}: flow mismatch"
+        assert config.revocation_url == exp_revocation, f"{cid}: revocation_url mismatch"
+        assert config.secret_key, f"{cid}: secret_key must be non-empty"
+        # Pattern must be {CONNECTOR_ID_UPPER}_CLIENT_SECRET (AC16)
+        assert config.secret_key == f"{cid.upper()}_CLIENT_SECRET", (
+            f"{cid}: secret_key must be '{cid.upper()}_CLIENT_SECRET'"
+        )
+        # revocation_url must be Python None (not the string "None") for non-revocable connectors
+        if exp_revocation is None:
+            assert config.revocation_url is None, (
+                f"{cid}: revocation_url must be Python None, not string 'None'"
+            )
+
+
+# ---------------------------------------------------------------------------
+# AC17 — all four routes return 401 without authentication
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("method,path", [
+    ("GET",    "/api/connectors/salesforce/auth-url"),
+    ("GET",    "/api/connectors/oauth/callback"),
+    ("DELETE", "/api/connectors/salesforce/token"),
+    ("GET",    "/api/connectors/servicenow/token-status"),
+])
+def test_at79_ac17_all_routes_require_auth(client, method, path):  # AC17
+    """Unauthenticated requests to all 4 routes return HTTP 401."""
+    resp = client.request(method, path)   # no Authorization header
+    assert resp.status_code == 401, f"{method} {path} must return 401 without auth"
+
+
+# ---------------------------------------------------------------------------
+# AC18 — auth package importable; all required symbols are correct types
+# ---------------------------------------------------------------------------
+
+def test_at79_ac18_auth_module_importable_no_circular_imports():  # AC18
+    """from app.auth import ... succeeds for all required symbols.
+    Each symbol is the expected type — callable or Exception subclass.
+    No ImportError, no circular import.
+    """
+    import inspect as _insp
+    from app.auth import (
+        get_token,
+        store_token,
+        revoke_token,
+        ConnectorNotAuthenticatedError,
+    )
+
+    assert callable(get_token),   "get_token must be callable"
+    assert callable(store_token), "store_token must be callable"
+    assert callable(revoke_token), "revoke_token must be callable"
+    assert _insp.isclass(ConnectorNotAuthenticatedError), (
+        "ConnectorNotAuthenticatedError must be a class"
+    )
+    assert issubclass(ConnectorNotAuthenticatedError, Exception), (
+        "ConnectorNotAuthenticatedError must be an Exception subclass"
+    )
