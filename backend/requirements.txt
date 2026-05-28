@@ -14,6 +14,7 @@ idna==3.11
 iniconfig==2.3.0
 packaging==26.0
 pluggy==1.6.0
+pyodbc==5.3.0
 pycparser==3.0
 pydantic==2.8.2
 pydantic_core==2.20.1
@@ -29,3 +30,9 @@ urllib3==2.6.3
 uvicorn==0.30.6
 watchfiles==1.1.1
 websockets==16.0
+
+# T2-S10-A: Database driver Python packages
+# System-level prerequisites for each driver are installed in the Dockerfile.
+# See deployment/README.md for full installation rationale.
+oracledb>=2.0.0          # Oracle DB; uses Oracle Instant Client 21 at runtime.
+psycopg2-binary>=2.9.9   # PostgreSQL; libpq bundled, no postgres-client needed.
