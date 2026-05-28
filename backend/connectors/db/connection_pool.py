@@ -21,7 +21,10 @@ import queue
 import threading
 from typing import Any, Callable
 
-from backend.app.db_connectors.models import DBConnectorConfig, DBConnectionError
+try:
+    from backend.app.db_connectors.models import DBConnectorConfig, DBConnectionError
+except ModuleNotFoundError:  # Runtime inside backend/ where app is top-level
+    from app.db_connectors.models import DBConnectorConfig, DBConnectionError
 
 # ---------------------------------------------------------------------------
 # Pool constants  (spec: T2-S10-A table 9)
