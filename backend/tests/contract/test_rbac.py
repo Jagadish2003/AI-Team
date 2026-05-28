@@ -109,6 +109,37 @@ def test_viewer_cannot_manage_connectors(client: TestClient):
 
 
 # ---------------------------------------------------------------------------
+# AC10 — GET /api/workspace/members: owner only
+# ---------------------------------------------------------------------------
+
+
+def test_analyst_cannot_view_workspace_members(client: TestClient):
+    """Analyst role → GET /api/workspace/members returns 403 (AC10)."""
+    headers = _set_role("analyst")
+    resp = client.get("/api/workspace/members", headers=headers)
+    assert resp.status_code == 403
+    assert resp.json()["detail"] == "Insufficient role"
+
+
+def test_viewer_cannot_view_workspace_members(client: TestClient):
+    """Viewer role → GET /api/workspace/members returns 403 (AC10)."""
+    headers = _set_role("viewer")
+    resp = client.get("/api/workspace/members", headers=headers)
+    assert resp.status_code == 403
+    assert resp.json()["detail"] == "Insufficient role"
+
+
+def test_owner_workspace_members_returns_list(client: TestClient):
+    """Owner role → GET /api/workspace/members returns a list with role fields (AC10)."""
+    resp = client.get("/api/workspace/members", headers=AUTH)
+    assert resp.status_code == 200
+    assert isinstance(resp.json(), list)
+    # Dev user seeded as owner of 'default' org in lifespan
+    roles = {m["role"] for m in resp.json()}
+    assert "owner" in roles
+
+
+# ---------------------------------------------------------------------------
 # AC8 — owner can perform all actions
 # ---------------------------------------------------------------------------
 
@@ -157,3 +188,4 @@ def test_unauthenticated_returns_401(client: TestClient, method, path, body):
     else:
         resp = client.post(path, json=body)
     assert resp.status_code == 401
+ 

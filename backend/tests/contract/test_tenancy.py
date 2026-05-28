@@ -95,8 +95,8 @@ def test_tenancy_violation_returns_500_via_handler(client: TestClient):
 
     from app.middleware.tenancy import TenancyViolationError
 
-    # main.py imports get_all directly; patch the name in main's namespace
-    with patch("app.main.get_all", side_effect=TenancyViolationError("no context")):
+    # list_connectors now calls tenancy_get_all — patch that name in main's namespace
+    with patch("app.main.tenancy_get_all", side_effect=TenancyViolationError("no context")):
         resp = client.get("/api/connectors", headers=AUTH)
 
     assert resp.status_code == 500
@@ -107,6 +107,46 @@ def test_middleware_sets_default_org(client: TestClient):
     """X-Org-Id header is not required; middleware defaults to 'default'."""
     resp = client.get("/api/health")
     assert resp.status_code == 200
+
+
+def test_list_connectors_uses_tenancy_guard(client: TestClient):
+    """GET /api/connectors calls tenancy_get_all, not raw get_all (AC1 — data layer)."""
+    from unittest.mock import patch
+
+    called_with: list[str] = []
+
+    def _spy(table: str):
+        called_with.append(table)
+        return []
+
+    # Patch tenancy_get_all in main's namespace (that's where it was imported)
+    with patch("app.main.tenancy_get_all", side_effect=_spy):
+        client.get("/api/connectors", headers=AUTH)
+
+    assert called_with == ["connectors"], (
+        "list_connectors must call tenancy_get_all('connectors'), not raw get_all"
+    )
+
+
+def test_cross_org_connector_not_visible_via_route(client: TestClient):
+    """org_A cannot see a connector record tagged org_B through the actual route (AC1)."""
+    from unittest.mock import patch
+
+    # Simulate org_B owning the connector record
+    org_b_connector = {"id": "salesforce", "name": "Salesforce", "org_id": "org_B"}
+
+    # tenancy_get_all filters: org_A request sees [] because row is tagged org_B
+    def _tenancy_filtered(table: str):
+        from app.middleware.tenancy import get_current_org_id
+        current = get_current_org_id()
+        return [r for r in [org_b_connector] if r.get("org_id") == current]
+
+    with patch("app.main.tenancy_get_all", side_effect=_tenancy_filtered):
+        # Request as org_A — should NOT see org_B's connector
+        resp = client.get("/api/connectors", headers={**AUTH, "X-Org-Id": "default"})
+
+    assert resp.status_code == 200
+    assert resp.json() == [], "org_A must not see org_B's connector record"
 
 
 def test_middleware_respects_x_org_id_header(client: TestClient):
@@ -137,7 +177,8 @@ def test_middleware_respects_x_org_id_header(client: TestClient):
         captured.append(get_current_org_id())
         return []
 
-    with patch("app.main.get_all", side_effect=_capture):
+    with patch("app.main.tenancy_get_all", side_effect=_capture):
         client.get("/api/connectors", headers={**AUTH, "X-Org-Id": "acme_corp"})
 
     assert captured and captured[0] == "acme_corp"
+ 

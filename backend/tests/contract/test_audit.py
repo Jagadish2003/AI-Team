@@ -197,3 +197,90 @@ def test_primary_operation_continues_after_audit_failure(client):
             "/api/health",
         )
     assert resp.status_code == 200
+
+
+# ---------------------------------------------------------------------------
+# AC3 — run_started record includes user_id
+# ---------------------------------------------------------------------------
+
+
+def test_run_started_includes_user_id():
+    """run_started log_event must include user_id (AC3)."""
+    import app.db as db_mod
+    import app.middleware.audit as audit_mod
+    from pathlib import Path
+
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
+        db_path = f.name
+
+    original = db_mod.DB_PATH
+    db_mod.DB_PATH = Path(db_path)
+    audit_mod._TABLES_INITIALISED = False
+
+    try:
+        from app.middleware.audit import log_event
+        log_event(
+            "run_started",
+            run_id="run_test_001",
+            user_id="dev-token-change-me",
+            pack_id="service_cloud",
+            system_ids=["salesforce", "servicenow"],
+        )
+        rows = _read_audit_rows(db_path)
+        assert len(rows) == 1
+        row = rows[0]
+        assert row["event_type"] == "run_started"
+        assert row["user_id"] == "dev-token-change-me", "user_id must be stored in audit record"
+        assert row["run_id"] == "run_test_001"
+        assert row["payload"]["pack_id"] == "service_cloud"
+        assert row["payload"]["system_ids"] == ["salesforce", "servicenow"]
+    finally:
+        db_mod.DB_PATH = original
+        audit_mod._TABLES_INITIALISED = False
+        try:
+            os.unlink(db_path)
+        except OSError:
+            pass
+
+
+# ---------------------------------------------------------------------------
+# AC4 — connector_connected record includes user_id and scopes_granted
+# ---------------------------------------------------------------------------
+
+
+def test_connector_connected_includes_user_id_and_scopes():
+    """connector_connected log_event must include user_id and scopes_granted (AC4)."""
+    import app.db as db_mod
+    import app.middleware.audit as audit_mod
+    from pathlib import Path
+
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
+        db_path = f.name
+
+    original = db_mod.DB_PATH
+    db_mod.DB_PATH = Path(db_path)
+    audit_mod._TABLES_INITIALISED = False
+
+    try:
+        from app.middleware.audit import log_event
+        log_event(
+            "connector_connected",
+            connector_id="salesforce",
+            user_id="dev-token-change-me",
+            scopes_granted=["api", "refresh_token"],
+        )
+        rows = _read_audit_rows(db_path)
+        assert len(rows) == 1
+        row = rows[0]
+        assert row["event_type"] == "connector_connected"
+        assert row["connector_id"] == "salesforce"
+        assert row["user_id"] == "dev-token-change-me", "user_id must be stored in audit record"
+        assert row["payload"]["scopes_granted"] == ["api", "refresh_token"]
+    finally:
+        db_mod.DB_PATH = original
+        audit_mod._TABLES_INITIALISED = False
+        try:
+            os.unlink(db_path)
+        except OSError:
+            pass
+ 
