@@ -22,6 +22,17 @@ def pytest_configure(config):
     os.environ.setdefault("SEED_DIR", str(BACKEND_DIR / "database" / "seed"))
     os.environ.setdefault("CORS_ORIGINS", "http://localhost:5173")
 
+    alembic_result = subprocess.run(
+        [sys.executable, "-m", "alembic", "-c", "alembic.ini", "upgrade", "head"],
+        cwd=str(BACKEND_DIR),
+        env={**os.environ, "DB_PATH": TEST_DB_PATH, "PYTHONIOENCODING": "utf-8"},
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+    )
+    if alembic_result.returncode != 0:
+        raise RuntimeError(f"alembic upgrade failed:\n{alembic_result.stderr}")
+
     result = subprocess.run(
         [sys.executable, str(SEED_LOADER)],
         cwd=str(BACKEND_DIR),
