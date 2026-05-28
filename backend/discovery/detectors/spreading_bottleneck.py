@@ -34,6 +34,12 @@ from ..models import (
 
 DETECTOR_ID    = "SPREADING_BOTTLENECK"
 MIN_DAYS_OPEN  = 14  # unlocked for 14+ days = bottleneck
+SIGNAL_METRICS = {
+    "unlocked_count":    "Number of spread periods open 14+ days; primary bottleneck volume",
+    "max_days_unlocked": "Worst-case days unlocked; tracks severity of longest open period",
+    "avg_days_unlocked": "Average days unlocked; smoothed trend across all open periods",
+    "total_periods":     "Total periods evaluated; normalises unlocked_count as a rate",
+}
 
 SIGNAL_METRICS = [
     "total_periods",      # spread statement period workload volume
