@@ -205,15 +205,33 @@ def run(
         logger.info("Pack: service_cloud — 7 SC detectors active")
 
     detector_results = []
+    all_evaluated = []
     for det in all_detectors:
         name = det.__name__.split(".")[-1]
         try:
+            evaluation = det.evaluate(sf_data, sn_data, jira_data)
+            all_evaluated.append(evaluation)
             fired = det.detect(sf_data, sn_data, jira_data)
             detector_results.extend(fired)
             status = f"FIRED ({len(fired)})" if fired else "not fired"
         except Exception as e:
             fired, status = [], f"ERROR: {e}"
         logger.info(f"  {name}: {status}")
+
+    # T3-S10-A T8: snapshot after detector phase, before LLM enrichment — non-blocking
+    run_completed_at = datetime.now(timezone.utc)
+    try:
+        from backend.app.temporal import snapshot_signals
+        snapshot_signals(
+            org_id=org_id,
+            run_id=run_id,
+            pack_id=pack_id,
+            detector_results=detector_results,
+            all_evaluated=all_evaluated,
+            run_completed_at=run_completed_at,
+        )
+    except Exception as e:
+        logger.warning("Signal snapshot failed (non-blocking): %s", e)
 
     # 4. Score + Evidence
     # ENG-AIQ-NC-4: use lending_scorer for ncino pack, SC scorer for service_cloud
