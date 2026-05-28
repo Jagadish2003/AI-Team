@@ -142,12 +142,31 @@ def _schema_discovery_result_to_response(
     )
 
 
+def _import_driver_for_connector(connector_id: str) -> None:
+    """Import a driver module so it registers with the pool factory."""
+    if connector_id == "sqlserver":
+        try:
+            from backend.connectors.db import sqlserver as _sqlserver  # noqa: F401, PLC0415
+        except ModuleNotFoundError:
+            from connectors.db import sqlserver as _sqlserver  # type: ignore[no-redef] # noqa: F401, PLC0415
+    elif connector_id == "oracle_db":
+        try:
+            from backend.connectors.db import oracle as _oracle  # noqa: F401, PLC0415
+        except ModuleNotFoundError:
+            from connectors.db import oracle as _oracle  # type: ignore[no-redef] # noqa: F401, PLC0415
+    elif connector_id == "postgresql":
+        try:
+            from backend.connectors.db import postgresql as _postgresql  # noqa: F401, PLC0415
+        except ModuleNotFoundError:
+            from connectors.db import postgresql as _postgresql  # type: ignore[no-redef] # noqa: F401, PLC0415
+
+
 def _discover_schema_for_connector(conn: Any, connector_id: str) -> SchemaDiscoveryResult:
     """Dispatch schema discovery to the correct driver implementation.
 
-    Only SQL Server is implemented in Sprint 10.  Other drivers return a
-    stub result rather than raising, so the route stays operational while
-    Oracle and PostgreSQL drivers are delivered in later tasks.
+    Known Sprint 10 drivers dispatch to their concrete catalogue queries.
+    Unknown connectors return a stub result so the route stays operational
+    while future drivers are delivered.
     """
     if connector_id == "sqlserver":
         # Import here to avoid circular imports and to keep the driver optional
@@ -158,7 +177,23 @@ def _discover_schema_for_connector(conn: Any, connector_id: str) -> SchemaDiscov
 
         return discover_schema_sqlserver(conn)
 
-    # Stub for oracle_db / postgresql — Sprint 10 drivers not yet delivered
+    if connector_id == "oracle_db":
+        try:
+            from backend.connectors.db.oracle import discover_schema_oracle  # noqa: PLC0415
+        except ModuleNotFoundError:  # Runtime inside backend/ where connectors is top-level.
+            from connectors.db.oracle import discover_schema_oracle  # type: ignore[no-redef] # noqa: PLC0415
+
+        return discover_schema_oracle(conn)
+
+    if connector_id == "postgresql":
+        try:
+            from backend.connectors.db.postgresql import discover_schema_postgresql  # noqa: PLC0415
+        except ModuleNotFoundError:  # Runtime inside backend/ where connectors is top-level.
+            from connectors.db.postgresql import discover_schema_postgresql  # type: ignore[no-redef] # noqa: PLC0415
+
+        return discover_schema_postgresql(conn)
+
+    # Stub for unknown future drivers.
     return SchemaDiscoveryResult(
         schemas=[],
         tables=[],
@@ -234,6 +269,7 @@ def get_schema(
         from connectors.db.connection_pool import get_or_create_pool  # type: ignore[no-redef] # noqa: PLC0415
 
     try:
+        _import_driver_for_connector(connector_id)
         pool = get_or_create_pool(config)
         conn = pool.acquire(timeout=config.connect_timeout_s)
     except DBConnectionError as exc:
@@ -394,6 +430,7 @@ def get_connection_test(
     conn = None
     pool = None
     try:
+        _import_driver_for_connector(connector_id)
         pool = get_or_create_pool(config)
         conn = pool.acquire(timeout=config.connect_timeout_s)
         _run_test_query(conn, connector_id)
