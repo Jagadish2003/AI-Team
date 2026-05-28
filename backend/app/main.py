@@ -14,7 +14,7 @@ from fastapi.middleware.cors import CORSMiddleware
 load_dotenv()
 
 from . import db
-from .db import get_all, get_one, kv_get, kv_set, run_get, upsert
+from .db import get_all, get_one, kv_get, kv_set, run_get, upsert, tenancy_get_all, tenancy_get_one
 from .normalization_enrichment import enrich_ambiguous_mappings
 from .opportunity_display import (
     with_display_title,
@@ -139,7 +139,7 @@ def api_health() -> Dict[str, Any]:
 
 @app.get("/api/connectors", dependencies=[Depends(require_auth), Depends(require_role("viewer"))])
 def list_connectors() -> List[Dict[str, Any]]:
-    return get_all("connectors")
+    return tenancy_get_all("connectors")
 
 
 @app.post(
@@ -147,7 +147,7 @@ def list_connectors() -> List[Dict[str, Any]]:
     dependencies=[Depends(require_auth), Depends(require_role("analyst"))],
 )
 def connect_connector(connector_id: str, body: Dict[str, Any]) -> Dict[str, Any]:
-    c = get_one("connectors", connector_id)
+    c = tenancy_get_one("connectors", connector_id)
     if not c:
         raise HTTPException(404, "connector not found")
     status = body.get("status", "connected")
@@ -162,7 +162,7 @@ def connect_connector(connector_id: str, body: Dict[str, Any]) -> Dict[str, Any]
     dependencies=[Depends(require_auth), Depends(require_role("analyst"))],
 )
 def configure_connector(connector_id: str) -> Dict[str, Any]:
-    c = get_one("connectors", connector_id)
+    c = tenancy_get_one("connectors", connector_id)
     if not c:
         raise HTTPException(404, "connector not found")
     if c.get("status") != "connected":

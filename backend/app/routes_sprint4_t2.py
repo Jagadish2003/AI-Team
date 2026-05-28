@@ -4,7 +4,7 @@ from . import db
 from .materialize_t2 import get_status, run_trackb_and_persist, set_status
 from .middleware.audit import log_event
 from .models_t2 import StartRunRequest, StartRunResponse, StatusResponse
-from .rbac import require_role
+from .rbac import require_role, _get_user_id_from_token
 from .replay import seed_events
 from .security import require_auth
 
@@ -16,9 +16,13 @@ def register_sprint4_t2_routes(app):
     @app.post(
         "/api/runs/start",
         response_model=StartRunResponse,
-        dependencies=[Depends(require_auth), Depends(require_role("analyst"))],
+        dependencies=[Depends(require_role("analyst"))],
     )
-    async def start_run(body: StartRunRequest, background_tasks: BackgroundTasks):
+    async def start_run(
+        body: StartRunRequest,
+        background_tasks: BackgroundTasks,
+        token: str = Depends(require_auth),
+    ):
         """
         Creates a new run record, marks it RUNNING, and schedules Track B materialization
         in the background. Returns immediately with runId.
@@ -65,6 +69,7 @@ def register_sprint4_t2_routes(app):
         log_event(
             "run_started",
             run_id=run_id,
+            user_id=_get_user_id_from_token(token),
             pack_id=body.mode,
             system_ids=body.systems,
         )
@@ -86,3 +91,4 @@ def register_sprint4_t2_routes(app):
         s["runId"] = run_id
         s["isReplay"] = run.get("isReplay", False)  # ← add isReplay from run record
         return s
+ 
