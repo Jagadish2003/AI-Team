@@ -6,6 +6,7 @@ Public surface area (locked after T2-S10-A merges):
     DBConnectorConfig, ScopeDeclaration, DBQueryResult, SchemaDiscoveryResult
     DBScopeViolationError, DBQueryRejectedError, DBConnectionError
     validate_read_only, validate_scope
+    save_scope, get_scope
 """
 
 from .models import (
@@ -20,6 +21,7 @@ from .models import (
     DBConnectionError,
 )
 from .query_guard import validate_read_only, validate_scope
+from .scope import get_scope, save_scope
 
 __all__ = [
     # Data models
@@ -36,4 +38,7 @@ __all__ = [
     # Query guard
     "validate_read_only",
     "validate_scope",
+    # Scope management
+    "save_scope",
+    "get_scope",
 ]

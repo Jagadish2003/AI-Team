@@ -24,11 +24,39 @@ from __future__ import annotations
 import pytest
 from fastapi.testclient import TestClient
 
+from app.db_connectors.models import ColumnMeta, SchemaDiscoveryResult, TableMeta
 from app.main import app
+from connectors.db.scope import save_discovered_schema
 
 AUTH = {"Authorization": "Bearer dev-token-change-me"}
 BAD_AUTH = {"Authorization": "Bearer wrong-token"}
 CONNECTOR = "sqlserver"
+
+
+def _seed_discovered_schema(
+    connector_id: str = CONNECTOR,
+    org_id: str = "default",
+    schemas: list[str] | None = None,
+    tables: list[tuple[str, str]] | None = None,
+) -> None:
+    table_pairs = tables or [("dbo", "accounts"), ("dbo", "contacts"), ("dbo", "leads")]
+    schema_names = schemas or sorted({schema for schema, _table in table_pairs})
+    save_discovered_schema(
+        org_id,
+        connector_id,
+        SchemaDiscoveryResult(
+            schemas=schema_names,
+            tables=[
+                TableMeta(schema=schema, table=table)
+                for schema, table in table_pairs
+            ],
+            columns=[
+                ColumnMeta(schema=schema, table=table, column="id")
+                for schema, table in table_pairs
+            ],
+            estimated_row_counts=None,
+        ),
+    )
 
 
 @pytest.fixture(scope="module")
@@ -79,6 +107,7 @@ class TestAuthGuard:
 
 class TestPostScope:
     def test_post_scope_returns_201(self, client: TestClient) -> None:
+        _seed_discovered_schema()
         r = client.post(
             f"/api/db-connectors/{CONNECTOR}/scope",
             headers=AUTH,
@@ -87,6 +116,7 @@ class TestPostScope:
         assert r.status_code == 201
 
     def test_post_scope_response_body(self, client: TestClient) -> None:
+        _seed_discovered_schema(tables=[("dbo", "accounts")])
         r = client.post(
             f"/api/db-connectors/{CONNECTOR}/scope",
             headers=AUTH,
@@ -99,6 +129,7 @@ class TestPostScope:
 
     def test_post_scope_empty_tables_allowed(self, client: TestClient) -> None:
         """tables=[] is valid — means any table in the declared schemas."""
+        _seed_discovered_schema(schemas=["public"], tables=[("public", "events")])
         r = client.post(
             f"/api/db-connectors/{CONNECTOR}/scope",
             headers=AUTH,
@@ -107,12 +138,36 @@ class TestPostScope:
         assert r.status_code == 201
 
     def test_post_scope_multiple_schemas(self, client: TestClient) -> None:
+        _seed_discovered_schema(
+            schemas=["dbo", "hr", "finance"],
+            tables=[("dbo", "accounts"), ("hr", "employees"), ("finance", "ledger")],
+        )
         r = client.post(
             f"/api/db-connectors/{CONNECTOR}/scope",
             headers=AUTH,
             json={"schemas": ["dbo", "hr", "finance"], "tables": []},
         )
         assert r.status_code == 201
+
+    def test_post_scope_unknown_table_returns_400(self, client: TestClient) -> None:
+        connector_id = "sqlserver_unknown_table_contract"
+        _seed_discovered_schema(
+            connector_id=connector_id,
+            tables=[("dbo", "accounts")],
+        )
+
+        r = client.post(
+            f"/api/db-connectors/{connector_id}/scope",
+            headers=AUTH,
+            json={"schemas": ["dbo"], "tables": ["missing_table"]},
+        )
+
+        assert r.status_code == 400
+        assert r.json()["detail"]["error_code"] == "unknown_table"
+        assert client.get(
+            f"/api/db-connectors/{connector_id}/scope",
+            headers=AUTH,
+        ).status_code == 404
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -129,6 +184,7 @@ class TestGetScope:
 
     def test_get_scope_returns_saved_scope(self, client: TestClient) -> None:
         # Save scope first
+        _seed_discovered_schema(tables=[("dbo", "leads")])
         client.post(
             f"/api/db-connectors/{CONNECTOR}/scope",
             headers=AUTH,
@@ -143,6 +199,7 @@ class TestGetScope:
         assert "leads" in body["tables"]
 
     def test_get_scope_response_shape(self, client: TestClient) -> None:
+        _seed_discovered_schema(schemas=["sales"], tables=[("sales", "accounts")])
         client.post(
             f"/api/db-connectors/{CONNECTOR}/scope",
             headers=AUTH,
@@ -158,6 +215,10 @@ class TestGetScope:
     def test_scope_roundtrip(self, client: TestClient) -> None:
         """POST then GET returns identical schemas and tables."""
         payload = {"schemas": ["analytics", "reporting"], "tables": ["events", "pageviews"]}
+        _seed_discovered_schema(
+            schemas=payload["schemas"],
+            tables=[("analytics", "events"), ("reporting", "pageviews")],
+        )
         client.post(
             f"/api/db-connectors/{CONNECTOR}/scope",
             headers=AUTH,

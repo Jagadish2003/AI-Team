@@ -49,8 +49,21 @@ from .db_connectors.models import (
     SchemaDiscoveryResult,
     ScopeDeclaration,
 )
-from .middleware.audit import SCHEMA_DISCOVERED, SCOPE_DECLARED, log_event
+from .middleware.audit import SCHEMA_DISCOVERED, log_event
 from .security import require_auth, require_role
+
+try:
+    from backend.connectors.db.scope import (
+        get_scope as load_scope,
+        save_discovered_schema,
+        save_scope as persist_scope,
+    )
+except ModuleNotFoundError:  # Runtime inside backend/ where connectors is top-level.
+    from connectors.db.scope import (
+        get_scope as load_scope,
+        save_discovered_schema,
+        save_scope as persist_scope,
+    )
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -296,6 +309,7 @@ def get_schema(
         schema_count=len(result.schemas),
         table_count=len(result.tables),
     )
+    save_discovered_schema(org_id, connector_id, result)
 
     return _schema_discovery_result_to_response(result)
 
@@ -323,7 +337,6 @@ def post_scope(
     _role: str = Depends(require_role("analyst")),
 ) -> Dict[str, Any]:
     org_id = body.org_id
-    now_iso = datetime.now(timezone.utc).isoformat()
 
     scope = ScopeDeclaration(
         org_id=org_id,
@@ -334,26 +347,8 @@ def post_scope(
         declared_by="analyst",  # Production: extract identity from JWT
     )
 
-    _db.kv_set(
-        _kv_scope_key(org_id, connector_id),
-        {
-            "org_id": scope.org_id,
-            "connector_id": scope.connector_id,
-            "schemas": scope.schemas,
-            "tables": scope.tables,
-            "declared_at": now_iso,
-            "declared_by": scope.declared_by,
-        },
-    )
-
-    # Emit audit event — fail-silent
-    log_event(
-        SCOPE_DECLARED,
-        org_id=org_id,
-        connector_id=connector_id,
-        schemas=scope.schemas,
-        tables=scope.tables,
-    )
+    # Persist validated scope; save_scope emits the scope_declared audit event.
+    persist_scope(scope)
 
     response.status_code = 201
     return {"status": "scope_saved", "connector_id": connector_id, "org_id": org_id}
@@ -379,20 +374,15 @@ def get_scope(
 ) -> ScopeResponse:
     org_id = _DEV_ORG_ID
 
-    raw: Optional[Dict[str, Any]] = _db.kv_get(_kv_scope_key(org_id, connector_id))
-    if raw is None:
-        raise HTTPException(
-            status_code=404,
-            detail=f"No scope declared for connector '{connector_id}' in org '{org_id}'.",
-        )
+    scope = load_scope(org_id, connector_id)
 
     return ScopeResponse(
-        org_id=raw["org_id"],
-        connector_id=raw["connector_id"],
-        schemas=raw["schemas"],
-        tables=raw["tables"],
-        declared_at=raw["declared_at"],
-        declared_by=raw["declared_by"],
+        org_id=scope.org_id,
+        connector_id=scope.connector_id,
+        schemas=scope.schemas,
+        tables=scope.tables,
+        declared_at=scope.declared_at.isoformat(),
+        declared_by=scope.declared_by,
     )
 
 
