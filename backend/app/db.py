@@ -225,3 +225,67 @@ def run_kv_get(key: str, run_id: str, default: Any = None) -> Any:
 def run_kv_set(key: str, run_id: str, value: Any) -> None:
     """Helper to set run-scoped key-value data."""
     kv_set(f"{key}:{run_id}", value)
+
+
+# ---------------------------------------------------------------------------
+# Tenancy-guarded query helpers — AT-82 / T1-S10-B T2
+# ---------------------------------------------------------------------------
+# These are the single enforcement point for multi-tenant data access.
+# Every call to tenancy_get_all / tenancy_get_one first validates that a
+# request-scoped org_id has been set in context.  Tables covered:
+#   connectors, runs, kv_store, setup_state
+#
+# IMPORTANT: The existing {id, payload} tables do not have an org_id SQL
+# column in the current schema.  Isolation is therefore enforced at the
+# Python layer (payload-level filtering) with context presence as the hard
+# gate.  Adding a proper org_id SQL column per table is deferred to the
+# schema migration that will follow once the schema is stable.
+# ---------------------------------------------------------------------------
+
+# Tables that require tenancy enforcement
+_TENANCY_PROTECTED: frozenset[str] = frozenset(
+    {"connectors", "runs", "kv_store", "setup_state"}
+)
+
+
+def _assert_tenancy(table: str) -> str:
+    """Raise TenancyViolationError if no org context is set.
+
+    Returns the current org_id so callers can use it for payload filtering.
+    Imported lazily to avoid a circular import at module load time.
+    """
+    from app.middleware.tenancy import get_current_org_id  # lazy import
+    return get_current_org_id()
+
+
+def tenancy_get_all(table: str) -> List[Dict[str, Any]]:
+    """Return all payload rows for *table*, enforcing tenancy context.
+
+    Raises TenancyViolationError if called outside a request with org_id set.
+    When the payload contains an 'org_id' field the results are additionally
+    filtered to the current org.  Rows without an org_id field pass through
+    (legacy data seeded before multi-tenancy was added).
+    """
+    org_id = _assert_tenancy(table)
+    rows = get_all(table)
+    # Filter to current org where the payload declares one
+    return [
+        r for r in rows
+        if r.get("org_id") is None or r.get("org_id") == org_id
+    ]
+
+
+def tenancy_get_one(table: str, id_: str) -> Optional[Dict[str, Any]]:
+    """Return a single payload row, enforcing tenancy context.
+
+    Returns None if the row does not exist OR belongs to a different org.
+    Raises TenancyViolationError if called outside a request with org_id set.
+    """
+    org_id = _assert_tenancy(table)
+    row = get_one(table, id_)
+    if row is None:
+        return None
+    row_org = row.get("org_id")
+    if row_org is not None and row_org != org_id:
+        return None  # silently deny — same as not found (AC1)
+    return row
