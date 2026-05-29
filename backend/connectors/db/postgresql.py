@@ -1,22 +1,23 @@
 """
-PostgreSQL connection driver — T2-S10-A Task T5.
+PostgreSQL connection driver - T2-S10-A Task T5.
 
-Driver:  psycopg2-binary.
-SSL:     Configurable via config.ssl_mode (valid: 'require', 'prefer', 'disable').
-         Default: 'prefer' (autodetect).
+Driver: psycopg2-binary.
+SSL:    config.ssl_mode or POSTGRESQL_SSL_MODE, limited to require/prefer/disable.
 Timeouts:
-  connect_timeout_s  → connect_timeout in connection string (seconds).
-  query_timeout_s    → statement_timeout on the session (milliseconds).
+  connect_timeout_s -> psycopg2.connect(connect_timeout=...)
+  query_timeout_s   -> psycopg2 connection options statement_timeout in ms.
 
-Quoted identifiers:  use double-quotes "" for all PostgreSQL identifiers in queries.
-  See quote_identifier() below.
-
+Quoted identifiers: use double quotes for schema and table identifiers.
 Registers itself with the pool factory at import time via register_driver().
 """
 
 from __future__ import annotations
 
+import os
+from typing import Any
+
 import psycopg2
+from psycopg2.extensions import connection as PsycopgConnection
 
 from backend.app.db_connectors.models import (
     ColumnMeta,
@@ -27,86 +28,80 @@ from backend.app.db_connectors.models import (
 )
 from backend.connectors.db.connection_pool import register_driver
 
-# ---------------------------------------------------------------------------
-# Constants
-# ---------------------------------------------------------------------------
 
-# System catalogue query for schema discovery (spec: T2-S10-A table 14).
-# Returns schema, table, and column names excluding system schemas.
+SSL_MODE_ENV_VAR: str = "POSTGRESQL_SSL_MODE"
+ALLOWED_SSL_MODES: frozenset[str] = frozenset({"require", "prefer", "disable"})
+
+TRIVIAL_QUERY: str = "SELECT 1"
+
 CATALOGUE_QUERY: str = (
     "SELECT table_schema, table_name, column_name "
     "FROM information_schema.columns "
-    "WHERE table_schema NOT IN ('pg_catalog', 'information_schema')"
+    "WHERE table_schema NOT IN ('pg_catalog','information_schema')"
 )
 
-# ---------------------------------------------------------------------------
-# Identifier quoting
-# ---------------------------------------------------------------------------
 
 def quote_identifier(name: str) -> str:
-    """Wrap a PostgreSQL identifier in double-quotes.
-
-    Escapes embedded double-quotes by doubling them, per ANSI SQL convention.
-    Always use this for schema and table names in queries.
-
-    Example:
-        quote_identifier("public")     -> '"public"'
-        quote_identifier('odd"name')   -> '"odd""name"'
-    """
+    """Wrap a PostgreSQL identifier in double quotes."""
     return '"' + name.replace('"', '""') + '"'
 
 
-# ---------------------------------------------------------------------------
-# Connection string construction (never logged or surfaced in errors)
-# ---------------------------------------------------------------------------
+def qualified_table_name(schema: str, table: str) -> str:
+    """Return a schema-qualified table reference with both identifiers quoted."""
+    return f"{quote_identifier(schema)}.{quote_identifier(table)}"
 
-def _build_connection_string(
+
+def _resolve_ssl_mode(config: DBConnectorConfig) -> str:
+    """Resolve and validate the PostgreSQL sslmode value."""
+    raw_mode = config.ssl_mode or os.environ.get(SSL_MODE_ENV_VAR, "prefer")
+    ssl_mode = raw_mode.strip().lower()
+    if ssl_mode not in ALLOWED_SSL_MODES:
+        allowed = ", ".join(sorted(ALLOWED_SSL_MODES))
+        raise DBConnectionError(
+            f"Invalid PostgreSQL ssl_mode {ssl_mode!r}. Allowed values: {allowed}.",
+            error_code="invalid_ssl_mode",
+        )
+    return ssl_mode
+
+
+def _statement_timeout_option(config: DBConnectorConfig) -> str:
+    timeout_ms = int(config.query_timeout_s) * 1000
+    return f"-c statement_timeout={timeout_ms}"
+
+
+def _connect_kwargs(
     config: DBConnectorConfig,
     username: str,
     password: str,
-) -> str:
-    """Build the psycopg2 connection string.
+) -> dict[str, Any]:
+    """Build keyword arguments for psycopg2.connect().
 
-    SSL mode is applied from config.ssl_mode (valid: 'require', 'prefer', 'disable').
-    connect_timeout_s is applied directly.
-    The query timeout is set separately on the session after connect.
-
-    This string must NEVER appear in log output or exception messages.
+    The returned dict contains credentials and must never be logged.
     """
-    ssl_mode = config.ssl_mode or "prefer"
-    return (
-        f"host={config.host} "
-        f"port={config.port} "
-        f"database={config.database} "
-        f"user={username} "
-        f"password={password} "
-        f"connect_timeout={config.connect_timeout_s} "
-        f"sslmode={ssl_mode}"
-    )
+    return {
+        "host": config.host,
+        "port": config.port,
+        "dbname": config.database,
+        "user": username,
+        "password": password,
+        "connect_timeout": config.connect_timeout_s,
+        "sslmode": _resolve_ssl_mode(config),
+        "options": _statement_timeout_option(config),
+    }
 
-
-# ---------------------------------------------------------------------------
-# Driver factory — registered with the pool factory below
-# ---------------------------------------------------------------------------
 
 def create_postgresql_connection(
     config: DBConnectorConfig,
     username: str,
     password: str,
-) -> psycopg2.extensions.connection:
-    """Create and return a psycopg2 connection to PostgreSQL.
-
-    SSL mode is configurable.  connect_timeout_s bounds the TCP handshake.
-    query_timeout_s is applied as statement_timeout (per-statement timeout).
-
-    Raises DBConnectionError on any failure.  The error message includes only
-    host and database — never the connection string, username, or password.
-    """
-    conn_str = _build_connection_string(config, username, password)
+) -> PsycopgConnection:
+    """Create and return a psycopg2 connection to PostgreSQL."""
+    kwargs = _connect_kwargs(config, username, password)
     try:
-        conn = psycopg2.connect(conn_str)
+        return psycopg2.connect(**kwargs)
+    except DBConnectionError:
+        raise
     except psycopg2.OperationalError as exc:
-        # Sanitised message: host + db only, no credentials or conn string.
         raise DBConnectionError(
             f"PostgreSQL connection failed [{type(exc).__name__}] "
             f"host={config.host!r} db={config.database!r}",
@@ -125,32 +120,9 @@ def create_postgresql_connection(
             error_code="connection_failed",
         ) from exc
 
-    # Apply query-execution timeout (distinct from TCP connect timeout).
-    # statement_timeout expects milliseconds in PostgreSQL.
-    cursor = conn.cursor()
-    try:
-        cursor.execute(
-            f"SET statement_timeout = {config.query_timeout_s * 1000};"
-        )
-        conn.commit()
-    finally:
-        cursor.close()
 
-    return conn
-
-
-# ---------------------------------------------------------------------------
-# Schema discovery helper
-# ---------------------------------------------------------------------------
-
-def discover_schema_postgresql(conn: psycopg2.extensions.connection) -> SchemaDiscoveryResult:
-    """Run the information_schema.columns query and return a SchemaDiscoveryResult.
-
-    Uses information_schema.columns — no customer data accessed.
-    estimated_row_counts is always None for PostgreSQL in Sprint 10
-    (row count estimation requires checking table statistics which may not be
-    accurate or available depending on autovacuum settings).
-    """
+def discover_schema_postgresql(conn: PsycopgConnection) -> SchemaDiscoveryResult:
+    """Run the information_schema catalogue query and return schema metadata."""
     cursor = conn.cursor()
     try:
         cursor.execute(CATALOGUE_QUERY)
@@ -171,18 +143,10 @@ def discover_schema_postgresql(conn: psycopg2.extensions.connection) -> SchemaDi
 
     return SchemaDiscoveryResult(
         schemas=sorted(schemas),
-        tables=[
-            TableMeta(schema=s, table=t) for s, t in sorted(tables_seen)
-        ],
+        tables=[TableMeta(schema=s, table=t) for s, t in sorted(tables_seen)],
         columns=columns,
         estimated_row_counts=None,
     )
 
 
-# ---------------------------------------------------------------------------
-# Self-registration with the pool factory
-# ---------------------------------------------------------------------------
-
-# Importing this module is sufficient to register the PostgreSQL driver.
-# T2-S10-A's get_or_create_pool() will then be able to build PostgreSQL pools.
 register_driver("postgresql", create_postgresql_connection)

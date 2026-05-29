@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
+import sys
 from typing import Optional
 
 
@@ -101,3 +102,11 @@ class DBConnectionError(Exception):
     def __init__(self, message: str, error_code: str) -> None:
         super().__init__(message)
         self.error_code = error_code
+
+
+# Keep the top-level ``app`` and repo-root ``backend.app`` import paths from
+# creating duplicate dataclass/exception identities during local test runs.
+if __name__ == "backend.app.db_connectors.models":
+    sys.modules.setdefault("app.db_connectors.models", sys.modules[__name__])
+elif __name__ == "app.db_connectors.models":
+    sys.modules.setdefault("backend.app.db_connectors.models", sys.modules[__name__])
