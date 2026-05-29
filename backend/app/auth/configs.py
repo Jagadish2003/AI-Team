@@ -59,7 +59,7 @@ CONNECTOR_AUTH_CONFIGS: Dict[str, ConnectorAuthConfig] = {
         secret_key="CONFLUENCE_CLIENT_SECRET",
         token_url="https://auth.atlassian.com/oauth/token",
         revocation_url="https://auth.atlassian.com/oauth/token/revoke",
-        scopes=["read:confluence-space.summary", "read:confluence-content.all", "offline_access"],
+        scopes=["read:confluence-content.all", "read:confluence-space.summary", "read:confluence-user", "search:confluence", "readonly:content.attachment:confluence", "offline_access"],
         authorization_url="https://auth.atlassian.com/authorize",
         redirect_uri="https://app.example.com/auth/callbacks/confluence",
     ),
