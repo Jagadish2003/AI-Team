@@ -249,7 +249,11 @@ def start_health_check_job() -> None:
     )
     _scheduler.start()
 
-    signal.signal(signal.SIGTERM, _sigterm_handler)
+    # signal.signal() is only permitted in the main thread.
+    # Skip in test/worker-thread contexts (e.g. pytest via TestClient).
+    import threading
+    if threading.current_thread() is threading.main_thread():
+        signal.signal(signal.SIGTERM, _sigterm_handler)
 
     logger.info(
         "connector health check scheduler started (interval=%ds)",
