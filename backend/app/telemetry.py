@@ -152,6 +152,38 @@ class EntityExtractionCompletedPayload(TypedDict, total=False):
     failure_count: NotRequired[int]
 
 
+class DbQueryExecutedEvent(TypedDict):
+    """T1-S10-C (T2 events) — written after every connector DB/API query.
+
+    connector_id:  Which connector issued the query.
+    query_hash:    SHA-256 hex digest of the query string (never the raw query).
+    row_count:     Number of rows returned.
+    duration_ms:   Query round-trip time in milliseconds.
+    driver:        Connector driver name (e.g. 'salesforce_soql', 'servicenow_rest').
+    truncated:     True when the result set was capped by a row limit.
+    """
+    connector_id: str
+    query_hash: str
+    row_count: int
+    duration_ms: int
+    driver: str
+    truncated: bool
+
+
+class DbIngestorCompletedEvent(TypedDict):
+    """T1-S10-C (T2 events) — written after a connector ingestor finishes.
+
+    connector_id:     Which connector ran the ingestor.
+    tables_processed: Number of entity types / tables processed.
+    rows_ingested:    Total rows written to the local store.
+    duration_ms:      Total ingestor wall-clock time in milliseconds.
+    """
+    connector_id: str
+    tables_processed: int
+    rows_ingested: int
+    duration_ms: int
+
+
 # ---------------------------------------------------------------------------
 # Event type registry
 # Sprint 10 initial set.  Add new types in the sprint that produces them.
@@ -162,6 +194,9 @@ EVENT_TYPE_REGISTRY: frozenset[str] = frozenset({
     "connector.health_check",
     "run.started",
     "run.completed",
+    # T1-S10-C T2 events — connector query and ingestor observability
+    "db.query_executed",
+    "db.ingestor_completed",
     # T3-S10-A
     "run.signal_snapshot",
     # T1-S14-C  (Sprint 14)

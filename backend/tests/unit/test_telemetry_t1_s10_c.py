@@ -1,0 +1,180 @@
+"""Unit tests for T1-S10-C telemetry registry T2 event types.
+
+Validates that:
+- db.query_executed and db.ingestor_completed are registered in EVENT_TYPE_REGISTRY.
+- DbQueryExecutedEvent and DbIngestorCompletedEvent TypedDicts have the required fields.
+- record_event() accepts these event types without raising or logging a warning.
+
+Run from backend/:
+    python -m pytest tests/unit/test_telemetry_t1_s10_c.py -q
+"""
+from __future__ import annotations
+
+import logging
+from typing import get_type_hints
+
+import pytest
+
+
+# ---------------------------------------------------------------------------
+# Registry membership
+# ---------------------------------------------------------------------------
+
+def test_db_query_executed_in_registry():
+    """db.query_executed must be in EVENT_TYPE_REGISTRY."""
+    from app.telemetry import EVENT_TYPE_REGISTRY
+    assert "db.query_executed" in EVENT_TYPE_REGISTRY
+
+
+def test_db_ingestor_completed_in_registry():
+    """db.ingestor_completed must be in EVENT_TYPE_REGISTRY."""
+    from app.telemetry import EVENT_TYPE_REGISTRY
+    assert "db.ingestor_completed" in EVENT_TYPE_REGISTRY
+
+
+# ---------------------------------------------------------------------------
+# DbQueryExecutedEvent shape
+# ---------------------------------------------------------------------------
+
+def test_db_query_executed_event_importable():
+    """DbQueryExecutedEvent must be importable from app.telemetry."""
+    from app.telemetry import DbQueryExecutedEvent  # noqa: F401
+
+
+def test_db_query_executed_event_has_connector_id():
+    from app.telemetry import DbQueryExecutedEvent
+    hints = get_type_hints(DbQueryExecutedEvent)
+    assert "connector_id" in hints
+
+
+def test_db_query_executed_event_has_query_hash():
+    from app.telemetry import DbQueryExecutedEvent
+    hints = get_type_hints(DbQueryExecutedEvent)
+    assert "query_hash" in hints
+
+
+def test_db_query_executed_event_has_row_count():
+    from app.telemetry import DbQueryExecutedEvent
+    hints = get_type_hints(DbQueryExecutedEvent)
+    assert "row_count" in hints
+
+
+def test_db_query_executed_event_has_duration_ms():
+    from app.telemetry import DbQueryExecutedEvent
+    hints = get_type_hints(DbQueryExecutedEvent)
+    assert "duration_ms" in hints
+
+
+def test_db_query_executed_event_has_driver():
+    from app.telemetry import DbQueryExecutedEvent
+    hints = get_type_hints(DbQueryExecutedEvent)
+    assert "driver" in hints
+
+
+def test_db_query_executed_event_has_truncated():
+    from app.telemetry import DbQueryExecutedEvent
+    hints = get_type_hints(DbQueryExecutedEvent)
+    assert "truncated" in hints
+
+
+# ---------------------------------------------------------------------------
+# DbIngestorCompletedEvent shape
+# ---------------------------------------------------------------------------
+
+def test_db_ingestor_completed_event_importable():
+    """DbIngestorCompletedEvent must be importable from app.telemetry."""
+    from app.telemetry import DbIngestorCompletedEvent  # noqa: F401
+
+
+def test_db_ingestor_completed_event_has_connector_id():
+    from app.telemetry import DbIngestorCompletedEvent
+    hints = get_type_hints(DbIngestorCompletedEvent)
+    assert "connector_id" in hints
+
+
+def test_db_ingestor_completed_event_has_tables_processed():
+    from app.telemetry import DbIngestorCompletedEvent
+    hints = get_type_hints(DbIngestorCompletedEvent)
+    assert "tables_processed" in hints
+
+
+def test_db_ingestor_completed_event_has_rows_ingested():
+    from app.telemetry import DbIngestorCompletedEvent
+    hints = get_type_hints(DbIngestorCompletedEvent)
+    assert "rows_ingested" in hints
+
+
+def test_db_ingestor_completed_event_has_duration_ms():
+    from app.telemetry import DbIngestorCompletedEvent
+    hints = get_type_hints(DbIngestorCompletedEvent)
+    assert "duration_ms" in hints
+
+
+# ---------------------------------------------------------------------------
+# record_event() — accepts new event types without warning
+# ---------------------------------------------------------------------------
+
+def test_record_event_accepts_db_query_executed(caplog):
+    """record_event() must not log a warning for db.query_executed."""
+    from app.telemetry import record_event
+    from unittest.mock import patch
+
+    with patch("app.telemetry.get_db_session") as mock_sess:
+        mock_sess.return_value.__enter__ = lambda s, *a: mock_sess.return_value
+        mock_sess.return_value.__exit__ = lambda s, *a: False
+        mock_sess.return_value.add = lambda e: None
+        mock_sess.return_value.commit = lambda: None
+
+        with caplog.at_level(logging.WARNING, logger="app.telemetry"):
+            record_event(
+                org_id="org-test",
+                event_type="db.query_executed",
+                source="salesforce_ingestor",
+                connector_id="salesforce",
+                duration_ms=42,
+                success=True,
+                count=100,
+                payload={
+                    "connector_id": "salesforce",
+                    "query_hash": "abc123",
+                    "row_count": 100,
+                    "duration_ms": 42,
+                    "driver": "salesforce_soql",
+                    "truncated": False,
+                },
+            )
+
+    warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert not warnings, f"Unexpected warnings: {[r.message for r in warnings]}"
+
+
+def test_record_event_accepts_db_ingestor_completed(caplog):
+    """record_event() must not log a warning for db.ingestor_completed."""
+    from app.telemetry import record_event
+    from unittest.mock import patch
+
+    with patch("app.telemetry.get_db_session") as mock_sess:
+        mock_sess.return_value.__enter__ = lambda s, *a: mock_sess.return_value
+        mock_sess.return_value.__exit__ = lambda s, *a: False
+        mock_sess.return_value.add = lambda e: None
+        mock_sess.return_value.commit = lambda: None
+
+        with caplog.at_level(logging.WARNING, logger="app.telemetry"):
+            record_event(
+                org_id="org-test",
+                event_type="db.ingestor_completed",
+                source="salesforce_ingestor",
+                connector_id="salesforce",
+                duration_ms=380,
+                success=True,
+                count=4500,
+                payload={
+                    "connector_id": "salesforce",
+                    "tables_processed": 3,
+                    "rows_ingested": 4500,
+                    "duration_ms": 380,
+                },
+            )
+
+    warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert not warnings, f"Unexpected warnings: {[r.message for r in warnings]}"
