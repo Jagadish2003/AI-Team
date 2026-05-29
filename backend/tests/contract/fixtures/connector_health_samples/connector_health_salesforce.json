@@ -1,0 +1,50 @@
+[
+  {
+    "_comment": "Scenario 1 — Salesforce token valid and well within expiry window.",
+    "scenario": "connected",
+    "event_type": "connector.health_check",
+    "source": "connector_health_job",
+    "org_id": "org_acme_001",
+    "connector_id": "salesforce_prod",
+    "duration_ms": 182,
+    "success": true,
+    "payload": {
+      "status": "connected",
+      "connector_id": "salesforce_prod",
+      "token_expiry_seconds": 7200,
+      "check_duration_ms": 182
+    }
+  },
+  {
+    "_comment": "Scenario 2 — Salesforce token within REFRESH_THRESHOLD_SECONDS (300s default). Auto-refresh will trigger on next get_token() call.",
+    "scenario": "needs_refresh",
+    "event_type": "connector.health_check",
+    "source": "connector_health_job",
+    "org_id": "org_acme_001",
+    "connector_id": "salesforce_prod",
+    "duration_ms": 168,
+    "success": true,
+    "payload": {
+      "status": "needs_refresh",
+      "connector_id": "salesforce_prod",
+      "token_expiry_seconds": 45,
+      "check_duration_ms": 168
+    }
+  },
+  {
+    "_comment": "Scenario 3 — Salesforce token expired or refresh token rejected. User must re-authenticate via OAuth flow.",
+    "scenario": "needs_auth",
+    "event_type": "connector.health_check",
+    "source": "connector_health_job",
+    "org_id": "org_acme_001",
+    "connector_id": "salesforce_prod",
+    "duration_ms": 91,
+    "success": true,
+    "payload": {
+      "status": "needs_auth",
+      "connector_id": "salesforce_prod",
+      "token_expiry_seconds": null,
+      "check_duration_ms": 91
+    }
+  }
+]

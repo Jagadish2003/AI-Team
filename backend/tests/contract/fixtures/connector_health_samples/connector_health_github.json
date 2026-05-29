@@ -1,0 +1,34 @@
+[
+  {
+    "_comment": "Scenario 1 — GitHub PAT (Personal Access Token) present and valid. PATs do not expire by default — token_expiry_seconds is null.",
+    "scenario": "connected",
+    "event_type": "connector.health_check",
+    "source": "connector_health_job",
+    "org_id": "org_acme_001",
+    "connector_id": "github_cloud",
+    "duration_ms": 87,
+    "success": true,
+    "payload": {
+      "status": "connected",
+      "connector_id": "github_cloud",
+      "token_expiry_seconds": null,
+      "check_duration_ms": 87
+    }
+  },
+  {
+    "_comment": "Scenario 2 — GitHub PAT revoked by user or expired (fine-grained PATs support expiry). No refresh mechanism — user must generate a new PAT.",
+    "scenario": "needs_auth",
+    "event_type": "connector.health_check",
+    "source": "connector_health_job",
+    "org_id": "org_acme_001",
+    "connector_id": "github_cloud",
+    "duration_ms": 51,
+    "success": true,
+    "payload": {
+      "status": "needs_auth",
+      "connector_id": "github_cloud",
+      "token_expiry_seconds": null,
+      "check_duration_ms": 51
+    }
+  }
+]
