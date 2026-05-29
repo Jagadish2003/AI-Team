@@ -67,7 +67,7 @@ def test_snapshot_signals_emits_payload_per_signal_snapshot(monkeypatch):
 
     monkeypatch.setattr(
         temporal,
-        "_persist_snapshots",
+        "_insert_signal_snapshots",
         lambda snapshots: len(snapshots),
     )
     monkeypatch.setattr(

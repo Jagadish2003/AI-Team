@@ -14,6 +14,12 @@ from ..models import (
 )
 
 DETECTOR_ID = "DISBURSEMENT_OVERDUE"
+SIGNAL_METRICS = {
+    "overdue_count":     "Number of overdue disbursements; primary compliance volume trend",
+    "max_days_overdue":  "Worst-case days overdue; regulatory severity indicator",
+    "avg_days_overdue":  "Average days overdue; smoothed trend across all overdue payments",
+    "total_assignments": "Total assignments evaluated; normalises overdue_count as a rate",
+}
 
 SIGNAL_METRICS = [
     "total_assignments", # benefit assignment workload volume

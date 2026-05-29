@@ -270,6 +270,7 @@ def run(
                          integration_concentration, permission_bottleneck, cross_system_echo]
         logger.info("Pack: service_cloud — 7 SC detectors active")
 
+    # Capture fired and non-firing detector evaluations before scoring.
     detector_results, all_evaluated = _run_detector_phase(
         all_detectors,
         sf_data,

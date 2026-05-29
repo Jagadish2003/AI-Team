@@ -14,6 +14,11 @@ from ..models import (
 )
 
 DETECTOR_ID = "BENEFIT_ELECTION_DEADLINE"
+SIGNAL_METRICS = {
+    "overdue_election_count": "Number of elections past deadline; primary volume trend",
+    "max_days_overdue":       "Worst-case days overdue; tracks severity of missed deadlines",
+    "total_assignments":      "Total assignments evaluated; context for overdue rate",
+}
 
 SIGNAL_METRICS = [
     "total_assignments",       # benefit assignment workload volume

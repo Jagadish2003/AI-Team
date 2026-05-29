@@ -15,6 +15,12 @@ from ..models import (
 )
 
 DETECTOR_ID = "APPLICATION_STALL"
+SIGNAL_METRICS = {
+    "stalled_count":      "Number of applications currently stalled; primary volume trend",
+    "max_days_stalled":   "Worst-case staleness in days; tracks if backlog is getting older",
+    "avg_days_stalled":   "Average days stalled; smoothed trend across all stalled apps",
+    "total_applications": "Total applications evaluated; normalises stalled_count as a rate",
+}
 
 SIGNAL_METRICS = [
     "total_applications",  # application workload volume
