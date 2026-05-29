@@ -1,314 +1,150 @@
+"""Audit logging — AT-82 / T1-S10-B T4.
+
+log_event() is the single write point for audit_log.  It always fails
+silently: any exception is logged at ERROR and the caller continues.
+The table is INSERT-only — no UPDATE or DELETE ever runs against it.
+
+Event type payload schemas (locked — do not change field names):
+    run_started:           org_id, run_id, user_id, pack_id, system_ids, timestamp
+    run_completed:         org_id, run_id, duration_ms, opportunities_found, status
+    connector_queried:     org_id, run_id, connector_id, query_hash, row_count, duration_ms, timestamp
+    connector_connected:   org_id, connector_id, user_id, scopes_granted, timestamp
+    connector_disconnected: org_id, connector_id, user_id, timestamp
+    scope_declared:        org_id, connector_id, user_id, scope_type, scope_values, timestamp
+    user_login:            org_id, user_id, ip_address_hash, timestamp
+    setup_state_saved:     org_id, user_id, system_count, pack_id, timestamp
+    schema_discovered:     org_id, connector_id, schema_count, table_count, timestamp
+
+Behaviour difference — schema_discovered vs connector_queried:
+    schema_discovered  — connector read system catalogues only (no customer data touched).
+    connector_queried  — connector queried customer data tables during a run.
 """
-T1-S10-B  |  Audit Event Registry
-AgentIQ 2.0  |  Track 1 — Platform Foundation  |  Sprint 10
-
-Centralised audit-event registry and ``log_event()`` entry-point used by
-every track that needs to write an immutable, org-scoped audit trail.
-
-Design principles
------------------
-* **Open for extension, closed for modification.**
-  Event type constants and TypedDicts are added to the registry without
-  ever touching ``log_event()``.  New callers — including Track 2 DB
-  stories — call ``log_event()`` with their event-type string and keyword
-  fields; the function signature is permanently stable.
-
-* **Distinct event types for distinct data-access semantics.**
-  ``schema_discovered`` and ``connector_queried`` are *separate* constants
-  with *separate* string values.  Schema discovery reads system catalogues
-  only (no customer data); query execution reads declared customer tables.
-  Audit consumers downstream can therefore apply different retention,
-  alerting, or compliance rules to each event class.
-
-* **Fail-silent contract.**
-  ``log_event()`` logs at ERROR level on internal failures and swallows the
-  exception — an audit write failure must never crash the caller.
-
-Registered event types
-----------------------
-T1 core events
-  connector.registered    ConnectorRegisteredAuditEvent
-  run.started             RunStartedAuditEvent
-  run.completed           RunCompletedAuditEvent
-
-T1-S10-B  /  T2-S10-A  joint events
-  connector_queried       ConnectorQueriedEvent   (execute_query)
-  schema_discovered       SchemaDiscoveredEvent   (discover_schema)
-  scope_declared          ScopeDeclaredEvent      (save_scope)
-
-Callers (doc reference: T2-S10-A Table 11)
--------------------------------------------
-::
-
-    from backend.app.middleware.audit import log_event
-
-    # After execute_query():
-    log_event('connector_queried',
-        org_id=org_id, run_id=run_id, connector_id=config.connector_id,
-        query_hash=result.query_hash,
-        row_count=result.row_count, duration_ms=result.duration_ms)
-
-    # After discover_schema() — distinct event, no customer data:
-    log_event('schema_discovered',
-        org_id=org_id, connector_id=config.connector_id,
-        schema_count=len(result.schemas), table_count=len(result.tables))
-"""
-
 from __future__ import annotations
 
+import json
 import logging
-import time
-from typing import Any, Dict, MutableMapping, Optional, Type
+import uuid
+from datetime import datetime, timezone
+from typing import Any
+from typing_extensions import TypedDict
 
-logger = logging.getLogger(__name__)
+# ---------------------------------------------------------------------------
+# Event type string constants — import these instead of raw strings.
+# ---------------------------------------------------------------------------
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Event-type string constants
-#
-# Each constant MUST have a unique string value — audit consumers route on
-# these strings and must be able to distinguish event classes.
-# schema_discovered != connector_queried is enforced by the unit test suite.
-# ─────────────────────────────────────────────────────────────────────────────
+RUN_STARTED = "run_started"
+RUN_COMPLETED = "run_completed"
+CONNECTOR_QUERIED = "connector_queried"
+CONNECTOR_CONNECTED = "connector_connected"
+CONNECTOR_DISCONNECTED = "connector_disconnected"
+SCOPE_DECLARED = "scope_declared"
+USER_LOGIN = "user_login"
+SETUP_STATE_SAVED = "setup_state_saved"
+SCHEMA_DISCOVERED = "schema_discovered"
 
-# T2 database events  (T2-S10-A, tasks T7 / T8 / T12)
-CONNECTOR_QUERIED: str = "connector_queried"
-SCHEMA_DISCOVERED: str = "schema_discovered"
-SCOPE_DECLARED: str = "scope_declared"
+# ---------------------------------------------------------------------------
+# Registry — every accepted event type listed here.
+# log_event() accepts any string; this registry is for documentation and
+# unit-test validation only.
+# ---------------------------------------------------------------------------
 
-# T1 platform lifecycle events
-CONNECTOR_REGISTERED: str = "connector.registered"
-RUN_STARTED: str = "run.started"
-RUN_COMPLETED: str = "run.completed"
+AUDIT_EVENT_REGISTRY: frozenset[str] = frozenset({
+    RUN_STARTED,
+    RUN_COMPLETED,
+    CONNECTOR_QUERIED,
+    CONNECTOR_CONNECTED,
+    CONNECTOR_DISCONNECTED,
+    SCOPE_DECLARED,
+    USER_LOGIN,
+    SETUP_STATE_SAVED,
+    SCHEMA_DISCOVERED,
+})
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Audit-event TypedDicts
-# ─────────────────────────────────────────────────────────────────────────────
-
-try:
-    from typing import TypedDict
-except ImportError:  # Python < 3.8
-    from typing_extensions import TypedDict  # type: ignore[assignment]
-
-
-# ── T2 database events ────────────────────────────────────────────────────────
-
-
-class ConnectorQueriedEvent(TypedDict):
-    """Audit event emitted by execute_query() after every successful DB read.
-
-    Written once per query execution.  Contains the SHA-256 hash of the
-    query (never the raw query text) so the audit log is safe to store
-    without risk of exposing PII-containing query strings.
-
-    Fields
-    ------
-    org_id:
-        Workspace/tenant identifier.  Used for multi-tenant audit isolation.
-    run_id:
-        Discovery run that triggered this query.
-    connector_id:
-        One of ``'sqlserver'``, ``'oracle_db'``, ``'postgresql'``.
-    query_hash:
-        SHA-256 hex digest of the raw query string (not the query itself).
-    row_count:
-        Number of rows returned after any truncation.
-    duration_ms:
-        Wall-clock query round-trip in milliseconds.
-    """
-
-    org_id: str
-    run_id: str
-    connector_id: str
-    query_hash: str
-    row_count: int
-    duration_ms: int
+# ---------------------------------------------------------------------------
+# Payload TypedDicts — documentation only; log_event() accepts **kwargs.
+# Do not change existing field names — add new event types instead.
+# ---------------------------------------------------------------------------
 
 
 class SchemaDiscoveredEvent(TypedDict):
-    """Audit event emitted by discover_schema() after system-catalogue reads.
+    """Payload for schema_discovered audit events.
 
-    This event is DISTINCT from ``connector_queried``:
+    Written when a connector reads system catalogues to discover schema.
+    schema_discovered is distinct from connector_queried:
+      - schema_discovered: only system catalogues were accessed (no customer data).
+      - connector_queried: customer data tables were queried during execution.
 
-    * **Schema discovery** reads database system catalogues only.
-      No customer data tables are accessed.  There is no ``run_id`` because
-      discovery is triggered interactively (scope picker), not by a run.
-
-    * **connector_queried** is written during ingestion runs and references
-      declared customer tables.  It carries ``run_id`` and ``query_hash``.
-
-    Audit consumers applying compliance rules (e.g. data-access logging,
-    GDPR retention limits) MUST treat these as separate event classes.
-
-    Fields
-    ------
-    org_id:
-        Workspace/tenant identifier.
-    connector_id:
-        One of ``'sqlserver'``, ``'oracle_db'``, ``'postgresql'``.
-    schema_count:
-        Number of distinct schemas found in the system catalogue.
-    table_count:
-        Total number of tables discovered across all schemas.
+    connector_id:  Which connector performed schema discovery.
+    schema_count:  Number of schemas / databases discovered.
+    table_count:   Number of tables / collections discovered.
     """
-
-    org_id: str
     connector_id: str
     schema_count: int
     table_count: int
 
+from app import db
+from database.models.audit_log import (
+    CREATE_AUDIT_LOG_IDX_ORG_EVENT,
+    CREATE_AUDIT_LOG_IDX_ORG_TS,
+    CREATE_AUDIT_LOG_TABLE,
+)
 
-class ScopeDeclaredEvent(TypedDict):
-    """Audit event emitted by save_scope() when an analyst declares scope.
+logger = logging.getLogger(__name__)
 
-    Fields
-    ------
-    org_id:
-        Workspace/tenant identifier.
-    connector_id:
-        Database connector whose scope is being declared.
-    schemas:
-        List of declared schema names.
-    tables:
-        List of declared table names (empty list = any table in schemas).
-    """
-
-    org_id: str
-    connector_id: str
-    schemas: list
-    tables: list
+_TABLES_INITIALISED = False
 
 
-# ── T1 platform lifecycle events ───────────────────────────────────────────────
-
-
-class ConnectorRegisteredAuditEvent(TypedDict):
-    """Emitted when a connector is registered with the platform runner."""
-
-    org_id: str
-    connector_id: str
-
-
-class RunStartedAuditEvent(TypedDict):
-    """Emitted when a discovery run begins."""
-
-    org_id: str
-    run_id: str
-
-
-class RunCompletedAuditEvent(TypedDict):
-    """Emitted when a discovery run finishes."""
-
-    org_id: str
-    run_id: str
-    duration_ms: int
-    connectors_processed: int
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Audit-event registry
-#
-# Maps event_type string → TypedDict class.
-# Public so downstream stories can introspect; use register_audit_event_type()
-# for writes to get conflict detection.
-# ─────────────────────────────────────────────────────────────────────────────
-
-AUDIT_EVENT_REGISTRY: MutableMapping[str, Type] = {}
-
-
-def register_audit_event_type(event_type: str, schema: Type) -> None:
-    """Register *event_type* and its TypedDict *schema*.
-
-    Idempotent: same type + same schema → no-op.
-    Same type + different schema → ``ValueError`` (catch misregistrations early).
-    """
-    if event_type in AUDIT_EVENT_REGISTRY:
-        if AUDIT_EVENT_REGISTRY[event_type] is not schema:
-            raise ValueError(
-                f"Audit event type '{event_type}' is already registered with "
-                f"{AUDIT_EVENT_REGISTRY[event_type]!r}; cannot re-register "
-                f"with {schema!r}."
-            )
+def _ensure_table() -> None:
+    global _TABLES_INITIALISED
+    if _TABLES_INITIALISED:
         return
-    AUDIT_EVENT_REGISTRY[event_type] = schema
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Core log_event() — the T1-S10-B stable interface
-#
-# This function NEVER needs modification when new event types are added.
-# Track 2 stories call log_event('schema_discovered', ...) without any
-# change to T1-S10-B code — only registry entries are appended below.
-# ─────────────────────────────────────────────────────────────────────────────
-
-
-def log_event(
-    event_type: str,
-    *,
-    ts: Optional[float] = None,
-    **fields: Any,
-) -> None:
-    """Write an immutable audit event.
-
-    Parameters
-    ----------
-    event_type:
-        Registered audit event type constant, e.g. ``SCHEMA_DISCOVERED``.
-        Passing an unregistered type is allowed and emits a DEBUG warning —
-        it does **not** raise.
-    ts:
-        Optional Unix timestamp override.  Defaults to ``time.time()``.
-    **fields:
-        Keyword arguments matching the TypedDict for *event_type*.
-        Extra keys are accepted (forward-compatible).
-
-    Failure contract
-    ----------------
-    This function **never raises**.  Any internal failure is logged at
-    ERROR level and silently dropped — audit failures must not propagate
-    to the caller.
-
-    Extension contract
-    ------------------
-    New event types are supported by adding a string constant, a TypedDict,
-    and a ``register_audit_event_type()`` call **below** this function.
-    The function body itself is immutable — this is intentional.
-    """
+    con = db.connect()
     try:
-        record: Dict[str, Any] = {
-            "event_type": event_type,
-            "ts": ts if ts is not None else time.time(),
-            **fields,
-        }
+        con.execute(CREATE_AUDIT_LOG_TABLE)
+        con.execute(CREATE_AUDIT_LOG_IDX_ORG_TS)
+        con.execute(CREATE_AUDIT_LOG_IDX_ORG_EVENT)
+        con.commit()
+        _TABLES_INITIALISED = True
+    except Exception as exc:  # pragma: no cover
+        logger.error("audit_log table init failed: %s", exc)
+    finally:
+        con.close()
 
-        if logger.isEnabledFor(logging.DEBUG):
-            if event_type not in AUDIT_EVENT_REGISTRY:
-                logger.debug(
-                    "[audit] log_event called with unregistered type '%s'",
+
+def log_event(event_type: str, **kwargs: Any) -> None:
+    """Append one record to audit_log.  Never raises — fails silently (AC9)."""
+    try:
+        _ensure_table()
+        from app.middleware.tenancy import get_current_org_id_optional
+
+        org_id = kwargs.pop("org_id", None) or get_current_org_id_optional() or "default"
+        run_id = kwargs.pop("run_id", None)
+        connector_id = kwargs.pop("connector_id", None)
+        user_id = kwargs.pop("user_id", None)
+        record_id = str(uuid.uuid4())
+        ts = datetime.now(timezone.utc).isoformat()
+
+        con = db.connect()
+        try:
+            con.execute(
+                """
+                INSERT INTO audit_log
+                    (id, org_id, event_type, user_id, run_id, connector_id, payload, timestamp)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    record_id,
+                    org_id,
                     event_type,
-                )
-
-        logger.info("[audit] %s", record)
-
-        # ── Persistence hook (T1-S10-B future work) ──────────────────────
-        # Wire to the audit-events table or append-only audit stream here.
-        # _audit_sink.write(record)
-
-    except Exception:  # noqa: BLE001  — intentional broad catch
-        logger.exception(
-            "[audit] log_event failed silently for event_type='%s'", event_type
-        )
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Registry population — append only; never modify log_event() above
-# ─────────────────────────────────────────────────────────────────────────────
-
-# T1 platform lifecycle
-register_audit_event_type(CONNECTOR_REGISTERED, ConnectorRegisteredAuditEvent)
-register_audit_event_type(RUN_STARTED, RunStartedAuditEvent)
-register_audit_event_type(RUN_COMPLETED, RunCompletedAuditEvent)
-
-# T2 database events  (T2-S10-A, task T12 — schema_discovered added here)
-register_audit_event_type(CONNECTOR_QUERIED, ConnectorQueriedEvent)
-register_audit_event_type(SCHEMA_DISCOVERED, SchemaDiscoveredEvent)
-register_audit_event_type(SCOPE_DECLARED, ScopeDeclaredEvent)
+                    user_id,
+                    run_id,
+                    connector_id,
+                    json.dumps(kwargs) if kwargs else None,
+                    ts,
+                ),
+            )
+            con.commit()
+        finally:
+            con.close()
+    except Exception as exc:
+        logger.error("audit log_event(%s) failed: %s", event_type, exc)
