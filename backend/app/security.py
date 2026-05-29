@@ -1,45 +1,67 @@
 import os
-from typing import Callable
+from collections.abc import Callable
 
 from fastapi import Depends, HTTPException
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 bearer = HTTPBearer(auto_error=False)
 DEV_JWT = os.getenv("DEV_JWT", "dev-token-change-me")
+VIEWER_JWT = os.getenv("VIEWER_JWT", "viewer-token")
 
-# In dev mode the single bearer token is granted all roles.
-# Production: decode the JWT and inspect role claims.
-_DEV_TOKEN_ROLES: frozenset[str] = frozenset({"viewer", "analyst", "admin"})
+ROLE_LEVELS = {
+    "viewer": 0,
+    "analyst": 1,
+    "admin": 2,
+}
+
+
+def _role_set_for(role: str | None) -> frozenset[str]:
+    level = ROLE_LEVELS.get((role or "").strip().lower(), -1)
+    return frozenset(name for name, value in ROLE_LEVELS.items() if value <= level)
+
+
+_DEV_TOKEN_ROLES: frozenset[str] = _role_set_for(os.getenv("DEV_JWT_ROLE", "analyst"))
+
+
+def _token_roles() -> dict[str, str]:
+    roles = {
+        DEV_JWT: os.getenv("DEV_JWT_ROLE", "analyst").strip().lower(),
+        VIEWER_JWT: "viewer",
+    }
+
+    analyst_jwt = os.getenv("ANALYST_JWT")
+    if analyst_jwt:
+        roles[analyst_jwt] = "analyst"
+
+    admin_jwt = os.getenv("ADMIN_JWT")
+    if admin_jwt:
+        roles[admin_jwt] = "admin"
+
+    return roles
 
 
 def require_auth(creds: HTTPAuthorizationCredentials = Depends(bearer)) -> str:
-    if creds is None or creds.scheme.lower() != "bearer" or creds.credentials != DEV_JWT:
+    if (
+        creds is None
+        or creds.scheme.lower() != "bearer"
+        or creds.credentials not in _token_roles()
+    ):
         raise HTTPException(status_code=401, detail="Unauthorized")
     return creds.credentials
 
 
-def require_role(role: str) -> Callable[[str], str]:
-    """Return a FastAPI dependency that enforces a minimum role.
+def require_role(required_role: str) -> Callable[[str], str]:
+    """Return a FastAPI dependency that enforces a minimum role."""
+    required = required_role.strip().lower()
+    required_level = ROLE_LEVELS.get(required)
+    if required_level is None:
+        raise ValueError(f"Unknown role: {required_role}")
 
-    Depends on require_auth — a 401 from require_auth propagates before
-    this check runs.  Returns 403 Forbidden when the authenticated user
-    does not carry the required role.
+    def dependency(token: str = Depends(require_auth)) -> str:
+        role = _token_roles().get(token)
+        token_roles = _DEV_TOKEN_ROLES if token == DEV_JWT else _role_set_for(role)
+        if role is None or required not in token_roles:
+            raise HTTPException(status_code=403, detail="Forbidden")
+        return role
 
-    Usage::
-
-        @app.get("/protected")
-        def endpoint(
-            token: str = Depends(require_auth),
-            _role: str = Depends(require_role("analyst")),
-        ):
-            ...
-    """
-
-    def _check_role(token: str = Depends(require_auth)) -> str:
-        # Dev mode: the dev token has all roles.
-        # Replace with JWT role-claim inspection in production.
-        if role not in _DEV_TOKEN_ROLES:
-            raise HTTPException(status_code=403, detail="Forbidden: insufficient role")
-        return token
-
-    return _check_role
+    return dependency
