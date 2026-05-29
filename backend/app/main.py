@@ -37,7 +37,6 @@ from .routes_sprint4_t6 import register_sprint4_t6_routes
 from .routes_sprint41_blueprint import register_blueprint_routes
 from .run_store import read_run, read_run_events, start_run_
 from .routes_workspace_catalog import register_workspace_catalog_routes
-from .routes_connector_auth import register_connector_auth_routes
 from .security import require_auth
 from .auth.configs import CONNECTOR_AUTH_CONFIGS
 from .auth.secrets import validate_all_secrets
