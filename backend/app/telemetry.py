@@ -241,10 +241,10 @@ def record_event(event_type: str, payload: Optional[dict] = None) -> None:
         # Persist to telemetry_events table.
         _ensure_telemetry_table()
 
-        # org_id from tenancy context when available; else fall back to unknown.
+        # org_id priority: tenancy context → payload["org_id"] → "unknown"
         try:
             from app.middleware.tenancy import get_current_org_id_optional
-            org_id = get_current_org_id_optional() or "unknown"
+            org_id = get_current_org_id_optional() or payload.get("org_id", "unknown")
         except Exception:
             org_id = payload.get("org_id", "unknown")
 

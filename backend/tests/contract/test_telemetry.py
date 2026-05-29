@@ -63,13 +63,11 @@ class TestRecordEvent:
 
     def test_run_started_writes_correct_schema(self, patch_session):
         """AC3 — run.started event has correct fields."""
-        record_event(
-            org_id=ORG_A,
-            event_type="run.started",
-            source="run_pipeline",
-            run_id=RUN_ID,
-            success=None,
-        )
+        record_event("run.started", {
+            "org_id": ORG_A,
+            "source": "run_pipeline",
+            "run_id": RUN_ID,
+        })
 
         assert patch_session.commit.called
         event = patch_session._written[0]
@@ -83,16 +81,16 @@ class TestRecordEvent:
 
     def test_run_completed_writes_correct_schema(self, patch_session):
         """AC4 — run.completed event carries duration_ms, count, and success."""
-        record_event(
-            org_id=ORG_A,
-            event_type="run.completed",
-            source="run_pipeline",
-            run_id=RUN_ID,
-            duration_ms=1234,
-            success=True,
-            count=42,
-            payload={"pack_id": "pack-1", "system_count": 5},
-        )
+        record_event("run.completed", {
+            "org_id": ORG_A,
+            "source": "run_pipeline",
+            "run_id": RUN_ID,
+            "duration_ms": 1234,
+            "success": True,
+            "count": 42,
+            "pack_id": "pack-1",
+            "system_count": 5,
+        })
 
         assert patch_session.commit.called
         event = patch_session._written[0]
@@ -103,7 +101,7 @@ class TestRecordEvent:
         assert event.success is True
         assert event.count == 42
 
-        # Payload must be JSON-serialised.
+        # Payload must be JSON-serialised and contain event-specific fields.
         parsed = json.loads(event.payload)
         assert parsed["pack_id"] == "pack-1"
         assert parsed["system_count"] == 5
@@ -114,12 +112,7 @@ class TestRecordEvent:
 
         with caplog.at_level(logging.ERROR, logger="app.telemetry"):
             # Must NOT raise.
-            record_event(
-                org_id=ORG_A,
-                event_type="run.completed",
-                source="run_pipeline",
-                payload=non_serialisable,
-            )
+            record_event("run.completed", non_serialisable)
 
         assert "telemetry.record_event failed" in caplog.text
         # Nothing was committed.
@@ -129,24 +122,20 @@ class TestRecordEvent:
         """AC7 — database unavailable; record_event logs but does not raise."""
         with patch("app.telemetry.get_db_session", side_effect=Exception("DB down")):
             with caplog.at_level(logging.ERROR, logger="app.telemetry"):
-                record_event(
-                    org_id=ORG_A,
-                    event_type="run.started",
-                    source="run_pipeline",
-                )
+                record_event("run.started", {"org_id": ORG_A, "source": "run_pipeline"})
 
         assert "telemetry.record_event failed" in caplog.text
 
     def test_correct_org_id_always_written(self, patch_session):
         """AC1 — org_id on the written row matches the caller's org_id."""
-        record_event(org_id=ORG_B, event_type="run.started", source="run_pipeline")
+        record_event("run.started", {"org_id": ORG_B, "source": "run_pipeline"})
         event = patch_session._written[0]
         assert event.org_id == ORG_B
 
     def test_timestamp_is_utc(self, patch_session):
         """AC1 — timestamp is a UTC datetime."""
         before = datetime.now(timezone.utc)
-        record_event(org_id=ORG_A, event_type="run.started", source="run_pipeline")
+        record_event("run.started", {"org_id": ORG_A, "source": "run_pipeline"})
         after = datetime.now(timezone.utc)
 
         event = patch_session._written[0]
