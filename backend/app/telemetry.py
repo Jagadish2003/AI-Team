@@ -74,12 +74,7 @@ class RunSignalSnapshotPayload(TypedDict):
 RunSignalSnapshotEvent = RunSignalSnapshotPayload
 
 
-def record_event(
-    event_type: str,
-    payload: dict[str, Any],
-    *,
-    ts: Optional[float] = None,
-) -> None:
+def record_event(event_type: str, payload: dict[str, Any]) -> None:
     """Record a telemetry event as structured log data.
 
     This function intentionally never raises. Track 3 uses the generic
@@ -94,7 +89,7 @@ def record_event(
 
         event = {
             "event_type": event_type,
-            "ts": ts if ts is not None else time.time(),
+            "ts": time.time(),
             **dict(payload),
         }
 
