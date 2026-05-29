@@ -25,6 +25,8 @@ from app import db
 from app.auth import build_auth_url, exchange_code, revoke_token, store_token
 from app.auth.configs import CONNECTOR_AUTH_CONFIGS
 from app.auth.vault import REFRESH_THRESHOLD_SECONDS
+from app.middleware.audit import log_event
+from app.rbac import _get_user_id_from_token
 from app.security import require_auth
 from database.models.credentials import (
     ALTER_CREDENTIALS_ADD_REFRESH_FAILED,
@@ -147,12 +149,12 @@ def register_connector_auth_routes(app: FastAPI) -> None:
     @app.get(
         "/api/connectors/oauth/callback",
         include_in_schema=True,
-        dependencies=[Depends(require_auth)],
     )
     async def oauth_callback(
         code: Optional[str] = Query(default=None),
         state: Optional[str] = Query(default=None),
         error: Optional[str] = Query(default=None),
+        token: str = Depends(require_auth),
     ) -> RedirectResponse:
         """Handle OAuth callback. Requires Bearer auth (called by frontend after provider redirect).
 
@@ -188,6 +190,12 @@ def register_connector_auth_routes(app: FastAPI) -> None:
                 status_code=302,
             )
 
+        log_event(
+            "connector_connected",
+            connector_id=connector_id,
+            user_id=_get_user_id_from_token(token),
+            scopes_granted=config.scopes,
+        )
         # AC2/AC4: redirect target is a hardcoded constant; connector_id comes
         # from the server-side nonce store, not from state or query params.
         return RedirectResponse(
@@ -222,11 +230,15 @@ def register_connector_auth_routes(app: FastAPI) -> None:
 
     @app.delete(
         "/api/connectors/{connector_id}/token",
-        dependencies=[Depends(require_auth)],
     )
-    async def delete_token(connector_id: str) -> Response:
+    async def delete_token(connector_id: str, token: str = Depends(require_auth)) -> Response:
         """Revoke and delete the stored token for the given connector (AC11/AC12/AC13)."""
         await revoke_token(_DEFAULT_ORG_ID, connector_id)
+        log_event(
+            "connector_disconnected",
+            connector_id=connector_id,
+            user_id=_get_user_id_from_token(token),
+        )
         return Response(status_code=204)
 
     @app.get(
@@ -266,3 +278,4 @@ def register_connector_auth_routes(app: FastAPI) -> None:
                 return {"status": "refresh_failed"}
             return {"status": "needs_refresh"}
         return {"status": "connected"}
+ 

@@ -251,6 +251,18 @@ def register_stack_builder_routes(app: FastAPI) -> None:
                 detail=f"Failed to persist setup state: {exc}",
             ) from exc
 
+        try:
+            from app.middleware.audit import log_event
+            systems = payload.state.get("systems") if isinstance(payload.state, dict) else {}
+            pack_id = payload.state.get("pack") if isinstance(payload.state, dict) else None
+            log_event(
+                "setup_state_saved",
+                system_count=len(systems) if isinstance(systems, (list, dict)) else 0,
+                pack_id=pack_id,
+            )
+        except Exception:
+            pass
+
         return Response(status_code=204)
 
     @app.get(
