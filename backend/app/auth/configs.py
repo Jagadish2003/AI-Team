@@ -1,9 +1,15 @@
 from __future__ import annotations
 
+import os
 from typing import Dict
 
+from dotenv import load_dotenv
+
 from app.auth.models import ConnectorAuthConfig
-import os
+
+# Load .env before any os.getenv() calls so client_id values resolve correctly
+# in test and dev environments where main.py's load_dotenv() may not yet have run.
+load_dotenv()
 
 CONNECTOR_AUTH_CONFIGS: Dict[str, ConnectorAuthConfig] = {
     "salesforce": ConnectorAuthConfig(
