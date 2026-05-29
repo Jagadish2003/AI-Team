@@ -20,6 +20,7 @@ from backend.connectors.db.connection_pool import (
     MAX_POOL_SIZE_PER_CONNECTOR,
     MIN_POOL_SIZE_PER_CONNECTOR,
     _IsolatedPool,
+    _driver_factories,
     _pool_registry,
     clear_all_pools,
     clear_pool,
@@ -64,10 +65,12 @@ ENV = {"TEST_DB_USER": "test_user", "TEST_DB_PASS": "test_pass"}
 def isolated_registry():
     """Each test starts with an empty pool registry and a registered fake driver."""
     clear_all_pools()
+    _driver_factories.clear()
     register_driver("sqlserver", _fake_driver)
     register_driver("postgresql", _fake_driver)
     yield
     clear_all_pools()
+    _driver_factories.clear()
 
 
 # ---------------------------------------------------------------------------
