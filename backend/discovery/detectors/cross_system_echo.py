@@ -13,11 +13,26 @@ SF-1.3 thresholds:
 """
 from __future__ import annotations
 from typing import Any, Dict, List, Tuple
-from ..models import DetectorResult
+from ..models import (
+    DetectorResult,
+    detector_result_from_evaluation,
+    make_detector_evaluation,
+)
 
 DETECTOR_ID = "CROSS_SYSTEM_ECHO"
 THRESHOLD = 0.15
 MIN_VOLUME = 30
+
+SIGNAL_METRICS = [
+    "sf_echo_count",        # Salesforce echo volume
+    "sf_total_cases",       # Salesforce volume denominator
+    "sf_echo_score",        # Salesforce echo score
+    "sn_match_count",       # ServiceNow matched incident volume
+    "sn_total_incidents",   # ServiceNow volume denominator
+    "sn_echo_score",        # ServiceNow echo score
+    "jira_sf_label_count",  # Jira Salesforce-reference volume
+    "jira_echo_score",      # Jira echo score
+]
 
 
 def _extract_scores(
@@ -79,51 +94,55 @@ def _extract_scores(
     return sources
 
 
-def detect(
+def evaluate(
     sf_data: Dict[str, Any],
     sn_data: Dict[str, Any] = None,
     jira_data: Dict[str, Any] = None,
-) -> List[DetectorResult]:
+):
     sources = _extract_scores(sf_data, sn_data or {}, jira_data or {})
-
-    # Find the dominant source
     eligible = [
         (src, score, vol, ev)
         for src, score, vol, ev in sources
         if score > THRESHOLD and vol >= MIN_VOLUME
     ]
-
-    if not eligible:
-        return []
-
-    # Use the highest echo score as the metric_value
-    dominant = max(eligible, key=lambda x: x[1])
+    dominant_pool = eligible or sources or [("salesforce", 0.0, 0, {})]
+    dominant = max(dominant_pool, key=lambda x: x[1])
     dom_source, dom_score, _, _ = dominant
 
-    # Merge all evidence into one dict for the full three-system picture
     merged_evidence: Dict[str, Any] = {
         "sf_echo_count": 0, "sf_total_cases": 0, "sf_echo_score": 0.0,
         "sn_match_count": 0, "sn_total_incidents": 0, "sn_echo_score": 0.0,
+        "jira_sf_label_count": 0, "jira_total_issues": 0, "jira_echo_score": 0.0,
         "matched_patterns": [],
     }
     all_patterns = set()
     for _, _, _, ev in sources:
         for k in ("sf_echo_count", "sf_total_cases", "sn_match_count", "sn_total_incidents"):
             merged_evidence[k] = merged_evidence.get(k, 0) + ev.get(k, 0)
-        for k in ("sf_echo_score", "sn_echo_score"):
+        for k in ("sf_echo_score", "sn_echo_score", "jira_echo_score"):
             merged_evidence[k] = max(merged_evidence.get(k, 0.0), ev.get(k, 0.0))
         all_patterns.update(ev.get("matched_patterns", []))
-        # Jira extras
-        for jk in ("jira_sf_label_count", "jira_total_issues", "jira_echo_score"):
+        for jk in ("jira_sf_label_count", "jira_total_issues"):
             if jk in ev:
-                merged_evidence[jk] = ev[jk]
+                merged_evidence[jk] = max(merged_evidence.get(jk, 0), ev[jk])
 
     merged_evidence["matched_patterns"] = sorted(all_patterns)
 
-    return [DetectorResult(
+    return make_detector_evaluation(
+        module_name=__name__,
         detector_id=DETECTOR_ID,
         signal_source=dom_source,
         metric_value=round(dom_score, 4),
         threshold=THRESHOLD,
         raw_evidence=merged_evidence,
-    )]
+        fired=bool(eligible),
+    )
+
+
+def detect(
+    sf_data: Dict[str, Any],
+    sn_data: Dict[str, Any] = None,
+    jira_data: Dict[str, Any] = None,
+) -> List[DetectorResult]:
+    evaluation = evaluate(sf_data, sn_data, jira_data)
+    return [detector_result_from_evaluation(evaluation)] if evaluation.fired else []

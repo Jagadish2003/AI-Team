@@ -6,6 +6,14 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
+try:
+    from app.temporal import DetectorEvaluation
+except ModuleNotFoundError:  # project-root execution uses backend as package
+    from backend.app.temporal import DetectorEvaluation
+
+
+TEMPORAL_EVALUATION_APPROACH = "Option A: detectors expose evaluate() separately from detect()."
+
 
 @dataclass
 class DetectorResult:
@@ -31,3 +39,60 @@ class DetectorResult:
                 yield from self._all_values(v)
             else:
                 yield v
+
+
+def make_detector_evaluation(
+    *,
+    module_name: str,
+    detector_id: str,
+    signal_source: str,
+    metric_value: float,
+    threshold: float,
+    fired: bool,
+    raw_evidence: dict,
+) -> DetectorEvaluation:
+    """
+    Build the temporal interface object for module-based detectors.
+
+    T3-S10-A chose Option A: every detector exposes evaluate() for temporal
+    capture, while detect() remains the thresholded opportunity API. Existing
+    detectors are modules rather than classes, so this helper attaches a
+    lightweight detector class to each module. snapshot_signals() can read
+    SIGNAL_METRICS via getattr(evaluation.detector_cls, "SIGNAL_METRICS", []).
+    """
+    import sys
+
+    detector_module = sys.modules[module_name]
+    detector_cls = getattr(detector_module, "DETECTOR_CLS", None)
+    if detector_cls is None:
+        class_name = "".join(part.title() for part in detector_id.lower().split("_"))
+        detector_cls = type(
+            f"{class_name}Detector",
+            (),
+            {
+                "DETECTOR_ID": detector_id,
+                "SIGNAL_METRICS": getattr(detector_module, "SIGNAL_METRICS", []),
+            },
+        )
+        setattr(detector_module, "DETECTOR_CLS", detector_cls)
+
+    return DetectorEvaluation(
+        detector_id=detector_id,
+        detector_cls=detector_cls,
+        signal_source=signal_source,
+        metric_value=float(metric_value),
+        threshold=float(threshold),
+        fired=bool(fired),
+        raw_evidence=dict(raw_evidence or {}),
+    )
+
+
+def detector_result_from_evaluation(evaluation: DetectorEvaluation) -> DetectorResult:
+    """Convert a fired DetectorEvaluation back to the existing result shape."""
+    return DetectorResult(
+        detector_id=evaluation.detector_id,
+        signal_source=evaluation.signal_source,
+        metric_value=evaluation.metric_value,
+        threshold=evaluation.threshold,
+        raw_evidence=evaluation.raw_evidence,
+    )

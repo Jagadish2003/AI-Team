@@ -26,23 +26,40 @@ from __future__ import annotations
 
 from typing import Any, Dict, List
 
-from ..models import DetectorResult
+from ..models import (
+    DetectorResult,
+    detector_result_from_evaluation,
+    make_detector_evaluation,
+)
 
 DETECTOR_ID              = "LOAN_ORIGINATION_ROUTING_FRICTION"
 OWNER_CHANGE_THRESHOLD   = 2    # SME-confirmed NC-2
 TRANSITION_THRESHOLD     = 4    # NC-1 retained
+SIGNAL_METRICS = {
+    "max_owner_changes":     "Highest owner-change count on a single loan; primary friction signal",
+    "avg_owner_changes":     "Average owner changes per loan; smoothed friction trend",
+    "max_stage_transitions": "Highest stage transition count; secondary friction signal",
+    "total_loans":           "Total loans evaluated; normalises friction counts as a rate",
+    "high_friction_count":   "Number of loans exceeding both thresholds; severity volume trend",
+}
+
+SIGNAL_METRICS = [
+    "total_loans",            # lending workload volume
+    "avg_stage_transitions",  # average routing movement per loan
+    "max_stage_transitions",  # strongest transition friction signal
+    "avg_owner_changes",      # average confirmed owner handoff count
+    "max_owner_changes",      # strongest confirmed owner handoff signal
+    "high_friction_count",    # count of loans with high friction
+]
 
 
-def detect(
+def evaluate(
     sf_data: Dict[str, Any],
     sn_data: Dict[str, Any] = None,
     jira_data: Dict[str, Any] = None,
-) -> List[DetectorResult]:
+):
     ncino = sf_data.get("ncino") or sf_data
     metrics = ncino.get("origination_metrics", {})
-
-    if not metrics:
-        return []
 
     max_transitions  = int(metrics.get("max_stage_transitions", 0))
     avg_transitions  = float(metrics.get("avg_stage_transitions", 0.0))
@@ -53,10 +70,7 @@ def detect(
     high_friction    = metrics.get("high_friction_loans", [])
 
     fires_owner      = max_owner_changes >= OWNER_CHANGE_THRESHOLD
-    fires_transition = max_stage_transitions = max_transitions >= TRANSITION_THRESHOLD
-
-    if not (fires_owner or fires_transition):
-        return []
+    fires_transition = max_transitions >= TRANSITION_THRESHOLD
 
     # Use owner changes as primary metric if confirmed source
     if fires_owner and owner_change_source == "LOAN_HISTORY_CREATEDBY":
@@ -68,7 +82,8 @@ def detect(
 
     high_friction_count = len(high_friction)
 
-    return [DetectorResult(
+    return make_detector_evaluation(
+        module_name=__name__,
         detector_id=DETECTOR_ID,
         signal_source="salesforce",
         metric_value=metric_value,
@@ -82,4 +97,14 @@ def detect(
             "high_friction_count":    high_friction_count,
             "owner_change_source":    owner_change_source,  # NC-2: STAGE_OWNER_CONFIRMED
         },
-    )]
+        fired=bool(metrics) and (fires_owner or fires_transition),
+    )
+
+
+def detect(
+    sf_data: Dict[str, Any],
+    sn_data: Dict[str, Any] = None,
+    jira_data: Dict[str, Any] = None,
+) -> List[DetectorResult]:
+    evaluation = evaluate(sf_data, sn_data, jira_data)
+    return [detector_result_from_evaluation(evaluation)] if evaluation.fired else []
