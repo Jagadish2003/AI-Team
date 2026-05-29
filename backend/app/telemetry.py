@@ -74,7 +74,12 @@ class RunSignalSnapshotPayload(TypedDict):
 RunSignalSnapshotEvent = RunSignalSnapshotPayload
 
 
-def record_event(event_type: str, payload: dict[str, Any]) -> None:
+def record_event(
+    event_type: str,
+    payload: dict[str, Any],
+    *,
+    ts: Optional[float] = None,
+) -> None:
     """Record a telemetry event as structured log data.
 
     This function intentionally never raises. Track 3 uses the generic
@@ -82,14 +87,14 @@ def record_event(event_type: str, payload: dict[str, Any]) -> None:
     """
     try:
         if event_type not in EVENT_REGISTRY:
-            logger.warning(
-                "[telemetry] unregistered event type '%s' - dropped", event_type
+            logger.debug(
+                "[telemetry] record_event called with unregistered type '%s'",
+                event_type,
             )
-            return None
 
         event = {
             "event_type": event_type,
-            "ts": time.time(),
+            "ts": ts if ts is not None else time.time(),
             **dict(payload),
         }
 
