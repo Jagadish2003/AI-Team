@@ -1,48 +1,49 @@
-"""Telemetry write and read API. Shared foundation for all AgentIQ 2.0
-observability surfaces.  See T1-S10-C.
+"""Telemetry write and read API — shared foundation for AgentIQ 2.0.
 
 Public surface
 --------------
-  record_event(...)        — fire-and-forget write.  Never raises.
-  get_telemetry_range(...) — time-range read scoped to org_id.
-                             Only approved read path until T1-S15-C adds
-                             aggregation.
+  record_event(event_type, payload)  — fire-and-forget write. Never raises.
+  get_telemetry_range(...)           — time-range read scoped to org_id.
+  register_event_type(name, schema)  — register a TypedDict schema for an event type.
 
-All telemetry writes go through record_event().  No story writes directly
+Signature contract (locked by T3-S10-A):
+    record_event(event_type: str, payload: Optional[dict] = None) -> None
+
+All telemetry writes go through record_event(). No story writes directly
 to telemetry_events.
-
-Database
---------
-Uses get_db_session() from database.connection — a thin sqlite3 session
-adapter whose interface mirrors SQLAlchemy Session for testability.
-Table is created lazily on first write/read via _ensure_telemetry_table().
 """
 
 from __future__ import annotations
 
 import json
 import logging
+import time
 import traceback
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Optional
+from typing import Any, MutableMapping, Optional, Type
 
-from typing import NotRequired, TypedDict
+from typing_extensions import NotRequired, TypedDict
 
 from database.connection import get_db_connection, get_db_session
 from database.models.telemetry import ALL_TELEMETRY_DDL
 
 logger = logging.getLogger(__name__)
 
+# ---------------------------------------------------------------------------
+# Event type registry — maps event_type string to its payload TypedDict class.
+# Mutable so new event types can be registered at module load time.
+# ---------------------------------------------------------------------------
+
 EVENT_REGISTRY: MutableMapping[str, Type[Any]] = {}
-TELEMETRY_EVENT_REGISTRY = EVENT_REGISTRY
+TELEMETRY_EVENT_REGISTRY = EVENT_REGISTRY   # alias for Track 3 imports
 
 # ---------------------------------------------------------------------------
-# Lazy table initialisation  (mirrors pattern used by other tables)
+# Lazy table initialisation
 # ---------------------------------------------------------------------------
 
-_table_ready = False   # module-level guard; avoids re-running DDL every call
+_table_ready = False
 
 
 def _ensure_telemetry_table() -> None:
@@ -63,16 +64,7 @@ def _ensure_telemetry_table() -> None:
 
 @dataclass
 class TelemetryEvent:
-    """In-memory representation of a telemetry_events row.
-
-    Attributes mirror the table columns exactly.  payload is kept as a
-    JSON string (not a dict) so the dataclass can be passed directly to
-    the session adapter without an extra serialisation step.  Callers that
-    need the parsed payload should do json.loads(event.payload).
-
-    success is bool | None (not int) — the session adapter converts to
-    SQLite INTEGER on write and back on read.
-    """
+    """In-memory representation of a telemetry_events row."""
 
     id: str
     org_id: str
@@ -94,17 +86,11 @@ class TelemetryEvent:
 # ---------------------------------------------------------------------------
 
 class TelemetryReadError(Exception):
-    """Raised by get_telemetry_range() when the database operation fails.
-
-    Wraps the underlying exception so callers receive a typed, stable error
-    rather than a raw sqlite3 or SQLAlchemy exception.
-    """
+    """Raised by get_telemetry_range() when the database operation fails."""
 
 
 # ---------------------------------------------------------------------------
-# Payload TypedDicts — documentation / type-checking only.
-# record_event() accepts any JSON-serialisable dict.
-# New event type added in a sprint → add a TypedDict here + registry entry.
+# Payload TypedDicts — documentation only; record_event() accepts any dict.
 # ---------------------------------------------------------------------------
 
 class RunStartedPayload(TypedDict, total=False):
@@ -124,9 +110,14 @@ class ConnectorHealthPayload(TypedDict):
     check_duration_ms: int
 
 
-class RunSignalSnapshotPayload(TypedDict, total=False):
-    """T3-S10-A — written at end of each run for temporal baselining."""
-    signal_values: NotRequired[dict[str, Any]]
+class RunSignalSnapshotPayload(TypedDict):
+    """T3-S10-A — one record per signal metric per run (locked schema)."""
+    metric_key: str
+    value: float
+    baseline: Optional[float]
+
+
+RunSignalSnapshotEvent = RunSignalSnapshotPayload   # alias
 
 
 class PackExecutedPayload(TypedDict, total=False):
@@ -154,6 +145,7 @@ class EntityExtractionCompletedPayload(TypedDict, total=False):
     entity_count: NotRequired[int]
     failure_count: NotRequired[int]
 
+
 class RunStartedEvent(TypedDict):
     run_id: str
     org_id: str
@@ -172,15 +164,7 @@ class ConnectorRegisteredEvent(TypedDict):
 
 
 class DbQueryExecutedEvent(TypedDict):
-    """T1-S10-C (T2 events) — written after every connector DB/API query.
-
-    connector_id:  Which connector issued the query.
-    query_hash:    SHA-256 hex digest of the query string (never the raw query).
-    row_count:     Number of rows returned.
-    duration_ms:   Query round-trip time in milliseconds.
-    driver:        Connector driver name (e.g. 'salesforce_soql', 'servicenow_rest').
-    truncated:     True when the result set was capped by a row limit.
-    """
+    """T1-S10-C T2 events — written after every connector DB/API query."""
     connector_id: str
     query_hash: str
     row_count: int
@@ -190,24 +174,22 @@ class DbQueryExecutedEvent(TypedDict):
 
 
 class DbIngestorCompletedEvent(TypedDict):
-    """T1-S10-C (T2 events) — written after a connector ingestor finishes.
-
-    connector_id:     Which connector ran the ingestor.
-    tables_processed: Number of entity types / tables processed.
-    rows_ingested:    Total rows written to the local store.
-    duration_ms:      Total ingestor wall-clock time in milliseconds.
-    """
+    """T1-S10-C T2 events — written after a connector ingestor finishes."""
     connector_id: str
     tables_processed: int
     rows_ingested: int
     duration_ms: int
 
-def register_event_type(event_type: str, schema: Type[Any]) -> None:
-    """Register an event type and payload schema.
 
-    Registering the same event type with the same schema is idempotent.
-    Registering it with a different schema raises so ownership mistakes are
-    caught during development.
+# ---------------------------------------------------------------------------
+# Registry helpers
+# ---------------------------------------------------------------------------
+
+def register_event_type(event_type: str, schema: Type[Any]) -> None:
+    """Register an event type and its payload TypedDict schema.
+
+    Idempotent when called with the same schema.  Raises ValueError if the
+    same event_type is registered with a different schema (catches mistakes).
     """
     if event_type in EVENT_REGISTRY:
         if EVENT_REGISTRY[event_type] is not schema:
@@ -217,123 +199,87 @@ def register_event_type(event_type: str, schema: Type[Any]) -> None:
                 f"with {schema!r}."
             )
         return
-
     EVENT_REGISTRY[event_type] = schema
 
-# ---------------------------------------------------------------------------
-# Event type registry
-# Sprint 10 initial set.  Add new types in the sprint that produces them.
-# ---------------------------------------------------------------------------
 
-EVENT_TYPE_REGISTRY: frozenset[str] = frozenset({
-    # T1-S10-C (this story)
-    "connector.health_check",
-    "run.started",
-    "run.completed",
-    # T1-S10-C T2 events — connector query and ingestor observability
-    "db.query_executed",
-    "db.ingestor_completed",
-    # T3-S10-A
-    "run.signal_snapshot",
-    # T1-S14-C  (Sprint 14)
-    "pack.executed",
-    "detector.fired",
-    "llm.enrichment_attempted",
-    # T3-S12  (Sprint 12, Track 3)
-    "entity.extraction_completed",
-})
+# Register Sprint 10 initial set
+register_event_type("run.started", RunStartedEvent)
+register_event_type("run.completed", RunCompletedEvent)
+register_event_type("connector.registered", ConnectorRegisteredEvent)
+register_event_type("connector.health_check", ConnectorHealthPayload)
+register_event_type("db.query_executed", DbQueryExecutedEvent)
+register_event_type("db.ingestor_completed", DbIngestorCompletedEvent)
+register_event_type("run.signal_snapshot", RunSignalSnapshotPayload)
 
 
 # ---------------------------------------------------------------------------
-# Public write API
+# Public write API — locked signature (T3-S10-A contract)
 # ---------------------------------------------------------------------------
 
-def record_event(
-    *,
-    org_id: str,
-    event_type: str,
-    source: str,
-    run_id: Optional[str] = None,
-    connector_id: Optional[str] = None,
-    pack_id: Optional[str] = None,
-    duration_ms: Optional[int] = None,
-    success: Optional[bool] = None,
-    count: Optional[int] = None,
-    error_code: Optional[str] = None,
-    payload: Optional[dict[str, Any]] = None,
-) -> None:
-    """Fire-and-forget telemetry write.  Never raises.
+def record_event(event_type: str, payload: Optional[dict] = None) -> None:
+    """Fire-and-forget telemetry write.  Never raises under any circumstance.
 
-    Creates a TelemetryEvent and persists it via get_db_session().
-    Failures (serialisation error, DB unavailable, etc.) are written to the
-    application error log.  The caller's operation is never interrupted.
+    Signature is locked: record_event(event_type, payload).
+    Track 3 (T3-S10-A) calls this with 2 positional args.
 
-    Args:
-        org_id:       Workspace / tenant identifier.
-        event_type:   One of the strings in EVENT_TYPE_REGISTRY.
-        source:       Logical component that produced the event.
-        run_id:       Discovery run ID, if applicable.
-        connector_id: Connector identifier, if applicable.
-        pack_id:      Pack identifier, if applicable.
-        duration_ms:  Elapsed milliseconds for the measured operation.
-        success:      Whether the operation succeeded (True/False/None).
-        count:        Cardinality metric (e.g. number of opportunities).
-        error_code:   Short error identifier on failure.
-        payload:      Arbitrary JSON-serialisable metadata dict.
+    The function:
+    1. Logs the event via logger.info so tests can observe it via caplog.
+    2. Persists to telemetry_events DB table (best-effort; never raises).
     """
     try:
+        if payload is None:
+            payload = {}
+
+        # Log for observability — Track 3 contract tests read from caplog.
+        event_log = {
+            "event_type": event_type,
+            "ts": time.time(),
+            **payload,
+        }
+        logger.info("[telemetry] %s", event_log)
+
+        # Persist to telemetry_events table.
         _ensure_telemetry_table()
 
-        # Validate payload is JSON-serialisable before touching the DB.
-        payload_str: str = json.dumps(payload if payload is not None else {})
+        # org_id from tenancy context when available; else fall back to unknown.
+        try:
+            from app.middleware.tenancy import get_current_org_id_optional
+            org_id = get_current_org_id_optional() or "unknown"
+        except Exception:
+            org_id = payload.get("org_id", "unknown")
 
-        event = TelemetryEvent(
+        payload_str = json.dumps(payload)
+
+        tel_event = TelemetryEvent(
             id=str(uuid.uuid4()),
             org_id=org_id,
             event_type=event_type,
-            source=source,
-            run_id=run_id,
-            connector_id=connector_id,
-            pack_id=pack_id,
-            duration_ms=duration_ms,
-            success=success,
-            count=count,
-            error_code=error_code,
+            source=payload.get("source", "telemetry"),
+            run_id=payload.get("run_id"),
+            connector_id=payload.get("connector_id"),
+            pack_id=payload.get("pack_id"),
+            duration_ms=payload.get("duration_ms"),
+            success=payload.get("success"),
+            count=payload.get("count"),
+            error_code=payload.get("error_code"),
             payload=payload_str,
             timestamp=datetime.now(timezone.utc),
         )
 
         with get_db_session() as session:
-            session.add(event)
+            session.add(tel_event)
             session.commit()
-        
-        if event_type not in EVENT_REGISTRY:
-            logger.debug(
-                "[telemetry] record_event called with unregistered type '%s'",
-                event_type,
-            )
-
-        event = {
-            "event_type": event_type,
-            "ts": time.time(),
-            **dict(payload),
-        }
-
-        logger.info("[telemetry] %s", event)
 
     except Exception:
         logger.error(
-            "telemetry.record_event failed — event_type=%s org_id=%s\n%s",
+            "telemetry.record_event failed — event_type=%s\n%s",
             event_type,
-            org_id,
             traceback.format_exc(),
         )
-    
-    return None
+
 
 # ---------------------------------------------------------------------------
-# Public read API
-# Only approved read path until T1-S15-C adds aggregation and dashboards.
+# Public read API — only approved read path until T1-S15-C.
 # ---------------------------------------------------------------------------
 
 _MAX_LIMIT = 10_000
@@ -351,25 +297,10 @@ def get_telemetry_range(
     Always scoped to org_id — events from other orgs are never returned.
     Results are ordered oldest-first (timestamp ASC).
 
-    Args:
-        org_id:     Workspace identifier.  Must not be empty or None.
-        event_type: Event type string from EVENT_TYPE_REGISTRY.
-        from_dt:    Range start (inclusive).  Timezone-aware UTC datetime.
-        to_dt:      Range end   (exclusive).  Timezone-aware UTC datetime.
-        limit:      Maximum rows returned (default 1 000; capped at 10 000).
-
-    Returns:
-        List of TelemetryEvent-compatible objects with columns as attributes.
-        payload is the raw JSON string; callers must json.loads() if needed.
-        Returns [] on empty result, never None.
-
     Raises:
-        ValueError:          If org_id is empty/None, from_dt >= to_dt, or
-                             limit < 1.  Raised before any DB call.
-        TelemetryReadError:  If the database operation fails.  Wraps the
-                             underlying exception.
+        ValueError:         org_id empty/None, from_dt >= to_dt, or limit < 1.
+        TelemetryReadError: DB operation failed.
     """
-    # --- Parameter validation (before any DB call) ---
     if not org_id:
         raise ValueError("org_id must not be empty or None")
     if from_dt >= to_dt:
@@ -377,7 +308,6 @@ def get_telemetry_range(
     if limit < 1:
         raise ValueError("limit must be >= 1")
 
-    # --- Limit clamping ---
     if limit > _MAX_LIMIT:
         logger.warning(
             "get_telemetry_range: requested limit %d exceeds maximum %d — clamped",
@@ -407,32 +337,16 @@ def get_telemetry_range(
         raise
     except Exception as exc:
         logger.error(
-            "get_telemetry_range failed — org_id=%s event_type=%s from=%s to=%s: %s",
+            "get_telemetry_range failed — org_id=%s event_type=%s: %s",
             org_id,
             event_type,
-            from_dt,
-            to_dt,
             exc,
         )
         raise TelemetryReadError(str(exc)) from exc
 
-class RunSignalSnapshotPayload(TypedDict):
-    metric_key: str
-    value: float
-    baseline: Optional[float]
-
-
-RunSignalSnapshotEvent = RunSignalSnapshotPayload
-
-register_event_type("run.started", RunStartedEvent)
-register_event_type("run.completed", RunCompletedEvent)
-register_event_type("connector.registered", ConnectorRegisteredEvent)
-register_event_type("db.query_executed", DbQueryExecutedEvent)
-register_event_type("db.ingestor_completed", DbIngestorCompletedEvent)
-register_event_type("run.signal_snapshot", RunSignalSnapshotPayload)
-
 
 __all__ = [
+    "ConnectorHealthPayload",
     "ConnectorRegisteredEvent",
     "DbIngestorCompletedEvent",
     "DbQueryExecutedEvent",
@@ -442,6 +356,8 @@ __all__ = [
     "RunSignalSnapshotPayload",
     "RunStartedEvent",
     "TELEMETRY_EVENT_REGISTRY",
+    "TelemetryReadError",
+    "get_telemetry_range",
     "record_event",
     "register_event_type",
 ]

@@ -137,20 +137,15 @@ def _check_connector(connector: Any, org_id: str) -> None:
         expiry: Optional[int] = getattr(token_status, "expires_in_seconds", None)
         connector_id = str(connector.id)
 
-        record_event(
-            org_id=org_id,
-            event_type="connector.health_check",
-            source="connector_health_job",
-            connector_id=connector_id,
-            duration_ms=duration_ms,
-            success=True,
-            payload={
-                "status":               status,
-                "connector_id":         connector_id,
-                "token_expiry_seconds": expiry,
-                "check_duration_ms":    duration_ms,
-            },
-        )
+        record_event("connector.health_check", {
+            "status":               status,
+            "connector_id":         connector_id,
+            "token_expiry_seconds": expiry,
+            "check_duration_ms":    duration_ms,
+            "org_id":               org_id,
+            "source":               "connector_health_job",
+            "success":              True,
+        })
 
         logger.debug(
             "health_check org=%s connector=%s status=%s duration_ms=%d",

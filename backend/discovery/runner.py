@@ -162,13 +162,11 @@ def run(
     started_at = _run_started_dt.isoformat()
     logger.info(f"AgentIQ discovery runner — mode={mode} run_id={run_id} pack={pack_id}")
 
-    record_event(
-        org_id=org_id,
-        event_type="run.started",
-        source="run_pipeline",
-        run_id=run_id,
-        success=None,
-    )
+    record_event("run.started", {
+        "org_id": org_id,
+        "run_id": run_id,
+        "source": "run_pipeline",
+    })
 
     # 1. Ingest
     from .ingest import salesforce, servicenow, jira as jira_mod
@@ -206,16 +204,16 @@ def run(
             _elapsed_ms = int((datetime.now(timezone.utc) - _run_started_dt).total_seconds() * 1000)
         except Exception:
             _elapsed_ms = None
-        record_event(
-            org_id=org_id,
-            event_type="run.completed",
-            source="run_pipeline",
-            run_id=run_id,
-            duration_ms=_elapsed_ms,
-            success=False,
-            count=0,
-            payload={"pack_id": pack_id, "system_count": len(_systems)},
-        )
+        record_event("run.completed", {
+            "org_id": org_id,
+            "run_id": run_id,
+            "source": "run_pipeline",
+            "duration_ms": _elapsed_ms,
+            "success": False,
+            "count": 0,
+            "pack_id": pack_id,
+            "system_count": len(_systems),
+        })
         return _empty_run(run_id, org_id, mode, started_at)
 
     # 2a. nCino ingest — if ncino pack, fetch lending signals from nCino objects
@@ -442,16 +440,16 @@ def run(
         _elapsed_ms = int((datetime.now(timezone.utc) - _run_started_dt).total_seconds() * 1000)
     except Exception:
         _elapsed_ms = None
-    record_event(
-        org_id=org_id,
-        event_type="run.completed",
-        source="run_pipeline",
-        run_id=run_id,
-        duration_ms=_elapsed_ms,
-        success=True,
-        count=len(opportunities),
-        payload={"pack_id": pack_id, "system_count": len(_systems)},
-    )
+    record_event("run.completed", {
+        "org_id": org_id,
+        "run_id": run_id,
+        "source": "run_pipeline",
+        "duration_ms": _elapsed_ms,
+        "success": True,
+        "count": len(opportunities),
+        "pack_id": pack_id,
+        "system_count": len(_systems),
+    })
 
     return {
         "runId": run_id, "orgId": org_id, "mode": mode,
