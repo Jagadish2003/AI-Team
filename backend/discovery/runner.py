@@ -22,6 +22,8 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 from dotenv import load_dotenv
 
+from app.telemetry import record_event
+
 # Track A adapter
 from .track_a_adapter import export_track_a_seed
 
@@ -90,8 +92,17 @@ def run(
     if run_id is None:
         run_id = f"run_{uuid.uuid4().hex[:8]}"
 
-    started_at = datetime.now(timezone.utc).isoformat()
+    _run_started_dt = datetime.now(timezone.utc)
+    started_at = _run_started_dt.isoformat()
     logger.info(f"AgentIQ discovery runner — mode={mode} run_id={run_id} pack={pack_id}")
+
+    record_event(
+        org_id=org_id,
+        event_type="run.started",
+        source="run_pipeline",
+        run_id=run_id,
+        success=None,
+    )
 
     # 1. Ingest
     from .ingest import salesforce, servicenow, jira as jira_mod
@@ -125,6 +136,20 @@ def run(
 
     if not sf_data and "salesforce" in _systems:
         logger.error("Salesforce data unavailable — cannot run detectors. Aborting.")
+        try:
+            _elapsed_ms = int((datetime.now(timezone.utc) - _run_started_dt).total_seconds() * 1000)
+        except Exception:
+            _elapsed_ms = None
+        record_event(
+            org_id=org_id,
+            event_type="run.completed",
+            source="run_pipeline",
+            run_id=run_id,
+            duration_ms=_elapsed_ms,
+            success=False,
+            count=0,
+            payload={"pack_id": pack_id, "system_count": len(_systems)},
+        )
         return _empty_run(run_id, org_id, mode, started_at)
 
     # 2a. nCino ingest — if ncino pack, fetch lending signals from nCino objects
@@ -342,6 +367,21 @@ def run(
             opp["compliance_guardrail"] = det_labels.get("compliance_guardrail")
 
         opportunities.append(opp)
+
+    try:
+        _elapsed_ms = int((datetime.now(timezone.utc) - _run_started_dt).total_seconds() * 1000)
+    except Exception:
+        _elapsed_ms = None
+    record_event(
+        org_id=org_id,
+        event_type="run.completed",
+        source="run_pipeline",
+        run_id=run_id,
+        duration_ms=_elapsed_ms,
+        success=True,
+        count=len(opportunities),
+        payload={"pack_id": pack_id, "system_count": len(_systems)},
+    )
 
     return {
         "runId": run_id, "orgId": org_id, "mode": mode,

@@ -56,7 +56,12 @@ async def lifespan(app: FastAPI):
         validate_all_secrets(CONNECTOR_AUTH_CONFIGS)
     # Seed the dev user as owner of the default org so existing routes pass RBAC.
     seed_owner(_DEV_ORG, _DEV_USER)
+    # AT-90: start connector health check background job.
+    from .jobs.connector_health import start_health_check_job, stop_health_check_job
+    start_health_check_job()
     yield
+    # AT-90: shut down scheduler on SIGTERM / graceful shutdown (wait=False).
+    stop_health_check_job()
 
 
 app = FastAPI(title="AgentIQ Layer 1 API Skeleton", version="0.1.0", lifespan=lifespan)

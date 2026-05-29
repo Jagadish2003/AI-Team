@@ -61,6 +61,32 @@ CREATE INDEX IF NOT EXISTS idx_telemetry_org_run
 """
 
 # ---------------------------------------------------------------------------
+# Append-only enforcement — SQLite BEFORE UPDATE/DELETE triggers.
+#
+# These are the SQLite equivalent of:
+#     REVOKE UPDATE, DELETE ON telemetry_events FROM <app_db_user>;
+# which will be applied in the PostgreSQL deployment (see docstring above).
+# In SQLite, per-user grants do not exist, so triggers enforce the same
+# invariant at the DB layer (AC8).
+# ---------------------------------------------------------------------------
+
+CREATE_TELEMETRY_TRIGGER_NO_UPDATE = """
+CREATE TRIGGER IF NOT EXISTS trg_telemetry_no_update
+BEFORE UPDATE ON telemetry_events
+BEGIN
+    SELECT RAISE(ABORT, 'telemetry_events is append-only: UPDATE not permitted');
+END
+"""
+
+CREATE_TELEMETRY_TRIGGER_NO_DELETE = """
+CREATE TRIGGER IF NOT EXISTS trg_telemetry_no_delete
+BEFORE DELETE ON telemetry_events
+BEGIN
+    SELECT RAISE(ABORT, 'telemetry_events is append-only: DELETE not permitted');
+END
+"""
+
+# ---------------------------------------------------------------------------
 # Convenience tuple — iterate to initialise all DDL in order
 # ---------------------------------------------------------------------------
 
@@ -69,4 +95,6 @@ ALL_TELEMETRY_DDL: tuple[str, ...] = (
     CREATE_TELEMETRY_IDX_ORG_TS,
     CREATE_TELEMETRY_IDX_ORG_EVENT,
     CREATE_TELEMETRY_IDX_ORG_RUN,
+    CREATE_TELEMETRY_TRIGGER_NO_UPDATE,
+    CREATE_TELEMETRY_TRIGGER_NO_DELETE,
 )
