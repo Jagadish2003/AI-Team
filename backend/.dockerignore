@@ -1,0 +1,39 @@
+# Exclude files that should not be copied into the Docker image
+
+# Python cache / compiled bytecode
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# Virtual environment — dependencies are installed from requirements.txt
+.venv/
+venv/
+env/
+
+# Local development database — never copied to image
+database/dev.db
+runs/
+
+# Test artefacts
+.pytest_cache/
+*.egg-info/
+dist/
+build/
+htmlcov/
+.coverage
+
+# Secrets / local config — injected at runtime via --env-file
+.env
+.env.*
+
+# IDE and OS noise
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Git history — not needed in the image
+.git/
+.gitignore

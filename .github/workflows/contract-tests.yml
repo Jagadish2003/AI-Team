@@ -41,6 +41,7 @@ jobs:
 
       - name: Run contract tests
         env:
+          PYTHONPATH: "..:."
           DEV_JWT: dev-token-change-me
           DB_PATH: database/dev.db
           SEED_DIR: database/seed

@@ -82,10 +82,10 @@ def record_event(event_type: str, payload: dict[str, Any]) -> None:
     """
     try:
         if event_type not in EVENT_REGISTRY:
-            logger.warning(
-                "[telemetry] unregistered event type '%s' - dropped", event_type
+            logger.debug(
+                "[telemetry] record_event called with unregistered type '%s'",
+                event_type,
             )
-            return None
 
         event = {
             "event_type": event_type,

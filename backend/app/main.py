@@ -38,6 +38,7 @@ from .routes_sprint4_t6 import register_sprint4_t6_routes
 from .routes_sprint41_blueprint import register_blueprint_routes
 from .run_store import read_run, read_run_events, start_run_
 from .routes_workspace_catalog import register_workspace_catalog_routes
+from .routes_db_connectors import register_db_connector_routes
 from .routes_temporal import register_temporal_routes
 from .security import require_auth
 
@@ -72,6 +73,7 @@ register_sprint4_t2_routes(app)
 register_sprint4_t1_routes(app)
 register_blueprint_routes(app)
 register_normalization_routes(app)
+register_db_connector_routes(app)
 register_temporal_routes(app)
 
 origins = [
