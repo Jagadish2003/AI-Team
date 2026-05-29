@@ -1,15 +1,28 @@
-"""Unit tests for T1-S10-B audit registry T2 additions.
-
-Validates that:
-- SCHEMA_DISCOVERED constant equals "schema_discovered".
-- schema_discovered is registered in AUDIT_EVENT_REGISTRY.
-- schema_discovered is distinct from CONNECTOR_QUERIED / "connector_queried".
-- SchemaDiscoveredEvent TypedDict has connector_id, schema_count, table_count.
-- log_event() accepts schema_discovered without special-casing.
-
-Run from backend/:
-    python -m pytest tests/unit/test_audit_t1_s10_b.py -q
 """
+T1-S10-B  |  Audit Event Registry — Unit Tests
+AgentIQ 2.0  |  Track 1 — Platform Foundation  |  Sprint 10
+
+Acceptance criteria verified here:
+
+  AC-AUD-1  schema_discovered constant is present in audit.py and in the
+            AUDIT_EVENT_REGISTRY.
+  AC-AUD-2  schema_discovered constant value != connector_queried constant
+            value  (distinct strings — different data-access semantics).
+  AC-AUD-3  SchemaDiscoveredEvent TypedDict declares the required fields:
+            connector_id, schema_count, table_count  (+ org_id from doc).
+  AC-AUD-4  log_event() accepts 'schema_discovered' without modification
+            to T1-S10-B code — verified by calling log_event() with the
+            schema_discovered event type and asserting no exception.
+  AC-AUD-5  log_event() never raises — fail-silent contract.
+  AC-AUD-6  connector_queried is in the registry with its TypedDict.
+  AC-AUD-7  Registry idempotency and conflict detection.
+  AC-AUD-8  T1 lifecycle events are registered.
+
+Run:
+  cd backend
+  pytest tests/unit/test_audit_t1_s10_b.py -v
+"""
+
 from __future__ import annotations
 
 import logging

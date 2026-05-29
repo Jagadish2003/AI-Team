@@ -27,10 +27,76 @@ from app.telemetry import record_event
 # Track A adapter
 from .track_a_adapter import export_track_a_seed
 
+try:
+    from app.temporal import DetectorEvaluation, snapshot_signals
+except ModuleNotFoundError:  # project-root execution uses backend as package
+    from backend.app.temporal import DetectorEvaluation, snapshot_signals
+
 load_dotenv()
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s  %(message)s")
 logger = logging.getLogger(__name__)
+
+
+def _run_detector_phase(
+    all_detectors: List[Any],
+    sf_data: Dict[str, Any],
+    sn_data: Dict[str, Any],
+    jira_data: Dict[str, Any],
+) -> tuple[List[Any], List[DetectorEvaluation]]:
+    detector_results = []
+    all_evaluated: List[DetectorEvaluation] = []
+
+    for det in all_detectors:
+        name = det.__name__.split(".")[-1]
+        try:
+            evaluation = det.evaluate(sf_data, sn_data, jira_data)
+            all_evaluated.append(evaluation)
+
+            fired = det.detect(sf_data, sn_data, jira_data)
+            detector_results.extend(fired)
+            if evaluation.fired != bool(fired):
+                logger.warning(
+                    "  %s: evaluate/detect fired mismatch (evaluation=%s, results=%d)",
+                    name,
+                    evaluation.fired,
+                    len(fired),
+                )
+            status = f"FIRED ({len(fired)})" if fired else "not fired"
+        except Exception as e:
+            status = f"ERROR: {e}"
+        logger.info(f"  {name}: {status}")
+
+    logger.info(
+        "Temporal detector evaluations captured: %d/%d",
+        len(all_evaluated),
+        len(all_detectors),
+    )
+    return detector_results, all_evaluated
+
+
+def _snapshot_detector_evaluations(
+    *,
+    org_id: str,
+    run_id: str,
+    pack_id: str,
+    detector_results: List[Any],
+    all_evaluated: List[DetectorEvaluation],
+) -> datetime:
+    run_completed_at = datetime.now(timezone.utc)
+    try:
+        snapshot_signals(
+            org_id=org_id,
+            run_id=run_id,
+            pack_id=pack_id,
+            detector_results=detector_results,
+            all_evaluated=all_evaluated,
+            run_completed_at=run_completed_at,
+        )
+    except Exception as e:
+        logger.warning("Signal snapshot failed (non-blocking): %s", e)
+    return run_completed_at
+
 
 def build_org_context(sf_data: Dict, sn_data: Dict, jira_data: Dict) -> Dict[str, Any]:
     cm = sf_data.get("case_metrics") or {}
@@ -229,16 +295,20 @@ def run(
                          integration_concentration, permission_bottleneck, cross_system_echo]
         logger.info("Pack: service_cloud — 7 SC detectors active")
 
-    detector_results = []
-    for det in all_detectors:
-        name = det.__name__.split(".")[-1]
-        try:
-            fired = det.detect(sf_data, sn_data, jira_data)
-            detector_results.extend(fired)
-            status = f"FIRED ({len(fired)})" if fired else "not fired"
-        except Exception as e:
-            fired, status = [], f"ERROR: {e}"
-        logger.info(f"  {name}: {status}")
+    # Capture fired and non-firing detector evaluations before scoring.
+    detector_results, all_evaluated = _run_detector_phase(
+        all_detectors,
+        sf_data,
+        sn_data,
+        jira_data,
+    )
+    _snapshot_detector_evaluations(
+        org_id=org_id,
+        run_id=run_id,
+        pack_id=pack_id,
+        detector_results=detector_results,
+        all_evaluated=all_evaluated,
+    )
 
     # 4. Score + Evidence
     # ENG-AIQ-NC-4: use lending_scorer for ncino pack, SC scorer for service_cloud
