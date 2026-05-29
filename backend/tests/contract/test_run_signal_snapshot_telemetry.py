@@ -8,7 +8,7 @@ from unittest.mock import patch
 from app.db import connect
 from app.telemetry import (
     EVENT_REGISTRY,
-    RunSignalSnapshotEvent,
+    TELEMETRY_EVENT_REGISTRY,
     RunSignalSnapshotPayload,
     record_event,
     register_event_type,
@@ -53,58 +53,39 @@ def _logged_events(caplog) -> list[dict]:
 
 
 def test_run_signal_snapshot_event_is_registered():
-    assert EVENT_REGISTRY["run.signal_snapshot"] is RunSignalSnapshotEvent
-    assert _fields(RunSignalSnapshotEvent) == {
-        "org_id",
-        "run_id",
-        "source",
-        "success",
-        "count",
-        "payload",
-    }
+    assert EVENT_REGISTRY["run.signal_snapshot"] is RunSignalSnapshotPayload
+    assert TELEMETRY_EVENT_REGISTRY["run.signal_snapshot"] is RunSignalSnapshotPayload
 
 
-def test_run_signal_snapshot_payload_fields_are_counts_only():
+def test_run_signal_snapshot_payload_fields_match_track3_contract():
     assert _fields(RunSignalSnapshotPayload) == {
-        "pack_id",
-        "signal_count",
-        "detector_count",
-        "fired_count",
-        "below_threshold",
+        "metric_key",
+        "value",
+        "baseline",
     }
 
 
 def test_run_signal_snapshot_registration_is_idempotent():
-    register_event_type("run.signal_snapshot", RunSignalSnapshotEvent)
-    assert EVENT_REGISTRY["run.signal_snapshot"] is RunSignalSnapshotEvent
+    register_event_type("run.signal_snapshot", RunSignalSnapshotPayload)
+    assert EVENT_REGISTRY["run.signal_snapshot"] is RunSignalSnapshotPayload
 
 
-def test_record_event_accepts_temporal_keyword_shape(caplog):
+def test_record_event_accepts_signal_snapshot_payload(caplog):
     with caplog.at_level(logging.INFO, logger="app.telemetry"):
         record_event(
-            org_id="org_tel",
-            event_type="run.signal_snapshot",
-            source="temporal_engine",
-            run_id="run_tel",
-            success=True,
-            count=2,
-            payload={
-                "pack_id": "pack_tel",
-                "signal_count": 2,
-                "detector_count": 1,
-                "fired_count": 1,
-                "below_threshold": 0,
+            "run.signal_snapshot",
+            {
+                "metric_key": "pack_tel::det_tel::metric_value",
+                "value": 2.0,
+                "baseline": None,
             },
         )
 
     event = _logged_events(caplog)[0]
     assert event["event_type"] == "run.signal_snapshot"
-    assert event["org_id"] == "org_tel"
-    assert event["run_id"] == "run_tel"
-    assert event["source"] == "temporal_engine"
-    assert event["success"] is True
-    assert event["count"] == 2
-    assert event["payload"]["signal_count"] == 2
+    assert event["metric_key"] == "pack_tel::det_tel::metric_value"
+    assert event["value"] == 2.0
+    assert event["baseline"] is None
     assert "metric_value" not in event
     assert "raw_evidence" not in event
 
@@ -131,18 +112,11 @@ def test_record_event_accepts_generic_registry_shape(caplog):
 def test_record_event_failure_never_raises():
     with patch("app.telemetry.logger.info", side_effect=RuntimeError("sink down")):
         record_event(
-            org_id="org_tel",
-            event_type="run.signal_snapshot",
-            source="temporal_engine",
-            run_id="run_tel",
-            success=True,
-            count=1,
-            payload={
-                "pack_id": "pack_tel",
-                "signal_count": 1,
-                "detector_count": 1,
-                "fired_count": 0,
-                "below_threshold": 1,
+            "run.signal_snapshot",
+            {
+                "metric_key": "pack_tel::det_tel::metric_value",
+                "value": 1.0,
+                "baseline": None,
             },
         )
 
@@ -173,13 +147,6 @@ def test_snapshot_signals_emits_registered_telemetry_event_after_write(caplog):
 
     events = _logged_events(caplog)
     event = next(item for item in events if item["event_type"] == "run.signal_snapshot")
-    assert event["org_id"] == "org_task9"
-    assert event["run_id"] == run_id
-    assert event["count"] == 1
-    assert event["payload"] == {
-        "pack_id": "pack_task9",
-        "signal_count": 1,
-        "detector_count": 1,
-        "fired_count": 1,
-        "below_threshold": 0,
-    }
+    assert event["metric_key"] == "pack_task9::DET_TASK9::metric_value"
+    assert event["value"] == 4.0
+    assert event["baseline"] is None

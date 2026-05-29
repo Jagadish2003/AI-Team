@@ -7,10 +7,11 @@ database-to-app circular imports.
 
 from __future__ import annotations
 
+import logging
 import os
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Dict, List, Optional, TypedDict
+from typing import Any, Dict, List, Optional
 
 from fastapi import HTTPException
 
@@ -27,17 +28,16 @@ except ModuleNotFoundError:  # pragma: no cover - supports repo-root imports.
         SignalSnapshot,
     )
 
+try:
+    from app.telemetry import RunSignalSnapshotPayload, record_event
+except ModuleNotFoundError:  # pragma: no cover - repo-root execution
+    from backend.app.telemetry import RunSignalSnapshotPayload, record_event
+
+
+logger = logging.getLogger(__name__)
 
 BASELINE_MIN_RUNS = int(os.getenv("BASELINE_MIN_RUNS", "3"))
 PRIMARY_METRIC_NAME = "metric_value"
-
-
-class RunSignalSnapshotPayload(TypedDict):
-    pack_id: str
-    signal_count: int
-    detector_count: int
-    fired_count: int
-    below_threshold: int
 
 
 @dataclass
@@ -58,37 +58,6 @@ class DetectorEvaluation:
     raw_evidence: dict[str, Any]
 
 
-def record_event(
-    *,
-    org_id: str,
-    event_type: str,
-    source: str,
-    run_id: str,
-    success: bool,
-    count: int,
-    payload: RunSignalSnapshotPayload,
-) -> None:
-    """Import-safe bridge for T1-S10-C telemetry when it is available."""
-
-    try:
-        try:
-            from app.telemetry import record_event as telemetry_record_event
-        except ModuleNotFoundError:  # pragma: no cover - supports repo-root imports.
-            from backend.app.telemetry import record_event as telemetry_record_event
-    except ModuleNotFoundError:
-        return None
-
-    telemetry_record_event(
-        org_id=org_id,
-        event_type=event_type,
-        source=source,
-        run_id=run_id,
-        success=success,
-        count=count,
-        payload=payload,
-    )
-
-
 def _build_signal_snapshots(
     *,
     org_id: str,
@@ -99,30 +68,37 @@ def _build_signal_snapshots(
 ) -> list[SignalSnapshot]:
     snapshots: list[SignalSnapshot] = []
     for evaluation in all_evaluated:
-        snapshots.append(
-            SignalSnapshot.from_primary_metric(
-                org_id=org_id,
-                run_id=run_id,
-                pack_id=pack_id,
-                evaluation=evaluation,
-                run_completed_at=run_completed_at,
+        try:
+            snapshots.append(
+                SignalSnapshot.from_primary_metric(
+                    org_id=org_id,
+                    run_id=run_id,
+                    pack_id=pack_id,
+                    evaluation=evaluation,
+                    run_completed_at=run_completed_at,
+                )
             )
-        )
-        snapshots.extend(
-            SignalSnapshot.from_signal_metrics(
-                org_id=org_id,
-                run_id=run_id,
-                pack_id=pack_id,
-                evaluation=evaluation,
-                run_completed_at=run_completed_at,
+            snapshots.extend(
+                SignalSnapshot.from_signal_metrics(
+                    org_id=org_id,
+                    run_id=run_id,
+                    pack_id=pack_id,
+                    evaluation=evaluation,
+                    run_completed_at=run_completed_at,
+                )
             )
-        )
+        except Exception as exc:
+            logger.warning(
+                "Signal snapshot build failed for %s (non-blocking): %s",
+                getattr(evaluation, "detector_id", "unknown"),
+                exc,
+            )
     return snapshots
 
 
-def _insert_signal_snapshots(snapshots: list[SignalSnapshot]) -> None:
+def _insert_signal_snapshots(snapshots: list[SignalSnapshot]) -> int:
     if not snapshots:
-        return None
+        return 0
 
     columns = [
         "id",
@@ -157,6 +133,7 @@ def _insert_signal_snapshots(snapshots: list[SignalSnapshot]) -> None:
         cur = con.cursor()
         cur.executemany(sql, rows)
         con.commit()
+        return len(snapshots)
     except Exception:
         con.rollback()
         raise
@@ -188,42 +165,20 @@ def snapshot_signals(
             run_completed_at=run_completed_at,
         )
         _insert_signal_snapshots(snapshots)
+    except Exception as exc:
+        logger.warning("Signal snapshot persistence failed (non-blocking): %s", exc)
+        return None
 
+    for snapshot in snapshots:
         payload = RunSignalSnapshotPayload(
-            pack_id=pack_id,
-            signal_count=len(snapshots),
-            detector_count=len(
-                {evaluation.detector_id for evaluation in all_evaluated}
-            ),
-            fired_count=len(
-                {
-                    evaluation.detector_id
-                    for evaluation in all_evaluated
-                    if evaluation.fired
-                }
-            ),
-            below_threshold=len(
-                {
-                    evaluation.detector_id
-                    for evaluation in all_evaluated
-                    if not evaluation.fired
-                }
-            ),
+            metric_key=snapshot.signal_key,
+            value=snapshot.metric_value,
+            baseline=snapshot.baseline_mean,
         )
         try:
-            record_event(
-                org_id=org_id,
-                event_type="run.signal_snapshot",
-                source="temporal_engine",
-                run_id=run_id,
-                success=True,
-                count=len(snapshots),
-                payload=payload,
-            )
-        except Exception:
-            return None
-    except Exception:
-        return None
+            record_event("run.signal_snapshot", payload)
+        except Exception as exc:
+            logger.warning("Signal snapshot telemetry failed (non-blocking): %s", exc)
 
     return None
 

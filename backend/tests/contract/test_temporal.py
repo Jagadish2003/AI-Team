@@ -199,12 +199,11 @@ def test_ac8_two_org_isolation():
 
 def test_ac9_record_event_payload_shape():
     """AC9: run.signal_snapshot event payload contains required fields."""
-    expected_keys = {"signal_count", "detector_count", "fired_count", "below_threshold"}
+    expected_keys = {"metric_key", "value", "baseline"}
     sample_payload = {
-        "signal_count": 5,
-        "detector_count": 3,
-        "fired_count": 2,
-        "below_threshold": 1
+        "metric_key": "pack::detector::metric_value",
+        "value": 5.0,
+        "baseline": None,
     }
     assert expected_keys.issubset(set(sample_payload.keys()))
 
@@ -398,15 +397,12 @@ def test_ac18_job_interval_configured():
 def test_ac19_telemetry_event_type():
     """AC19: run.signal_snapshot event type exists in registry."""
     expected_event = "run.signal_snapshot"
-    expected_payload_keys = {
-        "signal_count", "detector_count", "fired_count", "below_threshold"
-    }
+    expected_payload_keys = {"metric_key", "value", "baseline"}
     sample = {
         "event_type": expected_event,
-        "signal_count": 5,
-        "detector_count": 3,
-        "fired_count": 2,
-        "below_threshold": 1,
+        "metric_key": "pack::detector::metric_value",
+        "value": 5.0,
+        "baseline": None,
     }
     assert sample["event_type"] == expected_event
     assert expected_payload_keys.issubset(set(sample.keys()))

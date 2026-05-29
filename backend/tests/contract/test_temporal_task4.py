@@ -48,9 +48,13 @@ def test_snapshot_signals_writes_primary_and_additional_rows(monkeypatch):
     run_completed_at = datetime(2026, 5, 28, 10, 30, tzinfo=timezone.utc)
     event_calls = []
 
-    def fake_record_event(**kwargs):
+    def fake_record_event(event_type, payload):
         event_calls.append(
-            {"row_count_at_event": len(_rows_for_run("run_task4_main")), **kwargs}
+            {
+                "row_count_at_event": len(_rows_for_run("run_task4_main")),
+                "event_type": event_type,
+                "payload": payload,
+            }
         )
 
     monkeypatch.setattr("app.temporal.record_event", fake_record_event)
@@ -113,23 +117,19 @@ def test_snapshot_signals_writes_primary_and_additional_rows(monkeypatch):
     assert additional["fired"] in (0, False)
     assert "bool_flag" not in {row["metric_name"] for row in rows}
 
-    assert len(event_calls) == 1
-    event = event_calls[0]
-    assert event["row_count_at_event"] == 3
-    assert event["event_type"] == "run.signal_snapshot"
-    assert event["source"] == "temporal_engine"
-    assert event["count"] == 3
-    assert event["payload"] == {
-        "pack_id": "pack_task4",
-        "signal_count": 3,
-        "detector_count": 2,
-        "fired_count": 1,
-        "below_threshold": 1,
+    assert len(event_calls) == 3
+    assert all(event["row_count_at_event"] == 3 for event in event_calls)
+    assert {event["event_type"] for event in event_calls} == {"run.signal_snapshot"}
+    assert {event["payload"]["metric_key"] for event in event_calls} == {
+        "pack_task4::DET_FIRED::metric_value",
+        "pack_task4::DET_FIRED::extra_metric",
+        "pack_task4::DET_BELOW::metric_value",
     }
+    assert {event["payload"]["baseline"] for event in event_calls} == {None}
 
 
 def test_snapshot_signals_defaults_missing_signal_metrics(monkeypatch):
-    monkeypatch.setattr("app.temporal.record_event", lambda **kwargs: None)
+    monkeypatch.setattr("app.temporal.record_event", lambda event_type, payload: None)
 
     snapshot_signals(
         org_id="org_task4_no_metrics",
@@ -182,7 +182,7 @@ def test_snapshot_signals_failure_never_raises(monkeypatch):
 
 
 def test_snapshot_signals_telemetry_failure_does_not_abort(monkeypatch):
-    def broken_record_event(**kwargs):
+    def broken_record_event(event_type, payload):
         raise RuntimeError("telemetry unavailable")
 
     monkeypatch.setattr("app.temporal.record_event", broken_record_event)
@@ -212,7 +212,7 @@ def test_snapshot_signals_telemetry_failure_does_not_abort(monkeypatch):
 
 
 def test_signal_history_is_scoped_by_org(monkeypatch):
-    monkeypatch.setattr("app.temporal.record_event", lambda **kwargs: None)
+    monkeypatch.setattr("app.temporal.record_event", lambda event_type, payload: None)
     signal_key = "pack_task4::DET_SHARED::metric_value"
 
     for org_id, run_id, value in [
