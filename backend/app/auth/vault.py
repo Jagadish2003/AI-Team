@@ -1,0 +1,359 @@
+from __future__ import annotations
+
+import json
+import logging
+import os
+import uuid
+from datetime import datetime, timedelta, timezone
+from typing import Optional
+
+import httpx
+from cryptography.fernet import Fernet
+
+from app import db
+from app.auth import oauth as _oauth
+from app.auth.configs import CONNECTOR_AUTH_CONFIGS
+from app.auth.models import ConnectorAuthConfig, ConnectorNotAuthenticatedError, TokenRecord
+from app.auth.secrets import MissingSecretError
+from database.models.credentials import (
+    ALTER_CREDENTIALS_ADD_REFRESH_FAILED,
+    CREATE_CREDENTIALS_IDX_CONNECTOR,
+    CREATE_CREDENTIALS_IDX_ORG,
+    CREATE_CREDENTIALS_TABLE,
+)
+
+logger = logging.getLogger(__name__)
+
+REFRESH_THRESHOLD_SECONDS = int(os.environ.get("REFRESH_THRESHOLD_SECONDS", "300"))
+_OAUTH_HTTP_TIMEOUT = int(os.environ.get("OAUTH_HTTP_TIMEOUT_SECONDS", "30"))
+
+
+# ---------------------------------------------------------------------------
+# Internal helpers
+# ---------------------------------------------------------------------------
+
+
+def _init_credentials_table() -> None:
+    """Create the credentials table and indexes if they don't exist yet.
+
+    Also applies the refresh_failed column migration for pre-existing databases.
+    """
+    import sqlite3 as _sqlite3
+    con = db.connect()
+    try:
+        con.execute(CREATE_CREDENTIALS_TABLE)
+        con.execute(CREATE_CREDENTIALS_IDX_ORG)
+        con.execute(CREATE_CREDENTIALS_IDX_CONNECTOR)
+        try:
+            con.execute(ALTER_CREDENTIALS_ADD_REFRESH_FAILED)
+        except _sqlite3.OperationalError:
+            pass  # Column already exists — idempotent
+        con.commit()
+    finally:
+        con.close()
+
+
+def _get_fernet() -> Fernet:
+    """Return a Fernet instance using CREDENTIAL_VAULT_KEY from env.
+
+    Called at use time only — never cached at module level.
+    Raises MissingSecretError if the env var is absent.
+    """
+    key = os.environ.get("CREDENTIAL_VAULT_KEY")
+    if key is None:
+        raise MissingSecretError("CREDENTIAL_VAULT_KEY")
+    return Fernet(key.encode() if isinstance(key, str) else key)
+
+
+def _encrypt(plaintext: str) -> str:
+    return _get_fernet().encrypt(plaintext.encode()).decode()
+
+
+def _decrypt(ciphertext: str) -> str:
+    return _get_fernet().decrypt(ciphertext.encode()).decode()
+
+
+def _parse_expires_at(token_response: dict) -> datetime:
+    """Return a UTC-aware datetime for when the token expires.
+
+    Handles both expires_in (relative seconds) and expires_at (absolute).
+    Falls back to 1 hour if neither is present.
+    """
+    now = datetime.now(timezone.utc)
+
+    if "expires_in" in token_response:
+        try:
+            return now + timedelta(seconds=int(token_response["expires_in"]))
+        except (TypeError, ValueError):
+            pass
+
+    if "expires_at" in token_response:
+        val = token_response["expires_at"]
+        # Numeric Unix timestamp (int or float or numeric string)
+        try:
+            return datetime.fromtimestamp(float(val), tz=timezone.utc)
+        except (TypeError, ValueError):
+            pass
+        # ISO 8601 string
+        try:
+            dt = datetime.fromisoformat(str(val))
+            return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+        except ValueError:
+            pass
+
+    # Default: 1 hour from now
+    return now + timedelta(hours=1)
+
+
+def _row_to_token_record(row: tuple) -> TokenRecord:
+    """Convert a raw DB row to a TokenRecord with decrypted token values."""
+    _, org_id, connector_id, enc_access, enc_refresh, expires_at_str, scopes_json, created_str, updated_str = row
+
+    access_token = _decrypt(enc_access)
+    refresh_token = _decrypt(enc_refresh) if enc_refresh else None
+
+    expires_at = datetime.fromisoformat(expires_at_str)
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
+
+    created_at = datetime.fromisoformat(created_str)
+    if created_at.tzinfo is None:
+        created_at = created_at.replace(tzinfo=timezone.utc)
+
+    updated_at = datetime.fromisoformat(updated_str)
+    if updated_at.tzinfo is None:
+        updated_at = updated_at.replace(tzinfo=timezone.utc)
+
+    return TokenRecord(
+        org_id=org_id,
+        connector_id=connector_id,
+        access_token=access_token,
+        refresh_token=refresh_token,
+        expires_at=expires_at,
+        scopes=json.loads(scopes_json),
+        created_at=created_at,
+        updated_at=updated_at,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Public vault API
+# ---------------------------------------------------------------------------
+
+
+def _mark_refresh_failed(org_id: str, connector_id: str) -> None:
+    """Set refresh_failed=1 for an existing credential row.  No-op if row absent."""
+    con = db.connect()
+    try:
+        con.execute(
+            "UPDATE credentials SET refresh_failed=1 WHERE org_id=? AND connector_id=?",
+            (org_id, connector_id),
+        )
+        con.commit()
+    finally:
+        con.close()
+
+
+def store_token(org_id: str, connector_id: str, token_response: dict) -> TokenRecord:
+    """Encrypt and upsert a token response for the given org+connector pair.
+
+    Accepts the raw dict returned by exchange_code() or get_client_credentials_token().
+    Returns a TokenRecord with decrypted values (plaintext never written to DB).
+    """
+    _init_credentials_table()
+
+    now = datetime.now(timezone.utc)
+    expires_at = _parse_expires_at(token_response)
+
+    enc_access = _encrypt(token_response["access_token"])
+
+    raw_refresh = token_response.get("refresh_token")
+    enc_refresh = _encrypt(raw_refresh) if raw_refresh else None
+
+    scopes_json = json.dumps(token_response.get("scope", "").split() if isinstance(token_response.get("scope"), str) else token_response.get("scopes", []))
+
+    record_id = str(uuid.uuid4())
+    now_iso = now.isoformat()
+    expires_iso = expires_at.isoformat()
+
+    con = db.connect()
+    try:
+        con.execute(
+            """
+            INSERT INTO credentials
+                (id, org_id, connector_id, access_token, refresh_token, expires_at, scopes, created_at, updated_at, refresh_failed)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+            ON CONFLICT(org_id, connector_id) DO UPDATE SET
+                access_token   = excluded.access_token,
+                refresh_token  = excluded.refresh_token,
+                expires_at     = excluded.expires_at,
+                scopes         = excluded.scopes,
+                updated_at     = excluded.updated_at,
+                refresh_failed = 0
+            """,
+            (record_id, org_id, connector_id, enc_access, enc_refresh, expires_iso, scopes_json, now_iso, now_iso),
+        )
+        con.commit()
+    finally:
+        con.close()
+
+    return TokenRecord(
+        org_id=org_id,
+        connector_id=connector_id,
+        access_token=token_response["access_token"],
+        refresh_token=raw_refresh,
+        expires_at=expires_at,
+        scopes=json.loads(scopes_json),
+        created_at=now,
+        updated_at=now,
+    )
+
+
+async def get_token(org_id: str, connector_id: str) -> TokenRecord:
+    """Return a valid, decrypted TokenRecord for the given org+connector.
+
+    Auto-refreshes if the token is within REFRESH_THRESHOLD_SECONDS of expiry.
+    Raises ConnectorNotAuthenticatedError when no token exists or refresh fails.
+    """
+    _init_credentials_table()
+
+    con = db.connect()
+    try:
+        cur = con.execute(
+            """
+            SELECT id, org_id, connector_id, access_token, refresh_token,
+                   expires_at, scopes, created_at, updated_at
+            FROM credentials
+            WHERE org_id = ? AND connector_id = ?
+            """,
+            (org_id, connector_id),
+        )
+        row = cur.fetchone()
+    finally:
+        con.close()
+
+    if row is None:
+        raise ConnectorNotAuthenticatedError(org_id, connector_id)
+
+    record = _row_to_token_record(row)
+
+    now = datetime.now(timezone.utc)
+    seconds_left = (record.expires_at - now).total_seconds()
+
+    if seconds_left <= REFRESH_THRESHOLD_SECONDS:
+        if record.refresh_token is None:
+            raise ConnectorNotAuthenticatedError(org_id, connector_id)
+
+        config = CONNECTOR_AUTH_CONFIGS.get(connector_id)
+        if config is None:
+            raise ConnectorNotAuthenticatedError(org_id, connector_id)
+
+        try:
+            new_response = await _oauth.refresh_token(config, record.refresh_token)
+        except _oauth.OAuthError as exc:
+            logger.warning("Token refresh failed for %s/%s: %s", org_id, connector_id, exc.reason)
+            # Mark refresh_failed so token-status can return 'refresh_failed'
+            try:
+                _mark_refresh_failed(org_id, connector_id)
+            except Exception:
+                pass  # Never let flag-writing block the error propagation
+            raise ConnectorNotAuthenticatedError(org_id, connector_id) from exc
+
+        record = store_token(org_id, connector_id, new_response)
+
+    return record
+
+
+async def revoke_token(
+    org_id: str,
+    connector_id: str,
+    *,
+    _revoke_transport: Optional[httpx.AsyncBaseTransport] = None,
+) -> None:
+    """Revoke and delete the stored token for the given org+connector.
+
+    Step 1 — External revocation (best-effort, never raises):
+        POST to config.revocation_url if present.
+        Any failure is logged as a WARNING.
+
+    Step 2 — Local deletion (always executes):
+        Deletes the DB record and writes a connector_disconnected audit event.
+
+    Idempotent: if no token exists, both steps are no-ops.
+    """
+    _init_credentials_table()
+
+    config = CONNECTOR_AUTH_CONFIGS.get(connector_id)
+
+    # --- Step 1: external revocation (best-effort) ---
+    access_token_for_revoke: Optional[str] = None
+    if config and config.revocation_url:
+        # Read the raw encrypted token from DB to decrypt for revocation call
+        con = db.connect()
+        try:
+            cur = con.execute(
+                "SELECT access_token FROM credentials WHERE org_id = ? AND connector_id = ?",
+                (org_id, connector_id),
+            )
+            row = cur.fetchone()
+        finally:
+            con.close()
+
+        if row:
+            try:
+                access_token_for_revoke = _decrypt(row[0])
+            except Exception as exc:
+                logger.warning(
+                    "Could not decrypt token for external revocation of %s/%s: %s",
+                    org_id, connector_id, exc,
+                )
+
+        if access_token_for_revoke:
+            try:
+                async with httpx.AsyncClient(
+                    timeout=_OAUTH_HTTP_TIMEOUT, transport=_revoke_transport
+                ) as client:
+                    resp = await client.post(
+                        config.revocation_url,
+                        data={"token": access_token_for_revoke, "token_type_hint": "access_token"},
+                    )
+                if resp.status_code == 200:
+                    logger.info("External revocation succeeded for %s/%s", org_id, connector_id)
+                else:
+                    logger.warning(
+                        "External revocation returned HTTP %s for %s/%s",
+                        resp.status_code, org_id, connector_id,
+                    )
+            except httpx.TimeoutException:
+                logger.warning(
+                    "External revocation timed out for %s/%s", org_id, connector_id
+                )
+            except Exception as exc:
+                logger.warning(
+                    "External revocation failed for %s/%s: %s", org_id, connector_id, exc
+                )
+
+    # --- Step 2: local deletion (always) ---
+    con = db.connect()
+    try:
+        con.execute(
+            "DELETE FROM credentials WHERE org_id = ? AND connector_id = ?",
+            (org_id, connector_id),
+        )
+        con.commit()
+    finally:
+        con.close()
+
+    # Write connector_disconnected audit event to the audit_events table
+    event_id = f"audit_{uuid.uuid4().hex[:8]}"
+    db.upsert(
+        "audit_events",
+        event_id,
+        {
+            "id": event_id,
+            "action": "connector_disconnected",
+            "org_id": org_id,
+            "connector_id": connector_id,
+            "ts": datetime.now(timezone.utc).isoformat(),
+        },
+    )
