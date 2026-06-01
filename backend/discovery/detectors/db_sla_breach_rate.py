@@ -49,15 +49,17 @@ def evaluate(
             raw_evidence={"breach_rate_pct": 0.0, "breached_count": 0, "total_tickets_30d": 0},
         )
 
-    degraded = bool(sla.get("degraded", False))
+    # degraded_signal is the key used by the ingestor (Section 1d return shape)
+    degraded_signal = bool(sla.get("degraded_signal", False))
     breach_rate_pct = float(sla.get("breach_rate_pct", 0.0))
     breached_count = int(sla.get("breached_count", 0))
     total_tickets_30d = int(sla.get("total_tickets_30d", 0))
-    schema_name = sla.get("schema_name", "")
-    table_name = sla.get("table_name", "")
+    # schema_name and table_name are top-level fields in db_data (Section 1d)
+    schema_name = db_data.get("schema_name", "")
+    table_name = db_data.get("table_name", "")
 
     fired = (
-        not degraded
+        not degraded_signal
         and total_tickets_30d >= MIN_TICKETS
         and breach_rate_pct >= THRESHOLD
     )
@@ -75,7 +77,7 @@ def evaluate(
             "total_tickets_30d": total_tickets_30d,
             "schema_name": schema_name,
             "table_name": table_name,
-            "degraded": degraded,
+            "degraded_signal": degraded_signal,
         },
     )
 
