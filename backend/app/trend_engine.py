@@ -15,9 +15,9 @@ from dataclasses import dataclass
 from typing import Any, Literal, Mapping, Sequence
 
 try:
-    from app.temporal import get_signal_history
+    from app.temporal import get_baseline, get_signal_history
 except ModuleNotFoundError:  # pragma: no cover - supports repo-root imports.
-    from backend.app.temporal import get_signal_history
+    from backend.app.temporal import get_baseline, get_signal_history
 
 # ---------------------------------------------------------------------------
 # Temporal configuration — tunable defaults
@@ -81,6 +81,10 @@ def _trend_stable_band() -> float:
     return float(TEMPORAL_CONFIG["TREND_STABLE_BAND"])
 
 
+def _anomaly_threshold_stddev() -> float:
+    return float(TEMPORAL_CONFIG["ANOMALY_THRESHOLD_STDDEV"])
+
+
 def _detector_id_from_signal_key(signal_key: str) -> str:
     parts = signal_key.split("::")
     if len(parts) >= 3 and parts[1]:
@@ -126,6 +130,37 @@ def _metric_value(row: Any) -> float:
     if raw_value is None:
         raise ValueError("signal history row is missing metric_value")
     return float(raw_value)
+
+
+@dataclass(frozen=True)
+class AnomalyResult:
+    is_anomalous: bool
+    anomaly_score: float | None
+    anomaly_direction: Literal["above", "below"] | None
+    baseline_mean: float | None
+    baseline_stddev: float | None
+    insufficient_data: bool
+    first_deviation: bool
+    signal_key: str
+
+
+def _baseline_for_signal(org_id: str, signal_key: str) -> Any:
+    try:
+        signature = inspect.signature(get_baseline)
+    except (TypeError, ValueError):
+        signature = None
+
+    if signature is not None and "signal_key" in signature.parameters:
+        return get_baseline(org_id, signal_key)
+
+    detector_id = _detector_id_from_signal_key(signal_key)
+    return get_baseline(org_id, detector_id)
+
+
+def _baseline_field(baseline: Any, field_name: str, default: Any = None) -> Any:
+    if isinstance(baseline, Mapping):
+        return baseline.get(field_name, default)
+    return getattr(baseline, field_name, default)
 
 
 def calculate_trend(org_id: str, signal_key: str) -> TrendResult:
@@ -184,11 +219,92 @@ def calculate_trend(org_id: str, signal_key: str) -> TrendResult:
     )
 
 
+def calculate_anomaly(
+    org_id: str,
+    signal_key: str,
+    current_value: float,
+) -> AnomalyResult:
+    """Compare a current signal value against its Sprint 10 baseline."""
+    baseline = _baseline_for_signal(org_id, signal_key)
+    if baseline is None:
+        return AnomalyResult(
+            is_anomalous=False,
+            anomaly_score=None,
+            anomaly_direction=None,
+            baseline_mean=None,
+            baseline_stddev=None,
+            insufficient_data=True,
+            first_deviation=False,
+            signal_key=signal_key,
+        )
+
+    baseline_mean = _baseline_field(baseline, "baseline_mean")
+    baseline_stddev = _baseline_field(baseline, "baseline_stddev")
+    insufficient_data = bool(_baseline_field(baseline, "insufficient_data", False))
+    if insufficient_data or baseline_mean is None or baseline_stddev is None:
+        return AnomalyResult(
+            is_anomalous=False,
+            anomaly_score=None,
+            anomaly_direction=None,
+            baseline_mean=None,
+            baseline_stddev=None,
+            insufficient_data=True,
+            first_deviation=False,
+            signal_key=signal_key,
+        )
+
+    current = float(current_value)
+    mean = float(baseline_mean)
+    stddev = float(baseline_stddev)
+
+    if stddev == 0:
+        first_deviation = current != mean
+        if current > mean:
+            direction: Literal["above", "below"] | None = "above"
+        elif current < mean:
+            direction = "below"
+        else:
+            direction = None
+
+        return AnomalyResult(
+            is_anomalous=False,
+            anomaly_score=None,
+            anomaly_direction=direction,
+            baseline_mean=mean,
+            baseline_stddev=0.0,
+            insufficient_data=False,
+            first_deviation=first_deviation,
+            signal_key=signal_key,
+        )
+
+    score = abs(current - mean) / stddev
+    is_anomalous = score >= _anomaly_threshold_stddev()
+    if is_anomalous and current > mean:
+        anomaly_direction: Literal["above", "below"] | None = "above"
+    elif is_anomalous and current < mean:
+        anomaly_direction = "below"
+    else:
+        anomaly_direction = None
+
+    return AnomalyResult(
+        is_anomalous=is_anomalous,
+        anomaly_score=round(score, 2),
+        anomaly_direction=anomaly_direction,
+        baseline_mean=mean,
+        baseline_stddev=stddev,
+        insufficient_data=False,
+        first_deviation=False,
+        signal_key=signal_key,
+    )
+
+
 __all__ = [
+    "AnomalyResult",
     "TrendResult",
     "TEMPORAL_CONFIG",
     "TREND_WINDOW_RUNS",
     "TREND_STABLE_BAND",
     "ANOMALY_THRESHOLD_STDDEV",
+    "calculate_anomaly",
     "calculate_trend",
 ]
