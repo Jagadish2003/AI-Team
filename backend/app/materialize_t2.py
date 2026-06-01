@@ -210,9 +210,10 @@ def run_trackb_and_persist(
         _emit_event(
             run_id, "EXTRACT", "Extracting entities and identifying patterns..."
         )
+        pack_id = (run.get("inputs") or {}).get("packId") or run.get("packId") or None
         payload = trackb_run(
-            mode=mode, systems=succeeded, run_id=run_id, pack="strs_benefits"
-        )  # added pack="ncino"
+            mode=mode, systems=succeeded, run_id=run_id, pack=pack_id
+        )
         seed = export_track_a_seed(payload)
 
         opps = seed.get("opportunities", [])
