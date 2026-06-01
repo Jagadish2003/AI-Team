@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 
 from app import trend_engine
-from app.trend_engine import TEMPORAL_CONFIG, calculate_trend
+from app.trend_engine import TEMPORAL_CONFIG, calculate_anomaly, calculate_trend
 
 
 SIGNAL_KEY = "pack_trend::DET_TREND::metric_value"
@@ -33,6 +33,17 @@ def _stub_history(monkeypatch: pytest.MonkeyPatch, values: list[float]) -> list[
         return _latest_first(values[:limit])
 
     monkeypatch.setattr(trend_engine, "get_signal_history", fake_get_signal_history)
+    return calls
+
+
+def _stub_baseline(monkeypatch: pytest.MonkeyPatch, baseline) -> list[dict]:
+    calls = []
+
+    def fake_get_baseline(org_id, detector_id):
+        calls.append({"org_id": org_id, "detector_id": detector_id})
+        return baseline
+
+    monkeypatch.setattr(trend_engine, "get_baseline", fake_get_baseline)
     return calls
 
 
@@ -127,3 +138,168 @@ def test_calculate_trend_classification_responds_to_configured_stable_band(
 
     assert narrow_result.trend_direction == "rising"
     assert wider_result.trend_direction == "stable"
+
+
+def test_calculate_anomaly_marks_value_above_configured_threshold(monkeypatch):
+    threshold = float(TEMPORAL_CONFIG["ANOMALY_THRESHOLD_STDDEV"])
+    calls = _stub_baseline(
+        monkeypatch,
+        {
+            "baseline_mean": 100.0,
+            "baseline_stddev": 10.0,
+            "insufficient_data": False,
+        },
+    )
+
+    result = calculate_anomaly(
+        "org_anomaly",
+        SIGNAL_KEY,
+        current_value=100.0 + ((threshold + 0.25) * 10.0),
+    )
+
+    assert result.is_anomalous is True
+    assert result.anomaly_score == round(threshold + 0.25, 2)
+    assert result.anomaly_direction == "above"
+    assert result.baseline_mean == 100.0
+    assert result.baseline_stddev == 10.0
+    assert result.insufficient_data is False
+    assert result.first_deviation is False
+    assert result.signal_key == SIGNAL_KEY
+    assert calls == [{"org_id": "org_anomaly", "detector_id": "DET_TREND"}]
+
+
+def test_calculate_anomaly_does_not_mark_value_within_threshold(monkeypatch):
+    threshold = float(TEMPORAL_CONFIG["ANOMALY_THRESHOLD_STDDEV"])
+    _stub_baseline(
+        monkeypatch,
+        {
+            "baseline_mean": 100.0,
+            "baseline_stddev": 10.0,
+            "insufficient_data": False,
+        },
+    )
+
+    result = calculate_anomaly(
+        "org_anomaly",
+        SIGNAL_KEY,
+        current_value=100.0 + ((threshold - 0.25) * 10.0),
+    )
+
+    assert result.is_anomalous is False
+    assert result.anomaly_score == round(threshold - 0.25, 2)
+    assert result.anomaly_direction is None
+    assert result.insufficient_data is False
+    assert result.first_deviation is False
+
+
+def test_calculate_anomaly_returns_insufficient_data_without_raising(monkeypatch):
+    _stub_baseline(
+        monkeypatch,
+        {
+            "baseline_mean": None,
+            "baseline_stddev": None,
+            "insufficient_data": True,
+        },
+    )
+
+    result = calculate_anomaly("org_anomaly", SIGNAL_KEY, current_value=125.0)
+
+    assert result.is_anomalous is False
+    assert result.anomaly_score is None
+    assert result.anomaly_direction is None
+    assert result.baseline_mean is None
+    assert result.baseline_stddev is None
+    assert result.insufficient_data is True
+    assert result.first_deviation is False
+    assert result.signal_key == SIGNAL_KEY
+
+
+def test_calculate_anomaly_treats_missing_baseline_as_insufficient_data(
+    monkeypatch,
+):
+    _stub_baseline(monkeypatch, None)
+
+    result = calculate_anomaly("org_anomaly", SIGNAL_KEY, current_value=125.0)
+
+    assert result.is_anomalous is False
+    assert result.insufficient_data is True
+    assert result.first_deviation is False
+
+
+def test_calculate_anomaly_marks_first_deviation_for_zero_stddev(monkeypatch):
+    _stub_baseline(
+        monkeypatch,
+        {
+            "baseline_mean": 100.0,
+            "baseline_stddev": 0.0,
+            "insufficient_data": False,
+        },
+    )
+
+    result = calculate_anomaly("org_anomaly", SIGNAL_KEY, current_value=90.0)
+
+    assert result.is_anomalous is False
+    assert result.anomaly_score is None
+    assert result.anomaly_direction == "below"
+    assert result.baseline_mean == 100.0
+    assert result.baseline_stddev == 0.0
+    assert result.insufficient_data is False
+    assert result.first_deviation is True
+
+
+def test_calculate_anomaly_does_not_mark_first_deviation_when_value_unchanged(
+    monkeypatch,
+):
+    _stub_baseline(
+        monkeypatch,
+        {
+            "baseline_mean": 100.0,
+            "baseline_stddev": 0.0,
+            "insufficient_data": False,
+        },
+    )
+
+    result = calculate_anomaly("org_anomaly", SIGNAL_KEY, current_value=100.0)
+
+    assert result.is_anomalous is False
+    assert result.anomaly_score is None
+    assert result.anomaly_direction is None
+    assert result.first_deviation is False
+
+
+def test_calculate_anomaly_responds_to_configured_threshold(monkeypatch):
+    original_threshold = float(TEMPORAL_CONFIG["ANOMALY_THRESHOLD_STDDEV"])
+    score_between_thresholds = original_threshold + 0.25
+    _stub_baseline(
+        monkeypatch,
+        {
+            "baseline_mean": 100.0,
+            "baseline_stddev": 10.0,
+            "insufficient_data": False,
+        },
+    )
+
+    monkeypatch.setitem(
+        TEMPORAL_CONFIG,
+        "ANOMALY_THRESHOLD_STDDEV",
+        original_threshold,
+    )
+    lower_threshold_result = calculate_anomaly(
+        "org_config",
+        SIGNAL_KEY,
+        current_value=100.0 + (score_between_thresholds * 10.0),
+    )
+
+    monkeypatch.setitem(
+        TEMPORAL_CONFIG,
+        "ANOMALY_THRESHOLD_STDDEV",
+        score_between_thresholds + 0.25,
+    )
+    higher_threshold_result = calculate_anomaly(
+        "org_config",
+        SIGNAL_KEY,
+        current_value=100.0 + (score_between_thresholds * 10.0),
+    )
+
+    assert lower_threshold_result.is_anomalous is True
+    assert higher_threshold_result.is_anomalous is False
