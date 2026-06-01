@@ -103,6 +103,28 @@ PACK_REGISTRY: Dict[str, Dict[str, Any]] = {
         ),
     },
 
+    "sqlserver_opsignal": {
+        "packId":      "sqlserver_opsignal",
+        "packName":    "SQL Server Operational Signals",
+        "domain":      "sqlserver_opsignal",
+        "pack_domain": "sqlserver_opsignal",
+        "detectors": [
+            "discovery.detectors.db_ticket_volume_surge",
+            "discovery.detectors.db_sla_breach_rate",
+            "discovery.detectors.db_queue_depth_elevated",
+        ],
+        "ui_labels_path": str(_PACKS_DIR / "sqlserver_opsignal_ui_labels.json"),
+        "llm_context": (
+            "SQL Server operational database analysis. "
+            "Focus on service ticket volume trends, SLA breach patterns, "
+            "and queue depth accumulation. "
+            "Use IT operations language. "
+            "Cross-reference with ServiceNow and Jira findings where available. "
+            "IMPORTANT: agent surfaces operational signals to IT managers only. "
+            "No automated ticket resolution or SLA override."
+        ),
+    },
+
     # CPQ pack slot — reserved for Sprint 6
 
     # "ncino_cpq": {
@@ -162,6 +184,15 @@ def get_llm_context(pack_id: Optional[str] = None) -> str:
     return get_pack(pack_id)["llm_context"]
 
 
+
+
+def is_sqlserver_opsignal_pack(pack_id: Optional[str] = None) -> bool:
+    """Return True when the active pack is SQL Server Operational Signals.
+
+    Used by the runner, scorer, and evidence builder for pack routing.
+    Follows the identical pattern as is_ncino_pack() and is_strs_benefits_pack().
+    """
+    return get_pack(pack_id)["domain"] == "sqlserver_opsignal"
 
 
 def is_strs_benefits_pack(pack_id: Optional[str] = None) -> bool:
