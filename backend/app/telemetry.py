@@ -319,20 +319,36 @@ def get_telemetry_range(
     _ensure_telemetry_table()
 
     try:
-        with get_db_session() as session:
-            return (
-                session
-                .query(TelemetryEvent)
-                .filter(
-                    org_id=org_id,
-                    event_type=event_type,
-                    from_dt=from_dt.isoformat(),
-                    to_dt=to_dt.isoformat(),
-                )
-                .order_by("timestamp")
-                .limit(limit)
-                .all()
+        with get_db_connection() as conn:
+            rows = conn.execute(
+                """
+                SELECT id, org_id, event_type, source, run_id, connector_id,
+                       pack_id, duration_ms, success, count, error_code,
+                       payload, timestamp
+                FROM telemetry_events
+                WHERE org_id      = ?
+                  AND event_type  = ?
+                  AND timestamp   >= ?
+                  AND timestamp   <  ?
+                ORDER BY timestamp ASC
+                LIMIT ?
+                """,
+                (org_id, event_type, from_dt.isoformat(), to_dt.isoformat(), limit),
+            ).fetchall()
+
+        from types import SimpleNamespace
+        return [
+            SimpleNamespace(
+                id=r[0], org_id=r[1], event_type=r[2], source=r[3],
+                run_id=r[4], connector_id=r[5], pack_id=r[6],
+                duration_ms=r[7],
+                success=None if r[8] is None else bool(r[8]),
+                count=r[9], error_code=r[10],
+                payload=r[11],
+                timestamp=r[12],
             )
+            for r in rows
+        ]
     except TelemetryReadError:
         raise
     except Exception as exc:
