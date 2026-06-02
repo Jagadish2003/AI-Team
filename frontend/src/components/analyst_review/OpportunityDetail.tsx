@@ -6,6 +6,7 @@ import {
 import { ArrowRight, Hash } from "lucide-react";
 import { fetchOppEnrichment, OppEnrichment } from "../../api/enrichmentApi";
 import { useRunContext } from "../../context/RunContext";
+import BaselineContextPanel from "./BaselineContextPanel";
 
 function BulletList({
   items,
@@ -261,6 +262,9 @@ export default function OpportunityDetail({
 
         {/* T7: LLM enrichment panel */}
         <EnrichmentPanel opp={opp} enrichment={enrichment} />
+
+        {/* T10: Temporal baseline context panel */}
+        <BaselineContextPanel enrichment={enrichment} />
 
         {/* T41-7: Required Permissions section removed from Opportunity Review.
             Permissions are now shown on the Agent Blueprint screen in
