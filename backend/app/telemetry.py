@@ -181,6 +181,16 @@ class DbIngestorCompletedEvent(TypedDict):
     duration_ms: int
 
 
+class DBIngestorCompletedPayload(TypedDict):
+    """T2-S11-A — payload written by every Track 2 DB ingestor."""
+    connector_id: str
+    pack_id: str
+    query_count: int        # number of execute_query() calls
+    signal_count: int       # number of signal metrics extracted
+    degraded_count: int     # number of metrics with degraded_signal=True
+    duration_ms: int
+
+
 # ---------------------------------------------------------------------------
 # Registry helpers
 # ---------------------------------------------------------------------------
