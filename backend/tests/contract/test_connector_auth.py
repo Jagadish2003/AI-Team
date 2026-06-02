@@ -1427,7 +1427,10 @@ def test_auth_url_returns_salesforce_url_with_required_params(client):
     """auth-url returns URL containing client_id, redirect_uri, non-empty state,
     response_type=code, and at least one scope (AC1).
     """
-    from backend.app.auth.configs import CONNECTOR_AUTH_CONFIGS
+    # Import from the same module the route uses (app.auth.configs, not
+    # backend.app.auth.configs) so both sides see the same SALESFORCE_CLIENT_ID
+    # value regardless of when load_dotenv() ran during the test session.
+    from app.auth.configs import CONNECTOR_AUTH_CONFIGS
 
     resp = client.get("/api/connectors/salesforce/auth-url", headers=_AUTH_HEADERS)
     assert resp.status_code == 200
@@ -1964,6 +1967,111 @@ def test_nonce_replay_rejected(client):
 # ---------------------------------------------------------------------------
 # AC7: Nonce expiry rejected — nonce older than 10 minutes returns 400
 # ---------------------------------------------------------------------------
+
+
+# ---------------------------------------------------------------------------
+# AT-164: Slack-specific revocation branch (T1-S11 Task 1, Section 3)
+# AC1 — Slack DELETE calls auth.revoke with Bearer token
+# AC2 — ok=false writes connector_revocation_failed audit event; local deletion completes
+# AC3 — GitHub DELETE calls no external endpoint (no RFC 7009 URL, no Slack path)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.anyio
+async def test_revoke_token_slack_calls_auth_revoke_with_bearer(client):
+    """DELETE /api/connectors/slack/token calls https://slack.com/api/auth.revoke
+    with the stored Slack access token as Bearer (AT-164 AC1).
+    """
+    from backend.app.auth.vault import store_token, revoke_token
+    from backend.app.auth.models import ConnectorAuthConfig
+
+    slack_config = ConnectorAuthConfig(
+        connector_id="slack",
+        flow="authorization_code",
+        client_id="cid",
+        secret_key="_TEST_OAUTH_SECRET",
+        token_url="https://slack.com/api/oauth.v2.access",
+        scopes=["channels:read"],
+        revocation_url=None,
+    )
+    transport = _MockTransport(200, {"ok": True})
+
+    with _patch.dict(_os.environ, _vault_env()):
+        store_token("org-sl-ac1", "slack", _token_response(access_token="xoxp-slack-access"))
+        with _patch("app.auth.vault.CONNECTOR_AUTH_CONFIGS", {"slack": slack_config}):
+            await revoke_token("org-sl-ac1", "slack", _revoke_transport=transport)
+
+    assert transport.last_request is not None, "Expected auth.revoke call to Slack"
+    assert "slack.com/api/auth.revoke" in str(transport.last_request.url)
+    auth_header = transport.last_request.headers.get("authorization", "")
+    assert auth_header.startswith("Bearer "), "Authorization must use Bearer scheme"
+    assert "xoxp-slack-access" in auth_header, "Bearer token must be the stored access token"
+    assert _raw_credentials("org-sl-ac1", "slack") is None
+    _clear_credentials()
+
+
+@pytest.mark.anyio
+async def test_revoke_token_slack_ok_false_writes_audit_event():
+    """When Slack auth.revoke returns ok=false, connector_revocation_failed audit event
+    is written. Local deletion still completes. Never raises (AT-164 AC2).
+    """
+    from backend.app.auth.vault import store_token, revoke_token
+    from backend.app.auth.models import ConnectorAuthConfig
+
+    slack_config = ConnectorAuthConfig(
+        connector_id="slack",
+        flow="authorization_code",
+        client_id="cid",
+        secret_key="_TEST_OAUTH_SECRET",
+        token_url="https://slack.com/api/oauth.v2.access",
+        scopes=["channels:read"],
+        revocation_url=None,
+    )
+    transport = _MockTransport(200, {"ok": False, "error": "token_revoked"})
+
+    with _patch.dict(_os.environ, _vault_env()):
+        store_token("org-sl-ac2", "slack", _token_response(access_token="xoxp-bad"))
+        with _patch("app.auth.vault.CONNECTOR_AUTH_CONFIGS", {"slack": slack_config}), \
+             _patch("backend.app.auth.vault.log_event") as mock_log_event:
+            await revoke_token("org-sl-ac2", "slack", _revoke_transport=transport)
+
+    mock_log_event.assert_called_once_with(
+        "connector_revocation_failed",
+        org_id="org-sl-ac2",
+        connector_id="slack",
+        error_code="token_revoked",
+    )
+    assert _raw_credentials("org-sl-ac2", "slack") is None
+    _clear_credentials()
+
+
+@pytest.mark.anyio
+async def test_revoke_token_github_no_external_call():
+    """DELETE /api/connectors/github/token does not call any external endpoint —
+    no RFC 7009 revocation URL and no Slack-specific path (AT-164 AC3).
+    """
+    from backend.app.auth.vault import store_token, revoke_token
+    from backend.app.auth.models import ConnectorAuthConfig
+
+    github_config = ConnectorAuthConfig(
+        connector_id="github",
+        flow="authorization_code",
+        client_id="cid",
+        secret_key="_TEST_OAUTH_SECRET",
+        token_url="https://github.com/login/oauth/access_token",
+        scopes=["repo"],
+        revocation_url=None,
+    )
+    transport = _MockTransport(200, {})
+
+    with _patch.dict(_os.environ, _vault_env()):
+        store_token("org-gh-ac3", "github", _token_response())
+        with _patch("app.auth.vault.CONNECTOR_AUTH_CONFIGS", {"github": github_config}):
+            await revoke_token("org-gh-ac3", "github", _revoke_transport=transport)
+
+    assert transport.last_request is None, "github revocation must not call any external endpoint"
+    assert _raw_credentials("org-gh-ac3", "github") is None
+    _clear_credentials()
 
 
 def test_nonce_expiry_rejected(client):
