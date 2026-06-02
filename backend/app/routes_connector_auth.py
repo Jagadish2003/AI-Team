@@ -24,7 +24,7 @@ from fastapi.responses import RedirectResponse
 from app import db
 from app.auth import build_auth_url, exchange_code, revoke_token, store_token
 from app.auth.configs import CONNECTOR_AUTH_CONFIGS
-from app.auth.vault import REFRESH_THRESHOLD_SECONDS
+from app.auth.vault import REFRESH_THRESHOLD_SECONDS, consume_nonce, store_nonce
 from app.middleware.audit import log_event
 from app.rbac import _get_user_id_from_token
 from app.security import require_auth
@@ -168,10 +168,11 @@ def register_connector_auth_routes(app: FastAPI) -> None:
                 status_code=302,
             )
 
-        connector_id = _consume_nonce(state)
-        if connector_id is None:
+        nonce_data = consume_nonce(state)
+        if nonce_data is None:
             # AC3: HTTP 400 on state mismatch, generic message, no detail
             raise HTTPException(status_code=400, detail="Invalid request")
+        connector_id = nonce_data["connector_id"]
 
         config = CONNECTOR_AUTH_CONFIGS.get(connector_id)
         if config is None:
@@ -224,7 +225,7 @@ def register_connector_auth_routes(app: FastAPI) -> None:
             )
 
         state = _secrets_mod.token_urlsafe(32)
-        _store_nonce(state, connector_id)
+        store_nonce(state, connector_id)
         auth_url = build_auth_url(config, state)
         return {"auth_url": auth_url, "connector_id": connector_id}
 
