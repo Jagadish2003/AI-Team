@@ -183,10 +183,6 @@ def get_ui_labels(pack_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
 def get_llm_context(pack_id: Optional[str] = None) -> str:
     """Return the LLM context hint string for this pack."""
     return get_pack(pack_id)["llm_context"]
-
-
-
-
 def is_strs_benefits_pack(pack_id: Optional[str] = None) -> bool:
     """
     Returns True when the active pack is STRS Benefits Administration.
