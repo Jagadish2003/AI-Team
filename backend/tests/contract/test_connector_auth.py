@@ -1968,19 +1968,26 @@ def test_nonce_replay_rejected(client):
 
 def test_nonce_expiry_rejected(client):
     """Nonce with expires_at in the past returns 400 even if never used (AC7)."""
-    import app.routes_connector_auth as _rca
+    import json as _json_mod
     from datetime import timedelta, timezone
     from app import db as _db
+    from app.auth.vault import _init_nonce_table
 
-    _rca._ensure_tables()
+    _init_nonce_table()
     nonce = _secrets_mod.token_hex(16)
+    key = f"nonce:{nonce}"
     expired_at = (datetime.now(timezone.utc) - timedelta(minutes=11)).isoformat()
+    data = _json_mod.dumps({
+        "connector_id": "salesforce",
+        "created_at": (datetime.now(timezone.utc) - timedelta(minutes=11)).isoformat(),
+        "expires_at": expired_at,
+    })
 
     con = _db.connect()
     try:
         con.execute(
-            "INSERT INTO oauth_nonces (nonce, connector_id, expires_at) VALUES (?, ?, ?)",
-            (nonce, "salesforce", expired_at),
+            "INSERT OR REPLACE INTO nonces (key, data) VALUES (?, ?)",
+            (key, data),
         )
         con.commit()
     finally:
