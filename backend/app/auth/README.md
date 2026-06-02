@@ -17,7 +17,7 @@ Pattern: `{CONNECTOR_ID_UPPER}_CLIENT_SECRET`
 | confluence  | `CONFLUENCE_CLIENT_SECRET`        |
 | slack       | `SLACK_CLIENT_SECRET`             |
 | sap         | `SAP_CLIENT_SECRET`               |
-| d365        | `D365_CLIENT_SECRET`              |
+| dynamic365  | `DYNAMIC365_CLIENT_SECRET`        |
 
 At runtime, callers resolve the secret via `os.environ[config.secret_key]` (implemented in T2/secrets.py).
 
@@ -44,4 +44,4 @@ Any change that renames or removes a field is a breaking change and requires a n
 ## Flows
 
 - `authorization_code`: used by Salesforce, ServiceNow, Jira, Confluence, GitHub (has revocation endpoint)
-- `client_credentials`: used by SAP, D365, Slack; no `refresh_token`, no `redirect_uri`
+- `client_credentials`: used by SAP, Dynamic365; no `refresh_token`, no `redirect_uri`

@@ -1359,12 +1359,12 @@ def test_connector_auth_configs_has_8_entries():
 
 def test_connector_auth_configs_flow_types():
     """authorization_code connectors: salesforce, servicenow, jira, confluence, github, slack.
-    client_credentials connectors: sap, d365. (AC16)
+    client_credentials connectors: sap, dynamic365. (AC16)
     """
     from backend.app.auth.configs import CONNECTOR_AUTH_CONFIGS
 
     auth_code = {"salesforce", "servicenow", "jira", "confluence", "github", "slack"}
-    client_creds = {"sap", "d365"}
+    client_creds = {"sap", "dynamic365"}
 
     for cid in auth_code:
         assert CONNECTOR_AUTH_CONFIGS[cid].flow == "authorization_code", (
@@ -1378,12 +1378,12 @@ def test_connector_auth_configs_flow_types():
 
 def test_connector_auth_configs_revocation_url_values():
     """Connectors with revocation_url set: salesforce, servicenow, jira, confluence.
-    Connectors with revocation_url=None: github, slack, sap, d365. (AC16)
+    Connectors with revocation_url=None: github, slack, sap, dynamic365. (AC16)
     """
     from backend.app.auth.configs import CONNECTOR_AUTH_CONFIGS
 
     has_revocation = {"salesforce", "servicenow", "jira", "confluence"}
-    no_revocation = {"github", "slack", "sap", "d365"}
+    no_revocation = {"github", "slack", "sap", "dynamic365"}
 
     for cid in has_revocation:
         assert CONNECTOR_AUTH_CONFIGS[cid].revocation_url is not None, (

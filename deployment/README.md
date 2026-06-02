@@ -237,6 +237,22 @@ secrets manager in production. **Never bake credentials into the image.**
 | `POSTGRESQL_PASSWORD` | PostgreSQL connector | Env-var key resolved by `resolve_secret()` |
 | `DEV_JWT` | Auth middleware | Bearer token for development |
 | `DB_PATH` | SQLite store | Path to the application database |
+| `OAUTH_REDIRECT_URI` | All `authorization_code` connectors | Callback URL registered with each OAuth provider |
+| `SALESFORCE_CLIENT_ID` | Salesforce connector | OAuth app client ID |
+| `SALESFORCE_CLIENT_SECRET` | Salesforce connector | Resolved via `resolve_secret()` |
+| `SERVICENOW_CLIENT_ID` | ServiceNow connector | OAuth app client ID |
+| `SERVICENOW_CLIENT_SECRET` | ServiceNow connector | Resolved via `resolve_secret()` |
+| `ATLASSIAN_CLIENT_ID` | Jira + Confluence connectors | Shared Atlassian OAuth app client ID |
+| `JIRA_CLIENT_SECRET` | Jira connector | Resolved via `resolve_secret()` |
+| `CONFLUENCE_CLIENT_SECRET` | Confluence connector | Resolved via `resolve_secret()` |
+| `GITHUB_CLIENT_ID` | GitHub connector | OAuth app client ID |
+| `GITHUB_CLIENT_SECRET` | GitHub connector | Resolved via `resolve_secret()` |
+| `SLACK_CLIENT_ID` | Slack connector | OAuth app client ID |
+| `SLACK_CLIENT_SECRET` | Slack connector | Resolved via `resolve_secret()` |
+| `SAP_CLIENT_ID` | SAP connector | OAuth app client ID |
+| `SAP_CLIENT_SECRET` | SAP connector | Resolved via `resolve_secret()` |
+| `DYNAMIC365_CLIENT_ID` | Dynamics 365 connector | OAuth app client ID |
+| `DYNAMIC365_CLIENT_SECRET` | Dynamics 365 connector | Resolved via `resolve_secret()` |
 
 > **Note:** The `*_USERNAME` / `*_PASSWORD` naming is the Sprint 10 bootstrap
 > credential model. T1 owns the credential vault migration story; ingestors
