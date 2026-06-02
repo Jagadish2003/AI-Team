@@ -119,9 +119,14 @@ def enrich_opportunities_with_temporal_context(
             trend = calculate_trend(org_id, signal_key)
             anomaly = calculate_anomaly(org_id, signal_key, float(current_value))
             context = build_baseline_context(trend, anomaly, float(current_value))
+            trend_direction = (
+                "insufficient_data"
+                if anomaly.insufficient_data
+                else trend.trend_direction
+            )
 
             opp["baseline_context"] = context
-            opp["trend_direction"] = trend.trend_direction
+            opp["trend_direction"] = trend_direction
             opp["anomaly_score"] = anomaly.anomaly_score
             opp["is_anomalous"] = anomaly.is_anomalous
             opp["first_deviation"] = anomaly.first_deviation
