@@ -13,6 +13,7 @@ from cryptography.fernet import Fernet
 from app import db
 from app.auth import oauth as _oauth
 from app.auth.configs import CONNECTOR_AUTH_CONFIGS
+from app.middleware.audit import log_event
 from app.auth.models import ConnectorAuthConfig, ConnectorNotAuthenticatedError, TokenRecord
 from app.auth.secrets import MissingSecretError
 from database.models.credentials import (
@@ -453,9 +454,16 @@ async def revoke_token(
                 )
             body = resp.json()
             if not body.get("ok"):
+                error_code = body.get("error", "unknown")
                 logger.warning(
                     "Slack auth.revoke returned ok=false for %s/%s: error=%s",
-                    org_id, connector_id, body.get("error", "unknown"),
+                    org_id, connector_id, error_code,
+                )
+                log_event(
+                    "connector_revocation_failed",
+                    org_id=org_id,
+                    connector_id=connector_id,
+                    error_code=error_code,
                 )
         except httpx.TimeoutException:
             logger.warning(

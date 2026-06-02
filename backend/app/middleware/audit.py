@@ -37,6 +37,7 @@ RUN_COMPLETED = "run_completed"
 CONNECTOR_QUERIED = "connector_queried"
 CONNECTOR_CONNECTED = "connector_connected"
 CONNECTOR_DISCONNECTED = "connector_disconnected"
+CONNECTOR_REVOCATION_FAILED = "connector_revocation_failed"
 SCOPE_DECLARED = "scope_declared"
 USER_LOGIN = "user_login"
 SETUP_STATE_SAVED = "setup_state_saved"
@@ -54,6 +55,7 @@ AUDIT_EVENT_REGISTRY: frozenset[str] = frozenset({
     CONNECTOR_QUERIED,
     CONNECTOR_CONNECTED,
     CONNECTOR_DISCONNECTED,
+    CONNECTOR_REVOCATION_FAILED,
     SCOPE_DECLARED,
     USER_LOGIN,
     SETUP_STATE_SAVED,
