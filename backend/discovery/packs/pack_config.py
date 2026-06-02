@@ -133,6 +133,7 @@ PACK_REGISTRY: Dict[str, Dict[str, Any]] = {
     #     "domain":   "ncino",
     #     ...
     # },
+
 }
 
 DEFAULT_PACK = "service_cloud"
@@ -199,15 +200,19 @@ def list_packs() -> List[str]:
     return list(PACK_REGISTRY.keys())
 
 
-def is_sqlserver_opsignal_pack(pack_id: Optional[str] = None) -> bool:
-    """Return True when the active pack is SQL Server Operational Signals."""
-    return get_pack(pack_id)["domain"] == "sqlserver_opsignal"
-
-
 def is_ncino_pack(pack_id: Optional[str] = None) -> bool:
     """
     Convenience helper — replaces the temporary is_ncino_pack conditional.
     Returns True when the active pack is nCino domain.
     """
     return get_pack(pack_id)["domain"] == "ncino"
+
+
+def is_sqlserver_opsignal_pack(pack_id: Optional[str] = None) -> bool:
+    """Return True when the active pack is the SQL Server Operational Signal pack.
+
+    Used in runner.py and scorer for pack routing.  Follows the identical
+    pattern as is_ncino_pack() and is_strs_benefits_pack().
+    """
+    return get_pack(pack_id)["domain"] == "sqlserver_opsignal"
  

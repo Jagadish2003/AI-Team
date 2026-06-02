@@ -1,10 +1,10 @@
 {
   "_meta": {
     "story": "T2-S11-A",
-    "description": "SQL Server Operational Signal Pack — UI labels for opportunity cards",
+    "description": "SQL Server Operational Signal Pack UI labels for opportunity cards",
     "status": "READY",
     "audience": "IT Operations Manager",
-    "compliance_note": "Agent surfaces operational signals to IT managers only. No automated ticket resolution or SLA override."
+    "compliance_note": "Agent surfaces operational signals to IT managers only. No automated ticket resolution, SLA override, or priority change."
   },
   "DB_TICKET_VOLUME_SURGE": {
     "s6_title": "Ticket Volume Surge Monitor",
