@@ -202,7 +202,8 @@ export default function ConnectorDetailPanel({
       )}
 
       {/* T2-S11-A: SQL Server scope picker */}
-      {connector.id === 'sqlserver' && isConnected && (
+      {/* Matches both 'sql_server' (seed data) and 'sqlserver' (backend routes) */}
+      {(connector.id === 'sql_server' || connector.id === 'sqlserver') && isConnected && (
         <SqlServerScopePicker />
       )}
 
