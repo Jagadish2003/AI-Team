@@ -328,6 +328,35 @@ def run_trackb_and_persist(
             errors["llm_enrichment"] = str(e)
             _emit_event(run_id, "AI_ERROR", f"AI analysis failed: {e}", level="WARNING")
 
+        # T7 — temporal enrichment (non-blocking, AT-143)
+        try:
+            from .llm_enrichment import KV_LLM_ENRICHMENT as _KV_LLM
+            from .middleware.tenancy import get_current_org_id_optional
+            from .telemetry import record_event
+            from .temporal_enrichment import enrich_opportunities_with_temporal_context
+
+            _org_id = get_current_org_id_optional() or "default"
+            _pack_id = run.get("inputs", {}).get("packId") if run else None
+            opps = enrich_opportunities_with_temporal_context(run_id, _org_id, _pack_id or "", opps)
+
+            _temporal_keys = (
+                "baseline_context", "trend_direction", "anomaly_score",
+                "is_anomalous", "first_deviation", "baseline_mean", "run_count",
+            )
+            _stored = db.run_kv_get(_KV_LLM, run_id, {})
+            _per_opp = _stored.get("perOpportunity", {})
+            for _opp in opps:
+                _oid = _opp.get("id", "")
+                if _oid in _per_opp:
+                    for _k in _temporal_keys:
+                        if _k in _opp:
+                            _per_opp[_oid][_k] = _opp[_k]
+            _stored["perOpportunity"] = _per_opp
+            db.run_kv_set(_KV_LLM, run_id, _stored)
+            record_event("temporal.enrichment_completed", {"run_id": run_id})
+        except Exception as e:
+            logger.warning("T7 temporal enrichment failed (non-blocking): %s", e)
+
         status = "complete" if len(succeeded) == len(systems) else "partial"
         audit_action = (
             "DISCOVERY_MATERIALIZED" if status == "complete" else "DISCOVERY_PARTIAL"
