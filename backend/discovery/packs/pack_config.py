@@ -215,4 +215,3 @@ def is_sqlserver_opsignal_pack(pack_id: Optional[str] = None) -> bool:
     pattern as is_ncino_pack() and is_strs_benefits_pack().
     """
     return get_pack(pack_id)["domain"] == "sqlserver_opsignal"
- 

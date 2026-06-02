@@ -4,6 +4,7 @@
     "description": "SQL Server Operational Signal Pack UI labels for opportunity cards",
     "status": "READY",
     "audience": "IT Operations Manager",
+    "note": "Loaded per request; no restart required when editing label copy.",
     "compliance_note": "Agent surfaces operational signals to IT managers only. No automated ticket resolution, SLA override, or priority change."
   },
   "DB_TICKET_VOLUME_SURGE": {
