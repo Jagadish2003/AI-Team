@@ -334,6 +334,8 @@ async def revoke_token(
                 )
 
     # --- Step 2: local deletion (always) ---
+    # connector_disconnected audit event is written by the route handler
+    # via log_event() — do not write a second record here.
     con = db.connect()
     try:
         con.execute(
@@ -343,17 +345,3 @@ async def revoke_token(
         con.commit()
     finally:
         con.close()
-
-    # Write connector_disconnected audit event to the audit_events table
-    event_id = f"audit_{uuid.uuid4().hex[:8]}"
-    db.upsert(
-        "audit_events",
-        event_id,
-        {
-            "id": event_id,
-            "action": "connector_disconnected",
-            "org_id": org_id,
-            "connector_id": connector_id,
-            "ts": datetime.now(timezone.utc).isoformat(),
-        },
-    )

@@ -321,8 +321,7 @@ def get_telemetry_range(
     try:
         with get_db_session() as session:
             return (
-                session
-                .query(TelemetryEvent)
+                session.query(TelemetryEvent)
                 .filter(
                     org_id=org_id,
                     event_type=event_type,
