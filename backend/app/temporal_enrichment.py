@@ -14,9 +14,19 @@ import logging
 from typing import Optional
 
 try:
-    from app.trend_engine import AnomalyResult, TrendResult
+    from app.trend_engine import (
+        AnomalyResult,
+        TrendResult,
+        calculate_anomaly,
+        calculate_trend,
+    )
 except ModuleNotFoundError:  # pragma: no cover - supports repo-root imports.
-    from backend.app.trend_engine import AnomalyResult, TrendResult
+    from backend.app.trend_engine import (
+        AnomalyResult,
+        TrendResult,
+        calculate_anomaly,
+        calculate_trend,
+    )
 
 logger = logging.getLogger(__name__)
 
@@ -84,4 +94,42 @@ def build_baseline_context(
     return f"Stable — within normal range of your {window_days}-day baseline"
 
 
-__all__ = ["build_baseline_context"]
+def enrich_opportunities_with_temporal_context(
+    run_id: str,
+    org_id: str,
+    pack_id: str,
+    opps: list,
+) -> list:
+    """Attach temporal fields to each opportunity dict. Non-blocking.
+
+    Opportunities that lack detector metadata or a metric_value are skipped
+    and returned unchanged — missing temporal data must not cause an
+    opportunity to disappear or fail.
+
+    Returns opps unchanged if any unexpected error occurs.
+    """
+    try:
+        for opp in opps:
+            detector_id = opp.get("_debug", {}).get("detector_id")
+            current_value = opp.get("metric_value")
+            if not detector_id or current_value is None:
+                continue
+
+            signal_key = f"{pack_id}::{detector_id}::metric_value"
+            trend = calculate_trend(org_id, signal_key)
+            anomaly = calculate_anomaly(org_id, signal_key, float(current_value))
+            context = build_baseline_context(trend, anomaly, float(current_value))
+
+            opp["baseline_context"] = context
+            opp["trend_direction"] = trend.trend_direction
+            opp["anomaly_score"] = anomaly.anomaly_score
+            opp["is_anomalous"] = anomaly.is_anomalous
+            opp["first_deviation"] = anomaly.first_deviation
+            opp["baseline_mean"] = anomaly.baseline_mean
+            opp["run_count"] = trend.run_count
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Temporal enrichment failed (non-blocking): %s", exc)
+    return opps
+
+
+__all__ = ["build_baseline_context", "enrich_opportunities_with_temporal_context"]
