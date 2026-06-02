@@ -38,6 +38,7 @@ logger = logging.getLogger(__name__)
 
 EVENT_REGISTRY: MutableMapping[str, Type[Any]] = {}
 TELEMETRY_EVENT_REGISTRY = EVENT_REGISTRY   # alias for Track 3 imports
+EVENT_TYPE_REGISTRY = EVENT_REGISTRY        # alias for T1-S10-C unit tests
 
 # ---------------------------------------------------------------------------
 # Lazy table initialisation
@@ -182,12 +183,36 @@ class DbIngestorCompletedEvent(TypedDict):
 
 
 class DBIngestorCompletedPayload(TypedDict):
-    """T2-S11-A — payload written by every Track 2 DB ingestor."""
+    """T2-S11-A Sprint 11 payload for db.ingestor_completed.
+
+    Replaces DbIngestorCompletedEvent in the registry.  Written by every
+    Track 2 DB ingestor (SQL Server, Oracle DB, PostgreSQL) at the end of
+    each discovery run.  Emitted via record_event() — fire-and-forget.
+
+    Fields
+    ------
+    connector_id:
+        Identifies the source database connector, e.g. ``'sqlserver'``.
+    pack_id:
+        The detector pack that consumed the ingested signals,
+        e.g. ``'sqlserver_opsignal'``.
+    query_count:
+        Number of execute_query() calls made during this ingestion run
+        (one per signal query, e.g. 3 for the SQL Server ingestor).
+    signal_count:
+        Number of signal metrics successfully extracted across all queries.
+    degraded_count:
+        Number of metrics with degraded_signal=True (query timeout,
+        missing column, or other partial-failure conditions).
+    duration_ms:
+        Total wall-clock time for the entire ingestor execution in
+        milliseconds, from first query to return.
+    """
     connector_id: str
     pack_id: str
-    query_count: int        # number of execute_query() calls
-    signal_count: int       # number of signal metrics extracted
-    degraded_count: int     # number of metrics with degraded_signal=True
+    query_count: int
+    signal_count: int
+    degraded_count: int
     duration_ms: int
 
 
@@ -218,7 +243,7 @@ register_event_type("run.completed", RunCompletedEvent)
 register_event_type("connector.registered", ConnectorRegisteredEvent)
 register_event_type("connector.health_check", ConnectorHealthPayload)
 register_event_type("db.query_executed", DbQueryExecutedEvent)
-register_event_type("db.ingestor_completed", DbIngestorCompletedEvent)
+register_event_type("db.ingestor_completed", DBIngestorCompletedPayload)
 register_event_type("run.signal_snapshot", RunSignalSnapshotPayload)
 
 
@@ -358,9 +383,11 @@ def get_telemetry_range(
 __all__ = [
     "ConnectorHealthPayload",
     "ConnectorRegisteredEvent",
-    "DbIngestorCompletedEvent",
+    "DBIngestorCompletedPayload",   # Sprint 11 — SQL Server ingestor payload
+    "DbIngestorCompletedEvent",     # T1-S10-C legacy — kept for backward compat
     "DbQueryExecutedEvent",
     "EVENT_REGISTRY",
+    "EVENT_TYPE_REGISTRY",          # alias for T1-S10-C unit tests
     "RunCompletedEvent",
     "RunSignalSnapshotEvent",
     "RunSignalSnapshotPayload",
