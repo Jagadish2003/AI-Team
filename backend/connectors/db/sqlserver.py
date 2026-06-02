@@ -74,18 +74,25 @@ def _build_connection_string(
     ConnectTimeout maps to config.connect_timeout_s (TCP connection attempt).
     The query timeout is set separately on the connection object after connect.
 
+    Windows auth vs SQL auth:
+        SQL auth:     username is non-empty → UID/PWD included.
+        Windows auth: username is empty string → Trusted_Connection=yes,
+                      no UID/PWD in connection string.
+
     This string must NEVER appear in log output or exception messages.
     """
-    return (
+    base = (
         f"DRIVER={{{ODBC_DRIVER}}};"
         f"SERVER={config.host},{config.port};"
         f"DATABASE={config.database};"
-        f"UID={username};"
-        f"PWD={password};"
         f"Encrypt=yes;"
         f"TrustServerCertificate=no;"
         f"ConnectTimeout={config.connect_timeout_s};"
     )
+    if username:
+        return base + f"UID={username};PWD={password};"
+    # Windows auth — Trusted_Connection handles identity via Kerberos/NTLM
+    return base + "Trusted_Connection=yes;"
 
 
 # ---------------------------------------------------------------------------

@@ -115,7 +115,10 @@ def test_db_ingestor_completed_event_has_duration_ms():
 # ---------------------------------------------------------------------------
 
 def test_record_event_accepts_db_query_executed(caplog):
-    """record_event() must not log a warning for db.query_executed."""
+    """record_event() must not log a warning for db.query_executed.
+
+    Uses the locked 2-arg signature: record_event(event_type, payload).
+    """
     from app.telemetry import record_event
     from unittest.mock import patch
 
@@ -127,20 +130,16 @@ def test_record_event_accepts_db_query_executed(caplog):
 
         with caplog.at_level(logging.WARNING, logger="app.telemetry"):
             record_event(
-                org_id="org-test",
-                event_type="db.query_executed",
-                source="salesforce_ingestor",
-                connector_id="salesforce",
-                duration_ms=42,
-                success=True,
-                count=100,
-                payload={
-                    "connector_id": "salesforce",
-                    "query_hash": "abc123",
-                    "row_count": 100,
-                    "duration_ms": 42,
-                    "driver": "salesforce_soql",
-                    "truncated": False,
+                "db.query_executed",
+                {
+                    "org_id":       "org-test",
+                    "source":       "connector",
+                    "connector_id": "sqlserver",
+                    "query_hash":   "abc123",
+                    "row_count":    100,
+                    "duration_ms":  42,
+                    "driver":       "pyodbc",
+                    "truncated":    False,
                 },
             )
 
@@ -149,7 +148,11 @@ def test_record_event_accepts_db_query_executed(caplog):
 
 
 def test_record_event_accepts_db_ingestor_completed(caplog):
-    """record_event() must not log a warning for db.ingestor_completed."""
+    """record_event() must not log a warning for db.ingestor_completed.
+
+    Uses the Sprint 11 DBIngestorCompletedPayload shape and the locked
+    2-arg signature: record_event(event_type, payload).
+    """
     from app.telemetry import record_event
     from unittest.mock import patch
 
@@ -161,18 +164,19 @@ def test_record_event_accepts_db_ingestor_completed(caplog):
 
         with caplog.at_level(logging.WARNING, logger="app.telemetry"):
             record_event(
-                org_id="org-test",
-                event_type="db.ingestor_completed",
-                source="salesforce_ingestor",
-                connector_id="salesforce",
-                duration_ms=380,
-                success=True,
-                count=4500,
-                payload={
-                    "connector_id": "salesforce",
-                    "tables_processed": 3,
-                    "rows_ingested": 4500,
-                    "duration_ms": 380,
+                "db.ingestor_completed",
+                {
+                    "org_id":          "org-test",
+                    "run_id":          "run-001",
+                    "source":          "connector",
+                    "connector_id":    "sqlserver",
+                    "pack_id":         "sqlserver_opsignal",
+                    "query_count":     3,
+                    "signal_count":    3,
+                    "degraded_count":  0,
+                    "duration_ms":     380,
+                    "success":         True,
+                    "count":           3,
                 },
             )
 
