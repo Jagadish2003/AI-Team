@@ -146,6 +146,12 @@ class EntityExtractionCompletedPayload(TypedDict, total=False):
     failure_count: NotRequired[int]
 
 
+class TemporalEnrichmentCompletedPayload(TypedDict, total=False):
+    """T3-S11-A — emitted once per run after temporal enrichment completes."""
+    run_id: NotRequired[str]
+    opp_count: NotRequired[int]
+
+
 class RunStartedEvent(TypedDict):
     run_id: str
     org_id: str
@@ -210,6 +216,8 @@ register_event_type("connector.health_check", ConnectorHealthPayload)
 register_event_type("db.query_executed", DbQueryExecutedEvent)
 register_event_type("db.ingestor_completed", DbIngestorCompletedEvent)
 register_event_type("run.signal_snapshot", RunSignalSnapshotPayload)
+# T3-S11-A Sprint 11
+register_event_type("temporal.enrichment_completed", TemporalEnrichmentCompletedPayload)
 
 
 # ---------------------------------------------------------------------------
@@ -355,6 +363,7 @@ __all__ = [
     "RunSignalSnapshotPayload",
     "RunStartedEvent",
     "TELEMETRY_EVENT_REGISTRY",
+    "TemporalEnrichmentCompletedPayload",
     "TelemetryReadError",
     "get_telemetry_range",
     "record_event",
