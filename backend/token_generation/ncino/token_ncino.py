@@ -12,7 +12,7 @@ load_dotenv()
 LOGIN_URL = "https://login.salesforce.com"
 TOKEN_URL = LOGIN_URL + "/services/oauth2/token"
 
-CLIENT_ID = os.environ.get("NCINO_CLIENT_ID")
+CLIENT_ID = os.environ.get("NCINO__CLIENT_ID")
 USERNAME = os.environ.get("NCINO_USER")
 PRIVATE_KEY_PATH = "token_generation/ncino/server_ncino.key"
 TOKEN_FILE = "token_generation/ncino/ncino_token.json"

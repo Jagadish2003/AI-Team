@@ -466,11 +466,7 @@ async def revoke_token(
                 "Slack auth.revoke failed for %s/%s: %s", org_id, connector_id, exc
             )
 
-<<<<<<< Updated upstream
-    # --- Step 2: local deletion (always) ---
-=======
     # --- Step 2: local deletion (always executes regardless of Step 1 outcome) ---
->>>>>>> Stashed changes
     con = db.connect()
     try:
         con.execute(
@@ -479,22 +475,4 @@ async def revoke_token(
         )
         con.commit()
     finally:
-<<<<<<< Updated upstream
         con.close()
-
-    # Write connector_disconnected audit event to the audit_events table
-    event_id = f"audit_{uuid.uuid4().hex[:8]}"
-    db.upsert(
-        "audit_events",
-        event_id,
-        {
-            "id": event_id,
-            "action": "connector_disconnected",
-            "org_id": org_id,
-            "connector_id": connector_id,
-            "ts": datetime.now(timezone.utc).isoformat(),
-        },
-    )
-=======
-        con.close()
->>>>>>> Stashed changes
