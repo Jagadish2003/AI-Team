@@ -507,7 +507,7 @@ def test_temporal_enrichment_completed_emits_exactly_once_per_run():
 
 def test_temporal_enrichment_completed_called_in_materialize_t2():
     """Structural: record_event('temporal.enrichment_completed') must appear in materialize_t2.py."""
-    src = Path(__file__).parents[3] / "app" / "materialize_t2.py"
+    src = Path(__file__).parents[2] / "app" / "materialize_t2.py"
     if not src.exists():
         pytest.skip("materialize_t2.py not found — skipping structural check")
 
