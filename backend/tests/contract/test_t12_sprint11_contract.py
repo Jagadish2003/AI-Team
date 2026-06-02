@@ -401,6 +401,33 @@ def test_enrichment_sets_all_six_temporal_fields(monkeypatch):
     assert enriched["run_count"] == 5
 
 
+def test_enrichment_with_two_history_values_marks_trend_insufficient(monkeypatch):
+    """AC14: <3 historical values keeps opportunity trend_direction insufficient."""
+    _stub_history(monkeypatch, [10.0, 12.0])
+    _stub_baseline(monkeypatch, {
+        "baseline_mean": None,
+        "baseline_stddev": None,
+        "insufficient_data": True,
+    })
+    opp = {
+        "id": "opp_t12_002b",
+        "_debug": {"detector_id": "DET_T12"},
+        "metric_value": 12.0,
+    }
+
+    result = enrich_opportunities_with_temporal_context(
+        "run_t12",
+        "org_t12",
+        "pack",
+        [opp],
+    )
+
+    enriched = result[0]
+    assert enriched["baseline_context"] is None
+    assert enriched["trend_direction"] == "insufficient_data"
+    assert enriched["run_count"] == 2
+
+
 def test_enrichment_skips_opp_without_detector_id():
     """Opportunity without _debug.detector_id is returned without temporal fields."""
     opp = {"id": "opp_t12_003", "metric_value": 10.0}
