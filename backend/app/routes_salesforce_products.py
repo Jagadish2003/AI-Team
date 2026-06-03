@@ -43,6 +43,7 @@ from pydantic import BaseModel
 
 from .db import get_one, upsert
 from .security import require_auth
+from .rbac import require_role
 
 # ── Known Salesforce product IDs ──────────────────────────────────────────────
 
@@ -101,7 +102,7 @@ def register_salesforce_products_routes(app: FastAPI) -> None:
     @app.patch(
         "/api/connectors/salesforce/products",
         response_model=SalesforceProductsResponse,
-        dependencies=[Depends(require_auth)],
+        dependencies=[Depends(require_auth), Depends(require_role("analyst"))],
         summary="Declare Salesforce cloud products for this workspace",
         tags=["Integration Hub"],
     )
@@ -160,7 +161,7 @@ def register_salesforce_products_routes(app: FastAPI) -> None:
     @app.get(
         "/api/connectors/salesforce/products",
         response_model=SalesforceProductsResponse,
-        dependencies=[Depends(require_auth)],
+        dependencies=[Depends(require_auth), Depends(require_role("viewer"))],
         summary="Get declared Salesforce cloud products for this workspace",
         tags=["Integration Hub"],
     )
