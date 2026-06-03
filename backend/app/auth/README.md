@@ -45,3 +45,45 @@ Any change that renames or removes a field is a breaking change and requires a n
 
 - `authorization_code`: used by Salesforce, ServiceNow, Jira, Confluence, GitHub (has revocation endpoint)
 - `client_credentials`: used by SAP, Dynamic365; no `refresh_token`, no `redirect_uri`
+
+## Two-Phase OAuth Callback Pattern
+
+Real OAuth providers redirect to a registered callback URI after the user authorises. The callback
+receives the code, exchanges it for a token, then redirects the user to the Integration Hub frontend.
+Understanding both phases is essential for correct `OAUTH_REDIRECT_URI` configuration.
+
+### Phase 1 — Provider → AgentIQ callback endpoint
+
+The OAuth provider redirects to `OAUTH_REDIRECT_URI` after the user grants access.
+
+- `OAUTH_REDIRECT_URI` **must match the URI registered with the provider exactly** — character for
+  character, including scheme, host, port, and path.
+- A mismatch causes the provider to return a `redirect_uri_mismatch` error and reject the flow.
+- Example: `OAUTH_REDIRECT_URI = 'https://agentiq.app/api/connectors/oauth/callback'`
+
+### Phase 2 — AgentIQ callback → Integration Hub frontend
+
+After the code exchange succeeds and the token is stored, the callback issues an internal redirect
+to the Integration Hub frontend. This redirect goes to `OAUTH_SUCCESS_REDIRECT` — it is **not**
+sent to the OAuth provider.
+
+- `OAUTH_SUCCESS_REDIRECT = '/integration-hub?connected={connector_id}'`
+- This is an internal frontend route, not a provider URI.
+
+### Reverse proxy note
+
+When AgentIQ runs behind a reverse proxy (e.g. nginx, AWS ALB), the proxy forwards public traffic
+to the internal app host. `OAUTH_REDIRECT_URI` must be the **public-facing URI** — the one
+registered with the provider — not the internal host.
+
+If the proxy rewrites paths, ensure the callback path is preserved end-to-end.
+
+```
+# Example: proxy forwards https://agentiq.app/api/* → http://app:8000/api/*
+
+# Correct — matches the URI registered with the provider:
+OAUTH_REDIRECT_URI = 'https://agentiq.app/api/connectors/oauth/callback'
+
+# Wrong — internal host is not registered with the provider and will cause redirect_uri_mismatch:
+OAUTH_REDIRECT_URI = 'http://app:8000/api/connectors/oauth/callback'
+```
