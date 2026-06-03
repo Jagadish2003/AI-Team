@@ -28,6 +28,14 @@ def get_status(run_id: str) -> Dict[str, Any]:
     )
 
 
+def _pack_id_for_run(run: Dict[str, Any] | None) -> str | None:
+    if not run:
+        return None
+    inputs = run.get("inputs") or {}
+    input_pack_id = inputs.get("packId") if isinstance(inputs, dict) else None
+    return input_pack_id or run.get("packId") or None
+
+
 def _audit_prepend(run_id: str, event: Dict[str, Any]) -> None:
     audit = db.run_kv_get("audit", run_id, [])
     db.run_kv_set("audit", run_id, [event] + audit)
@@ -210,7 +218,7 @@ def run_trackb_and_persist(
         _emit_event(
             run_id, "EXTRACT", "Extracting entities and identifying patterns..."
         )
-        pack_id = (run.get("inputs") or {}).get("packId") or run.get("packId") or None
+        pack_id = _pack_id_for_run(run)
         payload = trackb_run(
             mode=mode, systems=succeeded, run_id=run_id, pack=pack_id
         )
@@ -311,7 +319,7 @@ def run_trackb_and_persist(
             exec_report = db.run_kv_get("executive_report", run_id, {})
             sources_analyzed = exec_report.get("sourcesAnalyzed", {})
             # ENG-AIQ-NC-5: pass pack_id for banking language prompts
-            pack_id = run.get("inputs", {}).get("packId") if run else None
+            pack_id = _pack_id_for_run(run)
             enrichment = run_llm_enrichment(
                 run_id=run_id,
                 opps=opps,
@@ -336,7 +344,7 @@ def run_trackb_and_persist(
             from .temporal_enrichment import enrich_opportunities_with_temporal_context
 
             _org_id = get_current_org_id_optional() or "default"
-            _pack_id = run.get("inputs", {}).get("packId") if run else None
+            _pack_id = _pack_id_for_run(run)
             opps = enrich_opportunities_with_temporal_context(run_id, _org_id, _pack_id or "", opps)
 
             _temporal_keys = (

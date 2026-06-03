@@ -454,6 +454,19 @@ def test_enrichment_reads_metric_value_from_debug_payload(monkeypatch):
     assert enriched["run_count"] == 1
 
 
+def test_materialize_t2_pack_id_supports_stack_builder_run_shape():
+    """Stack Builder launches store packId on the run root, not only in inputs."""
+    from app.materialize_t2 import _pack_id_for_run
+
+    assert _pack_id_for_run({"packId": "service_cloud"}) == "service_cloud"
+    assert _pack_id_for_run({"inputs": {"packId": "ncino"}}) == "ncino"
+    assert (
+        _pack_id_for_run({"inputs": {"packId": "strs_benefits"}, "packId": "ncino"})
+        == "strs_benefits"
+    )
+    assert _pack_id_for_run({}) is None
+
+
 def test_enrichment_skips_opp_without_detector_id():
     """Opportunity without _debug.detector_id is returned without temporal fields."""
     opp = {"id": "opp_t12_003", "metric_value": 10.0}
