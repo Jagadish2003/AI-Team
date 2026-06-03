@@ -47,6 +47,7 @@ from pydantic import BaseModel, Field
 
 from .db import run_kv_set, next_run_id, upsert_run
 from .security import require_auth
+from .rbac import require_role
 
 
 # ── Request / response models ─────────────────────────────────────────────────
@@ -96,7 +97,7 @@ def register_stack_builder_launch_routes(app: FastAPI) -> None:
     @app.post(
         "/api/stack-builder/launch",
         response_model=LaunchResponse,
-        dependencies=[Depends(require_auth)],
+        dependencies=[Depends(require_auth), Depends(require_role("analyst"))],
         summary="Launch a discovery run from Stack Builder setup state",
         tags=["Stack Builder"],
     )
