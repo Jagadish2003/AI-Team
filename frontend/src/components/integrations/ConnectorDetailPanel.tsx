@@ -201,10 +201,12 @@ export default function ConnectorDetailPanel({
         <SalesforceProductPicker />
       )}
 
-      {/* T2-S11-A: SQL Server scope picker */}
-      {/* Matches both 'sql_server' (seed data) and 'sqlserver' (backend routes) */}
+      {/* T2-S11-A Task T9: SQL Server scope declaration */}
+      {/* Shown after SQL Server is connected — read scope selector */}
       {(connector.id === 'sql_server' || connector.id === 'sqlserver') && isConnected && (
-        <SqlServerScopePicker />
+        <div className="mt-4 border-t border-border pt-4">
+          <SqlServerScopePicker />
+        </div>
       )}
 
       {/* CTA */}
