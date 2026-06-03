@@ -16,7 +16,7 @@ def register_sprint4_t2_routes(app):
     @app.post(
         "/api/runs/start",
         response_model=StartRunResponse,
-        dependencies=[Depends(require_role("analyst"))],
+        dependencies=[Depends(require_auth), Depends(require_role("analyst"))],
     )
     async def start_run(
         body: StartRunRequest,
@@ -81,7 +81,7 @@ def register_sprint4_t2_routes(app):
     @app.get(
         "/api/runs/{run_id}/status",
         response_model=StatusResponse,
-        dependencies=[Depends(require_auth)],
+        dependencies=[Depends(require_auth), Depends(require_role("viewer"))],
     )
     def run_status(run_id: str):
         run = db.run_get(

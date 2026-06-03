@@ -10,6 +10,7 @@ from typing import Any, Dict, List
 from fastapi import Depends, HTTPException
 
 from .security import require_auth
+from .rbac import require_role
 from . import db
 from .materialize_t3_hook import get_clusters
 from .models_clusters import LinkedCluster
@@ -32,6 +33,6 @@ def register_sprint4_t3_routes(app) -> None:
         get_run_clusters,
         methods=["GET"],
         response_model=List[LinkedCluster],   # Fix 4: added
-        dependencies=[Depends(require_auth)],
+        dependencies=[Depends(require_auth), Depends(require_role("viewer"))],
         tags=["runs"],
     )

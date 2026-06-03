@@ -258,7 +258,7 @@ def get_events(run_id: str) -> List[Dict[str, Any]]:
         raise HTTPException(404, "run not found")
 
 
-@app.get("/api/runs/{run_id}/evidence", dependencies=[Depends(require_auth)])
+@app.get("/api/runs/{run_id}/evidence", dependencies=[Depends(require_auth), Depends(require_role("viewer"))])
 def list_evidence(run_id: str) -> List[Dict[str, Any]]:
     run_get(run_id)
     run_ev = run_kv_get("evidence", run_id, None)
@@ -461,7 +461,7 @@ def list_audit(run_id: str) -> List[Dict[str, Any]]:
     return sorted(audit, key=lambda e: int(e.get("tsEpoch", 0)), reverse=True)
 
 
-@app.get("/api/runs/{run_id}/roadmap", dependencies=[Depends(require_auth)])
+@app.get("/api/runs/{run_id}/roadmap", dependencies=[Depends(require_auth), Depends(require_role("viewer"))])
 def get_roadmap(run_id: str) -> Dict[str, Any]:
     run_get(run_id)
     run_roadmap = run_kv_get("roadmap", run_id, None)
@@ -479,7 +479,7 @@ def get_roadmap(run_id: str) -> Dict[str, Any]:
     return build_roadmap(with_display_titles(opps))
 
 
-@app.get("/api/runs/{run_id}/executive-report", dependencies=[Depends(require_auth)])
+@app.get("/api/runs/{run_id}/executive-report", dependencies=[Depends(require_auth), Depends(require_role("viewer"))])
 def get_exec_report(run_id: str) -> Dict[str, Any]:
     try:
         run = read_run(run_id)
