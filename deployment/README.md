@@ -19,7 +19,7 @@ See `backend/.env.example` for the full list including non-secret client IDs.
 | GitHub        | `GITHUB_CLIENT_SECRET`       | authorization_code    |
 | Slack         | `SLACK_CLIENT_SECRET`        | authorization_code    |
 | SAP           | `SAP_CLIENT_SECRET`          | client_credentials    |
-| Dynamics 365  | `DYNAMIC365_CLIENT_SECRET`   | client_credentials    |
+| Dynamics 365  | `DYNAMICS365_CLIENT_SECRET`  | client_credentials    |
 
 Set each to `your_secret_here` as a placeholder; replace with the real value from the
 provider's OAuth app registration before going to production.

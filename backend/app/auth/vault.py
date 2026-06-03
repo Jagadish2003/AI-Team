@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hmac
 import json
 import logging
 import os
@@ -171,6 +172,7 @@ def store_nonce(nonce: str, connector_id: str) -> None:
 
     now = datetime.now(timezone.utc)
     data = json.dumps({
+        "nonce":        nonce,
         "connector_id": connector_id,
         "created_at":   now.isoformat(),
         "expires_at":   (now + timedelta(minutes=_NONCE_TTL_MINUTES)).isoformat(),
@@ -234,6 +236,14 @@ def consume_nonce(nonce: str) -> dict | None:
 
     if datetime.now(timezone.utc) > expires_at:
         return None  # Expired — nonce already deleted above, correctly
+
+    # Timing-safe comparison of the supplied state against the stored nonce
+    # (Section 2 / AC9): use hmac.compare_digest, never ==, to guard against
+    # timing attacks on state validation. Rows written before the nonce value
+    # was stored fall back to the exact key match already performed above.
+    stored_nonce = data.get("nonce")
+    if stored_nonce is not None and not hmac.compare_digest(stored_nonce, nonce):
+        return None
 
     return data
 

@@ -90,11 +90,11 @@ CONNECTOR_AUTH_CONFIGS: Dict[str, ConnectorAuthConfig] = {
         redirect_uri=None,                                                          # client_credentials — no browser redirect
         authorization_url=None,
     ),
-    "dynamic365": ConnectorAuthConfig(
-        connector_id="dynamic365",
+    "dynamics365": ConnectorAuthConfig(
+        connector_id="dynamics365",
         flow="client_credentials",
-        client_id=os.getenv("DYNAMIC365_CLIENT_ID", "dynamic365-dev-client-id"),
-        secret_key="DYNAMIC365_CLIENT_SECRET",
+        client_id=os.getenv("DYNAMICS365_CLIENT_ID", "dynamics365-dev-client-id"),
+        secret_key="DYNAMICS365_CLIENT_SECRET",
         token_url="https://login.microsoftonline.com/bb612c49-03be-4da1-9974-49f0c8704eb8/oauth2/v2.0/token",
         revocation_url=None,                                                        # client_credentials — no user token to revoke
         scopes=["https://org.api.crm.dynamics.com/.default"],

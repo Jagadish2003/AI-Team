@@ -17,7 +17,7 @@ Pattern: `{CONNECTOR_ID_UPPER}_CLIENT_SECRET`
 | confluence  | `CONFLUENCE_CLIENT_SECRET`        |
 | slack       | `SLACK_CLIENT_SECRET`             |
 | sap         | `SAP_CLIENT_SECRET`               |
-| dynamic365  | `DYNAMIC365_CLIENT_SECRET`        |
+| dynamics365 | `DYNAMICS365_CLIENT_SECRET`       |
 
 At runtime, callers resolve the secret via `os.environ[config.secret_key]` (implemented in T2/secrets.py).
 
