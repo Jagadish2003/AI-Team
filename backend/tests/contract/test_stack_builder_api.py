@@ -46,7 +46,8 @@ from discovery.packs.industry_registry import (
 
 @pytest.fixture
 def client():
-    return TestClient(app)
+    with TestClient(app) as c:
+        yield c
 
 
 def _auth() -> Dict[str, str]:
