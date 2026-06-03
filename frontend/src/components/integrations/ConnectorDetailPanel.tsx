@@ -6,6 +6,7 @@ import { accessIcons } from './AccessIcons';
 import { useToast } from '../common/Toast';
 import { ExternalLink, CheckCircle2 } from 'lucide-react';
 import SalesforceProductPicker from './SalesforceProductPicker';
+import SqlServerScopePicker from './SqlServerScopePicker';
 
 // T41-7: Connection Health - configured read scope for this connector.
 // Shows what AgentIQ is configured to read from this source.
@@ -177,6 +178,14 @@ export default function ConnectorDetailPanel({
       <ConnectionHealthSection connector={connector} />
 
       {connector.id === 'salesforce' && isConnected && <SalesforceProductPicker />}
+
+      {/* T2-S11-A Task T9: SQL Server scope declaration */}
+      {/* Shown after SQL Server is connected — read scope selector */}
+      {(connector.id === 'sql_server' || connector.id === 'sqlserver') && isConnected && (
+        <div className="mt-4 border-t border-border pt-4">
+          <SqlServerScopePicker />
+        </div>
+      )}
 
       <div className="mt-5">
         <Button
