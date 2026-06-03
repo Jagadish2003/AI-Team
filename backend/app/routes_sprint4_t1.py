@@ -16,6 +16,7 @@ from fastapi import BackgroundTasks, Depends, HTTPException, FastAPI
 from pydantic import BaseModel, Field
 
 from .security import require_auth
+from .rbac import require_role
 from . import db
 from .connector_metrics import update_connector_metrics_from_run
 from .trackb_runner import run_trackb
@@ -317,7 +318,7 @@ def register_sprint4_t1_routes(app: FastAPI) -> None:
     @app.post(
         "/api/runs/{run_id}/compute",
         response_model=ComputeResponse,
-        dependencies=[Depends(require_auth)],
+        dependencies=[Depends(require_auth), Depends(require_role("analyst"))],
     )
     async def compute_run(run_id: str, body: ComputeRequest, background_tasks: BackgroundTasks) -> ComputeResponse:
         # Ensure run exists. db.run_get should raise 404; keep defensive for alternate impls.
@@ -352,7 +353,7 @@ def register_sprint4_t1_routes(app: FastAPI) -> None:
     @app.get(
         "/api/runs/{run_id}/status",
         response_model=RunStatus,
-        dependencies=[Depends(require_auth)],
+        dependencies=[Depends(require_auth), Depends(require_role("viewer"))],
     )
     async def get_status(run_id: str) -> RunStatus:
         run = db.run_get(run_id)
@@ -368,7 +369,7 @@ def register_sprint4_t1_routes(app: FastAPI) -> None:
 
     @app.get(
         "/api/runs/{run_id}/connector-health",
-        dependencies=[Depends(require_auth)],
+        dependencies=[Depends(require_auth), Depends(require_role("viewer"))],
     )
     async def get_connector_health(run_id: str) -> Dict[str, Any]:
         """
