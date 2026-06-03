@@ -41,6 +41,7 @@ websockets==16.0
 
 # T2-S10-A database connector packages.
 # System-level prerequisites for each driver are installed in the Dockerfile.
+# See deployment/README.md for full installation rationale.
 pyodbc==5.3.0
-oracledb>=2.0.0
-psycopg2-binary>=2.9.9
+oracledb>=2.0.0          # Oracle DB; uses Oracle Instant Client 21 at runtime.
+psycopg2-binary>=2.9.9   # PostgreSQL; libpq bundled, no postgres-client needed.
