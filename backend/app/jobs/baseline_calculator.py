@@ -23,33 +23,59 @@ scheduler = BackgroundScheduler()
 _sigterm_handler_registered = False
 
 
-def calculate_baselines() -> None:
+def get_distinct_org_ids() -> list[str]:
+    """Return all org_ids that have signal snapshot data.
+
+    Background job use only — never calls get_current_org_id().
+    org_id is read directly from the database, not from request context.
+    """
+    con = connect()
+    try:
+        cur = con.cursor()
+        try:
+            cur.execute("SELECT DISTINCT org_id FROM signal_snapshots")
+        except sqlite3.OperationalError as exc:
+            if "no such table: signal_snapshots" in str(exc):
+                return []
+            raise
+        return [row[0] for row in cur.fetchall()]
+    finally:
+        con.close()
+
+
+def calculate_baselines_for_org(org_id: str) -> None:
+    """Compute and persist baselines for all signal keys belonging to org_id.
+
+    Background job use only. org_id is passed explicitly — never derived
+    from request context (get_current_org_id() must not be called here).
+    """
     con = connect()
     try:
         cur = con.cursor()
         try:
             cur.execute(
                 """
-                SELECT org_id, signal_key, metric_value
+                SELECT signal_key, metric_value
                 FROM signal_snapshots
-                WHERE captured_at >= datetime('now', ? || ' days')
+                WHERE org_id = ?
+                  AND captured_at >= datetime('now', ? || ' days')
                 """,
-                (f"-{BASELINE_WINDOW_DAYS}",),
+                (org_id, f"-{BASELINE_WINDOW_DAYS}"),
             )
         except sqlite3.OperationalError as exc:
             if "no such table: signal_snapshots" in str(exc):
                 con.rollback()
-                return None
+                return
             raise
         rows = cur.fetchall()
 
-        groups: dict[tuple[str, str], list[float]] = {}
-        for org_id, signal_key, value in rows:
-            groups.setdefault((org_id, signal_key), []).append(float(value))
+        groups: dict[str, list[float]] = {}
+        for signal_key, value in rows:
+            groups.setdefault(signal_key, []).append(float(value))
 
         calculated_at = datetime.now(timezone.utc).isoformat()
 
-        for (org_id, signal_key), values in groups.items():
+        for signal_key, values in groups.items():
             if len(values) >= BASELINE_MIN_RUNS:
                 baseline_mean = statistics.mean(values)
                 baseline_stddev = statistics.pstdev(values)
@@ -95,6 +121,21 @@ def calculate_baselines() -> None:
         con.close()
 
 
+def run_baseline_job() -> None:
+    """Entry point for the scheduled baseline calculation job.
+
+    Background job — no request context. org_id is never read from tenancy
+    context. get_current_org_id() must not be called here or in any function
+    called from here.
+
+    Fetches all org_ids with signal data explicitly from the database and
+    processes each org in isolation, passing org_id through every call.
+    """
+    org_ids = get_distinct_org_ids()
+    for org_id in org_ids:
+        calculate_baselines_for_org(org_id)
+
+
 def _shutdown_scheduler(*args) -> None:
     if scheduler.running:
         scheduler.shutdown(wait=False)
@@ -118,7 +159,7 @@ def start_scheduler() -> BackgroundScheduler:
         return scheduler
 
     scheduler.add_job(
-        calculate_baselines,
+        run_baseline_job,
         trigger="interval",
         hours=BASELINE_JOB_INTERVAL_HOURS,
         next_run_time=datetime.now(timezone.utc),
