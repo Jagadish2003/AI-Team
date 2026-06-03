@@ -41,6 +41,7 @@ from .routes_sprint4_t6 import register_sprint4_t6_routes
 from .routes_sprint41_blueprint import register_blueprint_routes
 from .run_store import read_run, read_run_events, start_run_
 from .routes_workspace_catalog import register_workspace_catalog_routes
+from .routes_workspace import register_workspace_routes
 from .routes_db_connectors import register_db_connector_routes
 from .routes_temporal import register_temporal_routes
 from .security import require_auth
@@ -88,6 +89,7 @@ if not any(r.path == "/api/connectors/oauth/callback" for r in app.routes):
     register_connector_auth_routes(app)
 register_db_connector_routes(app)
 register_temporal_routes(app)
+register_workspace_routes(app)
 
 origins = [
     o.strip()
@@ -580,61 +582,7 @@ def list_audit_log(
 
 
 # ---------------------------------------------------------------------------
-# Workspace members — AT-82 T8
+# Workspace members — see routes_workspace.py (T1-S11 Task 2 / Section 3).
+# The GET/POST/DELETE member endpoints are registered via
+# register_workspace_routes(app) above.
 # ---------------------------------------------------------------------------
-
-@app.get(
-    "/api/workspace/members",
-    dependencies=[Depends(require_auth), Depends(require_role("owner"))],
-)
-def list_members() -> List[Dict[str, Any]]:
-    """List workspace members (owner only)."""
-    from .middleware.tenancy import get_current_org_id
-    from .rbac import _ensure_members_table
-
-    _ensure_members_table()
-    org_id = get_current_org_id()
-    con = db.connect()
-    try:
-        cur = con.execute(
-            "SELECT org_id, user_id, role, created_at FROM workspace_members WHERE org_id = ?",
-            (org_id,),
-        )
-        rows = cur.fetchall()
-    finally:
-        con.close()
-    return [{"org_id": r[0], "user_id": r[1], "role": r[2], "created_at": r[3]} for r in rows]
-
-
-@app.post(
-    "/api/workspace/members",
-    dependencies=[Depends(require_auth), Depends(require_role("owner"))],
-)
-def add_member(body: Dict[str, Any]) -> Dict[str, Any]:
-    """Add or update a workspace member (owner only)."""
-    from .middleware.tenancy import get_current_org_id
-    from .rbac import _ensure_members_table
-
-    _ensure_members_table()
-    org_id = get_current_org_id()
-    user_id = body.get("user_id", "").strip()
-    role = body.get("role", "").strip()
-    if not user_id:
-        raise HTTPException(400, "user_id required")
-    if role not in ("owner", "analyst", "viewer"):
-        raise HTTPException(400, "role must be owner, analyst, or viewer")
-
-    con = db.connect()
-    try:
-        con.execute(
-            """
-            INSERT INTO workspace_members (org_id, user_id, role, created_at)
-            VALUES (?, ?, ?, ?)
-            ON CONFLICT(org_id, user_id) DO UPDATE SET role = excluded.role
-            """,
-            (org_id, user_id, role, db.now_iso()),
-        )
-        con.commit()
-    finally:
-        con.close()
-    return {"org_id": org_id, "user_id": user_id, "role": role}
