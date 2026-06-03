@@ -454,6 +454,23 @@ def test_enrichment_reads_metric_value_from_debug_payload(monkeypatch):
     assert enriched["run_count"] == 1
 
 
+def test_materialize_t2_calculates_baseline_before_temporal_enrichment():
+    """Baseline columns must be refreshed before baseline_context is generated."""
+    src = Path(__file__).parents[2] / "app" / "materialize_t2.py"
+    if not src.exists():
+        pytest.skip("materialize_t2.py not found â€” skipping structural check")
+
+    text = src.read_text(encoding="utf-8")
+    baseline_call = text.find("calculate_baselines()")
+    enrichment_call = text.find("opps = enrich_opportunities_with_temporal_context(")
+
+    assert baseline_call != -1, "calculate_baselines() must run during materialization"
+    assert enrichment_call != -1, "temporal enrichment call not found in materialize_t2.py"
+    assert baseline_call < enrichment_call, (
+        "calculate_baselines() must run before enrich_opportunities_with_temporal_context()"
+    )
+
+
 def test_materialize_t2_pack_id_supports_stack_builder_run_shape():
     """Stack Builder launches store packId on the run root, not only in inputs."""
     from app.materialize_t2 import _pack_id_for_run
@@ -465,6 +482,17 @@ def test_materialize_t2_pack_id_supports_stack_builder_run_shape():
         == "strs_benefits"
     )
     assert _pack_id_for_run({}) is None
+
+
+def test_materialize_t2_org_id_supports_stack_builder_run_shape():
+    """Temporal enrichment must read history using the run's persisted org id."""
+    from app.materialize_t2 import _org_id_for_run
+
+    assert _org_id_for_run({"orgId": "demo-org"}, "default") == "demo-org"
+    assert _org_id_for_run({"org_id": "org_api"}, "default") == "org_api"
+    assert _org_id_for_run({"inputs": {"orgId": "org_inputs"}}, "default") == "org_inputs"
+    assert _org_id_for_run({"inputs": {"org_id": "org_inputs_2"}}, "default") == "org_inputs_2"
+    assert _org_id_for_run({}, "default") == "default"
 
 
 def test_enrichment_skips_opp_without_detector_id():

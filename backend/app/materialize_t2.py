@@ -36,6 +36,16 @@ def _pack_id_for_run(run: Dict[str, Any] | None) -> str | None:
     return input_pack_id or run.get("packId") or None
 
 
+def _org_id_for_run(run: Dict[str, Any] | None, fallback: str | None = None) -> str | None:
+    if not run:
+        return fallback
+    inputs = run.get("inputs") or {}
+    input_org_id = None
+    if isinstance(inputs, dict):
+        input_org_id = inputs.get("orgId") or inputs.get("org_id")
+    return run.get("orgId") or run.get("org_id") or input_org_id or fallback
+
+
 def _audit_prepend(run_id: str, event: Dict[str, Any]) -> None:
     audit = db.run_kv_get("audit", run_id, [])
     db.run_kv_set("audit", run_id, [event] + audit)
@@ -219,8 +229,9 @@ def run_trackb_and_persist(
             run_id, "EXTRACT", "Extracting entities and identifying patterns..."
         )
         pack_id = _pack_id_for_run(run)
+        run_org_id = _org_id_for_run(run, "demo-org")
         payload = trackb_run(
-            mode=mode, systems=succeeded, run_id=run_id, pack=pack_id
+            mode=mode, systems=succeeded, run_id=run_id, org_id=run_org_id, pack=pack_id
         )
         seed = export_track_a_seed(payload)
 
@@ -339,12 +350,14 @@ def run_trackb_and_persist(
         # T7 — temporal enrichment (non-blocking, AT-143)
         try:
             from .llm_enrichment import KV_LLM_ENRICHMENT as _KV_LLM
+            from .jobs.baseline_calculator import calculate_baselines
             from .middleware.tenancy import get_current_org_id_optional
             from .telemetry import record_event
             from .temporal_enrichment import enrich_opportunities_with_temporal_context
 
-            _org_id = get_current_org_id_optional() or "default"
+            _org_id = _org_id_for_run(run, get_current_org_id_optional() or "default")
             _pack_id = _pack_id_for_run(run)
+            calculate_baselines()
             opps = enrich_opportunities_with_temporal_context(run_id, _org_id, _pack_id or "", opps)
 
             _temporal_keys = (

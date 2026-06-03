@@ -63,10 +63,18 @@ async def lifespan(app: FastAPI):
     seed_owner(_DEV_ORG, _DEV_USER)
     # AT-90: start connector health check background job.
     from .jobs.connector_health import start_health_check_job, stop_health_check_job
+    from .jobs.baseline_calculator import (
+        scheduler as baseline_scheduler,
+        start_scheduler as start_baseline_scheduler,
+    )
+
     start_health_check_job()
+    start_baseline_scheduler()
     yield
     # AT-90: shut down scheduler on SIGTERM / graceful shutdown (wait=False).
     stop_health_check_job()
+    if baseline_scheduler.running:
+        baseline_scheduler.shutdown(wait=False)
 
 
 app = FastAPI(title="AgentIQ Layer 1 API Skeleton", version="0.1.0", lifespan=lifespan)
