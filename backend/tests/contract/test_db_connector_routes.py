@@ -59,9 +59,18 @@ def _seed_discovered_schema(
     )
 
 
+@pytest.fixture(autouse=True, scope="module")
+def seed_dev_owner():
+    """Seed dev-token as owner of 'default' org so RBAC checks pass."""
+    from app.rbac import seed_owner, _ensure_members_table
+    _ensure_members_table()
+    seed_owner("default", "dev-token-change-me")
+
+
 @pytest.fixture(scope="module")
 def client() -> TestClient:
-    return TestClient(app)
+    with TestClient(app) as c:
+        yield c
 
 
 # ─────────────────────────────────────────────────────────────────────────────
