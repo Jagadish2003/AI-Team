@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState, useCallback } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
-import { Zap } from "lucide-react";
+import { ArrowRight, ChevronDown, Zap } from "lucide-react";
 import PageShell from "../components/common/PageShell";
 import OpportunityToolbar, {
   ConfidenceFilter,
@@ -44,6 +44,7 @@ export default function OpportunityReviewPage() {
   const [tier, setTier] = useState<TierFilter>("All");
   const [conf, setConf] = useState<ConfidenceFilter>("All");
   const [decisionF, setDecisionF] = useState<DecisionFilter>("All");
+  const [detailPanelOpen, setDetailPanelOpen] = useState(true);
   const pageDescription =
     "Prioritize, approve, and understand automation opportunities from one review workspace.";
 
@@ -84,23 +85,22 @@ export default function OpportunityReviewPage() {
   const handleSelect = useCallback(
     (id: string) => {
       select(id);
+      setDetailPanelOpen(true);
     },
     [select],
   );
 
   useEffect(() => {
-    if (filtered.length > 0) {
-      const isCurrentValid = filtered.some((o) => o.id === selectedId);
-      if (!selectedId || !isCurrentValid) {
-        select(filtered[0].id);
-      }
+    if (selectedId && !filtered.some((o) => o.id === selectedId)) {
+      setDetailPanelOpen(false);
     }
-  }, [filtered, selectedId, select]);
+  }, [filtered, selectedId]);
 
   useEffect(() => {
     if (!requestedOppId) return;
     if (!opportunities.some((o) => o.id === requestedOppId)) return;
     select(requestedOppId);
+    setDetailPanelOpen(true);
   }, [requestedOppId, opportunities, select]);
 
   const selected = useMemo(
@@ -109,7 +109,10 @@ export default function OpportunityReviewPage() {
   );
 
   const blueprintAction = selected ? (
-    <div data-testid="blueprint-button-container">
+    <div
+      data-testid="blueprint-button-container"
+      className="flex justify-end"
+    >
       {salesforceConnected ? (
         <button
           data-testid="blueprint-button-active"
@@ -119,7 +122,7 @@ export default function OpportunityReviewPage() {
               `/agent-blueprint?oppId=${encodeURIComponent(selected.id)}`,
             );
           }}
-          className="flex w-full items-center justify-center gap-2 rounded-md border border-accent/20 bg-accent/5 px-4 py-3 text-sm font-medium text-accent transition-colors hover:border-accent/45 hover:bg-accent/10 focus:outline-none focus-visible:ring-1 focus-visible:ring-accent/40"
+          className="inline-flex items-center justify-center gap-2 rounded-lg border border-accent/30 bg-accent/10 px-4 py-2.5 text-sm font-semibold text-accent transition-colors hover:border-accent/50 hover:bg-accent/15 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/30"
         >
           <Zap size={15} />
           View Agent Blueprint
@@ -128,7 +131,7 @@ export default function OpportunityReviewPage() {
         <button
           data-testid="blueprint-button-disabled"
           disabled
-          className="flex w-full cursor-not-allowed items-center justify-center gap-2 rounded-md border border-border bg-bg/30 px-4 py-3 text-sm font-medium text-muted opacity-60"
+          className="inline-flex cursor-not-allowed items-center justify-center gap-2 rounded-lg border border-border bg-bg/30 px-4 py-2.5 text-sm font-medium text-muted opacity-60"
           title="Connect Salesforce on Integration Hub to enable Agent Blueprint"
         >
           <Zap size={15} />
@@ -176,26 +179,76 @@ export default function OpportunityReviewPage() {
           totalShown={filtered.length}
         />
 
-        <div className="grid grid-cols-1 gap-4 lg:h-[620px] lg:grid-cols-[minmax(0,1.12fr)_minmax(380px,0.88fr)] lg:items-stretch">
+        <div className="mt-4 h-[560px] lg:h-[720px]">
           <OpportunityMatrix
             filtered={filtered}
             selectedId={selectedId}
             onSelect={handleSelect}
           />
-
-          <OpportunityDetail
-            opp={selected}
-            audit={audit}
-            suppressPermissions={true}
-            footer={blueprintAction}
-            onNavigate={() => {
-              if (selected) {
-                select(selected.id);
-                nav("/executive-report");
-              }
-            }}
-          />
         </div>
+
+        {selected && (
+          <section className="mt-4 overflow-hidden rounded-xl border border-border bg-panel">
+            <div className="flex items-center justify-between gap-3 px-5 py-4">
+              <div className="min-w-0">
+                <div className="text-xs font-semibold uppercase tracking-wide text-muted">
+                  Selected Opportunity Details
+                </div>
+                <div className="mt-1 truncate text-lg font-semibold leading-tight text-text">
+                  {selected.title}
+                </div>
+              </div>
+              <div className="flex shrink-0 items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    select(selected.id);
+                    nav("/executive-report");
+                  }}
+                  className="group relative flex h-10 w-10 items-center justify-center rounded-lg border border-accent/25 bg-accent/10 text-accent transition hover:-translate-y-0.5 hover:border-accent/45 hover:bg-accent/15 hover:text-accent focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/30"
+                  aria-label="Open opportunity report"
+                >
+                  <ArrowRight size={17} strokeWidth={2.4} />
+                  <span className="pointer-events-none absolute right-0 top-full z-20 mt-2 hidden whitespace-nowrap rounded-md border border-border bg-panel px-2 py-1 text-[11px] font-medium text-text group-hover:block">
+                    Open report
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setDetailPanelOpen((open) => !open)}
+                  aria-expanded={detailPanelOpen}
+                  className="group relative flex h-10 w-10 items-center justify-center rounded-lg border border-accent/25 bg-accent/10 text-accent transition hover:-translate-y-0.5 hover:border-accent/45 hover:bg-accent/15 hover:text-accent focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/30"
+                  aria-label={detailPanelOpen ? "Collapse selected opportunity details" : "Expand selected opportunity details"}
+                >
+                  <ChevronDown
+                    size={18}
+                    strokeWidth={2.4}
+                    className={`transition-transform ${detailPanelOpen ? "rotate-180" : ""}`}
+                  />
+                  <span className="pointer-events-none absolute right-0 top-full z-20 mt-2 hidden whitespace-nowrap rounded-md border border-border bg-panel px-2 py-1 text-[11px] font-medium text-text group-hover:block">
+                    {detailPanelOpen ? "Click to collapse" : "Click to expand"}
+                  </span>
+                </button>
+              </div>
+            </div>
+
+            {detailPanelOpen && (
+              <div className="h-[560px] border-t border-border">
+                <OpportunityDetail
+                  opp={selected}
+                  audit={audit}
+                  hideTitleBar={true}
+                  suppressPermissions={true}
+                  footer={blueprintAction}
+                  onNavigate={() => {
+                    select(selected.id);
+                    nav("/executive-report");
+                  }}
+                />
+              </div>
+            )}
+          </section>
+        )}
 
         <div className="mt-4 grid grid-cols-1 gap-4 lg:h-[460px] lg:grid-cols-3 lg:items-stretch">
           <TopQuickWins
@@ -239,6 +292,7 @@ export default function OpportunityReviewPage() {
             }}
           />
         </div>
+
     </PageShell>
   );
 }

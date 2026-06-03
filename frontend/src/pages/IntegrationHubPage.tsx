@@ -27,7 +27,7 @@
  *
  * WHAT DID NOT CHANGE:
  *   - Connect / Configure flow unchanged — same ConnectorTile, same handlers
- *   - DiscoveryStartBar flow unchanged
+ *   - Start Discovery Run is managed from the Discovery Run page
  *   - RightPanel unchanged
  *   - ConnectorContext unchanged
  *   - Dark theme preserved — bg-panel, border-border, text-muted tokens only
@@ -49,11 +49,8 @@ import LoadingPanel from '../components/common/LoadingPanel';
 import ErrorPanel from '../components/common/ErrorPanel';
 import ConnectorGroupSection, { GroupConfig } from '../components/integrations/ConnectorGroupSection';
 import RightPanel from '../components/integrations/RightPanel';
-import DiscoveryStartBar from '../components/integrations/DiscoveryStartBar';
 import { useToast } from '../components/common/Toast';
 import { useConnectorContext } from '../context/ConnectorContext';
-import { useRunContext } from '../context/RunContext';
-import { useSourceIntakeContext } from '../context/SourceIntakeContext';
 import { isDiscoveryReadyConnector } from '../utils/sourceReadiness';
 import { computeConfidence } from '../utils/confidence';
 import { Connector } from '../types/connector';
@@ -136,8 +133,6 @@ export default function IntegrationHubPage() {
   const { push }         = useToast();
   const navigate         = useNavigate();
   const [searchParams]   = useSearchParams();
-  const { runId }        = useRunContext();
-  const { uploadedFiles } = useSourceIntakeContext();
 
   // ?category= deep-link param — ENG-IH-2 AC6
   const deepLinkCategory = searchParams.get('category') ?? null;
@@ -188,11 +183,6 @@ export default function IntegrationHubPage() {
     [allConnectors, selectedConnectorId],
   );
 
-  const readyConnectorCount = useMemo(
-    () => allConnectors.filter(isDiscoveryReadyConnector).length,
-    [allConnectors],
-  );
-
   const startBarStatusConnectors = useMemo(() => {
     return START_BAR_SOURCE_IDS
       .map(id => allConnectors.find(c => c.id === id))
@@ -213,8 +203,6 @@ export default function IntegrationHubPage() {
     () => startBarStatusConnectors.find(c => !isDiscoveryReadyConnector(c)) ?? null,
     [startBarStatusConnectors],
   );
-
-  const canStart = readyConnectorCount > 0 || uploadedFiles.length > 0;
 
   // Connect / configure handler (same logic as pre-Sprint-9)
   function handlePrimary(id: string) {
@@ -248,12 +236,10 @@ export default function IntegrationHubPage() {
   }
 
   return (
-    <>
-      <PageShell
-        title="Integration Hub"
-        description="Connect enterprise systems to provide data for discovery. Manage credentials and connection status for your workspace."
-        contentClassName="pb-56 sm:pb-52 xl:pb-28"
-      >
+    <PageShell
+      title="Integration Hub"
+      description="Connect enterprise systems to provide data for discovery. Manage credentials and connection status for your workspace."
+    >
         {loading && <LoadingPanel />}
         {error && !loading && <ErrorPanel message={error} onRetry={refetch} />}
 
@@ -323,26 +309,6 @@ export default function IntegrationHubPage() {
             </div>
           </div>
         )}
-      </PageShell>
-
-      {/* Discovery start bar */}
-      {!loading && !error && (
-        <DiscoveryStartBar
-          confidence={startBarConfidence}
-          recommendedReadyCount={startBarReadyCount}
-          recommendedTotal={START_BAR_SOURCE_IDS.length}
-          recommended={recommended}
-          statusConnectors={startBarStatusConnectors}
-          canStart={canStart}
-          onStart={() => {
-            if (runId) {
-              navigate(`/discovery-run?runId=${runId}`);
-            } else {
-              navigate('/discovery-run', { state: { autoStart: true } });
-            }
-          }}
-        />
-      )}
-    </>
+    </PageShell>
   );
 }

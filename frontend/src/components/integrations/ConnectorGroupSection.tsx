@@ -29,7 +29,8 @@ import React from 'react';
 import { Connector } from '../../types/connector';
 import ConnectorTile from './ConnectorTile';
 import { connectorIcons, fallbackConnectorIcon } from './ConnectorIcons';
-import { CircleCheck, PlusCircle } from 'lucide-react';
+import { PlusCircle } from 'lucide-react';
+import ConnectedToolsStatus from './ConnectedToolsStatus';
 
 export interface GroupConfig {
   label:       string;
@@ -52,11 +53,7 @@ export default function ConnectorGroupSection({
 }: Props) {
   const hasConnectors = group.connectors.length > 0;
   const shouldScrollConnectors = group.connectors.length > 6;
-  const connectedCount = group.connectors.filter(
-    c => c.status === 'connected'
-  ).length;
   const connectorGridClass = 'grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3';
-  const connectedLabel = `${connectedCount} Connected`;
 
   return (
     <div className="rounded-xl border border-border bg-panel p-5 shadow-sm">
@@ -69,12 +66,7 @@ export default function ConnectorGroupSection({
           </div>
           <div className="text-xs text-muted">{group.subLabel}</div>
         </div>
-        {connectedCount > 0 && (
-          <span className="inline-flex shrink-0 items-center gap-1.5 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2.5 py-1 text-xs font-medium leading-none text-emerald-300 shadow-sm">
-            <CircleCheck size={13} strokeWidth={2.2} aria-hidden="true" />
-            {connectedLabel}
-          </span>
-        )}
+        <ConnectedToolsStatus connectors={group.connectors} />
       </div>
 
       {/* Connector tiles */}

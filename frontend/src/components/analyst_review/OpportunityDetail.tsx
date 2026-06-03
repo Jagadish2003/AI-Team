@@ -21,7 +21,7 @@ function BulletList({
     ) : null;
   }
   return (
-    <ul className="space-y-1.5">
+    <ul className="opportunity-round-bullets space-y-1.5">
       {items.map((item, i) => (
         <li key={i} className="flex items-start gap-2 text-xs text-text">
           <span className="mt-0.5 shrink-0 text-muted font-bold">›</span>
@@ -136,6 +136,7 @@ export default function OpportunityDetail({
   opp,
   audit,
   onNavigate,
+  hideTitleBar = false,
   // T41-7: suppressPermissions is DEPRECATED — the Required Permissions section
   // was removed in T41-7. This prop is retained only for backward compatibility
   // with existing call sites (OpportunityReviewPage.tsx line 213). It has no
@@ -147,6 +148,7 @@ export default function OpportunityDetail({
   opp: OpportunityCandidate | null;
   audit: ReviewAuditEvent[];
   onNavigate?: () => void;
+  hideTitleBar?: boolean;
   /** @deprecated T41-7: has no effect. Permissions section removed from this component. */
   suppressPermissions?: boolean;
   footer?: React.ReactNode;
@@ -198,22 +200,27 @@ export default function OpportunityDetail({
   }
 
   return (
-    <div className="flex h-full min-h-0 w-full flex-col overflow-hidden rounded-xl border border-border bg-panel">
-      {/* Title bar */}
-      <div className="flex items-center justify-between px-5 py-4 border-b border-border bg-panel shrink-0">
-        <h2 className="min-w-0 pr-4 text-lg font-semibold leading-snug text-text">
-          {opp.title}
-        </h2>
-        {onNavigate && (
-          <button
-            onClick={onNavigate}
-            className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-border text-muted transition-colors hover:bg-panel2 hover:text-text"
-            aria-label="Open opportunity report"
-          >
-            <ArrowRight size={14} />
-          </button>
-        )}
-      </div>
+    <div
+      className={`flex h-full min-h-0 w-full flex-col overflow-hidden bg-panel ${
+        hideTitleBar ? "" : "rounded-xl border border-border"
+      }`}
+    >
+      {!hideTitleBar && (
+        <div className="flex items-center justify-between px-5 py-4 border-b border-border bg-panel shrink-0">
+          <h2 className="min-w-0 pr-4 text-lg font-semibold leading-snug text-text">
+            {opp.title}
+          </h2>
+          {onNavigate && (
+            <button
+              onClick={onNavigate}
+              className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-border text-muted transition-colors hover:bg-panel2 hover:text-text"
+              aria-label="Open opportunity report"
+            >
+              <ArrowRight size={14} />
+            </button>
+          )}
+        </div>
+      )}
 
       <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto px-5 py-5 space-y-5">
         {/* Identifier */}
@@ -321,7 +328,7 @@ export default function OpportunityDetail({
                           {e.by}
                         </span>
                       </div>
-                      <span className="text-muted text-[10px] font-mono">
+                      <span className="text-xs text-muted leading-relaxed">
                         {formattedDate}
                       </span>
                     </div>

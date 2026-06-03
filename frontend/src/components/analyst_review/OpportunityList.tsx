@@ -23,10 +23,11 @@ function DecisionBadge({ value }: { value: string }) {
   ? 'border-emerald-500/50 bg-emerald-500/15 text-emerald-300'
   : value === 'REJECTED'
   ? 'border-red-500/50 bg-red-500/15 text-red-300'
-  : 'border-border bg-bg/30 text-muted';
+  : 'border-blue-500/45 bg-blue-500/12 text-blue-300';
+  const label = value === 'APPROVED' || value === 'REJECTED' ? value : 'PENDING';
   return (
     <span className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold tracking-wide whitespace-nowrap ${cls}`}>
-    {value}
+    {label}
     </span>
   );
 }
