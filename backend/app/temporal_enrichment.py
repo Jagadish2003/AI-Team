@@ -110,8 +110,11 @@ def enrich_opportunities_with_temporal_context(
     """
     try:
         for opp in opps:
-            detector_id = opp.get("_debug", {}).get("detector_id")
+            debug = opp.get("_debug", {}) or {}
+            detector_id = debug.get("detector_id")
             current_value = opp.get("metric_value")
+            if current_value is None:
+                current_value = debug.get("metric_value")
             if not detector_id or current_value is None:
                 continue
 

@@ -428,6 +428,32 @@ def test_enrichment_with_two_history_values_marks_trend_insufficient(monkeypatch
     assert enriched["run_count"] == 2
 
 
+def test_enrichment_reads_metric_value_from_debug_payload(monkeypatch):
+    """Real run opportunities carry metric_value inside _debug."""
+    _stub_history(monkeypatch, [10.0])
+    _stub_baseline(monkeypatch, {
+        "baseline_mean": None,
+        "baseline_stddev": None,
+        "insufficient_data": True,
+    })
+    opp = {
+        "id": "opp_t12_002c",
+        "_debug": {"detector_id": "DET_T12", "metric_value": 10.0},
+    }
+
+    result = enrich_opportunities_with_temporal_context(
+        "run_t12",
+        "org_t12",
+        "pack",
+        [opp],
+    )
+
+    enriched = result[0]
+    assert enriched["baseline_context"] is None
+    assert enriched["trend_direction"] == "insufficient_data"
+    assert enriched["run_count"] == 1
+
+
 def test_enrichment_skips_opp_without_detector_id():
     """Opportunity without _debug.detector_id is returned without temporal fields."""
     opp = {"id": "opp_t12_003", "metric_value": 10.0}
