@@ -1,7 +1,9 @@
 import os
+import sqlite3
 import subprocess
 import sys
 import tempfile
+from datetime import datetime, timezone
 from pathlib import Path
 import pytest
 from alembic import command as alembic_command
@@ -46,6 +48,26 @@ def pytest_configure(config):
     )
     if result.returncode != 0:
         raise RuntimeError(f"seed_loader.py failed:\n{result.stderr}")
+
+    # Some legacy contract tests instantiate TestClient(app) without entering
+    # the lifespan context. Seed the default dev owner here as well so RBAC
+    # matches normal app startup.
+    from database.models.workspace_members import CREATE_WORKSPACE_MEMBERS_TABLE
+
+    with sqlite3.connect(TEST_DB_PATH) as conn:
+        conn.execute(CREATE_WORKSPACE_MEMBERS_TABLE)
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO workspace_members (org_id, user_id, role, created_at)
+            VALUES (?, ?, 'owner', ?)
+            """,
+            (
+                "default",
+                os.environ["DEV_JWT"],
+                datetime.now(timezone.utc).isoformat(),
+            ),
+        )
+        conn.commit()
 
 
 def pytest_sessionfinish(session, exitstatus):

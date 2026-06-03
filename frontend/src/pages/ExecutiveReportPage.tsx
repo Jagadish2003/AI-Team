@@ -177,13 +177,12 @@ export default function ExecutiveReportPage() {
           <StatCard title="Agent Roadmap" value="Phase 1/2/3" />
         </div>
 
-        <div className="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-[2fr_1fr]">
-          <div className="space-y-4">
-            <KeyInsights />
-            <SnapshotMatrix opportunities={opportunities} />
-          </div>
+        <div className="mt-4 space-y-4">
+          {/* Key Insights — full width */}
+          <KeyInsights />
 
-          <div className="space-y-4">
+          {/* Top Quick Wins + Agent Roadmap Highlights — side by side */}
+          <div className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(420px,520px)]">
             <TopQuickWins quickWins={quickWins} />
             <PilotRoadmapHighlights
               stages={roadmap.stages}
@@ -191,6 +190,9 @@ export default function ExecutiveReportPage() {
               overallReadiness={roadmap.overallReadiness}
             />
           </div>
+
+          {/* Effort vs Impact matrix — full width */}
+          <SnapshotMatrix opportunities={opportunities} />
         </div>
     </PageShell>
   );

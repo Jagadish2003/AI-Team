@@ -8,7 +8,7 @@ import { ExternalLink, CheckCircle2 } from 'lucide-react';
 import SalesforceProductPicker from './SalesforceProductPicker';
 import SqlServerScopePicker from './SqlServerScopePicker';
 
-// ── T41-7: Connection Health — configured read scope for this connector.
+// T41-7: Connection Health - configured read scope for this connector.
 // Shows what AgentIQ is configured to read from this source.
 // Derived deterministically from connector.id (CONNECTION_HEALTH_LABELS map).
 // IMPORTANT: reflects configured read scope, NOT proven last-sync results.
@@ -22,7 +22,6 @@ const CONNECTION_HEALTH_LABELS: Record<string, string[]> = {
     'Read User records',
     'Read OpportunityLineItem records',
   ],
-  // nCino lending — used when Salesforce category contains "nCino"
   salesforce_ncino: [
     'Read LLC_BI__Loan__c records',
     'Read LLC_BI__Covenant2__c records',
@@ -30,7 +29,6 @@ const CONNECTION_HEALTH_LABELS: Record<string, string[]> = {
     'Read LLC_BI__Spread_Statement_Period__c records',
     'Read ProcessInstance records',
   ],
-  // STRS PSS — used when Salesforce category contains "PSS" or "Benefits"
   salesforce_strs: [
     'Read IndividualApplication records',
     'Read BenefitAssignment records',
@@ -68,18 +66,17 @@ const CONNECTION_HEALTH_LABELS: Record<string, string[]> = {
 function ConnectionHealthSection({ connector }: { connector: Connector }) {
   if (connector.status !== 'connected') return null;
 
-  // Use pack-specific labels based on Salesforce category
   const healthKey =
     connector.id === 'salesforce' && connector.category?.includes('nCino')
       ? 'salesforce_ncino'
       : connector.id === 'salesforce' &&
-        (connector.category?.includes('PSS') || connector.category?.includes('Benefits'))
-      ? 'salesforce_strs'
-      : connector.id;
+          (connector.category?.includes('PSS') || connector.category?.includes('Benefits'))
+        ? 'salesforce_strs'
+        : connector.id;
 
   const items =
     CONNECTION_HEALTH_LABELS[healthKey] ??
-    connector.reads.map((r) => `Read ${r} records`);
+    connector.reads.map((readScope) => `Read ${readScope} records`);
 
   return (
     <div className="mt-4">
@@ -95,16 +92,12 @@ function ConnectionHealthSection({ connector }: { connector: Connector }) {
             key={label}
             className="flex items-center gap-2 rounded-md border border-border bg-bg/20 px-3 py-2 text-xs text-text"
           >
-            <CheckCircle2
-              size={14}
-              className="shrink-0 text-emerald-400"
-            />
+            <CheckCircle2 size={14} className="shrink-0 text-emerald-400" />
             <span className="min-w-0 flex-1 break-words">{label}</span>
-            <span className="text-emerald-400 text-[10px] font-medium">✓</span>
           </div>
         ))}
       </div>
-      <p className="mt-2 text-[10px] text-muted leading-relaxed">
+      <p className="mt-2 text-[10px] leading-relaxed text-muted">
         Configured read scope for this connector. Actual sync results available in Sprint 6.
       </p>
     </div>
@@ -113,12 +106,12 @@ function ConnectionHealthSection({ connector }: { connector: Connector }) {
 
 export default function ConnectorDetailPanel({
   connector,
-  onConfigure
+  onConfigure,
 }: {
   connector: Connector | null;
   onConfigure: () => void;
 }) {
-  const { push } = useToast(); 
+  const { push } = useToast();
 
   if (!connector) {
     return (
@@ -133,27 +126,22 @@ export default function ConnectorDetailPanel({
 
   return (
     <div className="rounded-xl border border-border bg-panel p-5">
-      
-      {/* Header */}
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0">
           <div className="break-words text-xl font-semibold leading-snug text-text">
             {connector.name} Integration
           </div>
-          <div className="mt-1 break-words text-sm text-muted">
-            {connector.category}
-          </div>
+          <div className="mt-1 break-words text-sm text-muted">{connector.category}</div>
         </div>
 
         <Badge status={connector.status} />
       </div>
 
-      {/* Last Sync + Learn More */}
       <div className="mt-3 flex items-center justify-between text-xs text-muted">
         <div>
           Last sync:{' '}
           <span className="text-text">
-            {isConfigured ? connector.lastSynced : '—'}
+            {isConfigured ? connector.lastSynced : '-'}
           </span>
         </div>
 
@@ -167,39 +155,29 @@ export default function ConnectorDetailPanel({
 
       <div className="mt-4 border-t border-border" />
 
-      {/* Access Section */}
       <div className="mt-4">
-        <div className="mb-2 text-sm font-medium text-text">
-          Access as:
-        </div>
+        <div className="mb-2 text-sm font-medium text-text">Access as:</div>
 
         <div className="space-y-2">
-          {connector.reads.slice(0, 3).map((r) => (
+          {connector.reads.slice(0, 3).map((readScope) => (
             <div
-              key={r}
-              className="flex items-center justify-between rounded-md border border-border px-3 py-2 hover:bg-panel2"
+              key={readScope}
+              className="flex items-center rounded-md border border-border px-3 py-2 hover:bg-panel2"
             >
               <div className="flex min-w-0 items-center gap-2 text-sm text-text">
                 <div className="flex h-5 w-5 items-center justify-center rounded bg-accent/20">
-                  {accessIcons[r] || accessIcons.fallback}
+                  {accessIcons[readScope] || accessIcons.fallback}
                 </div>
-                <span className="min-w-0 break-words">{r}</span>
+                <span className="min-w-0 break-words">{readScope}</span>
               </div>
-
-              <span className="shrink-0 text-muted">›</span>
             </div>
           ))}
         </div>
       </div>
 
-      {/* T41-7: Connection Health — shown only when connected */}
       <ConnectionHealthSection connector={connector} />
 
-      {/* ENG-IH-3 Sprint 9: Salesforce product declaration */}
-      {/* Shown after Salesforce is connected — workspace-level declaration */}
-      {connector.id === 'salesforce' && isConnected && (
-        <SalesforceProductPicker />
-      )}
+      {connector.id === 'salesforce' && isConnected && <SalesforceProductPicker />}
 
       {/* T2-S11-A Task T9: SQL Server scope declaration */}
       {/* Shown after SQL Server is connected — read scope selector */}
@@ -209,7 +187,6 @@ export default function ConnectorDetailPanel({
         </div>
       )}
 
-      {/* CTA */}
       <div className="mt-5">
         <Button
           variant="tertiary"
@@ -221,7 +198,6 @@ export default function ConnectorDetailPanel({
           {isConfigured ? 'Re-sync' : 'Configure & Sync'}
         </Button>
       </div>
-
     </div>
   );
 }

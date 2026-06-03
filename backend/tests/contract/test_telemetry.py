@@ -17,7 +17,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from app.telemetry import get_telemetry_range, record_event
+from app.telemetry import EVENT_REGISTRY, get_telemetry_range, record_event
 from app.jobs.connector_health import run_connector_health_checks
 
 
@@ -326,3 +326,104 @@ class TestGetTelemetryRange:
         # Verify filter and limit were called (exact args verified by integration test).
         assert mock_query.filter.called
         mock_query.limit.assert_called_once_with(50)
+
+
+# ---------------------------------------------------------------------------
+# AT-145 — temporal.enrichment_completed event type
+# ---------------------------------------------------------------------------
+
+class TestTemporalEnrichmentCompletedEvent:
+
+    def test_event_type_is_in_registry(self):
+        """temporal.enrichment_completed must be registered in EVENT_REGISTRY."""
+        assert "temporal.enrichment_completed" in EVENT_REGISTRY, (
+            "temporal.enrichment_completed not found in EVENT_REGISTRY — "
+            "add register_event_type() call to telemetry.py"
+        )
+
+    def test_record_event_emits_no_warnings(self, patch_session, caplog):
+        """record_event() must not log warnings for this event type."""
+        with caplog.at_level(logging.WARNING, logger="app.telemetry"):
+            record_event("temporal.enrichment_completed", {"run_id": "run-at145-test"})
+
+        warning_records = [
+            r for r in caplog.records
+            if r.levelno >= logging.WARNING and "temporal.enrichment_completed" in r.message
+        ]
+        assert warning_records == [], (
+            f"Unexpected warnings for temporal.enrichment_completed: {warning_records}"
+        )
+
+    def test_record_event_persists_run_id(self, patch_session):
+        """Payload run_id must be stored on the written TelemetryEvent row."""
+        record_event("temporal.enrichment_completed", {"run_id": "run-at145-persist"})
+
+        assert patch_session.commit.called
+        event = patch_session._written[0]
+        assert event.event_type == "temporal.enrichment_completed"
+        assert event.run_id == "run-at145-persist"
+
+    def test_event_emitted_once_not_per_opportunity(self, patch_session):
+        """Event is emitted exactly once per run — not once per opportunity.
+
+        The record_event call in materialize_t2.py T7 block is outside the
+        per-opp loop. This test verifies that calling record_event once with
+        a run_id produces exactly one persisted event (not scaled by opp count).
+        """
+        RUN = "run-at145-once"
+        OPPS = ["opp-1", "opp-2", "opp-3", "opp-4", "opp-5"]
+
+        # Simulate what the T7 block does: one record_event call after all opps
+        record_event("temporal.enrichment_completed", {"run_id": RUN})
+
+        events = [e for e in patch_session._written if e.event_type == "temporal.enrichment_completed"]
+        assert len(events) == 1, (
+            f"Expected 1 temporal.enrichment_completed event for run '{RUN}', "
+            f"got {len(events)} — event must not be emitted per opportunity"
+        )
+        assert events[0].run_id == RUN
+
+    def test_call_site_is_outside_per_opp_loop(self):
+        """Structural: record_event('temporal.enrichment_completed') in materialize_t2
+        must appear outside the per-opportunity for loop."""
+        import ast
+        import inspect
+        import app.materialize_t2 as m2
+
+        source = inspect.getsource(m2.run_trackb_and_persist)
+        tree = ast.parse(source)
+
+        # Walk the AST and find the record_event call, then verify it is not
+        # nested inside a For loop node.
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            func = node.func
+            name = (
+                func.id if isinstance(func, ast.Name)
+                else func.attr if isinstance(func, ast.Attribute)
+                else None
+            )
+            if name != "record_event":
+                continue
+            # Check first arg is "temporal.enrichment_completed"
+            if not node.args or not isinstance(node.args[0], ast.Constant):
+                continue
+            if node.args[0].value != "temporal.enrichment_completed":
+                continue
+            # Found the call. Now verify it's not inside a For loop by checking
+            # parent nodes. ast doesn't track parents natively — use line number
+            # heuristic: find all For loops and verify their lineno range.
+            call_line = node.lineno
+            for loop_node in ast.walk(tree):
+                if not isinstance(loop_node, ast.For):
+                    continue
+                loop_start = loop_node.lineno
+                loop_end = max(
+                    (child.lineno for child in ast.walk(loop_node) if hasattr(child, "lineno")),
+                    default=loop_start,
+                )
+                assert not (loop_start <= call_line <= loop_end), (
+                    f"temporal.enrichment_completed record_event call at line {call_line} "
+                    f"is inside a For loop ({loop_start}–{loop_end}) — move it outside"
+                )

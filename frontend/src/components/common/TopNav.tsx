@@ -128,7 +128,7 @@ export default function TopNav() {
             aria-label="Open navigation menu"
             aria-expanded={menuOpen}
             onClick={() => setMenuOpen((open) => !open)}
-            className="flex h-9 w-9 items-center justify-center rounded-full border border-border bg-buttonbg text-navtext/80 transition-colors hover:bg-navhover hover:text-navtext focus:outline-none focus:ring-2 focus:ring-accent/50 lg:hidden"
+            className="flex h-7 w-7 items-center justify-center rounded-full border border-border text-navtext/75 transition-colors hover:bg-navhover hover:text-navtext focus:outline-none focus:ring-2 focus:ring-accent/50 lg:hidden"
           >
             <Menu className="h-5 w-5" />
           </button>
