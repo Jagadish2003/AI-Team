@@ -13,12 +13,7 @@ import { EvidenceProvider } from "./context/EvidenceContext";
 import { ThemeProvider } from "./context/ThemeContext";
 
 import IntegrationHubPage from "./pages/IntegrationHubPage";
-import SourceIntakePage from "./pages/SourceIntakePage";
 import DiscoveryRunPage from "./pages/DiscoveryRunPage";
-import PartialResultsPage from "./pages/PartialResultsPage";
-import NormalizationInspectorPage from "./pages/NormalizationInspectorPage";
-import AnalystReviewPage from "./pages/AnalystReviewPage";
-import OpportunityMapPage from "./pages/OpportunityMapPage";
 import OpportunityReviewPage from "./pages/OpportunityReviewPage";
 import SourceIntelligencePage from "./pages/SourceIntelligencePage";
 import PilotRoadmapPage from "./pages/PilotRoadmapPage";

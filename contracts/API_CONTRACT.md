@@ -1,6 +1,6 @@
 # AgentIQ — API_CONTRACT.md (EPIC E0)
-Version: v1.1 (Contract Freeze)
-Date: 2026-03-18
+Version: v1.2
+Date: 2026-06-03
 
 ## Purpose
 This contract is the **referee** between Frontend and Backend.
@@ -169,13 +169,85 @@ Response: `PilotRoadmapModel` (`src/types/pilotRoadmap.ts`)
 Response (v1 stub shape):
 ```json
 {
-  "confidence": "High",
+  "confidence": "Moderate",
   "sourcesAnalyzed": { "recommendedConnected": 2, "totalConnected": 5 },
   "topQuickWins": [],
   "snapshotBubbles": [{ "x": 90, "y": 55, "r": 18 }],
   "roadmapHighlights": { "next30Count": 3, "next60Count": 2, "next90Count": 1, "blockerCount": 4 }
 }
 ```
+
+---
+
+### I) Run Lifecycle & Status (added v1.2)
+
+#### GET /api/runs/{runId}/status
+Purpose: poll current status of a discovery run.
+Response:
+```json
+{ "runId": "string", "status": "running|complete|error", "progress": 0.0 }
+```
+
+#### POST /api/runs/{runId}/compute
+Purpose: trigger T2 materialization for a completed run.
+Response: `{ "ok": true }`
+
+#### GET /api/runs/{runId}/connector-health
+Purpose: return connector health status scoped to a run.
+Response: `ConnectorHealth[]` (see `src/types/connectorHealth.ts`)
+
+---
+
+### J) Clusters (added v1.2)
+
+#### GET /api/runs/{runId}/clusters
+Purpose: return opportunity clusters for a run.
+Response: `OpportunityCluster[]` (see `src/types/clusters.ts`)
+
+---
+
+### K) LLM Enrichment (added v1.2)
+
+#### GET /api/runs/{runId}/llm-enrichment
+Purpose: return aggregate LLM enrichment summary for a run.
+Response: `LLMEnrichmentSummary` (see `src/types/enrichment.ts`)
+
+#### GET /api/runs/{runId}/opportunities/{oppId}/enrichment
+Purpose: return per-opportunity LLM enrichment detail.
+Response: `OppEnrichment` (see `src/types/enrichment.ts`)
+
+---
+
+### L) Blueprint (added v1.2)
+
+#### GET /api/runs/{runId}/opportunities/{oppId}/blueprint
+Purpose: return agent blueprint for a specific opportunity.
+Response: `AgentBlueprint` (see `src/types/blueprint.ts`)
+
+---
+
+### M) Normalization (added v1.2)
+
+#### GET /api/runs/{runId}/normalization
+Purpose: return field normalization mapping results for a run.
+Response:
+```json
+{
+  "runId": "string",
+  "rows": "MappingRow[]",
+  "counts": { "MAPPED": 0, "UNMAPPED": 0, "AMBIGUOUS": 0 },
+  "source": "stored|derived"
+}
+```
+Note: response is a wrapper object, not a bare `MappingRow[]` array.
+
+---
+
+### N) Temporal Signals (added v1.2)
+
+#### GET /api/runs/{runId}/signals
+Purpose: return temporal signal data for a run.
+Response: `TemporalSignal[]` (see `src/types/temporal.ts`)
 
 ---
 

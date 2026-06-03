@@ -7,8 +7,6 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List
 from uuid import uuid4
 
-from contextlib import asynccontextmanager
-
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -26,7 +24,6 @@ from .opportunity_display import (
     with_exec_report_display_titles,
     with_roadmap_display_titles,
 )
-from .replay import replay_run as replay_run_
 from .roadmap_engine import build_roadmap
 from .routes_normalization import register_normalization_routes
 from .routes_connector_auth import register_connector_auth_routes
@@ -39,7 +36,7 @@ from .routes_sprint4_t3 import register_sprint4_t3_routes
 from .routes_sprint4_t4 import register_sprint4_t4_routes
 from .routes_sprint4_t6 import register_sprint4_t6_routes
 from .routes_sprint41_blueprint import register_blueprint_routes
-from .run_store import read_run, read_run_events, start_run_
+from .run_store import read_run, read_run_events
 from .routes_workspace_catalog import register_workspace_catalog_routes
 from .routes_db_connectors import register_db_connector_routes
 from .routes_temporal import register_temporal_routes
@@ -63,7 +60,9 @@ async def lifespan(app: FastAPI):
     seed_owner(_DEV_ORG, _DEV_USER)
     # AT-90: start connector health check background job.
     from .jobs.connector_health import start_health_check_job, stop_health_check_job
+    from .jobs.baseline_calculator import start_scheduler as start_baseline_scheduler
     start_health_check_job()
+    start_baseline_scheduler()
     yield
     # AT-90: shut down scheduler on SIGTERM / graceful shutdown (wait=False).
     stop_health_check_job()
@@ -265,11 +264,7 @@ def list_evidence(run_id: str) -> List[Dict[str, Any]]:
     if run_ev is None:
         raise HTTPException(
             status_code=404,
-            detail=(
-                f"No evidence found for run '{run_id}'. "
-                "Ensure PATCH_materialize_t2.py has been applied "
-                "and the run has completed successfully."
-            ),
+            detail=f"No evidence found for run '{run_id}'. Ensure the run has completed successfully.",
         )
     return run_ev
 
@@ -317,6 +312,9 @@ def list_entities(run_id: str) -> List[Dict[str, Any]]:
         read_run(run_id)
     except KeyError:
         raise HTTPException(404, "run not found")
+    run_entities = run_kv_get("entities", run_id, None)
+    if run_entities is not None:
+        return run_entities
     return get_all("entities")
 
 
@@ -520,7 +518,7 @@ def get_exec_report(run_id: str) -> Dict[str, Any]:
     quick_wins = [o for o in opps if o.get("tier") == "Quick Win"]
 
     return {
-        "confidence": "MODERATE",
+        "confidence": "Moderate",
         "sourcesAnalyzed": sources_analyzed,
         "topQuickWins": quick_wins,
         "snapshotBubbles": [],

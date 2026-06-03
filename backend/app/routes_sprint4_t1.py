@@ -249,7 +249,12 @@ def _run_trackb_and_persist(run_id: str, mode: str, systems: List[str], pack: Op
                     },
                     "topQuickWins": [],
                     "snapshotBubbles": [],
-                    "roadmapHighlights": [],
+                    "roadmapHighlights": {
+                        "next30Count": 0,
+                        "next60Count": 0,
+                        "next90Count": 0,
+                        "blockerCount": 0,
+                    },
                 },
             )
 

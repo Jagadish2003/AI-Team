@@ -1,16 +1,3 @@
-/**
- * Sprint 4.1 Fix Pack — Task 4
- * NormalizationContext.tsx — rewired to live backend endpoint
- *
- * Changes from original:
- *   - mockMappings.json import removed
- *   - rows fetched from GET /api/runs/{runId}/normalization
- *   - loading and error states added for rows (same pattern as permissions)
- *   - rows refetch when runId changes
- *   - mockConfidenceExplanation.json kept for confidence explanation
- *     (no backend endpoint for this yet — Sprint 5)
- *   - All filter/sort/selection logic unchanged
- */
 import React, {
   createContext,
   useCallback,
@@ -19,13 +6,12 @@ import React, {
   useMemo,
   useState,
 } from "react";
-import confMock from "../data/mockConfidenceExplanation.json";
 import {
   MappingRow,
   PermissionRequirement,
   ConfidenceExplanation,
 } from "../types/normalization";
-import { fetchPermissions } from "../services/staticApi";
+import { fetchPermissions, fetchConfidence } from "../services/staticApi";
 import { apiGet } from "../lib/apiClient";
 import { useRunContext } from "./RunContext";
 import { useDiscoveryRunContext } from "./DiscoveryRunContext";
@@ -147,10 +133,19 @@ export function NormalizationProvider({
     return () => clearInterval(interval);
   }, [runId, computing, refetchRows]);
 
-  // Confidence — still from mock until Sprint 5 adds an endpoint
-  const [confidence] = useState<ConfidenceExplanation>(
-    confMock as unknown as ConfidenceExplanation,
-  );
+  // Confidence — fetched from GET /api/confidence/explanation
+  const [confidence, setConfidence] = useState<ConfidenceExplanation>({
+    level: "MEDIUM",
+    why: [],
+    nextAction: "",
+    recommendedNextSourceId: "",
+  });
+
+  useEffect(() => {
+    fetchConfidence()
+      .then(setConfidence)
+      .catch(() => {});
+  }, []);
 
   // Permissions
   const [permissions, setPermissions] = useState<PermissionRequirement[]>([]);
