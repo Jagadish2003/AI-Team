@@ -33,6 +33,7 @@ from fastapi import Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from .security import require_auth
+from .rbac import require_role
 from . import db
 from .llm_enrichment import KV_LLM_ENRICHMENT
 
@@ -102,7 +103,7 @@ def register_sprint4_t6_routes(app) -> None:
     @app.get(
         "/api/runs/{run_id}/opportunities/{opp_id}/enrichment",
         response_model=OppEnrichment,
-        dependencies=[Depends(require_auth)],
+        dependencies=[Depends(require_auth), Depends(require_role("viewer"))],
         tags=["runs"],
     )
     def get_opp_enrichment(run_id: str, opp_id: str) -> OppEnrichment:
@@ -151,7 +152,7 @@ def register_sprint4_t6_routes(app) -> None:
     @app.get(
         "/api/runs/{run_id}/llm-enrichment",
         response_model=RunEnrichment,
-        dependencies=[Depends(require_auth)],
+        dependencies=[Depends(require_auth), Depends(require_role("viewer"))],
         tags=["runs"],
     )
     def get_run_enrichment(run_id: str) -> RunEnrichment:
