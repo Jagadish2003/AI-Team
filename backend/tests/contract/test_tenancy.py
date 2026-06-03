@@ -181,4 +181,67 @@ def test_middleware_respects_x_org_id_header(client: TestClient):
         client.get("/api/connectors", headers={**AUTH, "X-Org-Id": "acme_corp"})
 
     assert captured and captured[0] == "acme_corp"
+
+
+# ---------------------------------------------------------------------------
+# AT-155 — X-Org-Id impersonation guard (Section 4a)
+#
+# org_id comes from the JWT org claim. When the dev token carries a claim
+# (DEV_JWT_ORG), an X-Org-Id header that contradicts it is rejected with 403;
+# a matching header is ignored and context comes from the JWT. When no claim
+# is configured, X-Org-Id continues to drive context (dev fallback).
+# ---------------------------------------------------------------------------
+
+
+def test_x_org_id_mismatch_returns_403(client: TestClient, monkeypatch):
+    """X-Org-Id that differs from the JWT org claim returns 403."""
+    monkeypatch.setenv("DEV_JWT_ORG", "default")
+    resp = client.get("/api/connectors", headers={**AUTH, "X-Org-Id": "other-org"})
+    assert resp.status_code == 403
+    assert resp.json()["detail"] == "X-Org-Id does not match authenticated workspace"
+
+
+def test_no_x_org_id_proceeds_normally(client: TestClient, monkeypatch):
+    """A request with no X-Org-Id header proceeds normally (context from JWT)."""
+    monkeypatch.setenv("DEV_JWT_ORG", "default")
+    resp = client.get("/api/connectors", headers=AUTH)
+    assert resp.status_code == 200  # dev user is owner of "default"
+
+
+def test_matching_x_org_id_ignored_context_from_jwt(client: TestClient, monkeypatch):
+    """X-Org-Id matching the JWT org claim proceeds; context is sourced from the JWT."""
+    monkeypatch.setenv("DEV_JWT_ORG", "default")
+
+    captured: list[str] = []
+
+    def _capture(table):
+        from app.middleware.tenancy import get_current_org_id
+        captured.append(get_current_org_id())
+        return []
+
+    from unittest.mock import patch
+    with patch("app.main.tenancy_get_all", side_effect=_capture):
+        resp = client.get("/api/connectors", headers={**AUTH, "X-Org-Id": "default"})
+
+    assert resp.status_code == 200
+    assert captured and captured[0] == "default"
+
+
+def test_no_jwt_claim_falls_back_to_x_org_id(client: TestClient, monkeypatch):
+    """Backward-compat: with no JWT org claim, X-Org-Id still drives context (no 403)."""
+    monkeypatch.delenv("DEV_JWT_ORG", raising=False)
+
+    captured: list[str] = []
+
+    def _capture(table):
+        from app.middleware.tenancy import get_current_org_id
+        captured.append(get_current_org_id())
+        return []
+
+    from unittest.mock import patch
+    with patch("app.main.tenancy_get_all", side_effect=_capture):
+        resp = client.get("/api/connectors", headers={**AUTH, "X-Org-Id": "acme_corp"})
+
+    assert resp.status_code == 200
+    assert captured and captured[0] == "acme_corp"
  

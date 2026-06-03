@@ -5,10 +5,17 @@ downstream DB helpers can enforce row-level isolation without every route
 handler needing to thread org_id through manually.
 
 Design decisions vs spec:
-- The current auth layer (security.py) validates a static dev token; it does
-  NOT issue real JWTs with claims. org_id is therefore taken from the
-  X-Org-Id request header when present, falling back to "default".
-  Real JWT claim extraction must replace this when a proper IDP is wired in.
+- org_id comes exclusively from the JWT org claim. The X-Org-Id header is
+  NEVER used to set the org context. If an X-Org-Id header is supplied and it
+  contradicts the JWT org claim, the request is rejected with HTTP 403
+  (Section 4a — X-Org-Id impersonation guard). A matching X-Org-Id is silently
+  ignored.
+- The current auth layer (security.py) validates static dev tokens that carry
+  no embedded claims. The dev token's org claim is therefore supplied
+  out-of-band via the DEV_JWT_ORG environment variable (mirroring DEV_JWT_ROLE
+  in security.py). When no claim is configured the token has no JWT org, and
+  org_id falls back to the X-Org-Id header (dev behaviour), then "default".
+  Real JWT claim extraction replaces _jwt_org_id() when a proper IDP is wired in.
 - TenancyViolationError is raised as a plain Exception (not HTTPException) and
   caught by a registered FastAPI exception handler, so route-level try/except
   blocks cannot swallow it.
@@ -16,6 +23,7 @@ Design decisions vs spec:
 from __future__ import annotations
 
 import logging
+import os
 from contextvars import ContextVar
 from typing import Callable
 
@@ -33,6 +41,36 @@ logger = logging.getLogger(__name__)
 _current_org_id: ContextVar[str | None] = ContextVar("current_org_id", default=None)
 
 DEV_DEFAULT_ORG = "default"
+
+
+# ---------------------------------------------------------------------------
+# JWT org claim resolution
+# ---------------------------------------------------------------------------
+
+
+def _bearer_token(request: Request) -> str | None:
+    """Extract the bearer token from the Authorization header, or None."""
+    auth = request.headers.get("Authorization", "")
+    if auth.lower().startswith("bearer "):
+        return auth[7:].strip() or None
+    return None
+
+
+def _jwt_org_id(token: str | None) -> str | None:
+    """Return the org_id claim carried by the JWT, or None if it carries none.
+
+    The dev auth layer uses static bearer tokens with no embedded claims, so
+    the dev token's org claim is read from DEV_JWT_ORG (mirrors DEV_JWT_ROLE in
+    security.py). When DEV_JWT_ORG is unset the token has no JWT org claim and
+    callers fall back to the X-Org-Id header. A real IDP integration replaces
+    this with JWT signature verification and claim decoding.
+    """
+    if token is None:
+        return None
+    dev_jwt = os.getenv("DEV_JWT", "dev-token-change-me")
+    if token == dev_jwt:
+        return os.getenv("DEV_JWT_ORG") or None
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -73,16 +111,44 @@ def get_current_org_id_optional() -> str | None:
 
 
 class TenancyMiddleware(BaseHTTPMiddleware):
-    """Extract org_id from X-Org-Id header (or fall back to 'default') and
-    store it in the ContextVar for the duration of the request.
+    """Resolve org_id from the JWT org claim and store it in the ContextVar
+    for the duration of the request.
 
-    Must be registered AFTER auth middleware so the JWT is validated first.
-    In dev mode (static bearer token) there is no JWT to decode; org_id
-    is taken exclusively from the X-Org-Id header.
+    X-Org-Id header handling (Section 4a — impersonation guard):
+      * org_id is sourced from the JWT org claim, never from X-Org-Id.
+      * If X-Org-Id is present and contradicts the JWT org claim → HTTP 403.
+      * A matching X-Org-Id is silently ignored.
+      * When the token carries no JWT org claim (dev tokens without
+        DEV_JWT_ORG set), org_id falls back to the X-Org-Id header, then
+        DEV_DEFAULT_ORG, preserving dev/test behaviour.
     """
 
     async def dispatch(self, request: Request, call_next: Callable) -> Response:
-        org_id = request.headers.get("X-Org-Id", DEV_DEFAULT_ORG).strip() or DEV_DEFAULT_ORG
+        jwt_org_id = _jwt_org_id(_bearer_token(request))
+
+        x_org_id = request.headers.get("X-Org-Id")
+        if x_org_id is not None:
+            x_org_id = x_org_id.strip() or None
+
+        # Impersonation guard: a supplied X-Org-Id must not contradict the JWT.
+        if x_org_id and jwt_org_id is not None and x_org_id != jwt_org_id:
+            logger.warning(
+                "X-Org-Id %r does not match JWT org_id %r — rejecting",
+                x_org_id,
+                jwt_org_id,
+            )
+            return JSONResponse(
+                status_code=403,
+                content={"detail": "X-Org-Id does not match authenticated workspace"},
+            )
+
+        # org_id comes from the JWT claim when present; X-Org-Id never overrides
+        # it. Dev fallback (no JWT claim): X-Org-Id, then DEV_DEFAULT_ORG.
+        if jwt_org_id is not None:
+            org_id = jwt_org_id
+        else:
+            org_id = x_org_id or DEV_DEFAULT_ORG
+
         token = _current_org_id.set(org_id)
         try:
             response = await call_next(request)
