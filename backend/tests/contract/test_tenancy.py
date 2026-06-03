@@ -244,4 +244,70 @@ def test_no_jwt_claim_falls_back_to_x_org_id(client: TestClient, monkeypatch):
 
     assert resp.status_code == 200
     assert captured and captured[0] == "acme_corp"
+
+
+# ---------------------------------------------------------------------------
+# AT-156 — Legacy table audit: tenancy_get_* wrappers (Section 4b)
+# ---------------------------------------------------------------------------
+
+
+def test_tenancy_get_connectors_filters_by_org(client: TestClient):
+    """tenancy_get_connectors returns only rows tagged with the given org_id."""
+    from app.db import tenancy_get_connectors, upsert
+
+    upsert("connectors", "at156_conn_a", {"id": "at156_conn_a", "org_id": "at156_org_A"})
+    upsert("connectors", "at156_conn_b", {"id": "at156_conn_b", "org_id": "at156_org_B"})
+
+    result = tenancy_get_connectors("at156_org_A")
+    ids = {c["id"] for c in result}
+    assert "at156_conn_a" in ids
+    assert "at156_conn_b" not in ids  # never cross-org
+    assert all(c.get("org_id") == "at156_org_A" for c in result)
+
+
+def test_tenancy_get_runs_filters_by_org(client: TestClient):
+    """tenancy_get_runs returns only runs tagged with the given org_id."""
+    from app.db import tenancy_get_runs, upsert_run
+
+    upsert_run("at156_run_a", {"id": "at156_run_a", "org_id": "at156_org_A"})
+    upsert_run("at156_run_b", {"id": "at156_run_b", "org_id": "at156_org_B"})
+
+    result = tenancy_get_runs("at156_org_A")
+    ids = {r["id"] for r in result}
+    assert "at156_run_a" in ids
+    assert "at156_run_b" not in ids  # never cross-org
+
+
+def test_signal_snapshots_queries_filter_by_org(client: TestClient):
+    """temporal.py signal_snapshots reads are scoped to org_id (AT-156 verify)."""
+    from app.db import connect
+    from app.temporal import get_run_signals, get_signal_history
+
+    rows = [
+        # (id, org_id, run_id, detector_id, signal_key, metric_name)
+        ("ss_a", "ss_org_A", "ss_run", "DET", "DET::m", "m"),
+        ("ss_b", "ss_org_B", "ss_run", "DET", "DET::m", "m"),
+    ]
+    con = connect()
+    try:
+        for _id, org, run_id, det, key, metric in rows:
+            con.execute(
+                "INSERT INTO signal_snapshots "
+                "(id, org_id, run_id, pack_id, detector_id, signal_key, metric_name, "
+                " metric_value, fired, signal_source, captured_at) "
+                "VALUES (?, ?, ?, 'pack', ?, ?, ?, 1.0, 0, 'offline', '2026-01-01T00:00:00Z')",
+                (_id, org, run_id, det, key, metric),
+            )
+        con.commit()
+    finally:
+        con.close()
+
+    # get_run_signals: only org_A's row for the shared run_id
+    run_signals = get_run_signals(org_id="ss_org_A", run_id="ss_run")
+    assert {r["id"] for r in run_signals} == {"ss_a"}
+
+    # get_signal_history: only org_A's history
+    history = get_signal_history(org_id="ss_org_A", detector_id="DET", signal_key="DET::m")
+    assert all(r["org_id"] == "ss_org_A" for r in history)
+    assert any(r["id"] == "ss_a" for r in history)
  
