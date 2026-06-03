@@ -1359,12 +1359,12 @@ def test_connector_auth_configs_has_8_entries():
 
 def test_connector_auth_configs_flow_types():
     """authorization_code connectors: salesforce, servicenow, jira, confluence, github, slack.
-    client_credentials connectors: sap, dynamic365. (AC16)
+    client_credentials connectors: sap, dynamics365. (AC16)
     """
     from backend.app.auth.configs import CONNECTOR_AUTH_CONFIGS
 
     auth_code = {"salesforce", "servicenow", "jira", "confluence", "github", "slack"}
-    client_creds = {"sap", "dynamic365"}
+    client_creds = {"sap", "dynamics365"}
 
     for cid in auth_code:
         assert CONNECTOR_AUTH_CONFIGS[cid].flow == "authorization_code", (
@@ -1378,12 +1378,12 @@ def test_connector_auth_configs_flow_types():
 
 def test_connector_auth_configs_revocation_url_values():
     """Connectors with revocation_url set: salesforce, servicenow, jira, confluence.
-    Connectors with revocation_url=None: github, slack, sap, dynamic365. (AC16)
+    Connectors with revocation_url=None: github, slack, sap, dynamics365. (AC16)
     """
     from backend.app.auth.configs import CONNECTOR_AUTH_CONFIGS
 
     has_revocation = {"salesforce", "servicenow", "jira", "confluence"}
-    no_revocation = {"github", "slack", "sap", "dynamic365"}
+    no_revocation = {"github", "slack", "sap", "dynamics365"}
 
     for cid in has_revocation:
         assert CONNECTOR_AUTH_CONFIGS[cid].revocation_url is not None, (
@@ -1897,9 +1897,9 @@ def test_open_redirect_ignored(client):
 
 
 def test_timing_safe_state_comparison(client):
-    """One-character state mismatch returns 400; hmac.compare_digest is used (not ==) (AC9)."""
-    import inspect as _inspect
-    import app.routes_connector_auth as _rca
+    """One-character state mismatch returns 400; hmac.compare_digest is used on
+    the live nonce-consume path (not ==) (AC9)."""
+    from app.auth import vault as _vault
 
     with _patch.dict(_os.environ, _vault_env()):
         r = client.get("/api/connectors/salesforce/auth-url", headers=_AUTH_HEADERS)
@@ -1917,11 +1917,19 @@ def test_timing_safe_state_comparison(client):
         f"Expected 400 for one-character state mismatch, got {resp.status_code}"
     )
 
-    source = _inspect.getsource(_rca)
-    assert "compare_digest" in source, (
-        "hmac.compare_digest() not found in routes_connector_auth source — "
-        "timing-safe comparison is required (AC9)"
+    # The LIVE callback path validates state via vault.consume_nonce — assert it
+    # actually invokes hmac.compare_digest (not ==). Issue a fresh nonce and
+    # consume it under a wrap-patch to prove compare_digest is on the live path.
+    fresh = _secrets_mod.token_urlsafe(32)
+    _vault.store_nonce(fresh, "salesforce")
+    with _patch(
+        "app.auth.vault.hmac.compare_digest", wraps=_hmac_mod.compare_digest
+    ) as mock_cd:
+        data = _vault.consume_nonce(fresh)
+    assert mock_cd.called, (
+        "hmac.compare_digest() must be called on the live consume_nonce path (AC9)"
     )
+    assert data is not None and data["connector_id"] == "salesforce"
 
 
 # ---------------------------------------------------------------------------
