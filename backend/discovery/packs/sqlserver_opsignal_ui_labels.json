@@ -1,0 +1,28 @@
+{
+  "_meta": {
+    "story": "T2-S11-A",
+    "description": "SQL Server Operational Signal Pack UI labels for opportunity cards",
+    "status": "READY",
+    "audience": "IT Operations Manager",
+    "note": "Loaded per request; no restart required when editing label copy.",
+    "compliance_note": "Agent surfaces operational signals to IT managers only. No automated ticket resolution, SLA override, or priority change."
+  },
+  "DB_TICKET_VOLUME_SURGE": {
+    "s6_title": "Ticket Volume Surge Monitor",
+    "agentType": "Monitoring Agent",
+    "s6_why": "Recent ticket intake is significantly above your 90-day average, suggesting an operational event or capacity gap that is not yet visible in SaaS systems.",
+    "s6_action": "An agent can monitor daily ticket intake against your baseline, surface surge alerts to IT managers before queues back up, and cross-reference with ServiceNow incident trends."
+  },
+  "DB_SLA_BREACH_RATE": {
+    "s6_title": "SLA Compliance Guardian",
+    "agentType": "Monitoring Agent",
+    "s6_why": "More than 15% of tickets are breaching SLA in the last 30 days. This pattern typically precedes escalations and customer satisfaction impact.",
+    "s6_action": "An agent can track SLA compliance in real time, alert assignment groups before breach occurs, and identify which ticket categories drive the highest breach rate."
+  },
+  "DB_QUEUE_DEPTH_ELEVATED": {
+    "s6_title": "Critical Queue Depth Monitor",
+    "agentType": "Monitoring Agent",
+    "s6_why": "The number of open P1 and P2 tickets has exceeded the configured threshold. Elevated critical queue depth is a leading indicator of service disruption risk.",
+    "s6_action": "An agent can monitor P1/P2 queue depth against configurable thresholds, trigger escalation workflows when depth is sustained, and surface oldest tickets to shift leads automatically."
+  }
+}
