@@ -27,7 +27,7 @@ CONNECTOR_AUTH_CONFIGS: Dict[str, ConnectorAuthConfig] = {
         secret_key="SERVICENOW_CLIENT_SECRET",
         token_url="https://dev198195.service-now.com/oauth_token.do",
         revocation_url="https://dev198195.service-now.com/oauth_revoke.do",
-        scopes=["useraccount"],
+        scopes=["user", "admin"],
         authorization_url="https://dev198195.service-now.com/oauth_auth.do",
         redirect_uri=os.environ.get("OAUTH_REDIRECT_URI", ""),
     ),
@@ -86,7 +86,7 @@ CONNECTOR_AUTH_CONFIGS: Dict[str, ConnectorAuthConfig] = {
         secret_key="SAP_CLIENT_SECRET",
         token_url="https://05e6c258trial.authentication.us10.hana.ondemand.com/oauth/token",
         revocation_url=None,                                                        # client_credentials — no user token to revoke
-        scopes=["API_BUSINESSPARTNER_0001"],
+        scopes=["uaa.resource"],
         redirect_uri=None,                                                          # client_credentials — no browser redirect
         authorization_url=None,
     ),
@@ -97,7 +97,7 @@ CONNECTOR_AUTH_CONFIGS: Dict[str, ConnectorAuthConfig] = {
         secret_key="DYNAMICS365_CLIENT_SECRET",
         token_url="https://login.microsoftonline.com/bb612c49-03be-4da1-9974-49f0c8704eb8/oauth2/v2.0/token",
         revocation_url=None,                                                        # client_credentials — no user token to revoke
-        scopes=["https://org.api.crm.dynamics.com/.default"],
+        scopes=["default"],
         redirect_uri=None,                                                          # client_credentials — no browser redirect
         authorization_url=None,
     ),
