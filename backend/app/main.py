@@ -526,7 +526,7 @@ def get_exec_report(run_id: str) -> Dict[str, Any]:
     quick_wins = [o for o in opps if o.get("tier") == "Quick Win"]
 
     return {
-        "confidence": "MODERATE",
+        "confidence": "Moderate",
         "sourcesAnalyzed": sources_analyzed,
         "topQuickWins": quick_wins,
         "snapshotBubbles": [],

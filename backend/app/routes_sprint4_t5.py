@@ -133,7 +133,7 @@ def _get_exec_report(run_id: str) -> Dict[str, Any]:
       roadmapHighlights: derived from opps tier counts
       topQuickWins: filtered from run opps (tier == Quick Win)
       sourcesAnalyzed: from run.inputs (unchanged)
-      confidence: "MODERATE" constant until T6 computes from signal coverage
+      confidence: "Moderate" constant until T6 computes from signal coverage
     """
     run = _require_run(run_id)
 
@@ -165,7 +165,7 @@ def _get_exec_report(run_id: str) -> Dict[str, Any]:
     quick_wins = [o for o in opps if o.get("tier") == "Quick Win"]
 
     return {
-        "confidence":        "MODERATE",   # T6 will compute from signal coverage
+        "confidence":        "Moderate",   # T6 will compute from signal coverage
         "sourcesAnalyzed":   sources_analyzed,
         "topQuickWins":      quick_wins,
         "snapshotBubbles":   [],           # T6 LLM enrichment will populate
