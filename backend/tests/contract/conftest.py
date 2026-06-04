@@ -33,7 +33,7 @@ def pytest_configure(config):
 
     try:
         alembic_cfg = AlembicConfig(str(BACKEND_DIR / "alembic.ini"))
-        alembic_cfg.set_main_option("script_location", str(BACKEND_DIR / "alembic"))
+        alembic_cfg.set_main_option("script_location", str(BACKEND_DIR / "migrations"))
         alembic_command.upgrade(alembic_cfg, "head")
     except Exception as exc:
         raise RuntimeError(f"alembic upgrade failed:\n{exc}") from exc

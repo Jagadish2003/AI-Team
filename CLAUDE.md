@@ -284,11 +284,9 @@ Smoke scripts are Bash scripts under `scripts/` and `backend/scripts/`; run them
 
 ## Database Migrations
 
-Two migration systems coexist — use `backend/migrations/` for all new migration work:
+Use `backend/migrations/` for all migration work. `backend/alembic.ini` points to this directory, and contract tests run these migrations against an isolated temporary DB.
 
-* `backend/migrations/`: active migration scripts (`0001_create_telemetry_events.py`, `0002_create_signal_snapshots.py`). `alembic.ini` points here.
-* `backend/alembic/`: legacy alembic directory with an earlier signal snapshots migration. Do not add new migrations here.
-
+* `backend/migrations/`: active migration scripts (`0001_create_telemetry_events.py`, `0002_create_signal_snapshots.py`).
 Apply pending migrations:
 
 ```powershell
