@@ -18,7 +18,7 @@ CONNECTOR_AUTH_CONFIGS: Dict[str, ConnectorAuthConfig] = {
         revocation_url="https://test.salesforce.com/services/oauth2/revoke",
         scopes=["api", "refresh_token", "offline_access"],
         authorization_url="https://test.salesforce.com/services/oauth2/authorize",
-        redirect_uri=os.environ.get("OAUTH_REDIRECT_URI", ""),
+        redirect_uri=os.environ.get("SALESFORCE_OAUTH_REDIRECT_URI", ""),
     ),
     "servicenow": ConnectorAuthConfig(
         connector_id="servicenow",

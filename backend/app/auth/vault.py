@@ -162,20 +162,27 @@ def _row_to_token_record(row: tuple) -> TokenRecord:
 # ---------------------------------------------------------------------------
 
 
-def store_nonce(nonce: str, connector_id: str) -> None:
+def store_nonce(
+    nonce: str,
+    connector_id: str,
+    code_verifier: Optional[str] = None,
+) -> None:
     """Store a state nonce with connector context and a 10-minute expiry.
 
     Called by the OAuth initiation route when generating the state parameter.
     The nonce key is prefixed with 'nonce:' to namespace it in the store.
+    `code_verifier`, when provided, is the PKCE verifier bound to this state;
+    it is returned by consume_nonce() so the callback can complete the exchange.
     """
     _init_nonce_table()
 
     now = datetime.now(timezone.utc)
     data = json.dumps({
-        "nonce":        nonce,
-        "connector_id": connector_id,
-        "created_at":   now.isoformat(),
-        "expires_at":   (now + timedelta(minutes=_NONCE_TTL_MINUTES)).isoformat(),
+        "nonce":         nonce,
+        "connector_id":  connector_id,
+        "code_verifier": code_verifier,
+        "created_at":    now.isoformat(),
+        "expires_at":    (now + timedelta(minutes=_NONCE_TTL_MINUTES)).isoformat(),
     })
 
     key = f"nonce:{nonce}"

@@ -483,6 +483,88 @@ def test_build_auth_url_does_not_call_resolve_secret():
 
 
 # ---------------------------------------------------------------------------
+# PKCE (RFC 7636) — code_challenge in auth URL, code_verifier in exchange
+# ---------------------------------------------------------------------------
+
+
+def test_generate_pkce_pair_is_valid_s256():
+    """generate_pkce_pair returns (verifier, challenge) where challenge = S256(verifier)."""
+    import base64 as _b64
+    import hashlib as _hashlib
+
+    from backend.app.auth.oauth import generate_pkce_pair
+
+    verifier, challenge = generate_pkce_pair()
+    assert 43 <= len(verifier) <= 128  # RFC 7636 length bounds
+    expected = (
+        _b64.urlsafe_b64encode(_hashlib.sha256(verifier.encode("ascii")).digest())
+        .decode("ascii")
+        .rstrip("=")
+    )
+    assert challenge == expected
+    assert "=" not in challenge  # base64url, padding stripped
+
+
+def test_build_auth_url_includes_pkce_when_challenge_given():
+    """build_auth_url adds code_challenge + code_challenge_method=S256 when a challenge is passed."""
+    from urllib.parse import parse_qs, urlparse
+
+    from backend.app.auth.oauth import build_auth_url
+
+    config = _make_config()
+    qs = parse_qs(urlparse(build_auth_url(config, state="n", code_challenge="chal-123")).query)
+    assert qs["code_challenge"] == ["chal-123"]
+    assert qs["code_challenge_method"] == ["S256"]
+
+    # Omitting the challenge leaves PKCE params out (backward compatible).
+    qs_none = parse_qs(urlparse(build_auth_url(config, state="n")).query)
+    assert "code_challenge" not in qs_none
+
+
+@pytest.mark.anyio
+async def test_exchange_code_sends_code_verifier():
+    """exchange_code includes code_verifier in the token POST when provided, omits it otherwise."""
+    from backend.app.auth.oauth import exchange_code
+
+    config = _make_config()
+    with _patch.dict(_os.environ, {"_TEST_OAUTH_SECRET": "s3cr3t"}):
+        t1 = _MockTransport(200, {"access_token": "tok"})
+        await exchange_code(config, code="c", code_verifier="verifier-xyz", _transport=t1)
+        assert "code_verifier=verifier-xyz" in t1.last_request.content.decode()
+
+        t2 = _MockTransport(200, {"access_token": "tok"})
+        await exchange_code(config, code="c", _transport=t2)
+        assert "code_verifier" not in t2.last_request.content.decode()
+
+
+def test_auth_url_endpoint_emits_pkce_bound_to_stored_verifier(client):
+    """The live auth-url endpoint emits an S256 challenge bound to the stored verifier."""
+    import base64 as _b64
+    import hashlib as _hashlib
+
+    from app.auth.vault import consume_nonce
+
+    with _patch.dict(_os.environ, _vault_env()):
+        r = client.get("/api/connectors/salesforce/auth-url", headers=_AUTH_HEADERS)
+    assert r.status_code == 200
+
+    qs = _parse_qs(_urlparse(r.json()["auth_url"]).query)
+    assert qs["code_challenge_method"] == ["S256"]
+    challenge = qs["code_challenge"][0]
+    state = qs["state"][0]
+
+    # The stored nonce carries the verifier; its S256 hash must equal the challenge.
+    data = consume_nonce(state)
+    assert data is not None and data.get("code_verifier")
+    expected = (
+        _b64.urlsafe_b64encode(_hashlib.sha256(data["code_verifier"].encode("ascii")).digest())
+        .decode("ascii")
+        .rstrip("=")
+    )
+    assert expected == challenge
+
+
+# ---------------------------------------------------------------------------
 # exchange_code
 # ---------------------------------------------------------------------------
 
