@@ -18,6 +18,14 @@ for path in (str(REPO_ROOT), str(BACKEND_DIR)):
     if path not in sys.path:
         sys.path.insert(0, path)
 
+# Keep contract tests hermetic even when backend/.env contains live-mode
+# settings or a real LLM API key. Test modules import app.main at module scope,
+# so these must be set before pytest imports those modules.
+os.environ.setdefault("DEV_JWT", "dev-token-change-me")
+os.environ["INGEST_MODE"] = "offline"
+os.environ["ANTHROPIC_API_KEY"] = ""
+os.environ["AGENTIQ_DISABLE_BACKGROUND_JOBS"] = "1"
+
 # Use a temp DB for contract tests so the live dev.db is never touched
 _tmp_db = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
 _tmp_db.close()
@@ -28,6 +36,9 @@ def pytest_configure(config):
     """Seed a fresh temporary database before any contract tests run."""
     os.environ.setdefault("DEV_JWT", "dev-token-change-me")
     os.environ["DB_PATH"] = TEST_DB_PATH
+    os.environ["INGEST_MODE"] = "offline"
+    os.environ["ANTHROPIC_API_KEY"] = ""
+    os.environ["AGENTIQ_DISABLE_BACKGROUND_JOBS"] = "1"
     os.environ.setdefault("SEED_DIR", str(BACKEND_DIR / "database" / "seed"))
     os.environ.setdefault("CORS_ORIGINS", "http://localhost:5173")
 

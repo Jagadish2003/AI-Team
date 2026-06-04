@@ -16,8 +16,12 @@ from __future__ import annotations
 import os
 from typing import Any
 
-import psycopg2
-from psycopg2.extensions import connection as PsycopgConnection
+try:
+    import psycopg2
+    from psycopg2.extensions import connection as PsycopgConnection
+except ModuleNotFoundError:  # Optional DB driver may be absent in mocked tests.
+    psycopg2 = None
+    PsycopgConnection = Any
 
 from backend.app.db_connectors.models import (
     ColumnMeta,
@@ -96,6 +100,12 @@ def create_postgresql_connection(
     password: str,
 ) -> PsycopgConnection:
     """Create and return a psycopg2 connection to PostgreSQL."""
+    if psycopg2 is None:
+        raise DBConnectionError(
+            "PostgreSQL driver package 'psycopg2' is not installed.",
+            error_code="driver_not_installed",
+        )
+
     kwargs = _connect_kwargs(config, username, password)
     try:
         return psycopg2.connect(**kwargs)

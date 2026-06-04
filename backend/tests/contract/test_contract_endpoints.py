@@ -43,6 +43,7 @@ def start_and_materialize(payload: dict) -> str:
     all writes are visible to the read endpoints.  Replay is the guaranteed
     sync point that flushes run-scoped data deterministically.
     """
+    payload = {"mode": "offline", **payload}
     r = client.post("/api/runs/start", headers=auth_headers(), json=payload)
     assert r.status_code == 200
     run_id = r.json()["runId"]
@@ -95,6 +96,7 @@ def test_start_run_and_run_scoped_reads():
         "connectedSources": ["ServiceNow"],
         "uploadedFiles": [],
         "sampleWorkspaceEnabled": True,
+        "mode": "offline",
     }
 
     # Confirm start returns quickly with correct shape
@@ -292,6 +294,7 @@ def test_replay_is_deterministic():
             "connectedSources": [],
             "uploadedFiles": [],
             "sampleWorkspaceEnabled": False,
+            "mode": "offline",
         },
     )
     assert r.status_code == 200
@@ -355,6 +358,7 @@ def test_start_run_uses_runner_style_run_ids():
             "connectedSources": [],
             "uploadedFiles": [],
             "sampleWorkspaceEnabled": False,
+            "mode": "offline",
         },
     )
 
