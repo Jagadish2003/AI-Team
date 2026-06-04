@@ -7,6 +7,7 @@ import { useToast } from '../common/Toast';
 import { ExternalLink, CheckCircle2 } from 'lucide-react';
 import SalesforceProductPicker from './SalesforceProductPicker';
 import SqlServerScopePicker from './SqlServerScopePicker';
+import PostgreSQLScopePicker from './PostgreSQLScopePicker';
 
 // T41-7: Connection Health - configured read scope for this connector.
 // Shows what AgentIQ is configured to read from this source.
@@ -184,6 +185,14 @@ export default function ConnectorDetailPanel({
       {(connector.id === 'sql_server' || connector.id === 'sqlserver') && isConnected && (
         <div className="mt-4 border-t border-border pt-4">
           <SqlServerScopePicker />
+        </div>
+      )}
+
+      {/* T2-S12-A Task T5: PostgreSQL scope declaration */}
+      {/* Shown after PostgreSQL is connected — read scope selector */}
+      {connector.id === 'postgresql' && isConnected && (
+        <div className="mt-4 border-t border-border pt-4">
+          <PostgreSQLScopePicker />
         </div>
       )}
 
