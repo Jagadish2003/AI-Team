@@ -142,7 +142,12 @@ def run(
     pack: Optional[str] = None,
 ) -> Dict[str, Any]:
     # ENG-SHARED-1: resolve pack config — replaces temporary is_ncino_pack conditional
-    from .packs.pack_config import get_pack, get_pack_domain, is_ncino_pack
+    from .packs.pack_config import (
+        get_pack,
+        get_pack_domain,
+        is_ncino_pack,
+        is_sqlserver_opsignal_pack,
+    )
     pack_config = get_pack(pack)
     pack_id     = pack_config["packId"]
     pack_domain = pack_config["pack_domain"]
@@ -282,6 +287,18 @@ def run(
             disability_review_bottleneck,
         ]
         logger.info("Pack: strs_benefits — 4 benefit detectors active")
+    elif is_sqlserver_opsignal_pack(pack_id):
+        from .detectors import (
+            db_ticket_volume_surge,
+            db_sla_breach_rate,
+            db_queue_depth_elevated,
+        )
+        all_detectors = [
+            db_ticket_volume_surge,
+            db_sla_breach_rate,
+            db_queue_depth_elevated,
+        ]
+        logger.info("Pack: sqlserver_opsignal - 3 DB operational detectors active")
     else:
         # Service Cloud detectors — default
         from .detectors import (
@@ -313,6 +330,10 @@ def run(
     from .scorer import score as sc_score
     from .lending_scorer import score_lending, is_lending_detector
     from .strs_benefits_scorer import score_strs_benefits, is_strs_benefits_detector
+    from .packs.sqlserver_opsignal_scorer import (
+        score_sqlserver_opsignal,
+        is_sqlserver_opsignal_detector,
+    )
     from .evidence_builder import build_evidence
     id_counter = itertools.count(1)
     def id_factory() -> str: return f"{run_id[-6:]}_{next(id_counter):04d}"
@@ -361,6 +382,8 @@ def run(
             scored = score_lending(dr)
         elif _is_strs(pack_id) and is_strs_benefits_detector(dr.detector_id):
             scored = score_strs_benefits(dr)
+        elif is_sqlserver_opsignal_pack(pack_id) and is_sqlserver_opsignal_detector(dr.detector_id):
+            scored = score_sqlserver_opsignal(dr)
         else:
             scored = sc_score(dr)
         # Pass packId so build_evidence uses nCino banking-language builders

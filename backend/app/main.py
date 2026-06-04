@@ -7,8 +7,6 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List
 from uuid import uuid4
 
-from contextlib import asynccontextmanager
-
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware

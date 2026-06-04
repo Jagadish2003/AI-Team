@@ -21,13 +21,13 @@ from typing import Dict, Optional
 from fastapi import Depends, FastAPI, HTTPException, Query, Response
 from fastapi.responses import RedirectResponse
 
-from app import db
-from app.auth import build_auth_url, exchange_code, revoke_token, store_token
-from app.auth.configs import CONNECTOR_AUTH_CONFIGS
-from app.auth.vault import REFRESH_THRESHOLD_SECONDS
-from app.middleware.audit import log_event
-from app.rbac import _get_user_id_from_token
-from app.security import require_auth
+from . import db
+from .auth import build_auth_url, exchange_code, revoke_token, store_token
+from .auth.configs import CONNECTOR_AUTH_CONFIGS
+from .auth.vault import REFRESH_THRESHOLD_SECONDS
+from .middleware.audit import log_event
+from .rbac import _get_user_id_from_token
+from .security import require_auth
 from database.models.credentials import (
     ALTER_CREDENTIALS_ADD_REFRESH_FAILED,
     CREATE_CREDENTIALS_IDX_CONNECTOR,
