@@ -55,7 +55,7 @@ function RunStatusPill({
 
 function ComputingPill() {
   return (
-    <span className="inline-flex h-7 items-center gap-2 rounded-full border border-accent/30 bg-accent/10 px-3 text-[13px] font-semibold leading-none text-blue-100 shadow-[0_0_0_1px_rgba(37,99,235,0.08)]">
+    <span className="inline-flex h-7 items-center gap-2 rounded-full border border-accent/30 bg-accent/10 px-3 text-[13px] font-semibold leading-none text-blue-100">
       <Loader2
         size={14}
         strokeWidth={2.5}
@@ -68,7 +68,7 @@ function ComputingPill() {
 
 function SourceIntelligenceReadyPill() {
   return (
-    <span className="inline-flex h-7 items-center gap-2 rounded-full border border-accent/30 bg-accent/10 px-3 text-[13px] font-semibold leading-none text-blue-100 shadow-[0_0_0_1px_rgba(37,99,235,0.08)]">
+    <span className="inline-flex h-7 items-center gap-2 rounded-full border border-accent/30 bg-accent/10 px-3 text-[13px] font-semibold leading-none text-blue-100">
       <span className="h-1.5 w-1.5 rounded-full bg-accent" />
       Source Intelligence ready
     </span>

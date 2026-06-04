@@ -54,6 +54,14 @@ class OppEnrichment(BaseModel):
     aiSuggestedNextSteps: List[str] = Field(default_factory=list)
     llmGenerated:         bool = False
     llmModel:             Optional[str] = None
+    # Track 3 Stage 1 — T3-S11-A temporal fields
+    baseline_context:     Optional[str] = None
+    trend_direction:      Optional[str] = None
+    anomaly_score:        Optional[float] = None
+    is_anomalous:         bool = False
+    first_deviation:      bool = False
+    baseline_mean:        Optional[float] = None
+    run_count:            Optional[int] = None
 
 
 class RunEnrichment(BaseModel):
@@ -146,6 +154,13 @@ def register_sprint4_t6_routes(app) -> None:
             aiSuggestedNextSteps=opp_data.get("aiSuggestedNextSteps", []),
             llmGenerated=opp_data.get("llmGenerated", False),
             llmModel=opp_data.get("llmModel"),
+            baseline_context=opp_data.get("baseline_context"),
+            trend_direction=opp_data.get("trend_direction"),
+            anomaly_score=opp_data.get("anomaly_score"),
+            is_anomalous=opp_data.get("is_anomalous", False),
+            first_deviation=opp_data.get("first_deviation", False),
+            baseline_mean=opp_data.get("baseline_mean"),
+            run_count=opp_data.get("run_count"),
         )
 
     @app.get(

@@ -106,9 +106,62 @@ def _append_event(run_id: str, stage: str, message: str, level: str = "INFO") ->
 from .materialize_t2 import (
     _finalise,
     _emit_event,
+    _org_id_for_run,
+    _pack_id_for_run,
     _probe_systems,
     _selected_system_ids_for_report,
 )
+
+
+def _apply_temporal_enrichment(
+    run_id: str,
+    run: Dict[str, Any],
+    pack: Optional[str],
+    opps: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """Attach temporal context to the active compute path without blocking runs."""
+    try:
+        from .llm_enrichment import KV_LLM_ENRICHMENT
+        from .jobs.baseline_calculator import calculate_baselines
+        from .middleware.tenancy import get_current_org_id_optional
+        from .telemetry import record_event
+        from .temporal_enrichment import enrich_opportunities_with_temporal_context
+
+        org_id = _org_id_for_run(run, get_current_org_id_optional() or "default")
+        pack_id = _pack_id_for_run(run) or pack or ""
+
+        calculate_baselines()
+        opps = enrich_opportunities_with_temporal_context(
+            run_id,
+            org_id or "default",
+            pack_id,
+            opps,
+        )
+
+        temporal_keys = (
+            "baseline_context",
+            "trend_direction",
+            "anomaly_score",
+            "is_anomalous",
+            "first_deviation",
+            "baseline_mean",
+            "run_count",
+        )
+        stored = db.run_kv_get(KV_LLM_ENRICHMENT, run_id, {})
+        per_opp = stored.get("perOpportunity", {})
+        for opp in opps:
+            opp_id = opp.get("id", "")
+            if opp_id in per_opp:
+                for key in temporal_keys:
+                    if key in opp:
+                        per_opp[opp_id][key] = opp[key]
+        stored["perOpportunity"] = per_opp
+        db.run_kv_set(KV_LLM_ENRICHMENT, run_id, stored)
+        record_event("temporal.enrichment_completed", {"run_id": run_id})
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("T7 temporal enrichment failed (non-blocking): %s", exc)
+    return opps
+
 
 def _run_trackb_and_persist(run_id: str, mode: str, systems: List[str], pack: Optional[str] = None) -> None:
     """Background task: execute Track B and persist Track A-shaped artifacts."""
@@ -278,6 +331,9 @@ def _run_trackb_and_persist(run_id: str, mode: str, systems: List[str], pack: Op
         except Exception as e:
             errors["llm_enrichment"] = str(e)
             _emit_event(run_id, "AI_ERROR", f"AI analysis failed: {e}", level="WARNING")
+
+        # T7 - temporal enrichment (non-blocking, T3-S11-A)
+        opps = _apply_temporal_enrichment(run_id, run, pack, opps)
 
         status = "complete" if len(succeeded) == len(systems) else "partial"
         audit_action = (
