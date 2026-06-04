@@ -28,7 +28,7 @@ import pytest
 
 from discovery.models import DetectorResult
 from discovery.sqlserver_opsignal_scorer import (
-    _SQLSERVER_SCORES,
+    get_score,
     is_sqlserver_opsignal_detector,
     score_sqlserver_opsignal,
 )
@@ -306,9 +306,12 @@ class TestRobustness:
         score = score_sqlserver_opsignal(dr)
         assert score["confidence"] == "MEDIUM"
 
-    def test_score_table_has_exactly_three_entries(self):
-        """Guard against accidental entries — exactly 3 SQL Server detectors."""
-        assert len(_SQLSERVER_SCORES) == 3
+    def test_get_score_supports_all_expected_ids(self):
+        """Public score lookup supports every expected SQL Server detector."""
+        scores = [get_score(detector_id) for detector_id in ALL_DETECTOR_IDS]
+        assert all(REQUIRED_SCORE_KEYS.issubset(score) for score in scores)
 
-    def test_score_table_contains_all_expected_ids(self):
-        assert set(_SQLSERVER_SCORES.keys()) == set(ALL_DETECTOR_IDS)
+    def test_get_score_returns_an_independent_copy(self):
+        score = get_score("DB_TICKET_VOLUME_SURGE")
+        score["impact"] = 999
+        assert get_score("DB_TICKET_VOLUME_SURGE")["impact"] == 6

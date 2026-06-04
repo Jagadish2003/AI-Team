@@ -141,7 +141,7 @@ export default function ExecutiveReportPage() {
     : 'Unavailable';
   const roadmapStageLabel = roadmap.stages.length
     ? roadmap.stages.map(stage => stage.title).join(' / ')
-    : 'No roadmap stages';
+    : '—';
 
   return (
     <PageShell

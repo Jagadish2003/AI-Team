@@ -1,12 +1,6 @@
 import type { OpportunityCandidate } from './analystReview';
 
-export type ExecutiveReportConfidence =
-  | 'HIGH'
-  | 'MODERATE'
-  | 'LOW'
-  | 'High'
-  | 'Moderate'
-  | 'Low';
+export type ExecutiveReportConfidence = 'High' | 'Moderate' | 'Low';
 
 export interface SourcesAnalyzed {
   recommendedConnected: number;

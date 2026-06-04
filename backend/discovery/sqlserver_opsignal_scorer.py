@@ -3,7 +3,6 @@ from __future__ import annotations
 
 try:
     from backend.discovery.packs.sqlserver_opsignal_scorer import (
-        _SQLSERVER_SCORES,
         get_score,
         is_sqlserver_opsignal_detector,
         score_opportunity,
@@ -11,7 +10,6 @@ try:
     )
 except ModuleNotFoundError:
     from discovery.packs.sqlserver_opsignal_scorer import (
-        _SQLSERVER_SCORES,
         get_score,
         is_sqlserver_opsignal_detector,
         score_opportunity,
@@ -19,7 +17,6 @@ except ModuleNotFoundError:
     )
 
 __all__ = [
-    "_SQLSERVER_SCORES",
     "get_score",
     "is_sqlserver_opsignal_detector",
     "score_opportunity",
