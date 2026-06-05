@@ -6,7 +6,8 @@ export interface OppEnrichment {
   aiSuggestedNextSteps: string[];
   llmGenerated: boolean;
   llmModel: string | null;
-  // Track 3 Stage 1 - T3-S11-A temporal fields
+  // Temporal fields use snake_case to match the backend JSON response directly.
+  // This is an intentional exception to the camelCase frontend convention.
   baseline_context: string | null;
   trend_direction: string | null;
   anomaly_score: number | null;

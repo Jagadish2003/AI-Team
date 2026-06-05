@@ -48,6 +48,8 @@ jobs:
           DB_PATH: database/dev.db
           SEED_DIR: database/seed
           CORS_ORIGINS: http://localhost:5173
+          AGENTIQ_DISABLE_BACKGROUND_JOBS: "1"
+          INGEST_MODE: offline
         run: pytest tests/contract/ -v
 
       - name: Run Track 3 Sprint 10/11 verification
@@ -57,4 +59,6 @@ jobs:
           DEV_JWT: dev-token-change-me
           SEED_DIR: backend/database/seed
           CORS_ORIGINS: http://localhost:5173
+          AGENTIQ_DISABLE_BACKGROUND_JOBS: "1"
+          INGEST_MODE: offline
         run: python scripts/verify_sprint_10_11.py

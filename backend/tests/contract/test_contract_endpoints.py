@@ -43,6 +43,7 @@ def start_and_materialize(payload: dict) -> str:
     all writes are visible to the read endpoints.  Replay is the guaranteed
     sync point that flushes run-scoped data deterministically.
     """
+    # Ensure offline mode; caller may also include "mode" — that takes precedence via **payload.
     payload = {"mode": "offline", **payload}
     r = client.post("/api/runs/start", headers=auth_headers(), json=payload)
     assert r.status_code == 200
