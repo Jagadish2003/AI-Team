@@ -125,6 +125,29 @@ PACK_REGISTRY: Dict[str, Dict[str, Any]] = {
         ),
     },
 
+    "github_engineering": {
+        "packId":        "github_engineering",
+        "packName":      "GitHub Engineering Signals",
+        "domain":        "github_engineering",
+        "pack_domain":   "github_engineering",
+        "detectors": [
+            "discovery.detectors.github_pr_bottleneck",
+            "discovery.detectors.github_commit_concentration",
+            "discovery.detectors.github_stale_branches",
+        ],
+        "ui_labels_path": str(_PACKS_DIR / "github_engineering_ui_labels.json"),
+        "llm_context": (
+            "GitHub engineering signal analysis. "
+            "Focus on PR review bottlenecks, commit concentration risk, "
+            "and stale branch accumulation. "
+            "Use engineering operations language. "
+            "Cross-reference with Jira open issues where available for "
+            "confidence elevation. "
+            "IMPORTANT: agent surfaces signals to engineering leads only. "
+            "No automated merge approvals, branch deletions, or code changes."
+        ),
+    },
+
     # CPQ pack slot — reserved for Sprint 6
 
     # "ncino_cpq": {
@@ -211,3 +234,12 @@ def is_sqlserver_opsignal_pack(pack_id: Optional[str] = None) -> bool:
     pattern as is_ncino_pack() and is_strs_benefits_pack().
     """
     return get_pack(pack_id)["domain"] == "sqlserver_opsignal"
+
+
+def is_github_engineering_pack(pack_id: Optional[str] = None) -> bool:
+    """Return True when the active pack is the GitHub Engineering Signal pack.
+
+    Used in runner.py and scorer for pack routing.  Follows the identical
+    pattern as is_ncino_pack() and is_sqlserver_opsignal_pack().
+    """
+    return get_pack(pack_id)["domain"] == "github_engineering"
