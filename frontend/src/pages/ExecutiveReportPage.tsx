@@ -136,6 +136,13 @@ export default function ExecutiveReportPage() {
     ? `${sourcesAnalyzed.totalConnected} Connected`
     : '— Connected';
 
+  const reportConfidence = report?.confidence
+    ? report.confidence.charAt(0).toUpperCase() + report.confidence.slice(1).toLowerCase()
+    : 'Unavailable';
+  const roadmapStageLabel = roadmap.stages.length
+    ? roadmap.stages.map(stage => stage.title).join(' / ')
+    : '—';
+
   return (
     <PageShell
       title="Executive Report"
@@ -171,10 +178,10 @@ export default function ExecutiveReportPage() {
         </div>
 
         <div className="grid grid-cols-1 gap-4 md:grid-cols-4">
-          <StatCard title="Overall Confidence" value={roadmap.overallReadiness} />
+          <StatCard title="Overall Confidence" value={reportConfidence} />
           <StatCard title="Sources Analyzed" value={sourcesLabel} />
           <StatCard title="Top Opportunities" value={`${quickWins.length} Quick Wins`} />
-          <StatCard title="Agent Roadmap" value="Phase 1/2/3" />
+          <StatCard title="Agent Roadmap" value={roadmapStageLabel} />
         </div>
 
         <div className="mt-4 space-y-4">
