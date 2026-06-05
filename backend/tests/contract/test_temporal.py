@@ -7,7 +7,6 @@ import pytest
 from fastapi.testclient import TestClient
 
 os.environ.setdefault("DEV_JWT", "dev-token-change-me")
-os.environ.setdefault("DB_PATH", "database/dev.db")
 os.environ.setdefault("CORS_ORIGINS", "http://localhost:5173")
 
 from app.main import app

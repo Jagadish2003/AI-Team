@@ -28,6 +28,24 @@ def get_status(run_id: str) -> Dict[str, Any]:
     )
 
 
+def _pack_id_for_run(run: Dict[str, Any] | None) -> str | None:
+    if not run:
+        return None
+    inputs = run.get("inputs") or {}
+    input_pack_id = inputs.get("packId") if isinstance(inputs, dict) else None
+    return input_pack_id or run.get("packId") or None
+
+
+def _org_id_for_run(run: Dict[str, Any] | None, fallback: str | None = None) -> str | None:
+    if not run:
+        return fallback
+    inputs = run.get("inputs") or {}
+    input_org_id = None
+    if isinstance(inputs, dict):
+        input_org_id = inputs.get("orgId") or inputs.get("org_id")
+    return run.get("orgId") or run.get("org_id") or input_org_id or fallback
+
+
 def _audit_prepend(run_id: str, event: Dict[str, Any]) -> None:
     audit = db.run_kv_get("audit", run_id, [])
     db.run_kv_set("audit", run_id, [event] + audit)
@@ -210,9 +228,11 @@ def run_trackb_and_persist(
         _emit_event(
             run_id, "EXTRACT", "Extracting entities and identifying patterns..."
         )
+        pack_id = _pack_id_for_run(run)
+        run_org_id = _org_id_for_run(run, "demo-org")
         payload = trackb_run(
-            mode=mode, systems=succeeded, run_id=run_id, pack="strs_benefits"
-        )  # added pack="ncino"
+            mode=mode, systems=succeeded, run_id=run_id, org_id=run_org_id, pack=pack_id
+        )
         seed = export_track_a_seed(payload)
 
         opps = seed.get("opportunities", [])
@@ -310,7 +330,7 @@ def run_trackb_and_persist(
             exec_report = db.run_kv_get("executive_report", run_id, {})
             sources_analyzed = exec_report.get("sourcesAnalyzed", {})
             # ENG-AIQ-NC-5: pass pack_id for banking language prompts
-            pack_id = run.get("inputs", {}).get("packId") if run else None
+            pack_id = _pack_id_for_run(run)
             enrichment = run_llm_enrichment(
                 run_id=run_id,
                 opps=opps,
@@ -326,6 +346,41 @@ def run_trackb_and_persist(
         except Exception as e:
             errors["llm_enrichment"] = str(e)
             _emit_event(run_id, "AI_ERROR", f"AI analysis failed: {e}", level="WARNING")
+
+        # T7 — temporal enrichment (non-blocking, AT-143)
+        try:
+            from .llm_enrichment import KV_LLM_ENRICHMENT as _KV_LLM
+            from .jobs.baseline_calculator import calculate_baselines
+            from .telemetry import record_event
+            from .temporal_enrichment import enrich_opportunities_with_temporal_context
+
+            # Read baselines under the SAME org_id the snapshots were written
+            # with (the value passed to trackb_run above). Resolving the org
+            # again with a different fallback would let a run with no explicit
+            # orgId write under "demo-org" but read under "default", so it
+            # would never find its own history.
+            _org_id = run_org_id
+            _pack_id = _pack_id_for_run(run)
+            calculate_baselines()
+            opps = enrich_opportunities_with_temporal_context(run_id, _org_id, _pack_id or "", opps)
+
+            _temporal_keys = (
+                "baseline_context", "trend_direction", "anomaly_score",
+                "is_anomalous", "first_deviation", "baseline_mean", "run_count",
+            )
+            _stored = db.run_kv_get(_KV_LLM, run_id, {})
+            _per_opp = _stored.get("perOpportunity", {})
+            for _opp in opps:
+                _oid = _opp.get("id", "")
+                if _oid in _per_opp:
+                    for _k in _temporal_keys:
+                        if _k in _opp:
+                            _per_opp[_oid][_k] = _opp[_k]
+            _stored["perOpportunity"] = _per_opp
+            db.run_kv_set(_KV_LLM, run_id, _stored)
+            record_event("temporal.enrichment_completed", {"run_id": run_id})
+        except Exception as e:
+            logger.warning("T7 temporal enrichment failed (non-blocking): %s", e)
 
         status = "complete" if len(succeeded) == len(systems) else "partial"
         audit_action = (

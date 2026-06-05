@@ -7,7 +7,7 @@ from fastapi.testclient import TestClient
 
 os.environ.setdefault("DEV_JWT", "dev-token-change-me")
 
-from app.db import connect
+from app.db import connect, upsert_run
 from app.main import app
 from app.routes_temporal import TEMPORAL_ROUTE_PATHS, register_temporal_routes
 
@@ -221,5 +221,106 @@ def test_temporal_routes_forbid_viewer_role():
     )
     assert (
         client.get("/api/runs/run_missing/signals", headers=viewer_headers()).status_code
+        == 403
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# AT-144 — Trend endpoint and temporal-context endpoint
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_trend_endpoint_returns_correct_fields():
+    """Trend endpoint returns all six required fields for a known detector."""
+    detector_id = f"det_t8_{uuid4().hex[:8]}"
+    org_id = f"org_t8_{uuid4().hex[:8]}"
+
+    # The trend route requires analyst; the route reads org from X-Org-Id, so
+    # seed the dev token's role in this fresh org or RBAC returns 403.
+    from app.rbac import _ensure_members_table
+    from app import db as _db
+    from datetime import datetime as _dt, timezone as _tz
+    _ensure_members_table()
+    _con = _db.connect()
+    try:
+        _con.execute(
+            "INSERT OR REPLACE INTO workspace_members (org_id, user_id, role, created_at) "
+            "VALUES (?, ?, 'analyst', ?)",
+            (org_id, os.environ["DEV_JWT"], _dt.now(_tz.utc).isoformat()),
+        )
+        _con.commit()
+    finally:
+        _con.close()
+
+    for i, val in enumerate([10.0, 12.0, 14.0, 16.0, 18.0]):
+        insert_snapshot(
+            org_id=org_id,
+            detector_id=detector_id,
+            run_id=f"run_t8_trend_{i}",
+            value=val,
+            captured_at=f"2026-05-0{i+1}T10:00:00",
+        )
+
+    response = client.get(
+        f"/api/temporal/{detector_id}/trend",
+        headers={**auth_headers(), "X-Org-Id": org_id},
+        params={"pack_id": "pack"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    for field in ("trend_direction", "slope", "slope_pct", "r_squared", "run_count", "signal_key"):
+        assert field in body, f"Missing field '{field}' in trend response"
+    assert body["run_count"] == 5
+    assert body["signal_key"] == f"pack::{detector_id}::metric_value"
+    assert body["trend_direction"] in ("rising", "falling", "stable", "insufficient_data")
+
+
+def test_trend_endpoint_requires_auth():
+    """Trend endpoint returns 401 for unauthenticated requests (AC21)."""
+    assert client.get("/api/temporal/some_det/trend").status_code == 401
+
+
+def test_trend_endpoint_forbids_viewer():
+    """Trend endpoint returns 403 for Viewer-role users (AC21)."""
+    assert (
+        client.get("/api/temporal/some_det/trend", headers=viewer_headers()).status_code
+        == 403
+    )
+
+
+def test_trend_endpoint_has_no_org_id_query_param():
+    """AC15: trend endpoint must not accept org_id as a query parameter."""
+    import inspect
+    from app.routes_temporal import temporal_trend
+    sig = inspect.signature(temporal_trend)
+    assert "org_id" not in sig.parameters, (
+        "AC15 violation: trend endpoint must not accept org_id as a query param"
+    )
+
+
+def test_temporal_context_endpoint_returns_404_for_cross_org_run():
+    """AC16: temporal-context returns 404 when run belongs to a different org."""
+    run_id = f"run_t8_crossorg_{uuid4().hex[:8]}"
+    upsert_run(run_id, {"id": run_id, "status": "complete", "org_id": "org_other_444"})
+
+    # Default tenancy is "default" — different from "org_other_444"
+    response = client.get(
+        f"/api/runs/{run_id}/temporal-context",
+        headers=auth_headers(),
+    )
+    assert response.status_code == 404
+
+
+def test_temporal_context_endpoint_requires_auth():
+    """Temporal-context endpoint returns 401 for unauthenticated requests (AC21)."""
+    assert client.get("/api/runs/run_missing/temporal-context").status_code == 401
+
+
+def test_temporal_context_endpoint_forbids_viewer():
+    """Temporal-context endpoint returns 403 for Viewer-role users (AC21)."""
+    assert (
+        client.get(
+            "/api/runs/run_missing/temporal-context", headers=viewer_headers()
+        ).status_code
         == 403
     )

@@ -149,6 +149,16 @@ function renderPage(initialPath = '/opportunity-review') {
   );
 }
 
+async function openSelectedOpportunityDetails() {
+  const quickWinButton = screen.getAllByRole('button', {
+    name: /Accelerate quote approvals/i,
+  }).find((el) => el.tagName === 'BUTTON');
+  expect(quickWinButton).toBeTruthy();
+  await act(async () => {
+    fireEvent.click(quickWinButton!);
+  });
+}
+
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 describe('OpportunityReviewPage v1.2 — T41-2 acceptance criteria', () => {
@@ -235,17 +245,19 @@ describe('OpportunityReviewPage v1.2 — T41-2 acceptance criteria', () => {
 
   // ── Blueprint button gating ─────────────────────────────────────────────────
 
-  it('AC8: Blueprint button active when Salesforce connected', () => {
+  it('AC8: Blueprint button active when Salesforce connected', async () => {
     mockSalesforceConnected = true;
     renderPage();
+    await openSelectedOpportunityDetails();
     const btn = screen.queryByTestId('blueprint-button-active');
     expect(btn).toBeTruthy();
     expect(btn?.hasAttribute('disabled')).toBeFalsy();
   });
 
-  it('AC9: Blueprint button disabled when Salesforce not connected', () => {
+  it('AC9: Blueprint button disabled when Salesforce not connected', async () => {
     mockSalesforceConnected = false;
     renderPage();
+    await openSelectedOpportunityDetails();
     const btn = screen.queryByTestId('blueprint-button-disabled');
     expect(btn).toBeTruthy();
     expect(btn?.hasAttribute('disabled')).toBeTruthy();
@@ -254,6 +266,7 @@ describe('OpportunityReviewPage v1.2 — T41-2 acceptance criteria', () => {
   it('AC10: Blueprint button click navigates with oppId query param', async () => {
     mockSalesforceConnected = true;
     renderPage();
+    await openSelectedOpportunityDetails();
     const btn = screen.queryByTestId('blueprint-button-active');
     if (btn) {
       await act(async () => { fireEvent.click(btn); });

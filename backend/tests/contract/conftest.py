@@ -1,7 +1,9 @@
 import os
+import sqlite3
 import subprocess
 import sys
 import tempfile
+from datetime import datetime, timezone
 from pathlib import Path
 import pytest
 from alembic import command as alembic_command
@@ -16,6 +18,36 @@ for path in (str(REPO_ROOT), str(BACKEND_DIR)):
     if path not in sys.path:
         sys.path.insert(0, path)
 
+# Keep contract tests hermetic even when backend/.env contains live-mode
+# settings or a real LLM API key. Test modules import app.main at module scope,
+# so these must be set before pytest imports those modules.
+os.environ.setdefault("DEV_JWT", "dev-token-change-me")
+os.environ["INGEST_MODE"] = "offline"
+os.environ["ANTHROPIC_API_KEY"] = ""
+os.environ["AGENTIQ_DISABLE_BACKGROUND_JOBS"] = "1"
+
+
+def _resolve_seed_dir() -> Path:
+    """Resolve SEED_DIR consistently from repo-root or backend working dirs."""
+    raw_seed_dir = os.environ.get("SEED_DIR")
+    if not raw_seed_dir:
+        return BACKEND_DIR / "database" / "seed"
+
+    seed_dir = Path(raw_seed_dir)
+    if seed_dir.is_absolute():
+        return seed_dir
+
+    candidates = [
+        (Path.cwd() / seed_dir).resolve(),
+        (REPO_ROOT / seed_dir).resolve(),
+        (BACKEND_DIR / seed_dir).resolve(),
+    ]
+    for candidate in candidates:
+        if (candidate / "connectors.json").exists():
+            return candidate
+    return candidates[0]
+
+
 # Use a temp DB for contract tests so the live dev.db is never touched
 _tmp_db = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
 _tmp_db.close()
@@ -26,7 +58,10 @@ def pytest_configure(config):
     """Seed a fresh temporary database before any contract tests run."""
     os.environ.setdefault("DEV_JWT", "dev-token-change-me")
     os.environ["DB_PATH"] = TEST_DB_PATH
-    os.environ.setdefault("SEED_DIR", str(BACKEND_DIR / "database" / "seed"))
+    os.environ["INGEST_MODE"] = "offline"
+    os.environ["ANTHROPIC_API_KEY"] = ""
+    os.environ["AGENTIQ_DISABLE_BACKGROUND_JOBS"] = "1"
+    os.environ["SEED_DIR"] = str(_resolve_seed_dir())
     os.environ.setdefault("CORS_ORIGINS", "http://localhost:5173")
     # Contract tests must never hit live connectors or external LLM APIs. Force
     # offline ingestion and drop the Anthropic key regardless of the developer's
@@ -43,7 +78,7 @@ def pytest_configure(config):
 
     try:
         alembic_cfg = AlembicConfig(str(BACKEND_DIR / "alembic.ini"))
-        alembic_cfg.set_main_option("script_location", str(BACKEND_DIR / "alembic"))
+        alembic_cfg.set_main_option("script_location", str(BACKEND_DIR / "migrations"))
         alembic_command.upgrade(alembic_cfg, "head")
     except Exception as exc:
         raise RuntimeError(f"alembic upgrade failed:\n{exc}") from exc
@@ -67,6 +102,26 @@ def pytest_configure(config):
     from app.rbac import seed_owner
 
     seed_owner("default", os.environ["DEV_JWT"])
+    
+    # Some legacy contract tests instantiate TestClient(app) without entering
+    # the lifespan context. Seed the default dev owner here as well so RBAC
+    # matches normal app startup.
+    from database.models.workspace_members import CREATE_WORKSPACE_MEMBERS_TABLE
+
+    with sqlite3.connect(TEST_DB_PATH) as conn:
+        conn.execute(CREATE_WORKSPACE_MEMBERS_TABLE)
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO workspace_members (org_id, user_id, role, created_at)
+            VALUES (?, ?, 'owner', ?)
+            """,
+            (
+                "default",
+                os.environ["DEV_JWT"],
+                datetime.now(timezone.utc).isoformat(),
+            ),
+        )
+        conn.commit()
 
 
 def pytest_sessionfinish(session, exitstatus):

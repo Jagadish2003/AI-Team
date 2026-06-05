@@ -24,7 +24,10 @@ Registers itself with the pool factory at import time via register_driver().
 
 from __future__ import annotations
 
-import oracledb
+try:
+    import oracledb
+except ModuleNotFoundError:  # Optional DB driver may be absent in mocked tests.
+    oracledb = None
 
 from backend.app.db_connectors.models import (
     ColumnMeta,
@@ -63,6 +66,12 @@ def init_thick_mode(lib_dir: str | None = None) -> None:
     lib_dir:  path to Oracle Instant Client libraries, or None to let
               oracledb locate them via LD_LIBRARY_PATH / PATH.
     """
+    if oracledb is None:
+        raise DBConnectionError(
+            "Oracle DB driver package 'oracledb' is not installed.",
+            error_code="driver_not_installed",
+        )
+
     try:
         oracledb.init_oracle_client(lib_dir=lib_dir)
     except oracledb.ProgrammingError:
@@ -145,6 +154,12 @@ def create_oracle_connection(
     Raises DBConnectionError on any failure.  Error messages include only
     host and service name — never the DSN, username, or password.
     """
+    if oracledb is None:
+        raise DBConnectionError(
+            "Oracle DB driver package 'oracledb' is not installed.",
+            error_code="driver_not_installed",
+        )
+
     kwargs = _connect_kwargs(config, username, password)
     try:
         conn = oracledb.connect(**kwargs)

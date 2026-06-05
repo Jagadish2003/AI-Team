@@ -136,6 +136,13 @@ export default function ExecutiveReportPage() {
     ? `${sourcesAnalyzed.totalConnected} Connected`
     : '— Connected';
 
+  const reportConfidence = report?.confidence
+    ? report.confidence.charAt(0).toUpperCase() + report.confidence.slice(1).toLowerCase()
+    : 'Unavailable';
+  const roadmapStageLabel = roadmap.stages.length
+    ? roadmap.stages.map(stage => stage.title).join(' / ')
+    : '—';
+
   return (
     <PageShell
       title="Executive Report"
@@ -171,19 +178,18 @@ export default function ExecutiveReportPage() {
         </div>
 
         <div className="grid grid-cols-1 gap-4 md:grid-cols-4">
-          <StatCard title="Overall Confidence" value={roadmap.overallReadiness} />
+          <StatCard title="Overall Confidence" value={reportConfidence} />
           <StatCard title="Sources Analyzed" value={sourcesLabel} />
           <StatCard title="Top Opportunities" value={`${quickWins.length} Quick Wins`} />
-          <StatCard title="Agent Roadmap" value="Phase 1/2/3" />
+          <StatCard title="Agent Roadmap" value={roadmapStageLabel} />
         </div>
 
-        <div className="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-[2fr_1fr]">
-          <div className="space-y-4">
-            <KeyInsights />
-            <SnapshotMatrix opportunities={opportunities} />
-          </div>
+        <div className="mt-4 space-y-4">
+          {/* Key Insights — full width */}
+          <KeyInsights />
 
-          <div className="space-y-4">
+          {/* Top Quick Wins + Agent Roadmap Highlights — side by side */}
+          <div className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(420px,520px)]">
             <TopQuickWins quickWins={quickWins} />
             <PilotRoadmapHighlights
               stages={roadmap.stages}
@@ -191,6 +197,9 @@ export default function ExecutiveReportPage() {
               overallReadiness={roadmap.overallReadiness}
             />
           </div>
+
+          {/* Effort vs Impact matrix — full width */}
+          <SnapshotMatrix opportunities={opportunities} />
         </div>
     </PageShell>
   );

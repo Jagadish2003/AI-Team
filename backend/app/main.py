@@ -7,8 +7,6 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List
 from uuid import uuid4
 
-from contextlib import asynccontextmanager
-
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -62,12 +60,29 @@ async def lifespan(app: FastAPI):
         validate_all_secrets(CONNECTOR_AUTH_CONFIGS)
     # Seed the dev user as owner of the default org so existing routes pass RBAC.
     seed_owner(_DEV_ORG, _DEV_USER)
+    # Ensure the temporal signal_snapshots table exists. A fresh dev.db is built
+    # by seed_loader.py, which does not run alembic migrations, so without this
+    # the baseline/temporal enrichment silently fails and the Baseline Context
+    # panel never renders. Idempotent (IF NOT EXISTS) — no-op once migrated.
+    from .temporal import ensure_signal_snapshots_table
+    ensure_signal_snapshots_table()
     # AT-90: start connector health check background job.
     from .jobs.connector_health import start_health_check_job, stop_health_check_job
-    start_health_check_job()
+    from .jobs.baseline_calculator import (
+        scheduler as baseline_scheduler,
+        start_scheduler as start_baseline_scheduler,
+    )
+
+    background_jobs_disabled = os.getenv("AGENTIQ_DISABLE_BACKGROUND_JOBS") == "1"
+    if not background_jobs_disabled:
+        start_health_check_job()
+        start_baseline_scheduler()
     yield
     # AT-90: shut down scheduler on SIGTERM / graceful shutdown (wait=False).
-    stop_health_check_job()
+    if not background_jobs_disabled:
+        stop_health_check_job()
+        if baseline_scheduler.running:
+            baseline_scheduler.shutdown(wait=False)
 
 
 app = FastAPI(title="AgentIQ Layer 1 API Skeleton", version="0.1.0", lifespan=lifespan)
@@ -522,7 +537,7 @@ def get_exec_report(run_id: str) -> Dict[str, Any]:
     quick_wins = [o for o in opps if o.get("tier") == "Quick Win"]
 
     return {
-        "confidence": "MODERATE",
+        "confidence": "Moderate",
         "sourcesAnalyzed": sources_analyzed,
         "topQuickWins": quick_wins,
         "snapshotBubbles": [],
@@ -582,7 +597,61 @@ def list_audit_log(
 
 
 # ---------------------------------------------------------------------------
-# Workspace members — see routes_workspace.py (T1-S11 Task 2 / Section 3).
-# The GET/POST/DELETE member endpoints are registered via
-# register_workspace_routes(app) above.
+# Workspace members — AT-82 T8
 # ---------------------------------------------------------------------------
+
+@app.get(
+    "/api/workspace/members",
+    dependencies=[Depends(require_auth), Depends(require_role("owner"))],
+)
+def list_members() -> List[Dict[str, Any]]:
+    """List workspace members (owner only)."""
+    from .middleware.tenancy import get_current_org_id
+    from .rbac import _ensure_members_table
+
+    _ensure_members_table()
+    org_id = get_current_org_id()
+    con = db.connect()
+    try:
+        cur = con.execute(
+            "SELECT org_id, user_id, role, created_at FROM workspace_members WHERE org_id = ?",
+            (org_id,),
+        )
+        rows = cur.fetchall()
+    finally:
+        con.close()
+    return [{"org_id": r[0], "user_id": r[1], "role": r[2], "created_at": r[3]} for r in rows]
+
+
+@app.post(
+    "/api/workspace/members",
+    dependencies=[Depends(require_auth), Depends(require_role("owner"))],
+)
+def add_member(body: Dict[str, Any]) -> Dict[str, Any]:
+    """Add or update a workspace member (owner only)."""
+    from .middleware.tenancy import get_current_org_id
+    from .rbac import _ensure_members_table
+
+    _ensure_members_table()
+    org_id = get_current_org_id()
+    user_id = body.get("user_id", "").strip()
+    role = body.get("role", "").strip()
+    if not user_id:
+        raise HTTPException(400, "user_id required")
+    if role not in ("owner", "analyst", "viewer"):
+        raise HTTPException(400, "role must be owner, analyst, or viewer")
+
+    con = db.connect()
+    try:
+        con.execute(
+            """
+            INSERT INTO workspace_members (org_id, user_id, role, created_at)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(org_id, user_id) DO UPDATE SET role = excluded.role
+            """,
+            (org_id, user_id, role, db.now_iso()),
+        )
+        con.commit()
+    finally:
+        con.close()
+    return {"org_id": org_id, "user_id": user_id, "role": role}

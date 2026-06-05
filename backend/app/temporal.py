@@ -141,6 +141,64 @@ def _insert_signal_snapshots(snapshots: list[SignalSnapshot]) -> int:
         con.close()
 
 
+def ensure_signal_snapshots_table() -> None:
+    """Create the signal_snapshots table + indexes if they do not exist.
+
+    Schema mirrors migrations/versions/0002_create_signal_snapshots.py exactly.
+    All statements are IF NOT EXISTS, so this is a no-op when the alembic
+    migration already created the table (contract tests, production). It exists
+    so a fresh dev.db — created by seed_loader.py, which does not run alembic —
+    still has the table the temporal/baseline enrichment reads from. Without it,
+    every signal-history query raises "no such table" and the broad try/except
+    in temporal_enrichment swallows it, hiding the Baseline Context panel.
+    """
+    con = connect()
+    try:
+        cur = con.cursor()
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS signal_snapshots (
+                id                   VARCHAR(36)  NOT NULL PRIMARY KEY,
+                org_id               VARCHAR(64)  NOT NULL,
+                run_id               VARCHAR(64)  NOT NULL,
+                pack_id              VARCHAR(64)  NOT NULL,
+                detector_id          VARCHAR(128) NOT NULL,
+                signal_key           VARCHAR(256) NOT NULL,
+                metric_name          VARCHAR(128) NOT NULL,
+                metric_value         DOUBLE       NOT NULL,
+                threshold            DOUBLE,
+                fired                BOOLEAN      NOT NULL,
+                signal_source        VARCHAR(64)  NOT NULL,
+                captured_at          TIMESTAMP    NOT NULL,
+                baseline_mean        DOUBLE,
+                baseline_stddev      DOUBLE,
+                baseline_window_days INTEGER,
+                baseline_calculated_at TIMESTAMP
+            )
+        """)
+        cur.execute("""
+            CREATE INDEX IF NOT EXISTS idx_ss_org_signal_time
+                ON signal_snapshots (org_id, signal_key, captured_at DESC)
+        """)
+        cur.execute("""
+            CREATE INDEX IF NOT EXISTS idx_ss_org_run
+                ON signal_snapshots (org_id, run_id)
+        """)
+        cur.execute("""
+            CREATE INDEX IF NOT EXISTS idx_ss_org_detector
+                ON signal_snapshots (org_id, detector_id, captured_at DESC)
+        """)
+        cur.execute("""
+            CREATE INDEX IF NOT EXISTS idx_ss_baseline_stale
+                ON signal_snapshots (baseline_calculated_at)
+        """)
+        con.commit()
+    except Exception as exc:
+        con.rollback()
+        logger.warning("ensure_signal_snapshots_table failed (non-blocking): %s", exc)
+    finally:
+        con.close()
+
+
 def snapshot_signals(
     org_id: str,
     run_id: str,
@@ -317,6 +375,7 @@ __all__ = [
     "DetectorEvaluationLike",
     "RunSignalSnapshotPayload",
     "SignalSnapshot",
+    "ensure_signal_snapshots_table",
     "get_baseline",
     "get_run_signals",
     "get_signal_history",

@@ -50,6 +50,15 @@ def with_roadmap_display_titles(roadmap: Dict[str, Any]) -> Dict[str, Any]:
 
 def with_exec_report_display_titles(report: Dict[str, Any]) -> Dict[str, Any]:
     display_report = dict(report)
+    confidence = display_report.get("confidence")
+    if isinstance(confidence, str):
+        canonical_confidence = {
+            "high": "High",
+            "moderate": "Moderate",
+            "low": "Low",
+        }.get(confidence.strip().lower())
+        if canonical_confidence:
+            display_report["confidence"] = canonical_confidence
     for field in ("topQuickWins", "snapshotBubbles"):
         items = display_report.get(field)
         if isinstance(items, list):

@@ -262,6 +262,77 @@ def test_enrichment_stable_after_replay(client, enriched_run_id, first_opp_id):
 # Executive report
 # ─────────────────────────────────────────────────────────────────────────────
 
+# ─────────────────────────────────────────────────────────────────────────────
+# T7 — temporal enrichment wire-in (AT-143)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_temporal_fields_present_when_data_exists(client, enriched_run_id, first_opp_id):
+    """Temporal fields appear in enrichment response when historical data exists."""
+    r = client.get(
+        f"/api/runs/{enriched_run_id}/opportunities/{first_opp_id}/enrichment",
+        headers=_auth(),
+    )
+    assert r.status_code == 200
+    data = r.json()
+    temporal_fields = (
+        "baseline_context", "trend_direction", "anomaly_score",
+        "is_anomalous", "first_deviation", "baseline_mean", "run_count",
+    )
+    for field in temporal_fields:
+        assert field in data, f"Temporal field '{field}' missing from enrichment response"
+
+
+def test_temporal_enrichment_exception_does_not_break_response(client, enriched_run_id, first_opp_id):
+    """AC12: exception in temporal enrichment does not break enrichment response."""
+    r = client.get(
+        f"/api/runs/{enriched_run_id}/opportunities/{first_opp_id}/enrichment",
+        headers=_auth(),
+    )
+    assert r.status_code == 200
+    data = r.json()
+    assert "oppId" in data
+    assert "aiSummary" in data
+    assert isinstance(data.get("aiWhyBullets"), list)
+    assert isinstance(data.get("aiRisks"), list)
+    assert isinstance(data.get("aiSuggestedNextSteps"), list)
+
+
+def test_insufficient_history_returns_null_baseline_and_insufficient_trend(client):
+    """AC14: runs with < 3 historical values return baseline_context=null,
+    trend_direction='insufficient_data'."""
+    from unittest.mock import patch
+    from app.temporal_enrichment import enrich_opportunities_with_temporal_context
+    from app.trend_engine import TrendResult, AnomalyResult
+
+    _trend = TrendResult(
+        trend_direction="insufficient_data",
+        slope=0.0,
+        slope_pct=0.0,
+        r_squared=0.0,
+        run_count=1,
+        signal_key="test::det::metric_value",
+    )
+    _anomaly = AnomalyResult(
+        is_anomalous=False,
+        anomaly_score=0.0,
+        anomaly_direction=None,
+        baseline_mean=None,
+        baseline_stddev=None,
+        insufficient_data=True,
+        first_deviation=False,
+        signal_key="test::det::metric_value",
+    )
+
+    opps = [{"id": "opp_t14", "_debug": {"detector_id": "det"}, "metric_value": 5.0}]
+    with patch("app.temporal_enrichment.calculate_trend", return_value=_trend), \
+         patch("app.temporal_enrichment.calculate_anomaly", return_value=_anomaly):
+        result = enrich_opportunities_with_temporal_context("run_t14", "org1", "test", opps)
+
+    opp = result[0]
+    assert opp.get("baseline_context") is None, "AC14: baseline_context must be null for insufficient history"
+    assert opp.get("trend_direction") == "insufficient_data", "AC14: trend_direction must be 'insufficient_data'"
+
+
 def test_exec_report_has_ai_executive_summary_field(client, enriched_run_id):
     """aiExecutiveSummary must exist in exec report. May be empty without API key."""
     r = client.get(
