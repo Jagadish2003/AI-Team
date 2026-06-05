@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hmac
 import json
 import logging
 import os
@@ -13,6 +14,7 @@ from cryptography.fernet import Fernet
 from app import db
 from app.auth import oauth as _oauth
 from app.auth.configs import CONNECTOR_AUTH_CONFIGS
+from app.middleware.audit import log_event
 from app.auth.models import ConnectorAuthConfig, ConnectorNotAuthenticatedError, TokenRecord
 from app.auth.secrets import MissingSecretError
 from database.models.credentials import (
@@ -27,6 +29,8 @@ logger = logging.getLogger(__name__)
 REFRESH_THRESHOLD_SECONDS = int(os.environ.get("REFRESH_THRESHOLD_SECONDS", "300"))
 _OAUTH_HTTP_TIMEOUT = int(os.environ.get("OAUTH_HTTP_TIMEOUT_SECONDS", "30"))
 
+# Nonce TTL — must match Section 2 of T1-S11 Task 1 spec
+_NONCE_TTL_MINUTES = 10
 
 # ---------------------------------------------------------------------------
 # Internal helpers
@@ -48,6 +52,23 @@ def _init_credentials_table() -> None:
             con.execute(ALTER_CREDENTIALS_ADD_REFRESH_FAILED)
         except _sqlite3.OperationalError:
             pass  # Column already exists — idempotent
+        con.commit()
+    finally:
+        con.close()
+
+
+def _init_nonce_table() -> None:
+    """Create the nonce store table if it doesn't exist yet."""
+    con = db.connect()
+    try:
+        con.execute(
+            """
+            CREATE TABLE IF NOT EXISTS nonces (
+                key        TEXT PRIMARY KEY,
+                data       TEXT NOT NULL
+            )
+            """
+        )
         con.commit()
     finally:
         con.close()
@@ -134,6 +155,104 @@ def _row_to_token_record(row: tuple) -> TokenRecord:
         created_at=created_at,
         updated_at=updated_at,
     )
+
+
+# ---------------------------------------------------------------------------
+# Nonce store — single-use state nonce enforcement (T1-S11 Task 1, Section 2)
+# ---------------------------------------------------------------------------
+
+
+def store_nonce(
+    nonce: str,
+    connector_id: str,
+    code_verifier: Optional[str] = None,
+) -> None:
+    """Store a state nonce with connector context and a 10-minute expiry.
+
+    Called by the OAuth initiation route when generating the state parameter.
+    The nonce key is prefixed with 'nonce:' to namespace it in the store.
+    `code_verifier`, when provided, is the PKCE verifier bound to this state;
+    it is returned by consume_nonce() so the callback can complete the exchange.
+    """
+    _init_nonce_table()
+
+    now = datetime.now(timezone.utc)
+    data = json.dumps({
+        "nonce":         nonce,
+        "connector_id":  connector_id,
+        "code_verifier": code_verifier,
+        "created_at":    now.isoformat(),
+        "expires_at":    (now + timedelta(minutes=_NONCE_TTL_MINUTES)).isoformat(),
+    })
+
+    key = f"nonce:{nonce}"
+    con = db.connect()
+    try:
+        con.execute(
+            "INSERT OR REPLACE INTO nonces (key, data) VALUES (?, ?)",
+            (key, data),
+        )
+        con.commit()
+    finally:
+        con.close()
+
+
+def consume_nonce(nonce: str) -> dict | None:
+    """Retrieve and DELETE the nonce in a single operation.
+
+    Returns the nonce data dict if the nonce exists and has not expired.
+    Returns None if the nonce does not exist (already used or never issued).
+    Returns None if the nonce has expired (issued more than 10 minutes ago).
+
+    Delete-before-process pattern (Section 2):
+        The nonce is deleted from the store BEFORE expiry is checked.
+        This prevents a race condition where two simultaneous requests both
+        read the nonce as valid before either deletes it.
+        A second call with the same nonce always returns None → 400.
+
+    NOTE: Must NOT fall back to storing None — kv_delete (DELETE SQL here)
+    is the only correct pattern. Storing a null payload leaves the key in
+    the store and breaks the single-use guarantee.
+    """
+    _init_nonce_table()
+
+    key = f"nonce:{nonce}"
+    con = db.connect()
+    try:
+        # Step 1: Read
+        cur = con.execute(
+            "SELECT data FROM nonces WHERE key = ?",
+            (key,),
+        )
+        row = cur.fetchone()
+
+        if row is None:
+            return None  # Already used or never issued
+
+        # Step 2: DELETE immediately — before any further processing
+        con.execute("DELETE FROM nonces WHERE key = ?", (key,))
+        con.commit()
+    finally:
+        con.close()
+
+    # Step 3: Check expiry (after deletion — nonce is already gone from store)
+    data = json.loads(row[0])
+    expires_at = datetime.fromisoformat(data["expires_at"])
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
+
+    if datetime.now(timezone.utc) > expires_at:
+        return None  # Expired — nonce already deleted above, correctly
+
+    # Timing-safe comparison of the supplied state against the stored nonce
+    # (Section 2 / AC9): use hmac.compare_digest, never ==, to guard against
+    # timing attacks on state validation. Rows written before the nonce value
+    # was stored fall back to the exact key match already performed above.
+    stored_nonce = data.get("nonce")
+    if stored_nonce is not None and not hmac.compare_digest(stored_nonce, nonce):
+        return None
+
+    return data
 
 
 # ---------------------------------------------------------------------------
@@ -272,12 +391,18 @@ async def revoke_token(
 ) -> None:
     """Revoke and delete the stored token for the given org+connector.
 
-    Step 1 — External revocation (best-effort, never raises):
+    Step 1a — RFC 7009 revocation (standard connectors, best-effort, never raises):
         POST to config.revocation_url if present.
         Any failure is logged as a WARNING.
 
+    Step 1b — Slack-specific revocation via auth.revoke Web API (T1-S11 Task 1, Section 3):
+        Runs when connector_id == 'slack' and revocation_url is None.
+        Calls https://slack.com/api/auth.revoke with Bearer token.
+        ok=false in the response body is logged as connector_revocation_failed.
+        Any exception is logged as a WARNING. Never raises.
+
     Step 2 — Local deletion (always executes):
-        Deletes the DB record and writes a connector_disconnected audit event.
+        Deletes the DB record regardless of Step 1 outcome.
 
     Idempotent: if no token exists, both steps are no-ops.
     """
@@ -285,57 +410,88 @@ async def revoke_token(
 
     config = CONNECTOR_AUTH_CONFIGS.get(connector_id)
 
-    # --- Step 1: external revocation (best-effort) ---
+    # Fetch the stored access token once — used by both Step 1a and 1b
     access_token_for_revoke: Optional[str] = None
-    if config and config.revocation_url:
-        # Read the raw encrypted token from DB to decrypt for revocation call
-        con = db.connect()
+    con = db.connect()
+    try:
+        cur = con.execute(
+            "SELECT access_token FROM credentials WHERE org_id = ? AND connector_id = ?",
+            (org_id, connector_id),
+        )
+        row = cur.fetchone()
+    finally:
+        con.close()
+
+    if row:
         try:
-            cur = con.execute(
-                "SELECT access_token FROM credentials WHERE org_id = ? AND connector_id = ?",
-                (org_id, connector_id),
+            access_token_for_revoke = _decrypt(row[0])
+        except Exception as exc:
+            logger.warning(
+                "Could not decrypt token for external revocation of %s/%s: %s",
+                org_id, connector_id, exc,
             )
-            row = cur.fetchone()
-        finally:
-            con.close()
 
-        if row:
-            try:
-                access_token_for_revoke = _decrypt(row[0])
-            except Exception as exc:
-                logger.warning(
-                    "Could not decrypt token for external revocation of %s/%s: %s",
-                    org_id, connector_id, exc,
+    # --- Step 1a: RFC 7009 revocation (standard connectors) ---
+    if config and config.revocation_url and access_token_for_revoke:
+        try:
+            async with httpx.AsyncClient(
+                timeout=_OAUTH_HTTP_TIMEOUT, transport=_revoke_transport
+            ) as client:
+                resp = await client.post(
+                    config.revocation_url,
+                    data={"token": access_token_for_revoke, "token_type_hint": "access_token"},
                 )
+            if resp.status_code == 200:
+                logger.info("External revocation succeeded for %s/%s", org_id, connector_id)
+            else:
+                logger.warning(
+                    "External revocation returned HTTP %s for %s/%s",
+                    resp.status_code, org_id, connector_id,
+                )
+        except httpx.TimeoutException:
+            logger.warning(
+                "External revocation timed out for %s/%s", org_id, connector_id
+            )
+        except Exception as exc:
+            logger.warning(
+                "External revocation failed for %s/%s: %s", org_id, connector_id, exc
+            )
 
-        if access_token_for_revoke:
-            try:
-                async with httpx.AsyncClient(
-                    timeout=_OAUTH_HTTP_TIMEOUT, transport=_revoke_transport
-                ) as client:
-                    resp = await client.post(
-                        config.revocation_url,
-                        data={"token": access_token_for_revoke, "token_type_hint": "access_token"},
-                    )
-                if resp.status_code == 200:
-                    logger.info("External revocation succeeded for %s/%s", org_id, connector_id)
-                else:
-                    logger.warning(
-                        "External revocation returned HTTP %s for %s/%s",
-                        resp.status_code, org_id, connector_id,
-                    )
-            except httpx.TimeoutException:
-                logger.warning(
-                    "External revocation timed out for %s/%s", org_id, connector_id
+    # --- Step 1b: Slack-specific revocation via auth.revoke Web API ---
+    # Runs only when connector_id is 'slack' (revocation_url is None for Slack).
+    # This is a connector-specific branch, not a general framework mechanism.
+    elif connector_id == "slack" and access_token_for_revoke:
+        try:
+            async with httpx.AsyncClient(
+                timeout=_OAUTH_HTTP_TIMEOUT, transport=_revoke_transport
+            ) as client:
+                resp = await client.post(
+                    "https://slack.com/api/auth.revoke",
+                    headers={"Authorization": f"Bearer {access_token_for_revoke}"},
                 )
-            except Exception as exc:
+            body = resp.json()
+            if not body.get("ok"):
+                error_code = body.get("error", "unknown")
                 logger.warning(
-                    "External revocation failed for %s/%s: %s", org_id, connector_id, exc
+                    "Slack auth.revoke returned ok=false for %s/%s: error=%s",
+                    org_id, connector_id, error_code,
                 )
+                log_event(
+                    "connector_revocation_failed",
+                    org_id=org_id,
+                    connector_id=connector_id,
+                    error_code=error_code,
+                )
+        except httpx.TimeoutException:
+            logger.warning(
+                "Slack auth.revoke timed out for %s/%s", org_id, connector_id
+            )
+        except Exception as exc:
+            logger.warning(
+                "Slack auth.revoke failed for %s/%s: %s", org_id, connector_id, exc
+            )
 
-    # --- Step 2: local deletion (always) ---
-    # connector_disconnected audit event is written by the route handler
-    # via log_event() — do not write a second record here.
+    # --- Step 2: local deletion (always executes regardless of Step 1 outcome) ---
     con = db.connect()
     try:
         con.execute(

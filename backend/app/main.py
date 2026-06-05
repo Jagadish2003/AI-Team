@@ -39,6 +39,7 @@ from .routes_sprint4_t6 import register_sprint4_t6_routes
 from .routes_sprint41_blueprint import register_blueprint_routes
 from .run_store import read_run, read_run_events, start_run_
 from .routes_workspace_catalog import register_workspace_catalog_routes
+from .routes_workspace import register_workspace_routes
 from .routes_db_connectors import register_db_connector_routes
 from .routes_temporal import register_temporal_routes
 from .security import require_auth
@@ -59,6 +60,12 @@ async def lifespan(app: FastAPI):
         validate_all_secrets(CONNECTOR_AUTH_CONFIGS)
     # Seed the dev user as owner of the default org so existing routes pass RBAC.
     seed_owner(_DEV_ORG, _DEV_USER)
+    # Ensure the temporal signal_snapshots table exists. A fresh dev.db is built
+    # by seed_loader.py, which does not run alembic migrations, so without this
+    # the baseline/temporal enrichment silently fails and the Baseline Context
+    # panel never renders. Idempotent (IF NOT EXISTS) — no-op once migrated.
+    from .temporal import ensure_signal_snapshots_table
+    ensure_signal_snapshots_table()
     # AT-90: start connector health check background job.
     from .jobs.connector_health import start_health_check_job, stop_health_check_job
     from .jobs.baseline_calculator import (
@@ -97,6 +104,7 @@ if not any(r.path == "/api/connectors/oauth/callback" for r in app.routes):
     register_connector_auth_routes(app)
 register_db_connector_routes(app)
 register_temporal_routes(app)
+register_workspace_routes(app)
 
 origins = [
     o.strip()
@@ -267,7 +275,7 @@ def get_events(run_id: str) -> List[Dict[str, Any]]:
         raise HTTPException(404, "run not found")
 
 
-@app.get("/api/runs/{run_id}/evidence", dependencies=[Depends(require_auth)])
+@app.get("/api/runs/{run_id}/evidence", dependencies=[Depends(require_auth), Depends(require_role("viewer"))])
 def list_evidence(run_id: str) -> List[Dict[str, Any]]:
     run_get(run_id)
     run_ev = run_kv_get("evidence", run_id, None)
@@ -470,7 +478,7 @@ def list_audit(run_id: str) -> List[Dict[str, Any]]:
     return sorted(audit, key=lambda e: int(e.get("tsEpoch", 0)), reverse=True)
 
 
-@app.get("/api/runs/{run_id}/roadmap", dependencies=[Depends(require_auth)])
+@app.get("/api/runs/{run_id}/roadmap", dependencies=[Depends(require_auth), Depends(require_role("viewer"))])
 def get_roadmap(run_id: str) -> Dict[str, Any]:
     run_get(run_id)
     run_roadmap = run_kv_get("roadmap", run_id, None)
@@ -488,7 +496,7 @@ def get_roadmap(run_id: str) -> Dict[str, Any]:
     return build_roadmap(with_display_titles(opps))
 
 
-@app.get("/api/runs/{run_id}/executive-report", dependencies=[Depends(require_auth)])
+@app.get("/api/runs/{run_id}/executive-report", dependencies=[Depends(require_auth), Depends(require_role("viewer"))])
 def get_exec_report(run_id: str) -> Dict[str, Any]:
     try:
         run = read_run(run_id)

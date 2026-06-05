@@ -50,7 +50,8 @@ from .db_connectors.models import (
     ScopeDeclaration,
 )
 from .middleware.audit import SCHEMA_DISCOVERED, log_event
-from .security import require_auth, require_role
+from .security import require_auth
+from .rbac import require_role
 
 try:
     from backend.connectors.db.scope import (
@@ -364,13 +365,13 @@ def post_scope(
     description=(
         "Returns the most recently saved scope declaration, or 404 if no scope "
         "has been declared for this connector. "
-        "Requires Analyst role."
+        "Requires Viewer role."
     ),
 )
 def get_scope(
     connector_id: str,
     token: str = Depends(require_auth),
-    _role: str = Depends(require_role("analyst")),
+    _role: str = Depends(require_role("viewer")),
 ) -> ScopeResponse:
     org_id = _DEV_ORG_ID
 

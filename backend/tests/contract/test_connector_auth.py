@@ -483,6 +483,88 @@ def test_build_auth_url_does_not_call_resolve_secret():
 
 
 # ---------------------------------------------------------------------------
+# PKCE (RFC 7636) — code_challenge in auth URL, code_verifier in exchange
+# ---------------------------------------------------------------------------
+
+
+def test_generate_pkce_pair_is_valid_s256():
+    """generate_pkce_pair returns (verifier, challenge) where challenge = S256(verifier)."""
+    import base64 as _b64
+    import hashlib as _hashlib
+
+    from backend.app.auth.oauth import generate_pkce_pair
+
+    verifier, challenge = generate_pkce_pair()
+    assert 43 <= len(verifier) <= 128  # RFC 7636 length bounds
+    expected = (
+        _b64.urlsafe_b64encode(_hashlib.sha256(verifier.encode("ascii")).digest())
+        .decode("ascii")
+        .rstrip("=")
+    )
+    assert challenge == expected
+    assert "=" not in challenge  # base64url, padding stripped
+
+
+def test_build_auth_url_includes_pkce_when_challenge_given():
+    """build_auth_url adds code_challenge + code_challenge_method=S256 when a challenge is passed."""
+    from urllib.parse import parse_qs, urlparse
+
+    from backend.app.auth.oauth import build_auth_url
+
+    config = _make_config()
+    qs = parse_qs(urlparse(build_auth_url(config, state="n", code_challenge="chal-123")).query)
+    assert qs["code_challenge"] == ["chal-123"]
+    assert qs["code_challenge_method"] == ["S256"]
+
+    # Omitting the challenge leaves PKCE params out (backward compatible).
+    qs_none = parse_qs(urlparse(build_auth_url(config, state="n")).query)
+    assert "code_challenge" not in qs_none
+
+
+@pytest.mark.anyio
+async def test_exchange_code_sends_code_verifier():
+    """exchange_code includes code_verifier in the token POST when provided, omits it otherwise."""
+    from backend.app.auth.oauth import exchange_code
+
+    config = _make_config()
+    with _patch.dict(_os.environ, {"_TEST_OAUTH_SECRET": "s3cr3t"}):
+        t1 = _MockTransport(200, {"access_token": "tok"})
+        await exchange_code(config, code="c", code_verifier="verifier-xyz", _transport=t1)
+        assert "code_verifier=verifier-xyz" in t1.last_request.content.decode()
+
+        t2 = _MockTransport(200, {"access_token": "tok"})
+        await exchange_code(config, code="c", _transport=t2)
+        assert "code_verifier" not in t2.last_request.content.decode()
+
+
+def test_auth_url_endpoint_emits_pkce_bound_to_stored_verifier(client):
+    """The live auth-url endpoint emits an S256 challenge bound to the stored verifier."""
+    import base64 as _b64
+    import hashlib as _hashlib
+
+    from app.auth.vault import consume_nonce
+
+    with _patch.dict(_os.environ, _vault_env()):
+        r = client.get("/api/connectors/salesforce/auth-url", headers=_AUTH_HEADERS)
+    assert r.status_code == 200
+
+    qs = _parse_qs(_urlparse(r.json()["auth_url"]).query)
+    assert qs["code_challenge_method"] == ["S256"]
+    challenge = qs["code_challenge"][0]
+    state = qs["state"][0]
+
+    # The stored nonce carries the verifier; its S256 hash must equal the challenge.
+    data = consume_nonce(state)
+    assert data is not None and data.get("code_verifier")
+    expected = (
+        _b64.urlsafe_b64encode(_hashlib.sha256(data["code_verifier"].encode("ascii")).digest())
+        .decode("ascii")
+        .rstrip("=")
+    )
+    assert expected == challenge
+
+
+# ---------------------------------------------------------------------------
 # exchange_code
 # ---------------------------------------------------------------------------
 
@@ -1359,12 +1441,12 @@ def test_connector_auth_configs_has_8_entries():
 
 def test_connector_auth_configs_flow_types():
     """authorization_code connectors: salesforce, servicenow, jira, confluence, github, slack.
-    client_credentials connectors: sap, d365. (AC16)
+    client_credentials connectors: sap, dynamics365. (AC16)
     """
     from backend.app.auth.configs import CONNECTOR_AUTH_CONFIGS
 
     auth_code = {"salesforce", "servicenow", "jira", "confluence", "github", "slack"}
-    client_creds = {"sap", "d365"}
+    client_creds = {"sap", "dynamics365"}
 
     for cid in auth_code:
         assert CONNECTOR_AUTH_CONFIGS[cid].flow == "authorization_code", (
@@ -1378,12 +1460,12 @@ def test_connector_auth_configs_flow_types():
 
 def test_connector_auth_configs_revocation_url_values():
     """Connectors with revocation_url set: salesforce, servicenow, jira, confluence.
-    Connectors with revocation_url=None: github, slack, sap, d365. (AC16)
+    Connectors with revocation_url=None: github, slack, sap, dynamics365. (AC16)
     """
     from backend.app.auth.configs import CONNECTOR_AUTH_CONFIGS
 
     has_revocation = {"salesforce", "servicenow", "jira", "confluence"}
-    no_revocation = {"github", "slack", "sap", "d365"}
+    no_revocation = {"github", "slack", "sap", "dynamics365"}
 
     for cid in has_revocation:
         assert CONNECTOR_AUTH_CONFIGS[cid].revocation_url is not None, (
@@ -1427,7 +1509,10 @@ def test_auth_url_returns_salesforce_url_with_required_params(client):
     """auth-url returns URL containing client_id, redirect_uri, non-empty state,
     response_type=code, and at least one scope (AC1).
     """
-    from backend.app.auth.configs import CONNECTOR_AUTH_CONFIGS
+    # Import from the same module the route uses (app.auth.configs, not
+    # backend.app.auth.configs) so both sides see the same SALESFORCE_CLIENT_ID
+    # value regardless of when load_dotenv() ran during the test session.
+    from app.auth.configs import CONNECTOR_AUTH_CONFIGS
 
     resp = client.get("/api/connectors/salesforce/auth-url", headers=_AUTH_HEADERS)
     assert resp.status_code == 200
@@ -1847,4 +1932,270 @@ def test_full_import_chain_no_circular_imports():
         get_token,
         revoke_token,
         store_token,
+    )
+
+
+# ---------------------------------------------------------------------------
+# AC8: Open redirect ignored — redirect_to in state never affects redirect target
+# ---------------------------------------------------------------------------
+
+
+def test_open_redirect_ignored(client):
+    """redirect_to query param in callback is ignored — redirect always goes to OAUTH_SUCCESS_REDIRECT (AC8).
+
+    Simulates an attacker appending redirect_to=https://evil.com to the callback URL.
+    The route must redirect to the hardcoded constant only.
+    """
+    with _patch.dict(_os.environ, _vault_env()):
+        r = client.get("/api/connectors/salesforce/auth-url", headers=_AUTH_HEADERS)
+    assert r.status_code == 200
+    state = _parse_qs(_urlparse(r.json()["auth_url"]).query)["state"][0]
+
+    fake_token = {"access_token": "t", "expires_in": 3600}
+    with _patch.dict(_os.environ, _vault_env()), \
+         _patch("app.routes_connector_auth.exchange_code", new_callable=_AsyncMock, return_value=fake_token), \
+         _patch("app.routes_connector_auth.store_token", return_value=None):
+        resp = client.get(
+            f"/api/connectors/oauth/callback?code=valid_code&state={state}&redirect_to=https://evil.com",
+            headers=_AUTH_HEADERS,
+            follow_redirects=False,
+        )
+
+    assert resp.status_code in (302, 303), (
+        f"Expected redirect, got {resp.status_code}"
+    )
+    location = resp.headers["location"]
+    assert "evil.com" not in location, (
+        f"Open redirect not protected — location contains evil.com: {location}"
+    )
+    assert "connected=salesforce" in location or "/integration-hub" in location, (
+        f"Redirect did not go to OAUTH_SUCCESS_REDIRECT — got: {location}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# AC9: Timing-safe state comparison — hmac.compare_digest used, not ==
+# ---------------------------------------------------------------------------
+
+
+def test_timing_safe_state_comparison(client):
+    """One-character state mismatch returns 400; hmac.compare_digest is used on
+    the live nonce-consume path (not ==) (AC9)."""
+    from app.auth import vault as _vault
+
+    with _patch.dict(_os.environ, _vault_env()):
+        r = client.get("/api/connectors/salesforce/auth-url", headers=_AUTH_HEADERS)
+    assert r.status_code == 200
+    nonce = _parse_qs(_urlparse(r.json()["auth_url"]).query)["state"][0]
+
+    bad_state = nonce[:-1] + ("a" if nonce[-1] != "a" else "b")
+
+    resp = client.get(
+        f"/api/connectors/oauth/callback?code=code&state={bad_state}",
+        headers=_AUTH_HEADERS,
+        follow_redirects=False,
+    )
+    assert resp.status_code == 400, (
+        f"Expected 400 for one-character state mismatch, got {resp.status_code}"
+    )
+
+    # The LIVE callback path validates state via vault.consume_nonce — assert it
+    # actually invokes hmac.compare_digest (not ==). Issue a fresh nonce and
+    # consume it under a wrap-patch to prove compare_digest is on the live path.
+    fresh = _secrets_mod.token_urlsafe(32)
+    _vault.store_nonce(fresh, "salesforce")
+    with _patch(
+        "app.auth.vault.hmac.compare_digest", wraps=_hmac_mod.compare_digest
+    ) as mock_cd:
+        data = _vault.consume_nonce(fresh)
+    assert mock_cd.called, (
+        "hmac.compare_digest() must be called on the live consume_nonce path (AC9)"
+    )
+    assert data is not None and data["connector_id"] == "salesforce"
+
+
+# ---------------------------------------------------------------------------
+# AC10: Nonce replay rejected — second callback with same nonce returns 400
+# ---------------------------------------------------------------------------
+
+
+def test_nonce_replay_rejected(client):
+    """Two sequential callbacks with the same valid nonce: first succeeds (302), second returns 400 (AC10)."""
+    with _patch.dict(_os.environ, _vault_env()):
+        r = client.get("/api/connectors/salesforce/auth-url", headers=_AUTH_HEADERS)
+    assert r.status_code == 200
+    state = _parse_qs(_urlparse(r.json()["auth_url"]).query)["state"][0]
+
+    fake_token = {"access_token": "tok", "expires_in": 3600}
+
+    with _patch.dict(_os.environ, _vault_env()), \
+         _patch("app.routes_connector_auth.exchange_code", new_callable=_AsyncMock, return_value=fake_token), \
+         _patch("app.routes_connector_auth.store_token", return_value=None):
+        r1 = client.get(
+            f"/api/connectors/oauth/callback?code=code1&state={state}",
+            headers=_AUTH_HEADERS,
+            follow_redirects=False,
+        )
+    assert r1.status_code in (302, 303), (
+        f"First callback did not succeed — got {r1.status_code}"
+    )
+
+    with _patch.dict(_os.environ, _vault_env()), \
+         _patch("app.routes_connector_auth.exchange_code", new_callable=_AsyncMock, return_value=fake_token), \
+         _patch("app.routes_connector_auth.store_token", return_value=None):
+        r2 = client.get(
+            f"/api/connectors/oauth/callback?code=code2&state={state}",
+            headers=_AUTH_HEADERS,
+            follow_redirects=False,
+        )
+    assert r2.status_code == 400, (
+        f"Nonce replay was not rejected — expected 400, got {r2.status_code}"
+    )
+    _clear_credentials()
+
+
+# ---------------------------------------------------------------------------
+# AC7: Nonce expiry rejected — nonce older than 10 minutes returns 400
+# ---------------------------------------------------------------------------
+
+
+# ---------------------------------------------------------------------------
+# AT-164: Slack-specific revocation branch (T1-S11 Task 1, Section 3)
+# AC1 — Slack DELETE calls auth.revoke with Bearer token
+# AC2 — ok=false writes connector_revocation_failed audit event; local deletion completes
+# AC3 — GitHub DELETE calls no external endpoint (no RFC 7009 URL, no Slack path)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.anyio
+async def test_revoke_token_slack_calls_auth_revoke_with_bearer(client):
+    """DELETE /api/connectors/slack/token calls https://slack.com/api/auth.revoke
+    with the stored Slack access token as Bearer (AT-164 AC1).
+    """
+    from backend.app.auth.vault import store_token, revoke_token
+    from backend.app.auth.models import ConnectorAuthConfig
+
+    slack_config = ConnectorAuthConfig(
+        connector_id="slack",
+        flow="authorization_code",
+        client_id="cid",
+        secret_key="_TEST_OAUTH_SECRET",
+        token_url="https://slack.com/api/oauth.v2.access",
+        scopes=["channels:read"],
+        revocation_url=None,
+    )
+    transport = _MockTransport(200, {"ok": True})
+
+    with _patch.dict(_os.environ, _vault_env()):
+        store_token("org-sl-ac1", "slack", _token_response(access_token="xoxp-slack-access"))
+        with _patch("app.auth.vault.CONNECTOR_AUTH_CONFIGS", {"slack": slack_config}):
+            await revoke_token("org-sl-ac1", "slack", _revoke_transport=transport)
+
+    assert transport.last_request is not None, "Expected auth.revoke call to Slack"
+    assert "slack.com/api/auth.revoke" in str(transport.last_request.url)
+    auth_header = transport.last_request.headers.get("authorization", "")
+    assert auth_header.startswith("Bearer "), "Authorization must use Bearer scheme"
+    assert "xoxp-slack-access" in auth_header, "Bearer token must be the stored access token"
+    assert _raw_credentials("org-sl-ac1", "slack") is None
+    _clear_credentials()
+
+
+@pytest.mark.anyio
+async def test_revoke_token_slack_ok_false_writes_audit_event():
+    """When Slack auth.revoke returns ok=false, connector_revocation_failed audit event
+    is written. Local deletion still completes. Never raises (AT-164 AC2).
+    """
+    from backend.app.auth.vault import store_token, revoke_token
+    from backend.app.auth.models import ConnectorAuthConfig
+
+    slack_config = ConnectorAuthConfig(
+        connector_id="slack",
+        flow="authorization_code",
+        client_id="cid",
+        secret_key="_TEST_OAUTH_SECRET",
+        token_url="https://slack.com/api/oauth.v2.access",
+        scopes=["channels:read"],
+        revocation_url=None,
+    )
+    transport = _MockTransport(200, {"ok": False, "error": "token_revoked"})
+
+    with _patch.dict(_os.environ, _vault_env()):
+        store_token("org-sl-ac2", "slack", _token_response(access_token="xoxp-bad"))
+        with _patch("app.auth.vault.CONNECTOR_AUTH_CONFIGS", {"slack": slack_config}), \
+             _patch("backend.app.auth.vault.log_event") as mock_log_event:
+            await revoke_token("org-sl-ac2", "slack", _revoke_transport=transport)
+
+    mock_log_event.assert_called_once_with(
+        "connector_revocation_failed",
+        org_id="org-sl-ac2",
+        connector_id="slack",
+        error_code="token_revoked",
+    )
+    assert _raw_credentials("org-sl-ac2", "slack") is None
+    _clear_credentials()
+
+
+@pytest.mark.anyio
+async def test_revoke_token_github_no_external_call():
+    """DELETE /api/connectors/github/token does not call any external endpoint —
+    no RFC 7009 revocation URL and no Slack-specific path (AT-164 AC3).
+    """
+    from backend.app.auth.vault import store_token, revoke_token
+    from backend.app.auth.models import ConnectorAuthConfig
+
+    github_config = ConnectorAuthConfig(
+        connector_id="github",
+        flow="authorization_code",
+        client_id="cid",
+        secret_key="_TEST_OAUTH_SECRET",
+        token_url="https://github.com/login/oauth/access_token",
+        scopes=["repo"],
+        revocation_url=None,
+    )
+    transport = _MockTransport(200, {})
+
+    with _patch.dict(_os.environ, _vault_env()):
+        store_token("org-gh-ac3", "github", _token_response())
+        with _patch("app.auth.vault.CONNECTOR_AUTH_CONFIGS", {"github": github_config}):
+            await revoke_token("org-gh-ac3", "github", _revoke_transport=transport)
+
+    assert transport.last_request is None, "github revocation must not call any external endpoint"
+    assert _raw_credentials("org-gh-ac3", "github") is None
+    _clear_credentials()
+
+
+def test_nonce_expiry_rejected(client):
+    """Nonce with expires_at in the past returns 400 even if never used (AC7)."""
+    import json as _json_mod
+    from datetime import timedelta, timezone
+    from app import db as _db
+    from app.auth.vault import _init_nonce_table
+
+    _init_nonce_table()
+    nonce = _secrets_mod.token_hex(16)
+    key = f"nonce:{nonce}"
+    expired_at = (datetime.now(timezone.utc) - timedelta(minutes=11)).isoformat()
+    data = _json_mod.dumps({
+        "connector_id": "salesforce",
+        "created_at": (datetime.now(timezone.utc) - timedelta(minutes=11)).isoformat(),
+        "expires_at": expired_at,
+    })
+
+    con = _db.connect()
+    try:
+        con.execute(
+            "INSERT OR REPLACE INTO nonces (key, data) VALUES (?, ?)",
+            (key, data),
+        )
+        con.commit()
+    finally:
+        con.close()
+
+    resp = client.get(
+        f"/api/connectors/oauth/callback?code=valid_code&state={nonce}",
+        headers=_AUTH_HEADERS,
+        follow_redirects=False,
+    )
+    assert resp.status_code == 400, (
+        f"Expired nonce was not rejected — expected 400, got {resp.status_code}"
     )

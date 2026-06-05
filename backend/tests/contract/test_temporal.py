@@ -17,6 +17,14 @@ client = TestClient(app)
 BASELINE_MIN_RUNS = int(os.getenv("BASELINE_MIN_RUNS", "3"))
 
 
+@pytest.fixture(autouse=True, scope="module")
+def seed_dev_owner():
+    """Seed dev-token as owner of 'default' org so RBAC checks pass."""
+    from app.rbac import seed_owner, _ensure_members_table
+    _ensure_members_table()
+    seed_owner("default", "dev-token-change-me")
+
+
 def auth_headers():
     return {"Authorization": f"Bearer {os.environ['DEV_JWT']}"}
 

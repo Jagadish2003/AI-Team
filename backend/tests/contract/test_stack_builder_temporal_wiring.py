@@ -23,8 +23,9 @@ def test_stack_builder_compute_flow_writes_temporal_fields(monkeypatch):
     def fake_run_kv_set(key, run_id, value):
         stored[key] = value
 
-    def fake_calculate_baselines():
+    def fake_calculate_baselines_for_org(org_id):
         calls["baseline_calculated"] = True
+        calls["baseline_org_id"] = org_id
 
     def fake_enrich(run_id, org_id, pack_id, opps):
         calls["enrich_args"] = (run_id, org_id, pack_id)
@@ -46,7 +47,10 @@ def test_stack_builder_compute_flow_writes_temporal_fields(monkeypatch):
 
     monkeypatch.setattr(route.db, "run_kv_get", fake_run_kv_get)
     monkeypatch.setattr(route.db, "run_kv_set", fake_run_kv_set)
-    monkeypatch.setattr("app.jobs.baseline_calculator.calculate_baselines", fake_calculate_baselines)
+    monkeypatch.setattr(
+        "app.jobs.baseline_calculator.calculate_baselines_for_org",
+        fake_calculate_baselines_for_org,
+    )
     monkeypatch.setattr(
         "app.temporal_enrichment.enrich_opportunities_with_temporal_context",
         fake_enrich,
@@ -54,11 +58,14 @@ def test_stack_builder_compute_flow_writes_temporal_fields(monkeypatch):
     monkeypatch.setattr("app.telemetry.record_event", fake_record_event)
     monkeypatch.setattr("app.middleware.tenancy.get_current_org_id_optional", lambda: None)
 
+    # org_id is now resolved by the caller and passed in explicitly so it
+    # matches the org the signal snapshots were written under.
     route._apply_temporal_enrichment(
         "run_123",
         {"id": "run_123", "orgId": "demo-org"},
         "service_cloud",
         [{"id": "opp_001", "_debug": {"detector_id": "REPETITIVE_AUTOMATION", "metric_value": 2.2}}],
+        "demo-org",
     )
 
     enriched = stored[KV_LLM_ENRICHMENT]["perOpportunity"]["opp_001"]

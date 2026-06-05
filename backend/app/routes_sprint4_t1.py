@@ -16,6 +16,7 @@ from fastapi import BackgroundTasks, Depends, HTTPException, FastAPI
 from pydantic import BaseModel, Field
 
 from .security import require_auth
+from .rbac import require_role
 from . import db
 from .connector_metrics import update_connector_metrics_from_run
 from .trackb_runner import run_trackb
@@ -118,19 +119,22 @@ def _apply_temporal_enrichment(
     run: Dict[str, Any],
     pack: Optional[str],
     opps: List[Dict[str, Any]],
+    org_id: str,
 ) -> List[Dict[str, Any]]:
-    """Attach temporal context to the active compute path without blocking runs."""
+    """Attach temporal context to the active compute path without blocking runs.
+
+    org_id must be the same value the signal snapshots were written under (the
+    org_id passed to the runner), otherwise the baseline read finds no history.
+    """
     try:
         from .llm_enrichment import KV_LLM_ENRICHMENT
-        from .jobs.baseline_calculator import calculate_baselines
-        from .middleware.tenancy import get_current_org_id_optional
+        from .jobs.baseline_calculator import calculate_baselines_for_org
         from .telemetry import record_event
         from .temporal_enrichment import enrich_opportunities_with_temporal_context
 
-        org_id = _org_id_for_run(run, get_current_org_id_optional() or "default")
         pack_id = _pack_id_for_run(run) or pack or ""
 
-        calculate_baselines()
+        calculate_baselines_for_org(org_id or "default")
         opps = enrich_opportunities_with_temporal_context(
             run_id,
             org_id or "default",
@@ -211,12 +215,18 @@ def _run_trackb_and_persist(run_id: str, mode: str, systems: List[str], pack: Op
 
         from discovery.runner import run as trackb_run
         from discovery.track_a_adapter import export_track_a_seed
+        from .middleware.tenancy import get_current_org_id_optional
 
         _emit_event(
             run_id, "EXTRACT", "Extracting entities and identifying patterns..."
         )
+        # Resolve org_id once and pass it to the runner so signal snapshots are
+        # written under the same org the temporal read uses below. Without an
+        # explicit org_id the runner falls back to its own "demo-org" default,
+        # which never matches the read org and hides the Baseline Context panel.
+        run_org_id = _org_id_for_run(run, get_current_org_id_optional() or "default")
         payload = trackb_run(
-            mode=mode, systems=succeeded, run_id=run_id, pack=pack
+            mode=mode, systems=succeeded, run_id=run_id, org_id=run_org_id, pack=pack
         )
         seed = export_track_a_seed(payload)
 
@@ -333,7 +343,7 @@ def _run_trackb_and_persist(run_id: str, mode: str, systems: List[str], pack: Op
             _emit_event(run_id, "AI_ERROR", f"AI analysis failed: {e}", level="WARNING")
 
         # T7 - temporal enrichment (non-blocking, T3-S11-A)
-        opps = _apply_temporal_enrichment(run_id, run, pack, opps)
+        opps = _apply_temporal_enrichment(run_id, run, pack, opps, run_org_id)
 
         status = "complete" if len(succeeded) == len(systems) else "partial"
         audit_action = (
@@ -373,7 +383,7 @@ def register_sprint4_t1_routes(app: FastAPI) -> None:
     @app.post(
         "/api/runs/{run_id}/compute",
         response_model=ComputeResponse,
-        dependencies=[Depends(require_auth)],
+        dependencies=[Depends(require_auth), Depends(require_role("analyst"))],
     )
     async def compute_run(run_id: str, body: ComputeRequest, background_tasks: BackgroundTasks) -> ComputeResponse:
         # Ensure run exists. db.run_get should raise 404; keep defensive for alternate impls.
@@ -408,7 +418,7 @@ def register_sprint4_t1_routes(app: FastAPI) -> None:
     @app.get(
         "/api/runs/{run_id}/status",
         response_model=RunStatus,
-        dependencies=[Depends(require_auth)],
+        dependencies=[Depends(require_auth), Depends(require_role("viewer"))],
     )
     async def get_status(run_id: str) -> RunStatus:
         run = db.run_get(run_id)
@@ -424,7 +434,7 @@ def register_sprint4_t1_routes(app: FastAPI) -> None:
 
     @app.get(
         "/api/runs/{run_id}/connector-health",
-        dependencies=[Depends(require_auth)],
+        dependencies=[Depends(require_auth), Depends(require_role("viewer"))],
     )
     async def get_connector_health(run_id: str) -> Dict[str, Any]:
         """

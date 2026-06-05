@@ -6,7 +6,9 @@ from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Query
 
-from .security import require_auth, require_role
+from .middleware.tenancy import get_current_org_id
+from .rbac import require_role
+from .security import require_auth
 from .temporal import get_baseline, get_run_signals, get_signal_history
 
 TEMPORAL_HISTORY_PATH = "/api/temporal/{detector_id}/history"
@@ -30,10 +32,10 @@ router = APIRouter(tags=["temporal"])
 @router.get(TEMPORAL_HISTORY_PATH, dependencies=analyst_dependencies)
 def temporal_signal_history(
     detector_id: str,
-    org_id: str = Query("org_default"),
     signal_key: str = Query("metric_value"),
     limit: int = Query(10, ge=1, le=50),
 ) -> List[Dict[str, Any]]:
+    org_id = get_current_org_id()
     rows = get_signal_history(org_id, detector_id, signal_key, limit)
     if not rows:
         raise HTTPException(status_code=404, detail="signal history not found")
@@ -43,8 +45,8 @@ def temporal_signal_history(
 @router.get(TEMPORAL_BASELINE_PATH, dependencies=analyst_dependencies)
 def temporal_baseline(
     detector_id: str,
-    org_id: str = Query("org_default"),
 ) -> Dict[str, Any]:
+    org_id = get_current_org_id()
     baseline = get_baseline(org_id, detector_id)
     if baseline is None:
         raise HTTPException(status_code=404, detail="baseline not found")
@@ -61,8 +63,8 @@ def temporal_baseline(
 @router.get(RUN_SIGNALS_PATH, dependencies=analyst_dependencies)
 def run_signals(
     run_id: str,
-    org_id: str = Query("org_default"),
 ) -> List[Dict[str, Any]]:
+    org_id = get_current_org_id()
     return get_run_signals(org_id, run_id)
 
 

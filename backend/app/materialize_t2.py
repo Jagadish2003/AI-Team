@@ -351,11 +351,15 @@ def run_trackb_and_persist(
         try:
             from .llm_enrichment import KV_LLM_ENRICHMENT as _KV_LLM
             from .jobs.baseline_calculator import calculate_baselines
-            from .middleware.tenancy import get_current_org_id_optional
             from .telemetry import record_event
             from .temporal_enrichment import enrich_opportunities_with_temporal_context
 
-            _org_id = _org_id_for_run(run, get_current_org_id_optional() or "default")
+            # Read baselines under the SAME org_id the snapshots were written
+            # with (the value passed to trackb_run above). Resolving the org
+            # again with a different fallback would let a run with no explicit
+            # orgId write under "demo-org" but read under "default", so it
+            # would never find its own history.
+            _org_id = run_org_id
             _pack_id = _pack_id_for_run(run)
             calculate_baselines()
             opps = enrich_opportunities_with_temporal_context(run_id, _org_id, _pack_id or "", opps)

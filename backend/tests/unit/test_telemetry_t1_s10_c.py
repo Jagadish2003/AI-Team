@@ -21,15 +21,15 @@ import pytest
 # ---------------------------------------------------------------------------
 
 def test_db_query_executed_in_registry():
-    """db.query_executed must be in EVENT_TYPE_REGISTRY."""
-    from app.telemetry import EVENT_TYPE_REGISTRY
-    assert "db.query_executed" in EVENT_TYPE_REGISTRY
+    """db.query_executed must be in the telemetry event registry."""
+    from app.telemetry import EVENT_REGISTRY
+    assert "db.query_executed" in EVENT_REGISTRY
 
 
 def test_db_ingestor_completed_in_registry():
-    """db.ingestor_completed must be in EVENT_TYPE_REGISTRY."""
-    from app.telemetry import EVENT_TYPE_REGISTRY
-    assert "db.ingestor_completed" in EVENT_TYPE_REGISTRY
+    """db.ingestor_completed must be in the telemetry event registry."""
+    from app.telemetry import EVENT_REGISTRY
+    assert "db.ingestor_completed" in EVENT_REGISTRY
 
 
 # ---------------------------------------------------------------------------
@@ -129,17 +129,22 @@ def test_record_event_accepts_db_query_executed(caplog):
         mock_sess.return_value.commit = lambda: None
 
         with caplog.at_level(logging.WARNING, logger="app.telemetry"):
+            # Locked signature: record_event(event_type, payload). All event
+            # metadata travels inside the payload dict (record_event extracts
+            # org_id/source/connector_id/duration_ms/success/count from it).
             record_event(
                 "db.query_executed",
                 {
-                    "org_id":       "org-test",
-                    "source":       "connector",
-                    "connector_id": "sqlserver",
-                    "query_hash":   "abc123",
-                    "row_count":    100,
-                    "duration_ms":  42,
-                    "driver":       "pyodbc",
-                    "truncated":    False,
+                    "org_id": "org-test",
+                    "source": "salesforce_ingestor",
+                    "connector_id": "salesforce",
+                    "duration_ms": 42,
+                    "success": True,
+                    "count": 100,
+                    "query_hash": "abc123",
+                    "row_count": 100,
+                    "driver": "salesforce_soql",
+                    "truncated": False,
                 },
             )
 
@@ -163,6 +168,7 @@ def test_record_event_accepts_db_ingestor_completed(caplog):
         mock_sess.return_value.commit = lambda: None
 
         with caplog.at_level(logging.WARNING, logger="app.telemetry"):
+            # Locked signature: record_event(event_type, payload).
             record_event(
                 "db.ingestor_completed",
                 {

@@ -581,7 +581,28 @@ class TestPoolsAndCredentials:
 class TestApiRoutes:
     @pytest.fixture()
     def client(self) -> TestClient:
-        return TestClient(app)
+        with TestClient(app) as c:
+            yield c
+
+    def _viewer_headers(self) -> dict:
+        """Return headers with viewer-role token scoped to a fresh org."""
+        import uuid
+        from datetime import datetime, timezone
+        from app import db
+        from app.rbac import _ensure_members_table
+        _ensure_members_table()
+        org_id = f"viewer_test_{uuid.uuid4().hex[:8]}"
+        con = db.connect()
+        try:
+            con.execute(
+                "INSERT OR REPLACE INTO workspace_members (org_id, user_id, role, created_at) "
+                "VALUES (?, ?, ?, ?)",
+                (org_id, "dev-token-change-me", "viewer", datetime.now(timezone.utc).isoformat()),
+            )
+            con.commit()
+        finally:
+            con.close()
+        return {**AUTH, "X-Org-Id": org_id}
 
     @pytest.mark.parametrize(
         "method,path,json_body",
@@ -605,22 +626,22 @@ class TestApiRoutes:
     @pytest.mark.parametrize(
         "method,path,json_body",
         [
+            # analyst+ routes — viewer gets 403
             ("GET", "/api/db-connectors/sqlserver/schema", None),
             ("POST", "/api/db-connectors/sqlserver/scope", {"schemas": ["dbo"], "tables": []}),
-            ("GET", "/api/db-connectors/sqlserver/scope", None),
             ("GET", "/api/db-connectors/sqlserver/connection-test", None),
         ],
     )
-    def test_ac18_all_endpoints_return_403_for_viewer_role(
+    def test_ac18_analyst_endpoints_return_403_for_viewer_role(
         self,
-        monkeypatch: pytest.MonkeyPatch,
         client: TestClient,
         method: str,
         path: str,
         json_body: dict[str, Any] | None,
     ) -> None:
-        monkeypatch.setattr(app_security, "_DEV_TOKEN_ROLES", frozenset({"viewer"}))
-        response = client.request(method, path, headers=AUTH, json=json_body)
+        # GET /scope is viewer+ (200 for viewer); only analyst+ routes are tested here
+        headers = self._viewer_headers()
+        response = client.request(method, path, headers=headers, json=json_body)
         assert response.status_code == 403
 
     def test_ac16_connection_test_uses_connect_timeout(

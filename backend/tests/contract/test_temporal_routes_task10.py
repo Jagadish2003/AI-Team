@@ -1,6 +1,7 @@
 import os
 from uuid import uuid4
 
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -12,6 +13,26 @@ from app.routes_temporal import TEMPORAL_ROUTE_PATHS, register_temporal_routes
 
 
 client = TestClient(app)
+
+
+@pytest.fixture(autouse=True, scope="module")
+def seed_roles():
+    """Seed dev-token as owner and viewer-token as viewer of 'default' org."""
+    from app.rbac import _ensure_members_table, seed_owner
+    from app import db
+    from datetime import datetime, timezone
+    _ensure_members_table()
+    seed_owner("default", "dev-token-change-me")
+    con = db.connect()
+    try:
+        con.execute(
+            "INSERT OR REPLACE INTO workspace_members (org_id, user_id, role, created_at) "
+            "VALUES (?, ?, ?, ?)",
+            ("default", "viewer-token", "viewer", datetime.now(timezone.utc).isoformat()),
+        )
+        con.commit()
+    finally:
+        con.close()
 
 
 def auth_headers() -> dict[str, str]:
@@ -85,63 +106,57 @@ def test_temporal_route_registration_is_idempotent():
 
 
 def test_history_route_defaults_to_metric_value_and_scopes_org():
+    # Use "default" org — dev-token is seeded as owner there by seed_roles fixture.
     detector_id = f"det_task10_{uuid4().hex[:8]}"
-    org_id = f"org_task10_{uuid4().hex[:8]}"
 
     insert_snapshot(
-        org_id=org_id,
+        org_id="default",
         detector_id=detector_id,
         run_id="run_history_1",
         value=1.0,
         captured_at="2026-05-01T10:00:00",
     )
     insert_snapshot(
-        org_id=org_id,
+        org_id="default",
         detector_id=detector_id,
         run_id="run_history_2",
         value=2.0,
         captured_at="2026-05-02T10:00:00",
     )
     insert_snapshot(
-        org_id=org_id,
+        org_id="default",
         detector_id=detector_id,
         run_id="run_history_3",
         value=3.0,
         captured_at="2026-05-03T10:00:00",
     )
-    insert_snapshot(
-        org_id=f"{org_id}_other",
-        detector_id=detector_id,
-        run_id="run_history_other",
-        value=99.0,
-        captured_at="2026-05-04T10:00:00",
-    )
 
+    # No X-Org-Id header → tenancy middleware defaults to "default" org.
     response = client.get(
         f"/api/temporal/{detector_id}/history",
         headers=auth_headers(),
-        params={"org_id": org_id, "limit": 2},
+        params={"limit": 2},
     )
 
     assert response.status_code == 200
     rows = response.json()
     assert [row["metric_value"] for row in rows] == [3.0, 2.0]
-    assert {row["org_id"] for row in rows} == {org_id}
+    assert {row["org_id"] for row in rows} == {"default"}
 
 
 def test_baseline_route_returns_task10_shape_with_insufficient_data():
+    # Use "default" org — dev-token is seeded as owner there by seed_roles fixture.
     detector_id = f"det_task10_{uuid4().hex[:8]}"
-    org_id = f"org_task10_{uuid4().hex[:8]}"
 
     insert_snapshot(
-        org_id=org_id,
+        org_id="default",
         detector_id=detector_id,
         run_id="run_baseline_1",
         value=10.0,
         captured_at="2026-05-01T10:00:00",
     )
     insert_snapshot(
-        org_id=org_id,
+        org_id="default",
         detector_id=detector_id,
         run_id="run_baseline_2",
         value=12.0,
@@ -151,7 +166,6 @@ def test_baseline_route_returns_task10_shape_with_insufficient_data():
     response = client.get(
         f"/api/temporal/{detector_id}/baseline",
         headers=auth_headers(),
-        params={"org_id": org_id},
     )
 
     assert response.status_code == 200
@@ -169,8 +183,9 @@ def test_baseline_route_returns_task10_shape_with_insufficient_data():
 
 
 def test_run_signals_route_returns_404_for_different_org():
-    detector_id = f"det_task10_{uuid4().hex[:8]}"
+    # Data inserted for a non-"default" org; querying "default" org → 404.
     run_id = f"run_task10_{uuid4().hex[:8]}"
+    detector_id = f"det_task10_{uuid4().hex[:8]}"
 
     insert_snapshot(
         org_id="org_task10_owner",
@@ -180,10 +195,10 @@ def test_run_signals_route_returns_404_for_different_org():
         captured_at="2026-05-01T10:00:00",
     )
 
+    # No X-Org-Id → tenancy uses "default". run_id belongs to "org_task10_owner" → 404.
     response = client.get(
         f"/api/runs/{run_id}/signals",
         headers=auth_headers(),
-        params={"org_id": "org_task10_other"},
     )
 
     assert response.status_code == 404
@@ -218,6 +233,23 @@ def test_trend_endpoint_returns_correct_fields():
     """Trend endpoint returns all six required fields for a known detector."""
     detector_id = f"det_t8_{uuid4().hex[:8]}"
     org_id = f"org_t8_{uuid4().hex[:8]}"
+
+    # The trend route requires analyst; the route reads org from X-Org-Id, so
+    # seed the dev token's role in this fresh org or RBAC returns 403.
+    from app.rbac import _ensure_members_table
+    from app import db as _db
+    from datetime import datetime as _dt, timezone as _tz
+    _ensure_members_table()
+    _con = _db.connect()
+    try:
+        _con.execute(
+            "INSERT OR REPLACE INTO workspace_members (org_id, user_id, role, created_at) "
+            "VALUES (?, ?, 'analyst', ?)",
+            (org_id, os.environ["DEV_JWT"], _dt.now(_tz.utc).isoformat()),
+        )
+        _con.commit()
+    finally:
+        _con.close()
 
     for i, val in enumerate([10.0, 12.0, 14.0, 16.0, 18.0]):
         insert_snapshot(

@@ -14,6 +14,7 @@ from app.auth.oauth import (
     OAuthError,
     build_auth_url,
     exchange_code,
+    generate_pkce_pair,
     get_client_credentials_token,
     refresh_token,
 )
@@ -30,6 +31,7 @@ __all__ = [
     "OAuthError",
     "build_auth_url",
     "exchange_code",
+    "generate_pkce_pair",
     "get_client_credentials_token",
     "refresh_token",
     "get_token",

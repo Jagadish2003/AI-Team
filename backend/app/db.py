@@ -289,3 +289,81 @@ def tenancy_get_one(table: str, id_: str) -> Optional[Dict[str, Any]]:
     if row_org is not None and row_org != org_id:
         return None  # silently deny — same as not found (AC1)
     return row
+
+
+# ===========================================================================
+# Legacy table audit — AT-156 / T1-S11 Task 2 Section 4b (Item 5)
+# ===========================================================================
+# Every table reachable through this application is enumerated below with its
+# tenancy status: (a) org-scoped customer data isolated by org_id (with a
+# tenancy_get_* wrapper where served through db.py's generic accessors), (b)
+# run-scoped customer data isolated via run ownership, or (c) intentionally
+# cross-org reference/global data. No table is left undocumented (AC18).
+#
+# --- Org-scoped customer-data tables served via db.py ----------------------
+#   connectors  — {id, payload}; org_id carried in payload.
+#                 Wrapper: tenancy_get_connectors(org_id).
+#   runs        — {id, payload}; org_id carried in payload.
+#                 Wrapper: tenancy_get_runs(org_id).
+#                 (The request-scoped generic guard tenancy_get_all/_one also
+#                  filters these by the current org context.)
+#
+# --- Run-scoped customer data (isolation via run ownership) ----------------
+#   kv          — {key, payload}. Stores run artifacts keyed "{name}:{run_id}"
+#                 (opps, evidence, roadmap, executive_report, …; see
+#                 run_kv_get/run_kv_set) AND org-keyed entries such as the
+#                 Stack Builder state written as "setup_state:{org_id}". No
+#                 org_id column — isolation is transitive through the run_id
+#                 (org-scoped via runs) or the explicit org_id key segment.
+#   run_events  — (run_id, seq, payload). Per-run event stream, keyed by run_id.
+#   opportunities / evidence / executive_reports — legacy {id, payload} tables.
+#                 Authoritative runtime data is the run-scoped kv store above;
+#                 these tables back decision/override reads (get_one/upsert by
+#                 id) and inherit org isolation through run ownership. Not
+#                 cross-org reference data.
+#
+# --- Intentionally cross-org reference / demo seed data --------------------
+# CROSS-ORG TABLE: entities, mappings, permissions, uploads, audit_events
+# Global reference / demo seed catalogues (normalization entities, process
+# mappings, permission catalogue, upload templates, legacy demo audit rows).
+# No per-org customer data. Tenancy guard does not apply. Read-only reference.
+#
+# CROSS-ORG REGISTRY: industries
+# NOTE: "industries" is NOT a database table — it is an in-code registry
+# (discovery/packs/industry_registry.py, INDUSTRY_REGISTRY). Global reference
+# data only; read-only from all orgs. Documented here because Section 4b lists
+# it; "setup_state" likewise is not its own table (see kv above).
+#
+# --- Org-native tables owned by other modules (enforced there) -------------
+#   workspace_members — native org_id; enforced in app/rbac.py ("WHERE org_id").
+#   audit_log         — native org_id; enforced in app/middleware/audit.py and
+#                       the /api/audit-log reader ("WHERE org_id = ?").
+#   signal_snapshots  — native org_id; enforced in app/temporal.py — every
+#                       query (history, baseline, run-signals) filters
+#                       "WHERE org_id = ?" (verified AT-156).
+#   telemetry_events  — native org_id column (database/models/telemetry.py).
+#   credentials       — native org_id; UNIQUE(org_id, connector_id); enforced
+#                       in app/auth/vault.py.
+#   nonces / oauth_nonces — short-lived OAuth/CSRF nonces. No customer data.
+# ===========================================================================
+
+
+def _tenancy_filter(table: str, org_id: str) -> List[Dict[str, Any]]:
+    """Return rows of *table* belonging to *org_id* only. Never cross-org.
+
+    org_id is passed explicitly (not read from request context) so the helper
+    is safe to call from background jobs as well as request handlers
+    (Section 4d). Strict equality — rows tagged with a different org_id are
+    excluded.
+    """
+    return [r for r in get_all(table) if r.get("org_id") == org_id]
+
+
+def tenancy_get_connectors(org_id: str) -> List[Dict[str, Any]]:
+    """Returns connectors for org_id only. Never cross-org."""
+    return _tenancy_filter("connectors", org_id)
+
+
+def tenancy_get_runs(org_id: str) -> List[Dict[str, Any]]:
+    """Returns runs for org_id only. Never cross-org."""
+    return _tenancy_filter("runs", org_id)

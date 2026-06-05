@@ -21,13 +21,19 @@ from typing import Dict, Optional
 from fastapi import Depends, FastAPI, HTTPException, Query, Response
 from fastapi.responses import RedirectResponse
 
-from . import db
-from .auth import build_auth_url, exchange_code, revoke_token, store_token
-from .auth.configs import CONNECTOR_AUTH_CONFIGS
-from .auth.vault import REFRESH_THRESHOLD_SECONDS
-from .middleware.audit import log_event
-from .rbac import _get_user_id_from_token
-from .security import require_auth
+from app import db
+from app.auth import (
+    build_auth_url,
+    exchange_code,
+    generate_pkce_pair,
+    revoke_token,
+    store_token,
+)
+from app.auth.configs import CONNECTOR_AUTH_CONFIGS
+from app.auth.vault import REFRESH_THRESHOLD_SECONDS, consume_nonce, store_nonce
+from app.middleware.audit import log_event
+from app.rbac import _get_user_id_from_token
+from app.security import require_auth
 from database.models.credentials import (
     ALTER_CREDENTIALS_ADD_REFRESH_FAILED,
     CREATE_CREDENTIALS_IDX_CONNECTOR,
@@ -132,7 +138,7 @@ def _consume_nonce(state: str) -> Optional[str]:
 
     # Timing-safe comparison (spec requirement: use hmac.compare_digest, not ==)
     if not hmac.compare_digest(stored_nonce, state):
-        return None
+        raise HTTPException(status_code=400, detail='Invalid state')
 
     return connector_id
 
@@ -168,10 +174,12 @@ def register_connector_auth_routes(app: FastAPI) -> None:
                 status_code=302,
             )
 
-        connector_id = _consume_nonce(state)
-        if connector_id is None:
+        nonce_data = consume_nonce(state)
+        if nonce_data is None:
             # AC3: HTTP 400 on state mismatch, generic message, no detail
             raise HTTPException(status_code=400, detail="Invalid request")
+        connector_id = nonce_data["connector_id"]
+        code_verifier = nonce_data.get("code_verifier")
 
         config = CONNECTOR_AUTH_CONFIGS.get(connector_id)
         if config is None:
@@ -181,7 +189,7 @@ def register_connector_auth_routes(app: FastAPI) -> None:
             )
 
         try:
-            token_response = await exchange_code(config, code)
+            token_response = await exchange_code(config, code, code_verifier=code_verifier)
             store_token(_DEFAULT_ORG_ID, connector_id, token_response)
         except Exception:
             logger.exception("Token exchange failed for connector %s", connector_id)
@@ -224,8 +232,12 @@ def register_connector_auth_routes(app: FastAPI) -> None:
             )
 
         state = _secrets_mod.token_urlsafe(32)
-        _store_nonce(state, connector_id)
-        auth_url = build_auth_url(config, state)
+        # PKCE (RFC 7636): bind a per-request verifier to the state nonce and
+        # send its S256 challenge in the authorize URL. Required by providers
+        # that enforce PKCE (e.g. Salesforce "Require PKCE").
+        code_verifier, code_challenge = generate_pkce_pair()
+        store_nonce(state, connector_id, code_verifier=code_verifier)
+        auth_url = build_auth_url(config, state, code_challenge=code_challenge)
         return {"auth_url": auth_url, "connector_id": connector_id}
 
     @app.delete(
