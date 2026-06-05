@@ -1,5 +1,6 @@
 from app.executive_report_engine import build_executive_report
 from app.materialize_t2 import _selected_system_ids_for_report
+from app.opportunity_display import with_exec_report_display_titles
 from discovery.ingest.strs_sn_corroboration import fetch_strs_sn_incidents
 
 
@@ -12,6 +13,22 @@ def test_executive_report_counts_selected_system_ids():
     )
 
     assert report["sourcesAnalyzed"]["totalConnected"] == 3
+
+
+def test_executive_report_confidence_uses_contract_title_case():
+    report = build_executive_report(
+        run_id="run_001",
+        opps=[],
+        roadmap={},
+    )
+
+    assert report["confidence"] == "Low"
+
+
+def test_persisted_executive_report_confidence_is_normalized():
+    report = with_exec_report_display_titles({"confidence": "MODERATE"})
+
+    assert report["confidence"] == "Moderate"
 
 
 def test_report_system_ids_prefer_stack_builder_setup_context(monkeypatch):
