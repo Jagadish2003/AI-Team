@@ -30,15 +30,15 @@ export default function BaselineContextPanel({ enrichment }: Props) {
   // Insufficient data — fewer than 3 runs
   if (run_count !== null && run_count < 3) {
     return (
-      <div className="space-y-1.5">
-        <div className="text-sm font-semibold text-text">Baseline Context</div>
-        <div className="rounded-lg border border-border bg-bg/30 px-4 py-3">
+      <div>
+        <div className="mb-2 text-xs font-semibold text-text">Baseline Context</div>
+        <div className="rounded-lg border border-border bg-bg/30 p-3">
           <div className="flex items-start gap-3">
             <span className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-blue-500/25 bg-blue-500/10 text-blue-500">
               <History size={15} aria-hidden="true" />
             </span>
-            <p className="text-xs text-muted leading-relaxed">
-            Baseline context will appear after 3 or more discovery runs.
+            <p className="pt-1 text-xs text-text leading-relaxed">
+              Baseline context will appear after 3 or more discovery runs.
             </p>
           </div>
         </div>
@@ -67,10 +67,10 @@ export default function BaselineContextPanel({ enrichment }: Props) {
   const TrendIcon = trendStyle.icon;
 
   return (
-    <div className="space-y-1.5">
-      <div className="text-sm font-semibold text-text">Baseline Context</div>
+    <div>
+      <div className="mb-2 text-xs font-semibold text-text">Baseline Context</div>
 
-      <div className="rounded-lg border border-border bg-bg/30 px-4 py-3 space-y-2">
+      <div className="rounded-lg border border-border bg-bg/30 p-3 space-y-2">
         {/* Trend row */}
         <div className="flex items-start gap-3">
           <span
@@ -78,7 +78,7 @@ export default function BaselineContextPanel({ enrichment }: Props) {
           >
             <TrendIcon size={16} aria-hidden="true" />
           </span>
-          <span className="pt-1 text-xs font-medium text-text leading-relaxed">
+          <span className="pt-1 text-xs text-text leading-relaxed">
             {baseline_context}
           </span>
         </div>
@@ -101,7 +101,7 @@ export default function BaselineContextPanel({ enrichment }: Props) {
 
         {/* Run count footnote */}
         {run_count !== null && (
-          <div className="flex items-center gap-1.5 pl-11 text-xs text-muted">
+          <div className="flex items-center gap-1.5 pl-11 text-xs text-text leading-relaxed">
             <History size={11} className="text-blue-500/80" aria-hidden="true" />
             <span>
               Based on {run_count} run{run_count === 1 ? "" : "s"}

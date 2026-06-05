@@ -66,13 +66,16 @@ async def lifespan(app: FastAPI):
         start_scheduler as start_baseline_scheduler,
     )
 
-    start_health_check_job()
-    start_baseline_scheduler()
+    background_jobs_disabled = os.getenv("AGENTIQ_DISABLE_BACKGROUND_JOBS") == "1"
+    if not background_jobs_disabled:
+        start_health_check_job()
+        start_baseline_scheduler()
     yield
     # AT-90: shut down scheduler on SIGTERM / graceful shutdown (wait=False).
-    stop_health_check_job()
-    if baseline_scheduler.running:
-        baseline_scheduler.shutdown(wait=False)
+    if not background_jobs_disabled:
+        stop_health_check_job()
+        if baseline_scheduler.running:
+            baseline_scheduler.shutdown(wait=False)
 
 
 app = FastAPI(title="AgentIQ Layer 1 API Skeleton", version="0.1.0", lifespan=lifespan)

@@ -134,7 +134,7 @@ describe("BaselineContextPanel", () => {
       />
     );
     expect(
-      screen.getByText("First deviation from stable baseline")
+      screen.getByText("First deviation from a previously stable baseline")
     ).toBeTruthy();
   });
 
