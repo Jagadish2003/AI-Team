@@ -48,20 +48,20 @@ def upgrade() -> None:
         CREATE INDEX IF NOT EXISTS idx_entities_org_canonical
             ON entities (org_id, entity_type, canonical_name)
     """)
-    # Scoped entity listing by type within an org
-    op.execute("""
-        CREATE INDEX IF NOT EXISTS idx_entities_org_type
-            ON entities (org_id, entity_type)
-    """)
     # Run-scoped entity queries (e.g. entities seen in a given run)
     op.execute("""
         CREATE INDEX IF NOT EXISTS idx_entities_org_run
             ON entities (org_id, last_seen_run_id)
     """)
+    # Suppress low-frequency/service-account entities during enrichment
+    op.execute("""
+        CREATE INDEX IF NOT EXISTS idx_entities_org_run_count
+            ON entities (org_id, run_count)
+    """)
 
 
 def downgrade() -> None:
+    op.execute("DROP INDEX IF EXISTS idx_entities_org_run_count")
     op.execute("DROP INDEX IF EXISTS idx_entities_org_run")
-    op.execute("DROP INDEX IF EXISTS idx_entities_org_type")
     op.execute("DROP INDEX IF EXISTS idx_entities_org_canonical")
     op.execute("DROP TABLE IF EXISTS entities")

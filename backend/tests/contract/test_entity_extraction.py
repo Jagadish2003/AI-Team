@@ -1,27 +1,25 @@
-"""Contract tests for T3-S12-A — Entity Extraction from Ingestor Runs.
+"""Contract tests for T3-S12-A - Entity Extraction from Ingestor Runs.
 
-T1 coverage (this file):
-  AC1 — entities table exists with all 15 columns including
-         resolution_confidence and resolution_status.
+T1 coverage:
+  AC1 - entities table exists with all 15 columns including
+        resolution_confidence and resolution_status.
+  AC1 - required indexes support resolution lookup, run-scoped queries,
+        and run_count filtering.
+  AC1 - entity rows can be inserted and queried by org_id, run_id,
+        canonical_name, and source_record_id.
 
-Remaining ACs (AC2–AC12) are covered by T2–T8 stories.
+Remaining ACs (AC2-AC12) are covered by T2-T8 stories.
 """
-import sqlite3
 import os
-import pytest
+import sqlite3
 
 
 def _get_db_path() -> str:
     return os.environ["DB_PATH"]
 
 
-# ---------------------------------------------------------------------------
-# AC1 — entities table schema
-# ---------------------------------------------------------------------------
-
 class TestEntitiesTableSchema:
-    """AC1: entities table created with all 15 columns including
-    resolution_confidence and resolution_status."""
+    """AC1: entities table created with all required columns and indexes."""
 
     def _columns(self) -> dict[str, dict]:
         """Return {column_name: pragma_row} for the entities table."""
@@ -35,6 +33,49 @@ class TestEntitiesTableSchema:
         with sqlite3.connect(_get_db_path()) as conn:
             conn.row_factory = sqlite3.Row
             return [dict(r) for r in conn.execute("PRAGMA index_list(entities)").fetchall()]
+
+    def _index_columns(self, index_name: str) -> list[str]:
+        """Return ordered column names for a specific entities index."""
+        with sqlite3.connect(_get_db_path()) as conn:
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute(f"PRAGMA index_info({index_name})").fetchall()
+        return [r["name"] for r in rows]
+
+    def _insert_entity(self) -> dict:
+        from database.models.entities import Entity
+
+        entity = Entity(
+            org_id="test-org",
+            entity_type="person",
+            canonical_name="sarah chen",
+            display_name="Sarah Chen",
+            source_system="jira",
+            source_record_id="JIRA-123",
+            resolution_confidence=0.8,
+            resolution_status="resolved",
+            first_seen_run_id="run-001",
+            last_seen_run_id="run-001",
+            run_count=3,
+            metadata={"team": "support"},
+        )
+        row = entity.to_db_row()
+        with sqlite3.connect(_get_db_path()) as conn:
+            conn.execute(
+                """INSERT INTO entities (
+                    id, org_id, entity_type, canonical_name, display_name,
+                    source_system, source_record_id, resolution_confidence,
+                    resolution_status, first_seen_run_id, last_seen_run_id,
+                    run_count, metadata, created_at, updated_at
+                ) VALUES (
+                    :id, :org_id, :entity_type, :canonical_name, :display_name,
+                    :source_system, :source_record_id, :resolution_confidence,
+                    :resolution_status, :first_seen_run_id, :last_seen_run_id,
+                    :run_count, :metadata, :created_at, :updated_at
+                )""",
+                row,
+            )
+            conn.commit()
+        return row
 
     def test_table_exists(self):
         cols = self._columns()
@@ -82,79 +123,76 @@ class TestEntitiesTableSchema:
             assert cols[col]["notnull"] == 1, f"{col} must be NOT NULL"
 
     def test_nullable_columns(self):
-        # source_record_id and metadata are nullable — derived entities have no record ID
+        # source_record_id and metadata are nullable because derived entities
+        # may not map to a source row.
         cols = self._columns()
         assert cols["source_record_id"]["notnull"] == 0, "source_record_id must be nullable"
         assert cols["metadata"]["notnull"] == 0, "metadata must be nullable"
 
-    def test_three_indexes_exist(self):
+    def test_three_required_indexes_exist(self):
         indexes = self._indexes()
-        # Exclude the implicit primary key index
         non_pk = [i for i in indexes if i["origin"] != "pk"]
+        names = {i["name"] for i in non_pk}
+        expected = {
+            "idx_entities_org_canonical",
+            "idx_entities_org_run",
+            "idx_entities_org_run_count",
+        }
         assert len(non_pk) == 3, (
             f"Expected 3 indexes on entities, got {len(non_pk)}: "
             f"{[i['name'] for i in non_pk]}"
         )
+        assert names == expected
 
-    def test_canonical_name_index_exists(self):
-        indexes = self._indexes()
-        names = {i["name"] for i in indexes}
-        assert "idx_entities_org_canonical" in names, (
-            "idx_entities_org_canonical index missing — required for resolution lookups"
-        )
+    def test_canonical_name_index_columns(self):
+        assert self._index_columns("idx_entities_org_canonical") == [
+            "org_id", "entity_type", "canonical_name",
+        ]
 
-    def test_org_type_index_exists(self):
-        indexes = self._indexes()
-        names = {i["name"] for i in indexes}
-        assert "idx_entities_org_type" in names, (
-            "idx_entities_org_type index missing — required for scoped entity listing"
-        )
+    def test_org_run_index_columns(self):
+        assert self._index_columns("idx_entities_org_run") == [
+            "org_id", "last_seen_run_id",
+        ]
 
-    def test_org_run_index_exists(self):
-        indexes = self._indexes()
-        names = {i["name"] for i in indexes}
-        assert "idx_entities_org_run" in names, (
-            "idx_entities_org_run index missing — required for run-scoped entity queries"
-        )
+    def test_org_run_count_index_columns(self):
+        assert self._index_columns("idx_entities_org_run_count") == [
+            "org_id", "run_count",
+        ]
 
-    def test_insert_and_read_round_trip(self):
-        """Smoke: a valid entity row can be inserted and retrieved."""
-        from database.models.entities import Entity
-        entity = Entity(
-            org_id="test-org",
-            entity_type="person",
-            canonical_name="sarah chen",
-            display_name="Sarah Chen",
-            source_system="jira",
-            resolution_confidence=0.8,
-            resolution_status="resolved",
-            first_seen_run_id="run-001",
-            last_seen_run_id="run-001",
-        )
-        row = entity.to_db_row()
+    def test_insert_and_query_by_required_access_paths(self):
+        row = self._insert_entity()
         with sqlite3.connect(_get_db_path()) as conn:
-            conn.execute(
-                """INSERT INTO entities (
-                    id, org_id, entity_type, canonical_name, display_name,
-                    source_system, source_record_id, resolution_confidence,
-                    resolution_status, first_seen_run_id, last_seen_run_id,
-                    run_count, metadata, created_at, updated_at
-                ) VALUES (
-                    :id, :org_id, :entity_type, :canonical_name, :display_name,
-                    :source_system, :source_record_id, :resolution_confidence,
-                    :resolution_status, :first_seen_run_id, :last_seen_run_id,
-                    :run_count, :metadata, :created_at, :updated_at
-                )""",
-                row,
-            )
-            conn.commit()
             conn.row_factory = sqlite3.Row
-            fetched = dict(conn.execute(
-                "SELECT * FROM entities WHERE id = ?", (row["id"],)
+            by_id = dict(conn.execute(
+                "SELECT * FROM entities WHERE id = ?",
+                (row["id"],),
+            ).fetchone())
+            by_org = dict(conn.execute(
+                "SELECT * FROM entities WHERE org_id = ? AND id = ?",
+                ("test-org", row["id"]),
+            ).fetchone())
+            by_run = dict(conn.execute(
+                "SELECT * FROM entities WHERE org_id = ? AND last_seen_run_id = ?",
+                ("test-org", "run-001"),
+            ).fetchone())
+            by_canonical = dict(conn.execute(
+                """
+                SELECT * FROM entities
+                WHERE org_id = ? AND entity_type = ? AND canonical_name = ?
+                """,
+                ("test-org", "person", "sarah chen"),
+            ).fetchone())
+            by_source_record = dict(conn.execute(
+                "SELECT * FROM entities WHERE org_id = ? AND source_record_id = ?",
+                ("test-org", "JIRA-123"),
             ).fetchone())
 
-        assert fetched["org_id"] == "test-org"
-        assert fetched["resolution_confidence"] == 0.8
-        assert fetched["resolution_status"] == "resolved"
-        assert fetched["canonical_name"] == "sarah chen"
-        assert fetched["run_count"] == 1
+        assert by_id["org_id"] == "test-org"
+        assert by_id["resolution_confidence"] == 0.8
+        assert by_id["resolution_status"] == "resolved"
+        assert by_id["canonical_name"] == "sarah chen"
+        assert by_id["run_count"] == 3
+        assert by_org["id"] == row["id"]
+        assert by_run["id"] == row["id"]
+        assert by_canonical["id"] == row["id"]
+        assert by_source_record["id"] == row["id"]

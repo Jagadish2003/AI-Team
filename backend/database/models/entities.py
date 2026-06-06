@@ -39,6 +39,28 @@ CREATE_ENTITIES_TABLE = """
     )
 """
 
+CREATE_ENTITIES_IDX_ORG_CANONICAL = """
+    CREATE INDEX IF NOT EXISTS idx_entities_org_canonical
+        ON entities (org_id, entity_type, canonical_name)
+"""
+
+CREATE_ENTITIES_IDX_ORG_RUN = """
+    CREATE INDEX IF NOT EXISTS idx_entities_org_run
+        ON entities (org_id, last_seen_run_id)
+"""
+
+CREATE_ENTITIES_IDX_ORG_RUN_COUNT = """
+    CREATE INDEX IF NOT EXISTS idx_entities_org_run_count
+        ON entities (org_id, run_count)
+"""
+
+ALL_ENTITIES_DDL: tuple[str, ...] = (
+    CREATE_ENTITIES_TABLE,
+    CREATE_ENTITIES_IDX_ORG_CANONICAL,
+    CREATE_ENTITIES_IDX_ORG_RUN,
+    CREATE_ENTITIES_IDX_ORG_RUN_COUNT,
+)
+
 
 @dataclass
 class Entity:
