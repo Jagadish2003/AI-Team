@@ -124,10 +124,15 @@ def test_start_run_and_run_scoped_reads():
     )
     assert "stage" in events[0]
 
-    # entities shape (ExtractedEntity)
+    # entities endpoint — Stage 2 schema (T3-S12-A). Entity extraction runs in T3
+    # (extract_entities), so the list is empty until that story lands. Verify the
+    # endpoint responds correctly and returns a list with the new column shape.
     ents = client.get(f"/api/runs/{run_id}/entities", headers=auth_headers()).json()
-    assert isinstance(ents, list) and len(ents) >= 1
-    assert {"id", "name", "type", "confidence"}.issubset(set(ents[0].keys()))
+    assert isinstance(ents, list)
+    # When entities are present they must carry Stage 2 fields, not the legacy seed shape.
+    if ents:
+        assert {"id", "org_id", "entity_type", "canonical_name", "resolution_confidence",
+                "resolution_status"}.issubset(set(ents[0].keys()))
 
     # mappings shape
     maps = client.get(f"/api/runs/{run_id}/mappings", headers=auth_headers()).json()

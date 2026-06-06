@@ -1,6 +1,7 @@
 from contextlib import asynccontextmanager
 import logging
 import os
+import sqlite3
 import time
 import uuid
 from datetime import datetime, timezone
@@ -334,7 +335,18 @@ def list_entities(run_id: str) -> List[Dict[str, Any]]:
         read_run(run_id)
     except KeyError:
         raise HTTPException(404, "run not found")
-    return get_all("entities")
+    # entities table uses Stage 2 column schema — query by run_id directly.
+    # T3-S12-A (T6) will replace this with a routes_entities.py route.
+    con = db.connect()
+    try:
+        con.row_factory = sqlite3.Row
+        rows = con.execute(
+            "SELECT * FROM entities WHERE last_seen_run_id = ? ORDER BY entity_type, canonical_name",
+            (run_id,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        con.close()
 
 
 @app.get("/api/runs/{run_id}/mappings", dependencies=[Depends(require_auth)])
