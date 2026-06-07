@@ -1,7 +1,7 @@
 import { apiGet } from '../lib/apiClient';
 import type { OppEnrichment, RunEnrichment } from '../types/enrichment';
 
-export type { OppEnrichment, RunEnrichment } from '../types/enrichment';
+export type { OppEnrichment, RunEnrichment, EntitySummary } from '../types/enrichment';
 
 export async function fetchOppEnrichment(
   runId: string,

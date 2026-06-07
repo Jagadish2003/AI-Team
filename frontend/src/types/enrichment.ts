@@ -1,3 +1,14 @@
+// Stage 2 entity summary — surfaced in the evidence trace below BaselineContextPanel.
+// resolution_status='ambiguous' signals the UI to render with muted styling.
+export interface EntitySummary {
+  entity_id: string;
+  entity_type: string;
+  display_name: string;
+  source_system: string;
+  resolution_confidence: number;
+  resolution_status: 'resolved' | 'ambiguous';
+}
+
 export interface OppEnrichment {
   oppId: string;
   aiSummary: string;
@@ -15,6 +26,8 @@ export interface OppEnrichment {
   first_deviation: boolean;
   baseline_mean: number | null;
   run_count: number | null;
+  // Stage 2 entity list — empty array when no entities extracted yet.
+  entities: EntitySummary[];
 }
 
 export interface RunEnrichment {

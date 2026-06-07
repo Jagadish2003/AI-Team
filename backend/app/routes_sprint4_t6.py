@@ -37,10 +37,26 @@ from .rbac import require_role
 from . import db
 from .llm_enrichment import KV_LLM_ENRICHMENT
 
+_MIN_ENTITY_RUN_COUNT = 3  # service-account filter threshold (Section 8)
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Response models
 # ─────────────────────────────────────────────────────────────────────────────
+
+class EntitySummary(BaseModel):
+    """
+    Lightweight entity representation surfaced in the evidence trace.
+    display_name is the original source name — canonical_name is never exposed.
+    resolution_status='ambiguous' signals the UI to render with muted styling.
+    """
+    entity_id:             str
+    entity_type:           str
+    display_name:          str
+    source_system:         str
+    resolution_confidence: float
+    resolution_status:     str  # 'resolved' | 'ambiguous'
+
 
 class OppEnrichment(BaseModel):
     """
@@ -63,6 +79,10 @@ class OppEnrichment(BaseModel):
     first_deviation:      bool = False
     baseline_mean:        Optional[float] = None
     run_count:            Optional[int] = None
+    # Track 3 Stage 2 — T3-S12-A entity summaries
+    # default_factory=list ensures backward compat for code that constructs
+    # OppEnrichment without an entity list (existing tests, fallback paths).
+    entities:             List[EntitySummary] = Field(default_factory=list)
 
 
 class RunEnrichment(BaseModel):
@@ -86,7 +106,11 @@ def _require_run(run_id: str) -> Dict[str, Any]:
     return run
 
 
-def _full_fallback(opp_id: str, ai_rationale: str) -> OppEnrichment:
+def _full_fallback(
+    opp_id: str,
+    ai_rationale: str,
+    entities: Optional[List[EntitySummary]] = None,
+) -> OppEnrichment:
     """
     Fix 6: Return the full OppEnrichment shape on fallback.
     All list fields are empty lists — consistent with LLM-generated shape.
@@ -99,7 +123,35 @@ def _full_fallback(opp_id: str, ai_rationale: str) -> OppEnrichment:
         aiSuggestedNextSteps=[],
         llmGenerated=False,
         llmModel=None,
+        entities=entities or [],
     )
+
+
+def _load_entity_summaries(run_id: str) -> List[EntitySummary]:
+    """Load entity summaries from run KV and apply the service-account filter.
+
+    The KV store holds entities pre-populated by entity_extractor after each run.
+    Service-account filter (run_count < 3) is applied here per Section 8 spec —
+    low-count entities remain in the DB for graph completeness but are hidden
+    from the evidence trace.
+    """
+    raw: List[Dict[str, Any]] = db.run_kv_get("entities", run_id, []) or []
+    summaries: List[EntitySummary] = []
+    for e in raw:
+        if e.get("run_count", 0) < _MIN_ENTITY_RUN_COUNT:
+            continue
+        try:
+            summaries.append(EntitySummary(
+                entity_id=e["entity_id"],
+                entity_type=e["entity_type"],
+                display_name=e["display_name"],
+                source_system=e["source_system"],
+                resolution_confidence=float(e["resolution_confidence"]),
+                resolution_status=e["resolution_status"],
+            ))
+        except (KeyError, ValueError, TypeError):
+            pass  # malformed entry — skip silently
+    return summaries
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -122,8 +174,13 @@ def register_sprint4_t6_routes(app) -> None:
         - If enrichment exists: returns LLM-generated fields
         - If enrichment missing: returns aiRationale as aiSummary, empty lists
         - Never returns 404 for missing enrichment (only for unknown runId/oppId)
+        - entities field is always present — populated from run KV when available
         """
         _require_run(run_id)
+
+        # Load entity summaries once for this run (shared across all opportunities).
+        # Service-account filter (run_count < 3) is applied here per spec Section 8.
+        entity_summaries = _load_entity_summaries(run_id)
 
         enrichment = db.run_kv_get(KV_LLM_ENRICHMENT, run_id, None)
 
@@ -136,7 +193,7 @@ def register_sprint4_t6_routes(app) -> None:
                     status_code=404,
                     detail=f"Opportunity '{opp_id}' not found in run '{run_id}'"
                 )
-            return _full_fallback(opp_id, opp.get("aiRationale", ""))
+            return _full_fallback(opp_id, opp.get("aiRationale", ""), entity_summaries)
 
         per_opp  = enrichment.get("perOpportunity", {})
         opp_data = per_opp.get(opp_id)
@@ -162,6 +219,7 @@ def register_sprint4_t6_routes(app) -> None:
             first_deviation=opp_data.get("first_deviation", False),
             baseline_mean=opp_data.get("baseline_mean"),
             run_count=opp_data.get("run_count"),
+            entities=entity_summaries,
         )
 
     @app.get(
