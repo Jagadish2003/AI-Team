@@ -15,9 +15,13 @@ print("Seed Path:", SEED_DIR)
 print("DB Path:", DB_PATH)
 
 TABLES = [
-    "connectors", "uploads", "runs", "evidence", "entities",
+    "connectors", "uploads", "runs", "evidence",
     "mappings", "permissions", "opportunities", "audit_events", "executive_reports"
 ]
+# NOTE: "entities" is intentionally excluded from TABLES. The entities table is
+# now a 15-column Stage 2 schema managed by Alembic migration 0003. The old
+# (id, payload) seed format is incompatible with the new schema. Stage 2 entity
+# rows are written at run time by entity_extractor.py, not seeded.
 
 FILES = {
     "connectors": "connectors.json",
@@ -98,10 +102,6 @@ def main():
     for u in load_file(FILES["uploads"]):
         upsert(conn, "uploads", u["id"], u)
 
-    # entities
-    for e in load_file(FILES["entities"]):
-        upsert(conn, "entities", e["id"], e)
-
     # mappings
     for m in load_file(FILES["mappings"]):
         upsert(conn, "mappings", m["id"], m)
@@ -128,12 +128,11 @@ def main():
     # ────────────────────────────────────────────────────────────────────────
     connectors_count = len(load_file(FILES["connectors"]))
     uploads_count = len(load_file(FILES["uploads"]))
-    entities_count = len(load_file(FILES["entities"]))
     mappings_count = len(load_file(FILES["mappings"]))
     permissions_count = len(load_file(FILES["permissions"]))
 
     print("✅ Seed load complete:", DB_PATH)
-    print(f"   {connectors_count} connectors | {entities_count} entities | {mappings_count} mappings")
+    print(f"   {connectors_count} connectors | {mappings_count} mappings")
     print(f"   {permissions_count} permissions | {uploads_count} uploads")
 
 
