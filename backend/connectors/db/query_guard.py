@@ -28,6 +28,7 @@ ARCHITECTURAL NOTE (from spec section 3b):
 
 from __future__ import annotations
 
+import re
 import sqlparse
 from sqlparse.sql import (
     Function,
@@ -50,6 +51,43 @@ from .models import (
 
 #: Only SELECT is permitted. All other statement types are rejected.
 ALLOWED_STATEMENT_TYPES: frozenset[str] = frozenset({"SELECT"})
+
+# ---------------------------------------------------------------------------
+# CTE alias extraction
+# ---------------------------------------------------------------------------
+
+# Matches "WITH alias AS (" and ", alias AS (" in CTE definitions.
+# Used to identify virtual CTE names that must be excluded from scope
+# validation — they are temporary definitions, not real database objects.
+#
+# FAIL-CLOSED GUARANTEE FOR CTEs (Task 5B, Sprint 12 Platform Hardening):
+#   sqlparse extracts CTE aliases as regular Identifiers alongside the real
+#   base tables.  For example:
+#     WITH recent AS (SELECT * FROM restricted_table) SELECT * FROM recent
+#   → _extract_table_references returns {'recent', 'restricted_table'}
+#   If 'recent' is not in scope.tables the query is rejected — correct outcome
+#   even if for the wrong reason.  After CTE alias filtering:
+#   → referenced = {'restricted_table'} only — rejection is now for the right
+#   reason.
+#   If sqlparse returns only the alias ({'recent'}) and misses the base table,
+#   filtering produces {} — the empty-extraction fail-closed rule fires and the
+#   query is still rejected.  The guard cannot be bypassed via CTE aliasing.
+#
+# ORACLE SYNONYM LIMITATION (documented per Task 5B):
+#   A query against an Oracle synonym (e.g. SELECT * FROM "public_view") will
+#   pass scope validation if "public_view" is declared in scope, even though
+#   the synonym may resolve to a table outside the declared scope.  AgentIQ
+#   cannot resolve synonyms at query-parse time without a live DB lookup.
+#   Mitigation: operators must NOT declare synonym names in the scope
+#   declaration.  Scope declarations should use real schema-qualified table
+#   names only.  Any synonym query whose alias is not in the declared scope
+#   is rejected.  This limitation is documented here so future engineers do
+#   not silently remove the reject-unknown behaviour.
+
+_CTE_ALIAS_PATTERN: re.Pattern[str] = re.compile(
+    r"(?:WITH|,)\s+(\w+)\s+AS\s*\(",
+    re.IGNORECASE,
+)
 
 #: Trivial queries that are exempt from table-reference extraction.
 #: SELECT 1 and SELECT 1 FROM DUAL never reference real tables and are
@@ -99,6 +137,26 @@ _CLAUSE_TERMINATORS: frozenset[str] = frozenset({
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
+
+
+def _extract_cte_aliases(query: str) -> frozenset[str]:
+    """Return the set of CTE alias names (lowercased) defined in *query*.
+
+    For ``WITH recent AS (...) SELECT * FROM recent`` returns ``{'recent'}``.
+    For ``WITH a AS (...), b AS (...) ...`` returns ``{'a', 'b'}``.
+
+    CTE aliases are virtual temporary names — not real database objects — and
+    must be excluded from scope validation.  Only the base tables referenced
+    inside the CTE bodies are subject to scope enforcement.
+
+    If sqlparse extracts a CTE alias as a table reference AND the alias is not
+    in scope.tables, the query would be rejected for the wrong reason.  This
+    function allows validate_scope to filter aliases out before enforcement,
+    so rejections are always based on real table references.
+
+    Returns an empty frozenset when the query contains no WITH clause.
+    """
+    return frozenset(m.group(1).lower() for m in _CTE_ALIAS_PATTERN.finditer(query))
 
 
 def validate_read_only(query: str) -> None:
@@ -151,6 +209,19 @@ def validate_read_only(query: str) -> None:
                 "Only SELECT statements are allowed (read-only enforcement).",
                 error_code="query_rejected",
             )
+
+    # Multi-statement guard (fail-closed) — reject any input that parses to
+    # more than one statement even if every statement is a SELECT.
+    # Multiple statements increase risk (e.g. batch injection, connection
+    # state mutation) and must not be treated as normal read-only queries.
+    non_empty_stmts = [s for s in parsed if s.value.strip()]
+    if len(non_empty_stmts) > 1:
+        raise DBQueryRejectedError(
+            f"Multi-statement queries are not permitted — "
+            f"{len(non_empty_stmts)} statements detected. "
+            "Only a single SELECT statement is allowed per query (fail-closed).",
+            error_code="query_rejected",
+        )
 
 
 def validate_scope(query: str, scope: ScopeDeclaration) -> None:
@@ -205,7 +276,23 @@ def validate_scope(query: str, scope: ScopeDeclaration) -> None:
             f"Reason: {exc}"
         ) from exc
 
-    # Empty extraction result on a non-trivial query → fail-closed
+    # CTE alias filtering (Task 5B, Sprint 12 Platform Hardening):
+    # sqlparse returns CTE alias names (e.g. "recent" in WITH recent AS (...))
+    # as regular table references alongside the real base tables.  Aliases are
+    # virtual — they are not real database objects — so they must be excluded
+    # before scope enforcement.  Only the base tables inside CTE bodies are
+    # checked.
+    #
+    # Fail-closed guarantee: if filtering reduces referenced to an empty set
+    # (i.e. sqlparse returned only aliases and missed the base tables), the
+    # empty-extraction rule below fires and the query is still rejected.
+    cte_aliases = _extract_cte_aliases(query)
+    if cte_aliases:
+        referenced = {ref for ref in referenced if ref.lower() not in cte_aliases}
+
+    # Empty extraction result on a non-trivial query → fail-closed.
+    # Also fires when CTE filtering removed all extracted references (meaning
+    # the parser could not reliably identify the real base tables).
     if not referenced:
         raise DBScopeViolationError(
             "No table references could be extracted from a non-trivial query "
