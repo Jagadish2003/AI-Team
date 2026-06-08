@@ -1,25 +1,20 @@
 """
-Oracle DB operational signal ingestor — T2-S12-A Task T1.
+Oracle DB operational signal ingestor — T2-S12-A.
 
-Runs three signal queries against the declared Oracle DB scope and returns
+Runs three signal queries against the declared Oracle scope and returns
 structured signals consumed by the sqlserver_opsignal detector set.
 
 Called by the runner when 'oracle_db' is in the selected systems list.
 All data access goes through execute_query() — no direct connection opened.
 
-Driver strategy — thin mode default:
-    Thin mode is active by default — no Instant Client required.
-    Thin mode supports Oracle 12.1+.
-    See deployment/README.md for the thick mode escalation path when
-    a customer requires pre-12.1 Oracle or Kerberos/TNS name resolution.
+Driver strategy (locked):
+    oracledb thin mode is the default. init_oracle_client() is NOT called.
+    No Oracle Instant Client required. Thick mode is a documented escalation
+    path only (see deployment/README.md).
 
-Oracle-specific behaviour:
-    - Quoted identifiers use "" double-quotes (Oracle is case-sensitive with quotes).
-    - Schema and table names in scope declarations must match Oracle's stored case
-      (usually uppercase — ALL_COLUMNS returns OWNER in uppercase).
-    - Date arithmetic uses SYSDATE and Oracle interval expressions.
-    - sla_breached column may be stored as integer (0/1) or string ('Y'/'N');
-      both variants are handled via CASE WHEN col IN (1,'Y').
+Oracle case sensitivity:
+    Object names stored in ALL_COLUMNS are UPPERCASE. Never lowercase Oracle
+    schema/table names. Scope picker displays names verbatim.
 """
 
 from __future__ import annotations
@@ -32,6 +27,7 @@ try:
     from backend.connectors.db import (
         DBConnectionError,
         DBConnectorConfig,
+        DBScopeViolationError,
         ScopeDeclaration,
         execute_query,
         get_scope,
@@ -41,6 +37,7 @@ except ModuleNotFoundError:
     from connectors.db import (
         DBConnectionError,
         DBConnectorConfig,
+        DBScopeViolationError,
         ScopeDeclaration,
         execute_query,
         get_scope,
@@ -52,68 +49,63 @@ logger = logging.getLogger(__name__)
 CONNECTOR_ID = "oracle_db"
 
 # ---------------------------------------------------------------------------
-# Column alias maps — same set as SQL Server; handles naming variation across
-# ITSM and service management schemas deployed on Oracle.
+# Column alias maps — handles naming variation across ITSM database schemas
 # ---------------------------------------------------------------------------
 
 _DATE_COL_ALIASES = [
     "created_date", "opened_at", "create_date", "CreatedDate",
     "creation_time", "open_date", "OpenedAt", "sys_created_on",
+    "CREATED_DATE", "OPENED_AT", "CREATE_DATE",
 ]
 _SLA_COL_ALIASES = [
     "sla_breached", "breach_flag", "sla_breach", "SLABreached",
     "breach", "made_sla", "sla_met",
+    "SLA_BREACHED", "BREACH_FLAG", "SLA_BREACH",
 ]
 _STATUS_COL_ALIASES = [
     "status", "Status", "state", "State", "incident_state",
     "ticket_status", "TicketStatus",
+    "STATUS", "STATE",
 ]
 _PRIORITY_COL_ALIASES = [
     "priority", "Priority", "urgency", "Urgency",
     "severity", "Severity", "impact", "Impact",
+    "PRIORITY", "URGENCY", "SEVERITY",
 ]
 
 # ---------------------------------------------------------------------------
-# Signal queries — SELECT-only, schema-qualified, "" double-quote identifiers,
-# Oracle date arithmetic (SYSDATE, * 24 for hours).
-#
-# AC1: thin mode only — no Oracle Instant Client required.
-# AC2: All identifiers use "" double-quotes.
-# AC3: sla_breached handled as integer (0/1) or string ('Y'/'N').
+# Signal queries — SELECT-only, schema-qualified, "" quoted identifiers,
+# Oracle date arithmetic (SYSDATE), Oracle boolean handling (1/'Y')
 # ---------------------------------------------------------------------------
 
 TICKET_VOLUME_QUERY = """
-SELECT TRUNC("{date_col}") AS ticket_date,
-       COUNT(*) AS ticket_count
+SELECT TRUNC("{date_col}") AS ticket_date, COUNT(*) AS ticket_count
 FROM "{schema}"."{table}"
 WHERE "{date_col}" >= SYSDATE - 90
-GROUP BY TRUNC("{date_col}")
-ORDER BY ticket_date DESC
+GROUP BY TRUNC("{date_col}") ORDER BY ticket_date DESC
 """
 
 SLA_BREACH_QUERY = """
 SELECT COUNT(*) AS total_tickets,
-       SUM(CASE WHEN "{sla_col}" IN (1, 'Y') THEN 1 ELSE 0 END) AS breached_count,
-       AVG(CASE WHEN "{sla_col}" IN (1, 'Y') THEN 1.0 ELSE 0.0 END) * 100 AS breach_rate_pct
+    SUM(CASE WHEN "{sla_col}" IN (1, 'Y') THEN 1 ELSE 0 END) AS breached_count,
+    AVG(CASE WHEN "{sla_col}" IN (1, 'Y') THEN 1.0 ELSE 0.0 END) * 100 AS breach_rate_pct
 FROM "{schema}"."{table}"
 WHERE "{date_col}" >= SYSDATE - 30
 """
 
 QUEUE_DEPTH_QUERY = """
-SELECT "{priority_col}" AS priority,
-       COUNT(*) AS queue_count,
-       AVG((SYSDATE - "{date_col}") * 24) AS avg_age_hours
+SELECT "{priority_col}" AS priority, COUNT(*) AS queue_count,
+    AVG((SYSDATE - "{date_col}") * 24) AS avg_age_hours
 FROM "{schema}"."{table}"
 WHERE "{status_col}" NOT IN ('Closed', 'Resolved', 'Cancelled')
-GROUP BY "{priority_col}"
-ORDER BY "{priority_col}"
+GROUP BY "{priority_col}" ORDER BY "{priority_col}"
 """
 
 # P1/P2 label set — covers numeric and named priority conventions
 _P1_P2_LABELS = {"1", "p1", "2", "p2", "critical", "high"}
 
 # ---------------------------------------------------------------------------
-# Column resolution helpers — identical to sqlserver_ingestor
+# Column resolution helpers
 # ---------------------------------------------------------------------------
 
 def _resolve_column(columns: list[str], aliases: list[str]) -> str | None:
@@ -195,8 +187,8 @@ def _process_ticket_volume(result: Any) -> dict:
 def _process_sla_breach(result: Any) -> dict:
     """Build sla_breach signal from SLA_BREACH_QUERY result.
 
-    Oracle stores sla_breached as integer (0/1) or string ('Y'/'N').
-    The SLA_BREACH_QUERY handles both via CASE WHEN col IN (1,'Y').
+    Oracle handles sla_breached as integer (0/1) or string ('Y'/'N') via
+    CASE WHEN col IN (1,'Y'). Both forms produce the same output shape.
     """
     total_idx = _col_index(result.columns, "total_tickets")
     breached_idx = _col_index(result.columns, "breached_count")
@@ -236,11 +228,7 @@ def _process_sla_breach(result: Any) -> dict:
 
 
 def _process_queue_depth(result: Any) -> dict:
-    """Build queue_depth signal from QUEUE_DEPTH_QUERY result.
-
-    Oracle returns avg_age_hours as (SYSDATE - created_date) * 24.
-    Null priority values are coerced to 'Unknown'.
-    """
+    """Build queue_depth signal from QUEUE_DEPTH_QUERY result."""
     priority_idx = _col_index(result.columns, "priority")
     count_idx = _col_index(result.columns, "queue_count")
     age_idx = _col_index(result.columns, "avg_age_hours")
@@ -289,7 +277,7 @@ def _process_queue_depth(result: Any) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# Degraded sentinel helpers — used when a query fails entirely
+# Degraded signal factories
 # ---------------------------------------------------------------------------
 
 def _degraded_ticket_volume() -> dict:
@@ -315,50 +303,6 @@ def _degraded_queue_depth() -> dict:
 
 
 # ---------------------------------------------------------------------------
-# Schema discovery with ALL_COLUMNS / USER_COLUMNS fallback (AC4)
-# ---------------------------------------------------------------------------
-
-ALL_COLUMNS_QUERY = (
-    "SELECT OWNER, TABLE_NAME, COLUMN_NAME "
-    "FROM ALL_COLUMNS "
-    "WHERE OWNER NOT IN ('SYS', 'SYSTEM', 'INFORMATION_SCHEMA')"
-)
-
-USER_COLUMNS_QUERY = (
-    "SELECT USER AS OWNER, TABLE_NAME, COLUMN_NAME "
-    "FROM USER_COLUMNS"
-)
-
-
-def discover_schema_oracle_ingestor(
-    config: DBConnectorConfig,
-    org_id: str,
-    run_id: str,
-    scope: ScopeDeclaration | None = None,
-) -> Any:
-    """Discover Oracle schema using ALL_COLUMNS, falling back to USER_COLUMNS.
-
-    AC4: If ALL_COLUMNS is not accessible, logs a warning and falls back to
-    USER_COLUMNS (current schema only) without raising.
-    """
-    try:
-        return execute_query(
-            config, scope=scope, query=ALL_COLUMNS_QUERY,
-            org_id=org_id, run_id=run_id,
-        )
-    except Exception as exc:
-        logger.warning(
-            "oracle_ingestor: ALL_COLUMNS not accessible for org %s "
-            "(error: %s) — falling back to USER_COLUMNS",
-            org_id, exc,
-        )
-        return execute_query(
-            config, scope=scope, query=USER_COLUMNS_QUERY,
-            org_id=org_id, run_id=run_id,
-        )
-
-
-# ---------------------------------------------------------------------------
 # Main ingestor
 # ---------------------------------------------------------------------------
 
@@ -372,25 +316,15 @@ def ingest(
 
     Called by the runner for every discovery run where oracle_db is in the
     selected systems list. Returns a structured dict consumed by the
-    sqlserver_opsignal detector set (same three detectors as SQL Server).
+    sqlserver_opsignal detector set (reused for all DB engines per T2-S12-A).
 
-    All data access goes through execute_query() — no direct oracledb
-    connection is opened here. Thin mode is the default — no Oracle Instant
-    Client required. See deployment/README.md for the escalation path.
-
+    oracledb thin mode is used — init_oracle_client() is NOT called.
     Tolerates query failures: sets degraded_signal=True on the affected metric
     and continues with remaining queries.
-
-    AC2: Queries use "" double-quote identifiers.
-    AC3: sla_breached handled as 0/1 integer and 'Y'/'N' string.
-    AC7: Missing columns → degraded_signal=True, no raise.
-    AC8: query_timeout → degraded_signal=True, run continues.
-    AC9: Return shape identical to sqlserver_ingestor with connector_id='oracle_db'.
     """
     start_ms = time.monotonic()
 
-    # Resolve scope; fall back to a minimal default for offline/test mode.
-    # Oracle schema names are typically uppercase — the default uses uppercase.
+    # Resolve scope; fall back to a minimal default for offline/test mode
     if scope is None:
         try:
             scope = get_scope(org_id, CONNECTOR_ID)

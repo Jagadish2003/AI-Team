@@ -8,6 +8,7 @@ import { ExternalLink, CheckCircle2 } from 'lucide-react';
 import SalesforceProductPicker from './SalesforceProductPicker';
 import SqlServerScopePicker from './SqlServerScopePicker';
 import OracleScopePicker from './OracleScopePicker';
+import PostgreSQLScopePicker from './PostgreSQLScopePicker';
 
 // T41-7: Connection Health - configured read scope for this connector.
 // Shows what AgentIQ is configured to read from this source.
@@ -63,6 +64,21 @@ const CONNECTION_HEALTH_LABELS: Record<string, string[]> = {
     'Read LLC_BI__Spread_Statement_Period__c records',
   ],
 };
+
+function isViewerOnlyScopeUser(): boolean {
+  const role = (import.meta.env.VITE_DEV_JWT_ROLE as string | undefined)
+    ?.trim()
+    .toLowerCase();
+  if (role) return role === 'viewer';
+
+  const token =
+    (import.meta.env.VITE_DEV_JWT as string | undefined) ??
+    'dev-token-change-me';
+  const viewerToken =
+    (import.meta.env.VITE_VIEWER_JWT as string | undefined) ?? 'viewer-token';
+
+  return token === viewerToken;
+}
 
 function ConnectionHealthSection({ connector }: { connector: Connector }) {
   if (connector.status !== 'connected') return null;
@@ -124,6 +140,7 @@ export default function ConnectorDetailPanel({
 
   const isConnected = connector.status === 'connected';
   const isConfigured = connector.configured;
+  const viewerOnlyScope = isViewerOnlyScopeUser();
 
   return (
     <div className="rounded-xl border border-border bg-panel p-5">
@@ -188,11 +205,17 @@ export default function ConnectorDetailPanel({
         </div>
       )}
 
-      {/* T2-S12-A Task T6: Oracle DB scope declaration */}
-      {/* Shown after Oracle DB is connected — read scope selector (AC12) */}
+      {/* T2-S12-A: Oracle DB scope declaration */}
       {connector.id === 'oracle_db' && isConnected && (
         <div className="mt-4 border-t border-border pt-4">
-          <OracleScopePicker />
+          <OracleScopePicker viewerOnly={viewerOnlyScope} />
+        </div>
+      )}
+
+      {/* T2-S12-A: PostgreSQL scope declaration */}
+      {connector.id === 'postgresql' && isConnected && (
+        <div className="mt-4 border-t border-border pt-4">
+          <PostgreSQLScopePicker viewerOnly={viewerOnlyScope} />
         </div>
       )}
 

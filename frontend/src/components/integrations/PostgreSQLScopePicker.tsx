@@ -1,13 +1,12 @@
 /**
- * OracleScopePicker — T2-S12-A
+ * PostgreSQLScopePicker — T2-S12-A
  *
- * Rendered inside ConnectorDetailPanel when the selected connector is Oracle DB
+ * Rendered inside ConnectorDetailPanel when the selected connector is PostgreSQL
  * and its status is 'connected'.
  *
  * Identical flow to SqlServerScopePicker with these differences:
- *   - Calls /api/db-connectors/oracle_db/schema and /oracle_db/scope
- *   - Oracle schema names are stored in UPPERCASE — displayed verbatim
- *   - Case-sensitivity tooltip informs users names are shown exactly as stored
+ *   - Calls /api/db-connectors/postgresql/schema and /postgresql/scope
+ *   - PostgreSQL schema names are typically lowercase (displayed verbatim)
  *
  * Role enforcement:
  *   The POST save button is disabled with a tooltip when viewerOnly=true.
@@ -61,7 +60,7 @@ function extractSaveError(err: unknown): string {
 
 // ── Component ─────────────────────────────────────────────────────────────────
 
-export default function OracleScopePicker({
+export default function PostgreSQLScopePicker({
   onSaved,
   viewerOnly = false,
 }: Props) {
@@ -86,10 +85,10 @@ export default function OracleScopePicker({
     setLoadError(null);
 
     Promise.all([
-      apiGet<SchemaDiscoveryResult>('/api/db-connectors/oracle_db/schema').catch(
+      apiGet<SchemaDiscoveryResult>('/api/db-connectors/postgresql/schema').catch(
         () => null,
       ),
-      apiGet<ScopeResponse>('/api/db-connectors/oracle_db/scope').catch(
+      apiGet<ScopeResponse>('/api/db-connectors/postgresql/scope').catch(
         () => null,
       ),
     ]).then(([disc, savedScope]) => {
@@ -180,7 +179,7 @@ export default function OracleScopePicker({
     if (viewerOnly) return;
     setSaving(true);
     try {
-      await apiPost<ScopeResponse>('/api/db-connectors/oracle_db/scope', {
+      await apiPost<ScopeResponse>('/api/db-connectors/postgresql/scope', {
         schemas: [...selectedSchemas],
         tables: [...selectedTables],
       });
@@ -229,28 +228,19 @@ export default function OracleScopePicker({
     <div className="mt-4">
       {/* Section header */}
       <div className="flex items-center justify-between mb-2">
-        <div className="text-sm font-medium text-text">Oracle DB scope</div>
+        <div className="text-sm font-medium text-text">PostgreSQL scope</div>
         <div className="text-[10px] font-medium uppercase tracking-wide text-muted">
           Scope declaration
         </div>
       </div>
 
-      <p className="text-xs text-muted mb-1 leading-relaxed">
+      <p className="text-xs text-muted mb-3 leading-relaxed">
         Select schemas and tables AgentIQ may query. Selecting a schema without
         expanding allows any table in that schema.
       </p>
 
-      {/* Oracle case-sensitivity tooltip — AC18 */}
-      <p
-        className="text-[11px] text-muted/70 mb-3 leading-relaxed italic"
-        title="Oracle schema names are case-sensitive — shown exactly as stored in the database."
-      >
-        Oracle schema names are case-sensitive — shown exactly as stored in the
-        database.
-      </p>
-
       {/* Schema → table tree */}
-      <div role="group" aria-label="Oracle DB scope" className="space-y-1">
+      <div role="group" aria-label="PostgreSQL scope" className="space-y-1">
         {discovery.schemas.map((schema) => {
           const tables     = tablesForSchema(schema);
           const isSelected = selectedSchemas.has(schema);
