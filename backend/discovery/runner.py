@@ -141,8 +141,15 @@ def _ingest_github(org_id: str, run_id: str) -> Dict[str, Any]:
     GitHub ingest failure must never abort the run). Tests monkeypatch this
     function to inject mocked GitHub data and exercise the full
     ingest → detect → score → OpportunityCandidate path (AC10).
+
+    Always runs the coroutine in a dedicated thread with its own event loop so
+    this function is safe to call from both sync contexts and from within
+    FastAPI's running async event loop (e.g. background tasks). Using
+    asyncio.run() or loop.run_until_complete() directly on the calling thread
+    raises RuntimeError when an event loop is already running there.
     """
     import asyncio
+    import concurrent.futures
 
     try:
         from connectors.saas import github as github_connector
@@ -157,16 +164,20 @@ def _ingest_github(org_id: str, run_id: str) -> Dict[str, Any]:
         return {}
 
     try:
-        return asyncio.run(github_connector.ingest(org_id, run_id))
-    except RuntimeError:
-        # Already inside a running event loop — use a dedicated one.
-        loop = asyncio.new_event_loop()
-        try:
-            return loop.run_until_complete(github_connector.ingest(org_id, run_id))
-        finally:
-            loop.close()
+        # Run in a fresh thread so asyncio.run() always gets a clean event loop,
+        # regardless of whether the caller is sync or inside FastAPI's loop.
+        def _run() -> Dict[str, Any]:
+            return asyncio.run(github_connector.ingest(org_id, run_id))
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+            return executor.submit(_run).result()
     except Exception as e:
-        logger.warning("GitHub ingestion failed (non-blocking): %s", e)
+        # Use type name only — the exception str may contain request headers
+        # (Authorization: Bearer ...) from urllib3/requests reprs.
+        logger.warning(
+            "GitHub ingestion failed (non-blocking) org=%s run=%s: [%s]",
+            org_id, run_id, type(e).__name__,
+        )
         return {}
 
 
@@ -292,13 +303,26 @@ def run(
     # confidence-elevation corroboration can run.
     if is_github_engineering_pack(pack_id):
         github_data = _ingest_github(org_id, run_id) or {}
-        if github_data and not all(
-            (github_data.get(k) or {}).get("degraded_signal", False)
-            for k in ("pr_review", "commit_concentration", "stale_branches")
-        ):
-            logger.info("GitHub ingestion: OK")
+        if github_data:
+            # Log degraded state per sub-signal so a pagination failure in one
+            # signal (e.g. stale_branches) is reported independently and does
+            # not imply the other signals are also degraded.
+            _GITHUB_SUB_SIGNALS = {
+                "pr_review":            "GITHUB_PR_REVIEW_BOTTLENECK",
+                "commit_concentration": "GITHUB_COMMIT_CONCENTRATION",
+                "stale_branches":       "GITHUB_STALE_BRANCHES",
+            }
+            for sub_key, detector_id in _GITHUB_SUB_SIGNALS.items():
+                if (github_data.get(sub_key) or {}).get("degraded_signal", False):
+                    logger.warning(
+                        "GitHub ingestion: %s signal degraded — %s detector will not fire",
+                        sub_key,
+                        detector_id,
+                    )
+                else:
+                    logger.info("GitHub ingestion: %s signal OK", sub_key)
         else:
-            logger.warning("GitHub ingestion: degraded or empty signal")
+            logger.warning("GitHub ingestion: empty payload — all three detectors will not fire")
 
     # 2. Context
     org_ctx = build_org_context(sf_data, sn_data, jira_data)

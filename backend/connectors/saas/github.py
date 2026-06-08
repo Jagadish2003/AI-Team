@@ -14,12 +14,29 @@ Return shape: see Section 2b of T1-S12 spec.
 from __future__ import annotations
 
 import logging
+import re
 import uuid
 from collections import Counter
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
+
+# Redact bearer tokens from exception messages before they reach log sinks.
+# Covers Authorization header values that may appear in requests/urllib3
+# exception reprs (e.g. PreparedRequest serialisation in ConnectionError).
+_BEARER_RE = re.compile(r"(Bearer\s+)[A-Za-z0-9\-._~+/]+=*", re.IGNORECASE)
+
+
+def _safe_exc(exc: BaseException) -> str:
+    """Return str(exc) with any bearer token values replaced by [REDACTED].
+
+    requests exceptions can embed the PreparedRequest (including the
+    Authorization header) in their string representation under certain
+    urllib3 versions. This function ensures no raw token reaches log sinks
+    regardless of the exception source.
+    """
+    return _BEARER_RE.sub(r"\1[REDACTED]", str(exc))
 
 GITHUB_API_BASE = "https://api.github.com"
 PR_AGE_THRESHOLD_DAYS = 3
@@ -75,7 +92,7 @@ def _paginate(session, url: str, params: Optional[Dict] = None) -> Tuple[List[Di
             logger.warning("GitHub API timeout: %s (page %d) — degraded signal", url, page)
             return all_items, True
         except Exception as exc:
-            logger.warning("GitHub API request error: %s — %s", url, exc)
+            logger.warning("GitHub API request error: %s — %s", url, _safe_exc(exc))
             return all_items, True
 
         if resp.status_code == 429:
@@ -406,12 +423,28 @@ async def ingest(org_id: str, run_id: Optional[str] = None) -> Dict[str, Any]:
         token_record = await get_token(org_id, "github")
     except ConnectorNotAuthenticatedError:
         logger.warning(
-            "GitHub connector not authenticated for org=%s — returning degraded payload",
-            org_id,
+            "GitHub connector not authenticated for org=%s run=%s "
+            "— no token stored. Authenticate via Integration Hub before running. "
+            "All three GitHub detectors will be skipped.",
+            org_id, run_id,
         )
         return _degraded_payload(org_id, run_id)
     except Exception as exc:
-        logger.warning("GitHub token retrieval failed for org=%s: %s", org_id, exc)
+        logger.warning(
+            "GitHub vault lookup raised an unexpected error for org=%s run=%s: %s "
+            "— check CREDENTIAL_VAULT_KEY is set and the vault is reachable. "
+            "All three GitHub detectors will be skipped.",
+            org_id, run_id, _safe_exc(exc),
+        )
+        return _degraded_payload(org_id, run_id)
+
+    if token_record is None:
+        logger.warning(
+            "GitHub vault returned no token for org=%s run=%s "
+            "— connector has not been authenticated or token was revoked. "
+            "All three GitHub detectors will be skipped.",
+            org_id, run_id,
+        )
         return _degraded_payload(org_id, run_id)
 
     access_token = token_record.access_token
