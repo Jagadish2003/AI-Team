@@ -2,7 +2,7 @@
 
 Public surface
 --------------
-  record_event(event_type, payload)  — fire-and-forget write. Never raises.
+  record_event(event_type, payload)  — fire-and-forget write for registered events.
   get_telemetry_range(...)           — time-range read scoped to org_id.
   register_event_type(name, schema)  — register a TypedDict schema for an event type.
 
