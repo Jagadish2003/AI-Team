@@ -23,9 +23,12 @@ CPQ pack slot is reserved but empty — Sprint 6 adds ncino_cpq.
 from __future__ import annotations
 
 import json
+import logging
 import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+
+logger = logging.getLogger(__name__)
 
 # ── Pack registry ─────────────────────────────────────────────────────────────
 
@@ -171,9 +174,18 @@ def get_pack(pack_id: Optional[str] = None) -> Dict[str, Any]:
 
     This is the single entry point for pack selection — replaces all
     temporary is_ncino_pack conditionals in AIQ-NC-4 and AIQ-NC-5.
+
+    An unrecognized non-None pack_id logs a WARNING so misconfiguration is
+    visible in logs rather than silently producing wrong detector results.
     """
     if pack_id and pack_id in PACK_REGISTRY:
         return PACK_REGISTRY[pack_id]
+    if pack_id is not None:
+        logger.warning(
+            "get_pack: unrecognized pack_id %r — falling back to '%s'. "
+            "Valid pack IDs: %s",
+            pack_id, DEFAULT_PACK, sorted(PACK_REGISTRY),
+        )
     return PACK_REGISTRY[DEFAULT_PACK]
 
 
