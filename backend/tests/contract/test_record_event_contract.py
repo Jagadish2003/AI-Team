@@ -1,7 +1,13 @@
 """
 backend/tests/contract/test_record_event_contract.py
 
-Contract audit for Task 5A (AT-209) — record_event() call-site contract.
+Contract audit for Task 5A (AT-182 / AT-211) — record_event() call-site contract.
+
+AT-211 acceptance criteria:
+  AC1  test_unregistered_event_type_raises   — ValueError on unknown event_type.
+  AC2  test_all_call_sites_use_registered_event_type — grep-based static audit.
+  AC3  test_all_registered_types_have_typeddict — REGISTERED_EVENT_TYPES ↔
+       EVENT_PAYLOAD_TYPES in sync (no orphaned registration).
 
 The locked telemetry signature (T3-S10-A) is:
 
@@ -26,15 +32,23 @@ from pathlib import Path
 
 import pytest
 
-from app.telemetry import EVENT_REGISTRY
+from app.telemetry import (
+    EVENT_PAYLOAD_TYPES,
+    EVENT_REGISTRY,
+    REGISTERED_EVENT_TYPES,
+    record_event,
+)
 
 # backend/ root: tests/contract/<this file> -> parents[2] == backend/
 BACKEND_ROOT = Path(__file__).resolve().parents[2]
 
 # Directories that are not first-party source and must not be audited.
+# "tests" is excluded so test files can legitimately call record_event() with
+# unregistered event_type values (e.g. "unknown.event") to exercise the guard
+# without triggering the production call-site audit.
 _EXCLUDED_DIR_NAMES = {
     ".venv", "venv", "env", "site-packages", "__pycache__",
-    "node_modules", ".git", ".mypy_cache", ".pytest_cache",
+    "node_modules", ".git", ".mypy_cache", ".pytest_cache", "tests",
 }
 
 # The only keyword arguments the locked signature accepts.
@@ -169,4 +183,74 @@ def test_every_registered_type_has_a_payload_schema():
     ]
     assert not missing, (
         f"registered event types without a usable payload schema: {missing}"
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# AT-211 — Three tests required by the Section 1c contract spec
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_unregistered_event_type_raises():
+    """AT-211 AC1 — record_event() raises ValueError on an unknown event_type.
+
+    The guard added in AT-210 (5A-2) must be wired correctly: passing an
+    event_type not in REGISTERED_EVENT_TYPES must raise ValueError with a
+    message that includes 'unregistered event type'.
+    """
+    with pytest.raises(ValueError, match="unregistered event type"):
+        record_event(
+            "unknown.event",
+            {"org_id": "org1", "source": "test", "run_id": "r1"},
+        )
+
+
+def test_all_registered_types_have_typeddict():
+    """AT-211 AC3 — REGISTERED_EVENT_TYPES and EVENT_PAYLOAD_TYPES are in sync.
+
+    Every entry in REGISTERED_EVENT_TYPES must have a corresponding TypedDict
+    (or type) in EVENT_PAYLOAD_TYPES. Since both are aliases of EVENT_REGISTRY
+    (a single type→schema mapping), a key present in one is always present in
+    the other. The test guards against any future refactor that splits them.
+    """
+    for event_type in REGISTERED_EVENT_TYPES:
+        assert event_type in EVENT_PAYLOAD_TYPES, (
+            f"{event_type!r} is registered in REGISTERED_EVENT_TYPES "
+            f"but has no entry in EVENT_PAYLOAD_TYPES"
+        )
+        assert isinstance(EVENT_PAYLOAD_TYPES[event_type], type), (
+            f"{event_type!r} maps to {EVENT_PAYLOAD_TYPES[event_type]!r} "
+            f"which is not a type/TypedDict class"
+        )
+
+
+def test_all_sprint_10_11_call_sites_use_registered_types():
+    """AT-211 AC2 — grep-based audit: every event_type= literal in the codebase
+    is in REGISTERED_EVENT_TYPES.
+
+    This test automatically catches any new call site added with an unregistered
+    type — even if the developer forgets to run the manual audit. It complements
+    test_all_call_sites_use_registered_event_type (which uses AST resolution)
+    by also matching raw regex patterns on the source text.
+    """
+    import re
+    violations = []
+    for path in BACKEND_ROOT.rglob("*.py"):
+        if any(part in _EXCLUDED_DIR_NAMES for part in path.parts):
+            continue
+        try:
+            src = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
+        if "record_event(" not in src:
+            continue
+        for match in re.finditer(r"event_type\s*=\s*['\"]([^'\"]+)['\"]", src):
+            et = match.group(1)
+            if et not in REGISTERED_EVENT_TYPES:
+                rel = path.relative_to(BACKEND_ROOT)
+                violations.append(f"{rel}: {et!r}")
+
+    assert not violations, (
+        "record_event() called with unregistered event_type(s):\n  "
+        + "\n  ".join(violations)
+        + f"\nRegistered: {sorted(REGISTERED_EVENT_TYPES)}"
     )

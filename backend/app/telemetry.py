@@ -243,6 +243,17 @@ def register_event_type(event_type: str, schema: Type[Any]) -> None:
     EVENT_REGISTRY[event_type] = schema
 
 
+# ---------------------------------------------------------------------------
+# Named aliases — used by AT-211 contract tests and ValueError message copy.
+# REGISTERED_EVENT_TYPES: set-like view of every registered event_type name.
+# EVENT_PAYLOAD_TYPES:    mapping of event_type → TypedDict schema class.
+# Both are live views of EVENT_REGISTRY; no separate sync required.
+# ---------------------------------------------------------------------------
+
+REGISTERED_EVENT_TYPES = EVENT_REGISTRY   # alias: keys are the registered names
+EVENT_PAYLOAD_TYPES = EVENT_REGISTRY      # alias: values are the TypedDict schemas
+
+
 # Register Sprint 10 initial set
 register_event_type("run.started", RunStartedEvent)
 # AT-209 audit: run.completed call sites send pack_id/system_count (see
@@ -407,8 +418,10 @@ __all__ = [
     "DBIngestorCompletedPayload",   # Sprint 11 — SQL Server ingestor payload
     "DbIngestorCompletedEvent",     # T1-S10-C legacy — kept for backward compat
     "DbQueryExecutedEvent",
+    "EVENT_PAYLOAD_TYPES",          # AT-211 alias: event_type → TypedDict schema
     "EVENT_REGISTRY",
     "EVENT_TYPE_REGISTRY",          # alias for T1-S10-C unit tests
+    "REGISTERED_EVENT_TYPES",       # AT-211 alias: set-like view of registered names
     "RunCompletedEvent",
     "RunSignalSnapshotEvent",
     "RunSignalSnapshotPayload",
