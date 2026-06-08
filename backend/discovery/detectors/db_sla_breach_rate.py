@@ -37,6 +37,7 @@ def evaluate(
     total_tickets_30d = int(sla.get("total_tickets_30d", 0))
     schema_name = str((db_data or {}).get("schema_name", ""))
     table_name = str((db_data or {}).get("table_name", ""))
+    signal_source = str((db_data or {}).get("connector_id", "sqlserver"))
 
     fired = (
         not degraded_signal
@@ -47,7 +48,7 @@ def evaluate(
     return make_detector_evaluation(
         module_name=__name__,
         detector_id=DETECTOR_ID,
-        signal_source="sqlserver",
+        signal_source=signal_source,
         metric_value=round(breach_rate_pct, 4),
         threshold=BREACH_THRESHOLD,
         fired=fired,

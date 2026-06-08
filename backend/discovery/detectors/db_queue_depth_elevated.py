@@ -49,12 +49,13 @@ def evaluate(
     total_open = int(qd.get("total_open", 0))
     oldest = float(qd.get("oldest_ticket_hours", 0.0))
 
+    signal_source = str((db_data or {}).get("connector_id", "sqlserver"))
     fired = (not degraded) and (p1_p2 >= P1_P2_THRESHOLD)
 
     return make_detector_evaluation(
         module_name=__name__,
         detector_id=DETECTOR_ID,
-        signal_source="sqlserver",
+        signal_source=signal_source,
         metric_value=float(p1_p2),
         threshold=float(P1_P2_THRESHOLD),
         fired=fired,
