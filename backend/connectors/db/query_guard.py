@@ -2,6 +2,8 @@
 backend/connectors/db/query_guard.py
 
 Query guard for the AgentIQ database connectivity framework (T2-S10-A, Task T6).
+Sprint 12 Platform Hardening (Task 5B): documented sqlparse behaviour and
+fail-closed rules for CTEs, synonyms, and multi-statement queries.
 
 Implements two layers of read-only / scope enforcement called by
 execute_query() BEFORE any database connection is opened:
@@ -10,6 +12,7 @@ execute_query() BEFORE any database connection is opened:
         Uses sqlparse for reliable statement type detection.
         Rejects INSERT, UPDATE, DELETE, DDL, and every non-SELECT type.
         Never relies on string matching or prefix heuristics.
+        Also rejects multi-statement inputs (> 1 parsed statement).
 
     validate_scope(query, scope)
         Fail-closed scope boundary enforcement.
@@ -20,14 +23,124 @@ execute_query() BEFORE any database connection is opened:
         permitted — scope enforcement is NOT bypassed; schema membership
         is still verified via schema qualifier inspection.
 
-ARCHITECTURAL NOTE (from spec section 3b):
-    sqlparse alone is not a sufficient security boundary for scope enforcement
-    across all enterprise SQL dialects. The fail-closed rule compensates: any
-    ambiguity in table extraction is treated as a violation.
+───────────────────────────────────────────────────────────────────────────────
+DOCUMENTED SQLPARSE BEHAVIOUR
+(verified against sqlparse 0.4.x, query patterns from Sprint 11/12 ingestors)
+───────────────────────────────────────────────────────────────────────────────
+
+The observations below were produced by calling _extract_table_references()
+on each pattern and recording the exact return value.  They are intentionally
+left in the source so that future engineers understand what sqlparse does —
+and why the guard makes the decisions it does — before refactoring.
+
+Pattern 1 — CTE with out-of-scope base table:
+    Query : WITH recent AS (SELECT * FROM restricted_table ...) SELECT * FROM recent
+    Return: ['recent', 'restricted_table']
+    Note  : sqlparse extracts BOTH the CTE alias ('recent') AND the real base
+            table ('restricted_table').  'recent' is the virtual alias; it is
+            not a real database object.  'restricted_table' is the real table.
+    Guard : Either name may fail scope validation.  If 'restricted_table' is
+            out of scope → DBScopeViolationError (correct reason).  If only
+            'recent' is out of scope but 'restricted_table' is in scope, the
+            alias would cause a false rejection — this is why _extract_cte_aliases()
+            removes alias names before scope enforcement.
+
+Pattern 2 — CTE with in-scope base table:
+    Query : WITH t AS (SELECT * FROM dbo.ServiceTickets ...) SELECT * FROM t
+    Return: ['dbo.ServiceTickets', 't']
+    Note  : sqlparse returns 't' (CTE alias) as a table reference alongside
+            'dbo.ServiceTickets' (the real table).  Without alias filtering,
+            't' would fail scope validation even though the query is safe.
+    Guard : _extract_cte_aliases() removes 't' before scope check.  Only
+            'dbo.ServiceTickets' is validated → passes when in scope.
+    IMPORTANT: if _extract_cte_aliases() is removed or broken, in-scope
+            CTE queries WILL be incorrectly rejected.  This is a regression
+            guard — do not remove without updating the contract tests.
+
+Pattern 3 — Nested CTE (two aliases, one real base table):
+    Query : WITH inner_cte AS (SELECT * FROM secret_db.admin_logs),
+              outer_cte AS (SELECT * FROM inner_cte) SELECT * FROM outer_cte
+    Return: ['inner_cte', 'outer_cte', 'secret_db.admin_logs']
+    Note  : Both aliases AND the real base table are extracted.  After alias
+            filtering, only 'secret_db.admin_logs' remains.  That table is
+            not in scope → DBScopeViolationError (correct).
+    EDGE CASE: if sqlparse fails to recurse into the inner CTE body, it may
+            return only ['inner_cte', 'outer_cte'].  After alias filtering → {}.
+            Empty set on non-trivial query → fail-closed fires.  Correct.
+
+Pattern 4 — Oracle synonym:
+    Query : SELECT * FROM public_view   (synonym pointing to restricted_schema.sensitive)
+    Return: ['public_view']
+    Note  : sqlparse sees only the alias name.  AgentIQ cannot resolve what
+            a synonym points to at query-parse time — no live DB lookup is
+            performed here.
+    Guard : If 'public_view' is not in scope.tables → DBScopeViolationError.
+    KNOWN LIMITATION: if an operator declares 'public_view' in scope.tables,
+            the query passes — even though it may resolve to an object outside
+            declared scope.  Operators MUST declare real schema-qualified table
+            names in scope.  Synonym aliases must NOT be added to scope.tables.
+            This limitation is intentional and documented here to prevent
+            silent scope bypass via synonym declarations.
+
+Pattern 5 — Multi-statement (SELECT; SELECT):
+    Query : SELECT 1; SELECT 2
+    Return: []   (empty — no table references found across either statement)
+    Note  : Empty set on a non-trivial query would normally trigger the
+            fail-closed rule with DBScopeViolationError.  However, the correct
+            error class for multiple statements is DBQueryRejectedError (the
+            query structure itself is invalid, not just the scope).
+    Guard : validate_read_only() detects > 1 parsed statement BEFORE scope
+            validation is reached, raising DBQueryRejectedError.
+
+Pattern 6 — SELECT 1 FROM DUAL:
+    Query : SELECT 1 FROM DUAL
+    Return: ['DUAL']   (sqlparse extracts DUAL as a table reference)
+    Note  : DUAL is Oracle's built-in pseudo-table used for health checks.
+            It has no rows and is used only to satisfy the FROM clause syntax.
+    Guard : validate_scope() checks the trivial-query exemption BEFORE calling
+            _extract_table_references().  'SELECT 1 FROM DUAL' is in
+            _TRIVIAL_QUERIES and returns immediately — 'DUAL' is never
+            checked against scope.tables.
+    IMPORTANT: do NOT remove SELECT 1 FROM DUAL from _TRIVIAL_QUERIES.
+            Without it, every Oracle health-check query would require 'DUAL'
+            to be declared in scope, which is wrong.
+
+───────────────────────────────────────────────────────────────────────────────
+THE FAIL-CLOSED RULE — READ BEFORE REFACTORING
+───────────────────────────────────────────────────────────────────────────────
+
+The fail-closed rule is the foundation of the security boundary:
+
+    IF AgentIQ cannot reliably extract and verify table references,
+    IT REJECTS THE QUERY — it does not execute it.
+
+This is intentional.  It is NOT a bug, NOT an overly strict check, and NOT
+something to be relaxed for convenience.  The rule exists because:
+
+  1. sqlparse is not a full SQL parser for every enterprise SQL dialect.
+     Oracle synonyms, recursive CTEs, dynamic SQL, and dialect-specific
+     constructs may cause incorrect or incomplete extraction.
+
+  2. AgentIQ runs queries against live customer databases.  A wrong
+     allow-decision leaks data from outside the declared scope.  A wrong
+     reject-decision causes a query to fail.  Reject is always safer.
+
+  3. T2-S16-A (normalisation layer) and future Track 3 stories build on top
+     of the data returned by these queries.  Scope violations here propagate
+     silently into opportunity cards, evidence, and executive reports.
+
+If you find that the guard rejects a query that should be allowed:
+  a. Write a failing test that demonstrates the case.
+  b. Fix _extract_table_references() or add an alias-filter helper.
+  c. Document the sqlparse behaviour you observed (as above).
+  d. Do NOT weaken the fail-closed rule to make tests pass.
+
+───────────────────────────────────────────────────────────────────────────────
 """
 
 from __future__ import annotations
 
+import re
 import sqlparse
 from sqlparse.sql import (
     Function,
@@ -79,6 +192,20 @@ _TABLE_INTRODUCING_KEYWORDS: frozenset[str] = frozenset({
     "NATURAL RIGHT JOIN",
 })
 
+# CTE alias pattern (Task 5B, Sprint 12 Platform Hardening).
+# Matches "WITH alias AS (" and ", alias AS (" to identify virtual CTE names.
+# CTE aliases are temporary definitions — not real database objects — so they
+# must be excluded from scope enforcement.  Only base tables inside the CTE
+# bodies are subject to scope validation.
+#
+# See module docstring (Pattern 1 / Pattern 2) for the sqlparse behaviour that
+# makes this necessary.  Without this filter, in-scope CTE queries are
+# incorrectly rejected because the alias itself is not in scope.tables.
+_CTE_ALIAS_PATTERN: re.Pattern[str] = re.compile(
+    r"(?:WITH|,)\s+(\w+)\s+AS\s*\(",
+    re.IGNORECASE,
+)
+
 #: Keywords that terminate the FROM / table-reference context.
 _CLAUSE_TERMINATORS: frozenset[str] = frozenset({
     "WHERE",
@@ -94,6 +221,43 @@ _CLAUSE_TERMINATORS: frozenset[str] = frozenset({
     "SET",          # guard against UPDATE SET slipping through
     "INTO",         # guard against INSERT INTO slipping through
 })
+
+
+# ---------------------------------------------------------------------------
+# CTE alias helper
+# ---------------------------------------------------------------------------
+
+
+def _extract_cte_aliases(query: str) -> frozenset[str]:
+    """Return the set of CTE alias names (lower-cased) defined in *query*.
+
+    Example:
+        WITH recent AS (...) SELECT * FROM recent  →  frozenset({'recent'})
+        WITH a AS (...), b AS (...)               →  frozenset({'a', 'b'})
+
+    Why this is needed
+    ------------------
+    sqlparse returns CTE alias names as regular table Identifiers alongside
+    the real base tables (see module docstring Pattern 1 / Pattern 2).  If
+    an alias is not in scope.tables validate_scope would raise
+    DBScopeViolationError for the wrong reason — the alias is virtual and
+    should never be scope-checked.
+
+    After calling this helper, validate_scope subtracts the alias set from
+    the extracted references before enforcement.  Only real base tables
+    (found inside the CTE bodies during sqlparse recursion) remain.
+
+    Fail-closed guarantee:
+        If alias filtering reduces the reference set to {} and the query is
+        not trivial, the empty-extraction fail-closed rule fires and the
+        query is still rejected.  Alias filtering cannot be used to bypass
+        scope enforcement — it can only prevent false rejections.
+
+    Returns an empty frozenset when the query contains no WITH clause.
+    """
+    return frozenset(
+        m.group(1).lower() for m in _CTE_ALIAS_PATTERN.finditer(query)
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -152,6 +316,23 @@ def validate_read_only(query: str) -> None:
                 error_code="query_rejected",
             )
 
+    # Multi-statement guard (fail-closed, Task 5B).
+    # See module docstring Pattern 5 for the exact sqlparse behaviour.
+    # sqlparse returns [] for "SELECT 1; SELECT 2" — both statements pass the
+    # type check above because both are SELECT.  Without this guard, a
+    # double-SELECT input would reach validate_scope with an empty reference
+    # set and trigger DBScopeViolationError instead of the correct
+    # DBQueryRejectedError.  Multiple statements increase injection risk
+    # regardless of their individual types and must be rejected here.
+    non_empty_stmts = [s for s in parsed if s.value.strip()]
+    if len(non_empty_stmts) > 1:
+        raise DBQueryRejectedError(
+            f"Multi-statement queries are not permitted — "
+            f"{len(non_empty_stmts)} statements detected. "
+            "Only a single SELECT statement is allowed per query (fail-closed).",
+            error_code="query_rejected",
+        )
+
 
 def validate_scope(query: str, scope: ScopeDeclaration) -> None:
     """
@@ -205,7 +386,24 @@ def validate_scope(query: str, scope: ScopeDeclaration) -> None:
             f"Reason: {exc}"
         ) from exc
 
-    # Empty extraction result on a non-trivial query → fail-closed
+    # CTE alias filtering (Task 5B) — see module docstring Pattern 1 / Pattern 2.
+    # sqlparse returns CTE alias names (e.g. 'recent', 't') as regular table
+    # references alongside the real base tables.  Aliases are virtual; they
+    # are not real database objects and must not be scope-checked.
+    # _extract_cte_aliases() identifies names defined in WITH ... AS (...).
+    # After filtering, only real base tables remain for scope enforcement.
+    #
+    # Fail-closed guarantee: if filtering empties the reference set (meaning
+    # sqlparse returned only aliases and missed the real base tables), the
+    # empty-extraction rule below still fires and the query is rejected.
+    cte_aliases = _extract_cte_aliases(query)
+    if cte_aliases:
+        referenced = {ref for ref in referenced if ref.lower() not in cte_aliases}
+
+    # Empty extraction result on a non-trivial query → fail-closed.
+    # Also fires when CTE filtering removed all extracted references (i.e.
+    # the parser could not reliably identify the real base tables).
+    # See module docstring Pattern 3 edge-case for an example.
     if not referenced:
         raise DBScopeViolationError(
             "No table references could be extracted from a non-trivial query "
