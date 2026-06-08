@@ -13,7 +13,8 @@
  *   npx vitest run src/__tests__/OracleScopePicker.test.tsx
  */
 
-import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
+import '@testing-library/jest-dom/vitest';
+import { render, screen, fireEvent, waitFor, act, cleanup } from '@testing-library/react';
 import { vi, describe, it, expect, beforeEach, afterEach } from 'vitest';
 
 // ── Mock API client before importing the component ────────────────────────────
@@ -77,6 +78,7 @@ describe('OracleScopePicker', () => {
   });
 
   afterEach(() => {
+    cleanup();
     vi.restoreAllMocks();
   });
 
