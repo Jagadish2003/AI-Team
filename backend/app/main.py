@@ -1,7 +1,6 @@
 from contextlib import asynccontextmanager
 import logging
 import os
-import sqlite3
 import time
 import uuid
 from datetime import datetime, timezone
@@ -43,6 +42,7 @@ from .routes_workspace_catalog import register_workspace_catalog_routes
 from .routes_workspace import register_workspace_routes
 from .routes_db_connectors import register_db_connector_routes
 from .routes_temporal import register_temporal_routes
+from .routes_entities import register_entities_routes
 from .security import require_auth
 from .auth.configs import CONNECTOR_AUTH_CONFIGS
 from .auth.secrets import validate_all_secrets
@@ -106,6 +106,7 @@ if not any(r.path == "/api/connectors/oauth/callback" for r in app.routes):
 register_db_connector_routes(app)
 register_temporal_routes(app)
 register_workspace_routes(app)
+register_entities_routes(app)
 
 origins = [
     o.strip()
@@ -328,25 +329,6 @@ def set_evidence_decision(
     run_kv_set("audit", run_id, [audit_event, *audit])
     return e
 
-
-@app.get("/api/runs/{run_id}/entities", dependencies=[Depends(require_auth)])
-def list_entities(run_id: str) -> List[Dict[str, Any]]:
-    try:
-        read_run(run_id)
-    except KeyError:
-        raise HTTPException(404, "run not found")
-    # entities table uses Stage 2 column schema — query by run_id directly.
-    # T3-S12-A (T6) will replace this with a routes_entities.py route.
-    con = db.connect()
-    try:
-        con.row_factory = sqlite3.Row
-        rows = con.execute(
-            "SELECT * FROM entities WHERE last_seen_run_id = ? ORDER BY entity_type, canonical_name",
-            (run_id,),
-        ).fetchall()
-        return [dict(r) for r in rows]
-    finally:
-        con.close()
 
 
 @app.get("/api/runs/{run_id}/mappings", dependencies=[Depends(require_auth)])
