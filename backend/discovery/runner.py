@@ -324,6 +324,74 @@ def run(
         else:
             logger.warning("GitHub ingestion: empty payload — all three detectors will not fire")
 
+    # 2d. Oracle DB ingest  — T2-S12-A: sqlserver_opsignal pack + oracle_db connector.
+    # 2e. PostgreSQL ingest — T2-S12-A: sqlserver_opsignal pack + postgresql connector.
+    from .packs.pack_config import is_sqlserver_opsignal_pack as _is_db_opsignal
+    db_data: Dict[str, Any] = {}
+    _db_connector_id: Optional[str] = None
+
+    if _is_db_opsignal(pack_id):
+        try:
+            from connectors.db import DBConnectorConfig, ScopeDeclaration as _SD
+        except ModuleNotFoundError:
+            from backend.connectors.db import DBConnectorConfig, ScopeDeclaration as _SD
+
+        def _build_db_config(connector_id: str) -> DBConnectorConfig:
+            """Build connector config from env vars; placeholder values are fine in offline mode."""
+            if connector_id == "oracle_db":
+                return DBConnectorConfig(
+                    connector_id="oracle_db",
+                    org_id=org_id,
+                    host=os.environ.get("ORACLE_HOST", "oracle.local"),
+                    port=int(os.environ.get("ORACLE_PORT", "1521")),
+                    database=os.environ.get("ORACLE_DATABASE", "ORCL"),
+                    driver="oracledb",
+                    username_key="ORACLE_USER",
+                    password_key="ORACLE_PASS",
+                )
+            return DBConnectorConfig(
+                connector_id="postgresql",
+                org_id=org_id,
+                host=os.environ.get("PG_HOST", "postgres.local"),
+                port=int(os.environ.get("PG_PORT", "5432")),
+                database=os.environ.get("PG_DATABASE", "postgres"),
+                driver="psycopg2",
+                username_key="PG_USER",
+                password_key="PG_PASS",
+            )
+
+        if "oracle_db" in _systems:
+            try:
+                try:
+                    from connectors.db.oracle_ingestor import ingest as _oracle_ingest
+                except ModuleNotFoundError:
+                    from backend.connectors.db.oracle_ingestor import ingest as _oracle_ingest
+                db_data = _oracle_ingest(
+                    org_id=org_id,
+                    run_id=run_id,
+                    config=_build_db_config("oracle_db"),
+                )
+                _db_connector_id = "oracle_db"
+                logger.info("Oracle DB ingestion: OK")
+            except Exception as e:
+                logger.warning("Oracle DB ingestion failed (non-blocking): %s", e)
+
+        elif "postgresql" in _systems:
+            try:
+                try:
+                    from connectors.db.postgresql_ingestor import ingest as _pg_ingest
+                except ModuleNotFoundError:
+                    from backend.connectors.db.postgresql_ingestor import ingest as _pg_ingest
+                db_data = _pg_ingest(
+                    org_id=org_id,
+                    run_id=run_id,
+                    config=_build_db_config("postgresql"),
+                )
+                _db_connector_id = "postgresql"
+                logger.info("PostgreSQL ingestion: OK")
+            except Exception as e:
+                logger.warning("PostgreSQL ingestion failed (non-blocking): %s", e)
+
     # 2. Context
     org_ctx = build_org_context(sf_data, sn_data, jira_data)
 
@@ -332,7 +400,20 @@ def run(
     # pack_config.py (ENG-SHARED-1) defines which detectors each pack activates.
     from .packs.pack_config import is_ncino_pack
 
-    if is_ncino_pack(pack_id):
+    if _is_db_opsignal(pack_id):
+        # DB operational signal detectors — shared across SQL Server, Oracle, PostgreSQL (T2-S12-A)
+        from .detectors import (
+            db_ticket_volume_surge,
+            db_sla_breach_rate,
+            db_queue_depth_elevated,
+        )
+        all_detectors = [
+            db_ticket_volume_surge,
+            db_sla_breach_rate,
+            db_queue_depth_elevated,
+        ]
+        logger.info("Pack: sqlserver_opsignal — 3 DB operational signal detectors active (connector=%s)", _db_connector_id or "none")
+    elif is_ncino_pack(pack_id):
         # nCino lending detectors — confirmed objects from SF-NC-2
         from .detectors import (
             loan_origination_routing_friction,
@@ -363,18 +444,6 @@ def run(
             disability_review_bottleneck,
         ]
         logger.info("Pack: strs_benefits — 4 benefit detectors active")
-    elif is_sqlserver_opsignal_pack(pack_id):
-        from .detectors import (
-            db_ticket_volume_surge,
-            db_sla_breach_rate,
-            db_queue_depth_elevated,
-        )
-        all_detectors = [
-            db_ticket_volume_surge,
-            db_sla_breach_rate,
-            db_queue_depth_elevated,
-        ]
-        logger.info("Pack: sqlserver_opsignal - 3 DB operational detectors active")
     elif is_github_engineering_pack(pack_id):
         from .detectors import (
             github_pr_bottleneck,
@@ -399,15 +468,31 @@ def run(
         logger.info("Pack: service_cloud — 7 SC detectors active")
 
     # Capture fired and non-firing detector evaluations before scoring.
-    # GitHub detectors read their signal from the first positional arg, so the
-    # github_engineering pack passes github_data into that slot.
-    primary_data = github_data if is_github_engineering_pack(pack_id) else sf_data
+    # DB and GitHub packs read their signal from the first positional arg.
+    # Keep Service Cloud, nCino, and STRS on Salesforce-shaped data.
+    if _is_db_opsignal(pack_id):
+        primary_data = db_data
+    elif is_github_engineering_pack(pack_id):
+        primary_data = github_data
+    else:
+        primary_data = sf_data
+
     detector_results, all_evaluated = _run_detector_phase(
         all_detectors,
         primary_data,
         sn_data,
         jira_data,
     )
+
+    # T2-S12-A: override signal_source for oracle/postgresql — detectors hardcode
+    # 'sqlserver' but signal_source must reflect the actual connector used.
+    if _is_db_opsignal(pack_id) and _db_connector_id:
+        for _dr in detector_results:
+            _dr.signal_source = _db_connector_id
+        for _ev in all_evaluated:
+            if hasattr(_ev, "signal_source"):
+                _ev.signal_source = _db_connector_id
+
     _snapshot_detector_evaluations(
         org_id=org_id,
         run_id=run_id,
