@@ -494,14 +494,21 @@ class TestAC10EndToEndRunner:
 
         os.environ["INGEST_MODE"] = "offline"
         try:
-            with patch.object(runner, "_ingest_github", return_value=github_payload):
-                return runner.run(
+            # autospec=True binds the mock to the real _ingest_github signature, and
+            # assert_called_once() makes the test fail loudly (not vacuously pass) if
+            # the patch target drifts due to an import-path/refactor change — otherwise
+            # the real ingestor would attempt live HTTP and break unpredictably in CI.
+            with patch.object(runner, "_ingest_github", autospec=True) as mock_ingest:
+                mock_ingest.return_value = github_payload
+                result = runner.run(
                     mode="offline",
                     pack="github_engineering",
                     systems=systems or ["github"],
                     org_id="org-ac10",
                     run_id="run_ac10test",
                 )
+                mock_ingest.assert_called_once()
+                return result
         finally:
             os.environ.pop("INGEST_MODE", None)
 
