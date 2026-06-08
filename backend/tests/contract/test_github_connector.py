@@ -478,6 +478,89 @@ class TestSignalMetricsValidation:
 # Pack registration and UI labels (coverage supplement)
 # ─────────────────────────────────────────────────────────────────────────────
 
+class TestAC10EndToEndRunner:
+    """AC10 — the discovery runner, given mocked GitHub data, produces at least
+    one OpportunityCandidate from the three GitHub detectors.
+
+    These run the *real* runner.run() pipeline (ingest -> detect -> score ->
+    OpportunityCandidate[]) with the async GitHub connector replaced by a
+    deterministic mocked payload via runner._ingest_github.
+    """
+
+    def _run_with_mock(self, github_payload: Dict[str, Any], systems=None) -> Dict[str, Any]:
+        import os
+        from unittest.mock import patch
+        from discovery import runner
+
+        os.environ["INGEST_MODE"] = "offline"
+        try:
+            with patch.object(runner, "_ingest_github", return_value=github_payload):
+                return runner.run(
+                    mode="offline",
+                    pack="github_engineering",
+                    systems=systems or ["github"],
+                    org_id="org-ac10",
+                    run_id="run_ac10test",
+                )
+        finally:
+            os.environ.pop("INGEST_MODE", None)
+
+    def test_runner_produces_at_least_one_opportunity(self):
+        result = self._run_with_mock(
+            _github_all(prs_over_threshold=5, top_author_pct=0.75, stale_count=10)
+        )
+        assert len(result.get("opportunities", [])) >= 1
+
+    def test_runner_packid_is_github_engineering(self):
+        result = self._run_with_mock(_github_all())
+        assert result.get("packId") == "github_engineering"
+
+    def test_all_three_github_detectors_produce_opportunities(self):
+        result = self._run_with_mock(
+            _github_all(prs_over_threshold=8, top_author_pct=0.80, stale_count=15)
+        )
+        fired = {opp["detector_id"] for opp in result.get("opportunities", [])}
+        assert {
+            "GITHUB_PR_REVIEW_BOTTLENECK",
+            "GITHUB_COMMIT_CONCENTRATION",
+            "GITHUB_STALE_BRANCHES",
+        } <= fired
+
+    def test_opportunities_carry_github_signal_source_and_scores(self):
+        result = self._run_with_mock(_github_all())
+        opps = result.get("opportunities", [])
+        assert opps
+        for opp in opps:
+            assert opp["signal_source"] == "github"
+            assert opp["packId"] == "github_engineering"
+            assert opp["confidence"] in ("MEDIUM", "HIGH")
+            assert isinstance(opp["impact"], (int, float))
+            assert isinstance(opp["effort"], (int, float))
+
+    def test_degraded_github_ingest_produces_no_opportunities(self):
+        """All three signal blocks degraded -> no detector fires -> no opportunities."""
+        degraded = {
+            "pr_review": {
+                "prs_over_threshold": 99, "avg_days_open": 9.0,
+                "max_days_open": 20.0, "open_pr_count": 99, "degraded_signal": True,
+            },
+            "commit_concentration": {
+                "top_author_pct": 0.99, "top_author_name": "solo",
+                "total_contributors": 5, "degraded_signal": True,
+            },
+            "stale_branches": {
+                "stale_count": 99, "total_branches": 120,
+                "oldest_stale_days": 90.0, "degraded_signal": True,
+            },
+        }
+        result = self._run_with_mock(degraded)
+        gh_opps = [
+            o for o in result.get("opportunities", [])
+            if o["detector_id"].startswith("GITHUB_")
+        ]
+        assert gh_opps == []
+
+
 class TestPackRegistration:
     """Pack is correctly registered and UI labels are loadable."""
 
