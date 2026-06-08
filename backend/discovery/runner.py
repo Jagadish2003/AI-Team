@@ -134,6 +134,53 @@ def build_org_context(sf_data: Dict, sn_data: Dict, jira_data: Dict) -> Dict[str
         },
     }
 
+def _ingest_github(org_id: str, run_id: str) -> Dict[str, Any]:
+    """Sync wrapper around the async GitHub connector ingest (T1-S12).
+
+    Returns the Section 2b payload, or {} on any failure (non-blocking — a
+    GitHub ingest failure must never abort the run). Tests monkeypatch this
+    function to inject mocked GitHub data and exercise the full
+    ingest → detect → score → OpportunityCandidate path (AC10).
+
+    Always runs the coroutine in a dedicated thread with its own event loop so
+    this function is safe to call from both sync contexts and from within
+    FastAPI's running async event loop (e.g. background tasks). Using
+    asyncio.run() or loop.run_until_complete() directly on the calling thread
+    raises RuntimeError when an event loop is already running there.
+    """
+    import asyncio
+    import concurrent.futures
+
+    try:
+        from connectors.saas import github as github_connector
+    except ModuleNotFoundError:  # project-root execution uses backend as package
+        try:
+            from backend.connectors.saas import github as github_connector
+        except Exception as e:
+            logger.warning("GitHub connector import failed (non-blocking): %s", e)
+            return {}
+    except Exception as e:
+        logger.warning("GitHub connector import failed (non-blocking): %s", e)
+        return {}
+
+    try:
+        # Run in a fresh thread so asyncio.run() always gets a clean event loop,
+        # regardless of whether the caller is sync or inside FastAPI's loop.
+        def _run() -> Dict[str, Any]:
+            return asyncio.run(github_connector.ingest(org_id, run_id))
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+            return executor.submit(_run).result()
+    except Exception as e:
+        # Use type name only — the exception str may contain request headers
+        # (Authorization: Bearer ...) from urllib3/requests reprs.
+        logger.warning(
+            "GitHub ingestion failed (non-blocking) org=%s run=%s: [%s]",
+            org_id, run_id, type(e).__name__,
+        )
+        return {}
+
+
 def run(
     mode: Optional[str] = None,
     run_id: Optional[str] = None,
@@ -147,6 +194,7 @@ def run(
         get_pack_domain,
         is_ncino_pack,
         is_sqlserver_opsignal_pack,
+        is_github_engineering_pack,
     )
     pack_config = get_pack(pack)
     pack_id     = pack_config["packId"]
@@ -180,6 +228,7 @@ def run(
     from .ingest.jira import JiraIngestError
 
     sf_data, sn_data, jira_data = {}, {}, {}
+    github_data: Dict[str, Any] = {}
     logger.info(f"Systems: {sorted(list(_systems))}")
 
     try:
@@ -248,6 +297,33 @@ def run(
         except Exception as e:
             logger.warning("STRS Benefits ingestion failed (non-blocking): %s", e)
 
+    # 2c. GitHub Engineering ingest — if github_engineering pack (T1-S12).
+    # GitHub is the first engineering signal source and does not depend on
+    # Salesforce. Jira is still ingested above when in _systems so the pack's
+    # confidence-elevation corroboration can run.
+    if is_github_engineering_pack(pack_id):
+        github_data = _ingest_github(org_id, run_id) or {}
+        if github_data:
+            # Log degraded state per sub-signal so a pagination failure in one
+            # signal (e.g. stale_branches) is reported independently and does
+            # not imply the other signals are also degraded.
+            _GITHUB_SUB_SIGNALS = {
+                "pr_review":            "GITHUB_PR_REVIEW_BOTTLENECK",
+                "commit_concentration": "GITHUB_COMMIT_CONCENTRATION",
+                "stale_branches":       "GITHUB_STALE_BRANCHES",
+            }
+            for sub_key, detector_id in _GITHUB_SUB_SIGNALS.items():
+                if (github_data.get(sub_key) or {}).get("degraded_signal", False):
+                    logger.warning(
+                        "GitHub ingestion: %s signal degraded — %s detector will not fire",
+                        sub_key,
+                        detector_id,
+                    )
+                else:
+                    logger.info("GitHub ingestion: %s signal OK", sub_key)
+        else:
+            logger.warning("GitHub ingestion: empty payload — all three detectors will not fire")
+
     # 2. Context
     org_ctx = build_org_context(sf_data, sn_data, jira_data)
 
@@ -299,6 +375,18 @@ def run(
             db_queue_depth_elevated,
         ]
         logger.info("Pack: sqlserver_opsignal - 3 DB operational detectors active")
+    elif is_github_engineering_pack(pack_id):
+        from .detectors import (
+            github_pr_bottleneck,
+            github_commit_concentration,
+            github_stale_branches,
+        )
+        all_detectors = [
+            github_pr_bottleneck,
+            github_commit_concentration,
+            github_stale_branches,
+        ]
+        logger.info("Pack: github_engineering — 3 engineering signal detectors active")
     else:
         # Service Cloud detectors — default
         from .detectors import (
@@ -311,9 +399,12 @@ def run(
         logger.info("Pack: service_cloud — 7 SC detectors active")
 
     # Capture fired and non-firing detector evaluations before scoring.
+    # GitHub detectors read their signal from the first positional arg, so the
+    # github_engineering pack passes github_data into that slot.
+    primary_data = github_data if is_github_engineering_pack(pack_id) else sf_data
     detector_results, all_evaluated = _run_detector_phase(
         all_detectors,
-        sf_data,
+        primary_data,
         sn_data,
         jira_data,
     )
@@ -333,6 +424,10 @@ def run(
     from .packs.sqlserver_opsignal_scorer import (
         score_sqlserver_opsignal,
         is_sqlserver_opsignal_detector,
+    )
+    from .packs.github_engineering_scorer import (
+        score_github_engineering,
+        is_github_engineering_detector,
     )
     from .evidence_builder import build_evidence
     id_counter = itertools.count(1)
@@ -384,6 +479,15 @@ def run(
             scored = score_strs_benefits(dr)
         elif is_sqlserver_opsignal_pack(pack_id) and is_sqlserver_opsignal_detector(dr.detector_id):
             scored = score_sqlserver_opsignal(dr)
+        elif is_github_engineering_pack(pack_id) and is_github_engineering_detector(dr.detector_id):
+            # T7/AT-191: PR-bottleneck confidence elevates MEDIUM->HIGH when Jira
+            # corroborates. jira_connected mirrors how sources_connected.jira is derived.
+            scored = score_github_engineering(
+                dr,
+                jira_data=jira_data,
+                org_id=org_id,
+                jira_connected=bool(jira_data),
+            )
         else:
             scored = sc_score(dr)
         # Pass packId so build_evidence uses nCino banking-language builders

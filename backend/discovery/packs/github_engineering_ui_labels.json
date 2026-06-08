@@ -1,0 +1,28 @@
+{
+  "_meta": {
+    "story": "T1-S12-T5",
+    "description": "GitHub Engineering Signal Pack UI labels for opportunity cards",
+    "status": "READY",
+    "audience": "Engineering Lead, VP Engineering",
+    "note": "Loaded per request; no restart required when editing label copy.",
+    "compliance_note": "Agent surfaces engineering signals to engineering leads only. No automated merge approvals, branch deletions, or code changes."
+  },
+  "GITHUB_PR_REVIEW_BOTTLENECK": {
+    "s6_title": "PR Review Bottleneck Monitor",
+    "agentType": "Monitoring Agent",
+    "s6_why": "Pull requests are waiting significantly longer than your review threshold, creating a downstream delivery bottleneck that compounds with each sprint.",
+    "s6_action": "An agent can monitor open PR age daily, alert reviewers when PRs approach the threshold, and surface the oldest PRs to engineering leads automatically. No automated merge approvals — all merge decisions remain with the engineering team."
+  },
+  "GITHUB_COMMIT_CONCENTRATION": {
+    "s6_title": "Commit Concentration Risk Monitor",
+    "agentType": "Monitoring Agent",
+    "s6_why": "A single contributor is responsible for the majority of recent commits, creating a significant bus factor risk in this codebase.",
+    "s6_action": "An agent can track contribution distribution weekly, alert engineering leads when concentration exceeds threshold, and flag high-concentration areas for knowledge transfer planning. No automated code changes — all code decisions remain with the engineering team."
+  },
+  "GITHUB_STALE_BRANCHES": {
+    "s6_title": "Stale Branch Accumulation Monitor",
+    "agentType": "Monitoring Agent",
+    "s6_why": "Stale branches are accumulating, indicating incomplete work, abandoned features, or process gaps in branch lifecycle management.",
+    "s6_action": "An agent can identify stale branches weekly, notify branch owners, and generate a cleanup report for engineering leads. No automated branch deletions — all branch lifecycle decisions remain with the engineering team."
+  }
+}
