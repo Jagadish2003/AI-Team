@@ -26,7 +26,7 @@ from datetime import datetime, timezone
 from typing import Any, Optional
 
 from app import db
-from database.models.entities import Entity
+from database.models.entities import Entity, ENTITY_NAME_MAX_LEN
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +35,30 @@ _STABLE_ENTITY_TYPES = frozenset({"system", "process"})
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _truncate(value: str, max_len: int = ENTITY_NAME_MAX_LEN) -> str:
+    """Bound a name to the VARCHAR(256) schema width.
+
+    ServiceNow group names and Salesforce approval chains can exceed the column
+    width; truncating here prevents a silent DB truncation or constraint error
+    on long values. Applied to display_name and canonical_name before persist.
+    """
+    if value is None:
+        return value
+    return value[:max_len]
+
+
+def _canonicalize(display_name: str) -> str:
+    """Normalise a display name into the canonical match key.
+
+    Lowercases, strips, and collapses internal whitespace runs so that
+    "Alice Smith", "alice smith", and "Alice  Smith" all resolve to the single
+    canonical key "alice smith" instead of creating duplicate entity rows. The
+    (org_id, entity_type, canonical_name) index only dedupes exact matches, so
+    normalisation MUST happen before both lookup and persistence.
+    """
+    return _truncate(" ".join(display_name.split()).lower())
 
 
 def _connect() -> sqlite3.Connection:
@@ -98,8 +122,37 @@ def update_entity_seen(
     entity_id: str,
     run_id: str,
     source_system: str,
+    new_confidence: Optional[float] = None,
+    new_source_record_id: Optional[str] = None,
 ) -> None:
-    """Increment run_count and update last_seen_run_id for a returning entity."""
+    """Increment run_count and update last_seen_run_id for a returning entity.
+
+    Confidence upgrade (never downgrade): when a later, higher-quality signal
+    arrives for an existing entity — e.g. an incoming record carries a
+    source_record_id (confidence 1.0) where the stored row was name-based (0.8)
+    — the stored resolution_confidence is raised to max(existing, incoming) and
+    the source_record_id is backfilled if it was missing. The confidence is only
+    ever increased here; a lower incoming confidence leaves the stored value
+    untouched. Ambiguous rows are deliberately left alone by the caller (their
+    0.6 confidence and 'ambiguous' status are intentional, load-bearing data).
+    """
+    if new_confidence is not None:
+        # COALESCE so a NULL stored source_record_id is backfilled, but an
+        # existing one is never overwritten. MAX guarantees confidence only
+        # ever rises.
+        conn.execute(
+            """
+            UPDATE entities
+            SET last_seen_run_id    = ?,
+                run_count           = run_count + 1,
+                resolution_confidence = MAX(resolution_confidence, ?),
+                source_record_id    = COALESCE(source_record_id, ?),
+                updated_at          = ?
+            WHERE id = ?
+            """,
+            (run_id, new_confidence, new_source_record_id, _now(), str(entity_id)),
+        )
+        return
     conn.execute(
         """
         UPDATE entities
@@ -151,7 +204,8 @@ def resolve_or_create_entity(
     Returns:
         The resolved or newly created Entity (reflects DB state after commit).
     """
-    canonical = display_name.strip().lower()
+    canonical = _canonicalize(display_name)
+    display_name = _truncate(display_name)
 
     conn = _connect()
     try:
@@ -180,9 +234,24 @@ def resolve_or_create_entity(
 
         if len(candidates) == 1:
             # Branch 2 — single candidate: update seen, return existing row.
-            # Confidence is NOT re-evaluated — it was set on creation and is stable.
+            # Confidence is upgraded (never downgraded) when this run carries a
+            # higher-quality signal — e.g. a source_record_id (1.0) for a row
+            # first created name-based (0.8). Ambiguous rows are left untouched:
+            # their 0.6/'ambiguous' state is intentional and must not be revised
+            # by a single later sighting.
             existing = candidates[0]
-            update_entity_seen(conn, str(existing.id), run_id, source_system)
+            if existing.resolution_status == "ambiguous":
+                update_entity_seen(conn, str(existing.id), run_id, source_system)
+            else:
+                incoming_confidence = _initial_confidence(entity_type, source_record_id)
+                update_entity_seen(
+                    conn,
+                    str(existing.id),
+                    run_id,
+                    source_system,
+                    new_confidence=incoming_confidence,
+                    new_source_record_id=source_record_id,
+                )
             conn.commit()
             # Return refreshed view
             row = conn.execute(

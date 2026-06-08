@@ -26,11 +26,14 @@ import logging
 from typing import Any, Dict, List, Optional
 
 from app.entity_resolution import resolve_or_create_entity
-from database.models.entities import Entity
+from database.models.entities import Entity, ENTITY_MIN_RUN_COUNT
 
 logger = logging.getLogger(__name__)
 
-_MIN_DISPLAY_RUN_COUNT = 3  # entities below this threshold treated as service accounts
+# Entities seen in fewer runs than this are treated as service accounts and
+# filtered from the OppEnrichment evidence trace. Sourced from a single shared
+# constant so the threshold can never drift from the test suite that asserts it.
+_MIN_DISPLAY_RUN_COUNT = ENTITY_MIN_RUN_COUNT
 
 
 def _safe_str(val: Any) -> Optional[str]:
@@ -867,6 +870,9 @@ def extract_entities(
 
     # Fire-and-forget telemetry — never raises.
     # Not emitted if extraction raised an exception; the runner warning covers that.
+    # PII GUARD: this payload carries COUNTS and identifiers (run/org/pack) only.
+    # Never add canonical_name or display_name here — those can be real user
+    # names (e.g. "Alice Smith") and telemetry must not log sensitive values.
     try:
         from app.telemetry import record_event
         record_event(

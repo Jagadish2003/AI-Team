@@ -151,10 +151,15 @@ Flags:
 
 Core Data Loaded:
     • connectors.json    (Integration Hub connectors)
-    • entities.json      (Business entities)
     • mappings.json      (Process mappings)
     • permissions.json   (User permissions)
     • uploads.json       (File uploads)
+
+Not Seeded:
+    • entities — Stage 2 (15-column) schema is managed by Alembic migration
+      0003 and populated at run time by entity_extractor.py. The legacy
+      (id, payload) entities.json format is incompatible and is NOT loaded.
+      See the TABLES note near the top of this file.
 
 Mock Data Excluded:
     • opportunities.json, evidence.json, audit.json, run.json,

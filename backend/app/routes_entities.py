@@ -95,15 +95,34 @@ def ensure_entities_table() -> None:
     dependencies=[Depends(require_auth), Depends(require_role("analyst"))],
 )
 def list_entities(run_id: str) -> List[Dict[str, Any]]:
-    """Return all entities for a run, scoped to the authenticated org.
+    """Return all entities visible as of a run, scoped to the authenticated org.
 
-    Returns [] when the run exists but extraction has not run yet.
+    "Visible as of run N" means every entity first observed in run N or any
+    earlier run — entities accumulate in the org and persist once seen. An
+    entity first seen in run 1 and not re-extracted in run 2 is still a real
+    org entity and MUST remain visible when querying run 2. Filtering on
+    ``last_seen_run_id = run_id`` (the prior behaviour) silently dropped those
+    older entities on every re-run; this query instead bounds visibility by the
+    run in which each entity was *first* seen.
+
+    Run IDs are random (``run_<hex>``) and carry no orderable information, so we
+    derive chronological order from the ``runs`` table's implicit rowid
+    (insertion order = creation order). An entity is included when the run it
+    was first seen in was created no later than the queried run.
+
+    Returns [] when the run exists but no entities are visible yet.
     Returns 404 when run_id is missing or belongs to a different org.
+
+    NOTE: schema DDL is created once at startup via register_entities_routes();
+    this hot path performs no DDL (no per-request CREATE TABLE / lock risk).
     """
     org_id = get_current_org_id()
 
-    # Verify the run exists AND belongs to this org in one query to prevent
-    # leaking run existence via 403 vs 404 divergence (tenancy isolation rule).
+    # Verify the run exists AND belongs to this org before serving any data.
+    # This existence check is itself org-scoped: a run owned by another org is
+    # reported as 404 (never 403), so an analyst in org-B cannot distinguish
+    # "run does not exist" from "run exists in org-A" — closing the run
+    # enumeration channel (tenancy isolation rule).
     run = db.get_run(run_id)
     if run is None:
         raise HTTPException(status_code=404, detail="run not found")
@@ -116,15 +135,24 @@ def list_entities(run_id: str) -> List[Dict[str, Any]]:
     con = db.connect()
     try:
         con.row_factory = sqlite3.Row
+        # All values are bound parameters (?) — never string-interpolated — so
+        # source_record_id and other external-system values cannot inject SQL.
+        # LEFT JOIN keeps entities whose first_seen run row is absent (defensive:
+        # never drop a real entity just because its origin run record is gone).
         rows = con.execute(
             """
-            SELECT id, org_id, entity_type, canonical_name, display_name,
-                   source_system, source_record_id, resolution_confidence,
-                   resolution_status, first_seen_run_id, last_seen_run_id,
-                   run_count, metadata, created_at, updated_at
-            FROM entities
-            WHERE org_id = ? AND last_seen_run_id = ?
-            ORDER BY entity_type, canonical_name
+            SELECT e.id, e.org_id, e.entity_type, e.canonical_name, e.display_name,
+                   e.source_system, e.source_record_id, e.resolution_confidence,
+                   e.resolution_status, e.first_seen_run_id, e.last_seen_run_id,
+                   e.run_count, e.metadata, e.created_at, e.updated_at
+            FROM entities e
+            LEFT JOIN runs r_first ON r_first.id = e.first_seen_run_id
+            WHERE e.org_id = ?
+              AND (
+                    r_first.rowid IS NULL
+                 OR r_first.rowid <= (SELECT rowid FROM runs WHERE id = ?)
+              )
+            ORDER BY e.entity_type, e.canonical_name
             """,
             (org_id, run_id),
         ).fetchall()
@@ -135,7 +163,14 @@ def list_entities(run_id: str) -> List[Dict[str, Any]]:
                 try:
                     row_dict["metadata"] = json.loads(row_dict["metadata"])
                 except (json.JSONDecodeError, ValueError):
-                    pass
+                    # Corrupt metadata must not leak a raw string to a consumer
+                    # that expects a dict. Return {} and flag the offending row.
+                    logger.warning(
+                        "entities: dropping unparseable metadata for entity %s (run %s)",
+                        row_dict.get("id"),
+                        run_id,
+                    )
+                    row_dict["metadata"] = {}
             result.append(row_dict)
         return result
     finally:

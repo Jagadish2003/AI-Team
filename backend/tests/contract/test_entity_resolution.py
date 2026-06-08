@@ -10,7 +10,9 @@ AC5 — System and Process entities → confidence=1.0 (stable AgentIQ IDs).
 Additional coverage:
   - New entity (zero candidates) is created with correct fields.
   - Single candidate: run_count incremented, last_seen_run_id updated,
-    confidence NOT re-evaluated.
+    confidence upgraded to max(existing, incoming) when a higher-quality signal
+    arrives (e.g. a source_record_id for a previously name-based row) — never
+    downgraded (Issue #2).
   - Cross-org isolation: same canonical_name in different orgs → no collision.
   - ambiguous path creates N+1 rows (all candidates + new row).
 """
@@ -145,11 +147,19 @@ class TestConfidenceAssignment:
         )
         assert e.resolution_confidence == 1.0
 
-    def test_single_candidate_match_confidence_not_re_evaluated(self):
-        # First call creates with confidence 0.8 (name-only Jira)
+    def test_single_candidate_match_confidence_upgrades_with_better_source(self):
+        """Issue #2: a later, higher-quality signal upgrades confidence (never down).
+
+        A resolved entity first seen name-based (0.8) must be raised to 1.0 when a
+        subsequent run supplies a source_record_id, and the source_record_id is
+        backfilled onto the existing row (not a new duplicate). Confidence is only
+        ever increased — a lower incoming value would leave it unchanged.
+        """
+        # First call creates with confidence 0.8 (name-only Jira), no source id.
         first = _call(display_name="Gail Sun", org_id="org-ac4d", source_system="jira")
         assert first.resolution_confidence == 0.8
-        # Second call with source_record_id — confidence must NOT change to 1.0
+        assert first.source_record_id is None
+        # Second call with source_record_id — confidence upgrades 0.8 -> 1.0.
         second = _call(
             display_name="Gail Sun",
             org_id="org-ac4d",
@@ -157,9 +167,12 @@ class TestConfidenceAssignment:
             source_record_id="005XYZ",
             run_id="run-002",
         )
-        assert second.resolution_confidence == 0.8, (
-            "Single-candidate match must not re-evaluate confidence"
+        assert second.id == first.id, "Must resolve to the same row, not a duplicate"
+        assert second.resolution_confidence == 1.0, (
+            "Single-candidate match must upgrade confidence when a higher-quality "
+            "signal (source_record_id) arrives"
         )
+        assert second.source_record_id == "005XYZ", "source_record_id must be backfilled"
 
 
 # ---------------------------------------------------------------------------
