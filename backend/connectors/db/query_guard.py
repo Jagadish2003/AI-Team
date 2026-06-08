@@ -24,6 +24,33 @@ ARCHITECTURAL NOTE (from spec section 3b):
     sqlparse alone is not a sufficient security boundary for scope enforcement
     across all enterprise SQL dialects. The fail-closed rule compensates: any
     ambiguity in table extraction is treated as a violation.
+
+KNOWN LIMITATION — Oracle synonyms (Task 5B, Sprint 12):
+    Oracle synonyms are database-level aliases: a name like "public_view" may
+    appear to be a valid table but could silently resolve to
+    restricted_schema.sensitive_table at query execution time.
+
+    AgentIQ cannot resolve synonym targets at query parse time.  sqlparse
+    operates purely on SQL text — it has no access to Oracle's ALL_SYNONYMS
+    catalogue.  This means:
+
+      1. An unqualified reference such as FROM "public_view" cannot be
+         verified against the declared scope schemas.  Under the fail-closed
+         rule, unqualified references are rejected when scope.tables == [].
+
+      2. When scope.tables is non-empty, a synonym name that matches an entry
+         in scope.tables will pass validation — the guard cannot distinguish
+         a real table from a synonym alias.  Callers MUST declare concrete
+         schema.table pairs (e.g. "HR.EMPLOYEES") in scope.tables, never
+         synonym names, to avoid inadvertently approving an unresolvable alias.
+
+    The fail-closed rule makes synonym ambiguity safe by default: any reference
+    the guard cannot positively place within a declared schema is rejected.
+    Ambiguity is never treated as permission.
+
+    Tests: backend/tests/contract/test_query_guard_complex.py — class
+    TestOracleSynonymFailClosed documents the exact behaviour for each synonym
+    scenario and must be read alongside this comment.
 """
 
 from __future__ import annotations
