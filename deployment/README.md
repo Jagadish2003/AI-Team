@@ -254,5 +254,56 @@ secrets manager in production. **Never bake credentials into the image.**
 
 ---
 
+---
+
+## Oracle DB Driver Mode — Thin vs Thick (T2-S12-A)
+
+The `oracledb` Python package supports two operating modes.
+
+### Thin mode (default — no Instant Client required)
+
+Thin mode is the default for all standard AgentIQ deployments.
+`oracledb.init_oracle_client()` is **not called** in thin mode.
+The `oracle_ingestor.py` module never calls `init_oracle_client()`.
+
+| Property | Thin mode |
+|---|---|
+| Oracle Instant Client required? | **No** |
+| Oracle versions supported | 12.1 and later |
+| `init_oracle_client()` called? | No |
+| Docker image impact | `pip install oracledb` only |
+
+### Thick mode — escalation path only
+
+Escalate to thick mode only when the customer reports one of:
+- `ORA-12560: TNS: protocol adapter error`
+- Oracle version earlier than 12.1
+- Kerberos / external authentication required
+- TNS name resolution via `tnsnames.ora`
+
+**How to configure `oracle_thick` mode:**
+
+1. Install Oracle Instant Client 21 in the container (see Stage 3 above).
+
+2. Call `init_oracle_client()` once at container startup (before any connection):
+   ```python
+   from backend.connectors.db.oracle import init_thick_mode
+   init_thick_mode(lib_dir="/usr/lib/oracle/21.3/client64/lib")
+   ```
+
+3. Set `DBConnectorConfig.driver = 'oracle_thick'` for the connector:
+   ```python
+   config = DBConnectorConfig(connector_id="oracle_db", driver="oracle_thick", ...)
+   ```
+
+| Property | Thick mode |
+|---|---|
+| Oracle Instant Client required? | Yes — version 21 |
+| Oracle versions supported | All, including pre-12.1 |
+| `init_oracle_client()` called? | Yes — once at startup via `init_thick_mode()` |
+| Docker image impact | +~80 MB (Instant Client) |
+
+---
+
 *Document maintained by Track 2 — Enterprise Technology. Contact the T2-S10-A
 story owner before modifying Dockerfile driver installation stages.*

@@ -42,13 +42,14 @@ def evaluate(
     peak_date = str(tv.get("peak_date", ""))
     schema_name = str((db_data or {}).get("schema_name", ""))
     table_name = str((db_data or {}).get("table_name", ""))
+    signal_source = str((db_data or {}).get("connector_id", "sqlserver"))
 
     fired = (not degraded) and (ratio >= SURGE_THRESHOLD)
 
     return make_detector_evaluation(
         module_name=__name__,
         detector_id=DETECTOR_ID,
-        signal_source="sqlserver",
+        signal_source=signal_source,
         metric_value=round(ratio, 4),
         threshold=SURGE_THRESHOLD,
         fired=fired,
