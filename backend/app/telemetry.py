@@ -142,9 +142,20 @@ class LlmEnrichmentAttemptedPayload(TypedDict, total=False):
 
 
 class EntityExtractionCompletedPayload(TypedDict, total=False):
-    """T3-S12 — written after entity extraction."""
+    """T3-S12-A T7 — written after entity extraction completes successfully.
+
+    ambiguous_count is load-bearing for monitoring: a spike in ambiguous
+    entities per org_id signals naming-convention changes or data-quality
+    degradation in the source system. Not emitted on exception — runner
+    warning log covers that failure path.
+    """
     entity_count: NotRequired[int]
+    ambiguous_count: NotRequired[int]
     failure_count: NotRequired[int]
+    org_id: NotRequired[str]
+    run_id: NotRequired[str]
+    source: NotRequired[str]
+    pack_id: NotRequired[str]
 
 
 class TemporalEnrichmentCompletedPayload(TypedDict, total=False):
@@ -253,6 +264,8 @@ register_event_type("db.ingestor_completed", DBIngestorCompletedPayload)
 register_event_type("run.signal_snapshot", RunSignalSnapshotPayload)
 # T3-S11-A Sprint 11
 register_event_type("temporal.enrichment_completed", TemporalEnrichmentCompletedPayload)
+# T3-S12-A T7 Sprint 12
+register_event_type("entity.extraction_completed", EntityExtractionCompletedPayload)
 
 
 # ---------------------------------------------------------------------------
@@ -390,11 +403,12 @@ def get_telemetry_range(
 __all__ = [
     "ConnectorHealthPayload",
     "ConnectorRegisteredEvent",
-    "DBIngestorCompletedPayload",   # Sprint 11 — SQL Server ingestor payload
-    "DbIngestorCompletedEvent",     # T1-S10-C legacy — kept for backward compat
+    "DBIngestorCompletedPayload",           # Sprint 11 — SQL Server ingestor payload
+    "DbIngestorCompletedEvent",             # T1-S10-C legacy — kept for backward compat
     "DbQueryExecutedEvent",
+    "EntityExtractionCompletedPayload",     # T3-S12-A T7
     "EVENT_REGISTRY",
-    "EVENT_TYPE_REGISTRY",          # alias for T1-S10-C unit tests
+    "EVENT_TYPE_REGISTRY",                  # alias for T1-S10-C unit tests
     "RunCompletedEvent",
     "RunSignalSnapshotEvent",
     "RunSignalSnapshotPayload",

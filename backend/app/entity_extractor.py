@@ -483,14 +483,20 @@ def extract_entities(
         failure_count += 1
         logger.warning("Detector entity extraction failed: %s", exc)
 
+    ambiguous_count = sum(
+        1 for e in all_entities if e.resolution_status == "ambiguous"
+    )
+
     logger.info(
-        "Entity extraction complete — run=%s total=%d failures=%d",
+        "Entity extraction complete — run=%s total=%d ambiguous=%d failures=%d",
         run_id,
         len(all_entities),
+        ambiguous_count,
         failure_count,
     )
 
-    # Fire-and-forget telemetry — never raises
+    # Fire-and-forget telemetry — never raises.
+    # Not emitted if extraction raised an exception; the runner warning covers that.
     try:
         from app.telemetry import record_event
         record_event(
@@ -498,7 +504,10 @@ def extract_entities(
             {
                 "run_id": run_id,
                 "org_id": org_id,
+                "pack_id": pack_id,
+                "source": "entity_extractor",
                 "entity_count": len(all_entities),
+                "ambiguous_count": ambiguous_count,
                 "failure_count": failure_count,
             },
         )
