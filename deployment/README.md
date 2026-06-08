@@ -184,6 +184,9 @@ deployment path. This means:
 - No Oracle Instant Client package is required in the standard Docker image.
 - The Oracle Instant Client section (2) above documents thick mode for escalation only.
 - Thin mode supports Oracle Database 12.2 and later with direct TCP connections.
+- Oracle Autonomous Database / Oracle Cloud wallet mTLS connections require
+  thick mode plus wallet configuration; set `ORACLE_THICK_MODE=1` and follow
+  the thick mode escalation path.
 
 **When to escalate to thick mode**
 
@@ -294,8 +297,14 @@ secrets manager in production. **Never bake credentials into the image.**
 |---|---|---|
 | `SQLSERVER_USERNAME` | SQL Server connector | Env-var key resolved by `resolve_secret()` |
 | `SQLSERVER_PASSWORD` | SQL Server connector | Env-var key resolved by `resolve_secret()` |
+| `ORACLE_HOST` | Oracle DB connector | Oracle host name used by the runner |
+| `ORACLE_PORT` | Oracle DB connector | Oracle listener port, default `1521` |
+| `ORACLE_DATABASE` | Oracle DB connector | Oracle service/database name, default `ORCL` |
 | `ORACLE_DB_USERNAME` | Oracle DB connector | Env-var key resolved by `resolve_secret()` |
 | `ORACLE_DB_PASSWORD` | Oracle DB connector | Env-var key resolved by `resolve_secret()` |
+| `POSTGRESQL_HOST` | PostgreSQL connector | PostgreSQL host name used by the runner |
+| `POSTGRESQL_PORT` | PostgreSQL connector | PostgreSQL port, default `5432` |
+| `POSTGRESQL_DATABASE` | PostgreSQL connector | PostgreSQL database name, default `postgres` |
 | `POSTGRESQL_USERNAME` | PostgreSQL connector | Env-var key resolved by `resolve_secret()` |
 | `POSTGRESQL_PASSWORD` | PostgreSQL connector | Env-var key resolved by `resolve_secret()` |
 | `DEV_JWT` | Auth middleware | Bearer token for development |

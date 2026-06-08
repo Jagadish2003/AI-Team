@@ -140,22 +140,25 @@ If you find that the guard rejects a query that should be allowed:
 
 from __future__ import annotations
 
-import re
+import logging
 import sqlparse
 from sqlparse.sql import (
+    Comment,
     Function,
     Identifier,
     IdentifierList,
     Parenthesis,
     Where,
 )
-from sqlparse.tokens import Keyword, DML
+from sqlparse.tokens import Keyword, DML, Punctuation
 
 from .models import (
     DBQueryRejectedError,
     DBScopeViolationError,
     ScopeDeclaration,
 )
+
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -191,20 +194,6 @@ _TABLE_INTRODUCING_KEYWORDS: frozenset[str] = frozenset({
     "NATURAL LEFT JOIN",
     "NATURAL RIGHT JOIN",
 })
-
-# CTE alias pattern (Task 5B, Sprint 12 Platform Hardening).
-# Matches "WITH alias AS (" and ", alias AS (" to identify virtual CTE names.
-# CTE aliases are temporary definitions — not real database objects — so they
-# must be excluded from scope enforcement.  Only base tables inside the CTE
-# bodies are subject to scope validation.
-#
-# See module docstring (Pattern 1 / Pattern 2) for the sqlparse behaviour that
-# makes this necessary.  Without this filter, in-scope CTE queries are
-# incorrectly rejected because the alias itself is not in scope.tables.
-_CTE_ALIAS_PATTERN: re.Pattern[str] = re.compile(
-    r"(?:WITH|,)\s+(\w+)\s+AS\s*\(",
-    re.IGNORECASE,
-)
 
 #: Keywords that terminate the FROM / table-reference context.
 _CLAUSE_TERMINATORS: frozenset[str] = frozenset({
@@ -255,9 +244,126 @@ def _extract_cte_aliases(query: str) -> frozenset[str]:
 
     Returns an empty frozenset when the query contains no WITH clause.
     """
-    return frozenset(
-        m.group(1).lower() for m in _CTE_ALIAS_PATTERN.finditer(query)
-    )
+    aliases: set[str] = set()
+    for statement in sqlparse.parse(query):
+        tokens = list(statement.tokens)
+        try:
+            with_idx = next(
+                i for i, token in enumerate(tokens)
+                if token.ttype is Keyword.CTE and token.normalized.upper() == "WITH"
+            )
+        except StopIteration:
+            continue
+
+        pending_alias: str | None = None
+        i = with_idx + 1
+        while i < len(tokens):
+            token = tokens[i]
+
+            if _is_ignorable_cte_token(token):
+                i += 1
+                continue
+
+            if token.ttype in (DML, Keyword) and token.normalized.upper() == "SELECT":
+                break
+
+            if isinstance(token, IdentifierList):
+                for ident in token.get_identifiers():
+                    alias = _cte_alias_from_identifier(ident)
+                    if alias:
+                        aliases.add(alias)
+                break
+
+            if isinstance(token, Identifier):
+                alias = _cte_alias_from_identifier(token)
+                if alias:
+                    aliases.add(alias)
+                    pending_alias = None
+                elif pending_alias and _identifier_contains_as_parenthesis(token):
+                    aliases.add(pending_alias)
+                    pending_alias = None
+                i += 1
+                continue
+
+            if token.ttype is Keyword and token.normalized.upper() == "AS":
+                if pending_alias and _next_significant_is_parenthesis(tokens, i + 1):
+                    aliases.add(pending_alias)
+                    pending_alias = None
+                i += 1
+                continue
+
+            if token.ttype is Punctuation and token.value == ",":
+                pending_alias = None
+                i += 1
+                continue
+
+            if _token_can_be_cte_alias(token):
+                pending_alias = _clean_identifier_name(token.value)
+
+            i += 1
+
+    return frozenset(a for a in aliases if a)
+
+
+def _is_ignorable_cte_token(token) -> bool:
+    return bool(token.is_whitespace or isinstance(token, Comment))
+
+
+def _token_can_be_cte_alias(token) -> bool:
+    if token.ttype in (DML, Punctuation):
+        return False
+    if token.ttype is Keyword and token.normalized.upper() in {"WITH", "AS", "SELECT"}:
+        return False
+    return bool(_clean_identifier_name(token.value))
+
+
+def _identifier_contains_as_parenthesis(identifier: Identifier) -> bool:
+    saw_as = False
+    for token in identifier.tokens:
+        if _is_ignorable_cte_token(token):
+            continue
+        if isinstance(token, Identifier) and _identifier_contains_as_parenthesis(token):
+            return True
+        if token.ttype is Keyword and token.normalized.upper() == "AS":
+            saw_as = True
+            continue
+        if saw_as and isinstance(token, Parenthesis):
+            return True
+    return False
+
+
+def _cte_alias_from_identifier(identifier: Identifier) -> str | None:
+    """Extract the alias name from one CTE definition Identifier."""
+    if not _identifier_contains_as_parenthesis(identifier):
+        return None
+    for token in identifier.tokens:
+        if _is_ignorable_cte_token(token):
+            continue
+        if token.ttype is Keyword and token.normalized.upper() == "AS":
+            return None
+        if isinstance(token, Parenthesis):
+            return None
+        return _clean_identifier_name(token.value)
+    return None
+
+
+def _next_significant_is_parenthesis(tokens: list, start_idx: int) -> bool:
+    for token in tokens[start_idx:]:
+        if _is_ignorable_cte_token(token):
+            continue
+        return isinstance(token, Parenthesis)
+    return False
+
+
+def _clean_identifier_name(value: str) -> str:
+    cleaned = value.strip()
+    if not cleaned:
+        return ""
+    for quote_l, quote_r in (('"', '"'), ("'", "'"), ("`", "`"), ("[", "]")):
+        if cleaned.startswith(quote_l) and cleaned.endswith(quote_r):
+            cleaned = cleaned[1:-1]
+            break
+    return cleaned.strip().lower()
 
 
 # ---------------------------------------------------------------------------
@@ -398,7 +504,21 @@ def validate_scope(query: str, scope: ScopeDeclaration) -> None:
     # empty-extraction rule below still fires and the query is rejected.
     cte_aliases = _extract_cte_aliases(query)
     if cte_aliases:
-        referenced = {ref for ref in referenced if ref.lower() not in cte_aliases}
+        shadowed_aliases: set[str] = set()
+        if scope.tables:
+            allowed_table_names = {_clean_identifier_name(_bare_name(t)) for t in scope.tables}
+            shadowed_aliases = cte_aliases & allowed_table_names
+            if shadowed_aliases:
+                logger.warning(
+                    "CTE alias shadows a declared scope table; keeping it in "
+                    "scope validation: %s",
+                    sorted(shadowed_aliases),
+                )
+        referenced = {
+            ref for ref in referenced
+            if _clean_identifier_name(ref) not in cte_aliases
+            or _clean_identifier_name(ref) in shadowed_aliases
+        }
 
     # Empty extraction result on a non-trivial query → fail-closed.
     # Also fires when CTE filtering removed all extracted references (i.e.

@@ -302,6 +302,42 @@ def _degraded_queue_depth() -> dict:
     }
 
 
+def _emit_ingestor_completed(query_count: int, signal_count: int, degraded_count: int, duration_ms: int) -> None:
+    try:
+        record_event(
+            "db.ingestor_completed",
+            {
+                "connector_id": CONNECTOR_ID,
+                "pack_id": "sqlserver_opsignal",
+                "query_count": query_count,
+                "signal_count": signal_count,
+                "degraded_count": degraded_count,
+                "duration_ms": duration_ms,
+            },
+        )
+    except Exception:
+        pass
+
+
+def _degraded_output(org_id: str, run_id: str, duration_ms: int) -> dict:
+    _emit_ingestor_completed(
+        query_count=0,
+        signal_count=0,
+        degraded_count=3,
+        duration_ms=duration_ms,
+    )
+    return {
+        "ticket_volume": _degraded_ticket_volume(),
+        "sla_breach": _degraded_sla_breach(),
+        "queue_depth": _degraded_queue_depth(),
+        "connector_id": CONNECTOR_ID,
+        "org_id": org_id,
+        "run_id": run_id,
+        "schema_name": "",
+        "table_name": "",
+    }
+
+
 # ---------------------------------------------------------------------------
 # Main ingestor
 # ---------------------------------------------------------------------------
@@ -324,23 +360,43 @@ def ingest(
     """
     start_ms = time.monotonic()
 
-    # Resolve scope; fall back to a minimal default for offline/test mode
+    # Resolve scope. Missing scope must not fall back to Oracle's sample HR
+    # schema, because that hides configuration errors in production.
     if scope is None:
         try:
             scope = get_scope(org_id, CONNECTOR_ID)
-        except Exception:
-            from datetime import datetime, timezone
-            scope = ScopeDeclaration(
-                org_id=org_id,
-                connector_id=CONNECTOR_ID,
-                schemas=["HR"],
-                tables=["HR.SERVICE_TICKETS"],
-                declared_at=datetime.now(timezone.utc),
-                declared_by="system",
+        except Exception as exc:
+            duration_ms = max(0, int((time.monotonic() - start_ms) * 1000))
+            logger.warning(
+                "oracle_ingestor: no scope configured for org=%s connector=%s; "
+                "returning degraded signals. Configure schema/table scope before "
+                "running Oracle DB ingestion. reason=%s",
+                org_id,
+                CONNECTOR_ID,
+                exc,
             )
+            return _degraded_output(org_id, run_id, duration_ms)
 
-    schema_name = scope.schemas[0] if scope.schemas else "HR"
-    raw_table = scope.tables[0] if scope.tables else f"{schema_name}.SERVICE_TICKETS"
+    schema_name = scope.schemas[0] if scope.schemas else ""
+    if not schema_name:
+        duration_ms = max(0, int((time.monotonic() - start_ms) * 1000))
+        logger.warning(
+            "oracle_ingestor: scope has no schemas for org=%s connector=%s; "
+            "returning degraded signals.",
+            org_id,
+            CONNECTOR_ID,
+        )
+        return _degraded_output(org_id, run_id, duration_ms)
+    raw_table = scope.tables[0] if scope.tables else ""
+    if not raw_table:
+        duration_ms = max(0, int((time.monotonic() - start_ms) * 1000))
+        logger.warning(
+            "oracle_ingestor: scope has no table selected for org=%s connector=%s; "
+            "returning degraded signals.",
+            org_id,
+            CONNECTOR_ID,
+        )
+        return _degraded_output(org_id, run_id, duration_ms)
     # Strip schema prefix — queries add it via "{schema}"."{table}" template
     table_name = raw_table.split(".", 1)[1] if "." in raw_table else raw_table
 
@@ -437,20 +493,7 @@ def ingest(
     )
     duration_ms = max(0, int((time.monotonic() - start_ms) * 1000))
 
-    try:
-        record_event(
-            "db.ingestor_completed",
-            {
-                "connector_id": CONNECTOR_ID,
-                "pack_id": "sqlserver_opsignal",
-                "query_count": query_count,
-                "signal_count": signal_count,
-                "degraded_count": degraded_count,
-                "duration_ms": duration_ms,
-            },
-        )
-    except Exception:
-        pass
+    _emit_ingestor_completed(query_count, signal_count, degraded_count, duration_ms)
 
     return {
         "ticket_volume": ticket_volume,

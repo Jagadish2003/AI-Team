@@ -20,6 +20,10 @@ AgentIQ uses the `oracledb` Python package for Oracle DB connectivity.
 Thin mode is activated automatically when `oracledb.init_oracle_client()` is **not** called.
 The `oracle_ingestor.py` module never calls `init_oracle_client()`.
 
+Oracle Autonomous Database and Oracle Cloud wallet/mTLS connections require
+thick mode plus wallet configuration. Set `ORACLE_THICK_MODE=1` and follow the
+thick mode escalation path below when a customer provides an Oracle wallet.
+
 ### Standard Docker image — no changes needed
 
 ```dockerfile

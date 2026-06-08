@@ -53,6 +53,25 @@ _DEV_USER = os.getenv("DEV_JWT", "dev-token-change-me")
 _DEV_ORG = "default"
 
 
+def _verify_db_driver_imports() -> None:
+    """Log DB driver availability early so operators see issues at startup."""
+    for module_name, connector_name in (
+        ("oracledb", "Oracle DB"),
+        ("psycopg2", "PostgreSQL"),
+    ):
+        try:
+            __import__(module_name)
+            logger.info("%s DB driver import check passed (%s)", connector_name, module_name)
+        except Exception as exc:
+            logger.warning(
+                "%s DB driver import check failed (%s): %s. "
+                "The connector will degrade on first use until the driver is installed.",
+                connector_name,
+                module_name,
+                exc,
+            )
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Only enforce secret presence when REQUIRE_CONNECTOR_SECRETS=1 (production).
@@ -61,6 +80,8 @@ async def lifespan(app: FastAPI):
         validate_all_secrets(CONNECTOR_AUTH_CONFIGS)
     # Seed the dev user as owner of the default org so existing routes pass RBAC.
     seed_owner(_DEV_ORG, _DEV_USER)
+    # T2-S12-A: surface Oracle/PostgreSQL driver install issues at startup.
+    _verify_db_driver_imports()
     # Ensure the temporal signal_snapshots table exists. A fresh dev.db is built
     # by seed_loader.py, which does not run alembic migrations, so without this
     # the baseline/temporal enrichment silently fails and the Baseline Context

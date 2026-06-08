@@ -70,10 +70,9 @@ _PRIORITY_COL_ALIASES = [
 #
 # Boolean handling note (AC6):
 # SLA_BREACH_QUERY uses native boolean (= TRUE).
-# If the column is integer (0/1), psycopg2 raises a type error at execution time.
-# The ingestor catches this in _process_sla_breach_integer_fallback() and retries
-# with = 1, logging a warning.  The retry is done at the Python level using the
-# already-returned rows, not by re-running the query.
+# If the column is integer (0/1), psycopg2 raises a datatype/undefined-function
+# error at execution time. The ingestor catches AgentIQ DBConnectionError or
+# psycopg2 pgcode 42804/42883 and reruns the SLA query with = 1.
 # ---------------------------------------------------------------------------
 
 TICKET_VOLUME_QUERY = """
@@ -113,6 +112,8 @@ ORDER BY "{priority_col}"
 
 # P1/P2 label set — covers numeric and named priority conventions
 _P1_P2_LABELS = {"1", "p1", "2", "p2", "critical", "high"}
+_BOOLEAN_FALLBACK_ERROR_CODES = {"query_error", "type_error"}
+_BOOLEAN_FALLBACK_PG_CODES = {"42804", "42883"}  # datatype_mismatch, undefined_function
 
 # ---------------------------------------------------------------------------
 # Column resolution helpers
@@ -134,6 +135,34 @@ def _col_index(columns: list[str], name: str) -> int | None:
         return lower.index(name.lower())
     except ValueError:
         return None
+
+
+def _iter_exception_chain(exc: BaseException):
+    seen: set[int] = set()
+    current: BaseException | None = exc
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        yield current
+        current = current.__cause__ or current.__context__
+
+
+def _is_boolean_fallback_error(exc: BaseException) -> bool:
+    """Return True for native-boolean comparison failures that need = 1 retry."""
+    for item in _iter_exception_chain(exc):
+        if getattr(item, "error_code", None) in _BOOLEAN_FALLBACK_ERROR_CODES:
+            return True
+        if getattr(item, "pgcode", None) in _BOOLEAN_FALLBACK_PG_CODES:
+            return True
+        if item.__class__.__name__ in {"DatatypeMismatch", "UndefinedFunction"}:
+            return True
+    return False
+
+
+def _is_query_timeout(exc: BaseException) -> bool:
+    return any(
+        getattr(item, "error_code", None) == "query_timeout"
+        for item in _iter_exception_chain(exc)
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -329,9 +358,9 @@ def ingest(
     and continues with remaining queries.
 
     Boolean fallback (AC6): SLA query uses native boolean (= TRUE).
-    If the column is an integer type, execute_query raises DBConnectionError with
-    error_code='query_error'. The ingestor retries with integer fallback (= 1)
-    and logs a warning.
+    If the column is an integer type, execute_query may raise AgentIQ's
+    DBConnectionError or a psycopg2 exception with pgcode 42804/42883.
+    The ingestor retries with integer fallback (= 1) and logs a warning.
     """
     start_ms = time.monotonic()
 
@@ -400,7 +429,7 @@ def ingest(
         if sla_breach.get("degraded_signal"):
             degraded_count += 1
     except DBConnectionError as exc:
-        if getattr(exc, "error_code", None) in ("query_error", "type_error"):
+        if _is_boolean_fallback_error(exc):
             # Boolean column is actually integer — retry with integer fallback
             logger.warning(
                 "postgresql_ingestor: sla_breach boolean type error — "
@@ -426,7 +455,7 @@ def ingest(
                 )
                 sla_breach = _degraded_sla_breach()
                 degraded_count += 1
-        elif getattr(exc, "error_code", None) == "query_timeout":
+        elif _is_query_timeout(exc):
             logger.warning(
                 "postgresql_ingestor: sla_breach query timed out — degraded_signal=True"
             )
@@ -437,9 +466,35 @@ def ingest(
             sla_breach = _degraded_sla_breach()
             degraded_count += 1
     except Exception as exc:
-        logger.warning("postgresql_ingestor: sla_breach unexpected error: %s", exc)
-        sla_breach = _degraded_sla_breach()
-        degraded_count += 1
+        if _is_boolean_fallback_error(exc):
+            logger.warning(
+                "postgresql_ingestor: sla_breach psycopg2 boolean type error â€” "
+                "retrying with integer fallback (sla_breached = 1)"
+            )
+            try:
+                q2_fallback = SLA_BREACH_INTEGER_FALLBACK_QUERY.format(
+                    sla_col="sla_breached", date_col="created_date",
+                    schema=schema_name, table=table_name
+                ).strip()
+                result2_fb = execute_query(
+                    config, scope=scope, query=q2_fallback,
+                    org_id=org_id, run_id=run_id
+                )
+                query_count += 1
+                sla_breach = _process_sla_breach(result2_fb)
+                if sla_breach.get("degraded_signal"):
+                    degraded_count += 1
+            except Exception as fb_exc:
+                logger.warning(
+                    "postgresql_ingestor: sla_breach integer fallback also failed: %s",
+                    fb_exc,
+                )
+                sla_breach = _degraded_sla_breach()
+                degraded_count += 1
+        else:
+            logger.warning("postgresql_ingestor: sla_breach unexpected error: %s", exc)
+            sla_breach = _degraded_sla_breach()
+            degraded_count += 1
 
     # ── Query 3: Open queue depth by priority ────────────────────────────────
     queue_depth = _degraded_queue_depth()

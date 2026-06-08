@@ -123,6 +123,24 @@ def test_ac1_connector_id_is_oracle_db():
     assert CONNECTOR_ID == "oracle_db"
 
 
+def test_missing_scope_returns_degraded_without_hr_fallback(caplog):
+    """Missing scope must not silently fall back to Oracle sample HR schema."""
+    ingest = _import_ingestor()
+
+    with patch(PATCH_GS, side_effect=RuntimeError("scope missing")), \
+         patch(PATCH_EQ) as mock_execute, \
+         patch(PATCH_RE):
+        out = ingest("org", "run-no-scope", _make_config(), scope=None)
+
+    mock_execute.assert_not_called()
+    assert out["schema_name"] == ""
+    assert out["table_name"] == ""
+    assert out["ticket_volume"]["degraded_signal"] is True
+    assert out["sla_breach"]["degraded_signal"] is True
+    assert out["queue_depth"]["degraded_signal"] is True
+    assert "no scope configured" in caplog.text
+
+
 # ---------------------------------------------------------------------------
 # AC2 — all queries use "" double-quote identifiers, SELECT-only
 # ---------------------------------------------------------------------------

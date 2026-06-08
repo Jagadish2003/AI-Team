@@ -181,6 +181,69 @@ def _ingest_github(org_id: str, run_id: str) -> Dict[str, Any]:
         return {}
 
 
+_DB_CONNECTOR_IDS = frozenset({"oracle_db", "postgresql"})
+
+
+def _env_or_placeholder(
+    env_name: str,
+    placeholder: str,
+    *,
+    connector_id: str,
+    mode: str,
+) -> str:
+    """Return an env value, warning before placeholder use outside offline mode."""
+    value = os.environ.get(env_name)
+    if value:
+        return value
+
+    if mode != "offline" or os.environ.get("REQUIRE_CONNECTOR_SECRETS") == "1":
+        logger.warning(
+            "%s is not configured for %s; using placeholder %r. "
+            "Set %s before running live DB ingestion.",
+            env_name,
+            connector_id,
+            placeholder,
+            env_name,
+        )
+    return placeholder
+
+
+def _build_db_config(connector_id: str, org_id: str, mode: str):
+    """Build a DBConnectorConfig with explicit org_id and documented secret keys."""
+    try:
+        from connectors.db import DBConnectorConfig
+    except ModuleNotFoundError:
+        from backend.connectors.db import DBConnectorConfig
+
+    if connector_id == "oracle_db":
+        return DBConnectorConfig(
+            connector_id="oracle_db",
+            org_id=org_id,
+            host=_env_or_placeholder(
+                "ORACLE_HOST", "oracle.local", connector_id=connector_id, mode=mode
+            ),
+            port=int(os.environ.get("ORACLE_PORT", "1521")),
+            database=os.environ.get("ORACLE_DATABASE", "ORCL"),
+            driver="oracledb",
+            username_key="ORACLE_DB_USERNAME",
+            password_key="ORACLE_DB_PASSWORD",
+        )
+    if connector_id == "postgresql":
+        return DBConnectorConfig(
+            connector_id="postgresql",
+            org_id=org_id,
+            host=_env_or_placeholder(
+                "POSTGRESQL_HOST", "postgres.local", connector_id=connector_id, mode=mode
+            ),
+            port=int(os.environ.get("POSTGRESQL_PORT", "5432")),
+            database=os.environ.get("POSTGRESQL_DATABASE", "postgres"),
+            driver="psycopg2",
+            username_key="POSTGRESQL_USERNAME",
+            password_key="POSTGRESQL_PASSWORD",
+        )
+    raise ValueError(f"Unsupported DB connector for sqlserver_opsignal pack: {connector_id}")
+
+
 def run(
     mode: Optional[str] = None,
     run_id: Optional[str] = None,
@@ -331,36 +394,14 @@ def run(
     _db_connector_id: Optional[str] = None
 
     if _is_db_opsignal(pack_id):
-        try:
-            from connectors.db import DBConnectorConfig, ScopeDeclaration as _SD
-        except ModuleNotFoundError:
-            from backend.connectors.db import DBConnectorConfig, ScopeDeclaration as _SD
-
-        def _build_db_config(connector_id: str) -> DBConnectorConfig:
-            """Build connector config from env vars; placeholder values are fine in offline mode."""
-            if connector_id == "oracle_db":
-                return DBConnectorConfig(
-                    connector_id="oracle_db",
-                    org_id=org_id,
-                    host=os.environ.get("ORACLE_HOST", "oracle.local"),
-                    port=int(os.environ.get("ORACLE_PORT", "1521")),
-                    database=os.environ.get("ORACLE_DATABASE", "ORCL"),
-                    driver="oracledb",
-                    username_key="ORACLE_USER",
-                    password_key="ORACLE_PASS",
-                )
-            return DBConnectorConfig(
-                connector_id="postgresql",
-                org_id=org_id,
-                host=os.environ.get("PG_HOST", "postgres.local"),
-                port=int(os.environ.get("PG_PORT", "5432")),
-                database=os.environ.get("PG_DATABASE", "postgres"),
-                driver="psycopg2",
-                username_key="PG_USER",
-                password_key="PG_PASS",
+        active_db_connectors = sorted(_systems & _DB_CONNECTOR_IDS)
+        if len(active_db_connectors) > 1:
+            logger.warning(
+                "sqlserver_opsignal supports one DB connector per run; got %s. "
+                "Skipping DB ingestion to avoid mixed signal_source labels.",
+                active_db_connectors,
             )
-
-        if "oracle_db" in _systems:
+        elif "oracle_db" in active_db_connectors:
             try:
                 try:
                     from connectors.db.oracle_ingestor import ingest as _oracle_ingest
@@ -369,14 +410,15 @@ def run(
                 db_data = _oracle_ingest(
                     org_id=org_id,
                     run_id=run_id,
-                    config=_build_db_config("oracle_db"),
+                    config=_build_db_config("oracle_db", org_id, mode),
                 )
                 _db_connector_id = "oracle_db"
+                db_data["connector_id"] = _db_connector_id
                 logger.info("Oracle DB ingestion: OK")
             except Exception as e:
                 logger.warning("Oracle DB ingestion failed (non-blocking): %s", e)
 
-        elif "postgresql" in _systems:
+        elif "postgresql" in active_db_connectors:
             try:
                 try:
                     from connectors.db.postgresql_ingestor import ingest as _pg_ingest
@@ -385,9 +427,10 @@ def run(
                 db_data = _pg_ingest(
                     org_id=org_id,
                     run_id=run_id,
-                    config=_build_db_config("postgresql"),
+                    config=_build_db_config("postgresql", org_id, mode),
                 )
                 _db_connector_id = "postgresql"
+                db_data["connector_id"] = _db_connector_id
                 logger.info("PostgreSQL ingestion: OK")
             except Exception as e:
                 logger.warning("PostgreSQL ingestion failed (non-blocking): %s", e)
@@ -483,15 +526,6 @@ def run(
         sn_data,
         jira_data,
     )
-
-    # T2-S12-A: override signal_source for oracle/postgresql — detectors hardcode
-    # 'sqlserver' but signal_source must reflect the actual connector used.
-    if _is_db_opsignal(pack_id) and _db_connector_id:
-        for _dr in detector_results:
-            _dr.signal_source = _db_connector_id
-        for _ev in all_evaluated:
-            if hasattr(_ev, "signal_source"):
-                _ev.signal_source = _db_connector_id
 
     _snapshot_detector_evaluations(
         org_id=org_id,

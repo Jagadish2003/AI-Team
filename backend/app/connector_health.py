@@ -590,7 +590,7 @@ def _check_and_record(name: str, org_id: str) -> None:
         # Locked signature is record_event(event_type, payload) (T3-S10-A);
         # org_id/source/connector_id travel inside the payload, where
         # record_event() extracts them. Passing them as keyword arguments
-        # raises TypeError and silently drops the event (AT-209).
+        # violates the locked signature and is blocked by the 5A contract tests.
         record_event(
             "connector.health_check",
             {

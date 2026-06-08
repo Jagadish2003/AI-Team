@@ -339,6 +339,45 @@ def test_ac6b_integer_fallback_triggered_on_type_error():
 # AC6c — integer fallback also fails → degraded_signal=True, no raise
 # ---------------------------------------------------------------------------
 
+def test_ac6b_integer_fallback_triggered_on_psycopg2_pgcode():
+    """AC6: psycopg2 pgcode 42804 triggers integer fallback; result correct."""
+    try:
+        from backend.connectors.db.postgresql_ingestor import ingest
+    except ModuleNotFoundError:
+        from connectors.db.postgresql_ingestor import ingest
+
+    class FakeDatatypeMismatch(Exception):
+        pgcode = "42804"
+
+    vol_result = _make_result(VOLUME_COLUMNS, [])
+    fb_sla_result = _make_result(SLA_COLUMNS, [(90, 18, 20.0)])
+    queue_result = _make_result(QUEUE_COLUMNS, [])
+    results_seq = [
+        vol_result,
+        FakeDatatypeMismatch("operator does not exist"),
+        fb_sla_result,
+        queue_result,
+    ]
+    call_n = [0]
+
+    def side_effect(*args, **kwargs):
+        v = results_seq[call_n[0]]
+        call_n[0] += 1
+        if isinstance(v, Exception):
+            raise v
+        return v
+
+    with patch(_patch("execute_query"), side_effect=side_effect), \
+         patch(_patch("get_scope"), return_value=_make_scope()), \
+         patch(_patch("record_event")):
+        out = ingest("org", "run", _make_config(), scope=_make_scope())
+
+    assert out["sla_breach"]["degraded_signal"] is False
+    assert out["sla_breach"]["total_tickets_30d"] == 90
+    assert out["sla_breach"]["breached_count"] == 18
+    assert call_n[0] == 4
+
+
 def test_ac6c_fallback_failure_sets_degraded():
     """AC6: When both boolean and integer fallback fail, degraded_signal=True."""
     try:

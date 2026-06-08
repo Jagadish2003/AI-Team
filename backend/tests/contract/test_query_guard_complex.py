@@ -254,6 +254,24 @@ class TestExtractCTEAliases:
     def test_select_1_has_no_aliases(self):
         assert _extract_cte_aliases("SELECT 1") == frozenset()
 
+    def test_alias_with_newline_spacing_extracted(self):
+        q = "WITH\n recent\nAS\n(SELECT * FROM dbo.ServiceTickets) SELECT * FROM recent"
+        assert "recent" in _extract_cte_aliases(q)
+
+    def test_alias_with_inline_comment_extracted(self):
+        q = (
+            "WITH recent -- rolling 30 day ticket volume\n"
+            "AS (SELECT * FROM dbo.ServiceTickets) SELECT * FROM recent"
+        )
+        assert "recent" in _extract_cte_aliases(q)
+
+    def test_quoted_alias_extracted_without_quotes(self):
+        q = (
+            'WITH "QuotedAlias" AS (SELECT * FROM dbo.ServiceTickets) '
+            'SELECT * FROM "QuotedAlias"'
+        )
+        assert "quotedalias" in _extract_cte_aliases(q)
+
 
 # ---------------------------------------------------------------------------
 # AC4 — CTE with out-of-scope base table → DBScopeViolationError
@@ -410,6 +428,40 @@ class TestCTEInScopeIsAllowed:
             "FROM open_tickets o JOIN prio_map p ON o.priority = p.code"
         )
         validate_scope(query, scope)   # both aliases excluded; both bases in scope
+
+    def test_cte_with_newline_spacing_and_in_scope_base_table_passes(self):
+        scope = _scope(schemas=["dbo"], tables=["dbo.ServiceTickets"])
+        query = (
+            "WITH\n recent\nAS\n"
+            "(SELECT * FROM dbo.ServiceTickets WHERE status != 'Closed') "
+            "SELECT * FROM recent"
+        )
+        validate_scope(query, scope)
+
+    def test_cte_with_inline_comment_and_in_scope_base_table_passes(self):
+        scope = _scope(schemas=["dbo"], tables=["dbo.ServiceTickets"])
+        query = (
+            "WITH recent -- alias comment\n"
+            "AS (SELECT * FROM dbo.ServiceTickets) SELECT * FROM recent"
+        )
+        validate_scope(query, scope)
+
+    def test_cte_with_quoted_alias_and_in_scope_base_table_passes(self):
+        scope = _scope(schemas=["dbo"], tables=["dbo.ServiceTickets"])
+        query = (
+            'WITH "RecentTickets" AS (SELECT * FROM dbo.ServiceTickets) '
+            'SELECT * FROM "RecentTickets"'
+        )
+        validate_scope(query, scope)
+
+    def test_cte_alias_shadowing_scope_table_is_kept_for_validation(self, caplog):
+        scope = _scope(schemas=["dbo"], tables=["dbo.ServiceTickets"])
+        query = (
+            "WITH ServiceTickets AS (SELECT * FROM dbo.ServiceTickets) "
+            "SELECT * FROM ServiceTickets"
+        )
+        validate_scope(query, scope)
+        assert "shadows a declared scope table" in caplog.text
 
 
 # ---------------------------------------------------------------------------
