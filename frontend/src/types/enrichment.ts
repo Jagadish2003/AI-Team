@@ -25,7 +25,13 @@ export interface OppEnrichment {
   is_anomalous: boolean;
   first_deviation: boolean;
   baseline_mean: number | null;
+  baseline_stddev?: number | null;
+  baseline_window_days?: number | null;
   run_count: number | null;
+  current_value?: number | null;
+  recent_values?: number[];
+  signal_key?: string | null;
+  pack_id?: string | null;
   // Stage 2 entity list — empty array when no entities extracted yet.
   entities: EntitySummary[];
 }

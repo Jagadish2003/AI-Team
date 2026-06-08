@@ -367,6 +367,8 @@ def run_trackb_and_persist(
             _temporal_keys = (
                 "baseline_context", "trend_direction", "anomaly_score",
                 "is_anomalous", "first_deviation", "baseline_mean", "run_count",
+                "baseline_stddev", "baseline_window_days", "current_value",
+                "recent_values", "signal_key", "pack_id",
             )
             _stored = db.run_kv_get(_KV_LLM, run_id, {})
             _per_opp = _stored.get("perOpportunity", {})

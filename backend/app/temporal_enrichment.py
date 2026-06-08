@@ -11,7 +11,7 @@ Called from the enrichment integration layer (Section 5, T3-S11-A):
 from __future__ import annotations
 
 import logging
-from typing import Optional
+from typing import Any, Optional
 
 try:
     from app.trend_engine import (
@@ -35,6 +35,74 @@ logger = logging.getLogger(__name__)
 # Override per-call with the window_days keyword argument when a signal's
 # actual baseline_window_days is known.
 _BASELINE_WINDOW_DAYS = 90
+
+
+def _safe_float(value: Any) -> Optional[float]:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _recent_metric_values(
+    *,
+    org_id: str,
+    detector_id: str,
+    signal_key: str,
+    current_run_id: str,
+    current_value: float,
+    limit: int,
+) -> list[float]:
+    """Return recent values oldest-to-newest for UI display."""
+    try:
+        from app.temporal import get_signal_history
+    except ModuleNotFoundError:  # pragma: no cover - supports repo-root imports.
+        from backend.app.temporal import get_signal_history
+
+    try:
+        rows = get_signal_history(org_id, detector_id, signal_key, limit=limit)
+    except Exception:
+        return [current_value]
+    values: list[float] = []
+    includes_current_run = False
+    for row in reversed(rows):
+        if isinstance(row, dict):
+            value = _safe_float(row.get("metric_value", row.get("value")))
+            includes_current_run = includes_current_run or row.get("run_id") == current_run_id
+        else:
+            value = _safe_float(
+                getattr(row, "metric_value", getattr(row, "value", None))
+            )
+            includes_current_run = includes_current_run or (
+                getattr(row, "run_id", None) == current_run_id
+            )
+        if value is not None:
+            values.append(value)
+
+    if not values or not includes_current_run:
+        values.append(current_value)
+    return values[-limit:]
+
+
+def _baseline_window_days(org_id: str, detector_id: str) -> Optional[int]:
+    try:
+        from app.temporal import get_baseline
+    except ModuleNotFoundError:  # pragma: no cover - supports repo-root imports.
+        from backend.app.temporal import get_baseline
+
+    try:
+        baseline = get_baseline(org_id, detector_id)
+    except Exception:
+        return None
+    if not isinstance(baseline, dict):
+        return None
+    value = baseline.get("baseline_window_days")
+    if isinstance(value, bool) or value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def build_baseline_context(
@@ -118,10 +186,17 @@ def enrich_opportunities_with_temporal_context(
             if not detector_id or current_value is None:
                 continue
 
+            current_value_float = float(current_value)
             signal_key = f"{pack_id}::{detector_id}::metric_value"
             trend = calculate_trend(org_id, signal_key)
-            anomaly = calculate_anomaly(org_id, signal_key, float(current_value))
-            context = build_baseline_context(trend, anomaly, float(current_value))
+            anomaly = calculate_anomaly(org_id, signal_key, current_value_float)
+            window_days = _baseline_window_days(org_id, detector_id)
+            context = build_baseline_context(
+                trend,
+                anomaly,
+                current_value_float,
+                window_days=window_days or _BASELINE_WINDOW_DAYS,
+            )
             trend_direction = (
                 "insufficient_data"
                 if anomaly.insufficient_data
@@ -134,7 +209,20 @@ def enrich_opportunities_with_temporal_context(
             opp["is_anomalous"] = anomaly.is_anomalous
             opp["first_deviation"] = anomaly.first_deviation
             opp["baseline_mean"] = anomaly.baseline_mean
+            opp["baseline_stddev"] = anomaly.baseline_stddev
+            opp["baseline_window_days"] = window_days
             opp["run_count"] = trend.run_count
+            opp["current_value"] = current_value_float
+            opp["recent_values"] = _recent_metric_values(
+                org_id=org_id,
+                detector_id=detector_id,
+                signal_key=signal_key,
+                current_run_id=run_id,
+                current_value=current_value_float,
+                limit=max(trend.run_count, 5),
+            )
+            opp["signal_key"] = signal_key
+            opp["pack_id"] = pack_id
     except Exception as exc:  # noqa: BLE001
         logger.warning("Temporal enrichment failed (non-blocking): %s", exc)
     return opps

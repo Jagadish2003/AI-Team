@@ -67,7 +67,7 @@ describe("BaselineContextPanel", () => {
     );
     expect(
       screen.getByText(
-        "Baseline context will appear after 3 or more discovery runs."
+        "Baseline context will appear after 3 or more completed runs for this same Discovery Pack in your workspace."
       )
     ).toBeTruthy();
   });
