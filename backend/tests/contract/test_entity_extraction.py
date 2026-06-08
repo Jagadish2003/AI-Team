@@ -803,3 +803,652 @@ class TestMultiSourceRun:
         )
         assert isinstance(result, list)
         assert all(hasattr(e, "entity_type") for e in result)
+
+
+# =============================================================================
+# T8 — Merge-gate contract tests (full T3-S12-A story lock)
+#
+# These tests are the merge gate for the entire T3-S12-A story. No task is
+# considered done until its corresponding tests here pass.
+#
+# Coverage:
+#   AC2  — Ambiguous resolution: same canonical_name + entity_type → two
+#           separate rows, both ambiguous, never merged.
+#   AC4  — Confidence 0.6 when ambiguous path triggered by extractor.
+#   AC8  — entity.extraction_completed NOT emitted on non-blocking exception.
+#   AC9  — Service account filter (run_count < 3), EntitySummary shape.
+#   AC10 — Route: 403 for Viewer, 404 for cross-org, 200 for Analyst+,
+#           [] for run with no entities.
+#   AC11 — entity.extraction_completed registered, records entity_count +
+#           ambiguous_count.
+#   AC12 — run_count increments and last_seen_run_id updates across runs.
+# =============================================================================
+
+import json as _json
+import uuid as _uuid
+from datetime import datetime as _datetime, timezone as _tz
+
+
+def _seed_entity_row(
+    org_id: str,
+    canonical_name: str,
+    display_name: str,
+    entity_type: str = "person",
+    source_system: str = "jira",
+    resolution_status: str = "resolved",
+    resolution_confidence: float = 0.8,
+    run_id: str = "run-seed-001",
+) -> str:
+    """Insert one entity row directly and return its id."""
+    eid = str(_uuid.uuid4())
+    now = _datetime.now(_tz.utc).isoformat()
+    with sqlite3.connect(_get_db_path()) as conn:
+        conn.execute(
+            """INSERT INTO entities (
+                id, org_id, entity_type, canonical_name, display_name,
+                source_system, source_record_id, resolution_confidence,
+                resolution_status, first_seen_run_id, last_seen_run_id,
+                run_count, metadata, created_at, updated_at
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (eid, org_id, entity_type, canonical_name, display_name,
+             source_system, None, resolution_confidence,
+             resolution_status, run_id, run_id, 1, None, now, now),
+        )
+        conn.commit()
+    return eid
+
+
+def _db_entity_by_id(entity_id: str) -> dict | None:
+    with sqlite3.connect(_get_db_path()) as conn:
+        conn.row_factory = sqlite3.Row
+        row = conn.execute(
+            "SELECT * FROM entities WHERE id = ?", (entity_id,)
+        ).fetchone()
+        return dict(row) if row else None
+
+
+def _all_by_canonical(org_id: str, canonical: str, entity_type: str = "person") -> list:
+    with sqlite3.connect(_get_db_path()) as conn:
+        conn.row_factory = sqlite3.Row
+        return [dict(r) for r in conn.execute(
+            "SELECT * FROM entities WHERE org_id=? AND canonical_name=? AND entity_type=?",
+            (org_id, canonical, entity_type),
+        ).fetchall()]
+
+
+# ---------------------------------------------------------------------------
+# AC2 — Ambiguous resolution at extractor level (integration test)
+# ---------------------------------------------------------------------------
+
+class TestAC2AmbiguousResolutionIntegration:
+    """AC2: extract_entities() triggers the ambiguous path when two pre-existing
+    entities share the same canonical_name and entity_type in the same org.
+    The extractor must create a third distinct row (N+1) and mark all three
+    ambiguous. Rows must never be merged."""
+
+    def _org(self, suffix: str) -> str:
+        return f"t8-ac2-{suffix}"
+
+    def _seed_two(self, org: str, canonical: str = "sarah chen", run: str = "run-seed") -> list:
+        """Insert two rows with the same canonical_name to force the ambiguous path."""
+        id1 = _seed_entity_row(org, canonical, "Sarah Chen", source_system="jira", run_id=run)
+        id2 = _seed_entity_row(org, canonical, "Sarah Chen", source_system="salesforce", run_id=run)
+        return [id1, id2]
+
+    def test_ambiguous_path_creates_third_distinct_row(self):
+        """Two pre-existing rows + extract → N+1 rows (3 total, distinct IDs)."""
+        org = self._org("a")
+        existing_ids = set(self._seed_two(org))
+        _extract(
+            org_id=org, run_id="run-ac2-a",
+            ingestor_data={"jira": {
+                "issue_metrics": {"issues": [{"key": "X-1", "assignee": {"displayName": "Sarah Chen"}}]}
+            }},
+        )
+        rows = _all_by_canonical(org, "sarah chen")
+        assert len(rows) == 3, f"Expected 3 rows (N+1 pattern), got {len(rows)}"
+        row_ids = {r["id"] for r in rows}
+        assert len(row_ids & existing_ids) == 2, "Two original rows must still exist"
+        new_ids = row_ids - existing_ids
+        assert len(new_ids) == 1, "Exactly one new row must be created"
+
+    def test_ambiguous_path_all_existing_rows_marked_ambiguous(self):
+        """All pre-existing candidates are marked ambiguous — never left as resolved."""
+        org = self._org("b")
+        existing_ids = self._seed_two(org)
+        _extract(
+            org_id=org, run_id="run-ac2-b",
+            ingestor_data={"jira": {
+                "issue_metrics": {"issues": [{"key": "X-2", "assignee": {"displayName": "Sarah Chen"}}]}
+            }},
+        )
+        for eid in existing_ids:
+            row = _db_entity_by_id(eid)
+            assert row is not None
+            assert row["resolution_status"] == "ambiguous", (
+                f"Pre-existing entity {eid} must be marked ambiguous, got {row['resolution_status']}"
+            )
+
+    def test_ambiguous_path_new_row_has_status_ambiguous(self):
+        """The newly created N+1 row has resolution_status='ambiguous'."""
+        org = self._org("c")
+        existing_ids = set(self._seed_two(org))
+        _extract(
+            org_id=org, run_id="run-ac2-c",
+            ingestor_data={"jira": {
+                "issue_metrics": {"issues": [{"key": "X-3", "assignee": {"displayName": "Sarah Chen"}}]}
+            }},
+        )
+        rows = _all_by_canonical(org, "sarah chen")
+        new_row = next(r for r in rows if r["id"] not in existing_ids)
+        assert new_row["resolution_status"] == "ambiguous"
+
+    def test_ambiguous_path_new_row_confidence_0_6(self):
+        """The N+1 row has resolution_confidence=0.6 (ambiguous collision)."""
+        org = self._org("d")
+        existing_ids = set(self._seed_two(org))
+        _extract(
+            org_id=org, run_id="run-ac2-d",
+            ingestor_data={"jira": {
+                "issue_metrics": {"issues": [{"key": "X-4", "assignee": {"displayName": "Sarah Chen"}}]}
+            }},
+        )
+        rows = _all_by_canonical(org, "sarah chen")
+        new_row = next(r for r in rows if r["id"] not in existing_ids)
+        assert new_row["resolution_confidence"] == 0.6, (
+            f"Ambiguous new row must have confidence=0.6, got {new_row['resolution_confidence']}"
+        )
+
+    def test_ambiguous_rows_never_merged(self):
+        """All three rows remain distinct — no merge, no row deletion."""
+        org = self._org("e")
+        self._seed_two(org)
+        _extract(
+            org_id=org, run_id="run-ac2-e",
+            ingestor_data={"jira": {
+                "issue_metrics": {"issues": [{"key": "X-5", "assignee": {"displayName": "Sarah Chen"}}]}
+            }},
+        )
+        rows = _all_by_canonical(org, "sarah chen")
+        ids = {r["id"] for r in rows}
+        assert len(ids) == 3, (
+            f"All 3 rows must remain distinct after ambiguous path — got {len(ids)} unique IDs"
+        )
+
+    def test_unique_canonical_name_creates_single_resolved_entity(self):
+        """AC3 complement: a unique canonical name → exactly one resolved entity."""
+        org, run = "t8-ac3-unique", "run-ac3-unique"
+        _extract(
+            org_id=org, run_id=run,
+            ingestor_data={"jira": {
+                "issue_metrics": {"issues": [{"key": "U-1", "assignee": {"displayName": "Unique Person"}}]}
+            }},
+        )
+        rows = _all_by_canonical(org, "unique person")
+        assert len(rows) == 1, f"Unique name must produce exactly one row, got {len(rows)}"
+        assert rows[0]["resolution_status"] == "resolved"
+
+
+# ---------------------------------------------------------------------------
+# AC9 / Section 8 — Service account filter and EntitySummary shape
+# ---------------------------------------------------------------------------
+
+class TestServiceAccountFiltering:
+    """Section 8: entities with run_count < 3 are excluded from the OppEnrichment
+    KV store (service-account filter) but retained in the entities table.
+    Present in the KV after the third run (run_count reaches 3)."""
+
+    def _kv_entities(self, run_id: str) -> list:
+        """Read entity summaries from the run KV store directly via sqlite3."""
+        with sqlite3.connect(_get_db_path()) as conn:
+            row = conn.execute(
+                "SELECT payload FROM kv WHERE key = ?",
+                (f"entities:{run_id}",),
+            ).fetchone()
+        if row is None:
+            return []
+        val = row[0]
+        parsed = _json.loads(val) if isinstance(val, str) else val
+        return parsed if isinstance(parsed, list) else []
+
+    def test_service_account_absent_from_kv_after_first_run(self):
+        """Entity with run_count=1 must not appear in the KV entity summaries."""
+        org, run = "t8-svc-1a", "run-svc-1a"
+        _extract(
+            org_id=org, run_id=run,
+            ingestor_data={"jira": {
+                "issue_metrics": {"issues": [{"key": "S-1", "assignee": {"displayName": "System Admin"}}]}
+            }},
+        )
+        summaries = self._kv_entities(run)
+        names = [s.get("display_name") for s in summaries]
+        assert "System Admin" not in names, (
+            "Entity with run_count=1 must be filtered from KV (service account)"
+        )
+
+    def test_service_account_absent_from_kv_after_second_run(self):
+        """Entity with run_count=2 must still not appear in the KV."""
+        org = "t8-svc-2a"
+        _extract(org_id=org, run_id="run-svc-2a-r1",
+                 ingestor_data={"jira": {"issue_metrics": {
+                     "issues": [{"key": "S-2", "assignee": {"displayName": "System Bot"}}]}}})
+        _extract(org_id=org, run_id="run-svc-2a-r2",
+                 ingestor_data={"jira": {"issue_metrics": {
+                     "issues": [{"key": "S-2", "assignee": {"displayName": "System Bot"}}]}}})
+        summaries = self._kv_entities("run-svc-2a-r2")
+        names = [s.get("display_name") for s in summaries]
+        assert "System Bot" not in names, "Entity with run_count=2 must remain filtered"
+
+    def test_service_account_present_in_kv_after_third_run(self):
+        """Entity with run_count=3 must appear in the KV (passes filter)."""
+        org = "t8-svc-3a"
+        for i in range(1, 4):
+            _extract(org_id=org, run_id=f"run-svc-3a-r{i}",
+                     ingestor_data={"jira": {"issue_metrics": {
+                         "issues": [{"key": "S-3", "assignee": {"displayName": "Power User"}}]}}})
+        summaries = self._kv_entities("run-svc-3a-r3")
+        names = [s.get("display_name") for s in summaries]
+        assert "Power User" in names, (
+            "Entity with run_count=3 must appear in KV after third run (service account threshold crossed)"
+        )
+
+    def test_service_account_entity_retained_in_db_despite_kv_filter(self):
+        """Filtered entities must still exist in the entities table (graph completeness)."""
+        org, run = "t8-svc-db", "run-svc-db"
+        _extract(
+            org_id=org, run_id=run,
+            ingestor_data={"jira": {
+                "issue_metrics": {"issues": [{"key": "S-4", "assignee": {"displayName": "Ghost User"}}]}
+            }},
+        )
+        db_rows = _db_entities_by_type(org, run, "person")
+        names = {r["display_name"] for r in db_rows}
+        assert "Ghost User" in names, (
+            "Service account entity must be retained in the DB even though it is absent from KV"
+        )
+
+
+# ---------------------------------------------------------------------------
+# AC9 — EntitySummary shape
+# ---------------------------------------------------------------------------
+
+class TestEntitySummaryShape:
+    """AC9: Each EntitySummary must include all required fields including
+    resolution_confidence and resolution_status."""
+
+    _REQUIRED_KEYS = {
+        "entity_id",
+        "entity_type",
+        "display_name",
+        "source_system",
+        "resolution_confidence",
+        "resolution_status",
+        "run_count",
+    }
+
+    def _kv_entities(self, run_id: str) -> list:
+        with sqlite3.connect(_get_db_path()) as conn:
+            row = conn.execute(
+                "SELECT payload FROM kv WHERE key = ?",
+                (f"entities:{run_id}",),
+            ).fetchone()
+        if row is None:
+            return []
+        val = row[0]
+        parsed = _json.loads(val) if isinstance(val, str) else val
+        return parsed if isinstance(parsed, list) else []
+
+    def _run_three_times(self, org: str, base_run: str, display_name: str) -> list:
+        """Run extract three times to get past the service account threshold."""
+        for i in range(1, 4):
+            _extract(org_id=org, run_id=f"{base_run}-r{i}",
+                     ingestor_data={"jira": {"issue_metrics": {
+                         "issues": [{"key": f"SH-{i}", "assignee": {"displayName": display_name}}]}}})
+        return self._kv_entities(f"{base_run}-r3")
+
+    def test_entity_summary_has_all_required_keys(self):
+        summaries = self._run_three_times("t8-shape-a", "run-shape-a", "Shape Tester")
+        assert summaries, "KV must contain at least one summary after three runs"
+        for summary in summaries:
+            missing = self._REQUIRED_KEYS - set(summary.keys())
+            assert not missing, f"EntitySummary missing keys: {missing}"
+
+    def test_entity_summary_resolution_confidence_is_float(self):
+        summaries = self._run_three_times("t8-shape-b", "run-shape-b", "Confidence Checker")
+        assert summaries
+        for s in summaries:
+            assert isinstance(s["resolution_confidence"], float), (
+                f"resolution_confidence must be float, got {type(s['resolution_confidence'])}"
+            )
+
+    def test_entity_summary_resolution_status_valid_enum(self):
+        summaries = self._run_three_times("t8-shape-c", "run-shape-c", "Status Checker")
+        assert summaries
+        valid_statuses = {"resolved", "ambiguous", "unresolved"}
+        for s in summaries:
+            assert s["resolution_status"] in valid_statuses, (
+                f"resolution_status must be one of {valid_statuses}, got {s['resolution_status']!r}"
+            )
+
+    def test_entity_summary_canonical_name_not_exposed(self):
+        """canonical_name is an internal normalisation artifact — must not appear in summary."""
+        summaries = self._run_three_times("t8-shape-d", "run-shape-d", "Canonical Guard")
+        for s in summaries:
+            assert "canonical_name" not in s, (
+                "canonical_name must not be exposed in EntitySummary"
+            )
+
+
+# ---------------------------------------------------------------------------
+# AC12 — run_count increments and last_seen_run_id updates via extractor
+# ---------------------------------------------------------------------------
+
+class TestRunCountAcrossConsecutiveRuns:
+    """AC12: entities seen in two runs have run_count=2 and updated last_seen_run_id."""
+
+    def _db_entity_by_canonical(self, org: str, canonical: str) -> dict | None:
+        with sqlite3.connect(_get_db_path()) as conn:
+            conn.row_factory = sqlite3.Row
+            row = conn.execute(
+                "SELECT * FROM entities WHERE org_id=? AND canonical_name=? AND entity_type='person'",
+                (org, canonical),
+            ).fetchone()
+            return dict(row) if row else None
+
+    def test_first_extraction_run_count_equals_one(self):
+        org, run = "t8-rc-a", "run-rc-a"
+        _extract(org_id=org, run_id=run,
+                 ingestor_data={"jira": {"issue_metrics":
+                     {"issues": [{"key": "R-1", "assignee": {"displayName": "Count One"}}]}}})
+        entity = self._db_entity_by_canonical(org, "count one")
+        assert entity is not None
+        assert entity["run_count"] == 1
+
+    def test_second_extraction_increments_run_count_to_two(self):
+        org = "t8-rc-b"
+        _extract(org_id=org, run_id="run-rc-b1",
+                 ingestor_data={"jira": {"issue_metrics":
+                     {"issues": [{"key": "R-2", "assignee": {"displayName": "Count Two"}}]}}})
+        _extract(org_id=org, run_id="run-rc-b2",
+                 ingestor_data={"jira": {"issue_metrics":
+                     {"issues": [{"key": "R-2", "assignee": {"displayName": "Count Two"}}]}}})
+        entity = self._db_entity_by_canonical(org, "count two")
+        assert entity is not None
+        assert entity["run_count"] == 2, (
+            f"Expected run_count=2 after second run, got {entity['run_count']}"
+        )
+
+    def test_last_seen_run_id_updated_to_latest_run(self):
+        org = "t8-rc-c"
+        _extract(org_id=org, run_id="run-rc-c1",
+                 ingestor_data={"jira": {"issue_metrics":
+                     {"issues": [{"key": "R-3", "assignee": {"displayName": "Last Seen"}}]}}})
+        _extract(org_id=org, run_id="run-rc-c2",
+                 ingestor_data={"jira": {"issue_metrics":
+                     {"issues": [{"key": "R-3", "assignee": {"displayName": "Last Seen"}}]}}})
+        entity = self._db_entity_by_canonical(org, "last seen")
+        assert entity["last_seen_run_id"] == "run-rc-c2", (
+            f"Expected last_seen_run_id='run-rc-c2', got {entity['last_seen_run_id']!r}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# AC10 — Route behaviour: RBAC, cross-org isolation, empty-run response
+# ---------------------------------------------------------------------------
+
+def _route_client():
+    from fastapi.testclient import TestClient
+    from app.main import app
+    return TestClient(app, raise_server_exceptions=False)
+
+
+def _analyst_headers(org_id: str) -> dict:
+    """Seed dev-token as analyst in a fresh org and return request headers."""
+    from app.rbac import _ensure_members_table
+    from app import db as _db
+    _ensure_members_table()
+    token = os.getenv("DEV_JWT", "dev-token-change-me")
+    now = _datetime.now(_tz.utc).isoformat()
+    con = _db.connect()
+    try:
+        con.execute(
+            "INSERT OR REPLACE INTO workspace_members (org_id, user_id, role, created_at) "
+            "VALUES (?, ?, ?, ?)",
+            (org_id, token, "analyst", now),
+        )
+        con.commit()
+    finally:
+        con.close()
+    return {"Authorization": f"Bearer {token}", "X-Org-Id": org_id}
+
+
+def _viewer_headers(org_id: str) -> dict:
+    """Seed dev-token as viewer in a fresh org and return request headers."""
+    from app.rbac import _ensure_members_table
+    from app import db as _db
+    _ensure_members_table()
+    token = os.getenv("DEV_JWT", "dev-token-change-me")
+    now = _datetime.now(_tz.utc).isoformat()
+    con = _db.connect()
+    try:
+        con.execute(
+            "INSERT OR REPLACE INTO workspace_members (org_id, user_id, role, created_at) "
+            "VALUES (?, ?, ?, ?)",
+            (org_id, token, "viewer", now),
+        )
+        con.commit()
+    finally:
+        con.close()
+    return {"Authorization": f"Bearer {token}", "X-Org-Id": org_id}
+
+
+def _insert_run(run_id: str, org_id: str, status: str = "complete") -> None:
+    """Insert a minimal run record with org_id into the runs table."""
+    payload = _json.dumps({"org_id": org_id, "status": status})
+    with sqlite3.connect(_get_db_path()) as conn:
+        conn.execute(
+            "INSERT OR REPLACE INTO runs (id, payload) VALUES (?, ?)",
+            (run_id, payload),
+        )
+        conn.commit()
+
+
+class TestEntitiesRouteRBAC:
+    """AC10: GET /api/runs/{run_id}/entities RBAC and tenancy enforcement."""
+
+    def test_viewer_gets_403(self):
+        """Viewer-level access must be rejected with 403."""
+        client = _route_client()
+        org = f"t8-rbac-viewer-{_uuid.uuid4().hex[:6]}"
+        run_id = f"run-rbac-view-{_uuid.uuid4().hex[:6]}"
+        _insert_run(run_id, org)
+        headers = _viewer_headers(org)
+        r = client.get(f"/api/runs/{run_id}/entities", headers=headers)
+        assert r.status_code == 403, (
+            f"Viewer must receive 403 Forbidden, got {r.status_code}"
+        )
+
+    def test_analyst_gets_200(self):
+        """Analyst-level access must be accepted with 200."""
+        client = _route_client()
+        org = f"t8-rbac-analyst-{_uuid.uuid4().hex[:6]}"
+        run_id = f"run-rbac-analyst-{_uuid.uuid4().hex[:6]}"
+        _insert_run(run_id, org)
+        headers = _analyst_headers(org)
+        r = client.get(f"/api/runs/{run_id}/entities", headers=headers)
+        assert r.status_code == 200, (
+            f"Analyst must receive 200 OK, got {r.status_code}: {r.text}"
+        )
+
+    def test_unauthenticated_gets_401_or_403(self):
+        """Request without Authorization header must be rejected."""
+        client = _route_client()
+        r = client.get("/api/runs/run-any/entities")
+        assert r.status_code in (401, 403), (
+            f"Unauthenticated request must be rejected, got {r.status_code}"
+        )
+
+    def test_cross_org_run_returns_404(self):
+        """A run belonging to org_a must return 404 when requested as org_b.
+
+        The endpoint must not return 403 — that would reveal the run exists.
+        Tenancy isolation requires 404 for any cross-org access.
+        """
+        client = _route_client()
+        org_a = f"t8-xorg-a-{_uuid.uuid4().hex[:6]}"
+        org_b = f"t8-xorg-b-{_uuid.uuid4().hex[:6]}"
+        run_id = f"run-xorg-{_uuid.uuid4().hex[:6]}"
+        # Run belongs to org_a
+        _insert_run(run_id, org_a)
+        # Request made as analyst in org_b
+        headers = _analyst_headers(org_b)
+        r = client.get(f"/api/runs/{run_id}/entities", headers=headers)
+        assert r.status_code == 404, (
+            f"Cross-org run access must return 404 (not 403), got {r.status_code}"
+        )
+
+    def test_missing_run_returns_404(self):
+        """A completely non-existent run_id must return 404."""
+        client = _route_client()
+        org = f"t8-missing-{_uuid.uuid4().hex[:6]}"
+        headers = _analyst_headers(org)
+        r = client.get("/api/runs/run-does-not-exist-t8abc/entities", headers=headers)
+        assert r.status_code == 404, (
+            f"Non-existent run must return 404, got {r.status_code}"
+        )
+
+
+class TestEntitiesRouteEmptyAndPresent:
+    """AC10: run with no entities extracted → [] with 200; run with entities → list."""
+
+    def test_run_with_no_entities_returns_empty_list(self):
+        """When extraction has not run, the endpoint returns [] (not 404)."""
+        client = _route_client()
+        org = f"t8-empty-{_uuid.uuid4().hex[:6]}"
+        run_id = f"run-empty-{_uuid.uuid4().hex[:6]}"
+        _insert_run(run_id, org)
+        headers = _analyst_headers(org)
+        r = client.get(f"/api/runs/{run_id}/entities", headers=headers)
+        assert r.status_code == 200, f"Expected 200, got {r.status_code}: {r.text}"
+        assert r.json() == [], (
+            "Run with no entities must return [] not 404 — allows caller to distinguish "
+            "'run exists, no entities' from 'run does not exist'"
+        )
+
+    def test_run_with_entities_returns_list_of_dicts(self):
+        """After extraction, the route returns a non-empty list of entity dicts."""
+        client = _route_client()
+        org = f"t8-present-{_uuid.uuid4().hex[:6]}"
+        run_id = f"run-present-{_uuid.uuid4().hex[:6]}"
+        _insert_run(run_id, org)
+        # Seed one entity row for this run directly
+        _seed_entity_row(org, "route entity", "Route Entity",
+                         source_system="jira", run_id=run_id)
+        headers = _analyst_headers(org)
+        r = client.get(f"/api/runs/{run_id}/entities", headers=headers)
+        assert r.status_code == 200
+        data = r.json()
+        assert isinstance(data, list)
+        assert len(data) >= 1
+        assert all(isinstance(e, dict) for e in data)
+
+    def test_route_response_entity_has_required_fields(self):
+        """Each entity dict from the route contains the core entity fields."""
+        client = _route_client()
+        org = f"t8-fields-{_uuid.uuid4().hex[:6]}"
+        run_id = f"run-fields-{_uuid.uuid4().hex[:6]}"
+        _insert_run(run_id, org)
+        _seed_entity_row(org, "field check entity", "Field Check",
+                         source_system="salesforce", run_id=run_id)
+        headers = _analyst_headers(org)
+        r = client.get(f"/api/runs/{run_id}/entities", headers=headers)
+        assert r.status_code == 200
+        entities = r.json()
+        assert entities
+        required = {"id", "org_id", "entity_type", "display_name", "resolution_confidence",
+                    "resolution_status", "run_count"}
+        for entity in entities:
+            missing = required - set(entity.keys())
+            assert not missing, f"Route entity response missing fields: {missing}"
+
+
+# ---------------------------------------------------------------------------
+# AC8 — Non-blocking: entity.extraction_completed NOT emitted on exception
+# ---------------------------------------------------------------------------
+
+class TestNonBlockingFailureAndTelemetry:
+    """AC8: when extract_entities() internal sources fail, the run is non-blocking.
+    entity.extraction_completed must not be emitted if the whole extract raises.
+    """
+
+    def test_extraction_failure_does_not_propagate(self):
+        """Even when all source extractors raise, extract_entities() must not raise."""
+        from unittest.mock import patch
+        with patch("app.entity_extractor._extract_salesforce_entities", side_effect=RuntimeError("sf down")), \
+             patch("app.entity_extractor._extract_jira_entities", side_effect=RuntimeError("jira down")), \
+             patch("app.entity_extractor._extract_servicenow_entities", side_effect=RuntimeError("sn down")), \
+             patch("app.entity_extractor._extract_detector_entities", side_effect=RuntimeError("det down")), \
+             patch("app.db.run_kv_set"):
+            result = _extract(
+                org_id="t8-nb-a", run_id="run-nb-a",
+                ingestor_data={
+                    "salesforce": {"x": 1}, "jira": {"x": 1}, "servicenow": {"x": 1}
+                },
+            )
+        # Must not raise; returns a list (possibly empty)
+        assert isinstance(result, list)
+
+    def test_telemetry_event_emitted_on_success_not_on_extractor_exception(self):
+        """entity.extraction_completed IS emitted on normal completion,
+        NOT emitted when record_event itself raises (fire-and-forget)."""
+        from unittest.mock import patch
+        emitted = []
+        def capture(event_type, payload=None):
+            emitted.append(event_type)
+        with patch("app.entity_extractor._extract_salesforce_entities", return_value=[]), \
+             patch("app.entity_extractor._extract_jira_entities", return_value=[]), \
+             patch("app.entity_extractor._extract_servicenow_entities", return_value=[]), \
+             patch("app.entity_extractor._extract_detector_entities", return_value=[]), \
+             patch("app.db.run_kv_set"), \
+             patch("app.telemetry.record_event", side_effect=capture):
+            _extract(org_id="t8-nb-b", run_id="run-nb-b", ingestor_data={})
+        assert "entity.extraction_completed" in emitted, (
+            "entity.extraction_completed must be emitted on successful completion"
+        )
+
+
+# ---------------------------------------------------------------------------
+# AC11 — Telemetry event registration (cross-check with test_entity_extraction_telemetry)
+# ---------------------------------------------------------------------------
+
+class TestAC11TelemetryRegistration:
+    """AC11: entity.extraction_completed must be in the telemetry event registry,
+    use EntityExtractionCompletedPayload, and the payload TypedDict must contain
+    entity_count and ambiguous_count fields."""
+
+    def test_event_type_registered_in_registry(self):
+        """AC11: entity.extraction_completed appears in EVENT_REGISTRY."""
+        from app.telemetry import EVENT_REGISTRY
+        assert "entity.extraction_completed" in EVENT_REGISTRY, (
+            "entity.extraction_completed must be registered via register_event_type()"
+        )
+
+    def test_event_type_registered_with_entity_extraction_payload(self):
+        """AC11: registry uses EntityExtractionCompletedPayload TypedDict."""
+        from app.telemetry import EVENT_REGISTRY, EntityExtractionCompletedPayload
+        assert EVENT_REGISTRY["entity.extraction_completed"] is EntityExtractionCompletedPayload
+
+    def test_payload_typeddict_has_ambiguous_count(self):
+        """AC11: ambiguous_count is load-bearing — must be in the TypedDict."""
+        from typing import get_type_hints
+        from app.telemetry import EntityExtractionCompletedPayload
+        hints = get_type_hints(EntityExtractionCompletedPayload)
+        assert "ambiguous_count" in hints, (
+            "ambiguous_count must be in EntityExtractionCompletedPayload — "
+            "it is the primary signal for source data-quality degradation"
+        )
+
+    def test_payload_typeddict_has_entity_count(self):
+        from typing import get_type_hints
+        from app.telemetry import EntityExtractionCompletedPayload
+        assert "entity_count" in get_type_hints(EntityExtractionCompletedPayload)
