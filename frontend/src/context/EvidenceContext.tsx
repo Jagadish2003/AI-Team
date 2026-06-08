@@ -3,7 +3,7 @@ import { useRunContext } from "./RunContext";
 import { fetchEvidence, postEvidenceDecision } from "../api/evidenceApi";
 import type { EvidenceReview } from "../types/evidence";
 import type { Decision } from "../types/common";
-import { isRunNotFoundError, runScopedErrorMessage } from "../utils/apiErrors";
+import { runScopedErrorMessage } from "../utils/apiErrors";
 import { useDiscoveryRunContext } from "./DiscoveryRunContext";
 
 type EvidenceContextValue = {
@@ -23,7 +23,7 @@ function hasMaterializedArtifacts(status: string | undefined): boolean {
 }
 
 export function EvidenceProvider({ children }: { children: React.ReactNode }) {
-  const { runId, clearRunId } = useRunContext();
+  const { runId } = useRunContext();
   const { run } = useDiscoveryRunContext();
   const runStatus = run?.status?.toLowerCase();
   const [loading, setLoading] = useState(false);
@@ -56,10 +56,7 @@ export function EvidenceProvider({ children }: { children: React.ReactNode }) {
         if (!cancelled) setEvidence(data);
       } catch (e: any) {
         if (cancelled) return;
-        if (isRunNotFoundError(e)) {
-          clearRunId();
-          return;
-        }
+        setEvidence([]);
         setError(runScopedErrorMessage(e, "Failed to load evidence"));
       } finally {
         if (!cancelled) setLoading(false);
@@ -67,7 +64,7 @@ export function EvidenceProvider({ children }: { children: React.ReactNode }) {
     })();
 
     return () => { cancelled = true; };
-  }, [runId, runStatus, fetchCount, clearRunId]);
+  }, [runId, runStatus, fetchCount]);
 
   const setEvidenceDecision = useCallback(
     async (evidenceId: string, decision: Decision) => {

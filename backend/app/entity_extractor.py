@@ -41,6 +41,67 @@ def _safe_str(val: Any) -> Optional[str]:
     return s if s else None
 
 
+def _iter_records(value: Any) -> List[Dict[str, Any]]:
+    """Normalize source payload fragments to a list of record dictionaries."""
+    if isinstance(value, list):
+        return [item for item in value if isinstance(item, dict)]
+    if isinstance(value, dict):
+        return [value]
+    return []
+
+
+def _first_record_str(record: Dict[str, Any], keys: tuple[str, ...]) -> Optional[str]:
+    """Return the first non-empty string from common source-field variants."""
+    for key in keys:
+        val = record.get(key)
+        if isinstance(val, dict):
+            nested = _first_record_str(
+                val,
+                (
+                    "display_value",
+                    "displayValue",
+                    "displayName",
+                    "name",
+                    "Name",
+                    "value",
+                    "id",
+                    "Id",
+                    "key",
+                ),
+            )
+            if nested:
+                return nested
+            continue
+        text = _safe_str(val)
+        if text:
+            return text
+    return None
+
+
+def _ref_name_and_id(value: Any) -> tuple[Optional[str], Optional[str]]:
+    """Read a source reference that may be a string or {display,value,id} dict."""
+    if isinstance(value, dict):
+        name = _first_record_str(
+            value,
+            (
+                "display_value",
+                "displayValue",
+                "displayName",
+                "name",
+                "Name",
+                "label",
+                "value",
+                "id",
+                "Id",
+                "key",
+            ),
+        )
+        source_id = _first_record_str(value, ("id", "Id", "value", "sys_id", "key"))
+        return name, source_id
+    text = _safe_str(value)
+    return text, text
+
+
 # ---------------------------------------------------------------------------
 # Per-source extractors
 # ---------------------------------------------------------------------------
@@ -51,7 +112,7 @@ def _extract_salesforce_entities(
     run_id: str,
     sf_data: Dict[str, Any],
 ) -> List[Entity]:
-    """Extract Person and Object entities from Salesforce/nCino ingestor output."""
+    """Extract Person, Team, Project, and Object entities from Salesforce/nCino output."""
     entities: List[Entity] = []
 
     # Person: approver_ids inside approval_processes act as OwnerId equivalents.
@@ -74,6 +135,86 @@ def _extract_salesforce_entities(
                 entities.append(e)
             except Exception as exc:
                 logger.warning("SF person extraction failed for %s: %s", name, exc)
+
+    # Person: OwnerId / AssignedTo fields from common Salesforce record buckets.
+    # These are source IDs, so they carry confidence=1.0 through resolution.
+    for collection_name in (
+        "records",
+        "cases",
+        "tasks",
+        "opportunities",
+        "objects",
+        "sample_records",
+    ):
+        for record in _iter_records(sf_data.get(collection_name)):
+            for field_name in ("OwnerId", "owner_id", "AssignedTo", "assigned_to"):
+                display_name, source_id = _ref_name_and_id(record.get(field_name))
+                if not display_name:
+                    continue
+                try:
+                    e = resolve_or_create_entity(
+                        org_id=org_id,
+                        entity_type="person",
+                        display_name=display_name,
+                        source_system="salesforce",
+                        source_record_id=source_id or display_name,
+                        run_id=run_id,
+                        metadata={"source": collection_name, "field": field_name},
+                    )
+                    entities.append(e)
+                except Exception as exc:
+                    logger.warning(
+                        "SF %s extraction failed for %s: %s",
+                        field_name,
+                        display_name,
+                        exc,
+                    )
+
+    # Team: Salesforce team fields from case/account/opportunity team payloads.
+    for collection_name in (
+        "teams",
+        "team_fields",
+        "team_members",
+        "case_teams",
+        "account_teams",
+        "opportunity_teams",
+    ):
+        for team_record in _iter_records(sf_data.get(collection_name)):
+            team_name = _first_record_str(
+                team_record,
+                (
+                    "team_name",
+                    "TeamName",
+                    "name",
+                    "Name",
+                    "team",
+                    "Team",
+                    "group_name",
+                    "TeamRole",
+                    "team_role",
+                    "role",
+                    "Role",
+                ),
+            )
+            if not team_name:
+                continue
+            team_id = _first_record_str(
+                team_record,
+                ("id", "Id", "team_id", "TeamId", "group_id", "GroupId"),
+            )
+            try:
+                e = resolve_or_create_entity(
+                    org_id=org_id,
+                    entity_type="team",
+                    display_name=team_name,
+                    source_system="salesforce",
+                    source_record_id=team_id,
+                    run_id=run_id,
+                    metadata={"source": collection_name},
+                )
+                entities.append(e)
+            except Exception as exc:
+                logger.warning("SF team extraction failed for %s: %s", team_name, exc)
 
     # Object: sample_case_ids from case_metrics
     for case_id in (sf_data.get("case_metrics") or {}).get("sample_case_ids", []) or []:
@@ -98,9 +239,18 @@ def _extract_salesforce_entities(
     ncino = sf_data.get("ncino") or {}
     for key in ("loan_applications", "loan_portfolios"):
         for record in ncino.get(key, []) or []:
-            record_id = _safe_str(record.get("id") or record.get("loan_id"))
-            if not record_id:
-                continue
+            record_id = _first_record_str(
+                record,
+                (
+                    "id",
+                    "Id",
+                    "loan_id",
+                    "portfolio_id",
+                    "PortfolioId",
+                    "loan_portfolio_id",
+                    "loanPortfolioId",
+                ),
+            )
             owner_id = _safe_str(record.get("OwnerId") or record.get("owner_id"))
             if owner_id:
                 try:
@@ -116,6 +266,50 @@ def _extract_salesforce_entities(
                     entities.append(e)
                 except Exception as exc:
                     logger.warning("nCino person extraction failed for %s: %s", owner_id, exc)
+
+            # Project: bounded nCino work/portfolio. Prefer portfolio name, then ID.
+            project_name = _first_record_str(
+                record,
+                (
+                    "portfolio_name",
+                    "loan_portfolio_name",
+                    "loanPortfolioName",
+                    "portfolio",
+                    "loan_portfolio",
+                    "name",
+                    "Name",
+                    "application_name",
+                    "loan_name",
+                    "loan_number",
+                    "id",
+                    "loan_id",
+                ),
+            )
+            if project_name:
+                project_id = _first_record_str(
+                    record,
+                    (
+                        "portfolio_id",
+                        "PortfolioId",
+                        "loan_portfolio_id",
+                        "loanPortfolioId",
+                        "id",
+                        "loan_id",
+                    ),
+                )
+                try:
+                    e = resolve_or_create_entity(
+                        org_id=org_id,
+                        entity_type="project",
+                        display_name=project_name,
+                        source_system="salesforce",
+                        source_record_id=project_id,
+                        run_id=run_id,
+                        metadata={"source": f"ncino_{key}"},
+                    )
+                    entities.append(e)
+                except Exception as exc:
+                    logger.warning("nCino project extraction failed for %s: %s", project_name, exc)
 
     return entities
 
@@ -147,8 +341,65 @@ def _extract_jira_entities(
         except Exception as exc:
             logger.warning("Jira team extraction failed for %s: %s", project_name, exc)
 
+        try:
+            e = resolve_or_create_entity(
+                org_id=org_id,
+                entity_type="project",
+                display_name=project_name,
+                source_system="jira",
+                source_record_id=_safe_str(issue_metrics.get("project_key")),
+                run_id=run_id,
+                metadata={"source": "jira_project"},
+            )
+            entities.append(e)
+        except Exception as exc:
+            logger.warning("Jira project extraction failed for %s: %s", project_name, exc)
+
     # Issues: Object (issue key), Person (assignee, reporter)
     for issue in issue_metrics.get("issues", []) or []:
+        issue_project_name, issue_project_id = _ref_name_and_id(issue.get("project"))
+        if issue_project_name:
+            try:
+                e = resolve_or_create_entity(
+                    org_id=org_id,
+                    entity_type="project",
+                    display_name=issue_project_name,
+                    source_system="jira",
+                    source_record_id=issue_project_id,
+                    run_id=run_id,
+                    metadata={"source": "jira_issue_project"},
+                )
+                entities.append(e)
+            except Exception as exc:
+                logger.warning(
+                    "Jira issue project extraction failed for %s: %s",
+                    issue_project_name,
+                    exc,
+                )
+
+        epic_value = (
+            issue.get("epic")
+            or issue.get("epic_name")
+            or issue.get("epicName")
+            or issue.get("epic_key")
+            or issue.get("epicKey")
+        )
+        epic_name, epic_id = _ref_name_and_id(epic_value)
+        if epic_name:
+            try:
+                e = resolve_or_create_entity(
+                    org_id=org_id,
+                    entity_type="project",
+                    display_name=epic_name,
+                    source_system="jira",
+                    source_record_id=epic_id,
+                    run_id=run_id,
+                    metadata={"source": "jira_epic"},
+                )
+                entities.append(e)
+            except Exception as exc:
+                logger.warning("Jira epic extraction failed for %s: %s", epic_name, exc)
+
         issue_key = _safe_str(issue.get("key") or issue.get("id"))
         if issue_key:
             try:
@@ -239,7 +490,7 @@ def _extract_servicenow_entities(
     run_id: str,
     sn_data: Dict[str, Any],
 ) -> List[Entity]:
-    """Extract Person, Team, and Object entities from ServiceNow ingestor output."""
+    """Extract Person, Team, Project, and Object entities from ServiceNow output."""
     entities: List[Entity] = []
 
     # Team: assignment_groups — names frequently overlap with Jira project names;
@@ -267,9 +518,51 @@ def _extract_servicenow_entities(
         except Exception as exc:
             logger.warning("SN team extraction failed for %s: %s", group_name, exc)
 
+    for project_record in _iter_records(sn_data.get("projects")):
+        project_name = _first_record_str(
+            project_record,
+            ("display_value", "displayValue", "name", "Name", "project_name", "number", "id"),
+        )
+        if not project_name:
+            continue
+        project_id = _first_record_str(project_record, ("sys_id", "id", "Id", "number"))
+        try:
+            e = resolve_or_create_entity(
+                org_id=org_id,
+                entity_type="project",
+                display_name=project_name,
+                source_system="servicenow",
+                source_record_id=project_id,
+                run_id=run_id,
+                metadata={"source": "servicenow_project"},
+            )
+            entities.append(e)
+        except Exception as exc:
+            logger.warning("SN project extraction failed for %s: %s", project_name, exc)
+
     # Incidents: Object (incident number), Person (assigned_to, caller_id)
     incident_metrics = sn_data.get("incident_metrics") or {}
     for incident in incident_metrics.get("incidents", []) or []:
+        project_name, project_id = _ref_name_and_id(incident.get("project"))
+        if project_name:
+            try:
+                e = resolve_or_create_entity(
+                    org_id=org_id,
+                    entity_type="project",
+                    display_name=project_name,
+                    source_system="servicenow",
+                    source_record_id=project_id,
+                    run_id=run_id,
+                    metadata={"source": "servicenow_incident_project"},
+                )
+                entities.append(e)
+            except Exception as exc:
+                logger.warning(
+                    "SN incident project extraction failed for %s: %s",
+                    project_name,
+                    exc,
+                )
+
         inc_number = _safe_str(incident.get("number") or incident.get("id"))
         if inc_number:
             try:
@@ -333,6 +626,64 @@ def _extract_servicenow_entities(
                 entities.append(e)
             except Exception as exc:
                 logger.warning("SN caller_id extraction failed for %s: %s", caller_name, exc)
+
+    return entities
+
+
+def _extract_catalog_system_entities(
+    *,
+    org_id: str,
+    run_id: str,
+    catalog_data: Dict[str, Any],
+) -> List[Entity]:
+    """Extract System entities from Integration Hub/workspace catalog payloads."""
+    entities: List[Entity] = []
+    seen: set[str] = set()
+
+    for collection_name in (
+        "connectors",
+        "systems",
+        "workspace_catalog",
+        "integration_hub",
+    ):
+        raw_collection = catalog_data.get(collection_name)
+        records = _iter_records(raw_collection)
+        if isinstance(raw_collection, dict):
+            for nested_name in ("connectors", "systems", "workspace_catalog"):
+                records.extend(_iter_records(raw_collection.get(nested_name)))
+            if not records:
+                records.extend(
+                    item for item in raw_collection.values() if isinstance(item, dict)
+                )
+
+        for record in records:
+            display_name = _first_record_str(
+                record,
+                ("name", "Name", "display_name", "connector_name", "source", "signal_source", "id"),
+            )
+            if not display_name:
+                continue
+            connector_id = _first_record_str(
+                record,
+                ("connector_id", "id", "Id", "source", "signal_source", "key"),
+            ) or display_name
+            dedupe_key = connector_id.strip().lower()
+            if dedupe_key in seen:
+                continue
+            seen.add(dedupe_key)
+            try:
+                e = resolve_or_create_entity(
+                    org_id=org_id,
+                    entity_type="system",
+                    display_name=display_name,
+                    source_system="integration_hub",
+                    source_record_id=connector_id,
+                    run_id=run_id,
+                    metadata={"source": collection_name, "connector_id": connector_id},
+                )
+                entities.append(e)
+            except Exception as exc:
+                logger.warning("Catalog system extraction failed for %s: %s", display_name, exc)
 
     return entities
 
@@ -482,6 +833,25 @@ def extract_entities(
     except Exception as exc:
         failure_count += 1
         logger.warning("Detector entity extraction failed: %s", exc)
+
+    # Integration Hub / workspace catalog: System entities even when no detector fires.
+    catalog_data = {
+        key: value
+        for key, value in ingestor_data.items()
+        if key in {"connectors", "systems", "workspace_catalog", "integration_hub"}
+    }
+    if catalog_data:
+        try:
+            batch = _extract_catalog_system_entities(
+                org_id=org_id,
+                run_id=run_id,
+                catalog_data=catalog_data,
+            )
+            all_entities.extend(batch)
+            logger.info("Entity extraction — catalog systems: %d", len(batch))
+        except Exception as exc:
+            failure_count += 1
+            logger.warning("Catalog system extraction failed: %s", exc)
 
     ambiguous_count = sum(
         1 for e in all_entities if e.resolution_status == "ambiguous"

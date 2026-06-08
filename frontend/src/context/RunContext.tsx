@@ -20,12 +20,16 @@ const RunContext = createContext<RunContextValue | null>(null);
 const LS_KEY = "agentiq_run_id";
 const BASE_URL = (import.meta.env.VITE_API_BASE_URL as string | undefined) ?? "http://localhost:8000";
 const TOKEN = (import.meta.env.VITE_DEV_JWT as string | undefined) ?? "dev-token-change-me";
+const ORG_ID_HEADER = (import.meta.env.VITE_ORG_ID as string | undefined)?.trim();
 
 async function validateRunId(id: string): Promise<boolean> {
   if (!isCanonicalRunId(id)) return false;
   try {
     const res = await fetch(`${BASE_URL}/api/runs/${id}`, {
-      headers: { Authorization: `Bearer ${TOKEN}` },
+      headers: {
+        Authorization: `Bearer ${TOKEN}`,
+        ...(ORG_ID_HEADER ? { "X-Org-Id": ORG_ID_HEADER } : {}),
+      },
     });
     return res.ok;
   } catch {
@@ -80,8 +84,6 @@ export function RunProvider({ children }: { children: React.ReactNode }) {
         cancelled = true;
       };
     }
-
-    _setRunId((current) => (current === candidate ? current : candidate));
 
     validateRunId(candidate).then((valid) => {
       if (cancelled) return;

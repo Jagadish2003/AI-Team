@@ -4,7 +4,11 @@ import {
   ReviewAuditEvent,
 } from "../../types/analystReview";
 import { ArrowRight, Hash } from "lucide-react";
-import { fetchOppEnrichment, OppEnrichment } from "../../api/enrichmentApi";
+import {
+  fetchOppEnrichment,
+  OppEnrichment,
+  type EntitySummary,
+} from "../../api/enrichmentApi";
 import { useRunContext } from "../../context/RunContext";
 import BaselineContextPanel from "./BaselineContextPanel";
 
@@ -100,6 +104,87 @@ function EnrichmentPanel({
 }
 
 // ── Main component ────────────────────────────────────────────────────────────
+
+function labelize(value: string): string {
+  return value
+    .replace(/[_-]+/g, " ")
+    .replace(/\b\w/g, (char) => char.toUpperCase());
+}
+
+function confidenceLabel(value: number): string {
+  if (!Number.isFinite(value)) return "";
+  return `${Math.round(value * 100)}%`;
+}
+
+const SOURCE_LABELS: Record<string, string> = {
+  agentiq: "AgentIQ",
+  integration_hub: "Integration Hub",
+  jira: "Jira",
+  salesforce: "Salesforce",
+  servicenow: "ServiceNow",
+};
+
+function sourceLabel(value: string): string {
+  return SOURCE_LABELS[value.toLowerCase()] ?? labelize(value);
+}
+
+export function EntityTracePanel({
+  entities,
+}: {
+  entities: EntitySummary[] | undefined;
+}) {
+  if (!entities || entities.length === 0) return null;
+
+  return (
+    <div>
+      <div className="mb-2 flex items-center justify-between gap-3">
+        <span className="text-xs font-semibold text-text">Entities</span>
+        <span className="shrink-0 rounded border border-bg px-1.5 py-0.5 text-xs text-text">
+          {entities.length} linked
+        </span>
+      </div>
+      <div className="rounded-lg border border-border bg-bg/30 p-3">
+        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+          {entities.map((entity) => {
+            const isAmbiguous = entity.resolution_status === "ambiguous";
+            return (
+              <div
+                key={entity.entity_id}
+                data-testid={`entity-trace-${entity.entity_id}`}
+                className={`min-w-0 rounded-md border px-3 py-2 ${
+                  isAmbiguous
+                    ? "border-border/60 bg-panel/40 text-muted opacity-75"
+                    : "border-border/70 bg-panel/70 text-text"
+                }`}
+              >
+                <div className="flex min-w-0 items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="truncate text-xs font-semibold leading-snug">
+                      {entity.display_name}
+                    </div>
+                    <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] leading-tight text-muted">
+                      <span>{labelize(entity.entity_type)}</span>
+                      <span aria-hidden="true">/</span>
+                      <span>{sourceLabel(entity.source_system)}</span>
+                    </div>
+                  </div>
+                  <span className="shrink-0 rounded border border-border/70 px-1.5 py-0.5 text-[11px] leading-tight">
+                    {confidenceLabel(entity.resolution_confidence)}
+                  </span>
+                </div>
+                {isAmbiguous && (
+                  <div className="mt-1.5 text-[11px] leading-tight text-muted">
+                    Ambiguous
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
 
 function EvidenceIdsBox({ ids }: { ids: string[] }) {
   const hasOverflow = ids.length > 4;
@@ -272,6 +357,9 @@ export default function OpportunityDetail({
 
         {/* T10: Temporal baseline context panel */}
         <BaselineContextPanel enrichment={enrichment} />
+
+        {/* T3-S12-A: Entity trace shown after temporal baseline context. */}
+        <EntityTracePanel entities={enrichment?.entities} />
 
         {/* T41-7: Required Permissions section removed from Opportunity Review.
             Permissions are now shown on the Agent Blueprint screen in

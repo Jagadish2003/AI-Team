@@ -15,13 +15,13 @@ import SnapshotMatrix from '../components/executive_report/SnapshotMatrix';
 import KeyInsights from '../components/executive_report/KeyInsights';
 import TopQuickWins from '../components/executive_report/TopQuickWins';
 import PilotRoadmapHighlights from '../components/executive_report/PilotRoadmapHighlights';
-import { isRunNotFoundError, runScopedErrorMessage } from '../utils/apiErrors';
+import { runScopedErrorMessage } from '../utils/apiErrors';
 
 export default function ExecutiveReportPage() {
   const { push } = useToast();
   const { opportunities } = useAnalystReviewContext();
   const nav = useNavigate();
-  const { runId, clearRunId } = useRunContext();
+  const { runId } = useRunContext();
   const { run, computing } = useDiscoveryRunContext();
   const runStatus = run?.status?.toLowerCase();
 
@@ -55,10 +55,7 @@ export default function ExecutiveReportPage() {
         if (!cancelled) setReport(data);
       } catch (e: any) {
         if (cancelled) return;
-        if (isRunNotFoundError(e)) {
-          clearRunId();
-          return;
-        }
+        setReport(null);
         setError(runScopedErrorMessage(e, 'Failed to load executive report'));
       } finally {
         if (!cancelled) setLoading(false);
@@ -66,7 +63,7 @@ export default function ExecutiveReportPage() {
     })();
 
     return () => { cancelled = true; };
-  }, [runId, fetchCount, clearRunId]);
+  }, [runId, fetchCount]);
 
   useEffect(() => {
     if (!runId || !resultsPreparing || loading) return;

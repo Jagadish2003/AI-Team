@@ -661,6 +661,17 @@ class TestTeamAndObjectExtraction:
         teams = _db_entities_by_type(org, run, "team")
         assert any(e["display_name"] == "LOAN" for e in teams)
 
+    def test_salesforce_team_field_creates_team_entity(self):
+        org, run = "team-sf-a", "run-team-sf-a"
+        _extract(
+            org_id=org, run_id=run,
+            ingestor_data={"salesforce": {
+                "case_teams": [{"TeamName": "Commercial Credit", "TeamId": "00G-team"}]
+            }},
+        )
+        teams = _db_entities_by_type(org, run, "team")
+        assert any(e["display_name"] == "Commercial Credit" for e in teams)
+
     def test_servicenow_assignment_group_creates_team_entity(self):
         org, run = "team-sn-a", "run-team-sn-a"
         _extract(
@@ -713,6 +724,95 @@ class TestTeamAndObjectExtraction:
         crm = next((o for o in objects if o["display_name"] == "CRM-999"), None)
         assert crm is not None
         assert crm["source_record_id"] == "CRM-999"
+
+
+class TestProjectExtraction:
+    """Project entities from Jira, ServiceNow, and nCino source payloads."""
+
+    def test_jira_project_creates_project_entity(self):
+        org, run = "proj-j-a", "run-proj-j-a"
+        _extract(
+            org_id=org, run_id=run,
+            ingestor_data={"jira": {
+                "issue_metrics": {"project": "LOAN", "project_key": "LOAN", "issues": []}
+            }},
+        )
+        projects = _db_entities_by_type(org, run, "project")
+        assert any(e["display_name"] == "LOAN" for e in projects)
+
+    def test_jira_epic_creates_project_entity(self):
+        org, run = "proj-j-b", "run-proj-j-b"
+        _extract(
+            org_id=org, run_id=run,
+            ingestor_data={"jira": {
+                "issue_metrics": {
+                    "issues": [
+                        {
+                            "key": "LOAN-100",
+                            "epic": {"name": "Loan Intake Modernization", "key": "LOAN-E1"},
+                        }
+                    ]
+                }
+            }},
+        )
+        projects = _db_entities_by_type(org, run, "project")
+        assert any(e["display_name"] == "Loan Intake Modernization" for e in projects)
+
+    def test_servicenow_project_creates_project_entity(self):
+        org, run = "proj-sn-a", "run-proj-sn-a"
+        _extract(
+            org_id=org, run_id=run,
+            ingestor_data={"servicenow": {
+                "projects": [{"name": "Incident Deflection", "sys_id": "pm-001"}]
+            }},
+        )
+        projects = _db_entities_by_type(org, run, "project")
+        assert any(e["display_name"] == "Incident Deflection" for e in projects)
+
+    def test_ncino_loan_portfolio_creates_project_entity(self):
+        org, run = "proj-nc-a", "run-proj-nc-a"
+        _extract(
+            org_id=org, run_id=run,
+            ingestor_data={"salesforce": {
+                "ncino": {
+                    "loan_portfolios": [
+                        {
+                            "portfolio_name": "Commercial Lending Portfolio",
+                            "portfolio_id": "PF-001",
+                            "OwnerId": "005-owner",
+                        }
+                    ]
+                }
+            }},
+        )
+        projects = _db_entities_by_type(org, run, "project")
+        assert any(e["display_name"] == "Commercial Lending Portfolio" for e in projects)
+
+
+class TestAdditionalSourceCoverage:
+    """Document-level Sprint 12 source fields beyond the core AC list."""
+
+    def test_salesforce_assigned_to_creates_person(self):
+        org, run = "src-sf-a", "run-src-sf-a"
+        _extract(
+            org_id=org, run_id=run,
+            ingestor_data={"salesforce": {
+                "tasks": [{"AssignedTo": "005-assigned-user"}]
+            }},
+        )
+        persons = _db_entities_by_type(org, run, "person")
+        assert any(e["display_name"] == "005-assigned-user" for e in persons)
+
+    def test_workspace_catalog_creates_system_entity(self):
+        org, run = "src-cat-a", "run-src-cat-a"
+        _extract(
+            org_id=org, run_id=run,
+            ingestor_data={"connectors": [
+                {"id": "servicenow", "name": "ServiceNow"}
+            ]},
+        )
+        systems = _db_entities_by_type(org, run, "system")
+        assert any(e["display_name"] == "ServiceNow" for e in systems)
 
 
 class TestCrossOrgIsolation:

@@ -9,6 +9,7 @@
  */
 
 const ENV_BASE_URL = import.meta.env.VITE_API_BASE_URL as string | undefined;
+const ORG_ID_HEADER = (import.meta.env.VITE_ORG_ID as string | undefined)?.trim();
 
 const BASE_URL =
   ENV_BASE_URL ??
@@ -32,7 +33,10 @@ export class ApiError extends Error {
 
 function authHeader(): Record<string, string> {
   const token = (import.meta.env.VITE_DEV_JWT as string | undefined) ?? "dev-token-change-me";
-  return { Authorization: `Bearer ${token}` };
+  return {
+    Authorization: `Bearer ${token}`,
+    ...(ORG_ID_HEADER ? { "X-Org-Id": ORG_ID_HEADER } : {}),
+  };
 }
 
 async function parseBody(res: Response): Promise<unknown> {

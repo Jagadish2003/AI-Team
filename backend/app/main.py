@@ -168,6 +168,11 @@ def api_health() -> Dict[str, Any]:
     return {"ok": True, "ts": now_iso()}
 
 
+@app.get("/")
+def root() -> Dict[str, Any]:
+    return {"ok": True, "service": "AgentIQ API", "health": "/api/health"}
+
+
 @app.get("/api/connectors", dependencies=[Depends(require_auth), Depends(require_role("viewer"))])
 def list_connectors() -> List[Dict[str, Any]]:
     return tenancy_get_all("connectors")
