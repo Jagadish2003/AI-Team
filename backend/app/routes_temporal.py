@@ -51,6 +51,7 @@ def temporal_baseline(
     if baseline is None:
         raise HTTPException(status_code=404, detail="baseline not found")
     return {
+        "signal_key": baseline.get("signal_key"),
         "baseline_mean": baseline.get("baseline_mean"),
         "baseline_stddev": baseline.get("baseline_stddev"),
         "baseline_window_days": baseline.get("baseline_window_days"),
@@ -120,6 +121,8 @@ def run_temporal_context(run_id: str) -> List[Dict[str, Any]]:
     temporal_keys = (
         "baseline_context", "trend_direction", "anomaly_score",
         "is_anomalous", "first_deviation", "baseline_mean", "run_count",
+        "baseline_stddev", "baseline_window_days", "current_value",
+        "recent_values", "signal_key", "pack_id",
     )
     result: List[Dict[str, Any]] = []
     for opp_id, opp_data in per_opp.items():

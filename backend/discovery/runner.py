@@ -416,6 +416,32 @@ def run(
         all_evaluated=all_evaluated,
     )
 
+    try:
+        # Entity extraction is synchronous and DB-safe in this context: every
+        # resolve_or_create_entity() opens its own short-lived raw sqlite3
+        # connection via db.connect(), commits, and closes it (see
+        # entity_resolution._connect). There is no SQLAlchemy session or
+        # thread-local state to leak across an async boundary — unlike the
+        # GitHub ingest above, this call needs no event-loop isolation.
+        from app.entity_extractor import extract_entities
+        extract_entities(
+            org_id=org_id,
+            run_id=run_id,
+            pack_id=pack_id,
+            detector_results=detector_results,
+            ingestor_data={
+                "salesforce": sf_data,
+                "servicenow": sn_data,
+                "jira": jira_data,
+            },
+        )
+    except Exception as e:
+        logger.warning(
+            "Entity extraction failed (non-blocking): run_id=%s error=%s",
+            run_id,
+            e,
+        )
+
     # 4. Score + Evidence
     # ENG-AIQ-NC-4: use lending_scorer for ncino pack, SC scorer for service_cloud
     from .scorer import score as sc_score

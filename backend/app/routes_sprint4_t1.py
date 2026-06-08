@@ -150,6 +150,12 @@ def _apply_temporal_enrichment(
             "first_deviation",
             "baseline_mean",
             "run_count",
+            "baseline_stddev",
+            "baseline_window_days",
+            "current_value",
+            "recent_values",
+            "signal_key",
+            "pack_id",
         )
         stored = db.run_kv_get(KV_LLM_ENRICHMENT, run_id, {})
         per_opp = stored.get("perOpportunity", {})

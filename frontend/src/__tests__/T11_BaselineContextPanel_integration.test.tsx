@@ -31,6 +31,7 @@ const BASE_ENRICHMENT: OppEnrichment = {
   first_deviation: false,
   baseline_mean: null,
   run_count: null,
+  entities: [],
 };
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
@@ -135,6 +136,9 @@ describe("BaselineContextPanel", () => {
     );
     expect(
       screen.getByText("First deviation from a previously stable baseline")
+    ).toBeTruthy();
+    expect(
+      screen.getByText("First deviation from stable baseline")
     ).toBeTruthy();
   });
 

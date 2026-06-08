@@ -106,10 +106,13 @@ const CLOUD_PACK_REGISTRY: Record<string, string> = {
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
+const ORG_ID_HEADER = (import.meta.env.VITE_ORG_ID as string | undefined)?.trim();
+
 function buildAuthHeaders(token: string) {
   return {
     'Content-Type': 'application/json',
     Authorization: `Bearer ${token}`,
+    ...(ORG_ID_HEADER ? { 'X-Org-Id': ORG_ID_HEADER } : {}),
   };
 }
 
@@ -312,7 +315,7 @@ export default function StackBuilderPage({
   // Stale Run Fix Part 1: Bring in the context and navigate hook
   const { setRunId } = useRunContext();
   const navigate = useNavigate();
-  const orgId = (import.meta.env.VITE_ORG_ID as string | undefined) ?? 'demo-org';
+  const orgId = ORG_ID_HEADER ?? 'default';
 
   const setupState = useSetupState();
   const [catalog, setCatalog] = useState<WorkspaceCatalogResponse | null>(null);

@@ -117,15 +117,18 @@ def test_snapshot_signals_writes_primary_and_additional_rows(monkeypatch):
     assert additional["fired"] in (0, False)
     assert "bool_flag" not in {row["metric_name"] for row in rows}
 
-    assert len(event_calls) == 3
-    assert all(event["row_count_at_event"] == 3 for event in event_calls)
+    assert len(event_calls) == 1
+    assert event_calls[0]["row_count_at_event"] == 3
     assert {event["event_type"] for event in event_calls} == {"run.signal_snapshot"}
-    assert {event["payload"]["metric_key"] for event in event_calls} == {
-        "pack_task4::DET_FIRED::metric_value",
-        "pack_task4::DET_FIRED::extra_metric",
-        "pack_task4::DET_BELOW::metric_value",
+    assert event_calls[0]["payload"] == {
+        "org_id": "org_task4",
+        "run_id": "run_task4_main",
+        "pack_id": "pack_task4",
+        "signal_count": 3,
+        "detector_count": 2,
+        "fired_count": 1,
+        "below_threshold": 1,
     }
-    assert {event["payload"]["baseline"] for event in event_calls} == {None}
 
 
 def test_snapshot_signals_defaults_missing_signal_metrics(monkeypatch):

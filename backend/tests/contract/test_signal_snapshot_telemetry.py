@@ -5,7 +5,7 @@ import sys
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Optional, get_type_hints
+from typing import Any, get_type_hints
 
 from app import temporal
 from app.telemetry import (
@@ -56,13 +56,17 @@ def test_run_signal_snapshot_telemetry_contract():
     ]
     assert TELEMETRY_EVENT_REGISTRY["run.signal_snapshot"] is RunSignalSnapshotPayload
     assert get_type_hints(RunSignalSnapshotPayload) == {
-        "metric_key": str,
-        "value": float,
-        "baseline": Optional[float],
+        "org_id": str,
+        "run_id": str,
+        "pack_id": str,
+        "signal_count": int,
+        "detector_count": int,
+        "fired_count": int,
+        "below_threshold": int,
     }
 
 
-def test_snapshot_signals_emits_payload_per_signal_snapshot(monkeypatch):
+def test_snapshot_signals_emits_aggregate_payload_after_write(monkeypatch):
     events: list[tuple[str, dict[str, Any]]] = []
 
     monkeypatch.setattr(
@@ -89,25 +93,13 @@ def test_snapshot_signals_emits_payload_per_signal_snapshot(monkeypatch):
         (
             "run.signal_snapshot",
             {
-                "metric_key": "service_cloud::application_stall::metric_value",
-                "value": 21.0,
-                "baseline": None,
+                "org_id": "org_A",
+                "run_id": "run_001",
+                "pack_id": "service_cloud",
+                "signal_count": 3,
+                "detector_count": 1,
+                "fired_count": 1,
+                "below_threshold": 0,
             },
-        ),
-        (
-            "run.signal_snapshot",
-            {
-                "metric_key": "service_cloud::application_stall::stalled_count",
-                "value": 4.0,
-                "baseline": None,
-            },
-        ),
-        (
-            "run.signal_snapshot",
-            {
-                "metric_key": "service_cloud::application_stall::max_days_stalled",
-                "value": 31.5,
-                "baseline": None,
-            },
-        ),
+        )
     ]

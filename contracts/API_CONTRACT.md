@@ -1,6 +1,12 @@
 # AgentIQ — API_CONTRACT.md (EPIC E0)
-Version: v1.1 (Contract Freeze)
-Date: 2026-03-18
+Version: v1.2
+Date: 2026-06-08
+
+> v1.2 — Documented the LLM-enrichment endpoints and the `OppEnrichment` shape,
+> including the Track 3 Stage 1 temporal fields (`baseline_stddev`,
+> `baseline_window_days`, `current_value`, `recent_values`, `signal_key`,
+> `pack_id`) and the Stage 2 `entities` summary list. Mirrors
+> `src/types/enrichment.ts`. No previously documented shape changed.
 
 ## Purpose
 This contract is the **referee** between Frontend and Backend.
@@ -153,6 +159,69 @@ Request:
 { "decision": "APPROVED" }
 ```
 Response: updated `OpportunityCandidate`
+
+---
+
+### F2) LLM Enrichment + Temporal/Entity Context (Screens 4 & 6)
+
+#### GET /api/runs/{runId}/llm-enrichment
+Purpose: enrichment status + executive summary for a run.
+Response: `RunEnrichment` (`src/types/enrichment.ts`)
+- Returns `{ ...defaults, available: false }` (HTTP 200, **not** 404) when
+  enrichment has not been generated yet.
+
+#### GET /api/runs/{runId}/opportunities/{oppId}/enrichment
+Purpose: full enrichment for a single opportunity.
+Response: `OppEnrichment` (`src/types/enrichment.ts`)
+- Always returns a usable object — never 404 for *missing enrichment* (only for
+  an unknown `runId`/`oppId`). Missing-LLM fallback returns the same shape with
+  empty lists and the deterministic rationale surfaced as `aiSummary`.
+- All list fields are always present (empty list when unavailable) so the UI
+  never has to defensive-code around missing fields.
+
+`OppEnrichment` shape (must match the TS type exactly):
+```json
+{
+  "oppId": "opp_006",
+  "aiSummary": "",
+  "aiWhyBullets": [],
+  "aiRisks": [],
+  "aiSuggestedNextSteps": [],
+  "llmGenerated": false,
+  "llmModel": null,
+
+  "baseline_context": null,
+  "trend_direction": null,
+  "anomaly_score": null,
+  "is_anomalous": false,
+  "first_deviation": false,
+  "baseline_mean": null,
+  "baseline_stddev": null,
+  "baseline_window_days": null,
+  "run_count": null,
+  "current_value": null,
+  "recent_values": [],
+  "signal_key": null,
+  "pack_id": null,
+
+  "entities": [
+    {
+      "entity_id": "…",
+      "entity_type": "person",
+      "display_name": "…",
+      "source_system": "jira",
+      "resolution_confidence": 0.8,
+      "resolution_status": "resolved"
+    }
+  ]
+}
+```
+
+> Casing note: the temporal/entity fields use `snake_case` (e.g.
+> `baseline_stddev`, `recent_values`) — an intentional, documented exception to
+> the camelCase frontend convention so the backend JSON maps directly to the TS
+> type. `entities` items follow the `EntitySummary` shape and omit
+> `canonical_name` (internal normalisation artifact, never exposed).
 
 ---
 

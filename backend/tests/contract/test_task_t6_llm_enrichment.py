@@ -342,3 +342,122 @@ def test_exec_report_has_ai_executive_summary_field(client, enriched_run_id):
     assert "aiExecutiveSummary" in r.json(), (
         "aiExecutiveSummary missing from executive report"
     )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# T5 — AC9: EntitySummary in OppEnrichment (T3-S12-A Stage 2)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_opp_enrichment_entities_field_always_present(client, enriched_run_id, first_opp_id):
+    """AC9: OppEnrichment response always includes the 'entities' field."""
+    r = client.get(
+        f"/api/runs/{enriched_run_id}/opportunities/{first_opp_id}/enrichment",
+        headers=_auth(),
+    )
+    assert r.status_code == 200
+    data = r.json()
+    assert "entities" in data, "'entities' field missing from OppEnrichment response"
+    assert isinstance(data["entities"], list), "'entities' must be a list"
+
+
+def test_opp_enrichment_entity_summary_has_required_fields(client, enriched_run_id, first_opp_id):
+    """AC9: Each EntitySummary must include resolution_confidence and resolution_status."""
+    r = client.get(
+        f"/api/runs/{enriched_run_id}/opportunities/{first_opp_id}/enrichment",
+        headers=_auth(),
+    )
+    assert r.status_code == 200
+    entities = r.json().get("entities", [])
+
+    for entity in entities:
+        assert "entity_id" in entity, "EntitySummary missing 'entity_id'"
+        assert "entity_type" in entity, "EntitySummary missing 'entity_type'"
+        assert "display_name" in entity, "EntitySummary missing 'display_name'"
+        assert "source_system" in entity, "EntitySummary missing 'source_system'"
+        assert "resolution_confidence" in entity, "EntitySummary missing 'resolution_confidence'"
+        assert "resolution_status" in entity, "EntitySummary missing 'resolution_status'"
+        assert isinstance(entity["resolution_confidence"], float), (
+            "resolution_confidence must be a float"
+        )
+        assert entity["resolution_status"] in ("resolved", "ambiguous"), (
+            f"resolution_status must be 'resolved' or 'ambiguous', got: {entity['resolution_status']}"
+        )
+
+
+def test_opp_enrichment_entities_no_canonical_name_exposed(client, enriched_run_id, first_opp_id):
+    """AC9: canonical_name must never appear in EntitySummary — it is an internal field."""
+    r = client.get(
+        f"/api/runs/{enriched_run_id}/opportunities/{first_opp_id}/enrichment",
+        headers=_auth(),
+    )
+    assert r.status_code == 200
+    for entity in r.json().get("entities", []):
+        assert "canonical_name" not in entity, (
+            "canonical_name must not be exposed in EntitySummary (internal normalisation artifact)"
+        )
+
+
+def test_opp_enrichment_fallback_entities_field_present(client):
+    """AC9: The 'entities' field is present even on fallback (no LLM enrichment) responses."""
+    body = {
+        "connectedSources": [], "uploadedFiles": [],
+        "sampleWorkspaceEnabled": False,
+        "mode": "offline", "systems": ["salesforce"],
+    }
+    r = client.post("/api/runs/start", headers=_auth(), json=body)
+    assert r.status_code in (200, 201)
+    run_id = r.json().get("runId") or r.json().get("id")
+
+    opps_r = client.get(f"/api/runs/{run_id}/opportunities", headers=_auth())
+    if opps_r.status_code != 200 or not opps_r.json():
+        pytest.skip("No opportunities yet — run may not have started")
+
+    opp_id = opps_r.json()[0]["id"]
+    enrich_r = client.get(
+        f"/api/runs/{run_id}/opportunities/{opp_id}/enrichment",
+        headers=_auth(),
+    )
+    assert enrich_r.status_code == 200
+    data = enrich_r.json()
+    assert "entities" in data, "'entities' field missing from fallback OppEnrichment response"
+    assert isinstance(data["entities"], list), "'entities' must be a list even on fallback"
+
+
+def test_opp_enrichment_service_account_entities_filtered(client, enriched_run_id, first_opp_id):
+    """AC9 + Section 8: Entities with run_count < 3 must not appear in enrichment response.
+
+    The KV store may contain entities with run_count stored; the endpoint applies
+    the service-account filter before building EntitySummary objects.
+    This test injects a low-count entity into the run KV and verifies it is excluded.
+    """
+    import os
+    from app import db as app_db
+
+    # Read current entities from KV
+    current = app_db.run_kv_get("entities", enriched_run_id, []) or []
+
+    # Inject a service-account entity with run_count=1
+    injected = current + [{
+        "entity_id": "test-service-account-id",
+        "entity_type": "person",
+        "display_name": "System Admin",
+        "source_system": "salesforce",
+        "resolution_confidence": 0.8,
+        "resolution_status": "resolved",
+        "run_count": 1,
+    }]
+    app_db.run_kv_set("entities", enriched_run_id, injected)
+
+    try:
+        r = client.get(
+            f"/api/runs/{enriched_run_id}/opportunities/{first_opp_id}/enrichment",
+            headers=_auth(),
+        )
+        assert r.status_code == 200
+        entity_ids = [e["entity_id"] for e in r.json().get("entities", [])]
+        assert "test-service-account-id" not in entity_ids, (
+            "Service-account entity (run_count=1) must be filtered from enrichment response"
+        )
+    finally:
+        # Restore original KV state
+        app_db.run_kv_set("entities", enriched_run_id, current)

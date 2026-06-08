@@ -12,13 +12,13 @@ import { useRunContext } from '../context/RunContext';
 import { RunRequiredEmptyState } from '../components/common/RunRequiredEmptyState';
 import { fetchRunRoadmap } from '../api/runScopedS9S10Api';
 import type { PilotRoadmapModel } from '../types/pilotRoadmap';
-import { isRunNotFoundError, runScopedErrorMessage } from '../utils/apiErrors';
+import { runScopedErrorMessage } from '../utils/apiErrors';
 
 export default function PilotRoadmapPage() {
   const { select } = useAnalystReviewContext();
   const { push } = useToast();
   const nav = useNavigate();
-  const { runId, clearRunId } = useRunContext();
+  const { runId } = useRunContext();
   const { run, computing } = useDiscoveryRunContext();
   const runStatus = run?.status?.toLowerCase();
 
@@ -53,10 +53,7 @@ export default function PilotRoadmapPage() {
         if (!cancelled) setModel(data);
       } catch (e: any) {
         if (cancelled) return;
-        if (isRunNotFoundError(e)) {
-          clearRunId();
-          return;
-        }
+        setModel(null);
         setError(runScopedErrorMessage(e, 'Failed to load roadmap'));
       } finally {
         if (!cancelled) setLoading(false);
@@ -64,7 +61,7 @@ export default function PilotRoadmapPage() {
     })();
 
     return () => { cancelled = true; };
-  }, [runId, fetchCount, clearRunId]);
+  }, [runId, fetchCount]);
 
   useEffect(() => {
     if (!runId || !resultsPreparing || loading) return;
