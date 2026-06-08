@@ -67,7 +67,7 @@ describe("BaselineContextPanel", () => {
     );
     expect(
       screen.getByText(
-        "Baseline context will appear after 3 or more completed runs for this same Discovery Pack in your workspace."
+        "Baseline context will appear after 3 or more discovery runs."
       )
     ).toBeTruthy();
   });
@@ -136,6 +136,9 @@ describe("BaselineContextPanel", () => {
     );
     expect(
       screen.getByText("First deviation from a previously stable baseline")
+    ).toBeTruthy();
+    expect(
+      screen.getByText("First deviation from stable baseline")
     ).toBeTruthy();
   });
 

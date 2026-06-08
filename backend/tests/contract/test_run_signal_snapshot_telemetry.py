@@ -59,9 +59,13 @@ def test_run_signal_snapshot_event_is_registered():
 
 def test_run_signal_snapshot_payload_fields_match_track3_contract():
     assert _fields(RunSignalSnapshotPayload) == {
-        "metric_key",
-        "value",
-        "baseline",
+        "org_id",
+        "run_id",
+        "pack_id",
+        "signal_count",
+        "detector_count",
+        "fired_count",
+        "below_threshold",
     }
 
 
@@ -75,17 +79,22 @@ def test_record_event_accepts_signal_snapshot_payload(caplog):
         record_event(
             "run.signal_snapshot",
             {
-                "metric_key": "pack_tel::det_tel::metric_value",
-                "value": 2.0,
-                "baseline": None,
+                "org_id": "org_tel",
+                "run_id": "run_tel",
+                "pack_id": "pack_tel",
+                "signal_count": 2,
+                "detector_count": 1,
+                "fired_count": 1,
+                "below_threshold": 0,
             },
         )
 
     event = _logged_events(caplog)[0]
     assert event["event_type"] == "run.signal_snapshot"
-    assert event["metric_key"] == "pack_tel::det_tel::metric_value"
-    assert event["value"] == 2.0
-    assert event["baseline"] is None
+    assert event["signal_count"] == 2
+    assert event["detector_count"] == 1
+    assert event["fired_count"] == 1
+    assert event["below_threshold"] == 0
     assert "metric_value" not in event
     assert "raw_evidence" not in event
 
@@ -114,9 +123,13 @@ def test_record_event_failure_never_raises():
         record_event(
             "run.signal_snapshot",
             {
-                "metric_key": "pack_tel::det_tel::metric_value",
-                "value": 1.0,
-                "baseline": None,
+                "org_id": "org_tel",
+                "run_id": "run_tel",
+                "pack_id": "pack_tel",
+                "signal_count": 1,
+                "detector_count": 1,
+                "fired_count": 1,
+                "below_threshold": 0,
             },
         )
 
@@ -147,6 +160,10 @@ def test_snapshot_signals_emits_registered_telemetry_event_after_write(caplog):
 
     events = _logged_events(caplog)
     event = next(item for item in events if item["event_type"] == "run.signal_snapshot")
-    assert event["metric_key"] == "pack_task9::DET_TASK9::metric_value"
-    assert event["value"] == 4.0
-    assert event["baseline"] is None
+    assert event["org_id"] == "org_task9"
+    assert event["run_id"] == run_id
+    assert event["pack_id"] == "pack_task9"
+    assert event["signal_count"] == 1
+    assert event["detector_count"] == 1
+    assert event["fired_count"] == 1
+    assert event["below_threshold"] == 0

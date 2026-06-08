@@ -141,6 +141,25 @@ def _insert_signal_snapshots(snapshots: list[SignalSnapshot]) -> int:
         con.close()
 
 
+def _build_signal_snapshot_telemetry(
+    *,
+    org_id: str,
+    run_id: str,
+    pack_id: str,
+    snapshots: list[SignalSnapshot],
+    all_evaluated: list[DetectorEvaluation],
+) -> RunSignalSnapshotPayload:
+    return RunSignalSnapshotPayload(
+        org_id=org_id,
+        run_id=run_id,
+        pack_id=pack_id,
+        signal_count=len(snapshots),
+        detector_count=len(all_evaluated),
+        fired_count=sum(1 for evaluation in all_evaluated if evaluation.fired),
+        below_threshold=sum(1 for evaluation in all_evaluated if not evaluation.fired),
+    )
+
+
 def ensure_signal_snapshots_table() -> None:
     """Create the signal_snapshots table + indexes if they do not exist.
 
@@ -227,16 +246,17 @@ def snapshot_signals(
         logger.warning("Signal snapshot persistence failed (non-blocking): %s", exc)
         return None
 
-    for snapshot in snapshots:
-        payload = RunSignalSnapshotPayload(
-            metric_key=snapshot.signal_key,
-            value=snapshot.metric_value,
-            baseline=snapshot.baseline_mean,
-        )
-        try:
-            record_event("run.signal_snapshot", payload)
-        except Exception as exc:
-            logger.warning("Signal snapshot telemetry failed (non-blocking): %s", exc)
+    payload = _build_signal_snapshot_telemetry(
+        org_id=org_id,
+        run_id=run_id,
+        pack_id=pack_id,
+        snapshots=snapshots,
+        all_evaluated=all_evaluated,
+    )
+    try:
+        record_event("run.signal_snapshot", payload)
+    except Exception as exc:
+        logger.warning("Signal snapshot telemetry failed (non-blocking): %s", exc)
 
     return None
 

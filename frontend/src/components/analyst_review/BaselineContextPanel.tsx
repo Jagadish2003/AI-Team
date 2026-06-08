@@ -184,7 +184,7 @@ function subtitleFor(
   const pct = Math.abs(Math.round(change ?? 0));
 
   if (state === "insufficient") {
-    return "Baseline context will appear after 3 or more completed runs for this same Discovery Pack in your workspace.";
+    return "Baseline context will appear after 3 or more discovery runs.";
   }
   if (state === "first_deviation") {
     return "First deviation from a previously stable baseline";
@@ -242,7 +242,7 @@ function configFor(
         why:
           "Earlier runs were perfectly stable, so the baseline had no variation. This run changed for the first time, which makes it important even though an anomaly score cannot be calculated yet.",
         badges: [
-          { label: "First deviation", tone: "violet" },
+          { label: "First deviation from stable baseline", tone: "blue" },
           ...(runBadge ? [{ label: runBadge, tone: "neutral" as const }] : []),
         ],
         detailChips: [

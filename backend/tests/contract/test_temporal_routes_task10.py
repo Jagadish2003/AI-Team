@@ -171,6 +171,7 @@ def test_baseline_route_returns_task10_shape_with_insufficient_data():
     assert response.status_code == 200
     body = response.json()
     assert set(body) == {
+        "signal_key",
         "baseline_mean",
         "baseline_stddev",
         "baseline_window_days",
@@ -178,6 +179,7 @@ def test_baseline_route_returns_task10_shape_with_insufficient_data():
         "run_count",
         "insufficient_data",
     }
+    assert body["signal_key"] == f"pack::{detector_id}::metric_value"
     assert body["run_count"] == 2
     assert body["insufficient_data"] is True
 

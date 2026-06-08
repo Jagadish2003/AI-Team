@@ -61,16 +61,7 @@
  *   </div>
  */
 
-import React from 'react';
-import {
-  GitBranch,
-  Globe2,
-  ListChecks,
-  Settings,
-  ShieldCheck,
-  Shuffle,
-  Users,
-} from 'lucide-react';
+import type React from 'react';
 import { FocusCard as FocusCardType, FocusId } from '../../types/stack_builder';
 
 interface Props {
@@ -81,18 +72,17 @@ interface Props {
   tabIndex?: number;
 }
 
-const FOCUS_ICONS: Record<FocusId, React.ElementType> = {
-  member_customer_service: Users,
-  core_operations: Settings,
-  approvals_compliance: ShieldCheck,
-  cross_system_handoffs: Shuffle,
-  back_office_productivity: ListChecks,
-  engineering_change: GitBranch,
-  enterprise_wide: Globe2,
-};
-
 export default function FocusCard({ card, selected, onSelect, tabIndex = 0 }: Props) {
-  const Icon = FOCUS_ICONS[card.id] ?? Settings;
+  const iconClass = selected ? 'text-emerald-500' : 'text-muted';
+  const titleClass = selected ? 'text-emerald-500' : 'text-text';
+  const subtextClass = selected ? 'text-emerald-500/80' : 'text-muted';
+
+  function handleKeyDown(event: React.KeyboardEvent<HTMLButtonElement>) {
+    if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault();
+      onSelect(card.id);
+    }
+  }
 
   return (
     <button
@@ -101,42 +91,35 @@ export default function FocusCard({ card, selected, onSelect, tabIndex = 0 }: Pr
       aria-checked={selected}
       tabIndex={tabIndex}
       onClick={() => onSelect(card.id)}
+      onKeyDown={handleKeyDown}
       className={[
-        'w-full cursor-pointer rounded-lg border p-4 text-left transition-[border-color,background-color,box-shadow] duration-150',
-        'focus:outline-none focus-visible:ring-1 focus-visible:ring-accent/35',
-        card.wide ? 'md:col-span-2' : '',
+        'w-full cursor-pointer rounded-lg border p-4 text-left transition-colors duration-150',
+        'focus:outline-none focus:ring-2 focus:ring-emerald-500/50',
+        card.wide ? 'col-span-2' : '',
         selected
-          ? 'border-accent bg-accent/10'
-          : 'border-border bg-panel hover:border-accent/50 hover:bg-panel2',
+          ? 'border-emerald-500 bg-emerald-500/[0.08]'
+          : 'border-border bg-panel hover:border-emerald-500/40',
       ].filter(Boolean).join(' ')}
     >
       {card.wide ? (
         <div className="flex items-start gap-4">
-          <Icon size={20} strokeWidth={2.2} className={`mt-0.5 flex-shrink-0 ${selected ? 'text-accent' : 'text-muted'}`} aria-hidden="true" />
+          <i className={`${card.icon} mt-0.5 flex-shrink-0 ${iconClass}`} aria-hidden="true" />
           <div>
-            <div className={`text-sm font-medium mb-1 ${
-              selected ? 'text-text' : 'text-text'
-            }`}>
+            <div className={`mb-1 text-sm font-medium ${titleClass}`}>
               {card.title}
             </div>
-            <div className={`text-xs leading-relaxed ${
-              selected ? 'text-blue-100' : 'text-muted'
-            }`}>
+            <div className={`text-xs leading-relaxed ${subtextClass}`}>
               {card.subtext}
             </div>
           </div>
         </div>
       ) : (
         <div>
-          <Icon size={20} strokeWidth={2.2} className={`mb-2 flex-shrink-0 ${selected ? 'text-accent' : 'text-muted'}`} aria-hidden="true" />
-          <div className={`text-sm font-medium mb-1 ${
-            selected ? 'text-text' : 'text-text'
-          }`}>
+          <i className={`${card.icon} mb-2 block ${iconClass}`} aria-hidden="true" />
+          <div className={`mb-1 text-sm font-medium ${titleClass}`}>
             {card.title}
           </div>
-          <div className={`text-xs leading-relaxed ${
-            selected ? 'text-blue-100' : 'text-muted'
-          }`}>
+          <div className={`text-xs leading-relaxed ${subtextClass}`}>
             {card.subtext}
           </div>
         </div>

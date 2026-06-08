@@ -111,11 +111,15 @@ class ConnectorHealthPayload(TypedDict):
     check_duration_ms: int
 
 
-class RunSignalSnapshotPayload(TypedDict):
-    """T3-S10-A — one record per signal metric per run (locked schema)."""
-    metric_key: str
-    value: float
-    baseline: Optional[float]
+class RunSignalSnapshotPayload(TypedDict, total=False):
+    """T3-S10-A — aggregate signal snapshot write summary per run."""
+    org_id: NotRequired[str]
+    run_id: NotRequired[str]
+    pack_id: NotRequired[str]
+    signal_count: int
+    detector_count: int
+    fired_count: int
+    below_threshold: int
 
 
 RunSignalSnapshotEvent = RunSignalSnapshotPayload   # alias
