@@ -134,6 +134,6 @@ describe('T2-S12-A T6 Oracle/PostgreSQL scope picker wiring', () => {
 
     const saveBtn = screen.getByRole('button', { name: /save scope declaration/i });
     expect(saveBtn).toBeDisabled();
-    expect(saveBtn).toHaveAttribute('title', 'Analyst role required');
+    expect(saveBtn).toHaveAttribute('title', 'Analyst role required to save scope');
   });
 });
