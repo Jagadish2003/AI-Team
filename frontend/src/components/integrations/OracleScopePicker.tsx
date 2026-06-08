@@ -1,17 +1,31 @@
 /**
- * OracleScopePicker — T2-S12-A
+ * OracleScopePicker — T2-S12-A Task T4
  *
  * Rendered inside ConnectorDetailPanel when the selected connector is Oracle DB
  * and its status is 'connected'.
  *
- * Identical flow to SqlServerScopePicker with these differences:
- *   - Calls /api/db-connectors/oracle_db/schema and /oracle_db/scope
- *   - Oracle schema names are stored in UPPERCASE — displayed verbatim
- *   - Case-sensitivity tooltip informs users names are shown exactly as stored
+ * Behaviour (identical to SqlServerScopePicker except for connector_id and
+ * the Oracle case-sensitivity note):
+ *   - Loads available schemas/tables via GET /api/db-connectors/oracle_db/schema
+ *   - Pre-populates any previously saved scope via GET /api/db-connectors/oracle_db/scope
+ *   - Renders a checkbox tree: schema row (collapses/expands) → table rows
+ *   - Saves scope declaration via POST /api/db-connectors/oracle_db/scope
+ *   - Shows a toast on success; shows an inline error on failure
+ *   - All error states are local — a failure here never breaks the parent panel
  *
- * Role enforcement:
+ * Oracle case-sensitivity (AC18):
+ *   Oracle stores object names in UPPERCASE by default. ALL_COLUMNS returns
+ *   OWNER and TABLE_NAME in uppercase. Names are displayed exactly as returned —
+ *   never lowercased or normalised. The UI tooltip makes this explicit.
+ *
+ * Role enforcement (AC14):
  *   The POST save button is disabled with a tooltip when viewerOnly=true.
+ *   Viewer role can see the picker but cannot save changes.
  *   Wire the actual RBAC check when T1-S11 Task 2 lands.
+ *
+ * Props:
+ *   onSaved    — called after a successful save so the parent can refetch
+ *   viewerOnly — true blocks saves (Analyst+ required per T1-S11)
  */
 import React, { useCallback, useEffect, useState } from 'react';
 import { useToast } from '../common/Toast';
@@ -235,18 +249,13 @@ export default function OracleScopePicker({
         </div>
       </div>
 
-      <p className="text-xs text-muted mb-1 leading-relaxed">
-        Select schemas and tables AgentIQ may query. Selecting a schema without
-        expanding allows any table in that schema.
-      </p>
-
-      {/* Oracle case-sensitivity tooltip — AC18 */}
+      {/* AC18: Oracle case-sensitivity tooltip — exact required text */}
       <p
-        className="text-[11px] text-muted/70 mb-3 leading-relaxed italic"
+        className="text-xs text-muted mb-3 leading-relaxed"
         title="Oracle schema names are case-sensitive — shown exactly as stored in the database."
       >
         Oracle schema names are case-sensitive — shown exactly as stored in the
-        database.
+        database. Select schemas and tables AgentIQ may query.
       </p>
 
       {/* Schema → table tree */}
@@ -267,6 +276,7 @@ export default function OracleScopePicker({
                   type="button"
                   role="checkbox"
                   aria-checked={isSelected}
+                  aria-label={`Select schema ${schema}`}
                   onClick={() => toggleSchema(schema)}
                   className={[
                     'h-3.5 w-3.5 flex-shrink-0 rounded border flex items-center justify-center',
@@ -298,6 +308,7 @@ export default function OracleScopePicker({
                   <button
                     type="button"
                     aria-expanded={isExpanded}
+                    aria-label={`${isExpanded ? 'Collapse' : 'Expand'} ${schema}`}
                     onClick={() => toggleExpanded(schema)}
                     className="text-muted hover:text-text text-[10px] px-1 shrink-0"
                   >
@@ -311,7 +322,7 @@ export default function OracleScopePicker({
               {isExpanded && tables.length > 0 && (
                 <div className="border-t border-border bg-bg/30">
                   {tables.map((qualified) => {
-                    const tableName      = qualified.split('.')[1] ?? qualified;
+                    const tableName       = qualified.split('.')[1] ?? qualified;
                     const isTableSelected = selectedTables.has(qualified);
 
                     return (
@@ -320,6 +331,7 @@ export default function OracleScopePicker({
                         type="button"
                         role="checkbox"
                         aria-checked={isTableSelected}
+                        aria-label={`Select table ${tableName}`}
                         onClick={() => toggleTable(schema, qualified)}
                         className="w-full flex items-center gap-2 px-5 py-1.5 text-left hover:bg-panel2"
                       >
@@ -366,7 +378,7 @@ export default function OracleScopePicker({
         })}
       </div>
 
-      {/* Save button */}
+      {/* Save button — disabled for Viewer role (AC14) */}
       <button
         type="button"
         onClick={handleSave}
