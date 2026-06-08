@@ -23,9 +23,12 @@ CPQ pack slot is reserved but empty — Sprint 6 adds ncino_cpq.
 from __future__ import annotations
 
 import json
+import logging
 import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+
+logger = logging.getLogger(__name__)
 
 # ── Pack registry ─────────────────────────────────────────────────────────────
 
@@ -125,6 +128,29 @@ PACK_REGISTRY: Dict[str, Dict[str, Any]] = {
         ),
     },
 
+    "github_engineering": {
+        "packId":        "github_engineering",
+        "packName":      "GitHub Engineering Signals",
+        "domain":        "github_engineering",
+        "pack_domain":   "github_engineering",
+        "detectors": [
+            "discovery.detectors.github_pr_bottleneck",
+            "discovery.detectors.github_commit_concentration",
+            "discovery.detectors.github_stale_branches",
+        ],
+        "ui_labels_path": str(_PACKS_DIR / "github_engineering_ui_labels.json"),
+        "llm_context": (
+            "GitHub engineering signal analysis. "
+            "Focus on PR review bottlenecks, commit concentration risk, "
+            "and stale branch accumulation. "
+            "Use engineering operations language. "
+            "Cross-reference with Jira open issues where available for "
+            "confidence elevation. "
+            "IMPORTANT: agent surfaces signals to engineering leads only. "
+            "No automated merge approvals, branch deletions, or code changes."
+        ),
+    },
+
     # CPQ pack slot — reserved for Sprint 6
 
     # "ncino_cpq": {
@@ -148,9 +174,18 @@ def get_pack(pack_id: Optional[str] = None) -> Dict[str, Any]:
 
     This is the single entry point for pack selection — replaces all
     temporary is_ncino_pack conditionals in AIQ-NC-4 and AIQ-NC-5.
+
+    An unrecognized non-None pack_id logs a WARNING so misconfiguration is
+    visible in logs rather than silently producing wrong detector results.
     """
     if pack_id and pack_id in PACK_REGISTRY:
         return PACK_REGISTRY[pack_id]
+    if pack_id is not None:
+        logger.warning(
+            "get_pack: unrecognized pack_id %r — falling back to '%s'. "
+            "Valid pack IDs: %s",
+            pack_id, DEFAULT_PACK, sorted(PACK_REGISTRY),
+        )
     return PACK_REGISTRY[DEFAULT_PACK]
 
 
@@ -211,3 +246,12 @@ def is_sqlserver_opsignal_pack(pack_id: Optional[str] = None) -> bool:
     pattern as is_ncino_pack() and is_strs_benefits_pack().
     """
     return get_pack(pack_id)["domain"] == "sqlserver_opsignal"
+
+
+def is_github_engineering_pack(pack_id: Optional[str] = None) -> bool:
+    """Return True when the active pack is the GitHub Engineering Signal pack.
+
+    Used in runner.py and scorer for pack routing.  Follows the identical
+    pattern as is_ncino_pack() and is_sqlserver_opsignal_pack().
+    """
+    return get_pack(pack_id)["domain"] == "github_engineering"
