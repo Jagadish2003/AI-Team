@@ -266,15 +266,23 @@ register_event_type("temporal.enrichment_completed", TemporalEnrichmentCompleted
 # ---------------------------------------------------------------------------
 
 def record_event(event_type: str, payload: Optional[dict] = None) -> None:
-    """Fire-and-forget telemetry write.  Never raises under any circumstance.
+    """Fire-and-forget telemetry write.
 
     Signature is locked: record_event(event_type, payload).
     Track 3 (T3-S10-A) calls this with 2 positional args.
 
+    Raises:
+        ValueError: if event_type is not in EVENT_REGISTRY.
+
     The function:
     1. Logs the event via logger.info so tests can observe it via caplog.
-    2. Persists to telemetry_events DB table (best-effort; never raises).
+    2. Persists to telemetry_events DB table (best-effort; never raises for DB errors).
     """
+    if event_type not in EVENT_REGISTRY:
+        raise ValueError(
+            f"unregistered event type: '{event_type}'. "
+            f"Add it to REGISTERED_EVENT_TYPES before calling record_event()."
+        )
     try:
         if payload is None:
             payload = {}
