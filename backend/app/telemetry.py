@@ -245,7 +245,13 @@ def register_event_type(event_type: str, schema: Type[Any]) -> None:
 
 # Register Sprint 10 initial set
 register_event_type("run.started", RunStartedEvent)
-register_event_type("run.completed", RunCompletedEvent)
+# AT-209 audit: run.completed call sites send pack_id/system_count (see
+# discovery/runner.py), which match RunCompletedPayload. The legacy
+# RunCompletedEvent required a connectors_processed field that no call site
+# emits, so the payload never matched its registered schema. Bind to the
+# documented RunCompletedPayload (Task 5A §1b). RunCompletedEvent is retained
+# in __all__ for backward-compatible imports.
+register_event_type("run.completed", RunCompletedPayload)
 register_event_type("connector.registered", ConnectorRegisteredEvent)
 register_event_type("connector.health_check", ConnectorHealthPayload)
 register_event_type("db.query_executed", DbQueryExecutedEvent)
