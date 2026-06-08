@@ -65,6 +65,21 @@ const CONNECTION_HEALTH_LABELS: Record<string, string[]> = {
   ],
 };
 
+function isViewerOnlyScopeUser(): boolean {
+  const role = (import.meta.env.VITE_DEV_JWT_ROLE as string | undefined)
+    ?.trim()
+    .toLowerCase();
+  if (role) return role === 'viewer';
+
+  const token =
+    (import.meta.env.VITE_DEV_JWT as string | undefined) ??
+    'dev-token-change-me';
+  const viewerToken =
+    (import.meta.env.VITE_VIEWER_JWT as string | undefined) ?? 'viewer-token';
+
+  return token === viewerToken;
+}
+
 function ConnectionHealthSection({ connector }: { connector: Connector }) {
   if (connector.status !== 'connected') return null;
 
@@ -125,6 +140,7 @@ export default function ConnectorDetailPanel({
 
   const isConnected = connector.status === 'connected';
   const isConfigured = connector.configured;
+  const viewerOnlyScope = isViewerOnlyScopeUser();
 
   return (
     <div className="rounded-xl border border-border bg-panel p-5">
@@ -192,14 +208,14 @@ export default function ConnectorDetailPanel({
       {/* T2-S12-A Task T6: Oracle DB scope declaration (AC12) */}
       {connector.id === 'oracle_db' && isConnected && (
         <div className="mt-4 border-t border-border pt-4">
-          <OracleScopePicker />
+          <OracleScopePicker viewerOnly={viewerOnlyScope} />
         </div>
       )}
 
       {/* T2-S12-A Task T6: PostgreSQL scope declaration (AC13) */}
       {connector.id === 'postgresql' && isConnected && (
         <div className="mt-4 border-t border-border pt-4">
-          <PostgreSQLScopePicker />
+          <PostgreSQLScopePicker viewerOnly={viewerOnlyScope} />
         </div>
       )}
 
