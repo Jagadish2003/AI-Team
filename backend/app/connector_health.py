@@ -587,18 +587,21 @@ def _check_and_record(name: str, org_id: str) -> None:
         duration_ms  = int((time.monotonic() - t0) * 1000)
         connector_id = _CONNECTOR_IDS.get(name, name.lower().replace(" ", "_"))
 
+        # Locked signature is record_event(event_type, payload) (T3-S10-A);
+        # org_id/source/connector_id travel inside the payload, where
+        # record_event() extracts them. Passing them as keyword arguments
+        # raises TypeError and silently drops the event (AT-209).
         record_event(
-            org_id=org_id,
-            event_type="connector.health_check",
-            source="connector",
-            connector_id=connector_id,
-            payload={
+            "connector.health_check",
+            {
                 "status":               result.to_telemetry_status(),
                 "connector_id":         connector_id,
                 # token_expiry_seconds not available from these env-based connectors;
                 # set to None.  OAuth-based connectors in future sprints will populate this.
                 "token_expiry_seconds": None,
                 "check_duration_ms":    duration_ms,
+                "org_id":               org_id,
+                "source":               "connector",
             },
         )
 

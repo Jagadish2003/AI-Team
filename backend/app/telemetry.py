@@ -2,7 +2,7 @@
 
 Public surface
 --------------
-  record_event(event_type, payload)  — fire-and-forget write. Never raises.
+  record_event(event_type, payload)  — fire-and-forget write for registered events.
   get_telemetry_range(...)           — time-range read scoped to org_id.
   register_event_type(name, schema)  — register a TypedDict schema for an event type.
 
@@ -243,9 +243,26 @@ def register_event_type(event_type: str, schema: Type[Any]) -> None:
     EVENT_REGISTRY[event_type] = schema
 
 
+# ---------------------------------------------------------------------------
+# Named aliases — used by AT-211 contract tests and ValueError message copy.
+# REGISTERED_EVENT_TYPES: set-like view of every registered event_type name.
+# EVENT_PAYLOAD_TYPES:    mapping of event_type → TypedDict schema class.
+# Both are live views of EVENT_REGISTRY; no separate sync required.
+# ---------------------------------------------------------------------------
+
+REGISTERED_EVENT_TYPES = EVENT_REGISTRY   # alias: keys are the registered names
+EVENT_PAYLOAD_TYPES = EVENT_REGISTRY      # alias: values are the TypedDict schemas
+
+
 # Register Sprint 10 initial set
 register_event_type("run.started", RunStartedEvent)
-register_event_type("run.completed", RunCompletedEvent)
+# AT-209 audit: run.completed call sites send pack_id/system_count (see
+# discovery/runner.py), which match RunCompletedPayload. The legacy
+# RunCompletedEvent required a connectors_processed field that no call site
+# emits, so the payload never matched its registered schema. Bind to the
+# documented RunCompletedPayload (Task 5A §1b). RunCompletedEvent is retained
+# in __all__ for backward-compatible imports.
+register_event_type("run.completed", RunCompletedPayload)
 register_event_type("connector.registered", ConnectorRegisteredEvent)
 register_event_type("connector.health_check", ConnectorHealthPayload)
 register_event_type("db.query_executed", DbQueryExecutedEvent)
@@ -260,15 +277,23 @@ register_event_type("temporal.enrichment_completed", TemporalEnrichmentCompleted
 # ---------------------------------------------------------------------------
 
 def record_event(event_type: str, payload: Optional[dict] = None) -> None:
-    """Fire-and-forget telemetry write.  Never raises under any circumstance.
+    """Fire-and-forget telemetry write.
 
     Signature is locked: record_event(event_type, payload).
     Track 3 (T3-S10-A) calls this with 2 positional args.
 
+    Raises:
+        ValueError: if event_type is not in EVENT_REGISTRY.
+
     The function:
     1. Logs the event via logger.info so tests can observe it via caplog.
-    2. Persists to telemetry_events DB table (best-effort; never raises).
+    2. Persists to telemetry_events DB table (best-effort; never raises for DB errors).
     """
+    if event_type not in EVENT_REGISTRY:
+        raise ValueError(
+            f"unregistered event type: '{event_type}'. "
+            f"Add it to REGISTERED_EVENT_TYPES before calling record_event()."
+        )
     try:
         if payload is None:
             payload = {}
@@ -393,8 +418,10 @@ __all__ = [
     "DBIngestorCompletedPayload",   # Sprint 11 — SQL Server ingestor payload
     "DbIngestorCompletedEvent",     # T1-S10-C legacy — kept for backward compat
     "DbQueryExecutedEvent",
+    "EVENT_PAYLOAD_TYPES",          # AT-211 alias: event_type → TypedDict schema
     "EVENT_REGISTRY",
     "EVENT_TYPE_REGISTRY",          # alias for T1-S10-C unit tests
+    "REGISTERED_EVENT_TYPES",       # AT-211 alias: set-like view of registered names
     "RunCompletedEvent",
     "RunSignalSnapshotEvent",
     "RunSignalSnapshotPayload",
