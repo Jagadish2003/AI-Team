@@ -1,16 +1,24 @@
 /**
- * PostgreSQLScopePicker — T2-S12-A
+ * PostgreSQLScopePicker — T2-S12-A Task T5
  *
- * Rendered inside ConnectorDetailPanel when the selected connector is PostgreSQL
- * and its status is 'connected'.
+ * Rendered inside ConnectorDetailPanel when the selected connector is
+ * PostgreSQL and its status is 'connected'.
  *
- * Identical flow to SqlServerScopePicker with these differences:
- *   - Calls /api/db-connectors/postgresql/schema and /postgresql/scope
- *   - PostgreSQL schema names are typically lowercase (displayed verbatim)
+ * What it does:
+ *   - Loads available schemas/tables via GET /api/db-connectors/postgresql/schema
+ *   - Pre-populates any previously saved scope via GET /api/db-connectors/postgresql/scope
+ *   - Renders a checkbox tree: schema row (collapses/expands) → table rows
+ *   - Saves scope declaration via POST /api/db-connectors/postgresql/scope
+ *   - Shows a toast on success; shows an inline error on failure
+ *   - All error states are local — a failure here never breaks the parent panel
  *
  * Role enforcement:
  *   The POST save button is disabled with a tooltip when viewerOnly=true.
- *   Wire the actual RBAC check when T1-S11 Task 2 lands.
+ *   Analyst role is required to save scope per T1-S11 Task 2.
+ *
+ * Props:
+ *   onSaved    — called after a successful save so the parent can refetch
+ *   viewerOnly — true blocks saves (Analyst+ required per T1-S11)
  */
 import React, { useCallback, useEffect, useState } from 'react';
 import { useToast } from '../common/Toast';
@@ -39,7 +47,6 @@ interface Props {
   /** Called after a successful scope save so the parent can refetch. */
   onSaved?: () => void;
   /**
-   * Stub for T1-S11 Task 2 RBAC.
    * true  → user is Viewer, POST is blocked with tooltip.
    * false → user is Analyst+, save allowed.
    */
@@ -242,9 +249,9 @@ export default function PostgreSQLScopePicker({
       {/* Schema → table tree */}
       <div role="group" aria-label="PostgreSQL scope" className="space-y-1">
         {discovery.schemas.map((schema) => {
-          const tables     = tablesForSchema(schema);
-          const isSelected = selectedSchemas.has(schema);
-          const isExpanded = expanded.has(schema);
+          const tables        = tablesForSchema(schema);
+          const isSelected    = selectedSchemas.has(schema);
+          const isExpanded    = expanded.has(schema);
 
           return (
             <div
@@ -301,7 +308,7 @@ export default function PostgreSQLScopePicker({
               {isExpanded && tables.length > 0 && (
                 <div className="border-t border-border bg-bg/30">
                   {tables.map((qualified) => {
-                    const tableName      = qualified.split('.')[1] ?? qualified;
+                    const tableName       = qualified.split('.')[1] ?? qualified;
                     const isTableSelected = selectedTables.has(qualified);
 
                     return (
@@ -361,7 +368,7 @@ export default function PostgreSQLScopePicker({
         type="button"
         onClick={handleSave}
         disabled={saving || viewerOnly}
-        title={viewerOnly ? 'Analyst role required' : undefined}
+        title={viewerOnly ? 'Analyst role required to save scope' : undefined}
         className={[
           'mt-3 w-full rounded-lg px-4 py-2 text-sm font-medium',
           'border border-accent/20 bg-accent/5 text-accent transition-colors',
