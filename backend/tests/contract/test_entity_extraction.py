@@ -33,6 +33,11 @@ Additional T3 coverage:
 import os
 import sqlite3
 
+# Single source of truth for the service-account display threshold. Importing it
+# here (instead of hardcoding 3) keeps the tests in lockstep with the producer
+# in entity_extractor.py — Issue #6.
+from database.models.entities import ENTITY_MIN_RUN_COUNT
+
 
 def _get_db_path() -> str:
     return os.environ["DB_PATH"]
@@ -1140,16 +1145,17 @@ class TestServiceAccountFiltering:
         assert "System Bot" not in names, "Entity with run_count=2 must remain filtered"
 
     def test_service_account_present_in_kv_after_third_run(self):
-        """Entity with run_count=3 must appear in the KV (passes filter)."""
+        """Entity that reaches run_count == ENTITY_MIN_RUN_COUNT appears in the KV."""
         org = "t8-svc-3a"
-        for i in range(1, 4):
+        for i in range(1, ENTITY_MIN_RUN_COUNT + 1):
             _extract(org_id=org, run_id=f"run-svc-3a-r{i}",
                      ingestor_data={"jira": {"issue_metrics": {
                          "issues": [{"key": "S-3", "assignee": {"displayName": "Power User"}}]}}})
-        summaries = self._kv_entities("run-svc-3a-r3")
+        summaries = self._kv_entities(f"run-svc-3a-r{ENTITY_MIN_RUN_COUNT}")
         names = [s.get("display_name") for s in summaries]
         assert "Power User" in names, (
-            "Entity with run_count=3 must appear in KV after third run (service account threshold crossed)"
+            "Entity that reaches the run-count threshold must appear in KV "
+            "(service account threshold crossed)"
         )
 
     def test_service_account_entity_retained_in_db_despite_kv_filter(self):
@@ -1199,12 +1205,12 @@ class TestEntitySummaryShape:
         return parsed if isinstance(parsed, list) else []
 
     def _run_three_times(self, org: str, base_run: str, display_name: str) -> list:
-        """Run extract three times to get past the service account threshold."""
-        for i in range(1, 4):
+        """Run extract until past the service-account threshold, return final KV."""
+        for i in range(1, ENTITY_MIN_RUN_COUNT + 1):
             _extract(org_id=org, run_id=f"{base_run}-r{i}",
                      ingestor_data={"jira": {"issue_metrics": {
                          "issues": [{"key": f"SH-{i}", "assignee": {"displayName": display_name}}]}}})
-        return self._kv_entities(f"{base_run}-r3")
+        return self._kv_entities(f"{base_run}-r{ENTITY_MIN_RUN_COUNT}")
 
     def test_entity_summary_has_all_required_keys(self):
         summaries = self._run_three_times("t8-shape-a", "run-shape-a", "Shape Tester")
@@ -1552,3 +1558,256 @@ class TestAC11TelemetryRegistration:
         from typing import get_type_hints
         from app.telemetry import EntityExtractionCompletedPayload
         assert "entity_count" in get_type_hints(EntityExtractionCompletedPayload)
+
+
+# =============================================================================
+# Review fixes — regression coverage for Issues #1, #16, #17, #10
+# =============================================================================
+
+
+class TestEntitiesVisibleAcrossRuns:
+    """Issue #1 / #15: an entity first seen in an earlier run must remain visible
+    when querying a later run.
+
+    The previous route filtered on ``last_seen_run_id = run_id``, so an entity
+    last seen in run N-1 silently vanished from run N's response even though it
+    is a real, still-existing org entity. The route now bounds visibility by the
+    run in which each entity was *first* seen (ordered via the runs table rowid),
+    so older entities persist across re-runs.
+    """
+
+    def test_entity_last_seen_in_prior_run_is_visible_in_later_run(self):
+        client = _route_client()
+        org = f"t8-carry-{_uuid.uuid4().hex[:6]}"
+        run_prev = f"run-carry-prev-{_uuid.uuid4().hex[:6]}"
+        run_curr = f"run-carry-curr-{_uuid.uuid4().hex[:6]}"
+
+        # Insert the prior run BEFORE the current run so rowid order reflects
+        # chronological order (prior is older than current).
+        _insert_run(run_prev, org)
+        _insert_run(run_curr, org)
+
+        # Entity first AND last seen only in the prior run (run_count=1). Under
+        # the old `last_seen_run_id = run_id` filter this would be invisible when
+        # querying the current run — the exact data-loss bug being regression-tested.
+        _seed_entity_row(
+            org, "carryover person", "Carryover Person",
+            source_system="jira", run_id=run_prev,
+        )
+
+        headers = _analyst_headers(org)
+        r = client.get(f"/api/runs/{run_curr}/entities", headers=headers)
+        assert r.status_code == 200, r.text
+        names = {e["display_name"] for e in r.json()}
+        assert "Carryover Person" in names, (
+            "Entity first seen in a prior run must still be visible when querying "
+            "a later run (Issue #1 regression)"
+        )
+
+    def test_entity_first_seen_in_future_run_not_visible_in_earlier_run(self):
+        """The inverse guard: an entity first seen in a *later* run must not leak
+        into an *earlier* run's view (no showing of future data)."""
+        client = _route_client()
+        org = f"t8-future-{_uuid.uuid4().hex[:6]}"
+        run_early = f"run-future-early-{_uuid.uuid4().hex[:6]}"
+        run_late = f"run-future-late-{_uuid.uuid4().hex[:6]}"
+
+        _insert_run(run_early, org)
+        _insert_run(run_late, org)
+
+        # Entity first seen only in the later run.
+        _seed_entity_row(
+            org, "future person", "Future Person",
+            source_system="jira", run_id=run_late,
+        )
+
+        headers = _analyst_headers(org)
+        r = client.get(f"/api/runs/{run_early}/entities", headers=headers)
+        assert r.status_code == 200, r.text
+        names = {e["display_name"] for e in r.json()}
+        assert "Future Person" not in names, (
+            "Entity first seen in a later run must not appear in an earlier run's view"
+        )
+
+
+class TestConfidenceUpgradeOnBetterSource:
+    """Issue #2 / #16: when a later extraction provides a source_record_id for an
+    entity that was previously name-based, resolution_confidence must upgrade
+    from 0.8 to 1.0 (never downgrade), and the source_record_id is backfilled."""
+
+    def _person(self, org: str, canonical: str) -> dict | None:
+        with sqlite3.connect(_get_db_path()) as conn:
+            conn.row_factory = sqlite3.Row
+            row = conn.execute(
+                "SELECT * FROM entities WHERE org_id=? AND canonical_name=? AND entity_type='person'",
+                (org, canonical),
+            ).fetchone()
+            return dict(row) if row else None
+
+    def test_name_based_then_source_id_upgrades_confidence(self):
+        org = f"t8-upgrade-{_uuid.uuid4().hex[:6]}"
+        # Run 1: Jira assignee — name-based, confidence 0.8, no source_record_id.
+        _extract(
+            org_id=org, run_id="run-up-1",
+            ingestor_data={"jira": {"issue_metrics": {
+                "issues": [{"key": "UP-1", "assignee": {"displayName": "Upgrade Target"}}]}}},
+        )
+        before = self._person(org, "upgrade target")
+        assert before is not None
+        assert before["resolution_confidence"] == 0.8
+        assert before["source_record_id"] is None
+
+        # Run 2: same person arrives via a Salesforce OwnerId — carries a
+        # source_record_id, so the incoming confidence is 1.0.
+        _extract(
+            org_id=org, run_id="run-up-2",
+            ingestor_data={"salesforce": {
+                "approval_processes": [{"approver_ids": ["Upgrade Target"]}]}},
+        )
+        after = self._person(org, "upgrade target")
+        assert after is not None
+        assert after["id"] == before["id"], "Must resolve to the same entity row, not a duplicate"
+        assert after["resolution_confidence"] == 1.0, (
+            f"Confidence must upgrade 0.8 -> 1.0 when a source_record_id arrives, "
+            f"got {after['resolution_confidence']}"
+        )
+        assert after["source_record_id"] == "Upgrade Target", "source_record_id must be backfilled"
+        assert after["run_count"] == 2, "Second sighting must increment run_count"
+
+    def test_lower_confidence_does_not_downgrade(self):
+        """A later name-based sighting (0.8) must not lower an entity already at 1.0."""
+        org = f"t8-nodown-{_uuid.uuid4().hex[:6]}"
+        # Run 1: source_record_id present → 1.0.
+        _extract(
+            org_id=org, run_id="run-nd-1",
+            ingestor_data={"salesforce": {
+                "approval_processes": [{"approver_ids": ["No Downgrade"]}]}},
+        )
+        # Run 2: name-based sighting of the same canonical name (0.8 incoming).
+        _extract(
+            org_id=org, run_id="run-nd-2",
+            ingestor_data={"jira": {"issue_metrics": {
+                "issues": [{"key": "ND-1", "assignee": {"displayName": "No Downgrade"}}]}}},
+        )
+        after = self._person(org, "no downgrade")
+        assert after is not None
+        assert after["resolution_confidence"] == 1.0, (
+            "Confidence must never be downgraded by a lower-quality later signal"
+        )
+
+
+class TestCanonicalNameNormalization:
+    """Issue #4 / #17: names differing only by case or whitespace must resolve to
+    a single entity row, not create duplicates."""
+
+    def _persons(self, org: str, canonical: str) -> list:
+        with sqlite3.connect(_get_db_path()) as conn:
+            conn.row_factory = sqlite3.Row
+            return [dict(r) for r in conn.execute(
+                "SELECT * FROM entities WHERE org_id=? AND canonical_name=? AND entity_type='person'",
+                (org, canonical),
+            ).fetchall()]
+
+    def test_case_variants_resolve_to_single_entity(self):
+        org = f"t8-case-{_uuid.uuid4().hex[:6]}"
+        _extract(
+            org_id=org, run_id="run-case-1",
+            ingestor_data={"jira": {"issue_metrics": {
+                "issues": [{"key": "C-1", "assignee": {"displayName": "Alice Smith"}}]}}},
+        )
+        _extract(
+            org_id=org, run_id="run-case-2",
+            ingestor_data={"jira": {"issue_metrics": {
+                "issues": [{"key": "C-2", "assignee": {"displayName": "alice smith"}}]}}},
+        )
+        rows = self._persons(org, "alice smith")
+        assert len(rows) == 1, (
+            f"'Alice Smith' and 'alice smith' must resolve to ONE entity, got {len(rows)} rows"
+        )
+        assert rows[0]["run_count"] == 2, "Both sightings must increment the same entity"
+
+    def test_internal_whitespace_collapses_to_single_entity(self):
+        org = f"t8-ws-{_uuid.uuid4().hex[:6]}"
+        _extract(
+            org_id=org, run_id="run-ws-1",
+            ingestor_data={"jira": {"issue_metrics": {
+                "issues": [{"key": "W-1", "assignee": {"displayName": "Bob  Jones"}}]}}},
+        )
+        _extract(
+            org_id=org, run_id="run-ws-2",
+            ingestor_data={"jira": {"issue_metrics": {
+                "issues": [{"key": "W-2", "assignee": {"displayName": " Bob Jones "}}]}}},
+        )
+        rows = self._persons(org, "bob jones")
+        assert len(rows) == 1, (
+            f"Whitespace variants must resolve to ONE entity, got {len(rows)} rows"
+        )
+
+
+class TestSchemaModelMigrationParity:
+    """Issue #10: the entities schema is single-sourced from
+    database.models.entities.ALL_ENTITIES_DDL (the migration imports and runs it).
+    This guards against drift between the model DDL and the migration-built table
+    in the live (migration-applied) test database."""
+
+    def _schema_of(self, conn: sqlite3.Connection) -> tuple:
+        cols = {
+            r[1]: (r[2], r[3], r[5])  # name -> (type, notnull, pk)
+            for r in conn.execute("PRAGMA table_info(entities)").fetchall()
+        }
+        idx = sorted(
+            r[1] for r in conn.execute("PRAGMA index_list(entities)").fetchall()
+            if r[3] != "pk"
+        )
+        return cols, idx
+
+    def test_model_ddl_matches_migration_applied_schema(self):
+        from database.models.entities import ALL_ENTITIES_DDL
+
+        # Schema as built by the Alembic migration in the contract-test DB.
+        with sqlite3.connect(_get_db_path()) as live:
+            live_cols, live_idx = self._schema_of(live)
+
+        # Schema as built by applying the model DDL to a fresh in-memory DB.
+        mem = sqlite3.connect(":memory:")
+        try:
+            for ddl in ALL_ENTITIES_DDL:
+                mem.execute(ddl)
+            mem_cols, mem_idx = self._schema_of(mem)
+        finally:
+            mem.close()
+
+        assert live_cols == mem_cols, (
+            "entities columns differ between the migration and the model DDL — schema drift"
+        )
+        assert live_idx == mem_idx, (
+            "entities indexes differ between the migration and the model DDL — schema drift"
+        )
+
+    def test_check_constraints_present_in_schema(self):
+        """entity_type and resolution_status must carry CHECK constraints (Issue #19)."""
+        with sqlite3.connect(_get_db_path()) as conn:
+            sql = conn.execute(
+                "SELECT sql FROM sqlite_master WHERE type='table' AND name='entities'"
+            ).fetchone()[0].lower()
+        assert "check" in sql, "entities table must define CHECK constraints"
+        assert "entity_type in" in sql, "entity_type must have a CHECK (IN ...) constraint"
+        assert "resolution_status in" in sql, "resolution_status must have a CHECK (IN ...) constraint"
+
+    def test_invalid_entity_type_rejected_by_check_constraint(self):
+        """A row with an invalid entity_type must be rejected at the DB layer."""
+        from datetime import datetime as _dt, timezone as _tzc
+        now = _dt.now(_tzc.utc).isoformat()
+        with sqlite3.connect(_get_db_path()) as conn:
+            with pytest.raises(sqlite3.IntegrityError):
+                conn.execute(
+                    """INSERT INTO entities (
+                        id, org_id, entity_type, canonical_name, display_name,
+                        source_system, source_record_id, resolution_confidence,
+                        resolution_status, first_seen_run_id, last_seen_run_id,
+                        run_count, metadata, created_at, updated_at
+                    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    (str(_uuid.uuid4()), "chk-org", "not_a_real_type", "x", "X",
+                     "jira", None, 0.8, "resolved", "r1", "r1", 1, None, now, now),
+                )
+                conn.commit()

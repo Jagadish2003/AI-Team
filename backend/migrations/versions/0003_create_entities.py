@@ -12,6 +12,8 @@ Revision ID: 0003
 Revises: 0002
 Create Date: 2026-06-06
 """
+import os
+import sys
 from typing import Sequence, Union
 
 from alembic import op
@@ -22,42 +24,27 @@ branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
 
-def upgrade() -> None:
-    op.execute("""
-        CREATE TABLE IF NOT EXISTS entities (
-            id                   VARCHAR(36)   NOT NULL PRIMARY KEY,
-            org_id               VARCHAR(64)   NOT NULL,
-            entity_type          VARCHAR(32)   NOT NULL,
-            canonical_name       VARCHAR(256)  NOT NULL,
-            display_name         VARCHAR(256)  NOT NULL,
-            source_system        VARCHAR(64)   NOT NULL,
-            source_record_id     VARCHAR(256),
-            resolution_confidence FLOAT        NOT NULL,
-            resolution_status    VARCHAR(32)   NOT NULL,
-            first_seen_run_id    VARCHAR(64)   NOT NULL,
-            last_seen_run_id     VARCHAR(64)   NOT NULL,
-            run_count            INTEGER       NOT NULL,
-            metadata             TEXT,
-            created_at           TIMESTAMP     NOT NULL,
-            updated_at           TIMESTAMP     NOT NULL
-        )
-    """)
+def _all_entities_ddl() -> "tuple[str, ...]":
+    """Return the locked entities DDL from the single source of truth.
 
-    # Resolution lookup — canonical name matching is the primary resolution path
-    op.execute("""
-        CREATE INDEX IF NOT EXISTS idx_entities_org_canonical
-            ON entities (org_id, entity_type, canonical_name)
-    """)
-    # Run-scoped entity queries (e.g. entities seen in a given run)
-    op.execute("""
-        CREATE INDEX IF NOT EXISTS idx_entities_org_run
-            ON entities (org_id, last_seen_run_id)
-    """)
-    # Suppress low-frequency/service-account entities during enrichment
-    op.execute("""
-        CREATE INDEX IF NOT EXISTS idx_entities_org_run_count
-            ON entities (org_id, run_count)
-    """)
+    The schema lives in ``database/models/entities.py`` (``ALL_ENTITIES_DDL``)
+    and is imported here so the migration (the CI gate) and the runtime
+    ``ensure_entities_table()`` helper can never drift apart — both execute the
+    exact same CREATE TABLE / CREATE INDEX statements. ``env.py`` declares this
+    project "raw-SQL migrations only"; importing a tuple of raw SQL strings does
+    not change that — there is still no ORM metadata involved.
+    """
+    backend_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+    if backend_dir not in sys.path:
+        sys.path.insert(0, backend_dir)
+    from database.models.entities import ALL_ENTITIES_DDL
+
+    return ALL_ENTITIES_DDL
+
+
+def upgrade() -> None:
+    for ddl in _all_entities_ddl():
+        op.execute(ddl)
 
 
 def downgrade() -> None:

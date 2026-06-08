@@ -417,6 +417,12 @@ def run(
     )
 
     try:
+        # Entity extraction is synchronous and DB-safe in this context: every
+        # resolve_or_create_entity() opens its own short-lived raw sqlite3
+        # connection via db.connect(), commits, and closes it (see
+        # entity_resolution._connect). There is no SQLAlchemy session or
+        # thread-local state to leak across an async boundary — unlike the
+        # GitHub ingest above, this call needs no event-loop isolation.
         from app.entity_extractor import extract_entities
         extract_entities(
             org_id=org_id,

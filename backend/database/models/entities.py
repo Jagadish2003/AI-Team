@@ -19,17 +19,36 @@ from uuid import UUID, uuid4
 ENTITY_TYPES = frozenset({"person", "team", "project", "object", "process", "system"})
 RESOLUTION_STATUSES = frozenset({"resolved", "ambiguous", "unresolved"})
 
-CREATE_ENTITIES_TABLE = """
+# Service-account / low-frequency display threshold. Entities seen in fewer than
+# this many runs are treated as service accounts and filtered from the
+# OppEnrichment evidence trace (retained in the DB for graph completeness).
+# Single source of truth — imported by entity_extractor.py and the test suite so
+# the value can never drift between the producer and its tests.
+ENTITY_MIN_RUN_COUNT = 3
+
+# Maximum stored length for free-text name columns (matches the VARCHAR(256)
+# schema). Long ServiceNow group names / Salesforce approval chains are
+# truncated to this before persistence so a silent DB truncation or constraint
+# error can never occur. See _truncate() in entity_resolution.py.
+ENTITY_NAME_MAX_LEN = 256
+
+# CHECK-constraint value lists are derived from the frozensets above so the
+# schema and the in-Python validation can never disagree. Sorted for a stable,
+# deterministic DDL string (important for the migration/model drift test).
+_ENTITY_TYPE_CHECK = ", ".join(f"'{t}'" for t in sorted(ENTITY_TYPES))
+_RESOLUTION_STATUS_CHECK = ", ".join(f"'{s}'" for s in sorted(RESOLUTION_STATUSES))
+
+CREATE_ENTITIES_TABLE = f"""
     CREATE TABLE IF NOT EXISTS entities (
         id                    VARCHAR(36)   NOT NULL PRIMARY KEY,
         org_id                VARCHAR(64)   NOT NULL,
-        entity_type           VARCHAR(32)   NOT NULL,
+        entity_type           VARCHAR(32)   NOT NULL CHECK (entity_type IN ({_ENTITY_TYPE_CHECK})),
         canonical_name        VARCHAR(256)  NOT NULL,
         display_name          VARCHAR(256)  NOT NULL,
         source_system         VARCHAR(64)   NOT NULL,
         source_record_id      VARCHAR(256),
         resolution_confidence FLOAT         NOT NULL,
-        resolution_status     VARCHAR(32)   NOT NULL,
+        resolution_status     VARCHAR(32)   NOT NULL CHECK (resolution_status IN ({_RESOLUTION_STATUS_CHECK})),
         first_seen_run_id     VARCHAR(64)   NOT NULL,
         last_seen_run_id      VARCHAR(64)   NOT NULL,
         run_count             INTEGER       NOT NULL,
