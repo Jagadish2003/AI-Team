@@ -79,6 +79,7 @@ describe('OracleScopePicker', () => {
 
   afterEach(() => {
     cleanup();
+    vi.unstubAllEnvs();
     vi.restoreAllMocks();
   });
 
@@ -391,6 +392,38 @@ describe('OracleScopePicker', () => {
     await waitFor(() => {
       expect(screen.getByText('Oracle DB scope')).toBeInTheDocument();
     });
+  });
+
+  it('AC14: ConnectorDetailPanel passes viewerOnly to OracleScopePicker for viewer users', async () => {
+    vi.stubEnv('VITE_DEV_JWT_ROLE', 'viewer');
+    const { default: ConnectorDetailPanel } = await import(
+      '../components/integrations/ConnectorDetailPanel'
+    );
+
+    const oracleConnector = {
+      id: 'oracle_db',
+      name: 'Oracle DB',
+      status: 'connected' as const,
+      configured: true,
+      category: 'Database',
+      tier: 'recommended' as const,
+      reads: ['ServiceTickets'],
+      lastSynced: '1 hour ago',
+      metrics: [],
+      signalStrength: 80,
+    };
+
+    render(
+      <ConnectorDetailPanel connector={oracleConnector} onConfigure={vi.fn()} />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText('Oracle DB scope')).toBeInTheDocument();
+    });
+
+    const saveBtn = screen.getByRole('button', { name: /save scope declaration/i });
+    expect(saveBtn).toBeDisabled();
+    expect(saveBtn).toHaveAttribute('title', 'Analyst role required');
   });
 
   it('AC12: ConnectorDetailPanel does NOT render OracleScopePicker when connector is disconnected', async () => {
