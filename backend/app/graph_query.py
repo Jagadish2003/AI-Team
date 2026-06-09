@@ -10,9 +10,24 @@ T5 deliverables:
   select_relationships(org_id, run_id)       — flag-aware selector used by the
                                                OppEnrichment population step.
 
-All queries are scoped to org_id (cross-org isolation) and to the run via
-last_seen_run_id — the run pipeline re-confirms every current edge each run, so
-last_seen_run_id = run_id identifies the edges belonging to that run's graph.
+T8 deliverable:
+  get_entity_relationships(org_id, entity_id, inferred=False)
+    — single-hop entity-scoped query: all edges touching a specific entity.
+      inferred=False (default) returns only directly observed edges.
+      inferred=True returns all edges (observed + inferred).
+      The default is architecturally intentional: T3-S14-A's recursive CTE
+      graph queries call this with the default so the traversal is built on
+      solid observed foundations. T3-S15-A passes inferred=True only when
+      INFERRED_RELATIONSHIPS_ENABLED is active. Any caller that omits the
+      parameter safely gets observed edges only.
+
+T5 queries are scoped to org_id (cross-org isolation) and to the run via
+last_seen_run_id — the run pipeline re-confirms every current edge each run,
+so last_seen_run_id = run_id identifies the edges belonging to that run's graph.
+
+T8 query is entity-scoped, not run-scoped: it returns edges across all runs
+that involve the specified entity. This is intentional — graph traversal must
+see the full history of confirmed edges, not just the current run window.
 
 The flag check lives in select_relationships(), i.e. at population time — never
 at query time. Inferred edges are always stored; the flag only decides what is
@@ -130,3 +145,77 @@ def select_relationships(org_id: str, run_id: str) -> List[RelationshipSummary]:
     if inferred_relationships_enabled():
         return get_all_relationships(org_id, run_id)
     return get_observed_relationships(org_id, run_id)
+
+
+# Entity-scoped SQL: returns all edges where the entity appears as either
+# endpoint, across all runs. Separate template from _SELECT_EDGES because:
+# (a) filter is on entity_id + org_id rather than last_seen_run_id, and
+# (b) ORDER BY is the same deterministic ordering so callers get stable results.
+_SELECT_ENTITY_EDGES = """
+    SELECT
+        er.relationship_type AS relationship_type,
+        er.inferred          AS inferred,
+        er.confidence        AS confidence,
+        ef.display_name      AS from_entity_name,
+        ef.entity_type       AS from_entity_type,
+        et.display_name      AS to_entity_name,
+        et.entity_type       AS to_entity_type
+    FROM entity_relationships er
+    JOIN entities ef ON ef.id = er.from_entity_id AND ef.org_id = er.org_id
+    JOIN entities et ON et.id = er.to_entity_id   AND et.org_id = er.org_id
+    WHERE er.org_id = ?
+      AND (er.from_entity_id = ? OR er.to_entity_id = ?)
+      {inferred_filter}
+    ORDER BY er.inferred ASC, er.relationship_type ASC,
+             ef.display_name ASC, et.display_name ASC
+"""
+
+
+def get_entity_relationships(
+    org_id: str,
+    entity_id: str,
+    inferred: bool = False,
+) -> List[RelationshipSummary]:
+    """Return all edges for a specific entity (single-hop lookup).
+
+    Queries edges where from_entity_id=entity_id OR to_entity_id=entity_id
+    within the given org_id, across all runs.
+
+    inferred=False (default): returns only directly observed edges (inferred=0).
+      T3-S14-A recursive CTE queries call with this default — the traversal is
+      built on solid observed foundations, not co-firing hypotheses.
+    inferred=True: returns all edges including inferred ones.
+      T3-S15-A LLM context builder passes inferred=True only when
+      INFERRED_RELATIONSHIPS_ENABLED is active.
+
+    The inferred=False default is architecturally intentional. Any caller that
+    does not explicitly pass inferred=True gets observed edges only — preventing
+    inferred hypotheses from accidentally entering graph traversal or LLM prompts.
+
+    Cross-org isolation: the entity JOIN is scoped by org_id on both sides,
+    so an entity_id that happens to exist in another org cannot produce a match.
+    """
+    inferred_filter = "" if inferred else "AND er.inferred = 0"
+    sql = _SELECT_ENTITY_EDGES.format(inferred_filter=inferred_filter)
+
+    conn = db.connect()
+    try:
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(sql, (org_id, entity_id, entity_id)).fetchall()
+    finally:
+        conn.close()
+
+    summaries: List[RelationshipSummary] = []
+    for row in rows:
+        summaries.append(
+            RelationshipSummary(
+                from_entity_name=row["from_entity_name"],
+                from_entity_type=row["from_entity_type"],
+                relationship_type=row["relationship_type"],
+                to_entity_name=row["to_entity_name"],
+                to_entity_type=row["to_entity_type"],
+                inferred=bool(row["inferred"]),
+                confidence=float(row["confidence"]),
+            )
+        )
+    return summaries
