@@ -1,6 +1,6 @@
-"""Contract tests for T3-S13-A T1 — entity_relationships table.
+﻿"""Contract tests for T3-S13-A — entity_relationships table and upsert.
 
-AC1 coverage:
+T1 / AC1 coverage:
   - entity_relationships table exists with all 12 columns.
   - inferred and confidence are NOT NULL (load-bearing for T3-S14-A, T3-S15-A).
   - Three required indexes: idx_er_org_from, idx_er_org_to, idx_er_org_type.
@@ -9,9 +9,22 @@ AC1 coverage:
   - Rows can be inserted and queried by org_id, from_entity_id,
     to_entity_id, and inferred flag.
 
-AC8 coverage:
-  - Cross-org isolation: entity_relationships for org_A are never
-    returned in queries scoped to org_B.
+T2 / AC7 coverage:
+  - upsert_relationship() called twice with the same natural key
+    (org_id, from_entity_id, to_entity_id, relationship_type) produces
+    exactly one row with run_count=2. Never creates duplicates.
+  - first_seen_run_id is set only on creation; never changed on update.
+  - last_seen_run_id is updated to the most recent run_id on every call.
+  - confidence and inferred are set only on creation; never changed on update.
+  - evidence is updated to the most recent run's value on update.
+  - Calling N times on the same key yields run_count=N, one row only.
+  - upsert on a new key always creates a fresh row with run_count=1.
+
+T2 / AC8 coverage (upsert-layer isolation):
+  - upsert_relationship() for org_A never matches or modifies a row
+    belonging to org_B, even when entity UUIDs are identical.
+  - Same (from_id, to_id, type) in two different orgs creates two
+    independent rows with independent run counts.
 """
 import os
 import sqlite3
@@ -26,6 +39,7 @@ from database.models.entity_relationships import (
     EntityRelationship,
 )
 from database.models.entities import ALL_ENTITIES_DDL, Entity
+from app.relationship_mapper import upsert_relationship
 
 
 def _get_db_path() -> str:
@@ -497,3 +511,353 @@ class TestEntityRelationshipDataclass:
 
     def test_five_relationship_types_defined(self):
         assert RELATIONSHIP_TYPES == {"owns", "member_of", "escalates_to", "depends_on", "routes_to"}
+
+
+# ---------------------------------------------------------------------------
+# T2 — upsert_relationship() tests (AC7, AC8)
+# ---------------------------------------------------------------------------
+
+class TestUpsertRelationshipAC7:
+    """AC7: upsert_relationship() deduplication and run_count accuracy."""
+
+    def _query_rows(self, org_id: str, from_id: str, to_id: str, rtype: str) -> list[dict]:
+        with sqlite3.connect(_get_db_path()) as conn:
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute(
+                """
+                SELECT * FROM entity_relationships
+                WHERE org_id = ? AND from_entity_id = ?
+                  AND to_entity_id = ? AND relationship_type = ?
+                """,
+                (org_id, from_id, to_id, rtype),
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    def test_first_call_creates_row_with_run_count_1(self):
+        org = f"org-upsert-{uuid4().hex[:8]}"
+        from_id = str(uuid4())
+        to_id = str(uuid4())
+
+        rel = upsert_relationship(
+            org_id=org,
+            from_entity_id=from_id,
+            to_entity_id=to_id,
+            relationship_type="owns",
+            confidence=OBSERVED_CONFIDENCE,
+            inferred=False,
+            run_id="run-001",
+            evidence={"field": "OwnerId"},
+        )
+
+        rows = self._query_rows(org, from_id, to_id, "owns")
+        assert len(rows) == 1, "Expected exactly one row after first upsert"
+        assert rows[0]["run_count"] == 1
+        assert rel.run_count == 1
+
+    def test_second_call_same_key_yields_run_count_2_one_row(self):
+        """AC7 core: two calls on the same natural key → one row, run_count=2."""
+        org = f"org-dup-{uuid4().hex[:8]}"
+        from_id = str(uuid4())
+        to_id = str(uuid4())
+
+        upsert_relationship(
+            org_id=org,
+            from_entity_id=from_id,
+            to_entity_id=to_id,
+            relationship_type="owns",
+            confidence=OBSERVED_CONFIDENCE,
+            inferred=False,
+            run_id="run-001",
+        )
+        rel2 = upsert_relationship(
+            org_id=org,
+            from_entity_id=from_id,
+            to_entity_id=to_id,
+            relationship_type="owns",
+            confidence=OBSERVED_CONFIDENCE,
+            inferred=False,
+            run_id="run-002",
+        )
+
+        rows = self._query_rows(org, from_id, to_id, "owns")
+        assert len(rows) == 1, f"Expected 1 row, got {len(rows)} — duplicate created"
+        assert rows[0]["run_count"] == 2
+        assert rel2.run_count == 2
+
+    def test_n_calls_yields_run_count_n(self):
+        org = f"org-n-{uuid4().hex[:8]}"
+        from_id = str(uuid4())
+        to_id = str(uuid4())
+        n = 5
+
+        for i in range(n):
+            upsert_relationship(
+                org_id=org,
+                from_entity_id=from_id,
+                to_entity_id=to_id,
+                relationship_type="member_of",
+                confidence=OBSERVED_CONFIDENCE,
+                inferred=False,
+                run_id=f"run-{i:03d}",
+            )
+
+        rows = self._query_rows(org, from_id, to_id, "member_of")
+        assert len(rows) == 1
+        assert rows[0]["run_count"] == n
+
+    def test_first_seen_run_id_never_changes_on_update(self):
+        org = f"org-fsri-{uuid4().hex[:8]}"
+        from_id = str(uuid4())
+        to_id = str(uuid4())
+
+        upsert_relationship(
+            org_id=org, from_entity_id=from_id, to_entity_id=to_id,
+            relationship_type="owns", confidence=OBSERVED_CONFIDENCE,
+            inferred=False, run_id="run-FIRST",
+        )
+        upsert_relationship(
+            org_id=org, from_entity_id=from_id, to_entity_id=to_id,
+            relationship_type="owns", confidence=OBSERVED_CONFIDENCE,
+            inferred=False, run_id="run-SECOND",
+        )
+        upsert_relationship(
+            org_id=org, from_entity_id=from_id, to_entity_id=to_id,
+            relationship_type="owns", confidence=OBSERVED_CONFIDENCE,
+            inferred=False, run_id="run-THIRD",
+        )
+
+        rows = self._query_rows(org, from_id, to_id, "owns")
+        assert rows[0]["first_seen_run_id"] == "run-FIRST", (
+            "first_seen_run_id must not change after creation"
+        )
+
+    def test_last_seen_run_id_updated_on_each_call(self):
+        org = f"org-lsri-{uuid4().hex[:8]}"
+        from_id = str(uuid4())
+        to_id = str(uuid4())
+
+        upsert_relationship(
+            org_id=org, from_entity_id=from_id, to_entity_id=to_id,
+            relationship_type="escalates_to", confidence=OBSERVED_CONFIDENCE,
+            inferred=False, run_id="run-A",
+        )
+        rows_after_1 = self._query_rows(org, from_id, to_id, "escalates_to")
+        assert rows_after_1[0]["last_seen_run_id"] == "run-A"
+
+        upsert_relationship(
+            org_id=org, from_entity_id=from_id, to_entity_id=to_id,
+            relationship_type="escalates_to", confidence=OBSERVED_CONFIDENCE,
+            inferred=False, run_id="run-B",
+        )
+        rows_after_2 = self._query_rows(org, from_id, to_id, "escalates_to")
+        assert rows_after_2[0]["last_seen_run_id"] == "run-B"
+
+    def test_confidence_immutable_on_update(self):
+        """confidence set at creation must never change, even if caller passes different value."""
+        org = f"org-conf-{uuid4().hex[:8]}"
+        from_id = str(uuid4())
+        to_id = str(uuid4())
+
+        upsert_relationship(
+            org_id=org, from_entity_id=from_id, to_entity_id=to_id,
+            relationship_type="depends_on", confidence=OBSERVED_CONFIDENCE,
+            inferred=False, run_id="run-001",
+        )
+        # Second call passes a different confidence — must be ignored.
+        upsert_relationship(
+            org_id=org, from_entity_id=from_id, to_entity_id=to_id,
+            relationship_type="depends_on", confidence=INFERRED_CONFIDENCE,
+            inferred=True, run_id="run-002",
+        )
+
+        rows = self._query_rows(org, from_id, to_id, "depends_on")
+        assert float(rows[0]["confidence"]) == OBSERVED_CONFIDENCE, (
+            "confidence must not change on update"
+        )
+
+    def test_inferred_immutable_on_update(self):
+        """inferred set at creation must never change."""
+        org = f"org-inf-imm-{uuid4().hex[:8]}"
+        from_id = str(uuid4())
+        to_id = str(uuid4())
+
+        upsert_relationship(
+            org_id=org, from_entity_id=from_id, to_entity_id=to_id,
+            relationship_type="routes_to", confidence=INFERRED_CONFIDENCE,
+            inferred=True, run_id="run-001",
+        )
+        # Second call passes inferred=False — must be ignored.
+        upsert_relationship(
+            org_id=org, from_entity_id=from_id, to_entity_id=to_id,
+            relationship_type="routes_to", confidence=OBSERVED_CONFIDENCE,
+            inferred=False, run_id="run-002",
+        )
+
+        rows = self._query_rows(org, from_id, to_id, "routes_to")
+        assert int(rows[0]["inferred"]) == 1, "inferred must not change on update"
+
+    def test_evidence_updated_to_most_recent_on_update(self):
+        org = f"org-ev-upd-{uuid4().hex[:8]}"
+        from_id = str(uuid4())
+        to_id = str(uuid4())
+
+        upsert_relationship(
+            org_id=org, from_entity_id=from_id, to_entity_id=to_id,
+            relationship_type="owns", confidence=OBSERVED_CONFIDENCE,
+            inferred=False, run_id="run-001",
+            evidence={"field": "OwnerId", "source": "salesforce"},
+        )
+        upsert_relationship(
+            org_id=org, from_entity_id=from_id, to_entity_id=to_id,
+            relationship_type="owns", confidence=OBSERVED_CONFIDENCE,
+            inferred=False, run_id="run-002",
+            evidence={"field": "OwnerId", "source": "ncino", "note": "updated"},
+        )
+
+        rows = self._query_rows(org, from_id, to_id, "owns")
+        import json
+        ev = json.loads(rows[0]["evidence"])
+        assert ev["source"] == "ncino", "evidence must be updated to most recent run"
+
+    def test_different_relationship_types_same_entities_are_separate_rows(self):
+        """Relationship type is part of the natural key — different types are independent rows."""
+        org = f"org-diff-type-{uuid4().hex[:8]}"
+        from_id = str(uuid4())
+        to_id = str(uuid4())
+
+        upsert_relationship(
+            org_id=org, from_entity_id=from_id, to_entity_id=to_id,
+            relationship_type="owns", confidence=OBSERVED_CONFIDENCE,
+            inferred=False, run_id="run-001",
+        )
+        upsert_relationship(
+            org_id=org, from_entity_id=from_id, to_entity_id=to_id,
+            relationship_type="member_of", confidence=OBSERVED_CONFIDENCE,
+            inferred=False, run_id="run-001",
+        )
+
+        with sqlite3.connect(_get_db_path()) as conn:
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute(
+                "SELECT * FROM entity_relationships WHERE org_id = ? AND from_entity_id = ? AND to_entity_id = ?",
+                (org, from_id, to_id),
+            ).fetchall()
+
+        assert len(rows) == 2
+        types = {r["relationship_type"] for r in rows}
+        assert types == {"owns", "member_of"}
+
+    def test_returns_entity_relationship_object(self):
+        org = f"org-ret-{uuid4().hex[:8]}"
+        rel = upsert_relationship(
+            org_id=org,
+            from_entity_id=str(uuid4()),
+            to_entity_id=str(uuid4()),
+            relationship_type="owns",
+            confidence=OBSERVED_CONFIDENCE,
+            inferred=False,
+            run_id="run-001",
+        )
+        assert isinstance(rel, EntityRelationship)
+        assert rel.org_id == org
+        assert rel.relationship_type == "owns"
+        assert rel.run_count == 1
+
+
+class TestUpsertRelationshipAC8CrossOrg:
+    """AC8 (upsert layer): upsert for org_A must never match a row owned by org_B."""
+
+    def test_same_entity_ids_different_orgs_create_independent_rows(self):
+        """Two orgs with identical entity UUIDs must not share edge rows."""
+        org_a = f"org-a-upsert-{uuid4().hex[:8]}"
+        org_b = f"org-b-upsert-{uuid4().hex[:8]}"
+        # Use deliberately identical entity IDs to force a collision if isolation breaks.
+        from_id = str(uuid4())
+        to_id = str(uuid4())
+
+        rel_a = upsert_relationship(
+            org_id=org_a, from_entity_id=from_id, to_entity_id=to_id,
+            relationship_type="owns", confidence=OBSERVED_CONFIDENCE,
+            inferred=False, run_id="run-001",
+        )
+        rel_b = upsert_relationship(
+            org_id=org_b, from_entity_id=from_id, to_entity_id=to_id,
+            relationship_type="owns", confidence=OBSERVED_CONFIDENCE,
+            inferred=False, run_id="run-001",
+        )
+
+        # Each org has exactly one row; they are distinct rows.
+        assert rel_a.id != rel_b.id
+        assert rel_a.org_id == org_a
+        assert rel_b.org_id == org_b
+
+    def test_upsert_in_org_b_does_not_increment_org_a_run_count(self):
+        """Upserting in org_B must not touch org_A's run_count."""
+        org_a = f"org-a-cnt-{uuid4().hex[:8]}"
+        org_b = f"org-b-cnt-{uuid4().hex[:8]}"
+        from_id = str(uuid4())
+        to_id = str(uuid4())
+
+        upsert_relationship(
+            org_id=org_a, from_entity_id=from_id, to_entity_id=to_id,
+            relationship_type="owns", confidence=OBSERVED_CONFIDENCE,
+            inferred=False, run_id="run-001",
+        )
+        # Three upserts in org_B with the same entity IDs.
+        for i in range(3):
+            upsert_relationship(
+                org_id=org_b, from_entity_id=from_id, to_entity_id=to_id,
+                relationship_type="owns", confidence=OBSERVED_CONFIDENCE,
+                inferred=False, run_id=f"run-{i:03d}",
+            )
+
+        with sqlite3.connect(_get_db_path()) as conn:
+            conn.row_factory = sqlite3.Row
+            row_a = conn.execute(
+                """SELECT run_count FROM entity_relationships
+                   WHERE org_id = ? AND from_entity_id = ? AND to_entity_id = ? AND relationship_type = ?""",
+                (org_a, from_id, to_id, "owns"),
+            ).fetchone()
+            row_b = conn.execute(
+                """SELECT run_count FROM entity_relationships
+                   WHERE org_id = ? AND from_entity_id = ? AND to_entity_id = ? AND relationship_type = ?""",
+                (org_b, from_id, to_id, "owns"),
+            ).fetchone()
+
+        assert row_a["run_count"] == 1, "org_A run_count must not be affected by org_B upserts"
+        assert row_b["run_count"] == 3
+
+    def test_upsert_lookup_scoped_to_org_id(self):
+        """The existence check in upsert must use org_id — never cross-org."""
+        org_a = f"org-a-scope-{uuid4().hex[:8]}"
+        org_b = f"org-b-scope-{uuid4().hex[:8]}"
+        from_id = str(uuid4())
+        to_id = str(uuid4())
+
+        # Insert a row for org_B first.
+        upsert_relationship(
+            org_id=org_b, from_entity_id=from_id, to_entity_id=to_id,
+            relationship_type="member_of", confidence=OBSERVED_CONFIDENCE,
+            inferred=False, run_id="run-001",
+        )
+        # Upsert for org_A with the same entity IDs must create a NEW row,
+        # not update org_B's row.
+        rel_a = upsert_relationship(
+            org_id=org_a, from_entity_id=from_id, to_entity_id=to_id,
+            relationship_type="member_of", confidence=OBSERVED_CONFIDENCE,
+            inferred=False, run_id="run-001",
+        )
+
+        assert rel_a.run_count == 1, (
+            "upsert for org_A must create a new row, not match org_B's row"
+        )
+
+        # org_B's row must also still have run_count=1 (untouched).
+        with sqlite3.connect(_get_db_path()) as conn:
+            conn.row_factory = sqlite3.Row
+            row_b = conn.execute(
+                """SELECT run_count FROM entity_relationships
+                   WHERE org_id = ? AND from_entity_id = ? AND to_entity_id = ? AND relationship_type = ?""",
+                (org_b, from_id, to_id, "member_of"),
+            ).fetchone()
+        assert row_b["run_count"] == 1
