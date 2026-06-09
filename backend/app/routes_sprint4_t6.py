@@ -99,6 +99,22 @@ class OppEnrichment(BaseModel):
     # observed + inferred when the flag is on. default_factory=list keeps the
     # field present (empty) for fallback paths and runs without a graph.
     relationships:        List[RelationshipSummary] = Field(default_factory=list)
+    # ENT-3 / T3-S15-A — LLM enrichment enterprise hardening (Section 5).
+    # Graph grounding (from the T1 prompt builder against the ENT-4 graph):
+    llm_grounded:             bool = False
+    graph_entity_count:       int = 0          # total entities in the run's graph
+    graph_entity_count_shown: int = 0          # entities shown to the model (<= 15)
+    graph_truncated:          bool = False      # True when the graph was capped
+    # Hallucination guard outcomes (from the T3 pipeline integration):
+    hallucination_removals:   List[str] = Field(default_factory=list)  # drop reason codes
+    hallucination_rewrites:   int = 0           # rule-based rewrites
+    hallucination_llm_rewrites: int = 0         # second-pass LLM rewrites
+    # Preliminary quality gate (from T4). Default True = analyst review required
+    # until all three gates pass.
+    preliminary:              bool = True
+    preliminary_reason:       Optional[str] = None
+    # Corroboration label carried through from ENT-2.
+    corroboration_label:      Optional[str] = None
 
 
 class RunEnrichment(BaseModel):
@@ -463,6 +479,17 @@ def register_sprint4_t6_routes(app) -> None:
             pack_id=temporal.get("pack_id"),
             entities=entity_summaries,
             relationships=relationship_summaries,
+            # ENT-3 / T3-S15-A — graph grounding, guard outcomes, quality gate.
+            llm_grounded=opp_data.get("llm_grounded", False),
+            graph_entity_count=opp_data.get("graph_entity_count", 0),
+            graph_entity_count_shown=opp_data.get("graph_entity_count_shown", 0),
+            graph_truncated=opp_data.get("graph_truncated", False),
+            hallucination_removals=opp_data.get("hallucination_removals", []) or [],
+            hallucination_rewrites=opp_data.get("hallucination_rewrites", 0),
+            hallucination_llm_rewrites=opp_data.get("hallucination_llm_rewrites", 0),
+            preliminary=opp_data.get("preliminary", True),
+            preliminary_reason=opp_data.get("preliminary_reason"),
+            corroboration_label=opp_data.get("corroboration_label"),
         )
 
     @app.get(

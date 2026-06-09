@@ -54,6 +54,24 @@ export interface OppEnrichment {
   // unless INFERRED_RELATIONSHIPS_ENABLED is set on the backend, in which case
   // inferred edges (inferred=true) are also included.
   relationships: RelationshipSummary[];
+  // ENT-3 / T3-S15-A — LLM enrichment enterprise hardening (snake_case to match
+  // the backend JSON directly, like the temporal/entity fields above).
+  // Graph grounding: whether the first pass ran against the ENT-4 graph, and
+  // the entity counts behind the 15-entity cap.
+  llm_grounded: boolean;
+  graph_entity_count: number;
+  graph_entity_count_shown: number;
+  graph_truncated: boolean;
+  // Hallucination guard outcomes for this opportunity.
+  hallucination_removals: string[];
+  hallucination_rewrites: number;
+  hallucination_llm_rewrites: number;
+  // Preliminary quality gate: when true the evidence trace shows an
+  // "Analyst review required" banner with preliminary_reason.
+  preliminary: boolean;
+  preliminary_reason: string | null;
+  // Corroboration label carried through from ENT-2.
+  corroboration_label: string | null;
 }
 
 export interface RunEnrichment {

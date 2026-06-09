@@ -199,6 +199,128 @@ Return a JSON object with exactly these four fields. No preamble, no markdown �
 }}"""
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# ENT-3 / T3-S15-A — graph-grounded first-pass prompt (Section 2)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def build_grounded_opp_prompt(
+    signal_ctx: Dict[str, Any],
+    graph_context: "Any",
+    pack_llm_context: str,
+    org_name: str,
+) -> str:
+    """Assemble the four-section graph-grounded opportunity prompt (Section 2).
+
+    Pure function of (signal context, graph context, pack context, org name) —
+    given identical inputs it returns a byte-identical prompt, which is what
+    makes the first pass deterministic (AC1). The instruction block forbids
+    inventing names and requires each ``aiWhyBullets`` entry to be tagged
+    ``[OBSERVED]`` or ``[INFERRED: X]`` so the frontend (T6) can render the
+    OBSERVED/INFERRED pills.
+    """
+    observed = graph_context.observed_summary or "No directly observed entities for this finding."
+    truncation_note = (graph_context.truncation_note or "").strip()
+
+    return f"""You are analysing an operational finding for {org_name}.
+Your output appears on an executive dashboard reviewed by operations leaders.
+Be specific. Reference only the names and systems listed in the context below.
+Do not invent names, teams, or systems not present in the context.
+
+=== SIGNAL CONTEXT ===
+Finding: {signal_ctx.get("detector_display_name", "")}
+Current value: {signal_ctx.get("metric_value", "n/a")} (threshold: {signal_ctx.get("threshold", "n/a")})
+Trend: {signal_ctx.get("trend_direction", "stable")} — {signal_ctx.get("baseline_context", "")}
+Corroboration: {signal_ctx.get("corroboration_label", "Not corroborated across sources")}
+
+=== DIRECTLY OBSERVED ENTITIES AND RELATIONSHIPS ===
+{observed}
+{truncation_note}
+
+=== DOMAIN CONTEXT ===
+{pack_llm_context or "No additional domain context available."}
+
+=== OUTPUT INSTRUCTIONS ===
+Produce JSON with exactly these fields. No preamble, no markdown — JSON only.
+- aiSummary: 2-3 sentences specific to this organisation. Use the entity names
+  above. Do not use placeholders like 'the team' when you know the team name
+  from the context.
+- aiWhyBullets: 3-5 bullets. Each MUST begin with a tag of either [OBSERVED] or
+  [INFERRED: <basis>]. Use only entity names from the context above.
+- aiRisks: 2-3 specific risks if this finding is not addressed.
+- aiSuggestedNextSteps: 3 concrete actions referencing actual teams/systems.
+
+{{
+  "aiSummary": "...",
+  "aiWhyBullets": ["[OBSERVED] ...", "[INFERRED: co-firing signals] ..."],
+  "aiRisks": ["..."],
+  "aiSuggestedNextSteps": ["..."]
+}}"""
+
+
+def _build_signal_context(opp: Dict[str, Any], corroboration_label: Optional[str]) -> Dict[str, Any]:
+    """Derive the SIGNAL CONTEXT block inputs from a stored opportunity."""
+    debug = opp.get("_debug", {}) if isinstance(opp.get("_debug"), dict) else {}
+    metric_value = opp.get("current_value")
+    if metric_value is None:
+        metric_value = opp.get("metric_value", debug.get("metric_value", "n/a"))
+    return {
+        "detector_display_name": opp.get("title")
+        or debug.get("detector_id")
+        or "Operational finding",
+        "metric_value": metric_value if metric_value is not None else "n/a",
+        "threshold": debug.get("threshold", opp.get("threshold", "n/a")),
+        "trend_direction": opp.get("trend_direction") or "stable",
+        "baseline_context": opp.get("baseline_context") or "baseline still accumulating",
+        "corroboration_label": corroboration_label or "Not corroborated across sources",
+    }
+
+
+def _split_observation_tag(bullet: str) -> tuple:
+    """Split a bullet into its leading [OBSERVED]/[INFERRED: X] tag and body.
+
+    Returns (tag, body) where tag includes the brackets and a trailing space, or
+    ("", bullet) when no tag is present. The tag is preserved across the
+    hallucination guard so the frontend can still render the pill (T6).
+    """
+    import re as _re
+
+    m = _re.match(r"^\s*(\[(?:OBSERVED|INFERRED[^\]]*)\])\s*", bullet or "", _re.IGNORECASE)
+    if not m:
+        return "", (bullet or "")
+    return m.group(1) + " ", bullet[m.end():]
+
+
+def _corroboration_for(opp: Dict[str, Any]) -> Optional[str]:
+    """Resolve the ENT-2 corroboration label for an opportunity, if present."""
+    label = opp.get("corroboration_label")
+    if isinstance(label, str) and label.strip():
+        return label.strip()
+    return None
+
+
+def _resolve_run_count(org_id: Optional[str], opp: Dict[str, Any]) -> int:
+    """Best-effort run_count for the preliminary gate at enrichment time.
+
+    Prefers an explicit run_count on the opp, then the detector baseline, then
+    0 (which the gate treats as 'baseline still accumulating'). Never raises.
+    """
+    rc = opp.get("run_count")
+    if isinstance(rc, int) and not isinstance(rc, bool):
+        return rc
+    debug = opp.get("_debug", {}) if isinstance(opp.get("_debug"), dict) else {}
+    detector_id = debug.get("detector_id")
+    if org_id and detector_id:
+        try:
+            from .temporal import get_baseline
+
+            baseline = get_baseline(org_id, detector_id)
+            if isinstance(baseline, dict) and baseline.get("run_count") is not None:
+                return int(baseline["run_count"])
+        except Exception:
+            pass
+    return 0
+
+
 def _exec_summary_prompt(opps: List[Dict[str, Any]], sources_analyzed: Dict[str, Any],
                           pack_id: Optional[str] = None) -> str:
     """ENG-AIQ-NC-5: pack-aware executive summary prompt."""
@@ -434,6 +556,93 @@ def _enrich_opportunity(
     }
 
 
+def _enrich_opportunity_grounded(
+    opp: Dict[str, Any],
+    graph_context: "Any",
+    pack_id: Optional[str],
+    org_id: Optional[str],
+    run_id: str,
+    corroboration_label: Optional[str],
+) -> Dict[str, Any]:
+    """Graph-grounded first pass + hallucination guard for one opportunity.
+
+    Builds the four-section prompt (Section 2), calls the LLM, then runs each
+    ``why`` bullet through the hallucination guard (Section 3), preserving the
+    [OBSERVED]/[INFERRED] tag across any rewrite and dropping bullets the guard
+    returns as None. The guard's rewrite/removal counts are collected into the
+    returned dict for the OppEnrichment fields (T5). Never raises — on any
+    failure it returns the deterministic fallback with zeroed guard counts.
+    """
+    from .hallucination_guard import GuardStats, validate_and_recover
+
+    opp_id = opp.get("id", "unknown")
+    stats = GuardStats()
+    guard_fields = {
+        "hallucination_rewrites": 0,
+        "hallucination_llm_rewrites": 0,
+        "hallucination_removals": [],
+    }
+
+    try:
+        from discovery.packs.pack_config import get_llm_context
+
+        pack_llm_context = get_llm_context(pack_id) if pack_id else ""
+    except Exception:
+        pack_llm_context = ""
+
+    org_name = org_id or "your organisation"
+    signal_ctx = _build_signal_context(opp, corroboration_label)
+    prompt = build_grounded_opp_prompt(signal_ctx, graph_context, pack_llm_context, org_name)
+
+    fb = _fallback(opp, pack_id=pack_id)
+    fb.update(guard_fields)
+
+    raw = _call_claude(prompt, MAX_TOKENS_OPP)
+    if raw is None:
+        return fb
+
+    parsed = _parse_json(raw)
+    if parsed is None or not _validate_opp_fields(parsed, opp_id):
+        logger.warning("Opp %s: grounded response invalid — using fallback", opp_id)
+        return fb
+
+    # Hallucination guard: validate every why bullet against resolved names.
+    # The leading tag is split off so proper-noun extraction never sees it, then
+    # re-attached to whatever the guard returns. A guard failure on one bullet
+    # degrades to dropping that bullet — it never fails the enrichment.
+    resolved_names = graph_context.resolved_names
+    clean_bullets: List[str] = []
+    for bullet in parsed["aiWhyBullets"][:5]:
+        tag, body = _split_observation_tag(str(bullet))
+        try:
+            recovered = validate_and_recover(body, resolved_names, org_id, run_id, stats=stats)
+        except Exception as exc:  # defensive — drop the bullet, keep the run alive
+            logger.warning("Opp %s: guard error on a bullet (%s) — dropping", opp_id, exc)
+            stats.removals.append("dropped_error")
+            recovered = None
+        if recovered is None:
+            continue
+        clean_bullets.append(f"{tag}{recovered}".strip())
+
+    guard_fields = {
+        "hallucination_rewrites": stats.rule_rewrites,
+        "hallucination_llm_rewrites": stats.llm_rewrites,
+        "hallucination_removals": list(stats.removals),
+    }
+
+    result = {
+        "aiSummary": parsed["aiSummary"],
+        "aiWhyBullets": clean_bullets,
+        "aiRisks": [str(b) for b in parsed["aiRisks"][:3]],
+        "aiSuggestedNextSteps": [str(b) for b in parsed["aiSuggestedNextSteps"][:3]],
+        "llmGenerated": True,
+        "llmModel": MODEL,
+        "complianceGuardrailApplied": pack_id == "ncino",
+    }
+    result.update(guard_fields)
+    return result
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Executive summary
 # ─────────────────────────────────────────────────────────────────────────────
@@ -467,11 +676,19 @@ def run_llm_enrichment(
     evidence: List[Dict[str, Any]],
     sources_analyzed: Optional[Dict[str, Any]] = None,
     pack_id: Optional[str] = None,
+    org_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     ENG-AIQ-NC-5: pack_id parameter added.
     When pack_id='ncino', uses banking-language prompts and nCino UI labels.
     When pack_id='service_cloud' or None, uses original SC prompts unchanged.
+
+    ENT-3 / T3-S15-A: org_id parameter added to enable graph-grounded
+    enrichment. When the run's ENT-4 graph holds >= 3 entities, the first pass
+    uses the four-section grounded prompt, every why bullet is run through the
+    hallucination guard, and a preliminary quality gate is evaluated. When the
+    graph is sparse (< 3 entities) or no org_id is supplied, the pipeline falls
+    back to the pre-ENT-3 prompt with llm_grounded=False and no guard (AC10).
     """
     """
     Synchronous post-processing enrichment step.
@@ -487,14 +704,80 @@ def run_llm_enrichment(
     logger.info("T6 enrichment starting for run %s — %d opportunities", run_id, len(opps))
     start = time.time()
 
+    # ENT-3: build the run's graph context once. Deterministic, never raises —
+    # an empty/sparse context routes every opportunity to the fallback path.
+    from . import db
+    from .graph_context import build_graph_context
+    from .enrichment_quality import evaluate_preliminary_status
+
+    try:
+        graph_entities = db.run_kv_get("entities", run_id, []) or []
+    except Exception:
+        graph_entities = []
+    graph_context = build_graph_context(org_id, run_id, entities=graph_entities)
+    grounded = bool(org_id) and not graph_context.is_sparse
+
+    graph_fields = {
+        "llm_grounded": grounded,
+        "graph_entity_count": graph_context.entity_count,
+        "graph_entity_count_shown": graph_context.entity_count_shown,
+        "graph_truncated": graph_context.truncated,
+    }
+    logger.info(
+        "T6 enrichment run %s: grounded=%s entities=%d shown=%d truncated=%s",
+        run_id, grounded, graph_context.entity_count,
+        graph_context.entity_count_shown, graph_context.truncated,
+    )
+
     per_opp: Dict[str, Any] = {}
     enriched = 0
     failed   = 0
 
     for opp in opps:
         opp_id = opp.get("id", "")
+        corroboration_label = _corroboration_for(opp)
         try:
-            result = _enrich_opportunity(opp, evidence, pack_id=pack_id)
+            if grounded:
+                result = _enrich_opportunity_grounded(
+                    opp, graph_context, pack_id, org_id, run_id, corroboration_label
+                )
+                # Mark this opportunity's first pass as graph-grounded.
+                try:
+                    from .telemetry import record_event
+
+                    record_event(
+                        "llm.enrichment_grounded",
+                        {
+                            "org_id": org_id,
+                            "run_id": run_id,
+                            "opp_id": opp_id,
+                            "graph_entity_count": graph_context.entity_count,
+                            "graph_entity_count_shown": graph_context.entity_count_shown,
+                            "graph_truncated": graph_context.truncated,
+                            "source": "llm_enrichment",
+                        },
+                    )
+                except Exception as exc:
+                    logger.debug("llm.enrichment_grounded telemetry failed: %s", exc)
+            else:
+                # Sparse graph or no org context — pre-ENT-3 prompt, no guard.
+                result = _enrich_opportunity(opp, evidence, pack_id=pack_id)
+                result.setdefault("hallucination_rewrites", 0)
+                result.setdefault("hallucination_llm_rewrites", 0)
+                result.setdefault("hallucination_removals", [])
+
+            # Shared fields (both paths): graph shape + corroboration.
+            result.update(graph_fields)
+            result["corroboration_label"] = corroboration_label
+
+            # Preliminary quality gate (T4) — after the guard, before storing.
+            run_count = _resolve_run_count(org_id, opp)
+            preliminary, reason = evaluate_preliminary_status(
+                {"entities": graph_entities}, run_count, org_id
+            )
+            result["preliminary"] = preliminary
+            result["preliminary_reason"] = reason
+
             per_opp[opp_id] = result
             if result.get("llmGenerated"):
                 enriched += 1
@@ -502,7 +785,16 @@ def run_llm_enrichment(
                 failed += 1
         except Exception as e:
             logger.error("Opp %s error: %s", opp_id, e)
-            per_opp[opp_id] = _fallback(opp)
+            fallback = _fallback(opp, pack_id=pack_id)
+            fallback.update(graph_fields)
+            fallback["llm_grounded"] = False
+            fallback["hallucination_rewrites"] = 0
+            fallback["hallucination_llm_rewrites"] = 0
+            fallback["hallucination_removals"] = []
+            fallback["corroboration_label"] = corroboration_label
+            fallback["preliminary"] = True
+            fallback["preliminary_reason"] = "Enrichment failed — analyst review required"
+            per_opp[opp_id] = fallback
             failed += 1
 
     exec_summary = ""

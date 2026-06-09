@@ -33,6 +33,16 @@ const BASE_ENRICHMENT: OppEnrichment = {
   run_count: null,
   entities: [],
   relationships: [],
+  llm_grounded: false,
+  graph_entity_count: 0,
+  graph_entity_count_shown: 0,
+  graph_truncated: false,
+  hallucination_removals: [],
+  hallucination_rewrites: 0,
+  hallucination_llm_rewrites: 0,
+  preliminary: true,
+  preliminary_reason: null,
+  corroboration_label: null,
 };
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
