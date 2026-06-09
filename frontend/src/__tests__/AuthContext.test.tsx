@@ -12,6 +12,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { AuthProvider, useAuth } from "../context/AuthContext";
+import * as apiClient from "../lib/apiClient";
 
 // Mock the auth API boundary — tests assert on calls, never hit the network.
 vi.mock("../api/authApi", () => ({
@@ -199,5 +200,85 @@ describe("useAuth guard", () => {
     const spy = vi.spyOn(console, "error").mockImplementation(() => undefined);
     expect(() => render(<Consumer />)).toThrow(/within an AuthProvider/);
     spy.mockRestore();
+  });
+});
+
+describe("AC13 — 401 interceptor", () => {
+  it("AuthProvider registers a handler with setUnauthorizedHandler on mount", () => {
+    const spy = vi.spyOn(apiClient, "setUnauthorizedHandler");
+    const { unmount } = renderProvider();
+    expect(spy).toHaveBeenCalledWith(expect.any(Function));
+    unmount();
+    spy.mockRestore();
+  });
+
+  it("AuthProvider clears the handler (null) on unmount", () => {
+    const spy = vi.spyOn(apiClient, "setUnauthorizedHandler");
+    const { unmount } = renderProvider();
+    spy.mockClear();
+    unmount();
+    expect(spy).toHaveBeenCalledWith(null);
+    spy.mockRestore();
+  });
+
+  it("the registered handler clears token + user and redirects to /login", async () => {
+    const replaceFn = vi.fn();
+    vi.stubGlobal("location", { pathname: "/dashboard", replace: replaceFn });
+
+    // Capture the handler AuthProvider registers.
+    let captured: (() => void) | null = null;
+    const spy = vi.spyOn(apiClient, "setUnauthorizedHandler").mockImplementation((h) => {
+      captured = h;
+    });
+
+    mockLogin.mockResolvedValue({ token: "jwt-abc", user: OWNER });
+    mockGetMe.mockResolvedValue(OWNER);
+    const user = userEvent.setup();
+    const { unmount } = render(
+      <AuthProvider>
+        <Consumer />
+      </AuthProvider>
+    );
+
+    // Log in so token + user are populated.
+    await user.click(screen.getByText("login"));
+    await waitFor(() =>
+      expect(screen.getByTestId("status").textContent).toBe("authenticated")
+    );
+
+    // Fire the captured 401 handler exactly as the interceptor would.
+    expect(captured).not.toBeNull();
+    captured!();
+
+    await waitFor(() =>
+      expect(screen.getByTestId("token").textContent).toBe("none")
+    );
+    expect(screen.getByTestId("user").textContent).toBe("none");
+    expect(screen.getByTestId("status").textContent).toBe("anonymous");
+    expect(replaceFn).toHaveBeenCalledWith("/login");
+
+    spy.mockRestore();
+    vi.unstubAllGlobals();
+    unmount();
+  });
+
+  it("the registered handler does not redirect when already on /login", () => {
+    const replaceFn = vi.fn();
+    vi.stubGlobal("location", { pathname: "/login", replace: replaceFn });
+
+    let captured: (() => void) | null = null;
+    const spy = vi.spyOn(apiClient, "setUnauthorizedHandler").mockImplementation((h) => {
+      captured = h;
+    });
+
+    const { unmount } = renderProvider();
+    expect(captured).not.toBeNull();
+    captured!();
+
+    expect(replaceFn).not.toHaveBeenCalled();
+
+    spy.mockRestore();
+    vi.unstubAllGlobals();
+    unmount();
   });
 });
