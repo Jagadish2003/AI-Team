@@ -1402,3 +1402,292 @@ class TestGetResolvedEntity:
         org = f"org-gre-empty-{uuid4().hex[:8]}"
         result = get_resolved_entity(org, "person", "", [])
         assert result is None
+
+
+# ---------------------------------------------------------------------------
+# T4 — map_inferred_from_detectors() tests (AC4, AC11)
+# ---------------------------------------------------------------------------
+
+from app.relationship_mapper import (
+    map_inferred_from_detectors,
+    get_process_entity,
+    get_system_entity,
+    INFERRED_VALIDATION_NOTE,
+)
+
+
+class _DetectorResultStub:
+    """Minimal stand-in for a DetectorResult — map_inferred_from_detectors()
+    only reads .detector_id and .signal_source."""
+
+    def __init__(self, detector_id: str, signal_source: str = "salesforce"):
+        self.detector_id = detector_id
+        self.signal_source = signal_source
+
+
+def _make_process_entity(org_id: str, detector_id: str, run_id: str = "run-t4") -> Entity:
+    """Process entity as extract_entities() creates them: display_name=detector_id."""
+    return _make_entity(org_id, "process", detector_id, "resolved", run_id=run_id)
+
+
+def _make_system_entity(org_id: str, signal_source: str, run_id: str = "run-t4") -> Entity:
+    """System entity as extract_entities() creates them: display_name=signal_source."""
+    return _make_entity(org_id, "system", signal_source, "resolved", run_id=run_id)
+
+
+class TestMapInferredFromDetectorsAC4:
+    """AC4: depends_on edge written with inferred=True, confidence=0.6 when
+    LOAN_ORIGINATION_BOTTLENECK and COVENANT_TRACKING_GAP both fire, with the
+    validation note in evidence."""
+
+    def test_covenant_depends_on_loan_origination_edge_created(self):
+        org = f"org-t4-ac4-{uuid4().hex[:8]}"
+        run = "run-t4-ac4"
+        loan = _make_process_entity(org, "LOAN_ORIGINATION_BOTTLENECK", run)
+        cov = _make_process_entity(org, "COVENANT_TRACKING_GAP", run)
+        _persist_entity(loan)
+        _persist_entity(cov)
+
+        detectors = [
+            _DetectorResultStub("LOAN_ORIGINATION_BOTTLENECK"),
+            _DetectorResultStub("COVENANT_TRACKING_GAP"),
+        ]
+        count = map_inferred_from_detectors(org, run, detectors, [loan, cov])
+
+        assert count == 1
+        edges = _get_edges(org, "depends_on")
+        assert len(edges) == 1
+        # Edge direction: Covenant Review depends_on Loan Origination.
+        assert edges[0]["from_entity_id"] == str(cov.id)
+        assert edges[0]["to_entity_id"] == str(loan.id)
+
+    def test_inferred_edge_confidence_is_0_6(self):
+        org = f"org-t4-conf-{uuid4().hex[:8]}"
+        run = "run-t4-conf"
+        loan = _make_process_entity(org, "LOAN_ORIGINATION_BOTTLENECK", run)
+        cov = _make_process_entity(org, "COVENANT_TRACKING_GAP", run)
+        _persist_entity(loan)
+        _persist_entity(cov)
+
+        map_inferred_from_detectors(
+            org, run,
+            [_DetectorResultStub("LOAN_ORIGINATION_BOTTLENECK"),
+             _DetectorResultStub("COVENANT_TRACKING_GAP")],
+            [loan, cov],
+        )
+        edges = _get_edges(org, "depends_on")
+        assert float(edges[0]["confidence"]) == INFERRED_CONFIDENCE
+        assert float(edges[0]["confidence"]) == 0.6
+
+    def test_inferred_edge_inferred_flag_is_true(self):
+        org = f"org-t4-inf-{uuid4().hex[:8]}"
+        run = "run-t4-inf"
+        loan = _make_process_entity(org, "LOAN_ORIGINATION_BOTTLENECK", run)
+        cov = _make_process_entity(org, "COVENANT_TRACKING_GAP", run)
+        _persist_entity(loan)
+        _persist_entity(cov)
+
+        map_inferred_from_detectors(
+            org, run,
+            [_DetectorResultStub("LOAN_ORIGINATION_BOTTLENECK"),
+             _DetectorResultStub("COVENANT_TRACKING_GAP")],
+            [loan, cov],
+        )
+        edges = _get_edges(org, "depends_on")
+        assert int(edges[0]["inferred"]) == 1
+
+    def test_evidence_contains_validation_note_rationale_and_detector_ids(self):
+        import json
+        org = f"org-t4-ev-{uuid4().hex[:8]}"
+        run = "run-t4-ev"
+        loan = _make_process_entity(org, "LOAN_ORIGINATION_BOTTLENECK", run)
+        cov = _make_process_entity(org, "COVENANT_TRACKING_GAP", run)
+        _persist_entity(loan)
+        _persist_entity(cov)
+
+        map_inferred_from_detectors(
+            org, run,
+            [_DetectorResultStub("LOAN_ORIGINATION_BOTTLENECK"),
+             _DetectorResultStub("COVENANT_TRACKING_GAP")],
+            [loan, cov],
+        )
+        edges = _get_edges(org, "depends_on")
+        ev = json.loads(edges[0]["evidence"])
+        assert ev["note"] == INFERRED_VALIDATION_NOTE
+        assert ev["note"] == "Validate with Stage 3 causal analysis before treating as truth"
+        assert "rationale" in ev and ev["rationale"]
+        assert set(ev["detector_ids"]) == {"LOAN_ORIGINATION_BOTTLENECK", "COVENANT_TRACKING_GAP"}
+
+    def test_no_edge_when_only_one_detector_fires(self):
+        org = f"org-t4-single-{uuid4().hex[:8]}"
+        run = "run-t4-single"
+        loan = _make_process_entity(org, "LOAN_ORIGINATION_BOTTLENECK", run)
+        cov = _make_process_entity(org, "COVENANT_TRACKING_GAP", run)
+        _persist_entity(loan)
+        _persist_entity(cov)
+
+        # Only one of the pair fires — rule must NOT trigger.
+        count = map_inferred_from_detectors(
+            org, run, [_DetectorResultStub("LOAN_ORIGINATION_BOTTLENECK")], [loan, cov]
+        )
+        assert count == 0
+        assert len(_get_edges(org, "depends_on")) == 0
+
+    def test_missing_process_entity_skips_edge_no_exception(self):
+        org = f"org-t4-missing-{uuid4().hex[:8]}"
+        run = "run-t4-missing"
+        # Only the covenant process exists; loan origination process is absent.
+        cov = _make_process_entity(org, "COVENANT_TRACKING_GAP", run)
+        _persist_entity(cov)
+
+        count = map_inferred_from_detectors(
+            org, run,
+            [_DetectorResultStub("LOAN_ORIGINATION_BOTTLENECK"),
+             _DetectorResultStub("COVENANT_TRACKING_GAP")],
+            [cov],
+        )
+        assert count == 0
+        assert len(_get_edges(org, "depends_on")) == 0
+
+    def test_dedup_across_runs_increments_run_count(self):
+        org = f"org-t4-dedup-{uuid4().hex[:8]}"
+        loan = _make_process_entity(org, "LOAN_ORIGINATION_BOTTLENECK")
+        cov = _make_process_entity(org, "COVENANT_TRACKING_GAP")
+        _persist_entity(loan)
+        _persist_entity(cov)
+        detectors = [
+            _DetectorResultStub("LOAN_ORIGINATION_BOTTLENECK"),
+            _DetectorResultStub("COVENANT_TRACKING_GAP"),
+        ]
+        map_inferred_from_detectors(org, "run-1", detectors, [loan, cov])
+        map_inferred_from_detectors(org, "run-2", detectors, [loan, cov])
+
+        edges = _get_edges(org, "depends_on")
+        assert len(edges) == 1, "Same inferred edge across runs must not duplicate"
+        assert edges[0]["run_count"] == 2
+
+    def test_empty_detector_results_no_edge_no_exception(self):
+        org = f"org-t4-empty-{uuid4().hex[:8]}"
+        count = map_inferred_from_detectors(org, "run-empty", [], [])
+        assert count == 0
+
+
+class TestMapInferredFromDetectorsAC11:
+    """AC11: all four nCino co-firing rules write edges to the DB in every run
+    where both detectors fire, regardless of flag state."""
+
+    def _all_entities(self, org: str, run: str) -> list:
+        """Process + system entities needed by all four rules."""
+        ents = [
+            _make_process_entity(org, "LOAN_ORIGINATION_BOTTLENECK", run),
+            _make_process_entity(org, "COVENANT_TRACKING_GAP", run),
+            _make_process_entity(org, "DOCUMENT_CHECKLIST_INCOMPLETE", run),
+            _make_process_entity(org, "DISBURSEMENT_OVERDUE", run),
+            _make_system_entity(org, "sqlserver", run),
+            _make_system_entity(org, "salesforce", run),
+        ]
+        for e in ents:
+            _persist_entity(e)
+        return ents
+
+    def _all_detectors_fire(self) -> list:
+        return [
+            _DetectorResultStub("LOAN_ORIGINATION_BOTTLENECK", "salesforce"),
+            _DetectorResultStub("COVENANT_TRACKING_GAP", "salesforce"),
+            _DetectorResultStub("DOCUMENT_CHECKLIST_INCOMPLETE", "salesforce"),
+            _DetectorResultStub("DISBURSEMENT_OVERDUE", "salesforce"),
+            _DetectorResultStub("DB_SLA_BREACH_RATE", "sqlserver"),
+        ]
+
+    def test_all_four_rules_write_edges(self):
+        org = f"org-t4-all-{uuid4().hex[:8]}"
+        run = "run-t4-all"
+        ents = self._all_entities(org, run)
+        count = map_inferred_from_detectors(org, run, self._all_detectors_fire(), ents)
+
+        assert count == 4, "All four co-firing rules must write an edge"
+        depends = _get_edges(org, "depends_on")
+        routes = _get_edges(org, "routes_to")
+        assert len(depends) == 3, "Rules 1-3 produce three depends_on edges"
+        assert len(routes) == 1, "Rule 4 produces one routes_to edge"
+        # Every inferred edge is inferred=True, confidence=0.6.
+        for edge in depends + routes:
+            assert int(edge["inferred"]) == 1
+            assert float(edge["confidence"]) == 0.6
+
+    def test_rule4_routes_to_sqlserver_to_salesforce(self):
+        org = f"org-t4-r4-{uuid4().hex[:8]}"
+        run = "run-t4-r4"
+        ents = self._all_entities(org, run)
+        by_name = {(e.entity_type, e.canonical_name): e for e in ents}
+        sqlserver = by_name[("system", "sqlserver")]
+        salesforce = by_name[("system", "salesforce")]
+
+        map_inferred_from_detectors(org, run, self._all_detectors_fire(), ents)
+
+        routes = _get_edges(org, "routes_to")
+        assert len(routes) == 1
+        # SQL Server routes_to Salesforce.
+        assert routes[0]["from_entity_id"] == str(sqlserver.id)
+        assert routes[0]["to_entity_id"] == str(salesforce.id)
+
+    def test_rules_write_regardless_of_flag(self, monkeypatch):
+        """Storage is unconditional — setting INFERRED_RELATIONSHIPS_ENABLED=false
+        must not suppress writes (the flag is a surfacing control, not storage)."""
+        monkeypatch.setenv("INFERRED_RELATIONSHIPS_ENABLED", "false")
+        org = f"org-t4-flag-{uuid4().hex[:8]}"
+        run = "run-t4-flag"
+        ents = self._all_entities(org, run)
+        count = map_inferred_from_detectors(org, run, self._all_detectors_fire(), ents)
+        assert count == 4, "Edges must be stored even when the flag is off"
+
+    def test_only_rules_with_both_detectors_fire(self):
+        """Rules whose detector pair is incomplete are skipped; others still write."""
+        org = f"org-t4-partial-{uuid4().hex[:8]}"
+        run = "run-t4-partial"
+        ents = self._all_entities(org, run)
+        # Only LOAN_ORIGINATION_BOTTLENECK + COVENANT_TRACKING_GAP fire (Rule 1 only).
+        detectors = [
+            _DetectorResultStub("LOAN_ORIGINATION_BOTTLENECK", "salesforce"),
+            _DetectorResultStub("COVENANT_TRACKING_GAP", "salesforce"),
+        ]
+        count = map_inferred_from_detectors(org, run, detectors, ents)
+        assert count == 1
+        assert len(_get_edges(org, "depends_on")) == 1
+        assert len(_get_edges(org, "routes_to")) == 0
+
+
+class TestGetProcessAndSystemEntity:
+    """Unit tests for the T4 endpoint-resolution helpers."""
+
+    def test_get_process_entity_matches_canonicalized_detector_id(self):
+        org = f"org-gpe-{uuid4().hex[:8]}"
+        proc = _make_process_entity(org, "COVENANT_TRACKING_GAP")
+        # detector_id lookup is case-insensitive via canonicalization.
+        assert get_process_entity(org, "COVENANT_TRACKING_GAP", [proc]) is proc
+        assert get_process_entity(org, "covenant_tracking_gap", [proc]) is proc
+
+    def test_get_process_entity_returns_none_when_absent(self):
+        org = f"org-gpe-none-{uuid4().hex[:8]}"
+        assert get_process_entity(org, "COVENANT_TRACKING_GAP", []) is None
+
+    def test_get_process_entity_ignores_non_process_types(self):
+        org = f"org-gpe-type-{uuid4().hex[:8]}"
+        # A system entity with the same name must not be returned as a process.
+        sys_e = _make_system_entity(org, "COVENANT_TRACKING_GAP")
+        assert get_process_entity(org, "COVENANT_TRACKING_GAP", [sys_e]) is None
+
+    def test_get_system_entity_priority_order(self):
+        org = f"org-gse-{uuid4().hex[:8]}"
+        sql = _make_system_entity(org, "sqlserver")
+        assert get_system_entity(org, ["sqlserver", "mssql"], [sql]) is sql
+
+    def test_get_system_entity_falls_back_to_alias(self):
+        org = f"org-gse-alias-{uuid4().hex[:8]}"
+        sql = _make_system_entity(org, "mssql")
+        # Primary candidate 'sqlserver' absent; alias 'mssql' matches.
+        assert get_system_entity(org, ["sqlserver", "mssql"], [sql]) is sql
+
+    def test_get_system_entity_returns_none_when_absent(self):
+        org = f"org-gse-none-{uuid4().hex[:8]}"
+        assert get_system_entity(org, ["salesforce"], []) is None
