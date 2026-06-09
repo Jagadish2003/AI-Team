@@ -41,6 +41,7 @@ from database.models.entities import Entity
 from database.models.entity_relationships import (
     ALL_ENTITY_RELATIONSHIPS_DDL,
     EntityRelationship,
+    INFERRED_CONFIDENCE,
     OBSERVED_CONFIDENCE,
 )
 
@@ -521,3 +522,306 @@ def map_directly_observed(
         run_id, org_id, count,
     )
     return count
+
+
+# ---------------------------------------------------------------------------
+# map_inferred_from_detectors() — T4 secondary deliverable
+# ---------------------------------------------------------------------------
+#
+# Inferred relationships are HYPOTHESES, not graph truth. Co-firing of two
+# detectors in the same run is correlation, never proven causation. These
+# edges are written to the database in EVERY run where both detectors fire,
+# regardless of the INFERRED_RELATIONSHIPS_ENABLED flag (the flag is a
+# *surfacing* control implemented in T5 — it gates whether these edges appear
+# in OppEnrichment.relationships and the evidence trace, NOT whether they are
+# stored). Suppressing storage on the flag would silently starve T3-S16-A
+# Stage 3 causal analysis, which reads the full stored history of inferred
+# edges to validate whether co-firing reflects a real structural dependency.
+#
+# All edges created here have confidence=0.6 and inferred=True. These are
+# constants of an inferred edge — never parameterised, never derived.
+#
+# Every inferred edge carries an evidence dict with:
+#   rationale     — describes the co-firing pattern that produced the edge.
+#   detector_ids  — the detectors whose co-firing produced this edge.
+#   note          — the Stage 3 validation warning (verbatim, load-bearing).
+
+# Verbatim validation note attached to every inferred edge. T3-S16-A and the
+# evidence trace read this exact text — do not reword it.
+INFERRED_VALIDATION_NOTE = (
+    "Validate with Stage 3 causal analysis before treating as truth"
+)
+
+# nCino co-firing rules that produce Process -> Process depends_on edges.
+# Each rule: (detector_a, detector_b) must BOTH fire, then a depends_on edge is
+# drawn from the `from_detector` process to the `to_detector` process.
+# The edge direction encodes "downstream process depends_on upstream process".
+_NCINO_DEPENDS_ON_RULES: tuple[tuple[frozenset[str], str, str], ...] = (
+    # Rule 1: Covenant Review depends_on Loan Origination.
+    (
+        frozenset({"LOAN_ORIGINATION_BOTTLENECK", "COVENANT_TRACKING_GAP"}),
+        "COVENANT_TRACKING_GAP",
+        "LOAN_ORIGINATION_BOTTLENECK",
+    ),
+    # Rule 2: Document Collection depends_on Loan Origination.
+    (
+        frozenset({"LOAN_ORIGINATION_BOTTLENECK", "DOCUMENT_CHECKLIST_INCOMPLETE"}),
+        "DOCUMENT_CHECKLIST_INCOMPLETE",
+        "LOAN_ORIGINATION_BOTTLENECK",
+    ),
+    # Rule 3: Disbursement depends_on Covenant Review.
+    (
+        frozenset({"DISBURSEMENT_OVERDUE", "COVENANT_TRACKING_GAP"}),
+        "DISBURSEMENT_OVERDUE",
+        "COVENANT_TRACKING_GAP",
+    ),
+)
+
+# Rule 4 (System -> System routes_to): when COVENANT_TRACKING_GAP and
+# DB_SLA_BREACH_RATE co-fire, the SQL Server ITSM system routes_to Salesforce.
+# Systems are resolved by signal_source; the alias lists below are the fallback
+# canonical names when a detector's signal_source is absent from the run.
+_ROUTES_TO_RULE_DETECTORS = frozenset({"COVENANT_TRACKING_GAP", "DB_SLA_BREACH_RATE"})
+_SQLSERVER_SYSTEM_ALIASES = (
+    "sqlserver", "sql server", "sql_server", "mssql", "microsoft sql server",
+)
+_SALESFORCE_SYSTEM_ALIASES = ("salesforce", "sfdc")
+
+
+def get_process_entity(
+    org_id: str,
+    detector_id: str,
+    entities: List[Entity],
+) -> Optional[Entity]:
+    """Resolve the Process entity that represents a detector.
+
+    extract_entities() creates one Process entity per distinct detector_id,
+    using the detector_id as the display_name (canonical_name is therefore the
+    canonicalised detector_id). This helper maps a detector_id back to that
+    Process entity so an inferred edge can use it as an endpoint.
+
+    Returns None when no Process entity for the detector is present in the
+    run's entity list — the edge is then skipped (an inferred edge with a
+    missing endpoint is meaningless).
+
+    Process entities use stable AgentIQ identifiers and are never ambiguous,
+    so — unlike get_resolved_entity() — resolution_status is not gated here.
+    """
+    if not detector_id or not detector_id.strip():
+        return None
+    canonical = _canonicalize(detector_id)
+    for entity in entities:
+        if (
+            entity.org_id == org_id
+            and entity.entity_type == "process"
+            and entity.canonical_name == canonical
+        ):
+            return entity
+    return None
+
+
+def get_system_entity(
+    org_id: str,
+    candidate_names: List[str],
+    entities: List[Entity],
+) -> Optional[Entity]:
+    """Resolve a System entity by trying candidate names in priority order.
+
+    extract_entities() creates one System entity per distinct signal_source,
+    using the signal_source as the display_name. A detector's signal_source
+    (e.g. 'sqlserver', 'salesforce') is the primary candidate; alias lists
+    provide fallbacks when connector_id naming varies.
+
+    Returns the first System entity whose canonical_name matches a candidate,
+    or None when none match.
+    """
+    canon_candidates = [
+        _canonicalize(name) for name in candidate_names if name and str(name).strip()
+    ]
+    if not canon_candidates:
+        return None
+    for cand in canon_candidates:
+        for entity in entities:
+            if (
+                entity.org_id == org_id
+                and entity.entity_type == "system"
+                and entity.canonical_name == cand
+            ):
+                return entity
+    return None
+
+
+def _inferred_evidence(detector_ids: List[str]) -> Dict[str, Any]:
+    """Build the evidence dict carried by every inferred edge.
+
+    detector_ids is sorted for deterministic output. The note is verbatim and
+    load-bearing — T3-S16-A causal analysis and the evidence trace read it to
+    understand that the edge is an unvalidated hypothesis.
+    """
+    ordered = sorted(detector_ids)
+    pattern = " + ".join(ordered)
+    return {
+        "rationale": (
+            f"Co-firing pattern: {pattern} fired in the same run — "
+            "correlation, not confirmed as structural dependency"
+        ),
+        "detector_ids": ordered,
+        "note": INFERRED_VALIDATION_NOTE,
+    }
+
+
+def map_inferred_from_detectors(
+    org_id: str,
+    run_id: str,
+    detector_results: List[Any],
+    entities: List[Entity],
+) -> int:
+    """Write inferred depends_on / routes_to edges from detector co-firing.
+
+    Edges are persisted to the database in EVERY run where both detectors of a
+    rule fire, REGARDLESS of the INFERRED_RELATIONSHIPS_ENABLED flag. The flag
+    controls surfacing (T5), not storage. All edges have confidence=0.6 and
+    inferred=True — set here as constants, never parameterised.
+
+    Four nCino co-firing rules (Section 6):
+      1. LOAN_ORIGINATION_BOTTLENECK + COVENANT_TRACKING_GAP
+         -> Covenant Review depends_on Loan Origination
+      2. LOAN_ORIGINATION_BOTTLENECK + DOCUMENT_CHECKLIST_INCOMPLETE
+         -> Document Collection depends_on Loan Origination
+      3. DISBURSEMENT_OVERDUE + COVENANT_TRACKING_GAP
+         -> Disbursement depends_on Covenant Review
+      4. COVENANT_TRACKING_GAP + DB_SLA_BREACH_RATE
+         -> SQL Server ITSM routes_to Salesforce
+
+    A rule only writes an edge when both its detectors fired AND both edge
+    endpoints resolve to entities in the run's entity list. A rule whose
+    endpoints are missing is skipped; individual rule failures are caught and
+    logged and never raise to the caller (relationship mapping is non-blocking
+    per AC9).
+
+    Args:
+        org_id:           Workspace identifier. All lookups scoped to this.
+        run_id:           Current discovery run ID.
+        detector_results: DetectorResult objects from the detector phase. Each
+                          exposes .detector_id and .signal_source.
+        entities:         Entity list from extract_entities() for this run.
+
+    Returns:
+        Number of upsert_relationship() calls made (created or updated edges).
+    """
+    count = 0
+
+    fired = {
+        did
+        for did in (
+            _safe_detector_id(dr) for dr in (detector_results or [])
+        )
+        if did
+    }
+    source_by_detector = {
+        did: src
+        for did, src in (
+            (_safe_detector_id(dr), _safe_signal_source(dr))
+            for dr in (detector_results or [])
+        )
+        if did
+    }
+
+    # Rules 1-3: Process -> Process depends_on edges.
+    for required, from_detector, to_detector in _NCINO_DEPENDS_ON_RULES:
+        if not required.issubset(fired):
+            continue
+        try:
+            from_proc = get_process_entity(org_id, from_detector, entities)
+            to_proc = get_process_entity(org_id, to_detector, entities)
+            if from_proc is None or to_proc is None:
+                logger.debug(
+                    "map_inferred_from_detectors — depends_on rule %s skipped: "
+                    "missing process entity (from=%s to=%s)",
+                    sorted(required), from_proc is not None, to_proc is not None,
+                )
+                continue
+            upsert_relationship(
+                org_id=org_id,
+                from_entity_id=str(from_proc.id),
+                to_entity_id=str(to_proc.id),
+                relationship_type="depends_on",
+                confidence=INFERRED_CONFIDENCE,
+                inferred=True,
+                run_id=run_id,
+                evidence=_inferred_evidence([from_detector, to_detector]),
+            )
+            count += 1
+        except Exception as exc:
+            logger.debug(
+                "map_inferred_from_detectors — depends_on rule %s failed: %s",
+                sorted(required), exc,
+            )
+
+    # Rule 4: System -> System routes_to edge (SQL Server -> Salesforce).
+    if _ROUTES_TO_RULE_DETECTORS.issubset(fired):
+        try:
+            from_source = source_by_detector.get("DB_SLA_BREACH_RATE")
+            to_source = source_by_detector.get("COVENANT_TRACKING_GAP")
+            from_system = get_system_entity(
+                org_id,
+                [from_source, *_SQLSERVER_SYSTEM_ALIASES],
+                entities,
+            )
+            to_system = get_system_entity(
+                org_id,
+                [to_source, *_SALESFORCE_SYSTEM_ALIASES],
+                entities,
+            )
+            if from_system is None or to_system is None:
+                logger.debug(
+                    "map_inferred_from_detectors — routes_to rule skipped: "
+                    "missing system entity (from=%s to=%s)",
+                    from_system is not None, to_system is not None,
+                )
+            else:
+                upsert_relationship(
+                    org_id=org_id,
+                    from_entity_id=str(from_system.id),
+                    to_entity_id=str(to_system.id),
+                    relationship_type="routes_to",
+                    confidence=INFERRED_CONFIDENCE,
+                    inferred=True,
+                    run_id=run_id,
+                    evidence=_inferred_evidence(
+                        ["COVENANT_TRACKING_GAP", "DB_SLA_BREACH_RATE"]
+                    ),
+                )
+                count += 1
+        except Exception as exc:
+            logger.debug("map_inferred_from_detectors — routes_to rule failed: %s", exc)
+
+    logger.info(
+        "map_inferred_from_detectors — run=%s org=%s inferred_edges_written=%d",
+        run_id, org_id, count,
+    )
+    return count
+
+
+def _safe_detector_id(dr: Any) -> Optional[str]:
+    """Read .detector_id from a DetectorResult-like object, tolerating dicts."""
+    if isinstance(dr, dict):
+        val = dr.get("detector_id")
+    else:
+        val = getattr(dr, "detector_id", None)
+    if val is None:
+        return None
+    s = str(val).strip()
+    return s or None
+
+
+def _safe_signal_source(dr: Any) -> Optional[str]:
+    """Read .signal_source from a DetectorResult-like object, tolerating dicts."""
+    if isinstance(dr, dict):
+        val = dr.get("signal_source")
+    else:
+        val = getattr(dr, "signal_source", None)
+    if val is None:
+        return None
+    s = str(val).strip()
+    return s or None
