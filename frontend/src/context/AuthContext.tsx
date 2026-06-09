@@ -28,6 +28,7 @@ import React, {
 
 import {
   AuthUser,
+  acceptInvite as apiAcceptInvite,
   getMe,
   login as apiLogin,
   logout as apiLogout,
@@ -50,6 +51,8 @@ interface AuthContextValue {
   register: (orgName: string, email: string, password: string) => Promise<void>;
   /** POST /api/auth/logout (best-effort) and clear all state. */
   logout: () => Promise<void>;
+  /** POST /api/auth/accept-invite, store token + user in state. Throws ApiError on failure. */
+  acceptInvite: (inviteToken: string, password: string) => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextValue | undefined>(undefined);
@@ -120,6 +123,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     []
   );
 
+  const acceptInvite = useCallback(async (inviteToken: string, password: string) => {
+    const result = await apiAcceptInvite(inviteToken, password);
+    setToken(result.token);
+    setUser(result.user);
+  }, []);
+
   const logout = useCallback(async () => {
     const current = token;
     // Clear local state regardless of whether the server call succeeds, so the
@@ -144,8 +153,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       login,
       register,
       logout,
+      acceptInvite,
     }),
-    [token, user, loading, login, register, logout]
+    [token, user, loading, login, register, logout, acceptInvite]
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
@@ -157,4 +167,14 @@ export function useAuth(): AuthContextValue {
     throw new Error("useAuth must be used within an AuthProvider");
   }
   return ctx;
+}
+
+/**
+ * Non-throwing variant of useAuth. Returns undefined when rendered outside an
+ * AuthProvider instead of throwing. Use this in shared chrome (e.g. TopNav) that
+ * is mounted inside an AuthProvider in the real app but is also rendered in
+ * isolation by component tests that do not set one up.
+ */
+export function useAuthOptional(): AuthContextValue | undefined {
+  return useContext(AuthContext);
 }

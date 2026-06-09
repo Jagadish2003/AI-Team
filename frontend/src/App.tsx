@@ -12,6 +12,10 @@ import { ThemeProvider } from "./context/ThemeContext";
 import { AuthProvider } from "./context/AuthContext";
 import AuthGuard from "./components/auth/AuthGuard";
 
+import LoginPage from "./pages/LoginPage";
+import RegisterPage from "./pages/RegisterPage";
+import AcceptInvitePage from "./pages/AcceptInvitePage";
+
 import IntegrationHubPage from "./pages/IntegrationHubPage";
 import DiscoveryRunPage from "./pages/DiscoveryRunPage";
 import OpportunityReviewPage from "./pages/OpportunityReviewPage";
@@ -47,27 +51,9 @@ export default function App() {
                              * Route entries are pre-wired here so AuthGuard's
                              * redirect target exists as soon as AT-238 lands.
                              */}
-                            <Route
-                              path="/login"
-                              element={
-                                // AT-239: replace with <LoginPage />
-                                <Navigate to="/login" replace />
-                              }
-                            />
-                            <Route
-                              path="/register"
-                              element={
-                                // AT-239: replace with <RegisterPage />
-                                <Navigate to="/register" replace />
-                              }
-                            />
-                            <Route
-                              path="/accept-invite"
-                              element={
-                                // AT-239: replace with <AcceptInvitePage />
-                                <Navigate to="/accept-invite" replace />
-                              }
-                            />
+                            <Route path="/login" element={<LoginPage />} />
+                            <Route path="/register" element={<RegisterPage />} />
+                            <Route path="/accept-invite" element={<AcceptInvitePage />} />
 
                             {/*
                              * ── Protected routes ─────────────────────────────

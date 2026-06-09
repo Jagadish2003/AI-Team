@@ -365,7 +365,13 @@ def register_org_and_owner(org_name: str, email: str, password: str) -> dict:
     token = issue_jwt(user_id=user_id, org_id=org_id, role="owner", email=email)
     return {
         "token": token,
-        "user": {"id": user_id, "email": email, "role": "owner", "org_id": org_id},
+        "user": {
+            "id": user_id,
+            "email": email,
+            "role": "owner",
+            "org_id": org_id,
+            "org_name": org_name.strip(),
+        },
     }
 
 
@@ -417,6 +423,7 @@ def login(email: str, password: str, ip_address: str) -> dict:
             "email": email,
             "role": membership["role"],
             "org_id": membership["org_id"],
+            "org_name": get_org_name(membership["org_id"]),
         },
     }
 
@@ -444,6 +451,24 @@ def _get_user_by_email(email: str) -> dict | None:
         "password_hash": row[2],
         "is_active": bool(row[3]),
     }
+
+
+def get_org_name(org_id: str | None) -> str | None:
+    """Return the human-readable organization name for an org_id, or None.
+
+    org_id is a UUID primary key, not an encrypted value — the display name lives
+    in the orgs table. Callers use this to show "<org name>'s Profile" rather than
+    the raw UUID.
+    """
+    if not org_id:
+        return None
+    con = db.connect()
+    try:
+        cur = con.execute("SELECT name FROM orgs WHERE id = ?", (org_id,))
+        row = cur.fetchone()
+    finally:
+        con.close()
+    return row[0] if row else None
 
 
 def _get_workspace_member(user_id: str) -> dict | None:
