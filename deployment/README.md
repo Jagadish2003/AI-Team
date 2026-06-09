@@ -30,6 +30,8 @@ provider's OAuth app registration before going to production.
 |-------------------------|-------------------------------------------------|
 | `CREDENTIAL_VAULT_KEY`  | Fernet key for encrypting tokens at rest        |
 | `DEV_JWT`               | Bearer token for local dev auth (`dev-token-change-me` by default) |
+| `JWT_SECRET`            | HS256 signing secret for user-login JWTs (AUTH-1). **Required in production** — issuance fails closed if unset when `ENVIRONMENT=production`. Generate with `openssl rand -hex 32`. |
+| `ENVIRONMENT`           | `production` enforces `JWT_SECRET` and fail-closed invite behaviour; unset for dev/test. |
 
 ### Notes
 
