@@ -543,7 +543,7 @@ def run(
         # thread-local state to leak across an async boundary — unlike the
         # GitHub ingest above, this call needs no event-loop isolation.
         from app.entity_extractor import extract_entities
-        extract_entities(
+        entities = extract_entities(
             org_id=org_id,
             run_id=run_id,
             pack_id=pack_id,
@@ -553,11 +553,40 @@ def run(
                 "servicenow": sn_data,
                 "jira": jira_data,
             },
-        )
+        ) or []
     except Exception as e:
+        entities = []
         logger.warning(
             "Entity extraction failed (non-blocking): run_id=%s error=%s",
             run_id,
+            e,
+        )
+
+    # T3-S13-A T6: map relationships AFTER extract_entities() — both mapping
+    # passes draw edges only between the resolved entity rows written during
+    # extraction. map_relationships() is the single entry point (it calls
+    # map_directly_observed() + map_inferred_from_detectors() and emits the
+    # relationship.mapping_completed telemetry on success). Non-blocking: a
+    # failure here must never break opportunity delivery, so the run still
+    # completes and OppEnrichment.relationships simply defaults to empty (AC9).
+    try:
+        from app.relationship_mapper import map_relationships
+        map_relationships(
+            org_id=org_id,
+            run_id=run_id,
+            ingestor_data={
+                "salesforce": sf_data,
+                "servicenow": sn_data,
+                "jira": jira_data,
+            },
+            detector_results=detector_results,
+            entities=entities,
+        )
+    except Exception as e:
+        logger.warning(
+            "Relationship mapping failed (non-blocking): run_id=%s org_id=%s error=%s",
+            run_id,
+            org_id,
             e,
         )
 

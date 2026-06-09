@@ -168,6 +168,30 @@ class TemporalEnrichmentCompletedPayload(TypedDict, total=False):
     opp_count: NotRequired[int]
 
 
+class RelationshipMappingCompletedPayload(TypedDict, total=False):
+    """T3-S13-A — emitted once per run after relationship mapping completes.
+
+    Emitted from inside relationship_mapper.map_relationships() on success only.
+    The runner's non-blocking wrapper swallows any failure, so the ABSENCE of
+    this event alongside a warning log is the diagnostic signal for a failed
+    mapping run.
+
+    observed_count   — directly observed edges written (confidence=0.9, inferred=False).
+    inferred_count   — co-firing inferred edges written (confidence=0.6, inferred=True).
+                       Always stored regardless of INFERRED_RELATIONSHIPS_ENABLED.
+    skipped_ambiguous_count — edges skipped because one endpoint had
+                       resolution_status='ambiguous'. A spike in this field
+                       signals entity-resolution quality degradation upstream.
+    mapping_duration_ms — wall-clock time for both mapping passes combined.
+    """
+    org_id: NotRequired[str]
+    run_id: NotRequired[str]
+    observed_count: NotRequired[int]
+    inferred_count: NotRequired[int]
+    skipped_ambiguous_count: NotRequired[int]
+    mapping_duration_ms: NotRequired[float]
+
+
 class RunStartedEvent(TypedDict):
     run_id: str
     org_id: str
@@ -287,6 +311,8 @@ register_event_type("run.signal_snapshot", RunSignalSnapshotPayload)
 register_event_type("temporal.enrichment_completed", TemporalEnrichmentCompletedPayload)
 # T3-S12-A T7 Sprint 12
 register_event_type("entity.extraction_completed", EntityExtractionCompletedPayload)
+# T3-S13-A Sprint 13 — relationship mapping (emitted by map_relationships())
+register_event_type("relationship.mapping_completed", RelationshipMappingCompletedPayload)
 
 
 # ---------------------------------------------------------------------------
@@ -436,6 +462,7 @@ __all__ = [
     "DbIngestorCompletedEvent",             # T1-S10-C legacy — kept for backward compat
     "DbQueryExecutedEvent",
     "EntityExtractionCompletedPayload",     # T3-S12-A T7
+    "RelationshipMappingCompletedPayload",  # T3-S13-A
     "EVENT_PAYLOAD_TYPES",          # AT-211 alias: event_type → TypedDict schema
     "EVENT_REGISTRY",
     "EVENT_TYPE_REGISTRY",          # alias for T1-S10-C unit tests
