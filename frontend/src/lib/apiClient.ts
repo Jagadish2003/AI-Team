@@ -8,6 +8,26 @@
  * - Support run-scoped API calls with runId parameter.
  */
 
+// ---------------------------------------------------------------------------
+// 401 interceptor (AT-237 / AC13)
+// AuthContext registers a handler here on mount so any 401 from any route
+// clears auth state and redirects to /login without page-specific handling.
+// ---------------------------------------------------------------------------
+
+type UnauthorizedHandler = () => void;
+let _unauthorizedHandler: UnauthorizedHandler | null = null;
+
+/** Register (or clear) the global 401 handler. Call from AuthProvider on mount. */
+export function setUnauthorizedHandler(handler: UnauthorizedHandler | null): void {
+  _unauthorizedHandler = handler;
+}
+
+function _handle401(): void {
+  _unauthorizedHandler?.();
+}
+
+// ---------------------------------------------------------------------------
+
 const ENV_BASE_URL = import.meta.env.VITE_API_BASE_URL as string | undefined;
 const ORG_ID_HEADER = (import.meta.env.VITE_ORG_ID as string | undefined)?.trim();
 
@@ -50,7 +70,10 @@ export async function apiGet<T>(path: string): Promise<T> {
     headers: { ...authHeader() },
   });
   const body = await parseBody(res);
-  if (!res.ok) throw new ApiError(`GET ${path} failed`, res.status, body);
+  if (!res.ok) {
+    if (res.status === 401) _handle401();
+    throw new ApiError(`GET ${path} failed`, res.status, body);
+  }
   return body as T;
 }
 
@@ -61,7 +84,10 @@ export async function apiPost<T>(path: string, payload: unknown): Promise<T> {
     body: JSON.stringify(payload),
   });
   const body = await parseBody(res);
-  if (!res.ok) throw new ApiError(`POST ${path} failed`, res.status, body);
+  if (!res.ok) {
+    if (res.status === 401) _handle401();
+    throw new ApiError(`POST ${path} failed`, res.status, body);
+  }
   return body as T;
 }
 
@@ -72,7 +98,10 @@ export async function apiPatch<T>(path: string, payload: unknown): Promise<T> {
     body: JSON.stringify(payload),
   });
   const body = await parseBody(res);
-  if (!res.ok) throw new ApiError(`PATCH ${path} failed`, res.status, body);
+  if (!res.ok) {
+    if (res.status === 401) _handle401();
+    throw new ApiError(`PATCH ${path} failed`, res.status, body);
+  }
   return body as T;
 }
 
@@ -100,7 +129,10 @@ export async function apiStartRun<T>(payload?: unknown): Promise<T> {
     body: JSON.stringify(payload ?? {}),
   });
   const body = await parseBody(res);
-  if (!res.ok) throw new ApiError("POST /api/runs/start failed", res.status, body);
+  if (!res.ok) {
+    if (res.status === 401) _handle401();
+    throw new ApiError("POST /api/runs/start failed", res.status, body);
+  }
   return body as T;
 }
 
@@ -125,7 +157,10 @@ export async function apiGetRun<T>(runId: string): Promise<T> {
     headers: { ...authHeader() },
   });
   const body = await parseBody(res);
-  if (!res.ok) throw new ApiError(`GET /api/runs/${runId} failed`, res.status, body);
+  if (!res.ok) {
+    if (res.status === 401) _handle401();
+    throw new ApiError(`GET /api/runs/${runId} failed`, res.status, body);
+  }
   return body as T;
 }
 
@@ -151,7 +186,10 @@ export async function apiGetRunEvents<T>(runId: string): Promise<T> {
     headers: { ...authHeader() },
   });
   const body = await parseBody(res);
-  if (!res.ok) throw new ApiError(`GET /api/runs/${runId}/events failed`, res.status, body);
+  if (!res.ok) {
+    if (res.status === 401) _handle401();
+    throw new ApiError(`GET /api/runs/${runId}/events failed`, res.status, body);
+  }
   return body as T;
 }
 
@@ -187,8 +225,10 @@ export async function apiGetRunEventsPaginated<T>(
     headers: { ...authHeader() },
   });
   const body = await parseBody(res);
-  if (!res.ok)
+  if (!res.ok) {
+    if (res.status === 401) _handle401();
     throw new ApiError(`GET /api/runs/${runId}/events failed`, res.status, body);
+  }
   return body as T;
 }
 
@@ -214,8 +254,10 @@ export async function apiGetRunScoped<T>(runId: string, path: string): Promise<T
     headers: { ...authHeader() },
   });
   const body = await parseBody(res);
-  if (!res.ok)
+  if (!res.ok) {
+    if (res.status === 401) _handle401();
     throw new ApiError(`GET /api/runs/${runId}${path} failed`, res.status, body);
+  }
   return body as T;
 }
 
@@ -248,8 +290,10 @@ export async function apiPostRunScoped<T>(
     body: JSON.stringify(payload ?? {}),
   });
   const body = await parseBody(res);
-  if (!res.ok)
+  if (!res.ok) {
+    if (res.status === 401) _handle401();
     throw new ApiError(`POST /api/runs/${runId}${path} failed`, res.status, body);
+  }
   return body as T;
 }
 

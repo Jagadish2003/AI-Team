@@ -33,6 +33,7 @@ import {
   logout as apiLogout,
   register as apiRegister,
 } from "../api/authApi";
+import { setUnauthorizedHandler } from "../lib/apiClient";
 
 interface AuthContextValue {
   /** In-session JWT. null when logged out (and after any page refresh). */
@@ -58,6 +59,23 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [token, setToken] = useState<string | null>(null);
   const [user, setUser] = useState<AuthUser | null>(null);
   const [loading, setLoading] = useState(false);
+
+  // AC13: Register the 401 interceptor once. When any apiClient call receives a
+  // 401, this handler clears auth state and sends the user back to /login.
+  // Guard against redirect loops: skip the redirect if already on /login.
+  // setToken and setUser are stable useState setters — empty dep array is correct.
+  useEffect(() => {
+    setUnauthorizedHandler(() => {
+      setToken(null);
+      setUser(null);
+      if (!window.location.pathname.startsWith("/login")) {
+        window.location.replace("/login");
+      }
+    });
+    return () => {
+      setUnauthorizedHandler(null);
+    };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // On mount: only call /api/auth/me if a token is already in state. The token
   // is never in state on first mount (a page refresh wipes React state), so
