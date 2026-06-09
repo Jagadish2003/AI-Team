@@ -40,6 +40,26 @@ provider's OAuth app registration before going to production.
 
 ---
 
+## Login Rate Limiting (AUTH-1)
+
+AUTH-1 adds a `login_attempts` table (created by Alembic migration `0004`) that backs
+**lightweight application-layer brute-force protection**: after 5 failed login attempts
+for the same email **or** the same IP within 15 minutes, the 6th attempt returns
+`429` with a `Retry-After: 900` header.
+
+**Deployment assumption — is the table needed?**
+
+| Deployment posture | login_attempts table |
+|---|---|
+| No upstream rate limiting | **Required** — it is the only protection. |
+| Behind an API gateway / reverse proxy (AWS API Gateway, nginx, Cloudflare) with login rate limiting already configured | **Optional / redundant** — the gateway enforces the limit. |
+
+If you rely on a gateway, document that decision here per the deployment, but do **not**
+drop the table unless the gateway protection is confirmed. The table is cheap and
+fail-safe; the application-layer check is a defence-in-depth baseline.
+
+---
+
 ## Database Driver Inventory
 
 ### 1. Microsoft ODBC Driver 18 — SQL Server
