@@ -32,6 +32,7 @@ const BASE_ENRICHMENT: OppEnrichment = {
   baseline_mean: null,
   run_count: null,
   entities: [],
+  relationships: [],
 };
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
