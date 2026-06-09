@@ -1,4 +1,5 @@
-﻿"""Contract tests for T3-S13-A — entity_relationships table and upsert.
+﻿"""Contract tests for T3-S13-A — entity_relationships table, upsert, and
+map_directly_observed().
 
 T1 / AC1 coverage:
   - entity_relationships table exists with all 12 columns.
@@ -25,6 +26,23 @@ T2 / AC8 coverage (upsert-layer isolation):
     belonging to org_B, even when entity UUIDs are identical.
   - Same (from_id, to_id, type) in two different orgs creates two
     independent rows with independent run counts.
+
+T3 / AC2 coverage:
+  - map_directly_observed() creates an owns edge (confidence=0.9, inferred=False)
+    from Salesforce OwnerId → record when both endpoints are resolved.
+  - map_directly_observed() creates a member_of edge from ServiceNow
+    assigned_to → assignment_group when both endpoints are resolved.
+  - map_directly_observed() creates an escalates_to edge from ServiceNow
+    escalated_to and Jira escalation-labelled issues.
+  - All edges have confidence=0.9 and inferred=False — never parameterised.
+  - All edges persist via upsert_relationship(), not direct inserts.
+
+T3 / AC3 coverage:
+  - Entities with resolution_status='ambiguous' are never used as edge
+    endpoints. No edge is created when either endpoint is ambiguous.
+  - get_resolved_entity() returns None for ambiguous entities, preventing
+    the edge from being drawn.
+  - Missing / null ingestor fields are skipped without raising an exception.
 """
 import os
 import sqlite3
@@ -861,3 +879,526 @@ class TestUpsertRelationshipAC8CrossOrg:
                 (org_b, from_id, to_id, "member_of"),
             ).fetchone()
         assert row_b["run_count"] == 1
+
+
+# ---------------------------------------------------------------------------
+# T3 — map_directly_observed() tests (AC2, AC3)
+# ---------------------------------------------------------------------------
+
+import pytest
+from datetime import datetime, timezone as tz
+
+from app.relationship_mapper import map_directly_observed, get_resolved_entity
+from database.models.entities import Entity
+
+
+def _make_entity(
+    org_id: str,
+    entity_type: str,
+    display_name: str,
+    resolution_status: str = "resolved",
+    run_id: str = "run-t3-001",
+) -> Entity:
+    """Build an in-memory Entity for use as the entities list in tests."""
+    canonical = " ".join(display_name.split()).lower()
+    return Entity(
+        org_id=org_id,
+        entity_type=entity_type,
+        canonical_name=canonical,
+        display_name=display_name,
+        source_system="test",
+        resolution_confidence=1.0 if resolution_status == "resolved" else 0.6,
+        resolution_status=resolution_status,
+        first_seen_run_id=run_id,
+        last_seen_run_id=run_id,
+        run_count=1,
+    )
+
+
+def _persist_entity(entity: Entity) -> None:
+    """Write entity to the test DB so FK constraints are satisfied."""
+    import json as _json
+    row = entity.to_db_row()
+    with sqlite3.connect(_get_db_path()) as conn:
+        conn.execute("PRAGMA foreign_keys = OFF")
+        conn.execute(
+            """INSERT OR IGNORE INTO entities (
+                id, org_id, entity_type, canonical_name, display_name,
+                source_system, source_record_id, resolution_confidence,
+                resolution_status, first_seen_run_id, last_seen_run_id,
+                run_count, metadata, created_at, updated_at
+            ) VALUES (
+                :id, :org_id, :entity_type, :canonical_name, :display_name,
+                :source_system, :source_record_id, :resolution_confidence,
+                :resolution_status, :first_seen_run_id, :last_seen_run_id,
+                :run_count, :metadata, :created_at, :updated_at
+            )""",
+            row,
+        )
+        conn.commit()
+
+
+def _get_edges(org_id: str, rtype: str) -> list[dict]:
+    with sqlite3.connect(_get_db_path()) as conn:
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            "SELECT * FROM entity_relationships WHERE org_id = ? AND relationship_type = ?",
+            (org_id, rtype),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+class TestMapDirectlyObservedAC2:
+    """AC2: map_directly_observed() creates correct edges from observed source data."""
+
+    def test_owns_edge_created_from_salesforce_record(self):
+        """owns edge: Salesforce OwnerId → record Id, confidence=0.9, inferred=False."""
+        org = f"org-owns-{uuid4().hex[:8]}"
+        run = "run-t3-owns-001"
+
+        person = _make_entity(org, "person", "Sarah Chen", run_id=run)
+        obj = _make_entity(org, "object", "LOAN-001", run_id=run)
+        _persist_entity(person)
+        _persist_entity(obj)
+        entities = [person, obj]
+
+        ingestor_data = {
+            "salesforce": {
+                "records": [
+                    {
+                        "OwnerId": "Sarah Chen",
+                        "Id": "LOAN-001",
+                        "source_system": "salesforce",
+                    }
+                ]
+            }
+        }
+
+        count = map_directly_observed(org, run, ingestor_data, entities)
+
+        assert count == 1
+        edges = _get_edges(org, "owns")
+        assert len(edges) == 1
+        assert edges[0]["from_entity_id"] == str(person.id)
+        assert edges[0]["to_entity_id"] == str(obj.id)
+        assert float(edges[0]["confidence"]) == OBSERVED_CONFIDENCE
+        assert int(edges[0]["inferred"]) == 0
+
+    def test_owns_confidence_always_0_9(self):
+        """confidence must be exactly 0.9 for owns — never configurable."""
+        org = f"org-conf-owns-{uuid4().hex[:8]}"
+        run = "run-owns-conf"
+        person = _make_entity(org, "person", "Alice Wang", run_id=run)
+        obj = _make_entity(org, "object", "SF-REC-001", run_id=run)
+        _persist_entity(person)
+        _persist_entity(obj)
+
+        ingestor_data = {"salesforce": {"records": [{"OwnerId": "Alice Wang", "Id": "SF-REC-001"}]}}
+        map_directly_observed(org, run, ingestor_data, [person, obj])
+
+        edges = _get_edges(org, "owns")
+        assert float(edges[0]["confidence"]) == 0.9
+
+    def test_owns_inferred_always_false(self):
+        """inferred must be False for owns — directly observed."""
+        org = f"org-inf-owns-{uuid4().hex[:8]}"
+        run = "run-inf-owns"
+        person = _make_entity(org, "person", "Bob Lee", run_id=run)
+        obj = _make_entity(org, "object", "SF-REC-002", run_id=run)
+        _persist_entity(person)
+        _persist_entity(obj)
+
+        ingestor_data = {"salesforce": {"records": [{"OwnerId": "Bob Lee", "Id": "SF-REC-002"}]}}
+        map_directly_observed(org, run, ingestor_data, [person, obj])
+
+        edges = _get_edges(org, "owns")
+        assert int(edges[0]["inferred"]) == 0
+
+    def test_member_of_edge_created_from_servicenow_incident(self):
+        """member_of edge: ServiceNow assigned_to → assignment_group."""
+        org = f"org-memb-{uuid4().hex[:8]}"
+        run = "run-t3-memb-001"
+
+        person = _make_entity(org, "person", "Eve Torres", run_id=run)
+        team = _make_entity(org, "team", "Commercial Credit", run_id=run)
+        _persist_entity(person)
+        _persist_entity(team)
+        entities = [person, team]
+
+        ingestor_data = {
+            "servicenow": {
+                "incident_metrics": {
+                    "incidents": [
+                        {
+                            "number": "INC0001",
+                            "assigned_to": {"display_value": "Eve Torres"},
+                            "assignment_group": "Commercial Credit",
+                        }
+                    ]
+                }
+            }
+        }
+
+        count = map_directly_observed(org, run, ingestor_data, entities)
+
+        assert count == 1
+        edges = _get_edges(org, "member_of")
+        assert len(edges) == 1
+        assert edges[0]["from_entity_id"] == str(person.id)
+        assert edges[0]["to_entity_id"] == str(team.id)
+        assert float(edges[0]["confidence"]) == OBSERVED_CONFIDENCE
+        assert int(edges[0]["inferred"]) == 0
+
+    def test_member_of_string_assignment_group(self):
+        """assignment_group as a plain string (not dict) is handled."""
+        org = f"org-memb-str-{uuid4().hex[:8]}"
+        run = "run-memb-str"
+        person = _make_entity(org, "person", "Frank Ross", run_id=run)
+        team = _make_entity(org, "team", "Loan Operations", run_id=run)
+        _persist_entity(person)
+        _persist_entity(team)
+
+        ingestor_data = {
+            "servicenow": {
+                "incident_metrics": {
+                    "incidents": [
+                        {
+                            "number": "INC0002",
+                            "assigned_to": "Frank Ross",
+                            "assignment_group": "Loan Operations",
+                        }
+                    ]
+                }
+            }
+        }
+        count = map_directly_observed(org, run, ingestor_data, [person, team])
+        assert count == 1
+        edges = _get_edges(org, "member_of")
+        assert len(edges) == 1
+
+    def test_escalates_to_edge_from_servicenow_escalated_to_field(self):
+        """escalates_to edge: ServiceNow escalated_to field."""
+        org = f"org-esc-sn-{uuid4().hex[:8]}"
+        run = "run-esc-sn"
+        inc_obj = _make_entity(org, "object", "INC0003", run_id=run)
+        manager = _make_entity(org, "person", "Carol Sun", run_id=run)
+        _persist_entity(inc_obj)
+        _persist_entity(manager)
+
+        ingestor_data = {
+            "servicenow": {
+                "incident_metrics": {
+                    "incidents": [
+                        {
+                            "number": "INC0003",
+                            "escalated_to": "Carol Sun",
+                        }
+                    ]
+                }
+            }
+        }
+        count = map_directly_observed(org, run, ingestor_data, [inc_obj, manager])
+        assert count == 1
+        edges = _get_edges(org, "escalates_to")
+        assert len(edges) == 1
+        assert edges[0]["from_entity_id"] == str(inc_obj.id)
+        assert edges[0]["to_entity_id"] == str(manager.id)
+        assert float(edges[0]["confidence"]) == OBSERVED_CONFIDENCE
+        assert int(edges[0]["inferred"]) == 0
+
+    def test_escalates_to_edge_from_jira_escalation_label(self):
+        """escalates_to edge: Jira issue with 'escalation' label + escalated_to field."""
+        org = f"org-esc-jira-{uuid4().hex[:8]}"
+        run = "run-esc-jira"
+        issue_obj = _make_entity(org, "object", "LOAN-007", run_id=run)
+        manager = _make_entity(org, "person", "Dave Kim", run_id=run)
+        _persist_entity(issue_obj)
+        _persist_entity(manager)
+
+        ingestor_data = {
+            "jira": {
+                "issue_metrics": {
+                    "issues": [
+                        {
+                            "key": "LOAN-007",
+                            "labels": ["escalation", "loan"],
+                            "escalated_to": "Dave Kim",
+                        }
+                    ]
+                }
+            }
+        }
+        count = map_directly_observed(org, run, ingestor_data, [issue_obj, manager])
+        assert count == 1
+        edges = _get_edges(org, "escalates_to")
+        assert len(edges) == 1
+        assert edges[0]["from_entity_id"] == str(issue_obj.id)
+        assert edges[0]["to_entity_id"] == str(manager.id)
+
+    def test_multiple_incidents_multiple_edges(self):
+        """Multiple incidents with assignment data produce multiple member_of edges."""
+        org = f"org-multi-{uuid4().hex[:8]}"
+        run = "run-multi"
+        p1 = _make_entity(org, "person", "Alice Wang", run_id=run)
+        p2 = _make_entity(org, "person", "Bob Lee", run_id=run)
+        team = _make_entity(org, "team", "Credit Team", run_id=run)
+        for e in [p1, p2, team]:
+            _persist_entity(e)
+
+        ingestor_data = {
+            "servicenow": {
+                "incident_metrics": {
+                    "incidents": [
+                        {"number": "INC1", "assigned_to": "Alice Wang", "assignment_group": "Credit Team"},
+                        {"number": "INC2", "assigned_to": "Bob Lee", "assignment_group": "Credit Team"},
+                    ]
+                }
+            }
+        }
+        count = map_directly_observed(org, run, ingestor_data, [p1, p2, team])
+        assert count == 2
+        edges = _get_edges(org, "member_of")
+        assert len(edges) == 2
+
+    def test_routes_through_upsert_relationship_dedup(self):
+        """Calling map_directly_observed twice with same data → run_count=2, one row."""
+        org = f"org-dedup-obs-{uuid4().hex[:8]}"
+        run1, run2 = "run-dedup-1", "run-dedup-2"
+        person = _make_entity(org, "person", "Gina Park", run_id=run1)
+        team = _make_entity(org, "team", "Risk Team", run_id=run1)
+        _persist_entity(person)
+        _persist_entity(team)
+
+        ingestor_data = {
+            "servicenow": {
+                "incident_metrics": {
+                    "incidents": [
+                        {"number": "INC9", "assigned_to": "Gina Park", "assignment_group": "Risk Team"}
+                    ]
+                }
+            }
+        }
+
+        # Update run_id on entities for second call (same entities, new run)
+        person2 = _make_entity(org, "person", "Gina Park", run_id=run2)
+        person2.id = person.id  # same entity
+        team2 = _make_entity(org, "team", "Risk Team", run_id=run2)
+        team2.id = team.id
+
+        map_directly_observed(org, run1, ingestor_data, [person, team])
+        map_directly_observed(org, run2, ingestor_data, [person2, team2])
+
+        edges = _get_edges(org, "member_of")
+        assert len(edges) == 1, "Two runs of same observed data must produce one edge row"
+        assert edges[0]["run_count"] == 2
+
+
+class TestMapDirectlyObservedAC3:
+    """AC3: ambiguous entities are never used as edge endpoints."""
+
+    def test_ambiguous_person_skips_owns_edge(self):
+        """No owns edge created when person entity is ambiguous."""
+        org = f"org-ambig-p-{uuid4().hex[:8]}"
+        run = "run-ambig-p"
+        # Ambiguous person — resolution_status='ambiguous'
+        person = _make_entity(org, "person", "Alice Smith", "ambiguous", run_id=run)
+        obj = _make_entity(org, "object", "LOAN-X01", "resolved", run_id=run)
+        _persist_entity(person)
+        _persist_entity(obj)
+
+        ingestor_data = {
+            "salesforce": {
+                "records": [{"OwnerId": "Alice Smith", "Id": "LOAN-X01"}]
+            }
+        }
+        count = map_directly_observed(org, run, ingestor_data, [person, obj])
+        assert count == 0, "No edge must be created when person endpoint is ambiguous"
+        assert len(_get_edges(org, "owns")) == 0
+
+    def test_ambiguous_object_skips_owns_edge(self):
+        """No owns edge created when object entity is ambiguous."""
+        org = f"org-ambig-o-{uuid4().hex[:8]}"
+        run = "run-ambig-o"
+        person = _make_entity(org, "person", "Bob Ross", "resolved", run_id=run)
+        obj = _make_entity(org, "object", "LOAN-X02", "ambiguous", run_id=run)
+        _persist_entity(person)
+        _persist_entity(obj)
+
+        ingestor_data = {
+            "salesforce": {
+                "records": [{"OwnerId": "Bob Ross", "Id": "LOAN-X02"}]
+            }
+        }
+        count = map_directly_observed(org, run, ingestor_data, [person, obj])
+        assert count == 0, "No edge must be created when object endpoint is ambiguous"
+
+    def test_ambiguous_person_skips_member_of_edge(self):
+        """No member_of edge created when person is ambiguous."""
+        org = f"org-ambig-sn-p-{uuid4().hex[:8]}"
+        run = "run-ambig-sn-p"
+        person = _make_entity(org, "person", "Carol Chen", "ambiguous", run_id=run)
+        team = _make_entity(org, "team", "Ops Team", "resolved", run_id=run)
+        _persist_entity(person)
+        _persist_entity(team)
+
+        ingestor_data = {
+            "servicenow": {
+                "incident_metrics": {
+                    "incidents": [
+                        {"number": "INC-A1", "assigned_to": "Carol Chen", "assignment_group": "Ops Team"}
+                    ]
+                }
+            }
+        }
+        count = map_directly_observed(org, run, ingestor_data, [person, team])
+        assert count == 0
+
+    def test_ambiguous_team_skips_member_of_edge(self):
+        """No member_of edge created when team is ambiguous."""
+        org = f"org-ambig-sn-t-{uuid4().hex[:8]}"
+        run = "run-ambig-sn-t"
+        person = _make_entity(org, "person", "Dave Park", "resolved", run_id=run)
+        team = _make_entity(org, "team", "Risk Group", "ambiguous", run_id=run)
+        _persist_entity(person)
+        _persist_entity(team)
+
+        ingestor_data = {
+            "servicenow": {
+                "incident_metrics": {
+                    "incidents": [
+                        {"number": "INC-A2", "assigned_to": "Dave Park", "assignment_group": "Risk Group"}
+                    ]
+                }
+            }
+        }
+        count = map_directly_observed(org, run, ingestor_data, [person, team])
+        assert count == 0
+
+    def test_missing_owner_field_skipped_no_exception(self):
+        """Record without owner field is skipped silently."""
+        org = f"org-miss-own-{uuid4().hex[:8]}"
+        run = "run-miss-own"
+        obj = _make_entity(org, "object", "LOAN-Y01", "resolved", run_id=run)
+        _persist_entity(obj)
+
+        ingestor_data = {
+            "salesforce": {
+                "records": [{"Id": "LOAN-Y01"}]  # no OwnerId
+            }
+        }
+        count = map_directly_observed(org, run, ingestor_data, [obj])
+        assert count == 0
+
+    def test_missing_assigned_to_skipped_no_exception(self):
+        """Incident without assigned_to is skipped silently."""
+        org = f"org-miss-at-{uuid4().hex[:8]}"
+        run = "run-miss-at"
+        team = _make_entity(org, "team", "Support", "resolved", run_id=run)
+        _persist_entity(team)
+
+        ingestor_data = {
+            "servicenow": {
+                "incident_metrics": {
+                    "incidents": [{"number": "INC-B1", "assignment_group": "Support"}]
+                }
+            }
+        }
+        count = map_directly_observed(org, run, ingestor_data, [team])
+        assert count == 0
+
+    def test_null_ingestor_data_no_exception(self):
+        """Empty ingestor_data must not raise."""
+        org = f"org-empty-{uuid4().hex[:8]}"
+        run = "run-empty"
+        count = map_directly_observed(org, run, {}, [])
+        assert count == 0
+
+    def test_none_fields_in_records_skipped_gracefully(self):
+        """Records with None values for owner and id must not raise."""
+        org = f"org-none-{uuid4().hex[:8]}"
+        run = "run-none"
+        ingestor_data = {
+            "salesforce": {
+                "records": [
+                    {"OwnerId": None, "Id": None},
+                    {"OwnerId": "", "Id": ""},
+                ]
+            }
+        }
+        count = map_directly_observed(org, run, ingestor_data, [])
+        assert count == 0
+
+    def test_entity_not_in_list_produces_no_edge(self):
+        """If extracted entity is not in the entities list, no edge is drawn."""
+        org = f"org-not-in-{uuid4().hex[:8]}"
+        run = "run-not-in"
+        # The entities list is empty — no entities available for lookup.
+        ingestor_data = {
+            "salesforce": {
+                "records": [{"OwnerId": "Unknown Person", "Id": "LOAN-Z01"}]
+            }
+        }
+        count = map_directly_observed(org, run, ingestor_data, [])
+        assert count == 0
+
+    def test_bad_record_does_not_halt_processing_of_remaining_records(self):
+        """A malformed record must not prevent processing the valid records after it."""
+        org = f"org-bad-rec-{uuid4().hex[:8]}"
+        run = "run-bad-rec"
+        person = _make_entity(org, "person", "Eve Torres", run_id=run)
+        obj = _make_entity(org, "object", "LOAN-GOOD", run_id=run)
+        _persist_entity(person)
+        _persist_entity(obj)
+
+        ingestor_data = {
+            "salesforce": {
+                "records": [
+                    # Bad record — object not in entities list
+                    {"OwnerId": "Eve Torres", "Id": "LOAN-MISSING"},
+                    # Good record — both endpoints in entities list
+                    {"OwnerId": "Eve Torres", "Id": "LOAN-GOOD"},
+                ]
+            }
+        }
+        count = map_directly_observed(org, run, ingestor_data, [person, obj])
+        assert count == 1, "Valid record after a skipped record must still be processed"
+
+
+class TestGetResolvedEntity:
+    """Unit tests for the get_resolved_entity() helper."""
+
+    def test_returns_resolved_entity(self):
+        org = f"org-gre-{uuid4().hex[:8]}"
+        e = _make_entity(org, "person", "Alice Smith", "resolved")
+        result = get_resolved_entity(org, "person", "Alice Smith", [e])
+        assert result is e
+
+    def test_canonicalizes_display_name(self):
+        """Lookup must canonicalize name — case and whitespace insensitive."""
+        org = f"org-gre-canon-{uuid4().hex[:8]}"
+        e = _make_entity(org, "person", "Alice Smith", "resolved")
+        # canonical_name of e is "alice smith"
+        result = get_resolved_entity(org, "person", "ALICE  SMITH", [e])
+        assert result is e
+
+    def test_returns_none_for_ambiguous_entity(self):
+        org = f"org-gre-ambig-{uuid4().hex[:8]}"
+        e = _make_entity(org, "person", "Bob Jones", "ambiguous")
+        result = get_resolved_entity(org, "person", "Bob Jones", [e])
+        assert result is None
+
+    def test_returns_none_when_entity_not_in_list(self):
+        org = f"org-gre-missing-{uuid4().hex[:8]}"
+        result = get_resolved_entity(org, "person", "Carol Sun", [])
+        assert result is None
+
+    def test_wrong_entity_type_not_returned(self):
+        org = f"org-gre-type-{uuid4().hex[:8]}"
+        e = _make_entity(org, "team", "Alice Smith", "resolved")
+        result = get_resolved_entity(org, "person", "Alice Smith", [e])
+        assert result is None
+
+    def test_empty_display_name_returns_none(self):
+        org = f"org-gre-empty-{uuid4().hex[:8]}"
+        result = get_resolved_entity(org, "person", "", [])
+        assert result is None
