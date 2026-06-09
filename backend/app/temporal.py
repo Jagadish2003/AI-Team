@@ -146,14 +146,14 @@ def _build_signal_snapshot_telemetry(
     org_id: str,
     run_id: str,
     pack_id: str,
-    snapshots: list[SignalSnapshot],
+    signal_count: int,
     all_evaluated: list[DetectorEvaluation],
 ) -> RunSignalSnapshotPayload:
     return RunSignalSnapshotPayload(
         org_id=org_id,
         run_id=run_id,
         pack_id=pack_id,
-        signal_count=len(snapshots),
+        signal_count=signal_count,
         detector_count=len(all_evaluated),
         fired_count=sum(1 for evaluation in all_evaluated if evaluation.fired),
         below_threshold=sum(1 for evaluation in all_evaluated if not evaluation.fired),
@@ -241,7 +241,7 @@ def snapshot_signals(
             all_evaluated=all_evaluated,
             run_completed_at=run_completed_at,
         )
-        _insert_signal_snapshots(snapshots)
+        signal_count = _insert_signal_snapshots(snapshots)
     except Exception as exc:
         logger.warning("Signal snapshot persistence failed (non-blocking): %s", exc)
         return None
@@ -250,7 +250,7 @@ def snapshot_signals(
         org_id=org_id,
         run_id=run_id,
         pack_id=pack_id,
-        snapshots=snapshots,
+        signal_count=signal_count,
         all_evaluated=all_evaluated,
     )
     try:
