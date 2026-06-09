@@ -9,6 +9,22 @@ export interface EntitySummary {
   resolution_status: 'resolved' | 'ambiguous';
 }
 
+// Stage 2 relationship edge (T3-S13-A) — surfaced in the evidence trace.
+// Shape mirrors the backend RelationshipSummary exactly (snake_case).
+// `inferred` is load-bearing: when true the UI must prefix the relationship
+// description with the [inferred] label and use `confidence` as the numeric
+// signal. Observed edges (inferred=false) are graph truth; inferred edges are
+// co-firing hypotheses and only appear when INFERRED_RELATIONSHIPS_ENABLED.
+export interface RelationshipSummary {
+  from_entity_name: string;
+  from_entity_type: string;
+  relationship_type: string;
+  to_entity_name: string;
+  to_entity_type: string;
+  inferred: boolean;
+  confidence: number;
+}
+
 export interface OppEnrichment {
   oppId: string;
   aiSummary: string;
@@ -34,6 +50,10 @@ export interface OppEnrichment {
   pack_id?: string | null;
   // Stage 2 entity list — empty array when no entities extracted yet.
   entities: EntitySummary[];
+  // Stage 2 relationship edges — empty array by default. Observed edges only
+  // unless INFERRED_RELATIONSHIPS_ENABLED is set on the backend, in which case
+  // inferred edges (inferred=true) are also included.
+  relationships: RelationshipSummary[];
 }
 
 export interface RunEnrichment {
