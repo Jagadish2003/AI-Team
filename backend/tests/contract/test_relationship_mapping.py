@@ -43,6 +43,17 @@ T3 / AC3 coverage:
   - get_resolved_entity() returns None for ambiguous entities, preventing
     the edge from being drawn.
   - Missing / null ingestor fields are skipped without raising an exception.
+
+T8 / AC12 coverage:
+  - get_entity_relationships(org_id, entity_id) returns RelationshipSummary
+    objects for every edge where entity_id appears as from OR to endpoint.
+  - Default inferred=False returns only observed edges (inferred=0).
+  - inferred=True returns observed + inferred edges.
+  - Edges from a different org are never returned even if entity UUIDs match.
+  - Entity with no edges returns an empty list without error.
+  - Results include display_name and entity_type from the entities table.
+  - ORDER BY is deterministic: inferred ASC, relationship_type ASC,
+    from_entity_name ASC, to_entity_name ASC.
 """
 import os
 import sqlite3
@@ -58,6 +69,7 @@ from database.models.entity_relationships import (
 )
 from database.models.entities import ALL_ENTITIES_DDL, Entity
 from app.relationship_mapper import upsert_relationship
+from app.graph_query import get_entity_relationships
 
 
 def _get_db_path() -> str:
@@ -1691,3 +1703,219 @@ class TestGetProcessAndSystemEntity:
     def test_get_system_entity_returns_none_when_absent(self):
         org = f"org-gse-none-{uuid4().hex[:8]}"
         assert get_system_entity(org, ["salesforce"], []) is None
+
+
+# ---------------------------------------------------------------------------
+# T8 / AC12 — get_entity_relationships(org_id, entity_id, inferred=False)
+# ---------------------------------------------------------------------------
+
+def _insert_named_entity(
+    conn: sqlite3.Connection,
+    org_id: str,
+    display_name: str,
+    entity_type: str = "person",
+    run_id: str = "run-t8",
+) -> str:
+    """Insert a resolved entity with a specific display_name and return its id."""
+    entity = Entity(
+        org_id=org_id,
+        entity_type=entity_type,
+        canonical_name=display_name.lower().replace(" ", "-"),
+        display_name=display_name,
+        source_system="salesforce",
+        resolution_confidence=1.0,
+        resolution_status="resolved",
+        first_seen_run_id=run_id,
+        last_seen_run_id=run_id,
+        run_count=1,
+    )
+    row = entity.to_db_row()
+    conn.execute(
+        """INSERT INTO entities (
+            id, org_id, entity_type, canonical_name, display_name,
+            source_system, source_record_id, resolution_confidence,
+            resolution_status, first_seen_run_id, last_seen_run_id,
+            run_count, metadata, created_at, updated_at
+        ) VALUES (
+            :id, :org_id, :entity_type, :canonical_name, :display_name,
+            :source_system, :source_record_id, :resolution_confidence,
+            :resolution_status, :first_seen_run_id, :last_seen_run_id,
+            :run_count, :metadata, :created_at, :updated_at
+        )""",
+        row,
+    )
+    conn.commit()
+    return row["id"]
+
+
+class TestGetEntityRelationshipsAC12:
+    """AC12: get_entity_relationships(org_id, entity_id, inferred=False)."""
+
+    def _conn(self) -> sqlite3.Connection:
+        return sqlite3.connect(_get_db_path())
+
+    def test_returns_edges_where_entity_is_from_endpoint(self):
+        """Entity appearing as from_entity_id is returned."""
+        org = f"org-ac12-from-{uuid4().hex[:8]}"
+        conn = self._conn()
+        from_id = _insert_named_entity(conn, org, "Alice Summers", "person")
+        to_id = _insert_named_entity(conn, org, "Case-001", "object")
+        _insert_relationship(conn, org, from_id, to_id, "owns")
+        conn.close()
+
+        results = get_entity_relationships(org, from_id)
+        assert len(results) == 1
+        r = results[0]
+        assert r.relationship_type == "owns"
+        assert r.from_entity_name == "Alice Summers"
+        assert r.to_entity_name == "Case-001"
+        assert r.inferred is False
+        assert r.confidence == OBSERVED_CONFIDENCE
+
+    def test_returns_edges_where_entity_is_to_endpoint(self):
+        """Entity appearing as to_entity_id is also returned (bidirectional lookup)."""
+        org = f"org-ac12-to-{uuid4().hex[:8]}"
+        conn = self._conn()
+        from_id = _insert_named_entity(conn, org, "Bob Chen", "person")
+        to_id = _insert_named_entity(conn, org, "Support Team", "team")
+        _insert_relationship(conn, org, from_id, to_id, "member_of")
+        conn.close()
+
+        results = get_entity_relationships(org, to_id)
+        assert len(results) == 1
+        r = results[0]
+        assert r.relationship_type == "member_of"
+        assert r.from_entity_name == "Bob Chen"
+        assert r.to_entity_name == "Support Team"
+
+    def test_returns_both_from_and_to_edges(self):
+        """Entity as from in one edge and to in another — both are returned."""
+        org = f"org-ac12-both-{uuid4().hex[:8]}"
+        conn = self._conn()
+        # entity_a owns entity_b; entity_c escalates_to entity_a
+        a_id = _insert_named_entity(conn, org, "Entity A", "person")
+        b_id = _insert_named_entity(conn, org, "Entity B", "object")
+        c_id = _insert_named_entity(conn, org, "Entity C", "person")
+        _insert_relationship(conn, org, a_id, b_id, "owns")
+        _insert_relationship(conn, org, c_id, a_id, "escalates_to")
+        conn.close()
+
+        results = get_entity_relationships(org, a_id)
+        rel_types = {r.relationship_type for r in results}
+        assert "owns" in rel_types
+        assert "escalates_to" in rel_types
+        assert len(results) == 2
+
+    def test_default_inferred_false_excludes_inferred_edges(self):
+        """Default inferred=False filters out edges with inferred=True."""
+        org = f"org-ac12-obs-{uuid4().hex[:8]}"
+        conn = self._conn()
+        from_id = _insert_named_entity(conn, org, "Proc X", "process")
+        to_id = _insert_named_entity(conn, org, "Sys Y", "system")
+        _insert_relationship(conn, org, from_id, to_id, "depends_on", inferred=True)
+        conn.close()
+
+        # Default: inferred=False — should return nothing
+        results = get_entity_relationships(org, from_id)
+        assert results == []
+
+    def test_inferred_true_includes_inferred_edges(self):
+        """inferred=True returns edges with inferred=True as well as observed."""
+        org = f"org-ac12-inf-{uuid4().hex[:8]}"
+        conn = self._conn()
+        from_id = _insert_named_entity(conn, org, "Proc P", "process")
+        to_id_obs = _insert_named_entity(conn, org, "Sys Obs", "system")
+        to_id_inf = _insert_named_entity(conn, org, "Sys Inf", "system")
+        _insert_relationship(conn, org, from_id, to_id_obs, "depends_on", inferred=False)
+        _insert_relationship(conn, org, from_id, to_id_inf, "routes_to", inferred=True)
+        conn.close()
+
+        # With inferred=True, both edges are returned
+        results = get_entity_relationships(org, from_id, inferred=True)
+        assert len(results) == 2
+        inferred_flags = {r.inferred for r in results}
+        assert True in inferred_flags
+        assert False in inferred_flags
+
+    def test_inferred_true_flag_preserved_on_summary(self):
+        """RelationshipSummary.inferred reflects the stored value."""
+        org = f"org-ac12-flag-{uuid4().hex[:8]}"
+        conn = self._conn()
+        from_id = _insert_named_entity(conn, org, "Alice", "person")
+        to_id = _insert_named_entity(conn, org, "Beta System", "system")
+        _insert_relationship(conn, org, from_id, to_id, "routes_to", inferred=True)
+        conn.close()
+
+        results = get_entity_relationships(org, from_id, inferred=True)
+        assert len(results) == 1
+        assert results[0].inferred is True
+        assert results[0].confidence == INFERRED_CONFIDENCE
+
+    def test_cross_org_isolation(self):
+        """Edges from a different org are never returned even with the same entity UUIDs."""
+        org_a = f"org-ac12-xa-{uuid4().hex[:8]}"
+        org_b = f"org-ac12-xb-{uuid4().hex[:8]}"
+        conn = self._conn()
+        # Create entities in org_a
+        from_a = _insert_named_entity(conn, org_a, "Person A", "person")
+        to_a = _insert_named_entity(conn, org_a, "Object A", "object")
+        _insert_relationship(conn, org_a, from_a, to_a, "owns")
+        # Create identical entities in org_b with the SAME UUIDs would conflict
+        # so we use different entities but query org_b for org_a's entity_id.
+        conn.close()
+
+        # Querying org_b for an entity that only exists in org_a → empty
+        results = get_entity_relationships(org_b, from_a)
+        assert results == []
+
+    def test_no_edges_returns_empty_list(self):
+        """Entity with no edges returns an empty list without raising."""
+        org = f"org-ac12-empty-{uuid4().hex[:8]}"
+        conn = self._conn()
+        solo_id = _insert_named_entity(conn, org, "Solo Entity", "person")
+        conn.close()
+
+        results = get_entity_relationships(org, solo_id)
+        assert results == []
+
+    def test_nonexistent_entity_returns_empty_list(self):
+        """Unknown entity_id returns an empty list (no DB error)."""
+        org = f"org-ac12-noent-{uuid4().hex[:8]}"
+        results = get_entity_relationships(org, str(uuid4()))
+        assert results == []
+
+    def test_result_fields_come_from_entities_table(self):
+        """Summary display_name and entity_type are sourced from entities JOIN."""
+        org = f"org-ac12-fields-{uuid4().hex[:8]}"
+        conn = self._conn()
+        from_id = _insert_named_entity(conn, org, "Carol Davis", "person")
+        to_id = _insert_named_entity(conn, org, "Incident-999", "object")
+        _insert_relationship(conn, org, from_id, to_id, "escalates_to")
+        conn.close()
+
+        results = get_entity_relationships(org, from_id)
+        assert len(results) == 1
+        r = results[0]
+        assert r.from_entity_name == "Carol Davis"
+        assert r.from_entity_type == "person"
+        assert r.to_entity_name == "Incident-999"
+        assert r.to_entity_type == "object"
+
+    def test_order_is_deterministic(self):
+        """Results are ordered: inferred ASC, relationship_type ASC, names ASC."""
+        org = f"org-ac12-order-{uuid4().hex[:8]}"
+        conn = self._conn()
+        hub = _insert_named_entity(conn, org, "Hub Entity", "person")
+        s1 = _insert_named_entity(conn, org, "System Alpha", "system")
+        s2 = _insert_named_entity(conn, org, "System Beta", "system")
+        t1 = _insert_named_entity(conn, org, "Team Zeta", "team")
+        # Two observed edges with different relationship types
+        _insert_relationship(conn, org, hub, s1, "owns", inferred=False)
+        _insert_relationship(conn, org, hub, s2, "member_of", inferred=False)
+        _insert_relationship(conn, org, hub, t1, "depends_on", inferred=False)
+        conn.close()
+
+        results = get_entity_relationships(org, hub)
+        rel_types = [r.relationship_type for r in results]
+        # Alphabetical: depends_on < member_of < owns
+        assert rel_types == sorted(rel_types)
