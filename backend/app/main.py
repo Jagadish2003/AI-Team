@@ -88,6 +88,11 @@ async def lifespan(app: FastAPI):
     # panel never renders. Idempotent (IF NOT EXISTS) — no-op once migrated.
     from .temporal import ensure_signal_snapshots_table
     ensure_signal_snapshots_table()
+    # AUTH-1 / AT-233: ensure orgs/users/login_attempts exist for the auth layer.
+    # seed_loader.py does not run alembic, so create them idempotently here too
+    # (CREATE TABLE IF NOT EXISTS — no-op once migrations 0004/0005 have run).
+    from .auth.user_auth import ensure_auth_tables
+    ensure_auth_tables()
     # AT-90: start connector health check background job.
     from .jobs.connector_health import start_health_check_job, stop_health_check_job
     from .jobs.baseline_calculator import (
