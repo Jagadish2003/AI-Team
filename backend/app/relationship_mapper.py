@@ -825,3 +825,80 @@ def _safe_signal_source(dr: Any) -> Optional[str]:
         return None
     s = str(val).strip()
     return s or None
+
+
+# ---------------------------------------------------------------------------
+# map_relationships() — T6 runner orchestrator
+# ---------------------------------------------------------------------------
+
+def map_relationships(
+    org_id: str,
+    run_id: str,
+    ingestor_data: Dict[str, Any],
+    detector_results: List[Any],
+    entities: List[Entity],
+) -> Dict[str, int]:
+    """Single relationship-mapping entry point called by the discovery runner.
+
+    This is the ONLY relationship function runner.py invokes. It runs the two
+    mapping passes in sequence:
+      1. map_directly_observed()       — observed edges (graph truth).
+      2. map_inferred_from_detectors() — inferred co-firing edges (hypotheses).
+
+    Must be called AFTER extract_entities() completes: both passes draw edges
+    only between resolved entity rows written during extraction. Calling it
+    before extraction would find no entities and produce an empty graph.
+
+    On success it emits the relationship.mapping_completed telemetry event
+    (T9) exactly once. The event is emitted only when both passes complete —
+    if this function raises, the runner's non-blocking wrapper swallows it and
+    no event is emitted; the absence of the event alongside the runner's
+    warning log is the diagnostic signal for a failed mapping run.
+
+    Note: this function may raise (e.g. on DB errors). It is the RUNNER's
+    responsibility to wrap the call in try/except so relationship mapping is
+    never on the critical path for opportunity delivery (AC9).
+
+    Args:
+        org_id:           Workspace identifier. All edges scoped to this.
+        run_id:           Current discovery run ID.
+        ingestor_data:    Dict keyed by connector name (salesforce/servicenow/jira).
+        detector_results: DetectorResult objects from the detector phase.
+        entities:         Resolved entity list returned by extract_entities().
+
+    Returns:
+        Counts: {"observed": int, "inferred": int, "total": int}.
+    """
+    # Guarantee the table exists even if migrations have not been applied in
+    # this environment — both passes upsert into it. Idempotent.
+    ensure_entity_relationships_table()
+
+    observed = map_directly_observed(org_id, run_id, ingestor_data, entities or [])
+    inferred = map_inferred_from_detectors(org_id, run_id, detector_results or [], entities or [])
+    total = observed + inferred
+
+    # T9 telemetry — success path only, exactly once per run. Guarded so a
+    # telemetry failure never turns a successful mapping run into a failed one.
+    try:
+        from app.telemetry import record_event
+        record_event(
+            "relationship.mapping_completed",
+            {
+                "run_id": run_id,
+                "org_id": org_id,
+                "observed_edges": observed,
+                "inferred_edges": inferred,
+                "total_edges": total,
+            },
+        )
+    except Exception as exc:
+        logger.warning(
+            "relationship.mapping_completed telemetry failed: run_id=%s org_id=%s error=%s",
+            run_id, org_id, exc,
+        )
+
+    logger.info(
+        "map_relationships — run=%s org=%s observed=%d inferred=%d total=%d",
+        run_id, org_id, observed, inferred, total,
+    )
+    return {"observed": observed, "inferred": inferred, "total": total}
