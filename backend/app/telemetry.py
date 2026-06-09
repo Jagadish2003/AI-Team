@@ -174,14 +174,22 @@ class RelationshipMappingCompletedPayload(TypedDict, total=False):
     Emitted from inside relationship_mapper.map_relationships() on success only.
     The runner's non-blocking wrapper swallows any failure, so the ABSENCE of
     this event alongside a warning log is the diagnostic signal for a failed
-    mapping run. observed_edges / inferred_edges count the edges upserted this
-    run (inferred edges are always stored regardless of the surfacing flag).
+    mapping run.
+
+    observed_count   — directly observed edges written (confidence=0.9, inferred=False).
+    inferred_count   — co-firing inferred edges written (confidence=0.6, inferred=True).
+                       Always stored regardless of INFERRED_RELATIONSHIPS_ENABLED.
+    skipped_ambiguous_count — edges skipped because one endpoint had
+                       resolution_status='ambiguous'. A spike in this field
+                       signals entity-resolution quality degradation upstream.
+    mapping_duration_ms — wall-clock time for both mapping passes combined.
     """
-    run_id: NotRequired[str]
     org_id: NotRequired[str]
-    observed_edges: NotRequired[int]
-    inferred_edges: NotRequired[int]
-    total_edges: NotRequired[int]
+    run_id: NotRequired[str]
+    observed_count: NotRequired[int]
+    inferred_count: NotRequired[int]
+    skipped_ambiguous_count: NotRequired[int]
+    mapping_duration_ms: NotRequired[float]
 
 
 class RunStartedEvent(TypedDict):

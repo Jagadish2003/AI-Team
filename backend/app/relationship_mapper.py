@@ -32,6 +32,7 @@ from __future__ import annotations
 import json
 import logging
 import sqlite3
+import time
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 from uuid import uuid4
@@ -200,6 +201,31 @@ def _canonicalize(name: str) -> str:
     return " ".join(name.split()).lower()
 
 
+def _is_entity_ambiguous(
+    org_id: str,
+    entity_type: str,
+    display_name: str,
+    entities: List[Entity],
+) -> bool:
+    """Return True if the entity exists in the list but has resolution_status='ambiguous'.
+
+    Used by map_directly_observed() to distinguish "entity not found" (no skip
+    credit) from "entity found but ambiguous" (increments skipped_ambiguous_count
+    in the telemetry payload). Never raises — a broken entity list returns False.
+    """
+    if not display_name or not display_name.strip():
+        return False
+    canonical = _canonicalize(display_name)
+    for entity in entities:
+        if (
+            entity.org_id == org_id
+            and entity.entity_type == entity_type
+            and entity.canonical_name == canonical
+        ):
+            return entity.resolution_status == "ambiguous"
+    return False
+
+
 def get_resolved_entity(
     org_id: str,
     entity_type: str,
@@ -296,6 +322,7 @@ def map_directly_observed(
     run_id: str,
     ingestor_data: Dict[str, Any],
     entities: List[Entity],
+    _counters: Optional[Dict[str, int]] = None,
 ) -> int:
     """Map relationships directly observable from ingestor source fields.
 
@@ -319,6 +346,10 @@ def map_directly_observed(
         run_id:        Current discovery run ID.
         ingestor_data: Dict keyed by connector name (salesforce, jira, servicenow).
         entities:      Resolved entity list from extract_entities() for this run.
+        _counters:     Optional mutable dict. When provided, the key
+                       'skipped_ambiguous' is incremented each time an edge is
+                       skipped because one endpoint had resolution_status='ambiguous'.
+                       Callers that do not need this metric omit the argument.
 
     Returns:
         Number of upsert_relationship() calls made (created or updated edges).
@@ -344,6 +375,11 @@ def map_directly_observed(
                 person = get_resolved_entity(org_id, "person", owner_name, entities)
                 obj = get_resolved_entity(org_id, "object", obj_name, entities)
                 if person is None or obj is None:
+                    if _counters is not None and (
+                        _is_entity_ambiguous(org_id, "person", owner_name, entities)
+                        or _is_entity_ambiguous(org_id, "object", obj_name, entities)
+                    ):
+                        _counters["skipped_ambiguous"] = _counters.get("skipped_ambiguous", 0) + 1
                     continue
                 source = str(record.get("source_system") or "salesforce")
                 upsert_relationship(
@@ -378,6 +414,11 @@ def map_directly_observed(
                 person = get_resolved_entity(org_id, "person", owner_name, entities)
                 obj = get_resolved_entity(org_id, "object", obj_name, entities)
                 if person is None or obj is None:
+                    if _counters is not None and (
+                        _is_entity_ambiguous(org_id, "person", owner_name, entities)
+                        or _is_entity_ambiguous(org_id, "object", obj_name, entities)
+                    ):
+                        _counters["skipped_ambiguous"] = _counters.get("skipped_ambiguous", 0) + 1
                     continue
                 upsert_relationship(
                     org_id=org_id,
@@ -409,6 +450,11 @@ def map_directly_observed(
             person = get_resolved_entity(org_id, "person", assigned_name, entities)
             team = get_resolved_entity(org_id, "team", group_name, entities)
             if person is None or team is None:
+                if _counters is not None and (
+                    _is_entity_ambiguous(org_id, "person", assigned_name, entities)
+                    or _is_entity_ambiguous(org_id, "team", group_name, entities)
+                ):
+                    _counters["skipped_ambiguous"] = _counters.get("skipped_ambiguous", 0) + 1
                 continue
             upsert_relationship(
                 org_id=org_id,
@@ -450,6 +496,12 @@ def map_directly_observed(
                 org_id, "person", esc_name, entities
             ) or get_resolved_entity(org_id, "team", esc_name, entities)
             if from_ent is None or to_ent is None:
+                if _counters is not None and (
+                    _is_entity_ambiguous(org_id, "object", inc_number, entities)
+                    or _is_entity_ambiguous(org_id, "person", esc_name, entities)
+                    or _is_entity_ambiguous(org_id, "team", esc_name, entities)
+                ):
+                    _counters["skipped_ambiguous"] = _counters.get("skipped_ambiguous", 0) + 1
                 continue
             upsert_relationship(
                 org_id=org_id,
@@ -498,6 +550,12 @@ def map_directly_observed(
                 org_id, "person", esc_name, entities
             ) or get_resolved_entity(org_id, "team", esc_name, entities)
             if from_ent is None or to_ent is None:
+                if _counters is not None and (
+                    _is_entity_ambiguous(org_id, "object", issue_key, entities)
+                    or _is_entity_ambiguous(org_id, "person", esc_name, entities)
+                    or _is_entity_ambiguous(org_id, "team", esc_name, entities)
+                ):
+                    _counters["skipped_ambiguous"] = _counters.get("skipped_ambiguous", 0) + 1
                 continue
             upsert_relationship(
                 org_id=org_id,
@@ -873,9 +931,12 @@ def map_relationships(
     # this environment — both passes upsert into it. Idempotent.
     ensure_entity_relationships_table()
 
-    observed = map_directly_observed(org_id, run_id, ingestor_data, entities or [])
+    counters: Dict[str, int] = {"skipped_ambiguous": 0}
+    t0 = time.monotonic()
+    observed = map_directly_observed(org_id, run_id, ingestor_data, entities or [], _counters=counters)
     inferred = map_inferred_from_detectors(org_id, run_id, detector_results or [], entities or [])
-    total = observed + inferred
+    duration_ms = (time.monotonic() - t0) * 1000.0
+    skipped_ambiguous = counters.get("skipped_ambiguous", 0)
 
     # T9 telemetry — success path only, exactly once per run. Guarded so a
     # telemetry failure never turns a successful mapping run into a failed one.
@@ -884,11 +945,12 @@ def map_relationships(
         record_event(
             "relationship.mapping_completed",
             {
-                "run_id": run_id,
                 "org_id": org_id,
-                "observed_edges": observed,
-                "inferred_edges": inferred,
-                "total_edges": total,
+                "run_id": run_id,
+                "observed_count": observed,
+                "inferred_count": inferred,
+                "skipped_ambiguous_count": skipped_ambiguous,
+                "mapping_duration_ms": round(duration_ms, 2),
             },
         )
     except Exception as exc:
@@ -898,7 +960,7 @@ def map_relationships(
         )
 
     logger.info(
-        "map_relationships — run=%s org=%s observed=%d inferred=%d total=%d",
-        run_id, org_id, observed, inferred, total,
+        "map_relationships — run=%s org=%s observed=%d inferred=%d skipped_ambiguous=%d duration_ms=%.1f",
+        run_id, org_id, observed, inferred, skipped_ambiguous, duration_ms,
     )
-    return {"observed": observed, "inferred": inferred, "total": total}
+    return {"observed": observed, "inferred": inferred, "total": observed + inferred}
