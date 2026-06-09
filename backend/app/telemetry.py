@@ -160,6 +160,9 @@ class EntityExtractionCompletedPayload(TypedDict, total=False):
     run_id: NotRequired[str]
     source: NotRequired[str]
     pack_id: NotRequired[str]
+    # ENT-1 / AC5: count of service-account identities filtered out by the
+    # active entity-extraction overlay. 0 (or absent) when no overlay is active.
+    filtered_service_account_count: NotRequired[int]
 
 
 class TemporalEnrichmentCompletedPayload(TypedDict, total=False):
