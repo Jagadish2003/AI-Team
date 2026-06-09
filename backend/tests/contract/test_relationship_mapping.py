@@ -67,11 +67,14 @@ T9 / AC10 coverage:
   - A record_event() failure does not propagate out of map_relationships().
 """
 import os
+import logging
 import sqlite3
 from datetime import datetime, timezone
 from typing import get_type_hints
 from unittest.mock import patch
 from uuid import uuid4
+
+import pytest
 
 from database.models.entity_relationships import (
     ALL_ENTITY_RELATIONSHIPS_DDL,
@@ -404,6 +407,50 @@ class TestEntityRelationshipsInsertAndQuery:
         stored_types = {r["relationship_type"] for r in rows}
         assert stored_types == RELATIONSHIP_TYPES
 
+    def test_invalid_relationship_type_check_constraint_enforced(self):
+        """SQLite CHECK constraint must reject values outside RELATIONSHIP_TYPES."""
+        org = f"org-invalid-check-{uuid4().hex[:8]}"
+        with sqlite3.connect(_get_db_path()) as conn:
+            conn.execute("PRAGMA foreign_keys = OFF")
+            with pytest.raises(sqlite3.IntegrityError):
+                conn.execute(
+                    """INSERT INTO entity_relationships (
+                        id, org_id, from_entity_id, to_entity_id, relationship_type,
+                        confidence, inferred, evidence, first_seen_run_id,
+                        last_seen_run_id, run_count, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (
+                        str(uuid4()),
+                        org,
+                        str(uuid4()),
+                        str(uuid4()),
+                        "invalid_type",
+                        OBSERVED_CONFIDENCE,
+                        0,
+                        None,
+                        "run-invalid-check",
+                        "run-invalid-check",
+                        1,
+                        datetime.now(timezone.utc).isoformat(),
+                    ),
+                )
+
+    def test_sqlite_fk_off_allows_orphans_but_graph_join_omits_them(self):
+        """Document current SQLite FK behavior: orphans may exist but do not surface."""
+        org = f"org-orphan-{uuid4().hex[:8]}"
+        from_id = str(uuid4())
+        to_id = str(uuid4())
+        with sqlite3.connect(_get_db_path()) as conn:
+            conn.execute("PRAGMA foreign_keys = OFF")
+            _insert_relationship(conn, org, from_id, to_id, "owns")
+            count = conn.execute(
+                "SELECT COUNT(*) FROM entity_relationships WHERE org_id = ?",
+                (org,),
+            ).fetchone()[0]
+
+        assert count == 1
+        assert get_entity_relationships(org, from_id) == []
+
     def test_evidence_json_round_trip(self):
         org = f"org-evidence-{uuid4().hex[:8]}"
         evidence = {"field": "OwnerId", "source": "salesforce", "run_id": "run-abc"}
@@ -718,6 +765,26 @@ class TestUpsertRelationshipAC7:
             "confidence must not change on update"
         )
 
+    def test_confidence_mismatch_logged_on_update(self, caplog):
+        """Incoming confidence drift is ignored but visible in debug logs."""
+        org = f"org-conf-log-{uuid4().hex[:8]}"
+        from_id = str(uuid4())
+        to_id = str(uuid4())
+
+        upsert_relationship(
+            org_id=org, from_entity_id=from_id, to_entity_id=to_id,
+            relationship_type="depends_on", confidence=OBSERVED_CONFIDENCE,
+            inferred=False, run_id="run-001",
+        )
+        with caplog.at_level(logging.DEBUG, logger="app.relationship_mapper"):
+            upsert_relationship(
+                org_id=org, from_entity_id=from_id, to_entity_id=to_id,
+                relationship_type="depends_on", confidence=INFERRED_CONFIDENCE,
+                inferred=True, run_id="run-002",
+            )
+
+        assert any("confidence mismatch ignored" in r.getMessage() for r in caplog.records)
+
     def test_inferred_immutable_on_update(self):
         """inferred set at creation must never change."""
         org = f"org-inf-imm-{uuid4().hex[:8]}"
@@ -1008,6 +1075,36 @@ class TestMapDirectlyObservedAC2:
         assert edges[0]["to_entity_id"] == str(obj.id)
         assert float(edges[0]["confidence"]) == OBSERVED_CONFIDENCE
         assert int(edges[0]["inferred"]) == 0
+
+    def test_observed_evidence_stores_no_display_names_or_record_values(self):
+        """Evidence stores source metadata only, not ingestor display values."""
+        import json
+        org = f"org-pii-ev-{uuid4().hex[:8]}"
+        run = "run-pii-ev"
+        person = _make_entity(org, "person", "Private User", run_id=run)
+        obj = _make_entity(org, "object", "LOAN-PII-001", run_id=run)
+        _persist_entity(person)
+        _persist_entity(obj)
+
+        ingestor_data = {
+            "salesforce": {
+                "records": [
+                    {
+                        "OwnerId": "Private User",
+                        "Id": "LOAN-PII-001",
+                        "Name": "Sensitive Loan Title",
+                        "Amount": 123456,
+                    }
+                ]
+            }
+        }
+        map_directly_observed(org, run, ingestor_data, [person, obj])
+
+        evidence = json.loads(_get_edges(org, "owns")[0]["evidence"])
+        assert evidence == {"field": "OwnerId", "source": "salesforce"}
+        assert "Private User" not in json.dumps(evidence)
+        assert "LOAN-PII-001" not in json.dumps(evidence)
+        assert "Sensitive Loan Title" not in json.dumps(evidence)
 
     def test_owns_confidence_always_0_9(self):
         """confidence must be exactly 0.9 for owns — never configurable."""
@@ -1438,6 +1535,7 @@ from app.relationship_mapper import (
     get_process_entity,
     get_system_entity,
     INFERRED_VALIDATION_NOTE,
+    INFERRED_RULE_DETECTOR_IDS,
 )
 
 
@@ -1460,21 +1558,38 @@ def _make_system_entity(org_id: str, signal_source: str, run_id: str = "run-t4")
     return _make_entity(org_id, "system", signal_source, "resolved", run_id=run_id)
 
 
+class TestInferredRuleDetectorRegistry:
+    def test_rule_detector_ids_are_registered_in_pack_config(self):
+        """Co-firing rule detector IDs must match active pack detector constants."""
+        import importlib
+        from discovery.packs.pack_config import get_detector_modules, list_packs
+
+        registered: set[str] = set()
+        for pack_id in list_packs():
+            for module_path in get_detector_modules(pack_id):
+                module = importlib.import_module(module_path)
+                detector_id = getattr(module, "DETECTOR_ID", None)
+                if detector_id:
+                    registered.add(str(detector_id))
+
+        assert INFERRED_RULE_DETECTOR_IDS <= registered
+
+
 class TestMapInferredFromDetectorsAC4:
     """AC4: depends_on edge written with inferred=True, confidence=0.6 when
-    LOAN_ORIGINATION_BOTTLENECK and COVENANT_TRACKING_GAP both fire, with the
+    LOAN_ORIGINATION_ROUTING_FRICTION and COVENANT_TRACKING_GAP both fire, with the
     validation note in evidence."""
 
     def test_covenant_depends_on_loan_origination_edge_created(self):
         org = f"org-t4-ac4-{uuid4().hex[:8]}"
         run = "run-t4-ac4"
-        loan = _make_process_entity(org, "LOAN_ORIGINATION_BOTTLENECK", run)
+        loan = _make_process_entity(org, "LOAN_ORIGINATION_ROUTING_FRICTION", run)
         cov = _make_process_entity(org, "COVENANT_TRACKING_GAP", run)
         _persist_entity(loan)
         _persist_entity(cov)
 
         detectors = [
-            _DetectorResultStub("LOAN_ORIGINATION_BOTTLENECK"),
+            _DetectorResultStub("LOAN_ORIGINATION_ROUTING_FRICTION"),
             _DetectorResultStub("COVENANT_TRACKING_GAP"),
         ]
         count = map_inferred_from_detectors(org, run, detectors, [loan, cov])
@@ -1489,14 +1604,14 @@ class TestMapInferredFromDetectorsAC4:
     def test_inferred_edge_confidence_is_0_6(self):
         org = f"org-t4-conf-{uuid4().hex[:8]}"
         run = "run-t4-conf"
-        loan = _make_process_entity(org, "LOAN_ORIGINATION_BOTTLENECK", run)
+        loan = _make_process_entity(org, "LOAN_ORIGINATION_ROUTING_FRICTION", run)
         cov = _make_process_entity(org, "COVENANT_TRACKING_GAP", run)
         _persist_entity(loan)
         _persist_entity(cov)
 
         map_inferred_from_detectors(
             org, run,
-            [_DetectorResultStub("LOAN_ORIGINATION_BOTTLENECK"),
+            [_DetectorResultStub("LOAN_ORIGINATION_ROUTING_FRICTION"),
              _DetectorResultStub("COVENANT_TRACKING_GAP")],
             [loan, cov],
         )
@@ -1507,14 +1622,14 @@ class TestMapInferredFromDetectorsAC4:
     def test_inferred_edge_inferred_flag_is_true(self):
         org = f"org-t4-inf-{uuid4().hex[:8]}"
         run = "run-t4-inf"
-        loan = _make_process_entity(org, "LOAN_ORIGINATION_BOTTLENECK", run)
+        loan = _make_process_entity(org, "LOAN_ORIGINATION_ROUTING_FRICTION", run)
         cov = _make_process_entity(org, "COVENANT_TRACKING_GAP", run)
         _persist_entity(loan)
         _persist_entity(cov)
 
         map_inferred_from_detectors(
             org, run,
-            [_DetectorResultStub("LOAN_ORIGINATION_BOTTLENECK"),
+            [_DetectorResultStub("LOAN_ORIGINATION_ROUTING_FRICTION"),
              _DetectorResultStub("COVENANT_TRACKING_GAP")],
             [loan, cov],
         )
@@ -1525,14 +1640,14 @@ class TestMapInferredFromDetectorsAC4:
         import json
         org = f"org-t4-ev-{uuid4().hex[:8]}"
         run = "run-t4-ev"
-        loan = _make_process_entity(org, "LOAN_ORIGINATION_BOTTLENECK", run)
+        loan = _make_process_entity(org, "LOAN_ORIGINATION_ROUTING_FRICTION", run)
         cov = _make_process_entity(org, "COVENANT_TRACKING_GAP", run)
         _persist_entity(loan)
         _persist_entity(cov)
 
         map_inferred_from_detectors(
             org, run,
-            [_DetectorResultStub("LOAN_ORIGINATION_BOTTLENECK"),
+            [_DetectorResultStub("LOAN_ORIGINATION_ROUTING_FRICTION"),
              _DetectorResultStub("COVENANT_TRACKING_GAP")],
             [loan, cov],
         )
@@ -1541,19 +1656,19 @@ class TestMapInferredFromDetectorsAC4:
         assert ev["note"] == INFERRED_VALIDATION_NOTE
         assert ev["note"] == "Validate with Stage 3 causal analysis before treating as truth"
         assert "rationale" in ev and ev["rationale"]
-        assert set(ev["detector_ids"]) == {"LOAN_ORIGINATION_BOTTLENECK", "COVENANT_TRACKING_GAP"}
+        assert set(ev["detector_ids"]) == {"LOAN_ORIGINATION_ROUTING_FRICTION", "COVENANT_TRACKING_GAP"}
 
     def test_no_edge_when_only_one_detector_fires(self):
         org = f"org-t4-single-{uuid4().hex[:8]}"
         run = "run-t4-single"
-        loan = _make_process_entity(org, "LOAN_ORIGINATION_BOTTLENECK", run)
+        loan = _make_process_entity(org, "LOAN_ORIGINATION_ROUTING_FRICTION", run)
         cov = _make_process_entity(org, "COVENANT_TRACKING_GAP", run)
         _persist_entity(loan)
         _persist_entity(cov)
 
         # Only one of the pair fires — rule must NOT trigger.
         count = map_inferred_from_detectors(
-            org, run, [_DetectorResultStub("LOAN_ORIGINATION_BOTTLENECK")], [loan, cov]
+            org, run, [_DetectorResultStub("LOAN_ORIGINATION_ROUTING_FRICTION")], [loan, cov]
         )
         assert count == 0
         assert len(_get_edges(org, "depends_on")) == 0
@@ -1567,7 +1682,7 @@ class TestMapInferredFromDetectorsAC4:
 
         count = map_inferred_from_detectors(
             org, run,
-            [_DetectorResultStub("LOAN_ORIGINATION_BOTTLENECK"),
+            [_DetectorResultStub("LOAN_ORIGINATION_ROUTING_FRICTION"),
              _DetectorResultStub("COVENANT_TRACKING_GAP")],
             [cov],
         )
@@ -1576,12 +1691,12 @@ class TestMapInferredFromDetectorsAC4:
 
     def test_dedup_across_runs_increments_run_count(self):
         org = f"org-t4-dedup-{uuid4().hex[:8]}"
-        loan = _make_process_entity(org, "LOAN_ORIGINATION_BOTTLENECK")
+        loan = _make_process_entity(org, "LOAN_ORIGINATION_ROUTING_FRICTION")
         cov = _make_process_entity(org, "COVENANT_TRACKING_GAP")
         _persist_entity(loan)
         _persist_entity(cov)
         detectors = [
-            _DetectorResultStub("LOAN_ORIGINATION_BOTTLENECK"),
+            _DetectorResultStub("LOAN_ORIGINATION_ROUTING_FRICTION"),
             _DetectorResultStub("COVENANT_TRACKING_GAP"),
         ]
         map_inferred_from_detectors(org, "run-1", detectors, [loan, cov])
@@ -1604,9 +1719,9 @@ class TestMapInferredFromDetectorsAC11:
     def _all_entities(self, org: str, run: str) -> list:
         """Process + system entities needed by all four rules."""
         ents = [
-            _make_process_entity(org, "LOAN_ORIGINATION_BOTTLENECK", run),
+            _make_process_entity(org, "LOAN_ORIGINATION_ROUTING_FRICTION", run),
             _make_process_entity(org, "COVENANT_TRACKING_GAP", run),
-            _make_process_entity(org, "DOCUMENT_CHECKLIST_INCOMPLETE", run),
+            _make_process_entity(org, "CHECKLIST_BOTTLENECK", run),
             _make_process_entity(org, "DISBURSEMENT_OVERDUE", run),
             _make_system_entity(org, "sqlserver", run),
             _make_system_entity(org, "salesforce", run),
@@ -1617,9 +1732,9 @@ class TestMapInferredFromDetectorsAC11:
 
     def _all_detectors_fire(self) -> list:
         return [
-            _DetectorResultStub("LOAN_ORIGINATION_BOTTLENECK", "salesforce"),
+            _DetectorResultStub("LOAN_ORIGINATION_ROUTING_FRICTION", "salesforce"),
             _DetectorResultStub("COVENANT_TRACKING_GAP", "salesforce"),
-            _DetectorResultStub("DOCUMENT_CHECKLIST_INCOMPLETE", "salesforce"),
+            _DetectorResultStub("CHECKLIST_BOTTLENECK", "salesforce"),
             _DetectorResultStub("DISBURSEMENT_OVERDUE", "salesforce"),
             _DetectorResultStub("DB_SLA_BREACH_RATE", "sqlserver"),
         ]
@@ -1671,9 +1786,9 @@ class TestMapInferredFromDetectorsAC11:
         org = f"org-t4-partial-{uuid4().hex[:8]}"
         run = "run-t4-partial"
         ents = self._all_entities(org, run)
-        # Only LOAN_ORIGINATION_BOTTLENECK + COVENANT_TRACKING_GAP fire (Rule 1 only).
+        # Only LOAN_ORIGINATION_ROUTING_FRICTION + COVENANT_TRACKING_GAP fire (Rule 1 only).
         detectors = [
-            _DetectorResultStub("LOAN_ORIGINATION_BOTTLENECK", "salesforce"),
+            _DetectorResultStub("LOAN_ORIGINATION_ROUTING_FRICTION", "salesforce"),
             _DetectorResultStub("COVENANT_TRACKING_GAP", "salesforce"),
         ]
         count = map_inferred_from_detectors(org, run, detectors, ents)

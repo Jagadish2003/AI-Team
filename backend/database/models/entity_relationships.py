@@ -10,6 +10,12 @@ inferred and confidence are load-bearing columns:
 
 Column renames or removals require coordinated updates in all downstream
 stories simultaneously.
+
+SQLite note: from_entity_id and to_entity_id declare foreign keys, but SQLite
+does not enforce them unless each connection runs PRAGMA foreign_keys = ON.
+Current graph queries INNER JOIN entities, so orphaned relationship rows are
+not surfaced, but cleanup jobs should enable the PRAGMA before deleting
+entities.
 """
 from __future__ import annotations
 

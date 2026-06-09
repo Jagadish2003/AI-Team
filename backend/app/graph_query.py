@@ -21,9 +21,10 @@ T8 deliverable:
       INFERRED_RELATIONSHIPS_ENABLED is active. Any caller that omits the
       parameter safely gets observed edges only.
 
-T5 queries are scoped to org_id (cross-org isolation) and to the run via
-last_seen_run_id — the run pipeline re-confirms every current edge each run,
-so last_seen_run_id = run_id identifies the edges belonging to that run's graph.
+T5 queries are scoped to org_id (cross-org isolation) and to the queried run's
+chronological position. A relationship remains visible for every run at or
+after first_seen_run_id, even when a later upsert moves last_seen_run_id
+forward.
 
 T8 query is entity-scoped, not run-scoped: it returns edges across all runs
 that involve the specified entity. This is intentional — graph traversal must
@@ -64,8 +65,9 @@ class RelationshipSummary(BaseModel):
     confidence: float
 
 
-# Edge row joined to both endpoint entities for display names/types. INNER JOIN:
-# an edge whose endpoints are not resolvable to entities cannot produce a
+# Edge row joined to both endpoint entities for display names/types, and to
+# runs for chronological visibility and run/org ownership. INNER JOIN:
+# an edge whose endpoints or first-seen run are not resolvable cannot produce a
 # summary and is omitted. Ordered deterministically for stable responses.
 _SELECT_EDGES = """
     SELECT
@@ -77,10 +79,20 @@ _SELECT_EDGES = """
         et.display_name      AS to_entity_name,
         et.entity_type       AS to_entity_type
     FROM entity_relationships er
+    JOIN runs queried_run ON queried_run.id = ?
+    JOIN runs first_seen_run ON first_seen_run.id = er.first_seen_run_id
     JOIN entities ef ON ef.id = er.from_entity_id AND ef.org_id = er.org_id
     JOIN entities et ON et.id = er.to_entity_id   AND et.org_id = er.org_id
     WHERE er.org_id = ?
-      AND er.last_seen_run_id = ?
+      AND COALESCE(
+            json_extract(queried_run.payload, '$.org_id'),
+            json_extract(queried_run.payload, '$.orgId')
+          ) = er.org_id
+      AND COALESCE(
+            json_extract(first_seen_run.payload, '$.org_id'),
+            json_extract(first_seen_run.payload, '$.orgId')
+          ) = er.org_id
+      AND first_seen_run.rowid <= queried_run.rowid
       {inferred_filter}
     ORDER BY er.inferred ASC, er.relationship_type ASC,
              ef.display_name ASC, et.display_name ASC
@@ -95,7 +107,7 @@ def _query(org_id: str, run_id: str, observed_only: bool) -> List[RelationshipSu
     conn = db.connect()
     try:
         conn.row_factory = sqlite3.Row
-        rows = conn.execute(sql, (org_id, run_id)).fetchall()
+        rows = conn.execute(sql, (run_id, org_id)).fetchall()
     finally:
         conn.close()
 
@@ -149,8 +161,11 @@ def select_relationships(org_id: str, run_id: str) -> List[RelationshipSummary]:
 
 # Entity-scoped SQL: returns all edges where the entity appears as either
 # endpoint, across all runs. Separate template from _SELECT_EDGES because:
-# (a) filter is on entity_id + org_id rather than last_seen_run_id, and
+# (a) filter is on entity_id + org_id rather than run chronology, and
 # (b) ORDER BY is the same deterministic ordering so callers get stable results.
+# TODO(T3-S14): add pagination before this is exposed as a broad public API.
+# Current Sprint 13 callers use internal, single-hop lookups with small
+# row-count ceilings: a handful of edges per entity in demo/offline packs.
 _SELECT_ENTITY_EDGES = """
     SELECT
         er.relationship_type AS relationship_type,

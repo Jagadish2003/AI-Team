@@ -46,6 +46,19 @@ from database.models.entity_relationships import (
     OBSERVED_CONFIDENCE,
 )
 
+try:
+    from discovery.detectors.checklist_bottleneck import DETECTOR_ID as CHECKLIST_BOTTLENECK_DETECTOR_ID
+    from discovery.detectors.covenant_tracking_gap import DETECTOR_ID as COVENANT_TRACKING_DETECTOR_ID
+    from discovery.detectors.db_sla_breach_rate import DETECTOR_ID as DB_SLA_BREACH_RATE_DETECTOR_ID
+    from discovery.detectors.disbursement_overdue import DETECTOR_ID as DISBURSEMENT_OVERDUE_DETECTOR_ID
+    from discovery.detectors.loan_origination_routing_friction import DETECTOR_ID as LOAN_ORIGINATION_DETECTOR_ID
+except ModuleNotFoundError:  # project-root execution uses backend as package
+    from backend.discovery.detectors.checklist_bottleneck import DETECTOR_ID as CHECKLIST_BOTTLENECK_DETECTOR_ID
+    from backend.discovery.detectors.covenant_tracking_gap import DETECTOR_ID as COVENANT_TRACKING_DETECTOR_ID
+    from backend.discovery.detectors.db_sla_breach_rate import DETECTOR_ID as DB_SLA_BREACH_RATE_DETECTOR_ID
+    from backend.discovery.detectors.disbursement_overdue import DETECTOR_ID as DISBURSEMENT_OVERDUE_DETECTOR_ID
+    from backend.discovery.detectors.loan_origination_routing_friction import DETECTOR_ID as LOAN_ORIGINATION_DETECTOR_ID
+
 logger = logging.getLogger(__name__)
 
 
@@ -117,6 +130,9 @@ def upsert_relationship(
     """
     from_str = str(from_entity_id)
     to_str = str(to_entity_id)
+    # PII guard: mapper-owned evidence stores field/source names, detector IDs,
+    # and rationale only. Do not pass raw display names, case titles, amounts,
+    # or external record values into this generic persistence helper.
     evidence_json = json.dumps(evidence) if evidence is not None else None
 
     conn = _connect()
@@ -161,6 +177,16 @@ def upsert_relationship(
         else:
             # UPDATE path: increment run_count, update last_seen and evidence.
             # confidence, inferred, and first_seen_run_id are never changed.
+            stored_confidence = float(existing["confidence"])
+            if abs(stored_confidence - float(confidence)) > 1e-9:
+                logger.debug(
+                    "upsert_relationship confidence mismatch ignored: org_id=%s "
+                    "relationship_type=%s stored_confidence=%.3f incoming_confidence=%.3f",
+                    org_id,
+                    relationship_type,
+                    stored_confidence,
+                    float(confidence),
+                )
             conn.execute(
                 """
                 UPDATE entity_relationships
@@ -617,21 +643,21 @@ INFERRED_VALIDATION_NOTE = (
 _NCINO_DEPENDS_ON_RULES: tuple[tuple[frozenset[str], str, str], ...] = (
     # Rule 1: Covenant Review depends_on Loan Origination.
     (
-        frozenset({"LOAN_ORIGINATION_BOTTLENECK", "COVENANT_TRACKING_GAP"}),
-        "COVENANT_TRACKING_GAP",
-        "LOAN_ORIGINATION_BOTTLENECK",
+        frozenset({LOAN_ORIGINATION_DETECTOR_ID, COVENANT_TRACKING_DETECTOR_ID}),
+        COVENANT_TRACKING_DETECTOR_ID,
+        LOAN_ORIGINATION_DETECTOR_ID,
     ),
     # Rule 2: Document Collection depends_on Loan Origination.
     (
-        frozenset({"LOAN_ORIGINATION_BOTTLENECK", "DOCUMENT_CHECKLIST_INCOMPLETE"}),
-        "DOCUMENT_CHECKLIST_INCOMPLETE",
-        "LOAN_ORIGINATION_BOTTLENECK",
+        frozenset({LOAN_ORIGINATION_DETECTOR_ID, CHECKLIST_BOTTLENECK_DETECTOR_ID}),
+        CHECKLIST_BOTTLENECK_DETECTOR_ID,
+        LOAN_ORIGINATION_DETECTOR_ID,
     ),
     # Rule 3: Disbursement depends_on Covenant Review.
     (
-        frozenset({"DISBURSEMENT_OVERDUE", "COVENANT_TRACKING_GAP"}),
-        "DISBURSEMENT_OVERDUE",
-        "COVENANT_TRACKING_GAP",
+        frozenset({DISBURSEMENT_OVERDUE_DETECTOR_ID, COVENANT_TRACKING_DETECTOR_ID}),
+        DISBURSEMENT_OVERDUE_DETECTOR_ID,
+        COVENANT_TRACKING_DETECTOR_ID,
     ),
 )
 
@@ -639,7 +665,14 @@ _NCINO_DEPENDS_ON_RULES: tuple[tuple[frozenset[str], str, str], ...] = (
 # DB_SLA_BREACH_RATE co-fire, the SQL Server ITSM system routes_to Salesforce.
 # Systems are resolved by signal_source; the alias lists below are the fallback
 # canonical names when a detector's signal_source is absent from the run.
-_ROUTES_TO_RULE_DETECTORS = frozenset({"COVENANT_TRACKING_GAP", "DB_SLA_BREACH_RATE"})
+_ROUTES_TO_RULE_DETECTORS = frozenset(
+    {COVENANT_TRACKING_DETECTOR_ID, DB_SLA_BREACH_RATE_DETECTOR_ID}
+)
+INFERRED_RULE_DETECTOR_IDS = frozenset(
+    detector_id
+    for required, _, _ in _NCINO_DEPENDS_ON_RULES
+    for detector_id in required
+) | _ROUTES_TO_RULE_DETECTORS
 _SQLSERVER_SYSTEM_ALIASES = (
     "sqlserver", "sql server", "sql_server", "mssql", "microsoft sql server",
 )
@@ -741,10 +774,10 @@ def map_inferred_from_detectors(
     controls surfacing (T5), not storage. All edges have confidence=0.6 and
     inferred=True — set here as constants, never parameterised.
 
-    Four nCino co-firing rules (Section 6):
-      1. LOAN_ORIGINATION_BOTTLENECK + COVENANT_TRACKING_GAP
+    Four co-firing rules (Section 6):
+      1. LOAN_ORIGINATION_ROUTING_FRICTION + COVENANT_TRACKING_GAP
          -> Covenant Review depends_on Loan Origination
-      2. LOAN_ORIGINATION_BOTTLENECK + DOCUMENT_CHECKLIST_INCOMPLETE
+      2. LOAN_ORIGINATION_ROUTING_FRICTION + CHECKLIST_BOTTLENECK
          -> Document Collection depends_on Loan Origination
       3. DISBURSEMENT_OVERDUE + COVENANT_TRACKING_GAP
          -> Disbursement depends_on Covenant Review
@@ -819,8 +852,8 @@ def map_inferred_from_detectors(
     # Rule 4: System -> System routes_to edge (SQL Server -> Salesforce).
     if _ROUTES_TO_RULE_DETECTORS.issubset(fired):
         try:
-            from_source = source_by_detector.get("DB_SLA_BREACH_RATE")
-            to_source = source_by_detector.get("COVENANT_TRACKING_GAP")
+            from_source = source_by_detector.get(DB_SLA_BREACH_RATE_DETECTOR_ID)
+            to_source = source_by_detector.get(COVENANT_TRACKING_DETECTOR_ID)
             from_system = get_system_entity(
                 org_id,
                 [from_source, *_SQLSERVER_SYSTEM_ALIASES],
@@ -847,7 +880,7 @@ def map_inferred_from_detectors(
                     inferred=True,
                     run_id=run_id,
                     evidence=_inferred_evidence(
-                        ["COVENANT_TRACKING_GAP", "DB_SLA_BREACH_RATE"]
+                        [COVENANT_TRACKING_DETECTOR_ID, DB_SLA_BREACH_RATE_DETECTOR_ID]
                     ),
                 )
                 count += 1
@@ -883,6 +916,36 @@ def _safe_signal_source(dr: Any) -> Optional[str]:
         return None
     s = str(val).strip()
     return s or None
+
+
+def _record_mapping_completed(
+    *,
+    org_id: str,
+    run_id: str,
+    observed: int,
+    inferred: int,
+    skipped_ambiguous: int,
+    duration_ms: float,
+) -> None:
+    """Emit relationship.mapping_completed once without letting telemetry fail mapping."""
+    try:
+        from app.telemetry import record_event
+        record_event(
+            "relationship.mapping_completed",
+            {
+                "org_id": org_id,
+                "run_id": run_id,
+                "observed_count": observed,
+                "inferred_count": inferred,
+                "skipped_ambiguous_count": skipped_ambiguous,
+                "mapping_duration_ms": round(duration_ms, 2),
+            },
+        )
+    except Exception as exc:
+        logger.warning(
+            "relationship.mapping_completed telemetry failed: run_id=%s org_id=%s error=%s",
+            run_id, org_id, exc,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -931,8 +994,26 @@ def map_relationships(
     # this environment — both passes upsert into it. Idempotent.
     ensure_entity_relationships_table()
 
-    counters: Dict[str, int] = {"skipped_ambiguous": 0}
     t0 = time.monotonic()
+    if not entities:
+        duration_ms = (time.monotonic() - t0) * 1000.0
+        logger.warning("map_relationships skipped: no entities from extraction")
+        _record_mapping_completed(
+            org_id=org_id,
+            run_id=run_id,
+            observed=0,
+            inferred=0,
+            skipped_ambiguous=0,
+            duration_ms=duration_ms,
+        )
+        logger.info(
+            "map_relationships — run=%s org=%s observed=0 inferred=0 "
+            "skipped_ambiguous=0 duration_ms=%.1f",
+            run_id, org_id, duration_ms,
+        )
+        return {"observed": 0, "inferred": 0, "total": 0}
+
+    counters: Dict[str, int] = {"skipped_ambiguous": 0}
     observed = map_directly_observed(org_id, run_id, ingestor_data, entities or [], _counters=counters)
     inferred = map_inferred_from_detectors(org_id, run_id, detector_results or [], entities or [])
     duration_ms = (time.monotonic() - t0) * 1000.0
@@ -940,24 +1021,14 @@ def map_relationships(
 
     # T9 telemetry — success path only, exactly once per run. Guarded so a
     # telemetry failure never turns a successful mapping run into a failed one.
-    try:
-        from app.telemetry import record_event
-        record_event(
-            "relationship.mapping_completed",
-            {
-                "org_id": org_id,
-                "run_id": run_id,
-                "observed_count": observed,
-                "inferred_count": inferred,
-                "skipped_ambiguous_count": skipped_ambiguous,
-                "mapping_duration_ms": round(duration_ms, 2),
-            },
-        )
-    except Exception as exc:
-        logger.warning(
-            "relationship.mapping_completed telemetry failed: run_id=%s org_id=%s error=%s",
-            run_id, org_id, exc,
-        )
+    _record_mapping_completed(
+        org_id=org_id,
+        run_id=run_id,
+        observed=observed,
+        inferred=inferred,
+        skipped_ambiguous=skipped_ambiguous,
+        duration_ms=duration_ms,
+    )
 
     logger.info(
         "map_relationships — run=%s org=%s observed=%d inferred=%d skipped_ambiguous=%d duration_ms=%.1f",

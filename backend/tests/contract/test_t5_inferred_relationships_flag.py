@@ -28,6 +28,7 @@ from uuid import uuid4
 
 import pytest
 
+from app import db
 from app import config
 from app.graph_query import (
     RelationshipSummary,
@@ -42,6 +43,10 @@ from database.models.entity_relationships import INFERRED_CONFIDENCE, OBSERVED_C
 
 def _get_db_path() -> str:
     return os.environ["DB_PATH"]
+
+
+def _seed_run(org_id: str, run_id: str) -> None:
+    db.run_set(run_id, {"id": run_id, "runId": run_id, "status": "complete", "org_id": org_id})
 
 
 def _insert_entity(
@@ -86,6 +91,7 @@ def _insert_entity(
 
 def _seed_observed_edge(org_id: str, run_id: str, rtype: str = "owns") -> None:
     """Create one observed edge (inferred=False) between two resolved entities."""
+    _seed_run(org_id, run_id)
     from_id = _insert_entity(org_id, "person", "Observed Person", run_id)
     to_id = _insert_entity(org_id, "object", "Observed Object", run_id)
     upsert_relationship(
@@ -97,6 +103,7 @@ def _seed_observed_edge(org_id: str, run_id: str, rtype: str = "owns") -> None:
 
 def _seed_inferred_edge(org_id: str, run_id: str) -> None:
     """Create one inferred edge (inferred=True, confidence=0.6)."""
+    _seed_run(org_id, run_id)
     from_id = _insert_entity(org_id, "process", "Covenant Process", run_id)
     to_id = _insert_entity(org_id, "process", "Loan Process", run_id)
     upsert_relationship(
@@ -171,30 +178,67 @@ class TestQueryFunctions:
     def test_observed_query_scoped_to_org(self):
         org_a = f"org-a-{uuid4().hex[:8]}"
         org_b = f"org-b-{uuid4().hex[:8]}"
-        run = "run-iso"
-        _seed_observed_edge(org_a, run)
-        _seed_observed_edge(org_b, run)
+        run_a = "run-iso-a"
+        run_b = "run-iso-b"
+        _seed_observed_edge(org_a, run_a)
+        _seed_observed_edge(org_b, run_b)
 
-        assert len(get_observed_relationships(org_a, run)) == 1
-        assert len(get_observed_relationships(org_b, run)) == 1
+        assert len(get_observed_relationships(org_a, run_a)) == 1
+        assert len(get_observed_relationships(org_b, run_b)) == 1
+        assert get_observed_relationships(org_a, run_b) == []
 
     def test_all_query_scoped_to_org(self):
         org_a = f"org-a-all-{uuid4().hex[:8]}"
         org_b = f"org-b-all-{uuid4().hex[:8]}"
-        run = "run-iso-all"
-        _seed_observed_edge(org_a, run)
-        _seed_inferred_edge(org_a, run)
-        _seed_observed_edge(org_b, run)
+        run_a = "run-iso-all-a"
+        run_b = "run-iso-all-b"
+        _seed_observed_edge(org_a, run_a)
+        _seed_inferred_edge(org_a, run_a)
+        _seed_observed_edge(org_b, run_b)
 
-        assert len(get_all_relationships(org_a, run)) == 2
-        assert len(get_all_relationships(org_b, run)) == 1
+        assert len(get_all_relationships(org_a, run_a)) == 2
+        assert len(get_all_relationships(org_b, run_b)) == 1
+        assert get_all_relationships(org_b, run_a) == []
 
     def test_scoped_to_run(self):
         org = f"org-run-{uuid4().hex[:8]}"
-        _seed_observed_edge(org, "run-1")
-        _seed_observed_edge(org, "run-2")
-        assert len(get_observed_relationships(org, "run-1")) == 1
-        assert len(get_observed_relationships(org, "run-2")) == 1
+        run_1 = f"run-scope-1-{uuid4().hex[:6]}"
+        run_2 = f"run-scope-2-{uuid4().hex[:6]}"
+        _seed_observed_edge(org, run_1)
+        _seed_observed_edge(org, run_2)
+        assert len(get_observed_relationships(org, run_1)) == 1
+        assert len(get_observed_relationships(org, run_2)) == 2
+
+    def test_relationship_visible_in_first_run_after_later_upsert(self):
+        """Regression: last_seen_run_id moving forward must not erase run-1 history."""
+        org = f"org-run-history-{uuid4().hex[:8]}"
+        run_1 = f"run-history-1-{uuid4().hex[:6]}"
+        run_2 = f"run-history-2-{uuid4().hex[:6]}"
+        _seed_run(org, run_1)
+        _seed_run(org, run_2)
+        from_id = _insert_entity(org, "person", "History Person", run_1)
+        to_id = _insert_entity(org, "object", "History Object", run_1)
+
+        upsert_relationship(
+            org_id=org, from_entity_id=from_id, to_entity_id=to_id,
+            relationship_type="owns", confidence=OBSERVED_CONFIDENCE,
+            inferred=False, run_id=run_1, evidence={"field": "OwnerId"},
+        )
+        upsert_relationship(
+            org_id=org, from_entity_id=from_id, to_entity_id=to_id,
+            relationship_type="owns", confidence=OBSERVED_CONFIDENCE,
+            inferred=False, run_id=run_2, evidence={"field": "OwnerId"},
+        )
+
+        assert len(get_observed_relationships(org, run_1)) == 1
+        assert len(get_observed_relationships(org, run_2)) == 1
+
+    def test_observed_query_excludes_inferred_edge_without_python_bool_filter(self):
+        org = f"org-bool-{uuid4().hex[:8]}"
+        run = "run-bool-filter"
+        _seed_inferred_edge(org, run)
+
+        assert get_observed_relationships(org, run) == []
 
     def test_empty_graph_returns_empty_list(self):
         org = f"org-empty-{uuid4().hex[:8]}"
@@ -257,6 +301,20 @@ class TestSelectRelationshipsAC5AC6:
         assert len(select_relationships(org, run)) == 1
         monkeypatch.setenv("INFERRED_RELATIONSHIPS_ENABLED", "true")
         assert len(select_relationships(org, run)) == 2
+
+    def test_select_uses_callable_not_import_time_snapshot(self, monkeypatch):
+        """Regression: env changes after import must affect select_relationships()."""
+        monkeypatch.delenv("INFERRED_RELATIONSHIPS_ENABLED", raising=False)
+        assert config.INFERRED_RELATIONSHIPS_ENABLED is False
+        org = f"org-calltime-{uuid4().hex[:8]}"
+        run = f"run-calltime-{uuid4().hex[:6]}"
+        _seed_observed_edge(org, run)
+        _seed_inferred_edge(org, run)
+
+        monkeypatch.setenv("INFERRED_RELATIONSHIPS_ENABLED", "true")
+        result = select_relationships(org, run)
+        assert len(result) == 2
+        assert any(edge.inferred for edge in result)
 
 
 # ---------------------------------------------------------------------------

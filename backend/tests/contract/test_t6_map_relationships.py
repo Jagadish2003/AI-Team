@@ -94,14 +94,14 @@ class TestMapRelationshipsOrchestrator:
         run = "run-t6-both"
         person = _make_entity(org, "person", "Sarah Chen", run)
         obj = _make_entity(org, "object", "LOAN-001", run)
-        loan = _make_entity(org, "process", "LOAN_ORIGINATION_BOTTLENECK", run)
+        loan = _make_entity(org, "process", "LOAN_ORIGINATION_ROUTING_FRICTION", run)
         cov = _make_entity(org, "process", "COVENANT_TRACKING_GAP", run)
         for e in (person, obj, loan, cov):
             _persist(e)
 
         ingestor_data = {"salesforce": {"records": [{"OwnerId": "Sarah Chen", "Id": "LOAN-001"}]}}
         detectors = [
-            _DetectorResultStub("LOAN_ORIGINATION_BOTTLENECK"),
+            _DetectorResultStub("LOAN_ORIGINATION_ROUTING_FRICTION"),
             _DetectorResultStub("COVENANT_TRACKING_GAP"),
         ]
 
@@ -113,10 +113,15 @@ class TestMapRelationshipsOrchestrator:
         assert len(_edges(org, "owns")) == 1
         assert len(_edges(org, "depends_on")) == 1
 
-    def test_empty_inputs_no_edges_no_raise(self):
+    def test_empty_inputs_no_edges_no_raise(self, caplog):
         org = f"org-t6-empty-{uuid4().hex[:8]}"
-        counts = map_relationships(org, "run-empty", {}, [], [])
+        with caplog.at_level(logging.WARNING, logger="app.relationship_mapper"):
+            counts = map_relationships(org, "run-empty", {}, [], [])
         assert counts == {"observed": 0, "inferred": 0, "total": 0}
+        assert any(
+            "map_relationships skipped: no entities from extraction" in r.getMessage()
+            for r in caplog.records
+        )
 
 
 # ---------------------------------------------------------------------------

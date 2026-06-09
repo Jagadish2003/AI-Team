@@ -571,6 +571,8 @@ def run(
     # completes and OppEnrichment.relationships simply defaults to empty (AC9).
     try:
         from app.relationship_mapper import map_relationships
+        if not entities:
+            logger.warning("map_relationships skipped: no entities from extraction")
         map_relationships(
             org_id=org_id,
             run_id=run_id,

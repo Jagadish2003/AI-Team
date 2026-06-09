@@ -172,6 +172,21 @@ def _org_candidates_for_run(run: Dict[str, Any]) -> List[str]:
     return result
 
 
+def _run_org_id(run: Dict[str, Any]) -> Optional[str]:
+    """Return the explicit org on a run payload, if present."""
+    inputs = run.get("inputs") or {}
+    candidates: List[Optional[str]] = [
+        run.get("org_id"),
+        run.get("orgId"),
+        inputs.get("org_id") if isinstance(inputs, dict) else None,
+        inputs.get("orgId") if isinstance(inputs, dict) else None,
+    ]
+    for candidate in candidates:
+        if candidate:
+            return str(candidate)
+    return None
+
+
 def _find_stored_opp(run_id: str, opp_id: str) -> Optional[Dict[str, Any]]:
     opps = db.run_kv_get("opps", run_id, []) or []
     return next((o for o in opps if isinstance(o, dict) and o.get("id") == opp_id), None)
@@ -324,6 +339,11 @@ def _load_relationship_summaries(run_id: str) -> List[RelationshipSummary]:
     time: observed-only by default, observed + inferred when the flag is on.
     org_id is taken from the request tenancy context so queries stay org-scoped.
 
+    Architecture note: relationships are intentionally loaded live from the
+    queryable entity_relationships table instead of from a run-scoped KV
+    artifact. The graph is cross-run state, so future upserts can affect what
+    a historical run's relationship view returns.
+
     Never raises — relationship surfacing is advisory and must not break the
     enrichment response. Returns an empty list when the graph is empty, the
     org context is missing, or any query error occurs.
@@ -333,6 +353,22 @@ def _load_relationship_summaries(run_id: str) -> List[RelationshipSummary]:
         org_id = get_current_org_id()
     except Exception as exc:
         logger.debug("relationship load skipped — org context unavailable: %s", exc)
+        return []
+    try:
+        run = db.get_run(run_id)
+    except Exception as exc:
+        logger.debug("relationship load skipped — run lookup failed for %s: %s", run_id, exc)
+        return []
+    if run is None:
+        return []
+    run_org_id = _run_org_id(run)
+    if run_org_id != org_id:
+        logger.debug(
+            "relationship load skipped — run %s belongs to org %s, request org %s",
+            run_id,
+            run_org_id,
+            org_id,
+        )
         return []
     try:
         return select_relationships(org_id, run_id)
