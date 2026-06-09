@@ -84,9 +84,55 @@ describe("RegisterPage", () => {
     expect(link.getAttribute("href")).toBe("/login");
   });
 
-  it("renders the POC session-refresh notice", () => {
+  // ── Email format validation ──────────────────────────────────────────────────
+
+  it("shows an error and disables submit for an invalid email format", () => {
     renderPage();
-    expect(screen.getByText(/keep this browser tab open/i)).toBeTruthy();
+    fillForm("Acme Corp", "not-an-email", "password123");
+    expect(screen.getByText(/valid email address/i)).toBeTruthy();
+    const btn = screen.getByRole("button", { name: /create account/i }) as HTMLButtonElement;
+    expect(btn.disabled).toBe(true);
+  });
+
+  it("accepts a dotted-local-part email such as abc.m@xy.org", () => {
+    renderPage();
+    fillForm("Acme Corp", "abc.m@xy.org", "password123");
+    expect(screen.queryByText(/valid email address/i)).toBeNull();
+    const btn = screen.getByRole("button", { name: /create account/i }) as HTMLButtonElement;
+    expect(btn.disabled).toBe(false);
+  });
+
+  // ── Dynamic "min. 8 characters" hint ─────────────────────────────────────────
+
+  it("shows the length hint only while the password is too short", () => {
+    renderPage();
+    const [pwd] = screen.getAllByPlaceholderText("••••••••");
+
+    fireEvent.change(pwd, { target: { value: "abc" } });
+    expect(screen.getByText(/enter minimum of 8 characters/i)).toBeTruthy();
+
+    fireEvent.change(pwd, { target: { value: "abcdefgh" } });
+    expect(screen.queryByText(/enter minimum of 8 characters/i)).toBeNull();
+  });
+
+  it("does not show the length hint when the password field is empty", () => {
+    renderPage();
+    expect(screen.queryByText(/enter minimum of 8 characters/i)).toBeNull();
+  });
+
+  // ── Show/hide password ───────────────────────────────────────────────────────
+
+  it("toggles the two password fields independently via their eye buttons", () => {
+    renderPage();
+    const [pwd, confirm] = screen.getAllByPlaceholderText("••••••••") as HTMLInputElement[];
+    const eyeButtons = screen.getAllByRole("button", { name: /show password/i });
+
+    expect(pwd.type).toBe("password");
+    expect(confirm.type).toBe("password");
+
+    fireEvent.click(eyeButtons[0]);
+    expect(pwd.type).toBe("text");
+    expect(confirm.type).toBe("password"); // second field unaffected
   });
 
   // ── Disabled state ─────────────────────────────────────────────────────────

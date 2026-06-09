@@ -56,7 +56,7 @@ describe("LoginPage", () => {
   it("renders email and password fields", () => {
     renderPage();
     expect(screen.getByLabelText(/email/i)).toBeTruthy();
-    expect(screen.getByLabelText(/password/i)).toBeTruthy();
+    expect(screen.getByLabelText("Password")).toBeTruthy();
   });
 
   it("renders the sign in button", () => {
@@ -68,6 +68,20 @@ describe("LoginPage", () => {
     renderPage();
     const link = screen.getByRole("link", { name: /register/i });
     expect(link.getAttribute("href")).toBe("/register");
+  });
+
+  // ── Show/hide password ───────────────────────────────────────────────────────
+
+  it("toggles password visibility via the eye button", () => {
+    renderPage();
+    const pwd = screen.getByLabelText("Password") as HTMLInputElement;
+    expect(pwd.type).toBe("password");
+
+    fireEvent.click(screen.getByRole("button", { name: /show password/i }));
+    expect(pwd.type).toBe("text");
+
+    fireEvent.click(screen.getByRole("button", { name: /hide password/i }));
+    expect(pwd.type).toBe("password");
   });
 
   // ── Submit disabled state ──────────────────────────────────────────────────
@@ -83,11 +97,39 @@ describe("LoginPage", () => {
     fireEvent.change(screen.getByLabelText(/email/i), {
       target: { value: "user@example.com" },
     });
-    fireEvent.change(screen.getByLabelText(/password/i), {
-      target: { value: "secret" },
+    fireEvent.change(screen.getByLabelText("Password"), {
+      target: { value: "password1" },
     });
     const btn = screen.getByRole("button", { name: /sign in/i }) as HTMLButtonElement;
     expect(btn.disabled).toBe(false);
+  });
+
+  // ── Inline validation (mirrors RegisterPage) ─────────────────────────────────
+
+  it("shows an email error and disables submit for an invalid email format", () => {
+    renderPage();
+    fireEvent.change(screen.getByLabelText(/email/i), {
+      target: { value: "not-an-email" },
+    });
+    fireEvent.change(screen.getByLabelText("Password"), {
+      target: { value: "password1" },
+    });
+    expect(screen.getByText(/valid email address/i)).toBeTruthy();
+    const btn = screen.getByRole("button", { name: /sign in/i }) as HTMLButtonElement;
+    expect(btn.disabled).toBe(true);
+  });
+
+  it("shows a length error and disables submit when the password is under 8 chars", () => {
+    renderPage();
+    fireEvent.change(screen.getByLabelText(/email/i), {
+      target: { value: "user@example.com" },
+    });
+    fireEvent.change(screen.getByLabelText("Password"), {
+      target: { value: "short" },
+    });
+    expect(screen.getByText(/enter minimum of 8 characters/i)).toBeTruthy();
+    const btn = screen.getByRole("button", { name: /sign in/i }) as HTMLButtonElement;
+    expect(btn.disabled).toBe(true);
   });
 
   // ── Successful login ───────────────────────────────────────────────────────
@@ -99,7 +141,7 @@ describe("LoginPage", () => {
     fireEvent.change(screen.getByLabelText(/email/i), {
       target: { value: "  USER@Example.COM  " },
     });
-    fireEvent.change(screen.getByLabelText(/password/i), {
+    fireEvent.change(screen.getByLabelText("Password"), {
       target: { value: "mypassword" },
     });
     fireEvent.click(screen.getByRole("button", { name: /sign in/i }));
@@ -116,8 +158,8 @@ describe("LoginPage", () => {
     fireEvent.change(screen.getByLabelText(/email/i), {
       target: { value: "user@example.com" },
     });
-    fireEvent.change(screen.getByLabelText(/password/i), {
-      target: { value: "pass" },
+    fireEvent.change(screen.getByLabelText("Password"), {
+      target: { value: "password1" },
     });
     fireEvent.click(screen.getByRole("button", { name: /sign in/i }));
 
@@ -135,8 +177,8 @@ describe("LoginPage", () => {
     fireEvent.change(screen.getByLabelText(/email/i), {
       target: { value: "user@example.com" },
     });
-    fireEvent.change(screen.getByLabelText(/password/i), {
-      target: { value: "wrong" },
+    fireEvent.change(screen.getByLabelText("Password"), {
+      target: { value: "wrongpass1" },
     });
     fireEvent.click(screen.getByRole("button", { name: /sign in/i }));
 
@@ -154,8 +196,8 @@ describe("LoginPage", () => {
     fireEvent.change(screen.getByLabelText(/email/i), {
       target: { value: "user@example.com" },
     });
-    fireEvent.change(screen.getByLabelText(/password/i), {
-      target: { value: "pass" },
+    fireEvent.change(screen.getByLabelText("Password"), {
+      target: { value: "password1" },
     });
     fireEvent.click(screen.getByRole("button", { name: /sign in/i }));
 
@@ -173,8 +215,8 @@ describe("LoginPage", () => {
     fireEvent.change(screen.getByLabelText(/email/i), {
       target: { value: "user@example.com" },
     });
-    fireEvent.change(screen.getByLabelText(/password/i), {
-      target: { value: "pass" },
+    fireEvent.change(screen.getByLabelText("Password"), {
+      target: { value: "password1" },
     });
     fireEvent.click(screen.getByRole("button", { name: /sign in/i }));
 
@@ -192,8 +234,8 @@ describe("LoginPage", () => {
     fireEvent.change(screen.getByLabelText(/email/i), {
       target: { value: "user@example.com" },
     });
-    fireEvent.change(screen.getByLabelText(/password/i), {
-      target: { value: "wrong" },
+    fireEvent.change(screen.getByLabelText("Password"), {
+      target: { value: "wrongpass1" },
     });
     fireEvent.click(screen.getByRole("button", { name: /sign in/i }));
 

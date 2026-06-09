@@ -168,3 +168,13 @@ export function useAuth(): AuthContextValue {
   }
   return ctx;
 }
+
+/**
+ * Non-throwing variant of useAuth. Returns undefined when rendered outside an
+ * AuthProvider instead of throwing. Use this in shared chrome (e.g. TopNav) that
+ * is mounted inside an AuthProvider in the real app but is also rendered in
+ * isolation by component tests that do not set one up.
+ */
+export function useAuthOptional(): AuthContextValue | undefined {
+  return useContext(AuthContext);
+}

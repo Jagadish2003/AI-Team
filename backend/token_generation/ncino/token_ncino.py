@@ -9,7 +9,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # Production URL per original ncino file
-LOGIN_URL = "https://login.salesforce.com"
+LOGIN_URL = "https://test.salesforce.com"
 TOKEN_URL = LOGIN_URL + "/services/oauth2/token"
 
 CLIENT_ID = os.environ.get("NCINO__CLIENT_ID")

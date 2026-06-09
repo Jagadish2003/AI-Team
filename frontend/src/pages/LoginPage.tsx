@@ -3,22 +3,34 @@
  *
  * Section 6 behaviour:
  *   POST /api/auth/login via AuthContext.login().
- *   Shows an inline error on 401 (wrong credentials) or 429 (rate-limited).
+ *   Shows the submit error (401 / 429) directly below the "Sign in" heading,
+ *   in a fixed-height slot so the card never grows/jumps.
  *   Redirects to /integration-hub on success.
  *   Page refresh = re-login (token lives in React state only, Section 3).
+ *
+ * Client-side validation mirrors RegisterPage: the email must look like
+ * you@company.com and the password must be at least 8 characters. Inline hints
+ * sit in fixed-height slots beneath each field, and submit stays disabled until
+ * both are satisfied.
  */
 import React, { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 
+import PasswordInput from "../components/auth/PasswordInput";
 import { useAuth } from "../context/AuthContext";
 import { useTheme } from "../context/ThemeContext";
 import { ApiError } from "../lib/apiClient";
+
+// ── Validation ────────────────────────────────────────────────────────────────
+
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const MIN_PASSWORD_LENGTH = 8;
 
 // ── Shared input/button class constants ──────────────────────────────────────
 
 const INPUT_CLS =
   "w-full rounded-lg border border-border bg-bg px-3 py-2.5 text-sm text-text " +
-  "placeholder:text-muted focus:border-accent/60 focus:outline-none focus:ring-2 " +
+  "placeholder:text-muted/40 focus:border-accent/60 focus:outline-none focus:ring-2 " +
   "focus:ring-accent/30 disabled:opacity-50";
 
 const SUBMIT_CLS =
@@ -28,12 +40,15 @@ const SUBMIT_CLS =
   "disabled:cursor-not-allowed disabled:opacity-40 " +
   "border border-accent bg-accent text-textwhite shadow-sm hover:bg-accent/90";
 
+// Fixed-height slot for a single line of inline hint/error text.
+const HINT_SLOT_CLS = "mt-1 h-4 text-xs leading-4 text-red-400";
+
 // ── Error message resolver ────────────────────────────────────────────────────
 
 function loginErrorMessage(err: unknown): string {
   if (err instanceof ApiError) {
     if (err.status === 401) return "Invalid email or password.";
-    if (err.status === 429) return "Too many failed attempts. Please wait 15 minutes before trying again.";
+    if (err.status === 429) return "Too many failed attempts. Wait 15 minutes.";
   }
   return "Something went wrong. Please try again.";
 }
@@ -50,10 +65,19 @@ export default function LoginPage() {
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
-  const canSubmit = email.trim().length > 0 && password.length > 0 && !submitting;
+  // Inline validation — each only surfaces once the user has typed something.
+  const emailInvalid = email.trim().length > 0 && !EMAIL_RE.test(email.trim());
+  const passwordTooShort =
+    password.length > 0 && password.length < MIN_PASSWORD_LENGTH;
+
+  const canSubmit =
+    EMAIL_RE.test(email.trim()) &&
+    password.length >= MIN_PASSWORD_LENGTH &&
+    !submitting;
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
+    if (!canSubmit) return;
     setError(null);
     setSubmitting(true);
     try {
@@ -81,13 +105,24 @@ export default function LoginPage() {
 
         {/* Card */}
         <div className="rounded-xl border border-border bg-panel px-6 py-8 shadow-xl shadow-black/20">
-          <h1 className="mb-1 text-center text-xl font-semibold text-text">Sign in</h1>
-          <p className="mb-6 text-center text-sm text-muted">
-            Enter your credentials to continue.
-          </p>
+          <h1 className="text-center text-xl font-semibold text-text">Sign in</h1>
 
-          <form onSubmit={handleSubmit} noValidate className="space-y-4">
-            <div>
+          {/* Submit error sits directly below the heading, in a fixed-height slot. */}
+          <div className="mb-4 mt-3 min-h-[2.25rem]">
+            {error && (
+              <p
+                role="alert"
+                data-testid="login-error"
+                className="rounded-md border border-red-500/20 bg-red-500/10 px-3 py-1.5 text-xs text-red-400"
+              >
+                {error}
+              </p>
+            )}
+          </div>
+
+          <form onSubmit={handleSubmit} noValidate>
+            {/* Email */}
+            <div className="mb-3">
               <label htmlFor="email" className="mb-1.5 block text-sm font-medium text-text">
                 Email
               </label>
@@ -98,38 +133,34 @@ export default function LoginPage() {
                 required
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
-                className={INPUT_CLS}
+                className={`${INPUT_CLS} ${emailInvalid ? "border-red-500/50 focus:ring-red-500/20" : ""}`}
                 placeholder="you@company.com"
                 disabled={submitting}
               />
+              <div className={HINT_SLOT_CLS}>
+                {emailInvalid && "Enter a valid email address (e.g. you@company.com)."}
+              </div>
             </div>
 
-            <div>
+            {/* Password */}
+            <div className="mb-1">
               <label htmlFor="password" className="mb-1.5 block text-sm font-medium text-text">
                 Password
               </label>
-              <input
+              <PasswordInput
                 id="password"
-                type="password"
                 autoComplete="current-password"
                 required
+                minLength={MIN_PASSWORD_LENGTH}
+                invalid={passwordTooShort}
                 value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                className={INPUT_CLS}
-                placeholder="••••••••"
+                onChange={setPassword}
                 disabled={submitting}
               />
+              <div className={HINT_SLOT_CLS}>
+                {passwordTooShort && "Enter minimum of 8 characters"}
+              </div>
             </div>
-
-            {error && (
-              <p
-                role="alert"
-                data-testid="login-error"
-                className="rounded-lg border border-red-500/20 bg-red-500/10 px-3 py-2 text-sm text-red-400"
-              >
-                {error}
-              </p>
-            )}
 
             <button type="submit" disabled={!canSubmit} className={SUBMIT_CLS}>
               {submitting ? "Signing in…" : "Sign in"}

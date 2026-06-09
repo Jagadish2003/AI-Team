@@ -26,6 +26,7 @@ from app.auth.user_auth import (
     RateLimitError,
     RegistrationError,
     ensure_auth_tables,
+    get_org_name,
     hash_password,
     issue_jwt,
     login,
@@ -205,8 +206,9 @@ def logout_endpoint(
 
 @router.get("/me")
 def me(payload: dict = Depends(_require_jwt)) -> Dict[str, Any]:
-    """Return {id, email, role, org_id, last_login_at}."""
+    """Return {id, email, role, org_id, org_name, last_login_at}."""
     user_id = payload.get("sub")
+    org_id = payload.get("org_id")
     last_login_at: str | None = None
     if user_id:
         con = db.connect()
@@ -223,7 +225,8 @@ def me(payload: dict = Depends(_require_jwt)) -> Dict[str, Any]:
         "id": user_id,
         "email": payload.get("email"),
         "role": payload.get("role"),
-        "org_id": payload.get("org_id"),
+        "org_id": org_id,
+        "org_name": get_org_name(org_id),
         "last_login_at": last_login_at,
     }
 
@@ -341,7 +344,13 @@ def accept_invite(body: AcceptInviteRequest) -> Dict[str, Any]:
     token = issue_jwt(user_id=user_id, org_id=org_id, role=role, email=email)
     return {
         "token": token,
-        "user": {"id": user_id, "email": email, "role": role, "org_id": org_id},
+        "user": {
+            "id": user_id,
+            "email": email,
+            "role": role,
+            "org_id": org_id,
+            "org_name": get_org_name(org_id),
+        },
     }
 
 

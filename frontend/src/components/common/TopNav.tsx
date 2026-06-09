@@ -1,9 +1,10 @@
 import React, { useEffect, useRef, useState } from "react";
-import { Link, useLocation } from "react-router-dom";
+import { Link, useLocation, useNavigate } from "react-router-dom";
 import { LogOut, Menu, Moon, Settings, Sun, User, Zap } from "lucide-react";
 import { useRunContext } from "../../context/RunContext";
 import { useConnectorContext } from "../../context/ConnectorContext";
 import { useTheme } from "../../context/ThemeContext";
+import { useAuthOptional } from "../../context/AuthContext";
 
 type NavItem = {
   to: string;
@@ -45,13 +46,33 @@ const items = [
 
 export default function TopNav() {
   const loc = useLocation();
+  const navigate = useNavigate();
   const [menuOpen, setMenuOpen] = useState(false);
   const [profileOpen, setProfileOpen] = useState(false);
   const profileMenuRef = useRef<HTMLDivElement | null>(null);
   const { runId } = useRunContext();
   const { all: connectors } = useConnectorContext();
   const { theme, setTheme } = useTheme();
+  // useAuthOptional (not useAuth): TopNav is also rendered by page-level tests
+  // that don't mount an AuthProvider. In the real app it's always inside one.
+  const auth = useAuthOptional();
   const upcomingSprintMessage = "It will be implemented in upcoming sprints";
+
+  // Profile tooltip shows "<org name>'s Profile" once the user record is loaded.
+  // org_id is a UUID, not a display value — we show the org's human-readable
+  // name (orgs.name, surfaced via /api/auth/me) and fall back to "Profile"
+  // rather than ever exposing the raw UUID.
+  const orgName = auth?.user?.org_name;
+  const profileTitle = orgName ? `${orgName}'s Profile` : "Profile";
+
+  async function handleLogout() {
+    setProfileOpen(false);
+    try {
+      await auth?.logout();
+    } finally {
+      navigate("/login", { replace: true });
+    }
+  }
 
   const salesforceConnected = connectors.some(
     (c) => c.id === "salesforce" && c.status === "connected",
@@ -136,10 +157,10 @@ export default function TopNav() {
           <div ref={profileMenuRef} className="relative">
             <button
               type="button"
-              title="Profile"
+              title={profileTitle}
               aria-haspopup="menu"
               aria-expanded={profileOpen}
-              aria-label="User profile"
+              aria-label={profileTitle}
               onClick={() => setProfileOpen((open) => !open)}
               className="flex h-7 w-7 items-center justify-center rounded-full border border-border text-navtext/75 transition-colors hover:bg-navhover hover:text-navtext focus:outline-none focus:ring-2 focus:ring-accent/50"
             >
@@ -167,7 +188,7 @@ export default function TopNav() {
                 </div>
 
                 <div
-                  className="flex w-full items-center gap-3 rounded-md px-3 py-1 text-sm text-text transition-colors hover:bg-navhover"
+                  className="flex w-full items-center gap-2 rounded-md px-3 py-1 text-sm text-text transition-colors hover:bg-navhover"
                   role="menuitem"
                 >
                   <span className="flex h-4 w-4 shrink-0 items-center justify-center text-muted">
@@ -210,20 +231,15 @@ export default function TopNav() {
                   </div>
                 </div>
 
-                <div className="group profile-dropdown-item relative">
-                  <button
-                    type="button"
-                    aria-disabled="true"
-                    className="flex w-full cursor-not-allowed items-center gap-2 rounded-md px-3 py-2 text-left text-sm text-muted opacity-60"
-                    role="menuitem"
-                  >
-                    <LogOut className="h-4 w-4" />
-                    Logout
-                  </button>
-                  <div className="profile-menu-tooltip pointer-events-none absolute left-1/2 top-full z-20 mt-1 w-max max-w-[calc(100vw-2rem)] whitespace-nowrap rounded-md border border-border bg-panel px-2 py-1 text-xs text-text shadow-lg">
-                    {upcomingSprintMessage}
-                  </div>
-                </div>
+                <button
+                  type="button"
+                  onClick={handleLogout}
+                  className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm text-text transition-colors hover:bg-navhover focus:outline-none focus:ring-2 focus:ring-accent/50"
+                  role="menuitem"
+                >
+                  <LogOut className="h-4 w-4" />
+                  Logout
+                </button>
               </div>
             )}
           </div>
