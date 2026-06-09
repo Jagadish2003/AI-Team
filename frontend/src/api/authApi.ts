@@ -102,3 +102,24 @@ export async function logout(token: string): Promise<void> {
     throw new ApiError("POST /api/auth/logout failed", res.status, body);
   }
 }
+
+/**
+ * POST /api/auth/accept-invite — AUTH-1 / AT-239.
+ * Sets password for an invited user and activates the account.
+ * invite_token comes from the invite URL query param.
+ * Returns a JWT + user on success. 400 on invalid/expired/already-used token.
+ * Single-use — second call with the same token returns 400.
+ */
+export async function acceptInvite(
+  inviteToken: string,
+  password: string
+): Promise<AuthResult> {
+  const res = await fetch(`${BASE_URL}/api/auth/accept-invite`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ invite_token: inviteToken, password }),
+  });
+  const body = await parseBody(res);
+  if (!res.ok) throw new ApiError("POST /api/auth/accept-invite failed", res.status, body);
+  return body as AuthResult;
+}

@@ -32,6 +32,7 @@ const AUTHENTICATED = {
   login: vi.fn(),
   register: vi.fn(),
   logout: vi.fn(),
+  acceptInvite: vi.fn(),
 };
 
 const UNAUTHENTICATED = {
@@ -42,6 +43,7 @@ const UNAUTHENTICATED = {
   login: vi.fn(),
   register: vi.fn(),
   logout: vi.fn(),
+  acceptInvite: vi.fn(),
 };
 
 const LOADING = {
