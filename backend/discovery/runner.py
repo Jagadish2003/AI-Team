@@ -575,6 +575,23 @@ def run(
         is_github_engineering_detector,
     )
     from .evidence_builder import build_evidence
+    # ENT-2: shared cross-system corroboration engine (non-pack-specific).
+    # Imported defensively so a failure to import never breaks the run.
+    try:
+        try:
+            from backend.app.corroboration_engine import (
+                evaluate_corroboration,
+                apply_corroboration_confidence,
+            )
+        except ModuleNotFoundError:
+            from app.corroboration_engine import (
+                evaluate_corroboration,
+                apply_corroboration_confidence,
+            )
+        _corroboration_available = True
+    except Exception as _corr_imp_err:  # noqa: BLE001 — corroboration is optional.
+        logger.warning("ENT-2 corroboration engine unavailable (non-blocking): %s", _corr_imp_err)
+        _corroboration_available = False
     id_counter = itertools.count(1)
     def id_factory() -> str: return f"{run_id[-6:]}_{next(id_counter):04d}"
 
@@ -615,6 +632,31 @@ def run(
                 len(sn_by_detector),
             )
 
+    # ── ENT-2: build the shared corroboration run_data once for this run ──
+    # Maps the already-extracted Jira/ServiceNow lending correlation
+    # (by_detector) into the corroboration engine's run_data contract. Each
+    # synthesized incident/issue is tagged with its detector_ids and the run
+    # timestamp (the correlation is computed from recent data, so it is in
+    # window). connected_systems drives COR-08 (single-source no elevation).
+    # This only ever ELEVATES confidence downstream — it never downgrades.
+    _run_ts_iso = _run_started_dt.isoformat()
+    _corr_run_data: Dict[str, Any] = {"connected_systems": sorted(_systems)}
+    try:
+        _sn_incidents = [
+            {"detector_ids": [det], "state": "Open", "sys_created_on": _run_ts_iso}
+            for det, snippets in (sn_by_detector or {}).items()
+            for _ in (snippets or [])
+        ]
+        _jira_issues_corr = [
+            {"detector_ids": [det], "status": "Open", "created": _run_ts_iso}
+            for det, snippets in (jira_by_detector or {}).items()
+            for _ in (snippets or [])
+        ]
+        _corr_run_data["servicenow"] = {"incidents": _sn_incidents}
+        _corr_run_data["jira"] = {"issues": _jira_issues_corr}
+    except Exception as _corr_data_err:  # noqa: BLE001 — non-blocking.
+        logger.warning("ENT-2 corroboration run_data build failed (non-blocking): %s", _corr_data_err)
+
     opportunities = []
     for dr in detector_results:
         # Select scorer based on pack
@@ -635,6 +677,51 @@ def run(
             )
         else:
             scored = sc_score(dr)
+
+        # ── ENT-2: cross-system corroboration (shared engine, non-blocking) ──
+        # Evaluate corroboration AFTER the detector fired and the scorer ran,
+        # BEFORE final confidence is locked into the opportunity. Corroboration
+        # may only ELEVATE confidence (apply_corroboration_confidence never
+        # downgrades), so existing pack behaviour is preserved. Any failure is
+        # logged and the scorer's confidence is used unchanged (AC10).
+        corr_fields = {
+            "corroboration_sources": [],
+            "corroboration_label": None,
+            "triple_corroboration": False,
+            "corroboration_rule_ids": [],
+        }
+        if _corroboration_available:
+            try:
+                _corr = evaluate_corroboration(
+                    detector_id=dr.detector_id,
+                    pack_id=pack_id,
+                    run_data=_corr_run_data,
+                    run_timestamp=_run_started_dt,
+                    org_id=org_id,
+                )
+                scored["confidence"] = apply_corroboration_confidence(
+                    scored.get("confidence", "MEDIUM"), _corr
+                )
+                corr_fields = {
+                    "corroboration_sources": list(_corr.corroboration_sources),
+                    "corroboration_label": _corr.corroboration_label,
+                    "triple_corroboration": bool(_corr.triple_corroboration),
+                    "corroboration_rule_ids": list(_corr.rule_ids),
+                }
+                if _corr.corroboration_sources:
+                    logger.info(
+                        "  %s: corroboration %s -> %s via %s",
+                        dr.detector_id,
+                        _corr.original_confidence,
+                        scored.get("confidence"),
+                        _corr.rule_ids,
+                    )
+            except Exception as _corr_err:  # noqa: BLE001 — corroboration is optional.
+                logger.warning(
+                    "ENT-2 corroboration failed for %s (non-blocking): %s",
+                    dr.detector_id, _corr_err,
+                )
+
         # Pass packId so build_evidence uses nCino banking-language builders
         scored_with_pack = {**scored, "packId": pack_id}
         evidence_list = build_evidence(dr, scored_with_pack, id_factory=id_factory)
@@ -685,6 +772,11 @@ def run(
             "confidence": scored["confidence"], "tier": scored["tier"],
             "roadmap_stage": scored["roadmap_stage"], "evidenceIds": [e["id"] for e in evidence_list],
             "evidence": evidence_list, "raw_evidence": dr.raw_evidence, "score_debug": scored["score_debug"],
+            # ENT-2 cross-system corroboration fields (always present; safe defaults).
+            "corroboration_sources": corr_fields["corroboration_sources"],
+            "corroboration_label": corr_fields["corroboration_label"],
+            "triple_corroboration": corr_fields["triple_corroboration"],
+            "corroboration_rule_ids": corr_fields["corroboration_rule_ids"],
         }
         # ENG-AIQ-NC-5 Issue 1: inject approved UI labels from pack UI label files.
         # Deterministic config text — not LLM generated:
