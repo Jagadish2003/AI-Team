@@ -231,6 +231,7 @@ Smoke scripts are Bash scripts under `scripts/` and `backend/scripts/`; run them
 * Run lifecycle starts at `POST /api/runs/start`, then materialization writes status, events, opportunities, evidence, clusters, roadmap, executive report, and enrichment into run-scoped storage.
 * Replay should re-serve persisted artifacts only. It must not call live ingestion or regenerate LLM output.
 * LLM enrichment is advisory post-processing. It must not mutate scoring fields such as impact, effort, tier, decision, or evidence IDs.
+* `OppEnrichment.relationships` is intentionally different from the other enrichment fields: it is read live from `entity_relationships` through `graph_query.py`, not from a run-scoped KV artifact. The graph is cross-run state, so later relationship upserts can change what a historical run's relationship view returns.
 * Pack selection is centralized in `backend/discovery/packs/pack_config.py`. Current packs include `service_cloud`, `ncino`, and `strs_benefits`.
 * nCino and STRS packs have compliance guardrails. Do not suggest automated credit or benefit decisions; keep humans responsible for final decisions.
 * Multi-tenancy is enforced via `middleware/tenancy.py`. Every request is scoped to an org; the default local org is `default`.

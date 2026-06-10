@@ -33,13 +33,17 @@ async function validateRunId(id: string, token: string | null): Promise<boolean>
   try {
     // Sign with the in-session JWT so the run is validated against THIS user's
     // org. A run owned by another org returns 404 → not valid here, which
-    // correctly drops a stale cross-org runId from the URL/localStorage.
+    // correctly drops a stale cross-org runId from the URL/localStorage. Only a
+    // definitive 404 invalidates; transient errors (5xx / auth-not-ready / a
+    // network blip) keep the run so it isn't dropped on a hiccup.
     const res = await fetch(`${BASE_URL}/api/runs/${id}`, {
       headers: authHeaderForToken(token),
     });
-    return res.ok;
+    if (res.ok) return true;
+    if (res.status === 404) return false;
+    return true;
   } catch {
-    return false;
+    return true;
   }
 }
 

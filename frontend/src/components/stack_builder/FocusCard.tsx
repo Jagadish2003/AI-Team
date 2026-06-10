@@ -7,11 +7,11 @@
  *
  * Visual states:
  *   default  - border-border, bg-panel, muted icon, text-text title, muted subtext
- *   hover    - border-emerald-500/40 (no background change)
- *   selected - border-emerald-500, bg-emerald-500/[0.08], emerald icon, emerald title, emerald subtext/80
+ *   hover    - blue accent border with a very light blue background
+ *   selected - blue accent border, blue-tinted background, accent title/subtext
  *
  * Interaction:
- *   focus    - focus:ring-2 focus:ring-emerald-500/50
+ *   focus    - focus:ring-2 focus:ring-accent/35
  *   keyboard - Enter and Space activate selection
  *
  * Layout variants:
@@ -19,10 +19,8 @@
  *   wide     - icon left of title and subtext (row), card spans full grid width (col-span-2)
  *
  * Token note:
- *   Selected state uses emerald-500 (teal family) throughout. The accent token
- *   (#0D55D7, blue) is correct for primary buttons and links in the app shell
- *   but is not the selection color used in the stack builder. All selected
- *   states across the stack builder use the emerald/teal family.
+ *   Discovery-focus cards follow the same blue accent selection treatment as
+ *   the industry/template pills in this panel.
  *
  * Border radius:
  *   rounded-lg - consistent with SystemCard and DiscoveryConfidenceBar.
@@ -73,9 +71,9 @@ interface Props {
 }
 
 export default function FocusCard({ card, selected, onSelect, tabIndex = 0 }: Props) {
-  const iconClass = selected ? 'text-emerald-500' : 'text-muted';
-  const titleClass = selected ? 'text-emerald-500' : 'text-text';
-  const subtextClass = selected ? 'text-emerald-500/80' : 'text-muted';
+  const iconClass = selected ? 'text-accent' : 'text-muted';
+  const titleClass = selected ? 'text-accent' : 'text-text';
+  const subtextClass = selected ? 'text-accent' : 'text-muted';
 
   function handleKeyDown(event: React.KeyboardEvent<HTMLButtonElement>) {
     if (event.key === 'Enter' || event.key === ' ') {
@@ -94,11 +92,11 @@ export default function FocusCard({ card, selected, onSelect, tabIndex = 0 }: Pr
       onKeyDown={handleKeyDown}
       className={[
         'w-full cursor-pointer rounded-lg border p-4 text-left transition-colors duration-150',
-        'focus:outline-none focus:ring-2 focus:ring-emerald-500/50',
+        'focus:outline-none focus-visible:ring-1 focus-visible:ring-accent/35',
         card.wide ? 'col-span-2' : '',
         selected
-          ? 'border-emerald-500 bg-emerald-500/[0.08]'
-          : 'border-border bg-panel hover:border-emerald-500/40',
+          ? 'border-accent/60 bg-accent/15'
+          : 'border-border bg-panel hover:border-accent/50 hover:bg-accent/5',
       ].filter(Boolean).join(' ')}
     >
       {card.wide ? (

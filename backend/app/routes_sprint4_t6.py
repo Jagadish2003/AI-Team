@@ -27,6 +27,7 @@ Wire-in (main.py):
 """
 from __future__ import annotations
 
+import logging
 from typing import Any, Dict, List, Optional
 
 from fastapi import Depends, HTTPException
@@ -37,6 +38,9 @@ from .rbac import require_role
 from . import db
 from .llm_enrichment import KV_LLM_ENRICHMENT
 from .temporal import get_baseline, get_signal_history
+from .graph_query import RelationshipSummary, select_relationships
+
+logger = logging.getLogger(__name__)
 
 _MIN_ENTITY_RUN_COUNT = 3  # service-account filter threshold (Section 8)
 
@@ -90,6 +94,11 @@ class OppEnrichment(BaseModel):
     # default_factory=list ensures backward compat for code that constructs
     # OppEnrichment without an entity list (existing tests, fallback paths).
     entities:             List[EntitySummary] = Field(default_factory=list)
+    # Track 3 Stage 2 — T3-S13-A relationship edges.
+    # Flag-gated (INFERRED_RELATIONSHIPS_ENABLED): observed-only by default,
+    # observed + inferred when the flag is on. default_factory=list keeps the
+    # field present (empty) for fallback paths and runs without a graph.
+    relationships:        List[RelationshipSummary] = Field(default_factory=list)
 
 
 class RunEnrichment(BaseModel):
@@ -161,6 +170,21 @@ def _org_candidates_for_run(run: Dict[str, Any]) -> List[str]:
         if candidate and candidate not in result:
             result.append(candidate)
     return result
+
+
+def _run_org_id(run: Dict[str, Any]) -> Optional[str]:
+    """Return the explicit org on a run payload, if present."""
+    inputs = run.get("inputs") or {}
+    candidates: List[Optional[str]] = [
+        run.get("org_id"),
+        run.get("orgId"),
+        inputs.get("org_id") if isinstance(inputs, dict) else None,
+        inputs.get("orgId") if isinstance(inputs, dict) else None,
+    ]
+    for candidate in candidates:
+        if candidate:
+            return str(candidate)
+    return None
 
 
 def _find_stored_opp(run_id: str, opp_id: str) -> Optional[Dict[str, Any]]:
@@ -253,6 +277,7 @@ def _full_fallback(
     ai_rationale: str,
     entities: Optional[List[EntitySummary]] = None,
     temporal: Optional[Dict[str, Any]] = None,
+    relationships: Optional[List[RelationshipSummary]] = None,
 ) -> OppEnrichment:
     """
     Fix 6: Return the full OppEnrichment shape on fallback.
@@ -276,6 +301,7 @@ def _full_fallback(
         signal_key=temporal.get("signal_key"),
         pack_id=temporal.get("pack_id"),
         entities=entities or [],
+        relationships=relationships or [],
     )
 
 
@@ -306,6 +332,51 @@ def _load_entity_summaries(run_id: str) -> List[EntitySummary]:
     return summaries
 
 
+def _load_relationship_summaries(run_id: str) -> List[RelationshipSummary]:
+    """Load relationship edges for the run's graph, flag-gated (T3-S13-A T5).
+
+    select_relationships() applies INFERRED_RELATIONSHIPS_ENABLED at population
+    time: observed-only by default, observed + inferred when the flag is on.
+    org_id is taken from the request tenancy context so queries stay org-scoped.
+
+    Architecture note: relationships are intentionally loaded live from the
+    queryable entity_relationships table instead of from a run-scoped KV
+    artifact. The graph is cross-run state, so future upserts can affect what
+    a historical run's relationship view returns.
+
+    Never raises — relationship surfacing is advisory and must not break the
+    enrichment response. Returns an empty list when the graph is empty, the
+    org context is missing, or any query error occurs.
+    """
+    try:
+        from app.middleware.tenancy import get_current_org_id
+        org_id = get_current_org_id()
+    except Exception as exc:
+        logger.debug("relationship load skipped — org context unavailable: %s", exc)
+        return []
+    try:
+        run = db.get_run(run_id)
+    except Exception as exc:
+        logger.debug("relationship load skipped — run lookup failed for %s: %s", run_id, exc)
+        return []
+    if run is None:
+        return []
+    run_org_id = _run_org_id(run)
+    if run_org_id != org_id:
+        logger.debug(
+            "relationship load skipped — run %s belongs to org %s, request org %s",
+            run_id,
+            run_org_id,
+            org_id,
+        )
+        return []
+    try:
+        return select_relationships(org_id, run_id)
+    except Exception as exc:
+        logger.debug("relationship load failed for run %s: %s", run_id, exc)
+        return []
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Route registration
 # ─────────────────────────────────────────────────────────────────────────────
@@ -334,6 +405,10 @@ def register_sprint4_t6_routes(app) -> None:
         # Service-account filter (run_count < 3) is applied here per spec Section 8.
         entity_summaries = _load_entity_summaries(run_id)
 
+        # Load relationship edges once for this run. Flag-gated: observed-only by
+        # default, observed + inferred when INFERRED_RELATIONSHIPS_ENABLED is on.
+        relationship_summaries = _load_relationship_summaries(run_id)
+
         enrichment = db.run_kv_get(KV_LLM_ENRICHMENT, run_id, None)
 
         # Enrichment not yet generated — serve fallback from stored opps
@@ -351,6 +426,7 @@ def register_sprint4_t6_routes(app) -> None:
                 opp.get("aiRationale", ""),
                 entity_summaries,
                 temporal,
+                relationship_summaries,
             )
 
         per_opp  = enrichment.get("perOpportunity", {})
@@ -386,6 +462,7 @@ def register_sprint4_t6_routes(app) -> None:
             signal_key=temporal.get("signal_key"),
             pack_id=temporal.get("pack_id"),
             entities=entity_summaries,
+            relationships=relationship_summaries,
         )
 
     @app.get(
