@@ -22,18 +22,39 @@ const BASE_URL = (import.meta.env.VITE_API_BASE_URL as string | undefined) ?? "h
 const TOKEN = (import.meta.env.VITE_DEV_JWT as string | undefined) ?? "dev-token-change-me";
 const ORG_ID_HEADER = (import.meta.env.VITE_ORG_ID as string | undefined)?.trim();
 
+function authHeaders(): Record<string, string> {
+  return {
+    Authorization: `Bearer ${TOKEN}`,
+    ...(ORG_ID_HEADER ? { "X-Org-Id": ORG_ID_HEADER } : {}),
+  };
+}
+
 async function validateRunId(id: string): Promise<boolean> {
   if (!isCanonicalRunId(id)) return false;
   try {
     const res = await fetch(`${BASE_URL}/api/runs/${id}`, {
-      headers: {
-        Authorization: `Bearer ${TOKEN}`,
-        ...(ORG_ID_HEADER ? { "X-Org-Id": ORG_ID_HEADER } : {}),
-      },
+      headers: authHeaders(),
     });
-    return res.ok;
+    if (res.ok) return true;
+    if (res.status === 404) return false;
+    return true;
   } catch {
-    return false;
+    return true;
+  }
+}
+
+async function fetchLatestRunId(): Promise<string | null> {
+  try {
+    const res = await fetch(`${BASE_URL}/api/runs/latest`, {
+      headers: authHeaders(),
+    });
+    if (res.status === 404) return null;
+    if (!res.ok) return null;
+    const data = await res.json();
+    const latestId = cleanRunId(data?.id ?? data?.runId);
+    return latestId && isCanonicalRunId(latestId) ? latestId : null;
+  } catch {
+    return null;
   }
 }
 
@@ -70,8 +91,31 @@ export function RunProvider({ children }: { children: React.ReactNode }) {
       }, { replace: true });
     };
 
+    const applyRunId = (nextId: string) => {
+      _setRunId(nextId);
+      try {
+        localStorage.setItem(LS_KEY, nextId);
+      } catch {}
+      setSearchParams((prev) => {
+        if (prev.get("runId") === nextId) return prev;
+        const next = new URLSearchParams(prev);
+        next.set("runId", nextId);
+        return next;
+      }, { replace: true });
+    };
+
+    const restoreLatestRun = async () => {
+      const latestId = await fetchLatestRunId();
+      if (cancelled) return;
+      if (latestId) {
+        applyRunId(latestId);
+      } else {
+        _setRunId(null);
+      }
+    };
+
     if (!candidate) {
-      _setRunId(null);
+      void restoreLatestRun();
       return () => {
         cancelled = true;
       };
@@ -80,22 +124,29 @@ export function RunProvider({ children }: { children: React.ReactNode }) {
     if (!isCanonicalRunId(candidate)) {
       clearStoredRunId();
       if (fromUrl) clearUrlRunId();
+      void restoreLatestRun();
       return () => {
         cancelled = true;
       };
     }
 
-    validateRunId(candidate).then((valid) => {
+    void validateRunId(candidate).then((valid) => {
       if (cancelled) return;
       if (valid) {
-        _setRunId(candidate);
-        try {
-          localStorage.setItem(LS_KEY, candidate);
-        } catch {}
-      } else {
-        clearStoredRunId();
-        if (fromUrl) clearUrlRunId();
+        applyRunId(candidate);
+        return;
       }
+
+      clearStoredRunId();
+      if (fromUrl) clearUrlRunId();
+      fetchLatestRunId().then((latestId) => {
+        if (cancelled) return;
+        if (latestId) {
+          applyRunId(latestId);
+        } else {
+          clearStoredRunId();
+        }
+      });
     });
 
     return () => {
