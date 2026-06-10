@@ -27,7 +27,9 @@ Wire-in (main.py):
 """
 from __future__ import annotations
 
+import json
 import logging
+import sqlite3
 from typing import Any, Dict, List, Optional
 
 from fastapi import Depends, HTTPException
@@ -61,6 +63,26 @@ class EntitySummary(BaseModel):
     source_system:         str
     resolution_confidence: float
     resolution_status:     str  # 'resolved' | 'ambiguous'
+
+
+class CausalHypothesisSummary(BaseModel):
+    """Causal-chain hypothesis surfaced in the evidence trace (ENT-6 / T3-S16-A).
+
+    Read live from the causal_hypotheses table (most-recent row per opportunity),
+    not from run-scoped KV — like RelationshipSummary, the underlying data is
+    cross-run state. All six fields are always serialised; none is excluded even
+    when preliminary_reason is None.
+
+    preliminary / preliminary_reason drive the T9 amber 'analyst review required'
+    banner — preliminary_reason is null only when all three quality gates passed.
+    Advisory only: this never carries or affects scoring fields.
+    """
+    cause_chain:              List[str]
+    falsifiability_condition: str
+    confidence:               float
+    inferred:                 bool
+    preliminary:              bool
+    preliminary_reason:       Optional[str] = None
 
 
 class OppEnrichment(BaseModel):
@@ -99,6 +121,14 @@ class OppEnrichment(BaseModel):
     # observed + inferred when the flag is on. default_factory=list keeps the
     # field present (empty) for fallback paths and runs without a graph.
     relationships:        List[RelationshipSummary] = Field(default_factory=list)
+    # ENT-6 / T3-S16-A — causal chain hypothesis (Section 5). Loaded live from
+    # the causal_hypotheses table (most-recent row for this opportunity), not
+    # run-scoped KV. Defaults to None — absence is semantically distinct from an
+    # empty hypothesis, and the frontend branches on it: None -> omit the
+    # section; preliminary=True -> amber banner; preliminary=False -> full
+    # confirmed rendering. (Distinct from the opportunity-level preliminary
+    # fields below, which are the ENT-3 enrichment gate, not the causal gates.)
+    causal_hypothesis:    Optional[CausalHypothesisSummary] = None
     # ENT-2 — Cross-System Confidence Elevation corroboration fields.
     # Always present with safe defaults so the frontend needs no defensive
     # checks. Populated from the corroboration engine output stored on the
@@ -321,6 +351,7 @@ def _full_fallback(
     temporal: Optional[Dict[str, Any]] = None,
     relationships: Optional[List[RelationshipSummary]] = None,
     corroboration: Optional[Dict[str, Any]] = None,
+    causal_hypothesis: Optional[CausalHypothesisSummary] = None,
 ) -> OppEnrichment:
     """
     Fix 6: Return the full OppEnrichment shape on fallback.
@@ -349,6 +380,7 @@ def _full_fallback(
         pack_id=temporal.get("pack_id"),
         entities=entities or [],
         relationships=relationships or [],
+        causal_hypothesis=causal_hypothesis,
         corroboration_sources=corr["corroboration_sources"],
         corroboration_label=corr["corroboration_label"],
         triple_corroboration=corr["triple_corroboration"],
@@ -428,6 +460,62 @@ def _load_relationship_summaries(run_id: str) -> List[RelationshipSummary]:
         return []
 
 
+def _load_causal_hypothesis(
+    org_id: Optional[str], opportunity_id: str
+) -> Optional[CausalHypothesisSummary]:
+    """Load the most-recent causal hypothesis for (org_id, opportunity_id).
+
+    Read live from the causal_hypotheses table (ENT-6 / T3-S16-A), not from a
+    run-scoped KV artifact — like relationships, several rows can exist across
+    runs and the newest (created_at DESC) is surfaced. Scoped to org_id, so a
+    different org's hypothesis can never be returned.
+
+    Advisory and never raises: returns None when there is no hypothesis, when
+    the org context is missing, or on any query error. Absence is the normal
+    state, so it is deliberately NOT logged as a warning. Touches no scoring
+    fields (impact, effort, tier, decision, evidence ids).
+    """
+    if not org_id or not opportunity_id:
+        return None
+    try:
+        conn = db.connect()
+        try:
+            conn.row_factory = sqlite3.Row
+            row = conn.execute(
+                """
+                SELECT cause_chain, falsifiability_condition, confidence,
+                       inferred, preliminary, preliminary_reason
+                FROM causal_hypotheses
+                WHERE org_id = ? AND opportunity_id = ?
+                ORDER BY created_at DESC
+                LIMIT 1
+                """,
+                (org_id, opportunity_id),
+            ).fetchone()
+        finally:
+            conn.close()
+    except Exception as exc:
+        logger.debug("causal hypothesis load failed for opp %s: %s", opportunity_id, exc)
+        return None
+
+    if row is None:
+        return None  # absence is the normal state — no warning
+
+    try:
+        cause_chain = json.loads(row["cause_chain"]) if row["cause_chain"] else []
+    except (TypeError, ValueError):
+        cause_chain = []
+
+    return CausalHypothesisSummary(
+        cause_chain=cause_chain,
+        falsifiability_condition=row["falsifiability_condition"] or "",
+        confidence=float(row["confidence"]),
+        inferred=bool(row["inferred"]),
+        preliminary=bool(row["preliminary"]),
+        preliminary_reason=row["preliminary_reason"],
+    )
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Route registration
 # ─────────────────────────────────────────────────────────────────────────────
@@ -460,6 +548,16 @@ def register_sprint4_t6_routes(app) -> None:
         # default, observed + inferred when INFERRED_RELATIONSHIPS_ENABLED is on.
         relationship_summaries = _load_relationship_summaries(run_id)
 
+        # Load the most-recent causal hypothesis for this opportunity (ENT-6),
+        # live from the causal_hypotheses table. org_id from the tenancy context;
+        # None when absent or when no org context — the loader never raises.
+        try:
+            from app.middleware.tenancy import get_current_org_id_optional
+            causal_org_id = get_current_org_id_optional()
+        except Exception:
+            causal_org_id = None
+        causal_hypothesis = _load_causal_hypothesis(causal_org_id, opp_id)
+
         enrichment = db.run_kv_get(KV_LLM_ENRICHMENT, run_id, None)
 
         # ENT-2: corroboration fields live on the stored opportunity record.
@@ -483,6 +581,7 @@ def register_sprint4_t6_routes(app) -> None:
                 temporal,
                 relationship_summaries,
                 corroboration,
+                causal_hypothesis,
             )
 
         per_opp  = enrichment.get("perOpportunity", {})
@@ -519,6 +618,7 @@ def register_sprint4_t6_routes(app) -> None:
             pack_id=temporal.get("pack_id"),
             entities=entity_summaries,
             relationships=relationship_summaries,
+            causal_hypothesis=causal_hypothesis,
             # ENT-2 — Cross-System Confidence Elevation (from the stored opp).
             # corroboration_label here is the single source; ENT-3 reads the
             # same field, so it is not set a second time below.

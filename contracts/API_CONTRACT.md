@@ -1,7 +1,15 @@
 # AgentIQ — API_CONTRACT.md (EPIC E0)
-Version: v1.3
-Date: 2026-06-09
+Version: v1.4
+Date: 2026-06-10
 
+> v1.4 — ENT-6 / T3-S16-A: extended `OppEnrichment` with the optional
+> `causal_hypothesis` (`CausalHypothesisSummary`: `cause_chain`,
+> `falsifiability_condition`, `confidence`, `inferred`, `preliminary`,
+> `preliminary_reason`). Loaded live from the `causal_hypotheses` table
+> (most-recent row per opportunity); `null` when no hypothesis exists. Additive
+> and backward-compatible — existing fields unchanged. Mirrors
+> `src/types/enrichment.ts`.
+>
 > v1.3 — ENT-3 / T3-S15-A: extended `OppEnrichment` with the LLM enrichment
 > enterprise-hardening fields — graph grounding (`llm_grounded`,
 > `graph_entity_count`, `graph_entity_count_shown`, `graph_truncated`),
@@ -224,6 +232,7 @@ Response: `OppEnrichment` (`src/types/enrichment.ts`)
     }
   ],
   "relationships": [],
+  "causal_hypothesis": null,
 
   "llm_grounded": false,
   "graph_entity_count": 0,
@@ -247,6 +256,20 @@ Response: `OppEnrichment` (`src/types/enrichment.ts`)
 > ("analyst review required") until the three quality gates pass; when true,
 > `preliminary_reason` carries the human-readable explanation rendered in the
 > evidence trace. `corroboration_label` is carried through from ENT-2.
+
+> ENT-6 / T3-S16-A field (v1.4): `causal_hypothesis` is the optional
+> `CausalHypothesisSummary` for the opportunity, loaded live from the
+> `causal_hypotheses` table (most-recent row, like `relationships` are read live
+> from the graph). It is `null` when no causal hypothesis exists — absence is
+> the normal state and distinct from an empty hypothesis. When present it always
+> carries all six fields: `cause_chain` (ordered steps), `falsifiability_condition`,
+> `confidence` (composite, 0.5–1.0), `inferred` (true when any step rests on an
+> inferred relationship), `preliminary`, and `preliminary_reason`. The frontend
+> branches on it: `null` → omit the section; `preliminary=true` → amber "analyst
+> review required" banner with `preliminary_reason`; `preliminary=false` → full
+> confirmed cause-chain rendering. Note this nested `preliminary`/
+> `preliminary_reason` is the causal-gate status (ENT-6), distinct from the
+> top-level `preliminary` (the ENT-3 enrichment gate).
 
 > Casing note: the temporal/entity fields use `snake_case` (e.g.
 > `baseline_stddev`, `recent_values`) — an intentional, documented exception to

@@ -6,6 +6,7 @@ export type {
   RunEnrichment,
   EntitySummary,
   RelationshipSummary,
+  CausalHypothesisSummary,
 } from '../types/enrichment';
 
 export async function fetchOppEnrichment(
