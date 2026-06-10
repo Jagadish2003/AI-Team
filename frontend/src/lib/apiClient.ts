@@ -22,6 +22,38 @@ export function setUnauthorizedHandler(handler: UnauthorizedHandler | null): voi
   _unauthorizedHandler = handler;
 }
 
+// ---------------------------------------------------------------------------
+// In-session JWT (multi-tenancy)
+// AuthProvider pushes the logged-in user's JWT here whenever it changes. Every
+// data request is then signed with THAT user's token, so the backend scopes the
+// request to the user's org. Without this, requests fall back to the static dev
+// token (which carries no org claim → everyone resolves to the `default` org),
+// leaking connectors and runs across organisations.
+// ---------------------------------------------------------------------------
+
+let _authToken: string | null = null;
+
+/** Set (or clear, with null) the in-session JWT used to sign all data requests. */
+export function setAuthToken(token: string | null): void {
+  _authToken = token;
+}
+
+/** Current in-session JWT, or null when logged out (dev-token fallback applies). */
+export function getAuthToken(): string | null {
+  return _authToken;
+}
+
+/**
+ * Build an Authorization header from an EXPLICIT token. Use this from callers
+ * that hold the in-session token directly (e.g. a context whose effect runs
+ * before AuthProvider has synced setAuthToken) to avoid a stale module-token
+ * race. Falls back to the standard authHeader() when token is null.
+ */
+export function authHeaderForToken(token: string | null): Record<string, string> {
+  if (token) return { Authorization: `Bearer ${token}` };
+  return authHeader();
+}
+
 function _handle401(): void {
   _unauthorizedHandler?.();
 }
@@ -51,7 +83,15 @@ export class ApiError extends Error {
   }
 }
 
-function authHeader(): Record<string, string> {
+export function authHeader(): Record<string, string> {
+  // Authenticated session: sign with the in-session JWT. org_id is carried in
+  // the JWT claim, so we must NOT also send X-Org-Id — a stale/mismatched value
+  // trips the backend impersonation guard (403, see middleware/tenancy.py).
+  if (_authToken) {
+    return { Authorization: `Bearer ${_authToken}` };
+  }
+  // Dev/test fallback (no logged-in session): static dev token + optional
+  // explicit org header.
   const token = (import.meta.env.VITE_DEV_JWT as string | undefined) ?? "dev-token-change-me";
   return {
     Authorization: `Bearer ${token}`,
