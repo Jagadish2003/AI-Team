@@ -42,6 +42,11 @@ except ModuleNotFoundError:  # pragma: no cover - supports repo-root imports
     from backend.app.temporal_enrichment import build_baseline_context  # type: ignore[no-redef]
     from backend.app.trend_engine import calculate_anomaly, calculate_trend  # type: ignore[no-redef]
 
+try:
+    from database.models.causal_hypotheses import CausalHypothesis
+except ModuleNotFoundError:  # pragma: no cover - supports repo-root imports
+    from backend.database.models.causal_hypotheses import CausalHypothesis  # type: ignore[no-redef]
+
 logger = logging.getLogger(__name__)
 
 
@@ -1082,3 +1087,325 @@ def evaluate_causal_quality_gates(
     if gate1_failed:
         return GateResult(True, gate1_reason, run_count)
     return GateResult(False, None, run_count)
+
+
+# ---------------------------------------------------------------------------
+# T6 - persist a validated, gate-evaluated hypothesis (ENT-6 Sections 4 & 5)
+# ---------------------------------------------------------------------------
+#
+# store_causal_hypothesis() writes a hypothesis that has already passed T4
+# (falsifiability / hallucination) and been scored by T5's gates. Its only job
+# is to write the row accurately and completely, then emit the success
+# telemetry. It is the sole writer of the causal_hypotheses table.
+
+# Columns in causal_hypotheses, in DDL order (see
+# database/models/causal_hypotheses.py). CausalHypothesis.to_db_row() returns
+# exactly these keys.
+_CAUSAL_HYPOTHESES_COLUMNS: tuple[str, ...] = (
+    "id",
+    "org_id",
+    "opportunity_id",
+    "run_id",
+    "cause_chain",
+    "evidence_links",
+    "temporal_support",
+    "confidence",
+    "inferred",
+    "falsifiability_condition",
+    "preliminary",
+    "preliminary_reason",
+    "gate_run_count",
+    "generated_by",
+    "created_at",
+)
+
+# Confidence composite bounds and weights. The story leaves the weights open;
+# these are an engineering default chosen so the score is deterministic (stable
+# contract tests) and so even a weak-but-validated hypothesis scores >= 0.5.
+_CONFIDENCE_FLOOR = 0.5
+_CONFIDENCE_CEIL = 1.0
+_CONFIDENCE_W_TEMPORAL = 0.40   # data maturity is the strongest trust signal
+_CONFIDENCE_W_CORROBORATION = 0.35  # cross-system agreement
+_CONFIDENCE_W_DEPTH = 0.25       # graph proximity of cause to effect
+
+
+def _clamp(value: float, low: float, high: float) -> float:
+    return max(low, min(high, value))
+
+
+def _evidence_links_from_context(causal_context: Any) -> list[str]:
+    """Derive evidence_links (supporting entity ids) from the causal context.
+
+    parse_causal_output() (T4) returns only cause_chain + falsifiability_condition,
+    so the grounding entity ids come from the assembled graph neighbourhood. Sorted
+    for a deterministic stored value (stable contract tests).
+    """
+
+    graph = getattr(causal_context, "graph_context", None)
+    entities = getattr(graph, "entities", []) if graph is not None else []
+    ids = {getattr(entity, "entity_id", None) for entity in entities}
+    return sorted(eid for eid in ids if eid)
+
+
+def _distinct_source_systems(org_id: str, entity_ids: list[str]) -> list[str]:
+    """Distinct source_systems behind the evidence entities (corroboration input).
+
+    Best-effort: a read failure returns [] so a transient hiccup lowers the
+    confidence score rather than losing the hypothesis.
+    """
+
+    if not entity_ids:
+        return []
+    try:
+        conn = db.connect()
+        try:
+            conn.row_factory = sqlite3.Row
+            placeholders = ", ".join("?" for _ in entity_ids)
+            rows = conn.execute(
+                f"SELECT DISTINCT source_system FROM entities "
+                f"WHERE org_id = ? AND id IN ({placeholders})",
+                (org_id, *entity_ids),
+            ).fetchall()
+            return sorted({row["source_system"] for row in rows if row["source_system"]})
+        finally:
+            conn.close()
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.debug("source_system lookup failed for corroboration: %s", exc)
+        return []
+
+
+def _temporal_entry_for_entity(
+    temporal_support: dict[str, Any], entity_id: str
+) -> Optional[dict[str, Any]]:
+    """Find the temporal_support entry for an entity by its signal_key middle part.
+
+    signal_key format is ``{pack_id}::{entity_id}::metric_value`` (T2).
+    """
+
+    for signal_key, entry in temporal_support.items():
+        parts = str(signal_key).split("::")
+        if len(parts) >= 2 and parts[1] == entity_id:
+            return entry
+    return None
+
+
+def compute_causal_confidence(causal_context: Any, source_systems: list[str]) -> float:
+    """Composite confidence in [0.5, 1.0] for a stored hypothesis (read by T3-S17-A).
+
+    Three factors, each normalised to [0, 1] then combined as a weighted average
+    and mapped onto [0.5, 1.0]. Deterministic given the same inputs.
+
+    1. Graph depth - fewer hops connecting cause to effect score higher. Measured
+       from the dependency_paths assembled in build_causal_context(); a direct
+       edge (1 hop) scores 1.0, a depth-3 path scores ~0.33. No measured path is
+       neutral (0.5).
+    2. Temporal support - the fraction of the chain's process entities whose
+       signal history is mature (run_count >= 10, the Gate 1 bar).
+    3. Corroboration - the number of distinct source_systems contributing
+       evidence (Salesforce + ServiceNow + Jira = strong), saturating at 3.
+    """
+
+    # Factor 1 - graph depth.
+    paths = getattr(causal_context, "dependency_paths", None) or []
+    if paths:
+        avg_hops = sum(max(len(path) - 1, 0) for path in paths) / len(paths)
+        depth_score = _clamp(1.0 - (avg_hops - 1.0) / 3.0, 0.0, 1.0)
+    else:
+        depth_score = 0.5
+
+    # Factor 2 - temporal support maturity.
+    graph = getattr(causal_context, "graph_context", None)
+    entities = getattr(graph, "entities", []) if graph is not None else []
+    process_entities = [
+        entity for entity in entities if getattr(entity, "entity_type", None) == "process"
+    ]
+    temporal_support = getattr(causal_context, "temporal_support", None) or {}
+    if process_entities:
+        mature = 0
+        for entity in process_entities:
+            entry = _temporal_entry_for_entity(temporal_support, entity.entity_id)
+            if entry and int(entry.get("run_count", 0) or 0) >= GATE1_MIN_RUN_COUNT:
+                mature += 1
+        temporal_score = mature / len(process_entities)
+    else:
+        temporal_score = 0.0
+
+    # Factor 3 - corroboration breadth.
+    corroboration_score = _clamp(len(source_systems) / 3.0, 0.0, 1.0)
+
+    raw = (
+        _CONFIDENCE_W_TEMPORAL * temporal_score
+        + _CONFIDENCE_W_CORROBORATION * corroboration_score
+        + _CONFIDENCE_W_DEPTH * depth_score
+    )
+    confidence = _CONFIDENCE_FLOOR + (_CONFIDENCE_CEIL - _CONFIDENCE_FLOOR) * raw
+    return round(_clamp(confidence, _CONFIDENCE_FLOOR, _CONFIDENCE_CEIL), 4)
+
+
+def _gate_field(gate_result: Any, attr: str, index: Optional[int], default: Any = None) -> Any:
+    """Read a field from a GateResult, tolerating a plain (preliminary, reason) tuple."""
+
+    if hasattr(gate_result, attr):
+        return getattr(gate_result, attr)
+    if index is not None:
+        try:
+            return gate_result[index]
+        except (TypeError, IndexError, KeyError):
+            return default
+    return default
+
+
+def _insert_causal_hypothesis(row: dict[str, Any]) -> None:
+    """Parameterised single-row INSERT into causal_hypotheses (commit on success)."""
+
+    placeholders = ", ".join("?" for _ in _CAUSAL_HYPOTHESES_COLUMNS)
+    sql = (
+        f"INSERT INTO causal_hypotheses ({', '.join(_CAUSAL_HYPOTHESES_COLUMNS)}) "
+        f"VALUES ({placeholders})"
+    )
+    conn = db.connect()
+    try:
+        conn.execute(sql, tuple(row[column] for column in _CAUSAL_HYPOTHESES_COLUMNS))
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def _emit_hypothesis_generated(
+    *,
+    org_id: str,
+    run_id: str,
+    opportunity_id: str,
+    preliminary: bool,
+    confidence: float,
+    gate_run_count: int,
+    inferred: bool,
+) -> None:
+    """Fire causal.hypothesis_generated. Called only after a successful commit.
+
+    Payload matches CausalHypothesisGeneratedPayload (T10): identifiers, the
+    preliminary flag, and gate metrics only - never hypothesis text (PII guard).
+    """
+
+    try:
+        from app.telemetry import record_event
+    except ModuleNotFoundError:  # pragma: no cover
+        from backend.app.telemetry import record_event  # type: ignore[no-redef]
+
+    record_event(
+        "causal.hypothesis_generated",
+        {
+            "org_id": org_id,
+            "run_id": run_id,
+            "opportunity_id": opportunity_id,
+            "preliminary": bool(preliminary),
+            "confidence": float(confidence),
+            "gate_run_count": int(gate_run_count),
+            "inferred": bool(inferred),
+        },
+    )
+
+
+def store_causal_hypothesis(
+    org_id: str,
+    opportunity_id: str,
+    run_id: str,
+    parsed_output: Any,
+    gate_result: Any,
+    causal_context: Any,
+) -> Optional[str]:
+    """Persist a validated, gate-evaluated causal hypothesis. Returns the new row id.
+
+    By the time this runs the hypothesis has passed T4 (falsifiability /
+    hallucination) and been scored by T5's gates; storage writes the result
+    accurately and completely, then emits the success telemetry.
+
+    Column population (all 15; see Section 4):
+      * cause_chain / falsifiability_condition - from ``parsed_output``.
+      * evidence_links - the grounding entity ids from ``causal_context``.
+      * temporal_support - ``causal_context.temporal_support`` (or None).
+      * preliminary / preliminary_reason - straight from ``gate_result``
+        (reason is None only on a full pass).
+      * gate_run_count - the live Gate 1 count threaded out of T5
+        (``gate_result.run_count``); never re-estimated.
+      * inferred - True when any cause_chain step carries the ``[inferred:``
+        label, using the SAME detector as Gate 3 (cause_chain_uses_inferred) so
+        the column and the gate never disagree. inferred is permanent metadata
+        and is distinct from preliminary: a row can have preliminary=False and
+        inferred=True if inferred steps exist but none is a step's primary
+        evidence.
+      * confidence - the deterministic composite of compute_causal_confidence().
+      * generated_by - 'llm'; created_at - current UTC ISO timestamp.
+
+    Graceful degradation (per CLAUDE.md): the write is wrapped so a failure is
+    logged, emits no telemetry, and returns None rather than crashing the run.
+    causal.hypothesis_generated fires only after the row commits.
+    """
+
+    cause_chain = [str(step) for step in (_get(parsed_output, "cause_chain") or [])]
+    falsifiability_condition = str(_get(parsed_output, "falsifiability_condition") or "")
+
+    preliminary = bool(_gate_field(gate_result, "preliminary", 0, default=True))
+    preliminary_reason = _gate_field(gate_result, "reason", 1, default=None)
+    # Invariant (Section 4): preliminary_reason is null only on a full pass.
+    preliminary_reason = preliminary_reason if preliminary else None
+    gate_run_count = int(getattr(gate_result, "run_count", 0) or 0)
+
+    evidence_links = _evidence_links_from_context(causal_context)
+    temporal_support = getattr(causal_context, "temporal_support", None)
+    # Same detection as Gate 3 - the column and the gate can never disagree.
+    inferred = cause_chain_uses_inferred(cause_chain)
+
+    try:
+        source_systems = _distinct_source_systems(org_id, evidence_links)
+        confidence = compute_causal_confidence(causal_context, source_systems)
+        hypothesis = CausalHypothesis(
+            org_id=org_id,
+            opportunity_id=opportunity_id,
+            run_id=run_id,
+            cause_chain=cause_chain,
+            evidence_links=evidence_links,
+            confidence=confidence,
+            inferred=inferred,
+            falsifiability_condition=falsifiability_condition,
+            preliminary=preliminary,
+            gate_run_count=gate_run_count,
+            generated_by="llm",
+            temporal_support=temporal_support,
+            preliminary_reason=preliminary_reason,
+        )
+        row = hypothesis.to_db_row()
+        _insert_causal_hypothesis(row)
+    except Exception as exc:
+        # Degrade gracefully: no row, no event, run continues.
+        logger.error(
+            "store_causal_hypothesis: failed to persist hypothesis for opp=%s run=%s: %s",
+            opportunity_id,
+            run_id,
+            exc,
+        )
+        return None
+
+    # Success: emit telemetry only now that the write has committed. A telemetry
+    # hiccup must not undo a successful store, so it is non-blocking.
+    try:
+        _emit_hypothesis_generated(
+            org_id=org_id,
+            run_id=run_id,
+            opportunity_id=opportunity_id,
+            preliminary=preliminary,
+            confidence=confidence,
+            gate_run_count=gate_run_count,
+            inferred=inferred,
+        )
+    except Exception as exc:
+        logger.warning(
+            "causal.hypothesis_generated telemetry failed (non-blocking) for opp=%s: %s",
+            opportunity_id,
+            exc,
+        )
+
+    return row["id"]
