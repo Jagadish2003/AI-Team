@@ -42,15 +42,95 @@ load_dotenv()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# T3-S16-A — Causal prompt section (fifth section, Section 2b)
+# ─────────────────────────────────────────────────────────────────────────────
+# Appended to _opp_prompt() only when a valid CausalContext is available.
+# Placeholders are filled by format_dependency_paths() / format_temporal_support()
+# before the section is concatenated onto the base prompt.
+# Rule 3's verbatim sentence is load-bearing — T4 and T5 parse for it.
+# ─────────────────────────────────────────────────────────────────────────────
+
+CAUSAL_PROMPT_SECTION = """
+=== CAUSAL CONTEXT ===
+Process dependency paths in the knowledge graph:
+{dependency_paths_summary}
+
+Temporal signal support:
+{temporal_support_summary}
+
+RULES FOR CAUSAL CHAIN GENERATION:
+1. Each step must be supported by data in the context above.
+   Do not invent steps not evidenced by the graph or temporal data.
+2. Steps relying on inferred relationships (confidence < 0.8) must be
+   labelled [inferred: confidence=X].
+3. The chain MUST end with one falsifiability sentence: what specific,
+   measurable data would prove this hypothesis wrong.
+   This sentence is mandatory. If you cannot state a falsifiability
+   condition, do not produce a causal chain.
+4. Maximum 5 steps. Prefer shorter, strongly evidenced chains.
+5. Use only entity names present in the context above.
+
+=== CAUSAL CHAIN OUTPUT ===
+If a causal chain can be produced under the rules above, include two additional
+fields in the same JSON object (alongside the four fields already requested):
+  "cause_chain": ["step 1", "step 2", ...],  // JSON array of strings, max 5
+  "falsifiability_condition": "..."           // plain string — mandatory with cause_chain
+If you cannot produce a valid chain under the rules above, omit both fields entirely.
+"""
+
+
+def format_dependency_paths(dependency_paths: list) -> str:
+    """Serialise dependency_paths (list[list[str]]) into a token-efficient string.
+
+    Each path is rendered as a numbered arrow-joined chain of entity IDs.
+    Returns a placeholder string when there are no paths.
+    """
+    if not dependency_paths:
+        return "  (no process dependency paths found)"
+    lines = []
+    for i, path in enumerate(dependency_paths, start=1):
+        lines.append(f"  {i}. {' -> '.join(str(e) for e in path)}")
+    return "\n".join(lines)
+
+
+def format_temporal_support(temporal_support: dict) -> str:
+    """Serialise temporal_support (signal_key → {trend, anomaly, context, run_count})
+    into a compact, labelled table — one line per signal.
+
+    Returns a placeholder string when there is no support data.
+    """
+    if not temporal_support:
+        return "  (no temporal support data available)"
+    lines = []
+    for signal_key, info in temporal_support.items():
+        if not isinstance(info, dict):
+            continue
+        trend = info.get("trend", "unknown")
+        anomaly = "anomalous" if info.get("anomaly") else "normal"
+        run_count = info.get("run_count", "?")
+        context = info.get("context") or ""
+        context_str = f" | {context}" if context else ""
+        lines.append(
+            f"  {signal_key}: trend={trend}, {anomaly}, runs={run_count}{context_str}"
+        )
+    return "\n".join(lines) if lines else "  (no temporal support data available)"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Prompt builders
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _opp_prompt(opp: Dict[str, Any], evidence: List[Dict[str, Any]],
-                pack_id: Optional[str] = None) -> str:
+                pack_id: Optional[str] = None,
+                causal_context: Optional[Any] = None) -> str:
     """
     ENG-AIQ-NC-5: pack-aware opportunity prompt.
     ncino pack uses banking operations language and compliance instruction.
     service_cloud pack uses original SC prompt unchanged.
+
+    T3-S16-A: causal_context is optional. When provided, CAUSAL_PROMPT_SECTION
+    is appended after the base prompt. When None (no CausalContext available,
+    or ANTHROPIC_API_KEY unset), the prompt is returned unchanged.
     """
     from discovery.packs.pack_config import is_ncino_pack, is_strs_benefits_pack, get_llm_context
     ev_snippets = [
@@ -68,7 +148,7 @@ def _opp_prompt(opp: Dict[str, Any], evidence: List[Dict[str, Any]],
         ncino_snippets = [s for s in ev_snippets if "Jira" not in s and "ServiceNow" not in s]
         corr_snippets  = [s for s in ev_snippets if "Jira" in s or "ServiceNow" in s]
 
-        return f"""You are a commercial banking operations analyst writing insights for a Head of Commercial Lending or CRO.
+        base = f"""You are a commercial banking operations analyst writing insights for a Head of Commercial Lending or CRO.
 
 ## Context
 {llm_ctx}
@@ -116,7 +196,7 @@ Return a JSON object with exactly these four fields. No preamble, no markdown �
         llm_ctx = _glc("strs_benefits")
         pss_snippets  = [s for s in ev_snippets if "Jira" not in s and "ServiceNow" not in s]
         corr_snippets = [s for s in ev_snippets if "Jira" in s or "ServiceNow" in s]
-        return f"""You are a public sector pension fund operations analyst writing insights for a STRS Member Services Director or Chief Operating Officer.
+        base = f"""You are a public sector pension fund operations analyst writing insights for a STRS Member Services Director or Chief Operating Officer.
 
 ## Context
 {llm_ctx}
@@ -161,7 +241,7 @@ Return a JSON object with exactly these four fields. No preamble, no markdown �
 
     else:
         # Original Service Cloud prompt — unchanged
-        return f"""You are an AI analyst generating business explanations for a Salesforce automation discovery report.
+        base = f"""You are an AI analyst generating business explanations for a Salesforce automation discovery report.
 
 ## Opportunity Data (read-only — do not change any values)
 Title: {opp.get("title", "")}
@@ -197,6 +277,21 @@ Return a JSON object with exactly these four fields. No preamble, no markdown �
     "Concrete next action the team should take"
   ]
 }}"""
+
+    # T3-S16-A: append causal section when a valid CausalContext was assembled.
+    # When causal_context is None (no graph data, InsufficientGraphContextError,
+    # or ANTHROPIC_API_KEY unset) the prompt is returned byte-for-byte unchanged.
+    if causal_context is not None:
+        base += "\n" + CAUSAL_PROMPT_SECTION.format(
+            dependency_paths_summary=format_dependency_paths(
+                causal_context.dependency_paths
+            ),
+            temporal_support_summary=format_temporal_support(
+                causal_context.temporal_support
+            ),
+        )
+
+    return base
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -523,10 +618,11 @@ def _enrich_opportunity(
     opp: Dict[str, Any],
     evidence: List[Dict[str, Any]],
     pack_id: Optional[str] = None,
+    causal_context: Optional[Any] = None,
 ) -> Dict[str, Any]:
     opp_id   = opp.get("id", "unknown")
     fb       = _fallback(opp, pack_id=pack_id)
-    prompt   = _opp_prompt(opp, evidence, pack_id=pack_id)
+    prompt   = _opp_prompt(opp, evidence, pack_id=pack_id, causal_context=causal_context)
     raw      = _call_claude(prompt, MAX_TOKENS_OPP)
 
     if raw is None:
@@ -667,6 +763,59 @@ def _enrich_executive_summary(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# T3-S16-A — causal context assembly (best-effort, never raises)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _try_build_causal_context(
+    org_id: Optional[str],
+    opp: Dict[str, Any],
+    pack_id: Optional[str],
+) -> Optional[Any]:
+    """Try to build a CausalContext for one opportunity. Returns None on any failure.
+
+    Gracefully handles:
+    - causal_engine not yet available (ENT-4 / T2 not merged)
+    - InsufficientGraphContextError (< 3 entities in neighbourhood)
+    - Any other unexpected exception
+
+    When ANTHROPIC_API_KEY is unset, _call_claude() already returns None so the
+    causal section is never rendered even if this returns a context — but we
+    still return None early to avoid an unnecessary DB traversal.
+    """
+    if not org_id:
+        return None
+    if not os.getenv("ANTHROPIC_API_KEY", ""):
+        return None
+
+    try:
+        from .causal_engine import InsufficientGraphContextError, build_causal_context
+    except ImportError:
+        # causal_engine not yet merged — silent degradation
+        return None
+
+    opp_id = opp.get("id", "")
+    # Seed entity IDs: prefer an explicit list on the opp; fall back to the opp
+    # id itself as a single seed (which will usually yield InsufficientGraphContextError
+    # unless the graph is rich enough around this opportunity's record).
+    seed_ids: list = opp.get("entity_ids") or opp.get("entityIds") or []
+    if not seed_ids and opp_id:
+        seed_ids = [opp_id]
+
+    effective_pack = pack_id or "service_cloud"
+
+    try:
+        return build_causal_context(org_id, opp_id, seed_ids, effective_pack)
+    except InsufficientGraphContextError:
+        logger.debug(
+            "Causal context skipped for opp=%s: insufficient graph context", opp_id
+        )
+        return None
+    except Exception as exc:
+        logger.debug("Causal context build failed for opp=%s: %s", opp_id, exc)
+        return None
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Main enrichment runner
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -736,6 +885,9 @@ def run_llm_enrichment(
     for opp in opps:
         opp_id = opp.get("id", "")
         corroboration_label = _corroboration_for(opp)
+        # T3-S16-A: attempt to build causal context for this opportunity.
+        # Returns None when causal_engine is absent, graph is sparse, or no API key.
+        causal_context = _try_build_causal_context(org_id, opp, pack_id)
         try:
             if grounded:
                 result = _enrich_opportunity_grounded(
@@ -761,7 +913,8 @@ def run_llm_enrichment(
                     logger.debug("llm.enrichment_grounded telemetry failed: %s", exc)
             else:
                 # Sparse graph or no org context — pre-ENT-3 prompt, no guard.
-                result = _enrich_opportunity(opp, evidence, pack_id=pack_id)
+                result = _enrich_opportunity(opp, evidence, pack_id=pack_id,
+                                             causal_context=causal_context)
                 result.setdefault("hallucination_rewrites", 0)
                 result.setdefault("hallucination_llm_rewrites", 0)
                 result.setdefault("hallucination_removals", [])
