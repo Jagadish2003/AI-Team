@@ -9,6 +9,7 @@ os.environ.setdefault("DEV_JWT", "dev-token-change-me")
 os.environ.setdefault("CORS_ORIGINS", "http://localhost:5173")
 
 from app.main import app
+from app import db
 
 client = TestClient(app)
 
@@ -184,6 +185,36 @@ def test_invalid_run_id_returns_404():
         assert r.status_code == 404, (
             f"{ep} returned {r.status_code} — must return 404 for unknown runId"
         )
+
+
+def test_latest_run_returns_newest_visible_run():
+    old_run_id = "run_latest_contract_old"
+    new_run_id = "run_latest_contract_new"
+    db.run_set(
+        old_run_id,
+        {
+            "id": old_run_id,
+            "status": "complete",
+            "orgId": "default",
+            "startedAt": "2999-01-01T00:00:00+00:00",
+            "updatedAt": "2999-01-01T00:00:00+00:00",
+        },
+    )
+    db.run_set(
+        new_run_id,
+        {
+            "id": new_run_id,
+            "status": "complete",
+            "orgId": "default",
+            "startedAt": "2999-01-02T00:00:00+00:00",
+            "updatedAt": "2999-01-02T00:00:00+00:00",
+        },
+    )
+
+    r = client.get("/api/runs/latest", headers=auth_headers())
+
+    assert r.status_code == 200
+    assert r.json()["id"] == new_run_id
 
 
 def test_permissions_shape():
