@@ -9,6 +9,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useRunContext } from '../context/RunContext';
+import { useAuthOptional } from '../context/AuthContext';
 
 // Import components and types
 import { CheckCircle2, Database, Layers3, Loader2, Target } from 'lucide-react';
@@ -309,13 +310,21 @@ interface Props {
 
 export default function StackBuilderPage({
   apiBase = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000',
-  token = import.meta.env.VITE_DEV_JWT || 'dev-token-change-me',
+  token: tokenProp,
 }: Props) {
 
   // Stale Run Fix Part 1: Bring in the context and navigate hook
   const { setRunId } = useRunContext();
   const navigate = useNavigate();
-  const orgId = ORG_ID_HEADER ?? 'default';
+  const auth = useAuthOptional();
+
+  // Multi-tenancy: sign catalog/launch/persistence calls with the in-session
+  // JWT and key Stack Builder state by THIS user's org, so a run is created in
+  // and scoped to the right workspace. An explicit `token` prop (tests) wins;
+  // otherwise the session token, then the dev-token fallback.
+  const token =
+    tokenProp ?? auth?.token ?? (import.meta.env.VITE_DEV_JWT || 'dev-token-change-me');
+  const orgId = auth?.user?.org_id ?? ORG_ID_HEADER ?? 'default';
 
   const setupState = useSetupState();
   const [catalog, setCatalog] = useState<WorkspaceCatalogResponse | null>(null);
