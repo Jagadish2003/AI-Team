@@ -208,6 +208,52 @@ describe("LoginPage", () => {
     });
   });
 
+  it("shows the remaining wait time from the 429 retry_after (rounded up to minutes)", async () => {
+    // 120s → "2 minutes". Backend nests retry_after under `detail`.
+    mockLogin.mockRejectedValue(
+      new ApiError("rate limited", 429, {
+        detail: { message: "Too many failed attempts.", retry_after: 120 },
+      })
+    );
+    renderPage();
+
+    fireEvent.change(screen.getByLabelText(/email/i), {
+      target: { value: "user@example.com" },
+    });
+    fireEvent.change(screen.getByLabelText("Password"), {
+      target: { value: "password1" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /sign in/i }));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("login-error").textContent).toBe(
+        "Too many failed attempts. Wait for 2 minutes."
+      );
+    });
+  });
+
+  it("rounds a partial-minute retry_after up and uses the singular 'minute'", async () => {
+    // 30s → ceil → "1 minute" (singular).
+    mockLogin.mockRejectedValue(
+      new ApiError("rate limited", 429, { detail: { retry_after: 30 } })
+    );
+    renderPage();
+
+    fireEvent.change(screen.getByLabelText(/email/i), {
+      target: { value: "user@example.com" },
+    });
+    fireEvent.change(screen.getByLabelText("Password"), {
+      target: { value: "password1" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /sign in/i }));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("login-error").textContent).toBe(
+        "Too many failed attempts. Wait for 1 minute."
+      );
+    });
+  });
+
   it("shows generic error message for non-ApiError failures", async () => {
     mockLogin.mockRejectedValue(new Error("Network error"));
     renderPage();

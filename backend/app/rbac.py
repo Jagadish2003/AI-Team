@@ -74,9 +74,25 @@ def get_user_role(org_id: str, user_id: str) -> str | None:
 def _get_user_id_from_token(token: str) -> str:
     """Derive a stable user_id from the bearer token.
 
-    In dev mode the token IS the user identifier.  A real IDP would instead
-    decode the JWT sub claim here.
+    AUTH-1 JWTs carry the user_id in their `sub` claim (workspace_members rows
+    are keyed on that UUID). Static dev/test tokens are not valid JWTs, so the
+    decode fails and the token string itself is the identifier — a row is seeded
+    with user_id = token for those (unchanged dev behaviour). Signature is not
+    verified here; require_auth already validated the token.
     """
+    try:
+        import jwt as _pyjwt
+
+        payload = _pyjwt.decode(
+            token,
+            options={"verify_signature": False, "verify_exp": False},
+            algorithms=["HS256"],
+        )
+        sub = payload.get("sub")
+        if sub:
+            return sub
+    except Exception:
+        pass
     return token
 
 

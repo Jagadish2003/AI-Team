@@ -16,7 +16,7 @@ from uuid import uuid4
 
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request, Response
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from pydantic import BaseModel
+from pydantic import AliasChoices, BaseModel, Field
 
 from app import db
 from app.auth.user_auth import (
@@ -77,7 +77,10 @@ class InviteRequest(BaseModel):
 
 
 class AcceptInviteRequest(BaseModel):
-    token: str
+    # AUTH-1 Section 4 and the frontend (authApi.acceptInvite) both send
+    # `invite_token`. Accept `token` too as a backward-compatible alias so older
+    # callers / manual API tests using either name keep working.
+    invite_token: str = Field(validation_alias=AliasChoices("invite_token", "token"))
     password: str
 
 
@@ -151,6 +154,30 @@ def _mark_invite_used(raw_token: str) -> None:
         db.kv_set(key, entry)
 
 
+def _validate_invite(raw_token: str) -> dict:
+    """Load an invite and reject it if unknown, used, malformed, or expired.
+
+    Returns the stored entry on success. Shared by GET /invite-info (which only
+    reads) and POST /accept-invite (which then consumes it), so both apply the
+    exact same acceptance rules and 400 messages. Never mutates the entry.
+    """
+    entry = _load_invite(raw_token)
+    if entry is None:
+        raise HTTPException(status_code=400, detail="Invalid or unknown invite token")
+    if entry.get("used"):
+        raise HTTPException(status_code=400, detail="Invite token has already been used")
+    expires_at_str = entry.get("expires_at", "")
+    try:
+        expires_at = datetime.fromisoformat(expires_at_str)
+        if expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=timezone.utc)
+    except (ValueError, TypeError):
+        raise HTTPException(status_code=400, detail="Malformed invite token")
+    if datetime.now(timezone.utc) > expires_at:
+        raise HTTPException(status_code=400, detail="Invite token has expired")
+    return entry
+
+
 # ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
@@ -181,9 +208,16 @@ def login_endpoint(body: LoginRequest, request: Request) -> Dict[str, Any]:
     try:
         result = login(email=body.email, password=body.password, ip_address=ip)
     except RateLimitError as exc:
+        # retry_after is also carried in the body: the standard Retry-After
+        # header is not a CORS-safelisted response header, so the cross-origin
+        # SPA cannot read it without an Access-Control-Expose-Headers entry. The
+        # body field lets the login form render a live "wait N minutes" message.
         raise HTTPException(
             status_code=429,
-            detail="Too many login attempts. Try again later.",
+            detail={
+                "message": "Too many failed attempts. Try again later.",
+                "retry_after": exc.retry_after_seconds,
+            },
             headers={"Retry-After": str(exc.retry_after_seconds)},
         )
     except InvalidCredentialsError as exc:
@@ -288,6 +322,37 @@ def invite(
     return {"invite_token": raw_token}
 
 
+@router.get("/invite-info")
+def invite_info(token: str) -> Dict[str, Any]:
+    """Resolve an invite token to its org/email WITHOUT consuming it.
+
+    Lets the accept-invite page greet the invitee by org name and show an
+    'invalid / expired / already used' state on page load — before any submit, so
+    reopening a spent link no longer renders the empty password form. Applies the
+    same rejection rules (400) as accept-invite; the token is never marked used.
+    """
+    ensure_auth_tables()
+    entry = _validate_invite(token)
+
+    email: str | None = None
+    user_id = entry.get("user_id")
+    if user_id:
+        con = db.connect()
+        try:
+            cur = con.execute("SELECT email FROM users WHERE id = ?", (user_id,))
+            row = cur.fetchone()
+            if row:
+                email = row[0]
+        finally:
+            con.close()
+
+    return {
+        "org_name": get_org_name(entry.get("org_id")),
+        "email": email,
+        "role": entry.get("role"),
+    }
+
+
 @router.post("/accept-invite", status_code=200)
 def accept_invite(body: AcceptInviteRequest) -> Dict[str, Any]:
     """AC11/AC12: validate token → set password + is_active → return JWT."""
@@ -295,23 +360,7 @@ def accept_invite(body: AcceptInviteRequest) -> Dict[str, Any]:
 
     ensure_auth_tables()
 
-    entry = _load_invite(body.token)
-    if entry is None:
-        raise HTTPException(status_code=400, detail="Invalid or unknown invite token")
-
-    if entry.get("used"):
-        raise HTTPException(status_code=400, detail="Invite token has already been used")
-
-    expires_at_str = entry.get("expires_at", "")
-    try:
-        expires_at = datetime.fromisoformat(expires_at_str)
-        if expires_at.tzinfo is None:
-            expires_at = expires_at.replace(tzinfo=timezone.utc)
-    except (ValueError, TypeError):
-        raise HTTPException(status_code=400, detail="Malformed invite token")
-
-    if datetime.now(timezone.utc) > expires_at:
-        raise HTTPException(status_code=400, detail="Invite token has expired")
+    entry = _validate_invite(body.invite_token)
 
     if len(body.password) < PASSWORD_MIN_LENGTH:
         raise HTTPException(
@@ -339,7 +388,7 @@ def accept_invite(body: AcceptInviteRequest) -> Dict[str, Any]:
     finally:
         con.close()
 
-    _mark_invite_used(body.token)
+    _mark_invite_used(body.invite_token)
 
     token = issue_jwt(user_id=user_id, org_id=org_id, role=role, email=email)
     return {

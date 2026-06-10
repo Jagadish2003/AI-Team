@@ -45,10 +45,36 @@ const HINT_SLOT_CLS = "mt-1 h-4 text-xs leading-4 text-red-400";
 
 // ── Error message resolver ────────────────────────────────────────────────────
 
+/**
+ * Pull retry_after (seconds) out of a 429 body and convert to whole minutes,
+ * rounded up. The backend nests it under `detail` (FastAPI HTTPException), and
+ * carries it in the body — not just the Retry-After header — because that header
+ * is not CORS-exposed to the SPA. Returns null when the value is absent/invalid.
+ */
+function retryAfterMinutes(body: unknown): number | null {
+  const detail = (body as { detail?: unknown } | null)?.detail;
+  const seconds =
+    detail && typeof detail === "object"
+      ? (detail as { retry_after?: unknown }).retry_after
+      : undefined;
+  if (typeof seconds === "number" && Number.isFinite(seconds) && seconds > 0) {
+    return Math.max(1, Math.ceil(seconds / 60));
+  }
+  return null;
+}
+
 function loginErrorMessage(err: unknown): string {
   if (err instanceof ApiError) {
     if (err.status === 401) return "Invalid email or password.";
-    if (err.status === 429) return "Too many failed attempts. Wait 15 minutes.";
+    if (err.status === 429) {
+      const minutes = retryAfterMinutes(err.body);
+      if (minutes != null) {
+        return `Too many failed attempts. Wait for ${minutes} ${
+          minutes === 1 ? "minute" : "minutes"
+        }.`;
+      }
+      return "Too many failed attempts. Please wait before trying again.";
+    }
   }
   return "Something went wrong. Please try again.";
 }
@@ -108,7 +134,7 @@ export default function LoginPage() {
           <h1 className="text-center text-xl font-semibold text-text">Sign in</h1>
 
           {/* Submit error sits directly below the heading, in a fixed-height slot. */}
-          <div className="mb-4 mt-3 min-h-[2.25rem]">
+          <div className="mb-2 mt-2 min-h-[2rem]">
             {error && (
               <p
                 role="alert"

@@ -108,7 +108,20 @@ def _jwt_org_id(token: str | None) -> str | None:
     dev_jwt = os.getenv("DEV_JWT", "dev-token-change-me")
     if token == dev_jwt:
         return os.getenv("DEV_JWT_ORG") or None
-    return None
+    # AUTH-1 JWTs carry the workspace in their org_id claim. Decoded without
+    # signature verification (require_auth does the real verification before the
+    # route runs); a forged org claim still fails require_auth, so the request is
+    # rejected even though org context was set. Non-JWT static tokens (viewer/
+    # analyst/admin) aren't decodable and fall through to None unchanged.
+    try:
+        payload = _pyjwt.decode(
+            token,
+            options={"verify_signature": False, "verify_exp": False},
+            algorithms=["HS256"],
+        )
+    except Exception:
+        return None
+    return payload.get("org_id") or None
 
 
 # ---------------------------------------------------------------------------

@@ -154,10 +154,9 @@ export default function TopNav() {
             <Menu className="h-5 w-5" />
           </button>
 
-          <div ref={profileMenuRef} className="relative">
+          <div ref={profileMenuRef} className="group relative">
             <button
               type="button"
-              title={profileTitle}
               aria-haspopup="menu"
               aria-expanded={profileOpen}
               aria-label={profileTitle}
@@ -166,6 +165,20 @@ export default function TopNav() {
             >
               <User className="h-5 w-5" />
             </button>
+
+            {/*
+             * Themed profile tooltip (replaces the unstyleable native title).
+             * AgentIQ blue family: light-blue fill, accent-tinted 4px-rounded
+             * border. Hidden while the dropdown is open so the two don't overlap.
+             */}
+            {!profileOpen && (
+              <span
+                role="tooltip"
+                className="pointer-events-none absolute right-0 top-full z-50 mt-1.5 whitespace-nowrap rounded-[4px] border border-[#93c5fd] bg-[#dbeafe] px-2 py-1 text-xs font-medium text-[#1e3a8a] opacity-0 shadow-md transition-opacity duration-150 group-hover:opacity-100"
+              >
+                {profileTitle}
+              </span>
+            )}
 
             {profileOpen && (
               <div

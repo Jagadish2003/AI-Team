@@ -106,6 +106,28 @@ export async function logout(token: string): Promise<void> {
   }
 }
 
+/** Shape of GET /api/auth/invite-info — the org/email a token resolves to. */
+export interface InviteInfo {
+  org_name: string | null;
+  email: string | null;
+  role: Role | null;
+}
+
+/**
+ * GET /api/auth/invite-info?token=… — AUTH-1 / AT-239.
+ * Resolves an invite token to its org name and invitee email WITHOUT consuming
+ * it, so the accept-invite page can greet the invitee and surface an invalid /
+ * expired / already-used token on load. 400 on a bad/used/expired token.
+ */
+export async function getInviteInfo(inviteToken: string): Promise<InviteInfo> {
+  const res = await fetch(
+    `${BASE_URL}/api/auth/invite-info?token=${encodeURIComponent(inviteToken)}`
+  );
+  const body = await parseBody(res);
+  if (!res.ok) throw new ApiError("GET /api/auth/invite-info failed", res.status, body);
+  return body as InviteInfo;
+}
+
 /**
  * POST /api/auth/accept-invite — AUTH-1 / AT-239.
  * Sets password for an invited user and activates the account.
