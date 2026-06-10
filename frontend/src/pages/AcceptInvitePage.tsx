@@ -3,26 +3,32 @@
  *
  * Section 6 behaviour:
  *   Reads invite_token from the URL query param `?token=<value>`.
- *   POST /api/auth/accept-invite via AuthContext.acceptInvite().
- *   Sets password for an invited user (is_active=False → True).
- *   Returns JWT — user is logged in immediately.
- *   Redirects to /integration-hub on success.
- *   Single-use — second call with the same token returns 400.
- *   Expired token (>72 h) returns 400.
+ *   On mount it resolves the token via GET /api/auth/invite-info (without
+ *   consuming it) so the page can greet the invitee by org name AND show an
+ *   "invalid / expired / already used" state immediately — reopening a spent
+ *   link no longer renders the empty password form.
+ *   POST /api/auth/accept-invite via AuthContext.acceptInvite() activates the
+ *   account (is_active=False → True), returns a JWT, and redirects to
+ *   /integration-hub. Single-use — a second attempt returns 400.
+ *
+ * Layout/theme mirrors LoginPage and RegisterPage: shared input/button classes,
+ * the PasswordInput show/hide toggle, and fixed-height hint slots so the card
+ * height stays constant as inline errors appear and clear.
  */
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 
+import PasswordInput from "../components/auth/PasswordInput";
+import { getInviteInfo } from "../api/authApi";
 import { useAuth } from "../context/AuthContext";
 import { useTheme } from "../context/ThemeContext";
 import { ApiError } from "../lib/apiClient";
 
-// ── Shared styling constants ──────────────────────────────────────────────────
+// ── Validation ────────────────────────────────────────────────────────────────
 
-const INPUT_CLS =
-  "w-full rounded-lg border border-border bg-bg px-3 py-2.5 text-sm text-text " +
-  "placeholder:text-muted focus:border-accent/60 focus:outline-none focus:ring-2 " +
-  "focus:ring-accent/30 disabled:opacity-50";
+const MIN_PASSWORD_LENGTH = 8;
+
+// ── Shared styling constants (kept in sync with Login/Register) ───────────────
 
 const SUBMIT_CLS =
   "w-full inline-flex min-h-9 items-center justify-center whitespace-nowrap rounded-md " +
@@ -30,6 +36,9 @@ const SUBMIT_CLS =
   "focus:outline-none focus-visible:ring-1 focus-visible:ring-accent/40 " +
   "disabled:cursor-not-allowed disabled:opacity-40 " +
   "border border-accent bg-accent text-textwhite shadow-sm hover:bg-accent/90";
+
+// Fixed-height slot for a single line of inline hint/error text.
+const HINT_SLOT_CLS = "mt-1 h-4 text-xs leading-4 text-red-400";
 
 // ── Error message resolver ────────────────────────────────────────────────────
 
@@ -41,7 +50,28 @@ function acceptInviteErrorMessage(err: unknown): string {
   return "Something went wrong. Please try again.";
 }
 
+// ── Page shell (logo + centred card) ──────────────────────────────────────────
+
+function PageShell({ theme, children }: { theme: string; children: React.ReactNode }) {
+  return (
+    <div className="flex min-h-screen items-center justify-center bg-bg px-4 py-12">
+      <div className="w-full max-w-sm">
+        <div className="mb-8 flex justify-center">
+          <img
+            src={theme === "dark" ? "/Logo-Dark.svg" : "/Logo-Light.svg"}
+            alt="AgentIQ"
+            className="h-10 w-auto"
+          />
+        </div>
+        {children}
+      </div>
+    </div>
+  );
+}
+
 // ── Component ────────────────────────────────────────────────────────────────
+
+type InviteState = "loading" | "valid" | "invalid";
 
 export default function AcceptInvitePage() {
   const { acceptInvite } = useAuth();
@@ -51,45 +81,55 @@ export default function AcceptInvitePage() {
 
   const inviteToken = searchParams.get("token") ?? "";
 
+  // Token resolution (mount-time, non-consuming).
+  const [inviteState, setInviteState] = useState<InviteState>(
+    inviteToken ? "loading" : "invalid"
+  );
+  const [orgName, setOrgName] = useState<string | null>(null);
+  const [inviteError, setInviteError] = useState<string>(
+    "Invalid invite link. Please ask your administrator to send a new invitation."
+  );
+
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
+  // Resolve the token once on mount. A used/expired/invalid token (400) flips the
+  // page straight to the error state — no empty form for a spent link.
+  useEffect(() => {
+    if (!inviteToken) return;
+    let cancelled = false;
+    getInviteInfo(inviteToken)
+      .then((info) => {
+        if (cancelled) return;
+        setOrgName(info.org_name ?? null);
+        setInviteState("valid");
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        setInviteError(acceptInviteErrorMessage(err));
+        setInviteState("invalid");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [inviteToken]);
+
+  // Inline validation — each only surfaces once the user has typed something.
+  const passwordTooShort =
+    password.length > 0 && password.length < MIN_PASSWORD_LENGTH;
   const passwordMismatch =
     confirmPassword.length > 0 && password !== confirmPassword;
 
   const canSubmit =
-    inviteToken.length > 0 &&
-    password.length >= 8 &&
+    password.length >= MIN_PASSWORD_LENGTH &&
     password === confirmPassword &&
     !submitting;
 
-  // Missing token — show an error state immediately, no form.
-  if (!inviteToken) {
-    return (
-      <div className="flex min-h-screen items-center justify-center bg-bg px-4 py-12">
-        <div className="w-full max-w-sm">
-          <div className="mb-8 flex justify-center">
-            <img
-              src={theme === "dark" ? "/Logo-Dark.svg" : "/Logo-Light.svg"}
-              alt="AgentIQ"
-              className="h-10 w-auto"
-            />
-          </div>
-          <div className="rounded-xl border border-red-500/20 bg-red-500/10 px-6 py-8 text-center shadow-xl shadow-black/20">
-            <p className="text-sm font-medium text-red-400" data-testid="missing-token-error">
-              Invalid invite link. Please ask your administrator to send a new invitation.
-            </p>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    if (passwordMismatch) return;
+    if (!canSubmit) return;
     setError(null);
     setSubmitting(true);
     try {
@@ -102,82 +142,104 @@ export default function AcceptInvitePage() {
     }
   }
 
-  return (
-    <div className="flex min-h-screen items-center justify-center bg-bg px-4 py-12">
-      <div className="w-full max-w-sm">
-
-        {/* Logo */}
-        <div className="mb-8 flex justify-center">
-          <img
-            src={theme === "dark" ? "/Logo-Dark.svg" : "/Logo-Light.svg"}
-            alt="AgentIQ"
-            className="h-10 w-auto"
-          />
-        </div>
-
-        {/* Card */}
-        <div className="rounded-xl border border-border bg-panel px-6 py-8 shadow-xl shadow-black/20">
-          <h1 className="mb-1 text-center text-xl font-semibold text-text">Set your password</h1>
-          <p className="mb-6 text-center text-sm text-muted">
-            You've been invited to AgentIQ. Choose a password to activate your account.
+  // ── Invalid / used / expired token — error card, no form. ───────────────────
+  if (inviteState === "invalid") {
+    return (
+      <PageShell theme={theme}>
+        <div className="rounded-xl border border-red-500/20 bg-red-500/10 px-6 py-8 text-center shadow-xl shadow-black/20">
+          <p className="text-sm font-medium text-red-400" data-testid="invite-invalid-error">
+            {inviteError}
           </p>
+        </div>
+      </PageShell>
+    );
+  }
 
-          <form onSubmit={handleSubmit} noValidate className="space-y-4">
-            <div>
-              <label htmlFor="password" className="mb-1.5 block text-sm font-medium text-text">
-                Password
-                <span className="ml-1 text-xs font-normal text-muted">(min. 8 characters)</span>
-              </label>
-              <input
-                id="password"
-                type="password"
-                autoComplete="new-password"
-                required
-                minLength={8}
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                className={INPUT_CLS}
-                placeholder="••••••••"
-                disabled={submitting}
-              />
+  // ── Resolving the token. ────────────────────────────────────────────────────
+  if (inviteState === "loading") {
+    return (
+      <PageShell theme={theme}>
+        <div className="rounded-xl border border-border bg-panel px-6 py-8 text-center shadow-xl shadow-black/20">
+          <p className="text-sm text-muted" data-testid="invite-loading">
+            Checking your invitation…
+          </p>
+        </div>
+      </PageShell>
+    );
+  }
+
+  // ── Valid token — password setup form. ──────────────────────────────────────
+  const greeting = orgName
+    ? `You have been invited to ${orgName}'s AgentIQ. Set password to activate your account.`
+    : "You have been invited to AgentIQ. Set password to activate your account.";
+
+  return (
+    <PageShell theme={theme}>
+      <div className="rounded-xl border border-border bg-panel px-6 py-8 shadow-xl shadow-black/20">
+        <h1 className="mb-1 text-center text-xl font-semibold text-text">Set your password</h1>
+        <p className="mb-6 text-center text-sm text-muted">{greeting}</p>
+
+        <form onSubmit={handleSubmit} noValidate>
+          {/* Password */}
+          <div className="mb-3">
+            <label htmlFor="password" className="mb-1.5 block text-sm font-medium text-text">
+              Password
+            </label>
+            <PasswordInput
+              id="password"
+              autoComplete="new-password"
+              required
+              minLength={MIN_PASSWORD_LENGTH}
+              invalid={passwordTooShort}
+              value={password}
+              onChange={setPassword}
+              disabled={submitting}
+            />
+            <div className={HINT_SLOT_CLS}>
+              {passwordTooShort && "Enter minimum of 8 characters"}
             </div>
+          </div>
 
-            <div>
-              <label htmlFor="confirm-password" className="mb-1.5 block text-sm font-medium text-text">
-                Confirm password
-              </label>
-              <input
-                id="confirm-password"
-                type="password"
-                autoComplete="new-password"
-                required
-                value={confirmPassword}
-                onChange={(e) => setConfirmPassword(e.target.value)}
-                className={`${INPUT_CLS} ${passwordMismatch ? "border-red-500/50 focus:ring-red-500/20" : ""}`}
-                placeholder="••••••••"
-                disabled={submitting}
-              />
-              {passwordMismatch && (
-                <p className="mt-1 text-xs text-red-400">Passwords do not match.</p>
-              )}
-            </div>
+          {/* Confirm password */}
+          <div>
+            <label htmlFor="confirm-password" className="mb-1.5 block text-sm font-medium text-text">
+              Confirm password
+            </label>
+            <PasswordInput
+              id="confirm-password"
+              autoComplete="new-password"
+              required
+              invalid={passwordMismatch}
+              value={confirmPassword}
+              onChange={setConfirmPassword}
+              disabled={submitting}
+            />
+          </div>
 
-            {error && (
+          {/*
+           * One fixed-height region for the mismatch hint and the submit error.
+           * They can never co-occur (submit only fires when passwords match), so
+           * sharing the slot keeps the card height constant.
+           */}
+          <div className="mb-2 mt-1 min-h-[2rem]">
+            {passwordMismatch ? (
+              <p className="text-xs leading-4 text-red-400">Passwords do not match.</p>
+            ) : error ? (
               <p
                 role="alert"
                 data-testid="accept-invite-error"
-                className="rounded-lg border border-red-500/20 bg-red-500/10 px-3 py-2 text-sm text-red-400"
+                className="rounded-md border border-red-500/20 bg-red-500/10 px-3 py-1.5 text-xs text-red-400"
               >
                 {error}
               </p>
-            )}
+            ) : null}
+          </div>
 
-            <button type="submit" disabled={!canSubmit} className={SUBMIT_CLS}>
-              {submitting ? "Activating account…" : "Activate account"}
-            </button>
-          </form>
-        </div>
+          <button type="submit" disabled={!canSubmit} className={SUBMIT_CLS}>
+            {submitting ? "Activating account…" : "Activate account"}
+          </button>
+        </form>
       </div>
-    </div>
+    </PageShell>
   );
 }

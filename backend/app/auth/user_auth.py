@@ -21,13 +21,23 @@ Security controls (Section 7):
     * 8-hour HS256 JWT carrying sub/org_id/role/email/jti/iat/exp (AC4).
     * Logout blocklist — jti stored in the KV store until the token's own exp,
       so a logged-out token fails verify_jwt (AC9).
-    * Rate limiting — 5 failed attempts per email OR per IP in 15 minutes ->
-      RateLimitError (AC6/AC7); a successful login clears the email's failed
-      attempts (AC8).
+    * Rate limiting — 5 failed attempts for an EMAIL in 15 minutes ->
+      RateLimitError (AC6); a successful login clears the email's failed
+      attempts (AC8). Scoping is per-email, NOT per-IP: a throttled account must
+      never lock out other users who share the same IP (a whole team logging in
+      from one office IP, or several POC testers on localhost). retry_after is
+      the ACTUAL remaining time until the block lifts, so the UI can count it
+      down rather than always quoting the full 15-minute window.
+
+      Design note (deviation from AUTH-1 AC7): the original spec also throttled
+      per-IP. That was dropped intentionally because it locked out legitimate
+      co-located users during POC testing. login_attempts still records the IP
+      for audit; it is simply not used as a blocking key.
 """
 from __future__ import annotations
 
 import logging
+import math
 import os
 import sqlite3
 import time
@@ -252,16 +262,25 @@ def _is_jti_blocked(jti: str) -> bool:
 
 
 def check_login_rate_limit(email: str, ip_address: str) -> None:
-    """Raise RateLimitError when 5+ failed attempts exist for the email OR the IP
-    within the last 15 minutes."""
+    """Raise RateLimitError when 5+ failed attempts exist for this EMAIL within
+    the last 15 minutes (AC6).
+
+    Scoped to the email only — a throttled account does not block other users who
+    share the same IP. ``ip_address`` is accepted for signature compatibility and
+    is still recorded for audit by record_login_attempt(), but it is not a
+    blocking key (see the module docstring for the AC7 deviation rationale).
+
+    The RateLimitError carries the ACTUAL number of seconds until the block lifts,
+    not a fixed 15 minutes, so the UI can show a live countdown.
+    """
     ensure_auth_tables()
     window_start = datetime.now(timezone.utc) - timedelta(
         minutes=RATE_LIMIT_WINDOW_MINUTES
     )
     if _count_failed_attempts(since=window_start, email=email) >= RATE_LIMIT_MAX_ATTEMPTS:
-        raise RateLimitError(retry_after_seconds=RATE_LIMIT_WINDOW_MINUTES * 60)
-    if _count_failed_attempts(since=window_start, ip=ip_address) >= RATE_LIMIT_MAX_ATTEMPTS:
-        raise RateLimitError(retry_after_seconds=RATE_LIMIT_WINDOW_MINUTES * 60)
+        raise RateLimitError(
+            retry_after_seconds=_seconds_until_email_unblocked(email)
+        )
 
 
 def record_login_attempt(email: str, ip_address: str, succeeded: bool) -> None:
@@ -302,6 +321,44 @@ def _count_failed_attempts(
         return int(cur.fetchone()[0])
     finally:
         con.close()
+
+
+def _seconds_until_email_unblocked(email: str) -> int:
+    """Seconds until the email's failed-attempt count drops below the threshold.
+
+    The block lifts when the Nth-most-recent failure (N = RATE_LIMIT_MAX_ATTEMPTS)
+    ages out of the trailing window: once it leaves, only N-1 failures remain and
+    the count is back under the limit. So the unblock time is that attempt's
+    timestamp + the window length. Returns a value that shrinks as time passes,
+    clamped to at least 1 second while the block is active, so the UI can render a
+    live countdown instead of a fixed 15 minutes.
+
+    Falls back to the full window if no qualifying attempt is found (the email is
+    not actually blocked) — a defensive default that never under-reports.
+    """
+    window = timedelta(minutes=RATE_LIMIT_WINDOW_MINUTES)
+    window_start = datetime.now(timezone.utc) - window
+    con = db.connect()
+    try:
+        cur = con.execute(
+            "SELECT attempted_at FROM login_attempts "
+            "WHERE email = ? AND succeeded = 0 AND attempted_at >= ? "
+            "ORDER BY attempted_at DESC LIMIT 1 OFFSET ?",
+            (email, window_start.isoformat(), RATE_LIMIT_MAX_ATTEMPTS - 1),
+        )
+        row = cur.fetchone()
+    finally:
+        con.close()
+    if row is None or not row[0]:
+        return RATE_LIMIT_WINDOW_MINUTES * 60
+    try:
+        oldest_relevant = datetime.fromisoformat(row[0])
+    except ValueError:
+        return RATE_LIMIT_WINDOW_MINUTES * 60
+    if oldest_relevant.tzinfo is None:
+        oldest_relevant = oldest_relevant.replace(tzinfo=timezone.utc)
+    remaining = (oldest_relevant + window) - datetime.now(timezone.utc)
+    return max(1, math.ceil(remaining.total_seconds()))
 
 
 # ---------------------------------------------------------------------------

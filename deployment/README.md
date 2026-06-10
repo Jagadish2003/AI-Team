@@ -1,5 +1,29 @@
 # AgentIQ Deployment — Environment Variables
 
+## Per-Instance Configuration (POC Model)
+
+> **DEPLOYMENT NOTE — per-instance config (POC model)**
+>
+> Org-specific configuration lives **per deployment instance**, not in a shared
+> store. Each customer (TCU, City National) runs on a **separate instance** with
+> its own `config.py` and environment variables.
+>
+> **FUTURE:** when multi-tenant shared deployment is needed, these settings move
+> to a `workspace_config` table keyed by `org_id`.
+> See architectural discussion 2026-06-10 — workspace config externalisation.
+> Do not remove this note until that story is built.
+
+### Descope — Workspace config externalisation (per Team Lead)
+
+**Descoped from the current sprint (Sprint 12); to be done after the POC.**
+
+Both POCs (TCU, City National) run on **separate instances**, so each already
+has its own isolated `config.py` + environment variables. A shared multi-tenant
+config store is therefore not required for the POC. The `workspace_config`
+(keyed by `org_id`) externalisation described above is only needed once a
+single shared multi-tenant deployment is on the table — that work is deferred
+to a post-POC story.
+
 ## OAuth Connector Secrets
 
 Each connector's client secret is resolved from the environment at runtime via `secret_key`
@@ -46,8 +70,21 @@ provider's OAuth app registration before going to production.
 
 AUTH-1 adds a `login_attempts` table (created by Alembic migration `0004`) that backs
 **lightweight application-layer brute-force protection**: after 5 failed login attempts
-for the same email **or** the same IP within 15 minutes, the 6th attempt returns
-`429` with a `Retry-After: 900` header.
+for the **same email** within 15 minutes, the 6th attempt returns `429`.
+
+**Scoping — per email, not per IP.** The block is keyed on the email only. The original
+AUTH-1 AC7 also throttled per source IP, but that locked out legitimate co-located users
+(a whole team behind one office NAT, or several POC testers on `localhost`): one user's
+failures would block everyone on the shared IP. IP is still recorded in `login_attempts`
+for audit, but it is not used as a blocking key. If you need IP-level brute-force
+protection across many emails, enforce it at the gateway (see table below).
+
+**`Retry-After` reflects the actual remaining time.** Rather than a fixed `900`, the
+header (and a `retry_after` field in the `429` JSON body) carries the real seconds left
+until the block lifts — i.e. when the oldest of the 5 most-recent failures ages out of
+the 15-minute window. It is also placed in the body because `Retry-After` is not a
+CORS-safelisted response header, so the browser SPA cannot read the header cross-origin;
+the body field lets the login form show a live "wait N minutes" countdown.
 
 **Deployment assumption — is the table needed?**
 
