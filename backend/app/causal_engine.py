@@ -710,3 +710,375 @@ def _parse_causal_output_inner(
         "cause_chain": guarded_steps,
         "falsifiability_condition": falsifiability_text,
     }
+
+
+# ---------------------------------------------------------------------------
+# T5 - causal quality gates (ENT-6 Section 1)
+# ---------------------------------------------------------------------------
+#
+# evaluate_causal_quality_gates() decides whether a validated causal hypothesis
+# is stored CONFIRMED (preliminary=False) or PRELIMINARY (preliminary=True). It
+# is the central commitment of ENT-6 (Sections 1 and 8).
+#
+# The three gates are deliberately NOT configurable. There is intentionally no
+# flag, env var, threshold parameter, or "demo mode" that can bypass or weaken
+# any gate - the preliminary banner is the honest answer, not a limitation. If a
+# future change appears to require a bypass, stop and escalate rather than
+# adding one here.
+#
+# The function is PURE: it performs read-only lookups and never writes to the
+# database, so it is trivially unit-testable. All persistence - including the
+# gate_run_count column - is owned by T6's store_causal_hypothesis(), which
+# consumes the (preliminary, reason) result plus the threaded run_count below.
+
+# Gate 1 threshold - hardcoded by design (see note above). Causal chains built
+# on fewer than 10 runs rest on data that has not had time to stabilise.
+GATE1_MIN_RUN_COUNT = 10
+
+# Marker the T3 prompt (Rule 2) instructs the LLM to prepend to any cause-chain
+# step whose primary evidence is an inferred (confidence < 0.8) relationship,
+# e.g. "3. [inferred: 0.6] Backlog pressure ...". Matching INFERRED_CONFIDENCE =
+# 0.6 in entity_relationships.py. Tolerant of leading whitespace and casing.
+_INFERRED_STEP_LABEL_RE = re.compile(r"\[\s*inferred\b", re.IGNORECASE)
+
+
+class GateResult(tuple):
+    """Result of evaluate_causal_quality_gates().
+
+    Behaves exactly like the documented ``tuple[bool, str | None]`` return -
+    ``preliminary, reason = result`` and ``result == (preliminary, reason)`` both
+    work - while additionally carrying ``run_count``, the live primary-signal run
+    count Gate 1 observed. T6 reads ``result.run_count`` to persist
+    gate_run_count as *exactly* the value the gates saw, never a second
+    (possibly drifted) read of signal_snapshots.
+    """
+
+    # NB: a tuple subclass cannot declare a non-empty __slots__ (tuple stores its
+    # items in the variable part), so _run_count lives on the instance dict.
+
+    def __new__(cls, preliminary: bool, reason: Optional[str], run_count: int) -> "GateResult":
+        self = super().__new__(cls, (bool(preliminary), reason))
+        self._run_count = int(run_count)
+        return self
+
+    @property
+    def preliminary(self) -> bool:
+        return self[0]
+
+    @property
+    def reason(self) -> Optional[str]:
+        return self[1]
+
+    @property
+    def run_count(self) -> int:
+        return self._run_count
+
+    def __repr__(self) -> str:
+        return (
+            f"GateResult(preliminary={self.preliminary!r}, "
+            f"reason={self.reason!r}, run_count={self.run_count!r})"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Input accessors - tolerate dicts or objects so T6 can wire any payload shape
+# ---------------------------------------------------------------------------
+
+def _get(obj: Any, key: str, default: Any = None) -> Any:
+    """Read ``key`` from a dict or object, returning ``default`` when absent."""
+
+    if obj is None:
+        return default
+    if isinstance(obj, dict):
+        return obj.get(key, default)
+    return getattr(obj, key, default)
+
+
+def _lookup(key: str, *sources: Any) -> Any:
+    """Return the first non-None value of ``key`` across ``sources``."""
+
+    for source in sources:
+        value = _get(source, key)
+        if value is not None:
+            return value
+    return None
+
+
+def _entities_of(enrichment: Any) -> list[Any]:
+    """Return OppEnrichment.entities as a list (dict or object form), else []."""
+
+    entities = _get(enrichment, "entities")
+    return list(entities) if entities else []
+
+
+def _entity_id_of(entity: Any) -> Optional[str]:
+    """Best-effort entity id from a bare string, dict, or object."""
+
+    if entity is None:
+        return None
+    if isinstance(entity, str):
+        return entity
+    eid = _get(entity, "entity_id") or _get(entity, "id")
+    return str(eid) if eid else None
+
+
+def _entity_ids(value: Any) -> list[str]:
+    """Extract entity ids from a list of strings / dicts / objects."""
+
+    if not value:
+        return []
+    ids: list[str] = []
+    for item in value:
+        eid = _entity_id_of(item)
+        if eid:
+            ids.append(eid)
+    return ids
+
+
+def _resolve_org_id(opp: Any, enrichment: Any, causal_context: Any) -> str:
+    """Derive org_id from the inputs.
+
+    The documented signature has no org_id parameter, so it is resolved from the
+    payloads. Causal-context entities carry org_id from the entities JOIN and are
+    the most reliable source; opp/enrichment are fallbacks.
+    """
+
+    try:
+        for entity in causal_context.graph_context.entities:
+            org_id = getattr(entity, "org_id", None)
+            if org_id:
+                return str(org_id)
+    except Exception:
+        pass
+
+    org_id = _lookup("org_id", opp, enrichment) or _lookup("orgId", opp, enrichment)
+    return str(org_id) if org_id else ""
+
+
+# ---------------------------------------------------------------------------
+# Read-only data sources (monkeypatched in unit tests)
+# ---------------------------------------------------------------------------
+
+def _primary_signal_run_count(org_id: str, signal_key: Optional[str]) -> int:
+    """Live count of signal_snapshots rows for the primary signal_key (Gate 1).
+
+    Reads the *current* count straight from signal_snapshots - never
+    gate_run_count from a causal_hypotheses row, which would be circular: that
+    row does not exist yet when the gates run. calculate_trend() is unsuitable
+    here because its run_count is capped at the 5-run trend window, while Gate 1
+    needs the full history count (>= 10).
+    """
+
+    if not signal_key:
+        return 0
+    conn = db.connect()
+    try:
+        cur = conn.execute(
+            "SELECT COUNT(*) FROM signal_snapshots WHERE org_id = ? AND signal_key = ?",
+            (org_id, signal_key),
+        )
+        row = cur.fetchone()
+        return int(row[0]) if row and row[0] is not None else 0
+    finally:
+        conn.close()
+
+
+def _entity_resolution_status_map(org_id: str, entity_ids: list[str]) -> dict[str, str]:
+    """Return {entity_id: resolution_status} for ids found in the entities table."""
+
+    if not entity_ids:
+        return {}
+    conn = db.connect()
+    try:
+        conn.row_factory = sqlite3.Row
+        placeholders = ", ".join("?" for _ in entity_ids)
+        rows = conn.execute(
+            f"SELECT id, resolution_status FROM entities "
+            f"WHERE org_id = ? AND id IN ({placeholders})",
+            (org_id, *entity_ids),
+        ).fetchall()
+        return {row["id"]: row["resolution_status"] for row in rows}
+    finally:
+        conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Inferred-step detection - the single source of truth shared with T6
+# ---------------------------------------------------------------------------
+
+def step_references_inferred_relationship(step: Any) -> bool:
+    """True when a cause-chain step is labelled as resting on an inferred edge.
+
+    Detects the ``[inferred: ...]`` marker the T3 prompt (Rule 2) tells the LLM
+    to prepend to any step whose primary evidence is an inferred relationship.
+    This is the single source of truth for "does this step rely on an inferred
+    relationship": Gate 3 and T6's causal_hypotheses.inferred column both call
+    it, so the gate decision and the stored flag can never disagree.
+    """
+
+    if not step:
+        return False
+    return bool(_INFERRED_STEP_LABEL_RE.search(str(step)))
+
+
+def cause_chain_uses_inferred(cause_chain: Any) -> bool:
+    """True when any step in the chain references an inferred relationship.
+
+    Convenience for T6 to populate the causal_hypotheses.inferred column from
+    the same detector Gate 3 uses.
+    """
+
+    if not cause_chain:
+        return False
+    return any(step_references_inferred_relationship(step) for step in cause_chain)
+
+
+# ---------------------------------------------------------------------------
+# Individual gate evaluators
+# ---------------------------------------------------------------------------
+
+def _gate2_unresolved_count(opp: Any, enrichment: Any, org_id: str) -> int:
+    """Count distinct entities in the chain that are not 'resolved' (Gate 2).
+
+    Sources: every entity in OppEnrichment.entities plus every id in the
+    hypothesis evidence_links. resolution_status is read inline when the entity
+    object carries it (OppEnrichment entities do), otherwise looked up in the
+    entities table (bare evidence_links ids). Any status other than 'resolved' -
+    including an id absent from the table - counts as unresolved, because an
+    entity we cannot confirm as resolved cannot anchor a confirmed causal claim.
+    """
+
+    # (entity_id, inline_status); inline_status is None when the ref is a bare id.
+    refs: list[tuple[Optional[str], Optional[str]]] = []
+    for entity in _entities_of(enrichment):
+        refs.append((_entity_id_of(entity), _get(entity, "resolution_status")))
+    for eid in _entity_ids(_lookup("evidence_links", opp, enrichment)):
+        refs.append((eid, None))
+
+    if not refs:
+        return 0
+
+    lookup_ids = sorted({eid for eid, status in refs if eid and status is None})
+    if lookup_ids:
+        try:
+            status_map = _entity_resolution_status_map(org_id, lookup_ids)
+        except Exception as exc:  # conservative: unknown status -> treat as unresolved
+            logger.warning("Gate 2 resolution lookup failed: %s", exc)
+            status_map = {}
+    else:
+        status_map = {}
+
+    non_resolved_ids: set[str] = set()
+    anonymous_unresolved = 0
+    for eid, inline_status in refs:
+        status = inline_status if inline_status is not None else status_map.get(eid)
+        if status != "resolved":
+            if eid:
+                non_resolved_ids.add(eid)
+            else:
+                anonymous_unresolved += 1
+    return len(non_resolved_ids) + anonymous_unresolved
+
+
+def _gate3_inferred_step_index(opp: Any, enrichment: Any) -> Optional[int]:
+    """1-based index of the first cause-chain step that rests on an inferred
+    relationship, or None when no step does (Gate 3)."""
+
+    cause_chain = _lookup("cause_chain", opp, enrichment) or []
+    for index, step in enumerate(cause_chain, start=1):
+        if step_references_inferred_relationship(step):
+            return index
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Public entry point
+# ---------------------------------------------------------------------------
+
+def evaluate_causal_quality_gates(
+    opp: Any,
+    signal_key: Optional[str],
+    opportunity_id: str,
+    enrichment: Any,
+    causal_context: Any,
+) -> GateResult:
+    """Evaluate the three ENT-6 causal quality gates (Section 1).
+
+    Returns a GateResult that unpacks as ``(preliminary, reason)``:
+      * ``(False, None)``  - all three gates pass; the hypothesis is CONFIRMED.
+      * ``(True, reason)`` - at least one gate failed; the hypothesis is stored
+        PRELIMINARY and the evidence trace renders the analyst-review banner.
+
+    All three gates are always evaluated (no short-circuit on first failure).
+    When more than one fails, the surfaced reason follows the priority
+    **Gate 2 > Gate 3 > Gate 1** - entity ambiguity is the most trust-damaging,
+    then inferred evidence, then insufficient history.
+
+    The returned GateResult also exposes ``run_count`` - the live primary-signal
+    run count Gate 1 observed - so T6 can persist gate_run_count as exactly the
+    value seen here. The function never writes to the database.
+
+    Parameters
+    ----------
+    opp
+        The causal hypothesis under evaluation; provides ``cause_chain`` (Gate 3)
+        and ``evidence_links`` (Gate 2). dict or object form accepted.
+    signal_key
+        The opportunity's primary signal_key, used for the Gate 1 run-count read.
+    opportunity_id
+        Opportunity identifier, used only for log context.
+    enrichment
+        The OppEnrichment; ``enrichment.entities`` feed Gate 2 alongside
+        evidence_links.
+    causal_context
+        The CausalContext from build_causal_context(); its entities supply org_id.
+    """
+
+    org_id = _resolve_org_id(opp, enrichment, causal_context)
+
+    # Gate 1 - sufficient temporal history. Read the LIVE count from
+    # signal_snapshots. A read failure degrades to 0, which fails the gate - the
+    # safe, preliminary-by-default outcome. run_count is threaded out regardless
+    # of pass/fail so T6 can record gate_run_count as exactly this value.
+    try:
+        run_count = _primary_signal_run_count(org_id, signal_key)
+    except Exception as exc:
+        logger.warning("Gate 1 run_count read failed for opp=%s: %s", opportunity_id, exc)
+        run_count = 0
+    gate1_failed = run_count < GATE1_MIN_RUN_COUNT
+    gate1_reason = (
+        f"gate1_insufficient_run_count: {run_count} of {GATE1_MIN_RUN_COUNT} runs completed"
+        if gate1_failed
+        else None
+    )
+
+    # Gate 2 - resolved entity chain.
+    try:
+        unresolved_count = _gate2_unresolved_count(opp, enrichment, org_id)
+    except Exception as exc:
+        logger.warning("Gate 2 evaluation failed for opp=%s: %s", opportunity_id, exc)
+        unresolved_count = 1  # conservative: cannot confirm resolution
+    gate2_failed = unresolved_count > 0
+    gate2_reason = (
+        f"gate2_unresolved_entities: {unresolved_count} entities require resolution"
+        if gate2_failed
+        else None
+    )
+
+    # Gate 3 - directly observed cause chain.
+    inferred_step_index = _gate3_inferred_step_index(opp, enrichment)
+    gate3_failed = inferred_step_index is not None
+    gate3_reason = (
+        f"gate3_inferred_primary_step: step {inferred_step_index}"
+        if gate3_failed
+        else None
+    )
+
+    # Surfaced reason follows the priority Gate 2 > Gate 3 > Gate 1.
+    if gate2_failed:
+        return GateResult(True, gate2_reason, run_count)
+    if gate3_failed:
+        return GateResult(True, gate3_reason, run_count)
+    if gate1_failed:
+        return GateResult(True, gate1_reason, run_count)
+    return GateResult(False, None, run_count)
