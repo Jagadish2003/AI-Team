@@ -2,20 +2,18 @@
  * AgentIQ — AUTH-1 / AT-236
  * App-wide authentication state.
  *
- * Section 3 — Token Storage (explicit, POC behaviour):
- *   The token and user live in React state ONLY. Not in localStorage, not in
- *   sessionStorage, not in a cookie. A page refresh wipes React state, so the
- *   token is gone and the user lands back on /login.
+ * Section 3 — Token Storage (updated: refresh keeps the session):
+ *   The JWT is persisted in sessionStorage so a page refresh no longer logs the
+ *   user out. (The original AUTH-1 POC kept the token in memory only — "page
+ *   refresh = re-login" — which users hit as an accidental logout on every
+ *   refresh.) On mount the stored token is restored into state and validated
+ *   via GET /api/auth/me; an invalid/expired/revoked token drops the session.
  *
- *   >>> PAGE REFRESH = RE-LOGIN. <<<  This is intentional for the POC.
- *
- *   GET /api/auth/me is called ONLY when a token already exists in the current
- *   session (to refresh the user record). It is NOT a session-restoration
- *   mechanism — on first mount the token is always null, so /api/auth/me is
- *   never called on load (AC14).
- *
- *   httpOnly cookie session persistence is the production-grade solution and is
- *   explicitly POST-POC. Do not implement it in this story.
+ *   sessionStorage is per-tab and is cleared when the tab/browser closes, so
+ *   closing the browser still requires a fresh login (swap to localStorage if
+ *   you want the session to survive a full browser restart). httpOnly cookies
+ *   remain the production-grade, XSS-safe approach (web storage is readable by
+ *   JS) and are still the recommended post-POC hardening step.
  */
 import React, {
   createContext,
@@ -34,7 +32,7 @@ import {
   logout as apiLogout,
   register as apiRegister,
 } from "../api/authApi";
-import { setUnauthorizedHandler } from "../lib/apiClient";
+import { setAuthToken, setUnauthorizedHandler } from "../lib/apiClient";
 
 interface AuthContextValue {
   /** In-session JWT. null when logged out (and after any page refresh). */
@@ -57,11 +55,26 @@ interface AuthContextValue {
 
 const AuthContext = createContext<AuthContextValue | undefined>(undefined);
 
+// Section 3: the JWT is persisted here so a refresh restores the session.
+const TOKEN_STORAGE_KEY = "agentiq_auth_token";
+
+function readStoredToken(): string | null {
+  try {
+    return sessionStorage.getItem(TOKEN_STORAGE_KEY);
+  } catch {
+    return null;
+  }
+}
+
 export function AuthProvider({ children }: { children: React.ReactNode }) {
-  // Token and user in React state ONLY — never persisted (Section 3).
-  const [token, setToken] = useState<string | null>(null);
+  // Token restored from sessionStorage on mount (Section 3) so a refresh keeps
+  // the user signed in; user is re-fetched via /api/auth/me below.
+  const [token, setToken] = useState<string | null>(() => readStoredToken());
   const [user, setUser] = useState<AuthUser | null>(null);
-  const [loading, setLoading] = useState(false);
+  // Start in "loading" when a token was restored, so AuthGuard holds the route
+  // (shows "Verifying session…") instead of flashing /login before the mount
+  // /api/auth/me revalidation resolves on a refresh.
+  const [loading, setLoading] = useState<boolean>(() => readStoredToken() !== null);
 
   // AC13: Register the 401 interceptor once. When any apiClient call receives a
   // 401, this handler clears auth state and sends the user back to /login.
@@ -80,11 +93,27 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // On mount: only call /api/auth/me if a token is already in state. The token
-  // is never in state on first mount (a page refresh wipes React state), so
-  // this is a no-op on load — page refresh always requires re-login (AC14).
-  // When a token IS present (i.e. right after login/register), this refreshes
-  // the user record from the server.
+  // Keep apiClient's Authorization header AND sessionStorage in sync with the
+  // in-session JWT. apiClient sync scopes all data requests to THIS user's org
+  // (without it, requests fall back to the static dev token → everyone resolves
+  // to the `default` org, leaking connectors/runs). sessionStorage persistence
+  // is what lets a refresh restore the session. Both are cleared when token
+  // becomes null (logout / 401), so the dev-token fallback and a clean /login
+  // apply again.
+  useEffect(() => {
+    setAuthToken(token);
+    try {
+      if (token) sessionStorage.setItem(TOKEN_STORAGE_KEY, token);
+      else sessionStorage.removeItem(TOKEN_STORAGE_KEY);
+    } catch {
+      // Storage unavailable (private mode / disabled) — degrade to in-memory.
+    }
+  }, [token]);
+
+  // Validate the token whenever it is present: right after login/register, and
+  // on mount when it was restored from sessionStorage (a refresh). /api/auth/me
+  // refreshes the user record; a rejected call (invalid/expired/revoked token)
+  // drops the session and clears storage via the effect above.
   useEffect(() => {
     if (!token) return;
     let cancelled = false;

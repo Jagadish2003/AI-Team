@@ -127,8 +127,12 @@ export default function SalesforceProductPicker({ onSaved }: Props) {
           : 'Product declaration cleared.',
       );
       onSaved?.();
-      // Reload page to refresh catalog in Stack Builder
-      setTimeout(() => window.location.reload(), 500);
+      // NOTE: do NOT call window.location.reload() here. The auth token lives in
+      // React state only (see AuthContext Section 3), so a full page reload wipes
+      // the session and bounces the user to /login — which looked like an
+      // unexpected logout after saving. Stack Builder reads the product
+      // declaration fresh on its own mount, so no reload is needed; local state
+      // and the onSaved callback already reflect the saved selection.
     } catch (error) {
       push(getSaveErrorMessage(error));
     } finally {

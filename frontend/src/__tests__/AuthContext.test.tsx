@@ -67,10 +67,14 @@ function renderProvider() {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // Session persistence (Section 3): start each test with empty storage so a
+  // token written by one test cannot leak into the next.
+  sessionStorage.clear();
 });
 
 afterEach(() => {
   vi.clearAllMocks();
+  sessionStorage.clear();
 });
 
 describe("AuthContext — mount behaviour (AC14)", () => {
@@ -84,20 +88,43 @@ describe("AuthContext — mount behaviour (AC14)", () => {
     expect(screen.getByTestId("loading").textContent).toBe("idle");
   });
 
-  it("simulating a page refresh (fresh mount) leaves the user logged out", () => {
-    // First session: log in so token+user exist.
+  it("restores the session on a page refresh (token persisted in sessionStorage)", async () => {
+    // First session: log in so the token is persisted to sessionStorage.
     mockLogin.mockResolvedValue({ token: "jwt-abc", user: OWNER });
     mockGetMe.mockResolvedValue(OWNER);
+    const user = userEvent.setup();
     const { unmount } = renderProvider();
-    unmount(); // page refresh wipes React state
+    await user.click(screen.getByText("login"));
+    await waitFor(() =>
+      expect(screen.getByTestId("status").textContent).toBe("authenticated")
+    );
+    unmount(); // a page refresh wipes React state...
 
     vi.clearAllMocks();
+    mockGetMe.mockResolvedValue(OWNER);
 
-    // Fresh mount = new in-memory state. Token is null again, /me not called.
+    // ...but the token is still in sessionStorage, so a fresh mount restores it
+    // and revalidates via /api/auth/me — the user stays signed in (no re-login).
     renderProvider();
-    expect(mockGetMe).not.toHaveBeenCalled();
-    expect(screen.getByTestId("status").textContent).toBe("anonymous");
+    expect(screen.getByTestId("token").textContent).toBe("jwt-abc");
+    await waitFor(() => expect(mockGetMe).toHaveBeenCalledWith("jwt-abc"));
+    await waitFor(() =>
+      expect(screen.getByTestId("status").textContent).toBe("authenticated")
+    );
+  });
+
+  it("a refresh with a token but a rejected /api/auth/me drops the session", async () => {
+    sessionStorage.setItem("agentiq_auth_token", "jwt-stale");
+    mockGetMe.mockRejectedValue(new Error("401"));
+
+    renderProvider();
+
+    // Restored token is validated; rejection clears state + storage.
+    await waitFor(() =>
+      expect(screen.getByTestId("status").textContent).toBe("anonymous")
+    );
     expect(screen.getByTestId("token").textContent).toBe("none");
+    expect(sessionStorage.getItem("agentiq_auth_token")).toBeNull();
   });
 });
 
@@ -156,6 +183,8 @@ describe("AuthContext — logout", () => {
     expect(mockLogout).toHaveBeenCalledWith("jwt-abc");
     expect(screen.getByTestId("token").textContent).toBe("none");
     expect(screen.getByTestId("user").textContent).toBe("none");
+    // Logout must also clear the persisted token so a later refresh stays out.
+    expect(sessionStorage.getItem("agentiq_auth_token")).toBeNull();
   });
 
   it("clears local state even if the logout endpoint fails", async () => {

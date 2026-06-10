@@ -367,14 +367,27 @@ def _seconds_until_email_unblocked(email: str) -> int:
 
 
 def register_org_and_owner(org_name: str, email: str, password: str) -> dict:
-    """Create org + user (identity only) + owner workspace_member in one
-    transaction and return {token, user{id,email,role,org_id}} (AC2).
+    """Register a user against a workspace identified by org_name (AC2).
 
-    Raises EmailAlreadyExistsError (409) / RegistrationError (400) on bad input.
+    org_name is the workspace join key: registering with a NEW name creates the
+    workspace and makes the registrant its owner; registering with an EXISTING
+    name (case-insensitive) joins that same org_id as an *analyst* instead of
+    creating a duplicate workspace. This lets teammates land in the same
+    workspace without an invite. org_id and role always live in
+    workspace_members, never on the users row.
+
+    SECURITY NOTE: an org name is not a secret, so name-based joining lets anyone
+    who knows the name self-register into that workspace (as analyst). The invite
+    flow remains the controlled path; this is a POC convenience. Tighten before
+    production (e.g. require an invite, or a per-org join secret).
+
+    Returns {token, user{id,email,role,org_id,org_name}}. Raises
+    EmailAlreadyExistsError (409) / RegistrationError (400) on bad input.
     """
     ensure_auth_tables()
     email = email.strip().lower()
-    if not org_name or not org_name.strip():
+    org_name = (org_name or "").strip()
+    if not org_name:
         raise RegistrationError("Organization name is required")
     if not email:
         raise RegistrationError("Email is required")
@@ -385,19 +398,31 @@ def register_org_and_owner(org_name: str, email: str, password: str) -> dict:
     if _get_user_by_email(email) is not None:
         raise EmailAlreadyExistsError("Email already registered")
 
-    org_id = str(uuid4())
     user_id = str(uuid4())
     password_hash = hash_password(password)
     now = db.now_iso()
 
     con = db.connect()
     try:
-        # Single transaction — org_id and role live in workspace_members, never
-        # on the users row. Roll back all three rows if any insert fails.
-        con.execute(
-            "INSERT INTO orgs (id, name, created_at) VALUES (?, ?, ?)",
-            (org_id, org_name.strip(), now),
+        # Same org_name → join the existing workspace (earliest org of that name,
+        # case-insensitive). New name → create the workspace and own it. Single
+        # transaction: roll back every row if any insert fails.
+        cur = con.execute(
+            "SELECT id FROM orgs WHERE lower(name) = lower(?) "
+            "ORDER BY created_at ASC, id ASC LIMIT 1",
+            (org_name,),
         )
+        existing = cur.fetchone()
+        if existing is not None:
+            org_id = existing[0]
+            role = "analyst"  # joining an existing workspace by name
+        else:
+            org_id = str(uuid4())
+            role = "owner"  # first registrant creates and owns the workspace
+            con.execute(
+                "INSERT INTO orgs (id, name, created_at) VALUES (?, ?, ?)",
+                (org_id, org_name, now),
+            )
         con.execute(
             "INSERT INTO users (id, email, password_hash, is_active, created_at) "
             "VALUES (?, ?, ?, ?, ?)",
@@ -405,8 +430,8 @@ def register_org_and_owner(org_name: str, email: str, password: str) -> dict:
         )
         con.execute(
             "INSERT INTO workspace_members (org_id, user_id, role, created_at) "
-            "VALUES (?, ?, 'owner', ?)",
-            (org_id, user_id, now),
+            "VALUES (?, ?, ?, ?)",
+            (org_id, user_id, role, now),
         )
         con.commit()
     except sqlite3.IntegrityError as exc:
@@ -419,15 +444,15 @@ def register_org_and_owner(org_name: str, email: str, password: str) -> dict:
     finally:
         con.close()
 
-    token = issue_jwt(user_id=user_id, org_id=org_id, role="owner", email=email)
+    token = issue_jwt(user_id=user_id, org_id=org_id, role=role, email=email)
     return {
         "token": token,
         "user": {
             "id": user_id,
             "email": email,
-            "role": "owner",
+            "role": role,
             "org_id": org_id,
-            "org_name": org_name.strip(),
+            "org_name": org_name,
         },
     }
 

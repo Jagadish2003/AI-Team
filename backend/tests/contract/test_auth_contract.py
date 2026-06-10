@@ -53,8 +53,13 @@ def _claims(token: str) -> dict:
     )
 
 
-def _register(client, *, org="Org", email=None, password="ownerpass1"):
+def _register(client, *, org=None, email=None, password="ownerpass1"):
+    # Default to a UNIQUE org per call: registering with an existing org_name now
+    # joins that workspace as an analyst (not a new owner), so tests that expect a
+    # fresh owner must use a fresh org name. Tests exercising the join behaviour
+    # pass an explicit shared `org`.
     email = email or _email()
+    org = org or f"Org_{uuid.uuid4().hex[:8]}"
     resp = client.post(
         "/api/auth/register",
         json={"org_name": org, "email": email, "password": password},
