@@ -271,12 +271,18 @@ class CausalHypothesisRejectedPayload(TypedDict, total=False):
 
 
 class CausalHypothesisGeneratedPayload(TypedDict, total=False):
-    """ENT-6 / T3-S16-A — emitted when a hypothesis passes all gates and is stored."""
+    """ENT-6 / T3-S16-A — emitted when a hypothesis is stored (T6), after commit.
+
+    PII GUARD: identifiers, the preliminary flag, and gate metrics only — never
+    hypothesis text (cause_chain / falsifiability_condition).
+    """
     org_id: NotRequired[str]
     run_id: NotRequired[str]
     opportunity_id: NotRequired[str]
     preliminary: NotRequired[bool]
-    step_count: NotRequired[int]
+    confidence: NotRequired[float]
+    gate_run_count: NotRequired[int]
+    inferred: NotRequired[bool]
 
 
 class RunStartedEvent(TypedDict):
