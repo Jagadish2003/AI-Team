@@ -5,17 +5,19 @@ downstream DB helpers can enforce row-level isolation without every route
 handler needing to thread org_id through manually.
 
 Design decisions vs spec:
-- org_id comes exclusively from the JWT org claim. The X-Org-Id header is
-  NEVER used to set the org context. If an X-Org-Id header is supplied and it
-  contradicts the JWT org claim, the request is rejected with HTTP 403
-  (Section 4a — X-Org-Id impersonation guard). A matching X-Org-Id is silently
-  ignored.
-- The current auth layer (security.py) validates static dev tokens that carry
-  no embedded claims. The dev token's org claim is therefore supplied
-  out-of-band via the DEV_JWT_ORG environment variable (mirroring DEV_JWT_ROLE
-  in security.py). When no claim is configured the token has no JWT org, and
-  org_id falls back to the X-Org-Id header (dev behaviour), then "default".
-  Real JWT claim extraction replaces _jwt_org_id() when a proper IDP is wired in.
+- org_id comes exclusively from a SIGNATURE-VERIFIED JWT org claim. The org_id
+  of a forged or tampered token is never used to set the org context (issue #3),
+  because this ContextVar is read by DB helpers BEFORE route-level auth runs —
+  trusting an unverified claim here would scope a request to an attacker-chosen
+  org. The X-Org-Id header is NEVER used to override the JWT org claim. If an
+  X-Org-Id header contradicts the verified JWT org claim, the request is
+  rejected with HTTP 403 (Section 4a — X-Org-Id impersonation guard). A matching
+  X-Org-Id is silently ignored.
+- Static dev tokens (security.py) carry no embedded claims, so the dev token's
+  org claim is supplied out-of-band via the DEV_JWT_ORG environment variable
+  (mirroring DEV_JWT_ROLE in security.py). When no claim is configured the token
+  has no JWT org, and org_id falls back to the X-Org-Id header (dev behaviour),
+  then "default".
 - TenancyViolationError is raised as a plain Exception (not HTTPException) and
   caught by a registered FastAPI exception handler, so route-level try/except
   blocks cannot swallow it.
@@ -27,8 +29,6 @@ import os
 import time
 from contextvars import ContextVar
 from typing import Callable
-
-import jwt as _pyjwt
 
 from fastapi import FastAPI, Request, Response
 from fastapi.responses import JSONResponse
@@ -62,27 +62,10 @@ def _bearer_token(request: Request) -> str | None:
 _BLOCKLIST_PREFIX = "auth_blocklist"
 
 
-def _jti_is_revoked(token: str) -> bool:
-    """Return True if the JWT's jti is in the logout blocklist (AC9).
-
-    Decodes without signature verification to extract jti — the route-level
-    dependency owns full signature/expiry verification. Expired or malformed
-    tokens that aren't real JWTs simply return False so dev static tokens
-    continue to work unchanged.
-    """
-    try:
-        payload = _pyjwt.decode(
-            token,
-            options={"verify_signature": False, "verify_exp": False},
-            algorithms=["HS256"],
-        )
-    except Exception:
-        return False
-
-    jti = payload.get("jti")
+def _jti_in_blocklist(jti: str) -> bool:
+    """Return True if a (already signature-verified) jti is in the logout blocklist."""
     if not jti:
         return False
-
     from app import db
 
     entry = db.kv_get(f"{_BLOCKLIST_PREFIX}:{jti}")
@@ -94,34 +77,39 @@ def _jti_is_revoked(token: str) -> bool:
     return True
 
 
-def _jwt_org_id(token: str | None) -> str | None:
-    """Return the org_id claim carried by the JWT, or None if it carries none.
+def _verified_jwt_payload(token: str | None) -> dict | None:
+    """Return the payload of a signature-verified AUTH-1 JWT, else None.
 
-    The dev auth layer uses static bearer tokens with no embedded claims, so
-    the dev token's org claim is read from DEV_JWT_ORG (mirrors DEV_JWT_ROLE in
-    security.py). When DEV_JWT_ORG is unset the token has no JWT org claim and
-    callers fall back to the X-Org-Id header. A real IDP integration replaces
-    this with JWT signature verification and claim decoding.
+    Delegates to user_auth.decode_signed, which verifies the HS256 signature and
+    expiry. A forged, tampered, or expired token returns None — its claims are
+    NEVER trusted here. This is the core of the issue #3 fix: org context must
+    not be derived from an unverified claim, because the ContextVar is read by DB
+    helpers BEFORE route-level auth runs, so trusting a forged org_id would let a
+    request read/write another org's data for the duration of that request.
+    """
+    if not token:
+        return None
+    try:
+        from app.auth.user_auth import decode_signed
+
+        return decode_signed(token)
+    except Exception:
+        return None
+
+
+def _dev_token_org(token: str | None) -> str | None:
+    """org claim for the static dev token (from DEV_JWT_ORG), else None.
+
+    The dev/test static bearer tokens carry no embedded, signed claims, so their
+    org is supplied out-of-band via DEV_JWT_ORG (mirrors DEV_JWT_ROLE in
+    security.py). Non-dev / forged tokens get no trusted org from this path.
     """
     if token is None:
         return None
     dev_jwt = os.getenv("DEV_JWT", "dev-token-change-me")
     if token == dev_jwt:
         return os.getenv("DEV_JWT_ORG") or None
-    # AUTH-1 JWTs carry the workspace in their org_id claim. Decoded without
-    # signature verification (require_auth does the real verification before the
-    # route runs); a forged org claim still fails require_auth, so the request is
-    # rejected even though org context was set. Non-JWT static tokens (viewer/
-    # analyst/admin) aren't decodable and fall through to None unchanged.
-    try:
-        payload = _pyjwt.decode(
-            token,
-            options={"verify_signature": False, "verify_exp": False},
-            algorithms=["HS256"],
-        )
-    except Exception:
-        return None
-    return payload.get("org_id") or None
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -177,12 +165,23 @@ class TenancyMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next: Callable) -> Response:
         raw_token = _bearer_token(request)
 
-        # AC9: reject any request whose JWT jti has been added to the logout
-        # blocklist. Only applies when a bearer token is present.
-        if raw_token and _jti_is_revoked(raw_token):
-            return JSONResponse(status_code=401, content={"detail": "Token has been revoked"})
+        # Only a signature-verified token's claims are trusted. A forged/tampered
+        # token yields no payload here, so its org_id is never used to set the
+        # tenancy context (issue #3) and it cannot pass the jti revocation gate.
+        verified = _verified_jwt_payload(raw_token)
 
-        jwt_org_id = _jwt_org_id(raw_token)
+        if verified is not None:
+            # AC9: reject any request whose verified jti is in the logout
+            # blocklist. Checked only for genuinely signed tokens.
+            if _jti_in_blocklist(verified.get("jti")):
+                return JSONResponse(
+                    status_code=401, content={"detail": "Token has been revoked"}
+                )
+            jwt_org_id = verified.get("org_id") or None
+        else:
+            # Static dev token (no signed claims) → DEV_JWT_ORG. Anything else
+            # (including a forged JWT) contributes no trusted org claim.
+            jwt_org_id = _dev_token_org(raw_token)
 
         x_org_id = request.headers.get("X-Org-Id")
         if x_org_id is not None:
