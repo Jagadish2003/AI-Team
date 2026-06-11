@@ -97,6 +97,7 @@ from typing import Any, Dict, List, Optional
 
 try:
     from backend.discovery.packs.corroboration_rules import (
+        CORROBORATION_WINDOW_DAYS,
         CONFIDENCE_HIGH,
         CONFIDENCE_MEDIUM,
         CONFIDENCE_ORDER,
@@ -106,6 +107,7 @@ try:
     )
 except ModuleNotFoundError:  # Runtime inside backend/ where discovery is top-level.
     from discovery.packs.corroboration_rules import (
+        CORROBORATION_WINDOW_DAYS,
         CONFIDENCE_HIGH,
         CONFIDENCE_MEDIUM,
         CONFIDENCE_ORDER,
@@ -119,10 +121,6 @@ logger = logging.getLogger(__name__)
 # ─────────────────────────────────────────────────────────────────────────────
 # Configuration
 # ─────────────────────────────────────────────────────────────────────────────
-
-#: All corroboration checks use this window, evaluated relative to the run
-#: timestamp. Configurable, but 30 days is the ENT-2 default.
-CORROBORATION_WINDOW_DAYS = 30
 
 #: ServiceNow/Jira states that mean a record is NOT open/unresolved.
 _CLOSED_STATES = {"closed", "resolved", "cancelled", "canceled", "done", "complete", "completed"}
@@ -267,8 +265,9 @@ def _within_window(
     if run_timestamp.tzinfo is None:
         run_timestamp = run_timestamp.replace(tzinfo=timezone.utc)
     cutoff = run_timestamp - timedelta(days=window_days)
-    # Within window: cutoff <= ts <= run_timestamp (allow small future skew).
-    return cutoff <= ts <= run_timestamp + timedelta(days=1)
+    # Within window: cutoff <= ts <= run_timestamp. Future-dated records must
+    # not corroborate the current run.
+    return cutoff <= ts <= run_timestamp
 
 
 def _is_open(record: Dict[str, Any]) -> bool:
@@ -338,6 +337,234 @@ def _connected_systems(run_data: Dict[str, Any]) -> List[str]:
     if isinstance(systems, (list, tuple, set)):
         return [str(s).strip().lower() for s in systems if str(s).strip()]
     return []
+
+
+def normalise_connected_systems(systems: Any) -> List[str]:
+    """Return stable business system ids for corroboration rules."""
+    normalised = set()
+    for system in systems or []:
+        system_id = str(system).strip().lower()
+        if not system_id:
+            continue
+        if system_id in {"salesforce_ncino", "ncino"}:
+            normalised.add("salesforce")
+        elif system_id == "jira_confluence":
+            normalised.update({"jira", "confluence"})
+        else:
+            normalised.add(system_id)
+    return sorted(normalised)
+
+
+def _dict_or_empty(value: Any) -> Dict[str, Any]:
+    return value if isinstance(value, dict) else {}
+
+
+def _iter_candidate_blocks(payload: Dict[str, Any], *, depth: int = 0) -> List[Dict[str, Any]]:
+    """Return likely correlation containers without requiring caller-specific code."""
+    if not isinstance(payload, dict) or depth > 3:
+        return []
+    blocks = [payload]
+    for key in (
+        "lending_correlation",
+        "jira_strs_correlation",
+        "sn_strs_correlation",
+        "strs_benefits",
+        "corroboration",
+        "corroboration_data",
+        "cross_system_evidence",
+        "external_corroboration",
+    ):
+        child = payload.get(key)
+        if isinstance(child, dict):
+            blocks.extend(_iter_candidate_blocks(child, depth=depth + 1))
+    return blocks
+
+
+def _find_corroboration_block(system_id: str, payloads: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Find a Slack/Confluence corroboration block in available run payloads."""
+    direct_keys = (
+        system_id,
+        f"{system_id}_corroboration",
+        f"{system_id}_evidence",
+        f"{system_id}_signals",
+    )
+    for payload in payloads:
+        for block in _iter_candidate_blocks(payload):
+            for key in direct_keys:
+                found = _dict_or_empty(block.get(key))
+                if found:
+                    return found
+    return {}
+
+
+def _detector_ids_from_record(record: Dict[str, Any], default_detector_id: Optional[str] = None) -> List[str]:
+    linked = (
+        record.get("detector_ids")
+        or record.get("detector_id")
+        or record.get("detectorId")
+        or default_detector_id
+    )
+    if linked is None:
+        return []
+    if isinstance(linked, str):
+        linked = [linked]
+    if not isinstance(linked, (list, tuple, set)):
+        return []
+    return [str(item) for item in linked if str(item).strip()]
+
+
+def _timestamp_value(record: Dict[str, Any]) -> Any:
+    for key in _TIMESTAMP_KEYS:
+        if record.get(key) is not None:
+            return record.get(key)
+    return None
+
+
+def _add_record_by_detector(
+    records_by_detector: Dict[str, List[Dict[str, Any]]],
+    record: Dict[str, Any],
+    *,
+    default_detector_id: Optional[str] = None,
+) -> None:
+    for detector_id in _detector_ids_from_record(record, default_detector_id):
+        enriched = dict(record)
+        enriched.setdefault("detector_ids", [detector_id])
+        records_by_detector.setdefault(detector_id, []).append(enriched)
+
+
+def _extract_matched_records(
+    payloads: List[Dict[str, Any]],
+    record_keys: tuple[str, ...],
+) -> List[Dict[str, Any]]:
+    records: List[Dict[str, Any]] = []
+    for payload in payloads:
+        for block in _iter_candidate_blocks(payload):
+            for key in record_keys:
+                value = block.get(key)
+                if isinstance(value, list):
+                    records.extend(item for item in value if isinstance(item, dict))
+    return records
+
+
+def _add_detector_map_records(
+    records_by_detector: Dict[str, List[Dict[str, Any]]],
+    detector_map: Dict[str, List[Any]],
+    *,
+    open_field: str,
+) -> None:
+    for detector_id, entries in (detector_map or {}).items():
+        if not entries:
+            continue
+        dict_entries = [entry for entry in entries if isinstance(entry, dict)]
+        if dict_entries:
+            for entry in dict_entries:
+                _add_record_by_detector(records_by_detector, entry, default_detector_id=detector_id)
+            continue
+        # Legacy by_detector maps hold snippets only. Keep one placeholder per
+        # detector so counts are not inflated, but do not invent a timestamp.
+        _add_record_by_detector(
+            records_by_detector,
+            {"detector_ids": [detector_id], open_field: "Open"},
+            default_detector_id=detector_id,
+        )
+
+
+def _freshest_record(records: List[Dict[str, Any]]) -> Dict[str, Any]:
+    with_ts = [(record, _record_timestamp(record)) for record in records]
+    dated = [(record, ts) for record, ts in with_ts if ts is not None]
+    if dated:
+        return max(dated, key=lambda item: item[1])[0]
+    return records[0] if records else {}
+
+
+def _canonical_servicenow_record(detector_id: str, record: Dict[str, Any]) -> Dict[str, Any]:
+    out = dict(record)
+    out.setdefault("detector_ids", [detector_id])
+    out.setdefault("state", "Open")
+    ts = _timestamp_value(out)
+    if ts is not None and out.get("sys_created_on") is None:
+        out["sys_created_on"] = ts
+    return out
+
+
+def _canonical_jira_record(detector_id: str, record: Dict[str, Any]) -> Dict[str, Any]:
+    out = dict(record)
+    out.setdefault("detector_ids", [detector_id])
+    out.setdefault("status", "Open")
+    ts = _timestamp_value(out)
+    if ts is not None and out.get("created") is None:
+        out["created"] = ts
+    return out
+
+
+def build_corroboration_run_data(
+    *,
+    systems: Any,
+    sn_by_detector: Dict[str, List[Any]],
+    jira_by_detector: Dict[str, List[Any]],
+    run_timestamp_iso: str,
+    source_payloads: Optional[List[Dict[str, Any]]] = None,
+) -> Dict[str, Any]:
+    """Build the ENT-2 corroboration engine input from discovery run data.
+
+    The builder is intentionally part of the engine module so runner, replay
+    paths, tests, and future endpoints all construct the same input contract.
+    It uses real record timestamps when matched records are available and never
+    creates more than one ServiceNow/Jira corroboration record per detector.
+    """
+    connected = set(normalise_connected_systems(systems))
+    payloads = [_dict_or_empty(p) for p in (source_payloads or []) if isinstance(p, dict)]
+
+    sn_records_by_detector: Dict[str, List[Dict[str, Any]]] = {}
+    for record in _extract_matched_records(
+        payloads,
+        ("lending_incidents", "matched_incidents", "strs_incidents"),
+    ):
+        _add_record_by_detector(sn_records_by_detector, record)
+    _add_detector_map_records(sn_records_by_detector, sn_by_detector, open_field="state")
+
+    jira_records_by_detector: Dict[str, List[Dict[str, Any]]] = {}
+    for record in _extract_matched_records(
+        payloads,
+        ("lending_issues", "matched_issues", "strs_issues"),
+    ):
+        _add_record_by_detector(jira_records_by_detector, record)
+    _add_detector_map_records(jira_records_by_detector, jira_by_detector, open_field="status")
+
+    data: Dict[str, Any] = {
+        "connected_systems": sorted(connected),
+        "servicenow": {
+            "incidents": [
+                _canonical_servicenow_record(detector_id, _freshest_record(records))
+                for detector_id, records in sorted(sn_records_by_detector.items())
+                if records
+            ]
+        },
+        "jira": {
+            "issues": [
+                _canonical_jira_record(detector_id, _freshest_record(records))
+                for detector_id, records in sorted(jira_records_by_detector.items())
+                if records
+            ]
+        },
+    }
+
+    if "confluence" in connected:
+        confluence = _find_corroboration_block("confluence", payloads)
+        if confluence:
+            data["confluence"] = confluence
+        elif payloads:
+            logger.warning(
+                "ENT-2 corroboration: Confluence is connected but no recognized "
+                "corroboration block was found"
+            )
+
+    if "slack" in connected:
+        slack = _find_corroboration_block("slack", payloads)
+        if slack:
+            data["slack"] = slack
+
+    return data
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -599,7 +826,7 @@ def evaluate_corroboration(
 # ─────────────────────────────────────────────────────────────────────────────
 
 def apply_corroboration_confidence(
-    scorer_confidence: str,
+    scorer_confidence: Optional[str],
     result: CorroborationResult,
 ) -> str:
     """Return the final confidence after applying corroboration — NEVER downgrades.
@@ -609,7 +836,11 @@ def apply_corroboration_confidence(
     scorer's value is preserved. This protects existing pack behaviour
     (nCino/STRS already assign HIGH for several detectors).
     """
-    base = (scorer_confidence or CONFIDENCE_MEDIUM).upper()
-    base_rank = CONFIDENCE_ORDER.get(base, CONFIDENCE_ORDER[CONFIDENCE_MEDIUM])
+    if scorer_confidence is None or not str(scorer_confidence).strip():
+        raise ValueError("scorer_confidence is required before corroboration elevation")
+    base = str(scorer_confidence).strip().upper()
+    if base not in CONFIDENCE_ORDER:
+        raise ValueError(f"unknown scorer confidence: {scorer_confidence!r}")
+    base_rank = CONFIDENCE_ORDER[base]
     elevated_rank = CONFIDENCE_ORDER.get(result.elevated_confidence, base_rank)
     return result.elevated_confidence if elevated_rank > base_rank else base

@@ -135,105 +135,6 @@ def build_org_context(sf_data: Dict, sn_data: Dict, jira_data: Dict) -> Dict[str
     }
 
 
-def _normalise_connected_systems(systems: Optional[List[str]] | set[str] | tuple[str, ...]) -> List[str]:
-    """Return stable system ids for corroboration rules.
-
-    The UI and older connector catalog can use combined ids such as
-    jira_confluence or salesforce_ncino. The corroboration engine needs the
-    business systems, so keep the original id and add the normalized systems.
-    """
-    normalised = set()
-    for system in systems or []:
-        system_id = str(system).strip().lower()
-        if not system_id:
-            continue
-        normalised.add(system_id)
-        if system_id in {"salesforce_ncino", "ncino"}:
-            normalised.add("salesforce")
-        if system_id == "jira_confluence":
-            normalised.update({"jira", "confluence"})
-    return sorted(normalised)
-
-
-def _dict_or_empty(value: Any) -> Dict[str, Any]:
-    return value if isinstance(value, dict) else {}
-
-
-def _find_corroboration_block(system_id: str, payloads: List[Dict[str, Any]]) -> Dict[str, Any]:
-    """Find a Slack/Confluence corroboration block in available run payloads.
-
-    ENT-2 owns the corroboration engine, not the Slack/Confluence ingestors.
-    This helper keeps the runner ready for any connector payload that already
-    exposes corroboration data, while remaining safely empty when no such data
-    is available.
-    """
-    direct_keys = (
-        system_id,
-        f"{system_id}_corroboration",
-        f"{system_id}_evidence",
-        f"{system_id}_signals",
-    )
-    nested_keys = (
-        "corroboration",
-        "corroboration_data",
-        "cross_system_evidence",
-        "external_corroboration",
-    )
-
-    for payload in payloads:
-        payload = _dict_or_empty(payload)
-        for key in direct_keys:
-            block = _dict_or_empty(payload.get(key))
-            if block:
-                return block
-        for parent_key in nested_keys:
-            parent = _dict_or_empty(payload.get(parent_key))
-            block = _dict_or_empty(parent.get(system_id))
-            if block:
-                return block
-    return {}
-
-
-def _build_corroboration_run_data(
-    *,
-    systems: Optional[List[str]] | set[str] | tuple[str, ...],
-    sn_by_detector: Dict[str, List[str]],
-    jira_by_detector: Dict[str, List[str]],
-    run_timestamp_iso: str,
-    source_payloads: Optional[List[Dict[str, Any]]] = None,
-) -> Dict[str, Any]:
-    """Build the ENT-2 corroboration engine input from discovery run data."""
-    connected = set(_normalise_connected_systems(systems))
-    data: Dict[str, Any] = {"connected_systems": sorted(connected)}
-
-    sn_incidents = [
-        {"detector_ids": [det], "state": "Open", "sys_created_on": run_timestamp_iso}
-        for det, snippets in (sn_by_detector or {}).items()
-        for _ in (snippets or [])
-    ]
-    jira_issues = [
-        {"detector_ids": [det], "status": "Open", "created": run_timestamp_iso}
-        for det, snippets in (jira_by_detector or {}).items()
-        for _ in (snippets or [])
-    ]
-    data["servicenow"] = {"incidents": sn_incidents}
-    data["jira"] = {"issues": jira_issues}
-
-    payloads = [_dict_or_empty(p) for p in (source_payloads or []) if isinstance(p, dict)]
-    confluence = _find_corroboration_block("confluence", payloads)
-    if confluence:
-        data["confluence"] = confluence
-        connected.add("confluence")
-
-    slack = _find_corroboration_block("slack", payloads)
-    if slack:
-        data["slack"] = slack
-        connected.add("slack")
-
-    data["connected_systems"] = sorted(connected)
-    return data
-
-
 def _ingest_github(org_id: str, run_id: str) -> Dict[str, Any]:
     """Sync wrapper around the async GitHub connector ingest (T1-S12).
 
@@ -713,11 +614,13 @@ def run(
             from backend.app.corroboration_engine import (
                 evaluate_corroboration,
                 apply_corroboration_confidence,
+                build_corroboration_run_data,
             )
         except ModuleNotFoundError:
             from app.corroboration_engine import (
                 evaluate_corroboration,
                 apply_corroboration_confidence,
+                build_corroboration_run_data,
             )
         _corroboration_available = True
     except Exception as _corr_imp_err:  # noqa: BLE001 — corroboration is optional.
@@ -771,16 +674,17 @@ def run(
     # downgrades.
     _run_ts_iso = _run_started_dt.isoformat()
     _corr_run_data: Dict[str, Any] = {"connected_systems": sorted(_systems)}
-    try:
-        _corr_run_data = _build_corroboration_run_data(
-            systems=_systems,
-            sn_by_detector=sn_by_detector,
-            jira_by_detector=jira_by_detector,
-            run_timestamp_iso=_run_ts_iso,
-            source_payloads=[sf_data, sn_data, jira_data, github_data, db_data],
-        )
-    except Exception as _corr_data_err:  # noqa: BLE001 — non-blocking.
-        logger.warning("ENT-2 corroboration run_data build failed (non-blocking): %s", _corr_data_err)
+    if _corroboration_available:
+        try:
+            _corr_run_data = build_corroboration_run_data(
+                systems=_systems,
+                sn_by_detector=sn_by_detector,
+                jira_by_detector=jira_by_detector,
+                run_timestamp_iso=_run_ts_iso,
+                source_payloads=[sf_data, sn_data, jira_data, github_data, db_data],
+            )
+        except Exception as _corr_data_err:  # noqa: BLE001 — non-blocking.
+            logger.warning("ENT-2 corroboration run_data build failed (non-blocking): %s", _corr_data_err)
 
     opportunities = []
     for dr in detector_results:

@@ -724,6 +724,7 @@ def get_lending_correlation(
                     "priority",
                     "status",
                     "project",
+                    "created",
                 ],
                 max_results=50,
             )
@@ -745,6 +746,7 @@ def get_lending_correlation(
                         "priority": (fields.get("priority") or {}).get("name", ""),
                         "status": (fields.get("status") or {}).get("name", ""),
                         "project": (fields.get("project") or {}).get("key", ""),
+                        "created": fields.get("created", ""),
                     }
                 )
         except Exception as e:
@@ -778,6 +780,8 @@ def get_lending_correlation(
                 "snippet": snippet,
                 "source": "Jira",
                 "detectorId": detector_id,
+                "status": issue.get("status", ""),
+                "created": issue.get("created", ""),
             }
         )
         by_detector.setdefault(detector_id, []).append(snippet)
