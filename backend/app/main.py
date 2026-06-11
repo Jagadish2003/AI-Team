@@ -43,6 +43,7 @@ from .routes_workspace import register_workspace_routes
 from .routes_db_connectors import register_db_connector_routes
 from .routes_temporal import register_temporal_routes
 from .routes_entities import register_entities_routes
+from .routes_causal import register_causal_routes
 from .security import require_auth
 from .auth.configs import CONNECTOR_AUTH_CONFIGS
 from .auth.secrets import validate_all_secrets
@@ -140,6 +141,7 @@ register_db_connector_routes(app)
 register_temporal_routes(app)
 register_workspace_routes(app)
 register_entities_routes(app)
+register_causal_routes(app)
 
 origins = [
     o.strip()
