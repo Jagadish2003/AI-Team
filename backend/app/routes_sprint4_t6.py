@@ -99,6 +99,14 @@ class OppEnrichment(BaseModel):
     # observed + inferred when the flag is on. default_factory=list keeps the
     # field present (empty) for fallback paths and runs without a graph.
     relationships:        List[RelationshipSummary] = Field(default_factory=list)
+    # ENT-2 — Cross-System Confidence Elevation corroboration fields.
+    # Always present with safe defaults so the frontend needs no defensive
+    # checks. Populated from the corroboration engine output stored on the
+    # opportunity. Empty/False for single-source findings (no badge rendered).
+    corroboration_sources:  List[str] = Field(default_factory=list)
+    corroboration_label:    Optional[str] = None
+    triple_corroboration:   bool = False
+    corroboration_rule_ids: List[str] = Field(default_factory=list)
 
 
 class RunEnrichment(BaseModel):
@@ -272,18 +280,41 @@ def _temporal_payload(
     }
 
 
+def _corroboration_fields(opp: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """Extract ENT-2 corroboration fields from a stored opportunity record.
+
+    Returns safe defaults (empty lists / False / None) when the opportunity is
+    missing or predates corroboration — preserving backward compatibility for
+    older runs whose opps have no corroboration fields.
+    """
+    opp = opp or {}
+    sources = opp.get("corroboration_sources") or []
+    rule_ids = opp.get("corroboration_rule_ids") or []
+    return {
+        "corroboration_sources": list(sources) if isinstance(sources, (list, tuple)) else [],
+        "corroboration_label": opp.get("corroboration_label"),
+        "triple_corroboration": bool(opp.get("triple_corroboration", False)),
+        "corroboration_rule_ids": list(rule_ids) if isinstance(rule_ids, (list, tuple)) else [],
+    }
+
+
 def _full_fallback(
     opp_id: str,
     ai_rationale: str,
     entities: Optional[List[EntitySummary]] = None,
     temporal: Optional[Dict[str, Any]] = None,
     relationships: Optional[List[RelationshipSummary]] = None,
+    corroboration: Optional[Dict[str, Any]] = None,
 ) -> OppEnrichment:
     """
     Fix 6: Return the full OppEnrichment shape on fallback.
     All list fields are empty lists — consistent with LLM-generated shape.
+
+    ENT-2: corroboration fields are populated from the stored opportunity when
+    available, else safe defaults (empty / False).
     """
     temporal = temporal or {}
+    corr = corroboration or _corroboration_fields(None)
     return OppEnrichment(
         oppId=opp_id,
         aiSummary=ai_rationale,
@@ -302,6 +333,10 @@ def _full_fallback(
         pack_id=temporal.get("pack_id"),
         entities=entities or [],
         relationships=relationships or [],
+        corroboration_sources=corr["corroboration_sources"],
+        corroboration_label=corr["corroboration_label"],
+        triple_corroboration=corr["triple_corroboration"],
+        corroboration_rule_ids=corr["corroboration_rule_ids"],
     )
 
 
@@ -411,11 +446,15 @@ def register_sprint4_t6_routes(app) -> None:
 
         enrichment = db.run_kv_get(KV_LLM_ENRICHMENT, run_id, None)
 
+        # ENT-2: corroboration fields live on the stored opportunity record.
+        # Load the opps list once so both branches can read them.
+        stored_opps = db.run_kv_get("opps", run_id, []) or []
+        stored_opp = next((o for o in stored_opps if o.get("id") == opp_id), None)
+        corroboration = _corroboration_fields(stored_opp)
+
         # Enrichment not yet generated — serve fallback from stored opps
         if enrichment is None:
-            opps = db.run_kv_get("opps", run_id, [])
-            opp  = next((o for o in opps if o.get("id") == opp_id), None)
-            if opp is None:
+            if stored_opp is None:
                 raise HTTPException(
                     status_code=404,
                     detail=f"Opportunity '{opp_id}' not found in run '{run_id}'"
@@ -423,10 +462,11 @@ def register_sprint4_t6_routes(app) -> None:
             temporal = _temporal_payload(run, run_id, opp_id)
             return _full_fallback(
                 opp_id,
-                opp.get("aiRationale", ""),
+                stored_opp.get("aiRationale", ""),
                 entity_summaries,
                 temporal,
                 relationship_summaries,
+                corroboration,
             )
 
         per_opp  = enrichment.get("perOpportunity", {})
@@ -463,6 +503,10 @@ def register_sprint4_t6_routes(app) -> None:
             pack_id=temporal.get("pack_id"),
             entities=entity_summaries,
             relationships=relationship_summaries,
+            corroboration_sources=corroboration["corroboration_sources"],
+            corroboration_label=corroboration["corroboration_label"],
+            triple_corroboration=corroboration["triple_corroboration"],
+            corroboration_rule_ids=corroboration["corroboration_rule_ids"],
         )
 
     @app.get(
