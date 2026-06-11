@@ -72,7 +72,24 @@ RATE_LIMIT_WINDOW_MINUTES = 15
 _INVALID_CREDENTIALS_MSG = "Invalid email or password"
 # >= 32 bytes so HS256 does not warn in dev/test; production must set JWT_SECRET.
 _DEV_JWT_SECRET_FALLBACK = "dev-secret-change-me-not-for-production-use"
+# Known-weak secrets that must never sign tokens in a shared deployment. A match
+# is warned about in EVERY environment, not just production, because staging /
+# shared-dev deployments frequently leave ENVIRONMENT unset (see issue #9).
+_KNOWN_WEAK_SECRETS = frozenset(
+    {
+        _DEV_JWT_SECRET_FALLBACK,
+        "dev-secret-change-me",
+        "changeme",
+        "change-me",
+        "secret",
+    }
+)
 _BLOCKLIST_PREFIX = "auth_blocklist"
+# Per-user "password last changed" marker (issue #4). A token whose iat predates
+# this timestamp is treated as revoked by verify_jwt, so changing a password
+# immediately invalidates every JWT issued before the change.
+_PWD_CHANGED_PREFIX = "auth_pwd_changed"
+_WEAK_SECRET_WARNED = False
 
 # Precomputed bcrypt hash used for timing-safe comparison when the email is
 # unknown or the account is inactive — so the unknown-email path performs the
@@ -83,15 +100,31 @@ _DUMMY_PASSWORD_HASH = bcrypt.hashpw(
 ).decode("utf-8")
 
 
+def _warn_weak_secret_once() -> None:
+    """Emit a single weak-secret warning per process (avoids per-request spam)."""
+    global _WEAK_SECRET_WARNED
+    if not _WEAK_SECRET_WARNED:
+        logger.warning(
+            "JWT_SECRET is a known weak/default value — it MUST be changed before "
+            "any shared (staging/production) deployment. Tokens signed with it are "
+            "forgeable."
+        )
+        _WEAK_SECRET_WARNED = True
+
+
 def _jwt_secret() -> str:
     """Resolve the JWT signing secret.
 
     Reads JWT_SECRET (the env var AUTH-1 depends on). Falls back to a dev secret
-    when unset; warns loudly if that fallback is used in production so a
-    misconfigured deployment is never silently insecure.
+    when unset; refuses the fallback in production. A weak/default secret is
+    warned about in EVERY environment — not only when ENVIRONMENT=production —
+    because staging and shared-dev deployments routinely leave ENVIRONMENT unset
+    and would otherwise sign with a guessable secret silently (issue #9).
     """
     secret = os.getenv("JWT_SECRET")
     if secret:
+        if secret in _KNOWN_WEAK_SECRETS:
+            _warn_weak_secret_once()
         return secret
     if os.getenv("ENVIRONMENT", "").strip().lower() == "production":
         logger.error(
@@ -99,6 +132,7 @@ def _jwt_secret() -> str:
             "fallback secret."
         )
         raise RuntimeError("JWT_SECRET must be set in production")
+    _warn_weak_secret_once()
     return _DEV_JWT_SECRET_FALLBACK
 
 
@@ -172,10 +206,24 @@ def ensure_auth_tables() -> None:
 # ---------------------------------------------------------------------------
 
 
+def _password_bytes(password: str) -> bytes:
+    """Encode then truncate to PASSWORD_MAX_BYTES bytes — never the reverse.
+
+    bcrypt silently truncates at 72 BYTES internally. Slicing the string to 72
+    characters first and encoding afterwards is wrong: a multi-byte character
+    (accented letters, emoji, CJK) can push a 72-character string well past 72
+    bytes, so bcrypt would still truncate and two passwords differing only past
+    the 72nd byte would hash identically. Encoding first and truncating the byte
+    string makes the effective key exactly the bytes bcrypt will consume, so the
+    cap is explicit and consistent between hashing and verification.
+    """
+    return password.encode("utf-8")[:PASSWORD_MAX_BYTES]
+
+
 def hash_password(password: str) -> str:
     """Return a bcrypt (cost 12) hash, e.g. '$2b$12$...'. Input capped at 72 bytes."""
     return bcrypt.hashpw(
-        password[:PASSWORD_MAX_BYTES].encode("utf-8"),
+        _password_bytes(password),
         bcrypt.gensalt(rounds=BCRYPT_ROUNDS),
     ).decode("utf-8")
 
@@ -184,7 +232,7 @@ def verify_password(password: str, password_hash: str) -> bool:
     """Constant-time bcrypt verification. Never raises on a bad hash format."""
     try:
         return bcrypt.checkpw(
-            password[:PASSWORD_MAX_BYTES].encode("utf-8"),
+            _password_bytes(password),
             password_hash.encode("utf-8"),
         )
     except (ValueError, TypeError):
@@ -206,9 +254,30 @@ def issue_jwt(user_id: str, org_id: str, role: str, email: str) -> str:
         "email": email,  # display only
         "jti": str(uuid4()),  # logout blocklist key
         "iat": int(now.timestamp()),
+        # Millisecond issued-at, used only by the password-change revocation
+        # check (issue #4). Second-granularity iat would falsely revoke a fresh
+        # login that lands in the same second as a password change; milliseconds
+        # avoid that boundary collision.
+        "iat_ms": int(now.timestamp() * 1000),
         "exp": int((now + timedelta(hours=JWT_EXPIRY_HOURS)).timestamp()),
     }
     return jwt.encode(payload, _jwt_secret(), algorithm=JWT_ALGORITHM)
+
+
+def decode_signed(token: str) -> dict | None:
+    """Return the payload IFF the signature and expiry are valid, else None.
+
+    Signature/expiry verification ONLY — it does not consult the logout blocklist
+    or the password-change marker. Used by trust-establishing callers that must
+    decide whether a token's claims (org_id, jti) are genuine before acting on
+    them — notably the tenancy middleware, which must never set org context from
+    an unverified/forged claim (issue #3). Returns None for static dev tokens and
+    any non-JWT / tampered / expired token.
+    """
+    try:
+        return jwt.decode(token, _jwt_secret(), algorithms=[JWT_ALGORITHM])
+    except jwt.PyJWTError:
+        return None
 
 
 def verify_jwt(token: str) -> dict:
@@ -219,6 +288,12 @@ def verify_jwt(token: str) -> dict:
         raise InvalidTokenError("Invalid or expired token") from exc
     jti = payload.get("jti")
     if jti and _is_jti_blocked(jti):
+        raise InvalidTokenError("Token has been revoked")
+    # Password-change revocation (issue #4): a token issued before the user last
+    # changed their password is no longer valid, so rotating a credential ends
+    # every active session for that user (including a stolen one) immediately.
+    sub = payload.get("sub")
+    if sub and _password_changed_after(sub, payload):
         raise InvalidTokenError("Token has been revoked")
     return payload
 
@@ -254,6 +329,46 @@ def _is_jti_blocked(jti: str) -> bool:
     if exp is not None and int(exp) <= int(time.time()):
         return False  # entry (and token) have expired
     return True
+
+
+def mark_password_changed(user_id: str) -> None:
+    """Record that the user's password just changed, revoking older tokens (issue #4).
+
+    Every JWT issued before this instant fails verify_jwt afterwards (its iat is
+    older than the marker), so a password change ends all active sessions for the
+    user — including any session held by an attacker who stole a token. The marker
+    is kept until the longest-lived token that could exist (8h) has expired; a
+    little extra lifetime is harmless since an expired token is rejected anyway.
+    """
+    now = time.time()
+    db.kv_set(
+        f"{_PWD_CHANGED_PREFIX}:{user_id}",
+        {"at_ms": int(now * 1000), "exp": int(now) + JWT_EXPIRY_HOURS * 3600},
+    )
+
+
+def _password_changed_after(user_id: str, payload: dict) -> bool:
+    """True if the user changed their password after this token was issued.
+
+    Compares in milliseconds (token ``iat_ms`` vs the marker's ``at_ms``) with a
+    strict ``<``: a token issued strictly before the change is revoked, while a
+    fresh login issued at/after the change survives — second-granularity ``iat``
+    would falsely revoke a new token minted in the same second as the change.
+    Tokens predating the iat_ms claim fall back to second-granularity iat.
+    """
+    entry = db.kv_get(f"{_PWD_CHANGED_PREFIX}:{user_id}")
+    if not entry:
+        return False
+    changed_at_ms = entry.get("at_ms")
+    if changed_at_ms is None:
+        return False
+    token_ms = payload.get("iat_ms")
+    if token_ms is None:
+        iat = payload.get("iat")
+        if iat is None:
+            return False  # no issue time to compare — cannot prove it is stale
+        token_ms = int(iat) * 1000
+    return int(token_ms) < int(changed_at_ms)
 
 
 # ---------------------------------------------------------------------------
@@ -367,19 +482,20 @@ def _seconds_until_email_unblocked(email: str) -> int:
 
 
 def register_org_and_owner(org_name: str, email: str, password: str) -> dict:
-    """Register a user against a workspace identified by org_name (AC2).
+    """Register a brand-new workspace and make the registrant its owner (AC2).
 
-    org_name is the workspace join key: registering with a NEW name creates the
-    workspace and makes the registrant its owner; registering with an EXISTING
-    name (case-insensitive) joins that same org_id as an *analyst* instead of
-    creating a duplicate workspace. This lets teammates land in the same
-    workspace without an invite. org_id and role always live in
-    workspace_members, never on the users row.
+    Registration ALWAYS creates a fresh org (a new org_id) owned by the
+    registrant. It never joins an existing workspace, even when the org_name
+    collides with one that already exists — org names are not unique and not
+    secret, so they are display labels only, never a membership key. org_id and
+    role always live in workspace_members, never on the users row.
 
-    SECURITY NOTE: an org name is not a secret, so name-based joining lets anyone
-    who knows the name self-register into that workspace (as analyst). The invite
-    flow remains the controlled path; this is a POC convenience. Tighten before
-    production (e.g. require an invite, or a per-org join secret).
+    SECURITY (issue #5): the previous behaviour joined an existing org as analyst
+    when the name matched, which let any external user who guessed a customer's
+    org name (e.g. "TCU", "City National") self-register into that workspace and
+    read all of its runs/opportunities/evidence. Joining an existing workspace is
+    now EXCLUSIVELY via the invite flow (POST /api/auth/invite), which is the
+    controlled, owner-gated path.
 
     Returns {token, user{id,email,role,org_id,org_name}}. Raises
     EmailAlreadyExistsError (409) / RegistrationError (400) on bad input.
@@ -402,27 +518,17 @@ def register_org_and_owner(org_name: str, email: str, password: str) -> dict:
     password_hash = hash_password(password)
     now = db.now_iso()
 
+    org_id = str(uuid4())
+    role = "owner"  # registration always creates and owns a NEW workspace (issue #5)
+
     con = db.connect()
     try:
-        # Same org_name → join the existing workspace (earliest org of that name,
-        # case-insensitive). New name → create the workspace and own it. Single
-        # transaction: roll back every row if any insert fails.
-        cur = con.execute(
-            "SELECT id FROM orgs WHERE lower(name) = lower(?) "
-            "ORDER BY created_at ASC, id ASC LIMIT 1",
-            (org_name,),
+        # Always a fresh org — no name-based join. Single transaction: roll back
+        # every row if any insert fails.
+        con.execute(
+            "INSERT INTO orgs (id, name, created_at) VALUES (?, ?, ?)",
+            (org_id, org_name, now),
         )
-        existing = cur.fetchone()
-        if existing is not None:
-            org_id = existing[0]
-            role = "analyst"  # joining an existing workspace by name
-        else:
-            org_id = str(uuid4())
-            role = "owner"  # first registrant creates and owns the workspace
-            con.execute(
-                "INSERT INTO orgs (id, name, created_at) VALUES (?, ?, ?)",
-                (org_id, org_name, now),
-            )
         con.execute(
             "INSERT INTO users (id, email, password_hash, is_active, created_at) "
             "VALUES (?, ?, ?, ?, ?)",

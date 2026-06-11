@@ -259,6 +259,7 @@ def run(
         is_ncino_pack,
         is_sqlserver_opsignal_pack,
         is_github_engineering_pack,
+        is_enterprise_ops_pack,
     )
     pack_config = get_pack(pack)
     pack_id     = pack_config["packId"]
@@ -500,6 +501,18 @@ def run(
             github_stale_branches,
         ]
         logger.info("Pack: github_engineering — 3 engineering signal detectors active")
+    elif is_enterprise_ops_pack(pack_id):
+        from .detectors import (
+            ent_incident_resolution_lag,
+            ent_change_incident_correlation,
+            ent_sla_breach_by_team,
+        )
+        all_detectors = [
+            ent_incident_resolution_lag,
+            ent_change_incident_correlation,
+            ent_sla_breach_by_team,
+        ]
+        logger.info("Pack: enterprise_ops — 3 cross-system detectors active")
     else:
         # Service Cloud detectors — default
         from .detectors import (
@@ -606,6 +619,10 @@ def run(
         score_github_engineering,
         is_github_engineering_detector,
     )
+    from .packs.enterprise_ops_scorer import (
+        score_enterprise_ops,
+        is_enterprise_ops_detector,
+    )
     from .evidence_builder import build_evidence
     # ENT-2: shared cross-system corroboration engine (non-pack-specific).
     # Imported defensively so a failure to import never breaks the run.
@@ -703,6 +720,16 @@ def run(
                 jira_data=jira_data,
                 org_id=org_id,
                 jira_connected=bool(jira_data),
+            )
+        elif is_enterprise_ops_pack(pack_id) and is_enterprise_ops_detector(dr.detector_id):
+            # AT-266 T5: ENT_INCIDENT_RESOLUTION_LAG elevates MEDIUM->HIGH via COR-06
+            # (ENT-2); ENT_SLA_BREACH_BY_TEAM elevates via ENT-1 entity overlay
+            # (result already in dr.raw_evidence, read by scorer).
+            scored = score_enterprise_ops(
+                dr,
+                sn_data=sn_data,
+                jira_data=jira_data,
+                org_id=org_id,
             )
         else:
             scored = sc_score(dr)

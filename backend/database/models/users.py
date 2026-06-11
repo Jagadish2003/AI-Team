@@ -20,6 +20,23 @@ POC constraint — global email uniqueness (design debt):
     workspaces. When multi-org identity is built, the unique constraint moves
     from `email` to `(email, org_id)`, the table gains a separate identity
     anchor, and idx_users_email_unique is migrated. Do not let this fossilise.
+    Tracked as design debt in deployment/README.md, "AUTH-1 — Tracked Design
+    Debt & Deferred Hardening" (issue #12).
+
+invite_token_hash / invite_token_expires_at — RESERVED, currently UNUSED (issue #11):
+    The live invite flow (routes_auth.py) is the CANONICAL store for invite
+    tokens: it keeps the SHA-256 hash, org/role, expiry, and used flag in the KV
+    store, NOT in these columns. These columns are reserved for a future
+    DB-backed invite implementation and are never written or read today. Do not
+    add a second write path here without first consolidating onto one store — two
+    sources of truth for invite state is exactly the drift this note prevents.
+
+last_login_at — LOGIN-EVENT-ONLY (issue #18):
+    Set by user_auth.login() on each successful login and nowhere else. It is NOT
+    a "last active" timestamp: GET /api/auth/me does not touch it, and there are
+    no refresh tokens in this story. If silent re-auth / token refresh is added
+    later, update this field there too (or rename it) so it does not silently
+    under-report activity.
 
 SQLite-compatible types (TEXT-backed). PostgreSQL deployment replaces:
     VARCHAR(36)  id                       -> UUID

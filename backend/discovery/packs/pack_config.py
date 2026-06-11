@@ -151,6 +151,28 @@ PACK_REGISTRY: Dict[str, Dict[str, Any]] = {
         ),
     },
 
+    "enterprise_ops": {
+        "packId":        "enterprise_ops",
+        "packName":      "Enterprise Operations Intelligence",
+        "domain":        "enterprise_ops",
+        "pack_domain":   "enterprise_ops",
+        "detectors": [
+            "discovery.detectors.ent_incident_resolution_lag",
+            "discovery.detectors.ent_change_incident_correlation",
+            "discovery.detectors.ent_sla_breach_by_team",
+        ],
+        "ui_labels_path": str(_PACKS_DIR / "enterprise_ops_ui_labels.json"),
+        "llm_context": (
+            "Enterprise operations intelligence from cross-system analysis of "
+            "ServiceNow and Jira. These findings are not visible from either system "
+            "alone — they emerge from the gap between incident management and issue "
+            "tracking. Use operations leadership language. Avoid technical jargon. "
+            "The audience is a VP of Operations or Chief Operating Officer. "
+            "Focus on organisational impact and team dynamics, "
+            "not system configuration or process compliance."
+        ),
+    },
+
     # CPQ pack slot — reserved for Sprint 6
 
     # "ncino_cpq": {
@@ -255,3 +277,12 @@ def is_github_engineering_pack(pack_id: Optional[str] = None) -> bool:
     pattern as is_ncino_pack() and is_sqlserver_opsignal_pack().
     """
     return get_pack(pack_id)["domain"] == "github_engineering"
+
+
+def is_enterprise_ops_pack(pack_id: Optional[str] = None) -> bool:
+    """Return True when the active pack is the Enterprise Operations Intelligence pack.
+
+    Used in runner.py and scorer for pack routing.  Follows the identical
+    pattern as is_ncino_pack() and is_github_engineering_pack().
+    """
+    return get_pack(pack_id)["domain"] == "enterprise_ops"
