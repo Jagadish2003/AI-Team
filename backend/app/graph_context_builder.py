@@ -181,8 +181,8 @@ def rank_relationships_for_context(
     ordered = sorted(
         relationships,
         key=lambda r: (
-            -r.confidence,
             r.inferred,  # False (0) before True (1) — observed first
+            -r.confidence,
             r.from_name,
             r.to_name,
             r.relationship_type,
@@ -405,6 +405,8 @@ def build_graph_context(
                 "opportunity_id": opportunity_id,
                 "entity_count": entity_count,
                 "entity_count_shown": entity_count_shown,
+                "relationship_count": relationship_count,
+                "relationship_count_shown": relationship_count_shown,
                 "truncated": truncated,
                 "sparse_graph": sparse,
                 "duration_ms": duration_ms,

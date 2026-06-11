@@ -264,6 +264,8 @@ class GraphContextBuiltPayload(TypedDict, total=False):
     opportunity_id: NotRequired[str]
     entity_count: NotRequired[int]
     entity_count_shown: NotRequired[int]
+    relationship_count: NotRequired[int]
+    relationship_count_shown: NotRequired[int]
     truncated: NotRequired[bool]
     sparse_graph: NotRequired[bool]
     duration_ms: NotRequired[int]
