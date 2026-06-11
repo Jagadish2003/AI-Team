@@ -107,6 +107,18 @@ async def lifespan(app: FastAPI):
     # (CREATE TABLE IF NOT EXISTS — no-op once migrations 0004/0005 have run).
     from .auth.user_auth import ensure_auth_tables
     ensure_auth_tables()
+    # ENT-1: register customer entity-extraction overlays before the first run.
+    # No-op by default (no customer overlays hardcoded into the core); the
+    # function is the documented hook for deployment-time registration. Never
+    # blocks startup.
+    try:
+        from .entity_overlays.overlay_registry import register_startup_overlays
+        register_startup_overlays()
+    except Exception as exc:  # pragma: no cover — startup must not fail on this
+        import logging
+        logging.getLogger(__name__).warning(
+            "entity overlay startup registration skipped: %s", exc
+        )
     # AT-90: start connector health check background job.
     from .jobs.connector_health import start_health_check_job, stop_health_check_job
     from .jobs.baseline_calculator import (
