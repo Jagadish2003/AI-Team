@@ -420,6 +420,19 @@ def _fetch_seed_nodes(
     ]
 
 
+def entity_exists(org_id: str, entity_id: str) -> bool:
+    """Return True when the entity belongs to org_id and is resolved."""
+    conn = db.connect()
+    try:
+        row = conn.execute(
+            _SELECT_ONE_RESOLVED_ENTITY,
+            (org_id, entity_id),
+        ).fetchone()
+    finally:
+        conn.close()
+    return row is not None
+
+
 def _fetch_neighbours(
     conn: sqlite3.Connection,
     org_id: str,
@@ -744,3 +757,67 @@ def relationship_type_filter(
         )
         for row in rows
     ]
+
+
+def org_graph_summary(org_id: str) -> Dict[str, object]:
+    """Return org-scoped graph health counts for POC readiness checks."""
+    conn = db.connect()
+    try:
+        conn.row_factory = sqlite3.Row
+        entity_counts = conn.execute(
+            """
+            SELECT entity_type, COUNT(*) AS count
+            FROM entities
+            WHERE org_id = ?
+              AND resolution_status = 'resolved'
+            GROUP BY entity_type
+            ORDER BY entity_type
+            """,
+            (org_id,),
+        ).fetchall()
+        relationship_counts = conn.execute(
+            """
+            SELECT relationship_type, COUNT(*) AS count
+            FROM entity_relationships
+            WHERE org_id = ?
+            GROUP BY relationship_type
+            ORDER BY relationship_type
+            """,
+            (org_id,),
+        ).fetchall()
+        top_entities = conn.execute(
+            """
+            SELECT e.id, e.display_name, e.entity_type, COUNT(er.id) AS edge_count
+            FROM entities e
+            LEFT JOIN entity_relationships er
+              ON er.org_id = e.org_id
+             AND (er.from_entity_id = e.id OR er.to_entity_id = e.id)
+            WHERE e.org_id = ?
+              AND e.resolution_status = 'resolved'
+            GROUP BY e.id, e.display_name, e.entity_type
+            ORDER BY edge_count DESC, e.display_name ASC
+            LIMIT 10
+            """,
+            (org_id,),
+        ).fetchall()
+    finally:
+        conn.close()
+
+    return {
+        "org_id": org_id,
+        "entity_counts_by_type": {
+            row["entity_type"]: int(row["count"]) for row in entity_counts
+        },
+        "relationship_counts_by_type": {
+            row["relationship_type"]: int(row["count"]) for row in relationship_counts
+        },
+        "top_entities_by_edge_count": [
+            {
+                "entity_id": row["id"],
+                "display_name": row["display_name"],
+                "entity_type": row["entity_type"],
+                "edge_count": int(row["edge_count"]),
+            }
+            for row in top_entities
+        ],
+    }
