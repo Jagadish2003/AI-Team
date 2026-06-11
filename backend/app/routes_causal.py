@@ -75,22 +75,8 @@ def get_causal_hypothesis(opportunity_id: str) -> dict:
     try:
         con.row_factory = sqlite3.Row
 
-        # First check whether this opportunity_id exists in this org at all.
-        # We look in the opportunities KV table to distinguish the two 404
-        # cases without leaking cross-org existence.
-        #
-        # The opps table is keyed by "opportunities:<run_id>" in run-scoped KV,
-        # so a direct per-opportunity-id existence check is not available at the
-        # raw KV layer. Instead we check causal_hypotheses itself: if a row
-        # exists for this opportunity_id regardless of org_id, the opportunity
-        # is real — but if the org differs it's a cross-org access. We then
-        # check the org-scoped row separately.
-        #
-        # Implementation note: we do a two-phase query to keep the distinction:
-        #   Phase 1 — does any hypothesis row exist for this opportunity_id?
-        #   Phase 2 — does one exist for (opportunity_id, org_id)?
-        # Phase 1 is deliberately NOT filtered by org to detect cross-org cases.
-
+        # Phase 1 — does any hypothesis row exist for this opportunity_id?
+        # Deliberately NOT filtered by org_id to detect cross-org cases.
         any_row = con.execute(
             "SELECT org_id FROM causal_hypotheses WHERE opportunity_id = ? LIMIT 1",
             (opportunity_id,),
@@ -101,7 +87,7 @@ def get_causal_hypothesis(opportunity_id: str) -> dict:
             # Return 404 (not 403) — never leak existence across tenants.
             raise HTTPException(status_code=404, detail="not found")
 
-        # Now fetch the most-recent hypothesis for this org.
+        # Phase 2 — fetch most-recent hypothesis for this org.
         row = con.execute(
             """
             SELECT id, org_id, opportunity_id, run_id,
@@ -120,7 +106,7 @@ def get_causal_hypothesis(opportunity_id: str) -> dict:
 
         if row is None:
             if any_row is None:
-                # Truly nonexistent — same neutral body as cross-org case.
+                # Truly nonexistent — neutral body, same as cross-org case.
                 raise HTTPException(status_code=404, detail="not found")
             # In-org opportunity with no hypothesis generated yet.
             raise HTTPException(
@@ -159,8 +145,7 @@ def get_causal_hypothesis(opportunity_id: str) -> dict:
         row_dict["inferred"] = bool(row_dict["inferred"])
         row_dict["preliminary"] = bool(row_dict["preliminary"])
 
-        # Return only the CausalHypothesisSummary fields so the shape is
-        # identical to the inline causal_hypothesis field on OppEnrichment (T7).
+        # Return only CausalHypothesisSummary fields — identical shape to T7.
         return {
             "cause_chain": row_dict["cause_chain"],
             "falsifiability_condition": row_dict["falsifiability_condition"],
