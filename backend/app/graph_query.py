@@ -37,9 +37,10 @@ building blocks so callers (and Stage 3 analysis) can always reach either set.
 """
 from __future__ import annotations
 
+import concurrent.futures
 import logging
 import sqlite3
-from typing import List
+from typing import List, Optional
 
 from pydantic import BaseModel
 
@@ -234,3 +235,183 @@ def get_entity_relationships(
             )
         )
     return summaries
+
+
+# ---------------------------------------------------------------------------
+# T3-S14-A: Recursive neighbourhood traversal (ENT-4 T5)
+# ---------------------------------------------------------------------------
+
+_NEIGHBOURHOOD_MAX_DEPTH = 5    # hard ceiling on any traversal depth
+_NEIGHBOURHOOD_NODE_CAP = 500   # hard LIMIT per query to bound result size
+_NEIGHBOURHOOD_TIMEOUT_S = 10.0 # wall-clock timeout for the worker thread
+
+
+class NeighbourhoodNode(BaseModel):
+    """One entity reachable from the seed set via graph traversal.
+
+    ``depth=0`` entities are the seeds themselves.  ``from_entity_id`` and
+    ``relationship_type`` are NULL for depth-0 nodes and populated for all
+    deeper nodes.  ``inferred`` mirrors the edge flag so callers can distinguish
+    observed from inferred reachability.
+    """
+    entity_id: str
+    entity_type: str
+    display_name: str
+    resolution_confidence: float
+    run_count: int
+    from_entity_id: Optional[str]
+    relationship_type: Optional[str]
+    inferred: Optional[bool]
+    depth: int
+
+
+def _run_neighbourhood_cte(
+    org_id: str,
+    seed_entity_ids: List[str],
+    max_depth: int,
+) -> List[NeighbourhoodNode]:
+    """Execute the recursive CTE.  Called inside a worker thread by
+    ``opportunity_neighbourhood`` so the 10-second timeout can be enforced.
+
+    Cycle detection uses path-string membership: the visited set is stored as a
+    comma-joined string of entity IDs in the ``path`` CTE column.
+    ``INSTR(',' || path || ',', ',' || e.id || ',') = 0`` proves an entity is
+    not already in the current walk without needing a PostgreSQL array type.
+    """
+    placeholders = ",".join("?" * len(seed_entity_ids))
+    sql = f"""
+    WITH RECURSIVE graph_traversal(
+        entity_id, entity_type, display_name,
+        resolution_confidence, run_count,
+        from_entity_id, relationship_type, inferred,
+        depth, path
+    ) AS (
+        SELECT
+            e.id            AS entity_id,
+            e.entity_type,
+            e.display_name,
+            e.resolution_confidence,
+            e.run_count,
+            NULL            AS from_entity_id,
+            NULL            AS relationship_type,
+            NULL            AS inferred,
+            0               AS depth,
+            e.id            AS path
+        FROM entities e
+        WHERE e.id IN ({placeholders})
+          AND e.org_id = ?
+          AND e.resolution_status = 'resolved'
+
+        UNION ALL
+
+        SELECT
+            e.id,
+            e.entity_type,
+            e.display_name,
+            e.resolution_confidence,
+            e.run_count,
+            er.from_entity_id,
+            er.relationship_type,
+            er.inferred,
+            gt.depth + 1,
+            gt.path || ',' || e.id
+        FROM graph_traversal gt
+        JOIN entity_relationships er
+             ON er.from_entity_id = gt.entity_id
+             AND er.org_id = ?
+             AND er.inferred = 0
+        JOIN entities e
+             ON e.id = er.to_entity_id
+             AND e.org_id = ?
+             AND e.resolution_status = 'resolved'
+             AND INSTR(',' || gt.path || ',', ',' || e.id || ',') = 0
+        WHERE gt.depth < ?
+    )
+    SELECT DISTINCT
+        entity_id, entity_type, display_name,
+        resolution_confidence, run_count,
+        from_entity_id, relationship_type, inferred, depth
+    FROM graph_traversal
+    ORDER BY depth ASC, run_count DESC, resolution_confidence DESC
+    LIMIT {_NEIGHBOURHOOD_NODE_CAP}
+    """
+    params: List = [*seed_entity_ids, org_id, org_id, org_id, max_depth]
+
+    conn = db.connect()
+    try:
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(sql, params).fetchall()
+    finally:
+        conn.close()
+
+    nodes: List[NeighbourhoodNode] = []
+    for row in rows:
+        nodes.append(
+            NeighbourhoodNode(
+                entity_id=str(row["entity_id"]),
+                entity_type=str(row["entity_type"]),
+                display_name=str(row["display_name"]),
+                resolution_confidence=float(row["resolution_confidence"]),
+                run_count=int(row["run_count"]),
+                from_entity_id=row["from_entity_id"],
+                relationship_type=row["relationship_type"],
+                inferred=bool(row["inferred"]) if row["inferred"] is not None else None,
+                depth=int(row["depth"]),
+            )
+        )
+    return nodes
+
+
+def opportunity_neighbourhood(
+    org_id: str,
+    seed_entity_ids: List[str],
+    max_depth: int = 2,
+    timeout_s: float = _NEIGHBOURHOOD_TIMEOUT_S,
+) -> List[NeighbourhoodNode]:
+    """Return all resolved entities reachable from *seed_entity_ids* within
+    *max_depth* hops, scoped to *org_id*.
+
+    Uses a SQLite recursive CTE with path-string cycle detection so graph
+    cycles (A→B→C→A) terminate cleanly without infinite recursion.  The result
+    is hard-capped at :data:`_NEIGHBOURHOOD_NODE_CAP` (500) nodes.
+
+    The query runs in a worker thread; if it does not complete within
+    *timeout_s* seconds (default 10) the caller receives an empty list and a
+    warning is logged.  This guarantees the function returns within the timeout
+    regardless of graph size or depth.
+
+    Args:
+        org_id:           Tenant scope — never crosses org boundaries.
+        seed_entity_ids:  Starting entity IDs (depth-0 seeds of the traversal).
+        max_depth:        Maximum hops from any seed.  Clamped to
+                          :data:`_NEIGHBOURHOOD_MAX_DEPTH` (5).
+        timeout_s:        Wall-clock timeout for the traversal worker thread.
+
+    Returns:
+        Ordered list of :class:`NeighbourhoodNode`, sorted by depth ASC,
+        run_count DESC, resolution_confidence DESC.  Returns ``[]`` on timeout,
+        empty seed list, or query failure.
+    """
+    if not seed_entity_ids:
+        return []
+    max_depth = min(max_depth, _NEIGHBOURHOOD_MAX_DEPTH)
+
+    def _execute() -> List[NeighbourhoodNode]:
+        return _run_neighbourhood_cte(org_id, seed_entity_ids, max_depth)
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+        future = pool.submit(_execute)
+        try:
+            return future.result(timeout=timeout_s)
+        except concurrent.futures.TimeoutError:
+            logger.warning(
+                "opportunity_neighbourhood: timed out after %.1fs "
+                "(org_id=%s, max_depth=%d)",
+                timeout_s,
+                org_id,
+                max_depth,
+            )
+            return []
+        except Exception as exc:
+            logger.error("opportunity_neighbourhood: query failed: %s", exc)
+            return []
