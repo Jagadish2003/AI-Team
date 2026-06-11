@@ -300,6 +300,13 @@ class TestCausalHypothesesSchema:
         try:
             alembic_cfg = AlembicConfig(str(backend_dir / "alembic.ini"))
             alembic_cfg.set_main_option("script_location", str(backend_dir / "migrations"))
+            # Suppress the fileConfig() call in env.py — alembic.ini's [loggers]
+            # section calls fileConfig with disable_existing_loggers=True (Python
+            # default), which disables app.telemetry and other active loggers
+            # mid-suite, breaking downstream caplog assertions. The ini settings
+            # are already loaded; clearing config_file_name only skips the
+            # logging reconfiguration step.
+            alembic_cfg.config_file_name = None
 
             alembic_command.upgrade(alembic_cfg, "head")
 
