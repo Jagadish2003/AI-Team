@@ -39,7 +39,7 @@ from __future__ import annotations
 
 import logging
 import sqlite3
-from typing import List
+from typing import Dict, List, Optional
 
 from pydantic import BaseModel
 
@@ -63,6 +63,31 @@ class RelationshipSummary(BaseModel):
     to_entity_type: str
     inferred: bool
     confidence: float
+
+
+class GraphTraversalNode(BaseModel):
+    """One entity returned by an ENT-4 graph traversal."""
+
+    entity_id: str
+    entity_type: str
+    display_name: str
+    resolution_confidence: float
+    run_count: int
+    from_entity_id: Optional[str] = None
+    relationship_type: Optional[str] = None
+    inferred: Optional[bool] = None
+    depth: int = 0
+
+
+class GraphPathNode(BaseModel):
+    """One entity in a shortest path response."""
+
+    entity_id: str
+    entity_type: str
+    display_name: str
+    resolution_confidence: float
+    run_count: int
+    depth: int
 
 
 # Edge row joined to both endpoint entities for display names/types, and to
@@ -234,3 +259,315 @@ def get_entity_relationships(
             )
         )
     return summaries
+
+
+# ENT-4 / T3-S14-A graph traversal helpers.
+MAX_GRAPH_TRAVERSAL_DEPTH = 5
+MAX_GRAPH_TRAVERSAL_NODES = 500
+
+
+def _normalise_max_depth(max_depth: int) -> int:
+    """Clamp traversal depth to the ENT4 hard maximum."""
+    try:
+        requested = int(max_depth)
+    except (TypeError, ValueError):
+        requested = 2
+    return max(0, min(requested, MAX_GRAPH_TRAVERSAL_DEPTH))
+
+
+def entity_exists(org_id: str, entity_id: str) -> bool:
+    """Return True when the entity belongs to org_id and is resolved."""
+    conn = db.connect()
+    try:
+        row = conn.execute(
+            """
+            SELECT 1
+            FROM entities
+            WHERE org_id = ?
+              AND id = ?
+              AND resolution_status = 'resolved'
+            """,
+            (org_id, entity_id),
+        ).fetchone()
+    finally:
+        conn.close()
+    return row is not None
+
+
+def opportunity_neighbourhood(
+    org_id: str,
+    seed_entity_ids: List[str],
+    max_depth: int = 2,
+    include_inferred: bool = False,
+) -> List[GraphTraversalNode]:
+    """Return resolved entities reachable from supplied opportunity seeds.
+
+    Traversal is org-scoped, resolved-entity-only, depth-limited to max 5, and
+    cycle-safe through a visited path inside the recursive CTE. By default it
+    follows observed edges only; callers must opt in to inferred edges.
+    """
+    seeds = [str(seed) for seed in (seed_entity_ids or []) if str(seed).strip()]
+    if not org_id or not seeds:
+        return []
+
+    depth_limit = _normalise_max_depth(max_depth)
+    seed_placeholders = ", ".join("?" for _ in seeds)
+    inferred_clause = "" if include_inferred else "AND er.inferred = 0"
+
+    sql = f"""
+        WITH RECURSIVE graph_traversal AS (
+            SELECT
+                e.id AS entity_id,
+                e.entity_type AS entity_type,
+                e.display_name AS display_name,
+                e.resolution_confidence AS resolution_confidence,
+                e.run_count AS run_count,
+                NULL AS from_entity_id,
+                NULL AS relationship_type,
+                NULL AS inferred,
+                0 AS depth,
+                ',' || e.id || ',' AS visited
+            FROM entities e
+            WHERE e.org_id = ?
+              AND e.id IN ({seed_placeholders})
+              AND e.resolution_status = 'resolved'
+
+            UNION ALL
+
+            SELECT
+                e.id AS entity_id,
+                e.entity_type AS entity_type,
+                e.display_name AS display_name,
+                e.resolution_confidence AS resolution_confidence,
+                e.run_count AS run_count,
+                er.from_entity_id AS from_entity_id,
+                er.relationship_type AS relationship_type,
+                er.inferred AS inferred,
+                gt.depth + 1 AS depth,
+                gt.visited || e.id || ',' AS visited
+            FROM graph_traversal gt
+            JOIN entity_relationships er
+              ON er.from_entity_id = gt.entity_id
+             AND er.org_id = ?
+             {inferred_clause}
+            JOIN entities e
+              ON e.id = er.to_entity_id
+             AND e.org_id = er.org_id
+             AND e.resolution_status = 'resolved'
+             AND instr(gt.visited, ',' || e.id || ',') = 0
+            WHERE gt.depth < ?
+        )
+        SELECT
+            entity_id,
+            entity_type,
+            display_name,
+            resolution_confidence,
+            run_count,
+            from_entity_id,
+            relationship_type,
+            inferred,
+            MIN(depth) AS depth
+        FROM graph_traversal
+        GROUP BY entity_id
+        ORDER BY depth ASC, run_count DESC, resolution_confidence DESC, display_name ASC
+        LIMIT {MAX_GRAPH_TRAVERSAL_NODES}
+    """
+
+    conn = db.connect()
+    try:
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(sql, [org_id, *seeds, org_id, depth_limit]).fetchall()
+    finally:
+        conn.close()
+
+    return [
+        GraphTraversalNode(
+            entity_id=row["entity_id"],
+            entity_type=row["entity_type"],
+            display_name=row["display_name"],
+            resolution_confidence=float(row["resolution_confidence"]),
+            run_count=int(row["run_count"]),
+            from_entity_id=row["from_entity_id"],
+            relationship_type=row["relationship_type"],
+            inferred=None if row["inferred"] is None else bool(row["inferred"]),
+            depth=int(row["depth"]),
+        )
+        for row in rows
+    ]
+
+
+def entity_neighbourhood(
+    org_id: str,
+    entity_id: str,
+    max_depth: int = 2,
+    include_inferred: bool = False,
+) -> List[GraphTraversalNode]:
+    """Return all resolved entities reachable from one seed entity."""
+    if not entity_exists(org_id, entity_id):
+        return []
+    return opportunity_neighbourhood(
+        org_id=org_id,
+        seed_entity_ids=[entity_id],
+        max_depth=max_depth,
+        include_inferred=include_inferred,
+    )
+
+
+def entity_path(
+    org_id: str,
+    from_entity_id: str,
+    to_entity_id: str,
+    max_depth: int = MAX_GRAPH_TRAVERSAL_DEPTH,
+    include_inferred: bool = False,
+) -> List[GraphPathNode]:
+    """Return the shortest path between two org-scoped resolved entities.
+
+    Returns [] when both entities exist but no path is found within max_depth.
+    """
+    if not entity_exists(org_id, from_entity_id) or not entity_exists(org_id, to_entity_id):
+        return []
+
+    depth_limit = _normalise_max_depth(max_depth)
+    inferred_clause = "" if include_inferred else "AND er.inferred = 0"
+    sql = f"""
+        WITH RECURSIVE paths AS (
+            SELECT
+                e.id AS entity_id,
+                0 AS depth,
+                ',' || e.id || ',' AS visited
+            FROM entities e
+            WHERE e.org_id = ?
+              AND e.id = ?
+              AND e.resolution_status = 'resolved'
+
+            UNION ALL
+
+            SELECT
+                er.to_entity_id AS entity_id,
+                p.depth + 1 AS depth,
+                p.visited || er.to_entity_id || ',' AS visited
+            FROM paths p
+            JOIN entity_relationships er
+              ON er.from_entity_id = p.entity_id
+             AND er.org_id = ?
+             {inferred_clause}
+            JOIN entities e
+              ON e.id = er.to_entity_id
+             AND e.org_id = er.org_id
+             AND e.resolution_status = 'resolved'
+             AND instr(p.visited, ',' || e.id || ',') = 0
+            WHERE p.depth < ?
+        )
+        SELECT visited
+        FROM paths
+        WHERE entity_id = ?
+        ORDER BY depth ASC
+        LIMIT 1
+    """
+
+    conn = db.connect()
+    try:
+        conn.row_factory = sqlite3.Row
+        row = conn.execute(
+            sql,
+            (org_id, from_entity_id, org_id, depth_limit, to_entity_id),
+        ).fetchone()
+        if row is None:
+            return []
+
+        path_ids = [entity_id for entity_id in row["visited"].split(",") if entity_id]
+        placeholders = ", ".join("?" for _ in path_ids)
+        entity_rows = conn.execute(
+            f"""
+            SELECT id, entity_type, display_name, resolution_confidence, run_count
+            FROM entities
+            WHERE org_id = ?
+              AND id IN ({placeholders})
+              AND resolution_status = 'resolved'
+            """,
+            [org_id, *path_ids],
+        ).fetchall()
+    finally:
+        conn.close()
+
+    by_id = {r["id"]: r for r in entity_rows}
+    path: List[GraphPathNode] = []
+    for depth, entity_id in enumerate(path_ids):
+        r = by_id.get(entity_id)
+        if r is None:
+            return []
+        path.append(
+            GraphPathNode(
+                entity_id=r["id"],
+                entity_type=r["entity_type"],
+                display_name=r["display_name"],
+                resolution_confidence=float(r["resolution_confidence"]),
+                run_count=int(r["run_count"]),
+                depth=depth,
+            )
+        )
+    return path
+
+
+def org_graph_summary(org_id: str) -> Dict[str, object]:
+    """Return org-scoped graph health counts for POC readiness checks."""
+    conn = db.connect()
+    try:
+        conn.row_factory = sqlite3.Row
+        entity_counts = conn.execute(
+            """
+            SELECT entity_type, COUNT(*) AS count
+            FROM entities
+            WHERE org_id = ?
+              AND resolution_status = 'resolved'
+            GROUP BY entity_type
+            ORDER BY entity_type
+            """,
+            (org_id,),
+        ).fetchall()
+        relationship_counts = conn.execute(
+            """
+            SELECT relationship_type, COUNT(*) AS count
+            FROM entity_relationships
+            WHERE org_id = ?
+            GROUP BY relationship_type
+            ORDER BY relationship_type
+            """,
+            (org_id,),
+        ).fetchall()
+        top_entities = conn.execute(
+            """
+            SELECT e.id, e.display_name, e.entity_type, COUNT(er.id) AS edge_count
+            FROM entities e
+            LEFT JOIN entity_relationships er
+              ON er.org_id = e.org_id
+             AND (er.from_entity_id = e.id OR er.to_entity_id = e.id)
+            WHERE e.org_id = ?
+              AND e.resolution_status = 'resolved'
+            GROUP BY e.id, e.display_name, e.entity_type
+            ORDER BY edge_count DESC, e.display_name ASC
+            LIMIT 10
+            """,
+            (org_id,),
+        ).fetchall()
+    finally:
+        conn.close()
+
+    return {
+        "org_id": org_id,
+        "entity_counts_by_type": {
+            row["entity_type"]: int(row["count"]) for row in entity_counts
+        },
+        "relationship_counts_by_type": {
+            row["relationship_type"]: int(row["count"]) for row in relationship_counts
+        },
+        "top_entities_by_edge_count": [
+            {
+                "entity_id": row["id"],
+                "display_name": row["display_name"],
+                "entity_type": row["entity_type"],
+                "edge_count": int(row["edge_count"]),
+            }
+            for row in top_entities
+        ],
+    }
