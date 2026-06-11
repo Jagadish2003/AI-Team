@@ -286,6 +286,11 @@ MAX_NODES_PER_QUERY = 500
 #: Hard wall-clock timeout (seconds) for a single traversal query.
 QUERY_TIMEOUT_SECONDS = 10.0
 
+# Compatibility names used by ENT4 task branches/tests.
+_NEIGHBOURHOOD_MAX_DEPTH = MAX_TRAVERSAL_DEPTH
+_NEIGHBOURHOOD_NODE_CAP = MAX_NODES_PER_QUERY
+_NEIGHBOURHOOD_TIMEOUT_S = QUERY_TIMEOUT_SECONDS
+
 
 class GraphEntityNode(BaseModel):
     """One entity surfaced by a neighbourhood traversal.
@@ -320,6 +325,11 @@ class GraphPathStep(BaseModel):
     depth: int
 
 
+NeighbourhoodNode = GraphEntityNode
+GraphTraversalNode = GraphEntityNode
+GraphPathNode = GraphPathStep
+
+
 def _clamp_depth(max_depth: Optional[int]) -> int:
     """Clamp a requested depth into [0, MAX_TRAVERSAL_DEPTH].
 
@@ -336,8 +346,8 @@ def _clamp_depth(max_depth: Optional[int]) -> int:
     return max(0, min(depth, MAX_TRAVERSAL_DEPTH))
 
 
-def _deadline_exceeded(start: float) -> bool:
-    return (time.monotonic() - start) > QUERY_TIMEOUT_SECONDS
+def _deadline_exceeded(start: float, timeout_s: float = QUERY_TIMEOUT_SECONDS) -> bool:
+    return (time.monotonic() - start) > timeout_s
 
 
 # Resolved seed entities for a neighbourhood traversal (depth 0). Scoped to
@@ -426,6 +436,7 @@ def _bfs_neighbourhood(
     seed_entity_ids: List[str],
     max_depth: int,
     include_inferred: bool,
+    timeout_s: float = QUERY_TIMEOUT_SECONDS,
 ) -> List[GraphEntityNode]:
     """Breadth-first neighbourhood traversal shared by the two entry points.
 
@@ -460,10 +471,10 @@ def _bfs_neighbourhood(
                     MAX_NODES_PER_QUERY, org_id,
                 )
                 break
-            if _deadline_exceeded(start):
+            if _deadline_exceeded(start, timeout_s):
                 logger.warning(
                     "graph traversal exceeded %.0fs timeout (org=%s) — returning partial result",
-                    QUERY_TIMEOUT_SECONDS, org_id,
+                    timeout_s, org_id,
                 )
                 break
 
@@ -507,6 +518,7 @@ def opportunity_neighbourhood(
     seed_entity_ids: List[str],
     max_depth: int = DEFAULT_TRAVERSAL_DEPTH,
     include_inferred: bool = False,
+    timeout_s: float = QUERY_TIMEOUT_SECONDS,
 ) -> List[GraphEntityNode]:
     """Entities connected to an opportunity's seed entities.
 
@@ -519,7 +531,13 @@ def opportunity_neighbourhood(
     the 500-node cap, and the 10s timeout. ``include_inferred`` opts inferred
     edges into the traversal (default observed-only).
     """
-    return _bfs_neighbourhood(org_id, seed_entity_ids, max_depth, include_inferred)
+    return _bfs_neighbourhood(
+        org_id,
+        seed_entity_ids,
+        max_depth,
+        include_inferred,
+        timeout_s=timeout_s,
+    )
 
 
 def entity_neighbourhood(
@@ -527,6 +545,7 @@ def entity_neighbourhood(
     entity_id: str,
     max_depth: int = DEFAULT_TRAVERSAL_DEPTH,
     include_inferred: bool = False,
+    timeout_s: float = QUERY_TIMEOUT_SECONDS,
 ) -> List[GraphEntityNode]:
     """Entities connected to a single entity, within ``max_depth`` hops.
 
@@ -535,7 +554,13 @@ def entity_neighbourhood(
     Returns an empty list when the entity is missing, in another org, or not
     resolved.
     """
-    return _bfs_neighbourhood(org_id, [entity_id], max_depth, include_inferred)
+    return _bfs_neighbourhood(
+        org_id,
+        [entity_id],
+        max_depth,
+        include_inferred,
+        timeout_s=timeout_s,
+    )
 
 
 def entity_path(
