@@ -25,6 +25,7 @@ from .base_overlay import (
 from .overlay_registry import (
     get_overlay,
     register_overlay,
+    register_startup_overlay,
     register_startup_overlays,
     unregister_overlay,
 )
@@ -35,6 +36,7 @@ __all__ = [
     "TeamFieldRule",
     "ObjectRule",
     "register_overlay",
+    "register_startup_overlay",
     "get_overlay",
     "unregister_overlay",
     "register_startup_overlays",
