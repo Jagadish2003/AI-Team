@@ -50,6 +50,7 @@ const DEFAULT_WINDOW_DAYS = 90;
 const CHIP_TONES = {
   blue: "border-blue-500/35 bg-blue-500/10 text-blue-300",
   amber: "border-amber-500/40 bg-amber-500/10 text-amber-300",
+  emerald: "border-emerald-500/40 bg-emerald-500/10 text-emerald-300",
   teal: "border-teal-500/40 bg-teal-500/10 text-teal-300",
   violet: "border-violet-500/40 bg-violet-500/10 text-violet-300",
   red: "border-red-500/40 bg-red-500/10 text-red-300",
@@ -71,15 +72,15 @@ const STATE_STYLES: Record<BaselineState, StateStyle> = {
   },
   rising: {
     Icon: TrendingUp,
-    icon: "border-amber-500/40 bg-amber-500/10 text-amber-300",
-    primaryBadge: CHIP_TONES.amber,
-    arrow: "text-amber-400",
+    icon: "border-emerald-500/40 bg-emerald-500/10 text-emerald-300",
+    primaryBadge: CHIP_TONES.emerald,
+    arrow: "text-emerald-400",
   },
   falling: {
     Icon: TrendingDown,
-    icon: "border-teal-500/40 bg-teal-500/10 text-teal-300",
-    primaryBadge: CHIP_TONES.teal,
-    arrow: "text-teal-400",
+    icon: "border-amber-500/40 bg-amber-500/10 text-amber-300",
+    primaryBadge: CHIP_TONES.amber,
+    arrow: "text-amber-400",
   },
   first_deviation: {
     Icon: CircleDot,
@@ -112,6 +113,17 @@ function formatPercent(value: number | null): string {
   if (typeof value !== "number" || !Number.isFinite(value)) return "N/A";
   const rounded = Math.round(value);
   return `${rounded > 0 ? "+" : ""}${rounded}%`;
+}
+
+function baselineComparisonPhrase(
+  change: number | null,
+  windowDays: number,
+): string | null {
+  if (typeof change !== "number" || !Number.isFinite(change)) return null;
+  const rounded = Math.round(change);
+  if (rounded === 0) return `at your ${windowDays}-day baseline`;
+  const direction = rounded > 0 ? "above" : "below";
+  return `${Math.abs(rounded)}% ${direction} your ${windowDays}-day baseline`;
 }
 
 function labelize(value: string | null | undefined): string {
@@ -175,13 +187,10 @@ function subtitleFor(
   current: number | null,
   change: number | null,
 ): string {
-  if (state !== "insufficient" && enrichment.baseline_context) {
-    return enrichment.baseline_context;
-  }
-
   const windowDays = enrichment.baseline_window_days ?? DEFAULT_WINDOW_DAYS;
   const baseline = enrichment.baseline_mean;
   const pct = Math.abs(Math.round(change ?? 0));
+  const baselineComparison = baselineComparisonPhrase(change, windowDays);
 
   if (state === "insufficient") {
     return "Baseline context will appear after 3 or more discovery runs.";
@@ -190,16 +199,21 @@ function subtitleFor(
     return "First deviation from a previously stable baseline";
   }
   if (state === "anomaly_falling") {
+    if (!baselineComparison && enrichment.baseline_context) return enrichment.baseline_context;
     return `Down ${pct}% from your ${windowDays}-day baseline of ${formatValue(baseline)}`;
   }
   if (state === "anomaly_rising") {
+    if (!baselineComparison && enrichment.baseline_context) return enrichment.baseline_context;
     return `Up ${pct}% from your ${windowDays}-day baseline of ${formatValue(baseline)}`;
   }
   if (state === "rising") {
-    return `Trending up - currently ${pct}% above your ${windowDays}-day baseline`;
+    if (baselineComparison) return `Trending up - currently ${baselineComparison}`;
   }
   if (state === "falling") {
-    return `Trending down - currently ${pct}% below your ${windowDays}-day baseline`;
+    if (baselineComparison) return `Trending down - currently ${baselineComparison}`;
+  }
+  if (enrichment.baseline_context) {
+    return enrichment.baseline_context;
   }
   if (current !== null && baseline !== null && current === baseline) {
     return `Stable - within normal range of your ${windowDays}-day baseline`;
@@ -264,7 +278,7 @@ function configFor(
           { label: "Anomaly detected", tone: "red" },
           {
             label: state === "anomaly_falling" ? "Falling" : "Rising",
-            tone: state === "anomaly_falling" ? "teal" : "amber",
+            tone: state === "anomaly_falling" ? "amber" : "emerald",
           },
           ...(runBadge ? [{ label: runBadge, tone: "neutral" as const }] : []),
         ],
@@ -281,13 +295,13 @@ function configFor(
         why:
           "This signal increased across recent discovery runs. The calculated trend slope is above the normal stability band, so the system classifies the pattern as rising.",
         badges: [
-          { label: "Rising", tone: "amber" },
+          { label: "Rising", tone: "emerald" },
           ...(runBadge ? [{ label: runBadge, tone: "neutral" as const }] : []),
         ],
         detailChips: [
           { label: `Current: ${formatValue(current)}`, tone: "neutral" },
           { label: `Baseline avg: ${formatValue(baseline)}`, tone: "neutral" },
-          { label: `Change: ${formatPercent(change)}`, tone: "neutral" },
+          { label: `Vs baseline: ${formatPercent(change)}`, tone: "neutral" },
         ] as Chip[],
       };
     case "falling":
@@ -297,13 +311,13 @@ function configFor(
         why:
           "This signal decreased across recent discovery runs. The calculated trend slope is below the normal stability band, so the system classifies the pattern as falling.",
         badges: [
-          { label: "Falling", tone: "teal" },
+          { label: "Falling", tone: "amber" },
           ...(runBadge ? [{ label: runBadge, tone: "neutral" as const }] : []),
         ],
         detailChips: [
           { label: `Current: ${formatValue(current)}`, tone: "neutral" },
           { label: `Baseline avg: ${formatValue(baseline)}`, tone: "neutral" },
-          { label: `Change: ${formatPercent(change)}`, tone: "neutral" },
+          { label: `Vs baseline: ${formatPercent(change)}`, tone: "neutral" },
         ] as Chip[],
       };
     default:
@@ -319,7 +333,7 @@ function configFor(
         detailChips: [
           { label: `Current: ${formatValue(current)}`, tone: "neutral" },
           { label: `Baseline avg: ${formatValue(baseline)}`, tone: "neutral" },
-          { label: `Change: ${formatPercent(change)}`, tone: "neutral" },
+          { label: `Vs baseline: ${formatPercent(change)}`, tone: "neutral" },
         ] as Chip[],
       };
   }
@@ -329,9 +343,9 @@ function ChipPill({ chip, primaryClass }: { chip: Chip; primaryClass?: string })
   const toneClass = chip.tone ? CHIP_TONES[chip.tone] : primaryClass ?? CHIP_TONES.neutral;
   return (
     <span
-      className={`inline-flex h-6 max-w-full items-center rounded-full border px-2.5 text-[11px] font-semibold leading-none ${toneClass}`}
+      className={`inline-flex min-h-7 max-w-full items-center rounded-full border px-2.5 py-1 text-[11px] font-semibold leading-[1.35] ${toneClass}`}
     >
-      <span className="truncate">{chip.label}</span>
+      <span className="block max-w-full truncate leading-[1.35]">{chip.label}</span>
     </span>
   );
 }
