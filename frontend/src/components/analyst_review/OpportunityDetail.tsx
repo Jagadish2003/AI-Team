@@ -229,42 +229,47 @@ export function EntityTracePanel({
         </span>
       </div>
       <div className="rounded-lg border border-border bg-bg/30 p-3">
-        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-          {entities.map((entity) => {
-            const isAmbiguous = entity.resolution_status === "ambiguous";
-            return (
-              <div
-                key={entity.entity_id}
-                data-testid={`entity-trace-${entity.entity_id}`}
-                className={`min-w-0 rounded-md border px-3 py-2 ${
-                  isAmbiguous
-                    ? "border-border/60 bg-panel/40 text-muted opacity-75"
-                    : "border-border/70 bg-panel/70 text-text"
-                }`}
-              >
-                <div className="flex min-w-0 items-start justify-between gap-3">
-                  <div className="min-w-0">
-                    <div className="truncate text-xs font-semibold leading-snug">
-                      {entity.display_name}
+        <div
+          data-testid="entity-trace-scroll"
+          className="max-h-[18.5rem] overflow-y-auto pr-1 [scrollbar-gutter:stable]"
+        >
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+            {entities.map((entity) => {
+              const isAmbiguous = entity.resolution_status === "ambiguous";
+              return (
+                <div
+                  key={entity.entity_id}
+                  data-testid={`entity-trace-${entity.entity_id}`}
+                  className={`min-h-16 min-w-0 rounded-md border px-3 py-2 ${
+                    isAmbiguous
+                      ? "border-border/60 bg-panel/40 text-muted opacity-75"
+                      : "border-border/70 bg-panel/70 text-text"
+                  }`}
+                >
+                  <div className="flex min-w-0 items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <div className="truncate text-xs font-semibold leading-snug">
+                        {entity.display_name}
+                      </div>
+                      <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] leading-tight text-muted">
+                        <span>{labelize(entity.entity_type)}</span>
+                        <span aria-hidden="true">/</span>
+                        <span>{sourceLabel(entity.source_system)}</span>
+                      </div>
                     </div>
-                    <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] leading-tight text-muted">
-                      <span>{labelize(entity.entity_type)}</span>
-                      <span aria-hidden="true">/</span>
-                      <span>{sourceLabel(entity.source_system)}</span>
-                    </div>
+                    <span className="shrink-0 rounded border border-border/70 px-1.5 py-0.5 text-[11px] leading-tight">
+                      {confidenceLabel(entity.resolution_confidence)}
+                    </span>
                   </div>
-                  <span className="shrink-0 rounded border border-border/70 px-1.5 py-0.5 text-[11px] leading-tight">
-                    {confidenceLabel(entity.resolution_confidence)}
-                  </span>
+                  {isAmbiguous && (
+                    <div className="mt-1.5 text-[11px] leading-tight text-muted">
+                      Ambiguous
+                    </div>
+                  )}
                 </div>
-                {isAmbiguous && (
-                  <div className="mt-1.5 text-[11px] leading-tight text-muted">
-                    Ambiguous
-                  </div>
-                )}
-              </div>
-            );
-          })}
+              );
+            })}
+          </div>
         </div>
       </div>
     </div>
