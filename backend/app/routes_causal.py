@@ -135,6 +135,10 @@ def get_causal_hypothesis(opportunity_id: str) -> dict:
             try:
                 row_dict["temporal_support"] = json.loads(temporal)
             except (json.JSONDecodeError, ValueError):
+                logger.warning(
+                    "causal_hypotheses: unparseable temporal_support for opportunity %s",
+                    opportunity_id,
+                )
                 row_dict["temporal_support"] = None
 
         # Normalise SQLite integer booleans to Python bools.
