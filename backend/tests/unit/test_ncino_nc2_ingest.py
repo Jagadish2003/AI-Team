@@ -105,7 +105,7 @@ def test_spreading_metrics_resolve_loan_via_spread_header() -> None:
                 "Id": "period_001",
                 "LLC_BI__Spread__c": "spread_001",
                 "LLC_BI__Analyst__c": "analyst_001",
-                "LLC_BI__Is_Locked__c": False,
+                "IsLocked__c": False,
                 "CreatedDate": "2026-01-01",
             }
         ],

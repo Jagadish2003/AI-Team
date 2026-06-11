@@ -142,6 +142,9 @@ Use this verbatim as a worksheet — it maps 1:1 onto the overlay dataclasses.
 List regex patterns (case-insensitive) that match the customer's
 integration / system / API / batch / automation users. These users are filtered
 out of the entity graph so they never appear as real loan officers or analysts.
+When an overlay is active, these patterns apply to both overlay-specific fields
+and the default extraction paths for that connector. This is intentional, but
+review the patterns carefully so a real user name is not accidentally excluded.
 
 | Pattern (regex) | Matches example |
 | --- | --- |
@@ -150,15 +153,17 @@ out of the entity graph so they never appear as real loan officers or analysts.
 
 ---
 
-## 5. Example overlay structure (placeholder data only)
+## 5. EXAMPLE ONLY overlay structure (placeholder data only)
 
-> The example below uses **placeholder** field/stage names. It demonstrates the
-> *shape* of a City National overlay without exposing any real customer data.
-> Replace every placeholder with the values collected in Session 1.
+> **EXAMPLE ONLY — not a real customer overlay.** The example below uses
+> placeholder field/stage names. It demonstrates the *shape* of a customer
+> overlay without exposing or implying any real customer data. Replace every
+> placeholder with the values collected in Session 1.
 
 ```python
 # backend/app/entity_overlays/city_national_ncino_overlay.py
-# Placeholder example — replace placeholders with Session 1 inventory values.
+# EXAMPLE ONLY — not a real customer overlay.
+# Replace placeholders with Session 1 inventory values.
 
 from app.entity_overlays.base_overlay import (
     EntityExtractionOverlay,
@@ -237,7 +242,7 @@ def register_startup_overlays() -> None:
     from app.entity_overlays.city_national_ncino_overlay import (
         CITY_NATIONAL_NCINO_OVERLAY,
     )
-    register_overlay(CITY_NATIONAL_NCINO_OVERLAY)
+    register_startup_overlay(CITY_NATIONAL_NCINO_OVERLAY)
     # register additional customer overlays here ...
 ```
 

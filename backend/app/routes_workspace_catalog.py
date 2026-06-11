@@ -7,7 +7,8 @@ from typing import Any, Dict, List
 from fastapi import Depends, FastAPI
 from pydantic import BaseModel, Field
 
-from .db import get_all
+from .db import org_connectors_list
+from .middleware.tenancy import get_current_org_id
 from .security import require_auth
 from .rbac import require_role
 
@@ -159,4 +160,5 @@ def register_workspace_catalog_routes(app: FastAPI) -> None:
         tags=["Integration Hub"],
     )
     def get_workspace_catalog() -> WorkspaceCatalogResponse:
-        return build_workspace_catalog(get_all("connectors"))
+        # Per-org: catalog overlaid with THIS org's connection state + products.
+        return build_workspace_catalog(org_connectors_list(get_current_org_id()))

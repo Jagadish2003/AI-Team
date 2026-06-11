@@ -16,7 +16,20 @@ load_dotenv()
 logger = logging.getLogger(__name__)
 
 from . import db
-from .db import get_all, get_one, kv_get, kv_set, run_get, upsert, tenancy_get_all, tenancy_get_one
+from .db import (
+    get_all,
+    get_one,
+    kv_get,
+    kv_set,
+    run_get,
+    upsert,
+    tenancy_get_all,
+    tenancy_get_one,
+    tenancy_get_runs,
+    org_connectors_list,
+    org_connector_get,
+    org_connector_set,
+)
 from .normalization_enrichment import enrich_ambiguous_mappings
 from .opportunity_display import (
     with_display_title,
@@ -44,10 +57,12 @@ from .routes_db_connectors import register_db_connector_routes
 from .routes_temporal import register_temporal_routes
 from .routes_entities import register_entities_routes
 from .routes_causal import register_causal_routes
+from .routes_graph import register_graph_routes
+from .routes_auth import register_auth_routes
 from .security import require_auth
 from .auth.configs import CONNECTOR_AUTH_CONFIGS
 from .auth.secrets import validate_all_secrets
-from .middleware.tenancy import register_tenancy
+from .middleware.tenancy import get_current_org_id, register_tenancy
 from .rbac import require_role, seed_owner
 
 _DEV_USER = os.getenv("DEV_JWT", "dev-token-change-me")
@@ -89,6 +104,11 @@ async def lifespan(app: FastAPI):
     # panel never renders. Idempotent (IF NOT EXISTS) — no-op once migrated.
     from .temporal import ensure_signal_snapshots_table
     ensure_signal_snapshots_table()
+    # AUTH-1 / AT-233: ensure orgs/users/login_attempts exist for the auth layer.
+    # seed_loader.py does not run alembic, so create them idempotently here too
+    # (CREATE TABLE IF NOT EXISTS — no-op once migrations 0004/0005 have run).
+    from .auth.user_auth import ensure_auth_tables
+    ensure_auth_tables()
     # ENT-1: register customer entity-extraction overlays before the first run.
     # No-op by default (no customer overlays hardcoded into the core); the
     # function is the documented hook for deployment-time registration. Never
@@ -142,6 +162,8 @@ register_temporal_routes(app)
 register_workspace_routes(app)
 register_entities_routes(app)
 register_causal_routes(app)
+register_graph_routes(app)
+register_auth_routes(app)
 
 origins = [
     o.strip()
@@ -210,7 +232,9 @@ def root() -> Dict[str, Any]:
 
 @app.get("/api/connectors", dependencies=[Depends(require_auth), Depends(require_role("viewer"))])
 def list_connectors() -> List[Dict[str, Any]]:
-    return tenancy_get_all("connectors")
+    # Per-org: shared catalog overlaid with THIS org's connection state, so a
+    # fresh org sees disconnected connectors regardless of what other orgs did.
+    return org_connectors_list(get_current_org_id())
 
 
 @app.post(
@@ -218,13 +242,15 @@ def list_connectors() -> List[Dict[str, Any]]:
     dependencies=[Depends(require_auth), Depends(require_role("analyst"))],
 )
 def connect_connector(connector_id: str, body: Dict[str, Any]) -> Dict[str, Any]:
-    c = tenancy_get_one("connectors", connector_id)
+    org_id = get_current_org_id()
+    c = org_connector_get(org_id, connector_id)
     if not c:
         raise HTTPException(404, "connector not found")
     status = body.get("status", "connected")
     c["status"] = status
     c["lastSynced"] = c.get("lastSynced", "—")
-    upsert("connectors", connector_id, c)
+    # Write to THIS org's namespaced row — never the shared catalog.
+    org_connector_set(org_id, connector_id, c)
     return c
 
 
@@ -233,14 +259,15 @@ def connect_connector(connector_id: str, body: Dict[str, Any]) -> Dict[str, Any]
     dependencies=[Depends(require_auth), Depends(require_role("analyst"))],
 )
 def configure_connector(connector_id: str) -> Dict[str, Any]:
-    c = tenancy_get_one("connectors", connector_id)
+    org_id = get_current_org_id()
+    c = org_connector_get(org_id, connector_id)
     if not c:
         raise HTTPException(404, "connector not found")
     if c.get("status") != "connected":
         raise HTTPException(400, "connector must be connected before configuring")
     c["configured"] = True
     c["lastSynced"] = "Just now"
-    upsert("connectors", connector_id, c)
+    org_connector_set(org_id, connector_id, c)
     return c
 
 
@@ -301,16 +328,43 @@ def add_upload(body: Dict[str, Any]) -> Dict[str, Any]:
     return item
 
 
+@app.get("/api/runs", dependencies=[Depends(require_auth), Depends(require_role("viewer"))])
+def list_runs() -> List[Dict[str, Any]]:
+    """Runs owned by the caller's org, newest-first.
+
+    Org-scoped LIST (not a run-scoped 'latest' fallback): lets any member of an
+    org see the workspace's runs — and the creator find a run again after the
+    in-memory session token is gone — instead of the run living only in one
+    browser's localStorage. Run-scoped artifact endpoints still require an
+    explicit runId in the URL.
+    """
+    org_id = get_current_org_id()
+    runs = tenancy_get_runs(org_id)
+    runs.sort(key=lambda r: str(r.get("startedAt") or ""), reverse=True)
+    return [
+        {
+            "id": r.get("id"),
+            "status": r.get("status"),
+            "startedAt": r.get("startedAt"),
+            "updatedAt": r.get("updatedAt"),
+            "packId": r.get("packId"),
+            "source": r.get("source"),
+        }
+        for r in runs
+    ]
+
+
 def _run_order_key(run: Dict[str, Any]) -> tuple[str, str]:
     timestamp = str(run.get("updatedAt") or run.get("startedAt") or "")
     run_id = str(run.get("id") or run.get("runId") or "")
     return (timestamp, run_id)
 
 
+# NOTE: must be declared before "/api/runs/{run_id}" so "latest" is not captured
+# as a run_id path param. Org-scoped: a run is visible when it belongs to the
+# caller's org (org_id/orgId claim) or is an untagged legacy run.
 @app.get("/api/runs/latest", dependencies=[Depends(require_auth), Depends(require_role("viewer"))])
 def get_latest_run() -> Dict[str, Any]:
-    from .middleware.tenancy import get_current_org_id
-
     db.init_tables()
     org_id = get_current_org_id()
     runs = get_all("runs")
@@ -572,7 +626,7 @@ def get_exec_report(run_id: str) -> Dict[str, Any]:
     uploaded_files = inputs.get("uploadedFiles") or []
     sample_enabled = bool(inputs.get("sampleWorkspaceEnabled", False))
 
-    connectors = get_all("connectors")
+    connectors = org_connectors_list(get_current_org_id())
     name_to_tier = {c.get("name"): c.get("tier") for c in connectors}
     recommended_connected = sum(
         1 for n in connected_sources if name_to_tier.get(n) == "recommended"

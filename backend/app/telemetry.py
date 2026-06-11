@@ -285,6 +285,26 @@ class CausalHypothesisGeneratedPayload(TypedDict, total=False):
     inferred: NotRequired[bool]
 
 
+class GraphContextBuiltPayload(TypedDict, total=False):
+    """ENT-4 / T3-S14-A — emitted once per build_graph_context() call.
+
+    Records the shape of the graph context assembled for an opportunity:
+    the full entity count, the capped count actually placed in the prompt,
+    whether the graph was truncated past the 15-entity / 20-relationship caps,
+    and the build duration. Carries shape counts only — no entity names.
+    """
+    org_id: NotRequired[str]
+    opportunity_id: NotRequired[str]
+    entity_count: NotRequired[int]
+    entity_count_shown: NotRequired[int]
+    relationship_count: NotRequired[int]
+    relationship_count_shown: NotRequired[int]
+    truncated: NotRequired[bool]
+    sparse_graph: NotRequired[bool]
+    duration_ms: NotRequired[int]
+    source: NotRequired[str]
+
+
 class RunStartedEvent(TypedDict):
     run_id: str
     org_id: str
@@ -415,6 +435,9 @@ register_event_type("llm.enrichment_grounded", LlmEnrichmentGroundedPayload)
 # ENT-6 / T3-S16-A — causal hypothesis lifecycle events
 register_event_type("causal.hypothesis_rejected", CausalHypothesisRejectedPayload)
 register_event_type("causal.hypothesis_generated", CausalHypothesisGeneratedPayload)
+# ENT-4 / T3-S14-A Sprint 14 — graph context builder.
+# graph.context_built is emitted by app.graph_context_builder.build_graph_context().
+register_event_type("graph.context_built", GraphContextBuiltPayload)
 
 
 # ---------------------------------------------------------------------------
@@ -570,6 +593,7 @@ __all__ = [
     "LlmEnrichmentGroundedPayload",         # ENT-3 / T3-S15-A
     "CausalHypothesisRejectedPayload",      # ENT-6 / T3-S16-A
     "CausalHypothesisGeneratedPayload",     # ENT-6 / T3-S16-A
+    "GraphContextBuiltPayload",             # ENT-4 / T3-S14-A
     "EVENT_PAYLOAD_TYPES",          # AT-211 alias: event_type → TypedDict schema
     "EVENT_REGISTRY",
     "EVENT_TYPE_REGISTRY",          # alias for T1-S10-C unit tests

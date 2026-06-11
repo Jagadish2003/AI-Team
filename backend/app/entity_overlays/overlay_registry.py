@@ -14,6 +14,8 @@ query time. See register_startup_overlays().
 from __future__ import annotations
 
 import logging
+import re
+from threading import RLock
 from typing import Dict, Optional, Tuple
 
 from .base_overlay import EntityExtractionOverlay
@@ -25,6 +27,19 @@ logger = logging.getLogger(__name__)
 # in the same process (AC7: no server restart needed between registration and
 # the first discovery run).
 OVERLAY_REGISTRY: Dict[Tuple[str, str], EntityExtractionOverlay] = {}
+_REGISTRY_LOCK = RLock()
+
+
+def _validate_overlay(overlay: EntityExtractionOverlay) -> None:
+    for pattern in overlay.service_account_patterns or []:
+        try:
+            re.compile(pattern, re.IGNORECASE)
+        except re.error as exc:
+            raise ValueError(
+                "Invalid service_account_patterns regex "
+                f"{pattern!r} for org={overlay.org_id} "
+                f"connector={overlay.connector_id}: {exc}"
+            ) from exc
 
 
 def register_overlay(overlay: EntityExtractionOverlay) -> None:
@@ -39,10 +54,12 @@ def register_overlay(overlay: EntityExtractionOverlay) -> None:
         raise TypeError(
             f"register_overlay expects an EntityExtractionOverlay, got {type(overlay)!r}"
         )
+    _validate_overlay(overlay)
     key = (overlay.org_id, overlay.connector_id)
-    OVERLAY_REGISTRY[key] = overlay
+    with _REGISTRY_LOCK:
+        OVERLAY_REGISTRY[key] = overlay
     logger.info(
-        "entity overlay registered — org=%s connector=%s version=%s",
+        "entity overlay registered: org=%s connector=%s version=%s",
         overlay.org_id,
         overlay.connector_id,
         overlay.version,
@@ -56,7 +73,8 @@ def get_overlay(org_id: str, connector_id: str) -> Optional[EntityExtractionOver
     the default T3-S12-A extraction. This keeps default extraction safe for
     every org that has not been onboarded with an overlay yet.
     """
-    return OVERLAY_REGISTRY.get((org_id, connector_id))
+    with _REGISTRY_LOCK:
+        return OVERLAY_REGISTRY.get((org_id, connector_id))
 
 
 def unregister_overlay(org_id: str, connector_id: str) -> None:
@@ -65,12 +83,34 @@ def unregister_overlay(org_id: str, connector_id: str) -> None:
     Primarily used by tests for isolation and by deployment tooling when an
     overlay is retired.
     """
-    OVERLAY_REGISTRY.pop((org_id, connector_id), None)
+    with _REGISTRY_LOCK:
+        OVERLAY_REGISTRY.pop((org_id, connector_id), None)
 
 
 def registered_keys() -> list[Tuple[str, str]]:
     """Return the list of (org_id, connector_id) keys currently registered."""
-    return list(OVERLAY_REGISTRY.keys())
+    with _REGISTRY_LOCK:
+        return list(OVERLAY_REGISTRY.keys())
+
+
+def register_startup_overlay(overlay: EntityExtractionOverlay) -> bool:
+    """Register one startup overlay and keep startup non-blocking.
+
+    Deployment-specific startup code should call this helper for each customer
+    overlay so one broken overlay logs a clear warning and does not prevent the
+    remaining overlays from registering.
+    """
+    try:
+        register_overlay(overlay)
+        return True
+    except Exception as exc:
+        logger.warning(
+            "entity overlay startup registration failed: org=%s connector=%s error=%s",
+            getattr(overlay, "org_id", "<unknown>"),
+            getattr(overlay, "connector_id", "<unknown>"),
+            exc,
+        )
+        return False
 
 
 def register_startup_overlays() -> None:
@@ -93,10 +133,8 @@ def register_startup_overlays() -> None:
     try:
         # Intentionally empty: no customer overlays are hardcoded into the core.
         # Deployment-specific overlay registrations are added here.
-        registered = len(OVERLAY_REGISTRY)
-        logger.info(
-            "entity overlay startup sequence complete — %d overlay(s) registered",
-            registered,
-        )
+        with _REGISTRY_LOCK:
+            registered = len(OVERLAY_REGISTRY)
+        logger.info("entity overlay startup: %d overlays registered", registered)
     except Exception as exc:  # pragma: no cover — defensive; startup must not fail
         logger.warning("entity overlay startup sequence failed (non-blocking): %s", exc)

@@ -47,6 +47,11 @@ CONFIDENCE_LOW = "LOW"
 CONFIDENCE_MEDIUM = "MEDIUM"
 CONFIDENCE_HIGH = "HIGH"
 
+#: Shared freshness window for all time-sensitive corroboration rules.
+#: Kept in the rule registry so reviewers can audit the window beside COR-01
+#: through COR-08 instead of hunting in engine code.
+CORROBORATION_WINDOW_DAYS = 30
+
 #: Ordering used to compare / never-downgrade confidence levels.
 CONFIDENCE_ORDER: Dict[str, int] = {
     CONFIDENCE_LOW: 0,

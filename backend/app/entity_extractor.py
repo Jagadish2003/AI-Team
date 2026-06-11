@@ -62,9 +62,13 @@ _MIN_DISPLAY_RUN_COUNT = ENTITY_MIN_RUN_COUNT
 
 class _FilteredServiceAccount(Exception):
     """Raised internally when a display_name matches the active overlay's
-    service-account patterns. Caught by the per-source extractors' existing
-    ``except Exception`` blocks (so the entity is simply not stored) and by the
-    overlay extractor. Never escapes extract_entities()."""
+    service-account patterns.
+
+    Kept only as an internal marker type for older tests/imports. The resolver
+    wrapper now handles filtering itself and returns None, so broad
+    ``except Exception`` blocks in per-source extractors never mistake filtered
+    service accounts for extraction failures.
+    """
 
 
 class _OverlayContext:
@@ -99,6 +103,12 @@ class _OverlayContext:
         return len(self.filtered_names)
 
 
+def _append_entity(entities: List[Entity], entity: Optional[Entity]) -> None:
+    """Append only real entities; service-account filtering returns None."""
+    if entity is not None:
+        entities.append(entity)
+
+
 # Active overlay context for the current extraction, or None when no overlay
 # applies. ContextVar keeps this safe across concurrent extractions.
 _overlay_context: ContextVar[Optional[_OverlayContext]] = ContextVar(
@@ -117,15 +127,23 @@ def resolve_or_create_entity(**kwargs: Any) -> Optional[Entity]:
 
     Overlay active:
       - if display_name matches a service-account pattern, the identity is
-        recorded and ``_FilteredServiceAccount`` is raised so the entity is not
-        stored (T5 / AC5);
+        recorded and None is returned before any DB write (T5 / AC5);
       - otherwise the entity is resolved/created, and its source_system is added
         to metadata.sources for cross-system provenance (AC4).
     """
     ctx = _overlay_context.get()
     if ctx is not None and ctx.matches_service_account(kwargs.get("display_name")):
         ctx.record_filtered(kwargs.get("display_name"))
-        raise _FilteredServiceAccount(kwargs.get("display_name"))
+        metadata = kwargs.get("metadata")
+        path = "overlay" if isinstance(metadata, dict) and metadata.get("overlay_version") else "default"
+        logger.debug(
+            "entity overlay: filtered service-account identity from %s path "
+            "(source_system=%s display_name=%r)",
+            path,
+            kwargs.get("source_system"),
+            kwargs.get("display_name"),
+        )
+        return None
 
     entity = _core_resolve_or_create_entity(**kwargs)
 
@@ -140,6 +158,8 @@ def _record_entity_source(entity: Entity, source_system: Optional[str]) -> None:
     Cross-system provenance tracking (AC4). Only ever invoked while an overlay
     is active, so the default (no-overlay) path never touches metadata. Updates
     only the metadata JSON column — the locked entity schema is unchanged.
+    TODO(T3-S15-A): promote metadata.sources to a queryable/indexed column before
+    graph queries need to ask for entities seen in multiple systems.
     Best-effort: a failure here never breaks extraction.
     """
     if not source_system:
@@ -149,10 +169,14 @@ def _record_entity_source(entity: Entity, source_system: Optional[str]) -> None:
 
         conn = db.connect()
         try:
+            # Serialize the metadata read/merge/write so concurrent runs do not
+            # lose a source_system addition for the same entity row.
+            conn.execute("BEGIN IMMEDIATE")
             row = conn.execute(
                 "SELECT metadata FROM entities WHERE id = ?", (str(entity.id),)
             ).fetchone()
             if row is None:
+                conn.commit()
                 return
             raw = row[0]
             meta = json.loads(raw) if isinstance(raw, str) and raw else (raw or {})
@@ -276,7 +300,7 @@ def _extract_salesforce_entities(
                     run_id=run_id,
                     metadata={"process_name": proc.get("process_name")},
                 )
-                entities.append(e)
+                _append_entity(entities, e)
             except Exception as exc:
                 logger.warning("SF person extraction failed for %s: %s", name, exc)
 
@@ -305,7 +329,7 @@ def _extract_salesforce_entities(
                         run_id=run_id,
                         metadata={"source": collection_name, "field": field_name},
                     )
-                    entities.append(e)
+                    _append_entity(entities, e)
                 except Exception as exc:
                     logger.warning(
                         "SF %s extraction failed for %s: %s",
@@ -356,7 +380,7 @@ def _extract_salesforce_entities(
                     run_id=run_id,
                     metadata={"source": collection_name},
                 )
-                entities.append(e)
+                _append_entity(entities, e)
             except Exception as exc:
                 logger.warning("SF team extraction failed for %s: %s", team_name, exc)
 
@@ -375,7 +399,7 @@ def _extract_salesforce_entities(
                 run_id=run_id,
                 metadata={"record_type": "case"},
             )
-            entities.append(e)
+            _append_entity(entities, e)
         except Exception as exc:
             logger.warning("SF object extraction failed for %s: %s", name, exc)
 
@@ -407,7 +431,7 @@ def _extract_salesforce_entities(
                         run_id=run_id,
                         metadata={"source": "ncino_owner"},
                     )
-                    entities.append(e)
+                    _append_entity(entities, e)
                 except Exception as exc:
                     logger.warning("nCino person extraction failed for %s: %s", owner_id, exc)
 
@@ -451,7 +475,7 @@ def _extract_salesforce_entities(
                         run_id=run_id,
                         metadata={"source": f"ncino_{key}"},
                     )
-                    entities.append(e)
+                    _append_entity(entities, e)
                 except Exception as exc:
                     logger.warning("nCino project extraction failed for %s: %s", project_name, exc)
 
@@ -481,7 +505,7 @@ def _extract_jira_entities(
                 run_id=run_id,
                 metadata={"source": "jira_project"},
             )
-            entities.append(e)
+            _append_entity(entities, e)
         except Exception as exc:
             logger.warning("Jira team extraction failed for %s: %s", project_name, exc)
 
@@ -495,7 +519,7 @@ def _extract_jira_entities(
                 run_id=run_id,
                 metadata={"source": "jira_project"},
             )
-            entities.append(e)
+            _append_entity(entities, e)
         except Exception as exc:
             logger.warning("Jira project extraction failed for %s: %s", project_name, exc)
 
@@ -513,7 +537,7 @@ def _extract_jira_entities(
                     run_id=run_id,
                     metadata={"source": "jira_issue_project"},
                 )
-                entities.append(e)
+                _append_entity(entities, e)
             except Exception as exc:
                 logger.warning(
                     "Jira issue project extraction failed for %s: %s",
@@ -540,7 +564,7 @@ def _extract_jira_entities(
                     run_id=run_id,
                     metadata={"source": "jira_epic"},
                 )
-                entities.append(e)
+                _append_entity(entities, e)
             except Exception as exc:
                 logger.warning("Jira epic extraction failed for %s: %s", epic_name, exc)
 
@@ -560,7 +584,7 @@ def _extract_jira_entities(
                         "project": issue.get("project"),
                     },
                 )
-                entities.append(e)
+                _append_entity(entities, e)
             except Exception as exc:
                 logger.warning("Jira object extraction failed for %s: %s", issue_key, exc)
 
@@ -580,7 +604,7 @@ def _extract_jira_entities(
                     source_record_id=None,  # no stable cross-system ID from display name
                     run_id=run_id,
                 )
-                entities.append(e)
+                _append_entity(entities, e)
             except Exception as exc:
                 logger.warning("Jira assignee extraction failed for %s: %s", assignee_name, exc)
 
@@ -600,7 +624,7 @@ def _extract_jira_entities(
                     source_record_id=None,
                     run_id=run_id,
                 )
-                entities.append(e)
+                _append_entity(entities, e)
             except Exception as exc:
                 logger.warning("Jira reporter extraction failed for %s: %s", reporter_name, exc)
 
@@ -621,7 +645,7 @@ def _extract_jira_entities(
                         "sf_reference": ref.get("sf_reference"),
                     },
                 )
-                entities.append(e)
+                _append_entity(entities, e)
             except Exception as exc:
                 logger.warning("Jira cross-ref extraction failed for %s: %s", issue_key, exc)
 
@@ -658,7 +682,7 @@ def _extract_servicenow_entities(
                     "incident_count": ag.get("incident_count"),
                 },
             )
-            entities.append(e)
+            _append_entity(entities, e)
         except Exception as exc:
             logger.warning("SN team extraction failed for %s: %s", group_name, exc)
 
@@ -680,7 +704,7 @@ def _extract_servicenow_entities(
                 run_id=run_id,
                 metadata={"source": "servicenow_project"},
             )
-            entities.append(e)
+            _append_entity(entities, e)
         except Exception as exc:
             logger.warning("SN project extraction failed for %s: %s", project_name, exc)
 
@@ -699,7 +723,7 @@ def _extract_servicenow_entities(
                     run_id=run_id,
                     metadata={"source": "servicenow_incident_project"},
                 )
-                entities.append(e)
+                _append_entity(entities, e)
             except Exception as exc:
                 logger.warning(
                     "SN incident project extraction failed for %s: %s",
@@ -723,7 +747,7 @@ def _extract_servicenow_entities(
                         "priority": incident.get("priority"),
                     },
                 )
-                entities.append(e)
+                _append_entity(entities, e)
             except Exception as exc:
                 logger.warning("SN object extraction failed for %s: %s", inc_number, exc)
 
@@ -745,7 +769,7 @@ def _extract_servicenow_entities(
                     source_record_id=None,  # name-based only
                     run_id=run_id,
                 )
-                entities.append(e)
+                _append_entity(entities, e)
             except Exception as exc:
                 logger.warning("SN assigned_to extraction failed for %s: %s", assigned_name, exc)
 
@@ -767,7 +791,7 @@ def _extract_servicenow_entities(
                     source_record_id=None,
                     run_id=run_id,
                 )
-                entities.append(e)
+                _append_entity(entities, e)
             except Exception as exc:
                 logger.warning("SN caller_id extraction failed for %s: %s", caller_name, exc)
 
@@ -825,7 +849,7 @@ def _extract_catalog_system_entities(
                     run_id=run_id,
                     metadata={"source": collection_name, "connector_id": connector_id},
                 )
-                entities.append(e)
+                _append_entity(entities, e)
             except Exception as exc:
                 logger.warning("Catalog system extraction failed for %s: %s", display_name, exc)
 
@@ -864,7 +888,7 @@ def _extract_detector_entities(
                     run_id=run_id,
                     metadata={"connector_id": signal_source, "pack_id": pack_id},
                 )
-                entities.append(e)
+                _append_entity(entities, e)
             except Exception as exc:
                 logger.warning(
                     "System entity extraction failed for %s: %s", signal_source, exc
@@ -884,7 +908,7 @@ def _extract_detector_entities(
                     run_id=run_id,
                     metadata={"pack_id": pack_id, "detector_id": detector_id},
                 )
-                entities.append(e)
+                _append_entity(entities, e)
             except Exception as exc:
                 logger.warning(
                     "Process entity extraction failed for %s: %s", detector_id, exc
@@ -941,16 +965,40 @@ def _index_records_by_object_type(
       2. Typed records in a generic bucket (``records`` / ``objects`` /
          ``sample_records``) carrying ``attributes.type`` (Salesforce REST).
     The nCino nested bucket (``connector_data["ncino"]``) is scanned the same way.
-    Records are de-duplicated by object identity so a record reachable via two
-    conventions is not extracted twice.
+    Records are de-duplicated by stable source identifiers first, then by a
+    canonical JSON fingerprint. This prevents the same Salesforce record from
+    being extracted twice when it appears under both direct and typed buckets.
     """
     index: Dict[str, List[Dict[str, Any]]] = {t: [] for t in wanted_types}
-    seen: Dict[str, set[int]] = {t: set() for t in wanted_types}
+    seen: Dict[str, set[str]] = {t: set() for t in wanted_types}
+
+    def _record_dedup_key(obj_type: str, record: Dict[str, Any]) -> str:
+        stable_id = _first_record_str(
+            record,
+            (
+                "Id",
+                "id",
+                "sys_id",
+                "record_id",
+                "recordId",
+                "loan_id",
+                "portfolio_id",
+                "number",
+                "key",
+            ),
+        )
+        if stable_id:
+            return f"id:{obj_type}:{stable_id}"
+        try:
+            return f"json:{obj_type}:{json.dumps(record, sort_keys=True, default=str)}"
+        except TypeError:
+            return f"repr:{obj_type}:{repr(record)}"
 
     def _add(obj_type: Optional[str], record: Any) -> None:
         if obj_type in index and isinstance(record, dict):
-            if id(record) not in seen[obj_type]:
-                seen[obj_type].add(id(record))
+            dedup_key = _record_dedup_key(obj_type, record)
+            if dedup_key not in seen[obj_type]:
+                seen[obj_type].add(dedup_key)
                 index[obj_type].append(record)
 
     def _scan(container: Dict[str, Any]) -> None:
@@ -975,16 +1023,13 @@ def _index_records_by_object_type(
 def _overlay_emit(entities: List[Entity], *, label: str, **kwargs: Any) -> None:
     """Resolve+append one overlay entity, honoring the service-account filter.
 
-    A filtered service account raises _FilteredServiceAccount (already counted)
-    and is silently skipped. Any other resolver error is logged and swallowed —
-    overlay extraction is non-blocking, exactly like the default path.
+    A filtered service account returns None (already counted) and is silently
+    skipped. Any resolver error is logged and swallowed — overlay extraction is
+    non-blocking, exactly like the default path.
     """
     try:
         entity = resolve_or_create_entity(**kwargs)
-        if entity is not None:
-            entities.append(entity)
-    except _FilteredServiceAccount:
-        pass  # service account — recorded by the filter, not stored
+        _append_entity(entities, entity)
     except Exception as exc:
         logger.warning(
             "overlay %s extraction failed for %s: %s",

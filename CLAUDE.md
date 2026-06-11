@@ -40,6 +40,7 @@ Keep this file short and actionable. Prefer reading the relevant code and contra
 * `backend/app/entity_extractor.py`: Stage 2 knowledge graph orchestration. Non-blocking — extraction failures are logged and never break the run.
 * `backend/app/entity_resolution.py`: conservative entity resolution engine. Uses an N+1 lookup pattern for ambiguous rows; only confident matches are merged.
 * `backend/app/routes_entities.py`: `GET /api/runs/{runId}/entities` — analyst+ only. Owns `ensure_entities_table()` (startup-only schema creation).
+* `backend/app/graph_context_builder.py`: ENT-4 graph context builder — turns raw graph traversal rows into a ranked, capped `GraphContext` for LLM prompts. Hard caps (15 entities / 20 relationships) and deterministic ranking are not configurable per-run. Distinct from `graph_context.py` (the ENT-3 run-KV enrichment bridge) — do not conflate.
 * `backend/app/executive_report_engine.py`: executive report generation.
 * `backend/app/roadmap_engine.py`: roadmap build logic.
 * `backend/app/cross_system_linker.py`: cross-system signal linking across Salesforce/ServiceNow/Jira.
@@ -248,6 +249,7 @@ Smoke scripts are Bash scripts under `scripts/` and `backend/scripts/`; run them
 * Replay should re-serve persisted artifacts only. It must not call live ingestion or regenerate LLM output.
 * LLM enrichment is advisory post-processing. It must not mutate scoring fields such as impact, effort, tier, decision, or evidence IDs.
 * `OppEnrichment.relationships` is intentionally different from the other enrichment fields: it is read live from `entity_relationships` through `graph_query.py`, not from a run-scoped KV artifact. The graph is cross-run state, so later relationship upserts can change what a historical run's relationship view returns.
+* `OppEnrichment` also carries ENT-2 cross-system corroboration fields (`corroboration_sources`, `corroboration_label`, `triple_corroboration`, `corroboration_rule_ids`), populated from the stored opportunity record. See `backend/app/corroboration_engine.py` and `backend/discovery/packs/corroboration_rules.py`.
 * Pack selection is centralized in `backend/discovery/packs/pack_config.py`. Current packs: `service_cloud`, `ncino`, `strs_benefits`, `sqlserver_opsignal`, `github_engineering`.
 * nCino, STRS, and `github_engineering` packs have compliance guardrails. Do not suggest automated credit/benefit decisions or automated merge approvals, branch deletions, or code changes; keep humans responsible for final decisions.
 * Multi-tenancy is enforced via `middleware/tenancy.py`. Every request is scoped to an org; the default local org is `default`.

@@ -44,24 +44,42 @@ export default function CorroborationBadge({
   tripleCorroboration = false,
 }: CorroborationBadgeProps) {
   const list = Array.isArray(sources) ? sources.filter(Boolean) : [];
+  const labelText = typeof label === 'string' ? label.trim() : '';
 
   // No corroboration → render nothing (single-source findings stay clean).
   if (list.length === 0) {
+    if (labelText) {
+      return (
+        <span
+          data-testid="corroboration-badge"
+          data-variant="incomplete"
+          title={labelText}
+          className="inline-flex items-center gap-1 rounded-full border border-border bg-bg/30 px-2 py-0.5 text-[10px] font-semibold tracking-wide text-muted whitespace-nowrap"
+        >
+          <span aria-hidden="true" className="h-1.5 w-1.5 rounded-full bg-muted" />
+          Corroboration details unavailable
+        </span>
+      );
+    }
     return null;
   }
 
   const base =
-    'rounded-full border px-2 py-0.5 text-[10px] font-semibold tracking-wide whitespace-nowrap';
+    'inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-semibold tracking-wide whitespace-nowrap';
 
   // Gold pill — triple corroboration is the strongest signal.
   if (tripleCorroboration) {
+    const tripleTitle = labelText
+      ? `${labelText} - ${list.join(', ')}`
+      : `Triple corroboration: Salesforce + ServiceNow + Jira - ${list.join(', ')}`;
     return (
       <span
         data-testid="corroboration-badge"
         data-variant="triple"
-        title={`Triple corroboration — ${list.join(', ')}`}
+        title={tripleTitle}
         className={`${base} border-amber-400/60 bg-amber-400/15 text-amber-200`}
       >
+        <span aria-hidden="true" className="h-1.5 w-1.5 rounded-full bg-amber-300" />
         Triple corroboration
       </span>
     );
@@ -73,9 +91,10 @@ export default function CorroborationBadge({
       <span
         data-testid="corroboration-badge"
         data-variant="supporting"
-        title={label ?? `Supporting signal — ${list.join(', ')}`}
+        title={labelText || `Supporting signal — ${list.join(', ')}`}
         className={`${base} border-border bg-bg/30 text-muted`}
       >
+        <span aria-hidden="true" className="h-1.5 w-1.5 rounded-full bg-muted" />
         Supporting: Slack
       </span>
     );
@@ -84,14 +103,15 @@ export default function CorroborationBadge({
   // Green pill — corroborated by one or more systems.
   const count = list.length;
   const text =
-    count > 1 ? `Corroborated by ${count} systems` : `Corroborated by ${count} system`;
+    labelText || (count > 1 ? `Corroborated by ${count} systems` : `Corroborated by ${count} system`);
   return (
     <span
       data-testid="corroboration-badge"
       data-variant="corroborated"
-      title={label ? `${label} — ${list.join(', ')}` : `Corroborated by ${list.join(', ')}`}
+      title={labelText ? `${labelText} — ${list.join(', ')}` : `Corroborated by ${list.join(', ')}`}
       className={`${base} border-emerald-500/50 bg-emerald-500/15 text-emerald-300`}
     >
+      <span aria-hidden="true" className="h-1.5 w-1.5 rounded-full bg-emerald-300" />
       {text}
     </span>
   );

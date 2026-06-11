@@ -134,6 +134,7 @@ def build_org_context(sf_data: Dict, sn_data: Dict, jira_data: Dict) -> Dict[str
         },
     }
 
+
 def _ingest_github(org_id: str, run_id: str) -> Dict[str, Any]:
     """Sync wrapper around the async GitHub connector ingest (T1-S12).
 
@@ -613,11 +614,13 @@ def run(
             from backend.app.corroboration_engine import (
                 evaluate_corroboration,
                 apply_corroboration_confidence,
+                build_corroboration_run_data,
             )
         except ModuleNotFoundError:
             from app.corroboration_engine import (
                 evaluate_corroboration,
                 apply_corroboration_confidence,
+                build_corroboration_run_data,
             )
         _corroboration_available = True
     except Exception as _corr_imp_err:  # noqa: BLE001 — corroboration is optional.
@@ -664,29 +667,24 @@ def run(
             )
 
     # ── ENT-2: build the shared corroboration run_data once for this run ──
-    # Maps the already-extracted Jira/ServiceNow lending correlation
-    # (by_detector) into the corroboration engine's run_data contract. Each
-    # synthesized incident/issue is tagged with its detector_ids and the run
-    # timestamp (the correlation is computed from recent data, so it is in
-    # window). connected_systems drives COR-08 (single-source no elevation).
-    # This only ever ELEVATES confidence downstream — it never downgrades.
+    # Maps already-extracted Jira/ServiceNow correlation by detector and carries
+    # Slack/Confluence corroboration blocks through when an upstream connector
+    # payload provides them. connected_systems drives COR-08 (single-source no
+    # elevation). This only ever ELEVATES confidence downstream — it never
+    # downgrades.
     _run_ts_iso = _run_started_dt.isoformat()
     _corr_run_data: Dict[str, Any] = {"connected_systems": sorted(_systems)}
-    try:
-        _sn_incidents = [
-            {"detector_ids": [det], "state": "Open", "sys_created_on": _run_ts_iso}
-            for det, snippets in (sn_by_detector or {}).items()
-            for _ in (snippets or [])
-        ]
-        _jira_issues_corr = [
-            {"detector_ids": [det], "status": "Open", "created": _run_ts_iso}
-            for det, snippets in (jira_by_detector or {}).items()
-            for _ in (snippets or [])
-        ]
-        _corr_run_data["servicenow"] = {"incidents": _sn_incidents}
-        _corr_run_data["jira"] = {"issues": _jira_issues_corr}
-    except Exception as _corr_data_err:  # noqa: BLE001 — non-blocking.
-        logger.warning("ENT-2 corroboration run_data build failed (non-blocking): %s", _corr_data_err)
+    if _corroboration_available:
+        try:
+            _corr_run_data = build_corroboration_run_data(
+                systems=_systems,
+                sn_by_detector=sn_by_detector,
+                jira_by_detector=jira_by_detector,
+                run_timestamp_iso=_run_ts_iso,
+                source_payloads=[sf_data, sn_data, jira_data, github_data, db_data],
+            )
+        except Exception as _corr_data_err:  # noqa: BLE001 — non-blocking.
+            logger.warning("ENT-2 corroboration run_data build failed (non-blocking): %s", _corr_data_err)
 
     opportunities = []
     for dr in detector_results:

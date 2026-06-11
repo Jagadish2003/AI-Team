@@ -23,8 +23,10 @@ so overlay registrations never leak across tests or into other test modules.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import sqlite3
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Dict, List
@@ -178,6 +180,28 @@ class TestBaseOverlayDataclasses:
         assert overlay.stage_map["Intake"] == "application"
         assert overlay.referenced_object_names() == {"LLC_BI__Loan__c"}
 
+    def test_referenced_object_names_includes_all_rule_types(self):
+        from app.entity_overlays.base_overlay import (
+            EntityExtractionOverlay,
+            ObjectRule,
+            PersonFieldRule,
+            TeamFieldRule,
+        )
+
+        overlay = EntityExtractionOverlay(
+            org_id="all-names",
+            connector_id="salesforce",
+            person_fields=[PersonFieldRule("LLC_BI__Loan__c", "OwnerId")],
+            team_fields=[TeamFieldRule("LLC_BI__Team__c", "Team__c")],
+            object_rules=[ObjectRule("LLC_BI__Covenant__c", "object", "Name", "Covenant")],
+        )
+
+        assert overlay.referenced_object_names() == {
+            "LLC_BI__Loan__c",
+            "LLC_BI__Team__c",
+            "LLC_BI__Covenant__c",
+        }
+
     def test_overlay_defaults_are_empty_not_shared(self):
         """Default list/dict fields are independent per instance (no shared mutable default)."""
         from app.entity_overlays.base_overlay import EntityExtractionOverlay
@@ -270,6 +294,37 @@ class TestOverlayRegistry:
         with pytest.raises(TypeError):
             register_overlay({"org_id": "x"})
 
+    def test_register_rejects_invalid_service_account_regex(self):
+        from app.entity_overlays.base_overlay import EntityExtractionOverlay
+        from app.entity_overlays.overlay_registry import register_overlay
+
+        overlay = EntityExtractionOverlay(
+            org_id="bad-regex",
+            connector_id="salesforce",
+            service_account_patterns=[r"^[invalid"],
+        )
+
+        with pytest.raises(ValueError, match="Invalid service_account_patterns regex"):
+            register_overlay(overlay)
+
+    def test_startup_helper_logs_invalid_overlay_and_continues(self, caplog):
+        from app.entity_overlays.base_overlay import EntityExtractionOverlay
+        from app.entity_overlays.overlay_registry import (
+            get_overlay,
+            register_startup_overlay,
+        )
+
+        broken = EntityExtractionOverlay(
+            org_id="startup-bad",
+            connector_id="salesforce",
+            service_account_patterns=[r"^[invalid"],
+        )
+
+        caplog.set_level(logging.WARNING)
+        assert register_startup_overlay(broken) is False
+        assert get_overlay("startup-bad", "salesforce") is None
+        assert "entity overlay startup registration failed" in caplog.text
+
     def test_startup_sequence_callable_and_safe(self):
         """AC7 support: the startup registration hook runs without raising."""
         from app.entity_overlays.overlay_registry import register_startup_overlays
@@ -302,6 +357,20 @@ class TestNcinoCommonPatterns:
         from app.entity_overlays.ncino_overlay import NCINO_SERVICE_ACCOUNT_PATTERNS
 
         assert any("integration" in p for p in NCINO_SERVICE_ACCOUNT_PATTERNS)
+
+    def test_build_ncino_overlay_accepts_none_extras(self):
+        from app.entity_overlays.ncino_overlay import build_ncino_overlay
+
+        overlay = build_ncino_overlay(
+            "none-extras",
+            extra_person_fields=None,
+            extra_team_fields=None,
+            extra_object_rules=None,
+            extra_service_account_patterns=None,
+        )
+
+        assert overlay.org_id == "none-extras"
+        assert overlay.service_account_patterns
 
     def test_extracts_loan_owner_id_person(self):
         org, run = "ncino-owner", "run-ncino-owner"
@@ -627,6 +696,50 @@ class TestAC5ServiceAccountFilter:
         assert "API User" not in names
         assert "Genuine Approver" in names
 
+    def test_mixed_case_service_account_is_filtered(self):
+        """Service-account regex matching is case-insensitive for real Salesforce names."""
+        org, run = "ac5-case", "run-ac5-case"
+        self._register_with_patterns(org)
+        _extract(
+            org_id=org, run_id=run,
+            ingestor_data={"salesforce": {
+                "approval_processes": [
+                    {"process_name": "P", "approver_ids": ["Integration_User", "Real User"]}
+                ]
+            }},
+        )
+        names = {p["display_name"] for p in _db_by_type(org, run, "person")}
+        assert "Integration_User" not in names
+        assert "Real User" in names
+
+    def test_filtered_default_path_does_not_log_warning_or_increment_failure_count(
+        self,
+        caplog,
+    ):
+        """Regression: filtered service accounts are not extraction failures."""
+        org, run = "ac5-no-fail", "run-ac5-no-fail"
+        self._register_with_patterns(org)
+        caplog.set_level(logging.WARNING)
+
+        with patch("app.telemetry.record_event") as mock_record:
+            _extract(
+                org_id=org, run_id=run,
+                ingestor_data={"salesforce": {
+                    "approval_processes": [
+                        {"process_name": "P", "approver_ids": ["API User"]}
+                    ]
+                }},
+            )
+
+        payloads = [
+            c.args[1] for c in mock_record.call_args_list
+            if c.args and c.args[0] == "entity.extraction_completed"
+        ]
+        assert payloads
+        assert payloads[0]["filtered_service_account_count"] == 1
+        assert payloads[0]["failure_count"] == 0
+        assert "extraction failed" not in caplog.text.lower()
+
     def test_filtered_count_in_telemetry(self):
         org, run = "ac5-telemetry", "run-ac5-telemetry"
         self._register_with_patterns(org)
@@ -666,6 +779,100 @@ class TestAC5ServiceAccountFilter:
         # And the would-be service account IS stored when no overlay is active.
         names = {p["display_name"] for p in _db_by_type(org, run, "person")}
         assert "Integration User" in names
+
+
+class TestOverlayRecordDeduplication:
+    def test_same_record_under_direct_and_typed_bucket_is_extracted_once(self):
+        """Regression: duplicate payload shapes must not double-increment run_count."""
+        from app.entity_overlays.base_overlay import (
+            EntityExtractionOverlay,
+            PersonFieldRule,
+        )
+        from app.entity_overlays.overlay_registry import register_overlay
+
+        org, run = "dedupe-org", "run-dedupe"
+        register_overlay(
+            EntityExtractionOverlay(
+                org_id=org,
+                connector_id="salesforce",
+                person_fields=[
+                    PersonFieldRule(
+                        object_api_name="LLC_BI__Loan__c",
+                        field_api_name="CNB_Relationship_Manager__c",
+                        resolution_source="id",
+                    )
+                ],
+            )
+        )
+
+        direct_record = {
+            "Id": "a02same",
+            "CNB_Relationship_Manager__c": {"name": "Rita Vance", "id": "005rm0001"},
+        }
+        typed_record = {
+            "Id": "a02same",
+            "attributes": {"type": "LLC_BI__Loan__c"},
+            "CNB_Relationship_Manager__c": {"name": "Rita Vance", "id": "005rm0001"},
+        }
+
+        _extract(
+            org_id=org,
+            run_id=run,
+            ingestor_data={"salesforce": {
+                "LLC_BI__Loan__c": [direct_record],
+                "records": [typed_record],
+            }},
+        )
+
+        person = _person_by_canonical(org, "rita vance")
+        assert person is not None
+        assert person["run_count"] == 1
+
+
+class TestOverlayContextIsolation:
+    def test_concurrent_extracts_keep_service_account_context_per_thread(self):
+        from app.entity_overlays.base_overlay import EntityExtractionOverlay
+        from app.entity_overlays.overlay_registry import register_overlay
+
+        org_a, run_a = "thread-org-a", "run-thread-a"
+        org_b, run_b = "thread-org-b", "run-thread-b"
+        register_overlay(
+            EntityExtractionOverlay(
+                org_id=org_a,
+                connector_id="salesforce",
+                service_account_patterns=[r"^api user a$"],
+            )
+        )
+        register_overlay(
+            EntityExtractionOverlay(
+                org_id=org_b,
+                connector_id="salesforce",
+                service_account_patterns=[r"^api user b$"],
+            )
+        )
+
+        def _run(org: str, run: str) -> set[str]:
+            _extract(
+                org_id=org,
+                run_id=run,
+                ingestor_data={"salesforce": {
+                    "approval_processes": [
+                        {"process_name": "P", "approver_ids": ["API User A", "API User B"]}
+                    ]
+                }},
+            )
+            return {p["display_name"] for p in _db_by_type(org, run, "person")}
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            future_a = pool.submit(_run, org_a, run_a)
+            future_b = pool.submit(_run, org_b, run_b)
+            names_a = future_a.result()
+            names_b = future_b.result()
+
+        assert "API User A" not in names_a
+        assert "API User B" in names_a
+        assert "API User A" in names_b
+        assert "API User B" not in names_b
 
 
 # ===========================================================================
@@ -764,6 +971,8 @@ class TestAC8AuthoringDocs:
         text = self._doc_path().read_text(encoding="utf-8")
         lowered = text.lower()
         assert "register_overlay" in text
+        assert "example only" in lowered
+        assert "default extraction paths" in lowered
         assert "city national" in lowered  # example structure present
         # step-by-step process present
         assert "authoring process" in lowered or "step" in lowered

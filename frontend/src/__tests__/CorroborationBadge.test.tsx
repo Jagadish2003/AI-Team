@@ -20,7 +20,7 @@ describe('CorroborationBadge — ENT-2 (T5)', () => {
     const badge = screen.getByTestId('corroboration-badge');
     expect(badge).toHaveAttribute('data-variant', 'corroborated');
     expect(badge).toHaveClass('text-emerald-300');
-    expect(badge.textContent).toContain('Corroborated by 1 system');
+    expect(badge.textContent).toContain('Corroborated by ServiceNow incidents');
   });
 
   it('pluralises the system count', () => {
@@ -41,6 +41,9 @@ describe('CorroborationBadge — ENT-2 (T5)', () => {
     expect(badge).toHaveAttribute('data-variant', 'triple');
     expect(badge).toHaveClass('text-amber-200');
     expect(badge.textContent).toContain('Triple corroboration');
+    expect(badge.getAttribute('title')).toContain('Salesforce');
+    expect(badge.getAttribute('title')).toContain('ServiceNow');
+    expect(badge.getAttribute('title')).toContain('Jira');
   });
 
   it('renders a muted pill for Slack supporting only', () => {
@@ -62,5 +65,13 @@ describe('CorroborationBadge — ENT-2 (T5)', () => {
     render(<CorroborationBadge sources={['ServiceNow', 'Jira']} tripleCorroboration />);
     const badge = screen.getByTestId('corroboration-badge');
     expect(badge).toHaveAttribute('data-variant', 'triple');
+  });
+
+  it('shows an incomplete state when a label arrives without sources', () => {
+    render(<CorroborationBadge sources={[]} label="Corroborated by ServiceNow incidents" />);
+    const badge = screen.getByTestId('corroboration-badge');
+    expect(badge).toHaveAttribute('data-variant', 'incomplete');
+    expect(badge.textContent).toContain('Corroboration details unavailable');
+    expect(badge.getAttribute('title')).toContain('ServiceNow');
   });
 });
