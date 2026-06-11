@@ -41,6 +41,9 @@ describe('CorroborationBadge — ENT-2 (T5)', () => {
     expect(badge).toHaveAttribute('data-variant', 'triple');
     expect(badge).toHaveClass('text-amber-200');
     expect(badge.textContent).toContain('Triple corroboration');
+    expect(badge.getAttribute('title')).toContain('Salesforce');
+    expect(badge.getAttribute('title')).toContain('ServiceNow');
+    expect(badge.getAttribute('title')).toContain('Jira');
   });
 
   it('renders a muted pill for Slack supporting only', () => {

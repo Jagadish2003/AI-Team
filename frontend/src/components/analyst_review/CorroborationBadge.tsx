@@ -51,17 +51,21 @@ export default function CorroborationBadge({
   }
 
   const base =
-    'rounded-full border px-2 py-0.5 text-[10px] font-semibold tracking-wide whitespace-nowrap';
+    'inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-semibold tracking-wide whitespace-nowrap';
 
   // Gold pill — triple corroboration is the strongest signal.
   if (tripleCorroboration) {
+    const tripleTitle = label
+      ? `${label} - ${list.join(', ')}`
+      : `Triple corroboration: Salesforce + ServiceNow + Jira - ${list.join(', ')}`;
     return (
       <span
         data-testid="corroboration-badge"
         data-variant="triple"
-        title={`Triple corroboration — ${list.join(', ')}`}
+        title={tripleTitle}
         className={`${base} border-amber-400/60 bg-amber-400/15 text-amber-200`}
       >
+        <span aria-hidden="true" className="h-1.5 w-1.5 rounded-full bg-amber-300" />
         Triple corroboration
       </span>
     );
@@ -76,6 +80,7 @@ export default function CorroborationBadge({
         title={label ?? `Supporting signal — ${list.join(', ')}`}
         className={`${base} border-border bg-bg/30 text-muted`}
       >
+        <span aria-hidden="true" className="h-1.5 w-1.5 rounded-full bg-muted" />
         Supporting: Slack
       </span>
     );
@@ -92,6 +97,7 @@ export default function CorroborationBadge({
       title={label ? `${label} — ${list.join(', ')}` : `Corroborated by ${list.join(', ')}`}
       className={`${base} border-emerald-500/50 bg-emerald-500/15 text-emerald-300`}
     >
+      <span aria-hidden="true" className="h-1.5 w-1.5 rounded-full bg-emerald-300" />
       {text}
     </span>
   );

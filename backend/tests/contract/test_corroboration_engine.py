@@ -41,6 +41,10 @@ from discovery.packs.corroboration_rules import (
     TRIPLE_CORROBORATION_LABEL,
     is_elevating_rule,
 )
+from discovery.runner import (
+    _build_corroboration_run_data,
+    _normalise_connected_systems,
+)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -569,3 +573,123 @@ class TestResultShape:
         """Alternative slack shape: boolean flag instead of nested dict."""
         run_data = _run_data(slack={"escalation_pattern_fired": True})
         assert check_cor05_slack_escalation(run_data, RUN_TS) is True
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Runner wiring: Slack/Confluence blocks are carried into the shared engine
+# ──────────────────────────────────────────────────────────────────────────────
+
+class TestRunnerCorroborationWiring:
+    def test_normalises_combined_connector_ids_for_corroboration(self):
+        systems = _normalise_connected_systems(["salesforce_ncino", "jira_confluence"])
+        assert "salesforce" in systems
+        assert "jira" in systems
+        assert "confluence" in systems
+
+    def test_runner_data_builder_passes_confluence_gap_to_engine(self):
+        run_data = _build_corroboration_run_data(
+            systems={"salesforce", "confluence"},
+            sn_by_detector={},
+            jira_by_detector={},
+            run_timestamp_iso=RUN_TS.isoformat(),
+            source_payloads=[
+                {
+                    "corroboration": {
+                        "confluence": {"covenant_documentation_present": False},
+                    },
+                },
+            ],
+        )
+
+        result = evaluate_corroboration(
+            detector_id=COVENANT,
+            pack_id="ncino",
+            run_data=run_data,
+            run_timestamp=RUN_TS,
+            org_id="demo-org",
+        )
+
+        assert "COR-04" in result.rule_ids
+        assert "Confluence (no process documentation)" in result.corroboration_sources
+        assert result.elevated_confidence == "HIGH"
+
+    def test_runner_data_builder_passes_slack_only_without_elevation(self):
+        run_data = _build_corroboration_run_data(
+            systems={"salesforce", "slack"},
+            sn_by_detector={},
+            jira_by_detector={},
+            run_timestamp_iso=RUN_TS.isoformat(),
+            source_payloads=[
+                {
+                    "slack": {
+                        "escalation_pattern": {
+                            "fired": True,
+                            "timestamp": RUN_TS.isoformat(),
+                        },
+                    },
+                },
+            ],
+        )
+
+        result = evaluate_corroboration(
+            detector_id=COVENANT,
+            pack_id="ncino",
+            run_data=run_data,
+            run_timestamp=RUN_TS,
+            org_id="demo-org",
+        )
+
+        assert "COR-05" in result.rule_ids
+        assert "Slack (supporting only)" in result.corroboration_sources
+        assert result.elevated_confidence == "MEDIUM"
+        assert result.confidence_elevated is False
+
+    def test_runner_data_builder_combines_slack_with_servicenow_for_high(self):
+        run_data = _build_corroboration_run_data(
+            systems={"salesforce", "servicenow", "slack"},
+            sn_by_detector={COVENANT: ["incident evidence"]},
+            jira_by_detector={},
+            run_timestamp_iso=RUN_TS.isoformat(),
+            source_payloads=[
+                {
+                    "cross_system_evidence": {
+                        "slack": {"escalation_pattern_fired": True},
+                    },
+                },
+            ],
+        )
+
+        result = evaluate_corroboration(
+            detector_id=COVENANT,
+            pack_id="ncino",
+            run_data=run_data,
+            run_timestamp=RUN_TS,
+            org_id="demo-org",
+        )
+
+        assert "COR-01" in result.rule_ids
+        assert "COR-06" in result.rule_ids
+        assert "Slack (escalation pattern)" in result.corroboration_sources
+        assert result.elevated_confidence == "HIGH"
+
+    def test_runner_data_builder_supports_triple_corroboration(self):
+        run_data = _build_corroboration_run_data(
+            systems={"salesforce", "servicenow", "jira"},
+            sn_by_detector={COVENANT: ["incident evidence"]},
+            jira_by_detector={COVENANT: ["issue evidence"]},
+            run_timestamp_iso=RUN_TS.isoformat(),
+        )
+
+        result = evaluate_corroboration(
+            detector_id=COVENANT,
+            pack_id="ncino",
+            run_data=run_data,
+            run_timestamp=RUN_TS,
+            org_id="demo-org",
+        )
+
+        assert result.triple_corroboration is True
+        assert result.corroboration_label == TRIPLE_CORROBORATION_LABEL
+        assert "ServiceNow" in result.corroboration_sources
+        assert "Jira" in result.corroboration_sources
+        assert result.elevated_confidence == "HIGH"
