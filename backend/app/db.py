@@ -87,7 +87,34 @@ def get_run(run_id: str) -> Optional[Dict[str, Any]]:
     return None if not row else json.loads(row[0])
 
 
+def _current_request_org() -> Optional[str]:
+    """Return the current request's org_id, or None outside a request context.
+
+    Lazy import keeps db.py free of a hard module-level dependency on the
+    middleware layer (tenancy.py imports db lazily too, so a top-level import
+    here would risk a cycle). Background jobs and tests that write runs outside
+    a request simply get None.
+    """
+    try:
+        from app.middleware.tenancy import get_current_org_id_optional
+
+        return get_current_org_id_optional()
+    except Exception:
+        return None
+
+
 def upsert_run(run_id: str, payload: Dict[str, Any]) -> None:
+    # Multi-tenancy: stamp the owning org so run-scoped reads can enforce
+    # isolation (see require_run_exists). Preserve an org_id already present on
+    # the payload — status updates and materialization read-modify-write the
+    # full record, so the original owner is kept. Only stamp from the current
+    # request context on first write (creation). Writes with no existing org_id
+    # AND no request context (background jobs) leave the run untagged, which
+    # reads treat as legacy/global.
+    if not payload.get("org_id"):
+        org_id = _current_request_org()
+        if org_id is not None:
+            payload = {**payload, "org_id": org_id}
     con = connect()
     cur = con.cursor()
     cur.execute(
@@ -127,6 +154,14 @@ def next_run_id() -> str:
 def require_run_exists(run_id: str) -> Dict[str, Any]:
     r = get_run(run_id)
     if not r:
+        raise HTTPException(status_code=404, detail="run not found")
+    # Multi-tenancy: a run tagged with an org_id is visible only to that org.
+    # Cross-org access is denied as 404 — indistinguishable from not-found, the
+    # same silent-deny used by tenancy_get_one. Untagged legacy runs (no org_id)
+    # and reads outside a request context (background jobs) stay visible.
+    org_id = _current_request_org()
+    run_org = r.get("org_id")
+    if org_id is not None and run_org is not None and run_org != org_id:
         raise HTTPException(status_code=404, detail="run not found")
     return r
 
@@ -367,3 +402,63 @@ def tenancy_get_connectors(org_id: str) -> List[Dict[str, Any]]:
 def tenancy_get_runs(org_id: str) -> List[Dict[str, Any]]:
     """Returns runs for org_id only. Never cross-org."""
     return _tenancy_filter("runs", org_id)
+
+
+# ---------------------------------------------------------------------------
+# Org-scoped connector state (workspace isolation)
+# ---------------------------------------------------------------------------
+# The `connectors` table holds a SHARED catalog (seed rows with no org_id,
+# status "disconnected") PLUS per-org connection state. Per-org state is stored
+# under a namespaced primary key f"{org_id}::{connector_id}" with org_id tagged
+# in the payload, so connecting / configuring / declaring products in one org
+# never mutates the shared catalog or another org's state.
+#
+# Reads merge the catalog with the current org's overrides (override wins). This
+# replaces the old model where connect mutated the single global connector row,
+# which leaked connection state across every org (a fresh org saw another org's
+# connectors as already connected).
+# ---------------------------------------------------------------------------
+
+_ORG_CONNECTOR_SEP = "::"
+
+
+def _connector_catalog() -> Dict[str, Dict[str, Any]]:
+    """Shared catalog rows (no org_id), keyed by connector id."""
+    return {
+        r["id"]: r
+        for r in get_all("connectors")
+        if "id" in r and not r.get("org_id")
+    }
+
+
+def _org_connector_overrides(org_id: str) -> Dict[str, Dict[str, Any]]:
+    """Per-org connector rows for org_id, keyed by connector id."""
+    return {
+        r["id"]: r
+        for r in get_all("connectors")
+        if "id" in r and r.get("org_id") == org_id
+    }
+
+
+def org_connectors_list(org_id: str) -> List[Dict[str, Any]]:
+    """All connectors visible to org_id: catalog defaults overlaid with this
+    org's own connection state. Catalog ordering is preserved."""
+    merged = _connector_catalog()
+    merged.update(_org_connector_overrides(org_id))
+    return list(merged.values())
+
+
+def org_connector_get(org_id: str, connector_id: str) -> Optional[Dict[str, Any]]:
+    """This org's connector record if it has one, else the catalog template.
+    Returns None only when the connector id is unknown entirely."""
+    row = get_one("connectors", f"{org_id}{_ORG_CONNECTOR_SEP}{connector_id}")
+    if row is not None:
+        return row
+    return get_one("connectors", connector_id)
+
+
+def org_connector_set(org_id: str, connector_id: str, payload: Dict[str, Any]) -> None:
+    """Persist this org's connector state to its namespaced row, tagging org_id.
+    Never touches the shared catalog row or another org's row."""
+    record = {**payload, "id": connector_id, "org_id": org_id}
+    upsert("connectors", f"{org_id}{_ORG_CONNECTOR_SEP}{connector_id}", record)

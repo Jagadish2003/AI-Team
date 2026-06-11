@@ -42,8 +42,16 @@ def auth():
     return {"Authorization": "Bearer dev-token-change-me"}
 
 def _set_sf_status(status: str):
-    """Helper: set Salesforce connector status for test."""
-    connector = db.get_one("connectors", "salesforce")
+    """Helper: set Salesforce connector status for the dev request org.
+
+    Connection state is per-org now (the route reads db.org_connector_get for
+    the request's org, which for the dev token is "default"). Write to that same
+    per-org seam so the route sees what the test sets — writing the shared
+    catalog row would be shadowed by any per-org override left by an earlier
+    test in the session.
+    """
+    org_id = "default"
+    connector = db.org_connector_get(org_id, "salesforce")
     if not connector:
         connector = {
             "id": "salesforce", "name": "Salesforce",
@@ -53,8 +61,8 @@ def _set_sf_status(status: str):
             "reads": [], "signalStrength": 0, "category": "CRM",
         }
     else:
-        connector["status"] = status
-    db.upsert("connectors", "salesforce", connector)
+        connector = {**connector, "status": status}
+    db.org_connector_set(org_id, "salesforce", connector)
 
 
 class TestPatchSalesforceProducts:

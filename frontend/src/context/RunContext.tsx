@@ -7,6 +7,8 @@ import React, {
   useState,
 } from "react";
 import { useSearchParams } from "react-router-dom";
+import { authHeaderForToken } from "../lib/apiClient";
+import { useAuthOptional } from "./AuthContext";
 import { cleanRunId, isCanonicalRunId } from "../utils/runIds";
 
 type RunContextValue = {
@@ -19,21 +21,23 @@ const RunContext = createContext<RunContextValue | null>(null);
 
 const LS_KEY = "agentiq_run_id";
 const BASE_URL = (import.meta.env.VITE_API_BASE_URL as string | undefined) ?? "http://localhost:8000";
-const TOKEN = (import.meta.env.VITE_DEV_JWT as string | undefined) ?? "dev-token-change-me";
-const ORG_ID_HEADER = (import.meta.env.VITE_ORG_ID as string | undefined)?.trim();
 
-function authHeaders(): Record<string, string> {
-  return {
-    Authorization: `Bearer ${TOKEN}`,
-    ...(ORG_ID_HEADER ? { "X-Org-Id": ORG_ID_HEADER } : {}),
-  };
+interface RunSummary {
+  id: string;
+  status?: string | null;
+  startedAt?: string | null;
 }
 
-async function validateRunId(id: string): Promise<boolean> {
+async function validateRunId(id: string, token: string | null): Promise<boolean> {
   if (!isCanonicalRunId(id)) return false;
   try {
+    // Sign with the in-session JWT so the run is validated against THIS user's
+    // org. A run owned by another org returns 404 → not valid here, which
+    // correctly drops a stale cross-org runId from the URL/localStorage. Only a
+    // definitive 404 invalidates; transient errors (5xx / auth-not-ready / a
+    // network blip) keep the run so it isn't dropped on a hiccup.
     const res = await fetch(`${BASE_URL}/api/runs/${id}`, {
-      headers: authHeaders(),
+      headers: authHeaderForToken(token),
     });
     if (res.ok) return true;
     if (res.status === 404) return false;
@@ -43,16 +47,19 @@ async function validateRunId(id: string): Promise<boolean> {
   }
 }
 
-async function fetchLatestRunId(): Promise<string | null> {
+/** Most recent run for the caller's org, or null. The backend list is org-
+ * scoped and newest-first, so any member of the org (and the creator after a
+ * logout that wiped the in-memory token) can re-find the workspace's run. */
+async function fetchLatestOrgRunId(token: string | null): Promise<string | null> {
   try {
-    const res = await fetch(`${BASE_URL}/api/runs/latest`, {
-      headers: authHeaders(),
+    const res = await fetch(`${BASE_URL}/api/runs`, {
+      headers: authHeaderForToken(token),
     });
-    if (res.status === 404) return null;
     if (!res.ok) return null;
-    const data = await res.json();
-    const latestId = cleanRunId(data?.id ?? data?.runId);
-    return latestId && isCanonicalRunId(latestId) ? latestId : null;
+    const runs = (await res.json()) as RunSummary[];
+    if (!Array.isArray(runs)) return null;
+    const latest = runs.find((r) => r && isCanonicalRunId(r.id));
+    return latest ? latest.id : null;
   } catch {
     return null;
   }
@@ -62,9 +69,24 @@ export function RunProvider({ children }: { children: React.ReactNode }) {
   const [searchParams, setSearchParams] = useSearchParams();
   const urlRunId = searchParams.get("runId");
   const [runId, _setRunId] = useState<string | null>(null);
+  // Use OUR own in-session token, not apiClient's module token: RunProvider is a
+  // child of AuthProvider, so this effect runs before AuthProvider syncs the
+  // module token — reading it here would race. token from context is current.
+  const auth = useAuthOptional();
+  const token = auth?.token ?? null;
 
   useEffect(() => {
     let cancelled = false;
+
+    // Logged out: nothing to resolve. Leave localStorage intact so the run is
+    // recoverable after re-login (and don't 404-clear it with a dev token).
+    if (!token) {
+      _setRunId(null);
+      return () => {
+        cancelled = true;
+      };
+    }
+
     const fromUrl = cleanRunId(urlRunId);
     const stored = (() => {
       try {
@@ -76,10 +98,12 @@ export function RunProvider({ children }: { children: React.ReactNode }) {
     const fromLs = cleanRunId(stored);
     const candidate = fromUrl ?? fromLs;
 
-    const clearStoredRunId = () => {
-      _setRunId(null);
+    const setActiveRunId = (id: string | null) => {
+      if (cancelled) return;
+      _setRunId(id);
       try {
-        localStorage.removeItem(LS_KEY);
+        if (id) localStorage.setItem(LS_KEY, id);
+        else localStorage.removeItem(LS_KEY);
       } catch {}
     };
 
@@ -91,68 +115,43 @@ export function RunProvider({ children }: { children: React.ReactNode }) {
       }, { replace: true });
     };
 
-    const applyRunId = (nextId: string) => {
-      _setRunId(nextId);
-      try {
-        localStorage.setItem(LS_KEY, nextId);
-      } catch {}
-      setSearchParams((prev) => {
-        if (prev.get("runId") === nextId) return prev;
-        const next = new URLSearchParams(prev);
-        next.set("runId", nextId);
-        return next;
-      }, { replace: true });
-    };
-
-    const restoreLatestRun = async () => {
-      const latestId = await fetchLatestRunId();
+    // No usable candidate → fall back to this org's most recent run so any
+    // member of the org sees the active run (and the creator sees it again
+    // after logout). Auto-selection updates state + localStorage but NOT the
+    // URL, to avoid stamping ?runId= onto every page.
+    const selectLatestForOrg = async () => {
+      const latest = await fetchLatestOrgRunId(token);
       if (cancelled) return;
-      if (latestId) {
-        applyRunId(latestId);
-      } else {
-        _setRunId(null);
-      }
+      setActiveRunId(latest);
     };
 
-    if (!candidate) {
-      void restoreLatestRun();
+    if (!candidate || !isCanonicalRunId(candidate)) {
+      if (candidate) {
+        // Malformed stored/url value — drop it.
+        if (fromUrl) clearUrlRunId();
+      }
+      void selectLatestForOrg();
       return () => {
         cancelled = true;
       };
     }
 
-    if (!isCanonicalRunId(candidate)) {
-      clearStoredRunId();
-      if (fromUrl) clearUrlRunId();
-      void restoreLatestRun();
-      return () => {
-        cancelled = true;
-      };
-    }
-
-    void validateRunId(candidate).then((valid) => {
+    validateRunId(candidate, token).then((valid) => {
       if (cancelled) return;
       if (valid) {
-        applyRunId(candidate);
-        return;
+        setActiveRunId(candidate);
+      } else {
+        // Stale or belongs to another org — drop it and fall back to this
+        // org's latest run instead of leaving the user with nothing.
+        if (fromUrl) clearUrlRunId();
+        void selectLatestForOrg();
       }
-
-      clearStoredRunId();
-      if (fromUrl) clearUrlRunId();
-      fetchLatestRunId().then((latestId) => {
-        if (cancelled) return;
-        if (latestId) {
-          applyRunId(latestId);
-        } else {
-          clearStoredRunId();
-        }
-      });
     });
 
     return () => {
       cancelled = true;
     };
-  }, [urlRunId, setSearchParams]);
+  }, [urlRunId, setSearchParams, token]);
 
   const setRunId = useCallback(
     (id: string | null) => {

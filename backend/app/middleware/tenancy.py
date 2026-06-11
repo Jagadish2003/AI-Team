@@ -24,8 +24,11 @@ from __future__ import annotations
 
 import logging
 import os
+import time
 from contextvars import ContextVar
 from typing import Callable
+
+import jwt as _pyjwt
 
 from fastapi import FastAPI, Request, Response
 from fastapi.responses import JSONResponse
@@ -56,6 +59,41 @@ def _bearer_token(request: Request) -> str | None:
     return None
 
 
+_BLOCKLIST_PREFIX = "auth_blocklist"
+
+
+def _jti_is_revoked(token: str) -> bool:
+    """Return True if the JWT's jti is in the logout blocklist (AC9).
+
+    Decodes without signature verification to extract jti — the route-level
+    dependency owns full signature/expiry verification. Expired or malformed
+    tokens that aren't real JWTs simply return False so dev static tokens
+    continue to work unchanged.
+    """
+    try:
+        payload = _pyjwt.decode(
+            token,
+            options={"verify_signature": False, "verify_exp": False},
+            algorithms=["HS256"],
+        )
+    except Exception:
+        return False
+
+    jti = payload.get("jti")
+    if not jti:
+        return False
+
+    from app import db
+
+    entry = db.kv_get(f"{_BLOCKLIST_PREFIX}:{jti}")
+    if not entry:
+        return False
+    exp = entry.get("exp")
+    if exp is not None and int(exp) <= int(time.time()):
+        return False  # blocklist entry itself has expired
+    return True
+
+
 def _jwt_org_id(token: str | None) -> str | None:
     """Return the org_id claim carried by the JWT, or None if it carries none.
 
@@ -70,7 +108,20 @@ def _jwt_org_id(token: str | None) -> str | None:
     dev_jwt = os.getenv("DEV_JWT", "dev-token-change-me")
     if token == dev_jwt:
         return os.getenv("DEV_JWT_ORG") or None
-    return None
+    # AUTH-1 JWTs carry the workspace in their org_id claim. Decoded without
+    # signature verification (require_auth does the real verification before the
+    # route runs); a forged org claim still fails require_auth, so the request is
+    # rejected even though org context was set. Non-JWT static tokens (viewer/
+    # analyst/admin) aren't decodable and fall through to None unchanged.
+    try:
+        payload = _pyjwt.decode(
+            token,
+            options={"verify_signature": False, "verify_exp": False},
+            algorithms=["HS256"],
+        )
+    except Exception:
+        return None
+    return payload.get("org_id") or None
 
 
 # ---------------------------------------------------------------------------
@@ -124,7 +175,14 @@ class TenancyMiddleware(BaseHTTPMiddleware):
     """
 
     async def dispatch(self, request: Request, call_next: Callable) -> Response:
-        jwt_org_id = _jwt_org_id(_bearer_token(request))
+        raw_token = _bearer_token(request)
+
+        # AC9: reject any request whose JWT jti has been added to the logout
+        # blocklist. Only applies when a bearer token is present.
+        if raw_token and _jti_is_revoked(raw_token):
+            return JSONResponse(status_code=401, content={"detail": "Token has been revoked"})
+
+        jwt_org_id = _jwt_org_id(raw_token)
 
         x_org_id = request.headers.get("X-Org-Id")
         if x_org_id is not None:

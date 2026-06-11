@@ -41,7 +41,8 @@ from typing import Any, Dict, List
 from fastapi import Depends, FastAPI, HTTPException
 from pydantic import BaseModel
 
-from .db import get_one, upsert
+from .db import org_connector_get, org_connector_set
+from .middleware.tenancy import get_current_org_id
 from .security import require_auth
 from .rbac import require_role
 
@@ -127,7 +128,8 @@ def register_salesforce_products_routes(app: FastAPI) -> None:
         Idempotent — calling twice with the same products overwrites with
         the same values. Calling with empty list clears the declaration.
         """
-        connector = get_one("connectors", "salesforce")
+        org_id = get_current_org_id()
+        connector = org_connector_get(org_id, "salesforce")
         if not connector:
             raise HTTPException(
                 status_code=404,
@@ -149,9 +151,9 @@ def register_salesforce_products_routes(app: FastAPI) -> None:
         validated = [p for p in body.products if p in SALESFORCE_PRODUCT_IDS]
         labels    = [SALESFORCE_PRODUCT_LABELS[p] for p in validated]
 
-        # Persist to connector record
+        # Persist to THIS org's connector record (never the shared catalog).
         connector["products"] = validated
-        upsert("connectors", "salesforce", connector)
+        org_connector_set(org_id, "salesforce", connector)
 
         return SalesforceProductsResponse(
             products=validated,
@@ -174,7 +176,7 @@ def register_salesforce_products_routes(app: FastAPI) -> None:
         Returns empty products list if no declaration has been made.
         Returns 404 if Salesforce connector not found.
         """
-        connector = get_one("connectors", "salesforce")
+        connector = org_connector_get(get_current_org_id(), "salesforce")
         if not connector:
             raise HTTPException(
                 status_code=404,

@@ -8,9 +8,15 @@ builder) simultaneously.
 inferred and confidence are load-bearing columns that drive graph query
 filtering and LLM prompt construction in downstream sprints.
 
-Revision ID: 0004
-Revises: 0003
+Revision ID: 0006
+Revises: 0005
 Create Date: 2026-06-09
+
+Merge note: originally authored as "0004" off "0003" on the dev branch. The
+config_pack branch independently added "0004" (users/login_attempts) and "0005"
+(orgs) off the same "0003" parent. To keep a single linear history after the
+merge, this migration is re-chained to run last (0003 → 0004 users → 0005 orgs
+→ 0006 entity_relationships). Table contents are unchanged and order-independent.
 """
 import os
 import sys
@@ -18,8 +24,8 @@ from typing import Sequence, Union
 
 from alembic import op
 
-revision: str = "0004"
-down_revision: Union[str, None] = "0003"
+revision: str = "0006"
+down_revision: Union[str, None] = "0005"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
