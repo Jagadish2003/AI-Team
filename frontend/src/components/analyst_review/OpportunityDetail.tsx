@@ -8,6 +8,7 @@ import {
   fetchOppEnrichment,
   OppEnrichment,
   type EntitySummary,
+  type CausalHypothesisSummary,
 } from "../../api/enrichmentApi";
 import { useRunContext } from "../../context/RunContext";
 import BaselineContextPanel from "./BaselineContextPanel";
@@ -270,6 +271,140 @@ export function EntityTracePanel({
   );
 }
 
+// ── Causal hypothesis panel (ENT-6 / T3-S16-A T9) ───────────────────────────
+
+// Maps the backend preliminary_reason string produced by T5 quality gates to
+// the Section 5 banner copy. The reason string format is:
+//   gate1_insufficient_run_count: {X} of {N} runs completed
+//   gate2_unresolved_entities: {N} entities require resolution
+//   gate3_inferred_primary_step: step {N}
+function parsePreliminaryBanner(reason: string | null): string {
+  if (!reason) return "Preliminary — analyst review required.";
+
+  const gate1 = /^gate1_insufficient_run_count:\s*(\d+)\s+of\s+(\d+)/.exec(reason);
+  if (gate1) {
+    return `Preliminary — analyst review required. Baseline context is still accumulating (${gate1[1]} of ${gate1[2]} runs completed).`;
+  }
+
+  const gate2 = /^gate2_unresolved_entities:\s*(\d+)/.exec(reason);
+  if (gate2) {
+    return `Preliminary — ${gate2[1]} entities require resolution before this finding is confirmed.`;
+  }
+
+  if (reason.startsWith("gate3_inferred_primary_step")) {
+    return "Preliminary — this causal chain includes inferred relationships that have not yet been validated.";
+  }
+
+  return "Preliminary — analyst review required.";
+}
+
+// Splits a cause-chain step into its [inferred:…] prefix label (if any) and
+// clean body text. The backend T4 parser tags inferred steps with the prefix
+// "[inferred: confidence=X]" (matches the causal prompt spec in Section 2b).
+function parseCausalStep(step: string): { inferredLabel: string | null; text: string } {
+  const match = /^\s*\[inferred(?::[^\]]*)?\]\s*/i.exec(step);
+  if (!match) return { inferredLabel: null, text: step };
+  return { inferredLabel: "[inferred]", text: step.slice(match[0].length) };
+}
+
+export function CausalHypothesisPanel({
+  causal_hypothesis,
+}: {
+  causal_hypothesis: CausalHypothesisSummary | null | undefined;
+}) {
+  if (!causal_hypothesis) return null;
+
+  const {
+    cause_chain,
+    falsifiability_condition,
+    confidence,
+    preliminary,
+    preliminary_reason,
+  } = causal_hypothesis;
+
+  const bannerText = preliminary ? parsePreliminaryBanner(preliminary_reason) : null;
+  const confidencePct = Number.isFinite(confidence)
+    ? `${Math.round(confidence * 100)}%`
+    : null;
+
+  return (
+    <div data-testid="causal-hypothesis-panel">
+      {/* Header */}
+      <div className="mb-2 flex items-center justify-between gap-3">
+        <span className="text-xs font-semibold text-text">Causal Hypothesis</span>
+        {confidencePct && (
+          <span
+            data-testid="causal-confidence-badge"
+            className="shrink-0 rounded border border-border/70 px-1.5 py-0.5 text-[11px] leading-tight text-muted"
+          >
+            {confidencePct}
+          </span>
+        )}
+      </div>
+
+      <div className="rounded-lg border border-border bg-bg/30 p-3 space-y-3">
+        {/* Amber preliminary banner — only when gates have not all cleared */}
+        {preliminary && bannerText && (
+          <div
+            data-testid="causal-preliminary-banner"
+            role="status"
+            className="rounded border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs leading-relaxed text-amber-700"
+          >
+            {bannerText}
+          </div>
+        )}
+
+        {/* Numbered cause chain */}
+        {cause_chain && cause_chain.length > 0 && (
+          <ol className="space-y-1.5 list-none">
+            {cause_chain.map((step, i) => {
+              const { inferredLabel, text } = parseCausalStep(step);
+              return (
+                <li
+                  key={i}
+                  data-testid={`causal-step-${i}`}
+                  className={`flex items-start gap-2 text-xs ${
+                    preliminary ? "text-muted opacity-75" : "text-text"
+                  }`}
+                >
+                  <span className="shrink-0 font-semibold text-muted w-4 text-right">
+                    {i + 1}.
+                  </span>
+                  {inferredLabel && (
+                    <span
+                      data-testid={`causal-inferred-label-${i}`}
+                      className="shrink-0 rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase leading-tight tracking-wide border border-amber-500/40 bg-amber-500/10 text-amber-600"
+                    >
+                      inferred
+                    </span>
+                  )}
+                  <span className="leading-relaxed">{text}</span>
+                </li>
+              );
+            })}
+          </ol>
+        )}
+
+        {/* Falsifiability condition — always muted italic; confirmed hypothesis
+            prefixes with the mandatory "How to disprove this:" label */}
+        {falsifiability_condition && (
+          <p
+            data-testid="causal-falsifiability"
+            className="text-xs italic text-muted leading-relaxed"
+          >
+            {!preliminary && (
+              <span className="not-italic font-semibold text-muted">
+                How to disprove this:{" "}
+              </span>
+            )}
+            {falsifiability_condition}
+          </p>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function EvidenceIdsBox({ ids }: { ids: string[] }) {
   const hasOverflow = ids.length > 4;
 
@@ -444,6 +579,9 @@ export default function OpportunityDetail({
 
         {/* T3-S12-A: Entity trace shown after temporal baseline context. */}
         <EntityTracePanel entities={enrichment?.entities} />
+
+        {/* ENT-6/T9: Causal hypothesis evidence trace — after entity trace. */}
+        <CausalHypothesisPanel causal_hypothesis={enrichment?.causal_hypothesis} />
 
         {/* T41-7: Required Permissions section removed from Opportunity Review.
             Permissions are now shown on the Agent Blueprint screen in
