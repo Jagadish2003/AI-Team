@@ -344,7 +344,7 @@ def _fetch_spread_periods(client: NcinoClient) -> List[Dict[str, Any]]:
     rows = client.query(f"""
         SELECT Id,
                LLC_BI__Analyst__c,
-               LLC_BI__Is_Locked__c, LLC_BI__Is_Annual__c,
+               IsLocked__c, LLC_BI__Is_Annual__c,
                CreatedDate, LastModifiedDate,
                CreatedById
         FROM LLC_BI__Spread_Statement_Period__c
@@ -642,12 +642,13 @@ def _build_spreading_metrics(
     analyst_map: Dict[str, int] = {}
 
     for sp in spread_periods:
-        is_locked = bool(sp.get("LLC_BI__Is_Locked__c", True))
+        is_locked = bool(sp.get("IsLocked__c", True))
         if is_locked:
             continue
         created = _parse_date(sp.get("CreatedDate"))
         days_open = _days_since(created) or 0
-        if days_open < 14:
+        # if days_open < 14: - Change to this on 24th June 2026.
+        if days_open < 1:
             continue
 
         spread_id = sp.get("LLC_BI__Spread__c", "")

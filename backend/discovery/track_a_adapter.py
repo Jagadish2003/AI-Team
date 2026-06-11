@@ -291,6 +291,13 @@ def to_track_a_opportunities(
             "evidenceIds": opp.get("evidenceIds", []),
             "requiredPermissions": meta.get("required_permissions", []),
             "override":    _override_default(),
+            # ENT-2: carry cross-system corroboration forward to the stored opp
+            # so /api/runs/{id}/opportunities and the enrichment route surface
+            # it. Safe defaults keep single-source opportunities clean.
+            "corroboration_sources":  opp.get("corroboration_sources", []),
+            "corroboration_label":    opp.get("corroboration_label"),
+            "triple_corroboration":   bool(opp.get("triple_corroboration", False)),
+            "corroboration_rule_ids": opp.get("corroboration_rule_ids", []),
             # Keep calibration fields under a debug namespace (not breaking Track A)
             "_debug": {
                 "detector_id":   did,

@@ -54,6 +54,12 @@ export interface OppEnrichment {
   // unless INFERRED_RELATIONSHIPS_ENABLED is set on the backend, in which case
   // inferred edges (inferred=true) are also included.
   relationships: RelationshipSummary[];
+  // ENT-2 — Cross-System Confidence Elevation. snake_case to match backend JSON.
+  // Safe defaults from the backend: empty arrays / false / null.
+  corroboration_sources?: string[];
+  corroboration_label?: string | null;
+  triple_corroboration?: boolean;
+  corroboration_rule_ids?: string[];
 }
 
 export interface RunEnrichment {

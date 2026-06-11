@@ -91,7 +91,7 @@
       "Id": "period_001",
       "LLC_BI__Spread__c": "spread_001",
       "LLC_BI__Analyst__c": "user_analyst_001",
-      "LLC_BI__Is_Locked__c": false,
+      "IsLocked__c": false,
       "LLC_BI__Is_Annual__c": true,
       "CreatedDate": "2026-04-01T09:00:00Z",
       "LastModifiedDate": "2026-04-15T09:00:00Z",

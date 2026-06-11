@@ -1,6 +1,7 @@
 import React, { useMemo, useRef, useState } from 'react';
 import { OpportunityCandidate, OpportunityTier } from '../../types/analystReview';
 import { Search, ChevronRight, ChevronDown } from 'lucide-react';
+import CorroborationBadge from './CorroborationBadge';
 
 type SortMode = 'Impact High→Low' | 'Effort Low→High' | 'Confidence High→Low';
 type TierFilter = 'All' | OpportunityTier;
@@ -179,8 +180,13 @@ export default function OpportunityList({
               {o.category} · {o.tier}
               </div>
               </div>
-              <div className="shrink-0">
+              <div className="shrink-0 flex items-center gap-1.5">
               <ConfidenceBadge value={o.confidence} />
+              <CorroborationBadge
+              sources={o.corroboration_sources}
+              label={o.corroboration_label}
+              tripleCorroboration={o.triple_corroboration}
+              />
               </div>
               </div>
               <div className="mt-2 flex items-center gap-2">
