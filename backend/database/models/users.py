@@ -20,7 +20,8 @@ POC constraint — global email uniqueness (design debt):
     workspaces. When multi-org identity is built, the unique constraint moves
     from `email` to `(email, org_id)`, the table gains a separate identity
     anchor, and idx_users_email_unique is migrated. Do not let this fossilise.
-    Tracked as design debt in backend/app/auth/AUTH1_TECH_DEBT.md (issue #12).
+    Tracked as design debt in deployment/README.md, "AUTH-1 — Tracked Design
+    Debt & Deferred Hardening" (issue #12).
 
 invite_token_hash / invite_token_expires_at — RESERVED, currently UNUSED (issue #11):
     The live invite flow (routes_auth.py) is the CANONICAL store for invite
