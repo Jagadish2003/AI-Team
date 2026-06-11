@@ -74,7 +74,7 @@ function renderFocusCard(
 }
 
 describe("SB-3 v1.1 FocusCard acceptance criteria", () => {
-  it("renders the selected state with emerald styling and no accent selection tokens", () => {
+  it("renders the selected state with the theme accent styling", () => {
     const { radio } = renderFocusCard(cards[0], { selected: true });
     const icon = radio.querySelector("i");
 
@@ -82,16 +82,15 @@ describe("SB-3 v1.1 FocusCard acceptance criteria", () => {
     expect(radio).toHaveAttribute("tabindex", "0");
     expect(radio).toHaveClass(
       "rounded-lg",
-      "border-emerald-500",
-      "bg-emerald-500/[0.08]",
-      "focus:ring-emerald-500/50",
+      "border-accent/60",
+      "bg-accent/15",
+      "focus-visible:ring-accent/35",
     );
-    expect(radio.className).not.toContain("border-accent");
     expect(radio.className).not.toContain("bg-panel2");
 
-    expect(icon).toHaveClass("text-emerald-500");
-    expect(screen.getByText(cards[0].title)).toHaveClass("text-emerald-500");
-    expect(screen.getByText(cards[0].subtext)).toHaveClass("text-emerald-500/80");
+    expect(icon).toHaveClass("text-accent");
+    expect(screen.getByText(cards[0].title)).toHaveClass("text-accent");
+    expect(screen.getByText(cards[0].subtext)).toHaveClass("text-accent");
   });
 
   it("renders the default and hover state with neutral panel styling", () => {
@@ -102,11 +101,11 @@ describe("SB-3 v1.1 FocusCard acceptance criteria", () => {
     expect(radio).toHaveClass(
       "border-border",
       "bg-panel",
-      "hover:border-emerald-500/40",
+      "hover:border-accent/50",
+      "hover:bg-accent/5",
       "transition-colors",
       "duration-150",
     );
-    expect(radio.className).not.toContain("hover:border-accent");
 
     expect(icon).toHaveClass("text-muted");
     expect(screen.getByText(cards[1].title)).toHaveClass("text-text");

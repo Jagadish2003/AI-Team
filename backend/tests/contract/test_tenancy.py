@@ -95,8 +95,8 @@ def test_tenancy_violation_returns_500_via_handler(client: TestClient):
 
     from app.middleware.tenancy import TenancyViolationError
 
-    # list_connectors now calls tenancy_get_all — patch that name in main's namespace
-    with patch("app.main.tenancy_get_all", side_effect=TenancyViolationError("no context")):
+    # list_connectors now calls org_connectors_list — patch that in main's namespace
+    with patch("app.main.org_connectors_list", side_effect=TenancyViolationError("no context")):
         resp = client.get("/api/connectors", headers=AUTH)
 
     assert resp.status_code == 500
@@ -110,43 +110,58 @@ def test_middleware_sets_default_org(client: TestClient):
 
 
 def test_list_connectors_uses_tenancy_guard(client: TestClient):
-    """GET /api/connectors calls tenancy_get_all, not raw get_all (AC1 — data layer)."""
+    """GET /api/connectors goes through the org-scoped helper, not raw get_all (AC1)."""
     from unittest.mock import patch
 
     called_with: list[str] = []
 
-    def _spy(table: str):
-        called_with.append(table)
+    def _spy(org_id: str):
+        called_with.append(org_id)
         return []
 
-    # Patch tenancy_get_all in main's namespace (that's where it was imported)
-    with patch("app.main.tenancy_get_all", side_effect=_spy):
+    # list_connectors must resolve the current org and call org_connectors_list
+    # with it — never read connectors globally.
+    with patch("app.main.org_connectors_list", side_effect=_spy):
         client.get("/api/connectors", headers=AUTH)
 
-    assert called_with == ["connectors"], (
-        "list_connectors must call tenancy_get_all('connectors'), not raw get_all"
+    assert called_with == ["default"], (
+        "list_connectors must call org_connectors_list(<current org>), not raw get_all"
     )
 
 
-def test_cross_org_connector_not_visible_via_route(client: TestClient):
-    """org_A cannot see a connector record tagged org_B through the actual route (AC1)."""
-    from unittest.mock import patch
+def test_cross_org_connector_state_not_visible_via_route(client: TestClient):
+    """One org connecting a connector must not change another org's view (AC1).
 
-    # Simulate org_B owning the connector record
-    org_b_connector = {"id": "salesforce", "name": "Salesforce", "org_id": "org_B"}
+    Exercises the real per-org storage: connecting in another org writes a
+    namespaced per-org row and must leave the default org's GET /api/connectors
+    view of that connector exactly as it was. Order-independent: compares the
+    default org's status before/after rather than assuming a clean fixture.
+    """
+    from app.db import org_connector_set, org_connectors_list
 
-    # tenancy_get_all filters: org_A request sees [] because row is tagged org_B
-    def _tenancy_filtered(table: str):
-        from app.middleware.tenancy import get_current_org_id
-        current = get_current_org_id()
-        return [r for r in [org_b_connector] if r.get("org_id") == current]
+    def _sf_status():
+        resp = client.get("/api/connectors", headers=AUTH)  # dev token → "default"
+        assert resp.status_code == 200
+        sf = next((c for c in resp.json() if c.get("id") == "salesforce"), None)
+        return sf.get("status") if sf else None
 
-    with patch("app.main.tenancy_get_all", side_effect=_tenancy_filtered):
-        # Request as org_A — should NOT see org_B's connector
-        resp = client.get("/api/connectors", headers={**AUTH, "X-Org-Id": "default"})
+    before = _sf_status()
 
-    assert resp.status_code == 200
-    assert resp.json() == [], "org_A must not see org_B's connector record"
+    # A DIFFERENT org connects salesforce — writes only org_B_iso's namespaced row.
+    org_connector_set(
+        "org_B_iso",
+        "salesforce",
+        {"id": "salesforce", "name": "Salesforce", "status": "connected"},
+    )
+
+    assert _sf_status() == before, (
+        "default org's connector view must be unaffected by another org connecting"
+    )
+    # And org_B_iso itself sees it connected — isolation, not suppression.
+    assert any(
+        c.get("id") == "salesforce" and c.get("status") == "connected"
+        for c in org_connectors_list("org_B_iso")
+    )
 
 
 def test_middleware_respects_x_org_id_header(client: TestClient):
@@ -172,12 +187,12 @@ def test_middleware_respects_x_org_id_header(client: TestClient):
 
     captured: list[str] = []
 
-    def _capture(table):
+    def _capture(*_args, **_kwargs):
         from app.middleware.tenancy import get_current_org_id
         captured.append(get_current_org_id())
         return []
 
-    with patch("app.main.tenancy_get_all", side_effect=_capture):
+    with patch("app.main.org_connectors_list", side_effect=_capture):
         client.get("/api/connectors", headers={**AUTH, "X-Org-Id": "acme_corp"})
 
     assert captured and captured[0] == "acme_corp"
@@ -214,13 +229,13 @@ def test_matching_x_org_id_ignored_context_from_jwt(client: TestClient, monkeypa
 
     captured: list[str] = []
 
-    def _capture(table):
+    def _capture(*_args, **_kwargs):
         from app.middleware.tenancy import get_current_org_id
         captured.append(get_current_org_id())
         return []
 
     from unittest.mock import patch
-    with patch("app.main.tenancy_get_all", side_effect=_capture):
+    with patch("app.main.org_connectors_list", side_effect=_capture):
         resp = client.get("/api/connectors", headers={**AUTH, "X-Org-Id": "default"})
 
     assert resp.status_code == 200
@@ -233,13 +248,13 @@ def test_no_jwt_claim_falls_back_to_x_org_id(client: TestClient, monkeypatch):
 
     captured: list[str] = []
 
-    def _capture(table):
+    def _capture(*_args, **_kwargs):
         from app.middleware.tenancy import get_current_org_id
         captured.append(get_current_org_id())
         return []
 
     from unittest.mock import patch
-    with patch("app.main.tenancy_get_all", side_effect=_capture):
+    with patch("app.main.org_connectors_list", side_effect=_capture):
         resp = client.get("/api/connectors", headers={**AUTH, "X-Org-Id": "acme_corp"})
 
     assert resp.status_code == 200

@@ -1,0 +1,846 @@
+"""
+backend/app/corroboration_engine.py
+
+ENT-2 — Cross-System Confidence Elevation — Corroboration Engine (T1).
+
+This is the central, shared engine that decides whether a finding is supported
+by other connected systems. Before ENT-2, confidence elevation was handled
+inconsistently inside individual scorers (lending_scorer, strs_benefits_scorer,
+github_engineering_scorer). This engine centralises that logic so corroboration
+is consistent, explicit, testable, and visible on the opportunity card.
+
+The engine is NOT pack-specific. It evaluates corroboration for any detector
+against any connected-system data, so ENT-5 (ServiceNow + Jira pack) and future
+stories reuse it unchanged.
+
+Rule definitions live in backend/discovery/packs/corroboration_rules.py (data).
+This module holds only the BEHAVIOUR — the eight rule check functions and the
+orchestration in evaluate_corroboration(). Keeping rules-as-data separate from
+engine-as-logic means a reviewer can audit which rules exist without reading
+this file.
+
+────────────────────────────────────────────────────────────────────────────
+run_data CONTRACT (what the engine reads)
+────────────────────────────────────────────────────────────────────────────
+The engine reads a single ``run_data`` dict aggregating all connected-system
+signals for the run. Every access is defensive (.get with defaults) so a
+missing or partially-populated system never raises — a missing system simply
+does not corroborate.
+
+    run_data = {
+        # Names of systems connected for this run. Drives COR-08 (single source).
+        "connected_systems": ["salesforce", "servicenow", "jira", ...],
+
+        "servicenow": {
+            "incidents": [
+                {
+                    # one of: created | sys_created_on | opened | created_at | timestamp
+                    "sys_created_on": "2026-06-01T10:00:00Z",
+                    "state": "Open",                 # open unless Closed/Resolved/Cancelled
+                    "team": "lending-ops",           # optional assignment group / team
+                    "detector_ids": ["COVENANT_TRACKING_GAP"],  # optional linkage
+                },
+                ...
+            ],
+        },
+
+        "jira": {
+            "issues": [
+                {
+                    "created": "2026-06-01T10:00:00Z",
+                    "status": "Open",                # unresolved unless Done/Closed/Resolved
+                    "process": "covenant",           # optional process linkage
+                    "detector_ids": ["COVENANT_TRACKING_GAP"],  # optional linkage
+                },
+                ...
+            ],
+            "sprint_velocity": {                     # COR-07
+                "declined": True,
+                "team": "lending-eng",
+                "timestamp": "2026-06-01T10:00:00Z",
+            },
+        },
+
+        "confluence": {                              # COR-04
+            "covenant_documentation_present": False,
+        },
+
+        "slack": {                                   # COR-05 / COR-06
+            "escalation_pattern": {
+                "fired": True,
+                "timestamp": "2026-06-01T10:00:00Z",
+            },
+        },
+    }
+
+────────────────────────────────────────────────────────────────────────────
+TIME WINDOW
+────────────────────────────────────────────────────────────────────────────
+CORROBORATION_WINDOW_DAYS = 30. Every time-sensitive check requires the
+supporting signal to have occurred within 30 days of the run timestamp. A
+ServiceNow incident from 31+ days ago does NOT corroborate (ENT-2 AC6).
+
+────────────────────────────────────────────────────────────────────────────
+THE SLACK CEILING (hardcoded principle)
+────────────────────────────────────────────────────────────────────────────
+COR-05 is the only rule that records a supporting source WITHOUT elevating
+confidence. Slack escalation alone keeps confidence at MEDIUM. Slack elevates
+to HIGH only when combined with a primary corroborator (COR-06). Do not add a
+rule that elevates Slack-only to HIGH.
+"""
+from __future__ import annotations
+
+import logging
+from dataclasses import dataclass, field
+from datetime import datetime, timedelta, timezone
+from typing import Any, Dict, List, Optional
+
+try:
+    from backend.discovery.packs.corroboration_rules import (
+        CORROBORATION_WINDOW_DAYS,
+        CONFIDENCE_HIGH,
+        CONFIDENCE_MEDIUM,
+        CONFIDENCE_ORDER,
+        RULE_CARD_LABELS,
+        SINGLE_SOURCE_LABEL,
+        TRIPLE_CORROBORATION_LABEL,
+    )
+except ModuleNotFoundError:  # Runtime inside backend/ where discovery is top-level.
+    from discovery.packs.corroboration_rules import (
+        CORROBORATION_WINDOW_DAYS,
+        CONFIDENCE_HIGH,
+        CONFIDENCE_MEDIUM,
+        CONFIDENCE_ORDER,
+        RULE_CARD_LABELS,
+        SINGLE_SOURCE_LABEL,
+        TRIPLE_CORROBORATION_LABEL,
+    )
+
+logger = logging.getLogger(__name__)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Configuration
+# ─────────────────────────────────────────────────────────────────────────────
+
+#: ServiceNow/Jira states that mean a record is NOT open/unresolved.
+_CLOSED_STATES = {"closed", "resolved", "cancelled", "canceled", "done", "complete", "completed"}
+
+#: Detector that drives the Confluence documentation-gap rule (COR-04).
+_COVENANT_DETECTOR = "COVENANT_TRACKING_GAP"
+
+#: Detector that drives the Jira sprint-velocity rule (COR-07). Several spellings
+#: appear across packs, so match defensively.
+_LOAN_ORIGINATION_DETECTORS = {
+    "LOAN_ORIGINATION_BOTTLENECK",
+    "LOAN_ORIGINATION_ROUTING_FRICTION",
+}
+
+#: Timestamp field names accepted on incident / issue records.
+_TIMESTAMP_KEYS = (
+    "created", "sys_created_on", "opened", "created_at",
+    "timestamp", "opened_at", "createdAt", "openedAt",
+)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Result dataclass
+# ─────────────────────────────────────────────────────────────────────────────
+
+@dataclass
+class CorroborationResult:
+    """The single, predictable output shape of the corroboration engine.
+
+    Returned by evaluate_corroboration() in ALL cases — including when no
+    corroboration occurred — so the scoring pipeline can rely on a consistent
+    structure.
+
+    Fields
+    ------
+    rule_ids:
+        Every rule that fired, e.g. ['COR-01', 'COR-02']. Surfaced on
+        OppEnrichment.corroboration_rule_ids for auditability (AC9).
+    corroboration_sources:
+        Human-readable source labels, e.g. ['ServiceNow', 'Jira']. Empty when
+        there is no corroboration (single source / no support) so the UI badge
+        does not render (AC7).
+    corroboration_label:
+        The display string for the opportunity card.
+    elevated_confidence:
+        The confidence the corroboration rules support: 'LOW' | 'MEDIUM' | 'HIGH'.
+        This is the corroboration verdict, not necessarily the final applied
+        confidence (the pipeline never downgrades the scorer's confidence).
+    original_confidence:
+        The pre-corroboration baseline assumed by the engine (MEDIUM per spec).
+    triple_corroboration:
+        True when COR-03 applies (Salesforce + ServiceNow + Jira).
+    confidence_elevated:
+        Convenience flag — True when elevated_confidence is higher than
+        original_confidence.
+    elevation_target:
+        The confidence level the fired elevating rules target ('HIGH' when any
+        elevating rule fired, else 'MEDIUM').
+    """
+
+    rule_ids: List[str] = field(default_factory=list)
+    corroboration_sources: List[str] = field(default_factory=list)
+    corroboration_label: Optional[str] = None
+    elevated_confidence: str = CONFIDENCE_MEDIUM
+    original_confidence: str = CONFIDENCE_MEDIUM
+    triple_corroboration: bool = False
+    confidence_elevated: bool = False
+    elevation_target: str = CONFIDENCE_MEDIUM
+
+
+def _empty_result(original_confidence: str = CONFIDENCE_MEDIUM) -> CorroborationResult:
+    """A no-corroboration result. Used on single-source runs and on any error."""
+    return CorroborationResult(
+        rule_ids=[],
+        corroboration_sources=[],
+        corroboration_label=None,
+        elevated_confidence=original_confidence,
+        original_confidence=original_confidence,
+        triple_corroboration=False,
+        confidence_elevated=False,
+        elevation_target=original_confidence,
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Time-window helpers
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _parse_timestamp(value: Any) -> Optional[datetime]:
+    """Parse a timestamp from common string/`datetime` forms. Returns tz-aware UTC.
+
+    Returns None when the value cannot be parsed — the caller treats an
+    unparseable timestamp as NOT within the window (fail-safe: no elevation).
+    """
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+    if not isinstance(value, str):
+        return None
+    raw = value.strip()
+    if not raw:
+        return None
+    # Normalise trailing Z to +00:00 for fromisoformat.
+    candidate = raw.replace("Z", "+00:00")
+    for parser in (
+        lambda s: datetime.fromisoformat(s),
+        lambda s: datetime.strptime(s, "%Y-%m-%d %H:%M:%S"),
+        lambda s: datetime.strptime(s, "%Y-%m-%d"),
+    ):
+        try:
+            dt = parser(candidate)
+            return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+        except (ValueError, TypeError):
+            continue
+    return None
+
+
+def _record_timestamp(record: Dict[str, Any]) -> Optional[datetime]:
+    """Extract the first recognised timestamp from a record dict."""
+    for key in _TIMESTAMP_KEYS:
+        if key in record:
+            dt = _parse_timestamp(record.get(key))
+            if dt is not None:
+                return dt
+    return None
+
+
+def _within_window(
+    record: Dict[str, Any],
+    run_timestamp: datetime,
+    window_days: int = CORROBORATION_WINDOW_DAYS,
+) -> bool:
+    """True if the record's timestamp is within window_days before run_timestamp.
+
+    A record with no parseable timestamp is treated as OUTSIDE the window
+    (fail-safe: stale or unknown-age data must not elevate confidence).
+    """
+    ts = _record_timestamp(record)
+    if ts is None:
+        return False
+    if run_timestamp.tzinfo is None:
+        run_timestamp = run_timestamp.replace(tzinfo=timezone.utc)
+    cutoff = run_timestamp - timedelta(days=window_days)
+    # Within window: cutoff <= ts <= run_timestamp. Future-dated records must
+    # not corroborate the current run.
+    return cutoff <= ts <= run_timestamp
+
+
+def _is_open(record: Dict[str, Any]) -> bool:
+    """True when a ServiceNow incident / Jira issue is open / unresolved.
+
+    Defaults to open when no state/status field is present (a record passed in
+    as a corroborator is assumed relevant unless explicitly closed).
+    """
+    state = (
+        record.get("state")
+        or record.get("status")
+        or record.get("incident_state")
+        or ""
+    )
+    if isinstance(state, dict):  # Jira sometimes nests {"name": "..."}
+        state = state.get("name", "")
+    return str(state).strip().lower() not in _CLOSED_STATES
+
+
+def _linked_to_detector(record: Dict[str, Any], detector_id: str) -> bool:
+    """True when a record is linked to detector_id.
+
+    Linkage is established by an explicit ``detector_ids`` list on the record.
+    When a record carries NO ``detector_ids`` field at all, it is treated as a
+    pre-filtered relevant record (the ingestor already scoped it) and matches.
+    This keeps both controlled test data (explicit linkage) and real pipeline
+    data (pre-filtered correlation sets) working.
+    """
+    if "detector_ids" not in record:
+        return True
+    linked = record.get("detector_ids") or []
+    if isinstance(linked, str):
+        linked = [linked]
+    return detector_id in {str(x) for x in linked}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# System-data extraction helpers (defensive)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _system_block(run_data: Dict[str, Any], key: str) -> Dict[str, Any]:
+    """Return run_data[key] as a dict, or {} when missing or malformed.
+
+    Defensive: a non-dict value (e.g. a stray string) yields {} rather than
+    raising — supporting the non-blocking guarantee (AC10).
+    """
+    block = (run_data or {}).get(key)
+    return block if isinstance(block, dict) else {}
+
+
+def _servicenow_incidents(run_data: Dict[str, Any]) -> List[Dict[str, Any]]:
+    incidents = _system_block(run_data, "servicenow").get("incidents")
+    if isinstance(incidents, list):
+        return [i for i in incidents if isinstance(i, dict)]
+    return []
+
+
+def _jira_issues(run_data: Dict[str, Any]) -> List[Dict[str, Any]]:
+    issues = _system_block(run_data, "jira").get("issues")
+    if isinstance(issues, list):
+        return [i for i in issues if isinstance(i, dict)]
+    return []
+
+
+def _connected_systems(run_data: Dict[str, Any]) -> List[str]:
+    systems = (run_data or {}).get("connected_systems") or []
+    if isinstance(systems, (list, tuple, set)):
+        return [str(s).strip().lower() for s in systems if str(s).strip()]
+    return []
+
+
+def normalise_connected_systems(systems: Any) -> List[str]:
+    """Return stable business system ids for corroboration rules."""
+    normalised = set()
+    for system in systems or []:
+        system_id = str(system).strip().lower()
+        if not system_id:
+            continue
+        if system_id in {"salesforce_ncino", "ncino"}:
+            normalised.add("salesforce")
+        elif system_id == "jira_confluence":
+            normalised.update({"jira", "confluence"})
+        else:
+            normalised.add(system_id)
+    return sorted(normalised)
+
+
+def _dict_or_empty(value: Any) -> Dict[str, Any]:
+    return value if isinstance(value, dict) else {}
+
+
+def _iter_candidate_blocks(payload: Dict[str, Any], *, depth: int = 0) -> List[Dict[str, Any]]:
+    """Return likely correlation containers without requiring caller-specific code."""
+    if not isinstance(payload, dict) or depth > 3:
+        return []
+    blocks = [payload]
+    for key in (
+        "lending_correlation",
+        "jira_strs_correlation",
+        "sn_strs_correlation",
+        "strs_benefits",
+        "corroboration",
+        "corroboration_data",
+        "cross_system_evidence",
+        "external_corroboration",
+    ):
+        child = payload.get(key)
+        if isinstance(child, dict):
+            blocks.extend(_iter_candidate_blocks(child, depth=depth + 1))
+    return blocks
+
+
+def _find_corroboration_block(system_id: str, payloads: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Find a Slack/Confluence corroboration block in available run payloads."""
+    direct_keys = (
+        system_id,
+        f"{system_id}_corroboration",
+        f"{system_id}_evidence",
+        f"{system_id}_signals",
+    )
+    for payload in payloads:
+        for block in _iter_candidate_blocks(payload):
+            for key in direct_keys:
+                found = _dict_or_empty(block.get(key))
+                if found:
+                    return found
+    return {}
+
+
+def _detector_ids_from_record(record: Dict[str, Any], default_detector_id: Optional[str] = None) -> List[str]:
+    linked = (
+        record.get("detector_ids")
+        or record.get("detector_id")
+        or record.get("detectorId")
+        or default_detector_id
+    )
+    if linked is None:
+        return []
+    if isinstance(linked, str):
+        linked = [linked]
+    if not isinstance(linked, (list, tuple, set)):
+        return []
+    return [str(item) for item in linked if str(item).strip()]
+
+
+def _timestamp_value(record: Dict[str, Any]) -> Any:
+    for key in _TIMESTAMP_KEYS:
+        if record.get(key) is not None:
+            return record.get(key)
+    return None
+
+
+def _add_record_by_detector(
+    records_by_detector: Dict[str, List[Dict[str, Any]]],
+    record: Dict[str, Any],
+    *,
+    default_detector_id: Optional[str] = None,
+) -> None:
+    for detector_id in _detector_ids_from_record(record, default_detector_id):
+        enriched = dict(record)
+        enriched.setdefault("detector_ids", [detector_id])
+        records_by_detector.setdefault(detector_id, []).append(enriched)
+
+
+def _extract_matched_records(
+    payloads: List[Dict[str, Any]],
+    record_keys: tuple[str, ...],
+) -> List[Dict[str, Any]]:
+    records: List[Dict[str, Any]] = []
+    for payload in payloads:
+        for block in _iter_candidate_blocks(payload):
+            for key in record_keys:
+                value = block.get(key)
+                if isinstance(value, list):
+                    records.extend(item for item in value if isinstance(item, dict))
+    return records
+
+
+def _add_detector_map_records(
+    records_by_detector: Dict[str, List[Dict[str, Any]]],
+    detector_map: Dict[str, List[Any]],
+    *,
+    open_field: str,
+) -> None:
+    for detector_id, entries in (detector_map or {}).items():
+        if not entries:
+            continue
+        dict_entries = [entry for entry in entries if isinstance(entry, dict)]
+        if dict_entries:
+            for entry in dict_entries:
+                _add_record_by_detector(records_by_detector, entry, default_detector_id=detector_id)
+            continue
+        # Legacy by_detector maps hold snippets only. Keep one placeholder per
+        # detector so counts are not inflated, but do not invent a timestamp.
+        _add_record_by_detector(
+            records_by_detector,
+            {"detector_ids": [detector_id], open_field: "Open"},
+            default_detector_id=detector_id,
+        )
+
+
+def _freshest_record(records: List[Dict[str, Any]]) -> Dict[str, Any]:
+    with_ts = [(record, _record_timestamp(record)) for record in records]
+    dated = [(record, ts) for record, ts in with_ts if ts is not None]
+    if dated:
+        return max(dated, key=lambda item: item[1])[0]
+    return records[0] if records else {}
+
+
+def _canonical_servicenow_record(detector_id: str, record: Dict[str, Any]) -> Dict[str, Any]:
+    out = dict(record)
+    out.setdefault("detector_ids", [detector_id])
+    out.setdefault("state", "Open")
+    ts = _timestamp_value(out)
+    if ts is not None and out.get("sys_created_on") is None:
+        out["sys_created_on"] = ts
+    return out
+
+
+def _canonical_jira_record(detector_id: str, record: Dict[str, Any]) -> Dict[str, Any]:
+    out = dict(record)
+    out.setdefault("detector_ids", [detector_id])
+    out.setdefault("status", "Open")
+    ts = _timestamp_value(out)
+    if ts is not None and out.get("created") is None:
+        out["created"] = ts
+    return out
+
+
+def build_corroboration_run_data(
+    *,
+    systems: Any,
+    sn_by_detector: Dict[str, List[Any]],
+    jira_by_detector: Dict[str, List[Any]],
+    run_timestamp_iso: str,
+    source_payloads: Optional[List[Dict[str, Any]]] = None,
+) -> Dict[str, Any]:
+    """Build the ENT-2 corroboration engine input from discovery run data.
+
+    The builder is intentionally part of the engine module so runner, replay
+    paths, tests, and future endpoints all construct the same input contract.
+    It uses real record timestamps when matched records are available and never
+    creates more than one ServiceNow/Jira corroboration record per detector.
+    """
+    connected = set(normalise_connected_systems(systems))
+    payloads = [_dict_or_empty(p) for p in (source_payloads or []) if isinstance(p, dict)]
+
+    sn_records_by_detector: Dict[str, List[Dict[str, Any]]] = {}
+    for record in _extract_matched_records(
+        payloads,
+        ("lending_incidents", "matched_incidents", "strs_incidents"),
+    ):
+        _add_record_by_detector(sn_records_by_detector, record)
+    _add_detector_map_records(sn_records_by_detector, sn_by_detector, open_field="state")
+
+    jira_records_by_detector: Dict[str, List[Dict[str, Any]]] = {}
+    for record in _extract_matched_records(
+        payloads,
+        ("lending_issues", "matched_issues", "strs_issues"),
+    ):
+        _add_record_by_detector(jira_records_by_detector, record)
+    _add_detector_map_records(jira_records_by_detector, jira_by_detector, open_field="status")
+
+    data: Dict[str, Any] = {
+        "connected_systems": sorted(connected),
+        "servicenow": {
+            "incidents": [
+                _canonical_servicenow_record(detector_id, _freshest_record(records))
+                for detector_id, records in sorted(sn_records_by_detector.items())
+                if records
+            ]
+        },
+        "jira": {
+            "issues": [
+                _canonical_jira_record(detector_id, _freshest_record(records))
+                for detector_id, records in sorted(jira_records_by_detector.items())
+                if records
+            ]
+        },
+    }
+
+    if "confluence" in connected:
+        confluence = _find_corroboration_block("confluence", payloads)
+        if confluence:
+            data["confluence"] = confluence
+        elif payloads:
+            logger.warning(
+                "ENT-2 corroboration: Confluence is connected but no recognized "
+                "corroboration block was found"
+            )
+
+    if "slack" in connected:
+        slack = _find_corroboration_block("slack", payloads)
+        if slack:
+            data["slack"] = slack
+
+    return data
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# The eight rule check functions (ENT-2 Section 1a)
+# Each is explicit and independently testable.
+# ─────────────────────────────────────────────────────────────────────────────
+
+def check_cor01_servicenow_team_incidents(
+    detector_id: str,
+    run_data: Dict[str, Any],
+    run_timestamp: datetime,
+) -> bool:
+    """COR-01: ServiceNow shows an open incident for the same team within 30 days.
+
+    Fires when at least one ServiceNow incident is open, within the
+    corroboration window, and linked to this detector.
+    """
+    for incident in _servicenow_incidents(run_data):
+        if (
+            _linked_to_detector(incident, detector_id)
+            and _is_open(incident)
+            and _within_window(incident, run_timestamp)
+        ):
+            return True
+    return False
+
+
+def check_cor02_jira_process_issues(
+    detector_id: str,
+    run_data: Dict[str, Any],
+    run_timestamp: datetime,
+) -> bool:
+    """COR-02: Jira shows unresolved issues for the same process within 30 days."""
+    for issue in _jira_issues(run_data):
+        # Exclude sprint-velocity-only signals (handled by COR-07).
+        if (
+            _linked_to_detector(issue, detector_id)
+            and _is_open(issue)
+            and _within_window(issue, run_timestamp)
+        ):
+            return True
+    return False
+
+
+def check_cor03_triple(cor01_fired: bool, cor02_fired: bool) -> bool:
+    """COR-03: derived — true when BOTH COR-01 and COR-02 fired."""
+    return bool(cor01_fired and cor02_fired)
+
+
+def check_cor04_confluence_doc_gap(
+    detector_id: str,
+    run_data: Dict[str, Any],
+) -> bool:
+    """COR-04: COVENANT_TRACKING_GAP + Confluence shows no covenant documentation.
+
+    Only applies to the COVENANT_TRACKING_GAP detector. Fires when Confluence
+    data is present and explicitly reports no covenant documentation.
+    """
+    if detector_id != _COVENANT_DETECTOR:
+        return False
+    confluence = _system_block(run_data, "confluence")
+    if not confluence:
+        return False
+    # Documentation gap = present flag is explicitly False.
+    present = confluence.get("covenant_documentation_present")
+    if present is None:
+        # Alternative shape: explicit gap flag.
+        return bool(confluence.get("documentation_gap", False))
+    return present is False
+
+
+def check_cor05_slack_escalation(
+    run_data: Dict[str, Any],
+    run_timestamp: datetime,
+) -> bool:
+    """COR-05/06 precondition: Slack ESCALATION_PATTERN fired within the window.
+
+    This detects the Slack escalation signal. Whether it ELEVATES depends on
+    the presence of a primary corroborator (decided in evaluate_corroboration):
+      - Slack alone           -> COR-05 (supporting only, no elevation)
+      - Slack + ServiceNow/Jira -> COR-06 (elevates)
+    """
+    slack = _system_block(run_data, "slack")
+    escalation = slack.get("escalation_pattern")
+    if not isinstance(escalation, dict) or not escalation:
+        # Alternative shape: a boolean flag.
+        return bool(slack.get("escalation_pattern_fired", False))
+    if not escalation.get("fired", False):
+        return False
+    # If a timestamp is present, enforce the window; if absent, accept (the
+    # escalation pattern is computed for the current run).
+    if _record_timestamp(escalation) is not None:
+        return _within_window(escalation, run_timestamp)
+    return True
+
+
+def check_cor06_slack_with_primary(slack_fired: bool, primary_fired: bool) -> bool:
+    """COR-06: Slack escalation AND a primary corroborator (COR-01 or COR-02)."""
+    return bool(slack_fired and primary_fired)
+
+
+def check_cor07_jira_sprint_velocity(
+    detector_id: str,
+    run_data: Dict[str, Any],
+    run_timestamp: datetime,
+) -> bool:
+    """COR-07: LOAN_ORIGINATION_BOTTLENECK + Jira sprint velocity decline.
+
+    Only applies to loan-origination detectors. Fires when Jira reports a
+    sprint velocity decline within the window.
+    """
+    if detector_id not in _LOAN_ORIGINATION_DETECTORS:
+        return False
+    velocity = _system_block(run_data, "jira").get("sprint_velocity")
+    if not isinstance(velocity, dict) or not velocity:
+        return False
+    if not velocity.get("declined", False):
+        return False
+    if _record_timestamp(velocity) is not None:
+        return _within_window(velocity, run_timestamp)
+    return True
+
+
+def check_cor08_single_source(run_data: Dict[str, Any]) -> bool:
+    """COR-08: only one system connected — cannot self-corroborate.
+
+    Fires when the connected_systems list contains one or zero systems.
+    """
+    return len(_connected_systems(run_data)) <= 1
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Label builder
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _build_label(fired_rules: List[str], triple: bool) -> Optional[str]:
+    """Build the on-card corroboration label from the fired rules.
+
+    Triple corroboration always wins the headline. Otherwise the highest-value
+    elevating rule's label is used, falling back to a supporting-only label.
+    """
+    if not fired_rules:
+        return None
+    if triple:
+        return TRIPLE_CORROBORATION_LABEL
+    # Priority order for the headline label among non-derived rules.
+    for rule_id in ("COR-06", "COR-01", "COR-02", "COR-04", "COR-07", "COR-05", "COR-08"):
+        if rule_id in fired_rules:
+            return RULE_CARD_LABELS.get(rule_id)
+    return RULE_CARD_LABELS.get(fired_rules[0])
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Public engine entry point
+# ─────────────────────────────────────────────────────────────────────────────
+
+def evaluate_corroboration(
+    detector_id: str,
+    pack_id: str,
+    run_data: Dict[str, Any],
+    run_timestamp: datetime,
+    org_id: str,
+) -> CorroborationResult:
+    """Evaluate all applicable corroboration rules for this detector.
+
+    Rules are evaluated in order; every matching rule is recorded. The highest
+    elevation wins. Always returns a CorroborationResult, regardless of whether
+    any elevation occurred — so the scoring pipeline has a predictable shape.
+
+    Parameters
+    ----------
+    detector_id: the detector that fired (e.g. 'COVENANT_TRACKING_GAP').
+    pack_id:     the active pack id (engine is pack-agnostic; accepted for
+                 context and future rules).
+    run_data:    aggregated connected-system data (see module docstring).
+    run_timestamp: the run's timestamp; the corroboration window is relative to it.
+    org_id:      the org id (accepted for context / future org-scoped rules).
+
+    Never raises for normal data issues — defensive .get() throughout. The
+    caller (scoring pipeline) additionally wraps this in try/except so any
+    unexpected failure is non-blocking (ENT-2 AC10).
+    """
+    run_data = run_data or {}
+
+    if run_timestamp is None:
+        run_timestamp = datetime.now(timezone.utc)
+    elif run_timestamp.tzinfo is None:
+        run_timestamp = run_timestamp.replace(tzinfo=timezone.utc)
+
+    # COR-08: single source short-circuits — a lone system cannot self-corroborate.
+    # Sources stay empty so the UI renders no badge (AC7).
+    if check_cor08_single_source(run_data):
+        return _empty_result(CONFIDENCE_MEDIUM)
+
+    fired_rules: List[str] = []
+    sources: List[str] = []
+
+    # COR-01: ServiceNow incident for the same team.
+    cor01 = check_cor01_servicenow_team_incidents(detector_id, run_data, run_timestamp)
+    if cor01:
+        fired_rules.append("COR-01")
+        sources.append("ServiceNow")
+
+    # COR-02: Jira issues for the same process.
+    cor02 = check_cor02_jira_process_issues(detector_id, run_data, run_timestamp)
+    if cor02:
+        fired_rules.append("COR-02")
+        sources.append("Jira")
+
+    # COR-03: triple corroboration (derived from COR-01 AND COR-02).
+    triple = check_cor03_triple(cor01, cor02)
+    if triple:
+        fired_rules.append("COR-03")
+
+    # COR-04: Confluence documentation gap (COVENANT_TRACKING_GAP only).
+    if check_cor04_confluence_doc_gap(detector_id, run_data):
+        fired_rules.append("COR-04")
+        sources.append("Confluence (no process documentation)")
+
+    # COR-07: Jira sprint velocity decline (loan-origination only).
+    if check_cor07_jira_sprint_velocity(detector_id, run_data, run_timestamp):
+        fired_rules.append("COR-07")
+        sources.append("Jira (sprint velocity decline)")
+
+    # COR-05 / COR-06: Slack escalation pattern.
+    # Slack elevates ONLY with a primary corroborator (ServiceNow/Jira). The
+    # Slack ceiling: alone it stays MEDIUM (COR-05), never HIGH.
+    if check_cor05_slack_escalation(run_data, run_timestamp):
+        primary_fired = cor01 or cor02
+        if check_cor06_slack_with_primary(True, primary_fired):
+            fired_rules.append("COR-06")
+            sources.append("Slack (escalation pattern)")
+        else:
+            fired_rules.append("COR-05")          # supporting only — no elevation
+            sources.append("Slack (supporting only)")
+
+    # Determine elevation. COR-05 (Slack-only) never elevates — it is the only
+    # rule excluded from the elevating set. COR-08 already returned above.
+    elevating_rules = [r for r in fired_rules if r != "COR-05"]
+    elevated = CONFIDENCE_HIGH if elevating_rules else CONFIDENCE_MEDIUM
+    original = CONFIDENCE_MEDIUM
+
+    label = _build_label(fired_rules, triple)
+
+    return CorroborationResult(
+        rule_ids=fired_rules,
+        corroboration_sources=sources,
+        corroboration_label=label,
+        elevated_confidence=elevated,
+        original_confidence=original,
+        triple_corroboration=triple,
+        confidence_elevated=CONFIDENCE_ORDER[elevated] > CONFIDENCE_ORDER[original],
+        elevation_target=CONFIDENCE_HIGH if elevating_rules else CONFIDENCE_MEDIUM,
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Pipeline application helper (used by the scoring pipeline — T3)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def apply_corroboration_confidence(
+    scorer_confidence: Optional[str],
+    result: CorroborationResult,
+) -> str:
+    """Return the final confidence after applying corroboration — NEVER downgrades.
+
+    The corroboration engine may only raise confidence. If the scorer already
+    assigned a higher (or equal) confidence than the corroboration verdict, the
+    scorer's value is preserved. This protects existing pack behaviour
+    (nCino/STRS already assign HIGH for several detectors).
+    """
+    if scorer_confidence is None or not str(scorer_confidence).strip():
+        raise ValueError("scorer_confidence is required before corroboration elevation")
+    base = str(scorer_confidence).strip().upper()
+    if base not in CONFIDENCE_ORDER:
+        raise ValueError(f"unknown scorer confidence: {scorer_confidence!r}")
+    base_rank = CONFIDENCE_ORDER[base]
+    elevated_rank = CONFIDENCE_ORDER.get(result.elevated_confidence, base_rank)
+    return result.elevated_confidence if elevated_rank > base_rank else base

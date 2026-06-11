@@ -160,6 +160,9 @@ class EntityExtractionCompletedPayload(TypedDict, total=False):
     run_id: NotRequired[str]
     source: NotRequired[str]
     pack_id: NotRequired[str]
+    # ENT-1 / AC5: count of service-account identities filtered out by the
+    # active entity-extraction overlay. 0 (or absent) when no overlay is active.
+    filtered_service_account_count: NotRequired[int]
 
 
 class TemporalEnrichmentCompletedPayload(TypedDict, total=False):
@@ -190,6 +193,83 @@ class RelationshipMappingCompletedPayload(TypedDict, total=False):
     inferred_count: NotRequired[int]
     skipped_ambiguous_count: NotRequired[int]
     mapping_duration_ms: NotRequired[float]
+
+
+class HallucinationGuardRemovedPayload(TypedDict, total=False):
+    """ENT-3 / T3-S15-A — emitted when the hallucination guard DROPS a bullet.
+
+    Two drop paths produce this event, distinguished by ``reason``:
+      reason='dropped_generic' — generic bullet with no graph content, dropped
+                                 without attempting a second-pass LLM rewrite.
+      reason='dropped_timeout' — second-pass LLM rewrite exceeded
+                                 REWRITE_TIMEOUT_MS and the bullet was dropped.
+
+    PII GUARD: this payload carries COUNTS, reason codes, and run/org
+    identifiers ONLY. The hallucinated proper nouns and the bullet text itself
+    are NEVER added here — they can contain fabricated or real person/team
+    names and telemetry must not log sensitive values.
+    """
+    org_id: NotRequired[str]
+    run_id: NotRequired[str]
+    reason: NotRequired[str]          # 'dropped_generic' | 'dropped_timeout'
+    hallucinated_count: NotRequired[int]
+    source: NotRequired[str]
+
+
+class HallucinationGuardRewrittenPayload(TypedDict, total=False):
+    """ENT-3 / T3-S15-A — emitted when the hallucination guard REPAIRS a bullet.
+
+    Two repair paths produce this event, distinguished by ``method``:
+      method='rule_rewrite' — deterministic rule-based rewrite produced a
+                              coherent bullet; no LLM call was made.
+      method='llm_rewrite'  — second-pass LLM rewrite produced a clean bullet.
+
+    PII GUARD: counts, method, and run/org identifiers only — never the
+    hallucinated names or bullet text.
+    """
+    org_id: NotRequired[str]
+    run_id: NotRequired[str]
+    method: NotRequired[str]          # 'rule_rewrite' | 'llm_rewrite'
+    hallucinated_count: NotRequired[int]
+    source: NotRequired[str]
+
+
+class LlmEnrichmentGroundedPayload(TypedDict, total=False):
+    """ENT-3 / T3-S15-A — emitted once per opportunity when first-pass
+    enrichment ran against a real (non-sparse) ENT-4 graph context.
+
+    Distinguishes graph-grounded runs from the sparse-graph fallback path
+    (entity_count < 3) which sets llm_grounded=False and emits nothing.
+
+    Carries graph shape counts only — no entity names.
+    """
+    org_id: NotRequired[str]
+    run_id: NotRequired[str]
+    opp_id: NotRequired[str]
+    graph_entity_count: NotRequired[int]
+    graph_entity_count_shown: NotRequired[int]
+    graph_truncated: NotRequired[bool]
+    source: NotRequired[str]
+
+
+class GraphContextBuiltPayload(TypedDict, total=False):
+    """ENT-4 / T3-S14-A — emitted once per build_graph_context() call.
+
+    Records the shape of the graph context assembled for an opportunity:
+    the full entity count, the capped count actually placed in the prompt,
+    whether the graph was truncated past the 15-entity / 20-relationship caps,
+    and the build duration. Carries shape counts only — no entity names.
+    """
+    org_id: NotRequired[str]
+    opportunity_id: NotRequired[str]
+    entity_count: NotRequired[int]
+    entity_count_shown: NotRequired[int]
+    relationship_count: NotRequired[int]
+    relationship_count_shown: NotRequired[int]
+    truncated: NotRequired[bool]
+    sparse_graph: NotRequired[bool]
+    duration_ms: NotRequired[int]
+    source: NotRequired[str]
 
 
 class RunStartedEvent(TypedDict):
@@ -313,6 +393,15 @@ register_event_type("temporal.enrichment_completed", TemporalEnrichmentCompleted
 register_event_type("entity.extraction_completed", EntityExtractionCompletedPayload)
 # T3-S13-A Sprint 13 — relationship mapping (emitted by map_relationships())
 register_event_type("relationship.mapping_completed", RelationshipMappingCompletedPayload)
+# ENT-3 / T3-S15-A Sprint 15 — LLM enrichment enterprise hardening.
+# hallucination_guard.* are emitted by app.hallucination_guard.log_hallucination();
+# llm.enrichment_grounded is emitted by app.llm_enrichment on the grounded path.
+register_event_type("hallucination_guard.removed", HallucinationGuardRemovedPayload)
+register_event_type("hallucination_guard.rewritten", HallucinationGuardRewrittenPayload)
+register_event_type("llm.enrichment_grounded", LlmEnrichmentGroundedPayload)
+# ENT-4 / T3-S14-A Sprint 14 — graph context builder.
+# graph.context_built is emitted by app.graph_context_builder.build_graph_context().
+register_event_type("graph.context_built", GraphContextBuiltPayload)
 
 
 # ---------------------------------------------------------------------------
@@ -463,6 +552,10 @@ __all__ = [
     "DbQueryExecutedEvent",
     "EntityExtractionCompletedPayload",     # T3-S12-A T7
     "RelationshipMappingCompletedPayload",  # T3-S13-A
+    "HallucinationGuardRemovedPayload",     # ENT-3 / T3-S15-A
+    "HallucinationGuardRewrittenPayload",   # ENT-3 / T3-S15-A
+    "LlmEnrichmentGroundedPayload",         # ENT-3 / T3-S15-A
+    "GraphContextBuiltPayload",             # ENT-4 / T3-S14-A
     "EVENT_PAYLOAD_TYPES",          # AT-211 alias: event_type → TypedDict schema
     "EVENT_REGISTRY",
     "EVENT_TYPE_REGISTRY",          # alias for T1-S10-C unit tests

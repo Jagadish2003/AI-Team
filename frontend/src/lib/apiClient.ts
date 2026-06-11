@@ -8,6 +8,58 @@
  * - Support run-scoped API calls with runId parameter.
  */
 
+// ---------------------------------------------------------------------------
+// 401 interceptor (AT-237 / AC13)
+// AuthContext registers a handler here on mount so any 401 from any route
+// clears auth state and redirects to /login without page-specific handling.
+// ---------------------------------------------------------------------------
+
+type UnauthorizedHandler = () => void;
+let _unauthorizedHandler: UnauthorizedHandler | null = null;
+
+/** Register (or clear) the global 401 handler. Call from AuthProvider on mount. */
+export function setUnauthorizedHandler(handler: UnauthorizedHandler | null): void {
+  _unauthorizedHandler = handler;
+}
+
+// ---------------------------------------------------------------------------
+// In-session JWT (multi-tenancy)
+// AuthProvider pushes the logged-in user's JWT here whenever it changes. Every
+// data request is then signed with THAT user's token, so the backend scopes the
+// request to the user's org. Without this, requests fall back to the static dev
+// token (which carries no org claim → everyone resolves to the `default` org),
+// leaking connectors and runs across organisations.
+// ---------------------------------------------------------------------------
+
+let _authToken: string | null = null;
+
+/** Set (or clear, with null) the in-session JWT used to sign all data requests. */
+export function setAuthToken(token: string | null): void {
+  _authToken = token;
+}
+
+/** Current in-session JWT, or null when logged out (dev-token fallback applies). */
+export function getAuthToken(): string | null {
+  return _authToken;
+}
+
+/**
+ * Build an Authorization header from an EXPLICIT token. Use this from callers
+ * that hold the in-session token directly (e.g. a context whose effect runs
+ * before AuthProvider has synced setAuthToken) to avoid a stale module-token
+ * race. Falls back to the standard authHeader() when token is null.
+ */
+export function authHeaderForToken(token: string | null): Record<string, string> {
+  if (token) return { Authorization: `Bearer ${token}` };
+  return authHeader();
+}
+
+function _handle401(): void {
+  _unauthorizedHandler?.();
+}
+
+// ---------------------------------------------------------------------------
+
 const ENV_BASE_URL = import.meta.env.VITE_API_BASE_URL as string | undefined;
 const ORG_ID_HEADER = (import.meta.env.VITE_ORG_ID as string | undefined)?.trim();
 
@@ -31,7 +83,15 @@ export class ApiError extends Error {
   }
 }
 
-function authHeader(): Record<string, string> {
+export function authHeader(): Record<string, string> {
+  // Authenticated session: sign with the in-session JWT. org_id is carried in
+  // the JWT claim, so we must NOT also send X-Org-Id — a stale/mismatched value
+  // trips the backend impersonation guard (403, see middleware/tenancy.py).
+  if (_authToken) {
+    return { Authorization: `Bearer ${_authToken}` };
+  }
+  // Dev/test fallback (no logged-in session): static dev token + optional
+  // explicit org header.
   const token = (import.meta.env.VITE_DEV_JWT as string | undefined) ?? "dev-token-change-me";
   return {
     Authorization: `Bearer ${token}`,
@@ -50,7 +110,10 @@ export async function apiGet<T>(path: string): Promise<T> {
     headers: { ...authHeader() },
   });
   const body = await parseBody(res);
-  if (!res.ok) throw new ApiError(`GET ${path} failed`, res.status, body);
+  if (!res.ok) {
+    if (res.status === 401) _handle401();
+    throw new ApiError(`GET ${path} failed`, res.status, body);
+  }
   return body as T;
 }
 
@@ -61,7 +124,10 @@ export async function apiPost<T>(path: string, payload: unknown): Promise<T> {
     body: JSON.stringify(payload),
   });
   const body = await parseBody(res);
-  if (!res.ok) throw new ApiError(`POST ${path} failed`, res.status, body);
+  if (!res.ok) {
+    if (res.status === 401) _handle401();
+    throw new ApiError(`POST ${path} failed`, res.status, body);
+  }
   return body as T;
 }
 
@@ -72,7 +138,10 @@ export async function apiPatch<T>(path: string, payload: unknown): Promise<T> {
     body: JSON.stringify(payload),
   });
   const body = await parseBody(res);
-  if (!res.ok) throw new ApiError(`PATCH ${path} failed`, res.status, body);
+  if (!res.ok) {
+    if (res.status === 401) _handle401();
+    throw new ApiError(`PATCH ${path} failed`, res.status, body);
+  }
   return body as T;
 }
 
@@ -100,7 +169,10 @@ export async function apiStartRun<T>(payload?: unknown): Promise<T> {
     body: JSON.stringify(payload ?? {}),
   });
   const body = await parseBody(res);
-  if (!res.ok) throw new ApiError("POST /api/runs/start failed", res.status, body);
+  if (!res.ok) {
+    if (res.status === 401) _handle401();
+    throw new ApiError("POST /api/runs/start failed", res.status, body);
+  }
   return body as T;
 }
 
@@ -125,7 +197,10 @@ export async function apiGetRun<T>(runId: string): Promise<T> {
     headers: { ...authHeader() },
   });
   const body = await parseBody(res);
-  if (!res.ok) throw new ApiError(`GET /api/runs/${runId} failed`, res.status, body);
+  if (!res.ok) {
+    if (res.status === 401) _handle401();
+    throw new ApiError(`GET /api/runs/${runId} failed`, res.status, body);
+  }
   return body as T;
 }
 
@@ -151,7 +226,10 @@ export async function apiGetRunEvents<T>(runId: string): Promise<T> {
     headers: { ...authHeader() },
   });
   const body = await parseBody(res);
-  if (!res.ok) throw new ApiError(`GET /api/runs/${runId}/events failed`, res.status, body);
+  if (!res.ok) {
+    if (res.status === 401) _handle401();
+    throw new ApiError(`GET /api/runs/${runId}/events failed`, res.status, body);
+  }
   return body as T;
 }
 
@@ -187,8 +265,10 @@ export async function apiGetRunEventsPaginated<T>(
     headers: { ...authHeader() },
   });
   const body = await parseBody(res);
-  if (!res.ok)
+  if (!res.ok) {
+    if (res.status === 401) _handle401();
     throw new ApiError(`GET /api/runs/${runId}/events failed`, res.status, body);
+  }
   return body as T;
 }
 
@@ -214,8 +294,10 @@ export async function apiGetRunScoped<T>(runId: string, path: string): Promise<T
     headers: { ...authHeader() },
   });
   const body = await parseBody(res);
-  if (!res.ok)
+  if (!res.ok) {
+    if (res.status === 401) _handle401();
     throw new ApiError(`GET /api/runs/${runId}${path} failed`, res.status, body);
+  }
   return body as T;
 }
 
@@ -248,8 +330,10 @@ export async function apiPostRunScoped<T>(
     body: JSON.stringify(payload ?? {}),
   });
   const body = await parseBody(res);
-  if (!res.ok)
+  if (!res.ok) {
+    if (res.status === 401) _handle401();
     throw new ApiError(`POST /api/runs/${runId}${path} failed`, res.status, body);
+  }
   return body as T;
 }
 

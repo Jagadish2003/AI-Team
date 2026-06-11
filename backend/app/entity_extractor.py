@@ -22,10 +22,14 @@ filtered from the OppEnrichment evidence trace but retained in the DB.
 """
 from __future__ import annotations
 
+import json
 import logging
+import re
+from contextvars import ContextVar
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
-from app.entity_resolution import resolve_or_create_entity
+from app.entity_resolution import resolve_or_create_entity as _core_resolve_or_create_entity
 from database.models.entities import Entity, ENTITY_MIN_RUN_COUNT
 
 logger = logging.getLogger(__name__)
@@ -34,6 +38,167 @@ logger = logging.getLogger(__name__)
 # filtered from the OppEnrichment evidence trace. Sourced from a single shared
 # constant so the threshold can never drift from the test suite that asserts it.
 _MIN_DISPLAY_RUN_COUNT = ENTITY_MIN_RUN_COUNT
+
+
+# ===========================================================================
+# ENT-1 — Overlay awareness (Tasks T4 + T5)
+#
+# The overlay layer is ADDITIVE. When no overlay is registered for an
+# (org_id, connector_id), _overlay_context is None and resolve_or_create_entity
+# below is a transparent pass-through to the core resolver — so default
+# T3-S12-A extraction behaves byte-for-byte as before (AC2).
+#
+# When an overlay IS active, the same wrapper:
+#   - filters service-account display_names (T5 / AC5) — the entity is skipped
+#     and counted, never stored;
+#   - records cross-system provenance in metadata.sources (AC4) so a Person
+#     anchored to a Salesforce OwnerId and later seen by name in ServiceNow /
+#     Jira lists all three systems while retaining confidence 1.0.
+#
+# All per-source extractors call resolve_or_create_entity (this wrapper) by
+# name, so overlay behavior is applied without touching any of them.
+# ===========================================================================
+
+
+class _FilteredServiceAccount(Exception):
+    """Raised internally when a display_name matches the active overlay's
+    service-account patterns.
+
+    Kept only as an internal marker type for older tests/imports. The resolver
+    wrapper now handles filtering itself and returns None, so broad
+    ``except Exception`` blocks in per-source extractors never mistake filtered
+    service accounts for extraction failures.
+    """
+
+
+class _OverlayContext:
+    """Per-extraction overlay state: the compiled service-account filter and the
+    running set of filtered identities. Held in a ContextVar so concurrent runs
+    (async/threaded) never share state."""
+
+    def __init__(self, service_account_patterns: Optional[List[str]] = None) -> None:
+        self._compiled: List[re.Pattern] = []
+        for pattern in service_account_patterns or []:
+            try:
+                self._compiled.append(re.compile(pattern, re.IGNORECASE))
+            except re.error as exc:
+                logger.warning(
+                    "entity overlay: invalid service_account pattern %r skipped: %s",
+                    pattern,
+                    exc,
+                )
+        # Distinct filtered identities (canonicalised) — len() is the count.
+        self.filtered_names: set[str] = set()
+
+    def matches_service_account(self, display_name: Optional[str]) -> bool:
+        if not display_name or not self._compiled:
+            return False
+        return any(rx.search(display_name) for rx in self._compiled)
+
+    def record_filtered(self, display_name: Optional[str]) -> None:
+        self.filtered_names.add(" ".join((display_name or "").split()).lower())
+
+    @property
+    def filtered_count(self) -> int:
+        return len(self.filtered_names)
+
+
+def _append_entity(entities: List[Entity], entity: Optional[Entity]) -> None:
+    """Append only real entities; service-account filtering returns None."""
+    if entity is not None:
+        entities.append(entity)
+
+
+# Active overlay context for the current extraction, or None when no overlay
+# applies. ContextVar keeps this safe across concurrent extractions.
+_overlay_context: ContextVar[Optional[_OverlayContext]] = ContextVar(
+    "entity_overlay_context", default=None
+)
+
+
+def resolve_or_create_entity(**kwargs: Any) -> Optional[Entity]:
+    """Overlay-aware shim around entity_resolution.resolve_or_create_entity.
+
+    Defined with the same name the per-source extractors already call, so the
+    overlay behavior is injected without modifying any extractor body.
+
+    No overlay active (default path): a transparent pass-through — identical to
+    the core resolver (AC2).
+
+    Overlay active:
+      - if display_name matches a service-account pattern, the identity is
+        recorded and None is returned before any DB write (T5 / AC5);
+      - otherwise the entity is resolved/created, and its source_system is added
+        to metadata.sources for cross-system provenance (AC4).
+    """
+    ctx = _overlay_context.get()
+    if ctx is not None and ctx.matches_service_account(kwargs.get("display_name")):
+        ctx.record_filtered(kwargs.get("display_name"))
+        metadata = kwargs.get("metadata")
+        path = "overlay" if isinstance(metadata, dict) and metadata.get("overlay_version") else "default"
+        logger.debug(
+            "entity overlay: filtered service-account identity from %s path "
+            "(source_system=%s display_name=%r)",
+            path,
+            kwargs.get("source_system"),
+            kwargs.get("display_name"),
+        )
+        return None
+
+    entity = _core_resolve_or_create_entity(**kwargs)
+
+    if ctx is not None and entity is not None:
+        _record_entity_source(entity, kwargs.get("source_system"))
+    return entity
+
+
+def _record_entity_source(entity: Entity, source_system: Optional[str]) -> None:
+    """Additively merge *source_system* into the entity's metadata.sources.
+
+    Cross-system provenance tracking (AC4). Only ever invoked while an overlay
+    is active, so the default (no-overlay) path never touches metadata. Updates
+    only the metadata JSON column — the locked entity schema is unchanged.
+    TODO(T3-S15-A): promote metadata.sources to a queryable/indexed column before
+    graph queries need to ask for entities seen in multiple systems.
+    Best-effort: a failure here never breaks extraction.
+    """
+    if not source_system:
+        return
+    try:
+        from app import db
+
+        conn = db.connect()
+        try:
+            # Serialize the metadata read/merge/write so concurrent runs do not
+            # lose a source_system addition for the same entity row.
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                "SELECT metadata FROM entities WHERE id = ?", (str(entity.id),)
+            ).fetchone()
+            if row is None:
+                conn.commit()
+                return
+            raw = row[0]
+            meta = json.loads(raw) if isinstance(raw, str) and raw else (raw or {})
+            if not isinstance(meta, dict):
+                meta = {}
+            sources = meta.get("sources")
+            if not isinstance(sources, list):
+                sources = []
+            if source_system not in sources:
+                sources.append(source_system)
+            meta["sources"] = sources
+            conn.execute(
+                "UPDATE entities SET metadata = ?, updated_at = ? WHERE id = ?",
+                (json.dumps(meta), datetime.now(timezone.utc).isoformat(), str(entity.id)),
+            )
+            conn.commit()
+            # Reflect the merged metadata on the returned in-memory object too.
+            entity.metadata = meta
+        finally:
+            conn.close()
+    except Exception as exc:  # pragma: no cover — provenance is best-effort
+        logger.debug("entity source provenance update skipped: %s", exc)
 
 
 def _safe_str(val: Any) -> Optional[str]:
@@ -135,7 +300,7 @@ def _extract_salesforce_entities(
                     run_id=run_id,
                     metadata={"process_name": proc.get("process_name")},
                 )
-                entities.append(e)
+                _append_entity(entities, e)
             except Exception as exc:
                 logger.warning("SF person extraction failed for %s: %s", name, exc)
 
@@ -164,7 +329,7 @@ def _extract_salesforce_entities(
                         run_id=run_id,
                         metadata={"source": collection_name, "field": field_name},
                     )
-                    entities.append(e)
+                    _append_entity(entities, e)
                 except Exception as exc:
                     logger.warning(
                         "SF %s extraction failed for %s: %s",
@@ -215,7 +380,7 @@ def _extract_salesforce_entities(
                     run_id=run_id,
                     metadata={"source": collection_name},
                 )
-                entities.append(e)
+                _append_entity(entities, e)
             except Exception as exc:
                 logger.warning("SF team extraction failed for %s: %s", team_name, exc)
 
@@ -234,7 +399,7 @@ def _extract_salesforce_entities(
                 run_id=run_id,
                 metadata={"record_type": "case"},
             )
-            entities.append(e)
+            _append_entity(entities, e)
         except Exception as exc:
             logger.warning("SF object extraction failed for %s: %s", name, exc)
 
@@ -266,7 +431,7 @@ def _extract_salesforce_entities(
                         run_id=run_id,
                         metadata={"source": "ncino_owner"},
                     )
-                    entities.append(e)
+                    _append_entity(entities, e)
                 except Exception as exc:
                     logger.warning("nCino person extraction failed for %s: %s", owner_id, exc)
 
@@ -310,7 +475,7 @@ def _extract_salesforce_entities(
                         run_id=run_id,
                         metadata={"source": f"ncino_{key}"},
                     )
-                    entities.append(e)
+                    _append_entity(entities, e)
                 except Exception as exc:
                     logger.warning("nCino project extraction failed for %s: %s", project_name, exc)
 
@@ -340,7 +505,7 @@ def _extract_jira_entities(
                 run_id=run_id,
                 metadata={"source": "jira_project"},
             )
-            entities.append(e)
+            _append_entity(entities, e)
         except Exception as exc:
             logger.warning("Jira team extraction failed for %s: %s", project_name, exc)
 
@@ -354,7 +519,7 @@ def _extract_jira_entities(
                 run_id=run_id,
                 metadata={"source": "jira_project"},
             )
-            entities.append(e)
+            _append_entity(entities, e)
         except Exception as exc:
             logger.warning("Jira project extraction failed for %s: %s", project_name, exc)
 
@@ -372,7 +537,7 @@ def _extract_jira_entities(
                     run_id=run_id,
                     metadata={"source": "jira_issue_project"},
                 )
-                entities.append(e)
+                _append_entity(entities, e)
             except Exception as exc:
                 logger.warning(
                     "Jira issue project extraction failed for %s: %s",
@@ -399,7 +564,7 @@ def _extract_jira_entities(
                     run_id=run_id,
                     metadata={"source": "jira_epic"},
                 )
-                entities.append(e)
+                _append_entity(entities, e)
             except Exception as exc:
                 logger.warning("Jira epic extraction failed for %s: %s", epic_name, exc)
 
@@ -419,7 +584,7 @@ def _extract_jira_entities(
                         "project": issue.get("project"),
                     },
                 )
-                entities.append(e)
+                _append_entity(entities, e)
             except Exception as exc:
                 logger.warning("Jira object extraction failed for %s: %s", issue_key, exc)
 
@@ -439,7 +604,7 @@ def _extract_jira_entities(
                     source_record_id=None,  # no stable cross-system ID from display name
                     run_id=run_id,
                 )
-                entities.append(e)
+                _append_entity(entities, e)
             except Exception as exc:
                 logger.warning("Jira assignee extraction failed for %s: %s", assignee_name, exc)
 
@@ -459,7 +624,7 @@ def _extract_jira_entities(
                     source_record_id=None,
                     run_id=run_id,
                 )
-                entities.append(e)
+                _append_entity(entities, e)
             except Exception as exc:
                 logger.warning("Jira reporter extraction failed for %s: %s", reporter_name, exc)
 
@@ -480,7 +645,7 @@ def _extract_jira_entities(
                         "sf_reference": ref.get("sf_reference"),
                     },
                 )
-                entities.append(e)
+                _append_entity(entities, e)
             except Exception as exc:
                 logger.warning("Jira cross-ref extraction failed for %s: %s", issue_key, exc)
 
@@ -517,7 +682,7 @@ def _extract_servicenow_entities(
                     "incident_count": ag.get("incident_count"),
                 },
             )
-            entities.append(e)
+            _append_entity(entities, e)
         except Exception as exc:
             logger.warning("SN team extraction failed for %s: %s", group_name, exc)
 
@@ -539,7 +704,7 @@ def _extract_servicenow_entities(
                 run_id=run_id,
                 metadata={"source": "servicenow_project"},
             )
-            entities.append(e)
+            _append_entity(entities, e)
         except Exception as exc:
             logger.warning("SN project extraction failed for %s: %s", project_name, exc)
 
@@ -558,7 +723,7 @@ def _extract_servicenow_entities(
                     run_id=run_id,
                     metadata={"source": "servicenow_incident_project"},
                 )
-                entities.append(e)
+                _append_entity(entities, e)
             except Exception as exc:
                 logger.warning(
                     "SN incident project extraction failed for %s: %s",
@@ -582,7 +747,7 @@ def _extract_servicenow_entities(
                         "priority": incident.get("priority"),
                     },
                 )
-                entities.append(e)
+                _append_entity(entities, e)
             except Exception as exc:
                 logger.warning("SN object extraction failed for %s: %s", inc_number, exc)
 
@@ -604,7 +769,7 @@ def _extract_servicenow_entities(
                     source_record_id=None,  # name-based only
                     run_id=run_id,
                 )
-                entities.append(e)
+                _append_entity(entities, e)
             except Exception as exc:
                 logger.warning("SN assigned_to extraction failed for %s: %s", assigned_name, exc)
 
@@ -626,7 +791,7 @@ def _extract_servicenow_entities(
                     source_record_id=None,
                     run_id=run_id,
                 )
-                entities.append(e)
+                _append_entity(entities, e)
             except Exception as exc:
                 logger.warning("SN caller_id extraction failed for %s: %s", caller_name, exc)
 
@@ -684,7 +849,7 @@ def _extract_catalog_system_entities(
                     run_id=run_id,
                     metadata={"source": collection_name, "connector_id": connector_id},
                 )
-                entities.append(e)
+                _append_entity(entities, e)
             except Exception as exc:
                 logger.warning("Catalog system extraction failed for %s: %s", display_name, exc)
 
@@ -723,7 +888,7 @@ def _extract_detector_entities(
                     run_id=run_id,
                     metadata={"connector_id": signal_source, "pack_id": pack_id},
                 )
-                entities.append(e)
+                _append_entity(entities, e)
             except Exception as exc:
                 logger.warning(
                     "System entity extraction failed for %s: %s", signal_source, exc
@@ -743,11 +908,233 @@ def _extract_detector_entities(
                     run_id=run_id,
                     metadata={"pack_id": pack_id, "detector_id": detector_id},
                 )
-                entities.append(e)
+                _append_entity(entities, e)
             except Exception as exc:
                 logger.warning(
                     "Process entity extraction failed for %s: %s", detector_id, exc
                 )
+
+    return entities
+
+
+# ---------------------------------------------------------------------------
+# ENT-1 — Overlay-driven extraction (Task T4)
+#
+# Overlay extraction is ADDITIVE: it runs AFTER the default per-source
+# extraction and contributes extra customer-specific entities (union). Default
+# extraction always runs, so fields not covered by the overlay still fall back
+# to default behavior (AC1). Overlay person rules with resolution_source='id'
+# pass a source_record_id, which the resolver scores at confidence 1.0 (AC3),
+# taking precedence over a weaker name-based default sighting via the resolver's
+# confidence-upgrade (MAX) logic.
+# ---------------------------------------------------------------------------
+
+# Generic record buckets whose entries carry their own object type (rather than
+# being keyed by object API name). Salesforce REST returns records with an
+# {"attributes": {"type": "LLC_BI__Loan__c"}} envelope.
+_TYPED_RECORD_BUCKETS = ("records", "objects", "sample_records")
+
+
+def _record_object_type(record: Dict[str, Any]) -> Optional[str]:
+    """Return the object API name a record declares about itself, or None.
+
+    Supports the Salesforce REST ``attributes.type`` envelope and a few common
+    plain-key variants. Used to match generic-bucket records to overlay rules.
+    """
+    attrs = record.get("attributes")
+    if isinstance(attrs, dict):
+        t = _safe_str(attrs.get("type"))
+        if t:
+            return t
+    for key in ("object_api_name", "type", "sobject_type", "Type"):
+        t = _safe_str(record.get(key))
+        if t:
+            return t
+    return None
+
+
+def _index_records_by_object_type(
+    connector_data: Dict[str, Any],
+    wanted_types: set[str],
+) -> Dict[str, List[Dict[str, Any]]]:
+    """Index a connector's records by object API name, limited to wanted_types.
+
+    Two discovery conventions are supported so overlays work with realistic
+    ingestor shapes:
+      1. Direct keying: ``connector_data["LLC_BI__Loan__c"] = [ {...}, ... ]``.
+      2. Typed records in a generic bucket (``records`` / ``objects`` /
+         ``sample_records``) carrying ``attributes.type`` (Salesforce REST).
+    The nCino nested bucket (``connector_data["ncino"]``) is scanned the same way.
+    Records are de-duplicated by stable source identifiers first, then by a
+    canonical JSON fingerprint. This prevents the same Salesforce record from
+    being extracted twice when it appears under both direct and typed buckets.
+    """
+    index: Dict[str, List[Dict[str, Any]]] = {t: [] for t in wanted_types}
+    seen: Dict[str, set[str]] = {t: set() for t in wanted_types}
+
+    def _record_dedup_key(obj_type: str, record: Dict[str, Any]) -> str:
+        stable_id = _first_record_str(
+            record,
+            (
+                "Id",
+                "id",
+                "sys_id",
+                "record_id",
+                "recordId",
+                "loan_id",
+                "portfolio_id",
+                "number",
+                "key",
+            ),
+        )
+        if stable_id:
+            return f"id:{obj_type}:{stable_id}"
+        try:
+            return f"json:{obj_type}:{json.dumps(record, sort_keys=True, default=str)}"
+        except TypeError:
+            return f"repr:{obj_type}:{repr(record)}"
+
+    def _add(obj_type: Optional[str], record: Any) -> None:
+        if obj_type in index and isinstance(record, dict):
+            dedup_key = _record_dedup_key(obj_type, record)
+            if dedup_key not in seen[obj_type]:
+                seen[obj_type].add(dedup_key)
+                index[obj_type].append(record)
+
+    def _scan(container: Dict[str, Any]) -> None:
+        # 1. direct keying by object API name
+        for obj_type in wanted_types:
+            for record in _iter_records(container.get(obj_type)):
+                _add(obj_type, record)
+        # 2. typed records in generic buckets
+        for bucket in _TYPED_RECORD_BUCKETS:
+            for record in _iter_records(container.get(bucket)):
+                _add(_record_object_type(record), record)
+
+    if isinstance(connector_data, dict):
+        _scan(connector_data)
+        ncino = connector_data.get("ncino")
+        if isinstance(ncino, dict):
+            _scan(ncino)
+
+    return index
+
+
+def _overlay_emit(entities: List[Entity], *, label: str, **kwargs: Any) -> None:
+    """Resolve+append one overlay entity, honoring the service-account filter.
+
+    A filtered service account returns None (already counted) and is silently
+    skipped. Any resolver error is logged and swallowed — overlay extraction is
+    non-blocking, exactly like the default path.
+    """
+    try:
+        entity = resolve_or_create_entity(**kwargs)
+        _append_entity(entities, entity)
+    except Exception as exc:
+        logger.warning(
+            "overlay %s extraction failed for %s: %s",
+            label,
+            kwargs.get("display_name"),
+            exc,
+        )
+
+
+def _apply_overlay_rules(
+    *,
+    org_id: str,
+    run_id: str,
+    connector_id: str,
+    overlay: Any,
+    connector_data: Dict[str, Any],
+) -> List[Entity]:
+    """Apply one overlay's person/team/object rules to a connector's data.
+
+    Returns the extra entities the overlay contributed. Never raises — the
+    caller treats overlay extraction as additive and non-blocking.
+    """
+    entities: List[Entity] = []
+    if not connector_data:
+        return entities
+
+    records_by_type = _index_records_by_object_type(
+        connector_data, overlay.referenced_object_names()
+    )
+
+    # Person rules — ID-based fields resolve at confidence 1.0 (AC3).
+    for rule in overlay.person_fields:
+        use_id = rule.resolution_source == "id"
+        for record in records_by_type.get(rule.object_api_name, []):
+            display_name, source_id = _ref_name_and_id(record.get(rule.field_api_name))
+            if not display_name:
+                continue
+            _overlay_emit(
+                entities,
+                label="person",
+                org_id=org_id,
+                entity_type="person",
+                display_name=display_name,
+                source_system=connector_id,
+                source_record_id=(source_id or display_name) if use_id else None,
+                run_id=run_id,
+                metadata={
+                    "overlay_version": overlay.version,
+                    "label": rule.label,
+                    "object": rule.object_api_name,
+                    "field": rule.field_api_name,
+                    "sources": [connector_id],
+                },
+            )
+
+    # Team rules.
+    for rule in overlay.team_fields:
+        use_id = rule.resolution_source == "id"
+        for record in records_by_type.get(rule.object_api_name, []):
+            display_name, source_id = _ref_name_and_id(record.get(rule.field_api_name))
+            if not display_name:
+                continue
+            _overlay_emit(
+                entities,
+                label="team",
+                org_id=org_id,
+                entity_type="team",
+                display_name=display_name,
+                source_system=connector_id,
+                source_record_id=(source_id or display_name) if use_id else None,
+                run_id=run_id,
+                metadata={
+                    "overlay_version": overlay.version,
+                    "label": rule.label,
+                    "object": rule.object_api_name,
+                    "field": rule.field_api_name,
+                    "sources": [connector_id],
+                },
+            )
+
+    # Object rules.
+    for rule in overlay.object_rules:
+        for record in records_by_type.get(rule.object_api_name, []):
+            display_name = _first_record_str(
+                record, (rule.name_field, "Name", "name", "Id", "id")
+            )
+            if not display_name:
+                continue
+            source_id = _first_record_str(record, ("Id", "id", "sys_id"))
+            _overlay_emit(
+                entities,
+                label="object",
+                org_id=org_id,
+                entity_type=rule.entity_type,
+                display_name=display_name,
+                source_system=connector_id,
+                source_record_id=source_id,
+                run_id=run_id,
+                metadata={
+                    "overlay_version": overlay.version,
+                    "record_type": rule.record_type,
+                    "object": rule.object_api_name,
+                    "sources": [connector_id],
+                },
+            )
 
     return entities
 
@@ -784,77 +1171,166 @@ def extract_entities(
     all_entities: List[Entity] = []
     failure_count = 0
 
-    # Salesforce / nCino
-    sf_data = ingestor_data.get("salesforce") or {}
-    if sf_data:
-        try:
-            batch = _extract_salesforce_entities(
-                org_id=org_id, run_id=run_id, sf_data=sf_data
-            )
-            all_entities.extend(batch)
-            logger.info("Entity extraction — Salesforce: %d entities", len(batch))
-        except Exception as exc:
-            failure_count += 1
-            logger.warning("Salesforce entity extraction failed: %s", exc)
-
-    # Jira
-    jira_data = ingestor_data.get("jira") or {}
-    if jira_data:
-        try:
-            batch = _extract_jira_entities(
-                org_id=org_id, run_id=run_id, jira_data=jira_data
-            )
-            all_entities.extend(batch)
-            logger.info("Entity extraction — Jira: %d entities", len(batch))
-        except Exception as exc:
-            failure_count += 1
-            logger.warning("Jira entity extraction failed: %s", exc)
-
-    # ServiceNow
-    sn_data = ingestor_data.get("servicenow") or {}
-    if sn_data:
-        try:
-            batch = _extract_servicenow_entities(
-                org_id=org_id, run_id=run_id, sn_data=sn_data
-            )
-            all_entities.extend(batch)
-            logger.info("Entity extraction — ServiceNow: %d entities", len(batch))
-        except Exception as exc:
-            failure_count += 1
-            logger.warning("ServiceNow entity extraction failed: %s", exc)
-
-    # Detector-level: System and Process (stable identifiers)
+    # ENT-1: resolve any overlays registered for this run's connectors. Default
+    # extraction ALWAYS runs; overlays add customer-specific entities on top
+    # (union — AC1). When no overlay is registered the context is None and the
+    # resolve wrapper is a transparent pass-through (AC2). Lookup never blocks.
+    overlay_by_connector: Dict[str, Any] = {}
     try:
-        batch = _extract_detector_entities(
-            org_id=org_id,
-            run_id=run_id,
-            pack_id=pack_id,
-            detector_results=detector_results,
-        )
-        all_entities.extend(batch)
-        logger.info("Entity extraction — detector entities: %d", len(batch))
-    except Exception as exc:
-        failure_count += 1
-        logger.warning("Detector entity extraction failed: %s", exc)
+        from app.entity_overlays.overlay_registry import get_overlay
 
-    # Integration Hub / workspace catalog: System entities even when no detector fires.
-    catalog_data = {
-        key: value
-        for key, value in ingestor_data.items()
-        if key in {"connectors", "systems", "workspace_catalog", "integration_hub"}
-    }
-    if catalog_data:
+        for _connector in ("salesforce", "jira", "servicenow"):
+            _ov = get_overlay(org_id, _connector)
+            if _ov is not None:
+                overlay_by_connector[_connector] = _ov
+    except Exception as exc:
+        logger.warning("entity overlay lookup failed (non-blocking): %s", exc)
+
+    # One service-account filter for the whole extraction, built from the union
+    # of every active overlay's patterns. Setting the context (even with empty
+    # patterns) also enables cross-system provenance tracking (metadata.sources).
+    overlay_ctx: Optional[_OverlayContext] = None
+    if overlay_by_connector:
+        _sa_patterns: List[str] = []
+        for _ov in overlay_by_connector.values():
+            _sa_patterns.extend(_ov.service_account_patterns or [])
+        overlay_ctx = _OverlayContext(_sa_patterns)
+    ctx_token = _overlay_context.set(overlay_ctx)
+
+    try:
+        # Salesforce / nCino — default extraction
+        sf_data = ingestor_data.get("salesforce") or {}
+        if sf_data:
+            try:
+                batch = _extract_salesforce_entities(
+                    org_id=org_id, run_id=run_id, sf_data=sf_data
+                )
+                all_entities.extend(batch)
+                logger.info("Entity extraction — Salesforce: %d entities", len(batch))
+            except Exception as exc:
+                failure_count += 1
+                logger.warning("Salesforce entity extraction failed: %s", exc)
+
+            # Overlay extraction for Salesforce/nCino (additive union)
+            if "salesforce" in overlay_by_connector:
+                try:
+                    batch = _apply_overlay_rules(
+                        org_id=org_id,
+                        run_id=run_id,
+                        connector_id="salesforce",
+                        overlay=overlay_by_connector["salesforce"],
+                        connector_data=sf_data,
+                    )
+                    all_entities.extend(batch)
+                    logger.info(
+                        "Entity extraction — Salesforce overlay: %d entities", len(batch)
+                    )
+                except Exception as exc:
+                    failure_count += 1
+                    logger.warning("Salesforce overlay extraction failed: %s", exc)
+
+        # Jira — default extraction
+        jira_data = ingestor_data.get("jira") or {}
+        if jira_data:
+            try:
+                batch = _extract_jira_entities(
+                    org_id=org_id, run_id=run_id, jira_data=jira_data
+                )
+                all_entities.extend(batch)
+                logger.info("Entity extraction — Jira: %d entities", len(batch))
+            except Exception as exc:
+                failure_count += 1
+                logger.warning("Jira entity extraction failed: %s", exc)
+
+            # Overlay extraction for Jira (additive union)
+            if "jira" in overlay_by_connector:
+                try:
+                    batch = _apply_overlay_rules(
+                        org_id=org_id,
+                        run_id=run_id,
+                        connector_id="jira",
+                        overlay=overlay_by_connector["jira"],
+                        connector_data=jira_data,
+                    )
+                    all_entities.extend(batch)
+                    logger.info("Entity extraction — Jira overlay: %d entities", len(batch))
+                except Exception as exc:
+                    failure_count += 1
+                    logger.warning("Jira overlay extraction failed: %s", exc)
+
+        # ServiceNow — default extraction
+        sn_data = ingestor_data.get("servicenow") or {}
+        if sn_data:
+            try:
+                batch = _extract_servicenow_entities(
+                    org_id=org_id, run_id=run_id, sn_data=sn_data
+                )
+                all_entities.extend(batch)
+                logger.info("Entity extraction — ServiceNow: %d entities", len(batch))
+            except Exception as exc:
+                failure_count += 1
+                logger.warning("ServiceNow entity extraction failed: %s", exc)
+
+            # Overlay extraction for ServiceNow (additive union)
+            if "servicenow" in overlay_by_connector:
+                try:
+                    batch = _apply_overlay_rules(
+                        org_id=org_id,
+                        run_id=run_id,
+                        connector_id="servicenow",
+                        overlay=overlay_by_connector["servicenow"],
+                        connector_data=sn_data,
+                    )
+                    all_entities.extend(batch)
+                    logger.info(
+                        "Entity extraction — ServiceNow overlay: %d entities", len(batch)
+                    )
+                except Exception as exc:
+                    failure_count += 1
+                    logger.warning("ServiceNow overlay extraction failed: %s", exc)
+
+        # Detector-level: System and Process (stable identifiers)
         try:
-            batch = _extract_catalog_system_entities(
+            batch = _extract_detector_entities(
                 org_id=org_id,
                 run_id=run_id,
-                catalog_data=catalog_data,
+                pack_id=pack_id,
+                detector_results=detector_results,
             )
             all_entities.extend(batch)
-            logger.info("Entity extraction — catalog systems: %d", len(batch))
+            logger.info("Entity extraction — detector entities: %d", len(batch))
         except Exception as exc:
             failure_count += 1
-            logger.warning("Catalog system extraction failed: %s", exc)
+            logger.warning("Detector entity extraction failed: %s", exc)
+
+        # Integration Hub / workspace catalog: System entities even when no detector fires.
+        catalog_data = {
+            key: value
+            for key, value in ingestor_data.items()
+            if key in {"connectors", "systems", "workspace_catalog", "integration_hub"}
+        }
+        if catalog_data:
+            try:
+                batch = _extract_catalog_system_entities(
+                    org_id=org_id,
+                    run_id=run_id,
+                    catalog_data=catalog_data,
+                )
+                all_entities.extend(batch)
+                logger.info("Entity extraction — catalog systems: %d", len(batch))
+            except Exception as exc:
+                failure_count += 1
+                logger.warning("Catalog system extraction failed: %s", exc)
+    finally:
+        # Always detach the overlay context so it never leaks into the next
+        # extraction sharing this execution context.
+        _overlay_context.reset(ctx_token)
+
+    # Service accounts filtered (T5 / AC5) — distinct identities skipped by the
+    # active overlay's service_account_patterns. 0 when no overlay is active.
+    filtered_service_account_count = (
+        overlay_ctx.filtered_count if overlay_ctx is not None else 0
+    )
 
     ambiguous_count = sum(
         1 for e in all_entities if e.resolution_status == "ambiguous"
@@ -885,6 +1361,9 @@ def extract_entities(
                 "entity_count": len(all_entities),
                 "ambiguous_count": ambiguous_count,
                 "failure_count": failure_count,
+                # ENT-1 / AC5: number of service-account identities filtered by
+                # the active overlay (0 when no overlay is active).
+                "filtered_service_account_count": filtered_service_account_count,
             },
         )
     except Exception as exc:

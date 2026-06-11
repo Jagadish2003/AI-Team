@@ -616,6 +616,7 @@ def get_lending_correlation(
                         "subcategory": inc.get("subcategory", "") or "",
                         "priority": inc.get("priority", ""),
                         "state": inc.get("state", ""),
+                        "sys_created_on": inc.get("sys_created_on", ""),
                     }
                 )
         except Exception as e:
@@ -640,6 +641,8 @@ def get_lending_correlation(
                 "snippet": snippet,
                 "source": "ServiceNow",
                 "detectorId": detector_id,
+                "state": incident.get("state", ""),
+                "sys_created_on": incident.get("sys_created_on", ""),
             }
         )
         by_detector.setdefault(detector_id, []).append(snippet)

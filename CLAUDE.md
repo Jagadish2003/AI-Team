@@ -1,3 +1,7 @@
+# CLAUDE.md
+
+This file is the Claude Code guidance document for the AgentIQ repository. Claude Code reads it automatically at the start of a session. Keep it accurate and in sync with the code — when the codebase changes in a way that affects these instructions, update this file in the same PR.
+
 # AgentIQ Claude Instructions
 
 ## Purpose
@@ -33,6 +37,10 @@ Keep this file short and actionable. Prefer reading the relevant code and contra
 * `backend/app/materialize_t2.py`: run materialization, status, audit, events, roadmap/report persistence.
 * `backend/app/materialize_t3_hook.py`: T3 hook materialization — a separate step from `materialize_t2.py`; do not conflate.
 * `backend/app/llm_enrichment.py`: LLM enrichment post-processing (advisory only, must not mutate scoring fields).
+* `backend/app/entity_extractor.py`: Stage 2 knowledge graph orchestration. Non-blocking — extraction failures are logged and never break the run.
+* `backend/app/entity_resolution.py`: conservative entity resolution engine. Uses an N+1 lookup pattern for ambiguous rows; only confident matches are merged.
+* `backend/app/routes_entities.py`: `GET /api/runs/{runId}/entities` — analyst+ only. Owns `ensure_entities_table()` (startup-only schema creation).
+* `backend/app/graph_context_builder.py`: ENT-4 graph context builder — turns raw graph traversal rows into a ranked, capped `GraphContext` for LLM prompts. Hard caps (15 entities / 20 relationships) and deterministic ranking are not configurable per-run. Distinct from `graph_context.py` (the ENT-3 run-KV enrichment bridge) — do not conflate.
 * `backend/app/executive_report_engine.py`: executive report generation.
 * `backend/app/roadmap_engine.py`: roadmap build logic.
 * `backend/app/cross_system_linker.py`: cross-system signal linking across Salesforce/ServiceNow/Jira.
@@ -63,13 +71,14 @@ Keep this file short and actionable. Prefer reading the relevant code and contra
 * `backend/discovery/models.py`: discovery data models.
 * `backend/discovery/log.py`: discovery logging utilities.
 * `backend/discovery/lending_scorer.py` / `strs_benefits_scorer.py`: pack-specific scorers for nCino and STRS packs.
+* `backend/discovery/packs/github_engineering_scorer.py`: scorer for the `github_engineering` pack. Elevates PR-bottleneck confidence MEDIUM → HIGH when Jira corroborates.
 * `backend/discovery/integration_verifier.py`: verifies integration signal completeness.
 * `backend/discovery/track_a_adapter.py`: Track A ingestion adapter.
 * `backend/discovery/offline_export.py`: offline fixture/data export utilities.
 * `backend/discovery/ingest/live_validator.py`: live data validation at ingest time.
 * `backend/discovery/ingest/strs_jira_corroboration.py` / `strs_sn_corroboration.py`: STRS cross-source corroboration against Jira and ServiceNow.
 * `backend/discovery/calibration/calibrator.py` / `ranking.py`: confidence calibration and entity ranking.
-* `backend/discovery/packs/pack_config.py`: centralized pack selection. Current packs: `service_cloud`, `ncino`, `strs_benefits`.
+* `backend/discovery/packs/pack_config.py`: centralized pack selection. Current packs: `service_cloud`, `ncino`, `strs_benefits`, `sqlserver_opsignal`, `github_engineering`.
 
 ### Backend — Database & Connectors
 
@@ -77,13 +86,16 @@ Keep this file short and actionable. Prefer reading the relevant code and contra
 * `backend/database/models/`: SQLAlchemy ORM models — `audit_log.py`, `credentials.py`, `signal_snapshots.py`, `telemetry.py`, `workspace_members.py`.
 * `backend/database/seed_loader.py`: creates and seeds `backend/database/dev.db` from `backend/database/seed/` (11 JSON seed files).
 * `backend/connectors/db/`: native DB connector subsystem — Oracle, PostgreSQL, SQL Server drivers with connection pooling.
-* `backend/connectors/db/query_guard.py`: SQL injection prevention — must be invoked for every native DB connector query. Skipping it bypasses injection protection.
+* `backend/connectors/db/oracle_ingestor.py`: Oracle operational-signal ingestor. Missing scope does NOT fall back to Oracle's sample `HR` schema — it returns degraded signals instead, so a misconfigured scope surfaces rather than silently querying sample data.
+* `backend/connectors/db/postgresql_ingestor.py`: PostgreSQL operational-signal ingestor. Boolean predicates retry with an integer fallback when PostgreSQL raises a datatype-mismatch `pgcode` (`42804`/`42883`).
+* `backend/connectors/db/query_guard.py`: SQL injection prevention — must be invoked for every native DB connector query. Skipping it bypasses injection protection. Uses sqlparse token traversal to strip CTE aliases (`WITH x AS (...)`) so scope checks resolve real base tables; fail-closed on ambiguous extraction.
 * `backend/connectors/db/scope.py`: table/column scope management for DB connectors.
+* `backend/connectors/saas/github.py`: GitHub SaaS connector — REST ingestion backing the `github_engineering` pack (PRs, commits, branches).
 
 ### Backend — Token Generation & Tests
 
 * `backend/token_generation/`: per-pack OAuth token generation scripts for Salesforce, nCino, STRS, and Life Sciences. Each has a `token_*.py` and a `server_*.key` file. The `.key` files must never be committed.
-* `backend/tests/contract/`: 46+ contract and API tests. Use a temp SQLite DB via `conftest.py`.
+* `backend/tests/contract/`: contract and API tests. Use a temp SQLite DB via `conftest.py`.
 * `backend/tests/contract/fixtures/`: JSON fixtures for audit samples and connector health samples.
 * `backend/tests/unit/`: unit tests for individual backend modules.
 * `backend/discovery/tests/`: 15 discovery/ingest/detector/runner tests.
@@ -164,7 +176,9 @@ Backend contract tests:
 ```powershell
 cd backend
 python -m pytest
-python -m pytest tests\contract\test_workspace_catalog.py
+python -m pytest tests\contract\test_workspace_catalog.py        # single file
+python -m pytest tests\contract\test_entity_extraction.py::test_name   # single test by node id
+python -m pytest -k "entity and not resolution"                  # -k name-pattern filter
 ```
 
 Discovery tests:
@@ -222,6 +236,9 @@ Smoke scripts are Bash scripts under `scripts/` and `backend/scripts/`; run them
 * `REPLAY_RESETS_DECISIONS`: set to `1` to clear analyst overrides on replay. Default is off.
 * `TRACKB_PYTHON` / `TRACKB_RUNNER_MODE`: Python path and mode (`offline`/`live`) for the Track B subprocess runner.
 * `BASELINE_JOB_INTERVAL_HOURS` / `BASELINE_MIN_RUNS` / `BASELINE_WINDOW_DAYS`: control the background baseline calculator job.
+* Oracle native DB connector env vars: `ORACLE_HOST`, `ORACLE_PORT` (default `1521`), `ORACLE_DATABASE` (service name, default `ORCL`), `ORACLE_DB_USERNAME`, `ORACLE_DB_PASSWORD`. These diverge from the `{CONNECTOR_NAME}_CLIENT_SECRET` convention because native DB connectors authenticate with a database username/password pair (resolved via `username_key`/`password_key`), not an OAuth client secret.
+* PostgreSQL native DB connector env vars: `POSTGRESQL_HOST`, `POSTGRESQL_PORT` (default `5432`), `POSTGRESQL_DATABASE` (default `postgres`), `POSTGRESQL_USERNAME`, `POSTGRESQL_PASSWORD`, and `POSTGRESQL_SSL_MODE` (`require`/`prefer`/`disable`). Same divergence rationale as Oracle above.
+* `AGENTIQ_DISABLE_BACKGROUND_JOBS`: set to `1` to skip starting background jobs (connector health, baseline calculator) on app startup. Useful for tests and isolated runs.
 
 ## Architecture Notes
 
@@ -232,14 +249,18 @@ Smoke scripts are Bash scripts under `scripts/` and `backend/scripts/`; run them
 * Replay should re-serve persisted artifacts only. It must not call live ingestion or regenerate LLM output.
 * LLM enrichment is advisory post-processing. It must not mutate scoring fields such as impact, effort, tier, decision, or evidence IDs.
 * `OppEnrichment.relationships` is intentionally different from the other enrichment fields: it is read live from `entity_relationships` through `graph_query.py`, not from a run-scoped KV artifact. The graph is cross-run state, so later relationship upserts can change what a historical run's relationship view returns.
-* Pack selection is centralized in `backend/discovery/packs/pack_config.py`. Current packs include `service_cloud`, `ncino`, and `strs_benefits`.
-* nCino and STRS packs have compliance guardrails. Do not suggest automated credit or benefit decisions; keep humans responsible for final decisions.
+* `OppEnrichment` also carries ENT-2 cross-system corroboration fields (`corroboration_sources`, `corroboration_label`, `triple_corroboration`, `corroboration_rule_ids`), populated from the stored opportunity record. See `backend/app/corroboration_engine.py` and `backend/discovery/packs/corroboration_rules.py`.
+* Pack selection is centralized in `backend/discovery/packs/pack_config.py`. Current packs: `service_cloud`, `ncino`, `strs_benefits`, `sqlserver_opsignal`, `github_engineering`.
+* nCino, STRS, and `github_engineering` packs have compliance guardrails. Do not suggest automated credit/benefit decisions or automated merge approvals, branch deletions, or code changes; keep humans responsible for final decisions.
 * Multi-tenancy is enforced via `middleware/tenancy.py`. Every request is scoped to an org; the default local org is `default`.
 * RBAC is enforced via `rbac.py`. The dev user is seeded as owner of the default org on startup via `seed_owner`. Use `require_role` to gate privileged routes.
 * Audit trail is enforced via `middleware/audit.py`. All mutating requests are logged automatically.
 * A background connector health check job starts on app startup (`jobs/connector_health.py`) and shuts down on SIGTERM. Do not block startup waiting for connectors.
 * A background baseline calculator job (`jobs/baseline_calculator.py`) recalculates scoring baselines on a configurable interval.
 * Telemetry events are tracked via `telemetry.py`. Do not log sensitive field values (tokens, PII) in telemetry events.
+* Telemetry has a locked write signature: `record_event(event_type, payload)`. The `event_type` must be in `REGISTERED_EVENT_TYPES` — `record_event()` raises `ValueError` for an unregistered type. Register new event types (and their payload schema) before emitting them.
+* Entity extraction (`entity_extractor.py`) is a non-blocking Stage 2 step — failures are logged and never break the run. Resolution (`entity_resolution.py`) is conservative and uses an N+1 lookup for ambiguous rows. Never write `canonical_name` from caller-supplied values; it is normalized internally. Display filtering uses `ENTITY_MIN_RUN_COUNT`, imported from `database/models/entities.py` — import it, do not redefine the threshold locally.
+* `_verify_db_driver_imports()` runs at app startup to surface Oracle/PostgreSQL driver install problems early; it logs availability and does not block startup.
 * The native DB connector subsystem (`backend/connectors/db/`) supports Oracle, PostgreSQL, and SQL Server. All queries must go through `query_guard.py` for injection prevention.
 * The token vault (`auth/vault.py`) uses Fernet symmetric encryption. Set `CREDENTIAL_VAULT_KEY` before storing any connector credentials in production.
 * The frontend should fetch backend data through `frontend/src/lib/apiClient.ts` or typed wrappers in `frontend/src/api/`.
@@ -254,6 +275,7 @@ Smoke scripts are Bash scripts under `scripts/` and `backend/scripts/`; run them
 * Audit lists are newest-first.
 * Decision enums use uppercase values: `APPROVED`, `REJECTED`, `UNREVIEWED`.
 * Readiness/status enums use the casing already defined in the relevant frontend type or contract.
+* Contract changes require a version bump (e.g. v1.0 → v1.1) and PR sign-off by both the FE and BE leads, per the "Contract PR sign-off" section of `contracts/CONTRACT_RULES.md`.
 
 ## Frontend Conventions
 
@@ -287,7 +309,8 @@ Smoke scripts are Bash scripts under `scripts/` and `backend/scripts/`; run them
 
 Use `backend/migrations/` for all migration work. `backend/alembic.ini` points to this directory, and contract tests run these migrations against an isolated temporary DB.
 
-* `backend/migrations/`: active migration scripts (`0001_create_telemetry_events.py`, `0002_create_signal_snapshots.py`).
+* `backend/migrations/versions/`: active migration scripts (`0001_create_telemetry_events.py`, `0002_create_signal_snapshots.py`, `0003_create_entities.py`).
+* The `0003_create_entities.py` migration imports `ALL_ENTITIES_DDL` from `database/models/entities.py` rather than hardcoding DDL. The same `ALL_ENTITIES_DDL` is executed by the runtime `ensure_entities_table()` helper, so the migration-applied schema and the runtime-created schema can never drift apart.
 Apply pending migrations:
 
 ```powershell
@@ -315,6 +338,9 @@ alembic upgrade head
 * The CORS middleware allows any `localhost` port via regex in addition to the explicit origins list. This is intentional for dev flexibility.
 * `backend/connectors/db/query_guard.py` must be invoked for every native DB query. Skipping it bypasses SQL injection protection silently.
 * `auth/vault.py` requires `CREDENTIAL_VAULT_KEY` to be set in production. A missing key causes connector secret storage to fail or silently fall back to plaintext.
+* `get_pack()` falls back to `service_cloud` for an unknown pack_id (it logs a WARNING rather than raising). A typo'd pack id therefore yields Service Cloud detectors instead of an error — check the log line if a run produces unexpected detectors.
+* `record_event()` raises `ValueError` for an unregistered `event_type` — this is a deliberate change from the earlier silent-drop behavior. A new event type must be added to `REGISTERED_EVENT_TYPES` before it is emitted, or the call raises.
+* `ensure_entities_table()` is startup-only — it creates the entities table once when `routes_entities` is registered. Do not call it per-request.
 
 ## Useful Prompts For This Repo
 
