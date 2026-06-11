@@ -56,10 +56,27 @@ export interface OppEnrichment {
   relationships: RelationshipSummary[];
   // ENT-2 — Cross-System Confidence Elevation. snake_case to match backend JSON.
   // Safe defaults from the backend: empty arrays / false / null.
+  // corroboration_label is shared with ENT-3 (carried through from ENT-2).
   corroboration_sources?: string[];
   corroboration_label?: string | null;
   triple_corroboration?: boolean;
   corroboration_rule_ids?: string[];
+  // ENT-3 / T3-S15-A — LLM enrichment enterprise hardening (snake_case to match
+  // the backend JSON directly, like the temporal/entity fields above).
+  // Graph grounding: whether the first pass ran against the ENT-4 graph, and
+  // the entity counts behind the 15-entity cap.
+  llm_grounded: boolean;
+  graph_entity_count: number;
+  graph_entity_count_shown: number;
+  graph_truncated: boolean;
+  // Hallucination guard outcomes for this opportunity.
+  hallucination_removals: string[];
+  hallucination_rewrites: number;
+  hallucination_llm_rewrites: number;
+  // Preliminary quality gate: when true the evidence trace shows an
+  // "Analyst review required" banner with preliminary_reason.
+  preliminary: boolean;
+  preliminary_reason: string | null;
 }
 
 export interface RunEnrichment {

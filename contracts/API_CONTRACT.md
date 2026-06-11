@@ -1,7 +1,16 @@
 # AgentIQ — API_CONTRACT.md (EPIC E0)
-Version: v1.2
-Date: 2026-06-08
+Version: v1.3
+Date: 2026-06-09
 
+> v1.3 — ENT-3 / T3-S15-A: extended `OppEnrichment` with the LLM enrichment
+> enterprise-hardening fields — graph grounding (`llm_grounded`,
+> `graph_entity_count`, `graph_entity_count_shown`, `graph_truncated`),
+> hallucination-guard outcomes (`hallucination_removals`,
+> `hallucination_rewrites`, `hallucination_llm_rewrites`), the preliminary
+> quality gate (`preliminary`, `preliminary_reason`), and `corroboration_label`.
+> All additive and backward-compatible — existing fields unchanged. Mirrors
+> `src/types/enrichment.ts`.
+>
 > v1.2 — Documented the LLM-enrichment endpoints and the `OppEnrichment` shape,
 > including the Track 3 Stage 1 temporal fields (`baseline_stddev`,
 > `baseline_window_days`, `current_value`, `recent_values`, `signal_key`,
@@ -213,9 +222,31 @@ Response: `OppEnrichment` (`src/types/enrichment.ts`)
       "resolution_confidence": 0.8,
       "resolution_status": "resolved"
     }
-  ]
+  ],
+  "relationships": [],
+
+  "llm_grounded": false,
+  "graph_entity_count": 0,
+  "graph_entity_count_shown": 0,
+  "graph_truncated": false,
+  "hallucination_removals": [],
+  "hallucination_rewrites": 0,
+  "hallucination_llm_rewrites": 0,
+  "preliminary": true,
+  "preliminary_reason": null,
+  "corroboration_label": null
 }
 ```
+
+> ENT-3 / T3-S15-A fields (v1.3): `llm_grounded` is true when the first-pass
+> prompt was grounded against the ENT-4 graph (>= 3 entities); the
+> `graph_entity_count*` / `graph_truncated` fields reflect the 15-entity cap.
+> `hallucination_*` report what the hallucination guard did to the why-bullets
+> (`hallucination_removals` holds drop reason codes such as `dropped_timeout` /
+> `dropped_generic`, never the dropped text). `preliminary` defaults to `true`
+> ("analyst review required") until the three quality gates pass; when true,
+> `preliminary_reason` carries the human-readable explanation rendered in the
+> evidence trace. `corroboration_label` is carried through from ENT-2.
 
 > Casing note: the temporal/entity fields use `snake_case` (e.g.
 > `baseline_stddev`, `recent_values`) — an intentional, documented exception to

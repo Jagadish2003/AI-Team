@@ -38,7 +38,62 @@ function BulletList({
 
 // ── LLM enrichment panel
 
-function EnrichmentPanel({
+// ENT-3 / T3-S15-A: each aiWhyBullet may carry a leading [OBSERVED] or
+// [INFERRED: <basis>] tag. parseObservationTag splits the tag from the body so
+// the UI can render a pill and show the clean text. Untagged bullets render
+// with no pill.
+type ObservationKind = "observed" | "inferred" | null;
+
+export function parseObservationTag(bullet: string): {
+  kind: ObservationKind;
+  basis: string | null;
+  text: string;
+} {
+  const match = /^\s*\[(OBSERVED|INFERRED)(?::\s*([^\]]*))?\]\s*/i.exec(bullet);
+  if (!match) return { kind: null, basis: null, text: bullet };
+  const kind = match[1].toLowerCase() === "observed" ? "observed" : "inferred";
+  const basis = match[2]?.trim() || null;
+  return { kind, basis, text: bullet.slice(match[0].length) };
+}
+
+function ObservationPill({ kind, basis }: { kind: ObservationKind; basis: string | null }) {
+  if (!kind) return null;
+  const isObserved = kind === "observed";
+  return (
+    <span
+      data-testid={`observation-pill-${kind}`}
+      title={basis ? `Inferred from: ${basis}` : undefined}
+      className={`shrink-0 rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase leading-tight tracking-wide ${
+        isObserved
+          ? "border border-green-500/40 bg-green-500/10 text-green-600"
+          : "border border-amber-500/40 bg-amber-500/10 text-amber-600"
+      }`}
+    >
+      {isObserved ? "Observed" : "Inferred"}
+    </span>
+  );
+}
+
+// Why-bullets renderer with OBSERVED/INFERRED pills (ENT-3 / T3-S15-A).
+function WhyBulletList({ items }: { items: string[] }) {
+  if (!items || items.length === 0) return null;
+  return (
+    <ul className="opportunity-round-bullets space-y-1.5">
+      {items.map((item, i) => {
+        const { kind, basis, text } = parseObservationTag(item);
+        return (
+          <li key={i} className="flex items-start gap-2 text-xs text-text">
+            <span className="mt-0.5 shrink-0 text-muted font-bold">›</span>
+            <ObservationPill kind={kind} basis={basis} />
+            <span className="leading-relaxed">{text}</span>
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
+export function EnrichmentPanel({
   opp,
   enrichment,
 }: {
@@ -50,8 +105,27 @@ function EnrichmentPanel({
   // Use LLM summary if available, fall back to aiRationale
   const summary = enrichment?.aiSummary || opp.aiRationale;
 
+  // ENT-3: a preliminary finding has not cleared all quality gates and needs
+  // analyst review before it can be treated as confirmed.
+  const isPreliminary = enrichment?.preliminary === true;
+  const corroboration = enrichment?.corroboration_label;
+
   return (
     <div className="space-y-4">
+      {/* ENT-3: Analyst-review-required banner for preliminary findings */}
+      {isPreliminary && (
+        <div
+          data-testid="preliminary-banner"
+          role="status"
+          className="rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs leading-relaxed text-amber-700"
+        >
+          <span className="font-semibold">Analyst review required</span>
+          {enrichment?.preliminary_reason && (
+            <span className="text-amber-700/90"> — {enrichment.preliminary_reason}</span>
+          )}
+        </div>
+      )}
+
       {/* AI Analysis */}
       <div>
         <div className="mb-2">
@@ -62,6 +136,16 @@ function EnrichmentPanel({
         <div className="rounded-lg border border-border bg-bg/30 p-3 text-xs text-text leading-relaxed overflow-y-auto max-h-[140px]">
           {summary}
         </div>
+
+        {/* ENT-3: corroboration label (from ENT-2) below the analysis block */}
+        {corroboration && (
+          <div
+            data-testid="corroboration-label"
+            className="mt-2 inline-flex items-center rounded border border-border/70 bg-panel/60 px-2 py-0.5 text-[11px] leading-tight text-muted"
+          >
+            {corroboration}
+          </div>
+        )}
       </div>
 
       {/* Why bullets — only when LLM generated */}
@@ -71,7 +155,7 @@ function EnrichmentPanel({
             Why This Matters
           </div>
           <div className="rounded-lg border border-border bg-bg/30 p-3">
-            <BulletList items={enrichment.aiWhyBullets} />
+            <WhyBulletList items={enrichment.aiWhyBullets} />
           </div>
         </div>
       )}
