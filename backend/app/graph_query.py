@@ -39,7 +39,7 @@ from __future__ import annotations
 
 import logging
 import sqlite3
-from typing import List
+from typing import List, Optional
 
 from pydantic import BaseModel
 
@@ -63,6 +63,26 @@ class RelationshipSummary(BaseModel):
     to_entity_type: str
     inferred: bool
     confidence: float
+
+
+class GraphTraversalNode(BaseModel):
+    """One entity returned by an ENT-4 graph traversal.
+
+    Seed rows have from_entity_id / relationship_type / inferred set to None.
+    Traversed rows carry the edge that led to the entity. The shape mirrors the
+    ENT4 document's opportunity_neighbourhood() contract closely enough for
+    graph context building and cycle-safety contract tests.
+    """
+
+    entity_id: str
+    entity_type: str
+    display_name: str
+    resolution_confidence: float
+    run_count: int
+    from_entity_id: Optional[str] = None
+    relationship_type: Optional[str] = None
+    inferred: Optional[bool] = None
+    depth: int = 0
 
 
 # Edge row joined to both endpoint entities for display names/types, and to
@@ -234,3 +254,121 @@ def get_entity_relationships(
             )
         )
     return summaries
+
+
+# ENT-4 / T3-S14-A: recursive graph traversal used by the graph context layer.
+# The visited path is deliberately part of the recursive CTE. It prevents
+# A -> B -> C -> A cycles from revisiting A and looping until the depth cap.
+MAX_GRAPH_TRAVERSAL_DEPTH = 5
+MAX_GRAPH_TRAVERSAL_NODES = 500
+
+
+def _normalise_max_depth(max_depth: int) -> int:
+    """Clamp traversal depth to the ENT4 hard maximum."""
+    try:
+        requested = int(max_depth)
+    except (TypeError, ValueError):
+        requested = 2
+    return max(0, min(requested, MAX_GRAPH_TRAVERSAL_DEPTH))
+
+
+def opportunity_neighbourhood(
+    org_id: str,
+    seed_entity_ids: List[str],
+    max_depth: int = 2,
+    include_inferred: bool = False,
+) -> List[GraphTraversalNode]:
+    """Return resolved entities reachable from the supplied opportunity seeds.
+
+    Traversal is org-scoped, resolved-entity-only, depth-limited to max 5, and
+    cycle-safe. By default it follows observed edges only; callers must opt in
+    to inferred edges explicitly.
+    """
+    seeds = [str(seed) for seed in (seed_entity_ids or []) if str(seed).strip()]
+    if not org_id or not seeds:
+        return []
+
+    depth_limit = _normalise_max_depth(max_depth)
+    seed_placeholders = ", ".join("?" for _ in seeds)
+    inferred_clause = "" if include_inferred else "AND er.inferred = 0"
+
+    sql = f"""
+        WITH RECURSIVE graph_traversal AS (
+            SELECT
+                e.id AS entity_id,
+                e.entity_type AS entity_type,
+                e.display_name AS display_name,
+                e.resolution_confidence AS resolution_confidence,
+                e.run_count AS run_count,
+                NULL AS from_entity_id,
+                NULL AS relationship_type,
+                NULL AS inferred,
+                0 AS depth,
+                ',' || e.id || ',' AS visited
+            FROM entities e
+            WHERE e.org_id = ?
+              AND e.id IN ({seed_placeholders})
+              AND e.resolution_status = 'resolved'
+
+            UNION ALL
+
+            SELECT
+                e.id AS entity_id,
+                e.entity_type AS entity_type,
+                e.display_name AS display_name,
+                e.resolution_confidence AS resolution_confidence,
+                e.run_count AS run_count,
+                er.from_entity_id AS from_entity_id,
+                er.relationship_type AS relationship_type,
+                er.inferred AS inferred,
+                gt.depth + 1 AS depth,
+                gt.visited || e.id || ',' AS visited
+            FROM graph_traversal gt
+            JOIN entity_relationships er
+              ON er.from_entity_id = gt.entity_id
+             AND er.org_id = ?
+             {inferred_clause}
+            JOIN entities e
+              ON e.id = er.to_entity_id
+             AND e.org_id = er.org_id
+             AND e.resolution_status = 'resolved'
+             AND instr(gt.visited, ',' || e.id || ',') = 0
+            WHERE gt.depth < ?
+        )
+        SELECT
+            entity_id,
+            entity_type,
+            display_name,
+            resolution_confidence,
+            run_count,
+            from_entity_id,
+            relationship_type,
+            inferred,
+            depth
+        FROM graph_traversal
+        ORDER BY depth ASC, run_count DESC, resolution_confidence DESC, display_name ASC
+        LIMIT {MAX_GRAPH_TRAVERSAL_NODES}
+    """
+
+    params = [org_id, *seeds, org_id, depth_limit]
+    conn = db.connect()
+    try:
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(sql, params).fetchall()
+    finally:
+        conn.close()
+
+    return [
+        GraphTraversalNode(
+            entity_id=row["entity_id"],
+            entity_type=row["entity_type"],
+            display_name=row["display_name"],
+            resolution_confidence=float(row["resolution_confidence"]),
+            run_count=int(row["run_count"]),
+            from_entity_id=row["from_entity_id"],
+            relationship_type=row["relationship_type"],
+            inferred=None if row["inferred"] is None else bool(row["inferred"]),
+            depth=int(row["depth"]),
+        )
+        for row in rows
+    ]
