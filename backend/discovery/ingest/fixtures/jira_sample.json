@@ -5,7 +5,8 @@
     "project_key": "CRM",
     "window_days": 90,
     "generated": "2026-04-13",
-    "note": "62 of 280 CRM issues reference Salesforce CS- case IDs. Echo score = 62/280 = 0.22 \u2014 contributes to D7 cross-system signal."
+    "note": "62 of 280 CRM issues reference Salesforce CS- case IDs. Echo score = 62/280 = 0.22 \u2014 contributes to D7 cross-system signal.",
+    "github_corroboration_note": "Issue ENG-217 is unresolved (status In Progress), open 12 days (days_open > 7), with no PR linkage (pr_linked=false). It satisfies the T7/AT-191 corroboration rule so GITHUB_PR_REVIEW_BOTTLENECK elevates MEDIUM -> HIGH when the github_engineering pack runs with Jira connected."
   },
   "issue_metrics": {
     "total_issues_90d": 280,
@@ -132,6 +133,22 @@
         "priority": "High",
         "status": "Open",
         "project": "LOAN"
+      },
+      {
+        "id": "ENG-217",
+        "key": "ENG-217",
+        "summary": "Checkout service refactor blocked awaiting code review",
+        "description": "Engineering work complete but no pull request has been opened or linked; the issue has sat waiting on reviewer bandwidth well past the review SLA.",
+        "labels": [
+          "engineering",
+          "code-review",
+          "pr-bottleneck"
+        ],
+        "priority": "High",
+        "status": "In Progress",
+        "project": "ENG",
+        "days_open": 12,
+        "pr_linked": false
       }
     ]
   },

@@ -473,6 +473,147 @@ def get_cross_system_references(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# ENT-5 — Enterprise Operations cross-system blocks (LIVE)
+#
+# These three functions build the ServiceNow blocks the enterprise_ops detectors
+# read. They are implemented and ready, but the CALLS that merge them into
+# ingest()'s return dict are COMMENTED OUT below — uncomment them once the SME
+# team confirms field names and loads the data. See
+# docs/ENT5_enterprise_ops_live_data_requirements.md.
+#
+# Org-specific field names (override via env; defaults are the common choice):
+#   SERVICENOW_JIRA_KEY_FIELD  incident field holding the Jira key  (default: correlation_id)
+#   SERVICENOW_SLA_FIELD       incident SLA-attainment boolean      (default: made_sla)
+#
+# Each function fails safe: on any query error it returns a degraded block so an
+# unconfirmed field name never crashes the run — the detector simply won't fire.
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def get_incident_resolution(client: Optional[ServiceNowClient] = None) -> Dict[str, Any]:
+    """Build the ``incident_resolution`` block for ENT_INCIDENT_RESOLUTION_LAG.
+
+    Reads CLOSED/RESOLVED incidents (state IN 6,7) created in the window that
+    carry a Jira key in SERVICENOW_JIRA_KEY_FIELD, with their close date.
+    """
+    if not is_live():
+        return {"closed_incidents": [], "degraded_signal": False}
+    jira_field = os.getenv("SERVICENOW_JIRA_KEY_FIELD", "correlation_id").strip()
+    query = (
+        f"sys_created_on>=javascript:gs.daysAgo({WINDOW_DAYS})"
+        f"^stateIN6,7^{jira_field}ISNOTEMPTY"
+    )
+    try:
+        records = client.table_query(
+            "incident",
+            {
+                "sysparm_query": query,
+                "sysparm_fields": f"number,state,opened_at,closed_at,resolved_at,{jira_field}",
+                "sysparm_display_value": "all",
+            },
+        )
+    except Exception as e:  # noqa: BLE001 — never abort the run on a bad field name
+        logger.warning("ENT-5 incident_resolution query failed (degraded): %s", e)
+        return {"closed_incidents": [], "degraded_signal": True}
+
+    closed_incidents: List[Dict[str, Any]] = []
+    for r in records:
+        key = _sn_scalar(r.get(jira_field))
+        closed_at = _sn_scalar(r.get("closed_at")) or _sn_scalar(r.get("resolved_at"))
+        if key and closed_at:
+            closed_incidents.append(
+                {
+                    "number": _sn_scalar(r.get("number")),
+                    "jira_issue_key": str(key),
+                    "closed_at": closed_at,
+                }
+            )
+    return {"closed_incidents": closed_incidents, "degraded_signal": False}
+
+
+def get_change_correlation(client: Optional[ServiceNowClient] = None) -> Dict[str, Any]:
+    """Build the ``change_correlation`` block for ENT_CHANGE_INCIDENT_CORRELATION.
+
+    Reads implemented change_request records (with close date) and incidents
+    (with open date) in the window; the detector does the 72h correlation math.
+    """
+    if not is_live():
+        return {"changes": [], "incidents": [], "degraded_signal": False}
+    try:
+        changes_raw = client.table_query(
+            "change_request",
+            {
+                "sysparm_query": (
+                    f"state=Implemented^sys_created_on>=javascript:gs.daysAgo({WINDOW_DAYS})"
+                ),
+                "sysparm_fields": "number,state,closed_at",
+                "sysparm_display_value": "all",
+            },
+        )
+        incidents_raw = client.table_query(
+            "incident",
+            {
+                "sysparm_query": f"opened_at>=javascript:gs.daysAgo({WINDOW_DAYS})",
+                "sysparm_fields": "number,opened_at",
+                "sysparm_display_value": "all",
+            },
+        )
+    except Exception as e:  # noqa: BLE001
+        logger.warning("ENT-5 change_correlation query failed (degraded): %s", e)
+        return {"changes": [], "incidents": [], "degraded_signal": True}
+
+    changes = [
+        {
+            "number": _sn_scalar(c.get("number")),
+            "state": _sn_scalar(c.get("state")),
+            "closed_at": _sn_scalar(c.get("closed_at")),
+        }
+        for c in changes_raw
+    ]
+    incidents = [
+        {"number": _sn_scalar(i.get("number")), "opened_at": _sn_scalar(i.get("opened_at"))}
+        for i in incidents_raw
+    ]
+    return {"changes": changes, "incidents": incidents, "degraded_signal": False}
+
+
+def get_sla_breach_by_team(client: Optional[ServiceNowClient] = None) -> Dict[str, Any]:
+    """Build the ``sla_breach_by_team`` block for ENT_SLA_BREACH_BY_TEAM.
+
+    Reads incidents in the window with their assignment_group and SLA-attainment
+    flag (SERVICENOW_SLA_FIELD, default made_sla where False == breached). Returns
+    raw incidents; the detector groups by team and computes concentration.
+    """
+    if not is_live():
+        return {"incidents": [], "degraded_signal": False}
+    sla_field = os.getenv("SERVICENOW_SLA_FIELD", "made_sla").strip()
+    try:
+        records = client.table_query(
+            "incident",
+            {
+                "sysparm_query": (
+                    f"sys_created_on>=javascript:gs.daysAgo({WINDOW_DAYS})"
+                    f"^assignment_groupISNOTEMPTY"
+                ),
+                "sysparm_fields": f"number,assignment_group,{sla_field}",
+                "sysparm_display_value": "all",
+            },
+        )
+    except Exception as e:  # noqa: BLE001
+        logger.warning("ENT-5 sla_breach_by_team query failed (degraded): %s", e)
+        return {"incidents": [], "degraded_signal": True}
+
+    incidents: List[Dict[str, Any]] = []
+    for r in records:
+        group = _sn_scalar(r.get("assignment_group"))
+        made_sla_raw = _sn_scalar(r.get(sla_field))
+        # made_sla == false → the incident breached its SLA.
+        breached = str(made_sla_raw).strip().lower() in ("false", "0", "no")
+        incidents.append({"assignment_group": group, "made_sla": (not breached)})
+    return {"incidents": incidents, "degraded_signal": False}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Main ingest()
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -520,6 +661,16 @@ def ingest(sn_client: Optional[ServiceNowClient] = None) -> Dict[str, Any]:
             "cross_system_references": cross_system_references,
             "lending_correlation": lending_correlation,
             "assignment_groups": incident_metrics.get("assignment_groups", []),
+            # ── ENT-5 enterprise_ops cross-system blocks (LIVE) ───────────────
+            # UNCOMMENT the three lines below once the SME team confirms the
+            # field names and loads the data into ServiceNow. Set, if different
+            # from the defaults:
+            #   SERVICENOW_JIRA_KEY_FIELD  (default: correlation_id)
+            #   SERVICENOW_SLA_FIELD       (default: made_sla)
+            # See docs/ENT5_enterprise_ops_live_data_requirements.md.
+            # "incident_resolution": get_incident_resolution(sn_client),
+            # "change_correlation":  get_change_correlation(sn_client),
+            # "sla_breach_by_team":  get_sla_breach_by_team(sn_client),
         }
     except ServiceNowIngestError:
         raise

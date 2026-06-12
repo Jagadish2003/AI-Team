@@ -56,6 +56,7 @@ npm install
 5. Generate the local database by running the following command from the `AgentIQ/backend` directory:
 ```shell
 python database/seed_loader.py
+alembic upgrade head
 ```
 > This creates the `dev.db` file required by the backend. You only need to run this once after cloning.
 

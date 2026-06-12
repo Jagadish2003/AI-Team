@@ -128,6 +128,7 @@ describe("CausalHypothesisPanel — preliminary Gate 3 (inferred primary step)",
     const banner = screen.getByTestId("causal-preliminary-banner");
     expect(banner.textContent).toContain("Preliminary");
     expect(banner.textContent).toContain("inferred relationships that have not yet been validated");
+    expect(banner.textContent?.match(/Preliminary/g)).toHaveLength(1);
   });
 });
 

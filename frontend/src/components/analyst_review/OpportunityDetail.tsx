@@ -372,23 +372,23 @@ export function RelationshipTracePanel({
 //   gate2_unresolved_entities: {N} entities require resolution
 //   gate3_inferred_primary_step: step {N}
 function parsePreliminaryBanner(reason: string | null): string {
-  if (!reason) return "Preliminary — analyst review required.";
+  if (!reason) return "analyst review required.";
 
   const gate1 = /^gate1_insufficient_run_count:\s*(\d+)\s+of\s+(\d+)/.exec(reason);
   if (gate1) {
-    return `Preliminary — analyst review required. Baseline context is still accumulating (${gate1[1]} of ${gate1[2]} runs completed).`;
+    return `analyst review required. Baseline context is still accumulating (${gate1[1]} of ${gate1[2]} runs completed).`;
   }
 
   const gate2 = /^gate2_unresolved_entities:\s*(\d+)/.exec(reason);
   if (gate2) {
-    return `Preliminary — ${gate2[1]} entities require resolution before this finding is confirmed.`;
+    return `${gate2[1]} entities require resolution before this finding is confirmed.`;
   }
 
   if (reason.startsWith("gate3_inferred_primary_step")) {
-    return "Preliminary — this causal chain includes inferred relationships that have not yet been validated.";
+    return "this causal chain includes inferred relationships that have not yet been validated.";
   }
 
-  return "Preliminary — analyst review required.";
+  return "analyst review required.";
 }
 
 // Splits a cause-chain step into its [inferred:…] prefix label (if any) and
