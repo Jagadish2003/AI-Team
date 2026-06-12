@@ -23,9 +23,13 @@ from alembic import context
 
 config = context.config
 
-# Apply ini-file logging config (skipped when running under pytest).
+# Apply ini-file logging config. disable_existing_loggers=False is required: the
+# default (True) disables every logger created before this call, which silently
+# breaks application logging — and pytest's caplog capture — for any code already
+# imported when a migration runs mid-process (e.g. a test that calls
+# command.upgrade after other modules have created their loggers).
 if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+    fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 # ---------------------------------------------------------------------------
 # No ORM — all migrations use op.execute() with raw SQL.

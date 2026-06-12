@@ -31,6 +31,7 @@ from app.auth.user_auth import (
     issue_jwt,
     login,
     logout_token,
+    mark_password_changed,
     register_org_and_owner,
     verify_jwt,
     verify_password,
@@ -446,6 +447,11 @@ def change_password(
         con.commit()
     finally:
         con.close()
+
+    # Revoke every JWT issued before this change (issue #4) — including the token
+    # used to make this request and any session held on a compromised device.
+    # The caller must log in again to obtain a fresh token.
+    mark_password_changed(user_id)
 
     return Response(status_code=204)
 

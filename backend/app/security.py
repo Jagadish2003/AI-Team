@@ -43,18 +43,20 @@ def _token_roles() -> dict[str, str]:
 def _jwt_role(token: str) -> str | None:
     """Role claim carried by an AUTH-1 JWT, mapped onto the security levels.
 
-    Decoded without signature verification — require_auth already proved the
-    signature. AUTH-1's 'owner' maps to the highest security level ('admin');
-    'analyst' and 'viewer' pass through. Returns None for non-JWT static tokens.
+    Fail-closed: the token is fully verified (signature + expiry + logout
+    blocklist) via verify_jwt before the role claim is trusted. This does NOT
+    rely on require_auth having run upstream — a forged or tampered token, or one
+    with an inflated role claim, yields None here, so a caller that uses this
+    role for an authorization decision cannot be tricked into trusting an
+    unverified claim (privilege-escalation guard). AUTH-1's 'owner' maps to the
+    highest security level ('admin'); 'analyst' and 'viewer' pass through.
+    Returns None for non-JWT static tokens and for any token that fails
+    verification.
     """
     try:
-        import jwt as _pyjwt
+        from app.auth.user_auth import verify_jwt
 
-        payload = _pyjwt.decode(
-            token,
-            options={"verify_signature": False, "verify_exp": False},
-            algorithms=["HS256"],
-        )
+        payload = verify_jwt(token)
     except Exception:
         return None
     role = (payload.get("role") or "").strip().lower()

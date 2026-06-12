@@ -373,3 +373,161 @@ def test_logout_expired_token_is_noop():
     )
     # Already invalid — logout should silently no-op, not raise.
     user_auth.logout_token(expired)
+
+
+# ---------------------------------------------------------------------------
+# Review #5 — registration always creates a NEW org (no self-join by name)
+# ---------------------------------------------------------------------------
+
+
+def test_register_same_org_name_creates_separate_org_not_a_join():
+    """Two registrations with the SAME org name must NOT share a workspace.
+
+    Org names are not secrets, so name-based joining let any external user who
+    guessed a customer's org name self-register into that workspace as analyst
+    (review #5). Registration now always mints a fresh org_id the registrant
+    owns; joining an existing workspace is invite-only.
+    """
+    name = "Shared Bank Name"
+    a = user_auth.register_org_and_owner(name, _email(), "supersecret1")
+    b = user_auth.register_org_and_owner(name, _email(), "supersecret2")
+
+    # Distinct workspaces — no cross-org membership leaked by name collision.
+    assert a["user"]["org_id"] != b["user"]["org_id"]
+    # Each registrant OWNS their own workspace; neither is silently an analyst
+    # joined to the other's org.
+    assert a["user"]["role"] == "owner"
+    assert b["user"]["role"] == "owner"
+
+
+# ---------------------------------------------------------------------------
+# Review #2 / #14 — bcrypt truncation is by BYTES, not characters
+# ---------------------------------------------------------------------------
+
+
+def test_password_bytes_encodes_then_truncates():
+    # "é" is 2 bytes in UTF-8. 100 chars → 200 bytes → capped at 72 bytes.
+    raw = "é" * 100
+    capped = user_auth._password_bytes(raw)
+    assert len(capped) == user_auth.PASSWORD_MAX_BYTES
+    assert capped == raw.encode("utf-8")[: user_auth.PASSWORD_MAX_BYTES]
+
+
+def test_multibyte_password_truncation_is_byte_consistent():
+    """Two passwords sharing the first 72 BYTES must hash interchangeably; one
+    differing within the first 72 bytes must not — proving encode-then-truncate.
+
+    The old char-slice-then-encode bug would let two distinct multi-byte
+    passwords collide (review #2/#14). 36 × "é" is exactly 72 bytes.
+    """
+    base = "é" * 36  # exactly 72 bytes
+    assert len(base.encode("utf-8")) == 72
+    h = user_auth.hash_password(base)
+
+    # Same first 72 bytes + trailing extra → bcrypt truncates → still verifies.
+    assert user_auth.verify_password(base + "EXTRA-IGNORED", h) is True
+    # Differs within the first 72 bytes → must NOT verify.
+    differ = "é" * 35 + "xy"  # 70 + 2 = 72 bytes, last bytes differ
+    assert len(differ.encode("utf-8")) == 72
+    assert user_auth.verify_password(differ, h) is False
+
+
+# ---------------------------------------------------------------------------
+# Review #4 / #13 — password change revokes previously-issued tokens
+# ---------------------------------------------------------------------------
+
+
+def test_password_change_revokes_existing_tokens():
+    user_id = str(uuid.uuid4())
+    # Record a password change "now" and read back the stored marker time so the
+    # test drives revocation purely through iat_ms, independent of wall clock.
+    user_auth.mark_password_changed(user_id)
+    marker = db.kv_get(f"{user_auth._PWD_CHANGED_PREFIX}:{user_id}")
+    at_ms = marker["at_ms"]
+
+    secret = user_auth._jwt_secret()
+    now_s = int(time.time())  # a valid (non-future) iat for both tokens
+
+    # Issued one millisecond BEFORE the change → revoked.
+    stale = jwt.encode(
+        {"sub": user_id, "jti": str(uuid.uuid4()), "iat_ms": at_ms - 1,
+         "iat": now_s, "exp": now_s + 600},
+        secret, algorithm=user_auth.JWT_ALGORITHM,
+    )
+    with pytest.raises(user_auth.InvalidTokenError):
+        user_auth.verify_jwt(stale)
+
+    # Issued one millisecond AFTER the change → survives. A fresh login is never
+    # falsely revoked, even one minted in the same second as the change.
+    fresh = jwt.encode(
+        {"sub": user_id, "jti": str(uuid.uuid4()), "iat_ms": at_ms + 1,
+         "iat": now_s, "exp": now_s + 600},
+        secret, algorithm=user_auth.JWT_ALGORITHM,
+    )
+    assert user_auth.verify_jwt(fresh)["sub"] == user_id
+
+
+def test_password_change_marker_does_not_affect_other_users():
+    a = user_auth.register_org_and_owner("Org A", _email(), "supersecret1")
+    b = user_auth.register_org_and_owner("Org B", _email(), "supersecret2")
+    user_auth.mark_password_changed(a["user"]["id"])
+    # B's token is untouched — the marker is per-user.
+    assert user_auth.verify_jwt(b["token"])["sub"] == b["user"]["id"]
+
+
+# ---------------------------------------------------------------------------
+# Review #9 — weak/default JWT secret warns in ANY environment
+# ---------------------------------------------------------------------------
+
+
+def test_jwt_secret_warns_on_known_weak_value(monkeypatch):
+    # Spy on the logger directly rather than caplog: caplog record capture is
+    # unreliable in the full suite once other modules reconfigure logging, but
+    # the warning call itself is deterministic.
+    warnings: list[str] = []
+    monkeypatch.setenv("JWT_SECRET", "dev-secret-change-me")
+    monkeypatch.delenv("ENVIRONMENT", raising=False)  # not production
+    monkeypatch.setattr(user_auth, "_WEAK_SECRET_WARNED", False)
+    monkeypatch.setattr(user_auth.logger, "warning", lambda msg, *a, **k: warnings.append(str(msg)))
+
+    secret = user_auth._jwt_secret()
+
+    assert secret == "dev-secret-change-me"
+    assert any("weak" in w.lower() for w in warnings)
+
+
+# ---------------------------------------------------------------------------
+# Review #19 — Retry-After boundary, verified with a frozen clock
+# ---------------------------------------------------------------------------
+
+
+def test_retry_after_boundary_with_frozen_clock(monkeypatch):
+    """With all 5 failures 14 minutes ago, the block lifts in exactly 60s.
+
+    The oldest of the 5 failures ages out of the 15-minute window at
+    (oldest + 15m); frozen 14m after the burst, that is 60s away. Mocking the
+    clock makes the formula verifiable at the boundary (review #19).
+    """
+    email = _email()
+    fixed_now = datetime(2026, 6, 11, 12, 0, 0, tzinfo=timezone.utc)
+    burst_at = fixed_now - timedelta(minutes=14)
+
+    con = db.connect()
+    try:
+        for _ in range(user_auth.RATE_LIMIT_MAX_ATTEMPTS):
+            con.execute(
+                "INSERT INTO login_attempts (id, email, ip_address, attempted_at, succeeded) "
+                "VALUES (?, ?, ?, ?, 0)",
+                (str(uuid.uuid4()), email, "10.0.0.1", burst_at.isoformat()),
+            )
+        con.commit()
+    finally:
+        con.close()
+
+    class _FrozenDatetime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return fixed_now if tz else fixed_now.replace(tzinfo=None)
+
+    monkeypatch.setattr(user_auth, "datetime", _FrozenDatetime)
+    assert user_auth._seconds_until_email_unblocked(email) == 60
