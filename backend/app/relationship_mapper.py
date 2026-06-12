@@ -227,6 +227,32 @@ def _canonicalize(name: str) -> str:
     return " ".join(name.split()).lower()
 
 
+def _entity_matches_ref(
+    entity: Entity,
+    org_id: str,
+    entity_type: str,
+    display_name: str,
+) -> bool:
+    """Return True when an entity matches a raw source ref.
+
+    Stage 13 observed edges often carry stable IDs (OwnerId, record Id) while
+    the entity's display_name may be a friendly label. Matching source_record_id
+    keeps those source-backed edges from being dropped.
+    """
+    if entity.org_id != org_id or entity.entity_type != entity_type:
+        return False
+    ref = (display_name or "").strip()
+    if not ref:
+        return False
+    canonical = _canonicalize(ref)
+    if entity.canonical_name == canonical:
+        return True
+    if (entity.display_name or "").strip().lower() == ref.lower():
+        return True
+    source_record_id = getattr(entity, "source_record_id", None)
+    return bool(source_record_id and str(source_record_id).strip().lower() == ref.lower())
+
+
 def _is_entity_ambiguous(
     org_id: str,
     entity_type: str,
@@ -241,13 +267,8 @@ def _is_entity_ambiguous(
     """
     if not display_name or not display_name.strip():
         return False
-    canonical = _canonicalize(display_name)
     for entity in entities:
-        if (
-            entity.org_id == org_id
-            and entity.entity_type == entity_type
-            and entity.canonical_name == canonical
-        ):
+        if _entity_matches_ref(entity, org_id, entity_type, display_name):
             return entity.resolution_status == "ambiguous"
     return False
 
@@ -279,13 +300,8 @@ def get_resolved_entity(
     """
     if not display_name or not display_name.strip():
         return None
-    canonical = _canonicalize(display_name)
     for entity in entities:
-        if (
-            entity.org_id == org_id
-            and entity.entity_type == entity_type
-            and entity.canonical_name == canonical
-        ):
+        if _entity_matches_ref(entity, org_id, entity_type, display_name):
             if entity.resolution_status == "resolved":
                 return entity
             # Ambiguous or unresolved — skip. Do not return a partial match.

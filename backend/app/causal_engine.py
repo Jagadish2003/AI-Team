@@ -273,6 +273,19 @@ def _shortest_path(
 _MIN_RUNS_FOR_TEMPORAL_SUPPORT = 5
 
 
+def _candidate_signal_keys(pack_id: str, entity: EntityNode) -> list[str]:
+    """Signal keys that may represent a process entity's temporal history."""
+    candidates: list[str] = []
+    for middle in (entity.display_name, entity.entity_id):
+        middle = (middle or "").strip()
+        if not middle:
+            continue
+        signal_key = f"{pack_id}::{middle}::metric_value"
+        if signal_key not in candidates:
+            candidates.append(signal_key)
+    return candidates
+
+
 def _build_temporal_support(
     org_id: str,
     pack_id: str,
@@ -283,14 +296,20 @@ def _build_temporal_support(
     support: dict[str, dict[str, Any]] = {}
 
     for entity in process_entities:
-        signal_key = f"{pack_id}::{entity.entity_id}::metric_value"
-        try:
-            trend = calculate_trend(org_id, signal_key)
-        except Exception:
-            logger.debug("calculate_trend failed for signal_key=%s", signal_key)
-            continue
-
-        if trend.run_count < _MIN_RUNS_FOR_TEMPORAL_SUPPORT:
+        signal_key = ""
+        trend = None
+        for candidate_signal_key in _candidate_signal_keys(pack_id, entity):
+            try:
+                candidate_trend = calculate_trend(org_id, candidate_signal_key)
+            except Exception:
+                logger.debug("calculate_trend failed for signal_key=%s", candidate_signal_key)
+                continue
+            if candidate_trend.run_count < _MIN_RUNS_FOR_TEMPORAL_SUPPORT:
+                continue
+            signal_key = candidate_signal_key
+            trend = candidate_trend
+            break
+        if trend is None:
             continue
 
         try:
@@ -1175,16 +1194,26 @@ def _distinct_source_systems(org_id: str, entity_ids: list[str]) -> list[str]:
 
 
 def _temporal_entry_for_entity(
-    temporal_support: dict[str, Any], entity_id: str
+    temporal_support: dict[str, Any], entity: Any
 ) -> Optional[dict[str, Any]]:
-    """Find the temporal_support entry for an entity by its signal_key middle part.
+    """Find temporal_support for an entity by detector/display id or UUID.
 
-    signal_key format is ``{pack_id}::{entity_id}::metric_value`` (T2).
+    signal_key format is ``{pack_id}::{detector_id}::metric_value`` in the
+    signal snapshot table. Older tests and some callers still use the entity
+    UUID as the middle segment, so both are accepted.
     """
 
+    candidates = {
+        str(value).strip()
+        for value in (
+            getattr(entity, "display_name", None),
+            getattr(entity, "entity_id", None),
+        )
+        if value and str(value).strip()
+    }
     for signal_key, entry in temporal_support.items():
         parts = str(signal_key).split("::")
-        if len(parts) >= 2 and parts[1] == entity_id:
+        if len(parts) >= 2 and parts[1] in candidates:
             return entry
     return None
 
@@ -1223,7 +1252,7 @@ def compute_causal_confidence(causal_context: Any, source_systems: list[str]) ->
     if process_entities:
         mature = 0
         for entity in process_entities:
-            entry = _temporal_entry_for_entity(temporal_support, entity.entity_id)
+            entry = _temporal_entry_for_entity(temporal_support, entity)
             if entry and int(entry.get("run_count", 0) or 0) >= GATE1_MIN_RUN_COUNT:
                 mature += 1
         temporal_score = mature / len(process_entities)

@@ -1,7 +1,7 @@
 """Create causal_hypotheses table for Stage 3 Causal Inference.
 
-T3-S16-A — Causal Chain Hypotheses with Enterprise Quality Gates.
-Schema is locked after T3-S16-A merges — column names and types must not
+T3-S16-A - Causal Chain Hypotheses with Enterprise Quality Gates.
+Schema is locked after T3-S16-A merges; column names and types must not
 change without updating T3-S17-A (intervention modelling) and T3-S18-A
 (outcome tracking) simultaneously.
 
@@ -12,8 +12,8 @@ stored.
 preliminary and preliminary_reason are read by T7 and T9 to drive the
 amber 'analyst review required' banner.
 
-Revision ID: 0005
-Revises: 0004
+Revision ID: 0007
+Revises: 0006
 Create Date: 2026-06-10
 """
 import os
@@ -22,8 +22,8 @@ from typing import Sequence, Union
 
 from alembic import op
 
-revision: str = "0005"
-down_revision: Union[str, None] = "0004"
+revision: str = "0007"
+down_revision: Union[str, None] = "0006"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

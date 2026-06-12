@@ -338,6 +338,7 @@ def _run_trackb_and_persist(run_id: str, mode: str, systems: List[str], pack: Op
                 evidence=ev,
                 sources_analyzed=sources_analyzed,
                 pack_id=pack,
+                org_id=run_org_id,
             )
             db.run_kv_set(KV_LLM_ENRICHMENT, run_id, enrichment)
             if enrichment.get("executiveSummary"):

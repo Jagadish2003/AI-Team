@@ -32,7 +32,7 @@ from dotenv import load_dotenv
 logger = logging.getLogger(__name__)
 
 MODEL            = "claude-sonnet-4-5"
-MAX_TOKENS_OPP   = 1024
+MAX_TOKENS_OPP   = 1536
 MAX_TOKENS_EXEC  = 512
 API_URL          = "https://api.anthropic.com/v1/messages"
 API_VERSION      = "2023-06-01"
@@ -114,6 +114,18 @@ def format_temporal_support(temporal_support: dict) -> str:
             f"  {signal_key}: trend={trend}, {anomaly}, runs={run_count}{context_str}"
         )
     return "\n".join(lines) if lines else "  (no temporal support data available)"
+
+
+def _format_causal_context_section(causal_context: Any) -> str:
+    """Render the ENT-6 causal prompt addendum for any opportunity prompt."""
+    return CAUSAL_PROMPT_SECTION.format(
+        dependency_paths_summary=format_dependency_paths(
+            causal_context.dependency_paths
+        ),
+        temporal_support_summary=format_temporal_support(
+            causal_context.temporal_support
+        ),
+    )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -282,14 +294,7 @@ Return a JSON object with exactly these four fields. No preamble, no markdown �
     # When causal_context is None (no graph data, InsufficientGraphContextError,
     # or ANTHROPIC_API_KEY unset) the prompt is returned byte-for-byte unchanged.
     if causal_context is not None:
-        base += "\n" + CAUSAL_PROMPT_SECTION.format(
-            dependency_paths_summary=format_dependency_paths(
-                causal_context.dependency_paths
-            ),
-            temporal_support_summary=format_temporal_support(
-                causal_context.temporal_support
-            ),
-        )
+        base += "\n" + _format_causal_context_section(causal_context)
 
     return base
 
@@ -303,6 +308,7 @@ def build_grounded_opp_prompt(
     graph_context: "Any",
     pack_llm_context: str,
     org_name: str,
+    causal_context: Optional[Any] = None,
 ) -> str:
     """Assemble the four-section graph-grounded opportunity prompt (Section 2).
 
@@ -315,8 +321,13 @@ def build_grounded_opp_prompt(
     """
     observed = graph_context.observed_summary or "No directly observed entities for this finding."
     truncation_note = (graph_context.truncation_note or "").strip()
+    output_intro = (
+        "Produce JSON with the fields below. No preamble, no markdown - JSON only."
+        if causal_context is not None
+        else "Produce JSON with exactly these fields. No preamble, no markdown - JSON only."
+    )
 
-    return f"""You are analysing an operational finding for {org_name}.
+    base = f"""You are analysing an operational finding for {org_name}.
 Your output appears on an executive dashboard reviewed by operations leaders.
 Be specific. Reference only the names and systems listed in the context below.
 Do not invent names, teams, or systems not present in the context.
@@ -335,7 +346,7 @@ Corroboration: {signal_ctx.get("corroboration_label", "Not corroborated across s
 {pack_llm_context or "No additional domain context available."}
 
 === OUTPUT INSTRUCTIONS ===
-Produce JSON with exactly these fields. No preamble, no markdown — JSON only.
+{output_intro}
 - aiSummary: 2-3 sentences specific to this organisation. Use the entity names
   above. Do not use placeholders like 'the team' when you know the team name
   from the context.
@@ -350,6 +361,11 @@ Produce JSON with exactly these fields. No preamble, no markdown — JSON only.
   "aiRisks": ["..."],
   "aiSuggestedNextSteps": ["..."]
 }}"""
+
+    if causal_context is not None:
+        base += "\n" + _format_causal_context_section(causal_context)
+
+    return base
 
 
 def _build_signal_context(opp: Dict[str, Any], corroboration_label: Optional[str]) -> Dict[str, Any]:
@@ -638,7 +654,7 @@ def _enrich_opportunity(
         logger.warning("Opp %s: type validation failed — using fallback", opp_id)
         return fb
 
-    return {
+    result = {
         "aiSummary":             parsed["aiSummary"],
         "aiWhyBullets":          [str(b) for b in parsed["aiWhyBullets"][:3]],
         "aiRisks":               [str(b) for b in parsed["aiRisks"][:2]],
@@ -650,6 +666,9 @@ def _enrich_opportunity(
         # Post-generation validation of prohibited phrases is deferred to post-Sprint 5.
         "complianceGuardrailApplied": pack_id == "ncino",
     }
+    if causal_context is not None:
+        result["_causal_llm_response"] = parsed
+    return result
 
 
 def _enrich_opportunity_grounded(
@@ -659,6 +678,7 @@ def _enrich_opportunity_grounded(
     org_id: Optional[str],
     run_id: str,
     corroboration_label: Optional[str],
+    causal_context: Optional[Any] = None,
 ) -> Dict[str, Any]:
     """Graph-grounded first pass + hallucination guard for one opportunity.
 
@@ -688,7 +708,13 @@ def _enrich_opportunity_grounded(
 
     org_name = org_id or "your organisation"
     signal_ctx = _build_signal_context(opp, corroboration_label)
-    prompt = build_grounded_opp_prompt(signal_ctx, graph_context, pack_llm_context, org_name)
+    prompt = build_grounded_opp_prompt(
+        signal_ctx,
+        graph_context,
+        pack_llm_context,
+        org_name,
+        causal_context=causal_context,
+    )
 
     fb = _fallback(opp, pack_id=pack_id)
     fb.update(guard_fields)
@@ -735,6 +761,8 @@ def _enrich_opportunity_grounded(
         "llmModel": MODEL,
         "complianceGuardrailApplied": pack_id == "ncino",
     }
+    if causal_context is not None:
+        result["_causal_llm_response"] = parsed
     result.update(guard_fields)
     return result
 
@@ -766,7 +794,7 @@ def _enrich_executive_summary(
 # T3-S16-A — causal context assembly (best-effort, never raises)
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _try_build_causal_context(
+def _try_build_causal_context_legacy(
     org_id: Optional[str],
     opp: Dict[str, Any],
     pack_id: Optional[str],
@@ -816,6 +844,241 @@ def _try_build_causal_context(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# ENT-6 runtime bridge helpers used by run_llm_enrichment().
+
+def _entity_id_from_summary(entity: Any) -> Optional[str]:
+    if not entity:
+        return None
+    if isinstance(entity, str):
+        return entity
+    if isinstance(entity, dict):
+        value = entity.get("entity_id") or entity.get("id")
+    else:
+        value = getattr(entity, "entity_id", None) or getattr(entity, "id", None)
+    return str(value) if value else None
+
+
+def _dedupe(values: List[str]) -> List[str]:
+    seen: set[str] = set()
+    result: List[str] = []
+    for value in values:
+        value = str(value).strip()
+        if value and value not in seen:
+            seen.add(value)
+            result.append(value)
+    return result
+
+
+def _explicit_opp_entity_ids(opp: Dict[str, Any]) -> List[str]:
+    ids: List[str] = []
+    for key in ("entity_ids", "entityIds", "entities"):
+        value = opp.get(key)
+        if isinstance(value, list):
+            ids.extend(
+                entity_id
+                for entity_id in (_entity_id_from_summary(item) for item in value)
+                if entity_id
+            )
+    return _dedupe(ids)
+
+
+def _run_entity_ids_from_db(org_id: str, run_id: str) -> List[str]:
+    try:
+        from . import db as _db
+
+        conn = _db.connect()
+        try:
+            rows = conn.execute(
+                """
+                SELECT id
+                FROM entities
+                WHERE org_id = ? AND last_seen_run_id = ?
+                ORDER BY display_name ASC, id ASC
+                LIMIT 50
+                """,
+                (org_id, run_id),
+            ).fetchall()
+        finally:
+            conn.close()
+    except Exception as exc:
+        logger.debug("Causal seed entity DB lookup failed for run=%s: %s", run_id, exc)
+        return []
+    return _dedupe([str(row[0]) for row in rows if row and row[0]])
+
+
+def _causal_seed_entity_ids(
+    org_id: str,
+    run_id: str,
+    opp: Dict[str, Any],
+    graph_entities: List[Dict[str, Any]],
+) -> List[str]:
+    explicit = _explicit_opp_entity_ids(opp)
+    if explicit:
+        return explicit
+
+    from_kv = [
+        entity_id
+        for entity_id in (_entity_id_from_summary(entity) for entity in graph_entities)
+        if entity_id
+    ]
+    if from_kv:
+        return _dedupe(from_kv[:50])
+
+    return _run_entity_ids_from_db(org_id, run_id)
+
+
+def _record_causal_rejection(
+    reason: str,
+    org_id: Optional[str],
+    run_id: str,
+    opportunity_id: str,
+) -> None:
+    if not org_id:
+        return
+    try:
+        from .telemetry import record_event
+
+        record_event(
+            "causal.hypothesis_rejected",
+            {
+                "reason": reason,
+                "org_id": org_id,
+                "run_id": run_id,
+                "opportunity_id": opportunity_id,
+            },
+        )
+    except Exception as exc:
+        logger.debug("causal.hypothesis_rejected telemetry failed: %s", exc)
+
+
+def _try_build_causal_context(
+    org_id: Optional[str],
+    run_id: str,
+    opp: Dict[str, Any],
+    pack_id: Optional[str],
+    graph_entities: List[Dict[str, Any]],
+) -> Optional[Any]:
+    if not org_id:
+        return None
+    if not os.getenv("ANTHROPIC_API_KEY", ""):
+        return None
+
+    try:
+        from .causal_engine import InsufficientGraphContextError, build_causal_context
+    except ImportError:
+        return None
+
+    opp_id = opp.get("id", "")
+    seed_ids = _causal_seed_entity_ids(org_id, run_id, opp, graph_entities)
+    if not seed_ids:
+        _record_causal_rejection("insufficient_graph_context", org_id, run_id, opp_id)
+        return None
+
+    try:
+        return build_causal_context(org_id, opp_id, seed_ids, pack_id or "service_cloud")
+    except InsufficientGraphContextError:
+        logger.debug(
+            "Causal context skipped for opp=%s: insufficient graph context", opp_id
+        )
+        _record_causal_rejection("insufficient_graph_context", org_id, run_id, opp_id)
+        return None
+    except Exception as exc:
+        logger.debug("Causal context build failed for opp=%s: %s", opp_id, exc)
+        return None
+
+
+def _primary_signal_key_for_opp(
+    opp: Dict[str, Any],
+    pack_id: Optional[str],
+) -> Optional[str]:
+    signal_key = opp.get("signal_key")
+    if isinstance(signal_key, str) and signal_key.strip():
+        return signal_key.strip()
+    debug = opp.get("_debug", {}) if isinstance(opp.get("_debug"), dict) else {}
+    debug_signal_key = debug.get("signal_key")
+    if isinstance(debug_signal_key, str) and debug_signal_key.strip():
+        return debug_signal_key.strip()
+    detector_id = debug.get("detector_id") or opp.get("detector_id")
+    if pack_id and detector_id:
+        return f"{pack_id}::{detector_id}::metric_value"
+    return None
+
+
+def _context_entity_ids(causal_context: Any) -> List[str]:
+    graph = getattr(causal_context, "graph_context", None)
+    entities = getattr(graph, "entities", []) if graph is not None else []
+    return sorted(
+        {
+            str(getattr(entity, "entity_id", "")).strip()
+            for entity in entities
+            if str(getattr(entity, "entity_id", "")).strip()
+        }
+    )
+
+
+def _maybe_store_causal_hypothesis(
+    *,
+    org_id: Optional[str],
+    run_id: str,
+    opp: Dict[str, Any],
+    pack_id: Optional[str],
+    graph_entities: List[Dict[str, Any]],
+    causal_context: Optional[Any],
+    llm_response: Optional[Dict[str, Any]],
+) -> None:
+    if not org_id or causal_context is None or not llm_response:
+        return
+
+    opportunity_id = str(opp.get("id") or "")
+    if not opportunity_id:
+        return
+
+    try:
+        from .causal_engine import (
+            evaluate_causal_quality_gates,
+            parse_causal_output,
+            store_causal_hypothesis,
+        )
+
+        parsed = parse_causal_output(
+            llm_response,
+            org_id=org_id,
+            run_id=run_id,
+            opportunity_id=opportunity_id,
+            causal_context=causal_context,
+        )
+        if parsed is None:
+            return
+
+        gate_payload = {
+            **parsed,
+            "evidence_links": _context_entity_ids(causal_context),
+            "org_id": org_id,
+        }
+        gate_result = evaluate_causal_quality_gates(
+            gate_payload,
+            _primary_signal_key_for_opp(opp, pack_id),
+            opportunity_id,
+            {"entities": graph_entities, "org_id": org_id},
+            causal_context,
+        )
+        store_causal_hypothesis(
+            org_id,
+            opportunity_id,
+            run_id,
+            parsed,
+            gate_result,
+            causal_context,
+        )
+    except Exception as exc:
+        logger.warning(
+            "Causal hypothesis storage skipped for opp=%s run=%s: %s",
+            opportunity_id,
+            run_id,
+            exc,
+        )
+
+
 # Main enrichment runner
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -887,11 +1150,23 @@ def run_llm_enrichment(
         corroboration_label = _corroboration_for(opp)
         # T3-S16-A: attempt to build causal context for this opportunity.
         # Returns None when causal_engine is absent, graph is sparse, or no API key.
-        causal_context = _try_build_causal_context(org_id, opp, pack_id)
+        causal_context = _try_build_causal_context(
+            org_id,
+            run_id,
+            opp,
+            pack_id,
+            graph_entities,
+        )
         try:
             if grounded:
                 result = _enrich_opportunity_grounded(
-                    opp, graph_context, pack_id, org_id, run_id, corroboration_label
+                    opp,
+                    graph_context,
+                    pack_id,
+                    org_id,
+                    run_id,
+                    corroboration_label,
+                    causal_context=causal_context,
                 )
                 # Mark this opportunity's first pass as graph-grounded.
                 try:
@@ -918,6 +1193,17 @@ def run_llm_enrichment(
                 result.setdefault("hallucination_rewrites", 0)
                 result.setdefault("hallucination_llm_rewrites", 0)
                 result.setdefault("hallucination_removals", [])
+
+            causal_llm_response = result.pop("_causal_llm_response", None)
+            _maybe_store_causal_hypothesis(
+                org_id=org_id,
+                run_id=run_id,
+                opp=opp,
+                pack_id=pack_id,
+                graph_entities=graph_entities,
+                causal_context=causal_context,
+                llm_response=causal_llm_response,
+            )
 
             # Shared fields (both paths): graph shape + corroboration.
             result.update(graph_fields)

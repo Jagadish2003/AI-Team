@@ -338,6 +338,74 @@ def _extract_salesforce_entities(
                         exc,
                     )
 
+    # Object: records from common Salesforce buckets. Sprint 13 relationship
+    # mapping needs a resolved Object endpoint for OwnerId -> record edges.
+    for collection_name in (
+        "records",
+        "cases",
+        "tasks",
+        "opportunities",
+        "objects",
+        "sample_records",
+        "loans",
+        "loan_applications",
+    ):
+        for record in _iter_records(sf_data.get(collection_name)):
+            record_id = _first_record_str(
+                record,
+                (
+                    "Id",
+                    "id",
+                    "record_id",
+                    "CaseId",
+                    "case_id",
+                    "TaskId",
+                    "task_id",
+                    "OpportunityId",
+                    "opportunity_id",
+                    "loan_id",
+                    "LoanId",
+                ),
+            )
+            display_name = _first_record_str(
+                record,
+                (
+                    "Name",
+                    "name",
+                    "CaseNumber",
+                    "case_number",
+                    "number",
+                    "record_name",
+                    "record_id",
+                    "Id",
+                    "id",
+                ),
+            )
+            if not display_name:
+                continue
+            try:
+                attrs = record.get("attributes") if isinstance(record.get("attributes"), dict) else {}
+                e = resolve_or_create_entity(
+                    org_id=org_id,
+                    entity_type="object",
+                    display_name=display_name,
+                    source_system="salesforce",
+                    source_record_id=record_id or display_name,
+                    run_id=run_id,
+                    metadata={
+                        "source": collection_name,
+                        "record_type": attrs.get("type") or collection_name.rstrip("s"),
+                    },
+                )
+                _append_entity(entities, e)
+            except Exception as exc:
+                logger.warning(
+                    "SF object extraction failed for %s in %s: %s",
+                    display_name,
+                    collection_name,
+                    exc,
+                )
+
     # Team: Salesforce team fields from case/account/opportunity team payloads.
     for collection_name in (
         "teams",

@@ -8,6 +8,7 @@ import {
   fetchOppEnrichment,
   OppEnrichment,
   type EntitySummary,
+  type RelationshipSummary,
   type CausalHypothesisSummary,
 } from "../../api/enrichmentApi";
 import { useRunContext } from "../../context/RunContext";
@@ -276,7 +277,94 @@ export function EntityTracePanel({
   );
 }
 
-// ── Causal hypothesis panel (ENT-6 / T3-S16-A T9) ───────────────────────────
+// T3-S13-A relationship trace panel
+
+function relationshipText(rel: RelationshipSummary): string {
+  const from = rel.from_entity_name;
+  const to = rel.to_entity_name;
+  switch (rel.relationship_type) {
+    case "owns":
+      return `${from} owns ${to}`;
+    case "member_of":
+      return `${from} is a member of ${to}`;
+    case "escalates_to":
+      return `${from} escalates to ${to}`;
+    case "depends_on":
+      return `${from} depends on ${to}`;
+    case "routes_to":
+      return `${from} routes to ${to}`;
+    default:
+      return `${from} ${labelize(rel.relationship_type).toLowerCase()} ${to}`;
+  }
+}
+
+export function RelationshipTracePanel({
+  relationships,
+}: {
+  relationships: RelationshipSummary[] | undefined;
+}) {
+  if (!relationships || relationships.length === 0) return null;
+
+  return (
+    <div data-testid="relationship-trace-panel">
+      <div className="mb-2 flex items-center justify-between gap-3">
+        <span className="text-xs font-semibold text-text">Relationships</span>
+        <span className="shrink-0 rounded border border-bg px-1.5 py-0.5 text-xs text-text">
+          {relationships.length} linked
+        </span>
+      </div>
+      <div className="rounded-lg border border-border bg-bg/30 p-3">
+        <div
+          data-testid="relationship-trace-scroll"
+          className="max-h-[13.5rem] overflow-y-auto pr-1 [scrollbar-gutter:stable]"
+        >
+          <div className="space-y-2">
+            {relationships.map((rel, index) => {
+              const confidence = confidenceLabel(rel.confidence);
+              return (
+                <div
+                  key={`${rel.from_entity_name}-${rel.relationship_type}-${rel.to_entity_name}-${index}`}
+                  data-testid={`relationship-trace-${index}`}
+                  className="min-w-0 rounded-md border border-border/70 bg-panel/70 px-3 py-2 text-text"
+                >
+                  <div className="flex min-w-0 items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <div className="text-xs font-semibold leading-relaxed">
+                        {relationshipText(rel)}
+                      </div>
+                      <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] leading-tight text-muted">
+                        <span>{labelize(rel.from_entity_type)}</span>
+                        <span aria-hidden="true">-&gt;</span>
+                        <span>{labelize(rel.to_entity_type)}</span>
+                      </div>
+                    </div>
+                    <div className="flex shrink-0 items-center gap-1.5">
+                      {rel.inferred && (
+                        <span
+                          data-testid={`relationship-inferred-${index}`}
+                          className="rounded border border-amber-500/40 bg-amber-500/10 px-1.5 py-0.5 text-[10px] font-semibold uppercase leading-tight text-amber-600"
+                        >
+                          inferred
+                        </span>
+                      )}
+                      {confidence && (
+                        <span className="rounded border border-border/70 px-1.5 py-0.5 text-[11px] leading-tight">
+                          {confidence}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ENT-6 / T3-S16-A causal hypothesis panel
 
 // Maps the backend preliminary_reason string produced by T5 quality gates to
 // the Section 5 banner copy. The reason string format is:
@@ -584,6 +672,9 @@ export default function OpportunityDetail({
 
         {/* T3-S12-A: Entity trace shown after temporal baseline context. */}
         <EntityTracePanel entities={enrichment?.entities} />
+
+        {/* T3-S13-A: Relationship trace shown after entity trace. */}
+        <RelationshipTracePanel relationships={enrichment?.relationships} />
 
         {/* ENT-6/T9: Causal hypothesis evidence trace — after entity trace. */}
         <CausalHypothesisPanel causal_hypothesis={enrichment?.causal_hypothesis} />
