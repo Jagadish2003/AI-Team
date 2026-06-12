@@ -525,6 +525,111 @@ def _compute_trend(previous_sprints: List[Dict]) -> str:
 # ─────────────────────────────────────────────────────────────────────────────
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# ENT-5 — Enterprise Operations cross-system blocks (LIVE)
+#
+# These two functions build the Jira blocks the enterprise_ops detectors read.
+# They are implemented and ready, but the CALLS that merge them into ingest()'s
+# return dict are COMMENTED OUT below — uncomment once the SME team confirms the
+# team field and loads the data. See
+# docs/ENT5_enterprise_ops_live_data_requirements.md.
+#
+# Org-specific field name (override via env; default is the common choice):
+#   JIRA_TEAM_FIELD  field representing a team  (default: components)
+#
+# Both functions fail safe: on any query error they return an empty block so an
+# unconfirmed field name never crashes the run — the detector simply won't fire.
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def _jira_team_name(fields: Dict[str, Any], team_field: str) -> Optional[str]:
+    """Extract a team name from a Jira issue's fields for the configured field.
+
+    Handles components (list of {name}), an assignee/custom object ({name|value|
+    displayName}), or a plain string.
+    """
+    val = fields.get(team_field)
+    if isinstance(val, list):
+        if val:
+            first = val[0]
+            return first.get("name") if isinstance(first, dict) else str(first)
+        return None
+    if isinstance(val, dict):
+        return val.get("name") or val.get("value") or val.get("displayName")
+    return str(val) if val else None
+
+
+def get_team_backlog(
+    client: Optional[JiraClient] = None,
+    project_key: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Build the ``team_backlog`` block for ENT_SLA_BREACH_BY_TEAM corroboration.
+
+    Counts OPEN issues (statusCategory != Done) grouped by team
+    (JIRA_TEAM_FIELD). Team names should match ServiceNow assignment_group names.
+    """
+    if not is_live():
+        return {"open_issues_by_team": {}}
+    project_key = project_key or os.getenv("JIRA_PROJECT_KEY", "").strip()
+    team_field = os.getenv("JIRA_TEAM_FIELD", "components").strip()
+    jql = "statusCategory != Done"
+    if project_key:
+        jql = f"project = {project_key} AND {jql}"
+    try:
+        issues = client.search_issues(jql, fields=["status", team_field, "assignee"])
+    except Exception as e:  # noqa: BLE001 — never abort the run on a bad field name
+        logger.warning("ENT-5 team_backlog query failed (degraded): %s", e)
+        return {"open_issues_by_team": {}}
+
+    counts: Dict[str, int] = {}
+    for issue in issues:
+        team = _jira_team_name(issue.get("fields") or {}, team_field)
+        if team:
+            counts[team] = counts.get(team, 0) + 1
+    return {"open_issues_by_team": counts}
+
+
+def get_issue_resolution(
+    client: Optional[JiraClient] = None,
+    project_key: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Build the ``issue_resolution`` block for ENT_INCIDENT_RESOLUTION_LAG.
+
+    Maps each issue key in the window to its status / resolved flag / resolved
+    date so the detector can join ServiceNow incidents to their root-cause issue.
+    """
+    if not is_live():
+        return {"issues": {}}
+    project_key = project_key or os.getenv("JIRA_PROJECT_KEY", "").strip()
+    jql = f"created >= -{WINDOW_DAYS}d"
+    if project_key:
+        jql = f"project = {project_key} AND {jql}"
+    try:
+        issues = client.search_issues(
+            jql, fields=["status", "resolution", "resolutiondate"]
+        )
+    except Exception as e:  # noqa: BLE001
+        logger.warning("ENT-5 issue_resolution query failed (degraded): %s", e)
+        return {"issues": {}}
+
+    _resolved_statuses = {"done", "closed", "resolved", "complete", "completed"}
+    out: Dict[str, Any] = {}
+    for issue in issues:
+        key = issue.get("key")
+        if not key:
+            continue
+        fields = issue.get("fields") or {}
+        status = (fields.get("status") or {}).get("name") or ""
+        resolution_date = fields.get("resolutiondate")
+        resolved = bool(resolution_date) or str(status).strip().lower() in _resolved_statuses
+        out[key] = {
+            "status": status,
+            "resolved": resolved,
+            "resolved_at": resolution_date,
+        }
+    return {"issues": out}
+
+
 def ingest(jira_client: Optional[JiraClient] = None) -> Dict[str, Any]:
     """
     Orchestrate Jira ingestion. Returns combined payload.
@@ -569,6 +674,13 @@ def ingest(jira_client: Optional[JiraClient] = None) -> Dict[str, Any]:
             "issue_metrics": issue_metrics,
             "sprint_velocity": sprint_velocity,
             "lending_correlation": lending_correlation,
+            # ── ENT-5 enterprise_ops cross-system blocks (LIVE) ───────────────
+            # UNCOMMENT the two lines below once the SME team confirms the team
+            # field and loads the data into Jira. Set, if different from the
+            # default: JIRA_TEAM_FIELD (default: components).
+            # See docs/ENT5_enterprise_ops_live_data_requirements.md.
+            # "team_backlog":     get_team_backlog(jira_client),
+            # "issue_resolution": get_issue_resolution(jira_client),
         }
     except JiraIngestError:
         raise

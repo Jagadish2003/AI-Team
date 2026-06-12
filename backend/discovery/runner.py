@@ -182,6 +182,57 @@ def _ingest_github(org_id: str, run_id: str) -> Dict[str, Any]:
         return {}
 
 
+_ENTERPRISE_OPS_DEMO_PATH = (
+    Path(__file__).parent / "ingest" / "fixtures" / "enterprise_ops_demo.json"
+)
+
+
+def _attach_enterprise_ops_demo(
+    sn_data: Optional[Dict[str, Any]],
+    jira_data: Optional[Dict[str, Any]],
+) -> tuple[Dict[str, Any], Dict[str, Any]]:
+    """Seed ENT-5 cross-system blocks from the demo fixture when they are absent.
+
+    The enterprise_ops detectors consume blocks the live ServiceNow/Jira ingest
+    does not yet compute: incident_resolution, change_correlation,
+    sla_breach_by_team (+ the optional cor06_slack_escalation / team_entity_overlay
+    corroboration blocks) on ServiceNow, and issue_resolution / team_backlog on
+    Jira. Until that ingestion is built, this fills ONLY the missing blocks so the
+    pack produces findings in both offline and live runs. Real data always wins —
+    any block already present (e.g. once live computation exists) is left
+    untouched. Non-blocking: any load error leaves the payloads unchanged.
+    """
+    sn = dict(sn_data or {})
+    jira = dict(jira_data or {})
+    try:
+        with _ENTERPRISE_OPS_DEMO_PATH.open("r", encoding="utf-8") as fh:
+            seed = json.load(fh)
+    except (OSError, ValueError) as exc:
+        logger.warning("enterprise_ops demo seed unavailable (non-blocking): %s", exc)
+        return sn, jira
+
+    seeded: List[str] = []
+    for key, value in (seed.get("servicenow") or {}).items():
+        if key.startswith("_"):
+            continue
+        if key not in sn:
+            sn[key] = value
+            seeded.append(f"servicenow.{key}")
+    for key, value in (seed.get("jira") or {}).items():
+        if key.startswith("_"):
+            continue
+        if key not in jira:
+            jira[key] = value
+            seeded.append(f"jira.{key}")
+
+    if seeded:
+        logger.info(
+            "enterprise_ops: seeded demo blocks not produced by live ingest — %s",
+            ", ".join(seeded),
+        )
+    return sn, jira
+
+
 _DB_CONNECTOR_IDS = frozenset({"oracle_db", "postgresql"})
 
 
@@ -388,6 +439,18 @@ def run(
                     logger.info("GitHub ingestion: %s signal OK", sub_key)
         else:
             logger.warning("GitHub ingestion: empty payload — all three detectors will not fire")
+
+    # 2d. Enterprise Operations ingest — if enterprise_ops pack (ENT-5).
+    # The three cross-system detectors read blocks (incident_resolution,
+    # change_correlation, sla_breach_by_team on ServiceNow; issue_resolution,
+    # team_backlog on Jira) that the live ServiceNow/Jira ingest does not yet
+    # compute. In OFFLINE mode we seed the missing blocks from the demo fixture so
+    # the pack produces deterministic findings. In LIVE mode we use only real
+    # ServiceNow/Jira data — no fixture seeding — so these detectors fire only
+    # once the live block computation exists. Real computed data always wins:
+    # the seed fills only blocks not already present.
+    if is_enterprise_ops_pack(pack_id) and str(mode).strip().lower() != "live":
+        sn_data, jira_data = _attach_enterprise_ops_demo(sn_data, jira_data)
 
     # 2d. Oracle DB ingest  — T2-S12-A: sqlserver_opsignal pack + oracle_db connector.
     # 2e. PostgreSQL ingest — T2-S12-A: sqlserver_opsignal pack + postgresql connector.
