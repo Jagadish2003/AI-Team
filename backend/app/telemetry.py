@@ -252,6 +252,39 @@ class LlmEnrichmentGroundedPayload(TypedDict, total=False):
     source: NotRequired[str]
 
 
+class CausalHypothesisRejectedPayload(TypedDict, total=False):
+    """ENT-6 / T3-S16-A — emitted when a causal hypothesis is rejected.
+
+    Closed reason set (T4 / T10 contract):
+      no_falsifiability        — cause_chain or falsifiability_condition absent/empty.
+      generic_falsifiability   — falsifiability condition names no measurable disproof.
+      empty_cause_chain        — all steps were empty or filtered out.
+      hallucination_in_cause_chain — < 2 steps survived the entity-name guard.
+      insufficient_graph_context   — neighbourhood < 3 entities (T2).
+
+    PII GUARD: reason codes and run/org identifiers only — no hypothesis text.
+    """
+    org_id: NotRequired[str]
+    run_id: NotRequired[str]
+    opportunity_id: NotRequired[str]
+    reason: NotRequired[str]
+
+
+class CausalHypothesisGeneratedPayload(TypedDict, total=False):
+    """ENT-6 / T3-S16-A — emitted when a hypothesis is stored (T6), after commit.
+
+    PII GUARD: identifiers, the preliminary flag, and gate metrics only — never
+    hypothesis text (cause_chain / falsifiability_condition).
+    """
+    org_id: NotRequired[str]
+    run_id: NotRequired[str]
+    opportunity_id: NotRequired[str]
+    preliminary: NotRequired[bool]
+    confidence: NotRequired[float]
+    gate_run_count: NotRequired[int]
+    inferred: NotRequired[bool]
+
+
 class GraphContextBuiltPayload(TypedDict, total=False):
     """ENT-4 / T3-S14-A — emitted once per build_graph_context() call.
 
@@ -399,6 +432,9 @@ register_event_type("relationship.mapping_completed", RelationshipMappingComplet
 register_event_type("hallucination_guard.removed", HallucinationGuardRemovedPayload)
 register_event_type("hallucination_guard.rewritten", HallucinationGuardRewrittenPayload)
 register_event_type("llm.enrichment_grounded", LlmEnrichmentGroundedPayload)
+# ENT-6 / T3-S16-A — causal hypothesis lifecycle events
+register_event_type("causal.hypothesis_rejected", CausalHypothesisRejectedPayload)
+register_event_type("causal.hypothesis_generated", CausalHypothesisGeneratedPayload)
 # ENT-4 / T3-S14-A Sprint 14 — graph context builder.
 # graph.context_built is emitted by app.graph_context_builder.build_graph_context().
 register_event_type("graph.context_built", GraphContextBuiltPayload)
@@ -555,6 +591,8 @@ __all__ = [
     "HallucinationGuardRemovedPayload",     # ENT-3 / T3-S15-A
     "HallucinationGuardRewrittenPayload",   # ENT-3 / T3-S15-A
     "LlmEnrichmentGroundedPayload",         # ENT-3 / T3-S15-A
+    "CausalHypothesisRejectedPayload",      # ENT-6 / T3-S16-A
+    "CausalHypothesisGeneratedPayload",     # ENT-6 / T3-S16-A
     "GraphContextBuiltPayload",             # ENT-4 / T3-S14-A
     "EVENT_PAYLOAD_TYPES",          # AT-211 alias: event_type → TypedDict schema
     "EVENT_REGISTRY",

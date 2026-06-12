@@ -56,6 +56,7 @@ from .routes_workspace import register_workspace_routes
 from .routes_db_connectors import register_db_connector_routes
 from .routes_temporal import register_temporal_routes
 from .routes_entities import register_entities_routes
+from .routes_causal import register_causal_routes
 from .routes_graph import register_graph_routes
 from .routes_auth import register_auth_routes
 from .security import require_auth
@@ -160,6 +161,7 @@ register_db_connector_routes(app)
 register_temporal_routes(app)
 register_workspace_routes(app)
 register_entities_routes(app)
+register_causal_routes(app)
 register_graph_routes(app)
 register_auth_routes(app)
 

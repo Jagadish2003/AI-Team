@@ -24,6 +24,15 @@ const ENTITIES: EntitySummary[] = [
   },
 ];
 
+const MANY_ENTITIES: EntitySummary[] = Array.from({ length: 9 }, (_, index) => ({
+  entity_id: `ent_${index + 1}`,
+  entity_type: index % 2 === 0 ? "person" : "process",
+  display_name: `Entity ${index + 1}`,
+  source_system: index % 2 === 0 ? "salesforce" : "agentiq",
+  resolution_confidence: 1,
+  resolution_status: "resolved",
+}));
+
 describe("T3-S12-A EntityTracePanel", () => {
   it("renders nothing when no entity summaries are available", () => {
     const { container } = render(<EntityTracePanel entities={[]} />);
@@ -51,5 +60,13 @@ describe("T3-S12-A EntityTracePanel", () => {
       "text-muted",
       "opacity-75"
     );
+  });
+
+  it("keeps more than four entity rows inside a thin inner scroll area", () => {
+    render(<EntityTracePanel entities={MANY_ENTITIES} />);
+
+    const scrollArea = screen.getByTestId("entity-trace-scroll");
+    expect(screen.getByText("9 linked")).toBeInTheDocument();
+    expect(scrollArea).toHaveClass("max-h-[18.5rem]", "overflow-y-auto", "pr-1");
   });
 });

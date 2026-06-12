@@ -36,6 +36,7 @@ def test_loan_query_uses_confirmed_loan_type_code() -> None:
     _fetch_loans(client)
 
     assert "LLC_BI__Loan_Type_Code__c" in client.soql
+    assert "OwnerId" in client.soql
 
 
 def test_origination_metrics_count_stage_transitions_and_owner_changes() -> None:

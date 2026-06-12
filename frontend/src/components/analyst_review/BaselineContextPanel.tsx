@@ -44,12 +44,20 @@ interface BaselineConfig {
   detailChips: Chip[];
 }
 
+interface BaselineMetricContext {
+  latestValue: number | null;
+  baseline: number | null | undefined;
+  change: number | null;
+  windowDays: number;
+}
+
 const MIN_BASELINE_RUNS = 3;
 const DEFAULT_WINDOW_DAYS = 90;
 
 const CHIP_TONES = {
   blue: "border-blue-500/35 bg-blue-500/10 text-blue-300",
   amber: "border-amber-500/40 bg-amber-500/10 text-amber-300",
+  emerald: "border-emerald-500/40 bg-emerald-500/10 text-emerald-300",
   teal: "border-teal-500/40 bg-teal-500/10 text-teal-300",
   violet: "border-violet-500/40 bg-violet-500/10 text-violet-300",
   red: "border-red-500/40 bg-red-500/10 text-red-300",
@@ -71,15 +79,15 @@ const STATE_STYLES: Record<BaselineState, StateStyle> = {
   },
   rising: {
     Icon: TrendingUp,
-    icon: "border-amber-500/40 bg-amber-500/10 text-amber-300",
-    primaryBadge: CHIP_TONES.amber,
-    arrow: "text-amber-400",
+    icon: "border-emerald-500/40 bg-emerald-500/10 text-emerald-300",
+    primaryBadge: CHIP_TONES.emerald,
+    arrow: "text-emerald-400",
   },
   falling: {
     Icon: TrendingDown,
-    icon: "border-teal-500/40 bg-teal-500/10 text-teal-300",
-    primaryBadge: CHIP_TONES.teal,
-    arrow: "text-teal-400",
+    icon: "border-amber-500/40 bg-amber-500/10 text-amber-300",
+    primaryBadge: CHIP_TONES.amber,
+    arrow: "text-amber-400",
   },
   first_deviation: {
     Icon: CircleDot,
@@ -114,6 +122,17 @@ function formatPercent(value: number | null): string {
   return `${rounded > 0 ? "+" : ""}${rounded}%`;
 }
 
+function baselineComparisonPhrase(
+  change: number | null,
+  windowDays: number,
+): string | null {
+  if (typeof change !== "number" || !Number.isFinite(change)) return null;
+  const rounded = Math.round(change);
+  if (rounded === 0) return `at the ${windowDays}-day baseline`;
+  const direction = rounded > 0 ? "above" : "below";
+  return `${Math.abs(rounded)}% ${direction} the ${windowDays}-day baseline`;
+}
+
 function labelize(value: string | null | undefined): string {
   if (!value) return "Current Discovery Pack";
   const known: Record<string, string> = {
@@ -133,6 +152,11 @@ function lastNumber(values: number[] | undefined): number | null {
   if (!values || values.length === 0) return null;
   const value = values[values.length - 1];
   return Number.isFinite(value) ? value : null;
+}
+
+function latestSignalValue(enrichment: OppEnrichment, recentValues: number[]): number | null {
+  // Use the same latest point shown in "Recent runs" so the visible numbers reconcile.
+  return lastNumber(recentValues) ?? enrichment.current_value ?? null;
 }
 
 function changePct(current: number | null, baseline: number | null | undefined): number | null {
@@ -172,16 +196,11 @@ function classify(enrichment: OppEnrichment): BaselineState {
 function subtitleFor(
   state: BaselineState,
   enrichment: OppEnrichment,
-  current: number | null,
-  change: number | null,
+  metrics: BaselineMetricContext,
 ): string {
-  if (state !== "insufficient" && enrichment.baseline_context) {
-    return enrichment.baseline_context;
-  }
-
-  const windowDays = enrichment.baseline_window_days ?? DEFAULT_WINDOW_DAYS;
-  const baseline = enrichment.baseline_mean;
+  const { latestValue, baseline, change, windowDays } = metrics;
   const pct = Math.abs(Math.round(change ?? 0));
+  const baselineComparison = baselineComparisonPhrase(change, windowDays);
 
   if (state === "insufficient") {
     return "Baseline context will appear after 3 or more discovery runs.";
@@ -190,18 +209,27 @@ function subtitleFor(
     return "First deviation from a previously stable baseline";
   }
   if (state === "anomaly_falling") {
+    if (!baselineComparison && enrichment.baseline_context) return enrichment.baseline_context;
     return `Down ${pct}% from your ${windowDays}-day baseline of ${formatValue(baseline)}`;
   }
   if (state === "anomaly_rising") {
+    if (!baselineComparison && enrichment.baseline_context) return enrichment.baseline_context;
     return `Up ${pct}% from your ${windowDays}-day baseline of ${formatValue(baseline)}`;
   }
   if (state === "rising") {
-    return `Trending up - currently ${pct}% above your ${windowDays}-day baseline`;
+    if (baselineComparison) {
+      return `Latest run is ${baselineComparison}. Overall trend is rising across recent runs.`;
+    }
   }
   if (state === "falling") {
-    return `Trending down - currently ${pct}% below your ${windowDays}-day baseline`;
+    if (baselineComparison) {
+      return `Latest run is ${baselineComparison}. Overall trend is falling across recent runs.`;
+    }
   }
-  if (current !== null && baseline !== null && current === baseline) {
+  if (enrichment.baseline_context) {
+    return enrichment.baseline_context;
+  }
+  if (latestValue !== null && baseline !== null && latestValue === baseline) {
     return `Stable - within normal range of your ${windowDays}-day baseline`;
   }
   return `Stable - within normal range of your ${windowDays}-day baseline`;
@@ -210,13 +238,12 @@ function subtitleFor(
 function configFor(
   state: BaselineState,
   enrichment: OppEnrichment,
-  current: number | null,
-  change: number | null,
+  metrics: BaselineMetricContext,
 ): BaselineConfig {
   const currentRuns = enrichment.run_count ?? 0;
   const runBadge = pluralRun(enrichment.run_count);
-  const baseline = enrichment.baseline_mean;
-  const anomalyScore = enrichment.anomaly_score;
+  const { latestValue, baseline, change, windowDays } = metrics;
+  const baselineLabel = `${windowDays}-day avg`;
 
   switch (state) {
     case "insufficient":
@@ -247,7 +274,7 @@ function configFor(
         ],
         detailChips: [
           { label: `Previous baseline: ${formatValue(baseline)}`, tone: "neutral" },
-          { label: `Current: ${formatValue(current)}`, tone: "neutral" },
+          { label: `Latest: ${formatValue(latestValue)}`, tone: "neutral" },
           { label: `Std dev: ${formatValue(enrichment.baseline_stddev)}`, tone: "neutral" },
         ] as Chip[],
       };
@@ -264,46 +291,46 @@ function configFor(
           { label: "Anomaly detected", tone: "red" },
           {
             label: state === "anomaly_falling" ? "Falling" : "Rising",
-            tone: state === "anomaly_falling" ? "teal" : "amber",
+            tone: state === "anomaly_falling" ? "amber" : "emerald",
           },
           ...(runBadge ? [{ label: runBadge, tone: "neutral" as const }] : []),
         ],
         detailChips: [
-          { label: `Current: ${formatValue(current)}`, tone: "neutral" },
-          { label: `Baseline avg: ${formatValue(baseline)}`, tone: "neutral" },
-          { label: `Anomaly score: ${formatValue(anomalyScore)}`, tone: "neutral" },
+          { label: `Latest: ${formatValue(latestValue)}`, tone: "neutral" },
+          { label: `${baselineLabel}: ${formatValue(baseline)}`, tone: "neutral" },
+          { label: `Latest vs avg: ${formatPercent(change)}`, tone: "neutral" },
         ] as Chip[],
       };
     case "rising":
       return {
         title: "Trending Up",
-        whyTitle: "Why Rising?",
+        whyTitle: "Why This Trend?",
         why:
-          "This signal increased across recent discovery runs. The calculated trend slope is above the normal stability band, so the system classifies the pattern as rising.",
+          "AgentIQ calculates trend from the overall slope across recent runs. The latest run is compared separately against the baseline average.",
         badges: [
-          { label: "Rising", tone: "amber" },
+          { label: "Rising", tone: "emerald" },
           ...(runBadge ? [{ label: runBadge, tone: "neutral" as const }] : []),
         ],
         detailChips: [
-          { label: `Current: ${formatValue(current)}`, tone: "neutral" },
-          { label: `Baseline avg: ${formatValue(baseline)}`, tone: "neutral" },
-          { label: `Change: ${formatPercent(change)}`, tone: "neutral" },
+          { label: `Latest: ${formatValue(latestValue)}`, tone: "neutral" },
+          { label: `${baselineLabel}: ${formatValue(baseline)}`, tone: "neutral" },
+          { label: `Latest vs avg: ${formatPercent(change)}`, tone: "neutral" },
         ] as Chip[],
       };
     case "falling":
       return {
         title: "Trending Down",
-        whyTitle: "Why Falling?",
+        whyTitle: "Why This Trend?",
         why:
-          "This signal decreased across recent discovery runs. The calculated trend slope is below the normal stability band, so the system classifies the pattern as falling.",
+          "AgentIQ calculates trend from the overall slope across recent runs. The latest run is compared separately against the baseline average.",
         badges: [
-          { label: "Falling", tone: "teal" },
+          { label: "Falling", tone: "amber" },
           ...(runBadge ? [{ label: runBadge, tone: "neutral" as const }] : []),
         ],
         detailChips: [
-          { label: `Current: ${formatValue(current)}`, tone: "neutral" },
-          { label: `Baseline avg: ${formatValue(baseline)}`, tone: "neutral" },
-          { label: `Change: ${formatPercent(change)}`, tone: "neutral" },
+          { label: `Latest: ${formatValue(latestValue)}`, tone: "neutral" },
+          { label: `${baselineLabel}: ${formatValue(baseline)}`, tone: "neutral" },
+          { label: `Latest vs avg: ${formatPercent(change)}`, tone: "neutral" },
         ] as Chip[],
       };
     default:
@@ -317,9 +344,9 @@ function configFor(
           ...(runBadge ? [{ label: runBadge, tone: "neutral" as const }] : []),
         ],
         detailChips: [
-          { label: `Current: ${formatValue(current)}`, tone: "neutral" },
-          { label: `Baseline avg: ${formatValue(baseline)}`, tone: "neutral" },
-          { label: `Change: ${formatPercent(change)}`, tone: "neutral" },
+          { label: `Latest: ${formatValue(latestValue)}`, tone: "neutral" },
+          { label: `${baselineLabel}: ${formatValue(baseline)}`, tone: "neutral" },
+          { label: `Latest vs avg: ${formatPercent(change)}`, tone: "neutral" },
         ] as Chip[],
       };
   }
@@ -329,9 +356,9 @@ function ChipPill({ chip, primaryClass }: { chip: Chip; primaryClass?: string })
   const toneClass = chip.tone ? CHIP_TONES[chip.tone] : primaryClass ?? CHIP_TONES.neutral;
   return (
     <span
-      className={`inline-flex h-6 max-w-full items-center rounded-full border px-2.5 text-[11px] font-semibold leading-none ${toneClass}`}
+      className={`inline-flex min-h-7 max-w-full items-center rounded-full border px-2.5 py-1 text-[11px] font-semibold leading-[1.35] ${toneClass}`}
     >
-      <span className="truncate">{chip.label}</span>
+      <span className="block max-w-full truncate leading-[1.35]">{chip.label}</span>
     </span>
   );
 }
@@ -346,18 +373,20 @@ function RecentValues({
   if (!values.length) return null;
 
   return (
-    <div className="flex min-w-0 flex-wrap items-center gap-2 pl-1 text-[11px] text-muted">
-      <span className="mr-1 font-semibold">Recent values</span>
-      {values.map((value, index) => (
-        <React.Fragment key={`${value}-${index}`}>
-          {index > 0 && (
-            <ArrowRight size={14} className={`shrink-0 ${arrowClass}`} aria-hidden="true" />
-          )}
-          <span className="inline-flex h-6 min-w-[2.25rem] items-center justify-center rounded-full border border-blue-500/20 bg-blue-500/10 px-2 font-semibold text-text">
-            {formatValue(value)}
-          </span>
-        </React.Fragment>
-      ))}
+    <div className="pl-1">
+      <div className="flex min-w-0 flex-wrap items-center gap-2 text-[11px] text-muted">
+        <span className="mr-1 font-semibold">Recent runs</span>
+        {values.map((value, index) => (
+          <React.Fragment key={`${value}-${index}`}>
+            {index > 0 && (
+              <ArrowRight size={14} className={`shrink-0 ${arrowClass}`} aria-hidden="true" />
+            )}
+            <span className="inline-flex h-6 min-w-[2.25rem] items-center justify-center rounded-full border border-blue-500/20 bg-blue-500/10 px-2 font-semibold text-text">
+              {formatValue(value)}
+            </span>
+          </React.Fragment>
+        ))}
+      </div>
     </div>
   );
 }
@@ -375,13 +404,20 @@ export default function BaselineContextPanel({ enrichment }: Props) {
   if (!hasTemporalContext) return null;
 
   const recentValues = enrichment.recent_values ?? [];
-  const current = enrichment.current_value ?? lastNumber(recentValues);
-  const change = changePct(current, enrichment.baseline_mean);
+  const latestValue = latestSignalValue(enrichment, recentValues);
+  const windowDays = enrichment.baseline_window_days ?? DEFAULT_WINDOW_DAYS;
+  const change = changePct(latestValue, enrichment.baseline_mean);
+  const metrics = {
+    latestValue,
+    baseline: enrichment.baseline_mean,
+    change,
+    windowDays,
+  };
   const state = classify(enrichment);
   const style = STATE_STYLES[state];
   const { Icon } = style;
-  const config = configFor(state, enrichment, current, change);
-  const subtitle = subtitleFor(state, enrichment, current, change);
+  const config = configFor(state, enrichment, metrics);
+  const subtitle = subtitleFor(state, enrichment, metrics);
 
   return (
     <div>

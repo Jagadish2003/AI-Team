@@ -161,6 +161,80 @@ def select_relationships(org_id: str, run_id: str) -> List[RelationshipSummary]:
     return get_observed_relationships(org_id, run_id)
 
 
+_SELECT_CURRENT_RUN_EDGES = """
+    SELECT
+        er.relationship_type AS relationship_type,
+        er.inferred          AS inferred,
+        er.confidence        AS confidence,
+        ef.display_name      AS from_entity_name,
+        ef.entity_type       AS from_entity_type,
+        ef.source_record_id  AS from_source_record_id,
+        et.display_name      AS to_entity_name,
+        et.entity_type       AS to_entity_type,
+        et.source_record_id  AS to_source_record_id
+    FROM entity_relationships er
+    JOIN runs queried_run ON queried_run.id = ?
+    JOIN entities ef ON ef.id = er.from_entity_id AND ef.org_id = er.org_id
+    JOIN entities et ON et.id = er.to_entity_id   AND et.org_id = er.org_id
+    WHERE er.org_id = ?
+      AND er.last_seen_run_id = ?
+      AND COALESCE(
+            json_extract(queried_run.payload, '$.org_id'),
+            json_extract(queried_run.payload, '$.orgId')
+          ) = er.org_id
+      {inferred_filter}
+    ORDER BY er.inferred ASC, er.relationship_type ASC,
+             ef.display_name ASC, et.display_name ASC
+"""
+
+
+def select_relationships_for_opportunity(
+    org_id: str,
+    run_id: str,
+    detector_id: Optional[str] = None,
+) -> List[RelationshipSummary]:
+    """Return current-run relationships relevant to an opportunity.
+
+    The historical graph remains available through ``select_relationships``.
+    Opportunity Review should only show edges confirmed in this run. Inferred
+    process edges are also restricted to the opportunity detector when known.
+    """
+    inferred_filter = "" if inferred_relationships_enabled() else "AND er.inferred = 0"
+    sql = _SELECT_CURRENT_RUN_EDGES.format(inferred_filter=inferred_filter)
+
+    conn = db.connect()
+    try:
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(sql, (run_id, org_id, run_id)).fetchall()
+    finally:
+        conn.close()
+
+    detector_key = (detector_id or "").strip().lower()
+    summaries: List[RelationshipSummary] = []
+    for row in rows:
+        if bool(row["inferred"]) and detector_key:
+            endpoint_keys = {
+                str(row["from_entity_name"] or "").strip().lower(),
+                str(row["from_source_record_id"] or "").strip().lower(),
+                str(row["to_entity_name"] or "").strip().lower(),
+                str(row["to_source_record_id"] or "").strip().lower(),
+            }
+            if detector_key not in endpoint_keys:
+                continue
+        summaries.append(
+            RelationshipSummary(
+                from_entity_name=row["from_entity_name"],
+                from_entity_type=row["from_entity_type"],
+                relationship_type=row["relationship_type"],
+                to_entity_name=row["to_entity_name"],
+                to_entity_type=row["to_entity_type"],
+                inferred=bool(row["inferred"]),
+                confidence=float(row["confidence"]),
+            )
+        )
+    return summaries
+
+
 # Entity-scoped SQL: returns all edges where the entity appears as either
 # endpoint, across all runs. Separate template from _SELECT_EDGES because:
 # (a) filter is on entity_id + org_id rather than run chronology, and

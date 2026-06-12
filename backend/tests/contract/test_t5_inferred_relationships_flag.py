@@ -305,6 +305,9 @@ class TestSelectRelationshipsAC5AC6:
     def test_select_uses_callable_not_import_time_snapshot(self, monkeypatch):
         """Regression: env changes after import must affect select_relationships()."""
         monkeypatch.delenv("INFERRED_RELATIONSHIPS_ENABLED", raising=False)
+        # Refresh the module-level snapshot; it may be stale if a previous test
+        # in the session set the env var before this test cleared it.
+        config.INFERRED_RELATIONSHIPS_ENABLED = config.inferred_relationships_enabled()
         assert config.INFERRED_RELATIONSHIPS_ENABLED is False
         org = f"org-calltime-{uuid4().hex[:8]}"
         run = f"run-calltime-{uuid4().hex[:6]}"

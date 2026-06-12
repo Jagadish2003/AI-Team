@@ -25,6 +25,22 @@ export interface RelationshipSummary {
   confidence: number;
 }
 
+// ENT-6 / T3-S16-A causal chain hypothesis — surfaced in the evidence trace.
+// Shape mirrors the backend CausalHypothesisSummary exactly (snake_case), like
+// the entities/relationships/temporal fields. All six fields are always present
+// in the response. `preliminary`/`preliminary_reason` are load-bearing: T9
+// branches on them — preliminary=true renders the amber "analyst review
+// required" banner with preliminary_reason; preliminary=false renders the
+// confirmed cause chain. `inferred` marks chains containing inferred steps.
+export interface CausalHypothesisSummary {
+  cause_chain: string[];
+  falsifiability_condition: string;
+  confidence: number;
+  inferred: boolean;
+  preliminary: boolean;
+  preliminary_reason: string | null;
+}
+
 export interface OppEnrichment {
   oppId: string;
   aiSummary: string;
@@ -54,6 +70,11 @@ export interface OppEnrichment {
   // unless INFERRED_RELATIONSHIPS_ENABLED is set on the backend, in which case
   // inferred edges (inferred=true) are also included.
   relationships: RelationshipSummary[];
+  // ENT-6 / T3-S16-A — causal chain hypothesis, loaded live from the
+  // causal_hypotheses table (most-recent row). Optional/null: absence is
+  // distinct from an empty hypothesis. null/undefined -> omit the section;
+  // preliminary=true -> amber banner; preliminary=false -> full rendering.
+  causal_hypothesis?: CausalHypothesisSummary | null;
   // ENT-2 — Cross-System Confidence Elevation. snake_case to match backend JSON.
   // Safe defaults from the backend: empty arrays / false / null.
   // corroboration_label is shared with ENT-3 (carried through from ENT-2).

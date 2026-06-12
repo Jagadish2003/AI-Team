@@ -304,18 +304,26 @@ def get_issue_metrics(
     if not project_key:
         project_key = os.getenv("JIRA_PROJECT_KEY", "AIC")
 
+    escalation_field = os.getenv("JIRA_ESCALATION_FIELD", "").strip()
+    issue_fields = [
+        "summary",
+        "status",
+        "issuetype",
+        "labels",
+        "customfield_10016",
+        "customfield_10002",
+        "customfield_10004",
+        "assignee",
+        "reporter",
+        "project",
+    ]
+    if escalation_field:
+        issue_fields.append(escalation_field)
+
     # Total issues in window
     all_issues = client.search_issues(
         jql=f"project = {project_key} AND created >= -{WINDOW_DAYS}d",
-        fields=[
-            "summary",
-            "status",
-            "issuetype",
-            "labels",
-            "customfield_10016",
-            "customfield_10002",
-            "customfield_10004",
-        ],
+        fields=issue_fields,
     )
 
     total = len(all_issues)
@@ -353,15 +361,34 @@ def get_issue_metrics(
             }
         )
 
+    normalized_issues: List[Dict[str, Any]] = []
+    for issue in all_issues:
+        fields = issue.get("fields") or {}
+        normalized = {
+            "id": issue.get("id") or issue.get("key"),
+            "key": issue.get("key") or issue.get("id"),
+            "summary": fields.get("summary", ""),
+            "labels": fields.get("labels") or [],
+            "status": (fields.get("status") or {}).get("name", ""),
+            "project": fields.get("project") or project_key,
+            "assignee": fields.get("assignee"),
+            "reporter": fields.get("reporter"),
+        }
+        if escalation_field and fields.get(escalation_field):
+            normalized["escalation_target"] = fields.get(escalation_field)
+        normalized_issues.append(normalized)
+
     return {
         "total_issues_90d": total,
         "project": project_key,
+        "project_key": project_key,
         "salesforce_label_count": salesforce_label_count,
         "jira_echo_score": jira_echo_score,
         "issue_type_breakdown": [
             {"type": k, "count": v} for k, v in type_counts.items()
         ],
         "sample_cross_references": sample_cross_refs,
+        "issues": normalized_issues,
     }
 
 

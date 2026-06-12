@@ -1076,6 +1076,38 @@ class TestMapDirectlyObservedAC2:
         assert float(edges[0]["confidence"]) == OBSERVED_CONFIDENCE
         assert int(edges[0]["inferred"]) == 0
 
+    def test_owns_edge_matches_source_record_ids(self):
+        """owns edge: OwnerId and record Id can match source_record_id values."""
+        org = f"org-owns-srcid-{uuid4().hex[:8]}"
+        run = "run-t3-owns-srcid"
+
+        person = _make_entity(org, "person", "Sarah Chen", run_id=run)
+        person.source_record_id = "005WG00000ZkgMfYAJ"
+        obj = _make_entity(org, "object", "Loan Application 1042", run_id=run)
+        obj.source_record_id = "a01WG00000Loan1042"
+        _persist_entity(person)
+        _persist_entity(obj)
+
+        ingestor_data = {
+            "salesforce": {
+                "records": [
+                    {
+                        "OwnerId": "005WG00000ZkgMfYAJ",
+                        "Id": "a01WG00000Loan1042",
+                        "Name": "Loan Application 1042",
+                    }
+                ]
+            }
+        }
+
+        count = map_directly_observed(org, run, ingestor_data, [person, obj])
+
+        assert count == 1
+        edges = _get_edges(org, "owns")
+        assert len(edges) == 1
+        assert edges[0]["from_entity_id"] == str(person.id)
+        assert edges[0]["to_entity_id"] == str(obj.id)
+
     def test_observed_evidence_stores_no_display_names_or_record_values(self):
         """Evidence stores source metadata only, not ingestor display values."""
         import json

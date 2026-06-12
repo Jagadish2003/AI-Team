@@ -119,6 +119,33 @@ describe("BaselineContextPanel", () => {
     expect(screen.queryByText("Anomaly detected")).toBeNull();
   });
 
+  it("uses the latest visible run for falling baseline comparison", () => {
+    render(
+      <BaselineContextPanel
+        enrichment={enrich({
+          trend_direction: "falling",
+          baseline_context: "Trending down - currently 29% below your baseline",
+          is_anomalous: false,
+          run_count: 4,
+          current_value: 63.09,
+          baseline_mean: 49,
+          recent_values: [63, 63, 5, 65],
+        })}
+      />
+    );
+
+    expect(
+      screen.getByText(
+        "Latest run is 33% above the 90-day baseline. Overall trend is falling across recent runs."
+      )
+    ).toBeTruthy();
+    expect(screen.getByText("Latest: 65")).toBeTruthy();
+    expect(screen.getByText("90-day avg: 49")).toBeTruthy();
+    expect(screen.getByText("Latest vs avg: +33%")).toBeTruthy();
+    expect(screen.getByText("Recent runs")).toBeTruthy();
+    expect(screen.queryByText("Change: +29%")).toBeNull();
+  });
+
   it("shows stable trend text", () => {
     render(
       <BaselineContextPanel

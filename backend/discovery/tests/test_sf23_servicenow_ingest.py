@@ -86,6 +86,39 @@ class TestIndividualFunctions:
             "total_count is 0 — was hardcoded again instead of fetched"
 
 
+def test_live_incident_metrics_keep_relationship_fields(monkeypatch):
+    from discovery.ingest import servicenow as sn_mod
+
+    class Client:
+        def aggregate_count(self, table, query):
+            return 1
+
+        def table_query(self, table, params):
+            assert "assigned_to" in params["sysparm_fields"]
+            assert params["sysparm_display_value"] == "all"
+            return [{
+                "sys_id": {"value": "sys-1", "display_value": "sys-1"},
+                "number": {"value": "INC001", "display_value": "INC001"},
+                "category": {"value": "software", "display_value": "Software"},
+                "state": {"value": "2", "display_value": "In Progress"},
+                "assigned_to": {"value": "user-1", "display_value": "Sarah Chen"},
+                "assignment_group": {"value": "group-1", "display_value": "Loan Ops"},
+                "caller_id": {"value": "caller-1", "display_value": "Alex Doe"},
+                "resolved_at": "",
+                "sys_created_on": "2026-06-01 10:00:00",
+            }]
+
+    monkeypatch.setattr(sn_mod, "is_live", lambda: True)
+    result = sn_mod.get_incident_metrics(Client())
+
+    incident = result["incidents"][0]
+    assert incident["number"] == "INC001"
+    assert incident["assigned_to"]["display_value"] == "Sarah Chen"
+    assert result["assignment_groups"] == [
+        {"group_name": "Loan Ops", "incident_count": 1}
+    ]
+
+
 class TestErrorHandling:
     def test_missing_fixture_raises(self, tmp_path, monkeypatch):
         from discovery.ingest import servicenow as sn_mod
