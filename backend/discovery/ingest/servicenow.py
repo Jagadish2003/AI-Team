@@ -194,6 +194,18 @@ def _get_client() -> ServiceNowClient:
     return ServiceNowClient(sn_url, token=token, user=user, password=password)
 
 
+def _sn_scalar(value: Any) -> Any:
+    """Return the display value from a ServiceNow ``display_value=all`` field."""
+    if isinstance(value, dict):
+        return (
+            value.get("display_value")
+            or value.get("displayValue")
+            or value.get("value")
+            or value.get("name")
+        )
+    return value
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Ingestion functions
 # ─────────────────────────────────────────────────────────────────────────────
@@ -212,7 +224,8 @@ def get_incident_metrics(client: Optional[ServiceNowClient] = None) -> Dict[str,
         -- Incidents by category with avg resolution
         GET /api/now/table/incident
             ?sysparm_query=sys_created_on>=javascript:gs.daysAgo(90)
-            &sysparm_fields=category,state,assignment_group,resolved_at,sys_created_on
+            &sysparm_fields=sys_id,number,category,state,assigned_to,
+                            assignment_group,caller_id,resolved_at,sys_created_on
             &sysparm_limit=1000
 
     Returns: incident_metrics dict matching servicenow_sample.json shape
@@ -226,11 +239,27 @@ def get_incident_metrics(client: Optional[ServiceNowClient] = None) -> Dict[str,
     total = client.aggregate_count("incident", window_query)
 
     # Incident details for category breakdown
+    fields = [
+        "sys_id",
+        "number",
+        "category",
+        "state",
+        "assigned_to",
+        "assignment_group",
+        "caller_id",
+        "resolved_at",
+        "sys_created_on",
+    ]
+    escalation_field = os.getenv("SERVICENOW_ESCALATION_FIELD", "").strip()
+    if escalation_field:
+        fields.append(escalation_field)
+
     records = client.table_query(
         "incident",
         {
             "sysparm_query": window_query,
-            "sysparm_fields": "category,state,assignment_group,resolved_at,sys_created_on",
+            "sysparm_fields": ",".join(fields),
+            "sysparm_display_value": "all",
         },
     )
 
@@ -240,7 +269,7 @@ def get_incident_metrics(client: Optional[ServiceNowClient] = None) -> Dict[str,
     resolved_count = 0
 
     for r in records:
-        cat = r.get("category") or "uncategorized"
+        cat = _sn_scalar(r.get("category")) or "uncategorized"
         if cat not in category_map:
             category_map[cat] = {
                 "category": cat,
@@ -249,8 +278,8 @@ def get_incident_metrics(client: Optional[ServiceNowClient] = None) -> Dict[str,
             }
         category_map[cat]["volume"] += 1
 
-        resolved_at = r.get("resolved_at", "")
-        created = r.get("sys_created_on", "")
+        resolved_at = _sn_scalar(r.get("resolved_at")) or ""
+        created = _sn_scalar(r.get("sys_created_on")) or ""
         if resolved_at and created:
             try:
                 from datetime import datetime
@@ -282,11 +311,49 @@ def get_incident_metrics(client: Optional[ServiceNowClient] = None) -> Dict[str,
     for v in category_map.values():
         v.pop("_total_hours", None)
 
+    incidents: List[Dict[str, Any]] = []
+    for record in records:
+        incident = {
+            "id": _sn_scalar(record.get("sys_id")) or _sn_scalar(record.get("number")),
+            "number": _sn_scalar(record.get("number")) or _sn_scalar(record.get("sys_id")),
+            "category": _sn_scalar(record.get("category")),
+            "state": _sn_scalar(record.get("state")),
+            "assigned_to": record.get("assigned_to"),
+            "assignment_group": record.get("assignment_group"),
+            "caller_id": record.get("caller_id"),
+        }
+        if escalation_field and record.get(escalation_field):
+            incident["escalated_to"] = record.get(escalation_field)
+        incidents.append(incident)
+
+    assignment_groups: Dict[str, Dict[str, Any]] = {}
+    for incident in incidents:
+        group = incident.get("assignment_group")
+        if isinstance(group, dict):
+            group_name = (
+                group.get("display_value")
+                or group.get("displayName")
+                or group.get("name")
+                or group.get("value")
+            )
+        else:
+            group_name = group
+        if not group_name:
+            continue
+        key = str(group_name).strip()
+        summary = assignment_groups.setdefault(
+            key,
+            {"group_name": key, "incident_count": 0},
+        )
+        summary["incident_count"] += 1
+
     return {
         "total_incidents_90d": total,
         "avg_resolution_hours": avg_resolution,
         "avg_reassignment_count": 0.0,  # Extended in SF-3.2 using reassignment_count field
         "category_breakdown": list(category_map.values()),
+        "incidents": incidents,
+        "assignment_groups": list(assignment_groups.values()),
     }
 
 
@@ -452,6 +519,7 @@ def ingest(sn_client: Optional[ServiceNowClient] = None) -> Dict[str, Any]:
             "incident_metrics": incident_metrics,
             "cross_system_references": cross_system_references,
             "lending_correlation": lending_correlation,
+            "assignment_groups": incident_metrics.get("assignment_groups", []),
         }
     except ServiceNowIngestError:
         raise

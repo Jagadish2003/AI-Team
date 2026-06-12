@@ -150,12 +150,12 @@ class TestRelationshipSummaryShape:
 # ---------------------------------------------------------------------------
 
 class TestLoadRelationshipSummaries:
-    def _load_with_org(self, org_id: str, run_id: str):
+    def _load_with_org(self, org_id: str, run_id: str, opportunity=None):
         from app.middleware.tenancy import _current_org_id
         from app.routes_sprint4_t6 import _load_relationship_summaries
         token = _current_org_id.set(org_id)
         try:
-            return _load_relationship_summaries(run_id)
+            return _load_relationship_summaries(run_id, opportunity)
         finally:
             _current_org_id.reset(token)
 
@@ -198,6 +198,67 @@ class TestLoadRelationshipSummaries:
 # ---------------------------------------------------------------------------
 # Endpoint response — observed by default, inferred only when flag enabled
 # ---------------------------------------------------------------------------
+
+def test_historical_relationship_is_not_shown_on_later_run(monkeypatch):
+    from app.middleware.tenancy import _current_org_id
+    from app.routes_sprint4_t6 import _load_relationship_summaries
+
+    monkeypatch.setenv("INFERRED_RELATIONSHIPS_ENABLED", "true")
+    org = f"org-t7-current-{uuid4().hex[:8]}"
+    old_run = f"run-t7-old-{uuid4().hex[:6]}"
+    new_run = f"run-t7-new-{uuid4().hex[:6]}"
+    _seed_observed(org, old_run)
+    _seed_run(org, new_run)
+
+    token = _current_org_id.set(org)
+    try:
+        assert _load_relationship_summaries(new_run) == []
+    finally:
+        _current_org_id.reset(token)
+
+
+def test_inferred_relationships_are_scoped_to_detector(monkeypatch):
+    from app.middleware.tenancy import _current_org_id
+    from app.routes_sprint4_t6 import _load_relationship_summaries
+
+    monkeypatch.setenv("INFERRED_RELATIONSHIPS_ENABLED", "true")
+    org = f"org-t7-det-{uuid4().hex[:8]}"
+    run = f"run-t7-det-{uuid4().hex[:6]}"
+    _seed_run(org, run)
+    loan = _insert_entity(org, "process", "LOAN_ORIGINATION_ROUTING_FRICTION", run)
+    checklist = _insert_entity(org, "process", "CHECKLIST_BOTTLENECK", run)
+    covenant = _insert_entity(org, "process", "COVENANT_TRACKING_GAP", run)
+    upsert_relationship(
+        org_id=org,
+        from_entity_id=checklist,
+        to_entity_id=loan,
+        relationship_type="depends_on",
+        confidence=INFERRED_CONFIDENCE,
+        inferred=True,
+        run_id=run,
+    )
+    upsert_relationship(
+        org_id=org,
+        from_entity_id=covenant,
+        to_entity_id=loan,
+        relationship_type="depends_on",
+        confidence=INFERRED_CONFIDENCE,
+        inferred=True,
+        run_id=run,
+    )
+
+    token = _current_org_id.set(org)
+    try:
+        result = _load_relationship_summaries(
+            run,
+            {"detector_id": "CHECKLIST_BOTTLENECK"},
+        )
+    finally:
+        _current_org_id.reset(token)
+
+    assert len(result) == 1
+    assert result[0].from_entity_name == "CHECKLIST_BOTTLENECK"
+
 
 class TestEnrichmentEndpointRelationships:
     @pytest.fixture(scope="class")

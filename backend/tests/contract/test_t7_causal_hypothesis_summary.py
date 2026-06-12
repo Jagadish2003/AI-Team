@@ -1,14 +1,14 @@
 """Contract tests for T7 (ENT-6 / T3-S16-A).
 
 CausalHypothesisSummary surfaced on OppEnrichment, populated live from the
-most-recent causal_hypotheses row for the opportunity (not run-scoped KV).
+causal_hypotheses row for the current run and opportunity (not run-scoped KV).
 
 Coverage:
   - CausalHypothesisSummary carries exactly the six required fields.
   - OppEnrichment.causal_hypothesis defaults to None and serialises (all six
     fields present, including a null preliminary_reason).
-  - Loader (_load_causal_hypothesis): populated + None cases, surfaces the
-    newest row across runs, org-scoped, degrades to None without an org.
+  - Loader (_load_causal_hypothesis): populated + None cases, exact-run scoped,
+    org-scoped, degrades to None without an org.
   - Endpoint response: causal_hypothesis populated when a row exists, null when
     absent. Scoring fields are never touched.
 """
@@ -170,7 +170,7 @@ class TestLoadCausalHypothesis:
             confidence=0.72,
             inferred=False,
         )
-        summary = _load_causal_hypothesis(org, opp)
+        summary = _load_causal_hypothesis(org, opp, "run-causal")
         assert summary is not None
         assert summary.cause_chain == ["Step one [OBSERVED].", "Step two [OBSERVED]."]
         assert summary.falsifiability_condition == _FALSIFIABILITY
@@ -181,9 +181,9 @@ class TestLoadCausalHypothesis:
 
     def test_absent_returns_none(self):
         org = f"org-t7c-none-{uuid4().hex[:8]}"
-        assert _load_causal_hypothesis(org, "opp-does-not-exist") is None
+        assert _load_causal_hypothesis(org, "opp-does-not-exist", "run-missing") is None
 
-    def test_surfaces_most_recent_row_across_runs(self):
+    def test_surfaces_only_the_requested_run(self):
         org = f"org-t7c-recent-{uuid4().hex[:8]}"
         opp = "opp-recent"
         older = _now() - timedelta(days=2)
@@ -192,22 +192,26 @@ class TestLoadCausalHypothesis:
                        preliminary=True, preliminary_reason="gate1_insufficient_run_count: 7 of 10 runs completed")
         _insert_causal(org, opp, run_id="run-new", created_at=newer,
                        preliminary=False, preliminary_reason=None, confidence=0.9)
-        summary = _load_causal_hypothesis(org, opp)
-        assert summary is not None
-        assert summary.preliminary is False          # newest row
-        assert summary.preliminary_reason is None
-        assert summary.confidence == 0.9
+        old_summary = _load_causal_hypothesis(org, opp, "run-old")
+        new_summary = _load_causal_hypothesis(org, opp, "run-new")
+        assert old_summary is not None
+        assert old_summary.preliminary is True
+        assert old_summary.preliminary_reason is not None
+        assert new_summary is not None
+        assert new_summary.preliminary is False
+        assert new_summary.preliminary_reason is None
+        assert new_summary.confidence == 0.9
 
     def test_cross_org_isolation(self):
         org_a = f"org-t7c-a-{uuid4().hex[:8]}"
         org_b = f"org-t7c-b-{uuid4().hex[:8]}"
         opp = "opp-shared-id"
         _insert_causal(org_a, opp, created_at=_now())
-        assert _load_causal_hypothesis(org_b, opp) is None
+        assert _load_causal_hypothesis(org_b, opp, "run-causal") is None
 
     def test_missing_org_returns_none(self):
-        assert _load_causal_hypothesis(None, "opp-x") is None
-        assert _load_causal_hypothesis("", "opp-x") is None
+        assert _load_causal_hypothesis(None, "opp-x", "run-x") is None
+        assert _load_causal_hypothesis("", "opp-x", "run-x") is None
 
 
 # ---------------------------------------------------------------------------
@@ -230,7 +234,10 @@ class TestEnrichmentEndpointCausalHypothesis:
         run = f"run-t7c-ep-pop-{uuid4().hex[:6]}"
         opp = "opp-1"
         self._seed_run(org, run, opp)
-        _insert_causal(org, opp, created_at=_now(), preliminary=False, confidence=0.85)
+        _insert_causal(
+            org, opp, run_id=run, created_at=_now(),
+            preliminary=False, confidence=0.85,
+        )
 
         r = client.get(f"/api/runs/{run}/opportunities/{opp}/enrichment", headers=_auth(org))
         assert r.status_code == 200, r.text
@@ -259,7 +266,7 @@ class TestEnrichmentEndpointCausalHypothesis:
         opp = "opp-1"
         self._seed_run(org, run, opp)
         _insert_causal(
-            org, opp, created_at=_now(),
+            org, opp, run_id=run, created_at=_now(),
             preliminary=True,
             preliminary_reason="gate3_inferred_primary_step: step 3",
             inferred=True,

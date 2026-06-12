@@ -66,18 +66,17 @@ describe("CausalHypothesisPanel — preliminary Gate 1 (insufficient run count)"
 
   it("banner contains parsed run counts", () => {
     render(<CausalHypothesisPanel causal_hypothesis={gate1} />);
-    expect(
-      screen.getByText(
-        "Preliminary — analyst review required. Baseline context is still accumulating (7 of 10 runs completed)."
-      )
-    ).toBeInTheDocument();
+    const banner = screen.getByTestId("causal-preliminary-banner");
+    expect(banner.textContent).toContain("Preliminary");
+    expect(banner.textContent).toContain("7 of 10 runs completed");
   });
 
-  it("renders the cause chain in muted / opacity-75 styling", () => {
+  it("renders the cause chain text in opacity-75 when preliminary (badge stays full opacity)", () => {
     render(<CausalHypothesisPanel causal_hypothesis={gate1} />);
     const step0 = screen.getByTestId("causal-step-0");
-    expect(step0).toHaveClass("text-muted");
-    expect(step0).toHaveClass("opacity-75");
+    // opacity-75 is on the inner text div, not the card, so the INFERRED badge keeps full opacity
+    expect(step0.querySelector(".opacity-75")).toBeTruthy();
+    expect(step0).not.toHaveClass("opacity-75");
   });
 
   it("falsifiability condition is rendered in muted italic", () => {
@@ -104,16 +103,15 @@ describe("CausalHypothesisPanel — preliminary Gate 2 (unresolved entities)", (
 
   it("renders correct Gate 2 banner text with entity count", () => {
     render(<CausalHypothesisPanel causal_hypothesis={gate2} />);
-    expect(
-      screen.getByText(
-        "Preliminary — 3 entities require resolution before this finding is confirmed."
-      )
-    ).toBeInTheDocument();
+    const banner = screen.getByTestId("causal-preliminary-banner");
+    expect(banner.textContent).toContain("Preliminary");
+    expect(banner.textContent).toContain("3 entities require resolution");
   });
 
-  it("chain is muted when preliminary", () => {
+  it("chain text is muted when preliminary (badge stays full opacity)", () => {
     render(<CausalHypothesisPanel causal_hypothesis={gate2} />);
-    expect(screen.getByTestId("causal-step-0")).toHaveClass("opacity-75");
+    const step0 = screen.getByTestId("causal-step-0");
+    expect(step0.querySelector(".opacity-75")).toBeTruthy();
   });
 });
 
@@ -127,11 +125,9 @@ describe("CausalHypothesisPanel — preliminary Gate 3 (inferred primary step)",
 
   it("renders correct Gate 3 banner text", () => {
     render(<CausalHypothesisPanel causal_hypothesis={gate3} />);
-    expect(
-      screen.getByText(
-        "Preliminary — this causal chain includes inferred relationships that have not yet been validated."
-      )
-    ).toBeInTheDocument();
+    const banner = screen.getByTestId("causal-preliminary-banner");
+    expect(banner.textContent).toContain("Preliminary");
+    expect(banner.textContent).toContain("inferred relationships that have not yet been validated");
   });
 });
 
@@ -217,9 +213,9 @@ describe("CausalHypothesisPanel — unknown preliminary_reason fallback", () => 
         })}
       />
     );
-    expect(
-      screen.getByText("Preliminary — analyst review required.")
-    ).toBeInTheDocument();
+    const banner = screen.getByTestId("causal-preliminary-banner");
+    expect(banner.textContent).toContain("Preliminary");
+    expect(banner.textContent).toContain("analyst review required");
   });
 
   it("falls back to generic banner when preliminary_reason is null", () => {
@@ -228,8 +224,8 @@ describe("CausalHypothesisPanel — unknown preliminary_reason fallback", () => 
         causal_hypothesis={hyp({ preliminary: true, preliminary_reason: null })}
       />
     );
-    expect(
-      screen.getByText("Preliminary — analyst review required.")
-    ).toBeInTheDocument();
+    const banner = screen.getByTestId("causal-preliminary-banner");
+    expect(banner.textContent).toContain("Preliminary");
+    expect(banner.textContent).toContain("analyst review required");
   });
 });

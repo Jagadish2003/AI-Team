@@ -422,68 +422,70 @@ export function CausalHypothesisPanel({
 
   return (
     <div data-testid="causal-hypothesis-panel">
-      {/* Header */}
+      {/* Header — matches Relationships / Entities section headers exactly */}
       <div className="mb-2 flex items-center justify-between gap-3">
         <span className="text-xs font-semibold text-text">Causal Hypothesis</span>
         {confidencePct && (
           <span
             data-testid="causal-confidence-badge"
-            className="shrink-0 rounded border border-border/70 px-1.5 py-0.5 text-[11px] leading-tight text-muted"
+            className="shrink-0 rounded border border-bg px-1.5 py-0.5 text-xs text-text"
           >
             {confidencePct}
           </span>
         )}
       </div>
 
-      <div className="rounded-lg border border-border bg-bg/30 p-3 space-y-3">
-        {/* Amber preliminary banner — only when gates have not all cleared */}
+      <div className="rounded-lg border border-border bg-bg/30 p-3 space-y-2">
+        {/* Amber preliminary banner — matches ENT-3 analyst-review banner style */}
         {preliminary && bannerText && (
           <div
             data-testid="causal-preliminary-banner"
             role="status"
-            className="rounded border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs leading-relaxed text-amber-700"
+            className="rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs leading-relaxed text-amber-700"
           >
-            {bannerText}
+            <span className="font-semibold">Preliminary</span>
+            {" — "}{bannerText}
           </div>
         )}
 
-        {/* Numbered cause chain */}
+        {/* Numbered cause chain — each step is a card matching relationship rows */}
         {cause_chain && cause_chain.length > 0 && (
-          <ol className="space-y-1.5 list-none">
+          <div className="space-y-1.5">
             {cause_chain.map((step, i) => {
               const { inferredLabel, text } = parseCausalStep(step);
               return (
-                <li
+                <div
                   key={i}
                   data-testid={`causal-step-${i}`}
-                  className={`flex items-start gap-2 text-xs ${
-                    preliminary ? "text-muted opacity-75" : "text-text"
-                  }`}
+                  className="min-w-0 rounded-md border border-border/70 bg-panel/70 px-3 py-2 text-text"
                 >
-                  <span className="shrink-0 font-semibold text-muted w-4 text-right">
-                    {i + 1}.
-                  </span>
-                  {inferredLabel && (
-                    <span
-                      data-testid={`causal-inferred-label-${i}`}
-                      className="shrink-0 rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase leading-tight tracking-wide border border-amber-500/40 bg-amber-500/10 text-amber-600"
-                    >
-                      inferred
-                    </span>
-                  )}
-                  <span className="leading-relaxed">{text}</span>
-                </li>
+                  <div className="flex min-w-0 items-start justify-between gap-3">
+                    <div className={`min-w-0 flex items-start gap-2${preliminary ? " opacity-75" : ""}`}>
+                      <span className="shrink-0 text-xs font-semibold text-muted w-4 text-right leading-relaxed">
+                        {i + 1}.
+                      </span>
+                      <span className="text-xs font-semibold leading-relaxed">{text}</span>
+                    </div>
+                    {inferredLabel && (
+                      <span
+                        data-testid={`causal-inferred-label-${i}`}
+                        className="shrink-0 rounded border border-amber-500/40 bg-amber-500/10 px-1.5 py-0.5 text-[10px] font-semibold uppercase leading-tight text-amber-600"
+                      >
+                        inferred
+                      </span>
+                    )}
+                  </div>
+                </div>
               );
             })}
-          </ol>
+          </div>
         )}
 
-        {/* Falsifiability condition — always muted italic; confirmed hypothesis
-            prefixes with the mandatory "How to disprove this:" label */}
+        {/* Falsifiability — italic text-muted, matches AI Analysis footnote style */}
         {falsifiability_condition && (
           <p
             data-testid="causal-falsifiability"
-            className="text-xs italic text-muted leading-relaxed"
+            className="text-xs italic text-muted leading-relaxed px-1"
           >
             {!preliminary && (
               <span className="not-italic font-semibold text-muted">

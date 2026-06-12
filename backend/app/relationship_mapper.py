@@ -52,12 +52,24 @@ try:
     from discovery.detectors.db_sla_breach_rate import DETECTOR_ID as DB_SLA_BREACH_RATE_DETECTOR_ID
     from discovery.detectors.disbursement_overdue import DETECTOR_ID as DISBURSEMENT_OVERDUE_DETECTOR_ID
     from discovery.detectors.loan_origination_routing_friction import DETECTOR_ID as LOAN_ORIGINATION_DETECTOR_ID
+    from discovery.detectors.repetition import DETECTOR_ID as REPETITIVE_AUTOMATION_DETECTOR_ID
+    from discovery.detectors.handoff_friction import DETECTOR_ID as HANDOFF_FRICTION_DETECTOR_ID
+    from discovery.detectors.approval_bottleneck import DETECTOR_ID as APPROVAL_BOTTLENECK_DETECTOR_ID
+    from discovery.detectors.knowledge_gap import DETECTOR_ID as KNOWLEDGE_GAP_DETECTOR_ID
+    from discovery.detectors.integration_concentration import DETECTOR_ID as INTEGRATION_CONCENTRATION_DETECTOR_ID
+    from discovery.detectors.cross_system_echo import DETECTOR_ID as CROSS_SYSTEM_ECHO_DETECTOR_ID
 except ModuleNotFoundError:  # project-root execution uses backend as package
     from backend.discovery.detectors.checklist_bottleneck import DETECTOR_ID as CHECKLIST_BOTTLENECK_DETECTOR_ID
     from backend.discovery.detectors.covenant_tracking_gap import DETECTOR_ID as COVENANT_TRACKING_DETECTOR_ID
     from backend.discovery.detectors.db_sla_breach_rate import DETECTOR_ID as DB_SLA_BREACH_RATE_DETECTOR_ID
     from backend.discovery.detectors.disbursement_overdue import DETECTOR_ID as DISBURSEMENT_OVERDUE_DETECTOR_ID
     from backend.discovery.detectors.loan_origination_routing_friction import DETECTOR_ID as LOAN_ORIGINATION_DETECTOR_ID
+    from backend.discovery.detectors.repetition import DETECTOR_ID as REPETITIVE_AUTOMATION_DETECTOR_ID
+    from backend.discovery.detectors.handoff_friction import DETECTOR_ID as HANDOFF_FRICTION_DETECTOR_ID
+    from backend.discovery.detectors.approval_bottleneck import DETECTOR_ID as APPROVAL_BOTTLENECK_DETECTOR_ID
+    from backend.discovery.detectors.knowledge_gap import DETECTOR_ID as KNOWLEDGE_GAP_DETECTOR_ID
+    from backend.discovery.detectors.integration_concentration import DETECTOR_ID as INTEGRATION_CONCENTRATION_DETECTOR_ID
+    from backend.discovery.detectors.cross_system_echo import DETECTOR_ID as CROSS_SYSTEM_ECHO_DETECTOR_ID
 
 logger = logging.getLogger(__name__)
 
@@ -318,8 +330,10 @@ def _sn_ref_name(value: Any) -> Optional[str]:
     """
     if not value:
         return None
+    if isinstance(value, list):
+        return _sn_ref_name(value[0]) if value else None
     if isinstance(value, dict):
-        for key in ("display_value", "value", "name", "Name"):
+        for key in ("display_value", "displayValue", "displayName", "value", "name", "Name"):
             v = value.get(key)
             if v and str(v).strip():
                 return str(v).strip()
@@ -443,7 +457,7 @@ def map_directly_observed(
 
     # nCino nested records
     ncino: Dict[str, Any] = sf_data.get("ncino") or {}
-    for key in ("loan_applications", "loan_portfolios"):
+    for key in ("loans", "loan_applications", "loan_portfolios"):
         for record in (ncino.get(key) or []):
             if not isinstance(record, dict):
                 continue
@@ -681,14 +695,68 @@ _NCINO_DEPENDS_ON_RULES: tuple[tuple[frozenset[str], str, str], ...] = (
 # DB_SLA_BREACH_RATE co-fire, the SQL Server ITSM system routes_to Salesforce.
 # Systems are resolved by signal_source; the alias lists below are the fallback
 # canonical names when a detector's signal_source is absent from the run.
+# nCino Rule 4: SQL Server routes_to Salesforce.
 _ROUTES_TO_RULE_DETECTORS = frozenset(
     {COVENANT_TRACKING_DETECTOR_ID, DB_SLA_BREACH_RATE_DETECTOR_ID}
 )
-INFERRED_RULE_DETECTOR_IDS = frozenset(
-    detector_id
-    for required, _, _ in _NCINO_DEPENDS_ON_RULES
-    for detector_id in required
-) | _ROUTES_TO_RULE_DETECTORS
+
+# ---------------------------------------------------------------------------
+# Service Cloud co-firing rules (SC-1 … SC-4)
+# ---------------------------------------------------------------------------
+# SC-1: Case Routing Process depends_on Case Automation Process
+#        when REPETITIVE_AUTOMATION + HANDOFF_FRICTION co-fire. The handoff
+#        overhead is downstream of the repetitive automation gap.
+# SC-2: Approval Routing Process depends_on Case Routing Process
+#        when APPROVAL_BOTTLENECK + HANDOFF_FRICTION co-fire. Approval waits
+#        are amplified by the case-routing friction already present.
+# SC-3: Knowledge Management Process depends_on Case Automation Process
+#        when KNOWLEDGE_GAP + REPETITIVE_AUTOMATION co-fire. Agents escalate
+#        manually (automation gap) because knowledge is missing.
+_SC_DEPENDS_ON_RULES: tuple[tuple[frozenset[str], str, str], ...] = (
+    # SC-1
+    (
+        frozenset({REPETITIVE_AUTOMATION_DETECTOR_ID, HANDOFF_FRICTION_DETECTOR_ID}),
+        HANDOFF_FRICTION_DETECTOR_ID,
+        REPETITIVE_AUTOMATION_DETECTOR_ID,
+    ),
+    # SC-2
+    (
+        frozenset({APPROVAL_BOTTLENECK_DETECTOR_ID, HANDOFF_FRICTION_DETECTOR_ID}),
+        APPROVAL_BOTTLENECK_DETECTOR_ID,
+        HANDOFF_FRICTION_DETECTOR_ID,
+    ),
+    # SC-3
+    (
+        frozenset({KNOWLEDGE_GAP_DETECTOR_ID, REPETITIVE_AUTOMATION_DETECTOR_ID}),
+        KNOWLEDGE_GAP_DETECTOR_ID,
+        REPETITIVE_AUTOMATION_DETECTOR_ID,
+    ),
+)
+
+# SC-4: ServiceNow routes_to Salesforce when CROSS_SYSTEM_ECHO +
+#        INTEGRATION_CONCENTRATION co-fire (tickets echo across the boundary
+#        and the integration is over-concentrated on a single flow).
+_SC_ROUTES_TO_RULE_DETECTORS = frozenset(
+    {CROSS_SYSTEM_ECHO_DETECTOR_ID, INTEGRATION_CONCENTRATION_DETECTOR_ID}
+)
+_SERVICENOW_SYSTEM_ALIASES = (
+    "servicenow", "service now", "service_now", "snow",
+)
+
+INFERRED_RULE_DETECTOR_IDS = (
+    frozenset(
+        detector_id
+        for required, _, _ in _NCINO_DEPENDS_ON_RULES
+        for detector_id in required
+    )
+    | _ROUTES_TO_RULE_DETECTORS
+    | frozenset(
+        detector_id
+        for required, _, _ in _SC_DEPENDS_ON_RULES
+        for detector_id in required
+    )
+    | _SC_ROUTES_TO_RULE_DETECTORS
+)
 _SQLSERVER_SYSTEM_ALIASES = (
     "sqlserver", "sql server", "sql_server", "mssql", "microsoft sql server",
 )
@@ -790,7 +858,7 @@ def map_inferred_from_detectors(
     controls surfacing (T5), not storage. All edges have confidence=0.6 and
     inferred=True — set here as constants, never parameterised.
 
-    Four co-firing rules (Section 6):
+    Eight co-firing rules — nCino (1-4) and Service Cloud (SC-1 to SC-4):
       1. LOAN_ORIGINATION_ROUTING_FRICTION + COVENANT_TRACKING_GAP
          -> Covenant Review depends_on Loan Origination
       2. LOAN_ORIGINATION_ROUTING_FRICTION + CHECKLIST_BOTTLENECK
@@ -799,6 +867,14 @@ def map_inferred_from_detectors(
          -> Disbursement depends_on Covenant Review
       4. COVENANT_TRACKING_GAP + DB_SLA_BREACH_RATE
          -> SQL Server ITSM routes_to Salesforce
+      SC-1. REPETITIVE_AUTOMATION + HANDOFF_FRICTION
+         -> Case Routing depends_on Case Automation
+      SC-2. APPROVAL_BOTTLENECK + HANDOFF_FRICTION
+         -> Approval Routing depends_on Case Routing
+      SC-3. KNOWLEDGE_GAP + REPETITIVE_AUTOMATION
+         -> Knowledge Management depends_on Case Automation
+      SC-4. CROSS_SYSTEM_ECHO + INTEGRATION_CONCENTRATION
+         -> ServiceNow routes_to Salesforce
 
     A rule only writes an edge when both its detectors fired AND both edge
     endpoints resolve to entities in the run's entity list. A rule whose
@@ -902,6 +978,75 @@ def map_inferred_from_detectors(
                 count += 1
         except Exception as exc:
             logger.debug("map_inferred_from_detectors — routes_to rule failed: %s", exc)
+
+    # SC Rules 1-3: Service Cloud Process -> Process depends_on edges.
+    for required, from_detector, to_detector in _SC_DEPENDS_ON_RULES:
+        if not required.issubset(fired):
+            continue
+        try:
+            from_proc = get_process_entity(org_id, from_detector, entities)
+            to_proc = get_process_entity(org_id, to_detector, entities)
+            if from_proc is None or to_proc is None:
+                logger.debug(
+                    "map_inferred_from_detectors — SC depends_on rule %s skipped: "
+                    "missing process entity (from=%s to=%s)",
+                    sorted(required), from_proc is not None, to_proc is not None,
+                )
+                continue
+            upsert_relationship(
+                org_id=org_id,
+                from_entity_id=str(from_proc.id),
+                to_entity_id=str(to_proc.id),
+                relationship_type="depends_on",
+                confidence=INFERRED_CONFIDENCE,
+                inferred=True,
+                run_id=run_id,
+                evidence=_inferred_evidence([from_detector, to_detector]),
+            )
+            count += 1
+        except Exception as exc:
+            logger.debug(
+                "map_inferred_from_detectors — SC depends_on rule %s failed: %s",
+                sorted(required), exc,
+            )
+
+    # SC Rule 4: System -> System routes_to edge (ServiceNow -> Salesforce).
+    if _SC_ROUTES_TO_RULE_DETECTORS.issubset(fired):
+        try:
+            from_source = source_by_detector.get(CROSS_SYSTEM_ECHO_DETECTOR_ID)
+            to_source = source_by_detector.get(INTEGRATION_CONCENTRATION_DETECTOR_ID)
+            from_system = get_system_entity(
+                org_id,
+                [from_source, *_SERVICENOW_SYSTEM_ALIASES],
+                entities,
+            )
+            to_system = get_system_entity(
+                org_id,
+                [to_source, *_SALESFORCE_SYSTEM_ALIASES],
+                entities,
+            )
+            if from_system is None or to_system is None:
+                logger.debug(
+                    "map_inferred_from_detectors — SC routes_to rule skipped: "
+                    "missing system entity (from=%s to=%s)",
+                    from_system is not None, to_system is not None,
+                )
+            else:
+                upsert_relationship(
+                    org_id=org_id,
+                    from_entity_id=str(from_system.id),
+                    to_entity_id=str(to_system.id),
+                    relationship_type="routes_to",
+                    confidence=INFERRED_CONFIDENCE,
+                    inferred=True,
+                    run_id=run_id,
+                    evidence=_inferred_evidence(
+                        [CROSS_SYSTEM_ECHO_DETECTOR_ID, INTEGRATION_CONCENTRATION_DETECTOR_ID]
+                    ),
+                )
+                count += 1
+        except Exception as exc:
+            logger.debug("map_inferred_from_detectors — SC routes_to rule failed: %s", exc)
 
     logger.info(
         "map_inferred_from_detectors — run=%s org=%s inferred_edges_written=%d",

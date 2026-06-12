@@ -40,7 +40,7 @@ from .rbac import require_role
 from . import db
 from .llm_enrichment import KV_LLM_ENRICHMENT
 from .temporal import get_baseline, get_signal_history
-from .graph_query import RelationshipSummary, select_relationships
+from .graph_query import RelationshipSummary, select_relationships_for_opportunity
 
 logger = logging.getLogger(__name__)
 
@@ -415,7 +415,10 @@ def _load_entity_summaries(run_id: str) -> List[EntitySummary]:
     return summaries
 
 
-def _load_relationship_summaries(run_id: str) -> List[RelationshipSummary]:
+def _load_relationship_summaries(
+    run_id: str,
+    opportunity: Optional[Dict[str, Any]] = None,
+) -> List[RelationshipSummary]:
     """Load relationship edges for the run's graph, flag-gated (T3-S13-A T5).
 
     select_relationships() applies INFERRED_RELATIONSHIPS_ENABLED at population
@@ -454,28 +457,30 @@ def _load_relationship_summaries(run_id: str) -> List[RelationshipSummary]:
         )
         return []
     try:
-        return select_relationships(org_id, run_id)
+        detector_id = (opportunity or {}).get("detector_id")
+        return select_relationships_for_opportunity(org_id, run_id, detector_id)
     except Exception as exc:
         logger.debug("relationship load failed for run %s: %s", run_id, exc)
         return []
 
 
 def _load_causal_hypothesis(
-    org_id: Optional[str], opportunity_id: str
+    org_id: Optional[str], opportunity_id: str, run_id: str
 ) -> Optional[CausalHypothesisSummary]:
-    """Load the most-recent causal hypothesis for (org_id, opportunity_id).
+    """Load the causal hypothesis for the exact org, run, and opportunity.
 
     Read live from the causal_hypotheses table (ENT-6 / T3-S16-A), not from a
-    run-scoped KV artifact — like relationships, several rows can exist across
-    runs and the newest (created_at DESC) is surfaced. Scoped to org_id, so a
-    different org's hypothesis can never be returned.
+    run-scoped KV artifact. Opportunity IDs can repeat across runs, so run_id
+    is required to prevent historical hypotheses from leaking into the current
+    Opportunity Review. Scoped to org_id, so a different org's hypothesis can
+    never be returned.
 
     Advisory and never raises: returns None when there is no hypothesis, when
     the org context is missing, or on any query error. Absence is the normal
     state, so it is deliberately NOT logged as a warning. Touches no scoring
     fields (impact, effort, tier, decision, evidence ids).
     """
-    if not org_id or not opportunity_id:
+    if not org_id or not opportunity_id or not run_id:
         return None
     try:
         conn = db.connect()
@@ -486,11 +491,11 @@ def _load_causal_hypothesis(
                 SELECT cause_chain, falsifiability_condition, confidence,
                        inferred, preliminary, preliminary_reason
                 FROM causal_hypotheses
-                WHERE org_id = ? AND opportunity_id = ?
+                WHERE org_id = ? AND opportunity_id = ? AND run_id = ?
                 ORDER BY created_at DESC
                 LIMIT 1
                 """,
-                (org_id, opportunity_id),
+                (org_id, opportunity_id, run_id),
             ).fetchone()
         finally:
             conn.close()
@@ -544,20 +549,6 @@ def register_sprint4_t6_routes(app) -> None:
         # Service-account filter (run_count < 3) is applied here per spec Section 8.
         entity_summaries = _load_entity_summaries(run_id)
 
-        # Load relationship edges once for this run. Flag-gated: observed-only by
-        # default, observed + inferred when INFERRED_RELATIONSHIPS_ENABLED is on.
-        relationship_summaries = _load_relationship_summaries(run_id)
-
-        # Load the most-recent causal hypothesis for this opportunity (ENT-6),
-        # live from the causal_hypotheses table. org_id from the tenancy context;
-        # None when absent or when no org context — the loader never raises.
-        try:
-            from app.middleware.tenancy import get_current_org_id_optional
-            causal_org_id = get_current_org_id_optional()
-        except Exception:
-            causal_org_id = None
-        causal_hypothesis = _load_causal_hypothesis(causal_org_id, opp_id)
-
         enrichment = db.run_kv_get(KV_LLM_ENRICHMENT, run_id, None)
 
         # ENT-2: corroboration fields live on the stored opportunity record.
@@ -565,6 +556,15 @@ def register_sprint4_t6_routes(app) -> None:
         stored_opps = db.run_kv_get("opps", run_id, []) or []
         stored_opp = next((o for o in stored_opps if o.get("id") == opp_id), None)
         corroboration = _corroboration_fields(stored_opp)
+
+        relationship_summaries = _load_relationship_summaries(run_id, stored_opp)
+
+        try:
+            from app.middleware.tenancy import get_current_org_id_optional
+            causal_org_id = get_current_org_id_optional()
+        except Exception:
+            causal_org_id = None
+        causal_hypothesis = _load_causal_hypothesis(causal_org_id, opp_id, run_id)
 
         # Enrichment not yet generated — serve fallback from stored opps
         if enrichment is None:

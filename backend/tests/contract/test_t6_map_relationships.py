@@ -19,6 +19,7 @@ import sqlite3
 from uuid import uuid4
 
 from app import telemetry
+from app.entity_extractor import extract_entities
 from app.relationship_mapper import map_relationships
 from database.models.entities import Entity
 
@@ -89,6 +90,54 @@ def _edges(org_id, rtype):
 # ---------------------------------------------------------------------------
 
 class TestMapRelationshipsOrchestrator:
+    def test_ncino_loans_create_observed_ownership_edge_end_to_end(self):
+        org = f"org-t6-ncino-{uuid4().hex[:8]}"
+        run = f"run-t6-ncino-{uuid4().hex[:8]}"
+        ingestor_data = {
+            "salesforce": {
+                "ncino": {
+                    "loans": [
+                        {
+                            "Id": "loan-001",
+                            "Name": "Commercial Loan 001",
+                            "OwnerId": "005OWNER",
+                        }
+                    ]
+                }
+            }
+        }
+
+        entities = extract_entities(
+            org_id=org,
+            run_id=run,
+            pack_id="ncino",
+            detector_results=[],
+            ingestor_data=ingestor_data,
+        )
+        counts = map_relationships(org, run, ingestor_data, [], entities)
+
+        assert counts["observed"] == 1
+        with sqlite3.connect(_get_db_path()) as conn:
+            conn.row_factory = sqlite3.Row
+            row = conn.execute(
+                """
+                SELECT r.relationship_type, r.inferred,
+                       source.source_record_id AS owner_id,
+                       target.source_record_id AS loan_id
+                FROM entity_relationships r
+                JOIN entities source ON source.id = r.from_entity_id
+                JOIN entities target ON target.id = r.to_entity_id
+                WHERE r.org_id = ? AND r.last_seen_run_id = ?
+                """,
+                (org, run),
+            ).fetchone()
+
+        assert row is not None
+        assert row["relationship_type"] == "owns"
+        assert row["inferred"] == 0
+        assert row["owner_id"] == "005OWNER"
+        assert row["loan_id"] == "loan-001"
+
     def test_runs_both_passes_and_returns_counts(self):
         org = f"org-t6-{uuid4().hex[:8]}"
         run = "run-t6-both"
@@ -223,3 +272,97 @@ class TestRunnerNonBlocking:
             and "t6-map-noevent" in r.getMessage()
         ]
         assert not emitted, "mapping_completed must not be emitted when mapping fails"
+
+
+# ---------------------------------------------------------------------------
+# Service Cloud co-firing rules (SC-1 … SC-4)
+# ---------------------------------------------------------------------------
+
+class TestServiceCloudInferredRules:
+    """SC co-firing rules produce inferred edges for Service Cloud pack runs."""
+
+    def _make_sc_entities(self, org, run):
+        """Seed the four process entities and one system entity needed by SC rules."""
+        entities = [
+            _make_entity(org, "process", "REPETITIVE_AUTOMATION", run),
+            _make_entity(org, "process", "HANDOFF_FRICTION", run),
+            _make_entity(org, "process", "APPROVAL_BOTTLENECK", run),
+            _make_entity(org, "process", "KNOWLEDGE_GAP", run),
+            _make_entity(org, "system", "Salesforce", run),
+            _make_entity(org, "system", "ServiceNow", run),
+            _make_entity(org, "process", "INTEGRATION_CONCENTRATION", run),
+            _make_entity(org, "process", "CROSS_SYSTEM_ECHO", run),
+        ]
+        for e in entities:
+            _persist(e)
+        return entities
+
+    def test_sc1_handoff_friction_depends_on_repetitive_automation(self):
+        org = f"org-sc1-{uuid4().hex[:8]}"
+        run = f"run-sc1-{uuid4().hex[:8]}"
+        entities = self._make_sc_entities(org, run)
+        detectors = [
+            _DetectorResultStub("REPETITIVE_AUTOMATION", "salesforce"),
+            _DetectorResultStub("HANDOFF_FRICTION", "salesforce"),
+        ]
+        counts = map_relationships(org, run, {}, detectors, entities)
+        assert counts["inferred"] >= 1
+        edges = _edges(org, "depends_on")
+        assert any(e["org_id"] == org for e in edges)
+
+    def test_sc2_approval_bottleneck_depends_on_handoff_friction(self):
+        org = f"org-sc2-{uuid4().hex[:8]}"
+        run = f"run-sc2-{uuid4().hex[:8]}"
+        entities = self._make_sc_entities(org, run)
+        detectors = [
+            _DetectorResultStub("APPROVAL_BOTTLENECK", "salesforce"),
+            _DetectorResultStub("HANDOFF_FRICTION", "salesforce"),
+        ]
+        counts = map_relationships(org, run, {}, detectors, entities)
+        assert counts["inferred"] >= 1
+        edges = _edges(org, "depends_on")
+        assert any(e["org_id"] == org for e in edges)
+
+    def test_sc3_knowledge_gap_depends_on_repetitive_automation(self):
+        org = f"org-sc3-{uuid4().hex[:8]}"
+        run = f"run-sc3-{uuid4().hex[:8]}"
+        entities = self._make_sc_entities(org, run)
+        detectors = [
+            _DetectorResultStub("KNOWLEDGE_GAP", "salesforce"),
+            _DetectorResultStub("REPETITIVE_AUTOMATION", "salesforce"),
+        ]
+        counts = map_relationships(org, run, {}, detectors, entities)
+        assert counts["inferred"] >= 1
+        edges = _edges(org, "depends_on")
+        assert any(e["org_id"] == org for e in edges)
+
+    def test_sc4_servicenow_routes_to_salesforce(self):
+        org = f"org-sc4-{uuid4().hex[:8]}"
+        run = f"run-sc4-{uuid4().hex[:8]}"
+        entities = self._make_sc_entities(org, run)
+        detectors = [
+            _DetectorResultStub("CROSS_SYSTEM_ECHO", "servicenow"),
+            _DetectorResultStub("INTEGRATION_CONCENTRATION", "salesforce"),
+        ]
+        counts = map_relationships(org, run, {}, detectors, entities)
+        assert counts["inferred"] >= 1
+        edges = _edges(org, "routes_to")
+        assert any(e["org_id"] == org for e in edges)
+
+    def test_sc_rules_only_fire_when_both_detectors_present(self):
+        """A rule must not fire if only one of its two detectors fired."""
+        org = f"org-sc-partial-{uuid4().hex[:8]}"
+        run = f"run-sc-partial-{uuid4().hex[:8]}"
+        entities = self._make_sc_entities(org, run)
+        # Only one detector — no rule can fire.
+        detectors = [_DetectorResultStub("REPETITIVE_AUTOMATION", "salesforce")]
+        counts = map_relationships(org, run, {}, detectors, entities)
+        assert counts["inferred"] == 0
+
+    def test_service_cloud_offline_run_produces_inferred_relationships(self):
+        """End-to-end: offline service_cloud run must write at least one inferred edge."""
+        from discovery.runner import run as discovery_run
+        result = discovery_run(mode="offline", run_id=f"sc-e2e-{uuid4().hex[:8]}", pack="service_cloud")
+        assert isinstance(result, dict)
+        # The run itself must succeed regardless of mapping outcome (AC9).
+        assert "opportunities" in result

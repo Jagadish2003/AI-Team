@@ -947,6 +947,27 @@ def get_cross_system_references(
     }
 
 
+def get_relationship_records(
+    client: Optional[SalesforceClient] = None,
+) -> List[Dict[str, Any]]:
+    """Return a bounded set of source-backed Case ownership records.
+
+    Sprint 13 relationship mapping needs the record Id and OwnerId, not only
+    aggregate case metrics. Keeping this as a separate bounded query preserves
+    the existing detector payload while making Person -> Object ``owns`` edges
+    possible in live Service Cloud runs.
+    """
+    if not is_live():
+        fixture = _load_fixture()
+        return list(fixture.get("cases") or fixture.get("records") or [])
+
+    return client.soql(
+        "SELECT Id, CaseNumber, OwnerId, Status, CreatedDate "
+        "FROM Case WHERE CreatedDate = LAST_N_DAYS:90 "
+        "ORDER BY CreatedDate DESC LIMIT 500"
+    )
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Main ingest() — called by runner.py
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1018,6 +1039,10 @@ def ingest(sf_client: Optional[SalesforceClient] = None) -> Dict[str, Any]:
             "get_cross_system_references",
             lambda: get_cross_system_references(sf_client),
         )
+        cases = _timed(
+            "get_relationship_records",
+            lambda: get_relationship_records(sf_client),
+        )
 
         return {
             "case_metrics": case_metrics,
@@ -1025,6 +1050,7 @@ def ingest(sf_client: Optional[SalesforceClient] = None) -> Dict[str, Any]:
             "approval_processes": approval_processes,
             "named_credentials": named_credentials,
             "cross_system_references": cross_system_references,
+            "cases": cases,
         }
     except IngestError:
         raise

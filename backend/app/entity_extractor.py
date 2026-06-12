@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 from contextvars import ContextVar
 from datetime import datetime, timezone
@@ -248,6 +249,8 @@ def _first_record_str(record: Dict[str, Any], keys: tuple[str, ...]) -> Optional
 
 def _ref_name_and_id(value: Any) -> tuple[Optional[str], Optional[str]]:
     """Read a source reference that may be a string or {display,value,id} dict."""
+    if isinstance(value, list):
+        return _ref_name_and_id(value[0]) if value else (None, None)
     if isinstance(value, dict):
         name = _first_record_str(
             value,
@@ -471,9 +474,9 @@ def _extract_salesforce_entities(
         except Exception as exc:
             logger.warning("SF object extraction failed for %s: %s", name, exc)
 
-    # nCino: loan portfolio references from sf_data["ncino"]
+    # nCino: loan and portfolio references from sf_data["ncino"].
     ncino = sf_data.get("ncino") or {}
-    for key in ("loan_applications", "loan_portfolios"):
+    for key in ("loans", "loan_applications", "loan_portfolios"):
         for record in ncino.get(key, []) or []:
             record_id = _first_record_str(
                 record,
@@ -502,6 +505,25 @@ def _extract_salesforce_entities(
                     _append_entity(entities, e)
                 except Exception as exc:
                     logger.warning("nCino person extraction failed for %s: %s", owner_id, exc)
+
+            object_name = _first_record_str(
+                record,
+                ("Name", "name", "loan_number", "Id", "id", "loan_id"),
+            )
+            if object_name:
+                try:
+                    e = resolve_or_create_entity(
+                        org_id=org_id,
+                        entity_type="object",
+                        display_name=object_name,
+                        source_system="salesforce",
+                        source_record_id=record_id or object_name,
+                        run_id=run_id,
+                        metadata={"source": f"ncino_{key}", "record_type": "loan"},
+                    )
+                    _append_entity(entities, e)
+                except Exception as exc:
+                    logger.warning("nCino object extraction failed for %s: %s", object_name, exc)
 
             # Project: bounded nCino work/portfolio. Prefer portfolio name, then ID.
             project_name = _first_record_str(
@@ -696,6 +718,30 @@ def _extract_jira_entities(
             except Exception as exc:
                 logger.warning("Jira reporter extraction failed for %s: %s", reporter_name, exc)
 
+        escalation_target = issue.get("escalated_to") or issue.get("escalation_target")
+        escalation_name, escalation_id = _ref_name_and_id(escalation_target)
+        if escalation_name:
+            target_type = os.getenv("JIRA_ESCALATION_TARGET_TYPE", "person").strip().lower()
+            if target_type not in {"person", "team"}:
+                target_type = "person"
+            try:
+                e = resolve_or_create_entity(
+                    org_id=org_id,
+                    entity_type=target_type,
+                    display_name=escalation_name,
+                    source_system="jira",
+                    source_record_id=escalation_id,
+                    run_id=run_id,
+                    metadata={"source": "jira_escalation_target"},
+                )
+                _append_entity(entities, e)
+            except Exception as exc:
+                logger.warning(
+                    "Jira escalation target extraction failed for %s: %s",
+                    escalation_name,
+                    exc,
+                )
+
     # Sample cross-references: Object from issue_key
     for ref in issue_metrics.get("sample_cross_references", []) or []:
         issue_key = _safe_str(ref.get("issue_key"))
@@ -841,6 +887,28 @@ def _extract_servicenow_entities(
             except Exception as exc:
                 logger.warning("SN assigned_to extraction failed for %s: %s", assigned_name, exc)
 
+        assignment_group_name, assignment_group_id = _ref_name_and_id(
+            incident.get("assignment_group")
+        )
+        if assignment_group_name:
+            try:
+                e = resolve_or_create_entity(
+                    org_id=org_id,
+                    entity_type="team",
+                    display_name=assignment_group_name,
+                    source_system="servicenow",
+                    source_record_id=assignment_group_id,
+                    run_id=run_id,
+                    metadata={"source": "servicenow_incident_assignment_group"},
+                )
+                _append_entity(entities, e)
+            except Exception as exc:
+                logger.warning(
+                    "SN assignment group extraction failed for %s: %s",
+                    assignment_group_name,
+                    exc,
+                )
+
         # Person: caller_id.display_value
         caller_id = incident.get("caller_id") or {}
         if isinstance(caller_id, dict):
@@ -862,6 +930,31 @@ def _extract_servicenow_entities(
                 _append_entity(entities, e)
             except Exception as exc:
                 logger.warning("SN caller_id extraction failed for %s: %s", caller_name, exc)
+
+        escalation_name, escalation_id = _ref_name_and_id(incident.get("escalated_to"))
+        if escalation_name:
+            target_type = os.getenv(
+                "SERVICENOW_ESCALATION_TARGET_TYPE", "person"
+            ).strip().lower()
+            if target_type not in {"person", "team"}:
+                target_type = "person"
+            try:
+                e = resolve_or_create_entity(
+                    org_id=org_id,
+                    entity_type=target_type,
+                    display_name=escalation_name,
+                    source_system="servicenow",
+                    source_record_id=escalation_id,
+                    run_id=run_id,
+                    metadata={"source": "servicenow_escalation_target"},
+                )
+                _append_entity(entities, e)
+            except Exception as exc:
+                logger.warning(
+                    "SN escalation target extraction failed for %s: %s",
+                    escalation_name,
+                    exc,
+                )
 
     return entities
 

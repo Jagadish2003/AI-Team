@@ -220,6 +220,24 @@ class TestIndividualFunctions:
 # ── Error handling tests ──────────────────────────────────────────────────────
 
 
+def test_relationship_records_live_include_owner_and_record_ids(monkeypatch):
+    from discovery.ingest import salesforce as sf_mod
+
+    class Client:
+        query = ""
+
+        def soql(self, query):
+            self.query = query
+            return [{"Id": "500CASE", "CaseNumber": "000123", "OwnerId": "005OWNER"}]
+
+    client = Client()
+    monkeypatch.setattr(sf_mod, "is_live", lambda: True)
+    result = sf_mod.get_relationship_records(client)
+
+    assert result[0]["OwnerId"] == "005OWNER"
+    assert "Id, CaseNumber, OwnerId" in client.query
+
+
 class TestErrorHandling:
     def test_missing_fixture_raises_ingest_error(self, tmp_path, monkeypatch):
         from discovery.ingest import salesforce as sf_mod

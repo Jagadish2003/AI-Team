@@ -906,6 +906,84 @@ def _run_entity_ids_from_db(org_id: str, run_id: str) -> List[str]:
     return _dedupe([str(row[0]) for row in rows if row and row[0]])
 
 
+def _run_relationship_entity_ids_from_db(org_id: str, run_id: str) -> List[str]:
+    """Return endpoints of relationships confirmed in the current run."""
+    try:
+        from . import db as _db
+
+        conn = _db.connect()
+        try:
+            rows = conn.execute(
+                """
+                SELECT from_entity_id AS entity_id
+                FROM entity_relationships
+                WHERE org_id = ? AND last_seen_run_id = ?
+                UNION
+                SELECT to_entity_id AS entity_id
+                FROM entity_relationships
+                WHERE org_id = ? AND last_seen_run_id = ?
+                ORDER BY entity_id
+                LIMIT 50
+                """,
+                (org_id, run_id, org_id, run_id),
+            ).fetchall()
+        finally:
+            conn.close()
+    except Exception as exc:
+        logger.debug("Causal relationship seed lookup failed for run=%s: %s", run_id, exc)
+        return []
+    return _dedupe([str(row[0]) for row in rows if row and row[0]])
+
+
+def _detector_process_entity_id(
+    org_id: str,
+    run_id: str,
+    detector_id: Optional[str],
+) -> Optional[str]:
+    if not detector_id:
+        return None
+    try:
+        from . import db as _db
+
+        conn = _db.connect()
+        try:
+            row = conn.execute(
+                """
+                SELECT id
+                FROM entities
+                WHERE org_id = ?
+                  AND last_seen_run_id = ?
+                  AND entity_type = 'process'
+                  AND (
+                        lower(display_name) = lower(?)
+                     OR lower(COALESCE(source_record_id, '')) = lower(?)
+                  )
+                ORDER BY id
+                LIMIT 1
+                """,
+                (org_id, run_id, detector_id, detector_id),
+            ).fetchone()
+        finally:
+            conn.close()
+    except Exception as exc:
+        logger.debug("Causal detector seed lookup failed for run=%s: %s", run_id, exc)
+        return None
+    return str(row[0]) if row and row[0] else None
+
+
+def _opportunity_detector_id(opp: Dict[str, Any]) -> Optional[str]:
+    """Read the detector ID from runner or persisted Track A opportunity shapes."""
+    debug = opp.get("_debug") if isinstance(opp.get("_debug"), dict) else {}
+    value = (
+        opp.get("detector_id")
+        or opp.get("detectorId")
+        or debug.get("detector_id")
+        or debug.get("detectorId")
+    )
+    detector_id = str(value).strip() if value is not None else ""
+    return detector_id or None
+
+
 def _causal_seed_entity_ids(
     org_id: str,
     run_id: str,
@@ -915,6 +993,24 @@ def _causal_seed_entity_ids(
     explicit = _explicit_opp_entity_ids(opp)
     if explicit:
         return explicit
+
+    relationship_ids = _run_relationship_entity_ids_from_db(org_id, run_id)
+    detector_entity_id = _detector_process_entity_id(
+        org_id,
+        run_id,
+        _opportunity_detector_id(opp),
+    )
+    # Always seed with ALL relationship endpoints so depth-3 BFS sees the full
+    # connected component, not just the single detector process entity. A single
+    # seed can reach only direct neighbours; multiple co-located seeds pool their
+    # neighbourhoods, letting chains like A→B and C→A surface 3-entity context.
+    if relationship_ids:
+        if detector_entity_id and detector_entity_id in relationship_ids:
+            # Put detector entity first so causal context stays opportunity-focused.
+            seeds = _dedupe([detector_entity_id] + relationship_ids)
+        else:
+            seeds = relationship_ids
+        return seeds
 
     from_kv = [
         entity_id
