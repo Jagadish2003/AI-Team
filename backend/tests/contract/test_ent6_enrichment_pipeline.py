@@ -152,30 +152,33 @@ def test_llm_enrichment_stores_valid_causal_hypothesis(monkeypatch):
     )
     _insert_signal_history(org_id, "detector_a", pack_id)
 
+    # The UI-visible KV intentionally omits the newly-created process entities
+    # below the display run-count threshold. ENT-6 must still seed from DB rows
+    # last seen in the run so causal context can reach their relationship edges.
     graph_entities = [
         {
-            "entity_id": detector_a,
-            "entity_type": "process",
-            "display_name": "detector_a",
-            "source_system": "agentiq",
+            "entity_id": str(uuid4()),
+            "entity_type": "person",
+            "display_name": "Visible User",
+            "source_system": "salesforce",
             "resolution_confidence": 1.0,
             "resolution_status": "resolved",
             "run_count": 3,
         },
         {
-            "entity_id": detector_b,
-            "entity_type": "process",
-            "display_name": "detector_b",
-            "source_system": "agentiq",
+            "entity_id": str(uuid4()),
+            "entity_type": "team",
+            "display_name": "Visible Team",
+            "source_system": "jira",
             "resolution_confidence": 1.0,
             "resolution_status": "resolved",
             "run_count": 3,
         },
         {
-            "entity_id": detector_c,
-            "entity_type": "process",
-            "display_name": "detector_c",
-            "source_system": "agentiq",
+            "entity_id": str(uuid4()),
+            "entity_type": "system",
+            "display_name": "Visible System",
+            "source_system": "servicenow",
             "resolution_confidence": 1.0,
             "resolution_status": "resolved",
             "run_count": 3,

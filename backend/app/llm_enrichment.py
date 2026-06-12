@@ -921,10 +921,11 @@ def _causal_seed_entity_ids(
         for entity_id in (_entity_id_from_summary(entity) for entity in graph_entities)
         if entity_id
     ]
-    if from_kv:
-        return _dedupe(from_kv[:50])
-
-    return _run_entity_ids_from_db(org_id, run_id)
+    # The run KV is filtered for UI display (for example run_count >= 3), while
+    # causal analysis needs graph-complete seeds. Include DB rows last seen in
+    # this run so newly-created process entities can anchor relationship edges.
+    from_db = _run_entity_ids_from_db(org_id, run_id)
+    return _dedupe((from_kv + from_db)[:50])
 
 
 def _record_causal_rejection(
