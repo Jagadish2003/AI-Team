@@ -104,6 +104,14 @@ def _seed_entity_ids_for_opportunity(org_id: str, opp_id: str) -> List[str] | No
     and entity summaries are run-scoped, so this helper finds the newest
     org-visible run containing the opportunity and uses its resolved entity
     summaries as the seed set. It never scans runs outside the current org.
+
+    NOTE (perf): ownership is validated by scanning the org's runs newest-first
+    until the opportunity is found — O(n) in the org's run count, with no index
+    on opportunity IDs across runs. This is acceptable for the current POC scope
+    but is a hot path called during enrichment display.
+    # TODO: add opp_id index (run_id -> opp_id map, or an opportunities table)
+    #       before production so this lookup is not a per-call linear scan.
+    See ENT-4 review #6.
     """
     runs = sorted(db.tenancy_get_runs(org_id), key=_run_sort_key, reverse=True)
     for run in runs:
@@ -131,6 +139,11 @@ def get_opportunity_neighbourhood(
     opp_id: str,
     max_depth: int = Query(2, ge=0, le=5),
     include_inferred: bool = Query(False),
+    limit: int | None = Query(
+        None, ge=1, le=500,
+        description="Optional cap on returned nodes for display clients. Omit "
+                    "for the full traversal result (still bounded at 500).",
+    ),
 ) -> OpportunityNeighbourhoodResponse:
     org_id = get_current_org_id()
     seed_ids = _seed_entity_ids_for_opportunity(org_id, opp_id)
@@ -143,6 +156,11 @@ def get_opportunity_neighbourhood(
         max_depth=max_depth,
         include_inferred=include_inferred,
     )
+    # Optional client-side pagination: nodes arrive in deterministic order
+    # (depth, run_count, confidence) so the first `limit` are the most relevant
+    # for a small display payload. The full graph remains accessible without it.
+    if limit is not None:
+        nodes = nodes[:limit]
     return OpportunityNeighbourhoodResponse(
         opportunity_id=opp_id,
         seed_entity_ids=seed_ids,
@@ -161,6 +179,11 @@ def get_entity_neighbourhood(
     entity_id: str,
     max_depth: int = Query(2, ge=0, le=5),
     include_inferred: bool = Query(False),
+    limit: int | None = Query(
+        None, ge=1, le=500,
+        description="Optional cap on returned nodes for display clients. Omit "
+                    "for the full traversal result (still bounded at 500).",
+    ),
 ) -> EntityNeighbourhoodResponse:
     org_id = get_current_org_id()
     if not entity_exists(org_id, entity_id):
@@ -172,6 +195,9 @@ def get_entity_neighbourhood(
         max_depth=max_depth,
         include_inferred=include_inferred,
     )
+    # Optional client-side pagination — see get_opportunity_neighbourhood.
+    if limit is not None:
+        nodes = nodes[:limit]
     return EntityNeighbourhoodResponse(
         entity_id=entity_id,
         nodes=nodes,

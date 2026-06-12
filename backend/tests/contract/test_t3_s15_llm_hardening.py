@@ -171,6 +171,61 @@ class TestValidateAndRecover:
         assert out is None
 
 
+# ──────────────────── rewrite concurrency cap (ENT-4 review #1) ──────────────
+
+class TestRewriteConcurrencyCap:
+    def test_semaphore_bounded_to_max_concurrency(self):
+        # The cap is a BoundedSemaphore sized to REWRITE_MAX_CONCURRENCY so
+        # abandoned (timed-out) rewrite threads can never accumulate without
+        # bound under load.
+        assert hg.REWRITE_MAX_CONCURRENCY == 5
+        assert isinstance(hg._rewrite_semaphore, type(__import__("threading").BoundedSemaphore()))
+
+    def test_saturated_pool_drops_without_spawning_thread(self, monkeypatch):
+        # When every slot is held, a rewrite request fails fast (TimeoutError →
+        # caller drops the bullet) rather than starting an (N+1)-th thread. Use a
+        # fresh capacity-1 semaphore so the test is isolated from any rewrite
+        # thread still in flight from an earlier test.
+        import threading
+
+        monkeypatch.setattr(hg, "_rewrite_semaphore", threading.BoundedSemaphore(1))
+        spawned = {"n": 0}
+        monkeypatch.setattr(
+            hg, "_invoke_rewrite_llm", lambda p: spawned.__setitem__("n", spawned["n"] + 1)
+        )
+        assert hg._rewrite_semaphore.acquire(blocking=False)  # saturate the pool
+        with pytest.raises(TimeoutError):
+            hg.llm_rewrite_bullet(
+                "Ghost Person manages the Billing Queue",
+                ["Ghost Person"],
+                {"billing queue"},
+                timeout_ms=50,
+            )
+        assert spawned["n"] == 0, "must not invoke the LLM when pool is saturated"
+
+    def test_slot_released_after_normal_rewrite(self, monkeypatch):
+        # A completed rewrite returns its slot so steady-state load is unaffected.
+        import threading
+
+        sem = threading.BoundedSemaphore(1)
+        monkeypatch.setattr(hg, "_rewrite_semaphore", sem)
+        monkeypatch.setattr(
+            hg, "_invoke_rewrite_llm",
+            lambda p: "The Billing Queue has unassigned items piling up steadily",
+        )
+        hg.llm_rewrite_bullet(
+            "Ghost Person manages the Billing Queue",
+            ["Ghost Person"],
+            {"billing queue"},
+            timeout_ms=500,
+        )
+        # The single slot is free again (released by the worker), and a second
+        # acquire then fails — proving exactly one slot was returned, not leaked.
+        assert sem.acquire(blocking=False) is True
+        assert sem.acquire(blocking=False) is False
+        sem.release()
+
+
 # ────────────────────────── is_coherent / is_worth_saving ───────────────────
 
 class TestCoherenceChecks:
@@ -240,9 +295,21 @@ class TestPreliminaryGate:
         assert prelim is False
         assert reason is None
 
-    def test_empty_entities_is_preliminary(self):
+    def test_empty_entities_gate_not_applicable(self):
+        # Packs that do not extract entities (sqlserver_opsignal,
+        # github_engineering) carry an empty entity list. The entity-resolution
+        # gates (2 & 3) do not apply, so — once baseline maturity (Gate 1) is met
+        # — the finding is NOT flagged preliminary on entity grounds (review #3).
         prelim, reason = evaluate_preliminary_status({"entities": []}, MIN_BASELINE_RUNS, "org")
+        assert prelim is False
+        assert reason is None
+
+    def test_empty_entities_still_subject_to_baseline_gate(self):
+        # Gate 1 is independent of entities: an immature baseline is still
+        # preliminary even when there are no entities to evaluate.
+        prelim, reason = evaluate_preliminary_status({"entities": []}, 2, "org")
         assert prelim is True
+        assert "Baseline context is still accumulating" in reason
 
     def test_gate_ordering_baseline_first(self):
         # run_count<10 AND unresolved → baseline reason surfaces (checked first).
@@ -350,6 +417,116 @@ class TestGroundedPrompt:
         prompt = build_grounded_opp_prompt(signal, gc, "", "Acme Org")
         assert "SLA breach rate elevated" in prompt
         assert "Corroborated across Jira and ServiceNow" in prompt
+
+
+# ───────────── KV entity-load fallback to entities table (review #5) ─────────
+
+class TestGraphContextKvFallback:
+    def test_resolved_names_recovered_from_entities_table_when_kv_empty(self):
+        import sqlite3
+        import uuid
+        from datetime import datetime, timezone
+
+        from app import db
+        from app.graph_context import build_graph_context
+
+        org = f"org_fb_{uuid.uuid4().hex[:8]}"
+        now = datetime.now(timezone.utc).isoformat()
+        # Prior run is created first (lower rowid = earlier), current run after.
+        prior_run = f"run_prior_{uuid.uuid4().hex[:6]}"
+        cur_run = f"run_cur_{uuid.uuid4().hex[:6]}"
+        db.upsert_run(prior_run, {"id": prior_run, "org_id": org, "status": "done", "startedAt": now})
+        db.upsert_run(cur_run, {"id": cur_run, "org_id": org, "status": "done", "startedAt": now})
+
+        # Entity first seen in the prior run — and deliberately NOT written into
+        # the current run's KV blob (the PR #113 gap this fallback closes).
+        con = db.connect()
+        try:
+            con.execute(
+                """
+                INSERT INTO entities (
+                    id, org_id, entity_type, canonical_name, display_name,
+                    source_system, source_record_id, resolution_confidence,
+                    resolution_status, first_seen_run_id, last_seen_run_id,
+                    run_count, metadata, created_at, updated_at
+                ) VALUES (?, ?, 'person', 'alice smith', 'Alice Smith', 'jira', NULL,
+                          0.95, 'resolved', ?, ?, 7, NULL, ?, ?)
+                """,
+                (str(uuid.uuid4()), org, prior_run, prior_run, now, now),
+            )
+            con.commit()
+        finally:
+            con.close()
+
+        # Current run's KV has no entities → fallback to the accumulated set.
+        db.run_kv_set("entities", cur_run, [])
+        ctx = build_graph_context(org, cur_run)
+        assert "alice smith" in ctx.resolved_names
+
+    def test_kv_entities_take_precedence_over_table(self):
+        import uuid
+
+        from app import db
+        from app.graph_context import build_graph_context
+
+        org = f"org_kv_{uuid.uuid4().hex[:8]}"
+        run_id = f"run_kv_{uuid.uuid4().hex[:6]}"
+        db.run_kv_set("entities", run_id, [_entity("Kv Person")])
+        ctx = build_graph_context(org, run_id)
+        # KV present → used directly, no table query needed.
+        assert "kv person" in ctx.resolved_names
+
+
+# ──────────────── tag enforcement after guard rewrite (ENT-4 review #2) ──────
+
+class TestTagEnforcement:
+    def _grounded_ctx(self):
+        return GraphContext(
+            entity_count=5,
+            entity_count_shown=5,
+            truncated=False,
+            is_sparse=False,
+            resolved_names=["jane doe"],
+            observed_summary="Entities:\n- Jane Doe (person, jira)",
+            truncation_note="",
+            relationship_count=0,
+        )
+
+    def test_untagged_bullet_gets_unverified_tag(self, monkeypatch):
+        import json as _json
+
+        from app import llm_enrichment as le
+
+        # First-pass LLM emits one correctly-tagged bullet and one with NO tag
+        # (common non-compliance). Neither references a hallucinated name, so the
+        # guard returns both unchanged — exercising only the tag-enforcement step.
+        payload = {
+            "aiSummary": "Queue backlog is rising for this organisation.",
+            "aiWhyBullets": [
+                "[OBSERVED] Jane Doe owns the escalation backlog items",
+                "The backlog grew sharply over the last several weeks",
+            ],
+            "aiRisks": ["SLA breaches will continue"],
+            "aiSuggestedNextSteps": ["Rebalance the queue"],
+        }
+        monkeypatch.setattr(le, "_call_claude", lambda prompt, max_tokens: _json.dumps(payload))
+
+        out = le._enrich_opportunity_grounded(
+            opp={"id": "opp_tag", "title": "Backlog"},
+            graph_context=self._grounded_ctx(),
+            pack_id=None,
+            org_id="org-tag",
+            run_id="run-tag",
+            corroboration_label=None,
+        )
+
+        bullets = out["aiWhyBullets"]
+        assert len(bullets) == 2
+        # Every bullet reaching the frontend carries a recognised provenance tag.
+        for b in bullets:
+            assert b.startswith("[OBSERVED]") or b.startswith("[INFERRED") or b.startswith("[UNVERIFIED]")
+        # The originally-untagged bullet is now explicitly UNVERIFIED, never bare.
+        assert any(b.startswith("[UNVERIFIED] The backlog grew") for b in bullets)
 
 
 # ──────────────────── T7 — telemetry event registration ─────────────────────

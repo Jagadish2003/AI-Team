@@ -80,6 +80,30 @@ ALL_ENTITIES_DDL: tuple[str, ...] = (
     CREATE_ENTITIES_IDX_ORG_RUN_COUNT,
 )
 
+# Canonical "entities visible as of a run" FROM/WHERE clause, scoped to org_id.
+# An entity is visible in a run if it was first seen in that run OR any earlier
+# run — entities accumulate in the org and persist once seen. Chronological order
+# is derived from the runs table's implicit rowid (insertion order = creation
+# order), because run IDs (``run_<hex>``) carry no orderable information. The
+# LEFT JOIN keeps entities whose first_seen run row is absent (never drop a real
+# entity because its origin run record is gone).
+#
+# Single source of truth shared by:
+#   * routes_entities.list_entities       — GET /api/runs/{run_id}/entities
+#   * graph_context._load_entities_from_table — ENT-3 enrichment KV-load fallback
+# so the two chronological-visibility paths can never drift (ENT-4 review #5).
+# Callers prepend their own ``SELECT <cols>`` (aliasing the table ``e``) and may
+# append ``ORDER BY``. Bind parameters, in order: (org_id, run_id).
+ENTITIES_VISIBLE_AS_OF_RUN_FROM_WHERE = """
+    FROM entities e
+    LEFT JOIN runs r_first ON r_first.id = e.first_seen_run_id
+    WHERE e.org_id = ?
+      AND (
+            r_first.rowid IS NULL
+         OR r_first.rowid <= (SELECT rowid FROM runs WHERE id = ?)
+      )
+"""
+
 
 @dataclass
 class Entity:
