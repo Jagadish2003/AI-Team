@@ -37,6 +37,7 @@ from __future__ import annotations
 
 import logging
 import re
+import threading
 from dataclasses import dataclass, field
 from typing import Iterable, List, Optional, Set
 
@@ -47,6 +48,19 @@ logger = logging.getLogger(__name__)
 REWRITE_TIMEOUT_MS = 500
 # One rewrite attempt only — the guard never retries the LLM.
 REWRITE_MAX_RETRIES = 1
+
+# Maximum number of second-pass rewrite threads allowed to be in flight at once,
+# process-wide. The rewrite runs in a worker thread that we abandon after
+# REWRITE_TIMEOUT_MS, but a slow Claude API call keeps the abandoned thread alive
+# (holding an HTTPS connection + memory) until it finally returns — Python does
+# not garbage-collect a running daemon thread. Under enrichment load (many opps ×
+# many bullets) those abandoned threads would otherwise accumulate without bound.
+# This bounded semaphore caps the live rewrite threads: the worker releases its
+# slot in a ``finally`` even when it returns long after being abandoned, and a
+# caller that cannot get a slot within its timeout budget drops the bullet rather
+# than spawning an (N+1)-th thread. See ENT-4 review #1 (resource leak under load).
+REWRITE_MAX_CONCURRENCY = 5
+_rewrite_semaphore = threading.BoundedSemaphore(REWRITE_MAX_CONCURRENCY)
 
 # Capitalised word, then zero or more further capitalised words: matches both
 # single proper nouns ("Acme") and multi-word names ("Jane Doe", "Billing Ops").
@@ -59,6 +73,15 @@ _TAG_PREFIX_RE = re.compile(r"^\s*\[(?:OBSERVED|INFERRED[^\]]*)\]\s*", re.IGNORE
 # Single capitalised words that are ordinary sentence openers / generic terms,
 # not proper nouns. Filtering these avoids flagging "Tickets are piling up" as a
 # hallucination just because the sentence starts with a capital letter.
+#
+# MAINTENANCE OBLIGATION (review #8): this list must be reviewed whenever the
+# system is onboarded to a customer whose schema uses entity names that are also
+# common English words — e.g. an nCino loan product literally called "Standard",
+# or a team called "Operations". Such a real entity name, if it ever appears here
+# as a single word, would be filtered out and never validated against
+# resolved_names. Conversely, words missing from this list inflate false
+# positives. Keep it conservative and revisit per new customer naming convention;
+# without this review, guard false-positive rates silently drift upward.
 _COMMON_WORDS: Set[str] = {
     "the", "this", "these", "those", "that", "a", "an", "and", "but", "or",
     "when", "while", "after", "before", "if", "because", "since", "as",
@@ -267,24 +290,44 @@ def llm_rewrite_bullet(
     bullet). A returned rewrite that still contains a hallucinated name, or that
     is empty, is treated as a failed rewrite (TimeoutError) so the guard's
     contract — never return a hallucinated name — always holds.
-    """
-    import threading
 
+    Concurrency is bounded by :data:`REWRITE_MAX_CONCURRENCY` via
+    ``_rewrite_semaphore``. A slot is acquired before the worker starts and is
+    released by the worker itself in a ``finally`` — so an abandoned (timed-out)
+    thread still frees its slot when the slow API eventually returns, capping the
+    number of live rewrite threads / open connections process-wide. If no slot is
+    free within the timeout budget the rewrite is treated as a timeout and the
+    bullet is dropped, never spawning an unbounded extra thread.
+    """
     prompt = _build_rewrite_prompt(bullet, remove_names, resolved_names)
     result: dict = {}
+    timeout_s = timeout_ms / 1000.0
+
+    # Fail-fast if the rewrite pool is saturated — drop rather than pile on.
+    if not _rewrite_semaphore.acquire(timeout=timeout_s):
+        raise TimeoutError(
+            f"llm_rewrite_bullet: no rewrite slot free within {timeout_ms}ms "
+            f"(>= {REWRITE_MAX_CONCURRENCY} in flight)"
+        )
 
     def _worker() -> None:
         try:
             result["value"] = _invoke_rewrite_llm(prompt)
         except Exception as exc:  # pragma: no cover - defensive
             result["error"] = exc
+        finally:
+            # Always release, even if this thread was abandoned by the caller.
+            _rewrite_semaphore.release()
 
-    thread = threading.Thread(target=_worker, daemon=True)
+    thread = threading.Thread(
+        target=_worker, name="hallucination-rewrite", daemon=True
+    )
     thread.start()
-    thread.join(timeout_ms / 1000.0)
+    thread.join(timeout_s)
 
     if thread.is_alive():
-        # Worker still running past the budget — abandon it.
+        # Worker still running past the budget — abandon it. It keeps its
+        # semaphore slot until it finishes, which is exactly the cap we want.
         raise TimeoutError(f"llm_rewrite_bullet exceeded {timeout_ms}ms")
     if "error" in result:
         raise TimeoutError(f"llm_rewrite_bullet failed: {result['error']}")
@@ -374,6 +417,14 @@ def validate_and_recover(
     the pipeline (T3) can populate the ``OppEnrichment`` hallucination fields;
     callers that only need the contract return value (tests, AC2–AC5) may omit
     it.
+
+    SCOPE LIMITATION (review #7): each bullet is validated in isolation — the
+    guard has no cross-bullet context. A pronoun co-reference such as bullet 2
+    "She approved the covenant review" following bullet 1 "Alice Smith escalated
+    the approval" is NOT resolved: "She" is not a proper noun, so it is neither
+    flagged nor linked back to the resolved entity "Alice Smith". This is an
+    accepted limitation of per-bullet processing for the current scope; a future
+    improvement would thread prior-bullet entity context through this call.
     """
     resolved = _normalise_resolved(resolved_names)
 

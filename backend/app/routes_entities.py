@@ -21,7 +21,7 @@ from . import db
 from .middleware.tenancy import get_current_org_id
 from .rbac import require_role
 from .security import require_auth
-from database.models.entities import ALL_ENTITIES_DDL
+from database.models.entities import ALL_ENTITIES_DDL, ENTITIES_VISIBLE_AS_OF_RUN_FROM_WHERE
 
 ENTITIES_ROUTE_PATH = "/api/runs/{run_id}/entities"
 REQUIRED_ENTITY_COLUMNS = frozenset({
@@ -145,15 +145,9 @@ def list_entities(run_id: str) -> List[Dict[str, Any]]:
                    e.source_system, e.source_record_id, e.resolution_confidence,
                    e.resolution_status, e.first_seen_run_id, e.last_seen_run_id,
                    e.run_count, e.metadata, e.created_at, e.updated_at
-            FROM entities e
-            LEFT JOIN runs r_first ON r_first.id = e.first_seen_run_id
-            WHERE e.org_id = ?
-              AND (
-                    r_first.rowid IS NULL
-                 OR r_first.rowid <= (SELECT rowid FROM runs WHERE id = ?)
-              )
-            ORDER BY e.entity_type, e.canonical_name
-            """,
+            """
+            + ENTITIES_VISIBLE_AS_OF_RUN_FROM_WHERE
+            + "ORDER BY e.entity_type, e.canonical_name",
             (org_id, run_id),
         ).fetchall()
         result = []

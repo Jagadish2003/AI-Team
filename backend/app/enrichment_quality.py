@@ -17,7 +17,9 @@ Only when all three pass does it return ``(False, None)`` — confirmed (AC8).
 
 The function is pure and deterministic given the same enrichment object + run
 count, and tolerates entities supplied as either dicts or objects. An empty
-entity list is treated as confidence 0 (preliminary) rather than raising.
+entity list means the entity-resolution gates (2 and 3) do not apply — packs
+that do not extract entities (sqlserver_opsignal, github_engineering) are not
+flagged preliminary on entity grounds; only Gate 1 (baseline maturity) applies.
 The gate is advisory: it annotates the finding, it never alters scoring.
 """
 from __future__ import annotations
@@ -68,6 +70,17 @@ def evaluate_preliminary_status(
 
     entities = _entities_of(opp_enrichment)
 
+    # Gates 2 and 3 evaluate entity-resolution quality, which only applies to
+    # packs that populate the entities table (e.g. nCino). Packs such as
+    # sqlserver_opsignal and github_engineering do not extract entities, so their
+    # findings carry an empty entity list. Treating that as confidence 0.0 would
+    # flag EVERY such finding preliminary — making the flag meaningless for those
+    # customers. An empty entity list therefore means "entity-resolution gates not
+    # applicable" → not preliminary on these grounds (review #3). Gate 1 (baseline
+    # maturity) has already been applied above and is independent of entities.
+    if not entities:
+        return False, None
+
     # Gate 2 — entity resolution.
     unresolved = [e for e in entities if _field(e, "resolution_status") != "resolved"]
     if unresolved:
@@ -75,17 +88,14 @@ def evaluate_preliminary_status(
             f"{len(unresolved)} entities require resolution before findings are confirmed"
         )
 
-    # Gate 3 — average resolution confidence. Empty list => 0 => preliminary.
-    if entities:
-        total = 0.0
-        for e in entities:
-            try:
-                total += float(_field(e, "resolution_confidence", 0) or 0)
-            except (TypeError, ValueError):
-                total += 0.0
-        avg_confidence = total / len(entities)
-    else:
-        avg_confidence = 0.0
+    # Gate 3 — average resolution confidence (entities guaranteed non-empty here).
+    total = 0.0
+    for e in entities:
+        try:
+            total += float(_field(e, "resolution_confidence", 0) or 0)
+        except (TypeError, ValueError):
+            total += 0.0
+    avg_confidence = total / len(entities)
 
     if avg_confidence < MIN_AVG_CONFIDENCE:
         return True, (
