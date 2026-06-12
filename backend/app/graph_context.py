@@ -35,17 +35,21 @@ from typing import Any, Dict, List, Optional
 from pydantic import BaseModel, Field
 
 from app import db
+from app.graph_constants import (
+    GRAPH_CONTEXT_MAX_ENTITIES as MAX_GRAPH_ENTITIES,
+    SPARSE_GRAPH_THRESHOLD,
+)
 
 logger = logging.getLogger(__name__)
 
 # ENT-4 graph cap: the prompt reasons over at most 15 entities so the context
 # stays within a predictable token budget. A larger graph is truncated and the
 # model is told it is seeing a partial view via the truncation note.
-MAX_GRAPH_ENTITIES = 15
-
-# Below this many entities the graph is too thin to ground against — the
-# enrichment falls back to the pre-ENT-3 prompt and runs no hallucination guard.
-SPARSE_GRAPH_THRESHOLD = 3
+#
+# MAX_GRAPH_ENTITIES (15) and SPARSE_GRAPH_THRESHOLD (3) are imported from
+# app.graph_constants — the single source of truth shared with
+# app.graph_context_builder — and re-exported under these names so existing
+# importers/tests are unaffected (ENT-4 review #9).
 
 
 class GraphContext(BaseModel):
@@ -73,14 +77,65 @@ def _entity_get(entity: Any, key: str, default: Any = None) -> Any:
     return getattr(entity, key, default)
 
 
-def _load_entities(run_id: str) -> List[Dict[str, Any]]:
-    """Load this run's entity summaries from KV. Never raises."""
+def _load_entities_from_table(org_id: str, run_id: str) -> List[Dict[str, Any]]:
+    """Load the org's accumulated entity set visible as of ``run_id`` from the
+    entities table. Never raises; returns [] on any error.
+
+    This uses the shared ``ENTITIES_VISIBLE_AS_OF_RUN_FROM_WHERE`` clause — the
+    same chronological rowid approach the entities API route (PR #113 fix) uses —
+    so an entity first seen in an earlier run is still visible for this run's
+    context. Rows expose ``entity_id`` (aliased from ``id``) to match the shape
+    the rest of this module expects from KV-loaded entities.
+    """
+    try:
+        import sqlite3
+
+        from database.models.entities import ENTITIES_VISIBLE_AS_OF_RUN_FROM_WHERE
+
+        con = db.connect()
+        try:
+            con.row_factory = sqlite3.Row
+            rows = con.execute(
+                "SELECT e.id AS entity_id, e.display_name, e.entity_type, "
+                "e.source_system, e.resolution_status, e.resolution_confidence "
+                + ENTITIES_VISIBLE_AS_OF_RUN_FROM_WHERE,
+                (org_id, run_id),
+            ).fetchall()
+            return [dict(r) for r in rows]
+        finally:
+            con.close()
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.debug(
+            "graph_context: entities-table fallback failed for %s/%s: %s",
+            org_id, run_id, exc,
+        )
+        return []
+
+
+def _load_entities(org_id: Optional[str], run_id: str) -> List[Dict[str, Any]]:
+    """Load this run's entity summaries. Never raises.
+
+    Primary source is the run-scoped KV blob written during materialization
+    (deterministic, run-specific). When that blob is empty — which can happen if
+    the run's entities were first seen in a *prior* run and were not re-written
+    into this run's KV — we fall back to the accumulated org entity set from the
+    entities table (review #5). Without this, ``resolved_names`` would be
+    incomplete and the hallucination guard could wrongly flag legitimate,
+    previously-seen entity names and drop valid bullets.
+    """
     try:
         raw = db.run_kv_get("entities", run_id, []) or []
     except Exception as exc:  # pragma: no cover - defensive
         logger.debug("graph_context: entity load failed for %s: %s", run_id, exc)
-        return []
-    return [e for e in raw if isinstance(e, dict)]
+        raw = []
+    entities = [e for e in raw if isinstance(e, dict)]
+    if entities:
+        return entities
+    # KV had no entities for this run — recover the accumulated org set so the
+    # guard sees every legitimate name visible as of this run.
+    if org_id:
+        return _load_entities_from_table(org_id, run_id)
+    return entities
 
 
 def _load_relationships(org_id: str, run_id: str) -> List[Any]:
@@ -148,7 +203,7 @@ def build_graph_context(
     while ``entity_count_shown`` reflects what the prompt actually contains.
     """
     if entities is None:
-        entities = _load_entities(run_id)
+        entities = _load_entities(org_id, run_id)
     if relationships is None:
         relationships = _load_relationships(org_id, run_id) if org_id else []
 

@@ -290,6 +290,15 @@ def _split_observation_tag(bullet: str) -> tuple:
     return m.group(1) + " ", bullet[m.end():]
 
 
+# Provenance tag applied to any bullet the first-pass LLM emitted WITHOUT a
+# recognised [OBSERVED]/[INFERRED: X] prefix. The OUTPUT INSTRUCTIONS require a
+# tag on every aiWhyBullets entry, but the model does not always comply; an
+# untagged bullet would otherwise reach the frontend with no provenance pill
+# (and, after a guard rewrite, the re-attached prefix would be empty). Tagging it
+# UNVERIFIED guarantees the payload is consistently tagged. See ENT-4 review #2.
+_UNVERIFIED_TAG = "[UNVERIFIED] "
+
+
 def _corroboration_for(opp: Dict[str, Any]) -> Optional[str]:
     """Resolve the ENT-2 corroboration label for an opportunity, if present."""
     label = opp.get("corroboration_label")
@@ -614,6 +623,11 @@ def _enrich_opportunity_grounded(
     clean_bullets: List[str] = []
     for bullet in parsed["aiWhyBullets"][:5]:
         tag, body = _split_observation_tag(str(bullet))
+        # Enforce a recognised provenance tag: if the LLM omitted one, fall back
+        # to [UNVERIFIED] so the re-attached prefix is never empty/malformed and
+        # the frontend always receives a consistently-tagged bullet (review #2).
+        if not tag:
+            tag = _UNVERIFIED_TAG
         try:
             recovered = validate_and_recover(body, resolved_names, org_id, run_id, stats=stats)
         except Exception as exc:  # defensive — drop the bullet, keep the run alive

@@ -43,6 +43,11 @@ from typing import List, Optional
 try:
     from backend.app.graph_query import opportunity_neighbourhood
     from backend.app.telemetry import record_event
+    from backend.app.graph_constants import (
+        GRAPH_CONTEXT_MAX_ENTITIES,
+        GRAPH_CONTEXT_MAX_RELATIONSHIPS,
+        SPARSE_GRAPH_THRESHOLD,
+    )
     from backend.database.models.entity_relationships import (
         INFERRED_CONFIDENCE,
         OBSERVED_CONFIDENCE,
@@ -50,6 +55,11 @@ try:
 except ModuleNotFoundError:  # Runtime inside backend/ where app is top-level.
     from app.graph_query import opportunity_neighbourhood
     from app.telemetry import record_event
+    from app.graph_constants import (
+        GRAPH_CONTEXT_MAX_ENTITIES,
+        GRAPH_CONTEXT_MAX_RELATIONSHIPS,
+        SPARSE_GRAPH_THRESHOLD,
+    )
     from database.models.entity_relationships import (
         INFERRED_CONFIDENCE,
         OBSERVED_CONFIDENCE,
@@ -59,15 +69,13 @@ logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Hard caps (Section 2a) — not configurable per run.
+#
+# GRAPH_CONTEXT_MAX_ENTITIES (15), GRAPH_CONTEXT_MAX_RELATIONSHIPS (20) and
+# SPARSE_GRAPH_THRESHOLD (3) are defined once in app.graph_constants and imported
+# above (ENT-4 review #9). They are re-exported here so existing
+# ``from app.graph_context_builder import GRAPH_CONTEXT_MAX_ENTITIES`` callers and
+# tests keep working — but the values live in a single place.
 # ---------------------------------------------------------------------------
-
-GRAPH_CONTEXT_MAX_ENTITIES = 15
-GRAPH_CONTEXT_MAX_RELATIONSHIPS = 20
-
-# Below this many entities the graph is too thin to ground against; the caller
-# falls back to its pre-graph prompt. build_graph_context() returns a valid
-# (empty observed_summary) context with sparse_graph=True rather than raising.
-SPARSE_GRAPH_THRESHOLD = 3
 
 # Deterministic entity-type ranking priority (Section 2b). Lower = higher
 # priority in the LLM context. 'project' is in the entity model's type set but

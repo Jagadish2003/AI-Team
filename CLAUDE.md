@@ -41,6 +41,8 @@ Keep this file short and actionable. Prefer reading the relevant code and contra
 * `backend/app/entity_resolution.py`: conservative entity resolution engine. Uses an N+1 lookup pattern for ambiguous rows; only confident matches are merged.
 * `backend/app/routes_entities.py`: `GET /api/runs/{runId}/entities` — analyst+ only. Owns `ensure_entities_table()` (startup-only schema creation).
 * `backend/app/graph_context_builder.py`: ENT-4 graph context builder — turns raw graph traversal rows into a ranked, capped `GraphContext` for LLM prompts. Hard caps (15 entities / 20 relationships) and deterministic ranking are not configurable per-run. Distinct from `graph_context.py` (the ENT-3 run-KV enrichment bridge) — do not conflate.
+* `backend/app/graph_constants.py`: single source of truth for the graph-context hard caps (`GRAPH_CONTEXT_MAX_ENTITIES=15`, `GRAPH_CONTEXT_MAX_RELATIONSHIPS=20`, `SPARSE_GRAPH_THRESHOLD=3`). Both `graph_context_builder.py` and `graph_context.py` import these — do not redefine the caps locally.
+* `backend/app/routes_graph.py`: ENT-4 graph API routes — **registered** in `main.py` via `register_graph_routes(app)` (unlike `routes_sprint4_t5.py`). Four GET endpoints under `/api/graph`, all analyst+ and org-scoped via `get_current_org_id()` (request-body `org_id` is never trusted): `/opportunity/{opp_id}/neighbourhood`, `/entity/{entity_id}/neighbourhood` (both accept an optional `limit` query param for display-sized payloads), `/path`, and `/org/summary`.
 * `backend/app/executive_report_engine.py`: executive report generation.
 * `backend/app/roadmap_engine.py`: roadmap build logic.
 * `backend/app/cross_system_linker.py`: cross-system signal linking across Salesforce/ServiceNow/Jira.

@@ -190,6 +190,45 @@ def test_entity_neighbourhood_returns_org_scoped_graph(client: TestClient):
     ]
 
 
+def test_entity_neighbourhood_limit_caps_returned_nodes(client: TestClient):
+    # ENT-4 review #4: an optional `limit` query param lets display clients ask
+    # for a smaller payload; the full result is still returned when omitted.
+    org_id = f"graph_limit_{uuid4().hex[:8]}"
+    ids = _seed_graph(org_id)
+    headers = _headers_for_role("analyst", org_id)
+
+    full = client.get(
+        f"/api/graph/entity/{ids['a']}/neighbourhood",
+        headers=headers,
+        params={"max_depth": 2},
+    )
+    assert full.status_code == 200
+    assert full.json()["node_count"] == 3
+
+    limited = client.get(
+        f"/api/graph/entity/{ids['a']}/neighbourhood",
+        headers=headers,
+        params={"max_depth": 2, "limit": 1},
+    )
+    assert limited.status_code == 200
+    body = limited.json()
+    assert body["node_count"] == 1
+    assert len(body["nodes"]) == 1
+    # Deterministic order is preserved — the most relevant (seed) node is kept.
+    assert body["nodes"][0]["display_name"] == "Loan Intake"
+
+
+def test_neighbourhood_limit_rejects_out_of_range(client: TestClient):
+    org_id = f"graph_limit_bad_{uuid4().hex[:8]}"
+    ids = _seed_graph(org_id)
+    headers = _headers_for_role("analyst", org_id)
+    assert client.get(
+        f"/api/graph/entity/{ids['a']}/neighbourhood",
+        headers=headers,
+        params={"limit": 0},
+    ).status_code == 422
+
+
 def test_graph_path_returns_shortest_path(client: TestClient):
     org_id = f"graph_path_{uuid4().hex[:8]}"
     ids = _seed_graph(org_id)
