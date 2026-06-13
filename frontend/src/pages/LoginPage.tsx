@@ -14,11 +14,12 @@
  * both are satisfied.
  */
 import React, { useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link } from "react-router-dom";
 
 import PasswordInput from "../components/auth/PasswordInput";
 import { useAuth } from "../context/AuthContext";
 import { useTheme } from "../context/ThemeContext";
+import { hardRedirect } from "../utils/navigation";
 import { ApiError } from "../lib/apiClient";
 
 // ── Validation ────────────────────────────────────────────────────────────────
@@ -84,7 +85,6 @@ function loginErrorMessage(err: unknown): string {
 export default function LoginPage() {
   const { login } = useAuth();
   const { theme } = useTheme();
-  const navigate = useNavigate();
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -108,7 +108,9 @@ export default function LoginPage() {
     setSubmitting(true);
     try {
       await login(email.trim().toLowerCase(), password);
-      navigate("/integration-hub", { replace: true });
+      // Full reload (not SPA navigate) so all in-session context is rebuilt for
+      // this user — otherwise the previous user's connector/run state leaks.
+      hardRedirect("/integration-hub");
     } catch (err) {
       setError(loginErrorMessage(err));
     } finally {

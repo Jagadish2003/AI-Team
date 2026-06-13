@@ -16,13 +16,14 @@
  * height stays constant as inline errors appear and clear.
  */
 import React, { useEffect, useState } from "react";
-import { useNavigate, useSearchParams } from "react-router-dom";
+import { useSearchParams } from "react-router-dom";
 
 import PasswordInput from "../components/auth/PasswordInput";
 import { getInviteInfo } from "../api/authApi";
 import { useAuth } from "../context/AuthContext";
 import { useTheme } from "../context/ThemeContext";
 import { ApiError } from "../lib/apiClient";
+import { hardRedirect } from "../utils/navigation";
 
 // ── Validation ────────────────────────────────────────────────────────────────
 
@@ -76,7 +77,6 @@ type InviteState = "loading" | "valid" | "invalid";
 export default function AcceptInvitePage() {
   const { acceptInvite } = useAuth();
   const { theme } = useTheme();
-  const navigate = useNavigate();
   const [searchParams] = useSearchParams();
 
   const inviteToken = searchParams.get("token") ?? "";
@@ -134,7 +134,9 @@ export default function AcceptInvitePage() {
     setSubmitting(true);
     try {
       await acceptInvite(inviteToken, password);
-      navigate("/integration-hub", { replace: true });
+      // Full reload (not SPA navigate) so all in-session context is rebuilt for
+      // this user — otherwise the previous user's connector/run state leaks.
+      hardRedirect("/integration-hub");
     } catch (err) {
       setError(acceptInviteErrorMessage(err));
     } finally {

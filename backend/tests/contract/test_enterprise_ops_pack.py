@@ -110,11 +110,15 @@ class TestAC7:
         assert "vp of operations" in ctx or "chief operating" in ctx or "operations leadership" in ctx
 
     def test_llm_context_avoids_it_jargon(self):
-        """LLM context should not use ITSM or 'IT manager' framing."""
+        """LLM context must not use ITSM framing; 'not an IT manager' is a spec-required
+        disavowal phrase (ENT-5 §2) and is permitted — it rejects IT-manager framing
+        rather than adopting it."""
         m = _pack_config()
         ctx = m.get_pack("enterprise_ops")["llm_context"].lower()
         assert "itsm" not in ctx
-        assert "it manager" not in ctx
+        # The spec requires "not an IT manager" as an audience clarifier — check
+        # the phrase appears as a disavowal, not as a positive framing.
+        assert "not an it manager" in ctx
 
     def test_llm_context_mentions_servicenow_and_jira(self):
         m = _pack_config()
@@ -909,3 +913,183 @@ class TestAC10DetectorLevelIsolation:
         results_b = m.detect(sn_data=sn_b)
         assert len(results_a) == 1
         assert results_b == []
+
+
+# ---------------------------------------------------------------------------
+# AC5 — ENT_SLA_BREACH_BY_TEAM confidence elevation via ENT-1 entity overlay
+# ---------------------------------------------------------------------------
+
+def _sla_sn_with_overlay(teams, overlay):
+    """Build sn_data carrying both team breach rows and a team_entity_overlay."""
+    return {
+        "sla_breach_by_team": {"teams": teams},
+        "team_entity_overlay": overlay,
+    }
+
+
+def _jira_backlog(open_issues_by_team):
+    """Build jira_data with a team_backlog.open_issues_by_team map."""
+    return {"team_backlog": {"open_issues_by_team": open_issues_by_team}}
+
+
+class TestAC5SLABreachTeamConfidenceElevation:
+    """AC5: ENT_SLA_BREACH_BY_TEAM elevates MEDIUM → HIGH via ENT-1 entity graph
+    when top team resolves to a Team entity AND Jira open issues >= 20.
+    Exact-name fallback must stay MEDIUM."""
+
+    def _firing_teams(self):
+        return _sla_teams(top_pct=0.55, top_rate=0.35, n_teams=3)
+
+    def test_confidence_high_via_entity_graph(self):
+        """Entity overlay resolves top team to entity; Jira shows >= 20 open issues → HIGH."""
+        m = _sla_detector()
+        scorer = _scorer()
+        teams = self._firing_teams()
+        # "Alpha Team" is the top team produced by _sla_teams()
+        overlay = {"alpha team": "entity-001", "comm credit team": "entity-001"}
+        sn = _sla_sn_with_overlay(teams, overlay)
+        jira = _jira_backlog({"alpha team": 25})
+        results = m.detect(sn_data=sn, jira_data=jira)
+        assert len(results) == 1
+        scored = scorer.score_enterprise_ops(results[0])
+        assert scored["confidence"] == "HIGH"
+        assert scored["corroborated"] is True
+        assert "Jira" in scored["corroboration_sources"]
+
+    def test_raw_evidence_team_entity_resolved_true_on_entity_graph_path(self):
+        """raw_evidence['team_entity_resolved'] is True when entity overlay matched."""
+        m = _sla_detector()
+        teams = self._firing_teams()
+        overlay = {"alpha team": "entity-001"}
+        sn = _sla_sn_with_overlay(teams, overlay)
+        jira = _jira_backlog({"alpha team": 30})
+        results = m.detect(sn_data=sn, jira_data=jira)
+        assert len(results) == 1
+        assert results[0].raw_evidence.get("team_entity_resolved") is True
+        assert results[0].raw_evidence.get("match_strategy") == "entity_graph"
+
+    def test_confidence_medium_when_jira_open_issues_below_threshold(self):
+        """Entity overlay resolves but Jira open issues < 20 → stays MEDIUM."""
+        m = _sla_detector()
+        scorer = _scorer()
+        teams = self._firing_teams()
+        overlay = {"alpha team": "entity-001"}
+        sn = _sla_sn_with_overlay(teams, overlay)
+        jira = _jira_backlog({"alpha team": 10})  # below HIGH_JIRA_OPEN_ISSUES=20
+        results = m.detect(sn_data=sn, jira_data=jira)
+        assert len(results) == 1
+        scored = scorer.score_enterprise_ops(results[0])
+        assert scored["confidence"] == "MEDIUM"
+        assert scored["corroborated"] is False
+
+    def test_confidence_medium_via_exact_name_fallback(self):
+        """No overlay configured; exact-name match never elevates above MEDIUM."""
+        m = _sla_detector()
+        scorer = _scorer()
+        teams = self._firing_teams()
+        sn = _sla_sn(teams)  # no overlay
+        jira = _jira_backlog({"alpha team": 50})  # high Jira count, but no entity graph
+        results = m.detect(sn_data=sn, jira_data=jira)
+        assert len(results) == 1
+        scored = scorer.score_enterprise_ops(results[0])
+        assert scored["confidence"] == "MEDIUM"
+        assert results[0].raw_evidence.get("match_strategy") == "exact_name"
+        assert results[0].raw_evidence.get("team_entity_resolved") is False
+
+    def test_confidence_medium_with_no_jira_data(self):
+        """No jira_data at all → no corroboration possible → MEDIUM."""
+        m = _sla_detector()
+        scorer = _scorer()
+        teams = self._firing_teams()
+        sn = _sla_sn(teams)
+        results = m.detect(sn_data=sn)
+        assert len(results) == 1
+        scored = scorer.score_enterprise_ops(results[0])
+        assert scored["confidence"] == "MEDIUM"
+
+    def test_entity_graph_sums_jira_issues_across_aliased_teams(self):
+        """All Jira teams mapping to the same entity are summed for open issue count."""
+        m = _sla_detector()
+        scorer = _scorer()
+        teams = self._firing_teams()
+        # Two Jira team names both map to entity-001; combined count >= 20
+        overlay = {"alpha team": "entity-001", "alpha ops": "entity-001"}
+        sn = _sla_sn_with_overlay(teams, overlay)
+        jira = _jira_backlog({"alpha team": 8, "alpha ops": 15})  # sum = 23
+        results = m.detect(sn_data=sn, jira_data=jira)
+        assert len(results) == 1
+        assert results[0].raw_evidence.get("top_team_jira_open_issues") == 23
+        scored = scorer.score_enterprise_ops(results[0])
+        assert scored["confidence"] == "HIGH"
+
+
+# ---------------------------------------------------------------------------
+# AC9 — ENT_INCIDENT_RESOLUTION_LAG confidence elevation via COR-06 (scorer)
+# ---------------------------------------------------------------------------
+
+class TestAC9IncidentResolutionLagCOR06Elevation:
+    """AC9: ENT_INCIDENT_RESOLUTION_LAG elevates MEDIUM → HIGH when the scorer
+    receives sn_data with cor06_slack_escalation.fired == True.
+    Absent or fired==False must stay MEDIUM."""
+
+    def _firing_dr(self):
+        """A DetectorResult for ENT_INCIDENT_RESOLUTION_LAG (no raw_evidence confidence)."""
+        return _make_detector_result("ENT_INCIDENT_RESOLUTION_LAG", metric_value=0.45)
+
+    def test_confidence_high_when_cor06_fired(self):
+        """Scorer elevates to HIGH when cor06_slack_escalation.fired is True."""
+        scorer = _scorer()
+        dr = self._firing_dr()
+        sn = {"cor06_slack_escalation": {"fired": True, "org_id": "default"}}
+        result = scorer.score_enterprise_ops(dr, sn_data=sn, org_id="default")
+        assert result["confidence"] == "HIGH"
+        assert result["corroborated"] is True
+        assert "Slack" in result["corroboration_sources"]
+
+    def test_confidence_medium_when_cor06_not_fired(self):
+        """Scorer keeps MEDIUM when cor06_slack_escalation.fired is False."""
+        scorer = _scorer()
+        dr = self._firing_dr()
+        sn = {"cor06_slack_escalation": {"fired": False, "org_id": "default"}}
+        result = scorer.score_enterprise_ops(dr, sn_data=sn, org_id="default")
+        assert result["confidence"] == "MEDIUM"
+        assert result["corroborated"] is False
+
+    def test_confidence_medium_when_no_sn_data(self):
+        """Scorer keeps MEDIUM when sn_data is None (no COR-06 signal available)."""
+        scorer = _scorer()
+        dr = self._firing_dr()
+        result = scorer.score_enterprise_ops(dr)
+        assert result["confidence"] == "MEDIUM"
+        assert result["corroborated"] is False
+
+    def test_confidence_medium_when_cor06_key_absent(self):
+        """Scorer keeps MEDIUM when sn_data has no cor06_slack_escalation key."""
+        scorer = _scorer()
+        dr = self._firing_dr()
+        sn = {"other_signal": {"value": True}}
+        result = scorer.score_enterprise_ops(dr, sn_data=sn, org_id="default")
+        assert result["confidence"] == "MEDIUM"
+
+    def test_cross_org_guard_blocks_elevation(self):
+        """COR-06 from a different org must NOT elevate confidence (cross-org guard)."""
+        scorer = _scorer()
+        dr = self._firing_dr()
+        sn = {"cor06_slack_escalation": {"fired": True, "org_id": "org-other"}}
+        result = scorer.score_enterprise_ops(dr, sn_data=sn, org_id="org-mine")
+        assert result["confidence"] == "MEDIUM"
+        assert result["corroborated"] is False
+
+    def test_elevation_does_not_affect_other_detectors(self):
+        """COR-06 firing must NOT elevate ENT_CHANGE_INCIDENT_CORRELATION (already HIGH)
+        or ENT_SLA_BREACH_BY_TEAM (different elevation path)."""
+        scorer = _scorer()
+        sn = {"cor06_slack_escalation": {"fired": True, "org_id": "default"}}
+        for det_id in ("ENT_CHANGE_INCIDENT_CORRELATION", "ENT_SLA_BREACH_BY_TEAM"):
+            dr = _make_detector_result(det_id)
+            result = scorer.score_enterprise_ops(dr, sn_data=sn, org_id="default")
+            # ENT_CHANGE_INCIDENT_CORRELATION is always HIGH (not via COR-06)
+            # ENT_SLA_BREACH_BY_TEAM uses entity graph, not COR-06
+            assert result["corroboration_sources"] != ["Slack"], (
+                f"{det_id} must not be elevated via COR-06 Slack path"
+            )
