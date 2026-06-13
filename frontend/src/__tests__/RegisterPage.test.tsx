@@ -1,7 +1,7 @@
 /**
  * AT-239 — RegisterPage unit tests.
  *
- * Mocks: useAuth(), useTheme(), useNavigate().
+ * Mocks: useAuth(), useTheme(), utils/navigation/hardRedirect().
  * Does NOT reach into backend or real AuthContext.
  */
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
@@ -14,7 +14,7 @@ import { ApiError } from "../lib/apiClient";
 // ── Mocks ─────────────────────────────────────────────────────────────────────
 
 const mockRegister = vi.fn();
-const mockNavigate = vi.fn();
+const mockHardRedirect = vi.fn();
 
 vi.mock("../context/AuthContext", () => ({
   useAuth: () => ({ register: mockRegister }),
@@ -24,10 +24,9 @@ vi.mock("../context/ThemeContext", () => ({
   useTheme: () => ({ theme: "light" }),
 }));
 
-vi.mock("react-router-dom", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("react-router-dom")>();
-  return { ...actual, useNavigate: () => mockNavigate };
-});
+vi.mock("../utils/navigation", () => ({
+  hardRedirect: (path: string) => mockHardRedirect(path),
+}));
 
 // ── Helper ────────────────────────────────────────────────────────────────────
 
@@ -65,7 +64,7 @@ function fillForm(
 describe("RegisterPage", () => {
   beforeEach(() => {
     mockRegister.mockReset();
-    mockNavigate.mockReset();
+    mockHardRedirect.mockReset();
   });
 
   // ── Rendering ──────────────────────────────────────────────────────────────
@@ -195,14 +194,14 @@ describe("RegisterPage", () => {
     });
   });
 
-  it("navigates to /integration-hub on success", async () => {
+  it("reloads into /integration-hub on success", async () => {
     mockRegister.mockResolvedValue(undefined);
     renderPage();
     fillForm();
     fireEvent.click(screen.getByRole("button", { name: /create account/i }));
 
     await waitFor(() => {
-      expect(mockNavigate).toHaveBeenCalledWith("/integration-hub", { replace: true });
+      expect(mockHardRedirect).toHaveBeenCalledWith("/integration-hub");
     });
   });
 
@@ -247,7 +246,7 @@ describe("RegisterPage", () => {
     });
   });
 
-  it("does not navigate when registration fails", async () => {
+  it("does not redirect when registration fails", async () => {
     mockRegister.mockRejectedValue(new ApiError("conflict", 409, {}));
     renderPage();
     fillForm();
@@ -256,6 +255,6 @@ describe("RegisterPage", () => {
     await waitFor(() => {
       expect(screen.getByTestId("register-error")).toBeTruthy();
     });
-    expect(mockNavigate).not.toHaveBeenCalled();
+    expect(mockHardRedirect).not.toHaveBeenCalled();
   });
 });

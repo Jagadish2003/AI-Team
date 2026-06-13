@@ -4,7 +4,7 @@
  * Tests the component in isolation by mocking:
  *   - useAuth() (the API boundary)
  *   - useTheme() (returns "light" by default)
- *   - react-router-dom/useNavigate
+ *   - utils/navigation/hardRedirect (the full-reload after a successful login)
  *
  * We do NOT reach into the backend or real AuthContext.
  */
@@ -18,7 +18,7 @@ import { ApiError } from "../lib/apiClient";
 // ── Mocks ─────────────────────────────────────────────────────────────────────
 
 const mockLogin = vi.fn();
-const mockNavigate = vi.fn();
+const mockHardRedirect = vi.fn();
 
 vi.mock("../context/AuthContext", () => ({
   useAuth: () => ({ login: mockLogin }),
@@ -28,10 +28,9 @@ vi.mock("../context/ThemeContext", () => ({
   useTheme: () => ({ theme: "light" }),
 }));
 
-vi.mock("react-router-dom", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("react-router-dom")>();
-  return { ...actual, useNavigate: () => mockNavigate };
-});
+vi.mock("../utils/navigation", () => ({
+  hardRedirect: (path: string) => mockHardRedirect(path),
+}));
 
 // ── Helper ────────────────────────────────────────────────────────────────────
 
@@ -48,7 +47,7 @@ function renderPage() {
 describe("LoginPage", () => {
   beforeEach(() => {
     mockLogin.mockReset();
-    mockNavigate.mockReset();
+    mockHardRedirect.mockReset();
   });
 
   // ── Rendering ──────────────────────────────────────────────────────────────
@@ -151,7 +150,7 @@ describe("LoginPage", () => {
     });
   });
 
-  it("navigates to /integration-hub on successful login", async () => {
+  it("reloads into /integration-hub on successful login", async () => {
     mockLogin.mockResolvedValue(undefined);
     renderPage();
 
@@ -164,7 +163,7 @@ describe("LoginPage", () => {
     fireEvent.click(screen.getByRole("button", { name: /sign in/i }));
 
     await waitFor(() => {
-      expect(mockNavigate).toHaveBeenCalledWith("/integration-hub", { replace: true });
+      expect(mockHardRedirect).toHaveBeenCalledWith("/integration-hub");
     });
   });
 
@@ -273,7 +272,7 @@ describe("LoginPage", () => {
     });
   });
 
-  it("does not navigate on login failure", async () => {
+  it("does not redirect on login failure", async () => {
     mockLogin.mockRejectedValue(new ApiError("bad creds", 401, {}));
     renderPage();
 
@@ -288,6 +287,6 @@ describe("LoginPage", () => {
     await waitFor(() => {
       expect(screen.getByTestId("login-error")).toBeTruthy();
     });
-    expect(mockNavigate).not.toHaveBeenCalled();
+    expect(mockHardRedirect).not.toHaveBeenCalled();
   });
 });

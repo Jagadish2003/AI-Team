@@ -66,6 +66,23 @@ function readStoredToken(): string | null {
   }
 }
 
+/**
+ * Persist (or clear, with null) the JWT in sessionStorage. The [token] effect
+ * below does this on every render, but the auth callbacks call it directly too:
+ * the login/register/accept-invite pages trigger a full-document reload right
+ * after authenticating (to rebuild all in-session context for the new user),
+ * and that reload happens before the post-render effect would have flushed —
+ * so without this synchronous write the freshly issued token would be lost.
+ */
+function writeStoredToken(token: string | null): void {
+  try {
+    if (token) sessionStorage.setItem(TOKEN_STORAGE_KEY, token);
+    else sessionStorage.removeItem(TOKEN_STORAGE_KEY);
+  } catch {
+    // Storage unavailable (private mode / disabled) — degrade to in-memory.
+  }
+}
+
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   // Token restored from sessionStorage on mount (Section 3) so a refresh keeps
   // the user signed in; user is re-fetched via /api/auth/me below.
@@ -102,12 +119,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   // apply again.
   useEffect(() => {
     setAuthToken(token);
-    try {
-      if (token) sessionStorage.setItem(TOKEN_STORAGE_KEY, token);
-      else sessionStorage.removeItem(TOKEN_STORAGE_KEY);
-    } catch {
-      // Storage unavailable (private mode / disabled) — degrade to in-memory.
-    }
+    writeStoredToken(token);
   }, [token]);
 
   // Validate the token whenever it is present: right after login/register, and
@@ -139,6 +151,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const login = useCallback(async (email: string, password: string) => {
     const result = await apiLogin(email, password);
+    // Persist synchronously: the caller reloads the document immediately after
+    // (see writeStoredToken) so the post-render [token] effect would be too late.
+    writeStoredToken(result.token);
     setToken(result.token);
     setUser(result.user);
   }, []);
@@ -146,6 +161,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const register = useCallback(
     async (orgName: string, email: string, password: string) => {
       const result = await apiRegister(orgName, email, password);
+      writeStoredToken(result.token);
       setToken(result.token);
       setUser(result.user);
     },
@@ -154,6 +170,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const acceptInvite = useCallback(async (inviteToken: string, password: string) => {
     const result = await apiAcceptInvite(inviteToken, password);
+    writeStoredToken(result.token);
     setToken(result.token);
     setUser(result.user);
   }, []);
