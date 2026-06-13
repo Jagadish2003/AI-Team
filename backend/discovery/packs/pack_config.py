@@ -166,8 +166,9 @@ PACK_REGISTRY: Dict[str, Dict[str, Any]] = {
             "Enterprise operations intelligence from cross-system analysis of "
             "ServiceNow and Jira. These findings are not visible from either system "
             "alone — they emerge from the gap between incident management and issue "
-            "tracking. Use operations leadership language. Avoid technical jargon. "
-            "The audience is a VP of Operations or Chief Operating Officer. "
+            "tracking. Use operations leadership language. Avoid IT jargon. "
+            "The audience is a VP of Operations or Chief Operating Officer, "
+            "not an IT manager. "
             "Focus on organisational impact and team dynamics, "
             "not system configuration or process compliance."
         ),
