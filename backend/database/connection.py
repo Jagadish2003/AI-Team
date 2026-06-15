@@ -1,42 +1,49 @@
 """Database connection helpers for AgentIQ backend.
 
-Provides two connection primitives:
+AT-288 / Fix 1: the backend database is PostgreSQL (psycopg2). Provides two
+connection primitives:
 
-  get_db_connection()  — raw sqlite3 context manager; used for DDL and
-                         low-level operations (seed_loader, table init).
+  get_db_connection()  — raw psycopg2 connection context manager (DictCursor
+                         factory); used for DDL and low-level operations
+                         (seed_loader, table init).
   get_db_session()     — thin session adapter context manager; used by the
                          telemetry write and read API so those functions can
                          be unit-tested by mocking this function.
 
 The session adapter exposes add() / commit() / query() methods that mirror
 the SQLAlchemy Session interface at the surface level tests exercise, while
-the real implementation stays on plain sqlite3.
+the real implementation stays on plain psycopg2.
 """
 
 from __future__ import annotations
 
 import contextlib
 import os
-import sqlite3
 from datetime import datetime
-from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Iterator, Optional
 
+import psycopg2
+import psycopg2.extras
+
 
 # ---------------------------------------------------------------------------
-# Path helper — read at call time so tests that set DB_PATH via env work
+# Connection URL — read at call time so tests that set DATABASE_URL via env work
 # ---------------------------------------------------------------------------
 
-def _db_path() -> Path:
-    p = Path(os.getenv("DB_PATH", "database/dev.db"))
-    p.parent.mkdir(parents=True, exist_ok=True)
-    return p
+def _database_url() -> str:
+    return os.getenv(
+        "DATABASE_URL", "postgresql://agentiq:agentiq@localhost:5432/agentiq"
+    )
 
 
-def _connect() -> sqlite3.Connection:
-    conn = sqlite3.connect(str(_db_path()), timeout=30.0, check_same_thread=False)
-    conn.execute("PRAGMA busy_timeout=30000")
+def _connect() -> "psycopg2.extensions.connection":
+    conn = psycopg2.connect(
+        _database_url(),
+        cursor_factory=psycopg2.extras.DictCursor,
+        options="-c timezone=UTC",
+    )
+    conn.autocommit = False
     return conn
 
 
@@ -45,8 +52,8 @@ def _connect() -> sqlite3.Connection:
 # ---------------------------------------------------------------------------
 
 @contextlib.contextmanager
-def get_db_connection() -> Iterator[sqlite3.Connection]:
-    """Context manager yielding a raw sqlite3 connection.
+def get_db_connection() -> Iterator["psycopg2.extensions.connection"]:
+    """Context manager yielding a psycopg2 connection (DictCursor factory).
 
     The caller is responsible for commit() if they perform writes.
     The connection is always closed on exit.
@@ -61,6 +68,7 @@ def get_db_connection() -> Iterator[sqlite3.Connection]:
 # ---------------------------------------------------------------------------
 # Telemetry INSERT / SELECT SQL (owned here alongside the session adapter)
 # ---------------------------------------------------------------------------
+# psycopg2 named paramstyle is %(name)s (not sqlite3's :name).
 
 _INSERT_TELEMETRY = """
 INSERT INTO telemetry_events (
@@ -69,10 +77,10 @@ INSERT INTO telemetry_events (
     duration_ms, success, count, error_code,
     payload, timestamp
 ) VALUES (
-    :id, :org_id, :event_type, :source,
-    :run_id, :connector_id, :pack_id,
-    :duration_ms, :success, :count, :error_code,
-    :payload, :timestamp
+    %(id)s, %(org_id)s, %(event_type)s, %(source)s,
+    %(run_id)s, %(connector_id)s, %(pack_id)s,
+    %(duration_ms)s, %(success)s, %(count)s, %(error_code)s,
+    %(payload)s, %(timestamp)s
 )
 """
 
@@ -83,17 +91,17 @@ SELECT
     duration_ms, success, count, error_code,
     payload, timestamp
 FROM telemetry_events
-WHERE org_id      = :org_id
-  AND event_type  = :event_type
-  AND timestamp  >= :from_dt
-  AND timestamp   < :to_dt
+WHERE org_id      = %(org_id)s
+  AND event_type  = %(event_type)s
+  AND timestamp  >= %(from_dt)s
+  AND timestamp   < %(to_dt)s
 ORDER BY timestamp ASC
-LIMIT :limit
+LIMIT %(limit)s
 """
 
 
 # ---------------------------------------------------------------------------
-# Minimal query builder — returned by _SqliteSession.query()
+# Minimal query builder — returned by _PgSession.query()
 # ---------------------------------------------------------------------------
 
 class _TelemetryQuery:
@@ -109,7 +117,7 @@ class _TelemetryQuery:
     context without breaking the interface.
     """
 
-    def __init__(self, conn: sqlite3.Connection) -> None:
+    def __init__(self, conn) -> None:
         self._conn = conn
         self._filters: dict[str, Any] = {}
         self._limit_val: int = 10_000
@@ -128,16 +136,22 @@ class _TelemetryQuery:
 
     def all(self) -> list[Any]:
         params = {**self._filters, "limit": self._limit_val}
-        rows = self._conn.execute(_SELECT_TELEMETRY, params).fetchall()
+        cur = self._conn.cursor()
+        cur.execute(_SELECT_TELEMETRY, params)
+        rows = cur.fetchall()
         result = []
         for row in rows:
             (id_, org_id, event_type, source,
              run_id, connector_id, pack_id,
              duration_ms, success_int, count, error_code,
-             payload, timestamp_str) = row
-            ts: Optional[datetime] = (
-                datetime.fromisoformat(timestamp_str) if timestamp_str else None
-            )
+             payload, timestamp_val) = row
+            ts: Optional[datetime]
+            if timestamp_val is None:
+                ts = None
+            elif isinstance(timestamp_val, datetime):
+                ts = timestamp_val
+            else:
+                ts = datetime.fromisoformat(timestamp_val)
             success: Optional[bool] = (
                 bool(success_int) if success_int is not None else None
             )
@@ -154,14 +168,14 @@ class _TelemetryQuery:
 # Session adapter — yielded by get_db_session()
 # ---------------------------------------------------------------------------
 
-class _SqliteSession:
-    """Thin session adapter over sqlite3 for the telemetry_events table.
+class _PgSession:
+    """Thin session adapter over psycopg2 for the telemetry_events table.
 
     Matches the subset of the SQLAlchemy Session interface that the telemetry
     module and its contract tests use:  add(), commit(), query().
     """
 
-    def __init__(self, conn: sqlite3.Connection) -> None:
+    def __init__(self, conn) -> None:
         self._conn = conn
         self._pending: list[Any] = []
 
@@ -179,7 +193,8 @@ class _SqliteSession:
                 success_val = 1
             elif event.success is False:
                 success_val = 0
-            self._conn.execute(_INSERT_TELEMETRY, {
+            cur = self._conn.cursor()
+            cur.execute(_INSERT_TELEMETRY, {
                 "id":           event.id,
                 "org_id":       event.org_id,
                 "event_type":   event.event_type,
@@ -211,8 +226,8 @@ class _SqliteSession:
 # ---------------------------------------------------------------------------
 
 @contextlib.contextmanager
-def get_db_session() -> Iterator[_SqliteSession]:
-    """Context manager yielding a _SqliteSession for telemetry_events.
+def get_db_session() -> Iterator[_PgSession]:
+    """Context manager yielding a _PgSession for telemetry_events.
 
     Usage::
 
@@ -220,10 +235,10 @@ def get_db_session() -> Iterator[_SqliteSession]:
             session.add(event)
             session.commit()
 
-    The underlying sqlite3 connection is always closed on exit.
+    The underlying psycopg2 connection is always closed on exit.
     """
     conn = _connect()
     try:
-        yield _SqliteSession(conn)
+        yield _PgSession(conn)
     finally:
         conn.close()

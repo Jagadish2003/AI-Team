@@ -1,18 +1,32 @@
-"""Seed Loader (Task 2) — Core data only (mock data excluded)"""
+"""Seed Loader (Task 2) — Core data only (mock data excluded).
+
+AT-288 / Fix 1: seeds into PostgreSQL via DATABASE_URL using native psycopg2.
+The {id, payload} upsert SQL stays the same.
+"""
 
 import json
 import os
-import sqlite3
 import sys
 from pathlib import Path
 
 _SCRIPT_DIR = Path(__file__).resolve().parent
+_BACKEND_DIR = _SCRIPT_DIR.parent
+
+# Allow "python database/seed_loader.py" to import backend modules (the script's
+# own dir is on sys.path, not backend/, so add backend/).
+if str(_BACKEND_DIR) not in sys.path:
+    sys.path.insert(0, str(_BACKEND_DIR))
+
+import psycopg2  # noqa: E402
+import psycopg2.extras  # noqa: E402
 
 SEED_DIR = Path(os.getenv("SEED_DIR", _SCRIPT_DIR / "seed"))
-DB_PATH = Path(os.getenv("DB_PATH", _SCRIPT_DIR / "dev.db"))
+DATABASE_URL = os.getenv(
+    "DATABASE_URL", "postgresql://agentiq:agentiq@localhost:5432/agentiq"
+)
 
 print("Seed Path:", SEED_DIR)
-print("DB Path:", DB_PATH)
+print("Database URL:", DATABASE_URL)
 
 TABLES = [
     "connectors", "uploads", "runs", "evidence",
@@ -38,7 +52,7 @@ FILES = {
 }
 
 
-def ensure_db(conn: sqlite3.Connection) -> None:
+def ensure_db(conn) -> None:
     cur = conn.cursor()
 
     for t in TABLES:
@@ -48,6 +62,9 @@ def ensure_db(conn: sqlite3.Connection) -> None:
                 payload TEXT NOT NULL
             )
         """)
+
+    # runs needs the seq insertion-order column (see app/db.py init_tables).
+    cur.execute("ALTER TABLE runs ADD COLUMN IF NOT EXISTS seq BIGSERIAL")
 
     cur.execute("""
         CREATE TABLE IF NOT EXISTS run_events (
@@ -62,11 +79,19 @@ def ensure_db(conn: sqlite3.Connection) -> None:
     conn.commit()
 
 
-def upsert(conn: sqlite3.Connection, table: str, id_: str, payload: dict) -> None:
+def drop_seed_tables(conn) -> None:
+    """--fresh on PostgreSQL: drop the seed-managed tables (no DB file to unlink)."""
+    cur = conn.cursor()
+    for t in [*TABLES, "run_events", "kv"]:
+        cur.execute(f"DROP TABLE IF EXISTS {t} CASCADE")
+    conn.commit()
+
+
+def upsert(conn, table: str, id_: str, payload: dict) -> None:
     cur = conn.cursor()
     cur.execute(
-        f"INSERT INTO {table} (id, payload) VALUES (?, ?) "
-        "ON CONFLICT(id) DO UPDATE SET payload=excluded.payload",
+        f"INSERT INTO {table} (id, payload) VALUES (%s, %s) "
+        "ON CONFLICT (id) DO UPDATE SET payload=EXCLUDED.payload",
         (id_, json.dumps(payload))
     )
     conn.commit()
@@ -84,14 +109,14 @@ def main():
     fresh = "--fresh" in sys.argv
 
     SEED_DIR.mkdir(parents=True, exist_ok=True)
-    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
 
-    # Delete existing database if --fresh flag is used
-    if fresh and DB_PATH.exists():
-        DB_PATH.unlink()
-        print(f"🗑️  Deleted existing database: {DB_PATH}")
+    conn = psycopg2.connect(DATABASE_URL, cursor_factory=psycopg2.extras.DictCursor)
 
-    conn = sqlite3.connect(str(DB_PATH))
+    # Drop seed-managed tables if --fresh is used (PostgreSQL has no DB file).
+    if fresh:
+        drop_seed_tables(conn)
+        print("🗑️  Dropped existing seed tables")
+
     ensure_db(conn)
 
     # connectors
@@ -131,7 +156,8 @@ def main():
     mappings_count = len(load_file(FILES["mappings"]))
     permissions_count = len(load_file(FILES["permissions"]))
 
-    print("✅ Seed load complete:", DB_PATH)
+    conn.close()
+    print("✅ Seed load complete:", DATABASE_URL)
     print(f"   {connectors_count} connectors | {mappings_count} mappings")
     print(f"   {permissions_count} permissions | {uploads_count} uploads")
 

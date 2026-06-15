@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import os
 import signal
-import sqlite3
 import statistics
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+
+import psycopg2
 
 from apscheduler.schedulers.background import BackgroundScheduler
 
@@ -12,6 +13,11 @@ try:
     from app.db import connect
 except ModuleNotFoundError:  # pragma: no cover - supports repo-root imports.
     from backend.app.db import connect
+
+
+def _is_undefined_table(exc: Exception) -> bool:
+    """True when *exc* is PostgreSQL's 'relation does not exist' error."""
+    return "does not exist" in str(exc).lower() and "signal_snapshots" in str(exc)
 
 
 BASELINE_WINDOW_DAYS = int(os.getenv("BASELINE_WINDOW_DAYS", "90"))
@@ -34,8 +40,9 @@ def get_distinct_org_ids() -> list[str]:
         cur = con.cursor()
         try:
             cur.execute("SELECT DISTINCT org_id FROM signal_snapshots")
-        except sqlite3.OperationalError as exc:
-            if "no such table: signal_snapshots" in str(exc):
+        except psycopg2.Error as exc:
+            con.rollback()
+            if _is_undefined_table(exc):
                 return []
             raise
         return [row[0] for row in cur.fetchall()]
@@ -52,19 +59,26 @@ def calculate_baselines_for_org(org_id: str) -> None:
     con = connect()
     try:
         cur = con.cursor()
+        # Compute the window cutoff in Python rather than via a SQL date
+        # function. ISO-8601 strings sort chronologically, so this comparison is
+        # correct whether captured_at is a TIMESTAMP or TEXT column, and avoids
+        # SQLite's datetime('now', ...) which has no PostgreSQL equivalent.
+        cutoff = (
+            datetime.now(timezone.utc) - timedelta(days=BASELINE_WINDOW_DAYS)
+        ).isoformat()
         try:
             cur.execute(
                 """
                 SELECT signal_key, metric_value
                 FROM signal_snapshots
-                WHERE org_id = ?
-                  AND captured_at >= datetime('now', ? || ' days')
+                WHERE org_id = %s
+                  AND captured_at >= %s
                 """,
-                (org_id, f"-{BASELINE_WINDOW_DAYS}"),
+                (org_id, cutoff),
             )
-        except sqlite3.OperationalError as exc:
-            if "no such table: signal_snapshots" in str(exc):
-                con.rollback()
+        except psycopg2.Error as exc:
+            con.rollback()
+            if _is_undefined_table(exc):
                 return
             raise
         rows = cur.fetchall()
@@ -84,11 +98,11 @@ def calculate_baselines_for_org(org_id: str) -> None:
                     """
                     UPDATE signal_snapshots
                     SET
-                        baseline_mean = ?,
-                        baseline_stddev = ?,
-                        baseline_window_days = ?,
-                        baseline_calculated_at = ?
-                    WHERE org_id = ? AND signal_key = ?
+                        baseline_mean = %s,
+                        baseline_stddev = %s,
+                        baseline_window_days = %s,
+                        baseline_calculated_at = %s
+                    WHERE org_id = %s AND signal_key = %s
                     """,
                     (
                         baseline_mean,
@@ -108,7 +122,7 @@ def calculate_baselines_for_org(org_id: str) -> None:
                         baseline_stddev = NULL,
                         baseline_window_days = NULL,
                         baseline_calculated_at = NULL
-                    WHERE org_id = ? AND signal_key = ?
+                    WHERE org_id = %s AND signal_key = %s
                     """,
                     (org_id, signal_key),
                 )

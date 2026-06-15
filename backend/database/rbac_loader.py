@@ -29,7 +29,6 @@ owner/analyst/viewer set available for offline testing.
 """
 
 import os
-import sqlite3
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -44,9 +43,13 @@ if str(_BACKEND_DIR) not in sys.path:
 
 # Single source of truth for the table DDL — never re-declare it here.
 from database.models.workspace_members import CREATE_WORKSPACE_MEMBERS_TABLE
+import psycopg2
+import psycopg2.extras
 
-# Match seed_loader.py's DB path resolution exactly.
-DB_PATH = Path(os.getenv("DB_PATH", _SCRIPT_DIR / "dev.db"))
+# AT-288 / Fix 1: seed into PostgreSQL via DATABASE_URL.
+DATABASE_URL = os.getenv(
+    "DATABASE_URL", "postgresql://agentiq:agentiq@localhost:5432/agentiq"
+)
 
 ORG_ID = "default"
 
@@ -59,16 +62,19 @@ ROLES = [
 
 
 def main() -> None:
-    print("DB Path:", DB_PATH)
+    print("Database URL:", DATABASE_URL)
     now = datetime.now(timezone.utc).isoformat()
 
-    conn = sqlite3.connect(str(DB_PATH))
+    conn = psycopg2.connect(DATABASE_URL, cursor_factory=psycopg2.extras.DictCursor)
     try:
-        conn.execute(CREATE_WORKSPACE_MEMBERS_TABLE)
+        cur = conn.cursor()
+        cur.execute(CREATE_WORKSPACE_MEMBERS_TABLE)
         for role, user_id in ROLES:
-            conn.execute(
-                "INSERT OR REPLACE INTO workspace_members "
-                "(org_id, user_id, role, created_at) VALUES (?, ?, ?, ?)",
+            cur.execute(
+                "INSERT INTO workspace_members "
+                "(org_id, user_id, role, created_at) VALUES (%s, %s, %s, %s) "
+                "ON CONFLICT (org_id, user_id) DO UPDATE SET "
+                "role=EXCLUDED.role, created_at=EXCLUDED.created_at",
                 (ORG_ID, user_id, role, now),
             )
         conn.commit()

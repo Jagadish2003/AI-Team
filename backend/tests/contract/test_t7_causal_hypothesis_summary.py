@@ -49,11 +49,12 @@ def _auth(org_id: str = "default") -> Dict[str, str]:
 
 
 def _seed_workspace_member(org_id: str) -> None:
-    with sqlite3.connect(os.environ["DB_PATH"]) as conn:
+    with sqlite3.connect(os.environ.get("DB_PATH", "")) as conn:
         conn.execute(
             """
-            INSERT OR IGNORE INTO workspace_members (org_id, user_id, role, created_at)
-            VALUES (?, ?, 'owner', ?)
+            INSERT INTO workspace_members (org_id, user_id, role, created_at)
+            VALUES (%s, %s, 'owner', %s)
+            ON CONFLICT (org_id, user_id) DO NOTHING
             """,
             (org_id, os.getenv("DEV_JWT", "dev-token-change-me"), "2026-01-01T00:00:00+00:00"),
         )
@@ -99,8 +100,8 @@ def _insert_causal(
         "temporal_support", "confidence", "inferred", "falsifiability_condition",
         "preliminary", "preliminary_reason", "gate_run_count", "generated_by", "created_at",
     )
-    placeholders = ", ".join("?" for _ in columns)
-    with sqlite3.connect(os.environ["DB_PATH"]) as conn:
+    placeholders = ", ".join("%s" for _ in columns)
+    with sqlite3.connect(os.environ.get("DB_PATH", "")) as conn:
         conn.execute(
             f"INSERT INTO causal_hypotheses ({', '.join(columns)}) VALUES ({placeholders})",
             tuple(row[c] for c in columns),

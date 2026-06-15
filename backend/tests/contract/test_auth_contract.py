@@ -100,7 +100,7 @@ def test_ac16_password_hash_is_bcrypt_and_no_plaintext(client):
     con = db.connect()
     try:
         row = con.execute(
-            "SELECT password_hash FROM users WHERE email = ?", (email,)
+            "SELECT password_hash FROM users WHERE email = %s", (email,)
         ).fetchone()
     finally:
         con.close()

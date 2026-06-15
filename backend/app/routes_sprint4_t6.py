@@ -29,7 +29,6 @@ from __future__ import annotations
 
 import json
 import logging
-import sqlite3
 from typing import Any, Dict, List, Optional
 
 from fastapi import Depends, HTTPException
@@ -496,18 +495,19 @@ def _load_causal_hypothesis(
     try:
         conn = db.connect()
         try:
-            conn.row_factory = sqlite3.Row
-            row = conn.execute(
+            cur = conn.cursor()
+            cur.execute(
                 """
                 SELECT cause_chain, falsifiability_condition, confidence,
                        inferred, preliminary, preliminary_reason
                 FROM causal_hypotheses
-                WHERE org_id = ? AND opportunity_id = ? AND run_id = ?
+                WHERE org_id = %s AND opportunity_id = %s AND run_id = %s
                 ORDER BY created_at DESC
                 LIMIT 1
                 """,
                 (org_id, opportunity_id, run_id),
-            ).fetchone()
+            )
+            row = cur.fetchone()
         finally:
             conn.close()
     except Exception as exc:

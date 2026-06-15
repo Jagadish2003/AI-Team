@@ -46,7 +46,7 @@ def insert_snapshot(con, org_id, detector_id, signal_key, run_id, value,
             metric_name, metric_value, threshold, fired, signal_source,
             captured_at, baseline_mean, baseline_stddev,
             baseline_window_days, baseline_calculated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
     """, (
         str(uuid4()), org_id, run_id, pack_id, detector_id, signal_key,
         metric_name, value, None, fired, "test", captured_at,
@@ -61,8 +61,12 @@ def test_ac1_signal_snapshots_table_exists():
     """AC1: signal_snapshots table exists with all required columns."""
     con = connect()
     cur = con.cursor()
-    cur.execute("PRAGMA table_info(signal_snapshots)")
-    cols = [row[1] for row in cur.fetchall()]
+    cur.execute(
+        "SELECT column_name, data_type, is_nullable "
+        "FROM information_schema.columns "
+        "WHERE table_name='signal_snapshots' ORDER BY ordinal_position"
+    )
+    cols = [row[0] for row in cur.fetchall()]
     con.close()
 
     required_cols = [
@@ -82,8 +86,8 @@ def test_ac2_indexes_exist():
     con = connect()
     cur = con.cursor()
     cur.execute("""
-        SELECT name FROM sqlite_master
-        WHERE type='index' AND tbl_name='signal_snapshots'
+        SELECT indexname, indexdef FROM pg_indexes
+        WHERE tablename='signal_snapshots'
     """)
     indexes = [row[0] for row in cur.fetchall()]
     con.close()
@@ -130,12 +134,12 @@ def test_ac4_non_firing_detector_row_written():
     cur = con.cursor()
     cur.execute("""
         SELECT fired FROM signal_snapshots
-        WHERE org_id = ? AND detector_id = ?
+        WHERE org_id = %s AND detector_id = %s
     """, ("org_test_ac4", "det_nonfiring"))
     row = cur.fetchone()
     con.close()
     assert row is not None, "Row should exist for non-firing detector"
-    assert row[0] == 0 or row[0] is False, "fired should be False for non-firing detector"
+    assert row[0] is False, "fired should be False for non-firing detector"
 
 
 # ── AC5: Additional metric rows ───────────────────────────────────────────────
@@ -151,7 +155,7 @@ def test_ac5_additional_metric_rows():
     cur = con.cursor()
     cur.execute("""
         SELECT COUNT(*) FROM signal_snapshots
-        WHERE org_id = ? AND detector_id = ? AND run_id = ?
+        WHERE org_id = %s AND detector_id = %s AND run_id = %s
     """, ("org_ac5", "det_ac5", "run_ac5"))
     count = cur.fetchone()[0]
     con.close()
@@ -247,7 +251,7 @@ def test_ac11_baseline_null_insufficient_runs():
     cur = con.cursor()
     cur.execute("""
         SELECT baseline_mean, baseline_stddev FROM signal_snapshots
-        WHERE org_id = ? AND detector_id = ?
+        WHERE org_id = %s AND detector_id = %s
     """, ("org_insuf", "det_insuf"))
     row = cur.fetchone()
     con.close()

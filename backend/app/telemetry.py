@@ -53,8 +53,9 @@ def _ensure_telemetry_table() -> None:
     if _table_ready:
         return
     with get_db_connection() as conn:
+        cur = conn.cursor()
         for ddl in ALL_TELEMETRY_DDL:
-            conn.execute(ddl)
+            cur.execute(ddl)
         conn.commit()
     _table_ready = True
 

@@ -96,9 +96,10 @@ def register_workspace_routes(app) -> None:
         org_id = get_current_org_id()
         con = db.connect()
         try:
-            cur = con.execute(
+            cur = con.cursor()
+            cur.execute(
                 "SELECT user_id, role, created_at FROM workspace_members "
-                "WHERE org_id = ? ORDER BY created_at ASC",
+                "WHERE org_id = %s ORDER BY created_at ASC",
                 (org_id,),
             )
             rows = cur.fetchall()
@@ -143,9 +144,10 @@ def register_workspace_routes(app) -> None:
         created_at = _now_iso()
         con = db.connect()
         try:
-            con.execute(
+            cur = con.cursor()
+            cur.execute(
                 "INSERT INTO workspace_members (org_id, user_id, role, created_at) "
-                "VALUES (?, ?, ?, ?)",
+                "VALUES (%s, %s, %s, %s)",
                 (org_id, user_id, body.role, created_at),
             )
             con.commit()
@@ -196,8 +198,9 @@ def register_workspace_routes(app) -> None:
 
         con = db.connect()
         try:
-            con.execute(
-                "DELETE FROM workspace_members WHERE org_id = ? AND user_id = ?",
+            cur = con.cursor()
+            cur.execute(
+                "DELETE FROM workspace_members WHERE org_id = %s AND user_id = %s",
                 (org_id, user_id),
             )
             con.commit()

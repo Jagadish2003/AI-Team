@@ -24,9 +24,11 @@ CREATE TABLE IF NOT EXISTS credentials (
 )
 """
 
-# Applied with try/except for existing databases that pre-date this column.
+# Applied for databases that pre-date this column. PostgreSQL supports
+# ADD COLUMN IF NOT EXISTS, so this is idempotent without relying on catching a
+# DuplicateColumn error (which would otherwise abort the transaction).
 ALTER_CREDENTIALS_ADD_REFRESH_FAILED = (
-    "ALTER TABLE credentials ADD COLUMN refresh_failed INTEGER NOT NULL DEFAULT 0"
+    "ALTER TABLE credentials ADD COLUMN IF NOT EXISTS refresh_failed INTEGER NOT NULL DEFAULT 0"
 )
 
 CREATE_CREDENTIALS_IDX_ORG = (

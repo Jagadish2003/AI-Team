@@ -44,8 +44,9 @@ def _set_role(role: str) -> Dict[str, str]:
     con = db.connect()
     try:
         con.execute(
-            "INSERT OR REPLACE INTO workspace_members (org_id, user_id, role, created_at) "
-            "VALUES (?, ?, ?, ?)",
+            "INSERT INTO workspace_members (org_id, user_id, role, created_at) "
+            "VALUES (%s, %s, %s, %s) "
+            "ON CONFLICT (org_id, user_id) DO UPDATE SET role=EXCLUDED.role, created_at=EXCLUDED.created_at",
             (org_id, DEV_TOKEN, role, datetime.now(timezone.utc).isoformat()),
         )
         con.commit()

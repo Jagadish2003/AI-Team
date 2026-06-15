@@ -33,6 +33,8 @@ Additional T3 coverage:
 import os
 import sqlite3
 
+import psycopg2
+
 # Single source of truth for the service-account display threshold. Importing it
 # here (instead of hardcoding 3) keeps the tests in lockstep with the producer
 # in entity_extractor.py — Issue #6.
@@ -40,31 +42,95 @@ from database.models.entities import ENTITY_MIN_RUN_COUNT
 
 
 def _get_db_path() -> str:
-    return os.environ["DB_PATH"]
+    return os.environ.get("DB_PATH", "")
 
 
 class TestEntitiesTableSchema:
     """AC1: entities table created with all required columns and indexes."""
 
     def _columns(self) -> dict[str, dict]:
-        """Return {column_name: pragma_row} for the entities table."""
+        """Return {column_name: info} for the entities table.
+
+        PostgreSQL port: the original used ``PRAGMA table_info(entities)``. We now
+        read information_schema.columns and pg_index, and synthesize the keys the
+        assertions below rely on:
+          * ``notnull`` — 1 if is_nullable='NO' else 0 (mirrors SQLite's int flag).
+          * ``pk``      — 1 if the column participates in the primary key else 0.
+        """
         with sqlite3.connect(_get_db_path()) as conn:
-            conn.row_factory = sqlite3.Row
-            rows = conn.execute("PRAGMA table_info(entities)").fetchall()
-        return {r["name"]: dict(r) for r in rows}
+            col_rows = conn.execute(
+                "SELECT column_name, data_type, is_nullable, character_maximum_length "
+                "FROM information_schema.columns WHERE table_name = %s "
+                "ORDER BY ordinal_position",
+                ("entities",),
+            ).fetchall()
+            pk_rows = conn.execute(
+                "SELECT a.attname FROM pg_index i "
+                "JOIN pg_attribute a ON a.attrelid = i.indrelid "
+                "AND a.attnum = ANY(i.indkey) "
+                "WHERE i.indrelid = 'entities'::regclass AND i.indisprimary"
+            ).fetchall()
+        pk_cols = {r["attname"] for r in pk_rows}
+        result: dict[str, dict] = {}
+        for r in col_rows:
+            name = r["column_name"]
+            result[name] = {
+                "name": name,
+                "data_type": r["data_type"],
+                "is_nullable": r["is_nullable"],
+                "character_maximum_length": r["character_maximum_length"],
+                "notnull": 1 if r["is_nullable"] == "NO" else 0,
+                "pk": 1 if name in pk_cols else 0,
+            }
+        return result
 
     def _indexes(self) -> list[dict]:
-        """Return index pragma rows for the entities table."""
+        """Return non-PK index rows for the entities table.
+
+        PostgreSQL port of ``PRAGMA index_list(entities)``. pg_indexes also lists
+        the PK's backing index, so we tag origin ('pk' vs 'c') from pg_index so the
+        existing ``origin != 'pk'`` filter keeps working.
+        """
         with sqlite3.connect(_get_db_path()) as conn:
-            conn.row_factory = sqlite3.Row
-            return [dict(r) for r in conn.execute("PRAGMA index_list(entities)").fetchall()]
+            idx_rows = conn.execute(
+                "SELECT indexname, indexdef FROM pg_indexes WHERE tablename = %s",
+                ("entities",),
+            ).fetchall()
+            primary_rows = conn.execute(
+                "SELECT c.relname FROM pg_index i "
+                "JOIN pg_class c ON c.oid = i.indexrelid "
+                "WHERE i.indrelid = 'entities'::regclass AND i.indisprimary"
+            ).fetchall()
+        primary_names = {r["relname"] for r in primary_rows}
+        out: list[dict] = []
+        for r in idx_rows:
+            name = r["indexname"]
+            out.append({
+                "name": name,
+                "indexdef": r["indexdef"],
+                "origin": "pk" if name in primary_names else "c",
+            })
+        return out
 
     def _index_columns(self, index_name: str) -> list[str]:
-        """Return ordered column names for a specific entities index."""
+        """Return ordered column names for a specific entities index.
+
+        PostgreSQL port of ``PRAGMA index_info(<index>)`` — column order is read
+        from pg_attribute via the index's indkey ordering.
+        """
         with sqlite3.connect(_get_db_path()) as conn:
-            conn.row_factory = sqlite3.Row
-            rows = conn.execute(f"PRAGMA index_info({index_name})").fetchall()
-        return [r["name"] for r in rows]
+            rows = conn.execute(
+                "SELECT a.attname FROM pg_index i "
+                "JOIN pg_class c ON c.oid = i.indexrelid "
+                "JOIN pg_attribute a ON a.attrelid = i.indrelid "
+                "AND a.attnum = ANY(i.indkey) "
+                "JOIN unnest(i.indkey) WITH ORDINALITY AS k(attnum, ord) "
+                "ON k.attnum = a.attnum "
+                "WHERE c.relname = %s "
+                "ORDER BY k.ord",
+                (index_name,),
+            ).fetchall()
+        return [r["attname"] for r in rows]
 
     def _insert_entity(self) -> dict:
         from database.models.entities import Entity
@@ -92,10 +158,10 @@ class TestEntitiesTableSchema:
                     resolution_status, first_seen_run_id, last_seen_run_id,
                     run_count, metadata, created_at, updated_at
                 ) VALUES (
-                    :id, :org_id, :entity_type, :canonical_name, :display_name,
-                    :source_system, :source_record_id, :resolution_confidence,
-                    :resolution_status, :first_seen_run_id, :last_seen_run_id,
-                    :run_count, :metadata, :created_at, :updated_at
+                    %(id)s, %(org_id)s, %(entity_type)s, %(canonical_name)s, %(display_name)s,
+                    %(source_system)s, %(source_record_id)s, %(resolution_confidence)s,
+                    %(resolution_status)s, %(first_seen_run_id)s, %(last_seen_run_id)s,
+                    %(run_count)s, %(metadata)s, %(created_at)s, %(updated_at)s
                 )""",
                 row,
             )
@@ -189,26 +255,26 @@ class TestEntitiesTableSchema:
         with sqlite3.connect(_get_db_path()) as conn:
             conn.row_factory = sqlite3.Row
             by_id = dict(conn.execute(
-                "SELECT * FROM entities WHERE id = ?",
+                "SELECT * FROM entities WHERE id = %s",
                 (row["id"],),
             ).fetchone())
             by_org = dict(conn.execute(
-                "SELECT * FROM entities WHERE org_id = ? AND id = ?",
+                "SELECT * FROM entities WHERE org_id = %s AND id = %s",
                 ("test-org", row["id"]),
             ).fetchone())
             by_run = dict(conn.execute(
-                "SELECT * FROM entities WHERE org_id = ? AND last_seen_run_id = ?",
+                "SELECT * FROM entities WHERE org_id = %s AND last_seen_run_id = %s",
                 ("test-org", "run-001"),
             ).fetchone())
             by_canonical = dict(conn.execute(
                 """
                 SELECT * FROM entities
-                WHERE org_id = ? AND entity_type = ? AND canonical_name = ?
+                WHERE org_id = %s AND entity_type = %s AND canonical_name = %s
                 """,
                 ("test-org", "person", "sarah chen"),
             ).fetchone())
             by_source_record = dict(conn.execute(
-                "SELECT * FROM entities WHERE org_id = ? AND source_record_id = ?",
+                "SELECT * FROM entities WHERE org_id = %s AND source_record_id = %s",
                 ("test-org", "JIRA-123"),
             ).fetchone())
 
@@ -262,7 +328,7 @@ def _db_entities(org_id: str, run_id: str) -> List[Dict]:
         conn.row_factory = sqlite3.Row
         return [
             dict(r) for r in conn.execute(
-                "SELECT * FROM entities WHERE org_id = ? AND last_seen_run_id = ?",
+                "SELECT * FROM entities WHERE org_id = %s AND last_seen_run_id = %s",
                 (org_id, run_id),
             ).fetchall()
         ]
@@ -274,7 +340,7 @@ def _db_entities_by_type(org_id: str, run_id: str, entity_type: str) -> List[Dic
         return [
             dict(r) for r in conn.execute(
                 """SELECT * FROM entities
-                   WHERE org_id = ? AND last_seen_run_id = ? AND entity_type = ?""",
+                   WHERE org_id = %s AND last_seen_run_id = %s AND entity_type = %s""",
                 (org_id, run_id, entity_type),
             ).fetchall()
         ]
@@ -1050,7 +1116,7 @@ def _seed_entity_row(
                 source_system, source_record_id, resolution_confidence,
                 resolution_status, first_seen_run_id, last_seen_run_id,
                 run_count, metadata, created_at, updated_at
-            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
             (eid, org_id, entity_type, canonical_name, display_name,
              source_system, None, resolution_confidence,
              resolution_status, run_id, run_id, 1, None, now, now),
@@ -1063,7 +1129,7 @@ def _db_entity_by_id(entity_id: str) -> dict | None:
     with sqlite3.connect(_get_db_path()) as conn:
         conn.row_factory = sqlite3.Row
         row = conn.execute(
-            "SELECT * FROM entities WHERE id = ?", (entity_id,)
+            "SELECT * FROM entities WHERE id = %s", (entity_id,)
         ).fetchone()
         return dict(row) if row else None
 
@@ -1072,7 +1138,7 @@ def _all_by_canonical(org_id: str, canonical: str, entity_type: str = "person") 
     with sqlite3.connect(_get_db_path()) as conn:
         conn.row_factory = sqlite3.Row
         return [dict(r) for r in conn.execute(
-            "SELECT * FROM entities WHERE org_id=? AND canonical_name=? AND entity_type=?",
+            "SELECT * FROM entities WHERE org_id=%s AND canonical_name=%s AND entity_type=%s",
             (org_id, canonical, entity_type),
         ).fetchall()]
 
@@ -1203,7 +1269,7 @@ class TestServiceAccountFiltering:
         """Read entity summaries from the run KV store directly via sqlite3."""
         with sqlite3.connect(_get_db_path()) as conn:
             row = conn.execute(
-                "SELECT payload FROM kv WHERE key = ?",
+                "SELECT payload FROM kv WHERE key = %s",
                 (f"entities:{run_id}",),
             ).fetchone()
         if row is None:
@@ -1291,7 +1357,7 @@ class TestEntitySummaryShape:
     def _kv_entities(self, run_id: str) -> list:
         with sqlite3.connect(_get_db_path()) as conn:
             row = conn.execute(
-                "SELECT payload FROM kv WHERE key = ?",
+                "SELECT payload FROM kv WHERE key = %s",
                 (f"entities:{run_id}",),
             ).fetchone()
         if row is None:
@@ -1352,7 +1418,7 @@ class TestRunCountAcrossConsecutiveRuns:
         with sqlite3.connect(_get_db_path()) as conn:
             conn.row_factory = sqlite3.Row
             row = conn.execute(
-                "SELECT * FROM entities WHERE org_id=? AND canonical_name=? AND entity_type='person'",
+                "SELECT * FROM entities WHERE org_id=%s AND canonical_name=%s AND entity_type='person'",
                 (org, canonical),
             ).fetchone()
             return dict(row) if row else None
@@ -1414,8 +1480,10 @@ def _analyst_headers(org_id: str) -> dict:
     con = _db.connect()
     try:
         con.execute(
-            "INSERT OR REPLACE INTO workspace_members (org_id, user_id, role, created_at) "
-            "VALUES (?, ?, ?, ?)",
+            "INSERT INTO workspace_members (org_id, user_id, role, created_at) "
+            "VALUES (%s, %s, %s, %s) "
+            "ON CONFLICT (org_id, user_id) DO UPDATE SET "
+            "role=EXCLUDED.role, created_at=EXCLUDED.created_at",
             (org_id, token, "analyst", now),
         )
         con.commit()
@@ -1434,8 +1502,10 @@ def _viewer_headers(org_id: str) -> dict:
     con = _db.connect()
     try:
         con.execute(
-            "INSERT OR REPLACE INTO workspace_members (org_id, user_id, role, created_at) "
-            "VALUES (?, ?, ?, ?)",
+            "INSERT INTO workspace_members (org_id, user_id, role, created_at) "
+            "VALUES (%s, %s, %s, %s) "
+            "ON CONFLICT (org_id, user_id) DO UPDATE SET "
+            "role=EXCLUDED.role, created_at=EXCLUDED.created_at",
             (org_id, token, "viewer", now),
         )
         con.commit()
@@ -1449,7 +1519,8 @@ def _insert_run(run_id: str, org_id: str, status: str = "complete") -> None:
     payload = _json.dumps({"org_id": org_id, "status": status})
     with sqlite3.connect(_get_db_path()) as conn:
         conn.execute(
-            "INSERT OR REPLACE INTO runs (id, payload) VALUES (?, ?)",
+            "INSERT INTO runs (id, payload) VALUES (%s, %s) "
+            "ON CONFLICT (id) DO UPDATE SET payload=EXCLUDED.payload",
             (run_id, payload),
         )
         conn.commit()
@@ -1735,7 +1806,7 @@ class TestConfidenceUpgradeOnBetterSource:
         with sqlite3.connect(_get_db_path()) as conn:
             conn.row_factory = sqlite3.Row
             row = conn.execute(
-                "SELECT * FROM entities WHERE org_id=? AND canonical_name=? AND entity_type='person'",
+                "SELECT * FROM entities WHERE org_id=%s AND canonical_name=%s AND entity_type='person'",
                 (org, canonical),
             ).fetchone()
             return dict(row) if row else None
@@ -1800,7 +1871,7 @@ class TestCanonicalNameNormalization:
         with sqlite3.connect(_get_db_path()) as conn:
             conn.row_factory = sqlite3.Row
             return [dict(r) for r in conn.execute(
-                "SELECT * FROM entities WHERE org_id=? AND canonical_name=? AND entity_type='person'",
+                "SELECT * FROM entities WHERE org_id=%s AND canonical_name=%s AND entity_type='person'",
                 (org, canonical),
             ).fetchall()]
 
@@ -1846,64 +1917,130 @@ class TestSchemaModelMigrationParity:
     This guards against drift between the model DDL and the migration-built table
     in the live (migration-applied) test database."""
 
-    def _schema_of(self, conn: sqlite3.Connection) -> tuple:
-        cols = {
-            r[1]: (r[2], r[3], r[5])  # name -> (type, notnull, pk)
-            for r in conn.execute("PRAGMA table_info(entities)").fetchall()
+    def _columns_in_schema(self, conn, schema: str) -> dict:
+        """Return {column_name: (data_type, is_nullable, is_pk)} for entities in `schema`.
+
+        PostgreSQL port of the old PRAGMA-based ``_schema_of``: columns/nullability
+        come from information_schema; PK membership from pg_index against the
+        schema-qualified table.
+        """
+        col_rows = conn.execute(
+            "SELECT column_name, data_type, is_nullable "
+            "FROM information_schema.columns "
+            "WHERE table_schema = %s AND table_name = 'entities' "
+            "ORDER BY ordinal_position",
+            (schema,),
+        ).fetchall()
+        pk_rows = conn.execute(
+            "SELECT a.attname FROM pg_index i "
+            "JOIN pg_attribute a ON a.attrelid = i.indrelid "
+            "AND a.attnum = ANY(i.indkey) "
+            "WHERE i.indrelid = (%s || '.entities')::regclass AND i.indisprimary",
+            (schema,),
+        ).fetchall()
+        pk_cols = {r["attname"] for r in pk_rows}
+        return {
+            r["column_name"]: (r["data_type"], r["is_nullable"], r["column_name"] in pk_cols)
+            for r in col_rows
         }
-        idx = sorted(
-            r[1] for r in conn.execute("PRAGMA index_list(entities)").fetchall()
-            if r[3] != "pk"
-        )
-        return cols, idx
+
+    def _nonpk_indexes_in_schema(self, conn, schema: str) -> list:
+        """Sorted non-PK index names for entities in `schema` (pg_indexes port)."""
+        primary_rows = conn.execute(
+            "SELECT c.relname FROM pg_index i "
+            "JOIN pg_class c ON c.oid = i.indexrelid "
+            "WHERE i.indrelid = (%s || '.entities')::regclass AND i.indisprimary",
+            (schema,),
+        ).fetchall()
+        primary = {r["relname"] for r in primary_rows}
+        idx_rows = conn.execute(
+            "SELECT indexname FROM pg_indexes WHERE schemaname = %s AND tablename = 'entities'",
+            (schema,),
+        ).fetchall()
+        return sorted(r["indexname"] for r in idx_rows if r["indexname"] not in primary)
 
     def test_model_ddl_matches_migration_applied_schema(self):
+        """PostgreSQL port of the old ``:memory:`` drift check.
+
+        The original built a throwaway SQLite ``:memory:`` DB from ALL_ENTITIES_DDL
+        and diffed it against the live table. That is invalid against PostgreSQL, so
+        we instead execute ALL_ENTITIES_DDL into a fresh PostgreSQL schema in the
+        SAME connection (the DDL's VARCHAR/FLOAT/TIMESTAMP/INTEGER types and the
+        unqualified CREATE statements are all valid PostgreSQL) and compare the two
+        schemas via information_schema/pg_index. The model DDL is unqualified, so we
+        prepend it onto ``search_path`` to land objects in the parity schema.
+        """
         from database.models.entities import ALL_ENTITIES_DDL
 
-        # Schema as built by the Alembic migration in the contract-test DB.
-        with sqlite3.connect(_get_db_path()) as live:
-            live_cols, live_idx = self._schema_of(live)
+        parity = "ddl_parity_check"
+        with sqlite3.connect(_get_db_path()) as conn:
+            # Live (migration-applied) schema lives in public.
+            live_cols = self._columns_in_schema(conn, "public")
+            live_idx = self._nonpk_indexes_in_schema(conn, "public")
 
-        # Schema as built by applying the model DDL to a fresh in-memory DB.
-        mem = sqlite3.connect(":memory:")
-        try:
-            for ddl in ALL_ENTITIES_DDL:
-                mem.execute(ddl)
-            mem_cols, mem_idx = self._schema_of(mem)
-        finally:
-            mem.close()
+            # Build the expected schema from the model DDL in an isolated schema.
+            conn.execute(f"DROP SCHEMA IF EXISTS {parity} CASCADE")
+            conn.execute(f"CREATE SCHEMA {parity}")
+            try:
+                conn.execute(f"SET search_path TO {parity}")
+                for ddl in ALL_ENTITIES_DDL:
+                    conn.execute(ddl)
+                conn.execute("SET search_path TO public")
+                model_cols = self._columns_in_schema(conn, parity)
+                model_idx = self._nonpk_indexes_in_schema(conn, parity)
+            finally:
+                conn.execute("SET search_path TO public")
+                conn.execute(f"DROP SCHEMA IF EXISTS {parity} CASCADE")
+                conn.commit()
 
-        assert live_cols == mem_cols, (
+        assert live_cols == model_cols, (
             "entities columns differ between the migration and the model DDL — schema drift"
         )
-        assert live_idx == mem_idx, (
+        assert live_idx == model_idx, (
             "entities indexes differ between the migration and the model DDL — schema drift"
         )
 
     def test_check_constraints_present_in_schema(self):
-        """entity_type and resolution_status must carry CHECK constraints (Issue #19)."""
+        """entity_type and resolution_status must carry CHECK constraints (Issue #19).
+
+        PostgreSQL port: the old check read the CREATE TABLE text from
+        sqlite_master. We read the CHECK constraint definitions from pg_constraint
+        and assert both the column names and the IN-list appear.
+        """
         with sqlite3.connect(_get_db_path()) as conn:
-            sql = conn.execute(
-                "SELECT sql FROM sqlite_master WHERE type='table' AND name='entities'"
-            ).fetchone()[0].lower()
-        assert "check" in sql, "entities table must define CHECK constraints"
-        assert "entity_type in" in sql, "entity_type must have a CHECK (IN ...) constraint"
-        assert "resolution_status in" in sql, "resolution_status must have a CHECK (IN ...) constraint"
+            rows = conn.execute(
+                "SELECT pg_get_constraintdef(oid) AS def FROM pg_constraint "
+                "WHERE conrelid = 'entities'::regclass AND contype = 'c'"
+            ).fetchall()
+        defs = " ".join(r["def"].lower() for r in rows)
+        assert defs, "entities table must define CHECK constraints"
+        assert "entity_type" in defs, "entity_type must have a CHECK constraint"
+        assert "resolution_status" in defs, "resolution_status must have a CHECK constraint"
+        # The CHECK uses an IN (...) value list in the model DDL.
+        assert "person" in defs and "system" in defs, (
+            "entity_type CHECK must enumerate the allowed entity types"
+        )
+        assert "resolved" in defs and "ambiguous" in defs, (
+            "resolution_status CHECK must enumerate the allowed statuses"
+        )
 
     def test_invalid_entity_type_rejected_by_check_constraint(self):
         """A row with an invalid entity_type must be rejected at the DB layer."""
         from datetime import datetime as _dt, timezone as _tzc
         now = _dt.now(_tzc.utc).isoformat()
         with sqlite3.connect(_get_db_path()) as conn:
-            with pytest.raises(sqlite3.IntegrityError):
+            with pytest.raises(psycopg2.IntegrityError):
                 conn.execute(
                     """INSERT INTO entities (
                         id, org_id, entity_type, canonical_name, display_name,
                         source_system, source_record_id, resolution_confidence,
                         resolution_status, first_seen_run_id, last_seen_run_id,
                         run_count, metadata, created_at, updated_at
-                    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
                     (str(_uuid.uuid4()), "chk-org", "not_a_real_type", "x", "X",
                      "jira", None, 0.8, "resolved", "r1", "r1", 1, None, now, now),
                 )
                 conn.commit()
+            # The aborted transaction must be rolled back before the connection is
+            # reused (PostgreSQL blocks further statements after an error).
+            conn.rollback()

@@ -1,10 +1,11 @@
 import os
-import sqlite3
 import subprocess
 import sys
-import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
+
+import psycopg2
+import psycopg2.extras
 import pytest
 from alembic import command as alembic_command
 from alembic.config import Config as AlembicConfig
@@ -18,13 +19,124 @@ for path in (str(REPO_ROOT), str(BACKEND_DIR)):
     if path not in sys.path:
         sys.path.insert(0, path)
 
+# AT-288 / Fix 1: contract tests run against PostgreSQL. The test database is
+# taken from DATABASE_URL (or the documented local default). The schema is
+# dropped and rebuilt from migrations at session start, so the suite stays
+# hermetic without a throwaway SQLite file.
+TEST_DATABASE_URL = os.environ.get(
+    "DATABASE_URL", "postgresql://agentiq:agentiq@localhost:5432/agentiq"
+)
+
 # Keep contract tests hermetic even when backend/.env contains live-mode
 # settings or a real LLM API key. Test modules import app.main at module scope,
 # so these must be set before pytest imports those modules.
 os.environ.setdefault("DEV_JWT", "dev-token-change-me")
+os.environ["DATABASE_URL"] = TEST_DATABASE_URL
 os.environ["INGEST_MODE"] = "offline"
 os.environ["ANTHROPIC_API_KEY"] = ""
 os.environ["AGENTIQ_DISABLE_BACKGROUND_JOBS"] = "1"
+
+
+# ---------------------------------------------------------------------------
+# Test-only connection helper (NO SQL translation)
+# ---------------------------------------------------------------------------
+# The contract tests open their own DB connections for setup/assertions, written
+# in the sqlite3 idiom: sqlite3.connect(path), then conn.execute(...) directly on
+# the connection, and `with conn:` blocks. PostgreSQL/psycopg2 has neither a
+# connection-level .execute() nor that file path.
+#
+# This helper provides ONLY those ergonomics — a connection-level execute() and
+# context-manager support — over a real psycopg2 connection (DictCursor, so rows
+# support both row[0] and row["col"]). It performs NO SQL translation: the test
+# SQL itself is native PostgreSQL (%s placeholders, ON CONFLICT, information_schema,
+# TRUE/FALSE). It is test infrastructure only; application code uses raw psycopg2
+# cursors directly (see app/db.py). sqlite3.connect() is routed here so the test
+# bodies need no per-call-site change, only their SQL converted to native.
+import sqlite3 as _real_sqlite3  # noqa: E402
+
+
+class _PgTestConnection:
+    """psycopg2 connection with sqlite3-style connection-level execute().
+
+    NO query translation — SQL passes through verbatim. Closes on `with` exit
+    (sqlite3 leaves it open, but that would leak PostgreSQL connections across
+    the suite).
+    """
+
+    def __init__(self, raw):
+        self._raw = raw
+        self.row_factory = None  # accepted + ignored; DictCursor gives name access
+
+    def cursor(self, *args, **kwargs):
+        return self._raw.cursor()
+
+    def execute(self, sql, params=None):
+        cur = self._raw.cursor()
+        if params is None:
+            cur.execute(sql)
+        else:
+            cur.execute(sql, params)
+        return cur
+
+    def executemany(self, sql, seq_of_params):
+        cur = self._raw.cursor()
+        cur.executemany(sql, list(seq_of_params))
+        return cur
+
+    def commit(self):
+        self._raw.commit()
+
+    def rollback(self):
+        self._raw.rollback()
+
+    def close(self):
+        self._raw.close()
+
+    @property
+    def autocommit(self):
+        return self._raw.autocommit
+
+    @autocommit.setter
+    def autocommit(self, value):
+        self._raw.autocommit = value
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        try:
+            if exc_type is not None:
+                self._raw.rollback()
+            else:
+                self._raw.commit()
+        finally:
+            self._raw.close()
+
+
+def pg_test_connect(*_args, **_kwargs):
+    raw = psycopg2.connect(
+        os.environ["DATABASE_URL"],
+        cursor_factory=psycopg2.extras.DictCursor,
+        options="-c timezone=UTC",
+    )
+    raw.autocommit = False
+    return _PgTestConnection(raw)
+
+
+# Route sqlite3.connect(...) in tests to PostgreSQL. Installed at import time so
+# it is active before any test module's module-level sqlite3.connect() runs.
+_real_sqlite3.connect = pg_test_connect
+
+# Also route the application's own db.connect() through the same helper. Many
+# test modules do `con = db.connect(); con.execute(...)` (the sqlite3 idiom).
+# Patching here — before any test module (or app.main) imports `connect` — means
+# both attribute access (db.connect()) and value-bound imports
+# (from app.db import connect) resolve to the helper. Application code under test
+# uses cursors, which the helper delegates to natively; only test code uses the
+# helper's connection-level execute(). No SQL translation is performed.
+import app.db as _app_db  # noqa: E402
+
+_app_db.connect = pg_test_connect
 
 
 def _resolve_seed_dir() -> Path:
@@ -48,33 +160,49 @@ def _resolve_seed_dir() -> Path:
     return candidates[0]
 
 
-# Use a temp DB for contract tests so the live dev.db is never touched
-_tmp_db = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
-_tmp_db.close()
-TEST_DB_PATH = _tmp_db.name
+_RESET_PUBLIC_SCHEMA = """
+DO $$
+DECLARE r RECORD;
+BEGIN
+    FOR r IN (SELECT tablename FROM pg_tables WHERE schemaname = 'public') LOOP
+        EXECUTE 'DROP TABLE IF EXISTS public.' || quote_ident(r.tablename) || ' CASCADE';
+    END LOOP;
+    FOR r IN (SELECT sequencename FROM pg_sequences WHERE schemaname = 'public') LOOP
+        EXECUTE 'DROP SEQUENCE IF EXISTS public.' || quote_ident(r.sequencename) || ' CASCADE';
+    END LOOP;
+END $$;
+"""
+
+
+def _reset_database() -> None:
+    """Drop every table/sequence in the public schema for a clean slate."""
+    con = psycopg2.connect(os.environ["DATABASE_URL"])
+    try:
+        con.autocommit = True
+        with con.cursor() as cur:
+            cur.execute(_RESET_PUBLIC_SCHEMA)
+    finally:
+        con.close()
 
 
 def pytest_configure(config):
-    """Seed a fresh temporary database before any contract tests run."""
+    """Reset and seed a fresh PostgreSQL schema before any contract tests run."""
     os.environ.setdefault("DEV_JWT", "dev-token-change-me")
-    os.environ["DB_PATH"] = TEST_DB_PATH
+    os.environ["DATABASE_URL"] = TEST_DATABASE_URL
     os.environ["INGEST_MODE"] = "offline"
     os.environ["ANTHROPIC_API_KEY"] = ""
     os.environ["AGENTIQ_DISABLE_BACKGROUND_JOBS"] = "1"
     os.environ["SEED_DIR"] = str(_resolve_seed_dir())
     os.environ.setdefault("CORS_ORIGINS", "http://localhost:5173")
-    # Contract tests must never hit live connectors or external LLM APIs. Force
-    # offline ingestion and drop the Anthropic key regardless of the developer's
-    # .env (which may set INGEST_MODE=live and ANTHROPIC_API_KEY) so the suite
-    # stays fast and deterministic and uses the offline fixtures + deterministic
-    # enrichment fallback. Set before app import; load_dotenv() does not override
-    # already-set env vars. Tests that exercise live behaviour set their own env
-    # via monkeypatch/patch.dict.
-    # Setting (not popping) keeps them "present" so app.main's load_dotenv(),
-    # which uses override=False, will not re-populate them from .env. An empty
-    # ANTHROPIC_API_KEY is treated as "not set" by llm_enrichment.
-    os.environ["INGEST_MODE"] = "offline"
-    os.environ["ANTHROPIC_API_KEY"] = ""
+
+    try:
+        _reset_database()
+    except Exception as exc:
+        raise RuntimeError(
+            "Could not reset the test PostgreSQL database at "
+            f"{os.environ['DATABASE_URL']!r}. Ensure PostgreSQL is running and the "
+            f"agentiq database/role exist.\n{exc}"
+        ) from exc
 
     try:
         alembic_cfg = AlembicConfig(str(BACKEND_DIR / "alembic.ini"))
@@ -86,7 +214,7 @@ def pytest_configure(config):
     result = subprocess.run(
         [sys.executable, str(SEED_LOADER)],
         cwd=str(BACKEND_DIR),
-        env={**os.environ, "DB_PATH": TEST_DB_PATH, "PYTHONIOENCODING": "utf-8"},
+        env={**os.environ, "PYTHONIOENCODING": "utf-8"},
         capture_output=True,
         text=True,
         encoding="utf-8",
@@ -97,39 +225,32 @@ def pytest_configure(config):
     # Seed the dev user as owner of the default org so legacy contract tests
     # pass with RBAC applied. The app's lifespan does this for context-managed
     # TestClients, but some test modules instantiate TestClient(app) directly
-    # (no lifespan), so seed here to cover the whole suite. Tests that need a
-    # specific role use a fresh org via the X-Org-Id header and are unaffected.
+    # (no lifespan), so seed here to cover the whole suite.
     from app.rbac import seed_owner
 
     seed_owner("default", os.environ["DEV_JWT"])
-    
-    # Some legacy contract tests instantiate TestClient(app) without entering
-    # the lifespan context. Seed the default dev owner here as well so RBAC
-    # matches normal app startup.
+
     from database.models.workspace_members import CREATE_WORKSPACE_MEMBERS_TABLE
 
-    with sqlite3.connect(TEST_DB_PATH) as conn:
-        conn.execute(CREATE_WORKSPACE_MEMBERS_TABLE)
-        conn.execute(
-            """
-            INSERT OR IGNORE INTO workspace_members (org_id, user_id, role, created_at)
-            VALUES (?, ?, 'owner', ?)
-            """,
-            (
-                "default",
-                os.environ["DEV_JWT"],
-                datetime.now(timezone.utc).isoformat(),
-            ),
-        )
-        conn.commit()
-
-
-def pytest_sessionfinish(session, exitstatus):
-    """Clean up the temporary database after the test session."""
+    con = psycopg2.connect(os.environ["DATABASE_URL"])
     try:
-        os.remove(TEST_DB_PATH)
-    except OSError:
-        pass
+        with con.cursor() as cur:
+            cur.execute(CREATE_WORKSPACE_MEMBERS_TABLE)
+            cur.execute(
+                """
+                INSERT INTO workspace_members (org_id, user_id, role, created_at)
+                VALUES (%s, %s, 'owner', %s)
+                ON CONFLICT (org_id, user_id) DO NOTHING
+                """,
+                (
+                    "default",
+                    os.environ["DEV_JWT"],
+                    datetime.now(timezone.utc).isoformat(),
+                ),
+            )
+        con.commit()
+    finally:
+        con.close()
 
 
 @pytest.fixture()

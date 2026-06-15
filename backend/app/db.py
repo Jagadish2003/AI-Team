@@ -1,15 +1,19 @@
 import json
 import os
 import re
-import sqlite3
 import uuid
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+import psycopg2
+import psycopg2.extras
 from fastapi import HTTPException
 
-DB_PATH = Path(os.getenv("DB_PATH", "database/dev.db"))
+# AT-288 / Fix 1: the application database is PostgreSQL. The connection string
+# is read from DATABASE_URL (the local default matches deployment/.env.template).
+DATABASE_URL = os.getenv(
+    "DATABASE_URL", "postgresql://agentiq:agentiq@localhost:5432/agentiq"
+)
 RUN_ID_RE = re.compile(r"^RUN_(\d+)$")
 
 
@@ -17,26 +21,32 @@ def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def connect() -> sqlite3.Connection:
-    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    # timeout: how long a connection should wait for the lock to go away before raising an error.
-    # check_same_thread: allow the same connection to be used in multiple threads (FastAPI threads).
-    con = sqlite3.connect(str(DB_PATH), timeout=30.0, check_same_thread=False)
-    # Avoid changing journal mode on every request; that requires an exclusive
-    # lock and can fail under concurrent browser prefetches.
-    con.execute("PRAGMA busy_timeout=30000")
+def connect():
+    # AT-288 F1-AC2: connect() uses psycopg2.connect(DATABASE_URL).
+    # cursor_factory=DictCursor makes con.cursor() yield rows that support both
+    # positional (row[0]) and column-name (row["col"]) access — the stock
+    # psycopg2 equivalent of sqlite3.Row, no custom translation layer.
+    # options=-c timezone=UTC pins the session to UTC so timestamps round-trip
+    # consistently regardless of the server's local timezone. The app stores and
+    # compares ISO-8601 UTC values everywhere.
+    con = psycopg2.connect(
+        DATABASE_URL,
+        cursor_factory=psycopg2.extras.DictCursor,
+        options="-c timezone=UTC",
+    )
+    con.autocommit = False
     return con
 
 
 def get_one(table: str, id_: str) -> Optional[Dict[str, Any]]:
     con = connect()
     cur = con.cursor()
-    cur.execute(f"SELECT payload FROM {table} WHERE id = ?", (id_,))
+    cur.execute(f"SELECT payload FROM {table} WHERE id = %s", (id_,))
     row = cur.fetchone()
     con.close()
     if not row:
         return None
-    return json.loads(row[0])
+    return _loads(row[0])
 
 
 def get_all(table: str) -> List[Dict[str, Any]]:
@@ -45,34 +55,67 @@ def get_all(table: str) -> List[Dict[str, Any]]:
     cur.execute(f"SELECT payload FROM {table} ORDER BY id")
     rows = cur.fetchall()
     con.close()
-    return [json.loads(r[0]) for r in rows]
+    return [_loads(r[0]) for r in rows]
 
 
 def upsert(table: str, id_: str, payload: Dict[str, Any]) -> None:
     con = connect()
     cur = con.cursor()
     cur.execute(
-        f"INSERT INTO {table} (id, payload) VALUES (?, ?) "
-        "ON CONFLICT(id) DO UPDATE SET payload=excluded.payload",
+        f"INSERT INTO {table} (id, payload) VALUES (%s, %s) "
+        "ON CONFLICT (id) DO UPDATE SET payload=EXCLUDED.payload",
         (id_, json.dumps(payload)),
     )
     con.commit()
     con.close()
 
 
+def _loads(value: Any) -> Any:
+    """JSON payload columns are stored as TEXT; decode defensively.
+
+    psycopg2 returns TEXT columns as str. Guard against a value that is already
+    a dict/list (e.g. a JSONB column) so callers get a consistent Python object.
+    """
+    if isinstance(value, (dict, list)):
+        return value
+    return json.loads(value)
+
+
+def _column_exists(cur, table: str, column: str) -> bool:
+    cur.execute(
+        "SELECT 1 FROM information_schema.columns "
+        "WHERE table_name = %s AND column_name = %s",
+        (table, column),
+    )
+    return cur.fetchone() is not None
+
+
+def _table_exists(cur, table: str) -> bool:
+    cur.execute(
+        "SELECT 1 FROM information_schema.tables WHERE table_name = %s",
+        (table,),
+    )
+    return cur.fetchone() is not None
+
+
 def init_tables() -> None:
     con = connect()
     cur = con.cursor()
+    # `seq` is a monotonically increasing insertion-order column. It replaces the
+    # SQLite implicit `rowid` that entity visibility ordering relied on (see
+    # database/models/entities.py ENTITIES_VISIBLE_AS_OF_RUN_FROM_WHERE).
     cur.execute(
-        "CREATE TABLE IF NOT EXISTS runs (id TEXT PRIMARY KEY, payload TEXT NOT NULL)"
+        "CREATE TABLE IF NOT EXISTS runs ("
+        "id TEXT PRIMARY KEY, payload TEXT NOT NULL, seq BIGSERIAL)"
     )
-    # Migrate run_events if it exists with the old single-key schema
-    cur.execute("PRAGMA table_info(run_events)")
-    existing_cols = {row[1] for row in cur.fetchall()}
-    if existing_cols and "run_id" not in existing_cols:
+    cur.execute("ALTER TABLE runs ADD COLUMN IF NOT EXISTS seq BIGSERIAL")
+    # Migrate run_events if it exists with the old single-key schema.
+    if _table_exists(cur, "run_events") and not _column_exists(cur, "run_events", "run_id"):
         cur.execute("DROP TABLE run_events")
     cur.execute(
-        "CREATE TABLE IF NOT EXISTS run_events (run_id TEXT NOT NULL, seq INTEGER NOT NULL, payload TEXT NOT NULL, PRIMARY KEY(run_id, seq))"
+        "CREATE TABLE IF NOT EXISTS run_events ("
+        "run_id TEXT NOT NULL, seq INTEGER NOT NULL, payload TEXT NOT NULL, "
+        "PRIMARY KEY (run_id, seq))"
     )
     con.commit()
     con.close()
@@ -81,10 +124,10 @@ def init_tables() -> None:
 def get_run(run_id: str) -> Optional[Dict[str, Any]]:
     con = connect()
     cur = con.cursor()
-    cur.execute("SELECT payload FROM runs WHERE id = ?", (run_id,))
+    cur.execute("SELECT payload FROM runs WHERE id = %s", (run_id,))
     row = cur.fetchone()
     con.close()
-    return None if not row else json.loads(row[0])
+    return None if not row else _loads(row[0])
 
 
 def _current_request_org() -> Optional[str]:
@@ -118,7 +161,8 @@ def upsert_run(run_id: str, payload: Dict[str, Any]) -> None:
     con = connect()
     cur = con.cursor()
     cur.execute(
-        "INSERT INTO runs (id, payload) VALUES (?, ?) ON CONFLICT(id) DO UPDATE SET payload=excluded.payload",
+        "INSERT INTO runs (id, payload) VALUES (%s, %s) "
+        "ON CONFLICT (id) DO UPDATE SET payload=EXCLUDED.payload",
         (run_id, json.dumps(payload)),
     )
     con.commit()
@@ -134,8 +178,8 @@ def count_runs() -> int:
     rows = cur.fetchall()
     con.close()
     max_n = 0
-    for (run_id,) in rows:
-        match = RUN_ID_RE.match(str(run_id))
+    for row in rows:
+        match = RUN_ID_RE.match(str(row[0]))
         if match:
             max_n = max(max_n, int(match.group(1)))
     return max_n
@@ -169,7 +213,7 @@ def require_run_exists(run_id: str) -> Dict[str, Any]:
 def delete_run_events(run_id: str) -> None:
     con = connect()
     cur = con.cursor()
-    cur.execute("DELETE FROM run_events WHERE run_id = ?", (run_id,))
+    cur.execute("DELETE FROM run_events WHERE run_id = %s", (run_id,))
     con.commit()
     con.close()
 
@@ -179,7 +223,8 @@ def insert_run_events(run_id: str, events: List[Dict[str, Any]]) -> None:
     cur = con.cursor()
     for i, ev in enumerate(events):
         cur.execute(
-            "INSERT OR REPLACE INTO run_events (run_id, seq, payload) VALUES (?, ?, ?)",
+            "INSERT INTO run_events (run_id, seq, payload) VALUES (%s, %s, %s) "
+            "ON CONFLICT (run_id, seq) DO UPDATE SET payload=EXCLUDED.payload",
             (run_id, i, json.dumps(ev)),
         )
     con.commit()
@@ -190,11 +235,11 @@ def get_run_events(run_id: str) -> List[Dict[str, Any]]:
     con = connect()
     cur = con.cursor()
     cur.execute(
-        "SELECT payload FROM run_events WHERE run_id = ? ORDER BY seq ASC", (run_id,)
+        "SELECT payload FROM run_events WHERE run_id = %s ORDER BY seq ASC", (run_id,)
     )
     rows = cur.fetchall()
     con.close()
-    return [json.loads(r[0]) for r in rows]
+    return [_loads(r[0]) for r in rows]
 
 
 # --- replay.py db API ---
@@ -227,10 +272,10 @@ def kv_get(key: str) -> Any:
     _init_kv_table()
     con = connect()
     cur = con.cursor()
-    cur.execute("SELECT payload FROM kv WHERE key = ?", (key,))
+    cur.execute("SELECT payload FROM kv WHERE key = %s", (key,))
     row = cur.fetchone()
     con.close()
-    return json.loads(row[0]) if row else None
+    return _loads(row[0]) if row else None
 
 
 def kv_set(key: str, value: Any) -> None:
@@ -244,7 +289,8 @@ def kv_set(key: str, value: Any) -> None:
     con = connect()
     cur = con.cursor()
     cur.execute(
-        "INSERT INTO kv (key, payload) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET payload=excluded.payload",
+        "INSERT INTO kv (key, payload) VALUES (%s, %s) "
+        "ON CONFLICT (key) DO UPDATE SET payload=EXCLUDED.payload",
         (key, json.dumps(value)),
     )
     con.commit()
@@ -372,10 +418,10 @@ def tenancy_get_one(table: str, id_: str) -> Optional[Dict[str, Any]]:
 # --- Org-native tables owned by other modules (enforced there) -------------
 #   workspace_members — native org_id; enforced in app/rbac.py ("WHERE org_id").
 #   audit_log         — native org_id; enforced in app/middleware/audit.py and
-#                       the /api/audit-log reader ("WHERE org_id = ?").
+#                       the /api/audit-log reader ("WHERE org_id = %s").
 #   signal_snapshots  — native org_id; enforced in app/temporal.py — every
 #                       query (history, baseline, run-signals) filters
-#                       "WHERE org_id = ?" (verified AT-156).
+#                       "WHERE org_id = %s" (verified AT-156).
 #   telemetry_events  — native org_id column (database/models/telemetry.py).
 #   credentials       — native org_id; UNIQUE(org_id, connector_id); enforced
 #                       in app/auth/vault.py.
