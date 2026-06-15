@@ -389,16 +389,27 @@ def _full_fallback(
 
 
 def _load_entity_summaries(run_id: str) -> List[EntitySummary]:
-    """Load entity summaries from run KV and apply the service-account filter.
+    """Load unique entity summaries and apply the service-account filter.
 
     The KV store holds entities pre-populated by entity_extractor after each run.
     Service-account filter (run_count < 3) is applied here per Section 8 spec —
     low-count entities remain in the DB for graph completeness but are hidden
-    from the evidence trace.
+    from the evidence trace. Deduplication also protects legacy run payloads.
     """
     raw: List[Dict[str, Any]] = db.run_kv_get("entities", run_id, []) or []
+    unique_raw: Dict[str, Dict[str, Any]] = {}
+    for entity in raw:
+        if not isinstance(entity, dict):
+            continue
+        entity_id = entity.get("entity_id")
+        if not entity_id:
+            continue
+        # Legacy payloads stored repeated occurrences in source order. The last
+        # occurrence has the latest run_count and confidence snapshot.
+        unique_raw[str(entity_id)] = entity
+
     summaries: List[EntitySummary] = []
-    for e in raw:
+    for e in unique_raw.values():
         if e.get("run_count", 0) < _MIN_ENTITY_RUN_COUNT:
             continue
         try:

@@ -125,7 +125,7 @@ def update_entity_seen(
     new_confidence: Optional[float] = None,
     new_source_record_id: Optional[str] = None,
 ) -> None:
-    """Increment run_count and update last_seen_run_id for a returning entity.
+    """Update a returning entity and count at most one sighting per run.
 
     Confidence upgrade (never downgrade): when a later, higher-quality signal
     arrives for an existing entity — e.g. an incoming record carries a
@@ -143,25 +143,38 @@ def update_entity_seen(
         conn.execute(
             """
             UPDATE entities
-            SET last_seen_run_id    = ?,
-                run_count           = run_count + 1,
+            SET run_count             = CASE
+                                            WHEN last_seen_run_id = ? THEN run_count
+                                            ELSE run_count + 1
+                                        END,
+                last_seen_run_id      = ?,
                 resolution_confidence = MAX(resolution_confidence, ?),
-                source_record_id    = COALESCE(source_record_id, ?),
-                updated_at          = ?
+                source_record_id      = COALESCE(source_record_id, ?),
+                updated_at            = ?
             WHERE id = ?
             """,
-            (run_id, new_confidence, new_source_record_id, _now(), str(entity_id)),
+            (
+                run_id,
+                run_id,
+                new_confidence,
+                new_source_record_id,
+                _now(),
+                str(entity_id),
+            ),
         )
         return
     conn.execute(
         """
         UPDATE entities
-        SET last_seen_run_id = ?,
-            run_count        = run_count + 1,
+        SET run_count        = CASE
+                                   WHEN last_seen_run_id = ? THEN run_count
+                                   ELSE run_count + 1
+                               END,
+            last_seen_run_id = ?,
             updated_at       = ?
         WHERE id = ?
         """,
-        (run_id, _now(), str(entity_id)),
+        (run_id, run_id, _now(), str(entity_id)),
     )
 
 

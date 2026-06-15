@@ -67,11 +67,19 @@ CREATE_ER_IDX_ORG_TYPE = """
         ON entity_relationships (org_id, relationship_type, inferred)
 """
 
+CREATE_ER_UQ_NATURAL_KEY = """
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_er_org_natural_key
+        ON entity_relationships (
+            org_id, from_entity_id, to_entity_id, relationship_type
+        )
+"""
+
 ALL_ENTITY_RELATIONSHIPS_DDL: tuple[str, ...] = (
     CREATE_ENTITY_RELATIONSHIPS_TABLE,
     CREATE_ER_IDX_ORG_FROM,
     CREATE_ER_IDX_ORG_TO,
     CREATE_ER_IDX_ORG_TYPE,
+    CREATE_ER_UQ_NATURAL_KEY,
 )
 
 

@@ -616,6 +616,102 @@ class TestSalesforcePersonExtraction:
         assert persons[0]["source_system"] == "salesforce"
 
 
+class TestSalesforceOwnerDeduplication:
+    """Repeated source records must expose one entity per Salesforce owner."""
+
+    @staticmethod
+    def _kv_entities(run_id: str) -> list:
+        with sqlite3.connect(_get_db_path()) as conn:
+            row = conn.execute(
+                "SELECT payload FROM kv WHERE key = ?",
+                (f"entities:{run_id}",),
+            ).fetchone()
+        if row is None:
+            return []
+        parsed = _json.loads(row[0]) if isinstance(row[0], str) else row[0]
+        return parsed if isinstance(parsed, list) else []
+
+    @staticmethod
+    def _person(org_id: str, display_name: str) -> dict:
+        with sqlite3.connect(_get_db_path()) as conn:
+            conn.row_factory = sqlite3.Row
+            row = conn.execute(
+                """
+                SELECT * FROM entities
+                WHERE org_id = ? AND entity_type = 'person' AND display_name = ?
+                """,
+                (org_id, display_name),
+            ).fetchone()
+        assert row is not None
+        return dict(row)
+
+    def test_service_cloud_cases_with_same_owner_are_unique(self):
+        org = f"sf-owner-dedupe-{_uuid.uuid4().hex[:8]}"
+        owner_id = "005SERVICECLOUDOWNER"
+        payload = {
+            "salesforce": {
+                "cases": [
+                    {"Id": "500CASE001", "CaseNumber": "000001", "OwnerId": owner_id},
+                    {"Id": "500CASE002", "CaseNumber": "000002", "OwnerId": owner_id},
+                    {"Id": "500CASE003", "CaseNumber": "000003", "OwnerId": owner_id},
+                ]
+            }
+        }
+
+        final_entities = []
+        final_run = ""
+        for run_number in range(1, ENTITY_MIN_RUN_COUNT + 1):
+            final_run = f"run-sf-owner-dedupe-{run_number}"
+            final_entities = _extract(
+                org_id=org,
+                run_id=final_run,
+                pack_id="service_cloud",
+                ingestor_data=payload,
+            )
+
+        entity_ids = [str(entity.id) for entity in final_entities]
+        assert len(entity_ids) == len(set(entity_ids))
+        assert sum(entity.display_name == owner_id for entity in final_entities) == 1
+        assert self._person(org, owner_id)["run_count"] == ENTITY_MIN_RUN_COUNT
+
+        summaries = self._kv_entities(final_run)
+        assert sum(item["display_name"] == owner_id for item in summaries) == 1
+
+    def test_ncino_loans_with_same_owner_are_unique(self):
+        org = f"ncino-owner-dedupe-{_uuid.uuid4().hex[:8]}"
+        owner_id = "005NCINOOWNER"
+        payload = {
+            "salesforce": {
+                "ncino": {
+                    "loans": [
+                        {"Id": "LOAN001", "Name": "Loan 001", "OwnerId": owner_id},
+                        {"Id": "LOAN002", "Name": "Loan 002", "OwnerId": owner_id},
+                        {"Id": "LOAN003", "Name": "Loan 003", "OwnerId": owner_id},
+                    ]
+                }
+            }
+        }
+
+        final_entities = []
+        final_run = ""
+        for run_number in range(1, ENTITY_MIN_RUN_COUNT + 1):
+            final_run = f"run-ncino-owner-dedupe-{run_number}"
+            final_entities = _extract(
+                org_id=org,
+                run_id=final_run,
+                pack_id="ncino",
+                ingestor_data=payload,
+            )
+
+        entity_ids = [str(entity.id) for entity in final_entities]
+        assert len(entity_ids) == len(set(entity_ids))
+        assert sum(entity.display_name == owner_id for entity in final_entities) == 1
+        assert self._person(org, owner_id)["run_count"] == ENTITY_MIN_RUN_COUNT
+
+        summaries = self._kv_entities(final_run)
+        assert sum(item["display_name"] == owner_id for item in summaries) == 1
+
+
 class TestProcessEntityExtraction:
     """Process entity extracted per distinct detector_id → confidence=1.0."""
 

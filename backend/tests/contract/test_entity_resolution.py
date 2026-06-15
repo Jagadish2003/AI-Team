@@ -290,6 +290,12 @@ class TestAmbiguousResolution:
 class TestRunCountUpdate:
     """AC12: entities seen in two consecutive runs → run_count=2, updated last_seen_run_id."""
 
+    def test_repeated_sighting_in_same_run_does_not_increment(self):
+        org = "org-rc-same-run"
+        _call(display_name="Pat Quinn", org_id=org, run_id="run-001")
+        updated = _call(display_name="Pat Quinn", org_id=org, run_id="run-001")
+        assert updated.run_count == 1
+
     def test_run_count_incremented_on_second_run(self):
         org = "org-rc-a"
         _call(display_name="Pat Quinn", org_id=org, run_id="run-001")

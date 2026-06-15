@@ -4,7 +4,7 @@ map_directly_observed().
 T1 / AC1 coverage:
   - entity_relationships table exists with all 12 columns.
   - inferred and confidence are NOT NULL (load-bearing for T3-S14-A, T3-S15-A).
-  - Three required indexes: idx_er_org_from, idx_er_org_to, idx_er_org_type.
+  - Three lookup indexes plus a unique natural-key index.
   - FK columns from_entity_id and to_entity_id reference entities.id.
   - Table can be created repeatedly without error (idempotent DDL).
   - Rows can be inserted and queried by org_id, from_entity_id,
@@ -18,7 +18,8 @@ T2 / AC7 coverage:
   - last_seen_run_id is updated to the most recent run_id on every call.
   - confidence and inferred are set only on creation; never changed on update.
   - evidence is updated to the most recent run's value on update.
-  - Calling N times on the same key yields run_count=N, one row only.
+  - Calling the same key in N distinct runs yields run_count=N, one row only.
+  - Repeating the same key within one run does not inflate run_count.
   - upsert on a new key always creates a fresh row with run_count=1.
 
 T2 / AC8 coverage (upsert-layer isolation):
@@ -164,7 +165,7 @@ def _insert_relationship(
 
 
 class TestEntityRelationshipsTableSchema:
-    """AC1: entity_relationships table created with 12 columns and three indexes."""
+    """AC1: entity_relationships table created with 12 columns and required indexes."""
 
     def _columns(self) -> dict[str, dict]:
         with sqlite3.connect(_get_db_path()) as conn:
@@ -252,6 +253,18 @@ class TestEntityRelationshipsTableSchema:
         assert cols == ["org_id", "relationship_type", "inferred"], (
             f"idx_er_org_type must cover (org_id, relationship_type, inferred), got {cols}"
         )
+
+    def test_natural_key_unique_index(self):
+        indexes = {row["name"]: row for row in self._indexes()}
+        index = indexes.get("idx_er_org_natural_key")
+        assert index is not None, "Missing relationship natural-key unique index"
+        assert index["unique"] == 1
+        assert self._index_columns("idx_er_org_natural_key") == [
+            "org_id",
+            "from_entity_id",
+            "to_entity_id",
+            "relationship_type",
+        ]
 
     def test_idempotent_ddl_no_error_on_second_apply(self):
         with sqlite3.connect(_get_db_path()) as conn:
@@ -645,7 +658,7 @@ class TestUpsertRelationshipAC7:
         assert rel.run_count == 1
 
     def test_second_call_same_key_yields_run_count_2_one_row(self):
-        """AC7 core: two calls on the same natural key → one row, run_count=2."""
+        """AC7 core: the same natural key in two runs gives run_count=2."""
         org = f"org-dup-{uuid4().hex[:8]}"
         from_id = str(uuid4())
         to_id = str(uuid4())
@@ -673,6 +686,27 @@ class TestUpsertRelationshipAC7:
         assert len(rows) == 1, f"Expected 1 row, got {len(rows)} — duplicate created"
         assert rows[0]["run_count"] == 2
         assert rel2.run_count == 2
+
+    def test_repeated_call_in_same_run_does_not_increment_run_count(self):
+        org = f"org-same-run-{uuid4().hex[:8]}"
+        from_id = str(uuid4())
+        to_id = str(uuid4())
+
+        for _ in range(2):
+            rel = upsert_relationship(
+                org_id=org,
+                from_entity_id=from_id,
+                to_entity_id=to_id,
+                relationship_type="owns",
+                confidence=OBSERVED_CONFIDENCE,
+                inferred=False,
+                run_id="run-same",
+            )
+
+        rows = self._query_rows(org, from_id, to_id, "owns")
+        assert len(rows) == 1
+        assert rows[0]["run_count"] == 1
+        assert rel.run_count == 1
 
     def test_n_calls_yields_run_count_n(self):
         org = f"org-n-{uuid4().hex[:8]}"
@@ -1075,6 +1109,33 @@ class TestMapDirectlyObservedAC2:
         assert edges[0]["to_entity_id"] == str(obj.id)
         assert float(edges[0]["confidence"]) == OBSERVED_CONFIDENCE
         assert int(edges[0]["inferred"]) == 0
+
+    def test_duplicate_source_record_in_same_run_maps_one_edge(self):
+        org = f"org-owns-duplicate-{uuid4().hex[:8]}"
+        run = "run-t3-owns-duplicate"
+
+        person = _make_entity(org, "person", "Sarah Chen", run_id=run)
+        obj = _make_entity(org, "object", "LOAN-001", run_id=run)
+        _persist_entity(person)
+        _persist_entity(obj)
+        record = {
+            "OwnerId": "Sarah Chen",
+            "Id": "LOAN-001",
+            "source_system": "salesforce",
+        }
+        ingestor_data = {
+            "salesforce": {
+                "records": [record],
+                "cases": [dict(record)],
+            }
+        }
+
+        count = map_directly_observed(org, run, ingestor_data, [person, obj])
+
+        edges = _get_edges(org, "owns")
+        assert count == 1
+        assert len(edges) == 1
+        assert edges[0]["run_count"] == 1
 
     def test_owns_edge_matches_source_record_ids(self):
         """owns edge: OwnerId and record Id can match source_record_id values."""

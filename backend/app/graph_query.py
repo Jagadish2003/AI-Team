@@ -73,6 +73,8 @@ class RelationshipSummary(BaseModel):
 # summary and is omitted. Ordered deterministically for stable responses.
 _SELECT_EDGES = """
     SELECT
+        er.from_entity_id    AS from_entity_id,
+        er.to_entity_id      AS to_entity_id,
         er.relationship_type AS relationship_type,
         er.inferred          AS inferred,
         er.confidence        AS confidence,
@@ -163,6 +165,8 @@ def select_relationships(org_id: str, run_id: str) -> List[RelationshipSummary]:
 
 _SELECT_CURRENT_RUN_EDGES = """
     SELECT
+        er.from_entity_id    AS from_entity_id,
+        er.to_entity_id      AS to_entity_id,
         er.relationship_type AS relationship_type,
         er.inferred          AS inferred,
         er.confidence        AS confidence,
@@ -211,6 +215,7 @@ def select_relationships_for_opportunity(
 
     detector_key = (detector_id or "").strip().lower()
     summaries: List[RelationshipSummary] = []
+    seen_edges: set[tuple[str, str, str]] = set()
     for row in rows:
         if bool(row["inferred"]) and detector_key:
             endpoint_keys = {
@@ -221,6 +226,14 @@ def select_relationships_for_opportunity(
             }
             if detector_key not in endpoint_keys:
                 continue
+        edge_key = (
+            str(row["from_entity_id"]),
+            str(row["relationship_type"]),
+            str(row["to_entity_id"]),
+        )
+        if edge_key in seen_edges:
+            continue
+        seen_edges.add(edge_key)
         summaries.append(
             RelationshipSummary(
                 from_entity_name=row["from_entity_name"],
