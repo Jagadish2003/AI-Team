@@ -173,14 +173,29 @@ origins = [
     ).split(",")
     if o.strip()
 ]
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=origins,
-    allow_origin_regex=r"http://localhost:\d+",
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+
+
+def build_cors_kwargs(environment: str, allowed_origins: List[str]) -> Dict[str, Any]:
+    """Build CORS middleware kwargs.
+
+    The permissive ``http://localhost:<port>`` regex is convenient for local dev
+    (it lets any localhost port through), but in production it would allow any
+    localhost process to make authenticated cross-origin requests. We therefore
+    only attach ``allow_origin_regex`` outside of production.
+    """
+    cors_kwargs: Dict[str, Any] = {
+        "allow_origins": allowed_origins,
+        "allow_credentials": True,
+        "allow_methods": ["*"],
+        "allow_headers": ["*"],
+    }
+    if (environment or "").strip().lower() != "production":
+        cors_kwargs["allow_origin_regex"] = r"http://localhost:\d+"
+    return cors_kwargs
+
+
+_environment = os.getenv("ENVIRONMENT", "").strip().lower()
+app.add_middleware(CORSMiddleware, **build_cors_kwargs(_environment, origins))
 
 
 def now_iso() -> str:
