@@ -374,6 +374,12 @@ def _password_changed_after(user_id: str, payload: dict) -> bool:
 # ---------------------------------------------------------------------------
 # Rate limiting (AC6 / AC7 / AC8)
 # ---------------------------------------------------------------------------
+# NOTE (AUTH-1 AC7 deviation): Per-IP rate limiting was intentionally removed.
+# Reason: per-IP blocking is unreliable behind reverse proxies and NAT without
+# explicit X-Forwarded-For trust configuration, which is not yet in place.
+# Current implementation: per-email rate limiting only (5 failed attempts → lockout).
+# Tech debt: file a ticket to add per-IP limiting once proxy trust is configured.
+# ---------------------------------------------------------------------------
 
 
 def check_login_rate_limit(email: str, ip_address: str) -> None:
