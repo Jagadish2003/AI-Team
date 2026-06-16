@@ -192,17 +192,16 @@ def _insert_entity(org_id, display_name, *, entity_type="person",
         first_seen_run_id=run_id, last_seen_run_id=run_id, run_count=run_count,
     )
     row = entity.to_db_row()
-    with sqlite3.connect(os.environ["DB_PATH"]) as conn:
-        conn.execute("PRAGMA foreign_keys = OFF")
+    with sqlite3.connect(os.environ.get("DB_PATH", "")) as conn:
         conn.execute(
             """INSERT INTO entities (
                 id, org_id, entity_type, canonical_name, display_name, source_system,
                 source_record_id, resolution_confidence, resolution_status,
                 first_seen_run_id, last_seen_run_id, run_count, metadata, created_at, updated_at
             ) VALUES (
-                :id, :org_id, :entity_type, :canonical_name, :display_name, :source_system,
-                :source_record_id, :resolution_confidence, :resolution_status,
-                :first_seen_run_id, :last_seen_run_id, :run_count, :metadata, :created_at, :updated_at
+                %(id)s, %(org_id)s, %(entity_type)s, %(canonical_name)s, %(display_name)s, %(source_system)s,
+                %(source_record_id)s, %(resolution_confidence)s, %(resolution_status)s,
+                %(first_seen_run_id)s, %(last_seen_run_id)s, %(run_count)s, %(metadata)s, %(created_at)s, %(updated_at)s
             )""",
             row,
         )
@@ -220,17 +219,16 @@ def _insert_relationship(org_id, from_id, to_id, *, relationship_type="owns",
         first_seen_run_id=run_id, last_seen_run_id=run_id, run_count=1,
     )
     row = rel.to_db_row()
-    with sqlite3.connect(os.environ["DB_PATH"]) as conn:
-        conn.execute("PRAGMA foreign_keys = OFF")
+    with sqlite3.connect(os.environ.get("DB_PATH", "")) as conn:
         conn.execute(
             """INSERT INTO entity_relationships (
                 id, org_id, from_entity_id, to_entity_id, relationship_type,
                 confidence, inferred, evidence, first_seen_run_id, last_seen_run_id,
                 run_count, created_at
             ) VALUES (
-                :id, :org_id, :from_entity_id, :to_entity_id, :relationship_type,
-                :confidence, :inferred, :evidence, :first_seen_run_id, :last_seen_run_id,
-                :run_count, :created_at
+                %(id)s, %(org_id)s, %(from_entity_id)s, %(to_entity_id)s, %(relationship_type)s,
+                %(confidence)s, %(inferred)s, %(evidence)s, %(first_seen_run_id)s, %(last_seen_run_id)s,
+                %(run_count)s, %(created_at)s
             )""",
             row,
         )

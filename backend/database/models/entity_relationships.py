@@ -11,11 +11,12 @@ inferred and confidence are load-bearing columns:
 Column renames or removals require coordinated updates in all downstream
 stories simultaneously.
 
-SQLite note: from_entity_id and to_entity_id declare foreign keys, but SQLite
-does not enforce them unless each connection runs PRAGMA foreign_keys = ON.
-Current graph queries INNER JOIN entities, so orphaned relationship rows are
-not surfaced, but cleanup jobs should enable the PRAGMA before deleting
-entities.
+Referential integrity note (AT-288 / Fix 1): from_entity_id and to_entity_id
+are NOT declared as SQL foreign keys. Under SQLite they never were enforced
+(foreign_keys defaults OFF), and graph queries INNER JOIN entities so orphaned
+relationship rows are never surfaced. The FK clause is omitted on PostgreSQL to
+preserve that exact runtime behaviour — adding an enforced FK here would be a
+behavioural change, not a port. Integrity stays the application's responsibility.
 """
 from __future__ import annotations
 
@@ -39,8 +40,8 @@ CREATE_ENTITY_RELATIONSHIPS_TABLE = f"""
     CREATE TABLE IF NOT EXISTS entity_relationships (
         id                  VARCHAR(36)  NOT NULL PRIMARY KEY,
         org_id              VARCHAR(64)  NOT NULL,
-        from_entity_id      VARCHAR(36)  NOT NULL REFERENCES entities(id),
-        to_entity_id        VARCHAR(36)  NOT NULL REFERENCES entities(id),
+        from_entity_id      VARCHAR(36)  NOT NULL,
+        to_entity_id        VARCHAR(36)  NOT NULL,
         relationship_type   VARCHAR(32)  NOT NULL CHECK (relationship_type IN ({_RELATIONSHIP_TYPE_CHECK})),
         confidence          FLOAT        NOT NULL,
         inferred            BOOLEAN      NOT NULL,
@@ -122,7 +123,9 @@ class EntityRelationship:
             "to_entity_id": str(self.to_entity_id),
             "relationship_type": self.relationship_type,
             "confidence": self.confidence,
-            "inferred": int(self.inferred),
+            # PostgreSQL BOOLEAN column — bind a real bool, not 0/1 (psycopg2
+            # rejects an int for a boolean column).
+            "inferred": bool(self.inferred),
             "evidence": json.dumps(self.evidence) if self.evidence is not None else None,
             "first_seen_run_id": self.first_seen_run_id,
             "last_seen_run_id": self.last_seen_run_id,

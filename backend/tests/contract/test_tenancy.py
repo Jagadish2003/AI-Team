@@ -177,8 +177,9 @@ def test_middleware_respects_x_org_id_header(client: TestClient):
     con = db.connect()
     try:
         con.execute(
-            "INSERT OR REPLACE INTO workspace_members (org_id, user_id, role, created_at) "
-            "VALUES (?, ?, 'owner', ?)",
+            "INSERT INTO workspace_members (org_id, user_id, role, created_at) "
+            "VALUES (%s, %s, 'owner', %s) "
+            "ON CONFLICT (org_id, user_id) DO UPDATE SET role=EXCLUDED.role, created_at=EXCLUDED.created_at",
             ("acme_corp", AUTH["Authorization"].split()[-1], datetime.now(timezone.utc).isoformat()),
         )
         con.commit()
@@ -310,7 +311,7 @@ def test_signal_snapshots_queries_filter_by_org(client: TestClient):
                 "INSERT INTO signal_snapshots "
                 "(id, org_id, run_id, pack_id, detector_id, signal_key, metric_name, "
                 " metric_value, fired, signal_source, captured_at) "
-                "VALUES (?, ?, ?, 'pack', ?, ?, ?, 1.0, 0, 'offline', '2026-01-01T00:00:00Z')",
+                "VALUES (%s, %s, %s, 'pack', %s, %s, %s, 1.0, FALSE, 'offline', '2026-01-01T00:00:00Z')",
                 (_id, org, run_id, det, key, metric),
             )
         con.commit()

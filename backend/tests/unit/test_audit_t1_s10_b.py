@@ -131,9 +131,11 @@ def test_log_event_accepts_schema_discovered():
             table_count=47,
         )
 
-    assert mock_con.execute.called
+    # Native psycopg2: statements run via con.cursor().execute(...).
+    mock_cur = mock_con.cursor.return_value
+    assert mock_cur.execute.called
     # The last execute call must be the INSERT (DDL calls precede it when table is uninitialised)
-    last_call_args = mock_con.execute.call_args_list[-1][0]
+    last_call_args = mock_cur.execute.call_args_list[-1][0]
     assert "INSERT INTO audit_log" in last_call_args[0]
     # event_type in the bound params must be the schema_discovered string
     assert "schema_discovered" in last_call_args[1]
@@ -160,5 +162,5 @@ def test_log_event_schema_discovered_uses_constant():
             table_count=12,
         )
 
-    call_args = mock_con.execute.call_args[0]
+    call_args = mock_con.cursor.return_value.execute.call_args[0]
     assert "schema_discovered" in call_args[1]

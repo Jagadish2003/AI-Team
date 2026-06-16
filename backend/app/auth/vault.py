@@ -9,6 +9,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 import httpx
+import psycopg2
 from cryptography.fernet import Fernet
 
 from app import db
@@ -42,16 +43,18 @@ def _init_credentials_table() -> None:
 
     Also applies the refresh_failed column migration for pre-existing databases.
     """
-    import sqlite3 as _sqlite3
     con = db.connect()
     try:
-        con.execute(CREATE_CREDENTIALS_TABLE)
-        con.execute(CREATE_CREDENTIALS_IDX_ORG)
-        con.execute(CREATE_CREDENTIALS_IDX_CONNECTOR)
+        cur = con.cursor()
+        cur.execute(CREATE_CREDENTIALS_TABLE)
+        cur.execute(CREATE_CREDENTIALS_IDX_ORG)
+        cur.execute(CREATE_CREDENTIALS_IDX_CONNECTOR)
         try:
-            con.execute(ALTER_CREDENTIALS_ADD_REFRESH_FAILED)
-        except _sqlite3.OperationalError:
-            pass  # Column already exists — idempotent
+            # ADD COLUMN IF NOT EXISTS is idempotent on PostgreSQL; the guard is
+            # defensive only.
+            cur.execute(ALTER_CREDENTIALS_ADD_REFRESH_FAILED)
+        except psycopg2.Error:
+            con.rollback()  # column already exists — clear the aborted txn
         con.commit()
     finally:
         con.close()
@@ -61,7 +64,8 @@ def _init_nonce_table() -> None:
     """Create the nonce store table if it doesn't exist yet."""
     con = db.connect()
     try:
-        con.execute(
+        cur = con.cursor()
+        cur.execute(
             """
             CREATE TABLE IF NOT EXISTS nonces (
                 key        TEXT PRIMARY KEY,
@@ -188,8 +192,10 @@ def store_nonce(
     key = f"nonce:{nonce}"
     con = db.connect()
     try:
-        con.execute(
-            "INSERT OR REPLACE INTO nonces (key, data) VALUES (?, ?)",
+        cur = con.cursor()
+        cur.execute(
+            "INSERT INTO nonces (key, data) VALUES (%s, %s) "
+            "ON CONFLICT (key) DO UPDATE SET data=EXCLUDED.data",
             (key, data),
         )
         con.commit()
@@ -219,9 +225,10 @@ def consume_nonce(nonce: str) -> dict | None:
     key = f"nonce:{nonce}"
     con = db.connect()
     try:
+        cur = con.cursor()
         # Step 1: Read
-        cur = con.execute(
-            "SELECT data FROM nonces WHERE key = ?",
+        cur.execute(
+            "SELECT data FROM nonces WHERE key = %s",
             (key,),
         )
         row = cur.fetchone()
@@ -230,7 +237,7 @@ def consume_nonce(nonce: str) -> dict | None:
             return None  # Already used or never issued
 
         # Step 2: DELETE immediately — before any further processing
-        con.execute("DELETE FROM nonces WHERE key = ?", (key,))
+        cur.execute("DELETE FROM nonces WHERE key = %s", (key,))
         con.commit()
     finally:
         con.close()
@@ -264,8 +271,9 @@ def _mark_refresh_failed(org_id: str, connector_id: str) -> None:
     """Set refresh_failed=1 for an existing credential row.  No-op if row absent."""
     con = db.connect()
     try:
-        con.execute(
-            "UPDATE credentials SET refresh_failed=1 WHERE org_id=? AND connector_id=?",
+        cur = con.cursor()
+        cur.execute(
+            "UPDATE credentials SET refresh_failed=1 WHERE org_id=%s AND connector_id=%s",
             (org_id, connector_id),
         )
         con.commit()
@@ -297,17 +305,18 @@ def store_token(org_id: str, connector_id: str, token_response: dict) -> TokenRe
 
     con = db.connect()
     try:
-        con.execute(
+        cur = con.cursor()
+        cur.execute(
             """
             INSERT INTO credentials
                 (id, org_id, connector_id, access_token, refresh_token, expires_at, scopes, created_at, updated_at, refresh_failed)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
-            ON CONFLICT(org_id, connector_id) DO UPDATE SET
-                access_token   = excluded.access_token,
-                refresh_token  = excluded.refresh_token,
-                expires_at     = excluded.expires_at,
-                scopes         = excluded.scopes,
-                updated_at     = excluded.updated_at,
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, 0)
+            ON CONFLICT (org_id, connector_id) DO UPDATE SET
+                access_token   = EXCLUDED.access_token,
+                refresh_token  = EXCLUDED.refresh_token,
+                expires_at     = EXCLUDED.expires_at,
+                scopes         = EXCLUDED.scopes,
+                updated_at     = EXCLUDED.updated_at,
                 refresh_failed = 0
             """,
             (record_id, org_id, connector_id, enc_access, enc_refresh, expires_iso, scopes_json, now_iso, now_iso),
@@ -338,12 +347,13 @@ async def get_token(org_id: str, connector_id: str) -> TokenRecord:
 
     con = db.connect()
     try:
-        cur = con.execute(
+        cur = con.cursor()
+        cur.execute(
             """
             SELECT id, org_id, connector_id, access_token, refresh_token,
                    expires_at, scopes, created_at, updated_at
             FROM credentials
-            WHERE org_id = ? AND connector_id = ?
+            WHERE org_id = %s AND connector_id = %s
             """,
             (org_id, connector_id),
         )
@@ -414,8 +424,9 @@ async def revoke_token(
     access_token_for_revoke: Optional[str] = None
     con = db.connect()
     try:
-        cur = con.execute(
-            "SELECT access_token FROM credentials WHERE org_id = ? AND connector_id = ?",
+        cur = con.cursor()
+        cur.execute(
+            "SELECT access_token FROM credentials WHERE org_id = %s AND connector_id = %s",
             (org_id, connector_id),
         )
         row = cur.fetchone()
@@ -494,8 +505,9 @@ async def revoke_token(
     # --- Step 2: local deletion (always executes regardless of Step 1 outcome) ---
     con = db.connect()
     try:
-        con.execute(
-            "DELETE FROM credentials WHERE org_id = ? AND connector_id = ?",
+        cur = con.cursor()
+        cur.execute(
+            "DELETE FROM credentials WHERE org_id = %s AND connector_id = %s",
             (org_id, connector_id),
         )
         con.commit()

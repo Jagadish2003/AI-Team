@@ -26,7 +26,7 @@ from database.models.entities import Entity
 
 def _get_db_path(monkeypatch=None):
     import os
-    return os.environ["DB_PATH"]
+    return os.environ.get("DB_PATH", "")
 
 
 def _make_entity(org_id, entity_type, display_name, run_id="run-t6"):
@@ -47,20 +47,19 @@ def _make_entity(org_id, entity_type, display_name, run_id="run-t6"):
 def _persist(entity):
     import os
     row = entity.to_db_row()
-    with sqlite3.connect(os.environ["DB_PATH"]) as conn:
-        conn.execute("PRAGMA foreign_keys = OFF")
+    with sqlite3.connect(os.environ.get("DB_PATH", "")) as conn:
         conn.execute(
-            """INSERT OR IGNORE INTO entities (
+            """INSERT INTO entities (
                 id, org_id, entity_type, canonical_name, display_name,
                 source_system, source_record_id, resolution_confidence,
                 resolution_status, first_seen_run_id, last_seen_run_id,
                 run_count, metadata, created_at, updated_at
             ) VALUES (
-                :id, :org_id, :entity_type, :canonical_name, :display_name,
-                :source_system, :source_record_id, :resolution_confidence,
-                :resolution_status, :first_seen_run_id, :last_seen_run_id,
-                :run_count, :metadata, :created_at, :updated_at
-            )""",
+                %(id)s, %(org_id)s, %(entity_type)s, %(canonical_name)s, %(display_name)s,
+                %(source_system)s, %(source_record_id)s, %(resolution_confidence)s,
+                %(resolution_status)s, %(first_seen_run_id)s, %(last_seen_run_id)s,
+                %(run_count)s, %(metadata)s, %(created_at)s, %(updated_at)s
+            ) ON CONFLICT DO NOTHING""",
             row,
         )
         conn.commit()
@@ -74,12 +73,12 @@ class _DetectorResultStub:
 
 def _edges(org_id, rtype):
     import os
-    with sqlite3.connect(os.environ["DB_PATH"]) as conn:
+    with sqlite3.connect(os.environ.get("DB_PATH", "")) as conn:
         conn.row_factory = sqlite3.Row
         return [
             dict(r)
             for r in conn.execute(
-                "SELECT * FROM entity_relationships WHERE org_id = ? AND relationship_type = ?",
+                "SELECT * FROM entity_relationships WHERE org_id = %s AND relationship_type = %s",
                 (org_id, rtype),
             ).fetchall()
         ]
@@ -127,14 +126,14 @@ class TestMapRelationshipsOrchestrator:
                 FROM entity_relationships r
                 JOIN entities source ON source.id = r.from_entity_id
                 JOIN entities target ON target.id = r.to_entity_id
-                WHERE r.org_id = ? AND r.last_seen_run_id = ?
+                WHERE r.org_id = %s AND r.last_seen_run_id = %s
                 """,
                 (org, run),
             ).fetchone()
 
         assert row is not None
         assert row["relationship_type"] == "owns"
-        assert row["inferred"] == 0
+        assert row["inferred"] is False
         assert row["owner_id"] == "005OWNER"
         assert row["loan_id"] == "loan-001"
 

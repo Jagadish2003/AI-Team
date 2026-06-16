@@ -48,8 +48,7 @@ from __future__ import annotations
 
 import json
 import os
-import sqlite3
-import tempfile
+import psycopg2
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -113,21 +112,17 @@ _PARSED_CONFIRMED = {
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _db_path() -> str:
-    return os.environ["DB_PATH"]
-
-
-def _conn() -> sqlite3.Connection:
-    con = sqlite3.connect(_db_path())
-    con.row_factory = sqlite3.Row
-    return con
+def _conn():
+    # AT-288 / Fix 1: read directly from the test PostgreSQL via db.connect()
+    # (no DB_PATH). DictCursor rows support both row[0] and row["col"] access.
+    return db.connect()
 
 
 def _seed_workspace_member(org_id: str, role: str = "owner") -> None:
-    with sqlite3.connect(_db_path()) as con:
+    with db.connect() as con:
         con.execute(
-            "INSERT OR IGNORE INTO workspace_members (org_id, user_id, role, created_at) "
-            "VALUES (?, ?, ?, ?)",
+            "INSERT INTO workspace_members (org_id, user_id, role, created_at) "
+            "VALUES (%s, %s, %s, %s) ON CONFLICT DO NOTHING",
             (org_id, DEV_TOKEN, role, datetime.now(timezone.utc).isoformat()),
         )
         con.commit()
@@ -141,8 +136,10 @@ def _set_role(role: str) -> Dict[str, str]:
     con = db.connect()
     try:
         con.execute(
-            "INSERT OR REPLACE INTO workspace_members (org_id, user_id, role, created_at) "
-            "VALUES (?, ?, ?, ?)",
+            "INSERT INTO workspace_members (org_id, user_id, role, created_at) "
+            "VALUES (%s, %s, %s, %s) "
+            "ON CONFLICT (org_id, user_id) DO UPDATE SET "
+            "role=EXCLUDED.role, created_at=EXCLUDED.created_at",
             (org_id, DEV_TOKEN, role, datetime.now(timezone.utc).isoformat()),
         )
         con.commit()
@@ -185,8 +182,8 @@ def _insert_causal(
         "temporal_support", "confidence", "inferred", "falsifiability_condition",
         "preliminary", "preliminary_reason", "gate_run_count", "generated_by", "created_at",
     )
-    placeholders = ", ".join("?" for _ in cols)
-    with sqlite3.connect(_db_path()) as con:
+    placeholders = ", ".join("%s" for _ in cols)
+    with db.connect() as con:
         con.execute(
             f"INSERT INTO causal_hypotheses ({', '.join(cols)}) VALUES ({placeholders})",
             tuple(row[c] for c in cols),
@@ -226,22 +223,28 @@ def client():
 class TestCausalHypothesesSchema:
     """Verify the locked T1 DDL is applied correctly in the test DB."""
 
-    def _column_names(self) -> set[str]:
+    def _columns(self) -> list:
         con = _conn()
         try:
-            rows = con.execute("PRAGMA table_info(causal_hypotheses)").fetchall()
-            return {row["name"] for row in rows}
+            return con.execute(
+                "SELECT column_name, data_type, is_nullable "
+                "FROM information_schema.columns "
+                "WHERE table_name='causal_hypotheses' ORDER BY ordinal_position"
+            ).fetchall()
         finally:
             con.close()
+
+    def _column_names(self) -> set[str]:
+        return {row["column_name"] for row in self._columns()}
 
     def _index_names(self) -> set[str]:
         con = _conn()
         try:
             rows = con.execute(
-                "SELECT name FROM sqlite_master WHERE type='index' "
-                "AND tbl_name='causal_hypotheses'"
+                "SELECT indexname FROM pg_indexes "
+                "WHERE tablename='causal_hypotheses'"
             ).fetchall()
-            return {row["name"] for row in rows}
+            return {row["indexname"] for row in rows}
         finally:
             con.close()
 
@@ -255,20 +258,49 @@ class TestCausalHypothesesSchema:
         }
         assert expected == self._column_names()
 
+    def test_column_types_match_postgres_schema(self):
+        """Columns carry the PostgreSQL types/nullability from the locked DDL."""
+        expected = {
+            "id": ("character varying", "NO"),
+            "org_id": ("character varying", "NO"),
+            "opportunity_id": ("character varying", "NO"),
+            "run_id": ("character varying", "NO"),
+            "cause_chain": ("text", "NO"),
+            "evidence_links": ("text", "NO"),
+            "temporal_support": ("text", "YES"),
+            "confidence": ("double precision", "NO"),
+            "inferred": ("boolean", "NO"),
+            "falsifiability_condition": ("text", "NO"),
+            "preliminary": ("boolean", "NO"),
+            "preliminary_reason": ("text", "YES"),
+            "gate_run_count": ("integer", "NO"),
+            "generated_by": ("character varying", "NO"),
+            "created_at": ("timestamp without time zone", "NO"),
+        }
+        actual = {
+            row["column_name"]: (row["data_type"], row["is_nullable"])
+            for row in self._columns()
+        }
+        for col, (dtype, nullable) in expected.items():
+            assert col in actual, f"Missing column: {col}"
+            assert actual[col][0] == dtype, f"{col} type {actual[col][0]} != {dtype}"
+        # falsifiability_condition must be NOT NULL at DB level
+        assert actual["falsifiability_condition"][1] == "NO"
+
     def test_falsifiability_condition_not_null_at_db_level(self):
         """A row missing falsifiability_condition must be rejected at DB level."""
         org = f"schema-test-{uuid4().hex[:6]}"
         with pytest.raises(Exception):
-            with sqlite3.connect(_db_path()) as con:
+            with db.connect() as con:
                 con.execute(
                     "INSERT INTO causal_hypotheses "
                     "(id, org_id, opportunity_id, run_id, cause_chain, evidence_links, "
                     " confidence, inferred, preliminary, gate_run_count, generated_by, created_at) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
                     (
                         str(uuid4()), org, "opp-x", "run-x",
                         '["step"]', '[]',
-                        0.8, 0, 0, 12, "llm", "2026-01-01T00:00:00+00:00",
+                        0.8, False, False, 12, "llm", "2026-01-01T00:00:00+00:00",
                     ),
                 )
                 con.commit()
@@ -280,71 +312,70 @@ class TestCausalHypothesesSchema:
         assert "idx_ch_org_preliminary" in self._index_names()
 
     def test_migration_round_trip_downgrade_upgrade(self):
-        """0005 upgrade → downgrade to 0004 → upgrade head leaves schema intact.
+        """upgrade head → downgrade to 0004 → upgrade head round-trips cleanly.
 
-        env.py reads DB_PATH before sqlalchemy.url, so we temporarily redirect
-        DB_PATH to the isolated temp file to keep the shared test DB untouched.
+        AT-288 / Fix 1: env.py drives Alembic from DATABASE_URL, so to keep the
+        SHARED test database untouched this runs in an isolated, throwaway
+        PostgreSQL schema. DATABASE_URL is temporarily pointed at the same
+        database but with search_path set to that schema, so the migrations
+        create/drop their tables there and the public schema the rest of the
+        suite uses is never modified.
         """
         from alembic import command as alembic_command
         from alembic.config import Config as AlembicConfig
-        import gc
-        import time
 
         backend_dir = Path(__file__).resolve().parents[2]
-        tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
-        tmp.close()
+        base_url = os.environ["DATABASE_URL"]
+        schema = f"ch_rt_{uuid4().hex[:8]}"
 
-        # Save and override DB_PATH so env.py targets our temp file.
-        old_db_path = os.environ.get("DB_PATH")
-        os.environ["DB_PATH"] = tmp.name
+        def _table_in_schema() -> bool:
+            con = psycopg2.connect(base_url)
+            try:
+                cur = con.cursor()
+                cur.execute(
+                    "SELECT 1 FROM information_schema.tables "
+                    "WHERE table_schema = %s AND table_name = 'causal_hypotheses'",
+                    (schema,),
+                )
+                return cur.fetchone() is not None
+            finally:
+                con.close()
+
+        admin = psycopg2.connect(base_url)
+        admin.autocommit = True
+        with admin.cursor() as cur:
+            cur.execute(f'CREATE SCHEMA "{schema}"')
+        admin.close()
+
+        # Point Alembic at the isolated schema via libpq's PGOPTIONS env var
+        # (DATABASE_URL stays clean — embedding the option in the URL would trip
+        # ConfigParser's % interpolation in env.py).
+        old_pgoptions = os.environ.get("PGOPTIONS")
+        os.environ["PGOPTIONS"] = f"-c search_path={schema}"
         try:
             alembic_cfg = AlembicConfig(str(backend_dir / "alembic.ini"))
             alembic_cfg.set_main_option("script_location", str(backend_dir / "migrations"))
-            # Suppress the fileConfig() call in env.py — alembic.ini's [loggers]
-            # section calls fileConfig with disable_existing_loggers=True (Python
-            # default), which disables app.telemetry and other active loggers
-            # mid-suite, breaking downstream caplog assertions. The ini settings
-            # are already loaded; clearing config_file_name only skips the
-            # logging reconfiguration step.
+            # Skip env.py's fileConfig() — it would disable active loggers mid-suite.
             alembic_cfg.config_file_name = None
 
             alembic_command.upgrade(alembic_cfg, "head")
-
-            with sqlite3.connect(tmp.name) as con:
-                row = con.execute(
-                    "SELECT name FROM sqlite_master WHERE type='table' AND name='causal_hypotheses'"
-                ).fetchone()
-            assert row is not None, "causal_hypotheses table missing after upgrade"
+            assert _table_in_schema(), "causal_hypotheses table missing after upgrade"
 
             alembic_command.downgrade(alembic_cfg, "0004")
-
-            with sqlite3.connect(tmp.name) as con:
-                row = con.execute(
-                    "SELECT name FROM sqlite_master WHERE type='table' AND name='causal_hypotheses'"
-                ).fetchone()
-            assert row is None, "causal_hypotheses table still present after downgrade"
+            assert not _table_in_schema(), "causal_hypotheses still present after downgrade"
 
             alembic_command.upgrade(alembic_cfg, "head")
-
-            with sqlite3.connect(tmp.name) as con:
-                row = con.execute(
-                    "SELECT name FROM sqlite_master WHERE type='table' AND name='causal_hypotheses'"
-                ).fetchone()
-            assert row is not None, "causal_hypotheses table missing after re-upgrade"
+            assert _table_in_schema(), "causal_hypotheses table missing after re-upgrade"
         finally:
-            # Restore the original DB_PATH used by the rest of the suite.
-            if old_db_path is not None:
-                os.environ["DB_PATH"] = old_db_path
+            if old_pgoptions is None:
+                os.environ.pop("PGOPTIONS", None)
             else:
-                os.environ.pop("DB_PATH", None)
-            # SQLAlchemy NullPool should release immediately; retry once on Windows.
-            gc.collect()
-            for _ in range(5):
-                try:
-                    os.remove(tmp.name)
-                    break
-                except (PermissionError, OSError):
-                    time.sleep(0.15)
+                os.environ["PGOPTIONS"] = old_pgoptions
+            admin = psycopg2.connect(base_url)
+            admin.autocommit = True
+            with admin.cursor() as cur:
+                cur.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+            admin.close()
 
 
 # ===========================================================================
@@ -524,7 +555,7 @@ class TestParseCausalOutput:
         try:
             rows = con.execute(
                 "SELECT payload FROM telemetry_events "
-                "WHERE event_type='causal.hypothesis_rejected' AND run_id=?",
+                "WHERE event_type='causal.hypothesis_rejected' AND run_id=%s",
                 (self._RUN,),
             ).fetchall()
         finally:

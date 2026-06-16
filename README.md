@@ -53,12 +53,13 @@ npm install
 
 > **Note:** These server key files are not included in the repository. Ask the AgentIQ team for the server keys for `token_generation/salesforce`, `token_generation/ncino`, and `token_generation/strs`, then place them in their respective folders before proceeding.
 
-5. Generate the local database by running the following command from the `AgentIQ/backend` directory:
+5. Provision the database by running the following command from the `AgentIQ/backend` directory:
 ```shell
-python database/seed_loader.py
-alembic upgrade head
+./database/provision/provision.sh
 ```
-> This creates the `dev.db` file required by the backend. You only need to run this once after cloning.
+> This creates the full schema (Alembic migrations + core `{id,payload}` tables + lazy-only tables) and seeds the core reference data in one step. It reads `DATABASE_URL` from `backend/.env`. You only need to run this once after cloning; it is idempotent and safe to re-run.
+>
+> **Note:** This assumes the target PostgreSQL role and `agentiq` database already exist. On a brand-new server, first create the database as a superuser (`CREATE DATABASE agentiq;`) and ensure the connection role exists. The pure-SQL path (`01_schema.sql`) creates the `agentiq` role for you. See `database/provision/README.md` for details.
 
 ---
 

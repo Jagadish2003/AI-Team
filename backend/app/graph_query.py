@@ -38,10 +38,9 @@ building blocks so callers (and Stage 3 analysis) can always reach either set.
 from __future__ import annotations
 
 import logging
-import sqlite3
 import time
 from collections import deque
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel
 
@@ -83,20 +82,20 @@ _SELECT_EDGES = """
         et.display_name      AS to_entity_name,
         et.entity_type       AS to_entity_type
     FROM entity_relationships er
-    JOIN runs queried_run ON queried_run.id = ?
+    JOIN runs queried_run ON queried_run.id = %s
     JOIN runs first_seen_run ON first_seen_run.id = er.first_seen_run_id
     JOIN entities ef ON ef.id = er.from_entity_id AND ef.org_id = er.org_id
     JOIN entities et ON et.id = er.to_entity_id   AND et.org_id = er.org_id
-    WHERE er.org_id = ?
+    WHERE er.org_id = %s
       AND COALESCE(
-            json_extract(queried_run.payload, '$.org_id'),
-            json_extract(queried_run.payload, '$.orgId')
+            (queried_run.payload::json ->> 'org_id'),
+            (queried_run.payload::json ->> 'orgId')
           ) = er.org_id
       AND COALESCE(
-            json_extract(first_seen_run.payload, '$.org_id'),
-            json_extract(first_seen_run.payload, '$.orgId')
+            (first_seen_run.payload::json ->> 'org_id'),
+            (first_seen_run.payload::json ->> 'orgId')
           ) = er.org_id
-      AND first_seen_run.rowid <= queried_run.rowid
+      AND first_seen_run.seq <= queried_run.seq
       {inferred_filter}
     ORDER BY er.inferred ASC, er.relationship_type ASC,
              ef.display_name ASC, et.display_name ASC
@@ -105,13 +104,14 @@ _SELECT_EDGES = """
 
 def _query(org_id: str, run_id: str, observed_only: bool) -> List[RelationshipSummary]:
     """Run the edge query for a run, optionally filtering to observed edges."""
-    inferred_filter = "AND er.inferred = 0" if observed_only else ""
+    inferred_filter = "AND er.inferred = FALSE" if observed_only else ""
     sql = _SELECT_EDGES.format(inferred_filter=inferred_filter)
 
     conn = db.connect()
     try:
-        conn.row_factory = sqlite3.Row
-        rows = conn.execute(sql, (run_id, org_id)).fetchall()
+        cur = conn.cursor()
+        cur.execute(sql, (run_id, org_id))
+        rows = cur.fetchall()
     finally:
         conn.close()
 
@@ -177,14 +177,14 @@ _SELECT_CURRENT_RUN_EDGES = """
         et.entity_type       AS to_entity_type,
         et.source_record_id  AS to_source_record_id
     FROM entity_relationships er
-    JOIN runs queried_run ON queried_run.id = ?
+    JOIN runs queried_run ON queried_run.id = %s
     JOIN entities ef ON ef.id = er.from_entity_id AND ef.org_id = er.org_id
     JOIN entities et ON et.id = er.to_entity_id   AND et.org_id = er.org_id
-    WHERE er.org_id = ?
-      AND er.last_seen_run_id = ?
+    WHERE er.org_id = %s
+      AND er.last_seen_run_id = %s
       AND COALESCE(
-            json_extract(queried_run.payload, '$.org_id'),
-            json_extract(queried_run.payload, '$.orgId')
+            (queried_run.payload::json ->> 'org_id'),
+            (queried_run.payload::json ->> 'orgId')
           ) = er.org_id
       {inferred_filter}
     ORDER BY er.inferred ASC, er.relationship_type ASC,
@@ -203,13 +203,14 @@ def select_relationships_for_opportunity(
     Opportunity Review should only show edges confirmed in this run. Inferred
     process edges are also restricted to the opportunity detector when known.
     """
-    inferred_filter = "" if inferred_relationships_enabled() else "AND er.inferred = 0"
+    inferred_filter = "" if inferred_relationships_enabled() else "AND er.inferred = FALSE"
     sql = _SELECT_CURRENT_RUN_EDGES.format(inferred_filter=inferred_filter)
 
     conn = db.connect()
     try:
-        conn.row_factory = sqlite3.Row
-        rows = conn.execute(sql, (run_id, org_id, run_id)).fetchall()
+        cur = conn.cursor()
+        cur.execute(sql, (run_id, org_id, run_id))
+        rows = cur.fetchall()
     finally:
         conn.close()
 
@@ -267,8 +268,8 @@ _SELECT_ENTITY_EDGES = """
     FROM entity_relationships er
     JOIN entities ef ON ef.id = er.from_entity_id AND ef.org_id = er.org_id
     JOIN entities et ON et.id = er.to_entity_id   AND et.org_id = er.org_id
-    WHERE er.org_id = ?
-      AND (er.from_entity_id = ? OR er.to_entity_id = ?)
+    WHERE er.org_id = %s
+      AND (er.from_entity_id = %s OR er.to_entity_id = %s)
       {inferred_filter}
     ORDER BY er.inferred ASC, er.relationship_type ASC,
              ef.display_name ASC, et.display_name ASC
@@ -299,13 +300,14 @@ def get_entity_relationships(
     Cross-org isolation: the entity JOIN is scoped by org_id on both sides,
     so an entity_id that happens to exist in another org cannot produce a match.
     """
-    inferred_filter = "" if inferred else "AND er.inferred = 0"
+    inferred_filter = "" if inferred else "AND er.inferred = FALSE"
     sql = _SELECT_ENTITY_EDGES.format(inferred_filter=inferred_filter)
 
     conn = db.connect()
     try:
-        conn.row_factory = sqlite3.Row
-        rows = conn.execute(sql, (org_id, entity_id, entity_id)).fetchall()
+        cur = conn.cursor()
+        cur.execute(sql, (org_id, entity_id, entity_id))
+        rows = cur.fetchall()
     finally:
         conn.close()
 
@@ -442,7 +444,7 @@ def _deadline_exceeded(start: float, timeout_s: float = QUERY_TIMEOUT_SECONDS) -
 _SELECT_SEED_ENTITIES = """
     SELECT id, entity_type, display_name, resolution_confidence, run_count
     FROM entities
-    WHERE org_id = ?
+    WHERE org_id = %s
       AND resolution_status = 'resolved'
       AND id IN ({placeholders})
 """
@@ -452,7 +454,7 @@ _SELECT_SEED_ENTITIES = """
 _SELECT_ONE_RESOLVED_ENTITY = """
     SELECT id, entity_type, display_name, resolution_confidence, run_count
     FROM entities
-    WHERE org_id = ? AND id = ? AND resolution_status = 'resolved'
+    WHERE org_id = %s AND id = %s AND resolution_status = 'resolved'
 """
 
 # Outgoing resolved neighbours of a single entity (one hop, directed
@@ -473,8 +475,8 @@ _SELECT_NEIGHBOURS = """
       ON e.id = er.to_entity_id
      AND e.org_id = er.org_id
      AND e.resolution_status = 'resolved'
-    WHERE er.org_id = ?
-      AND er.from_entity_id = ?
+    WHERE er.org_id = %s
+      AND er.from_entity_id = %s
       {inferred_filter}
     ORDER BY e.run_count DESC, e.resolution_confidence DESC,
              e.display_name ASC, e.id ASC
@@ -482,15 +484,17 @@ _SELECT_NEIGHBOURS = """
 
 
 def _fetch_seed_nodes(
-    conn: sqlite3.Connection, org_id: str, seed_entity_ids: List[str]
+    conn: Any, org_id: str, seed_entity_ids: List[str]
 ) -> List[GraphEntityNode]:
     """Return resolved, org-scoped seed entities as depth-0 nodes."""
     ids = [s for s in dict.fromkeys(seed_entity_ids) if s]  # de-dup, drop falsy
     if not ids:
         return []
-    placeholders = ",".join("?" for _ in ids)
+    placeholders = ",".join("%s" for _ in ids)
     sql = _SELECT_SEED_ENTITIES.format(placeholders=placeholders)
-    rows = conn.execute(sql, (org_id, *ids)).fetchall()
+    cur = conn.cursor()
+    cur.execute(sql, (org_id, *ids))
+    rows = cur.fetchall()
     return [
         GraphEntityNode(
             entity_id=row["id"],
@@ -511,24 +515,28 @@ def entity_exists(org_id: str, entity_id: str) -> bool:
     """Return True when the entity belongs to org_id and is resolved."""
     conn = db.connect()
     try:
-        row = conn.execute(
+        cur = conn.cursor()
+        cur.execute(
             _SELECT_ONE_RESOLVED_ENTITY,
             (org_id, entity_id),
-        ).fetchone()
+        )
+        row = cur.fetchone()
     finally:
         conn.close()
     return row is not None
 
 
 def _fetch_neighbours(
-    conn: sqlite3.Connection,
+    conn: Any,
     org_id: str,
     entity_id: str,
     include_inferred: bool,
-) -> List[sqlite3.Row]:
-    inferred_filter = "" if include_inferred else "AND er.inferred = 0"
+) -> List[Any]:
+    inferred_filter = "" if include_inferred else "AND er.inferred = FALSE"
     sql = _SELECT_NEIGHBOURS.format(inferred_filter=inferred_filter)
-    return conn.execute(sql, (org_id, entity_id)).fetchall()
+    cur = conn.cursor()
+    cur.execute(sql, (org_id, entity_id))
+    return cur.fetchall()
 
 
 def _bfs_neighbourhood(
@@ -550,8 +558,6 @@ def _bfs_neighbourhood(
 
     conn = db.connect()
     try:
-        conn.row_factory = sqlite3.Row
-
         seeds = _fetch_seed_nodes(conn, org_id, seed_entity_ids)
         results: List[GraphEntityNode] = []
         visited: set[str] = set()
@@ -686,14 +692,11 @@ def entity_path(
 
     conn = db.connect()
     try:
-        conn.row_factory = sqlite3.Row
-
-        src_rows = conn.execute(
-            _SELECT_ONE_RESOLVED_ENTITY, (org_id, from_entity_id)
-        ).fetchall()
-        dst_rows = conn.execute(
-            _SELECT_ONE_RESOLVED_ENTITY, (org_id, to_entity_id)
-        ).fetchall()
+        cur = conn.cursor()
+        cur.execute(_SELECT_ONE_RESOLVED_ENTITY, (org_id, from_entity_id))
+        src_rows = cur.fetchall()
+        cur.execute(_SELECT_ONE_RESOLVED_ENTITY, (org_id, to_entity_id))
+        dst_rows = cur.fetchall()
         if not src_rows or not dst_rows:
             return []  # an endpoint is missing, cross-org, or unresolved
 
@@ -799,8 +802,8 @@ _SELECT_EDGES_BY_TYPE = """
     FROM entity_relationships er
     JOIN entities ef ON ef.id = er.from_entity_id AND ef.org_id = er.org_id
     JOIN entities et ON et.id = er.to_entity_id   AND et.org_id = er.org_id
-    WHERE er.org_id = ?
-      AND er.relationship_type = ?
+    WHERE er.org_id = %s
+      AND er.relationship_type = %s
       AND ef.resolution_status = 'resolved'
       AND et.resolution_status = 'resolved'
       {inferred_filter}
@@ -822,13 +825,14 @@ def relationship_type_filter(
     Deterministically ordered: confidence DESC, observed-before-inferred, then
     endpoint names.
     """
-    inferred_filter = "" if include_inferred else "AND er.inferred = 0"
+    inferred_filter = "" if include_inferred else "AND er.inferred = FALSE"
     sql = _SELECT_EDGES_BY_TYPE.format(inferred_filter=inferred_filter)
 
     conn = db.connect()
     try:
-        conn.row_factory = sqlite3.Row
-        rows = conn.execute(sql, (org_id, relationship_type)).fetchall()
+        cur = conn.cursor()
+        cur.execute(sql, (org_id, relationship_type))
+        rows = cur.fetchall()
     finally:
         conn.close()
 
@@ -850,43 +854,46 @@ def org_graph_summary(org_id: str) -> Dict[str, object]:
     """Return org-scoped graph health counts for POC readiness checks."""
     conn = db.connect()
     try:
-        conn.row_factory = sqlite3.Row
-        entity_counts = conn.execute(
+        cur = conn.cursor()
+        cur.execute(
             """
             SELECT entity_type, COUNT(*) AS count
             FROM entities
-            WHERE org_id = ?
+            WHERE org_id = %s
               AND resolution_status = 'resolved'
             GROUP BY entity_type
             ORDER BY entity_type
             """,
             (org_id,),
-        ).fetchall()
-        relationship_counts = conn.execute(
+        )
+        entity_counts = cur.fetchall()
+        cur.execute(
             """
             SELECT relationship_type, COUNT(*) AS count
             FROM entity_relationships
-            WHERE org_id = ?
+            WHERE org_id = %s
             GROUP BY relationship_type
             ORDER BY relationship_type
             """,
             (org_id,),
-        ).fetchall()
-        top_entities = conn.execute(
+        )
+        relationship_counts = cur.fetchall()
+        cur.execute(
             """
             SELECT e.id, e.display_name, e.entity_type, COUNT(er.id) AS edge_count
             FROM entities e
             LEFT JOIN entity_relationships er
               ON er.org_id = e.org_id
              AND (er.from_entity_id = e.id OR er.to_entity_id = e.id)
-            WHERE e.org_id = ?
+            WHERE e.org_id = %s
               AND e.resolution_status = 'resolved'
             GROUP BY e.id, e.display_name, e.entity_type
             ORDER BY edge_count DESC, e.display_name ASC
             LIMIT 10
             """,
             (org_id,),
-        ).fetchall()
+        )
+        top_entities = cur.fetchall()
     finally:
         conn.close()
 

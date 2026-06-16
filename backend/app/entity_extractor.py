@@ -180,11 +180,13 @@ def _record_entity_source(entity: Entity, source_system: Optional[str]) -> None:
         conn = db.connect()
         try:
             # Serialize the metadata read/merge/write so concurrent runs do not
-            # lose a source_system addition for the same entity row.
-            conn.execute("BEGIN IMMEDIATE")
-            row = conn.execute(
-                "SELECT metadata FROM entities WHERE id = ?", (str(entity.id),)
-            ).fetchone()
+            # lose a source_system addition for the same entity row. Lock the row
+            # FOR UPDATE within the implicit transaction psycopg2 opens.
+            cur = conn.cursor()
+            cur.execute(
+                "SELECT metadata FROM entities WHERE id = %s FOR UPDATE", (str(entity.id),)
+            )
+            row = cur.fetchone()
             if row is None:
                 conn.commit()
                 return
@@ -198,8 +200,8 @@ def _record_entity_source(entity: Entity, source_system: Optional[str]) -> None:
             if source_system not in sources:
                 sources.append(source_system)
             meta["sources"] = sources
-            conn.execute(
-                "UPDATE entities SET metadata = ?, updated_at = ? WHERE id = ?",
+            cur.execute(
+                "UPDATE entities SET metadata = %s, updated_at = %s WHERE id = %s",
                 (json.dumps(meta), datetime.now(timezone.utc).isoformat(), str(entity.id)),
             )
             conn.commit()

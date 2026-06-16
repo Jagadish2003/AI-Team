@@ -118,7 +118,7 @@ def _insert_signal_snapshots(snapshots: list[SignalSnapshot]) -> int:
         "baseline_window_days",
         "baseline_calculated_at",
     ]
-    placeholders = ", ".join("?" for _ in columns)
+    placeholders = ", ".join("%s" for _ in columns)
     sql = f"""
         INSERT INTO signal_snapshots ({", ".join(columns)})
         VALUES ({placeholders})
@@ -183,13 +183,13 @@ def ensure_signal_snapshots_table() -> None:
                 detector_id          VARCHAR(128) NOT NULL,
                 signal_key           VARCHAR(256) NOT NULL,
                 metric_name          VARCHAR(128) NOT NULL,
-                metric_value         DOUBLE       NOT NULL,
-                threshold            DOUBLE,
+                metric_value         DOUBLE PRECISION NOT NULL,
+                threshold            DOUBLE PRECISION,
                 fired                BOOLEAN      NOT NULL,
                 signal_source        VARCHAR(64)  NOT NULL,
                 captured_at          TIMESTAMP    NOT NULL,
-                baseline_mean        DOUBLE,
-                baseline_stddev      DOUBLE,
+                baseline_mean        DOUBLE PRECISION,
+                baseline_stddev      DOUBLE PRECISION,
                 baseline_window_days INTEGER,
                 baseline_calculated_at TIMESTAMP
             )
@@ -300,10 +300,10 @@ def get_signal_history(
 ) -> List[Dict[str, Any]]:
     signal_filter = (signal_key or "").strip() or PRIMARY_METRIC_NAME
     if "::" in signal_filter:
-        signal_clause = "signal_key = ?"
+        signal_clause = "signal_key = %s"
         signal_value = signal_filter
     else:
-        signal_clause = "metric_name = ?"
+        signal_clause = "metric_name = %s"
         signal_value = signal_filter
 
     con = connect()
@@ -312,9 +312,9 @@ def get_signal_history(
         cur.execute(
             _signal_snapshot_select()
             + f"""
-            WHERE org_id = ? AND detector_id = ? AND {signal_clause}
+            WHERE org_id = %s AND detector_id = %s AND {signal_clause}
             ORDER BY captured_at DESC
-            LIMIT ?
+            LIMIT %s
             """,
             (org_id, detector_id, signal_value, limit),
         )
@@ -347,7 +347,7 @@ def get_baseline(
                       AND counted.signal_key = signal_snapshots.signal_key
                 ) AS run_count
             FROM signal_snapshots
-            WHERE org_id = ? AND detector_id = ? AND metric_name = ?
+            WHERE org_id = %s AND detector_id = %s AND metric_name = %s
             ORDER BY captured_at DESC
             LIMIT 1
             """,
@@ -375,7 +375,7 @@ def get_run_signals(
         cur.execute(
             _signal_snapshot_select()
             + """
-            WHERE org_id = ? AND run_id = ?
+            WHERE org_id = %s AND run_id = %s
             ORDER BY captured_at DESC
             """,
             (org_id, run_id),

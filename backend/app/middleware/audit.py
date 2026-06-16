@@ -102,9 +102,10 @@ def _ensure_table() -> None:
         return
     con = db.connect()
     try:
-        con.execute(CREATE_AUDIT_LOG_TABLE)
-        con.execute(CREATE_AUDIT_LOG_IDX_ORG_TS)
-        con.execute(CREATE_AUDIT_LOG_IDX_ORG_EVENT)
+        cur = con.cursor()
+        cur.execute(CREATE_AUDIT_LOG_TABLE)
+        cur.execute(CREATE_AUDIT_LOG_IDX_ORG_TS)
+        cur.execute(CREATE_AUDIT_LOG_IDX_ORG_EVENT)
         con.commit()
         _TABLES_INITIALISED = True
     except Exception as exc:  # pragma: no cover
@@ -128,11 +129,12 @@ def log_event(event_type: str, **kwargs: Any) -> None:
 
         con = db.connect()
         try:
-            con.execute(
+            cur = con.cursor()
+            cur.execute(
                 """
                 INSERT INTO audit_log
                     (id, org_id, event_type, user_id, run_id, connector_id, payload, timestamp)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
                 """,
                 (
                     record_id,

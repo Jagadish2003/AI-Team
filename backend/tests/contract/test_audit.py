@@ -8,13 +8,12 @@ AC9: Audit failure does not propagate — primary operation continues.
 from __future__ import annotations
 
 import json
-import os
-import sqlite3
-import tempfile
-from pathlib import Path
+import uuid
 from unittest.mock import patch
 
 import pytest
+
+from app import db
 
 
 # ---------------------------------------------------------------------------
@@ -22,12 +21,19 @@ import pytest
 # ---------------------------------------------------------------------------
 
 
-def _read_audit_rows(db_path: str, org_id: str = "default") -> list[dict]:
-    con = sqlite3.connect(db_path)
+def _new_org_id() -> str:
+    """A unique org_id so each test sees only its own audit rows in the shared
+    PostgreSQL audit_log table (AT-288 / Fix 1 — replaces per-test SQLite files)."""
+    return f"audit-{uuid.uuid4().hex[:12]}"
+
+
+def _read_audit_rows(org_id: str) -> list[dict]:
+    con = db.connect()
     try:
-        cur = con.execute(
+        cur = con.cursor()
+        cur.execute(
             "SELECT id, org_id, event_type, user_id, run_id, connector_id, payload, timestamp "
-            "FROM audit_log WHERE org_id = ? ORDER BY timestamp DESC",
+            "FROM audit_log WHERE org_id = %s ORDER BY timestamp DESC",
             (org_id,),
         )
         rows = cur.fetchall()
@@ -93,38 +99,22 @@ def _read_audit_rows(db_path: str, org_id: str = "default") -> list[dict]:
 ])
 def test_log_event_writes_correct_record(event_type, kwargs, expected_payload_keys):
     """log_event inserts a row with all required top-level and payload fields (AC3)."""
-    import app.db as db_mod
-    import app.middleware.audit as audit_mod
+    from app.middleware.audit import log_event
 
-    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
-        db_path = f.name
+    org_id = _new_org_id()
+    log_event(event_type, org_id=org_id, **kwargs)
 
-    original_db_path = db_mod.DB_PATH
-    db_mod.DB_PATH = Path(db_path)
-    audit_mod._TABLES_INITIALISED = False
+    rows = _read_audit_rows(org_id)
+    assert len(rows) == 1, f"Expected 1 row, got {len(rows)}"
+    row = rows[0]
+    assert row["event_type"] == event_type
+    assert row["org_id"] == org_id
+    assert row["timestamp"]
 
-    try:
-        from app.middleware.audit import log_event
-        log_event(event_type, **kwargs)
-
-        rows = _read_audit_rows(db_path)
-        assert len(rows) == 1, f"Expected 1 row, got {len(rows)}"
-        row = rows[0]
-        assert row["event_type"] == event_type
-        assert row["org_id"] == "default"
-        assert row["timestamp"]
-
-        if expected_payload_keys:
-            assert row["payload"] is not None
-            for key in expected_payload_keys:
-                assert key in row["payload"], f"Missing payload key: {key}"
-    finally:
-        db_mod.DB_PATH = original_db_path
-        audit_mod._TABLES_INITIALISED = False
-        try:
-            os.unlink(db_path)
-        except OSError:
-            pass  # Windows may still hold a handle; temp dir cleanup handles it
+    if expected_payload_keys:
+        assert row["payload"] is not None
+        for key in expected_payload_keys:
+            assert key in row["payload"], f"Missing payload key: {key}"
 
 
 # ---------------------------------------------------------------------------
@@ -206,41 +196,25 @@ def test_primary_operation_continues_after_audit_failure(client):
 
 def test_run_started_includes_user_id():
     """run_started log_event must include user_id (AC3)."""
-    import app.db as db_mod
-    import app.middleware.audit as audit_mod
-    from pathlib import Path
+    from app.middleware.audit import log_event
 
-    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
-        db_path = f.name
-
-    original = db_mod.DB_PATH
-    db_mod.DB_PATH = Path(db_path)
-    audit_mod._TABLES_INITIALISED = False
-
-    try:
-        from app.middleware.audit import log_event
-        log_event(
-            "run_started",
-            run_id="run_test_001",
-            user_id="dev-token-change-me",
-            pack_id="service_cloud",
-            system_ids=["salesforce", "servicenow"],
-        )
-        rows = _read_audit_rows(db_path)
-        assert len(rows) == 1
-        row = rows[0]
-        assert row["event_type"] == "run_started"
-        assert row["user_id"] == "dev-token-change-me", "user_id must be stored in audit record"
-        assert row["run_id"] == "run_test_001"
-        assert row["payload"]["pack_id"] == "service_cloud"
-        assert row["payload"]["system_ids"] == ["salesforce", "servicenow"]
-    finally:
-        db_mod.DB_PATH = original
-        audit_mod._TABLES_INITIALISED = False
-        try:
-            os.unlink(db_path)
-        except OSError:
-            pass
+    org_id = _new_org_id()
+    log_event(
+        "run_started",
+        org_id=org_id,
+        run_id="run_test_001",
+        user_id="dev-token-change-me",
+        pack_id="service_cloud",
+        system_ids=["salesforce", "servicenow"],
+    )
+    rows = _read_audit_rows(org_id)
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["event_type"] == "run_started"
+    assert row["user_id"] == "dev-token-change-me", "user_id must be stored in audit record"
+    assert row["run_id"] == "run_test_001"
+    assert row["payload"]["pack_id"] == "service_cloud"
+    assert row["payload"]["system_ids"] == ["salesforce", "servicenow"]
 
 
 # ---------------------------------------------------------------------------
@@ -250,37 +224,21 @@ def test_run_started_includes_user_id():
 
 def test_connector_connected_includes_user_id_and_scopes():
     """connector_connected log_event must include user_id and scopes_granted (AC4)."""
-    import app.db as db_mod
-    import app.middleware.audit as audit_mod
-    from pathlib import Path
+    from app.middleware.audit import log_event
 
-    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
-        db_path = f.name
-
-    original = db_mod.DB_PATH
-    db_mod.DB_PATH = Path(db_path)
-    audit_mod._TABLES_INITIALISED = False
-
-    try:
-        from app.middleware.audit import log_event
-        log_event(
-            "connector_connected",
-            connector_id="salesforce",
-            user_id="dev-token-change-me",
-            scopes_granted=["api", "refresh_token"],
-        )
-        rows = _read_audit_rows(db_path)
-        assert len(rows) == 1
-        row = rows[0]
-        assert row["event_type"] == "connector_connected"
-        assert row["connector_id"] == "salesforce"
-        assert row["user_id"] == "dev-token-change-me", "user_id must be stored in audit record"
-        assert row["payload"]["scopes_granted"] == ["api", "refresh_token"]
-    finally:
-        db_mod.DB_PATH = original
-        audit_mod._TABLES_INITIALISED = False
-        try:
-            os.unlink(db_path)
-        except OSError:
-            pass
+    org_id = _new_org_id()
+    log_event(
+        "connector_connected",
+        org_id=org_id,
+        connector_id="salesforce",
+        user_id="dev-token-change-me",
+        scopes_granted=["api", "refresh_token"],
+    )
+    rows = _read_audit_rows(org_id)
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["event_type"] == "connector_connected"
+    assert row["connector_id"] == "salesforce"
+    assert row["user_id"] == "dev-token-change-me", "user_id must be stored in audit record"
+    assert row["payload"]["scopes_granted"] == ["api", "refresh_token"]
  

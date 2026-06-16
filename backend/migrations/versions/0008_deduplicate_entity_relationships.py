@@ -20,51 +20,58 @@ def upgrade() -> None:
     # each exact edge before adding the database-level uniqueness guarantee.
     # Preserve the strongest count and the most recently inserted duplicate's
     # last-seen/evidence values on the oldest surviving row.
+    #
+    # PostgreSQL port (AT-288 / Fix 1): SQLite's implicit ``rowid`` has no
+    # PostgreSQL equivalent. The surviving (oldest) row per natural key is chosen
+    # by ``(created_at, id)`` ascending; "most recent duplicate" is the same key
+    # descending. ``array_agg(... ORDER BY ...)[1]`` takes the latest value, and
+    # MAX(run_count) the strongest count — all computed over every duplicate
+    # BEFORE the delete step removes them.
     op.execute(
         """
-        UPDATE entity_relationships
-        SET run_count = (
-                SELECT MAX(duplicate.run_count)
-                FROM entity_relationships AS duplicate
-                WHERE duplicate.org_id = entity_relationships.org_id
-                  AND duplicate.from_entity_id = entity_relationships.from_entity_id
-                  AND duplicate.to_entity_id = entity_relationships.to_entity_id
-                  AND duplicate.relationship_type = entity_relationships.relationship_type
-            ),
-            last_seen_run_id = (
-                SELECT duplicate.last_seen_run_id
-                FROM entity_relationships AS duplicate
-                WHERE duplicate.org_id = entity_relationships.org_id
-                  AND duplicate.from_entity_id = entity_relationships.from_entity_id
-                  AND duplicate.to_entity_id = entity_relationships.to_entity_id
-                  AND duplicate.relationship_type = entity_relationships.relationship_type
-                ORDER BY duplicate.rowid DESC
-                LIMIT 1
-            ),
-            evidence = (
-                SELECT duplicate.evidence
-                FROM entity_relationships AS duplicate
-                WHERE duplicate.org_id = entity_relationships.org_id
-                  AND duplicate.from_entity_id = entity_relationships.from_entity_id
-                  AND duplicate.to_entity_id = entity_relationships.to_entity_id
-                  AND duplicate.relationship_type = entity_relationships.relationship_type
-                ORDER BY duplicate.rowid DESC
-                LIMIT 1
-            )
-        WHERE rowid IN (
-            SELECT MIN(rowid)
+        UPDATE entity_relationships er
+        SET run_count        = agg.max_run_count,
+            last_seen_run_id = agg.latest_last_seen_run_id,
+            evidence         = agg.latest_evidence
+        FROM (
+            SELECT
+                org_id, from_entity_id, to_entity_id, relationship_type,
+                MAX(run_count) AS max_run_count,
+                (array_agg(last_seen_run_id ORDER BY created_at DESC, id DESC))[1]
+                    AS latest_last_seen_run_id,
+                (array_agg(evidence ORDER BY created_at DESC, id DESC))[1]
+                    AS latest_evidence
             FROM entity_relationships
             GROUP BY org_id, from_entity_id, to_entity_id, relationship_type
-        )
+        ) AS agg
+        WHERE er.org_id = agg.org_id
+          AND er.from_entity_id = agg.from_entity_id
+          AND er.to_entity_id = agg.to_entity_id
+          AND er.relationship_type = agg.relationship_type
+          AND er.id = (
+              SELECT survivor.id
+              FROM entity_relationships AS survivor
+              WHERE survivor.org_id = er.org_id
+                AND survivor.from_entity_id = er.from_entity_id
+                AND survivor.to_entity_id = er.to_entity_id
+                AND survivor.relationship_type = er.relationship_type
+              ORDER BY survivor.created_at ASC, survivor.id ASC
+              LIMIT 1
+          )
         """
     )
     op.execute(
         """
-        DELETE FROM entity_relationships
-        WHERE rowid NOT IN (
-            SELECT MIN(rowid)
-            FROM entity_relationships
-            GROUP BY org_id, from_entity_id, to_entity_id, relationship_type
+        DELETE FROM entity_relationships er
+        WHERE er.id <> (
+            SELECT survivor.id
+            FROM entity_relationships AS survivor
+            WHERE survivor.org_id = er.org_id
+              AND survivor.from_entity_id = er.from_entity_id
+              AND survivor.to_entity_id = er.to_entity_id
+              AND survivor.relationship_type = er.relationship_type
+            ORDER BY survivor.created_at ASC, survivor.id ASC
+            LIMIT 1
         )
         """
     )

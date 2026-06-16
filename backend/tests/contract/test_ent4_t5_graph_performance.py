@@ -70,8 +70,6 @@ def _build_large_graph(db_path: str) -> List[str]:
     in all tests).
     """
     conn = sqlite3.connect(db_path)
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA synchronous=NORMAL")
 
     for ddl in ALL_ENTITIES_DDL + ALL_ENTITY_RELATIONSHIPS_DDL:
         conn.execute(ddl)
@@ -88,7 +86,7 @@ def _build_large_graph(db_path: str) -> List[str]:
             source_system, resolution_confidence, resolution_status,
             first_seen_run_id, last_seen_run_id, run_count,
             created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         """,
         [
             (
@@ -126,7 +124,7 @@ def _build_large_graph(db_path: str) -> List[str]:
                     entity_ids[j],
                     _REL_TYPES[i % len(_REL_TYPES)],
                     0.9,
-                    0,  # inferred=False (observed)
+                    False,  # inferred=False (observed)
                     _RUN_ID,
                     _RUN_ID,
                     1,
@@ -140,7 +138,7 @@ def _build_large_graph(db_path: str) -> List[str]:
             id, org_id, from_entity_id, to_entity_id,
             relationship_type, confidence, inferred,
             first_seen_run_id, last_seen_run_id, run_count, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         """,
         rel_rows,
     )
@@ -156,19 +154,15 @@ def _build_large_graph(db_path: str) -> List[str]:
 
 
 @pytest.fixture()
-def large_graph(tmp_path, monkeypatch):
-    """Build the 500-entity graph in a temp DB; patch db.DB_PATH for the test.
+def large_graph(tmp_path):
+    """Build the 500-entity graph in the test PostgreSQL database.
 
-    ``app.db.DB_PATH`` is captured at module-import time from ``os.environ``,
-    so ``monkeypatch.setenv`` alone is too late.  We also patch the module
-    attribute directly so ``db.connect()`` opens the perf DB for this test.
+    AT-288 / Fix 1: the perf graph is built in the shared test database (the
+    conftest routes sqlite3.connect() to PostgreSQL and the path is ignored), so
+    db.connect() in the queries under test reads the same rows. The org-scoped
+    seed data does not leak into other tests' org queries.
     """
-    from pathlib import Path
-    import app.db as _db
-
-    db_path = str(tmp_path / "perf_graph.db")
-    seed_ids = _build_large_graph(db_path)
-    monkeypatch.setattr(_db, "DB_PATH", Path(db_path))
+    seed_ids = _build_large_graph(str(tmp_path / "perf_graph.db"))
     return seed_ids
 
 

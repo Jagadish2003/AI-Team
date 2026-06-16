@@ -28,7 +28,6 @@ from __future__ import annotations
 
 import logging
 import re
-import sqlite3
 from collections import deque
 from dataclasses import dataclass, field
 from typing import Any, Optional
@@ -142,8 +141,8 @@ _EDGES_WITH_IDS_SQL = """
     FROM entity_relationships er
     JOIN entities ef ON ef.id = er.from_entity_id AND ef.org_id = er.org_id
     JOIN entities et ON et.id = er.to_entity_id   AND et.org_id = er.org_id
-    WHERE er.org_id = ?
-      AND (er.from_entity_id = ? OR er.to_entity_id = ?)
+    WHERE er.org_id = %s
+      AND (er.from_entity_id = %s OR er.to_entity_id = %s)
 """
 
 
@@ -152,8 +151,9 @@ def _raw_edges_for_entity(org_id: str, entity_id: str) -> list[dict[str, Any]]:
 
     conn = db.connect()
     try:
-        conn.row_factory = sqlite3.Row
-        rows = conn.execute(_EDGES_WITH_IDS_SQL, (org_id, entity_id, entity_id)).fetchall()
+        cur = conn.cursor()
+        cur.execute(_EDGES_WITH_IDS_SQL, (org_id, entity_id, entity_id))
+        rows = cur.fetchall()
         return [dict(row) for row in rows]
     finally:
         conn.close()
@@ -897,8 +897,9 @@ def _primary_signal_run_count(org_id: str, signal_key: Optional[str]) -> int:
         return 0
     conn = db.connect()
     try:
-        cur = conn.execute(
-            "SELECT COUNT(*) FROM signal_snapshots WHERE org_id = ? AND signal_key = ?",
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT COUNT(*) FROM signal_snapshots WHERE org_id = %s AND signal_key = %s",
             (org_id, signal_key),
         )
         row = cur.fetchone()
@@ -914,13 +915,14 @@ def _entity_resolution_status_map(org_id: str, entity_ids: list[str]) -> dict[st
         return {}
     conn = db.connect()
     try:
-        conn.row_factory = sqlite3.Row
-        placeholders = ", ".join("?" for _ in entity_ids)
-        rows = conn.execute(
+        cur = conn.cursor()
+        placeholders = ", ".join("%s" for _ in entity_ids)
+        cur.execute(
             f"SELECT id, resolution_status FROM entities "
-            f"WHERE org_id = ? AND id IN ({placeholders})",
+            f"WHERE org_id = %s AND id IN ({placeholders})",
             (org_id, *entity_ids),
-        ).fetchall()
+        )
+        rows = cur.fetchall()
         return {row["id"]: row["resolution_status"] for row in rows}
     finally:
         conn.close()
@@ -1178,13 +1180,14 @@ def _distinct_source_systems(org_id: str, entity_ids: list[str]) -> list[str]:
     try:
         conn = db.connect()
         try:
-            conn.row_factory = sqlite3.Row
-            placeholders = ", ".join("?" for _ in entity_ids)
-            rows = conn.execute(
+            cur = conn.cursor()
+            placeholders = ", ".join("%s" for _ in entity_ids)
+            cur.execute(
                 f"SELECT DISTINCT source_system FROM entities "
-                f"WHERE org_id = ? AND id IN ({placeholders})",
+                f"WHERE org_id = %s AND id IN ({placeholders})",
                 (org_id, *entity_ids),
-            ).fetchall()
+            )
+            rows = cur.fetchall()
             return sorted({row["source_system"] for row in rows if row["source_system"]})
         finally:
             conn.close()
@@ -1287,14 +1290,15 @@ def _gate_field(gate_result: Any, attr: str, index: Optional[int], default: Any 
 def _insert_causal_hypothesis(row: dict[str, Any]) -> None:
     """Parameterised single-row INSERT into causal_hypotheses (commit on success)."""
 
-    placeholders = ", ".join("?" for _ in _CAUSAL_HYPOTHESES_COLUMNS)
+    placeholders = ", ".join("%s" for _ in _CAUSAL_HYPOTHESES_COLUMNS)
     sql = (
         f"INSERT INTO causal_hypotheses ({', '.join(_CAUSAL_HYPOTHESES_COLUMNS)}) "
         f"VALUES ({placeholders})"
     )
     conn = db.connect()
     try:
-        conn.execute(sql, tuple(row[column] for column in _CAUSAL_HYPOTHESES_COLUMNS))
+        cur = conn.cursor()
+        cur.execute(sql, tuple(row[column] for column in _CAUSAL_HYPOTHESES_COLUMNS))
         conn.commit()
     except Exception:
         conn.rollback()

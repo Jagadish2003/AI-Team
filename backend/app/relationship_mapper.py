@@ -30,7 +30,6 @@ from __future__ import annotations
 
 import json
 import logging
-import sqlite3
 import time
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
@@ -77,10 +76,8 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def _connect() -> sqlite3.Connection:
-    conn = db.connect()
-    conn.row_factory = sqlite3.Row
-    return conn
+def _connect() -> Any:
+    return db.connect()
 
 
 def ensure_entity_relationships_table() -> None:
@@ -91,8 +88,9 @@ def ensure_entity_relationships_table() -> None:
     """
     conn = _connect()
     try:
+        cur = conn.cursor()
         for ddl in ALL_ENTITY_RELATIONSHIPS_DDL:
-            conn.execute(ddl)
+            cur.execute(ddl)
         conn.commit()
     finally:
         conn.close()
@@ -149,18 +147,48 @@ def upsert_relationship(
 
     conn = _connect()
     try:
-        existing = conn.execute(
+        cur = conn.cursor()
+        cur.execute(
             """
             SELECT * FROM entity_relationships
-            WHERE org_id = ?
-              AND from_entity_id = ?
-              AND to_entity_id = ?
-              AND relationship_type = ?
+            WHERE org_id = %s
+              AND from_entity_id = %s
+              AND to_entity_id = %s
+              AND relationship_type = %s
             """,
             (org_id, from_str, to_str, relationship_type),
-        ).fetchone()
+        )
+        existing = cur.fetchone()
 
-        if existing is not None:
+        if existing is None:
+            # INSERT path: new edge.
+            new_id = str(uuid4())
+            cur.execute(
+                """
+                INSERT INTO entity_relationships (
+                    id, org_id, from_entity_id, to_entity_id, relationship_type,
+                    confidence, inferred, evidence, first_seen_run_id,
+                    last_seen_run_id, run_count, created_at
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 1, %s)
+                """,
+                (
+                    new_id,
+                    org_id,
+                    from_str,
+                    to_str,
+                    relationship_type,
+                    confidence,
+                    bool(inferred),
+                    evidence_json,
+                    run_id,
+                    run_id,
+                    _now(),
+                ),
+            )
+            conn.commit()
+        else:
+            # UPDATE path: increment run_count, update last_seen and evidence.
+            # confidence, inferred, and first_seen_run_id are never changed.
             stored_confidence = float(existing["confidence"])
             if abs(stored_confidence - float(confidence)) > 1e-9:
                 logger.debug(
@@ -171,54 +199,49 @@ def upsert_relationship(
                     stored_confidence,
                     float(confidence),
                 )
+            if run_id == existing["last_seen_run_id"]:
+                # Already counted for this run — refresh evidence only, do NOT
+                # increment run_count (run_count tracks distinct confirming runs,
+                # not call count). See the "first sighting in that run" contract
+                # in this function's docstring.
+                cur.execute(
+                    """
+                    UPDATE entity_relationships
+                    SET evidence = %s
+                    WHERE org_id = %s
+                      AND from_entity_id = %s
+                      AND to_entity_id = %s
+                      AND relationship_type = %s
+                    """,
+                    (evidence_json, org_id, from_str, to_str, relationship_type),
+                )
+            else:
+                cur.execute(
+                    """
+                    UPDATE entity_relationships
+                    SET last_seen_run_id = %s,
+                        run_count        = run_count + 1,
+                        evidence         = %s
+                    WHERE org_id = %s
+                      AND from_entity_id = %s
+                      AND to_entity_id = %s
+                      AND relationship_type = %s
+                    """,
+                    (run_id, evidence_json, org_id, from_str, to_str, relationship_type),
+                )
+            conn.commit()
 
-        # One statement handles both creation and concurrent updates. The
-        # natural-key index is the conflict target, so two workers cannot
-        # create duplicate rows for the same edge.
-        conn.execute(
-            """
-            INSERT INTO entity_relationships (
-                id, org_id, from_entity_id, to_entity_id, relationship_type,
-                confidence, inferred, evidence, first_seen_run_id,
-                last_seen_run_id, run_count, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)
-            ON CONFLICT (
-                org_id, from_entity_id, to_entity_id, relationship_type
-            ) DO UPDATE SET
-                run_count = CASE
-                    WHEN entity_relationships.last_seen_run_id = excluded.last_seen_run_id
-                        THEN entity_relationships.run_count
-                    ELSE entity_relationships.run_count + 1
-                END,
-                last_seen_run_id = excluded.last_seen_run_id,
-                evidence = excluded.evidence
-            """,
-            (
-                str(uuid4()),
-                org_id,
-                from_str,
-                to_str,
-                relationship_type,
-                confidence,
-                int(inferred),
-                evidence_json,
-                run_id,
-                run_id,
-                _now(),
-            ),
-        )
-        conn.commit()
-
-        row = conn.execute(
+        cur.execute(
             """
             SELECT * FROM entity_relationships
-            WHERE org_id = ?
-              AND from_entity_id = ?
-              AND to_entity_id = ?
-              AND relationship_type = ?
+            WHERE org_id = %s
+              AND from_entity_id = %s
+              AND to_entity_id = %s
+              AND relationship_type = %s
             """,
             (org_id, from_str, to_str, relationship_type),
-        ).fetchone()
+        )
+        row = cur.fetchone()
         return EntityRelationship.from_db_row(dict(row))
 
     finally:

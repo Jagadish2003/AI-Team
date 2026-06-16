@@ -40,7 +40,7 @@ import pytest
 # ---------------------------------------------------------------------------
 
 def _get_db_path() -> str:
-    return os.environ["DB_PATH"]
+    return os.environ.get("DB_PATH", "")
 
 
 @pytest.fixture(autouse=True)
@@ -82,7 +82,7 @@ def _db_by_type(org_id: str, run_id: str, entity_type: str) -> List[Dict]:
             dict(r)
             for r in conn.execute(
                 """SELECT * FROM entities
-                   WHERE org_id = ? AND last_seen_run_id = ? AND entity_type = ?""",
+                   WHERE org_id = %s AND last_seen_run_id = %s AND entity_type = %s""",
                 (org_id, run_id, entity_type),
             ).fetchall()
         ]
@@ -92,7 +92,7 @@ def _person_by_canonical(org_id: str, canonical: str) -> Dict | None:
     with sqlite3.connect(_get_db_path()) as conn:
         conn.row_factory = sqlite3.Row
         row = conn.execute(
-            "SELECT * FROM entities WHERE org_id=? AND entity_type='person' AND canonical_name=?",
+            "SELECT * FROM entities WHERE org_id=%s AND entity_type='person' AND canonical_name=%s",
             (org_id, canonical),
         ).fetchone()
         return dict(row) if row else None
@@ -633,7 +633,7 @@ class TestAC4CrossSystemResolution:
         with sqlite3.connect(_get_db_path()) as conn:
             conn.row_factory = sqlite3.Row
             rows = conn.execute(
-                "SELECT * FROM entities WHERE org_id=? AND entity_type='person' AND canonical_name='uno person'",
+                "SELECT * FROM entities WHERE org_id=%s AND entity_type='person' AND canonical_name='uno person'",
                 (org,),
             ).fetchall()
         assert len(rows) == 1, "cross-system person must resolve to a single row"

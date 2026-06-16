@@ -2,20 +2,30 @@
 
 Uses raw-SQL migrations only (no ORM models).  target_metadata is None.
 
-DB URL resolution order:
-  1. DB_PATH env var  → sqlite:////<absolute path>
-  2. alembic.ini sqlalchemy.url key (default: sqlite:///database/dev.db)
+DB URL resolution (AT-288 / Fix 1):
+  1. DATABASE_URL env var (PostgreSQL connection string).
+  2. The documented local default if DATABASE_URL is unset.
 
-This lets tests and CI redirect to a temp DB by setting DB_PATH without
-modifying alembic.ini.
+The resolved value is written into the Alembic config via set_main_option()
+before the ``%(DATABASE_URL)s`` placeholder in alembic.ini is interpolated, so
+tests and CI can redirect migrations by exporting DATABASE_URL without editing
+alembic.ini.
 """
 from __future__ import annotations
 
 import os
 from logging.config import fileConfig
+from pathlib import Path
 
+from dotenv import load_dotenv
 from sqlalchemy import create_engine, pool
 from alembic import context
+
+# Load backend/.env so `alembic upgrade head` honours DATABASE_URL without the
+# caller exporting it. backend/ is the parent of this migrations/ directory.
+# override=False — an exported DATABASE_URL (and the value pytest's conftest sets
+# in os.environ) still takes precedence.
+load_dotenv(Path(__file__).resolve().parents[1] / ".env")
 
 # ---------------------------------------------------------------------------
 # Alembic config object — gives access to values in alembic.ini.
@@ -38,14 +48,19 @@ if config.config_file_name is not None:
 target_metadata = None
 
 # ---------------------------------------------------------------------------
-# DB URL override via DB_PATH env var.
+# DB URL — resolved from DATABASE_URL (PostgreSQL). Set the concrete value here
+# so the ``%(DATABASE_URL)s`` placeholder in alembic.ini is never interpolated
+# by ConfigParser (which would look in the ini, not the environment).
 # ---------------------------------------------------------------------------
 
-_db_path_env = os.getenv("DB_PATH")
-if _db_path_env:
-    # Use an absolute path so Alembic resolves it correctly regardless of cwd.
-    _abs = os.path.abspath(_db_path_env)
-    config.set_main_option("sqlalchemy.url", f"sqlite:///{_abs}")
+_database_url = os.getenv("DATABASE_URL")
+# set_main_option stores into ConfigParser, whose BasicInterpolation treats '%'
+# as interpolation syntax. A percent-encoded password (e.g. '%40' for '@',
+# '%25' for '%') would raise "invalid interpolation syntax". Escape '%' -> '%%'
+# so it is stored literally; get_main_option() (used by the runners below)
+# un-escapes it back to the real URL, which SQLAlchemy/libpq then percent-decode.
+if _database_url is not None:
+    config.set_main_option("sqlalchemy.url", _database_url.replace("%", "%%"))
 
 
 # ---------------------------------------------------------------------------

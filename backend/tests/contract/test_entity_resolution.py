@@ -29,7 +29,7 @@ from database.models.entities import ALL_ENTITIES_DDL
 # ---------------------------------------------------------------------------
 
 def _db() -> str:
-    return os.environ["DB_PATH"]
+    return os.environ.get("DB_PATH", "")
 
 
 def _call(
@@ -59,7 +59,7 @@ def _all_entities(org_id: str = "test-org", entity_type: str = "person", canonic
         conn.row_factory = sqlite3.Row
         return [
             dict(r) for r in conn.execute(
-                "SELECT * FROM entities WHERE org_id=? AND entity_type=? AND canonical_name=?",
+                "SELECT * FROM entities WHERE org_id=%s AND entity_type=%s AND canonical_name=%s",
                 (org_id, entity_type, canonical),
             ).fetchall()
         ]
@@ -68,7 +68,7 @@ def _all_entities(org_id: str = "test-org", entity_type: str = "person", canonic
 def _get_entity(entity_id: str):
     with sqlite3.connect(_db()) as conn:
         conn.row_factory = sqlite3.Row
-        row = conn.execute("SELECT * FROM entities WHERE id=?", (entity_id,)).fetchone()
+        row = conn.execute("SELECT * FROM entities WHERE id=%s", (entity_id,)).fetchone()
         return dict(row) if row else None
 
 
@@ -238,7 +238,7 @@ class TestAmbiguousResolution:
                     source_system, source_record_id, resolution_confidence,
                     resolution_status, first_seen_run_id, last_seen_run_id,
                     run_count, metadata, created_at, updated_at
-                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
                 rows,
             )
             conn.commit()
