@@ -137,7 +137,7 @@ export default function ExecutiveReportPage() {
     ? report.confidence.charAt(0).toUpperCase() + report.confidence.slice(1).toLowerCase()
     : 'Unavailable';
   const roadmapStageLabel = roadmap.stages.length
-    ? roadmap.stages.map(stage => stage.title).join(' / ')
+    ? roadmap.stages.map((_, i) => `Phase ${i + 1}`).join(' / ')
     : '—';
 
   return (
