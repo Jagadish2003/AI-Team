@@ -57,6 +57,7 @@ interface SnapshotMatrixProps {
 }
 
 export default function SnapshotMatrix({ opportunities }: SnapshotMatrixProps) {
+  const [hoverId, setHoverId] = useState<string | null>(null);
   const plotRef = useRef<HTMLDivElement>(null);
   const [viewport, setViewport] = useState({
     width: DEFAULT_WIDTH,
@@ -144,17 +145,29 @@ export default function SnapshotMatrix({ opportunities }: SnapshotMatrixProps) {
             HIGH EFFORT
           </text>
 
-          {points.map(({ o, x, y, r }) => (
-            <circle
-              key={o.id}
-              cx={x}
-              cy={y}
-              r={r}
-              fill="var(--opportunity-matrix-bubble-fill)"
-              stroke="var(--opportunity-matrix-bubble-stroke)"
-              strokeWidth="1.5"
-            />
-          ))}
+          {points.map(({ o, x, y, r }) => {
+            const isHover = o.id === hoverId;
+            return (
+              <g
+                key={o.id}
+                role="img"
+                aria-label={`Opportunity: ${o.title}`}
+                style={{ cursor: 'pointer' }}
+                onMouseEnter={() => setHoverId(o.id)}
+                onMouseLeave={() => setHoverId(null)}
+              >
+                <circle
+                  cx={x}
+                  cy={y}
+                  r={r}
+                  fill={isHover ? 'var(--opportunity-matrix-hover-fill)' : 'var(--opportunity-matrix-bubble-fill)'}
+                  stroke={isHover ? 'var(--opportunity-matrix-hover-stroke)' : 'var(--opportunity-matrix-bubble-stroke)'}
+                  strokeWidth="1.5"
+                  style={{ transition: 'fill 0.15s, stroke 0.15s' }}
+                />
+              </g>
+            );
+          })}
 
           {[
             { x: layout.left + 14, y: layout.top + 24, label: 'QUICK WINS', fill: 'var(--opportunity-matrix-label-strong)' },
@@ -168,6 +181,37 @@ export default function SnapshotMatrix({ opportunities }: SnapshotMatrixProps) {
               </text>
             </g>
           ))}
+
+          {points.map((p) => {
+            if (p.o.id !== hoverId) return null;
+            const title = p.o.title.length > 34 ? `${p.o.title.slice(0, 34)}...` : p.o.title;
+            const labelX = clamp(p.x, layout.left + 92, layout.rx - 92);
+            const labelY = clamp(p.y - p.r - 15, layout.top + 26, layout.by - 12);
+            const labelWidth = clamp(title.length * 7.1 + 18, 96, 270);
+            return (
+              <g key={`label-${p.o.id}`} pointerEvents="none">
+                <rect
+                  x={labelX - labelWidth / 2}
+                  y={labelY - 17}
+                  width={labelWidth}
+                  height={23}
+                  rx={6}
+                  fill="var(--opportunity-matrix-bubble-label-bg)"
+                  stroke="var(--opportunity-matrix-bubble-label-border)"
+                />
+                <text
+                  x={labelX}
+                  y={labelY}
+                  fontSize="13"
+                  fontWeight="600"
+                  fill="var(--opportunity-matrix-hover-label)"
+                  textAnchor="middle"
+                >
+                  {title}
+                </text>
+              </g>
+            );
+          })}
         </svg>
       </div>
     </div>
