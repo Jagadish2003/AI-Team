@@ -211,8 +211,11 @@ def pytest_configure(config):
     except Exception as exc:
         raise RuntimeError(f"alembic upgrade failed:\n{exc}") from exc
 
+    # --no-reset: seed_loader now resets the public schema by default, but the
+    # conftest already did its own reset + `alembic upgrade head` above, so the
+    # seed step must NOT drop the migration tables it just created.
     result = subprocess.run(
-        [sys.executable, str(SEED_LOADER)],
+        [sys.executable, str(SEED_LOADER), "--no-reset"],
         cwd=str(BACKEND_DIR),
         env={**os.environ, "PYTHONIOENCODING": "utf-8"},
         capture_output=True,

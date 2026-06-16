@@ -106,11 +106,11 @@ END $$;
 
 
 def reset_public_schema(conn) -> None:
-    """--fresh: drop EVERY table + sequence in the public schema (full reset).
+    """Drop EVERY table + sequence in the public schema (full reset).
 
-    Includes the Alembic-managed tables and alembic_version, so run this BEFORE
-    `alembic upgrade head` — running it after would wipe the migration tables
-    Alembic just created.
+    Runs by default (skip with --no-reset). Includes the Alembic-managed tables
+    and alembic_version, so run seed_loader BEFORE `alembic upgrade head` —
+    running it after would wipe the migration tables Alembic just created.
     """
     cur = conn.cursor()
     cur.execute(_RESET_PUBLIC_SCHEMA)
@@ -135,15 +135,21 @@ def load_file(name: str):
 
 
 def main():
-    # --fresh = full reset of the public schema (the PostgreSQL equivalent of
-    # deleting the SQLite file). Run BEFORE `alembic upgrade head`.
-    fresh = "--fresh" in sys.argv
+    # By DEFAULT this performs a FULL reset of the public schema (the PostgreSQL
+    # equivalent of deleting the SQLite file), then seeds. Run BEFORE
+    # `alembic upgrade head`, which recreates the migration-managed tables.
+    #
+    # --no-reset skips the wipe and only ensures/seeds the core {id, payload}
+    # tables. The test harness (tests/contract/conftest.py) uses it because it
+    # manages its own reset + migration ordering and must NOT have the migration
+    # tables dropped out from under it.
+    skip_reset = "--no-reset" in sys.argv
 
     SEED_DIR.mkdir(parents=True, exist_ok=True)
 
     conn = psycopg2.connect(DATABASE_URL, cursor_factory=psycopg2.extras.DictCursor)
 
-    if fresh:
+    if not skip_reset:
         reset_public_schema(conn)
         print("Reset: dropped all tables + sequences in the public schema")
 
@@ -199,21 +205,19 @@ Seed Loader — Populate the PostgreSQL agentiq DB with core data
 
 Target DB: $DATABASE_URL (default postgresql://agentiq:agentiq@localhost:5432/agentiq)
 
-Usage:
-    python database/seed_loader.py              # Upsert seed data (idempotent, safe)
-    python database/seed_loader.py --fresh      # Full reset, then seed
-
 Fresh-database workflow (run from backend/, in this order):
-    python database/seed_loader.py --fresh      # 1. wipe public schema + create/seed core tables
+    python database/seed_loader.py              # 1. wipe public schema + create/seed core tables
     alembic upgrade head                        # 2. create the migration-managed tables
 
+WARNING: by default this DROPS every table + sequence in the public schema
+(incl. alembic_version and the migration tables) before seeding — it is the
+PostgreSQL equivalent of deleting the SQLite file. Run it BEFORE
+`alembic upgrade head` (running it after would wipe the tables Alembic created).
+
 Flags:
-    --fresh       Drop EVERY table + sequence in the public schema (incl.
-                  alembic_version and the migration tables), then create and
-                  seed the core {id, payload} tables. PostgreSQL has no DB file
-                  to delete — this is the standard schema-level reset. Run it
-                  BEFORE `alembic upgrade head` (running it after would wipe the
-                  tables Alembic just created).
+    --no-reset    Do NOT drop anything. Only create-if-missing and upsert the
+                  core {id, payload} tables (idempotent, safe). Used by the test
+                  harness, which manages its own reset/migration ordering.
     --help, -h    Show this help message
 
 Core Data Loaded:
