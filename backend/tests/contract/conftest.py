@@ -9,6 +9,7 @@ import psycopg2.extras
 import pytest
 from alembic import command as alembic_command
 from alembic.config import Config as AlembicConfig
+from dotenv import load_dotenv
 from fastapi.testclient import TestClient
 
 BACKEND_DIR = Path(__file__).resolve().parents[2]
@@ -23,8 +24,14 @@ for path in (str(REPO_ROOT), str(BACKEND_DIR)):
 # taken from DATABASE_URL (or the documented local default). The schema is
 # dropped and rebuilt from migrations at session start, so the suite stays
 # hermetic without a throwaway SQLite file.
-TEST_DATABASE_URL = os.environ.get(
-    "DATABASE_URL", "postgresql://agentiq:agentiq@localhost:5432/agentiq"
+#
+# Resolve DATABASE_URL the same way the app does: an exported env var wins, else
+# backend/.env, else the documented local default. Without this fallback an
+# unset DATABASE_URL left TEST_DATABASE_URL = None and crashed conftest import.
+load_dotenv(BACKEND_DIR / ".env")
+TEST_DATABASE_URL = (
+    os.environ.get("DATABASE_URL")
+    or "postgresql://agentiq:agentiq@localhost:5432/agentiq"
 )
 
 # Keep contract tests hermetic even when backend/.env contains live-mode
@@ -55,16 +62,44 @@ os.environ["AGENTIQ_DISABLE_BACKGROUND_JOBS"] = "1"
 import sqlite3 as _real_sqlite3  # noqa: E402
 
 
-class _PgTestConnection:
-    """psycopg2 connection with sqlite3-style connection-level execute().
+from psycopg2 import pool as _pg_pool  # noqa: E402
 
-    NO query translation — SQL passes through verbatim. Closes on `with` exit
-    (sqlite3 leaves it open, but that would leak PostgreSQL connections across
-    the suite).
+# Connection pool — the dominant cost of the suite was opening connections, not
+# running queries: the test PostgreSQL accepts a new connection in ~0.28s and
+# the app opens one per DB call (con = connect(); …; close()), so a single
+# discovery run opened ~146 connections (~40s of pure handshake) and the suite
+# tens of thousands (the ~20-minute runtime). Pooling pays the handshake a
+# handful of times and reuses warm connections, with no change to application
+# code or its open/commit/close semantics.
+_CONN_POOL = None
+
+
+def _get_pool():
+    global _CONN_POOL
+    if _CONN_POOL is None:
+        _CONN_POOL = _pg_pool.ThreadedConnectionPool(
+            1,
+            64,
+            os.environ["DATABASE_URL"],
+            cursor_factory=psycopg2.extras.DictCursor,
+            options="-c timezone=UTC",
+        )
+    return _CONN_POOL
+
+
+class _PgTestConnection:
+    """Pooled psycopg2 connection with sqlite3-style connection-level execute().
+
+    Semantically equivalent to a fresh connection per call: each borrow is an
+    isolated connection/transaction; close()/__exit__ return it to the pool
+    after committing (clean exit) or rolling back (error), instead of physically
+    closing it. NO query translation — SQL passes through verbatim.
     """
 
-    def __init__(self, raw):
+    def __init__(self, raw, pool):
         self._raw = raw
+        self._pool = pool
+        self._returned = False
         self.row_factory = None  # accepted + ignored; DictCursor gives name access
 
     def cursor(self, *args, **kwargs):
@@ -89,8 +124,25 @@ class _PgTestConnection:
     def rollback(self):
         self._raw.rollback()
 
+    def _release(self, errored=False):
+        if self._returned:
+            return
+        self._returned = True
+        try:
+            if errored:
+                self._raw.rollback()
+        except Exception:
+            pass
+        try:
+            self._pool.putconn(self._raw)
+        except Exception:
+            try:
+                self._raw.close()
+            except Exception:
+                pass
+
     def close(self):
-        self._raw.close()
+        self._release()
 
     @property
     def autocommit(self):
@@ -104,23 +156,38 @@ class _PgTestConnection:
         return self
 
     def __exit__(self, exc_type, exc, tb):
-        try:
-            if exc_type is not None:
-                self._raw.rollback()
-            else:
+        if exc_type is not None:
+            self._release(errored=True)
+        else:
+            try:
                 self._raw.commit()
-        finally:
-            self._raw.close()
+            finally:
+                self._release()
+
+    def __del__(self):
+        # Safety net: several app helpers lack try/finally and skip close() when
+        # a query raises. Return the connection on GC so the pool cannot leak.
+        try:
+            self._release()
+        except Exception:
+            pass
 
 
 def pg_test_connect(*_args, **_kwargs):
-    raw = psycopg2.connect(
-        os.environ["DATABASE_URL"],
-        cursor_factory=psycopg2.extras.DictCursor,
-        options="-c timezone=UTC",
-    )
-    raw.autocommit = False
-    return _PgTestConnection(raw)
+    pool = _get_pool()
+    raw = pool.getconn()
+    # Reset any leftover state from the previous borrower before handing it out:
+    # rollback first (clears an open/aborted txn), then pin autocommit off and
+    # the UTC session the app expects.
+    try:
+        raw.rollback()
+    except Exception:
+        pass
+    try:
+        raw.autocommit = False
+    except Exception:
+        pass
+    return _PgTestConnection(raw, pool)
 
 
 # Route sqlite3.connect(...) in tests to PostgreSQL. Installed at import time so
@@ -137,6 +204,16 @@ _real_sqlite3.connect = pg_test_connect
 import app.db as _app_db  # noqa: E402
 
 _app_db.connect = pg_test_connect
+
+# The telemetry write/read path opens its own connections via
+# database/connection.py::_connect (psycopg2.connect directly), bypassing
+# app.db.connect. Route it through the same pool so telemetry events during a
+# run don't each pay the connection handshake. get_db_connection()/
+# get_db_session() look up `_connect` as a module global at call time, so
+# replacing the attribute is sufficient.
+import database.connection as _db_conn_mod  # noqa: E402
+
+_db_conn_mod._connect = pg_test_connect
 
 
 def _resolve_seed_dir() -> Path:
@@ -256,8 +333,15 @@ def pytest_configure(config):
         con.close()
 
 
-@pytest.fixture()
+@pytest.fixture(scope="session")
 def client():
+    # Session-scoped: `with TestClient(app)` runs the app lifespan (seed_owner,
+    # driver checks, ensure_auth_tables, overlay registration, several DB
+    # connections) on enter. Function scope re-ran that whole startup for EVERY
+    # test — ~0.6s each across ~2400 tests ≈ the 20-minute suite. The DB is
+    # already shared for the whole session (reset once in pytest_configure), so
+    # sharing one client adds no new cross-test state; the lifespan work is
+    # idempotent. One startup instead of thousands.
     from app.main import app
     with TestClient(app) as c:
         yield c

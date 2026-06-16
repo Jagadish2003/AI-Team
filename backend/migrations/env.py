@@ -53,10 +53,14 @@ target_metadata = None
 # by ConfigParser (which would look in the ini, not the environment).
 # ---------------------------------------------------------------------------
 
-_database_url = os.getenv(
-    "DATABASE_URL", "postgresql://agentiq:agentiq@localhost:5432/agentiq"
-)
-config.set_main_option("sqlalchemy.url", _database_url)
+_database_url = os.getenv("DATABASE_URL")
+# set_main_option stores into ConfigParser, whose BasicInterpolation treats '%'
+# as interpolation syntax. A percent-encoded password (e.g. '%40' for '@',
+# '%25' for '%') would raise "invalid interpolation syntax". Escape '%' -> '%%'
+# so it is stored literally; get_main_option() (used by the runners below)
+# un-escapes it back to the real URL, which SQLAlchemy/libpq then percent-decode.
+if _database_url is not None:
+    config.set_main_option("sqlalchemy.url", _database_url.replace("%", "%%"))
 
 
 # ---------------------------------------------------------------------------

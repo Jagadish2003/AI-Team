@@ -26,9 +26,7 @@ from dotenv import load_dotenv  # noqa: E402
 load_dotenv(_BACKEND_DIR / ".env")
 
 SEED_DIR = Path(os.getenv("SEED_DIR", _SCRIPT_DIR / "seed"))
-DATABASE_URL = os.getenv(
-    "DATABASE_URL", "postgresql://agentiq:agentiq@localhost:5432/agentiq"
-)
+DATABASE_URL = os.getenv("DATABASE_URL")
 
 print("Seed Path:", SEED_DIR)
 print("Database URL:", DATABASE_URL)
@@ -203,7 +201,7 @@ if __name__ == "__main__":
         print("""
 Seed Loader — Populate the PostgreSQL agentiq DB with core data
 
-Target DB: $DATABASE_URL (default postgresql://agentiq:agentiq@localhost:5432/agentiq)
+Target DB: $DATABASE_URL
 
 Fresh-database workflow (run from backend/, in this order):
     python database/seed_loader.py              # 1. wipe public schema + create/seed core tables

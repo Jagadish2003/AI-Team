@@ -32,9 +32,7 @@ import psycopg2.extras
 # ---------------------------------------------------------------------------
 
 def _database_url() -> str:
-    return os.getenv(
-        "DATABASE_URL", "postgresql://agentiq:agentiq@localhost:5432/agentiq"
-    )
+    return os.getenv("DATABASE_URL")
 
 
 def _connect() -> "psycopg2.extensions.connection":

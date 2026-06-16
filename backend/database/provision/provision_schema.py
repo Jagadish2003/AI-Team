@@ -54,9 +54,7 @@ from dotenv import load_dotenv  # noqa: E402
 # DATABASE_URL still wins (override=False).
 load_dotenv(_BACKEND_DIR / ".env")
 
-DATABASE_URL = os.getenv(
-    "DATABASE_URL", "postgresql://agentiq:agentiq@localhost:5432/agentiq"
-)
+DATABASE_URL = os.getenv("DATABASE_URL")
 
 
 def _redacted(url: str) -> str:
@@ -74,10 +72,13 @@ def run_migrations() -> None:
     from alembic import command as alembic_command
     from alembic.config import Config as AlembicConfig
 
-    print("[1/3] alembic upgrade head ...")
+    print("[1/3] migrations ...")
     cfg = AlembicConfig(str(_BACKEND_DIR / "alembic.ini"))
     cfg.set_main_option("script_location", str(_BACKEND_DIR / "migrations"))
-    # env.py reads DATABASE_URL from the environment, so the value above is used.
+    # Skip env.py's fileConfig() so Alembic does not emit its INFO log lines
+    # (the migration banner / "transactional DDL" noise). The migrations still
+    # run identically. env.py reads DATABASE_URL from the environment.
+    cfg.config_file_name = None
     alembic_command.upgrade(cfg, "head")
 
 
@@ -94,7 +95,7 @@ def run_seed_loader(seed: bool) -> None:
     creates the same tables but inserts no rows.
     """
     if not seed:
-        print("[2/3] create {id, payload} tables (schema only, no seed rows) ...")
+        print("[2/3] core tables (schema only) ...")
         import psycopg2
 
         from database import seed_loader
@@ -106,7 +107,9 @@ def run_seed_loader(seed: bool) -> None:
             con.close()
         return
 
-    print("[2/3] seed_loader --no-reset (schema + core reference seed) ...")
+    print("[2/3] core tables + seed ...")
+    # seed_loader prints its own progress (Seed Path / counts); capture it and
+    # surface it only on failure to keep the provisioning output concise.
     result = subprocess.run(
         [sys.executable, str(_BACKEND_DIR / "database" / "seed_loader.py"), "--no-reset"],
         cwd=str(_BACKEND_DIR),
@@ -115,9 +118,8 @@ def run_seed_loader(seed: bool) -> None:
         text=True,
         encoding="utf-8",
     )
-    sys.stdout.write(result.stdout)
     if result.returncode != 0:
-        raise SystemExit(f"seed_loader failed:\n{result.stderr}")
+        raise SystemExit(f"seed_loader failed:\n{result.stdout}\n{result.stderr}")
 
 
 def ensure_lazy_tables() -> None:
@@ -128,7 +130,7 @@ def ensure_lazy_tables() -> None:
     complete and inspection-friendly. Each call is CREATE TABLE IF NOT EXISTS,
     so this is idempotent.
     """
-    print("[3/3] ensure lazy-only tables (credentials, nonces, oauth_nonces) ...")
+    print("[3/3] lazy tables (credentials, nonces, oauth_nonces) ...")
     from app.auth.vault import _init_credentials_table, _init_nonce_table
     from app.routes_connector_auth import _ensure_tables as _ensure_oauth_nonces
 
@@ -137,8 +139,8 @@ def ensure_lazy_tables() -> None:
     _ensure_oauth_nonces()      # oauth_nonces
 
 
-def verify() -> None:
-    """Print the resulting table inventory + the Alembic head stamp."""
+def verify(verbose: bool) -> None:
+    """Report the resulting table count + Alembic head (full list with --verbose)."""
     import psycopg2
 
     con = psycopg2.connect(DATABASE_URL)
@@ -151,21 +153,26 @@ def verify() -> None:
         tables = [r[0] for r in cur.fetchall()]
         cur.execute("SELECT version_num FROM alembic_version")
         version = cur.fetchone()
-        print(f"\nProvisioned {len(tables)} tables on {_redacted(DATABASE_URL)}")
-        print("  " + ", ".join(tables))
-        print(f"  alembic_version = {version[0] if version else '(none)'}")
+        head = version[0] if version else "(none)"
+        print(f"Done: {len(tables)} tables, alembic head {head}.")
+        if verbose:
+            print("  " + ", ".join(tables))
     finally:
         con.close()
 
 
 def main() -> None:
+    if not DATABASE_URL:
+        raise SystemExit(
+            "DATABASE_URL is not set (export it or add it to backend/.env)."
+        )
     seed = "--no-seed" not in sys.argv
-    print(f"Provisioning AgentIQ schema on {_redacted(DATABASE_URL)}")
+    verbose = "--verbose" in sys.argv or "-v" in sys.argv
+    print(f"Provisioning schema -> {_redacted(DATABASE_URL)}")
     run_migrations()
     run_seed_loader(seed)
     ensure_lazy_tables()
-    verify()
-    print("\nDone. Point the backend at this DATABASE_URL and start the app.")
+    verify(verbose)
 
 
 if __name__ == "__main__":

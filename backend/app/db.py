@@ -19,9 +19,7 @@ load_dotenv(Path(__file__).resolve().parents[1] / ".env")
 
 # AT-288 / Fix 1: the application database is PostgreSQL. The connection string
 # is read from DATABASE_URL (the local default matches deployment/.env.template).
-DATABASE_URL = os.getenv(
-    "DATABASE_URL", "postgresql://agentiq:agentiq@localhost:5432/agentiq"
-)
+DATABASE_URL = os.getenv("DATABASE_URL")
 RUN_ID_RE = re.compile(r"^RUN_(\d+)$")
 
 

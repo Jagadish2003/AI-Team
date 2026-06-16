@@ -6,7 +6,12 @@
 # and database already exist (run 00_create_role_and_db.sql once as a superuser
 # first).
 #
+# DATABASE_URL is resolved in this order:
+#   1. an exported DATABASE_URL environment variable (wins), else
+#   2. the DATABASE_URL line in backend/.env.
+#
 # Usage:
+#   ./provision.sh                                                   # uses backend/.env
 #   DATABASE_URL=postgresql://agentiq:secret@db-host:5432/agentiq ./provision.sh
 #   ./provision.sh --no-seed
 set -euo pipefail
@@ -15,9 +20,23 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # backend/ is two levels up (provision -> database -> backend).
 BACKEND_DIR="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 
+# Fall back to backend/.env when DATABASE_URL is not already exported. Reads the
+# last DATABASE_URL=... line, strips an optional surrounding "" or '' quote, and
+# ignores commented (#) lines. An exported value still takes precedence.
+if [ -z "${DATABASE_URL:-}" ] && [ -f "${BACKEND_DIR}/.env" ]; then
+    DATABASE_URL="$(
+        grep -E '^[[:space:]]*DATABASE_URL[[:space:]]*=' "${BACKEND_DIR}/.env" \
+            | grep -vE '^[[:space:]]*#' \
+            | tail -n1 \
+            | sed -E 's/^[[:space:]]*DATABASE_URL[[:space:]]*=[[:space:]]*//; s/^"(.*)"$/\1/; s/^'\''(.*)'\''$/\1/'
+    )"
+    [ -n "${DATABASE_URL}" ] && export DATABASE_URL
+fi
+
 if [ -z "${DATABASE_URL:-}" ]; then
-    echo "ERROR: DATABASE_URL is not set." >&2
+    echo "ERROR: DATABASE_URL is not set and was not found in ${BACKEND_DIR}/.env" >&2
     echo "  export DATABASE_URL=postgresql://agentiq:secret@db-host:5432/agentiq" >&2
+    echo "  (or add a DATABASE_URL=... line to backend/.env)" >&2
     exit 1
 fi
 
