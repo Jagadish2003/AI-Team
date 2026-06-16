@@ -148,3 +148,26 @@ export async function acceptInvite(
   if (!res.ok) throw new ApiError("POST /api/auth/accept-invite failed", res.status, body);
   return body as AuthResult;
 }
+
+/**
+ * POST /api/auth/reset-password — CS-3 §5. Public.
+ * Sets a new password for the account a reset token belongs to. The token comes
+ * from the reset-password URL query param. Returns 200 (no useful body) on
+ * success, 400 on an invalid/expired token, and 422 when the new password fails
+ * the strength rule. Unlike accept-invite this does NOT return a session — the
+ * user is sent to /login afterwards to sign in with the new password.
+ */
+export async function resetPassword(
+  resetToken: string,
+  newPassword: string
+): Promise<void> {
+  const res = await fetch(`${BASE_URL}/api/auth/reset-password`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ reset_token: resetToken, new_password: newPassword }),
+  });
+  if (!res.ok) {
+    const body = await parseBody(res);
+    throw new ApiError("POST /api/auth/reset-password failed", res.status, body);
+  }
+}

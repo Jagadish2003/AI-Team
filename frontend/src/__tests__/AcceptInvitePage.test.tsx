@@ -59,6 +59,11 @@ async function renderActiveForm(token = "valid-invite-token") {
   await screen.findByRole("button", { name: /activate account/i });
 }
 
+/** The strength-indicator row (the <li data-met>) whose label matches. */
+function requirementRow(label: RegExp | string): HTMLElement | null {
+  return screen.getByText(label).closest("[data-met]");
+}
+
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 describe("AcceptInvitePage", () => {
@@ -146,7 +151,7 @@ describe("AcceptInvitePage", () => {
   it("submit button is disabled when passwords do not match", async () => {
     await renderActiveForm();
     const [passField, confirmField] = screen.getAllByPlaceholderText("••••••••");
-    fireEvent.change(passField, { target: { value: "password123" } });
+    fireEvent.change(passField, { target: { value: "Password1!" } });
     fireEvent.change(confirmField, { target: { value: "different!" } });
     const btn = screen.getByRole("button", { name: /activate account/i }) as HTMLButtonElement;
     expect(btn.disabled).toBe(true);
@@ -161,18 +166,28 @@ describe("AcceptInvitePage", () => {
     expect(btn.disabled).toBe(true);
   });
 
-  it("shows the length hint while the password is too short", async () => {
+  it("marks the 8-character requirement unmet while the password is too short", async () => {
     await renderActiveForm();
     const [passField] = screen.getAllByPlaceholderText("••••••••");
     fireEvent.change(passField, { target: { value: "short" } });
-    expect(screen.getByText(/minimum of 8 characters/i)).toBeTruthy();
+    expect(requirementRow(/at least 8 characters/i)?.getAttribute("data-met")).toBe("false");
+  });
+
+  it("renders four password requirements and greens them all for a valid password", async () => {
+    await renderActiveForm();
+    const [passField] = screen.getAllByPlaceholderText("••••••••");
+    expect(screen.getAllByTestId("password-requirement")).toHaveLength(4);
+    fireEvent.change(passField, { target: { value: "Password1!" } });
+    screen
+      .getAllByTestId("password-requirement")
+      .forEach((row) => expect(row.getAttribute("data-met")).toBe("true"));
   });
 
   it("submit button is enabled with valid matching passwords", async () => {
     await renderActiveForm();
     const [passField, confirmField] = screen.getAllByPlaceholderText("••••••••");
-    fireEvent.change(passField, { target: { value: "password123" } });
-    fireEvent.change(confirmField, { target: { value: "password123" } });
+    fireEvent.change(passField, { target: { value: "Password1!" } });
+    fireEvent.change(confirmField, { target: { value: "Password1!" } });
     const btn = screen.getByRole("button", { name: /activate account/i }) as HTMLButtonElement;
     expect(btn.disabled).toBe(false);
   });
@@ -184,12 +199,12 @@ describe("AcceptInvitePage", () => {
     await renderActiveForm("my-invite-token");
 
     const [passField, confirmField] = screen.getAllByPlaceholderText("••••••••");
-    fireEvent.change(passField, { target: { value: "newpassword" } });
-    fireEvent.change(confirmField, { target: { value: "newpassword" } });
+    fireEvent.change(passField, { target: { value: "Password1!" } });
+    fireEvent.change(confirmField, { target: { value: "Password1!" } });
     fireEvent.click(screen.getByRole("button", { name: /activate account/i }));
 
     await waitFor(() => {
-      expect(mockAcceptInvite).toHaveBeenCalledWith("my-invite-token", "newpassword");
+      expect(mockAcceptInvite).toHaveBeenCalledWith("my-invite-token", "Password1!");
     });
   });
 
@@ -198,8 +213,8 @@ describe("AcceptInvitePage", () => {
     await renderActiveForm();
 
     const [passField, confirmField] = screen.getAllByPlaceholderText("••••••••");
-    fireEvent.change(passField, { target: { value: "newpassword" } });
-    fireEvent.change(confirmField, { target: { value: "newpassword" } });
+    fireEvent.change(passField, { target: { value: "Password1!" } });
+    fireEvent.change(confirmField, { target: { value: "Password1!" } });
     fireEvent.click(screen.getByRole("button", { name: /activate account/i }));
 
     await waitFor(() => {
@@ -214,8 +229,8 @@ describe("AcceptInvitePage", () => {
     await renderActiveForm();
 
     const [passField, confirmField] = screen.getAllByPlaceholderText("••••••••");
-    fireEvent.change(passField, { target: { value: "newpassword" } });
-    fireEvent.change(confirmField, { target: { value: "newpassword" } });
+    fireEvent.change(passField, { target: { value: "Password1!" } });
+    fireEvent.change(confirmField, { target: { value: "Password1!" } });
     fireEvent.click(screen.getByRole("button", { name: /activate account/i }));
 
     await waitFor(() => {
@@ -230,8 +245,8 @@ describe("AcceptInvitePage", () => {
     await renderActiveForm();
 
     const [passField, confirmField] = screen.getAllByPlaceholderText("••••••••");
-    fireEvent.change(passField, { target: { value: "newpassword" } });
-    fireEvent.change(confirmField, { target: { value: "newpassword" } });
+    fireEvent.change(passField, { target: { value: "Password1!" } });
+    fireEvent.change(confirmField, { target: { value: "Password1!" } });
     fireEvent.click(screen.getByRole("button", { name: /activate account/i }));
 
     await waitFor(() => {
@@ -246,8 +261,8 @@ describe("AcceptInvitePage", () => {
     await renderActiveForm();
 
     const [passField, confirmField] = screen.getAllByPlaceholderText("••••••••");
-    fireEvent.change(passField, { target: { value: "newpassword" } });
-    fireEvent.change(confirmField, { target: { value: "newpassword" } });
+    fireEvent.change(passField, { target: { value: "Password1!" } });
+    fireEvent.change(confirmField, { target: { value: "Password1!" } });
     fireEvent.click(screen.getByRole("button", { name: /activate account/i }));
 
     await waitFor(() => {
@@ -262,8 +277,8 @@ describe("AcceptInvitePage", () => {
     await renderActiveForm();
 
     const [passField, confirmField] = screen.getAllByPlaceholderText("••••••••");
-    fireEvent.change(passField, { target: { value: "newpassword" } });
-    fireEvent.change(confirmField, { target: { value: "newpassword" } });
+    fireEvent.change(passField, { target: { value: "Password1!" } });
+    fireEvent.change(confirmField, { target: { value: "Password1!" } });
     fireEvent.click(screen.getByRole("button", { name: /activate account/i }));
 
     await waitFor(() => {
@@ -277,7 +292,7 @@ describe("AcceptInvitePage", () => {
   it("shows mismatch error when confirm password differs", async () => {
     await renderActiveForm();
     const [passField, confirmField] = screen.getAllByPlaceholderText("••••••••");
-    fireEvent.change(passField, { target: { value: "password123" } });
+    fireEvent.change(passField, { target: { value: "Password1!" } });
     fireEvent.change(confirmField, { target: { value: "different!" } });
     expect(screen.getByText(/passwords do not match/i)).toBeTruthy();
   });
