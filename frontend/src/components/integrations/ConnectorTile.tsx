@@ -20,6 +20,10 @@ export default function ConnectorTile({
   const isConfigured = connector.configured;
   const actionLabel = isConnected && !isConfigured ? 'Configure & Sync' : isConnected ? 'View data' : 'Connect';
   const actionVariant = !isConnected ? 'primary' : isConfigured ? 'secondary' : 'tertiary';
+  // Only Salesforce, ServiceNow, and Jira are actionable. Every other
+  // connector's button is shown but disabled (not clickable).
+  const ENABLED_CONNECTOR_IDS = ['salesforce', 'servicenow', 'jira'];
+  const actionDisabled = !ENABLED_CONNECTOR_IDS.includes(connector.id);
 
   return (
     <div
@@ -66,8 +70,12 @@ export default function ConnectorTile({
       <div className="mt-auto pb-1 pt-4">
         <Button
           variant={actionVariant}
+          disabled={actionDisabled}
+          title={actionDisabled ? 'Connecting new sources is currently unavailable' : undefined}
           className={`w-full ${
-            isConnected && isConfigured
+            actionDisabled
+              ? '!bg-slate-500/10 !text-muted !border-border !opacity-100'
+              : isConnected && isConfigured
               ? 'light-view-data-button !border-accent/50 !text-accent'
               : ''
           }`}
