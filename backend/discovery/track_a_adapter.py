@@ -364,7 +364,9 @@ def to_track_a_evidence(
     seen_ids = set()
     for opp in runner_payload.get("opportunities", []):
         detector_id = opp.get("detector_id", "")
-        for ev in opp.get("evidence", []):
+        opp_id = opp.get("id", "")
+        opp_ev_list = opp.get("evidence", [])
+        for ev in opp_ev_list:
             eid = ev.get("id")
             if eid and eid not in seen_ids:
                 # SHARED-2: add detectorId to each evidence item so
