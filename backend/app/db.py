@@ -3,11 +3,19 @@ import os
 import re
 import uuid
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import psycopg2
 import psycopg2.extras
+from dotenv import load_dotenv
 from fastapi import HTTPException
+
+# Load backend/.env so DATABASE_URL is honoured even when db.py is imported by a
+# standalone script (seed loader, a one-off shell) that did not call
+# load_dotenv() itself. override=False: a real exported env var still wins, and
+# the value the test conftest sets in os.environ is preserved.
+load_dotenv(Path(__file__).resolve().parents[1] / ".env")
 
 # AT-288 / Fix 1: the application database is PostgreSQL. The connection string
 # is read from DATABASE_URL (the local default matches deployment/.env.template).

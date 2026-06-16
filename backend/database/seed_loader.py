@@ -19,6 +19,11 @@ if str(_BACKEND_DIR) not in sys.path:
 
 import psycopg2  # noqa: E402
 import psycopg2.extras  # noqa: E402
+from dotenv import load_dotenv  # noqa: E402
+
+# Load backend/.env so DATABASE_URL (and SEED_DIR) are honoured without the
+# caller having to export them. override=False — an exported value still wins.
+load_dotenv(_BACKEND_DIR / ".env")
 
 SEED_DIR = Path(os.getenv("SEED_DIR", _SCRIPT_DIR / "seed"))
 DATABASE_URL = os.getenv(
@@ -79,11 +84,36 @@ def ensure_db(conn) -> None:
     conn.commit()
 
 
-def drop_seed_tables(conn) -> None:
-    """--fresh on PostgreSQL: drop the seed-managed tables (no DB file to unlink)."""
+# Full reset of the application's schema. PostgreSQL has no DB file to delete;
+# the standard "fresh start" for one app is to drop every table and sequence in
+# the `public` schema (this also removes alembic_version, so a subsequent
+# `alembic upgrade head` re-runs all migrations from scratch). The dynamic drop
+# only needs ownership of the objects (which the agentiq role has) — unlike
+# `DROP SCHEMA public`, it does not require schema ownership, and unlike
+# `DROP DATABASE` it needs no maintenance connection or CREATEDB privilege.
+_RESET_PUBLIC_SCHEMA = """
+DO $$
+DECLARE r RECORD;
+BEGIN
+    FOR r IN (SELECT tablename FROM pg_tables WHERE schemaname = 'public') LOOP
+        EXECUTE 'DROP TABLE IF EXISTS public.' || quote_ident(r.tablename) || ' CASCADE';
+    END LOOP;
+    FOR r IN (SELECT sequencename FROM pg_sequences WHERE schemaname = 'public') LOOP
+        EXECUTE 'DROP SEQUENCE IF EXISTS public.' || quote_ident(r.sequencename) || ' CASCADE';
+    END LOOP;
+END $$;
+"""
+
+
+def reset_public_schema(conn) -> None:
+    """--fresh: drop EVERY table + sequence in the public schema (full reset).
+
+    Includes the Alembic-managed tables and alembic_version, so run this BEFORE
+    `alembic upgrade head` — running it after would wipe the migration tables
+    Alembic just created.
+    """
     cur = conn.cursor()
-    for t in [*TABLES, "run_events", "kv"]:
-        cur.execute(f"DROP TABLE IF EXISTS {t} CASCADE")
+    cur.execute(_RESET_PUBLIC_SCHEMA)
     conn.commit()
 
 
@@ -105,17 +135,17 @@ def load_file(name: str):
 
 
 def main():
-    # Check for --fresh flag to delete existing database
+    # --fresh = full reset of the public schema (the PostgreSQL equivalent of
+    # deleting the SQLite file). Run BEFORE `alembic upgrade head`.
     fresh = "--fresh" in sys.argv
 
     SEED_DIR.mkdir(parents=True, exist_ok=True)
 
     conn = psycopg2.connect(DATABASE_URL, cursor_factory=psycopg2.extras.DictCursor)
 
-    # Drop seed-managed tables if --fresh is used (PostgreSQL has no DB file).
     if fresh:
-        drop_seed_tables(conn)
-        print("🗑️  Dropped existing seed tables")
+        reset_public_schema(conn)
+        print("Reset: dropped all tables + sequences in the public schema")
 
     ensure_db(conn)
 
@@ -157,7 +187,7 @@ def main():
     permissions_count = len(load_file(FILES["permissions"]))
 
     conn.close()
-    print("✅ Seed load complete:", DATABASE_URL)
+    print("Seed load complete:", DATABASE_URL)
     print(f"   {connectors_count} connectors | {mappings_count} mappings")
     print(f"   {permissions_count} permissions | {uploads_count} uploads")
 
@@ -165,14 +195,25 @@ def main():
 if __name__ == "__main__":
     if "--help" in sys.argv or "-h" in sys.argv:
         print("""
-Seed Loader — Populate dev.db with core data
+Seed Loader — Populate the PostgreSQL agentiq DB with core data
+
+Target DB: $DATABASE_URL (default postgresql://agentiq:agentiq@localhost:5432/agentiq)
 
 Usage:
-    python seed_loader.py              # Upsert data (idempotent, safe)
-    python seed_loader.py --fresh      # Delete existing db and create new one
+    python database/seed_loader.py              # Upsert seed data (idempotent, safe)
+    python database/seed_loader.py --fresh      # Full reset, then seed
+
+Fresh-database workflow (run from backend/, in this order):
+    python database/seed_loader.py --fresh      # 1. wipe public schema + create/seed core tables
+    alembic upgrade head                        # 2. create the migration-managed tables
 
 Flags:
-    --fresh       Delete existing dev.db and create a fresh database
+    --fresh       Drop EVERY table + sequence in the public schema (incl.
+                  alembic_version and the migration tables), then create and
+                  seed the core {id, payload} tables. PostgreSQL has no DB file
+                  to delete — this is the standard schema-level reset. Run it
+                  BEFORE `alembic upgrade head` (running it after would wipe the
+                  tables Alembic just created).
     --help, -h    Show this help message
 
 Core Data Loaded:

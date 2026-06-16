@@ -143,11 +143,15 @@ def update_entity_seen(
         # existing one is never overwritten. MAX guarantees confidence only
         # ever rises.
         cur = conn.cursor()
+        # run_count increments at most once per run: the CASE compares the OLD
+        # last_seen_run_id (PostgreSQL evaluates SET right-hand sides against the
+        # pre-UPDATE row) to the current run_id. The second %s is that run_id —
+        # this is also why the params list carries run_id twice.
         cur.execute(
             """
             UPDATE entities
             SET last_seen_run_id    = %s,
-                run_count           = run_count + 1,
+                run_count           = run_count + CASE WHEN last_seen_run_id <> %s THEN 1 ELSE 0 END,
                 resolution_confidence = GREATEST(resolution_confidence, %s),
                 source_record_id    = COALESCE(source_record_id, %s),
                 updated_at          = %s
@@ -168,7 +172,7 @@ def update_entity_seen(
         """
         UPDATE entities
         SET last_seen_run_id = %s,
-            run_count        = run_count + 1,
+            run_count        = run_count + CASE WHEN last_seen_run_id <> %s THEN 1 ELSE 0 END,
             updated_at       = %s
         WHERE id = %s
         """,

@@ -293,16 +293,18 @@ class TestEntityRelationshipsTableSchema:
         )
 
     def test_natural_key_unique_index(self):
-        indexes = {row["name"]: row for row in self._indexes()}
-        index = indexes.get("idx_er_org_natural_key")
-        assert index is not None, "Missing relationship natural-key unique index"
-        assert index["unique"] == 1
-        assert self._index_columns("idx_er_org_natural_key") == [
-            "org_id",
-            "from_entity_id",
-            "to_entity_id",
-            "relationship_type",
+        indexdef = self._index_def("idx_er_org_natural_key")
+        assert indexdef, "Missing relationship natural-key unique index"
+        assert "UNIQUE INDEX" in indexdef, f"natural-key index must be UNIQUE, got {indexdef}"
+        positions = [
+            indexdef.find(c)
+            for c in ("org_id", "from_entity_id", "to_entity_id", "relationship_type")
         ]
+        assert all(p != -1 for p in positions), indexdef
+        assert positions == sorted(positions), (
+            f"natural-key index columns must be in order "
+            f"(org_id, from_entity_id, to_entity_id, relationship_type), got {indexdef}"
+        )
 
     def test_idempotent_ddl_no_error_on_second_apply(self):
         with sqlite3.connect(_get_db_path()) as conn:

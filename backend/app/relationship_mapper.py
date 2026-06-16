@@ -199,19 +199,36 @@ def upsert_relationship(
                     stored_confidence,
                     float(confidence),
                 )
-            cur.execute(
-                """
-                UPDATE entity_relationships
-                SET last_seen_run_id = %s,
-                    run_count        = run_count + 1,
-                    evidence         = %s
-                WHERE org_id = %s
-                  AND from_entity_id = %s
-                  AND to_entity_id = %s
-                  AND relationship_type = %s
-                """,
-                (run_id, evidence_json, org_id, from_str, to_str, relationship_type),
-            )
+            if run_id == existing["last_seen_run_id"]:
+                # Already counted for this run — refresh evidence only, do NOT
+                # increment run_count (run_count tracks distinct confirming runs,
+                # not call count). See the "first sighting in that run" contract
+                # in this function's docstring.
+                cur.execute(
+                    """
+                    UPDATE entity_relationships
+                    SET evidence = %s
+                    WHERE org_id = %s
+                      AND from_entity_id = %s
+                      AND to_entity_id = %s
+                      AND relationship_type = %s
+                    """,
+                    (evidence_json, org_id, from_str, to_str, relationship_type),
+                )
+            else:
+                cur.execute(
+                    """
+                    UPDATE entity_relationships
+                    SET last_seen_run_id = %s,
+                        run_count        = run_count + 1,
+                        evidence         = %s
+                    WHERE org_id = %s
+                      AND from_entity_id = %s
+                      AND to_entity_id = %s
+                      AND relationship_type = %s
+                    """,
+                    (run_id, evidence_json, org_id, from_str, to_str, relationship_type),
+                )
             conn.commit()
 
         cur.execute(

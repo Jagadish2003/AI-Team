@@ -15,9 +15,17 @@ from __future__ import annotations
 
 import os
 from logging.config import fileConfig
+from pathlib import Path
 
+from dotenv import load_dotenv
 from sqlalchemy import create_engine, pool
 from alembic import context
+
+# Load backend/.env so `alembic upgrade head` honours DATABASE_URL without the
+# caller exporting it. backend/ is the parent of this migrations/ directory.
+# override=False — an exported DATABASE_URL (and the value pytest's conftest sets
+# in os.environ) still takes precedence.
+load_dotenv(Path(__file__).resolve().parents[1] / ".env")
 
 # ---------------------------------------------------------------------------
 # Alembic config object — gives access to values in alembic.ini.

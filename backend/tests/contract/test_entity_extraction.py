@@ -689,7 +689,7 @@ class TestSalesforceOwnerDeduplication:
     def _kv_entities(run_id: str) -> list:
         with sqlite3.connect(_get_db_path()) as conn:
             row = conn.execute(
-                "SELECT payload FROM kv WHERE key = ?",
+                "SELECT payload FROM kv WHERE key = %s",
                 (f"entities:{run_id}",),
             ).fetchone()
         if row is None:
@@ -704,7 +704,7 @@ class TestSalesforceOwnerDeduplication:
             row = conn.execute(
                 """
                 SELECT * FROM entities
-                WHERE org_id = ? AND entity_type = 'person' AND display_name = ?
+                WHERE org_id = %s AND entity_type = 'person' AND display_name = %s
                 """,
                 (org_id, display_name),
             ).fetchone()
