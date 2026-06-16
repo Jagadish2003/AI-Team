@@ -33,7 +33,7 @@ _STATIC_PERMISSION_DEFAULTS: Dict[str, PermissionItem] = {
         "satisfied": True,
     },
     "Salesforce: read CaseArticle": {
-        "required": False,
+        "required": True,
         "satisfied": False,
     },
     "Salesforce: read NamedCredential (Tooling API)": {

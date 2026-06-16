@@ -29,7 +29,7 @@ def test_permissions_merge_rules_required_or_satisfied_and():
     assert p["readiness"] == "MISSING"
 
 
-def test_phase1_string_permissions_now_roll_up_to_pending():
+def test_phase1_string_permissions_keep_one_missing_item():
     opps = [
         {"id": "opp1", "tier": "Quick Win", "decision": "UNREVIEWED", "requiredPermissions": [
             "Salesforce: read FlowVersionView (Tooling API)",
@@ -53,7 +53,7 @@ def test_phase1_string_permissions_now_roll_up_to_pending():
     for permission in s30["requiredPermissions"]:
         readiness_counts[permission["readiness"]] += 1
 
-    assert readiness_counts == {"READY": 2, "PENDING": 4, "MISSING": 0}
+    assert readiness_counts == {"READY": 2, "PENDING": 3, "MISSING": 1}
 
 
 def test_phase2_string_permissions_now_roll_up_to_ready():
