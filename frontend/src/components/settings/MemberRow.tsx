@@ -1,3 +1,4 @@
+import { Mail, Trash2 } from "lucide-react";
 import { apiDelete, ApiError } from "../../lib/apiClient";
 import { useAuth } from "../../context/AuthContext";
 import { useToast } from "../common/Toast";
@@ -16,16 +17,20 @@ interface Props {
 }
 
 const ROLE_BADGE: Record<WorkspaceMember["role"], string> = {
-  owner: "bg-purple-500/20 text-purple-300 border border-purple-400/30",
-  analyst: "bg-blue-500/20 text-blue-300 border border-blue-400/30",
-  viewer: "bg-slate-500/20 text-slate-300 border border-slate-400/30",
+  owner: "border-amber-500/35 bg-amber-500/10 text-amber-300",
+  analyst: "border-accent/35 bg-accent/10 text-accent",
+  viewer: "border-border/60 bg-bg/30 text-muted",
 };
 
 function formatJoinedDate(raw: string): string {
-  if (!raw) return "—";
+  if (!raw) return "Unavailable";
   const d = new Date(raw);
-  if (isNaN(d.getTime())) return "—";
+  if (isNaN(d.getTime())) return "Unavailable";
   return d.toLocaleDateString("en-US", { month: "short", year: "numeric" });
+}
+
+function roleLabel(role: WorkspaceMember["role"]): string {
+  return role.charAt(0).toUpperCase() + role.slice(1);
 }
 
 export default function MemberRow({ member, isOwner, onRemove }: Props) {
@@ -49,11 +54,9 @@ export default function MemberRow({ member, isOwner, onRemove }: Props) {
 
     try {
       await apiDelete(`/api/workspace/members/${member.user_id}`);
-      // Re-fetch via panel's refreshKey — never splice local state manually
       onRemove();
     } catch (err) {
       if (err instanceof ApiError && err.status === 400) {
-        // Backend self-removal guard (belt-and-suspenders for the isSelf check above)
         push("You cannot remove yourself from the workspace.", "error");
       } else {
         push("Failed to remove member. Please try again.", "error");
@@ -62,32 +65,47 @@ export default function MemberRow({ member, isOwner, onRemove }: Props) {
   }
 
   return (
-    <div className="flex items-center justify-between gap-4 rounded-lg border border-white/10 bg-white/5 px-4 py-3">
-      {/* Left: email + joined date */}
-      <div className="min-w-0 flex-1">
-        <p className="truncate text-sm font-medium text-white">{member.email}</p>
-        <p className="mt-0.5 text-xs text-slate-500">
-          Joined {formatJoinedDate(member.created_at)}
-        </p>
+    <div
+      role="listitem"
+      className="flex min-h-[82px] flex-col gap-3 bg-panel px-4 py-3 transition-colors hover:bg-accent/5 lg:flex-row lg:items-center lg:justify-between"
+    >
+      <div className="flex min-w-0 items-center gap-3">
+        <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-border/60 bg-bg/30 text-muted">
+          <Mail size={16} />
+        </span>
+        <div className="min-w-0">
+          <div className="flex min-w-0 flex-wrap items-center gap-2">
+            <p className="max-w-full truncate text-sm font-semibold text-text">{member.email}</p>
+            {isSelf && (
+              <span className="rounded-full border border-border/60 bg-bg/30 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-muted">
+                You
+              </span>
+            )}
+          </div>
+          <p className="mt-0.5 text-xs text-muted">
+            Joined {formatJoinedDate(member.created_at)}
+          </p>
+        </div>
       </div>
 
-      {/* Role badge */}
-      <span
-        className={`shrink-0 rounded-full px-2.5 py-0.5 text-xs font-medium capitalize ${ROLE_BADGE[member.role]}`}
-      >
-        {member.role}
-      </span>
-
-      {/* Remove button — visible to Owners only */}
-      {isOwner && (
-        <button
-          onClick={handleRemove}
-          className="shrink-0 rounded-md px-3 py-1.5 text-xs font-medium text-red-400 transition-colors
-            hover:bg-red-500/10 hover:text-red-300 active:bg-red-500/20"
+      <div className="flex shrink-0 items-center justify-between gap-3 pl-12 lg:pl-0">
+        <span
+          className={`inline-flex min-w-[74px] items-center justify-center rounded-full border px-2.5 py-1 text-xs font-semibold ${ROLE_BADGE[member.role]}`}
         >
-          Remove
-        </button>
-      )}
+          {roleLabel(member.role)}
+        </span>
+
+        {isOwner && (
+          <button
+            type="button"
+            onClick={handleRemove}
+            className="inline-flex h-8 items-center justify-center gap-1.5 rounded-md border border-transparent px-2.5 text-xs font-semibold text-red-300 transition-colors hover:border-red-500/30 hover:bg-red-500/10 hover:text-red-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-red-500/30"
+          >
+            <Trash2 size={13} />
+            Remove
+          </button>
+        )}
+      </div>
     </div>
   );
 }
