@@ -1,4 +1,4 @@
-import { apiPost, ApiError } from "../../lib/apiClient";
+import { apiDelete, ApiError } from "../../lib/apiClient";
 import { useAuth } from "../../context/AuthContext";
 import { useToast } from "../common/Toast";
 
@@ -48,21 +48,15 @@ export default function MemberRow({ member, isOwner, onRemove }: Props) {
     }
 
     try {
-      await apiPost(`/api/auth/workspace/members/${member.user_id}/remove`, {});
+      await apiDelete(`/api/workspace/members/${member.user_id}`);
+      // Re-fetch via panel's refreshKey — never splice local state manually
       onRemove();
     } catch (err) {
       if (err instanceof ApiError && err.status === 400) {
         // Backend self-removal guard (belt-and-suspenders for the isSelf check above)
         push("You cannot remove yourself from the workspace.", "error");
-      } else if (err instanceof ApiError) {
-        const body = err.body as Record<string, unknown> | null;
-        const detail =
-          typeof body?.detail === "string"
-            ? body.detail
-            : `Failed to remove member (${err.status}).`;
-        push(detail, "error");
       } else {
-        push("An unexpected error occurred.", "error");
+        push("Failed to remove member. Please try again.", "error");
       }
     }
   }
