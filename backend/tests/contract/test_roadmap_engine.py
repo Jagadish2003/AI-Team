@@ -57,7 +57,7 @@ def test_phase1_string_permissions_keep_one_missing_item():
     assert readiness_counts == {"READY": 2, "PENDING": 3, "MISSING": 1}
 
 
-def test_phase2_string_permissions_now_roll_up_to_ready():
+def test_phase2_string_permissions_keep_process_instance_workitem_missing():
     opps = [
         {"id": "opp1", "tier": "Strategic", "decision": "UNREVIEWED", "requiredPermissions": [
             "Salesforce: read ProcessInstance",
@@ -73,7 +73,7 @@ def test_phase2_string_permissions_now_roll_up_to_ready():
     for permission in s60["requiredPermissions"]:
         readiness_counts[permission["readiness"]] += 1
 
-    assert readiness_counts == {"READY": 3, "PENDING": 0, "MISSING": 0}
+    assert readiness_counts == {"READY": 2, "PENDING": 0, "MISSING": 1}
 
 
 def test_ncino_string_permissions_have_meaningful_stage1_mix():
@@ -95,7 +95,7 @@ def test_ncino_string_permissions_have_meaningful_stage1_mix():
     for permission in s30["requiredPermissions"]:
         readiness_counts[permission["readiness"]] += 1
 
-    assert readiness_counts == {"READY": 1, "PENDING": 2, "MISSING": 1}
+    assert readiness_counts == {"READY": 4, "PENDING": 0, "MISSING": 0}
 
 
 def test_saved_roadmap_backfills_ncino_permissions_from_detector_ids():
@@ -156,5 +156,5 @@ def test_saved_roadmap_backfills_ncino_permissions_from_detector_ids():
     for permission in s60["requiredPermissions"]:
         s60_counts[permission["readiness"]] += 1
 
-    assert s30_counts == {"READY": 1, "PENDING": 2, "MISSING": 1}
-    assert s60_counts == {"READY": 5, "PENDING": 0, "MISSING": 0}
+    assert s30_counts == {"READY": 4, "PENDING": 0, "MISSING": 0}
+    assert s60_counts == {"READY": 4, "PENDING": 0, "MISSING": 1}

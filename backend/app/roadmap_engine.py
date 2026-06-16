@@ -26,7 +26,7 @@ _STATIC_PERMISSION_DEFAULTS: Dict[str, PermissionItem] = {
     },
     "Salesforce: read ProcessInstanceWorkitem": {
         "required": True,
-        "satisfied": True,
+        "satisfied": False,
     },
     "Salesforce: read ProcessDefinition": {
         "required": True,
@@ -54,15 +54,15 @@ _STATIC_PERMISSION_DEFAULTS: Dict[str, PermissionItem] = {
     },
     "Salesforce: read LLC_BI__Loan__History": {
         "required": False,
-        "satisfied": False,
+        "satisfied": True,
     },
     "Salesforce: read LLC_BI__Checklist__c": {
         "required": True,
-        "satisfied": False,
+        "satisfied": True,
     },
     "Salesforce: read LLC_BI__Checklist__c owner/status fields": {
         "required": False,
-        "satisfied": False,
+        "satisfied": True,
     },
     "Salesforce: read LLC_BI__Covenant2__c": {
         "required": True,
