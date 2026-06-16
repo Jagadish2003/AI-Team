@@ -29,7 +29,7 @@ def test_permissions_merge_rules_required_or_satisfied_and():
     assert p["readiness"] == "MISSING"
 
 
-def test_string_permissions_use_mixed_static_readiness_defaults():
+def test_phase1_string_permissions_now_roll_up_to_pending():
     opps = [
         {"id": "opp1", "tier": "Quick Win", "decision": "UNREVIEWED", "requiredPermissions": [
             "Salesforce: read FlowVersionView (Tooling API)",
@@ -53,4 +53,23 @@ def test_string_permissions_use_mixed_static_readiness_defaults():
     for permission in s30["requiredPermissions"]:
         readiness_counts[permission["readiness"]] += 1
 
-    assert readiness_counts == {"READY": 2, "PENDING": 3, "MISSING": 1}
+    assert readiness_counts == {"READY": 2, "PENDING": 4, "MISSING": 0}
+
+
+def test_phase2_string_permissions_now_roll_up_to_ready():
+    opps = [
+        {"id": "opp1", "tier": "Strategic", "decision": "UNREVIEWED", "requiredPermissions": [
+            "Salesforce: read ProcessInstance",
+            "Salesforce: read ProcessInstanceWorkitem",
+            "Salesforce: read ProcessDefinition",
+        ]},
+    ]
+
+    rm = build_roadmap(opps)
+    s60 = next(s for s in rm["stages"] if s["id"] == "NEXT_60")
+    readiness_counts = {"READY": 0, "PENDING": 0, "MISSING": 0}
+
+    for permission in s60["requiredPermissions"]:
+        readiness_counts[permission["readiness"]] += 1
+
+    assert readiness_counts == {"READY": 3, "PENDING": 0, "MISSING": 0}

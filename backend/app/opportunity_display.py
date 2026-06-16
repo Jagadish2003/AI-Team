@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any, Dict, List
 
+from .roadmap_engine import overall_readiness, uniq_permissions_merge
+
 
 OPPORTUNITY_TITLE_OVERRIDES = {
     "APPLICATION_STALL": "Retirement Application Monitor",
@@ -36,15 +38,45 @@ def with_roadmap_display_titles(roadmap: Dict[str, Any]) -> Dict[str, Any]:
     display_roadmap = dict(roadmap)
     stages = display_roadmap.get("stages")
     if isinstance(stages, list):
-        display_roadmap["stages"] = [
-            {
-                **stage,
-                "opportunities": with_display_titles(stage.get("opportunities") or []),
-            }
-            if isinstance(stage, dict)
-            else stage
-            for stage in stages
-        ]
+        normalized_stages = []
+        for stage in stages:
+            if not isinstance(stage, dict):
+                normalized_stages.append(stage)
+                continue
+
+            labels = []
+            for permission in stage.get("requiredPermissions") or []:
+                if isinstance(permission, dict):
+                    label = str(permission.get("label") or "").strip()
+                    if label:
+                        labels.append(label)
+                elif isinstance(permission, str):
+                    label = permission.strip()
+                    if label:
+                        labels.append(label)
+
+            normalized_stages.append(
+                {
+                    **stage,
+                    "opportunities": with_display_titles(stage.get("opportunities") or []),
+                    "requiredPermissions": uniq_permissions_merge(labels),
+                }
+            )
+
+        display_roadmap["stages"] = normalized_stages
+        all_perms = uniq_permissions_merge(
+            [
+                permission.get("label", "")
+                for stage in normalized_stages
+                if isinstance(stage, dict)
+                for permission in stage.get("requiredPermissions") or []
+                if isinstance(permission, dict)
+            ]
+        )
+        display_roadmap["permissionsRequiredCount"] = sum(
+            1 for permission in all_perms if permission.get("required")
+        )
+        display_roadmap["overallReadiness"] = overall_readiness(all_perms)
     return display_roadmap
 
 

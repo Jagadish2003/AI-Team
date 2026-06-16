@@ -25,15 +25,15 @@ _STATIC_PERMISSION_DEFAULTS: Dict[str, PermissionItem] = {
         "satisfied": True,
     },
     "Salesforce: read ProcessInstanceWorkitem": {
-        "required": False,
-        "satisfied": False,
+        "required": True,
+        "satisfied": True,
     },
     "Salesforce: read ProcessDefinition": {
         "required": True,
-        "satisfied": False,
+        "satisfied": True,
     },
     "Salesforce: read CaseArticle": {
-        "required": True,
+        "required": False,
         "satisfied": False,
     },
     "Salesforce: read NamedCredential (Tooling API)": {
