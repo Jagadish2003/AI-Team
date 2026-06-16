@@ -584,7 +584,7 @@ def set_opp_override(run_id: str, opp_id: str, body: Dict[str, Any]) -> Dict[str
     return with_display_title(o)
 
 
-@app.get("/api/runs/{run_id}/audit", dependencies=[Depends(require_auth), Depends(require_role("owner"))])
+@app.get("/api/runs/{run_id}/audit", dependencies=[Depends(require_auth), Depends(require_role("analyst"))])
 def list_audit(run_id: str) -> List[Dict[str, Any]]:
     run_get(run_id)
     audit = run_kv_get("audit", run_id, default_audit())

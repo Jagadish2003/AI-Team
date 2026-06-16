@@ -63,7 +63,7 @@ export default function InviteModal({ open, onClose, onSuccess }: Props) {
       const result = await apiPost<InviteResponse>("/api/auth/invite", { email, role });
 
       if (result.invite_token) {
-        const link = `${window.location.protocol}//${window.location.hostname}/accept-invite?token=${result.invite_token}`;
+        const link = `${window.location.protocol}//${window.location.host}/accept-invite?token=${result.invite_token}`;
         setInviteLink(link);
       } else {
         // Production: backend returns 501 until email delivery is wired.
