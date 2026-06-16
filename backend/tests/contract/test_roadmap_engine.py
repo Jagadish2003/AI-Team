@@ -27,3 +27,30 @@ def test_permissions_merge_rules_required_or_satisfied_and():
     assert p["required"] is True
     assert p["satisfied"] is False
     assert p["readiness"] == "MISSING"
+
+
+def test_string_permissions_use_mixed_static_readiness_defaults():
+    opps = [
+        {"id": "opp1", "tier": "Quick Win", "decision": "UNREVIEWED", "requiredPermissions": [
+            "Salesforce: read FlowVersionView (Tooling API)",
+            "Salesforce: read Flow Metadata (Tooling API)",
+        ]},
+        {"id": "opp2", "tier": "Quick Win", "decision": "UNREVIEWED", "requiredPermissions": [
+            "Salesforce: read Case",
+            "Salesforce: read CaseArticle",
+        ]},
+        {"id": "opp3", "tier": "Quick Win", "decision": "UNREVIEWED", "requiredPermissions": [
+            "Salesforce: read Case",
+            "ServiceNow: read incident (if applicable)",
+            "Jira: read issues (if applicable)",
+        ]},
+    ]
+
+    rm = build_roadmap(opps)
+    s30 = next(s for s in rm["stages"] if s["id"] == "NEXT_30")
+    readiness_counts = {"READY": 0, "PENDING": 0, "MISSING": 0}
+
+    for permission in s30["requiredPermissions"]:
+        readiness_counts[permission["readiness"]] += 1
+
+    assert readiness_counts == {"READY": 2, "PENDING": 3, "MISSING": 1}
