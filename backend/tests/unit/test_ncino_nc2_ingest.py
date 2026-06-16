@@ -145,6 +145,94 @@ def test_approval_metrics_filter_to_loan_ids() -> None:
     assert metrics["pending_count"] == 1
 
 
+class _RecordingClient:
+    """Fake nCino REST client that records every SOQL query it receives."""
+
+    def __init__(self) -> None:
+        self.queries: list[str] = []
+
+    def query(self, soql: str):
+        self.queries.append(soql)
+        return []
+
+
+def _live_ingest(monkeypatch, **kwargs):
+    """Run ncino.ingest() in live mode against a recording client."""
+    from discovery.ingest import ncino
+
+    client = _RecordingClient()
+    monkeypatch.setattr(ncino, "is_live", lambda: True)
+    monkeypatch.setattr(ncino, "_get_client", lambda: client)
+    result = ncino.ingest(**kwargs)
+    return result, client
+
+
+def _process_instance_query_count(client: "_RecordingClient") -> int:
+    return sum(1 for q in client.queries if "FROM ProcessInstance" in q)
+
+
+def test_ingest_skips_processinstance_query_when_preloaded(monkeypatch) -> None:
+    """AT-309 AC1: preloaded data => zero ProcessInstance API calls."""
+    preloaded = [
+        {
+            "Id": "pi_001",
+            "TargetObjectId": "loan_001",
+            "Status": "Pending",
+            "CreatedDate": "2026-01-01",
+            "CompletedDate": None,
+        }
+    ]
+
+    result, client = _live_ingest(
+        monkeypatch, preloaded_process_instances=preloaded
+    )
+
+    assert _process_instance_query_count(client) == 0
+    assert result["process_instances"] == preloaded
+
+
+def test_ingest_fetches_processinstance_when_not_preloaded(monkeypatch) -> None:
+    """AT-309: fallback path still fetches ProcessInstance via the live query."""
+    result, client = _live_ingest(monkeypatch)
+
+    assert _process_instance_query_count(client) == 1
+    assert result["process_instances"] == []
+
+
+def test_ingest_empty_preloaded_list_still_skips_fetch(monkeypatch) -> None:
+    """AT-310: an empty list (no approval_processes) must NOT trigger a fetch."""
+    result, client = _live_ingest(monkeypatch, preloaded_process_instances=[])
+
+    assert _process_instance_query_count(client) == 0
+    assert result["process_instances"] == []
+
+
+def test_ingest_preloaded_reduces_salesforce_call_count_by_one(monkeypatch) -> None:
+    """AT-309 AC2: total Salesforce queries drop by exactly 1 when preloaded."""
+    _, fallback_client = _live_ingest(monkeypatch)
+    _, preloaded_client = _live_ingest(
+        monkeypatch, preloaded_process_instances=[]
+    )
+
+    assert (
+        len(fallback_client.queries) - len(preloaded_client.queries) == 1
+    )
+
+
+def test_ingest_signature_defaults_preloaded_to_none(monkeypatch) -> None:
+    """preloaded_process_instances defaults to None and offline mode is unaffected."""
+    import inspect
+
+    from discovery.ingest import ncino
+
+    sig = inspect.signature(ncino.ingest)
+    assert sig.parameters["preloaded_process_instances"].default is None
+
+    monkeypatch.setattr(ncino, "is_live", lambda: False)
+    result = ncino.ingest()
+    assert "process_instances" in result
+
+
 def test_stage_duration_helpers_are_deterministic_for_supplied_dates() -> None:
     from discovery.ingest.ncino import (
         derive_approval_cycle_days,

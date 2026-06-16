@@ -908,7 +908,24 @@ def is_access_token_expired(instance_url: str, access_token: str) -> bool:
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-def ingest() -> Dict[str, Any]:
+def ingest(preloaded_process_instances: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
+    """
+    Ingest nCino lending signals from Salesforce.
+
+    CS-4 / AT-309: ProcessInstance (standard Salesforce approval workflow) is
+    queried by both the Salesforce CRM ingestor and this nCino ingestor — a
+    genuine duplicate API call. When ``runner.py`` already fetched the approval
+    instances via ``salesforce.ingest()``, it passes them here as
+    ``preloaded_process_instances`` so this ingestor reuses that data instead of
+    issuing a second ProcessInstance query.
+
+    Args:
+        preloaded_process_instances: ProcessInstance records already fetched by
+            the Salesforce CRM ingestor. When ``not None`` (in live mode), the
+            ProcessInstance Salesforce query is skipped entirely and these
+            records are used directly. When ``None``, this ingestor falls back
+            to fetching them itself via ``_fetch_approval_instances``.
+    """
     if is_live():
         client = _get_client()
 
@@ -928,7 +945,20 @@ def ingest() -> Dict[str, Any]:
         checklists = _safe_fetch(_fetch_checklists, "checklists")
         spreads = _safe_fetch(_fetch_spreads, "spreads")
         spread_periods = _safe_fetch(_fetch_spread_periods, "spread_periods")
-        process_instances = _safe_fetch(_fetch_approval_instances, "process_instances")
+        # CS-4 / AT-309: reuse the Salesforce CRM ingestor's ProcessInstance
+        # records when supplied (even an empty list), instead of issuing a
+        # duplicate query. Only fetch when nothing was preloaded (None).
+        if preloaded_process_instances is not None:
+            logger.info(
+                "process_instances=%d (reused from Salesforce ingestor — "
+                "skipped duplicate ProcessInstance query)",
+                len(preloaded_process_instances),
+            )
+            process_instances = preloaded_process_instances
+        else:
+            process_instances = _safe_fetch(
+                _fetch_approval_instances, "process_instances"
+            )
     else:
         fixture = _load_fixture()
         loans = fixture.get("loans", [])
