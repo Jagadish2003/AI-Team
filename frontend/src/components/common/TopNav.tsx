@@ -56,7 +56,6 @@ export default function TopNav() {
   // useAuthOptional (not useAuth): TopNav is also rendered by page-level tests
   // that don't mount an AuthProvider. In the real app it's always inside one.
   const auth = useAuthOptional();
-  const upcomingSprintMessage = "It will be implemented in upcoming sprints";
 
   // Profile tooltip shows "<org name>'s Profile" once the user record is loaded.
   // org_id is a UUID, not a display value — we show the org's human-readable
@@ -185,20 +184,18 @@ export default function TopNav() {
                 className="absolute right-0 top-11 w-64 rounded-lg border border-border bg-panel p-1 text-text shadow-xl"
                 role="menu"
               >
-                <div className="group profile-dropdown-item relative">
-                  <button
-                    type="button"
-                    aria-disabled="true"
-                    className="flex w-full cursor-not-allowed items-center gap-2 rounded-md px-3 py-2 text-left text-sm text-muted opacity-60"
-                    role="menuitem"
-                  >
-                    <Settings className="h-4 w-4" />
-                    Profile settings
-                  </button>
-                  <div className="profile-menu-tooltip pointer-events-none absolute left-1/2 top-full z-20 mt-1 w-max max-w-[calc(100vw-2rem)] whitespace-nowrap rounded-md border border-border bg-panel px-2 py-1 text-xs text-text shadow-lg">
-                    {upcomingSprintMessage}
-                  </div>
-                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setProfileOpen(false);
+                    navigate("/settings");
+                  }}
+                  className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm text-text transition-colors hover:bg-navhover focus:outline-none focus:ring-2 focus:ring-accent/50"
+                  role="menuitem"
+                >
+                  <Settings className="h-4 w-4" />
+                  Settings
+                </button>
 
                 <div
                   className="flex w-full items-center gap-2 rounded-md px-3 py-1 text-sm text-text transition-colors hover:bg-navhover"

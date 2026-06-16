@@ -165,7 +165,6 @@ def _derive_from_evidence(run_id: str) -> List[Dict[str, Any]]:
             "sampleValues": [],
             "notes":        f"Derived from evidence: {title[:60]}",
         })
-
     return rows
 
 
