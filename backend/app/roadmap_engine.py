@@ -57,7 +57,7 @@ _STATIC_PERMISSION_DEFAULTS: Dict[str, PermissionItem] = {
         "satisfied": False,
     },
     "Salesforce: read LLC_BI__Checklist__c": {
-        "required": True,
+        "required": False,
         "satisfied": False,
     },
     "Salesforce: read LLC_BI__Checklist__c owner/status fields": {
