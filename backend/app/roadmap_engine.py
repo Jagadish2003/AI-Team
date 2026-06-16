@@ -48,6 +48,38 @@ _STATIC_PERMISSION_DEFAULTS: Dict[str, PermissionItem] = {
         "required": False,
         "satisfied": False,
     },
+    "Salesforce: read LLC_BI__Loan__c": {
+        "required": True,
+        "satisfied": True,
+    },
+    "Salesforce: read LLC_BI__Loan__History": {
+        "required": False,
+        "satisfied": False,
+    },
+    "Salesforce: read LLC_BI__Checklist__c": {
+        "required": True,
+        "satisfied": False,
+    },
+    "Salesforce: read LLC_BI__Checklist__c owner/status fields": {
+        "required": False,
+        "satisfied": False,
+    },
+    "Salesforce: read LLC_BI__Covenant2__c": {
+        "required": True,
+        "satisfied": True,
+    },
+    "Salesforce: read LLC_BI__Covenant2__c evaluation/breach fields": {
+        "required": True,
+        "satisfied": True,
+    },
+    "Salesforce: read LLC_BI__Spread_Statement_Period__c": {
+        "required": True,
+        "satisfied": True,
+    },
+    "Salesforce: read LLC_BI__Analyst__c": {
+        "required": False,
+        "satisfied": False,
+    },
 }
 
 def readiness_from_permission(p: PermissionItem) -> str:

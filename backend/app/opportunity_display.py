@@ -4,6 +4,11 @@ from typing import Any, Dict, List
 
 from .roadmap_engine import overall_readiness, uniq_permissions_merge
 
+try:
+    from discovery.track_a_adapter import get_required_permissions_for_detector
+except ModuleNotFoundError:  # project-root execution uses backend as package
+    from backend.discovery.track_a_adapter import get_required_permissions_for_detector
+
 
 OPPORTUNITY_TITLE_OVERRIDES = {
     "APPLICATION_STALL": "Retirement Application Monitor",
@@ -54,6 +59,31 @@ def with_roadmap_display_titles(roadmap: Dict[str, Any]) -> Dict[str, Any]:
                     label = permission.strip()
                     if label:
                         labels.append(label)
+
+            for opportunity in stage.get("opportunities") or []:
+                if not isinstance(opportunity, dict):
+                    continue
+
+                opp_permissions = opportunity.get("requiredPermissions") or []
+                if opp_permissions:
+                    for permission in opp_permissions:
+                        if isinstance(permission, dict):
+                            label = str(permission.get("label") or "").strip()
+                            if label:
+                                labels.append(label)
+                        elif isinstance(permission, str):
+                            label = permission.strip()
+                            if label:
+                                labels.append(label)
+                    continue
+
+                debug = opportunity.get("_debug") or {}
+                detector_id = str(
+                    debug.get("detector_id")
+                    or opportunity.get("detector_id")
+                    or ""
+                ).strip()
+                labels.extend(get_required_permissions_for_detector(detector_id))
 
             normalized_stages.append(
                 {
