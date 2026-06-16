@@ -19,8 +19,9 @@ so the target database is complete after one invocation:
      front here so an inspection of a freshly provisioned DB is not missing
      them: credentials, nonces, oauth_nonces.
 
-Prerequisite: the role and database already exist (run 00_create_role_and_db.sql
-once as a superuser) and DATABASE_URL points at the target server.
+Prerequisite: the target database already exists and DATABASE_URL points at it.
+(The agentiq role is created by the pure-SQL path's 01_schema.sql; this Alembic
+runbook connects with whatever role DATABASE_URL specifies.)
 
 Usage (run from the backend/ directory, with the venv active):
 

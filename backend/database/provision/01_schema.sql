@@ -10,7 +10,6 @@
 SET statement_timeout = 0;
 SET lock_timeout = 0;
 SET idle_in_transaction_session_timeout = 0;
-SET transaction_timeout = 0;
 SET client_encoding = 'UTF8';
 SET standard_conforming_strings = on;
 SELECT pg_catalog.set_config('search_path', '', false);
@@ -22,6 +21,28 @@ SET row_security = off;
 SET default_tablespace = '';
 
 SET default_table_access_method = "heap";
+
+--
+-- Application role (previously in 00_create_role_and_db.sql).
+-- Run 01_schema.sql connected to the target database (e.g. agentiqdev) as a
+-- superuser or the schema owner. The database itself must already exist.
+-- CREATE ROLE has no IF NOT EXISTS, so the DO block makes it idempotent.
+-- CHANGE THE PASSWORD below before running on any shared/production server.
+--
+DO
+$$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'agentiq') THEN
+        CREATE ROLE agentiq LOGIN PASSWORD 'agentiq';
+    END IF;
+END
+$$;
+
+-- Give the agentiq role ownership of (and full privilege on) the public schema
+-- so it can create/own the objects below. Requires the current connection to be
+-- a superuser or the existing schema owner.
+ALTER SCHEMA public OWNER TO agentiq;
+GRANT ALL ON SCHEMA public TO agentiq;
 
 --
 -- Name: alembic_version; Type: TABLE; Schema: public; Owner: -

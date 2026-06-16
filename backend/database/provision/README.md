@@ -32,15 +32,21 @@ Path A runs all three. Path B captures the union as flat SQL.
 ## Prerequisites (both paths)
 
 1. A reachable PostgreSQL server (this app is developed against **PostgreSQL 17**).
-2. The application role + database. Run **once** as a superuser (e.g. `postgres`),
-   connected to the maintenance DB `postgres`:
+2. The application **database** must already exist. Create it once as a superuser
+   (e.g. `postgres`), connected to the maintenance DB `postgres`:
 
    ```bash
-   psql -h <DB_HOST> -p 5432 -U postgres -d postgres -f 00_create_role_and_db.sql
+   psql -h <DB_HOST> -p 5432 -U postgres -d postgres -c "CREATE DATABASE agentiq;"
    ```
 
-   Edit the password in [`00_create_role_and_db.sql`](00_create_role_and_db.sql)
-   before running it on a shared/production server.
+   The application **role** (`agentiq`) is created automatically:
+   - Path B — by [`01_schema.sql`](01_schema.sql) (idempotent `CREATE ROLE`).
+   - Path A — supply an existing role in `DATABASE_URL` (Alembic does not create
+     roles); create it first if needed with
+     `psql ... -c "CREATE ROLE agentiq LOGIN PASSWORD '<password>';"`.
+
+   Change the role password (in `01_schema.sql` for Path B) before running on a
+   shared/production server.
 
 3. The connection string the backend will use:
 
@@ -89,18 +95,20 @@ You can also call the underlying script directly:
 
 ## Path B — Pure SQL bundle (`psql` only)
 
-No Python needed. After the prerequisite role/DB exist, against an **empty**
-`agentiq` database:
+No Python needed. After the prerequisite database exists, against an **empty**
+`agentiq` database. Run `01_schema.sql` as a superuser (or the schema owner) —
+it creates the `agentiq` role and assigns schema ownership before creating
+tables:
 
 ```bash
 export PGPASSWORD='<password>'
-psql -h <DB_HOST> -p 5432 -U agentiq -d agentiq -v ON_ERROR_STOP=1 -f 01_schema.sql
-psql -h <DB_HOST> -p 5432 -U agentiq -d agentiq -v ON_ERROR_STOP=1 -f 02_seed.sql
+psql -h <DB_HOST> -p 5432 -U postgres -d agentiq -v ON_ERROR_STOP=1 -f 01_schema.sql
+psql -h <DB_HOST> -p 5432 -U agentiq  -d agentiq -v ON_ERROR_STOP=1 -f 02_seed.sql
 ```
 
-- [`01_schema.sql`](01_schema.sql) — all 25 tables, indexes, sequences, and the
-  `alembic_version` stamp (so a later `alembic upgrade head` correctly applies
-  only *new* migrations).
+- [`01_schema.sql`](01_schema.sql) — creates the `agentiq` role + schema grants,
+  then all 25 tables, indexes, sequences, and the `alembic_version` stamp (so a
+  later `alembic upgrade head` correctly applies only *new* migrations).
 - [`02_seed.sql`](02_seed.sql) — core reference rows only (connectors, mappings,
   permissions, uploads). No run/telemetry/audit data.
 
@@ -143,6 +151,24 @@ pg_dump --data-only --no-owner --no-privileges --quote-all-identifiers \
         -t connectors -t mappings -t permissions -t uploads \
         "$PGDATABASE" > database/provision/02_seed.sql
 ```
+
+> **After regenerating `01_schema.sql`**, re-add the application-role block that
+> `pg_dump` does not emit (it lived in the former `00_create_role_and_db.sql`).
+> Insert it just after the `SET default_table_access_method` line, before the
+> first `CREATE TABLE`:
+>
+> ```sql
+> DO
+> $$
+> BEGIN
+>     IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'agentiq') THEN
+>         CREATE ROLE agentiq LOGIN PASSWORD 'agentiq';
+>     END IF;
+> END
+> $$;
+> ALTER SCHEMA public OWNER TO agentiq;
+> GRANT ALL ON SCHEMA public TO agentiq;
+> ```
 
 ---
 

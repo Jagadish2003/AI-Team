@@ -59,7 +59,7 @@ npm install
 ```
 > This creates the full schema (Alembic migrations + core `{id,payload}` tables + lazy-only tables) and seeds the core reference data in one step. It reads `DATABASE_URL` from `backend/.env`. You only need to run this once after cloning; it is idempotent and safe to re-run.
 >
-> **Note:** This assumes the target PostgreSQL role and `agentiq` database already exist. On a brand-new server, first run `database/provision/00_create_role_and_db.sql` once as a PostgreSQL superuser. See `database/provision/README.md` for details.
+> **Note:** This assumes the target PostgreSQL role and `agentiq` database already exist. On a brand-new server, first create the database as a superuser (`CREATE DATABASE agentiq;`) and ensure the connection role exists. The pure-SQL path (`01_schema.sql`) creates the `agentiq` role for you. See `database/provision/README.md` for details.
 
 ---
 
