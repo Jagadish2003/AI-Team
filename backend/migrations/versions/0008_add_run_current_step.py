@@ -14,6 +14,7 @@ Create Date: 2026-06-16
 from typing import Sequence, Union
 
 from alembic import op
+import sqlalchemy as sa
 
 revision: str = "0008"
 down_revision: Union[str, None] = "0007"
@@ -22,20 +23,32 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    op.execute("ALTER TABLE runs ADD COLUMN current_step VARCHAR")
+    bind = op.get_bind()
+    inspector = sa.inspect(bind)
+
+    if not inspector.has_table("runs"):
+        op.create_table(
+            "runs",
+            sa.Column("id", sa.Text(), primary_key=True),
+            sa.Column("payload", sa.Text(), nullable=False),
+            sa.Column("current_step", sa.String(), nullable=True),
+        )
+        return
+
+    columns = {column["name"] for column in inspector.get_columns("runs")}
+    if "current_step" not in columns:
+        op.add_column("runs", sa.Column("current_step", sa.String(), nullable=True))
 
 
 def downgrade() -> None:
-    # SQLite does not support DROP COLUMN in older versions; recreate without it.
-    op.execute(
-        """
-        CREATE TABLE IF NOT EXISTS runs_backup AS
-        SELECT id, payload FROM runs
-        """
-    )
-    op.execute("DROP TABLE runs")
-    op.execute(
-        "CREATE TABLE runs (id TEXT PRIMARY KEY, payload TEXT NOT NULL)"
-    )
-    op.execute("INSERT INTO runs SELECT id, payload FROM runs_backup")
-    op.execute("DROP TABLE runs_backup")
+    bind = op.get_bind()
+    inspector = sa.inspect(bind)
+    if not inspector.has_table("runs"):
+        return
+
+    columns = {column["name"] for column in inspector.get_columns("runs")}
+    if "current_step" not in columns:
+        return
+
+    with op.batch_alter_table("runs") as batch_op:
+        batch_op.drop_column("current_step")
