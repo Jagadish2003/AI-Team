@@ -1,5 +1,5 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { CheckCircle2, Circle, Loader2 } from "lucide-react";
+import React, { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
+import { CheckCircle2, Circle, Info, Loader2 } from "lucide-react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { InfoPanel } from "../components/common/InfoPanel";
 import LoadingPanel from "../components/common/LoadingPanel";
@@ -22,18 +22,31 @@ interface DiscoveryStep {
   id: string;
   label: string;
   subLabel: string;
+  // CS-4 T6 (AT-314): approved explanation shown via an info tooltip on the
+  // two Salesforce steps so the customer understands why both passes occur.
+  infoTooltip?: string;
 }
+
+// CS-4 T6 (AT-314 / Section 4): approved wording — must match exactly.
+export const SALESFORCE_DUAL_EXTRACTION_TOOLTIP =
+  "AgentIQ reads from your Salesforce system in two passes: the first reads " +
+  "CRM signals (Cases, Workflows, Approvals), the second reads nCino lending " +
+  "signals (Loans, Covenants, Checklists). These are different datasets " +
+  "serving different detectors. Both passes use your authorised read-only " +
+  "token and are logged in the audit trail.";
 
 const DISCOVERY_STEPS: DiscoveryStep[] = [
   {
     id: "sf_crm",
     label: "Salesforce CRM",
     subLabel: "Ingesting case metrics, flows, and approval data",
+    infoTooltip: SALESFORCE_DUAL_EXTRACTION_TOOLTIP,
   },
   {
     id: "sf_ncino",
     label: "nCino Lending",
     subLabel: "Ingesting nCino loan origination signals",
+    infoTooltip: SALESFORCE_DUAL_EXTRACTION_TOOLTIP,
   },
   {
     id: "sn",
@@ -67,17 +80,53 @@ const STEP_INDEX = Object.fromEntries(
 );
 
 // ---------------------------------------------------------------------------
+// StepInfoTooltip — accessible info tooltip for a discovery step (CS-4 T6).
+// Renders a keyboard-focusable info icon. The explanation shows on hover and
+// on keyboard focus, is exposed to assistive tech via aria-label, and is
+// linked to the trigger through aria-describedby (role="tooltip"). The native
+// title attribute provides a fallback hover/tap tooltip.
+// ---------------------------------------------------------------------------
+export function StepInfoTooltip({ text }: { text: string }) {
+  const tooltipId = useId();
+
+  return (
+    <span className="group relative inline-flex">
+      <button
+        type="button"
+        aria-label={text}
+        aria-describedby={tooltipId}
+        title={text}
+        className="inline-flex h-4 w-4 items-center justify-center rounded-full text-muted/70 transition-colors hover:text-accent focus:outline-none focus-visible:ring-1 focus-visible:ring-accent/60"
+      >
+        <Info size={14} aria-hidden="true" />
+      </button>
+      <span
+        role="tooltip"
+        id={tooltipId}
+        className="pointer-events-none absolute left-1/2 top-full z-10 mt-2 w-72 -translate-x-1/2 rounded-md border border-border bg-bg/95 p-2 text-xs leading-4 text-text opacity-0 shadow-lg transition-opacity duration-150 group-hover:opacity-100 group-focus-within:opacity-100"
+      >
+        {text}
+      </span>
+    </span>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // DiscoveryStepList — renders all steps with completed / active / pending state
 // ---------------------------------------------------------------------------
-function DiscoveryStepList({ currentStep }: { currentStep: string | null }) {
+export function DiscoveryStepList({ currentStep }: { currentStep: string | null }) {
   const activeIdx =
     currentStep != null ? (STEP_INDEX[currentStep] ?? -1) : -1;
 
   return (
     <ol className="space-y-3">
       {DISCOVERY_STEPS.map((step, idx) => {
-        const isCompleted = activeIdx > idx;
-        const isActive = activeIdx === idx;
+        // "complete" is the terminal step: reaching it means the run finished,
+        // so it renders as completed (check) rather than active (spinner) —
+        // there is no later step to advance activeIdx past it (CS-4 T5).
+        const isTerminal = step.id === "complete";
+        const isCompleted = activeIdx > idx || (isTerminal && activeIdx === idx);
+        const isActive = activeIdx === idx && !isCompleted;
 
         return (
           <li key={step.id} className="flex items-start gap-3">
@@ -107,7 +156,7 @@ function DiscoveryStepList({ currentStep }: { currentStep: string | null }) {
             {/* Labels */}
             <div className="min-w-0">
               <div
-                className={`text-sm font-semibold leading-5 ${
+                className={`flex items-center gap-1.5 text-sm font-semibold leading-5 ${
                   isCompleted
                     ? "text-emerald-300"
                     : isActive
@@ -115,7 +164,10 @@ function DiscoveryStepList({ currentStep }: { currentStep: string | null }) {
                       : "text-muted/60"
                 }`}
               >
-                {step.label}
+                <span>{step.label}</span>
+                {step.infoTooltip && (
+                  <StepInfoTooltip text={step.infoTooltip} />
+                )}
               </div>
               <div
                 className={`text-xs leading-4 ${
