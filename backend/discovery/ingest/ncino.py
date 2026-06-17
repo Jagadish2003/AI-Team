@@ -946,8 +946,7 @@ def ingest(preloaded_process_instances: Optional[List[Dict[str, Any]]] = None) -
         spreads = _safe_fetch(_fetch_spreads, "spreads")
         spread_periods = _safe_fetch(_fetch_spread_periods, "spread_periods")
         # CS-4 / AT-309: reuse the Salesforce CRM ingestor's ProcessInstance
-        # records when supplied (even an empty list), instead of issuing a
-        # duplicate query. Only fetch when nothing was preloaded (None).
+        # records when supplied, instead of issuing a duplicate query.
         if preloaded_process_instances is not None:
             logger.info(
                 "process_instances=%d (reused from Salesforce ingestor — "

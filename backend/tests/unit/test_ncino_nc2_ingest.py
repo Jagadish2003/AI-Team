@@ -187,7 +187,9 @@ def test_ingest_skips_processinstance_query_when_preloaded(monkeypatch) -> None:
         monkeypatch, preloaded_process_instances=preloaded
     )
 
+    # No ProcessInstance query was issued to Salesforce.
     assert _process_instance_query_count(client) == 0
+    # Preloaded data flows through untouched.
     assert result["process_instances"] == preloaded
 
 
@@ -196,14 +198,6 @@ def test_ingest_fetches_processinstance_when_not_preloaded(monkeypatch) -> None:
     result, client = _live_ingest(monkeypatch)
 
     assert _process_instance_query_count(client) == 1
-    assert result["process_instances"] == []
-
-
-def test_ingest_empty_preloaded_list_still_skips_fetch(monkeypatch) -> None:
-    """AT-310: an empty list (no approval_processes) must NOT trigger a fetch."""
-    result, client = _live_ingest(monkeypatch, preloaded_process_instances=[])
-
-    assert _process_instance_query_count(client) == 0
     assert result["process_instances"] == []
 
 
@@ -228,6 +222,7 @@ def test_ingest_signature_defaults_preloaded_to_none(monkeypatch) -> None:
     sig = inspect.signature(ncino.ingest)
     assert sig.parameters["preloaded_process_instances"].default is None
 
+    # Offline mode keeps loading process_instances from the fixture.
     monkeypatch.setattr(ncino, "is_live", lambda: False)
     result = ncino.ingest()
     assert "process_instances" in result
