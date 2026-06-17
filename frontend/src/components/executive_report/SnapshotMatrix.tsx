@@ -71,16 +71,12 @@ export default function SnapshotMatrix({ opportunities }: SnapshotMatrixProps) {
     [opportunities, layout],
   );
 
-  // Static name labels sit above each bubble. When labels collide, two things keep
-  // them readable: (1) they fan out horizontally by their bubble's x-position — the
-  // left bubble's name shifts left, the right bubble's name shifts right; (2) they
-  // stack vertically with a small gap. A thin leader line ties each pill to its
-  // bubble so overlapping bubbles (e.g. Refund vs Discount approval) stay unambiguous.
+  // Name labels. Non-overlapping bubbles keep their label in a pill just above the
+  // bubble (with a short leader line). Bubbles that physically overlap another bubble
+  // are flagged `onBubble` — their name is written directly on the bubble instead, so
+  // it's obvious which name belongs to which of the overlapping circles.
   const labelPlacements = useMemo(() => {
     const LABEL_H = 21;
-    const V_GAP = 3;       // vertical clearance when stacking
-    const H_MARGIN = 6;    // horizontal slack before two labels count as overlapping
-    const FAN_STEP = 70;   // horizontal offset between fanned labels in a cluster
 
     const clampX = (cx: number, width: number) =>
       clamp(cx, layout.left + width / 2 + 2, layout.rx - width / 2 - 2);
@@ -92,27 +88,29 @@ export default function SnapshotMatrix({ opportunities }: SnapshotMatrixProps) {
         id: p.o.id,
         title,
         width,
+        r: p.r,
         bubbleX: p.x,
+        bubbleCy: p.y,
         bubbleTop: p.y - p.r,
         centerX: clampX(p.x, width),
         pillBottom: clamp(p.y - p.r - 4, layout.top + LABEL_H, layout.by - 2),
+        onBubble: false,
+        onX: p.x,   // on-bubble label centre x (set for overlapping clusters)
+        onY: p.y,   // on-bubble label centre y
       };
     });
 
-    const horizontallyOverlap = (a: typeof placed[number], b: typeof placed[number]) =>
-      Math.abs(a.centerX - b.centerX) < (a.width + b.width) / 2 + H_MARGIN;
-    const verticallyOverlap = (a: typeof placed[number], b: typeof placed[number]) =>
-      Math.abs(a.pillBottom - b.pillBottom) < LABEL_H + V_GAP;
-
-    // 1. Cluster labels that currently collide (overlap both horizontally and
-    //    vertically), via simple union-find over the colliding pairs.
+    // Cluster bubbles that physically overlap (centre distance < sum of radii),
+    // via union-find, so a chain of overlapping bubbles is treated as one group.
     const parent = placed.map((_, i) => i);
     const find = (i: number): number => (parent[i] === i ? i : (parent[i] = find(parent[i])));
     for (let i = 0; i < placed.length; i += 1) {
       for (let j = i + 1; j < placed.length; j += 1) {
-        if (horizontallyOverlap(placed[i], placed[j]) && verticallyOverlap(placed[i], placed[j])) {
-          parent[find(i)] = find(j);
-        }
+        const dist = Math.hypot(
+          placed[i].bubbleX - placed[j].bubbleX,
+          placed[i].bubbleCy - placed[j].bubbleCy,
+        );
+        if (dist < placed[i].r + placed[j].r) parent[find(i)] = find(j);
       }
     }
     const clusters = new Map<number, number[]>();
@@ -122,36 +120,28 @@ export default function SnapshotMatrix({ opportunities }: SnapshotMatrixProps) {
       clusters.get(root)!.push(i);
     });
 
-    // 2. Within each colliding cluster, lay the labels out SIDE BY SIDE in a single
-    //    row at the same height, ordered by bubble x — leftmost bubble gets the
-    //    leftmost label, rightmost gets the rightmost. This keeps each name right at
-    //    its bubble instead of stacking them one above another.
-    const H_BETWEEN = 8; // horizontal gap between side-by-side labels
+    // For each overlapping cluster, draw each name as a bar that sticks OUT of its
+    // bubble: a bubble on the right side of the cluster extends its label to the
+    // right, a bubble on the left extends to the left — the label's inner edge is
+    // anchored at the bubble centre. Vertically each label sits at its own bubble's
+    // centre, so an upper bubble's name rides higher and a lower bubble's rides lower
+    // (matches the requested tag layout).
     clusters.forEach((idxs) => {
       if (idxs.length < 2) return;
-      const ordered = idxs.slice().sort((a, b) => placed[a].bubbleX - placed[b].bubbleX);
-      const meanX = ordered.reduce((s, i) => s + placed[i].bubbleX, 0) / ordered.length;
-      const rowBottom = Math.min(...ordered.map((i) => placed[i].pillBottom));
-      const totalWidth =
-        ordered.reduce((s, i) => s + placed[i].width, 0) + H_BETWEEN * (ordered.length - 1);
-      const available = layout.rx - layout.left - 4;
-
-      if (totalWidth <= available) {
-        // Fits on one row: place them left-to-right, centered on the cluster.
-        let cursor = clamp(meanX - totalWidth / 2, layout.left + 2, layout.rx - 2 - totalWidth);
-        ordered.forEach((i) => {
-          placed[i].centerX = cursor + placed[i].width / 2;
-          placed[i].pillBottom = rowBottom;
-          cursor += placed[i].width + H_BETWEEN;
-        });
-      } else {
-        // Too many wide labels to fit side by side — fall back to a fanned stack.
-        ordered.forEach((i, k) => {
-          const offset = (k - (ordered.length - 1) / 2) * FAN_STEP;
-          placed[i].centerX = clampX(meanX + offset, placed[i].width);
-          placed[i].pillBottom = clamp(rowBottom + k * (LABEL_H + V_GAP), layout.top + LABEL_H, layout.by - 2);
-        });
-      }
+      const meanX = idxs.reduce((s, i) => s + placed[i].bubbleX, 0) / idxs.length;
+      idxs.forEach((i) => {
+        placed[i].onBubble = true;
+        const extendRight = placed[i].bubbleX >= meanX;
+        // Inner edge at the bubble centre; the bar then extends outward.
+        const rawX = extendRight
+          ? placed[i].bubbleX + placed[i].width / 2
+          : placed[i].bubbleX - placed[i].width / 2;
+        placed[i].onX = clampX(rawX, placed[i].width);
+        // Drop the left-extending (lower) label to the bottom of its bubble so it
+        // sits clearly below the upper bubble instead of crossing into it.
+        const yOffset = extendRight ? 0 : Math.max(22, placed[i].r * 0.9);
+        placed[i].onY = clamp(placed[i].bubbleCy + yOffset, layout.top + 12, layout.by - 12);
+      });
     });
 
     return placed;
@@ -257,10 +247,8 @@ export default function SnapshotMatrix({ opportunities }: SnapshotMatrixProps) {
             </g>
           ))}
 
-          {/* Thin leader lines tying each label to its bubble (drawn under the pills).
-              The line starts at the pill's bottom edge nearest the bubble so the
-              connection reads cleanly even when a wide label sits off to one side. */}
-          {labelPlacements.map((lab) => {
+          {/* NON-OVERLAPPING bubbles: leader line from the pill down to the bubble. */}
+          {labelPlacements.filter((lab) => !lab.onBubble).map((lab) => {
             const originX = clamp(lab.bubbleX, lab.centerX - lab.width / 2, lab.centerX + lab.width / 2);
             return (
               <line
@@ -276,8 +264,8 @@ export default function SnapshotMatrix({ opportunities }: SnapshotMatrixProps) {
             );
           })}
 
-          {/* Static name labels — fanned horizontally by bubble position, stacked vertically */}
-          {labelPlacements.map((lab) => (
+          {/* NON-OVERLAPPING bubbles: name in a pill just above the bubble (unchanged). */}
+          {labelPlacements.filter((lab) => !lab.onBubble).map((lab) => (
             <g key={`label-${lab.id}`} pointerEvents="none">
               <rect
                 x={lab.centerX - lab.width / 2}
@@ -292,6 +280,33 @@ export default function SnapshotMatrix({ opportunities }: SnapshotMatrixProps) {
                 x={lab.centerX}
                 y={lab.pillBottom - 6}
                 fontSize="13"
+                fontWeight="600"
+                fill="var(--opportunity-matrix-hover-label)"
+                textAnchor="middle"
+              >
+                {lab.title}
+              </text>
+            </g>
+          ))}
+
+          {/* OVERLAPPING bubbles: names written ON the bubbles, side by side at the
+              same height (left bubble's name biased left, right biased right). Drawn
+              last so they sit above every bubble fill. */}
+          {labelPlacements.filter((lab) => lab.onBubble).map((lab) => (
+            <g key={`on-${lab.id}`} pointerEvents="none">
+              <rect
+                x={lab.onX - lab.width / 2}
+                y={lab.onY - 10}
+                width={lab.width}
+                height={20}
+                rx={5}
+                fill="var(--opportunity-matrix-bubble-label-bg)"
+                stroke="var(--opportunity-matrix-bubble-label-border)"
+              />
+              <text
+                x={lab.onX}
+                y={lab.onY + 4}
+                fontSize="12"
                 fontWeight="600"
                 fill="var(--opportunity-matrix-hover-label)"
                 textAnchor="middle"
