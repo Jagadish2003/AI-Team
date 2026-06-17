@@ -13,10 +13,29 @@ export function fetchConnectors(): Promise<Connector[]> {
   return apiGet<Connector[]>("/api/connectors");
 }
 
-export function connectConnectorApi(connectorId: string): Promise<Connector> {
-  return apiPost<Connector>(`/api/connectors/${connectorId}/connect`, {
-    status: "connected",
-  });
+/**
+ * CS-2 / AT-323 (T1): Initiate the real OAuth Connect flow.
+ *
+ * Instead of marking the connector connected without authentication, this
+ * fetches a one-time provider auth URL from the backend
+ * (GET /api/connectors/{id}/auth-url — the backend mints a state nonce) and
+ * redirects the browser to the provider's login page. The provider then
+ * redirects back to OAUTH_REDIRECT_URI, the backend exchanges the code and
+ * stores the token, and finally redirects to the frontend /oauth/callback.
+ *
+ * Does not resolve normally on success — the browser navigates away. The
+ * returned promise only settles (rejects) if fetching the auth URL fails.
+ */
+export async function connectConnectorApi(connectorId: string): Promise<void> {
+  // Step 1: Get the OAuth auth URL from the backend (mints a state nonce).
+  const { auth_url } = await apiGet<{ auth_url: string; connector_id: string }>(
+    `/api/connectors/${connectorId}/auth-url`
+  );
+
+  // Step 2: Redirect the browser to the provider login page. The provider
+  // redirects back to OAUTH_REDIRECT_URI after authorisation.
+  window.location.href = auth_url;
+  // Function does not return normally — browser navigates away.
 }
 
 export function configureSyncApi(connectorId: string): Promise<Connector> {

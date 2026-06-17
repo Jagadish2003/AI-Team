@@ -8,16 +8,49 @@ from app.auth.models import ConnectorAuthConfig
 # client_id values are non-sensitive per T1-S10-A spec and can be in code.
 # os.getenv() allows override from environment (production); the fallback is a
 # stable dev/CI placeholder so tests never receive None and CI needs no .env file.
+
+# ---------------------------------------------------------------------------
+# Per-connector instance / tenant settings
+#
+# These are the only host values that change between deployments. Edit them
+# here to point the OAuth flows at a different instance — no .env changes
+# required. The URLs below are built from these variables, so changing a value
+# here updates the token / revocation / authorization URLs together.
+#
+# Note: configs are evaluated once at import, so a backend restart is required
+# for a change to take effect (these are not hot-reloaded per request).
+#
+# Only Salesforce, ServiceNow, SAP and Dynamics365 have a per-customer
+# instance/tenant. Jira, Confluence, GitHub and Slack use fixed global hosts
+# (auth.atlassian.com, github.com, slack.com) that never vary per deployment.
+# ---------------------------------------------------------------------------
+
+# Salesforce login host: "test.salesforce.com" (sandbox),
+# "login.salesforce.com" (production), or your My Domain host
+# e.g. "mycompany.my.salesforce.com".
+SALESFORCE_INSTANCE = "test.salesforce.com"
+
+# ServiceNow instance subdomain only, e.g. "dev198195" → dev198195.service-now.com
+SERVICENOW_INSTANCE = "dev198195"
+
+# SAP BTP subaccount subdomain + region, e.g. "05e6c258trial" + "us10"
+# → 05e6c258trial.authentication.us10.hana.ondemand.com
+SAP_SUBDOMAIN = "05e6c258trial"
+SAP_REGION = "us10"
+
+# Microsoft Entra ID (Azure AD) tenant id (GUID) for Dynamics 365.
+DYNAMICS365_TENANT_ID = "bb612c49-03be-4da1-9974-49f0c8704eb8"
+
 CONNECTOR_AUTH_CONFIGS: Dict[str, ConnectorAuthConfig] = {
     "salesforce": ConnectorAuthConfig(
         connector_id="salesforce",
         flow="authorization_code",
         client_id=os.getenv("SALESFORCE_CLIENT_ID", "salesforce-dev-client-id"),
         secret_key="SALESFORCE_CLIENT_SECRET",
-        token_url="https://test.salesforce.com/services/oauth2/token",
-        revocation_url="https://test.salesforce.com/services/oauth2/revoke",
+        token_url=f"https://{SALESFORCE_INSTANCE}/services/oauth2/token",
+        revocation_url=f"https://{SALESFORCE_INSTANCE}/services/oauth2/revoke",
         scopes=["api", "refresh_token", "offline_access"],
-        authorization_url="https://test.salesforce.com/services/oauth2/authorize",
+        authorization_url=f"https://{SALESFORCE_INSTANCE}/services/oauth2/authorize",
         redirect_uri=os.environ.get("SALESFORCE_OAUTH_REDIRECT_URI", ""),
     ),
     "servicenow": ConnectorAuthConfig(
@@ -25,10 +58,10 @@ CONNECTOR_AUTH_CONFIGS: Dict[str, ConnectorAuthConfig] = {
         flow="authorization_code",
         client_id=os.getenv("SERVICENOW_CLIENT_ID", "servicenow-dev-client-id"),
         secret_key="SERVICENOW_CLIENT_SECRET",
-        token_url="https://dev198195.service-now.com/oauth_token.do",
-        revocation_url="https://dev198195.service-now.com/oauth_revoke.do",
+        token_url=f"https://{SERVICENOW_INSTANCE}.service-now.com/oauth_token.do",
+        revocation_url=f"https://{SERVICENOW_INSTANCE}.service-now.com/oauth_revoke.do",
         scopes=["user", "admin"],
-        authorization_url="https://dev198195.service-now.com/oauth_auth.do",
+        authorization_url=f"https://{SERVICENOW_INSTANCE}.service-now.com/oauth_auth.do",
         redirect_uri=os.environ.get("OAUTH_REDIRECT_URI", ""),
     ),
     "jira": ConnectorAuthConfig(
@@ -84,7 +117,7 @@ CONNECTOR_AUTH_CONFIGS: Dict[str, ConnectorAuthConfig] = {
         flow="client_credentials",
         client_id=os.getenv("SAP_CLIENT_ID", "sap-dev-client-id"),
         secret_key="SAP_CLIENT_SECRET",
-        token_url="https://05e6c258trial.authentication.us10.hana.ondemand.com/oauth/token",
+        token_url=f"https://{SAP_SUBDOMAIN}.authentication.{SAP_REGION}.hana.ondemand.com/oauth/token",
         revocation_url=None,                                                        # client_credentials — no user token to revoke
         scopes=["uaa.resource"],
         redirect_uri=None,                                                          # client_credentials — no browser redirect
@@ -95,7 +128,7 @@ CONNECTOR_AUTH_CONFIGS: Dict[str, ConnectorAuthConfig] = {
         flow="client_credentials",
         client_id=os.getenv("DYNAMICS365_CLIENT_ID", "dynamics365-dev-client-id"),
         secret_key="DYNAMICS365_CLIENT_SECRET",
-        token_url="https://login.microsoftonline.com/bb612c49-03be-4da1-9974-49f0c8704eb8/oauth2/v2.0/token",
+        token_url=f"https://login.microsoftonline.com/{DYNAMICS365_TENANT_ID}/oauth2/v2.0/token",
         revocation_url=None,                                                        # client_credentials — no user token to revoke
         scopes=["default"],
         redirect_uri=None,                                                          # client_credentials — no browser redirect
