@@ -391,7 +391,15 @@ def run(
     if _is_ncino(pack_id) and "salesforce" in _systems:
         try:
             from .ingest.ncino import ingest as ncino_ingest
-            ncino_data = ncino_ingest()
+            # CS-4 / AT-310: ProcessInstance is queried by both salesforce.ingest()
+            # and ncino.ingest(). Forward the Salesforce CRM approval data so the
+            # nCino ingestor reuses it instead of issuing a duplicate
+            # ProcessInstance query, reducing total Salesforce API calls by 1 per
+            # discovery run. Default to an empty list when approval_processes is
+            # absent so ncino.ingest() still skips the duplicate fetch.
+            ncino_data = ncino_ingest(
+                preloaded_process_instances=sf_data.get("approval_processes", [])
+            )
             # Merge ncino data into sf_data so detectors can find it
             if sf_data is None:
                 sf_data = {}
