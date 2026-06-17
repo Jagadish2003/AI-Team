@@ -26,8 +26,8 @@ def _email() -> str:
 def test_same_org_name_creates_distinct_orgs_both_owners(client: TestClient):
     name = f"Shared Workspace {uuid.uuid4().hex[:6]}"
 
-    first = user_auth.register_org_and_owner(name, _email(), "supersecret1")
-    second = user_auth.register_org_and_owner(name, _email(), "supersecret1")
+    first = user_auth.register_org_and_owner(name, _email(), "Supersecret1!")
+    second = user_auth.register_org_and_owner(name, _email(), "Supersecret1!")
 
     # A matching name must NOT join the first workspace — distinct org_ids.
     assert first["user"]["org_id"] != second["user"]["org_id"], "same name → separate orgs"
@@ -37,8 +37,8 @@ def test_same_org_name_creates_distinct_orgs_both_owners(client: TestClient):
 
 
 def test_different_org_name_creates_distinct_orgs(client: TestClient):
-    a = user_auth.register_org_and_owner(f"Org A {uuid.uuid4().hex[:6]}", _email(), "supersecret1")
-    b = user_auth.register_org_and_owner(f"Org B {uuid.uuid4().hex[:6]}", _email(), "supersecret1")
+    a = user_auth.register_org_and_owner(f"Org A {uuid.uuid4().hex[:6]}", _email(), "Supersecret1!")
+    b = user_auth.register_org_and_owner(f"Org B {uuid.uuid4().hex[:6]}", _email(), "Supersecret1!")
 
     assert a["user"]["org_id"] != b["user"]["org_id"], "different name → different org"
     assert a["user"]["role"] == "owner"
@@ -48,8 +48,8 @@ def test_different_org_name_creates_distinct_orgs(client: TestClient):
 def test_case_or_whitespace_name_variant_still_isolated(client: TestClient):
     name = f"Casing {uuid.uuid4().hex[:6]}"
 
-    first = user_auth.register_org_and_owner(name, _email(), "supersecret1")
-    other = user_auth.register_org_and_owner(f"  {name.upper()}  ", _email(), "supersecret1")
+    first = user_auth.register_org_and_owner(name, _email(), "Supersecret1!")
+    other = user_auth.register_org_and_owner(f"  {name.upper()}  ", _email(), "Supersecret1!")
 
     # Even a case/whitespace variant of an existing name creates its own org.
     assert other["user"]["org_id"] != first["user"]["org_id"]
@@ -66,7 +66,7 @@ def test_second_registration_same_name_cannot_see_first_users_run(client: TestCl
 
     a = client.post(
         "/api/auth/register",
-        json={"org_name": name, "email": _email(), "password": "supersecret1"},
+        json={"org_name": name, "email": _email(), "password": "Supersecret1!"},
     )
     assert a.status_code == 201, a.text
     a_org = a.json()["user"]["org_id"]
@@ -79,7 +79,7 @@ def test_second_registration_same_name_cannot_see_first_users_run(client: TestCl
 
     b = client.post(
         "/api/auth/register",
-        json={"org_name": name, "email": _email(), "password": "supersecret1"},
+        json={"org_name": name, "email": _email(), "password": "Supersecret1!"},
     )
     assert b.status_code == 201, b.text
     b_body = b.json()
