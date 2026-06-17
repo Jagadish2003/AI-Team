@@ -28,8 +28,57 @@ for path in (str(REPO_ROOT), str(BACKEND_DIR)):
 # Resolve DATABASE_URL the same way the app does: an exported env var wins, else
 # backend/.env, else the documented local default. Without this fallback an
 # unset DATABASE_URL left TEST_DATABASE_URL = None and crashed conftest import.
+def _normalize_database_url(url: str) -> str:
+    """Return a psycopg2-parseable DSN, percent-encoding a raw password if needed.
+
+    A DATABASE_URL whose userinfo contains characters that are special in a
+    libpq URI — most commonly a literal ``%`` or ``&`` in the password — fails
+    psycopg2's URI parser with ``invalid percent-encoded token`` before any
+    connection is attempted. Local ``backend/.env`` files often store the raw
+    password, so this helper repairs the value at load time instead of forcing
+    every developer to hand-encode their ``.env``.
+
+    Idempotent: a URL that psycopg2 already accepts is returned unchanged; only
+    a URL that fails to parse has its userinfo (username + password)
+    percent-encoded and is then rebuilt. Non-URI ("key=value") DSNs and URLs
+    without credentials are returned as-is.
+    """
+    import re
+    from urllib.parse import quote
+
+    from psycopg2.extensions import make_dsn
+
+    if not url:
+        return url
+
+    try:
+        make_dsn(url)
+        return url  # already a valid DSN — leave it untouched
+    except Exception:
+        pass
+
+    m = re.match(r"^(?P<scheme>[a-zA-Z][a-zA-Z0-9+.\-]*://)(?P<rest>.*)$", url, re.DOTALL)
+    if not m:
+        return url  # not a URI-form DSN (e.g. "host=... password=...")
+
+    userinfo, at, hostpart = m.group("rest").rpartition("@")
+    if not at:
+        return url  # no credentials to encode
+
+    user, sep, password = userinfo.partition(":")
+    if not sep:
+        return url  # username only, no password component
+
+    rebuilt = f"{m.group('scheme')}{quote(user, safe='')}:{quote(password, safe='')}@{hostpart}"
+    try:
+        make_dsn(rebuilt)
+    except Exception:
+        return url  # encoding did not help — defer to the original error path
+    return rebuilt
+
+
 load_dotenv(BACKEND_DIR / ".env")
-TEST_DATABASE_URL = (
+TEST_DATABASE_URL = _normalize_database_url(
     os.environ.get("DATABASE_URL")
     or "postgresql://agentiq:agentiq@localhost:5432/agentiq"
 )
@@ -272,35 +321,62 @@ def pytest_configure(config):
     os.environ["SEED_DIR"] = str(_resolve_seed_dir())
     os.environ.setdefault("CORS_ORIGINS", "http://localhost:5173")
 
+    # The hermetic reset drops every public-schema table and rebuilds it from
+    # migrations + seed. That is correct for a throwaway/CI database the test
+    # role owns, but it must NOT run against a shared, pre-provisioned database
+    # where the role does not own the schema objects: the DROP fails with
+    # insufficient_privilege and, worse, would wipe shared data if it had rights.
+    # When the role cannot reset, leave the existing schema in place and run the
+    # suite against it (no deletion, no creation of tables/schema). The reset
+    # runs as a single atomic DO-block, so a privilege failure drops nothing.
+    schema_is_resettable = True
     try:
         _reset_database()
+    except psycopg2.Error as exc:
+        if getattr(exc, "pgcode", None) == "42501":  # insufficient_privilege
+            schema_is_resettable = False
+            print(
+                "[conftest] DATABASE_URL role cannot reset the public schema "
+                "(insufficient_privilege) - running contract tests against the "
+                "existing provisioned schema; skipping schema drop/migrate/seed.",
+                file=sys.stderr,
+            )
+        else:
+            raise RuntimeError(
+                "Could not reset the test PostgreSQL database at "
+                f"{os.environ['DATABASE_URL']!r}. Ensure PostgreSQL is running and "
+                f"the database/role exist.\n{exc}"
+            ) from exc
     except Exception as exc:
         raise RuntimeError(
             "Could not reset the test PostgreSQL database at "
             f"{os.environ['DATABASE_URL']!r}. Ensure PostgreSQL is running and the "
-            f"agentiq database/role exist.\n{exc}"
+            f"database/role exist.\n{exc}"
         ) from exc
 
-    try:
-        alembic_cfg = AlembicConfig(str(BACKEND_DIR / "alembic.ini"))
-        alembic_cfg.set_main_option("script_location", str(BACKEND_DIR / "migrations"))
-        alembic_command.upgrade(alembic_cfg, "head")
-    except Exception as exc:
-        raise RuntimeError(f"alembic upgrade failed:\n{exc}") from exc
+    # Only (re)create the schema + reseed on a database this role owns (local
+    # throwaway DB or CI). A pre-provisioned shared DB already has both.
+    if schema_is_resettable:
+        try:
+            alembic_cfg = AlembicConfig(str(BACKEND_DIR / "alembic.ini"))
+            alembic_cfg.set_main_option("script_location", str(BACKEND_DIR / "migrations"))
+            alembic_command.upgrade(alembic_cfg, "head")
+        except Exception as exc:
+            raise RuntimeError(f"alembic upgrade failed:\n{exc}") from exc
 
-    # --no-reset: seed_loader now resets the public schema by default, but the
-    # conftest already did its own reset + `alembic upgrade head` above, so the
-    # seed step must NOT drop the migration tables it just created.
-    result = subprocess.run(
-        [sys.executable, str(SEED_LOADER), "--no-reset"],
-        cwd=str(BACKEND_DIR),
-        env={**os.environ, "PYTHONIOENCODING": "utf-8"},
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-    )
-    if result.returncode != 0:
-        raise RuntimeError(f"seed_loader.py failed:\n{result.stderr}")
+        # --no-reset: seed_loader now resets the public schema by default, but the
+        # conftest already did its own reset + `alembic upgrade head` above, so the
+        # seed step must NOT drop the migration tables it just created.
+        result = subprocess.run(
+            [sys.executable, str(SEED_LOADER), "--no-reset"],
+            cwd=str(BACKEND_DIR),
+            env={**os.environ, "PYTHONIOENCODING": "utf-8"},
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+        )
+        if result.returncode != 0:
+            raise RuntimeError(f"seed_loader.py failed:\n{result.stderr}")
 
     # Seed the dev user as owner of the default org so legacy contract tests
     # pass with RBAC applied. The app's lifespan does this for context-managed

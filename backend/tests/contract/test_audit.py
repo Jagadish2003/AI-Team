@@ -9,8 +9,9 @@ from __future__ import annotations
 
 import json
 import uuid
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
+import psycopg2
 import pytest
 
 from app import db
@@ -241,4 +242,93 @@ def test_connector_connected_includes_user_id_and_scopes():
     assert row["connector_id"] == "salesforce"
     assert row["user_id"] == "dev-token-change-me", "user_id must be stored in audit record"
     assert row["payload"]["scopes_granted"] == ["api", "refresh_token"]
+
+
+# ---------------------------------------------------------------------------
+# AT-292 / FixPack v2 Fix 5 — audit write failures emit telemetry
+#
+# The audit write path migrated to PostgreSQL (AT-288 / Fix 1), so the failing
+# write is simulated with psycopg2.OperationalError — the production equivalent
+# of the sqlite3.OperationalError named in the original AC.
+# ---------------------------------------------------------------------------
+
+
+def _failing_audit_connection() -> MagicMock:
+    """A db connection mock whose cursor.execute raises on the audit write."""
+    mock_con = MagicMock()
+    mock_con.cursor.return_value.execute.side_effect = psycopg2.OperationalError(
+        "simulated audit write failure"
+    )
+    return mock_con
+
+
+def test_audit_write_failure_logs_org_and_event_type(caplog):
+    """F5-AC1 — a failed audit write logs at ERROR with org_id and event_type,
+    and the exception is never re-raised to the caller."""
+    import logging
+
+    import app.middleware.audit as audit_mod
+
+    audit_mod._TABLES_INITIALISED = True  # isolate the failure to the write itself
+
+    with patch("app.middleware.audit.db.connect", return_value=_failing_audit_connection()), \
+            patch("app.telemetry.record_event"):
+        with caplog.at_level(logging.ERROR, logger="app.middleware.audit"):
+            from app.middleware.audit import log_event
+
+            # (a) must not raise to the caller
+            log_event("user_login", org_id="org-f5-ac1", user_id="u1")
+
+    error_records = [r for r in caplog.records if r.levelno == logging.ERROR]
+    assert error_records, "expected an ERROR log on audit write failure"
+    combined = " ".join(r.getMessage() for r in error_records)
+    assert "org-f5-ac1" in combined, "logger.error must include org_id"
+    assert "user_login" in combined, "logger.error must include event_type"
+
+
+def test_audit_write_failure_emits_telemetry():
+    """F5-AC3 — a failed audit write (psycopg2.OperationalError, PostgreSQL
+    equivalent of sqlite3.OperationalError) is swallowed and surfaces an
+    'audit.write_failed' telemetry event.
+
+    (a) No exception propagates to the caller.
+    (b) record_event is called with event_type='audit.write_failed'.
+    """
+    import app.middleware.audit as audit_mod
+
+    audit_mod._TABLES_INITIALISED = True
+
+    with patch("app.middleware.audit.db.connect", return_value=_failing_audit_connection()), \
+            patch("app.telemetry.record_event") as mock_record:
+        from app.middleware.audit import log_event
+
+        # (a) must not raise
+        log_event("connector_connected", org_id="org-f5-ac3", connector_id="sf")
+
+    # (b) telemetry emitted with the right event type and payload
+    mock_record.assert_called_once()
+    args, _kwargs = mock_record.call_args
+    assert args[0] == "audit.write_failed", "telemetry event_type must be audit.write_failed"
+    payload = args[1]
+    assert payload["event_type"] == "connector_connected"
+    assert payload["org_id"] == "org-f5-ac3"
+    assert payload["error"], "payload must carry the stringified error"
+
+
+def test_audit_write_failed_registered_with_typeddict():
+    """F5-AC2 — audit.write_failed is in REGISTERED_EVENT_TYPES and maps to a
+    TypedDict payload schema with the documented fields."""
+    from typing import get_type_hints
+
+    from app.telemetry import (
+        AuditWriteFailedPayload,
+        EVENT_PAYLOAD_TYPES,
+        REGISTERED_EVENT_TYPES,
+    )
+
+    assert "audit.write_failed" in REGISTERED_EVENT_TYPES
+    assert EVENT_PAYLOAD_TYPES["audit.write_failed"] is AuditWriteFailedPayload
+
+    hints = get_type_hints(AuditWriteFailedPayload)
+    assert {"org_id", "event_type", "error"} <= set(hints)
  

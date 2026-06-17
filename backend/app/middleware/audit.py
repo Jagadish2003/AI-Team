@@ -115,12 +115,28 @@ def _ensure_table() -> None:
 
 
 def log_event(event_type: str, **kwargs: Any) -> None:
-    """Append one record to audit_log.  Never raises — fails silently (AC9)."""
+    """Append one record to audit_log.  Never raises — fails silently (AC9).
+
+    On any write failure the exception is swallowed (an audit failure must not
+    break the request that triggered it), but it is no longer invisible: an
+    ``audit.write_failed`` telemetry event is emitted from the failure handler
+    so the otherwise-silent failure is observable and alertable
+    (AT-292 / FixPack v2 Fix 5).
+    """
+    # Resolve org_id up front so it is available to the failure handler even if
+    # the DB write below raises before the row is built.
+    org_id = kwargs.pop("org_id", None)
+    if not org_id:
+        try:
+            from app.middleware.tenancy import get_current_org_id_optional
+
+            org_id = get_current_org_id_optional()
+        except Exception:
+            org_id = None
+    org_id = org_id or "default"
+
     try:
         _ensure_table()
-        from app.middleware.tenancy import get_current_org_id_optional
-
-        org_id = kwargs.pop("org_id", None) or get_current_org_id_optional() or "default"
         run_id = kwargs.pop("run_id", None)
         connector_id = kwargs.pop("connector_id", None)
         user_id = kwargs.pop("user_id", None)
@@ -151,4 +167,26 @@ def log_event(event_type: str, **kwargs: Any) -> None:
         finally:
             con.close()
     except Exception as exc:
-        logger.error("audit log_event(%s) failed: %s", event_type, exc)
+        # F5-AC1: never re-raise — audit failure must not break the triggering
+        # request. Log with org_id + event_type so the failure is traceable.
+        logger.error(
+            "audit log_event failed — org_id=%s event_type=%s: %s",
+            org_id,
+            event_type,
+            exc,
+        )
+        # F5-AC2: surface the silent failure as telemetry so it is alertable.
+        # Fire-and-forget: telemetry must never raise out of the audit path.
+        try:
+            from app.telemetry import record_event
+
+            record_event(
+                "audit.write_failed",
+                {
+                    "org_id": org_id,
+                    "event_type": event_type,
+                    "error": str(exc),
+                },
+            )
+        except Exception:
+            pass

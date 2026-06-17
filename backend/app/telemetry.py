@@ -375,6 +375,28 @@ class DBIngestorCompletedPayload(TypedDict):
     duration_ms: int
 
 
+class AuditWriteFailedPayload(TypedDict):
+    """AT-292 / FixPack v2 Fix 5 — emitted when an audit_log write fails.
+
+    Audit writes are fail-silent by design (an audit failure must never break
+    the request that triggered it), which previously made persistence failures
+    invisible — no telemetry, no alert. Regulated enterprise customers (TCU,
+    City National) require audit-trail integrity, so every swallowed audit write
+    now surfaces here so it is observable and alertable. Emitted by
+    app.middleware.audit.log_event() from its failure handler — fire-and-forget.
+
+    PII GUARD: org/event identifiers and the stringified error only — never the
+    audit payload field values themselves.
+
+    org_id:     The org whose audit event failed to persist.
+    event_type: The audit event_type that failed (e.g. 'connector_connected').
+    error:      str(exception) from the failed write — exception text only.
+    """
+    org_id: str
+    event_type: str
+    error: str
+
+
 # ---------------------------------------------------------------------------
 # Registry helpers
 # ---------------------------------------------------------------------------
@@ -439,6 +461,11 @@ register_event_type("causal.hypothesis_generated", CausalHypothesisGeneratedPayl
 # ENT-4 / T3-S14-A Sprint 14 — graph context builder.
 # graph.context_built is emitted by app.graph_context_builder.build_graph_context().
 register_event_type("graph.context_built", GraphContextBuiltPayload)
+# AT-292 / FixPack v2 Fix 5 — audit write-failure telemetry.
+# audit.write_failed is emitted by app.middleware.audit.log_event() when an
+# audit_log write is swallowed, so silent audit-persistence failures become
+# observable and alertable.
+register_event_type("audit.write_failed", AuditWriteFailedPayload)
 
 
 # ---------------------------------------------------------------------------
@@ -582,6 +609,7 @@ def get_telemetry_range(
 
 
 __all__ = [
+    "AuditWriteFailedPayload",               # AT-292 / FixPack v2 Fix 5
     "ConnectorHealthPayload",
     "ConnectorRegisteredEvent",
     "DBIngestorCompletedPayload",           # Sprint 11 — SQL Server ingestor payload
