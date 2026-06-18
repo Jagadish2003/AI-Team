@@ -35,7 +35,7 @@ def _register_owner(client, email=None):
         json={
             "org_name": f"Org_{uuid.uuid4().hex[:8]}",
             "email": email,
-            "password": "ownerpass1",
+            "password": "Ownerpass1!",
         },
     )
     assert resp.status_code == 201, resp.text
@@ -59,7 +59,7 @@ def test_register_sends_welcome_email(client, monkeypatch):
     email = _email()
     resp = client.post(
         "/api/auth/register",
-        json={"org_name": f"Org_{uuid.uuid4().hex[:8]}", "email": email, "password": "ownerpass1"},
+        json={"org_name": f"Org_{uuid.uuid4().hex[:8]}", "email": email, "password": "Ownerpass1!"},
     )
 
     assert resp.status_code == 201, resp.text
@@ -78,7 +78,7 @@ def test_register_still_succeeds_when_welcome_email_fails(client, monkeypatch):
 
     resp = client.post(
         "/api/auth/register",
-        json={"org_name": f"Org_{uuid.uuid4().hex[:8]}", "email": _email(), "password": "ownerpass1"},
+        json={"org_name": f"Org_{uuid.uuid4().hex[:8]}", "email": _email(), "password": "Ownerpass1!"},
     )
 
     assert resp.status_code == 201, resp.text
@@ -166,7 +166,7 @@ def test_invite_token_still_usable_end_to_end(client, monkeypatch):
 
     accept = client.post(
         "/api/auth/accept-invite",
-        json={"invite_token": token, "password": "analystpass1"},
+        json={"invite_token": token, "password": "Analystpass1!"},
     )
     assert accept.status_code == 200, accept.text
     assert accept.json()["user"]["role"] == "analyst"

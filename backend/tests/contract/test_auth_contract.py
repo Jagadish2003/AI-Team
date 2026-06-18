@@ -91,7 +91,8 @@ def test_ac2_register_returns_jwt_with_org_and_owner_role(client):
 
 
 def test_ac16_password_hash_is_bcrypt_and_no_plaintext(client):
-    password = "Supersecret-plaintext-1"
+    # Strong (CS-3) and distinctive so we can assert it is never stored in plaintext.
+    password = "Supersecret-Plaintext1!"
     resp, email = _register(client, password=password)
     assert resp.status_code == 201
 
@@ -308,7 +309,7 @@ def test_ac12_accept_invite_expired_returns_400(client):
 
     expired = client.post(
         "/api/auth/accept-invite",
-        json={"invite_token": invite_token, "password": "viewerpass1"},
+        json={"invite_token": invite_token, "password": "Viewerpass1!"},
     )
     assert expired.status_code == 400, expired.text
 
