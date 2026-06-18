@@ -15,7 +15,8 @@ AC coverage map (the testable criteria from AUTH-1 Section 10):
          same client still logs in.
   AC8  — a successful login clears the email's failed-attempt count.
   AC9  — after logout the same token is rejected (401) on a protected route.
-  AC10 — invite returns invite_token in non-production; 501 in production.
+  AC10 — invite returns invite_token in non-production; in production it returns
+         201 with the token hidden (CS-3 T7 removed the old 501 stub).
   AC11 — accept-invite is single-use (also in test_auth_invite_routes.py).
   AC12 — accept-invite with an expired token → 400.
   AC15 — register → JWT passes require_auth + require_role on an existing route
@@ -244,7 +245,11 @@ def test_ac10_invite_returns_token_in_non_production(client):
     assert invite.json()["invite_token"]
 
 
-def test_ac10_invite_returns_501_in_production(client, monkeypatch):
+def test_ac10_invite_hides_token_in_production(client, monkeypatch):
+    # CS-3 (T7): the pre-CS-3 production 501 stub is removed — email delivery is
+    # now a real supported path, so invite succeeds (201) in production. The raw
+    # invite_token must NOT be returned in production (invitees get it by email),
+    # but email_sent is still reported.
     # A signing secret is required once ENVIRONMENT=production.
     monkeypatch.setenv("JWT_SECRET", "x" * 40)
     resp, _ = _register(client, email=_email())
@@ -256,7 +261,10 @@ def test_ac10_invite_returns_501_in_production(client, monkeypatch):
         headers=_auth(owner_token),
         json={"email": _email(), "role": "analyst"},
     )
-    assert invite.status_code == 501, invite.text
+    assert invite.status_code == 201, invite.text
+    body = invite.json()
+    assert "invite_token" not in body
+    assert "email_sent" in body
 
 
 # ── AC11 / AC12: accept-invite single-use + expiry ───────────────────────────────

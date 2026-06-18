@@ -27,6 +27,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import AliasChoices, BaseModel, Field
 
 from app import db
+from app.email_service import send_invite_email, send_welcome_email
 from app.auth.user_auth import (
     EmailAlreadyExistsError,
     InvalidCredentialsError,
@@ -226,6 +227,17 @@ def register(body: RegisterRequest) -> Dict[str, Any]:
         raise HTTPException(status_code=409, detail="Email already registered")
     except RegistrationError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+
+    # CS-3 (T7/AC10): send the welcome email after a successful registration.
+    # Non-blocking by design (AC14) — send_welcome_email never raises, but we also
+    # guard here so a registration always returns its normal 201 even if email
+    # delivery is misconfigured. Failures are logged, never surfaced to the user.
+    user = result.get("user", {}) if isinstance(result, dict) else {}
+    try:
+        send_welcome_email(user.get("email"), user.get("org_name"))
+    except Exception:  # pragma: no cover - email helper already swallows errors
+        logger.exception("welcome email dispatch failed (non-blocking)")
+
     return result
 
 
@@ -299,14 +311,19 @@ def invite(
     body: InviteRequest,
     owner_payload: dict = Depends(_require_owner),
 ) -> Dict[str, Any]:
-    """AC10: non-production returns invite_token; production returns 501."""
-    environment = os.getenv("ENVIRONMENT", "").strip().lower()
-    if environment == "production":
-        raise HTTPException(
-            status_code=501,
-            detail="Email delivery not configured. Invite tokens cannot be issued in production.",
-        )
+    """Create an invite and email the invitee an accept-invite link (CS-3 T7).
 
+    Always returns 201. The invitation email is sent via send_invite_email and is
+    non-blocking (AC14): if delivery fails the route still returns 201 and the
+    failure is logged. The response reports whether the email was sent
+    (``email_sent``).
+
+    Token visibility (CS-3 Section 4): in non-production the raw ``invite_token``
+    is included for testing convenience; in production it is omitted so a real
+    token is never returned in an API response — invitees receive it only by
+    email. The pre-CS-3 production 501 stub is removed: email delivery is now a
+    real supported path.
+    """
     if body.role not in ("owner", "analyst", "viewer"):
         raise HTTPException(status_code=400, detail="role must be owner, analyst, or viewer")
 
@@ -348,7 +365,23 @@ def invite(
     raw_token = str(uuid4())
     _store_invite(raw_token, user_id=user_id, org_id=org_id, role=body.role)
 
-    return {"invite_token": raw_token}
+    # CS-3 (T7/AC10): email the invitee the accept-invite link. Non-blocking
+    # (AC14) — send_invite_email never raises, but we also guard here so the
+    # invite always returns 201 even if email delivery is misconfigured.
+    org_name = get_org_name(org_id)
+    try:
+        email_sent = send_invite_email(email, raw_token, org_name, body.role)
+    except Exception:  # pragma: no cover - email helper already swallows errors
+        logger.exception("invite email dispatch failed (non-blocking)")
+        email_sent = False
+
+    # Token visibility: non-production returns the raw token for testing; production
+    # never returns it (invitees receive it by email only).
+    environment = os.getenv("ENVIRONMENT", "").strip().lower()
+    response: Dict[str, Any] = {"email_sent": email_sent}
+    if environment != "production":
+        response["invite_token"] = raw_token
+    return response
 
 
 @router.get("/invite-info")
