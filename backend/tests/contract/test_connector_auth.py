@@ -1635,6 +1635,72 @@ def test_callback_redirect_does_not_contain_state_value(client):
 
 
 # ---------------------------------------------------------------------------
+# AT-325 (CS-2 T3): callback redirect format matches OAuthCallbackPage
+#   T3-AC1 — success → ?connected={connector_id}&status=success
+#   T3-AC2 — failure → ?status=error&code={error_code}
+#   T3-AC3 — both target the frontend /oauth/callback path
+# ---------------------------------------------------------------------------
+
+
+def test_success_redirect_format_matches_frontend_callback():
+    """OAUTH_SUCCESS_REDIRECT targets /oauth/callback with connected + status=success (T3-AC1/AC3)."""
+    from app.routes_connector_auth import OAUTH_SUCCESS_REDIRECT
+
+    rendered = OAUTH_SUCCESS_REDIRECT.format(connector_id="salesforce")
+    assert "/oauth/callback?" in rendered
+    assert "connected=salesforce" in rendered
+    assert "status=success" in rendered
+
+
+def test_error_redirect_format_matches_frontend_callback():
+    """OAUTH_ERROR_REDIRECT targets /oauth/callback with status=error + code (T3-AC2/AC3)."""
+    from app.routes_connector_auth import OAUTH_ERROR_REDIRECT
+
+    rendered = OAUTH_ERROR_REDIRECT.format(error_code="exchange_failed")
+    assert "/oauth/callback?" in rendered
+    assert "status=error" in rendered
+    assert "code=exchange_failed" in rendered
+
+
+def test_callback_success_location_uses_status_success(client):
+    """A successful callback redirects with connected=<id> and status=success (T3-AC1)."""
+    with _patch.dict(_os.environ, _vault_env()):
+        r = client.get("/api/connectors/salesforce/auth-url", headers=_AUTH_HEADERS)
+    state = _parse_qs(_urlparse(r.json()["auth_url"]).query)["state"][0]
+
+    fake_token = {"access_token": "tok", "refresh_token": "r", "expires_in": 3600}
+    with _patch.dict(_os.environ, _vault_env()), \
+         _patch("app.routes_connector_auth.exchange_code", new_callable=_AsyncMock, return_value=fake_token), \
+         _patch("app.routes_connector_auth.store_token", return_value=None):
+        resp = client.get(
+            f"/api/connectors/oauth/callback?code=auth-code&state={state}",
+            headers=_AUTH_HEADERS,
+            follow_redirects=False,
+        )
+
+    assert resp.status_code == 302
+    location = resp.headers["location"]
+    assert "/oauth/callback?" in location
+    assert "connected=salesforce" in location
+    assert "status=success" in location
+
+
+def test_callback_error_location_uses_status_error_and_code(client):
+    """A failed callback (missing code) redirects with status=error and a code param (T3-AC2)."""
+    # No code/state → error path, no token exchange attempted.
+    resp = client.get(
+        "/api/connectors/oauth/callback?error=access_denied",
+        headers=_AUTH_HEADERS,
+        follow_redirects=False,
+    )
+    assert resp.status_code == 302
+    location = resp.headers["location"]
+    assert "/oauth/callback?" in location
+    assert "status=error" in location
+    assert "code=" in location
+
+
+# ---------------------------------------------------------------------------
 # AC3: state mismatch → 400; generic message; hmac.compare_digest used; redirect_to ignored
 # ---------------------------------------------------------------------------
 

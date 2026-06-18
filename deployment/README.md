@@ -53,6 +53,8 @@ provider's OAuth app registration before going to production.
 | Variable                | Purpose                                         |
 |-------------------------|-------------------------------------------------|
 | `CREDENTIAL_VAULT_KEY`  | Fernet key for encrypting tokens at rest        |
+| `OAUTH_REDIRECT_URI`    | Provider callback URL — must point at `…/api/connectors/oauth/callback` and be registered with every authorization_code provider |
+| `OAUTH_FRONTEND_BASE_URL` | Frontend origin the backend redirects to after the OAuth callback (CS-2 / AT-325). Backend appends `/oauth/callback?connected=…&status=success` or `/oauth/callback?status=error&code=…`. Leave blank for relative (same-origin / proxied) deploys; set to the frontend origin when FE/BE differ |
 | `DEV_JWT`               | Bearer token for local dev auth (`dev-token-change-me` by default) |
 | `JWT_SECRET`            | HS256 signing secret for user-login JWTs (AUTH-1). **Required in production** — issuance fails closed if unset when `ENVIRONMENT=production`. Generate with `openssl rand -hex 32`. |
 | `ENVIRONMENT`           | `production` enforces `JWT_SECRET` and fail-closed invite behaviour; unset for dev/test. |

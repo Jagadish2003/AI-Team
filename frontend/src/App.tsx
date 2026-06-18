@@ -15,6 +15,7 @@ import AuthGuard from "./components/auth/AuthGuard";
 import LoginPage from "./pages/LoginPage";
 import RegisterPage from "./pages/RegisterPage";
 import AcceptInvitePage from "./pages/AcceptInvitePage";
+import OAuthCallbackPage from "./pages/OAuthCallbackPage";
 
 import IntegrationHubPage from "./pages/IntegrationHubPage";
 import DiscoveryRunPage from "./pages/DiscoveryRunPage";
@@ -55,6 +56,19 @@ export default function App() {
                             <Route path="/login" element={<LoginPage />} />
                             <Route path="/register" element={<RegisterPage />} />
                             <Route path="/accept-invite" element={<AcceptInvitePage />} />
+
+                            {/*
+                             * CS-2 / AT-325: OAuth callback landing page. PUBLIC
+                             * (outside AuthGuard) — the backend redirects the
+                             * browser here after the provider round-trip, and the
+                             * session may be momentarily unavailable during the
+                             * redirect cycle. OAuthCallbackPage refetches the
+                             * connector list and routes back to Integration Hub.
+                             */}
+                            <Route
+                              path="/oauth/callback"
+                              element={<OAuthCallbackPage />}
+                            />
 
                             {/*
                              * ── Protected routes ─────────────────────────────

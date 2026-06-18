@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import hmac
 import logging
+import os
 import secrets as _secrets_mod
 from datetime import datetime, timedelta, timezone
 from typing import Dict, Optional
@@ -43,9 +44,30 @@ from database.models.credentials import (
 
 logger = logging.getLogger(__name__)
 
-# Hardcoded redirect targets — never constructed from external input
-OAUTH_SUCCESS_REDIRECT = "/integration-hub?connected={connector_id}"
-OAUTH_ERROR_REDIRECT = "/integration-hub?error={error_code}"
+# Frontend OAuth callback target (CS-2 / AT-325 T3).
+#
+# The provider redirects the browser to the backend callback below; the backend
+# then redirects to the frontend /oauth/callback page (handled by
+# OAuthCallbackPage), which reads ?status, ?connected and ?code, then routes the
+# user back to Integration Hub.
+#
+# The base URL is SERVER-CONTROLLED config (env var), never derived from request
+# input — this preserves the open-redirect protection from T1-S10-A. It defaults
+# to a relative path so same-origin / reverse-proxied deployments need no config;
+# set OAUTH_FRONTEND_BASE_URL (e.g. https://app.example.com) when the frontend is
+# served from a different origin than the backend.
+_FRONTEND_BASE_URL = os.environ.get("OAUTH_FRONTEND_BASE_URL", "").rstrip("/")
+_FRONTEND_CALLBACK_PATH = "/oauth/callback"
+
+# Hardcoded redirect templates — only {connector_id} / {error_code} are filled,
+# both from server-side state (the nonce store / fixed error codes), never from
+# request input. status= is a literal so OAuthCallbackPage can branch on it.
+OAUTH_SUCCESS_REDIRECT = (
+    _FRONTEND_BASE_URL + _FRONTEND_CALLBACK_PATH + "?connected={connector_id}&status=success"
+)
+OAUTH_ERROR_REDIRECT = (
+    _FRONTEND_BASE_URL + _FRONTEND_CALLBACK_PATH + "?status=error&code={error_code}"
+)
 
 _NONCE_TTL_SECONDS = 600  # 10-minute window for state nonce validity
 _DEFAULT_ORG_ID = "default"  # Single-tenant dev; org isolation is a T1-S11 concern

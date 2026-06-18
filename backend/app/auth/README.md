@@ -61,14 +61,18 @@ The OAuth provider redirects to `OAUTH_REDIRECT_URI` after the user grants acces
 - A mismatch causes the provider to return a `redirect_uri_mismatch` error and reject the flow.
 - Example: `OAUTH_REDIRECT_URI = 'https://agentiq.app/api/connectors/oauth/callback'`
 
-### Phase 2 — AgentIQ callback → Integration Hub frontend
+### Phase 2 — AgentIQ callback → frontend /oauth/callback (CS-2 / AT-325)
 
 After the code exchange succeeds and the token is stored, the callback issues an internal redirect
-to the Integration Hub frontend. This redirect goes to `OAUTH_SUCCESS_REDIRECT` — it is **not**
-sent to the OAuth provider.
+to the frontend `/oauth/callback` page (`OAuthCallbackPage`), which then routes the user back to
+Integration Hub. This redirect goes to `OAUTH_SUCCESS_REDIRECT` / `OAUTH_ERROR_REDIRECT` — it is
+**not** sent to the OAuth provider.
 
-- `OAUTH_SUCCESS_REDIRECT = '/integration-hub?connected={connector_id}'`
-- This is an internal frontend route, not a provider URI.
+- `OAUTH_SUCCESS_REDIRECT = '<base>/oauth/callback?connected={connector_id}&status=success'`
+- `OAUTH_ERROR_REDIRECT   = '<base>/oauth/callback?status=error&code={error_code}'`
+- `<base>` is `OAUTH_FRONTEND_BASE_URL` (server-controlled config, never request input). Blank by
+  default → a relative path for same-origin / proxied deploys. Only `{connector_id}` and
+  `{error_code}` are interpolated, both from server-side state — preserving open-redirect protection.
 
 ### Reverse proxy note
 
