@@ -287,33 +287,6 @@ def verify_password(password: str, password_hash: str) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# Password strength (CS-3 §1a) — used by the reset-password endpoint.
-# ---------------------------------------------------------------------------
-
-# Special-character set per CS-3 §1a. Kept as an explicit class (not a regex) so
-# the rule is obvious and the frontend PasswordStrengthIndicator can mirror it.
-_PASSWORD_STRENGTH_RULES = (
-    (lambda p: len(p) >= PASSWORD_MIN_LENGTH, f"at least {PASSWORD_MIN_LENGTH} characters"),
-    (lambda p: any(c.isupper() for c in p), "at least one uppercase letter"),
-    (lambda p: any(c.islower() for c in p), "at least one lowercase letter"),
-    (lambda p: any(not c.isalnum() and not c.isspace() for c in p),
-     "at least one special character"),
-)
-
-
-def validate_password_strength(password: str) -> "list[str]":
-    """Return the list of UNMET CS-3 strength requirements (empty == valid).
-
-    Rule (CS-3 §1a): minimum 8 characters, at least one uppercase letter, one
-    lowercase letter, and one special (non-alphanumeric, non-space) character.
-    Never raises — the caller decides how to surface unmet rules (the
-    reset-password route maps a non-empty list to HTTP 422). The full password is
-    evaluated before any bcrypt 72-byte slicing, matching the doc.
-    """
-    return [message for ok, message in _PASSWORD_STRENGTH_RULES if not ok(password)]
-
-
-# ---------------------------------------------------------------------------
 # JWT (AC4 / AC9)
 # ---------------------------------------------------------------------------
 

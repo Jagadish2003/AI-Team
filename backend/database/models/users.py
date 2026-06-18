@@ -69,24 +69,6 @@ CREATE TABLE IF NOT EXISTS users (
 )
 """
 
-# Password-reset columns (CS-3). Kept as standalone ADD COLUMN statements so the
-# 0008 migration can apply them to a pre-existing users table, while the same two
-# columns also appear in CREATE_USERS_TABLE above for fresh databases. Both
-# nullable so existing rows need no backfill. SQLite appends added columns at the
-# end of the table, matching their position in CREATE_USERS_TABLE — so the
-# migrated schema and a freshly created schema have identical column order.
-ADD_RESET_TOKEN_HASH_COLUMN = (
-    "ALTER TABLE users ADD COLUMN reset_token_hash VARCHAR(256)"
-)
-ADD_RESET_TOKEN_EXPIRES_AT_COLUMN = (
-    "ALTER TABLE users ADD COLUMN reset_token_expires_at TIMESTAMP"
-)
-
-# Ordered DDL the 0008 migration imports — single source of truth, no drift.
-ADD_PASSWORD_RESET_COLUMNS_DDL: tuple[str, ...] = (
-    ADD_RESET_TOKEN_HASH_COLUMN,
-    ADD_RESET_TOKEN_EXPIRES_AT_COLUMN,
-)
 
 # Global unique index on email (POC constraint — see module docstring).
 # email is stored lowercased and trimmed by the application layer (AT-233).
