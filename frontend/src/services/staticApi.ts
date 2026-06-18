@@ -9,8 +9,19 @@ import type {
   ConfidenceExplanation,
 } from "../types/normalization";
 
+export type TokenStatus = 'valid' | 'expired' | 'missing';
+
+export interface TokenStatusResponse {
+  status: TokenStatus;
+  expires_at: string | null;
+}
+
 export function fetchConnectors(): Promise<Connector[]> {
   return apiGet<Connector[]>("/api/connectors");
+}
+
+export function fetchTokenStatus(connectorId: string): Promise<TokenStatusResponse> {
+  return apiGet<TokenStatusResponse>(`/api/connectors/${connectorId}/token-status`);
 }
 
 /**
