@@ -15,6 +15,7 @@ import AuthGuard from "./components/auth/AuthGuard";
 import LoginPage from "./pages/LoginPage";
 import RegisterPage from "./pages/RegisterPage";
 import AcceptInvitePage from "./pages/AcceptInvitePage";
+import ForgotPasswordPage from "./pages/ForgotPasswordPage";
 import ResetPasswordPage from "./pages/ResetPasswordPage";
 
 import IntegrationHubPage from "./pages/IntegrationHubPage";
@@ -47,16 +48,20 @@ export default function App() {
                           <Routes>
                             {/*
                              * ── Public routes ────────────────────────────────
-                             * /login, /register, /accept-invite, /reset-password
-                             * are accessible without a session.  AT-239 delivered
-                             * the first three; /reset-password (CS-3) hosts the
-                             * password-reset form, reached from the emailed link.
+                             * /login, /register, /accept-invite are accessible
+                             * without a session.  Page components are delivered
+                             * by AT-239 (LoginPage, RegisterPage, AcceptInvitePage).
                              * Route entries are pre-wired here so AuthGuard's
                              * redirect target exists as soon as AT-238 lands.
+                             *
+                             * CS-3 adds /forgot-password and /reset-password as
+                             * public routes too: a user who cannot sign in must be
+                             * able to request and complete a password reset.
                              */}
                             <Route path="/login" element={<LoginPage />} />
                             <Route path="/register" element={<RegisterPage />} />
                             <Route path="/accept-invite" element={<AcceptInvitePage />} />
+                            <Route path="/forgot-password" element={<ForgotPasswordPage />} />
                             <Route path="/reset-password" element={<ResetPasswordPage />} />
 
                             {/*

@@ -150,12 +150,29 @@ export async function acceptInvite(
 }
 
 /**
- * POST /api/auth/reset-password — CS-3 §5. Public.
- * Sets a new password for the account a reset token belongs to. The token comes
- * from the reset-password URL query param. Returns 200 (no useful body) on
- * success, 400 on an invalid/expired token, and 422 when the new password fails
- * the strength rule. Unlike accept-invite this does NOT return a session — the
- * user is sent to /login afterwards to sign in with the new password.
+ * POST /api/auth/forgot-password — CS-3 (Section 5). Public, no auth.
+ * Requests a password-reset link for `email`. The backend ALWAYS returns 200
+ * regardless of whether the email is registered (to prevent email enumeration),
+ * so this resolves on success and the caller shows one fixed message either way.
+ */
+export async function forgotPassword(email: string): Promise<void> {
+  const res = await fetch(`${BASE_URL}/api/auth/forgot-password`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email }),
+  });
+  if (!res.ok) {
+    const body = await parseBody(res);
+    throw new ApiError("POST /api/auth/forgot-password failed", res.status, body);
+  }
+}
+
+/**
+ * POST /api/auth/reset-password — CS-3 (Section 5). Public, no auth.
+ * Sets a new password for the account the reset token belongs to.
+ * 200 on success, 422 if the new password fails strength validation, 400 if the
+ * token is invalid/expired. The token comes from the reset-password URL query
+ * param; the field name on the wire is `reset_token` to match the contract.
  */
 export async function resetPassword(
   resetToken: string,

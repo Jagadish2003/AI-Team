@@ -1,45 +1,45 @@
 /**
- * CS-3 — Password strength indicator.
+ * CS-3 (Section 2) — Password strength indicator.
  *
- * A real-time checklist of the password rules, rendered below the password
- * input on every flow where a user *creates* a password: RegisterPage,
- * AcceptInvitePage, and ResetPasswordPage. It is intentionally NOT used on
- * LoginPage — login does not enforce the strength rule, so existing users with
- * older passwords are never blocked.
+ * Renders a real-time, four-requirement checklist beneath a password input.
+ * Each requirement shows a green tick once met and a grey circle until then.
+ * Used on RegisterPage, AcceptInvitePage, and ResetPasswordPage.
  *
- * getPasswordRequirements() is the single source of truth the three pages share:
- * each gates its submit button on `getPasswordRequirements(password).every(r =>
- * r.met)` instead of re-deriving the regexes locally. The four patterns mirror
- * the backend's validate_password_strength() so the frontend and backend agree
- * on what "valid" means. The frontend gate is a UX affordance — the backend
- * still performs the authoritative check.
+ * The rules here MUST stay in sync with the backend `validate_password_strength`
+ * (backend/app/auth/user_auth.py): minimum 8 characters, at least one uppercase
+ * letter, one lowercase letter, and one special character. `getPasswordRequirements`
+ * is exported so a page can gate its submit button on `.every(r => r.met)` using
+ * exactly the same predicate the checklist renders.
  */
-import { Check, Circle } from "lucide-react";
 
-export interface Requirement {
+// The special-character set is kept character-for-character identical to the
+// backend PASSWORD_RULES pattern so the FE indicator and BE validation agree.
+export const SPECIAL_CHAR_RE = /[!@#$%^&*()_+\-=[\]{}|;:,.<>?]/;
+
+export interface PasswordRequirement {
   label: string;
   met: boolean;
 }
 
-// Mirrors PASSWORD_RULES in backend/app/auth/user_auth.py. Keep in sync.
-const SPECIAL_CHAR_RE = /[!@#$%^&*()_+\-=[\]{}|;:,.<>?]/;
-
 /**
- * The four locked password requirements, each tagged with whether the supplied
- * password currently satisfies it. An empty password yields four unmet rules.
- * Pages call `.every(r => r.met)` on the result to decide whether to enable
- * their submit button.
+ * Evaluate the four password-strength requirements against `password`.
+ * Returns them in display order; an empty input yields all-unmet.
  */
-export function getPasswordRequirements(password: string): Requirement[] {
+export function getPasswordRequirements(password: string): PasswordRequirement[] {
   return [
     { label: "At least 8 characters", met: password.length >= 8 },
     { label: "One uppercase letter (A-Z)", met: /[A-Z]/.test(password) },
     { label: "One lowercase letter (a-z)", met: /[a-z]/.test(password) },
     {
-      label: "One special character (!@#$%^&*...)",
+      label: "One special character (!@#$%^&*…)",
       met: SPECIAL_CHAR_RE.test(password),
     },
   ];
+}
+
+/** True when every strength requirement is satisfied — the submit-gate predicate. */
+export function isPasswordStrong(password: string): boolean {
+  return getPasswordRequirements(password).every((r) => r.met);
 }
 
 export default function PasswordStrengthIndicator({
@@ -50,24 +50,17 @@ export default function PasswordStrengthIndicator({
   const requirements = getPasswordRequirements(password);
 
   return (
-    <ul className="mt-2 space-y-1" aria-label="Password requirements">
+    <ul className="mt-2 space-y-1" data-testid="password-strength" aria-live="polite">
       {requirements.map((req) => (
         <li
           key={req.label}
-          data-testid="password-requirement"
-          data-met={req.met}
-          className={`flex items-center gap-2 text-xs leading-4 ${
+          className={`flex items-center gap-2 text-xs leading-4 transition-colors ${
             req.met ? "text-green-500" : "text-muted"
           }`}
+          data-met={req.met}
         >
-          {req.met ? (
-            <Check className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
-          ) : (
-            <Circle className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
-          )}
+          <span aria-hidden="true">{req.met ? "✓" : "○"}</span>
           <span>{req.label}</span>
-          {/* Screen-reader-only state so the checklist is meaningful without colour. */}
-          <span className="sr-only">{req.met ? "(met)" : "(not met)"}</span>
         </li>
       ))}
     </ul>

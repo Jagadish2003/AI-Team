@@ -1,34 +1,35 @@
 /**
- * CS-3 — Reset password page.
+ * CS-3 (Section 6) — Reset password page.
  *
- * Reached from the password-reset email link: /reset-password?token=<value>.
- * The user sets a new password (gated by the shared PasswordStrengthIndicator,
- * exactly like RegisterPage and AcceptInvitePage) and submits it to
- * POST /api/auth/reset-password. On success they are sent to /login to sign in
- * with the new password — reset does NOT return a session.
+ * Behaviour:
+ *   Reads the reset token from the URL query param `?token=<value>`.
+ *   Shows a new-password field with the live PasswordStrengthIndicator and a
+ *   confirm field. Submit stays disabled until all four strength requirements
+ *   are met and the two entries match.
+ *   POST /api/auth/reset-password. On success, SPA-navigates to /login with a
+ *   success toast ("Password reset. Please log in."). On 400 (invalid/expired
+ *   token) shows "This reset link has expired. Request a new one." On 422 the
+ *   backend rejected the password as weak — surfaced inline.
  *
- * Layout/theme mirror AcceptInvitePage: shared input/button classes, the
- * PasswordInput show/hide toggle, the strength checklist, and a fixed-height
- * region for the mismatch hint / submit error so the card height stays constant.
+ * SPA navigation (useNavigate) is intentional here, not the hardRedirect used by
+ * login/register/accept-invite: the user has NO session after a reset, so there
+ * is no per-user context to rebuild, and a full reload would discard the toast.
  *
- * NOTE: the backend POST /api/auth/reset-password endpoint is CS-3 task T9 and
- * is not implemented yet, so this page will surface an error on submit until
- * that lands. The frontend contract (token in query, {reset_token, new_password}
- * body, 200 / 400 expired / 422 weak) is already wired here.
+ * Layout/theme mirrors LoginPage, RegisterPage, and AcceptInvitePage.
  */
 import React, { useState } from "react";
-import { Link, useNavigate, useSearchParams } from "react-router-dom";
+import { useNavigate, useSearchParams, Link } from "react-router-dom";
 
 import PasswordInput from "../components/auth/PasswordInput";
 import PasswordStrengthIndicator, {
-  getPasswordRequirements,
+  isPasswordStrong,
 } from "../components/auth/PasswordStrengthIndicator";
 import { resetPassword } from "../api/authApi";
 import { useTheme } from "../context/ThemeContext";
 import { useToast } from "../components/common/Toast";
 import { ApiError } from "../lib/apiClient";
 
-// ── Shared styling constants (kept in sync with Login/Register/AcceptInvite) ──
+// ── Shared styling constants (kept in sync with the other auth pages) ─────────
 
 const SUBMIT_CLS =
   "w-full inline-flex min-h-9 items-center justify-center whitespace-nowrap rounded-md " +
@@ -42,7 +43,7 @@ const SUBMIT_CLS =
 function resetPasswordErrorMessage(err: unknown): string {
   if (err instanceof ApiError) {
     if (err.status === 400) return "This reset link has expired. Request a new one.";
-    if (err.status === 422) return "Please check your password and try again.";
+    if (err.status === 422) return "Please choose a stronger password and try again.";
   }
   return "Something went wrong. Please try again.";
 }
@@ -81,14 +82,13 @@ export default function ResetPasswordPage() {
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
-  // CS-3: same locked strength rule + helper as the other password-creation pages.
-  // Submit is gated on all four requirements plus the confirm match and not-submitting.
-  const passwordValid = getPasswordRequirements(password).every((r) => r.met);
+  // Inline validation — each only surfaces once the user has typed something.
+  const passwordStrong = isPasswordStrong(password);
   const passwordMismatch =
     confirmPassword.length > 0 && password !== confirmPassword;
 
   const canSubmit =
-    passwordValid && password === confirmPassword && !submitting;
+    passwordStrong && password === confirmPassword && !submitting;
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -97,14 +97,14 @@ export default function ResetPasswordPage() {
     setSubmitting(true);
     try {
       await resetPassword(resetToken, password);
-      // Reset does not establish a session — send the user to sign in afresh.
       push("Password reset. Please log in.", "success");
-      navigate("/login");
+      navigate("/login", { replace: true });
     } catch (err) {
       setError(resetPasswordErrorMessage(err));
-    } finally {
       setSubmitting(false);
     }
+    // On success we navigate away, so `submitting` is intentionally left true —
+    // the button stays disabled during the transition rather than flashing back.
   }
 
   // ── Missing token — error card, no form. ────────────────────────────────────
@@ -115,12 +115,12 @@ export default function ResetPasswordPage() {
           <p className="text-sm font-medium text-red-400" data-testid="reset-invalid-error">
             This reset link is invalid. Request a new one.
           </p>
-          <p className="mt-4 text-sm text-muted">
+          <p className="mt-6 text-sm text-muted">
             <Link
-              to="/login"
+              to="/forgot-password"
               className="font-medium text-accent hover:underline focus:outline-none focus-visible:ring-1 focus-visible:ring-accent/40"
             >
-              Back to sign in
+              Request a new reset link
             </Link>
           </p>
         </div>
@@ -128,18 +128,20 @@ export default function ResetPasswordPage() {
     );
   }
 
-  // ── Token present — new-password form. ──────────────────────────────────────
+  // ── Valid token present — new-password form. ────────────────────────────────
   return (
     <PageShell theme={theme}>
       <div className="rounded-xl border border-border bg-panel px-6 py-8 shadow-xl shadow-black/20">
-        <h1 className="mb-1 text-center text-xl font-semibold text-text">Reset your password</h1>
+        <h1 className="mb-1 text-center text-xl font-semibold text-text">
+          Set a new password
+        </h1>
         <p className="mb-6 text-center text-sm text-muted">
-          Choose a new password for your AgentIQ account.
+          Choose a new password for your account.
         </p>
 
         <form onSubmit={handleSubmit} noValidate>
           {/* New password */}
-          <div className="mb-3">
+          <div className="mb-1">
             <label htmlFor="password" className="mb-1.5 block text-sm font-medium text-text">
               New password
             </label>
@@ -147,17 +149,16 @@ export default function ResetPasswordPage() {
               id="password"
               autoComplete="new-password"
               required
-              minLength={8}
+              invalid={password.length > 0 && !passwordStrong}
               value={password}
               onChange={setPassword}
               disabled={submitting}
             />
-            {/* CS-3: same live requirement checklist as register / accept-invite. */}
             <PasswordStrengthIndicator password={password} />
           </div>
 
-          {/* Confirm new password */}
-          <div>
+          {/* Confirm password */}
+          <div className="mt-4">
             <label htmlFor="confirm-password" className="mb-1.5 block text-sm font-medium text-text">
               Confirm new password
             </label>
@@ -192,9 +193,18 @@ export default function ResetPasswordPage() {
           </div>
 
           <button type="submit" disabled={!canSubmit} className={SUBMIT_CLS}>
-            {submitting ? "Resetting password…" : "Reset password"}
+            {submitting ? "Resetting…" : "Reset password"}
           </button>
         </form>
+
+        <p className="mt-5 text-center text-sm text-muted">
+          <Link
+            to="/login"
+            className="font-medium text-accent hover:underline focus:outline-none focus-visible:ring-1 focus-visible:ring-accent/40"
+          >
+            Back to sign in
+          </Link>
+        </p>
       </div>
     </PageShell>
   );

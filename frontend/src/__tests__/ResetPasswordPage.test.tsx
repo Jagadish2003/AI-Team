@@ -1,13 +1,10 @@
 /**
  * CS-3 — ResetPasswordPage unit tests.
  *
- * Mocks: resetPassword() API, useTheme(), useToast(), and react-router's
- * useNavigate(). The reset token is supplied through the MemoryRouter query
- * string, so useSearchParams() stays real.
- *
- * The submit-gating tests are the heart of this task: a weak password keeps the
- * button disabled, a strong one (Password1!) enables it, and a confirm mismatch
- * still disables it.
+ * Mocks resetPassword(), useTheme(), useToast(), and react-router's useNavigate
+ * (keeping MemoryRouter + useSearchParams real so the ?token= param resolves).
+ * Verifies token gating, the strength-gated submit, the success path (toast +
+ * navigate to /login), and the 400 expired-token message.
  */
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
@@ -22,11 +19,6 @@ const mockResetPassword = vi.fn();
 const mockPush = vi.fn();
 const mockNavigate = vi.fn();
 
-vi.mock("../api/authApi", () => ({
-  resetPassword: (token: string, password: string) =>
-    mockResetPassword(token, password),
-}));
-
 vi.mock("../context/ThemeContext", () => ({
   useTheme: () => ({ theme: "light" }),
 }));
@@ -35,12 +27,18 @@ vi.mock("../components/common/Toast", () => ({
   useToast: () => ({ push: mockPush }),
 }));
 
-vi.mock("react-router-dom", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("react-router-dom")>();
+vi.mock("../api/authApi", () => ({
+  resetPassword: (token: string, password: string) => mockResetPassword(token, password),
+}));
+
+vi.mock("react-router-dom", async () => {
+  const actual = await vi.importActual<typeof import("react-router-dom")>("react-router-dom");
   return { ...actual, useNavigate: () => mockNavigate };
 });
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
+
+const STRONG = "Password1!";
 
 function renderWithToken(token = "valid-reset-token") {
   return render(
@@ -50,14 +48,18 @@ function renderWithToken(token = "valid-reset-token") {
   );
 }
 
-function fillPasswords(password: string, confirm = password) {
-  const [passField, confirmField] = screen.getAllByPlaceholderText("••••••••");
-  fireEvent.change(passField, { target: { value: password } });
-  fireEvent.change(confirmField, { target: { value: confirm } });
+function renderWithoutToken() {
+  return render(
+    <MemoryRouter initialEntries={["/reset-password"]}>
+      <ResetPasswordPage />
+    </MemoryRouter>
+  );
 }
 
-function submitButton() {
-  return screen.getByRole("button", { name: /reset password/i }) as HTMLButtonElement;
+function fillPasswords(pw: string, confirm = pw) {
+  const [passField, confirmField] = screen.getAllByPlaceholderText("••••••••");
+  fireEvent.change(passField, { target: { value: pw } });
+  fireEvent.change(confirmField, { target: { value: confirm } });
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -71,89 +73,105 @@ describe("ResetPasswordPage", () => {
 
   // ── Missing token ──────────────────────────────────────────────────────────
 
-  it("shows the invalid state and no form when the token is missing", () => {
-    render(
-      <MemoryRouter initialEntries={["/reset-password"]}>
-        <ResetPasswordPage />
-      </MemoryRouter>
-    );
+  it("shows the invalid state (no form) when no token is present", () => {
+    renderWithoutToken();
     expect(screen.getByTestId("reset-invalid-error")).toBeTruthy();
     expect(screen.queryByRole("button", { name: /reset password/i })).toBeNull();
   });
 
   // ── Rendering with a token ───────────────────────────────────────────────────
 
-  it("renders the new-password form when a token is present", () => {
+  it("renders the password fields and strength indicator with a token", () => {
     renderWithToken();
     expect(screen.getAllByPlaceholderText("••••••••")).toHaveLength(2);
-    expect(submitButton()).toBeTruthy();
+    expect(screen.getByTestId("password-strength")).toBeTruthy();
+    expect(screen.getByRole("button", { name: /reset password/i })).toBeTruthy();
   });
 
-  it("renders the four-requirement strength indicator", () => {
+  // ── Submit gating (strength indicator drives this — AC9 analog) ──────────────
+
+  it("disables submit until the password is strong AND confirmed", () => {
     renderWithToken();
-    expect(screen.getAllByTestId("password-requirement")).toHaveLength(4);
+    const btn = screen.getByRole("button", { name: /reset password/i }) as HTMLButtonElement;
+    expect(btn.disabled).toBe(true);
+
+    // Strong but mismatched → still disabled.
+    fillPasswords(STRONG, "Different1!");
+    expect(btn.disabled).toBe(true);
+
+    // Matched but weak → still disabled.
+    fillPasswords("weak", "weak");
+    expect(btn.disabled).toBe(true);
+
+    // Strong + matched → enabled.
+    fillPasswords(STRONG);
+    expect(btn.disabled).toBe(false);
   });
 
-  // ── Submit gating (the focus of this task) ───────────────────────────────────
-
-  it("disables submit until all four requirements are met", () => {
+  it("shows the mismatch hint when confirm differs", () => {
     renderWithToken();
-    expect(submitButton().disabled).toBe(true); // empty
-
-    fillPasswords("password"); // 8 chars, lowercase only — weak
-    expect(submitButton().disabled).toBe(true);
-
-    fillPasswords("Password1!"); // strong
-    expect(submitButton().disabled).toBe(false);
-  });
-
-  it("disables submit when the passwords do not match", () => {
-    renderWithToken();
-    fillPasswords("Password1!", "Password2!");
-    expect(submitButton().disabled).toBe(true);
+    fillPasswords(STRONG, "Different1!");
     expect(screen.getByText(/passwords do not match/i)).toBeTruthy();
   });
 
-  // ── Successful reset ─────────────────────────────────────────────────────────
+  // ── Success path ─────────────────────────────────────────────────────────────
 
-  it("posts the token + new password, toasts, and navigates to /login on success", async () => {
+  it("calls resetPassword() with the token + new password", async () => {
     mockResetPassword.mockResolvedValue(undefined);
-    renderWithToken("my-reset-token");
-    fillPasswords("Password1!");
-    fireEvent.click(submitButton());
-
+    renderWithToken("my-token");
+    fillPasswords(STRONG);
+    fireEvent.click(screen.getByRole("button", { name: /reset password/i }));
     await waitFor(() => {
-      expect(mockResetPassword).toHaveBeenCalledWith("my-reset-token", "Password1!");
+      expect(mockResetPassword).toHaveBeenCalledWith("my-token", STRONG);
     });
-    expect(mockPush).toHaveBeenCalledWith("Password reset. Please log in.", "success");
-    expect(mockNavigate).toHaveBeenCalledWith("/login");
   });
 
-  // ── Error handling ───────────────────────────────────────────────────────────
+  it("toasts and navigates to /login on success", async () => {
+    mockResetPassword.mockResolvedValue(undefined);
+    renderWithToken();
+    fillPasswords(STRONG);
+    fireEvent.click(screen.getByRole("button", { name: /reset password/i }));
+    await waitFor(() => {
+      expect(mockPush).toHaveBeenCalledWith("Password reset. Please log in.", "success");
+    });
+    expect(mockNavigate).toHaveBeenCalledWith("/login", { replace: true });
+  });
 
-  it("shows an expired-link message on 400 and does not navigate", async () => {
+  // ── Error paths ──────────────────────────────────────────────────────────────
+
+  it("shows the expired-link message on 400 and does not navigate", async () => {
     mockResetPassword.mockRejectedValue(new ApiError("expired", 400, {}));
     renderWithToken();
-    fillPasswords("Password1!");
-    fireEvent.click(submitButton());
-
+    fillPasswords(STRONG);
+    fireEvent.click(screen.getByRole("button", { name: /reset password/i }));
     await waitFor(() => {
       expect(screen.getByTestId("reset-password-error").textContent).toMatch(
-        /reset link has expired/i
+        /this reset link has expired/i
       );
     });
     expect(mockNavigate).not.toHaveBeenCalled();
   });
 
-  it("shows a validation message on 422", async () => {
+  it("shows a weak-password message on 422", async () => {
     mockResetPassword.mockRejectedValue(new ApiError("weak", 422, {}));
     renderWithToken();
-    fillPasswords("Password1!");
-    fireEvent.click(submitButton());
-
+    fillPasswords(STRONG);
+    fireEvent.click(screen.getByRole("button", { name: /reset password/i }));
     await waitFor(() => {
       expect(screen.getByTestId("reset-password-error").textContent).toMatch(
-        /check your password/i
+        /stronger password/i
+      );
+    });
+  });
+
+  it("shows a generic message for unexpected errors", async () => {
+    mockResetPassword.mockRejectedValue(new Error("network"));
+    renderWithToken();
+    fillPasswords(STRONG);
+    fireEvent.click(screen.getByRole("button", { name: /reset password/i }));
+    await waitFor(() => {
+      expect(screen.getByTestId("reset-password-error").textContent).toMatch(
+        /something went wrong/i
       );
     });
   });

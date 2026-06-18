@@ -1,91 +1,98 @@
 /**
  * CS-3 — PasswordStrengthIndicator unit tests.
  *
- * Covers the getPasswordRequirements() helper (the single source of truth the
- * three password-creation pages gate their submit buttons on) and the visual
- * checklist: four rules, each turning green as it is satisfied.
+ * Covers the getPasswordRequirements() helper (which mirrors the backend
+ * validate_password_strength rules) and the rendered four-requirement checklist
+ * that turns green as conditions are met (AC9).
  */
 import { render, screen } from "@testing-library/react";
 import { describe, it, expect } from "vitest";
 
 import PasswordStrengthIndicator, {
   getPasswordRequirements,
+  isPasswordStrong,
 } from "../components/auth/PasswordStrengthIndicator";
 
+// ── getPasswordRequirements (rule parity with backend) ─────────────────────────
+
 describe("getPasswordRequirements", () => {
-  it("marks all four requirements met for a fully valid password", () => {
-    const reqs = getPasswordRequirements("Password1!");
-    expect(reqs).toHaveLength(4);
-    expect(reqs.every((r) => r.met)).toBe(true);
-  });
+  function metLabels(password: string): string[] {
+    return getPasswordRequirements(password)
+      .filter((r) => r.met)
+      .map((r) => r.label);
+  }
+  function unmetCount(password: string): number {
+    return getPasswordRequirements(password).filter((r) => !r.met).length;
+  }
 
-  it("flags missing uppercase and special for an all-lowercase password", () => {
-    const byLabel = Object.fromEntries(
-      getPasswordRequirements("password").map((r) => [r.label, r.met])
-    );
-    expect(byLabel["At least 8 characters"]).toBe(true);
-    expect(byLabel["One lowercase letter (a-z)"]).toBe(true);
-    expect(byLabel["One uppercase letter (A-Z)"]).toBe(false);
-    expect(byLabel["One special character (!@#$%^&*...)"]).toBe(false);
-  });
-
-  it("flags only the length rule for a short but otherwise strong password", () => {
-    const unmet = getPasswordRequirements("Pa1!").filter((r) => !r.met); // 4 chars
-    expect(unmet).toHaveLength(1);
-    expect(unmet[0].label).toMatch(/8 characters/);
-  });
-
-  it("treats an empty password as all unmet (every() is false → submit stays disabled)", () => {
+  it("returns four requirements in display order", () => {
     const reqs = getPasswordRequirements("");
-    expect(reqs.every((r) => r.met)).toBe(false);
-    expect(reqs.every((r) => !r.met)).toBe(true);
+    expect(reqs).toHaveLength(4);
+    expect(reqs.map((r) => r.label)).toEqual([
+      "At least 8 characters",
+      "One uppercase letter (A-Z)",
+      "One lowercase letter (a-z)",
+      "One special character (!@#$%^&*…)",
+    ]);
   });
 
-  it("recognises a range of special characters", () => {
-    for (const ch of ["!", "@", "#", "-", "_", "?", ".", "$", "*"]) {
-      const special = getPasswordRequirements(`Abcdefg1${ch}`).find((r) =>
-        r.label.startsWith("One special")
-      );
-      expect(special?.met).toBe(true);
+  it("marks all four met for a fully valid password (AC1 parity)", () => {
+    expect(isPasswordStrong("Password1!")).toBe(true);
+    expect(unmetCount("Password1!")).toBe(0);
+  });
+
+  it("'password' meets only length + lowercase (missing upper & special)", () => {
+    // Backend AC2 analog: lowercase 8-char word fails uppercase and special.
+    expect(metLabels("password")).toEqual([
+      "At least 8 characters",
+      "One lowercase letter (a-z)",
+    ]);
+    expect(isPasswordStrong("password")).toBe(false);
+  });
+
+  it("'Pass1!' fails only the length rule (AC3 parity)", () => {
+    const reqs = getPasswordRequirements("Pass1!");
+    const unmet = reqs.filter((r) => !r.met);
+    expect(unmet).toHaveLength(1);
+    expect(unmet[0].label).toBe("At least 8 characters");
+  });
+
+  it("recognises a variety of special characters", () => {
+    for (const ch of ["!", "@", "#", "$", "%", "^", "&", "*", "-", "_", "?", "."]) {
+      expect(isPasswordStrong(`Abcdefg1${ch}`)).toBe(true);
     }
+  });
+
+  it("does not count a letter/digit-only password as having a special char", () => {
+    const reqs = getPasswordRequirements("Abcdefgh1");
+    const special = reqs.find((r) => r.label.startsWith("One special"));
+    expect(special?.met).toBe(false);
   });
 });
 
-describe("PasswordStrengthIndicator", () => {
+// ── Rendered checklist (AC9) ───────────────────────────────────────────────────
+
+describe("PasswordStrengthIndicator render", () => {
   it("renders all four requirement rows", () => {
     render(<PasswordStrengthIndicator password="" />);
-    expect(screen.getAllByTestId("password-requirement")).toHaveLength(4);
-    expect(screen.getByText(/at least 8 characters/i)).toBeTruthy();
-    expect(screen.getByText(/one uppercase letter/i)).toBeTruthy();
-    expect(screen.getByText(/one lowercase letter/i)).toBeTruthy();
-    expect(screen.getByText(/one special character/i)).toBeTruthy();
+    const list = screen.getByTestId("password-strength");
+    expect(list.querySelectorAll("li")).toHaveLength(4);
   });
 
-  it("renders every requirement as not-met (grey) for an empty password", () => {
-    render(<PasswordStrengthIndicator password="" />);
-    screen.getAllByTestId("password-requirement").forEach((row) => {
-      expect(row.getAttribute("data-met")).toBe("false");
-      expect(row.className).toContain("text-muted");
-    });
-  });
-
-  it("turns a requirement green the moment it is satisfied", () => {
-    const { rerender } = render(<PasswordStrengthIndicator password="ab" />);
-    const lengthRow = () =>
-      screen.getByText(/at least 8 characters/i).closest("[data-met]") as HTMLElement;
-
-    expect(lengthRow().getAttribute("data-met")).toBe("false");
-
-    rerender(<PasswordStrengthIndicator password="abcdefgh" />);
-    expect(lengthRow().getAttribute("data-met")).toBe("true");
-    expect(lengthRow().className).toContain("text-green-500");
-  });
-
-  it("greens all four requirements for a fully valid password", () => {
+  it("marks each row met/unmet via data-met as the password satisfies rules", () => {
     render(<PasswordStrengthIndicator password="Password1!" />);
-    screen.getAllByTestId("password-requirement").forEach((row) => {
-      expect(row.getAttribute("data-met")).toBe("true");
-      expect(row.className).toContain("text-green-500");
-    });
+    const rows = screen
+      .getByTestId("password-strength")
+      .querySelectorAll("li");
+    rows.forEach((row) => expect(row.getAttribute("data-met")).toBe("true"));
+  });
+
+  it("shows unmet rows as not-met for a weak password", () => {
+    render(<PasswordStrengthIndicator password="abc" />);
+    const metRows = Array.from(
+      screen.getByTestId("password-strength").querySelectorAll("li")
+    ).filter((r) => r.getAttribute("data-met") === "true");
+    // Only the lowercase rule is satisfied by "abc".
+    expect(metRows).toHaveLength(1);
   });
 });
