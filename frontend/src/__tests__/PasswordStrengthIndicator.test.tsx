@@ -1,9 +1,9 @@
 /**
- * CS-3 / AC9 — PasswordStrengthIndicator unit tests.
+ * CS-3 — PasswordStrengthIndicator unit tests.
  *
  * Covers the getPasswordRequirements() helper (the single source of truth the
- * three password-creation pages share) and the visual checklist: four rules,
- * each turning green as it is satisfied.
+ * three password-creation pages gate their submit buttons on) and the visual
+ * checklist: four rules, each turning green as it is satisfied.
  */
 import { render, screen } from "@testing-library/react";
 import { describe, it, expect } from "vitest";
@@ -35,8 +35,10 @@ describe("getPasswordRequirements", () => {
     expect(unmet[0].label).toMatch(/8 characters/);
   });
 
-  it("treats an empty password as all unmet", () => {
-    expect(getPasswordRequirements("").every((r) => !r.met)).toBe(true);
+  it("treats an empty password as all unmet (every() is false → submit stays disabled)", () => {
+    const reqs = getPasswordRequirements("");
+    expect(reqs.every((r) => r.met)).toBe(false);
+    expect(reqs.every((r) => !r.met)).toBe(true);
   });
 
   it("recognises a range of special characters", () => {

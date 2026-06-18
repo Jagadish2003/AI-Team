@@ -184,7 +184,7 @@ describe("RegisterPage", () => {
 
   it("submit is enabled with valid matching passwords meeting all requirements", () => {
     renderPage();
-    fillForm();
+    fillForm(); // default password is Password1! — satisfies all four rules
     const btn = screen.getByRole("button", { name: /create account/i }) as HTMLButtonElement;
     expect(btn.disabled).toBe(false);
   });

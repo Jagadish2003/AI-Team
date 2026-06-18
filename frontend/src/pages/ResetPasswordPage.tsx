@@ -82,6 +82,7 @@ export default function ResetPasswordPage() {
   const [submitting, setSubmitting] = useState(false);
 
   // CS-3: same locked strength rule + helper as the other password-creation pages.
+  // Submit is gated on all four requirements plus the confirm match and not-submitting.
   const passwordValid = getPasswordRequirements(password).every((r) => r.met);
   const passwordMismatch =
     confirmPassword.length > 0 && password !== confirmPassword;

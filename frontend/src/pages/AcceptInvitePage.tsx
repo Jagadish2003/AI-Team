@@ -116,8 +116,9 @@ export default function AcceptInvitePage() {
     };
   }, [inviteToken]);
 
-  // CS-3: the locked strength rule (length + upper + lower + special) replaces
-  // the old length-only check, shared with the indicator below the field.
+  // CS-3: the full strength rule (length + upper + lower + special) replaces the
+  // old length-only check, shared with the indicator below the field. The confirm
+  // match and not-submitting conditions are unchanged.
   const passwordValid = getPasswordRequirements(password).every((r) => r.met);
   const passwordMismatch =
     confirmPassword.length > 0 && password !== confirmPassword;

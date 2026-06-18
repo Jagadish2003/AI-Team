@@ -7,12 +7,12 @@
  * LoginPage — login does not enforce the strength rule, so existing users with
  * older passwords are never blocked.
  *
- * The rule is locked (CS-3 §1): minimum 8 characters with at least one
- * uppercase letter, one lowercase letter, and one special character. The four
- * patterns here mirror the backend's validate_password_strength() so the
- * frontend and backend agree on what "valid" means, and every page gates its
- * submit button on the same getPasswordRequirements() helper instead of
- * re-deriving the regexes locally.
+ * getPasswordRequirements() is the single source of truth the three pages share:
+ * each gates its submit button on `getPasswordRequirements(password).every(r =>
+ * r.met)` instead of re-deriving the regexes locally. The four patterns mirror
+ * the backend's validate_password_strength() so the frontend and backend agree
+ * on what "valid" means. The frontend gate is a UX affordance — the backend
+ * still performs the authoritative check.
  */
 import { Check, Circle } from "lucide-react";
 

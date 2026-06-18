@@ -72,9 +72,10 @@ export default function RegisterPage() {
 
   // Inline validation — each only surfaces once the user has typed something.
   const emailInvalid = email.trim().length > 0 && !EMAIL_RE.test(email.trim());
-  // CS-3: the locked strength rule (length + upper + lower + special) replaces
-  // the old length-only check. The indicator below the field and the submit
-  // gate both read this same helper, so they can never disagree.
+  // CS-3: the full strength rule (length + upper + lower + special) replaces the
+  // old length-only check. The indicator below the field and the submit gate
+  // both read this same helper, so they can never disagree. The other conditions
+  // (org name, valid email, confirm match, not submitting) are unchanged.
   const passwordValid = getPasswordRequirements(password).every((r) => r.met);
   const passwordMismatch =
     confirmPassword.length > 0 && password !== confirmPassword;

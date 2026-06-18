@@ -4,6 +4,10 @@
  * Mocks: resetPassword() API, useTheme(), useToast(), and react-router's
  * useNavigate(). The reset token is supplied through the MemoryRouter query
  * string, so useSearchParams() stays real.
+ *
+ * The submit-gating tests are the heart of this task: a weak password keeps the
+ * button disabled, a strong one (Password1!) enables it, and a confirm mismatch
+ * still disables it.
  */
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
@@ -90,16 +94,16 @@ describe("ResetPasswordPage", () => {
     expect(screen.getAllByTestId("password-requirement")).toHaveLength(4);
   });
 
-  // ── Submit gating ────────────────────────────────────────────────────────────
+  // ── Submit gating (the focus of this task) ───────────────────────────────────
 
   it("disables submit until all four requirements are met", () => {
     renderWithToken();
     expect(submitButton().disabled).toBe(true); // empty
 
-    fillPasswords("password"); // 8 chars, lowercase only
+    fillPasswords("password"); // 8 chars, lowercase only — weak
     expect(submitButton().disabled).toBe(true);
 
-    fillPasswords("Password1!");
+    fillPasswords("Password1!"); // strong
     expect(submitButton().disabled).toBe(false);
   });
 
