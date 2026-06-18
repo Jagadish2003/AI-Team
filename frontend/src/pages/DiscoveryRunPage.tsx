@@ -114,19 +114,30 @@ export function StepInfoTooltip({ text }: { text: string }) {
 // ---------------------------------------------------------------------------
 // DiscoveryStepList — renders all steps with completed / active / pending state
 // ---------------------------------------------------------------------------
-export function DiscoveryStepList({ currentStep }: { currentStep: string | null }) {
+export function DiscoveryStepList({
+  currentStep,
+  runComplete = false,
+}: {
+  currentStep: string | null;
+  // True only once the discovery run has truly finished (100%). The backend can
+  // emit the "complete" step while the run is still computing post-processing,
+  // so the terminal step's green tick is gated on this flag, not on currentStep.
+  runComplete?: boolean;
+}) {
   const activeIdx =
     currentStep != null ? (STEP_INDEX[currentStep] ?? -1) : -1;
 
   return (
     <ol className="space-y-3">
       {DISCOVERY_STEPS.map((step, idx) => {
-        // "complete" is the terminal step: reaching it means the run finished,
-        // so it renders as completed (check) rather than active (spinner) —
-        // there is no later step to advance activeIdx past it (CS-4 T5).
+        // "complete" is the terminal step. It earns the green check only when the
+        // run has actually finished (runComplete). While the run is still running
+        // — even if the backend already emitted "complete" — it shows the spinner.
         const isTerminal = step.id === "complete";
-        const isCompleted = activeIdx > idx || (isTerminal && activeIdx === idx);
-        const isActive = activeIdx === idx && !isCompleted;
+        const isCompleted = isTerminal
+          ? runComplete && activeIdx >= idx
+          : activeIdx > idx;
+        const isActive = !isCompleted && activeIdx === idx;
 
         return (
           <li key={step.id} className="flex items-start gap-3">
@@ -560,7 +571,7 @@ export default function DiscoveryRunPage() {
         {(computing || currentStep != null) && (
           <div className="mb-4 rounded-xl border border-border bg-panel p-4">
             <div className="mb-4 text-lg font-semibold">Discovery Progress</div>
-            <DiscoveryStepList currentStep={currentStep} />
+            <DiscoveryStepList currentStep={currentStep} runComplete={!computing} />
           </div>
         )}
 
