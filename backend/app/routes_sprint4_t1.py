@@ -47,6 +47,7 @@ class RunStatus(BaseModel):
     updatedAt: str
     error: Optional[str] = None
     counts: Dict[str, int] = Field(default_factory=dict)
+    current_step: Optional[str] = None  # last step written by db.update_run_step()
 
 
 def _now_iso() -> str:
@@ -437,7 +438,11 @@ def register_sprint4_t1_routes(app: FastAPI) -> None:
             # If status not written yet, treat as running (run exists)
             st = {"runId": run_id, "status": run.get("status") or "running", "startedAt": run.get("startedAt") or _now_iso(), "updatedAt": _now_iso(), "counts": {}}
 
-        return RunStatus(**st)
+        # current_step is written into the run payload by db.update_run_step()
+        # (CS-4 T3). Read it from the run record so polling endpoints get a
+        # real-time view of which discovery stage is active. None when absent.
+        current_step = run.get("current_step")
+        return RunStatus(**{**st, "current_step": current_step})
 
     @app.get(
         "/api/runs/{run_id}/connector-health",

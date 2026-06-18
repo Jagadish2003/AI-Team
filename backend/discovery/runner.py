@@ -24,6 +24,11 @@ from dotenv import load_dotenv
 
 from app.telemetry import record_event
 
+try:
+    from app.db import update_run_step
+except ModuleNotFoundError:  # project-root execution uses backend as package
+    from backend.app.db import update_run_step
+
 # Track A adapter
 from .track_a_adapter import export_track_a_seed
 
@@ -353,6 +358,7 @@ def run(
             logger.info("Salesforce ingestion: OK")
     except SFError as e:
         logger.error(f"Salesforce ingestion FAILED: {e}")
+    update_run_step(run_id, "sf_crm")
 
     try:
         if "servicenow" in _systems:
@@ -360,6 +366,7 @@ def run(
             if sn_data: logger.info("ServiceNow ingestion: OK")
     except SNError as e:
         logger.error(f"ServiceNow ingestion FAILED: {e}")
+    update_run_step(run_id, "sn")
 
     try:
         if "jira" in _systems:
@@ -367,6 +374,7 @@ def run(
             if jira_data: logger.info("Jira ingestion: OK")
     except JiraIngestError as e:
         logger.error(f"Jira ingestion FAILED: {e}")
+    update_run_step(run_id, "jira")
 
     if not sf_data and "salesforce" in _systems:
         logger.error("Salesforce data unavailable — cannot run detectors. Aborting.")
@@ -391,7 +399,15 @@ def run(
     if _is_ncino(pack_id) and "salesforce" in _systems:
         try:
             from .ingest.ncino import ingest as ncino_ingest
-            ncino_data = ncino_ingest()
+            # CS-4 / AT-310: ProcessInstance is queried by both salesforce.ingest()
+            # and ncino.ingest(). Forward the Salesforce CRM approval data so the
+            # nCino ingestor reuses it instead of issuing a duplicate
+            # ProcessInstance query, reducing total Salesforce API calls by 1 per
+            # discovery run. Default to an empty list when approval_processes is
+            # absent so ncino.ingest() still skips the duplicate fetch.
+            ncino_data = ncino_ingest(
+                preloaded_process_instances=sf_data.get("approval_processes", [])
+            )
             # Merge ncino data into sf_data so detectors can find it
             if sf_data is None:
                 sf_data = {}
@@ -399,6 +415,7 @@ def run(
             logger.info("nCino ingestion: OK — %d lending metrics", len(ncino_data))
         except Exception as e:
             logger.warning("nCino ingestion failed (non-blocking): %s", e)
+        update_run_step(run_id, "sf_ncino")
 
     # 2b. STRS Benefits ingest — if strs_benefits pack
     from .packs.pack_config import is_strs_benefits_pack as _is_strs
@@ -603,6 +620,7 @@ def run(
         sn_data,
         jira_data,
     )
+    update_run_step(run_id, "detect")
 
     _snapshot_detector_evaluations(
         org_id=org_id,
@@ -611,6 +629,8 @@ def run(
         detector_results=detector_results,
         all_evaluated=all_evaluated,
     )
+
+    update_run_step(run_id, "enrich")
 
     try:
         # Entity extraction is synchronous and DB-safe in this context: every
@@ -933,6 +953,8 @@ def run(
         "pack_id": pack_id,
         "system_count": len(_systems),
     })
+
+    update_run_step(run_id, "complete")
 
     return {
         "runId": run_id, "orgId": org_id, "mode": mode,
