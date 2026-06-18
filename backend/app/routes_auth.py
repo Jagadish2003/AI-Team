@@ -33,6 +33,7 @@ from app.auth.user_auth import (
     logout_token,
     mark_password_changed,
     register_org_and_owner,
+    validate_password_strength,
     verify_jwt,
     verify_password,
 )
@@ -44,6 +45,8 @@ _bearer = HTTPBearer(auto_error=False)
 
 _INVITE_KV_PREFIX = "auth_invite"
 INVITE_TTL_HOURS = 72
+_RESET_KV_PREFIX = "auth_pwd_reset"
+RESET_TTL_HOURS = 1  # CS-3 Section 5: reset tokens expire after 1 hour.
 
 AUTH_ROUTE_PATHS = {
     "/api/auth/register",
@@ -53,6 +56,8 @@ AUTH_ROUTE_PATHS = {
     "/api/auth/invite",
     "/api/auth/accept-invite",
     "/api/auth/change-password",
+    "/api/auth/forgot-password",
+    "/api/auth/reset-password",
 }
 
 
@@ -87,6 +92,17 @@ class AcceptInviteRequest(BaseModel):
 
 class ChangePasswordRequest(BaseModel):
     current_password: str
+    new_password: str
+
+
+class ForgotPasswordRequest(BaseModel):
+    email: str
+
+
+class ResetPasswordRequest(BaseModel):
+    # The frontend ResetPasswordPage posts `reset_token`; accept `token` as a
+    # backward-compatible alias, mirroring accept-invite.
+    reset_token: str = Field(validation_alias=AliasChoices("reset_token", "token"))
     new_password: str
 
 
@@ -180,14 +196,81 @@ def _validate_invite(raw_token: str) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Password strength enforcement (CS-3) — the API security boundary.
+# ---------------------------------------------------------------------------
+
+
+def _enforce_password_strength(password: str) -> None:
+    """Reject a weak password with HTTP 422 (CS-3). No-op when it is valid.
+
+    Shared by the password-CREATION routes (register, accept-invite,
+    reset-password). The 422 body lists exactly what is missing, e.g.
+    "Password must contain: at least one uppercase letter, at least one special
+    character". Login NEVER calls this — existing users with pre-CS-3 passwords
+    must still authenticate.
+    """
+    errors = validate_password_strength(password)
+    if errors:
+        raise HTTPException(
+            status_code=422,
+            detail="Password must contain: " + ", ".join(errors),
+        )
+
+
+# ---------------------------------------------------------------------------
+# Password-reset token helpers (KV store, keyed by SHA-256 of the raw token).
+# Mirrors the invite-token design above — CS-3 reuses the existing KV pattern
+# rather than adding users-table columns, so no schema migration is required.
+# ---------------------------------------------------------------------------
+
+
+def _store_reset_token(raw_token: str, user_id: str) -> None:
+    key = f"{_RESET_KV_PREFIX}:{_token_hash(raw_token)}"
+    expires_at = (
+        datetime.now(timezone.utc) + timedelta(hours=RESET_TTL_HOURS)
+    ).isoformat()
+    db.kv_set(key, {"user_id": user_id, "expires_at": expires_at, "used": False})
+
+
+def _mark_reset_used(raw_token: str) -> None:
+    key = f"{_RESET_KV_PREFIX}:{_token_hash(raw_token)}"
+    entry = db.kv_get(key)
+    if entry:
+        entry["used"] = True
+        db.kv_set(key, entry)
+
+
+def _validate_reset_token(raw_token: str) -> dict:
+    """Load a reset token; reject (400) if unknown, used, malformed, or expired."""
+    entry = db.kv_get(f"{_RESET_KV_PREFIX}:{_token_hash(raw_token)}")
+    if entry is None:
+        raise HTTPException(status_code=400, detail="Invalid or expired reset token")
+    if entry.get("used"):
+        raise HTTPException(status_code=400, detail="This reset link has already been used")
+    try:
+        expires_at = datetime.fromisoformat(entry.get("expires_at", ""))
+        if expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=timezone.utc)
+    except (ValueError, TypeError):
+        raise HTTPException(status_code=400, detail="Malformed reset token")
+    if datetime.now(timezone.utc) > expires_at:
+        raise HTTPException(status_code=400, detail="This reset link has expired")
+    return entry
+
+
+# ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
 
 
 @router.post("/register", status_code=201)
 def register(body: RegisterRequest) -> Dict[str, Any]:
-    """AC2: creates org + user + workspace_member in one transaction; returns JWT."""
+    """AC2: creates org + user + workspace_member in one transaction; returns JWT.
+
+    CS-3: a weak password is rejected with 422 before any org/user is created.
+    """
     ensure_auth_tables()
+    _enforce_password_strength(body.password)
     try:
         result = register_org_and_owner(
             org_name=body.org_name,
@@ -356,18 +439,17 @@ def invite_info(token: str) -> Dict[str, Any]:
 
 @router.post("/accept-invite", status_code=200)
 def accept_invite(body: AcceptInviteRequest) -> Dict[str, Any]:
-    """AC11/AC12: validate token → set password + is_active → return JWT."""
-    from app.auth.user_auth import PASSWORD_MIN_LENGTH
+    """AC11/AC12: validate token → enforce password strength → activate → return JWT.
 
+    CS-3: the invited account is activated only once the chosen password passes
+    the strength rule (422 otherwise). Token validation runs first, so an
+    invalid/expired/used token still returns 400 regardless of the password.
+    """
     ensure_auth_tables()
 
     entry = _validate_invite(body.invite_token)
 
-    if len(body.password) < PASSWORD_MIN_LENGTH:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Password must be at least {PASSWORD_MIN_LENGTH} characters",
-        )
+    _enforce_password_strength(body.password)
 
     user_id = entry["user_id"]
     org_id = entry["org_id"]
@@ -402,6 +484,75 @@ def accept_invite(body: AcceptInviteRequest) -> Dict[str, Any]:
             "org_name": get_org_name(org_id),
         },
     }
+
+
+@router.post("/forgot-password", status_code=200)
+def forgot_password(body: ForgotPasswordRequest) -> Dict[str, Any]:
+    """CS-3 Section 5: begin a password reset. Always 200 — prevents email enumeration.
+
+    For a known, active account a single-use reset token (1-hour TTL) is minted
+    and stored in the KV store. The token would normally be emailed
+    (send_password_reset_email is the separate email-service task); until that
+    lands, NON-production responses include the token so the flow stays usable
+    and testable. Unknown / inactive emails get the same 200 + message, no token.
+    """
+    ensure_auth_tables()
+    email = body.email.strip().lower()
+
+    con = db.connect()
+    try:
+        cur = con.execute("SELECT id, is_active FROM users WHERE email = ?", (email,))
+        row = cur.fetchone()
+    finally:
+        con.close()
+
+    raw_token: str | None = None
+    if row and bool(row[1]):
+        raw_token = str(uuid4())
+        _store_reset_token(raw_token, user_id=row[0])
+        # send_password_reset_email(email, raw_token)  # email delivery: separate CS-3 task
+
+    resp: Dict[str, Any] = {
+        "message": "If that email is registered, a password reset link has been sent."
+    }
+    if raw_token and os.getenv("ENVIRONMENT", "").strip().lower() != "production":
+        resp["reset_token"] = raw_token
+    return resp
+
+
+@router.post("/reset-password", status_code=200)
+def reset_password(body: ResetPasswordRequest) -> Dict[str, Any]:
+    """CS-3 Section 5: complete a password reset.
+
+    Order: enforce the new password's strength FIRST (422 if weak), then validate
+    the reset token (400 if invalid/expired/used), then store the new hash and
+    consume the token. Every JWT issued before the reset is revoked, so a stolen
+    session ends the moment the real owner resets.
+    """
+    ensure_auth_tables()
+    _enforce_password_strength(body.new_password)
+
+    entry = _validate_reset_token(body.reset_token)
+    user_id = entry["user_id"]
+
+    new_hash = hash_password(body.new_password)
+    con = db.connect()
+    try:
+        cur = con.execute("SELECT id FROM users WHERE id = ?", (user_id,))
+        if cur.fetchone() is None:
+            raise HTTPException(status_code=400, detail="Invalid or expired reset token")
+        con.execute(
+            "UPDATE users SET password_hash = ? WHERE id = ?", (new_hash, user_id)
+        )
+        con.commit()
+    finally:
+        con.close()
+
+    _mark_reset_used(body.reset_token)
+    # Revoke every JWT issued before the reset (parity with change-password).
+    mark_password_changed(user_id)
+
+    return {"message": "Password has been reset. Please log in."}
 
 
 @router.post("/change-password", status_code=204)
