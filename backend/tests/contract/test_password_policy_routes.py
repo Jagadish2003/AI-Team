@@ -20,7 +20,6 @@ import uuid
 from datetime import datetime, timedelta, timezone
 
 from app import db
-from app.routes_auth import _RESET_KV_PREFIX, _token_hash
 
 STRONG = "Password1!"
 WEAK = "password"  # 8 chars, lowercase only — missing uppercase + special
@@ -186,8 +185,10 @@ def test_forgot_password_always_200_with_same_message(client):
     known = client.post("/api/auth/forgot-password", json={"email": email})
     unknown = client.post("/api/auth/forgot-password", json={"email": _email()})
     assert known.status_code == unknown.status_code == 200
-    # Identical user-facing message → no account enumeration.
-    assert known.json()["message"] == unknown.json()["message"]
+    # Identical user-facing status → no account enumeration.
+    assert known.json()["status"] == unknown.json()["status"] == "ok"
+    assert "reset_token" in known.json()
+    assert "reset_token" not in unknown.json()
 
 
 def test_reset_password_invalid_token_returns_400(client):
@@ -200,12 +201,18 @@ def test_reset_password_invalid_token_returns_400(client):
 
 
 def test_reset_password_expired_token_returns_400(client):
-    _, reset_token = _register_and_get_reset_token(client)
-    # Age the stored token past its 1-hour TTL.
-    key = f"{_RESET_KV_PREFIX}:{_token_hash(reset_token)}"
-    entry = db.kv_get(key)
-    entry["expires_at"] = (datetime.now(timezone.utc) - timedelta(minutes=1)).isoformat()
-    db.kv_set(key, entry)
+    email, reset_token = _register_and_get_reset_token(client)
+    # Age the DB-backed reset token past its 1-hour TTL.
+    expired_at = (datetime.now(timezone.utc) - timedelta(minutes=1)).isoformat()
+    con = db.connect()
+    try:
+        con.execute(
+            "UPDATE users SET reset_token_expires_at = ? WHERE email = ?",
+            (expired_at, email),
+        )
+        con.commit()
+    finally:
+        con.close()
     resp = client.post(
         "/api/auth/reset-password",
         json={"reset_token": reset_token, "new_password": "Newpass1!"},
