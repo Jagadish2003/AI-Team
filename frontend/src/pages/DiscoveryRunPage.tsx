@@ -35,17 +35,16 @@ export const SALESFORCE_DUAL_EXTRACTION_TOOLTIP =
   "serving different detectors. Both passes use your authorised read-only " +
   "token and are logged in the audit trail.";
 
+// Order matches the backend runner's update_run_step() emission order
+// (backend/discovery/runner.py): Salesforce CRM → ServiceNow → Jira → the
+// second Salesforce pass (sf_ncino) → detect → enrich → complete. The second
+// Salesforce pass is emitted AFTER Jira ingestion, so it is listed here after
+// the Jira step — keeping the progress indicator consistent with the run log.
 const DISCOVERY_STEPS: DiscoveryStep[] = [
   {
     id: "sf_crm",
     label: "Salesforce CRM",
     subLabel: "Ingesting case metrics, flows, and approval data",
-    infoTooltip: SALESFORCE_DUAL_EXTRACTION_TOOLTIP,
-  },
-  {
-    id: "sf_ncino",
-    label: "nCino Lending",
-    subLabel: "Ingesting nCino loan origination signals",
     infoTooltip: SALESFORCE_DUAL_EXTRACTION_TOOLTIP,
   },
   {
@@ -57,6 +56,12 @@ const DISCOVERY_STEPS: DiscoveryStep[] = [
     id: "jira",
     label: "Jira",
     subLabel: "Ingesting issue metrics and project activity",
+  },
+  {
+    id: "sf_ncino",
+    label: "nCino Lending",
+    subLabel: "Ingesting nCino loan origination signals",
+    infoTooltip: SALESFORCE_DUAL_EXTRACTION_TOOLTIP,
   },
   {
     id: "detect",
@@ -85,58 +90,86 @@ const STEP_INDEX = Object.fromEntries(
 // unaffected — only the user-facing label/sub-label change. nCino keeps the
 // dual-extraction tooltip narrative; for any other product that nCino-specific
 // explanation no longer applies and is dropped from both Salesforce steps.
+// `tooltipDataset` is the phrase describing the SECOND extraction pass; it is
+// slotted into the dual-extraction tooltip so both Salesforce steps explain the
+// two passes in terms of the declared product.
 const SF_SECOND_PASS_BY_PRODUCT: Record<
   string,
-  { label: string; subLabel: string }
+  { label: string; subLabel: string; tooltipDataset: string }
 > = {
   salesforce_ncino: {
     label: "nCino Lending",
     subLabel: "Ingesting nCino loan origination signals",
+    tooltipDataset: "nCino lending signals (Loans, Covenants, Checklists)",
   },
   salesforce_sc: {
     label: "Service Cloud",
     subLabel: "Ingesting case management, service request, and SLA signals",
+    tooltipDataset: "Service Cloud signals (Case management, service requests, SLAs)",
   },
   salesforce_pss: {
     label: "Public Sector Solutions / Benefits",
     subLabel: "Ingesting benefits administration and member service signals",
+    tooltipDataset:
+      "Public Sector Solutions signals (Benefits administration, member services, PSS objects)",
   },
   salesforce_fsc: {
     label: "Financial Services Cloud",
     subLabel: "Ingesting wealth management and relationship banking signals",
+    tooltipDataset:
+      "Financial Services Cloud signals (Wealth management, relationship banking)",
   },
   salesforce_rc: {
     label: "Revenue Cloud",
     subLabel: "Ingesting CPQ, contract, and revenue operation signals",
+    tooltipDataset: "Revenue Cloud signals (CPQ, contracts, revenue operations)",
   },
   salesforce_hc: {
     label: "Health Cloud",
     subLabel: "Ingesting patient management and care programme signals",
+    tooltipDataset: "Health Cloud signals (Patient management, care programmes)",
   },
 };
 
+// Compose the dual-extraction explanation for a given second-pass dataset.
+// For nCino this reproduces SALESFORCE_DUAL_EXTRACTION_TOOLTIP verbatim
+// (AT-314 approved wording), so that constant stays the single source of truth.
+function buildDualExtractionTooltip(tooltipDataset: string): string {
+  return (
+    "AgentIQ reads from your Salesforce system in two passes: the first reads " +
+    "CRM signals (Cases, Workflows, Approvals), the second reads " +
+    tooltipDataset +
+    ". These are different datasets serving different detectors. Both passes " +
+    "use your authorised read-only token and are logged in the audit trail."
+  );
+}
+
 // Build the display step list for a declared Salesforce product. When no
-// product is declared (undefined), the default nCino labels are preserved so
-// existing behaviour and tests are unchanged.
+// product is declared (undefined) the default nCino labels/tooltip are used so
+// existing behaviour and tests are unchanged. Both Salesforce steps always
+// carry the dual-extraction tooltip, worded for the declared product.
 function resolveDiscoverySteps(salesforceProduct?: string): DiscoveryStep[] {
-  const override = salesforceProduct
-    ? SF_SECOND_PASS_BY_PRODUCT[salesforceProduct]
-    : undefined;
-  const isNcino = !salesforceProduct || salesforceProduct === "salesforce_ncino";
+  const productId =
+    salesforceProduct && SF_SECOND_PASS_BY_PRODUCT[salesforceProduct]
+      ? salesforceProduct
+      : "salesforce_ncino";
+  const meta = SF_SECOND_PASS_BY_PRODUCT[productId];
+  const tooltip =
+    productId === "salesforce_ncino"
+      ? SALESFORCE_DUAL_EXTRACTION_TOOLTIP
+      : buildDualExtractionTooltip(meta.tooltipDataset);
 
   return DISCOVERY_STEPS.map((step) => {
-    if (step.id === "sf_ncino" && override) {
+    if (step.id === "sf_crm") {
+      return { ...step, infoTooltip: tooltip };
+    }
+    if (step.id === "sf_ncino") {
       return {
         ...step,
-        label: override.label,
-        subLabel: override.subLabel,
-        infoTooltip: isNcino ? step.infoTooltip : undefined,
+        label: meta.label,
+        subLabel: meta.subLabel,
+        infoTooltip: tooltip,
       };
-    }
-    // The dual-extraction tooltip describes a CRM + nCino split; it no longer
-    // holds once a non-nCino product is the second pass.
-    if (step.id === "sf_crm" && !isNcino) {
-      return { ...step, infoTooltip: undefined };
     }
     return step;
   });
@@ -364,6 +397,16 @@ export default function DiscoveryRunPage() {
   // Reads current_step from the response and stops once complete or errored.
   // ---------------------------------------------------------------------------
   const [currentStep, setCurrentStep] = useState<string | null>(null);
+
+  // Reset the step indicator whenever the active run changes. Without this, a
+  // newly started run inherits the previous run's last step (e.g. "complete")
+  // — the /status poll only overwrites currentStep once the backend has written
+  // a non-null current_step, so until the first step lands the progress list
+  // would show every step ticked while the backend is still ingesting. The new
+  // run's real step is then re-applied from its /status response.
+  useEffect(() => {
+    setCurrentStep(null);
+  }, [runId]);
 
   // CS-4: the declared Salesforce product (from Integration Hub) decides what
   // the second Salesforce discovery pass is labelled as. Single declaration

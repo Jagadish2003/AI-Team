@@ -7,8 +7,9 @@ describe("DiscoveryStepList step state (CS-4 T5)", () => {
   it("marks an in-progress step active and earlier steps completed", () => {
     render(<DiscoveryStepList currentStep="sn" />);
 
-    // sf_crm and sf_ncino precede "sn" → completed; "sn" itself → active.
-    expect(screen.getAllByLabelText("completed").length).toBe(2);
+    // Backend emission order: sf_crm → sn → jira → sf_ncino → … so only
+    // sf_crm precedes "sn" → 1 completed; "sn" itself → active.
+    expect(screen.getAllByLabelText("completed").length).toBe(1);
     expect(screen.getByLabelText("active")).toBeInTheDocument();
   });
 
@@ -54,12 +55,16 @@ describe("DiscoveryStepList Salesforce product labelling (CS-4)", () => {
     expect(screen.queryByText("nCino Lending")).not.toBeInTheDocument();
   });
 
-  it("keeps the seven-step sequence intact regardless of declared product", () => {
+  it("places the Service Cloud pass after Jira, matching backend log order", () => {
     render(
-      <DiscoveryStepList currentStep="sn" salesforceProduct="salesforce_sc" />
+      <DiscoveryStepList
+        currentStep="sf_ncino"
+        salesforceProduct="salesforce_sc"
+      />
     );
-    // sf_crm + sf_ncino precede "sn" → still two completed steps.
-    expect(screen.getAllByLabelText("completed").length).toBe(2);
+    // sf_ncino is now index 3 (after sf_crm, sn, jira) → three completed steps,
+    // confirming the Service Cloud pass renders after Jira ingestion.
+    expect(screen.getAllByLabelText("completed").length).toBe(3);
     expect(screen.getByLabelText("active")).toBeInTheDocument();
   });
 });
