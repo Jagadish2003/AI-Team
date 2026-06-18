@@ -54,7 +54,7 @@ def _claims(token: str) -> dict:
     )
 
 
-def _register(client, *, org=None, email=None, password="ownerpass1"):
+def _register(client, *, org=None, email=None, password="Ownerpass1!"):
     # Default to a UNIQUE org per call: registering with an existing org_name now
     # joins that workspace as an analyst (not a new owner), so tests that expect a
     # fresh owner must use a fresh org name. Tests exercising the join behaviour
@@ -91,7 +91,8 @@ def test_ac2_register_returns_jwt_with_org_and_owner_role(client):
 
 
 def test_ac16_password_hash_is_bcrypt_and_no_plaintext(client):
-    password = "supersecret-plaintext-1"
+    # Strong (CS-3) and distinctive so we can assert it is never stored in plaintext.
+    password = "Supersecret-Plaintext1!"
     resp, email = _register(client, password=password)
     assert resp.status_code == 201
 
@@ -117,7 +118,7 @@ def test_ac3_duplicate_email_returns_409(client):
     _, email = _register(client, email=_email())
     dupe = client.post(
         "/api/auth/register",
-        json={"org_name": "Other", "email": email, "password": "anotherpass1"},
+        json={"org_name": "Other", "email": email, "password": "Anotherpass1!"},
     )
     assert dupe.status_code == 409, dupe.text
 
@@ -126,9 +127,9 @@ def test_ac3_duplicate_email_returns_409(client):
 
 
 def test_ac4_login_jwt_has_required_claims(client):
-    _, email = _register(client, email=_email(), password="loginpass1")
+    _, email = _register(client, email=_email(), password="Loginpass1!")
     resp = client.post(
-        "/api/auth/login", json={"email": email, "password": "loginpass1"}
+        "/api/auth/login", json={"email": email, "password": "Loginpass1!"}
     )
     assert resp.status_code == 200, resp.text
     claims = _claims(resp.json()["token"])
@@ -138,7 +139,7 @@ def test_ac4_login_jwt_has_required_claims(client):
 
 
 def test_ac5_wrong_password_and_unknown_email_identical_401(client):
-    _, email = _register(client, email=_email(), password="rightpass1")
+    _, email = _register(client, email=_email(), password="Rightpass1!")
 
     wrong = client.post(
         "/api/auth/login", json={"email": email, "password": "wrongpass1"}
@@ -155,7 +156,7 @@ def test_ac5_wrong_password_and_unknown_email_identical_401(client):
 
 
 def test_ac6_sixth_failed_attempt_returns_429_with_retry_after(client):
-    _, email = _register(client, email=_email(), password="correctpass1")
+    _, email = _register(client, email=_email(), password="Correctpass1!")
 
     for _ in range(5):
         bad = client.post(
@@ -164,7 +165,7 @@ def test_ac6_sixth_failed_attempt_returns_429_with_retry_after(client):
         assert bad.status_code == 401
 
     throttled = client.post(
-        "/api/auth/login", json={"email": email, "password": "correctpass1"}
+        "/api/auth/login", json={"email": email, "password": "Correctpass1!"}
     )
     assert throttled.status_code == 429, throttled.text
     # Retry-After header present and within the window.
@@ -177,23 +178,23 @@ def test_ac6_sixth_failed_attempt_returns_429_with_retry_after(client):
 def test_ac7_rate_limit_is_email_scoped_not_ip(client):
     """A throttled account does not lock out another user on the same client/IP
     (deliberate deviation from per-IP AC7)."""
-    _, blocked = _register(client, org="Blocked", email=_email(), password="blockedpass1")
-    _, other = _register(client, org="Other", email=_email(), password="otherpass1")
+    _, blocked = _register(client, org="Blocked", email=_email(), password="Blockedpass1!")
+    _, other = _register(client, org="Other", email=_email(), password="Otherpass1!")
 
     for _ in range(5):
         client.post("/api/auth/login", json={"email": blocked, "password": "wrong1"})
     assert (
-        client.post("/api/auth/login", json={"email": blocked, "password": "blockedpass1"}).status_code
+        client.post("/api/auth/login", json={"email": blocked, "password": "Blockedpass1!"}).status_code
         == 429
     )
 
     # Same TestClient (same IP) — the other account logs in fine.
-    ok = client.post("/api/auth/login", json={"email": other, "password": "otherpass1"})
+    ok = client.post("/api/auth/login", json={"email": other, "password": "Otherpass1!"})
     assert ok.status_code == 200, ok.text
 
 
 def test_ac8_successful_login_clears_failed_attempts(client):
-    _, email = _register(client, email=_email(), password="recoverpass1")
+    _, email = _register(client, email=_email(), password="Recoverpass1!")
 
     # 4 failures — under the threshold of 5.
     for _ in range(4):
@@ -201,14 +202,14 @@ def test_ac8_successful_login_clears_failed_attempts(client):
 
     # A correct login still succeeds and resets the counter…
     assert (
-        client.post("/api/auth/login", json={"email": email, "password": "recoverpass1"}).status_code
+        client.post("/api/auth/login", json={"email": email, "password": "Recoverpass1!"}).status_code
         == 200
     )
     # …so four more failures don't immediately trip the limit (count was reset).
     for _ in range(4):
         client.post("/api/auth/login", json={"email": email, "password": "wrong1"})
     assert (
-        client.post("/api/auth/login", json={"email": email, "password": "recoverpass1"}).status_code
+        client.post("/api/auth/login", json={"email": email, "password": "Recoverpass1!"}).status_code
         == 200
     )
 
@@ -281,12 +282,12 @@ def test_ac11_accept_invite_single_use(client):
 
     first = client.post(
         "/api/auth/accept-invite",
-        json={"invite_token": invite_token, "password": "analystpass1"},
+        json={"invite_token": invite_token, "password": "Analystpass1!"},
     )
     assert first.status_code == 200, first.text
     second = client.post(
         "/api/auth/accept-invite",
-        json={"invite_token": invite_token, "password": "analystpass1"},
+        json={"invite_token": invite_token, "password": "Analystpass1!"},
     )
     assert second.status_code == 400, second.text
 
@@ -308,7 +309,7 @@ def test_ac12_accept_invite_expired_returns_400(client):
 
     expired = client.post(
         "/api/auth/accept-invite",
-        json={"invite_token": invite_token, "password": "viewerpass1"},
+        json={"invite_token": invite_token, "password": "Viewerpass1!"},
     )
     assert expired.status_code == 400, expired.text
 
@@ -324,9 +325,9 @@ def test_ac15_register_jwt_passes_require_auth_and_role(client):
 
 
 def test_ac15_login_jwt_passes_require_auth_and_role(client):
-    _, email = _register(client, email=_email(), password="e2epass1")
+    _, email = _register(client, email=_email(), password="E2epass1!")
     token = client.post(
-        "/api/auth/login", json={"email": email, "password": "e2epass1"}
+        "/api/auth/login", json={"email": email, "password": "E2epass1!"}
     ).json()["token"]
     catalog = client.get(WORKSPACE_CATALOG, headers=_auth(token))
     assert catalog.status_code == 200, catalog.text

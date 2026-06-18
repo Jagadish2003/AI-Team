@@ -27,7 +27,6 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import AliasChoices, BaseModel, Field
 
 from app import db
-from app.email_service import send_invite_email, send_welcome_email
 from app.auth.user_auth import (
     EmailAlreadyExistsError,
     InvalidCredentialsError,
@@ -46,7 +45,11 @@ from app.auth.user_auth import (
     verify_jwt,
     verify_password,
 )
-from app.email_service import send_password_reset_email
+from app.email_service import (
+    send_invite_email,
+    send_password_reset_email,
+    send_welcome_email,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -209,14 +212,42 @@ def _validate_invite(raw_token: str) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Password strength (CS-3 §1/§4) — shared by register, accept-invite, and
+# reset-password so all three enforce the identical rule and 422 contract.
+# Login is deliberately NOT validated against this rule: existing users with
+# old, weaker passwords must never be locked out (CS-3 §1, AC6).
+# ---------------------------------------------------------------------------
+
+
+def _enforce_password_strength(password: str) -> None:
+    """Raise HTTP 422 if `password` fails the CS-3 strength rule.
+
+    validate_password_strength returns the list of unmet requirements (empty ==
+    valid); a non-empty list becomes a 422 whose detail names exactly which rules
+    failed, matching the CS-3 error shape.
+    """
+    unmet = validate_password_strength(password)
+    if unmet:
+        raise HTTPException(
+            status_code=422,
+            detail="Password must contain: " + ", ".join(unmet),
+        )
+
+
+# ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
 
 
 @router.post("/register", status_code=201)
 def register(body: RegisterRequest) -> Dict[str, Any]:
-    """AC2: creates org + user + workspace_member in one transaction; returns JWT."""
+    """AC2: creates org + user + workspace_member in one transaction; returns JWT.
+
+    CS-3 §1/§4: the password must satisfy the strength rule (min 8, upper, lower,
+    special) — a weak password is rejected with 422 before any account is created.
+    """
     ensure_auth_tables()
+    _enforce_password_strength(body.password)
     try:
         result = register_org_and_owner(
             org_name=body.org_name,
@@ -417,18 +448,19 @@ def invite_info(token: str) -> Dict[str, Any]:
 
 @router.post("/accept-invite", status_code=200)
 def accept_invite(body: AcceptInviteRequest) -> Dict[str, Any]:
-    """AC11/AC12: validate token → set password + is_active → return JWT."""
-    from app.auth.user_auth import PASSWORD_MIN_LENGTH
+    """AC11/AC12: validate token → set password + is_active → return JWT.
 
+    CS-3 §1/§4: the chosen password must satisfy the strength rule (422 if weak).
+    Token validity (400) is checked first, so an invalid token with a weak
+    password returns 400 — same ordering as reset-password.
+    """
     ensure_auth_tables()
 
     entry = _validate_invite(body.invite_token)
 
-    if len(body.password) < PASSWORD_MIN_LENGTH:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Password must be at least {PASSWORD_MIN_LENGTH} characters",
-        )
+    # CS-3: enforce the full strength rule (422), replacing the old length-only
+    # 400 check. The invite token has already been validated (400) above.
+    _enforce_password_strength(body.password)
 
     user_id = entry["user_id"]
     org_id = entry["org_id"]
@@ -650,14 +682,8 @@ def reset_password(body: ResetPasswordRequest) -> Dict[str, Any]:
     entry = _consume_reset_token(body.reset_token)
     user_id = entry["user_id"]
 
-    # 2) Strength (422). validate_password_strength returns the unmet rules; an
-    # empty list means valid. Matches the same rule registration/invite will use.
-    unmet = validate_password_strength(body.new_password)
-    if unmet:
-        raise HTTPException(
-            status_code=422,
-            detail="Password must contain: " + ", ".join(unmet),
-        )
+    # 2) Strength (422) — same rule and 422 contract as register and accept-invite.
+    _enforce_password_strength(body.new_password)
 
     # 3) Write the new hash and clear the reset token (single-use) atomically.
     password_hash = hash_password(body.new_password)

@@ -26,7 +26,7 @@ def test_invited_analyst_sees_org_run_and_products(client: TestClient):
     # 1. Owner registers org "DWP".
     reg = client.post(
         "/api/auth/register",
-        json={"org_name": "DWP", "email": "owner_dwp@example.com", "password": "password123"},
+        json={"org_name": "DWP", "email": "owner_dwp@example.com", "password": "Password123!"},
     )
     assert reg.status_code == 201, reg.text
     owner = reg.json()
@@ -59,7 +59,7 @@ def test_invited_analyst_sees_org_run_and_products(client: TestClient):
     # 4. Analyst accepts → JWT for the SAME org, role analyst.
     acc = client.post(
         "/api/auth/accept-invite",
-        json={"invite_token": invite_token, "password": "password123"},
+        json={"invite_token": invite_token, "password": "Password123!"},
     )
     assert acc.status_code == 200, acc.text
     analyst = acc.json()
@@ -96,7 +96,7 @@ def test_invited_analyst_sees_connectors_via_real_endpoints(client: TestClient):
 
     reg = client.post(
         "/api/auth/register",
-        json={"org_name": "DWP3", "email": "owner_dwp3@example.com", "password": "password123"},
+        json={"org_name": "DWP3", "email": "owner_dwp3@example.com", "password": "Password123!"},
     )
     assert reg.status_code == 201, reg.text
     owner = reg.json()
@@ -134,7 +134,7 @@ def test_invited_analyst_sees_connectors_via_real_endpoints(client: TestClient):
     assert inv.status_code == 201, inv.text
     acc = client.post(
         "/api/auth/accept-invite",
-        json={"invite_token": inv.json()["invite_token"], "password": "password123"},
+        json={"invite_token": inv.json()["invite_token"], "password": "Password123!"},
     )
     assert acc.status_code == 200, acc.text
     analyst_token = acc.json()["token"]
@@ -163,7 +163,7 @@ def test_outsider_in_another_org_does_not_see_the_run(client: TestClient):
 
     reg = client.post(
         "/api/auth/register",
-        json={"org_name": "DWP2", "email": "owner_dwp2@example.com", "password": "password123"},
+        json={"org_name": "DWP2", "email": "owner_dwp2@example.com", "password": "Password123!"},
     )
     owner_org = reg.json()["user"]["org_id"]
     db.upsert_run(
@@ -175,7 +175,7 @@ def test_outsider_in_another_org_does_not_see_the_run(client: TestClient):
     # A separate owner / separate org (mirrors "registered a new account to invite").
     other = client.post(
         "/api/auth/register",
-        json={"org_name": "CF", "email": "owner_cf@example.com", "password": "password123"},
+        json={"org_name": "CF", "email": "owner_cf@example.com", "password": "Password123!"},
     )
     other_token = other.json()["token"]
 
