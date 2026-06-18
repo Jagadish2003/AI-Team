@@ -58,11 +58,16 @@ const BOTTOM = 278;
 const CW = PW - MX * 2;
 const RIGHT = PW - MX;
 
-// Chart virtual size (aspect ~2:1, matching the on-screen panel) and its fixed
-// height once scaled to the content width.
+// Chart virtual size + its fixed height once scaled to the content width. The
+// chart spans the full content width (aligned with the heading above it) and is
+// rendered tall enough to be comfortably readable on the page.
 const CHART_VW = 1440;
-const CHART_VH = 720;
-const CHART_H = (CHART_VH * CW) / CHART_VW;
+const CHART_VH = 900;
+const CHART_H = (CHART_VH * CW) / CHART_VW; // ≈ 112.5mm at 180mm content width
+// Tighter plot insets than the on-screen defaults so the chart box reaches
+// closer to the page edges (uses the available left/right space). The left
+// gutter still holds the impact axis labels.
+const CHART_MARGINS = { left: 112, right: 24, top: 22, bottom: 48 };
 
 const PT_TO_MM = 0.3528;
 const lineHeight = (pt: number) => pt * PT_TO_MM * 1.34;
@@ -104,6 +109,33 @@ async function rasterizeSvgToPng(svg: string, pxW: number, pxH: number): Promise
   } catch {
     return null;
   }
+}
+
+/**
+ * Wrap a KPI value. For " / "-separated values (the Agent Roadmap label,
+ * "Phase 1 / Phase 2 / Phase 3"), each token is kept intact on its line so a
+ * "Phase" is never split from its number; the separator stays with the
+ * preceding token. Plain values fall through to splitTextToSize.
+ */
+function wrapKpiValue(pdf: import('jspdf').jsPDF, value: string, maxW: number): string[] {
+  if (!value.includes(' / ')) {
+    return pdf.splitTextToSize(value, maxW) as string[];
+  }
+  const tokens = value.split(' / ');
+  const lines: string[] = [];
+  let cur = '';
+  tokens.forEach((tok, i) => {
+    const piece = i < tokens.length - 1 ? `${tok} /` : tok;
+    const trial = cur ? `${cur} ${piece}` : piece;
+    if (!cur || pdf.getTextWidth(trial) <= maxW) {
+      cur = trial;
+    } else {
+      lines.push(cur);
+      cur = piece;
+    }
+  });
+  if (cur) lines.push(cur);
+  return lines;
 }
 
 /** Rasterize the bundled AgentIQ logo SVG to a PNG data URL for embedding.
@@ -182,7 +214,7 @@ export async function downloadExecutiveReportPdf(
     setFont(12.5, 'bold', NAVY);
     pdf.text(sanitize(text), MX, y + 4.6);
     if (caption) {
-      setFont(8.5, 'normal', MUTED);
+      setFont(7.5, 'normal', MUTED);
       pdf.text(sanitize(caption), RIGHT, y + 4.6, { align: 'right' });
     }
     y += 9;
@@ -249,7 +281,7 @@ export async function downloadExecutiveReportPdf(
   setFont(12.5, 'bold', NAVY);
   let maxValLines = 1;
   const valLines = stats.map(([, v]) => {
-    const lines = pdf.splitTextToSize(sanitize(v), cardW - 6) as string[];
+    const lines = wrapKpiValue(pdf, sanitize(v), cardW - 6);
     maxValLines = Math.max(maxValLines, lines.length);
     return lines;
   });
@@ -363,7 +395,7 @@ export async function downloadExecutiveReportPdf(
   // ── Effort vs Impact (rasterized from the same SVG the app renders) ──────────
   ensure(9 + CHART_H + 2); // keep heading + chart together on one page
   heading('Effort vs Impact', 'Read-only opportunity snapshot');
-  const chartSvg = buildMatrixSvg(data.opportunities, CHART_VW, CHART_VH, LIGHT_MATRIX_PALETTE);
+  const chartSvg = buildMatrixSvg(data.opportunities, CHART_VW, CHART_VH, LIGHT_MATRIX_PALETTE, CHART_MARGINS);
   const chartPng = await rasterizeSvgToPng(chartSvg, CHART_VW * 2, CHART_VH * 2);
   if (chartPng) {
     pdf.addImage(chartPng, 'PNG', MX, y, CW, CHART_H);

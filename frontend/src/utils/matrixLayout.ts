@@ -56,13 +56,28 @@ export interface MatrixGeometry {
   placements: MatrixLabelPlacement[];
 }
 
-export function createLayout(width: number, height: number): MatrixLayout {
+/** Plot insets (in virtual px) around the chart box: the left gutter holds the
+ *  impact axis labels, the bottom holds the effort labels. Optional — the
+ *  on-screen chart uses the responsive defaults; the PDF passes tighter values
+ *  to widen the plot box toward the page edges. */
+export interface MatrixMargins {
+  left: number;
+  right: number;
+  top: number;
+  bottom: number;
+}
+
+export function createLayout(
+  width: number,
+  height: number,
+  margins?: Partial<MatrixMargins>,
+): MatrixLayout {
   const safeWidth = Math.max(width, 360);
   const safeHeight = Math.max(height, 360);
-  const left = safeWidth < 640 ? 92 : 150;
-  const right = safeWidth < 640 ? 18 : 36;
-  const top = 28;
-  const bottom = 38;
+  const left = margins?.left ?? (safeWidth < 640 ? 92 : 150);
+  const right = margins?.right ?? (safeWidth < 640 ? 18 : 36);
+  const top = margins?.top ?? 28;
+  const bottom = margins?.bottom ?? 38;
   const rx = safeWidth - right;
   const by = safeHeight - bottom;
 
@@ -166,8 +181,9 @@ export function computeMatrixGeometry(
   opportunities: OpportunityCandidate[],
   width: number,
   height: number,
+  margins?: Partial<MatrixMargins>,
 ): MatrixGeometry {
-  const layout = createLayout(width, height);
+  const layout = createLayout(width, height, margins);
   const points = buildPoints(opportunities, layout).sort((a, b) => b.r - a.r);
   const placements = computeLabelPlacements(points, layout);
   return { layout, points, placements };
@@ -230,8 +246,9 @@ export function buildMatrixSvg(
   width: number,
   height: number,
   palette: MatrixPalette,
+  margins?: Partial<MatrixMargins>,
 ): string {
-  const { layout, points, placements } = computeMatrixGeometry(opportunities, width, height);
+  const { layout, points, placements } = computeMatrixGeometry(opportunities, width, height, margins);
   const parts: string[] = [];
 
   parts.push(
