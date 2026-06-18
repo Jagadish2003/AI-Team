@@ -39,43 +39,17 @@ _NONCE_TTL_MINUTES = 10
 
 
 def _init_credentials_table() -> None:
-    """Create the credentials table and indexes if they don't exist yet.
+    """No-op. The credentials table is provisioned externally.
 
-    Also applies the refresh_failed column migration for pre-existing databases.
+    Created by database/provision/provision.sh; the application no longer
+    creates this table at runtime.
     """
-    con = db.connect()
-    try:
-        cur = con.cursor()
-        cur.execute(CREATE_CREDENTIALS_TABLE)
-        cur.execute(CREATE_CREDENTIALS_IDX_ORG)
-        cur.execute(CREATE_CREDENTIALS_IDX_CONNECTOR)
-        try:
-            # ADD COLUMN IF NOT EXISTS is idempotent on PostgreSQL; the guard is
-            # defensive only.
-            cur.execute(ALTER_CREDENTIALS_ADD_REFRESH_FAILED)
-        except psycopg2.Error:
-            con.rollback()  # column already exists — clear the aborted txn
-        con.commit()
-    finally:
-        con.close()
+    return None
 
 
 def _init_nonce_table() -> None:
-    """Create the nonce store table if it doesn't exist yet."""
-    con = db.connect()
-    try:
-        cur = con.cursor()
-        cur.execute(
-            """
-            CREATE TABLE IF NOT EXISTS nonces (
-                key        TEXT PRIMARY KEY,
-                data       TEXT NOT NULL
-            )
-            """
-        )
-        con.commit()
-    finally:
-        con.close()
+    """No-op. The nonces table is provisioned by database/provision/provision.sh."""
+    return None
 
 
 def _get_fernet() -> Fernet:

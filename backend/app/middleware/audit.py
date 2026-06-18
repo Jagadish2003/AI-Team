@@ -97,21 +97,8 @@ _TABLES_INITIALISED = False
 
 
 def _ensure_table() -> None:
-    global _TABLES_INITIALISED
-    if _TABLES_INITIALISED:
-        return
-    con = db.connect()
-    try:
-        cur = con.cursor()
-        cur.execute(CREATE_AUDIT_LOG_TABLE)
-        cur.execute(CREATE_AUDIT_LOG_IDX_ORG_TS)
-        cur.execute(CREATE_AUDIT_LOG_IDX_ORG_EVENT)
-        con.commit()
-        _TABLES_INITIALISED = True
-    except Exception as exc:  # pragma: no cover
-        logger.error("audit_log table init failed: %s", exc)
-    finally:
-        con.close()
+    """No-op. The audit_log table is provisioned by database/provision/provision.sh."""
+    return None
 
 
 def log_event(event_type: str, **kwargs: Any) -> None:

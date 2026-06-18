@@ -105,26 +105,13 @@ def _table_exists(cur, table: str) -> bool:
 
 
 def init_tables() -> None:
-    con = connect()
-    cur = con.cursor()
-    # `seq` is a monotonically increasing insertion-order column. It replaces the
-    # SQLite implicit `rowid` that entity visibility ordering relied on (see
-    # database/models/entities.py ENTITIES_VISIBLE_AS_OF_RUN_FROM_WHERE).
-    cur.execute(
-        "CREATE TABLE IF NOT EXISTS runs ("
-        "id TEXT PRIMARY KEY, payload TEXT NOT NULL, seq BIGSERIAL)"
-    )
-    cur.execute("ALTER TABLE runs ADD COLUMN IF NOT EXISTS seq BIGSERIAL")
-    # Migrate run_events if it exists with the old single-key schema.
-    if _table_exists(cur, "run_events") and not _column_exists(cur, "run_events", "run_id"):
-        cur.execute("DROP TABLE run_events")
-    cur.execute(
-        "CREATE TABLE IF NOT EXISTS run_events ("
-        "run_id TEXT NOT NULL, seq INTEGER NOT NULL, payload TEXT NOT NULL, "
-        "PRIMARY KEY (run_id, seq))"
-    )
-    con.commit()
-    con.close()
+    """No-op. Schema is provisioned externally.
+
+    The runs/run_events tables (and all others) are created by
+    database/provision/provision.sh; the application no longer creates or
+    migrates tables at runtime.
+    """
+    return None
 
 
 def get_run(run_id: str) -> Optional[Dict[str, Any]]:
@@ -262,13 +249,8 @@ def run_set(run_id: str, run: Dict[str, Any]) -> None:
 
 
 def _init_kv_table() -> None:
-    con = connect()
-    cur = con.cursor()
-    cur.execute(
-        "CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, payload TEXT NOT NULL)"
-    )
-    con.commit()
-    con.close()
+    """No-op. The kv table is provisioned by database/provision/provision.sh."""
+    return None
 
 
 def kv_get(key: str) -> Any:

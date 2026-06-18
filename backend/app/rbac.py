@@ -27,17 +27,8 @@ _MEMBERS_INITIALISED = False
 
 
 def _ensure_members_table() -> None:
-    global _MEMBERS_INITIALISED
-    if _MEMBERS_INITIALISED:
-        return
-    con = db.connect()
-    try:
-        cur = con.cursor()
-        cur.execute(CREATE_WORKSPACE_MEMBERS_TABLE)
-        con.commit()
-        _MEMBERS_INITIALISED = True
-    finally:
-        con.close()
+    """No-op. The workspace_members table is provisioned by database/provision/provision.sh."""
+    return None
 
 
 def seed_owner(org_id: str, user_id: str) -> None:

@@ -15,9 +15,9 @@ so the target database is complete after one invocation:
         opportunities, audit_events, executive_reports, run_events, kv
         (and, with --seed, the core reference rows: connectors / mappings /
         permissions / uploads).
-  3. Lazy-only tables created on demand by the running app, materialised up
-     front here so an inspection of a freshly provisioned DB is not missing
-     them: credentials, nonces, oauth_nonces.
+  3. Tables with no Alembic migration and not in seed_loader, created directly
+     here. The application no longer creates tables at runtime, so provisioning
+     is the only place these are created: credentials, nonces, oauth_nonces.
 
 Prerequisite: the target database already exists and DATABASE_URL points at it.
 (The agentiq role is created by the pure-SQL path's 01_schema.sql; this Alembic
@@ -124,20 +124,44 @@ def run_seed_loader(seed: bool) -> None:
 
 
 def ensure_lazy_tables() -> None:
-    """Create the tables the app would otherwise only create on first use.
+    """Create credentials, nonces and oauth_nonces.
 
-    These have no Alembic migration by design — they are created lazily at
-    runtime. We materialise them up front so a freshly provisioned database is
-    complete and inspection-friendly. Each call is CREATE TABLE IF NOT EXISTS,
-    so this is idempotent.
+    These three have no Alembic migration and are not in seed_loader, so
+    provisioning is the only place that creates them — the application no longer
+    creates any tables at runtime. The DDL is executed directly here (not via
+    app code) and shares the credentials schema constants with the app. Each
+    statement is CREATE TABLE/INDEX IF NOT EXISTS (plus an idempotent ADD COLUMN
+    IF NOT EXISTS), so this is safe to re-run.
     """
     print("[3/3] lazy tables (credentials, nonces, oauth_nonces) ...")
-    from app.auth.vault import _init_credentials_table, _init_nonce_table
-    from app.routes_connector_auth import _ensure_tables as _ensure_oauth_nonces
+    import psycopg2
 
-    _init_credentials_table()   # credentials (+ indexes)
-    _init_nonce_table()         # nonces
-    _ensure_oauth_nonces()      # oauth_nonces
+    from database.models.credentials import (
+        ALTER_CREDENTIALS_ADD_REFRESH_FAILED,
+        CREATE_CREDENTIALS_IDX_CONNECTOR,
+        CREATE_CREDENTIALS_IDX_ORG,
+        CREATE_CREDENTIALS_TABLE,
+    )
+
+    con = psycopg2.connect(DATABASE_URL)
+    try:
+        cur = con.cursor()
+        cur.execute(CREATE_CREDENTIALS_TABLE)
+        cur.execute(CREATE_CREDENTIALS_IDX_ORG)
+        cur.execute(CREATE_CREDENTIALS_IDX_CONNECTOR)
+        cur.execute(ALTER_CREDENTIALS_ADD_REFRESH_FAILED)
+        cur.execute(
+            "CREATE TABLE IF NOT EXISTS nonces ("
+            "key TEXT PRIMARY KEY, data TEXT NOT NULL)"
+        )
+        cur.execute(
+            "CREATE TABLE IF NOT EXISTS oauth_nonces ("
+            "nonce TEXT PRIMARY KEY, connector_id TEXT NOT NULL, "
+            "expires_at TEXT NOT NULL)"
+        )
+        con.commit()
+    finally:
+        con.close()
 
 
 def verify(verbose: bool) -> None:

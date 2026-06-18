@@ -378,6 +378,38 @@ def pytest_configure(config):
         if result.returncode != 0:
             raise RuntimeError(f"seed_loader.py failed:\n{result.stderr}")
 
+        # The credentials/nonces/oauth_nonces tables are NOT in migrations or
+        # seed_loader — they used to be created lazily by the app at runtime.
+        # That runtime DDL has been removed (schema is now owned by
+        # database/provision/provision.sh), so create them here for the
+        # resettable test DB. A pre-provisioned shared DB already has them.
+        from database.models.credentials import (
+            ALTER_CREDENTIALS_ADD_REFRESH_FAILED,
+            CREATE_CREDENTIALS_IDX_CONNECTOR,
+            CREATE_CREDENTIALS_IDX_ORG,
+            CREATE_CREDENTIALS_TABLE,
+        )
+
+        _lazy_con = psycopg2.connect(os.environ["DATABASE_URL"])
+        try:
+            with _lazy_con.cursor() as _cur:
+                _cur.execute(CREATE_CREDENTIALS_TABLE)
+                _cur.execute(CREATE_CREDENTIALS_IDX_ORG)
+                _cur.execute(CREATE_CREDENTIALS_IDX_CONNECTOR)
+                _cur.execute(ALTER_CREDENTIALS_ADD_REFRESH_FAILED)
+                _cur.execute(
+                    "CREATE TABLE IF NOT EXISTS nonces ("
+                    "key TEXT PRIMARY KEY, data TEXT NOT NULL)"
+                )
+                _cur.execute(
+                    "CREATE TABLE IF NOT EXISTS oauth_nonces ("
+                    "nonce TEXT PRIMARY KEY, connector_id TEXT NOT NULL, "
+                    "expires_at TEXT NOT NULL)"
+                )
+            _lazy_con.commit()
+        finally:
+            _lazy_con.close()
+
     # Seed the dev user as owner of the default org so legacy contract tests
     # pass with RBAC applied. The app's lifespan does this for context-managed
     # TestClients, but some test modules instantiate TestClient(app) directly

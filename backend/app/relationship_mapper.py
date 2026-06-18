@@ -81,19 +81,12 @@ def _connect() -> Any:
 
 
 def ensure_entity_relationships_table() -> None:
-    """Create the entity_relationships table and indexes if they do not exist.
+    """No-op. The entity_relationships table is provisioned externally.
 
-    Idempotent — safe to call on every app startup or before any insert.
-    Uses IF NOT EXISTS so repeated calls are no-ops.
+    Created by database/provision/provision.sh; the application no longer
+    creates this table at runtime.
     """
-    conn = _connect()
-    try:
-        cur = conn.cursor()
-        for ddl in ALL_ENTITY_RELATIONSHIPS_DDL:
-            cur.execute(ddl)
-        conn.commit()
-    finally:
-        conn.close()
+    return None
 
 
 def upsert_relationship(

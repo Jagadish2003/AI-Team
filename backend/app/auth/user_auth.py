@@ -182,24 +182,12 @@ _AUTH_TABLES_INITIALISED = False
 
 
 def ensure_auth_tables() -> None:
-    """Create orgs, users, login_attempts and workspace_members if missing."""
-    global _AUTH_TABLES_INITIALISED
-    if _AUTH_TABLES_INITIALISED:
-        return
-    con = db.connect()
-    try:
-        cur = con.cursor()
-        for ddl in (
-            *ALL_ORGS_DDL,
-            *ALL_USERS_DDL,
-            *ALL_LOGIN_ATTEMPTS_DDL,
-        ):
-            cur.execute(ddl)
-        cur.execute(CREATE_WORKSPACE_MEMBERS_TABLE)
-        con.commit()
-        _AUTH_TABLES_INITIALISED = True
-    finally:
-        con.close()
+    """No-op. orgs/users/login_attempts/workspace_members are provisioned externally.
+
+    Created by database/provision/provision.sh; the application no longer
+    creates these tables at runtime.
+    """
+    return None
 
 
 # ---------------------------------------------------------------------------

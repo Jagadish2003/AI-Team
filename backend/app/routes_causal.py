@@ -32,23 +32,12 @@ logger = logging.getLogger(__name__)
 
 
 def ensure_causal_hypotheses_table() -> None:
-    """Ensure the causal_hypotheses table and its indexes exist.
+    """No-op. The causal_hypotheses table is provisioned externally.
 
-    Idempotent — all DDL statements use CREATE TABLE/INDEX IF NOT EXISTS.
-    Called once at registration time, never per-request.
+    Created by database/provision/provision.sh; the application no longer
+    creates this table at runtime.
     """
-    con = db.connect()
-    try:
-        cur = con.cursor()
-        for ddl in ALL_CAUSAL_HYPOTHESES_DDL:
-            cur.execute(ddl)
-        con.commit()
-    except Exception:
-        con.rollback()
-        logger.exception("ensure_causal_hypotheses_table failed")
-        raise
-    finally:
-        con.close()
+    return None
 
 
 @router.get(

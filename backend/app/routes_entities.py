@@ -56,41 +56,13 @@ def _table_exists(con, name: str) -> bool:
 
 
 def ensure_entities_table() -> None:
-    """Ensure dev databases have the Sprint 12 entity schema.
+    """No-op. The entities schema is provisioned externally.
 
-    Older seed databases had a generic payload-backed ``entities`` table used
-    by the retired Evidence Collection mock. The Sprint 12 graph code needs
-    real columns. Preserve the old rows by renaming that legacy table, then
-    create the locked graph schema.
+    The entities table and its indexes are created by
+    database/provision/provision.sh; the application no longer creates or
+    migrates this table at runtime.
     """
-    con = db.connect()
-    try:
-        cur = con.cursor()
-        cur.execute(
-            "SELECT column_name FROM information_schema.columns "
-            "WHERE table_name = 'entities'"
-        )
-        columns = {row[0] for row in cur.fetchall()}
-
-        if columns and not REQUIRED_ENTITY_COLUMNS.issubset(columns):
-            legacy_name = "entities_legacy_payload"
-            if _table_exists(con, legacy_name):
-                legacy_name = f"entities_legacy_payload_{int(time.time())}"
-            cur.execute(f"ALTER TABLE entities RENAME TO {legacy_name}")
-            logger.warning(
-                "Renamed legacy entities table to %s before creating graph schema",
-                legacy_name,
-            )
-
-        for ddl in ALL_ENTITIES_DDL:
-            cur.execute(ddl)
-        con.commit()
-    except Exception:
-        con.rollback()
-        logger.exception("ensure_entities_table failed")
-        raise
-    finally:
-        con.close()
+    return None
 
 
 @router.get(

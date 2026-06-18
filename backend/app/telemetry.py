@@ -48,16 +48,8 @@ _table_ready = False
 
 
 def _ensure_telemetry_table() -> None:
-    """Create telemetry_events and its indexes if they do not yet exist."""
-    global _table_ready
-    if _table_ready:
-        return
-    with get_db_connection() as conn:
-        cur = conn.cursor()
-        for ddl in ALL_TELEMETRY_DDL:
-            cur.execute(ddl)
-        conn.commit()
-    _table_ready = True
+    """No-op. The telemetry_events table is provisioned by database/provision/provision.sh."""
+    return None
 
 
 # ---------------------------------------------------------------------------

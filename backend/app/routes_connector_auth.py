@@ -67,21 +67,12 @@ CREATE TABLE IF NOT EXISTS oauth_nonces (
 
 
 def _ensure_tables() -> None:
-    con = db.connect()
-    try:
-        cur = con.cursor()
-        cur.execute(CREATE_CREDENTIALS_TABLE)
-        cur.execute(CREATE_CREDENTIALS_IDX_ORG)
-        cur.execute(CREATE_CREDENTIALS_IDX_CONNECTOR)
-        try:
-            # ADD COLUMN IF NOT EXISTS is idempotent on PostgreSQL.
-            cur.execute(ALTER_CREDENTIALS_ADD_REFRESH_FAILED)
-        except psycopg2.Error:
-            con.rollback()  # column already exists — clear the aborted txn
-        cur.execute(_CREATE_NONCES_TABLE)
-        con.commit()
-    finally:
-        con.close()
+    """No-op. The credentials and oauth_nonces tables are provisioned externally.
+
+    Created by database/provision/provision.sh; the application no longer
+    creates these tables at runtime.
+    """
+    return None
 
 
 # ---------------------------------------------------------------------------
