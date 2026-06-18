@@ -38,6 +38,16 @@ last_login_at — LOGIN-EVENT-ONLY (issue #18):
     later, update this field there too (or rename it) so it does not silently
     under-report activity.
 
+reset_token_hash / reset_token_expires_at — FORGOT-PASSWORD FLOW (CS-3):
+    Back the forgot/reset-password flow. POST /api/auth/forgot-password stores
+    the SHA-256 hash of a freshly generated reset token (NEVER the raw token, so a
+    DB leak does not expose usable reset links) and a one-hour expiry here; POST
+    /api/auth/reset-password validates the hash + expiry, rejecting an expired
+    link with 400. Both columns are NULLABLE so existing accounts stay valid with
+    no backfill (added by migration 0008_add_password_reset_fields). They are
+    cleared (set back to NULL) once a reset is consumed. Unlike the reserved
+    invite_token_* columns above, these ARE read and written by the live flow.
+
 SQLite-compatible types (TEXT-backed). PostgreSQL deployment replaces:
     VARCHAR(36)  id                       -> UUID
     TIMESTAMP    *_at                      -> TIMESTAMP WITH TIME ZONE
@@ -53,7 +63,9 @@ CREATE TABLE IF NOT EXISTS users (
     invite_token_hash       VARCHAR(256),
     invite_token_expires_at TIMESTAMP,
     created_at              TIMESTAMP    NOT NULL,
-    last_login_at           TIMESTAMP
+    last_login_at           TIMESTAMP,
+    reset_token_hash        VARCHAR(256),
+    reset_token_expires_at  TIMESTAMP
 )
 """
 
@@ -66,4 +78,23 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email_unique ON users (email)
 ALL_USERS_DDL: tuple[str, ...] = (
     CREATE_USERS_TABLE,
     CREATE_USERS_EMAIL_UNIQUE_IDX,
+)
+
+# Password-reset columns (CS-3). Kept as standalone ADD COLUMN statements so the
+# 0008 migration can apply them to a pre-existing users table, while the same two
+# columns also appear in CREATE_USERS_TABLE above for fresh databases. Both
+# nullable so existing rows need no backfill. SQLite appends added columns at the
+# end of the table, matching their position in CREATE_USERS_TABLE — so the
+# migrated schema and a freshly created schema have identical column order.
+ADD_RESET_TOKEN_HASH_COLUMN = (
+    "ALTER TABLE users ADD COLUMN reset_token_hash VARCHAR(256)"
+)
+ADD_RESET_TOKEN_EXPIRES_AT_COLUMN = (
+    "ALTER TABLE users ADD COLUMN reset_token_expires_at TIMESTAMP"
+)
+
+# Ordered DDL the 0008 migration imports — single source of truth, no drift.
+ADD_PASSWORD_RESET_COLUMNS_DDL: tuple[str, ...] = (
+    ADD_RESET_TOKEN_HASH_COLUMN,
+    ADD_RESET_TOKEN_EXPIRES_AT_COLUMN,
 )

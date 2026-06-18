@@ -14,7 +14,15 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Dict
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request, Response
+from fastapi import (
+    APIRouter,
+    BackgroundTasks,
+    Depends,
+    FastAPI,
+    HTTPException,
+    Request,
+    Response,
+)
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import AliasChoices, BaseModel, Field
 
@@ -33,9 +41,11 @@ from app.auth.user_auth import (
     logout_token,
     mark_password_changed,
     register_org_and_owner,
+    validate_password_strength,
     verify_jwt,
     verify_password,
 )
+from app.email_service import send_password_reset_email
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +55,11 @@ _bearer = HTTPBearer(auto_error=False)
 _INVITE_KV_PREFIX = "auth_invite"
 INVITE_TTL_HOURS = 72
 
+# CS-3 forgot/reset-password: the reset token's SHA-256 hash + expiry live in the
+# users table (reset_token_hash / reset_token_expires_at), per the doc. The raw
+# token is never stored. One-hour expiry.
+RESET_TTL_HOURS = 1
+
 AUTH_ROUTE_PATHS = {
     "/api/auth/register",
     "/api/auth/login",
@@ -53,6 +68,8 @@ AUTH_ROUTE_PATHS = {
     "/api/auth/invite",
     "/api/auth/accept-invite",
     "/api/auth/change-password",
+    "/api/auth/forgot-password",
+    "/api/auth/reset-password",
 }
 
 
@@ -87,6 +104,17 @@ class AcceptInviteRequest(BaseModel):
 
 class ChangePasswordRequest(BaseModel):
     current_password: str
+    new_password: str
+
+
+class ForgotPasswordRequest(BaseModel):
+    email: str
+
+
+class ResetPasswordRequest(BaseModel):
+    # CS-3 Section 5 (and the frontend authApi.resetPassword) send `reset_token`.
+    # Accept `token` too as a backward-compatible alias, mirroring AcceptInvite.
+    reset_token: str = Field(validation_alias=AliasChoices("reset_token", "token"))
     new_password: str
 
 
@@ -454,6 +482,167 @@ def change_password(
     mark_password_changed(user_id)
 
     return Response(status_code=204)
+
+
+# ---------------------------------------------------------------------------
+# Forgot / reset password (CS-3 Section 5)
+#
+# The reset token's SHA-256 hash and a one-hour expiry are stored in the users
+# table (reset_token_hash / reset_token_expires_at). The raw token is never
+# persisted — only its hash — so a DB leak does not yield usable reset links.
+# ---------------------------------------------------------------------------
+
+
+def _store_reset_token(user_id: str, raw_token: str) -> None:
+    """Persist the SHA-256 hash of a reset token + a one-hour expiry on the user."""
+    expires_at = (
+        datetime.now(timezone.utc) + timedelta(hours=RESET_TTL_HOURS)
+    ).isoformat()
+    con = db.connect()
+    try:
+        con.execute(
+            "UPDATE users SET reset_token_hash = ?, reset_token_expires_at = ? "
+            "WHERE id = ?",
+            (_token_hash(raw_token), expires_at, user_id),
+        )
+        con.commit()
+    finally:
+        con.close()
+
+
+def _consume_reset_token(raw_token: str) -> dict:
+    """Resolve a raw reset token to its user, enforcing match + expiry.
+
+    Returns {"user_id": ...} on success. Raises HTTPException(400) if the token
+    is unknown, already consumed, malformed, or expired — a single 400 surface so
+    the client cannot distinguish the failure modes. Does NOT mutate; the caller
+    clears the token only after the password is written (so a failed write leaves
+    the token usable for a retry).
+    """
+    token_hash = _token_hash(raw_token)
+    con = db.connect()
+    try:
+        row = con.execute(
+            "SELECT id, reset_token_expires_at FROM users WHERE reset_token_hash = ?",
+            (token_hash,),
+        ).fetchone()
+    finally:
+        con.close()
+
+    if row is None:
+        raise HTTPException(status_code=400, detail="Invalid or expired reset token")
+
+    expires_at_str = row[1] or ""
+    try:
+        expires_at = datetime.fromisoformat(expires_at_str)
+        if expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=timezone.utc)
+    except (ValueError, TypeError):
+        raise HTTPException(status_code=400, detail="Invalid or expired reset token")
+    if datetime.now(timezone.utc) > expires_at:
+        raise HTTPException(status_code=400, detail="Invalid or expired reset token")
+
+    return {"user_id": row[0]}
+
+
+def _dispatch_reset(user_id: str, email: str, raw_token: str) -> None:
+    """Persist the reset token and send the email — runs off the request path.
+
+    Scheduled as a BackgroundTask so the registered and unregistered branches of
+    forgot_password do the same (minimal) request-path work, closing the
+    write/email timing side-channel that would otherwise let an attacker
+    distinguish a registered email by response latency. Mirrors how the login
+    path equalizes timing via a dummy bcrypt compare. Never raises.
+    """
+    try:
+        _store_reset_token(user_id, raw_token)
+        send_password_reset_email(email, raw_token)
+    except Exception:  # pragma: no cover - defensive; must never surface
+        logger.warning("password reset dispatch failed (non-blocking)")
+
+
+@router.post("/forgot-password", status_code=200)
+def forgot_password(
+    body: ForgotPasswordRequest, background_tasks: BackgroundTasks
+) -> Dict[str, Any]:
+    """CS-3 §5 / AC11: request a password reset.
+
+    Always returns 200 with an identical body whether or not the email is
+    registered, so the endpoint cannot be used to enumerate accounts. When the
+    email IS registered, a UUID reset token is generated and its SHA-256 hash + a
+    one-hour expiry are stored on the user, then send_password_reset_email is
+    called — both off the request path via a BackgroundTask, so the registered
+    and unregistered branches return with equal request-path work (no timing
+    oracle). Email/transport failures are swallowed (logged) — they must not leak
+    account existence or change the response.
+    """
+    ensure_auth_tables()
+    email = body.email.strip().lower()
+
+    con = db.connect()
+    try:
+        row = con.execute("SELECT id FROM users WHERE email = ?", (email,)).fetchone()
+    finally:
+        con.close()
+
+    response: Dict[str, Any] = {"status": "ok"}
+
+    if row is not None:
+        # UUID + SHA-256 are microsecond-cheap; the DB write + email (the real
+        # latency) run in the background so they cannot be timed against the
+        # unregistered path.
+        raw_token = str(uuid4())
+        background_tasks.add_task(_dispatch_reset, row[0], email, raw_token)
+        # Non-production convenience (mirrors the invite flow): expose the raw
+        # token so automated tests / local manual testing can complete the reset
+        # without a live mailer. Never returned in production.
+        if os.getenv("ENVIRONMENT", "").strip().lower() != "production":
+            response["reset_token"] = raw_token
+
+    return response
+
+
+@router.post("/reset-password", status_code=200)
+def reset_password(body: ResetPasswordRequest) -> Dict[str, Any]:
+    """CS-3 §5 / AC12: complete a password reset.
+
+    Hashes the supplied token, finds the matching user, checks expiry (400 on
+    invalid/expired), validates the new password's strength (422 on weak), writes
+    the new password hash, and clears the reset-token fields so the token is
+    single-use. Returns 200 on success.
+    """
+    ensure_auth_tables()
+
+    # 1) Token validity first (400) — before any password work, mirroring invites.
+    entry = _consume_reset_token(body.reset_token)
+    user_id = entry["user_id"]
+
+    # 2) Strength (422). validate_password_strength returns the unmet rules; an
+    # empty list means valid. Matches the same rule registration/invite will use.
+    unmet = validate_password_strength(body.new_password)
+    if unmet:
+        raise HTTPException(
+            status_code=422,
+            detail="Password must contain: " + ", ".join(unmet),
+        )
+
+    # 3) Write the new hash and clear the reset token (single-use) atomically.
+    password_hash = hash_password(body.new_password)
+    con = db.connect()
+    try:
+        con.execute(
+            "UPDATE users SET password_hash = ?, reset_token_hash = NULL, "
+            "reset_token_expires_at = NULL WHERE id = ?",
+            (password_hash, user_id),
+        )
+        con.commit()
+    finally:
+        con.close()
+
+    # Revoke every JWT issued before this reset (parity with change-password).
+    mark_password_changed(user_id)
+
+    return {"status": "ok"}
 
 
 # ---------------------------------------------------------------------------
