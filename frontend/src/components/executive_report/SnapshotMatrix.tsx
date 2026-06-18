@@ -1,6 +1,62 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { OpportunityCandidate } from '../../types/analystReview';
 
+/**
+ * Colors used by the matrix SVG. By default each entry is a `var(--...)`
+ * reference so the on-screen chart follows the active theme. The PDF export
+ * passes concrete colors (see LIGHT_MATRIX_PALETTE) because html2canvas cannot
+ * resolve CSS custom properties inside a serialized <svg>.
+ */
+export interface MatrixPalette {
+  grid: string;
+  axisLabel: string;
+  quadrantPrimary: string;
+  quadrantMuted: string;
+  labelWeight: string | number;
+  labelStrong: string;
+  labelMid: string;
+  labelMuted: string;
+  bubbleFill: string;
+  bubbleStroke: string;
+  bubbleLabelBg: string;
+  bubbleLabelBorder: string;
+  hoverLabel: string;
+}
+
+const CSS_VAR_PALETTE: MatrixPalette = {
+  grid: 'var(--opportunity-matrix-grid)',
+  axisLabel: 'var(--opportunity-matrix-axis-label)',
+  quadrantPrimary: 'var(--opportunity-matrix-quadrant-primary)',
+  quadrantMuted: 'var(--opportunity-matrix-quadrant-muted)',
+  labelWeight: 'var(--opportunity-matrix-label-weight)',
+  labelStrong: 'var(--opportunity-matrix-label-strong)',
+  labelMid: 'var(--opportunity-matrix-label-mid)',
+  labelMuted: 'var(--opportunity-matrix-label-muted)',
+  bubbleFill: 'var(--opportunity-matrix-bubble-fill)',
+  bubbleStroke: 'var(--opportunity-matrix-bubble-stroke)',
+  bubbleLabelBg: 'var(--opportunity-matrix-bubble-label-bg)',
+  bubbleLabelBorder: 'var(--opportunity-matrix-bubble-label-border)',
+  hoverLabel: 'var(--opportunity-matrix-hover-label)',
+};
+
+/** Concrete light-theme colors (mirrors :root.theme-light in styles.css), in
+ *  legacy rgba() form for maximum html2canvas/SVG-rasterization compatibility. */
+export const LIGHT_MATRIX_PALETTE: MatrixPalette = {
+  grid: 'rgba(92, 112, 145, 0.62)',
+  axisLabel: 'rgba(64, 78, 105, 0.86)',
+  quadrantPrimary: 'rgba(13, 85, 215, 0.08)',
+  quadrantMuted: 'rgba(13, 85, 215, 0.015)',
+  labelWeight: 600,
+  labelStrong: 'rgba(40, 55, 82, 0.92)',
+  labelMid: 'rgba(48, 65, 96, 0.84)',
+  labelMuted: 'rgba(64, 78, 105, 0.78)',
+  bubbleFill: 'rgba(62, 92, 138, 0.24)',
+  bubbleStroke: 'rgba(66, 93, 132, 0.62)',
+  bubbleLabelBg: 'rgba(255, 255, 255, 0.95)',
+  bubbleLabelBorder: 'rgba(13, 85, 215, 0.30)',
+  hoverLabel: 'rgba(7, 25, 58, 0.86)',
+};
+
 function clamp(n: number, a: number, b: number) {
   return Math.max(a, Math.min(b, n));
 }
@@ -54,9 +110,15 @@ function buildPoints(opportunities: OpportunityCandidate[], layout: MatrixLayout
 
 interface SnapshotMatrixProps {
   opportunities: OpportunityCandidate[];
+  /** Override the SVG colors. Defaults to theme-driven CSS variables. The PDF
+   *  export passes LIGHT_MATRIX_PALETTE so the chart renders light + concrete. */
+  palette?: MatrixPalette;
+  /** When true, render only the chart (no panel chrome/heading) — used by the
+   *  PDF document which supplies its own section heading. */
+  bare?: boolean;
 }
 
-export default function SnapshotMatrix({ opportunities }: SnapshotMatrixProps) {
+export default function SnapshotMatrix({ opportunities, palette = CSS_VAR_PALETTE, bare = false }: SnapshotMatrixProps) {
   const plotRef = useRef<HTMLDivElement>(null);
   const [viewport, setViewport] = useState({
     width: DEFAULT_WIDTH,
@@ -173,14 +235,15 @@ export default function SnapshotMatrix({ opportunities }: SnapshotMatrixProps) {
     return () => observer.disconnect();
   }, []);
 
-  return (
-    <div className="flex h-[560px] min-h-0 flex-col rounded-xl border border-border bg-panel p-4 lg:h-[720px]">
-      <div className="mb-3 flex shrink-0 flex-wrap items-center justify-between gap-2">
-        <div className="pb-2 text-xl font-semibold text-text">Effort vs Impact</div>
-        <div className="text-xs text-muted">Read-only opportunity snapshot</div>
-      </div>
-
-      <div ref={plotRef} className="aspect-[1440/620] min-h-[320px] flex-1 overflow-hidden rounded-lg border border-border bg-bg/10 lg:aspect-auto lg:min-h-0">
+  const chart = (
+    <div
+      ref={plotRef}
+      className={
+        bare
+          ? 'h-full w-full overflow-hidden rounded-lg border border-border bg-bg/10'
+          : 'aspect-[1440/620] min-h-[320px] flex-1 overflow-hidden rounded-lg border border-border bg-bg/10 lg:aspect-auto lg:min-h-0'
+      }
+    >
         <svg
           viewBox={`0 0 ${layout.width} ${layout.height}`}
           width="100%"
@@ -188,10 +251,10 @@ export default function SnapshotMatrix({ opportunities }: SnapshotMatrixProps) {
           preserveAspectRatio="xMidYMid meet"
           style={{ display: 'block' }}
         >
-          <rect x={layout.left} y={layout.top} width={layout.cx - layout.left} height={layout.cy - layout.top} fill="var(--opportunity-matrix-quadrant-primary)" />
-          <rect x={layout.cx} y={layout.top} width={layout.rx - layout.cx} height={layout.cy - layout.top} fill="var(--opportunity-matrix-quadrant-muted)" />
-          <rect x={layout.left} y={layout.cy} width={layout.cx - layout.left} height={layout.by - layout.cy} fill="var(--opportunity-matrix-quadrant-muted)" />
-          <rect x={layout.cx} y={layout.cy} width={layout.rx - layout.cx} height={layout.by - layout.cy} fill="var(--opportunity-matrix-quadrant-muted)" />
+          <rect x={layout.left} y={layout.top} width={layout.cx - layout.left} height={layout.cy - layout.top} fill={palette.quadrantPrimary} />
+          <rect x={layout.cx} y={layout.top} width={layout.rx - layout.cx} height={layout.cy - layout.top} fill={palette.quadrantMuted} />
+          <rect x={layout.left} y={layout.cy} width={layout.cx - layout.left} height={layout.by - layout.cy} fill={palette.quadrantMuted} />
+          <rect x={layout.cx} y={layout.cy} width={layout.rx - layout.cx} height={layout.by - layout.cy} fill={palette.quadrantMuted} />
 
           <rect
             x={layout.left}
@@ -199,24 +262,24 @@ export default function SnapshotMatrix({ opportunities }: SnapshotMatrixProps) {
             width={layout.rx - layout.left}
             height={layout.by - layout.top}
             fill="none"
-            stroke="var(--opportunity-matrix-grid)"
+            stroke={palette.grid}
             strokeWidth="1"
           />
 
-          <line x1={layout.cx} y1={layout.top} x2={layout.cx} y2={layout.by} stroke="var(--opportunity-matrix-grid)" strokeWidth="1" />
-          <line x1={layout.left} y1={layout.cy} x2={layout.rx} y2={layout.cy} stroke="var(--opportunity-matrix-grid)" strokeWidth="1" />
+          <line x1={layout.cx} y1={layout.top} x2={layout.cx} y2={layout.by} stroke={palette.grid} strokeWidth="1" />
+          <line x1={layout.left} y1={layout.cy} x2={layout.rx} y2={layout.cy} stroke={palette.grid} strokeWidth="1" />
 
-          <text x={layout.left - 10} y={layout.top + 18} fontSize="16" fontWeight="600" fill="var(--opportunity-matrix-axis-label)" textAnchor="end">
+          <text x={layout.left - 10} y={layout.top + 18} fontSize="16" fontWeight="600" fill={palette.axisLabel} textAnchor="end">
             HIGH IMPACT
           </text>
-          <text x={layout.left - 10} y={layout.by - 6} fontSize="16" fontWeight="600" fill="var(--opportunity-matrix-axis-label)" textAnchor="end">
+          <text x={layout.left - 10} y={layout.by - 6} fontSize="16" fontWeight="600" fill={palette.axisLabel} textAnchor="end">
             LOW IMPACT
           </text>
 
-          <text x={layout.left} y={layout.height - 10} fontSize="16" fontWeight="600" fill="var(--opportunity-matrix-axis-label)">
+          <text x={layout.left} y={layout.height - 10} fontSize="16" fontWeight="600" fill={palette.axisLabel}>
             LOW EFFORT
           </text>
-          <text x={layout.rx} y={layout.height - 10} fontSize="16" fontWeight="600" fill="var(--opportunity-matrix-axis-label)" textAnchor="end">
+          <text x={layout.rx} y={layout.height - 10} fontSize="16" fontWeight="600" fill={palette.axisLabel} textAnchor="end">
             HIGH EFFORT
           </text>
 
@@ -226,8 +289,8 @@ export default function SnapshotMatrix({ opportunities }: SnapshotMatrixProps) {
               cx={x}
               cy={y}
               r={r}
-              fill="var(--opportunity-matrix-bubble-fill)"
-              stroke="var(--opportunity-matrix-bubble-stroke)"
+              fill={palette.bubbleFill}
+              stroke={palette.bubbleStroke}
               strokeWidth="1.5"
             >
               <title>{o.title}</title>
@@ -235,13 +298,13 @@ export default function SnapshotMatrix({ opportunities }: SnapshotMatrixProps) {
           ))}
 
           {[
-            { x: layout.left + 14, y: layout.top + 24, label: 'QUICK WINS', fill: 'var(--opportunity-matrix-label-strong)' },
-            { x: layout.cx + 14, y: layout.top + 24, label: 'HIGH VALUE', fill: 'var(--opportunity-matrix-label-mid)' },
-            { x: layout.left + 14, y: layout.cy + 24, label: 'FOUNDATION', fill: 'var(--opportunity-matrix-label-muted)' },
-            { x: layout.cx + 14, y: layout.cy + 24, label: 'LONG TERM', fill: 'var(--opportunity-matrix-label-muted)' },
+            { x: layout.left + 14, y: layout.top + 24, label: 'QUICK WINS', fill: palette.labelStrong },
+            { x: layout.cx + 14, y: layout.top + 24, label: 'HIGH VALUE', fill: palette.labelMid },
+            { x: layout.left + 14, y: layout.cy + 24, label: 'FOUNDATION', fill: palette.labelMuted },
+            { x: layout.cx + 14, y: layout.cy + 24, label: 'LONG TERM', fill: palette.labelMuted },
           ].map(({ x, y, label, fill }) => (
             <g key={label} pointerEvents="none">
-              <text x={x} y={y - 1} fontSize="14" fontWeight="var(--opportunity-matrix-label-weight)" letterSpacing="0.4" fill={fill}>
+              <text x={x} y={y - 1} fontSize="14" fontWeight={palette.labelWeight} letterSpacing="0.4" fill={fill}>
                 {label}
               </text>
             </g>
@@ -257,7 +320,7 @@ export default function SnapshotMatrix({ opportunities }: SnapshotMatrixProps) {
                 y1={lab.pillBottom}
                 x2={lab.bubbleX}
                 y2={lab.bubbleTop}
-                stroke="var(--opportunity-matrix-bubble-label-border)"
+                stroke={palette.bubbleLabelBorder}
                 strokeWidth="1"
                 pointerEvents="none"
               />
@@ -273,15 +336,15 @@ export default function SnapshotMatrix({ opportunities }: SnapshotMatrixProps) {
                 width={lab.width}
                 height={21}
                 rx={6}
-                fill="var(--opportunity-matrix-bubble-label-bg)"
-                stroke="var(--opportunity-matrix-bubble-label-border)"
+                fill={palette.bubbleLabelBg}
+                stroke={palette.bubbleLabelBorder}
               />
               <text
                 x={lab.centerX}
                 y={lab.pillBottom - 6}
                 fontSize="13"
                 fontWeight="600"
-                fill="var(--opportunity-matrix-hover-label)"
+                fill={palette.hoverLabel}
                 textAnchor="middle"
               >
                 {lab.title}
@@ -300,15 +363,15 @@ export default function SnapshotMatrix({ opportunities }: SnapshotMatrixProps) {
                 width={lab.width}
                 height={20}
                 rx={5}
-                fill="var(--opportunity-matrix-bubble-label-bg)"
-                stroke="var(--opportunity-matrix-bubble-label-border)"
+                fill={palette.bubbleLabelBg}
+                stroke={palette.bubbleLabelBorder}
               />
               <text
                 x={lab.onX}
                 y={lab.onY + 4}
                 fontSize="12"
                 fontWeight="600"
-                fill="var(--opportunity-matrix-hover-label)"
+                fill={palette.hoverLabel}
                 textAnchor="middle"
               >
                 {lab.title}
@@ -316,7 +379,18 @@ export default function SnapshotMatrix({ opportunities }: SnapshotMatrixProps) {
             </g>
           ))}
         </svg>
+    </div>
+  );
+
+  if (bare) return chart;
+
+  return (
+    <div className="flex h-[560px] min-h-0 flex-col rounded-xl border border-border bg-panel p-4 lg:h-[720px]">
+      <div className="mb-3 flex shrink-0 flex-wrap items-center justify-between gap-2">
+        <div className="pb-2 text-xl font-semibold text-text">Effort vs Impact</div>
+        <div className="text-xs text-muted">Read-only opportunity snapshot</div>
       </div>
+      {chart}
     </div>
   );
 }

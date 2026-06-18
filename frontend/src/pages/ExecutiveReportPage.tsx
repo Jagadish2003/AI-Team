@@ -1,4 +1,5 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Loader2 } from 'lucide-react';
 import PageShell from '../components/common/PageShell';
 import LoadingPanel from '../components/common/LoadingPanel';
 import ErrorPanel from '../components/common/ErrorPanel';
@@ -7,14 +8,18 @@ import { useAnalystReviewContext } from '../context/AnalystReviewContext';
 import { useNavigate } from 'react-router-dom';
 import { useRunContext } from '../context/RunContext';
 import { useDiscoveryRunContext } from '../context/DiscoveryRunContext';
+import { useAuthOptional } from '../context/AuthContext';
 import { RunRequiredEmptyState } from '../components/common/RunRequiredEmptyState';
 import { buildPilotRoadmap } from '../utils/buildRoadmap';
 import { fetchRunExecutiveReport, type ExecutiveReport } from '../api/runScopedS9S10Api';
+import { fetchRunEnrichment, type RunEnrichment } from '../api/enrichmentApi';
 import StatCard from '../components/executive_report/StatCard';
 import SnapshotMatrix from '../components/executive_report/SnapshotMatrix';
-import KeyInsights from '../components/executive_report/KeyInsights';
+import KeyInsights, { resolveExecutiveSummary } from '../components/executive_report/KeyInsights';
 import TopQuickWins from '../components/executive_report/TopQuickWins';
 import PilotRoadmapHighlights from '../components/executive_report/PilotRoadmapHighlights';
+import ExecutiveReportPdfDocument from '../components/executive_report/ExecutiveReportPdfDocument';
+import { downloadElementAsPdf } from '../utils/exportPdf';
 import { runScopedErrorMessage } from '../utils/apiErrors';
 
 export default function ExecutiveReportPage() {
@@ -23,12 +28,17 @@ export default function ExecutiveReportPage() {
   const nav = useNavigate();
   const { runId } = useRunContext();
   const { run, computing } = useDiscoveryRunContext();
+  const auth = useAuthOptional();
   const runStatus = run?.status?.toLowerCase();
 
   const [report, setReport] = useState<ExecutiveReport | null>(null);
+  const [enrichment, setEnrichment] = useState<RunEnrichment | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [fetchCount, setFetchCount] = useState(0);
+  const [pdfBusy, setPdfBusy] = useState(false);
+
+  const pdfRef = useRef<HTMLDivElement>(null);
 
   const refetch = useCallback(() => setFetchCount(c => c + 1), []);
   const runHasMaterializedResults =
@@ -65,6 +75,21 @@ export default function ExecutiveReportPage() {
     return () => { cancelled = true; };
   }, [runId, fetchCount]);
 
+  // Executive summary for the PDF mirrors the on-screen Key Insights card: the
+  // LLM enrichment summary when available, otherwise the static fallback. Fetch
+  // is non-blocking — failures simply leave the static fallback in place.
+  useEffect(() => {
+    if (!runId) {
+      setEnrichment(null);
+      return;
+    }
+    let cancelled = false;
+    fetchRunEnrichment(runId)
+      .then((data) => { if (!cancelled) setEnrichment(data); })
+      .catch(() => { if (!cancelled) setEnrichment(null); });
+    return () => { cancelled = true; };
+  }, [runId, fetchCount]);
+
   useEffect(() => {
     if (!runId || !resultsPreparing || loading) return;
     const timer = window.setTimeout(() => refetch(), 1500);
@@ -88,6 +113,26 @@ export default function ExecutiveReportPage() {
       .sort((a, b) => ((b.impact - b.effort) - (a.impact - a.effort)) || (b.impact - a.impact))
       .slice(0, 5)
   ), [opportunities]);
+
+  const handleDownloadPdf = useCallback(async () => {
+    const node = pdfRef.current;
+    if (!node || pdfBusy) return;
+    setPdfBusy(true);
+    push('Preparing executive report PDF…');
+    try {
+      const stamp = new Date().toISOString().slice(0, 10);
+      await downloadElementAsPdf(node, {
+        filename: `AgentIQ-Executive-Report-${stamp}.pdf`,
+        footerText: 'AgentIQ Executive Report — Confidential',
+      });
+      push('Executive report downloaded.', 'success');
+    } catch (e) {
+      console.error('[ExecutiveReport] PDF export failed:', e);
+      push('Could not generate the PDF. Please try again.', 'error');
+    } finally {
+      setPdfBusy(false);
+    }
+  }, [pdfBusy, push]);
 
   const pageHeader = (
     <PageShell
@@ -140,6 +185,14 @@ export default function ExecutiveReportPage() {
     ? roadmap.stages.map((_, i) => `Phase ${i + 1}`).join(' / ')
     : '—';
 
+  // Mirror the on-screen Key Insights summary so the PDF never drifts from the UI.
+  const pdfSummary = resolveExecutiveSummary(enrichment);
+  const generatedAt = new Date().toLocaleDateString('en-US', {
+    year: 'numeric',
+    month: 'long',
+    day: 'numeric',
+  });
+
   return (
     <PageShell
       title="Executive Report"
@@ -147,22 +200,32 @@ export default function ExecutiveReportPage() {
       actions={
           <>
             <button
-              className="rounded-lg border border-accent/20 bg-accent/5 px-4 py-2 text-sm font-medium text-accent transition-colors hover:border-accent/45 hover:bg-accent/10 focus:outline-none focus-visible:ring-1 focus-visible:ring-accent/40"
-              onClick={() => push('Downloading PDF...')}
+              type="button"
+              className="inline-flex items-center gap-2 rounded-lg border border-accent/20 bg-accent/5 px-4 py-2 text-sm font-medium text-accent transition-colors hover:border-accent/45 hover:bg-accent/10 focus:outline-none focus-visible:ring-1 focus-visible:ring-accent/40 disabled:cursor-not-allowed disabled:opacity-70"
+              onClick={handleDownloadPdf}
+              disabled={pdfBusy}
+              aria-busy={pdfBusy}
             >
-              Download PDF
+              {pdfBusy && <Loader2 className="h-4 w-4 animate-spin" aria-hidden />}
+              {pdfBusy ? 'Generating PDF…' : 'Download PDF'}
             </button>
 
             <button
-              className="rounded-lg border border-accent/20 bg-accent/5 px-4 py-2 text-sm font-medium text-accent transition-colors hover:border-accent/45 hover:bg-accent/10 focus:outline-none focus-visible:ring-1 focus-visible:ring-accent/40"
-              onClick={() => push('Downloading PPTX...')}
+              type="button"
+              className="cursor-not-allowed rounded-lg border border-border bg-transparent px-4 py-2 text-sm font-medium text-muted opacity-60"
+              disabled
+              aria-disabled
+              title="PPTX export is not available yet"
             >
               Download PPTX
             </button>
 
             <button
-              className="rounded-lg border border-accent/20 bg-accent/5 px-4 py-2 text-sm font-medium text-accent transition-colors hover:border-accent/45 hover:bg-accent/10 focus:outline-none focus-visible:ring-1 focus-visible:ring-accent/40"
-              onClick={() => push('Downloading XLSX...')}
+              type="button"
+              className="cursor-not-allowed rounded-lg border border-border bg-transparent px-4 py-2 text-sm font-medium text-muted opacity-60"
+              disabled
+              aria-disabled
+              title="XLSX export is not available yet"
             >
               Download XLSX
             </button>
@@ -197,6 +260,34 @@ export default function ExecutiveReportPage() {
 
           {/* Effort vs Impact matrix — full width */}
           <SnapshotMatrix opportunities={opportunities} />
+        </div>
+
+        {/*
+          Off-screen, always-light PDF document. This is the exact node captured
+          by "Download PDF" — kept out of the visual/accessibility tree and the
+          live layout via fixed off-screen positioning. It mirrors the visible
+          report content (no navbar, no buttons).
+        */}
+        <div
+          aria-hidden
+          style={{ position: 'fixed', left: -10000, top: 0, zIndex: -1, pointerEvents: 'none' }}
+        >
+          <ExecutiveReportPdfDocument
+            ref={pdfRef}
+            confidence={reportConfidence}
+            sourcesLabel={sourcesLabel}
+            quickWinsCount={quickWins.length}
+            roadmapStageLabel={roadmapStageLabel}
+            summary={pdfSummary}
+            quickWins={quickWins}
+            stages={roadmap.stages}
+            blockerCount={blockerCount}
+            overallReadiness={roadmap.overallReadiness}
+            opportunities={opportunities}
+            orgName={auth?.user?.org_name ?? null}
+            generatedAt={generatedAt}
+            runId={runId}
+          />
         </div>
     </PageShell>
   );
