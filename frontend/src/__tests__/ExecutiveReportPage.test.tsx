@@ -3,10 +3,10 @@
  *
  * Covers the Executive Report download controls:
  *   - "Download PDF" is the only enabled export and, when clicked, invokes the
- *     PDF export util against the off-screen, board-ready report document.
+ *     PDF export util with the report data + a dated filename.
  *   - "Download PPTX" and "Download XLSX" are disabled.
- *   - The off-screen PDF document mirrors the report content (title, a quick
- *     win, a leadership summary) and contains no navbar/buttons.
+ *   - The export data mirrors the report (confidence, quick wins, the LLM
+ *     summary, org name, run id).
  *
  * Run:
  *   npx vitest run src/__tests__/ExecutiveReportPage.test.tsx
@@ -71,7 +71,7 @@ const h = vi.hoisted(() => {
 });
 
 vi.mock('../utils/exportPdf', () => ({
-  downloadElementAsPdf: (...args: unknown[]) => h.mockDownloadPdf(...args),
+  downloadExecutiveReportPdf: (...args: unknown[]) => h.mockDownloadPdf(...args),
 }));
 
 vi.mock('../api/runScopedS9S10Api', () => ({
@@ -138,7 +138,7 @@ describe('ExecutiveReportPage — download controls', () => {
     expect(screen.getByRole('button', { name: /download xlsx/i })).toBeDisabled();
   });
 
-  it('invokes the PDF export util with a report filename when clicked', async () => {
+  it('invokes the PDF export with report data and a dated filename when clicked', async () => {
     renderPage();
     const pdfBtn = await findDownloadPdfButton();
 
@@ -147,25 +147,19 @@ describe('ExecutiveReportPage — download controls', () => {
     });
 
     await waitFor(() => expect(h.mockDownloadPdf).toHaveBeenCalledTimes(1));
-    const [node, options] = h.mockDownloadPdf.mock.calls[0];
-    expect(node).toBeInstanceOf(HTMLElement);
+    const [data, options] = h.mockDownloadPdf.mock.calls[0];
+
+    // Options: dated filename + confidential footer.
     expect(options.filename).toMatch(/^AgentIQ-Executive-Report-\d{4}-\d{2}-\d{2}\.pdf$/);
     expect(options.footerText).toMatch(/confidential/i);
-  });
 
-  it('renders an off-screen board-ready PDF document mirroring the report content', async () => {
-    renderPage();
-    await findDownloadPdfButton();
-
-    // Title is unique to the PDF document (not shown in the live page chrome).
-    expect(screen.getByText('Board-Ready Discovery Summary')).toBeInTheDocument();
-    // Confidential footer line is unique to the PDF document.
-    expect(screen.getByText(/prepared for internal leadership review/i)).toBeInTheDocument();
-    // The quick win appears in the PDF document's "Top Quick Wins" section.
-    expect(screen.getAllByText('Checklist Bottleneck').length).toBeGreaterThan(0);
-    // The LLM executive summary flows into the PDF document.
-    expect(
-      screen.getAllByText(/LLM generated executive summary for the board/i).length,
-    ).toBeGreaterThan(0);
+    // Data mirrors the report.
+    expect(data.confidence).toBe('High');
+    expect(data.sourcesLabel).toBe('3 Connected');
+    expect(data.summary).toMatch(/LLM generated executive summary for the board/i);
+    expect(data.orgName).toBe('Acme Bank');
+    expect(data.runId).toBe('run_x');
+    expect(data.opportunities).toHaveLength(2);
+    expect(data.quickWins.map((o: OpportunityCandidate) => o.title)).toContain('Checklist Bottleneck');
   });
 });

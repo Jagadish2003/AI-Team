@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Loader2 } from 'lucide-react';
 import PageShell from '../components/common/PageShell';
 import LoadingPanel from '../components/common/LoadingPanel';
@@ -18,8 +18,7 @@ import SnapshotMatrix from '../components/executive_report/SnapshotMatrix';
 import KeyInsights, { resolveExecutiveSummary } from '../components/executive_report/KeyInsights';
 import TopQuickWins from '../components/executive_report/TopQuickWins';
 import PilotRoadmapHighlights from '../components/executive_report/PilotRoadmapHighlights';
-import ExecutiveReportPdfDocument from '../components/executive_report/ExecutiveReportPdfDocument';
-import { downloadElementAsPdf } from '../utils/exportPdf';
+import { downloadExecutiveReportPdf } from '../utils/exportPdf';
 import { runScopedErrorMessage } from '../utils/apiErrors';
 
 export default function ExecutiveReportPage() {
@@ -37,8 +36,6 @@ export default function ExecutiveReportPage() {
   const [error, setError] = useState<string | null>(null);
   const [fetchCount, setFetchCount] = useState(0);
   const [pdfBusy, setPdfBusy] = useState(false);
-
-  const pdfRef = useRef<HTMLDivElement>(null);
 
   const refetch = useCallback(() => setFetchCount(c => c + 1), []);
   const runHasMaterializedResults =
@@ -114,17 +111,49 @@ export default function ExecutiveReportPage() {
       .slice(0, 5)
   ), [opportunities]);
 
+  // Display values shared by the page and the PDF export.
+  const sourcesLabel = report?.sourcesAnalyzed
+    ? `${report.sourcesAnalyzed.totalConnected} Connected`
+    : '— Connected';
+  const reportConfidence = report?.confidence
+    ? report.confidence.charAt(0).toUpperCase() + report.confidence.slice(1).toLowerCase()
+    : 'Unavailable';
+  const roadmapStageLabel = roadmap.stages.length
+    ? roadmap.stages.map((_, i) => `Phase ${i + 1}`).join(' / ')
+    : '—';
+
   const handleDownloadPdf = useCallback(async () => {
-    const node = pdfRef.current;
-    if (!node || pdfBusy) return;
+    if (pdfBusy) return;
     setPdfBusy(true);
     push('Preparing executive report PDF…');
     try {
       const stamp = new Date().toISOString().slice(0, 10);
-      await downloadElementAsPdf(node, {
-        filename: `AgentIQ-Executive-Report-${stamp}.pdf`,
-        footerText: 'AgentIQ Executive Report — Confidential',
+      const generatedAt = new Date().toLocaleDateString('en-US', {
+        year: 'numeric',
+        month: 'long',
+        day: 'numeric',
       });
+      await downloadExecutiveReportPdf(
+        {
+          confidence: reportConfidence,
+          sourcesLabel,
+          quickWinsCount: quickWins.length,
+          roadmapStageLabel,
+          summary: resolveExecutiveSummary(enrichment),
+          quickWins,
+          stageCounts: roadmap.stages.map((s) => s.opportunities.length),
+          blockerCount,
+          overallReadiness: roadmap.overallReadiness,
+          opportunities,
+          orgName: auth?.user?.org_name ?? null,
+          generatedAt,
+          runId,
+        },
+        {
+          filename: `AgentIQ-Executive-Report-${stamp}.pdf`,
+          footerText: 'AgentIQ Executive Report — Confidential',
+        },
+      );
       push('Executive report downloaded.', 'success');
     } catch (e) {
       console.error('[ExecutiveReport] PDF export failed:', e);
@@ -132,7 +161,20 @@ export default function ExecutiveReportPage() {
     } finally {
       setPdfBusy(false);
     }
-  }, [pdfBusy, push]);
+  }, [
+    pdfBusy,
+    push,
+    reportConfidence,
+    sourcesLabel,
+    roadmapStageLabel,
+    quickWins,
+    enrichment,
+    roadmap,
+    blockerCount,
+    opportunities,
+    auth,
+    runId,
+  ]);
 
   const pageHeader = (
     <PageShell
@@ -171,27 +213,6 @@ export default function ExecutiveReportPage() {
       </PageShell>
     );
   }
-
-  // sourcesAnalyzed comes from run.inputs (run-scoped) via the API
-  const sourcesAnalyzed = report?.sourcesAnalyzed;
-  const sourcesLabel = sourcesAnalyzed
-    ? `${sourcesAnalyzed.totalConnected} Connected`
-    : '— Connected';
-
-  const reportConfidence = report?.confidence
-    ? report.confidence.charAt(0).toUpperCase() + report.confidence.slice(1).toLowerCase()
-    : 'Unavailable';
-  const roadmapStageLabel = roadmap.stages.length
-    ? roadmap.stages.map((_, i) => `Phase ${i + 1}`).join(' / ')
-    : '—';
-
-  // Mirror the on-screen Key Insights summary so the PDF never drifts from the UI.
-  const pdfSummary = resolveExecutiveSummary(enrichment);
-  const generatedAt = new Date().toLocaleDateString('en-US', {
-    year: 'numeric',
-    month: 'long',
-    day: 'numeric',
-  });
 
   return (
     <PageShell
@@ -260,34 +281,6 @@ export default function ExecutiveReportPage() {
 
           {/* Effort vs Impact matrix — full width */}
           <SnapshotMatrix opportunities={opportunities} />
-        </div>
-
-        {/*
-          Off-screen, always-light PDF document. This is the exact node captured
-          by "Download PDF" — kept out of the visual/accessibility tree and the
-          live layout via fixed off-screen positioning. It mirrors the visible
-          report content (no navbar, no buttons).
-        */}
-        <div
-          aria-hidden
-          style={{ position: 'fixed', left: -10000, top: 0, zIndex: -1, pointerEvents: 'none' }}
-        >
-          <ExecutiveReportPdfDocument
-            ref={pdfRef}
-            confidence={reportConfidence}
-            sourcesLabel={sourcesLabel}
-            quickWinsCount={quickWins.length}
-            roadmapStageLabel={roadmapStageLabel}
-            summary={pdfSummary}
-            quickWins={quickWins}
-            stages={roadmap.stages}
-            blockerCount={blockerCount}
-            overallReadiness={roadmap.overallReadiness}
-            opportunities={opportunities}
-            orgName={auth?.user?.org_name ?? null}
-            generatedAt={generatedAt}
-            runId={runId}
-          />
         </div>
     </PageShell>
   );
