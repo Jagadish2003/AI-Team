@@ -57,6 +57,7 @@ export default function PasswordStrengthIndicator({
           className={`flex items-center gap-2 text-xs leading-4 transition-colors ${
             req.met ? "text-green-500" : "text-muted"
           }`}
+          data-testid="password-requirement"
           data-met={req.met}
         >
           <span aria-hidden="true">{req.met ? "✓" : "○"}</span>
