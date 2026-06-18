@@ -52,6 +52,45 @@ function buildPoints(opportunities: OpportunityCandidate[], layout: MatrixLayout
   }));
 }
 
+export interface OverlapBubble {
+  bubbleX: number;
+  bubbleCy: number;
+  r: number;
+}
+
+/**
+ * Cluster bubbles that physically overlap (centre distance < sum of radii)
+ * using union-find, so a chain of overlapping bubbles (A–B and B–C, but not
+ * A–C directly) is still treated as a single group. Returns one entry per
+ * cluster, each an array of input indices; every input bubble appears in
+ * exactly one cluster (singletons included), so the result is a partition of
+ * the input indices.
+ *
+ * Extracted from the label-placement memo as a pure, side-effect-free helper so
+ * the overlap/transitivity logic can be unit-tested without rendering the SVG.
+ */
+export function clusterOverlappingBubbles(bubbles: OverlapBubble[]): number[][] {
+  const parent = bubbles.map((_, i) => i);
+  const find = (i: number): number =>
+    parent[i] === i ? i : (parent[i] = find(parent[i]));
+  for (let i = 0; i < bubbles.length; i += 1) {
+    for (let j = i + 1; j < bubbles.length; j += 1) {
+      const dist = Math.hypot(
+        bubbles[i].bubbleX - bubbles[j].bubbleX,
+        bubbles[i].bubbleCy - bubbles[j].bubbleCy,
+      );
+      if (dist < bubbles[i].r + bubbles[j].r) parent[find(i)] = find(j);
+    }
+  }
+  const clusters = new Map<number, number[]>();
+  bubbles.forEach((_, i) => {
+    const root = find(i);
+    if (!clusters.has(root)) clusters.set(root, []);
+    clusters.get(root)!.push(i);
+  });
+  return Array.from(clusters.values());
+}
+
 interface SnapshotMatrixProps {
   opportunities: OpportunityCandidate[];
 }
@@ -100,25 +139,10 @@ export default function SnapshotMatrix({ opportunities }: SnapshotMatrixProps) {
       };
     });
 
-    // Cluster bubbles that physically overlap (centre distance < sum of radii),
-    // via union-find, so a chain of overlapping bubbles is treated as one group.
-    const parent = placed.map((_, i) => i);
-    const find = (i: number): number => (parent[i] === i ? i : (parent[i] = find(parent[i])));
-    for (let i = 0; i < placed.length; i += 1) {
-      for (let j = i + 1; j < placed.length; j += 1) {
-        const dist = Math.hypot(
-          placed[i].bubbleX - placed[j].bubbleX,
-          placed[i].bubbleCy - placed[j].bubbleCy,
-        );
-        if (dist < placed[i].r + placed[j].r) parent[find(i)] = find(j);
-      }
-    }
-    const clusters = new Map<number, number[]>();
-    placed.forEach((_, i) => {
-      const root = find(i);
-      if (!clusters.has(root)) clusters.set(root, []);
-      clusters.get(root)!.push(i);
-    });
+    // Cluster bubbles that physically overlap (centre distance < sum of radii)
+    // so a chain of overlapping bubbles is treated as one group. The union-find
+    // clustering is a pure, unit-tested helper (clusterOverlappingBubbles).
+    const clusters = clusterOverlappingBubbles(placed);
 
     // For each overlapping cluster, draw each name as a bar that sticks OUT of its
     // bubble: a bubble on the right side of the cluster extends its label to the

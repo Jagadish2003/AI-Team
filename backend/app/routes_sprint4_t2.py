@@ -91,4 +91,7 @@ def register_sprint4_t2_routes(app):
         s["runId"] = run_id
         s["isReplay"] = run.get("isReplay", False)  # ← add isReplay from run record
         s["current_step"] = run.get("current_step")
+        # CS-4 / AT-313: steps whose ingest failed, so the progress UI can render
+        # them as failed instead of as completed (green-check) stages.
+        s["failed_steps"] = run.get("failed_steps", [])
         return s

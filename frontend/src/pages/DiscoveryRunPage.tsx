@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
-import { CheckCircle2, Circle, Info, Loader2 } from "lucide-react";
+import { CheckCircle2, Circle, Info, Loader2, XCircle } from "lucide-react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { InfoPanel } from "../components/common/InfoPanel";
 import LoadingPanel from "../components/common/LoadingPanel";
@@ -214,6 +214,7 @@ export function DiscoveryStepList({
   currentStep,
   runComplete = false,
   salesforceProduct,
+  failedSteps = [],
 }: {
   currentStep: string | null;
   // True only once the discovery run has truly finished (100%). The backend can
@@ -223,6 +224,10 @@ export function DiscoveryStepList({
   // Declared Salesforce product id (e.g. "salesforce_sc"). Drives the label of
   // the second Salesforce pass so the run reflects the workspace's declaration.
   salesforceProduct?: string;
+  // Step ids whose ingest failed (from the run status' failed_steps). A failed
+  // step is rendered with an error icon, never as a completed green check — so
+  // a failed stage is not misrepresented as successful (CS-4 / AT-313).
+  failedSteps?: string[];
 }) {
   const activeIdx =
     currentStep != null ? (STEP_INDEX[currentStep] ?? -1) : -1;
@@ -231,20 +236,29 @@ export function DiscoveryStepList({
   return (
     <ol className="space-y-3">
       {steps.map((step, idx) => {
+        // A failed ingest takes precedence over every other state: it must never
+        // show the completed green check, even after the run advances past it.
+        const isFailed = failedSteps.includes(step.id);
         // "complete" is the terminal step. It earns the green check only when the
         // run has actually finished (runComplete). While the run is still running
         // — even if the backend already emitted "complete" — it shows the spinner.
         const isTerminal = step.id === "complete";
-        const isCompleted = isTerminal
-          ? runComplete && activeIdx >= idx
-          : activeIdx > idx;
-        const isActive = !isCompleted && activeIdx === idx;
+        const isCompleted =
+          !isFailed &&
+          (isTerminal ? runComplete && activeIdx >= idx : activeIdx > idx);
+        const isActive = !isFailed && !isCompleted && activeIdx === idx;
 
         return (
           <li key={step.id} className="flex items-start gap-3">
             {/* Icon */}
             <div className="mt-0.5 shrink-0">
-              {isCompleted ? (
+              {isFailed ? (
+                <XCircle
+                  size={20}
+                  className="text-red-400"
+                  aria-label="failed"
+                />
+              ) : isCompleted ? (
                 <CheckCircle2
                   size={20}
                   className="text-emerald-400"
@@ -269,11 +283,13 @@ export function DiscoveryStepList({
             <div className="min-w-0">
               <div
                 className={`flex items-center gap-1.5 text-sm font-semibold leading-5 ${
-                  isCompleted
-                    ? "text-emerald-300"
-                    : isActive
-                      ? "text-text"
-                      : "text-muted/60"
+                  isFailed
+                    ? "text-red-300"
+                    : isCompleted
+                      ? "text-emerald-300"
+                      : isActive
+                        ? "text-text"
+                        : "text-muted/60"
                 }`}
               >
                 <span>{step.label}</span>
@@ -283,10 +299,14 @@ export function DiscoveryStepList({
               </div>
               <div
                 className={`text-xs leading-4 ${
-                  isCompleted || isActive ? "text-muted" : "text-muted/40"
+                  isFailed
+                    ? "text-red-300/80"
+                    : isCompleted || isActive
+                      ? "text-muted"
+                      : "text-muted/40"
                 }`}
               >
-                {step.subLabel}
+                {isFailed ? `${step.subLabel} — failed` : step.subLabel}
               </div>
             </div>
           </li>
@@ -397,6 +417,7 @@ export default function DiscoveryRunPage() {
   // Reads current_step from the response and stops once complete or errored.
   // ---------------------------------------------------------------------------
   const [currentStep, setCurrentStep] = useState<string | null>(null);
+  const [failedSteps, setFailedSteps] = useState<string[]>([]);
 
   // Reset the step indicator whenever the active run changes. Without this, a
   // newly started run inherits the previous run's last step (e.g. "complete")
@@ -406,6 +427,7 @@ export default function DiscoveryRunPage() {
   // run's real step is then re-applied from its /status response.
   useEffect(() => {
     setCurrentStep(null);
+    setFailedSteps([]);
   }, [runId]);
 
   // CS-4: the declared Salesforce product (from Integration Hub) decides what
@@ -431,43 +453,73 @@ export default function DiscoveryRunPage() {
     };
   }, []);
 
+  // CS-4 T5 + AT-313: poll the run status while the run is active. The base
+  // cadence is 2 s (AC4), and it stays at 2 s while the step is actively
+  // advancing. When the step is unchanged between polls (a long-running or
+  // stalled stage) the interval backs off geometrically up to a cap, so a slow
+  // run is not hammered with a fixed 2 s poll for minutes on end. The cadence
+  // resets to the 2 s base as soon as the step advances again. Self-scheduling
+  // setTimeout (not setInterval) so each delay can differ.
   useEffect(() => {
     if (!runId || !computing) return;
 
-    let cancelled = false;
+    const BASE_DELAY_MS = 2000;
+    const MAX_DELAY_MS = 15000;
+    const BACKOFF_FACTOR = 1.5;
 
-    const poll = async () => {
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let delay = BASE_DELAY_MS;
+    // `undefined` = no poll yet; the first observation always counts as a change
+    // so the cadence starts at the base even if current_step is still null.
+    let lastStep: string | null | undefined = undefined;
+
+    const schedule = () => {
+      if (cancelled) return;
+      timer = setTimeout(() => void tick(), delay);
+    };
+
+    const tick = async () => {
       try {
         const st = await apiGetRunScoped<{
           current_step?: string | null;
           status?: string;
+          failed_steps?: string[];
         }>(runId, "/status");
 
         if (cancelled) return;
 
-        if (st.current_step != null) {
-          setCurrentStep(st.current_step);
+        if (st.current_step != null) setCurrentStep(st.current_step);
+        setFailedSteps(Array.isArray(st.failed_steps) ? st.failed_steps : []);
+
+        const step = st.current_step ?? null;
+        if (step !== lastStep) {
+          delay = BASE_DELAY_MS; // progress moved — stay responsive
+        } else {
+          delay = Math.min(delay * BACKOFF_FACTOR, MAX_DELAY_MS);
         }
+        lastStep = step;
 
         // Stop polling once the step reaches complete or the run errors out.
         const done =
-          st.current_step === "complete" ||
+          step === "complete" ||
           (st.status != null &&
             !["running", "queued"].includes(st.status.toLowerCase()));
-        if (done) {
-          clearInterval(intervalId);
-        }
+        if (done) return; // do not reschedule
       } catch {
-        // Non-blocking: polling failures do not surface errors to the UI.
+        // Non-blocking: polling failures do not surface errors to the UI, but
+        // do back off so a persistently failing endpoint is not hammered.
+        if (cancelled) return;
+        delay = Math.min(delay * BACKOFF_FACTOR, MAX_DELAY_MS);
       }
+      schedule();
     };
 
-    void poll();
-    const intervalId = setInterval(() => void poll(), 2000);
+    void tick(); // immediate first poll, then self-scheduled with backoff
 
     return () => {
       cancelled = true;
-      clearInterval(intervalId);
+      if (timer) clearTimeout(timer);
     };
   }, [runId, computing]);
 
@@ -709,6 +761,7 @@ export default function DiscoveryRunPage() {
               currentStep={currentStep}
               runComplete={!computing}
               salesforceProduct={salesforceProduct}
+              failedSteps={failedSteps}
             />
           </div>
         )}
