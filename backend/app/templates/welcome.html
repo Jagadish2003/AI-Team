@@ -13,6 +13,8 @@
     .brand { color:#ffffff; font:600 20px/1.2 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif; letter-spacing:.3px; }
     .body { padding:32px; color:#1f2937; font:16px/1.6 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif; }
     .h1 { font-size:20px; font-weight:600; margin:0 0 16px; color:#0f172a; }
+    .steps { margin:16px 0; padding-left:20px; }
+    .steps li { margin:6px 0; }
     .muted { color:#6b7280; font-size:13px; }
     .footer { padding:20px 32px; color:#9ca3af; font:12px/1.5 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif; border-top:1px solid #f0f1f3; }
     @media only screen and (max-width:600px){
@@ -25,11 +27,15 @@
     <div class="container">
       <div class="header"><span class="brand">AgentIQ</span></div>
       <div class="body">
-        <p class="h1">Welcome to AgentIQ</p>
-        <p>Your <strong>{{ org }}</strong> workspace is ready.</p>
-        <p>AgentIQ helps you discover high-impact automation opportunities across your
-           enterprise systems — connect your sources, run a discovery, and review the
-           prioritized opportunities and roadmap.</p>
+        <p class="h1">Welcome to AgentIQ 🎉</p>
+        <p>Your <strong>{{ org }}</strong> workspace is ready — your account has been created
+           successfully.</p>
+        <p>Here's how to get started:</p>
+        <ol class="steps">
+          <li>Connect your enterprise systems as data sources.</li>
+          <li>Run a discovery to surface automation opportunities.</li>
+          <li>Review the prioritized opportunities, pilot roadmap, and executive report.</li>
+        </ol>
         <p class="muted">You're receiving this because an account was created for you on AgentIQ.</p>
       </div>
       <div class="footer">
