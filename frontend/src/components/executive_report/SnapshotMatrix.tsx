@@ -71,6 +71,82 @@ export default function SnapshotMatrix({ opportunities }: SnapshotMatrixProps) {
     [opportunities, layout],
   );
 
+  // Name labels. Non-overlapping bubbles keep their label in a pill just above the
+  // bubble (with a short leader line). Bubbles that physically overlap another bubble
+  // are flagged `onBubble` — their name is written directly on the bubble instead, so
+  // it's obvious which name belongs to which of the overlapping circles.
+  const labelPlacements = useMemo(() => {
+    const LABEL_H = 21;
+
+    const clampX = (cx: number, width: number) =>
+      clamp(cx, layout.left + width / 2 + 2, layout.rx - width / 2 - 2);
+
+    const placed = points.map((p) => {
+      const title = p.o.title.length > 26 ? `${p.o.title.slice(0, 26)}...` : p.o.title;
+      const width = clamp(title.length * 6.7 + 16, 90, 210);
+      return {
+        id: p.o.id,
+        title,
+        width,
+        r: p.r,
+        bubbleX: p.x,
+        bubbleCy: p.y,
+        bubbleTop: p.y - p.r,
+        centerX: clampX(p.x, width),
+        pillBottom: clamp(p.y - p.r - 4, layout.top + LABEL_H, layout.by - 2),
+        onBubble: false,
+        onX: p.x,   // on-bubble label centre x (set for overlapping clusters)
+        onY: p.y,   // on-bubble label centre y
+      };
+    });
+
+    // Cluster bubbles that physically overlap (centre distance < sum of radii),
+    // via union-find, so a chain of overlapping bubbles is treated as one group.
+    const parent = placed.map((_, i) => i);
+    const find = (i: number): number => (parent[i] === i ? i : (parent[i] = find(parent[i])));
+    for (let i = 0; i < placed.length; i += 1) {
+      for (let j = i + 1; j < placed.length; j += 1) {
+        const dist = Math.hypot(
+          placed[i].bubbleX - placed[j].bubbleX,
+          placed[i].bubbleCy - placed[j].bubbleCy,
+        );
+        if (dist < placed[i].r + placed[j].r) parent[find(i)] = find(j);
+      }
+    }
+    const clusters = new Map<number, number[]>();
+    placed.forEach((_, i) => {
+      const root = find(i);
+      if (!clusters.has(root)) clusters.set(root, []);
+      clusters.get(root)!.push(i);
+    });
+
+    // For each overlapping cluster, draw each name as a bar that sticks OUT of its
+    // bubble: a bubble on the right side of the cluster extends its label to the
+    // right, a bubble on the left extends to the left — the label's inner edge is
+    // anchored at the bubble centre. Vertically each label sits at its own bubble's
+    // centre, so an upper bubble's name rides higher and a lower bubble's rides lower
+    // (matches the requested tag layout).
+    clusters.forEach((idxs) => {
+      if (idxs.length < 2) return;
+      const meanX = idxs.reduce((s, i) => s + placed[i].bubbleX, 0) / idxs.length;
+      idxs.forEach((i) => {
+        placed[i].onBubble = true;
+        const extendRight = placed[i].bubbleX >= meanX;
+        // Inner edge at the bubble centre; the bar then extends outward.
+        const rawX = extendRight
+          ? placed[i].bubbleX + placed[i].width / 2
+          : placed[i].bubbleX - placed[i].width / 2;
+        placed[i].onX = clampX(rawX, placed[i].width);
+        // Drop the left-extending (lower) label to the bottom of its bubble so it
+        // sits clearly below the upper bubble instead of crossing into it.
+        const yOffset = extendRight ? 0 : Math.max(22, placed[i].r * 0.9);
+        placed[i].onY = clamp(placed[i].bubbleCy + yOffset, layout.top + 12, layout.by - 12);
+      });
+    });
+
+    return placed;
+  }, [points, layout]);
+
   useEffect(() => {
     const node = plotRef.current;
     if (!node) return;
@@ -153,7 +229,9 @@ export default function SnapshotMatrix({ opportunities }: SnapshotMatrixProps) {
               fill="var(--opportunity-matrix-bubble-fill)"
               stroke="var(--opportunity-matrix-bubble-stroke)"
               strokeWidth="1.5"
-            />
+            >
+              <title>{o.title}</title>
+            </circle>
           ))}
 
           {[
@@ -165,6 +243,75 @@ export default function SnapshotMatrix({ opportunities }: SnapshotMatrixProps) {
             <g key={label} pointerEvents="none">
               <text x={x} y={y - 1} fontSize="14" fontWeight="var(--opportunity-matrix-label-weight)" letterSpacing="0.4" fill={fill}>
                 {label}
+              </text>
+            </g>
+          ))}
+
+          {/* NON-OVERLAPPING bubbles: leader line from the pill down to the bubble. */}
+          {labelPlacements.filter((lab) => !lab.onBubble).map((lab) => {
+            const originX = clamp(lab.bubbleX, lab.centerX - lab.width / 2, lab.centerX + lab.width / 2);
+            return (
+              <line
+                key={`leader-${lab.id}`}
+                x1={originX}
+                y1={lab.pillBottom}
+                x2={lab.bubbleX}
+                y2={lab.bubbleTop}
+                stroke="var(--opportunity-matrix-bubble-label-border)"
+                strokeWidth="1"
+                pointerEvents="none"
+              />
+            );
+          })}
+
+          {/* NON-OVERLAPPING bubbles: name in a pill just above the bubble (unchanged). */}
+          {labelPlacements.filter((lab) => !lab.onBubble).map((lab) => (
+            <g key={`label-${lab.id}`} pointerEvents="none">
+              <rect
+                x={lab.centerX - lab.width / 2}
+                y={lab.pillBottom - 21}
+                width={lab.width}
+                height={21}
+                rx={6}
+                fill="var(--opportunity-matrix-bubble-label-bg)"
+                stroke="var(--opportunity-matrix-bubble-label-border)"
+              />
+              <text
+                x={lab.centerX}
+                y={lab.pillBottom - 6}
+                fontSize="13"
+                fontWeight="600"
+                fill="var(--opportunity-matrix-hover-label)"
+                textAnchor="middle"
+              >
+                {lab.title}
+              </text>
+            </g>
+          ))}
+
+          {/* OVERLAPPING bubbles: names written ON the bubbles, side by side at the
+              same height (left bubble's name biased left, right biased right). Drawn
+              last so they sit above every bubble fill. */}
+          {labelPlacements.filter((lab) => lab.onBubble).map((lab) => (
+            <g key={`on-${lab.id}`} pointerEvents="none">
+              <rect
+                x={lab.onX - lab.width / 2}
+                y={lab.onY - 10}
+                width={lab.width}
+                height={20}
+                rx={5}
+                fill="var(--opportunity-matrix-bubble-label-bg)"
+                stroke="var(--opportunity-matrix-bubble-label-border)"
+              />
+              <text
+                x={lab.onX}
+                y={lab.onY + 4}
+                fontSize="12"
+                fontWeight="600"
+                fill="var(--opportunity-matrix-hover-label)"
+                textAnchor="middle"
+              >
+                {lab.title}
               </text>
             </g>
           ))}

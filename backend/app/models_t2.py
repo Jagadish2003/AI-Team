@@ -60,3 +60,4 @@ class StatusResponse(BaseModel):
     errors: Dict[str, str] = Field(default_factory=dict)
     updatedAt: Optional[str] = None
     isReplay: bool = False
+    current_step: Optional[str] = None

@@ -1,4 +1,5 @@
 import json
+import logging
 import os
 import re
 import sqlite3
@@ -8,6 +9,19 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from fastapi import HTTPException
+
+logger = logging.getLogger(__name__)
+
+# Ordered step IDs emitted by update_run_step() at each major discovery stage.
+DISCOVERY_STEPS = [
+    "sf_crm",    # after salesforce.ingest()
+    "sf_ncino",  # after ncino_ingest() (ncino pack only)
+    "sn",        # after servicenow.ingest()
+    "jira",      # after jira_mod.ingest()
+    "detect",    # after _run_detector_phase()
+    "enrich",    # before entity extraction / LLM enrichment
+    "complete",  # at the final return
+]
 
 DB_PATH = Path(os.getenv("DB_PATH", "database/dev.db"))
 RUN_ID_RE = re.compile(r"^RUN_(\d+)$")
@@ -66,6 +80,13 @@ def init_tables() -> None:
     cur.execute(
         "CREATE TABLE IF NOT EXISTS runs (id TEXT PRIMARY KEY, payload TEXT NOT NULL)"
     )
+    # Idempotently add current_step column (migration 0008 / CS-4 T3).
+    # Uses the same PRAGMA-then-ALTER pattern as the run_events migration above
+    # so a dev.db that hasn't had alembic run still gets the column on first use.
+    cur.execute("PRAGMA table_info(runs)")
+    run_cols = {row[1] for row in cur.fetchall()}
+    if "current_step" not in run_cols:
+        cur.execute("ALTER TABLE runs ADD COLUMN current_step VARCHAR")
     # Migrate run_events if it exists with the old single-key schema
     cur.execute("PRAGMA table_info(run_events)")
     existing_cols = {row[1] for row in cur.fetchall()}
@@ -123,6 +144,48 @@ def upsert_run(run_id: str, payload: Dict[str, Any]) -> None:
     )
     con.commit()
     con.close()
+
+
+def update_run_step(run_id: str, step_id: str) -> None:
+    """Record the current discovery step for run_id.
+
+    Writes step_id into both the current_step SQL column (migration 0008) and
+    the JSON payload so that get_run() surfaces it to status-poll endpoints
+    without a schema-aware query. Falls back to payload-only when the column
+    is absent (pre-migration dev.db). Never raises — a step-tracking failure
+    must not abort a discovery run.
+    """
+    try:
+        con = connect()
+        cur = con.cursor()
+        cur.execute("SELECT payload FROM runs WHERE id = ?", (run_id,))
+        row = cur.fetchone()
+        if not row:
+            con.close()
+            return
+        payload = json.loads(row[0])
+        payload["current_step"] = step_id
+        payload_json = json.dumps(payload)
+        try:
+            cur.execute(
+                "UPDATE runs SET payload = ?, current_step = ? WHERE id = ?",
+                (payload_json, step_id, run_id),
+            )
+        except sqlite3.OperationalError:
+            # current_step column not yet present — update payload only.
+            cur.execute(
+                "UPDATE runs SET payload = ? WHERE id = ?",
+                (payload_json, run_id),
+            )
+        con.commit()
+        con.close()
+    except Exception as exc:
+        logger.warning(
+            "update_run_step skipped: run_id=%s step_id=%s error=%s",
+            run_id,
+            step_id,
+            exc,
+        )
 
 
 def count_runs() -> int:
