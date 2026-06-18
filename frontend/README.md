@@ -3,13 +3,14 @@
 ## Purpose
 Provide deterministic demo data for the backend. Frontend must never import seed data directly.
 
-## One-command seed
+## One-command provision
+Run from the `AgentIQ/backend` directory:
 ```bash
-python backend/seed_loader.py
+./database/provision/provision.sh
 ```
 
 Outputs:
-- backend/dev.db (SQLite) containing JSON payload tables
+- The full PostgreSQL schema (Alembic migrations + `{id,payload}` tables + lazy-only tables) plus the core reference seed. See `backend/database/provision/README.md`.
 
 ## Edge cases included
 - One connector in `error` state (Databricks)

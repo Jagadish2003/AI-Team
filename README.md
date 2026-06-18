@@ -71,8 +71,10 @@ npm install
 Open **Bash** from the `AgentIQ\backend` directory (do not close this window):
 ```shell
 source .venv/scripts/activate
-./run.sh
+./run.sh --db dev      # for local development (uses DEV_DATABASE_URL)
+# ./run.sh --db prod   # for deployment/production (uses PROD_DATABASE_URL)
 ```
+> The `--db` flag is **required**. `--db dev` points the backend at `DEV_DATABASE_URL` and `--db prod` at `PROD_DATABASE_URL` (both defined in `backend/.env`). The selected value is written to `DATABASE_URL` so the server — and any later command that reads `.env` (e.g. provisioning) — targets the same database.
 
 ### Step 2: Start the Frontend Server
 Open **Bash** from the `AgentIQ\frontend` directory (do not close this window):
