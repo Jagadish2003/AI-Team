@@ -12,7 +12,7 @@ import {
   DISCOVERY_SOURCE_REQUIREMENT_MESSAGE,
   isDiscoveryReadyConnector,
 } from "../utils/sourceReadiness";
-import { apiGetRunScoped } from "../lib/apiClient";
+import { apiGet, apiGetRunScoped } from "../lib/apiClient";
 
 // ---------------------------------------------------------------------------
 // DISCOVERY_STEPS — ordered list of all seven discovery stages (CS-4 T5 AC4).
@@ -79,6 +79,69 @@ const STEP_INDEX = Object.fromEntries(
   DISCOVERY_STEPS.map((s, i) => [s.id, i])
 );
 
+// CS-4: the second Salesforce pass ("sf_ncino" step) reflects the Salesforce
+// product the workspace declared in Integration Hub (SalesforceProductPicker).
+// The step id stays "sf_ncino" so backend current_step progress mapping is
+// unaffected — only the user-facing label/sub-label change. nCino keeps the
+// dual-extraction tooltip narrative; for any other product that nCino-specific
+// explanation no longer applies and is dropped from both Salesforce steps.
+const SF_SECOND_PASS_BY_PRODUCT: Record<
+  string,
+  { label: string; subLabel: string }
+> = {
+  salesforce_ncino: {
+    label: "nCino Lending",
+    subLabel: "Ingesting nCino loan origination signals",
+  },
+  salesforce_sc: {
+    label: "Service Cloud",
+    subLabel: "Ingesting case management, service request, and SLA signals",
+  },
+  salesforce_pss: {
+    label: "Public Sector Solutions / Benefits",
+    subLabel: "Ingesting benefits administration and member service signals",
+  },
+  salesforce_fsc: {
+    label: "Financial Services Cloud",
+    subLabel: "Ingesting wealth management and relationship banking signals",
+  },
+  salesforce_rc: {
+    label: "Revenue Cloud",
+    subLabel: "Ingesting CPQ, contract, and revenue operation signals",
+  },
+  salesforce_hc: {
+    label: "Health Cloud",
+    subLabel: "Ingesting patient management and care programme signals",
+  },
+};
+
+// Build the display step list for a declared Salesforce product. When no
+// product is declared (undefined), the default nCino labels are preserved so
+// existing behaviour and tests are unchanged.
+function resolveDiscoverySteps(salesforceProduct?: string): DiscoveryStep[] {
+  const override = salesforceProduct
+    ? SF_SECOND_PASS_BY_PRODUCT[salesforceProduct]
+    : undefined;
+  const isNcino = !salesforceProduct || salesforceProduct === "salesforce_ncino";
+
+  return DISCOVERY_STEPS.map((step) => {
+    if (step.id === "sf_ncino" && override) {
+      return {
+        ...step,
+        label: override.label,
+        subLabel: override.subLabel,
+        infoTooltip: isNcino ? step.infoTooltip : undefined,
+      };
+    }
+    // The dual-extraction tooltip describes a CRM + nCino split; it no longer
+    // holds once a non-nCino product is the second pass.
+    if (step.id === "sf_crm" && !isNcino) {
+      return { ...step, infoTooltip: undefined };
+    }
+    return step;
+  });
+}
+
 // ---------------------------------------------------------------------------
 // StepInfoTooltip — accessible info tooltip for a discovery step (CS-4 T6).
 // Renders a keyboard-focusable info icon. The explanation shows on hover and
@@ -117,19 +180,24 @@ export function StepInfoTooltip({ text }: { text: string }) {
 export function DiscoveryStepList({
   currentStep,
   runComplete = false,
+  salesforceProduct,
 }: {
   currentStep: string | null;
   // True only once the discovery run has truly finished (100%). The backend can
   // emit the "complete" step while the run is still computing post-processing,
   // so the terminal step's green tick is gated on this flag, not on currentStep.
   runComplete?: boolean;
+  // Declared Salesforce product id (e.g. "salesforce_sc"). Drives the label of
+  // the second Salesforce pass so the run reflects the workspace's declaration.
+  salesforceProduct?: string;
 }) {
   const activeIdx =
     currentStep != null ? (STEP_INDEX[currentStep] ?? -1) : -1;
+  const steps = resolveDiscoverySteps(salesforceProduct);
 
   return (
     <ol className="space-y-3">
-      {DISCOVERY_STEPS.map((step, idx) => {
+      {steps.map((step, idx) => {
         // "complete" is the terminal step. It earns the green check only when the
         // run has actually finished (runComplete). While the run is still running
         // — even if the backend already emitted "complete" — it shows the spinner.
@@ -296,6 +364,29 @@ export default function DiscoveryRunPage() {
   // Reads current_step from the response and stops once complete or errored.
   // ---------------------------------------------------------------------------
   const [currentStep, setCurrentStep] = useState<string | null>(null);
+
+  // CS-4: the declared Salesforce product (from Integration Hub) decides what
+  // the second Salesforce discovery pass is labelled as. Single declaration
+  // (radio), so the first declared id wins. Failure → undefined → default copy.
+  const [salesforceProduct, setSalesforceProduct] = useState<string | undefined>(
+    undefined
+  );
+
+  useEffect(() => {
+    let cancelled = false;
+    apiGet<{ ok: boolean; products: string[]; labels: string[] }>(
+      "/api/connectors/salesforce/products"
+    )
+      .then((data) => {
+        if (!cancelled) setSalesforceProduct(data?.products?.[0]);
+      })
+      .catch(() => {
+        // Non-blocking: with no declaration the default nCino copy is used.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     if (!runId || !computing) return;
@@ -571,7 +662,11 @@ export default function DiscoveryRunPage() {
         {(computing || currentStep != null) && (
           <div className="mb-4 rounded-xl border border-border bg-panel p-4">
             <div className="mb-4 text-lg font-semibold">Discovery Progress</div>
-            <DiscoveryStepList currentStep={currentStep} runComplete={!computing} />
+            <DiscoveryStepList
+              currentStep={currentStep}
+              runComplete={!computing}
+              salesforceProduct={salesforceProduct}
+            />
           </div>
         )}
 
