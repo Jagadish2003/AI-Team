@@ -21,6 +21,9 @@ import pytest
 BACKEND_DIR = Path(__file__).resolve().parents[2]
 
 # (name, type, required/NOT NULL, primary_key)
+# reset_token_hash / reset_token_expires_at are appended last by migration 0008
+# (CS-3 forgot-password). Both nullable; SQLite ADD COLUMN appends at the end,
+# matching their position in CREATE_USERS_TABLE so migrated and fresh schemas align.
 EXPECTED_USERS_COLUMNS = [
     ("id", "VARCHAR(36)", True, True),
     ("email", "VARCHAR(256)", True, False),
@@ -30,6 +33,8 @@ EXPECTED_USERS_COLUMNS = [
     ("invite_token_expires_at", "TIMESTAMP", False, False),
     ("created_at", "TIMESTAMP", True, False),
     ("last_login_at", "TIMESTAMP", False, False),
+    ("reset_token_hash", "VARCHAR(256)", False, False),
+    ("reset_token_expires_at", "TIMESTAMP", False, False),
 ]
 
 EXPECTED_LOGIN_ATTEMPTS_COLUMNS = [
