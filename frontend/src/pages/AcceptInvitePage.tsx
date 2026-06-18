@@ -19,6 +19,9 @@ import React, { useEffect, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 
 import PasswordInput from "../components/auth/PasswordInput";
+import PasswordStrengthIndicator, {
+  getPasswordRequirements,
+} from "../components/auth/PasswordStrengthIndicator";
 import { getInviteInfo } from "../api/authApi";
 import { useAuth } from "../context/AuthContext";
 import { useTheme } from "../context/ThemeContext";
@@ -37,9 +40,6 @@ const SUBMIT_CLS =
   "focus:outline-none focus-visible:ring-1 focus-visible:ring-accent/40 " +
   "disabled:cursor-not-allowed disabled:opacity-40 " +
   "border border-accent bg-accent text-textwhite shadow-sm hover:bg-accent/90";
-
-// Fixed-height slot for a single line of inline hint/error text.
-const HINT_SLOT_CLS = "mt-1 h-4 text-xs leading-4 text-red-400";
 
 // ── Error message resolver ────────────────────────────────────────────────────
 
@@ -116,14 +116,14 @@ export default function AcceptInvitePage() {
     };
   }, [inviteToken]);
 
-  // Inline validation — each only surfaces once the user has typed something.
-  const passwordTooShort =
-    password.length > 0 && password.length < MIN_PASSWORD_LENGTH;
+  // CS-3: the locked strength rule (length + upper + lower + special) replaces
+  // the old length-only check, shared with the indicator below the field.
+  const passwordValid = getPasswordRequirements(password).every((r) => r.met);
   const passwordMismatch =
     confirmPassword.length > 0 && password !== confirmPassword;
 
   const canSubmit =
-    password.length >= MIN_PASSWORD_LENGTH &&
+    passwordValid &&
     password === confirmPassword &&
     !submitting;
 
@@ -192,14 +192,12 @@ export default function AcceptInvitePage() {
               autoComplete="new-password"
               required
               minLength={MIN_PASSWORD_LENGTH}
-              invalid={passwordTooShort}
               value={password}
               onChange={setPassword}
               disabled={submitting}
             />
-            <div className={HINT_SLOT_CLS}>
-              {passwordTooShort && "Enter minimum of 8 characters"}
-            </div>
+            {/* CS-3: live requirement checklist replaces the old length-only hint. */}
+            <PasswordStrengthIndicator password={password} />
           </div>
 
           {/* Confirm password */}
