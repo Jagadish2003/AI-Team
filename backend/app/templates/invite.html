@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="x-apple-disable-message-reformatting">
+  <title>You're invited to {{ org }} on AgentIQ</title>
+  <style>
+    body { margin:0; padding:0; background:#f4f5f7; }
+    .wrap { width:100%; background:#f4f5f7; padding:24px 0; }
+    .container { max-width:600px; margin:0 auto; background:#ffffff; border-radius:12px; overflow:hidden; border:1px solid #e5e7eb; }
+    .header { background:#0f172a; padding:24px 32px; }
+    .brand { color:#ffffff; font:600 20px/1.2 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif; letter-spacing:.3px; }
+    .body { padding:32px; color:#1f2937; font:16px/1.6 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif; }
+    .h1 { font-size:20px; font-weight:600; margin:0 0 16px; color:#0f172a; }
+    .btn { display:inline-block; background:#2563eb; color:#ffffff !important; text-decoration:none; padding:14px 28px; border-radius:8px; font-weight:600; font-size:16px; }
+    .muted { color:#6b7280; font-size:13px; }
+    .link { word-break:break-all; color:#2563eb; }
+    .footer { padding:20px 32px; color:#9ca3af; font:12px/1.5 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif; border-top:1px solid #f0f1f3; }
+    @media only screen and (max-width:600px){
+      .body,.header,.footer{ padding-left:20px; padding-right:20px; }
+      .btn{ display:block; text-align:center; }
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="container">
+      <div class="header"><span class="brand">AgentIQ</span></div>
+      <div class="body">
+        <p class="h1">You've been invited to {{ org }}</p>
+        <p>You have been invited to join the <strong>{{ org }}</strong> workspace on AgentIQ as
+           {% if role %}an <strong>{{ role|capitalize }}</strong>{% else %}a team member{% endif %}.</p>
+        <p>Click the button below to set your password and activate your account.</p>
+        <p style="margin:28px 0;">
+          <a href="{{ link }}" class="btn">Accept invitation</a>
+        </p>
+        <p class="muted">Or paste this link into your browser:<br>
+           <a href="{{ link }}" class="link">{{ link }}</a></p>
+      </div>
+      <div class="footer">
+        This invitation was sent by AgentIQ. If you weren't expecting it, you can safely ignore this email.
+      </div>
+    </div>
+  </div>
+</body>
+</html>
