@@ -1,4 +1,5 @@
 import json
+import logging
 import os
 import re
 import uuid
@@ -11,15 +12,21 @@ import psycopg2.extras
 from dotenv import load_dotenv
 from fastapi import HTTPException
 
-# Load backend/.env so DATABASE_URL is honoured even when db.py is imported by a
-# standalone script (seed loader, a one-off shell) that did not call
-# load_dotenv() itself. override=False: a real exported env var still wins, and
-# the value the test conftest sets in os.environ is preserved.
-load_dotenv(Path(__file__).resolve().parents[1] / ".env")
+logger = logging.getLogger(__name__)
 
-# AT-288 / Fix 1: the application database is PostgreSQL. The connection string
-# is read from DATABASE_URL (the local default matches deployment/.env.template).
+# Ordered step IDs emitted by update_run_step() at each major discovery stage.
+DISCOVERY_STEPS = [
+    "sf_crm",    # after salesforce.ingest()
+    "sf_ncino",  # after ncino_ingest() (ncino pack only)
+    "sn",        # after servicenow.ingest()
+    "jira",      # after jira_mod.ingest()
+    "detect",    # after _run_detector_phase()
+    "enrich",    # before entity extraction / LLM enrichment
+    "complete",  # at the final return
+]
+
 DATABASE_URL = os.getenv("DATABASE_URL")
+
 RUN_ID_RE = re.compile(r"^RUN_(\d+)$")
 
 
@@ -160,6 +167,50 @@ def upsert_run(run_id: str, payload: Dict[str, Any]) -> None:
     )
     con.commit()
     con.close()
+
+
+def update_run_step(run_id: str, step_id: str) -> None:
+    """Record the current discovery step for run_id.
+
+    Writes step_id into both the current_step SQL column (migration 0011) and
+    the JSON payload so that get_run() surfaces it to status-poll endpoints
+    without a schema-aware query. Falls back to payload-only when the column
+    is absent. Never raises — a step-tracking failure must not abort a
+    discovery run.
+    """
+    try:
+        con = connect()
+        cur = con.cursor()
+        cur.execute("SELECT payload FROM runs WHERE id = %s", (run_id,))
+        row = cur.fetchone()
+        if not row:
+            con.close()
+            return
+        payload = json.loads(row[0])
+        payload["current_step"] = step_id
+        payload_json = json.dumps(payload)
+        try:
+            cur.execute(
+                "UPDATE runs SET payload = %s, current_step = %s WHERE id = %s",
+                (payload_json, step_id, run_id),
+            )
+        except psycopg2.Error:
+            # current_step column not present — clear the aborted transaction
+            # (PostgreSQL aborts it on error) and update the payload only.
+            con.rollback()
+            cur.execute(
+                "UPDATE runs SET payload = %s WHERE id = %s",
+                (payload_json, run_id),
+            )
+        con.commit()
+        con.close()
+    except Exception as exc:
+        logger.warning(
+            "update_run_step skipped: run_id=%s step_id=%s error=%s",
+            run_id,
+            step_id,
+            exc,
+        )
 
 
 def count_runs() -> int:

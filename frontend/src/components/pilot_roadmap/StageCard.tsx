@@ -62,7 +62,7 @@ export default function StageCard({ stage, onOpenReview, renderBlueprintLink }: 
   const pendingCount = stage.requiredPermissions.filter((p) => readinessFromPermission(p) === 'PENDING').length;
   const missingCount = required.filter((p) => readinessFromPermission(p) === 'MISSING').length;
 
-  const gate = stageReadiness(stage.requiredPermissions);
+  const gate = stage.opportunities.length === 0 ? 'MISSING' : stageReadiness(stage.requiredPermissions);
   const dependencyCounts = countsFromStatuses(stage.dependencies);
 
   const hasPermScroll = stage.requiredPermissions.length > 4;

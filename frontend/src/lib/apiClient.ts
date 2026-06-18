@@ -145,6 +145,21 @@ export async function apiPatch<T>(path: string, payload: unknown): Promise<T> {
   return body as T;
 }
 
+export async function apiDelete<T = void>(path: string): Promise<T> {
+  const res = await fetch(`${BASE_URL}${path}`, {
+    method: "DELETE",
+    headers: { ...authHeader() },
+  });
+  // 204 No Content — tolerate empty body, return undefined cast to T
+  if (res.status === 204) return undefined as unknown as T;
+  const body = await parseBody(res);
+  if (!res.ok) {
+    if (res.status === 401) _handle401();
+    throw new ApiError(`DELETE ${path} failed`, res.status, body);
+  }
+  return body as T;
+}
+
 /* ========== TASK 7 - NEW CODE START ========== */
 
 /**

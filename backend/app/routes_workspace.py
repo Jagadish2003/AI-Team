@@ -67,14 +67,23 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def _row_to_member(user_id: str, role: str, created_at: str) -> Dict[str, Any]:
+def _row_to_member(
+    user_id: str,
+    role: str,
+    created_at: str,
+    email: Optional[str] = None,
+) -> Dict[str, Any]:
     """Map a workspace_members row to the contract shape.
 
-    user_id doubles as email in the dev identity model (see module docstring).
+    The real email is sourced from the users table (joined on users.id =
+    workspace_members.user_id). When no matching users row exists — e.g. a
+    member invited in the dev identity model where user_id IS the email, or a
+    seeded owner without a users record — we fall back to user_id, which has
+    historically doubled as the email (see module docstring).
     """
     return {
         "user_id": user_id,
-        "email": user_id,
+        "email": email or user_id,
         "role": role,
         "created_at": created_at,
     }
@@ -98,14 +107,16 @@ def register_workspace_routes(app) -> None:
         try:
             cur = con.cursor()
             cur.execute(
-                "SELECT user_id, role, created_at FROM workspace_members "
-                "WHERE org_id = %s ORDER BY created_at ASC",
+                "SELECT wm.user_id, wm.role, wm.created_at, u.email "
+                "FROM workspace_members wm "
+                "LEFT JOIN users u ON u.id = wm.user_id "
+                "WHERE wm.org_id = %s ORDER BY wm.created_at ASC",
                 (org_id,),
             )
             rows = cur.fetchall()
         finally:
             con.close()
-        return [MemberOut(**_row_to_member(r[0], r[1], r[2])) for r in rows]
+        return [MemberOut(**_row_to_member(r[0], r[1], r[2], r[3])) for r in rows]
 
     @app.post(
         "/api/workspace/members",

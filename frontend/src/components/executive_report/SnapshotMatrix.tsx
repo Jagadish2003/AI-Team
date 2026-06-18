@@ -1,56 +1,11 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { OpportunityCandidate } from '../../types/analystReview';
-
-function clamp(n: number, a: number, b: number) {
-  return Math.max(a, Math.min(b, n));
-}
-
-const DEFAULT_WIDTH = 1440;
-const DEFAULT_HEIGHT = 620;
-
-type MatrixLayout = {
-  width: number;
-  height: number;
-  left: number;
-  top: number;
-  cx: number;
-  cy: number;
-  rx: number;
-  by: number;
-};
-
-function createLayout(width: number, height: number): MatrixLayout {
-  const safeWidth = Math.max(width, 360);
-  const safeHeight = Math.max(height, 360);
-  const left = safeWidth < 640 ? 92 : 150;
-  const right = safeWidth < 640 ? 18 : 36;
-  const top = 28;
-  const bottom = 38;
-  const rx = safeWidth - right;
-  const by = safeHeight - bottom;
-
-  return {
-    width: safeWidth,
-    height: safeHeight,
-    left,
-    top,
-    cx: left + (rx - left) / 2,
-    cy: top + (by - top) / 2,
-    rx,
-    by,
-  };
-}
-
-function buildPoints(opportunities: OpportunityCandidate[], layout: MatrixLayout) {
-  const W = layout.rx - layout.left;
-  const H = layout.by - layout.top;
-  return opportunities.map((o) => ({
-    o,
-    x: layout.left + ((o.effort - 1) / 9) * W,
-    y: layout.by - ((o.impact - 1) / 9) * H,
-    r: clamp(10 + o.impact * 3, 12, 38),
-  }));
-}
+import {
+  clamp,
+  computeMatrixGeometry,
+  DEFAULT_MATRIX_HEIGHT,
+  DEFAULT_MATRIX_WIDTH,
+} from '../../utils/matrixLayout';
 
 interface SnapshotMatrixProps {
   opportunities: OpportunityCandidate[];
@@ -59,16 +14,13 @@ interface SnapshotMatrixProps {
 export default function SnapshotMatrix({ opportunities }: SnapshotMatrixProps) {
   const plotRef = useRef<HTMLDivElement>(null);
   const [viewport, setViewport] = useState({
-    width: DEFAULT_WIDTH,
-    height: DEFAULT_HEIGHT,
+    width: DEFAULT_MATRIX_WIDTH,
+    height: DEFAULT_MATRIX_HEIGHT,
   });
-  const layout = useMemo(
-    () => createLayout(viewport.width, viewport.height),
-    [viewport.height, viewport.width],
-  );
-  const points = useMemo(
-    () => buildPoints(opportunities, layout).sort((a, b) => b.r - a.r),
-    [opportunities, layout],
+
+  const { layout, points, placements: labelPlacements } = useMemo(
+    () => computeMatrixGeometry(opportunities, viewport.width, viewport.height),
+    [opportunities, viewport.height, viewport.width],
   );
 
   useEffect(() => {
@@ -153,7 +105,9 @@ export default function SnapshotMatrix({ opportunities }: SnapshotMatrixProps) {
               fill="var(--opportunity-matrix-bubble-fill)"
               stroke="var(--opportunity-matrix-bubble-stroke)"
               strokeWidth="1.5"
-            />
+            >
+              <title>{o.title}</title>
+            </circle>
           ))}
 
           {[
@@ -165,6 +119,75 @@ export default function SnapshotMatrix({ opportunities }: SnapshotMatrixProps) {
             <g key={label} pointerEvents="none">
               <text x={x} y={y - 1} fontSize="14" fontWeight="var(--opportunity-matrix-label-weight)" letterSpacing="0.4" fill={fill}>
                 {label}
+              </text>
+            </g>
+          ))}
+
+          {/* NON-OVERLAPPING bubbles: leader line from the pill down to the bubble. */}
+          {labelPlacements.filter((lab) => !lab.onBubble).map((lab) => {
+            const originX = clamp(lab.bubbleX, lab.centerX - lab.width / 2, lab.centerX + lab.width / 2);
+            return (
+              <line
+                key={`leader-${lab.id}`}
+                x1={originX}
+                y1={lab.pillBottom}
+                x2={lab.bubbleX}
+                y2={lab.bubbleTop}
+                stroke="var(--opportunity-matrix-bubble-label-border)"
+                strokeWidth="1"
+                pointerEvents="none"
+              />
+            );
+          })}
+
+          {/* NON-OVERLAPPING bubbles: name in a pill just above the bubble. */}
+          {labelPlacements.filter((lab) => !lab.onBubble).map((lab) => (
+            <g key={`label-${lab.id}`} pointerEvents="none">
+              <rect
+                x={lab.centerX - lab.width / 2}
+                y={lab.pillBottom - 21}
+                width={lab.width}
+                height={21}
+                rx={6}
+                fill="var(--opportunity-matrix-bubble-label-bg)"
+                stroke="var(--opportunity-matrix-bubble-label-border)"
+              />
+              <text
+                x={lab.centerX}
+                y={lab.pillBottom - 6}
+                fontSize="13"
+                fontWeight="600"
+                fill="var(--opportunity-matrix-hover-label)"
+                textAnchor="middle"
+              >
+                {lab.title}
+              </text>
+            </g>
+          ))}
+
+          {/* OVERLAPPING bubbles: names written ON the bubbles, side by side at the
+              same height (left bubble's name biased left, right biased right). Drawn
+              last so they sit above every bubble fill. */}
+          {labelPlacements.filter((lab) => lab.onBubble).map((lab) => (
+            <g key={`on-${lab.id}`} pointerEvents="none">
+              <rect
+                x={lab.onX - lab.width / 2}
+                y={lab.onY - 10}
+                width={lab.width}
+                height={20}
+                rx={5}
+                fill="var(--opportunity-matrix-bubble-label-bg)"
+                stroke="var(--opportunity-matrix-bubble-label-border)"
+              />
+              <text
+                x={lab.onX}
+                y={lab.onY + 4}
+                fontSize="12"
+                fontWeight="600"
+                fill="var(--opportunity-matrix-hover-label)"
+                textAnchor="middle"
+              >
+                {lab.title}
               </text>
             </g>
           ))}

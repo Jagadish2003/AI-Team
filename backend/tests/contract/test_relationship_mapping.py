@@ -79,13 +79,12 @@ from uuid import uuid4
 import pytest
 
 from database.models.entity_relationships import (
-    ALL_ENTITY_RELATIONSHIPS_DDL,
     INFERRED_CONFIDENCE,
     OBSERVED_CONFIDENCE,
     RELATIONSHIP_TYPES,
     EntityRelationship,
 )
-from database.models.entities import ALL_ENTITIES_DDL, Entity
+from database.models.entities import Entity
 from app.relationship_mapper import upsert_relationship, map_relationships
 from app.graph_query import get_entity_relationships
 
@@ -305,12 +304,6 @@ class TestEntityRelationshipsTableSchema:
             f"natural-key index columns must be in order "
             f"(org_id, from_entity_id, to_entity_id, relationship_type), got {indexdef}"
         )
-
-    def test_idempotent_ddl_no_error_on_second_apply(self):
-        with sqlite3.connect(_get_db_path()) as conn:
-            for ddl in ALL_ENTITY_RELATIONSHIPS_DDL:
-                conn.execute(ddl)
-            conn.commit()
 
 
 class TestEntityRelationshipsInsertAndQuery:

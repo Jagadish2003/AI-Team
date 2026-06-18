@@ -90,5 +90,5 @@ def register_sprint4_t2_routes(app):
         s = get_status(run_id)
         s["runId"] = run_id
         s["isReplay"] = run.get("isReplay", False)  # ← add isReplay from run record
+        s["current_step"] = run.get("current_step")
         return s
- 

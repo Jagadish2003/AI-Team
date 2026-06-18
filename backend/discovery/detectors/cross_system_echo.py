@@ -100,6 +100,7 @@ def evaluate(
     jira_data: Dict[str, Any] = None,
 ):
     sources = _extract_scores(sf_data, sn_data or {}, jira_data or {})
+
     eligible = [
         (src, score, vol, ev)
         for src, score, vol, ev in sources

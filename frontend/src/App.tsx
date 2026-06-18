@@ -24,6 +24,7 @@ import PilotRoadmapPage from "./pages/PilotRoadmapPage";
 import BlueprintPage from "./pages/BlueprintPage";
 import ExecutiveReportPage from "./pages/ExecutiveReportPage";
 import StackBuilderPage from "./pages/StackBuilderPage";
+import SettingsPage from "./pages/SettingsPage";
 
 export default function App() {
   return (
@@ -128,6 +129,7 @@ export default function App() {
                                 path="/executive-report"
                                 element={<ExecutiveReportPage />}
                               />
+                              <Route path="/settings" element={<SettingsPage />} />
                               <Route
                                 path="*"
                                 element={<Navigate to="/integration-hub" replace />}

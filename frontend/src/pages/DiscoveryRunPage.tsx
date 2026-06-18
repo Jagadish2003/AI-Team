@@ -1,5 +1,5 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Loader2 } from "lucide-react";
+import React, { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
+import { CheckCircle2, Circle, Info, Loader2 } from "lucide-react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { InfoPanel } from "../components/common/InfoPanel";
 import LoadingPanel from "../components/common/LoadingPanel";
@@ -12,6 +12,188 @@ import {
   DISCOVERY_SOURCE_REQUIREMENT_MESSAGE,
   isDiscoveryReadyConnector,
 } from "../utils/sourceReadiness";
+import { apiGetRunScoped } from "../lib/apiClient";
+
+// ---------------------------------------------------------------------------
+// DISCOVERY_STEPS — ordered list of all seven discovery stages (CS-4 T5 AC4).
+// Labels and sub-labels match Section 2 of the CS-4 spec.
+// ---------------------------------------------------------------------------
+interface DiscoveryStep {
+  id: string;
+  label: string;
+  subLabel: string;
+  // CS-4 T6 (AT-314): approved explanation shown via an info tooltip on the
+  // two Salesforce steps so the customer understands why both passes occur.
+  infoTooltip?: string;
+}
+
+// CS-4 T6 (AT-314 / Section 4): approved wording — must match exactly.
+export const SALESFORCE_DUAL_EXTRACTION_TOOLTIP =
+  "AgentIQ reads from your Salesforce system in two passes: the first reads " +
+  "CRM signals (Cases, Workflows, Approvals), the second reads nCino lending " +
+  "signals (Loans, Covenants, Checklists). These are different datasets " +
+  "serving different detectors. Both passes use your authorised read-only " +
+  "token and are logged in the audit trail.";
+
+const DISCOVERY_STEPS: DiscoveryStep[] = [
+  {
+    id: "sf_crm",
+    label: "Salesforce CRM",
+    subLabel: "Ingesting case metrics, flows, and approval data",
+    infoTooltip: SALESFORCE_DUAL_EXTRACTION_TOOLTIP,
+  },
+  {
+    id: "sf_ncino",
+    label: "nCino Lending",
+    subLabel: "Ingesting nCino loan origination signals",
+    infoTooltip: SALESFORCE_DUAL_EXTRACTION_TOOLTIP,
+  },
+  {
+    id: "sn",
+    label: "ServiceNow",
+    subLabel: "Ingesting incident metrics and change data",
+  },
+  {
+    id: "jira",
+    label: "Jira",
+    subLabel: "Ingesting issue metrics and project activity",
+  },
+  {
+    id: "detect",
+    label: "Pattern Detection",
+    subLabel: "Running detectors across all ingested signals",
+  },
+  {
+    id: "enrich",
+    label: "Entity Enrichment",
+    subLabel: "Extracting entities and mapping relationships",
+  },
+  {
+    id: "complete",
+    label: "Complete",
+    subLabel: "Discovery run finished successfully",
+  },
+];
+
+const STEP_INDEX = Object.fromEntries(
+  DISCOVERY_STEPS.map((s, i) => [s.id, i])
+);
+
+// ---------------------------------------------------------------------------
+// StepInfoTooltip — accessible info tooltip for a discovery step (CS-4 T6).
+// Renders a keyboard-focusable info icon. The explanation shows on hover and
+// on keyboard focus, is exposed to assistive tech via aria-label, and is
+// linked to the trigger through aria-describedby (role="tooltip"). The native
+// title attribute provides a fallback hover/tap tooltip.
+// ---------------------------------------------------------------------------
+export function StepInfoTooltip({ text }: { text: string }) {
+  const tooltipId = useId();
+
+  return (
+    <span className="group relative inline-flex">
+      <button
+        type="button"
+        aria-label={text}
+        aria-describedby={tooltipId}
+        title={text}
+        className="inline-flex h-4 w-4 items-center justify-center rounded-full text-muted/70 transition-colors hover:text-accent focus:outline-none focus-visible:ring-1 focus-visible:ring-accent/60"
+      >
+        <Info size={14} aria-hidden="true" />
+      </button>
+      <span
+        role="tooltip"
+        id={tooltipId}
+        className="pointer-events-none absolute left-1/2 top-full z-10 mt-2 w-72 -translate-x-1/2 rounded-md border border-border bg-bg/95 p-2 text-xs leading-4 text-text opacity-0 shadow-lg transition-opacity duration-150 group-hover:opacity-100 group-focus-within:opacity-100"
+      >
+        {text}
+      </span>
+    </span>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// DiscoveryStepList — renders all steps with completed / active / pending state
+// ---------------------------------------------------------------------------
+export function DiscoveryStepList({
+  currentStep,
+  runComplete = false,
+}: {
+  currentStep: string | null;
+  // True only once the discovery run has truly finished (100%). The backend can
+  // emit the "complete" step while the run is still computing post-processing,
+  // so the terminal step's green tick is gated on this flag, not on currentStep.
+  runComplete?: boolean;
+}) {
+  const activeIdx =
+    currentStep != null ? (STEP_INDEX[currentStep] ?? -1) : -1;
+
+  return (
+    <ol className="space-y-3">
+      {DISCOVERY_STEPS.map((step, idx) => {
+        // "complete" is the terminal step. It earns the green check only when the
+        // run has actually finished (runComplete). While the run is still running
+        // — even if the backend already emitted "complete" — it shows the spinner.
+        const isTerminal = step.id === "complete";
+        const isCompleted = isTerminal
+          ? runComplete && activeIdx >= idx
+          : activeIdx > idx;
+        const isActive = !isCompleted && activeIdx === idx;
+
+        return (
+          <li key={step.id} className="flex items-start gap-3">
+            {/* Icon */}
+            <div className="mt-0.5 shrink-0">
+              {isCompleted ? (
+                <CheckCircle2
+                  size={20}
+                  className="text-emerald-400"
+                  aria-label="completed"
+                />
+              ) : isActive ? (
+                <Loader2
+                  size={20}
+                  className="animate-spin text-accent"
+                  aria-label="active"
+                />
+              ) : (
+                <Circle
+                  size={20}
+                  className="text-muted/40"
+                  aria-label="pending"
+                />
+              )}
+            </div>
+
+            {/* Labels */}
+            <div className="min-w-0">
+              <div
+                className={`flex items-center gap-1.5 text-sm font-semibold leading-5 ${
+                  isCompleted
+                    ? "text-emerald-300"
+                    : isActive
+                      ? "text-text"
+                      : "text-muted/60"
+                }`}
+              >
+                <span>{step.label}</span>
+                {step.infoTooltip && (
+                  <StepInfoTooltip text={step.infoTooltip} />
+                )}
+              </div>
+              <div
+                className={`text-xs leading-4 ${
+                  isCompleted || isActive ? "text-muted" : "text-muted/40"
+                }`}
+              >
+                {step.subLabel}
+              </div>
+            </div>
+          </li>
+        );
+      })}
+    </ol>
+  );
+}
 
 function RunStatusPill({
   computing,
@@ -108,6 +290,52 @@ export default function DiscoveryRunPage() {
     restartRun,
     refetch,
   } = useDiscoveryRunContext();
+
+  // ---------------------------------------------------------------------------
+  // CS-4 T5: Poll /api/runs/{runId}/status every 2 s while the run is active.
+  // Reads current_step from the response and stops once complete or errored.
+  // ---------------------------------------------------------------------------
+  const [currentStep, setCurrentStep] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!runId || !computing) return;
+
+    let cancelled = false;
+
+    const poll = async () => {
+      try {
+        const st = await apiGetRunScoped<{
+          current_step?: string | null;
+          status?: string;
+        }>(runId, "/status");
+
+        if (cancelled) return;
+
+        if (st.current_step != null) {
+          setCurrentStep(st.current_step);
+        }
+
+        // Stop polling once the step reaches complete or the run errors out.
+        const done =
+          st.current_step === "complete" ||
+          (st.status != null &&
+            !["running", "queued"].includes(st.status.toLowerCase()));
+        if (done) {
+          clearInterval(intervalId);
+        }
+      } catch {
+        // Non-blocking: polling failures do not surface errors to the UI.
+      }
+    };
+
+    void poll();
+    const intervalId = setInterval(() => void poll(), 2000);
+
+    return () => {
+      cancelled = true;
+      clearInterval(intervalId);
+    };
+  }, [runId, computing]);
 
   const TOTAL_STAGES = 10;
 
@@ -336,6 +564,16 @@ export default function DiscoveryRunPage() {
               </p>
             )}
         </div>
+
+        {/* CS-4 T5 AC4: Discovery progress step list — shown while computing.
+            Replaces the generic ComputingPill spinner as the primary progress
+            indicator. Hidden once the run materialises. */}
+        {(computing || currentStep != null) && (
+          <div className="mb-4 rounded-xl border border-border bg-panel p-4">
+            <div className="mb-4 text-lg font-semibold">Discovery Progress</div>
+            <DiscoveryStepList currentStep={currentStep} runComplete={!computing} />
+          </div>
+        )}
 
         <div className="grid grid-cols-1 items-start gap-4 lg:grid-cols-3">
           <div className="flex h-[460px] min-h-0 flex-col rounded-xl border border-border bg-panel p-4 lg:h-[560px]">

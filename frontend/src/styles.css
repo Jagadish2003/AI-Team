@@ -479,3 +479,49 @@ body *::-webkit-scrollbar-corner {
   text-align: left;
   font-variant-numeric: tabular-nums;
 }
+
+/*
+ * PDF export scope — the Executive Report "Download PDF" action renders a
+ * dedicated, off-screen report document wrapped in `.pdf-light-scope`. This
+ * class redefines the theme CSS variables to their LIGHT values locally, so the
+ * captured document is always light even when the app is in dark mode. Because
+ * these are the same variable names the Tailwind color tokens read
+ * (bg-panel, text-text, border-border, …), the report's components render light
+ * without any global theme switch or visible flash. Mirrors :root.theme-light.
+ */
+.pdf-light-scope {
+  color-scheme: light;
+  --color-bgheader: 255 255 255;
+  --color-bg: 230 238 249;
+  --color-panel: 255 255 255;
+  --color-buttonbg: 255 255 255;
+  --color-panel2: 242 247 253;
+  --color-navborder: 17 96 238;
+  --color-border: 159 179 200;
+  --color-text: 7 25 58;
+  --color-muted: 33 51 92;
+  --color-accent: 13 85 215;
+  --color-danger: 239 68 68;
+  --color-navhover: 232 240 249;
+  --color-activenav: 255 255 255;
+  --color-textwhite: 255 255 255;
+  --color-navtext: 7 25 58;
+  --opportunity-matrix-grid: rgb(92 112 145 / 0.62);
+  --opportunity-matrix-axis-label: rgb(64 78 105 / 0.86);
+  --opportunity-matrix-quadrant-primary: rgb(13 85 215 / 0.08);
+  --opportunity-matrix-quadrant-muted: rgb(13 85 215 / 0.015);
+  --opportunity-matrix-label-weight: 600;
+  --opportunity-matrix-label-strong: rgb(40 55 82 / 0.92);
+  --opportunity-matrix-label-mid: rgb(48 65 96 / 0.84);
+  --opportunity-matrix-label-muted: rgb(64 78 105 / 0.78);
+  --opportunity-matrix-bubble-fill: rgb(62 92 138 / 0.24);
+  --opportunity-matrix-bubble-stroke: rgb(66 93 132 / 0.62);
+  --opportunity-matrix-bubble-label-bg: rgb(255 255 255 / 0.88);
+  --opportunity-matrix-bubble-label-border: rgb(13 85 215 / 0.18);
+  --status-emerald-text: 4 120 87;
+  --status-amber-text: 146 64 14;
+  --status-red-text: 185 28 28;
+  --status-blue-text: 29 78 216;
+  background-color: #ffffff;
+  color: rgb(7 25 58);
+}

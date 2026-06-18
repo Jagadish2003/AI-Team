@@ -4,11 +4,28 @@ import { ArrowRight, Lightbulb } from 'lucide-react';
 import { fetchRunEnrichment, RunEnrichment } from '../../api/enrichmentApi';
 import { useRunContext } from '../../context/RunContext';
 
-const STATIC_SUMMARY =
+export const STATIC_SUMMARY =
   'AgentIQ identified high-ROI "agentic moments" from operational signals ' +
   '(tickets + systems of record). Start with 2\u20133 quick wins in the next 30 days, ' +
   'prove measurable cycle-time reduction, then expand evidence coverage and ' +
   'productionize governance in the 60\u201390 day window.';
+
+/** The "What leadership should do next" checklist. Shared with the PDF export
+ *  so the on-screen card and the downloaded report never drift apart. */
+export const LEADERSHIP_ACTIONS = [
+  'Approve the top 2 quick wins and confirm success metrics.',
+  'Grant required permissions for 30-day pilots (read-only first).',
+  'Assign an executive sponsor and implementation owner per pilot.',
+  'Schedule a 2-week checkpoint with evidence and governance sign-off.',
+];
+
+/** Resolve the executive summary shown in Key Insights: the LLM summary when
+ *  available, otherwise the deterministic static fallback. Mirrored by the PDF. */
+export function resolveExecutiveSummary(enrichment: RunEnrichment | null): string {
+  return enrichment?.available && enrichment.executiveSummary
+    ? enrichment.executiveSummary
+    : STATIC_SUMMARY;
+}
 
 export default function KeyInsights() {
   const { runId } = useRunContext();
@@ -26,9 +43,7 @@ export default function KeyInsights() {
     return () => { cancelled = true; };
   }, [runId]);
 
-  const llmSummary = enrichment?.available && enrichment.executiveSummary
-    ? enrichment.executiveSummary
-    : null;
+  const summary = resolveExecutiveSummary(enrichment);
 
   return (
     <div className="rounded-xl border border-border bg-panel p-4">
@@ -39,7 +54,7 @@ export default function KeyInsights() {
 
       {/* Executive summary — LLM or static fallback */}
       <div className="text-sm text-text leading-relaxed">
-        {llmSummary ?? STATIC_SUMMARY}
+        {summary}
       </div>
 
       {/* What leadership should do next — static, always shown */}
@@ -49,22 +64,12 @@ export default function KeyInsights() {
           <span>What leadership should do next</span>
         </div>
         <ul className="mt-2 space-y-2">
-          <li className="flex items-start gap-2 text-sm text-text">
-            <ArrowRight className="mt-0.5 h-4 w-4 shrink-0 opacity-70" />
-            <span>Approve the top 2 quick wins and confirm success metrics.</span>
-          </li>
-          <li className="flex items-start gap-2 text-sm text-text">
-            <ArrowRight className="mt-0.5 h-4 w-4 shrink-0 opacity-70" />
-            <span>Grant required permissions for 30-day pilots (read-only first).</span>
-          </li>
-          <li className="flex items-start gap-2 text-sm text-text">
-            <ArrowRight className="mt-0.5 h-4 w-4 shrink-0 opacity-70" />
-            <span>Assign an executive sponsor and implementation owner per pilot.</span>
-          </li>
-          <li className="flex items-start gap-2 text-sm text-text">
-            <ArrowRight className="mt-0.5 h-4 w-4 shrink-0 opacity-70" />
-            <span>Schedule a 2-week checkpoint with evidence and governance sign-off.</span>
-          </li>
+          {LEADERSHIP_ACTIONS.map((action) => (
+            <li key={action} className="flex items-start gap-2 text-sm text-text">
+              <ArrowRight className="mt-0.5 h-4 w-4 shrink-0 opacity-70" />
+              <span>{action}</span>
+            </li>
+          ))}
         </ul>
       </div>
     </div>
