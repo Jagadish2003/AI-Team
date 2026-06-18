@@ -172,3 +172,126 @@ export function computeMatrixGeometry(
   const placements = computeLabelPlacements(points, layout);
   return { layout, points, placements };
 }
+
+// ── SVG serialization (used by the PDF export to embed a chart identical to the
+//    on-screen one) ───────────────────────────────────────────────────────────
+
+export interface MatrixPalette {
+  grid: string;
+  axisLabel: string;
+  quadrantPrimary: string;
+  quadrantMuted: string;
+  labelWeight: string | number;
+  labelStrong: string;
+  labelMid: string;
+  labelMuted: string;
+  bubbleFill: string;
+  bubbleStroke: string;
+  bubbleLabelBg: string;
+  bubbleLabelBorder: string;
+  hoverLabel: string;
+}
+
+/** Concrete light-theme colors — mirrors :root.theme-light in styles.css, so a
+ *  chart serialized with this palette looks like the on-screen chart in light
+ *  mode. Legacy rgba() form for maximum SVG-rasterization compatibility. */
+export const LIGHT_MATRIX_PALETTE: MatrixPalette = {
+  grid: 'rgba(92,112,145,0.62)',
+  axisLabel: 'rgba(64,78,105,0.86)',
+  quadrantPrimary: 'rgba(13,85,215,0.08)',
+  quadrantMuted: 'rgba(13,85,215,0.015)',
+  labelWeight: 600,
+  labelStrong: 'rgba(40,55,82,0.92)',
+  labelMid: 'rgba(48,65,96,0.84)',
+  labelMuted: 'rgba(64,78,105,0.78)',
+  bubbleFill: 'rgba(62,92,138,0.24)',
+  bubbleStroke: 'rgba(66,93,132,0.62)',
+  bubbleLabelBg: 'rgba(255,255,255,0.95)',
+  bubbleLabelBorder: 'rgba(13,85,215,0.30)',
+  hoverLabel: 'rgba(7,25,58,0.86)',
+};
+
+function escapeXml(s: string): string {
+  return s
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+/**
+ * Serialize the Effort vs Impact matrix to a standalone SVG string. Mirrors the
+ * markup that SnapshotMatrix renders on-screen (same geometry, same element
+ * structure), but with an explicit palette + font so it rasterizes identically
+ * outside the app. Used by the PDF export.
+ */
+export function buildMatrixSvg(
+  opportunities: OpportunityCandidate[],
+  width: number,
+  height: number,
+  palette: MatrixPalette,
+): string {
+  const { layout, points, placements } = computeMatrixGeometry(opportunities, width, height);
+  const parts: string[] = [];
+
+  parts.push(
+    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${layout.width} ${layout.height}" ` +
+      `width="${layout.width}" height="${layout.height}" ` +
+      `font-family="ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, Arial, sans-serif">`,
+  );
+  parts.push(`<rect x="0" y="0" width="${layout.width}" height="${layout.height}" fill="#ffffff"/>`);
+
+  // Quadrant tints.
+  parts.push(`<rect x="${layout.left}" y="${layout.top}" width="${layout.cx - layout.left}" height="${layout.cy - layout.top}" fill="${palette.quadrantPrimary}"/>`);
+  parts.push(`<rect x="${layout.cx}" y="${layout.top}" width="${layout.rx - layout.cx}" height="${layout.cy - layout.top}" fill="${palette.quadrantMuted}"/>`);
+  parts.push(`<rect x="${layout.left}" y="${layout.cy}" width="${layout.cx - layout.left}" height="${layout.by - layout.cy}" fill="${palette.quadrantMuted}"/>`);
+  parts.push(`<rect x="${layout.cx}" y="${layout.cy}" width="${layout.rx - layout.cx}" height="${layout.by - layout.cy}" fill="${palette.quadrantMuted}"/>`);
+
+  // Plot border + center cross.
+  parts.push(`<rect x="${layout.left}" y="${layout.top}" width="${layout.rx - layout.left}" height="${layout.by - layout.top}" fill="none" stroke="${palette.grid}" stroke-width="1"/>`);
+  parts.push(`<line x1="${layout.cx}" y1="${layout.top}" x2="${layout.cx}" y2="${layout.by}" stroke="${palette.grid}" stroke-width="1"/>`);
+  parts.push(`<line x1="${layout.left}" y1="${layout.cy}" x2="${layout.rx}" y2="${layout.cy}" stroke="${palette.grid}" stroke-width="1"/>`);
+
+  // Axis labels.
+  parts.push(`<text x="${layout.left - 10}" y="${layout.top + 18}" font-size="16" font-weight="600" fill="${palette.axisLabel}" text-anchor="end">HIGH IMPACT</text>`);
+  parts.push(`<text x="${layout.left - 10}" y="${layout.by - 6}" font-size="16" font-weight="600" fill="${palette.axisLabel}" text-anchor="end">LOW IMPACT</text>`);
+  parts.push(`<text x="${layout.left}" y="${layout.height - 10}" font-size="16" font-weight="600" fill="${palette.axisLabel}">LOW EFFORT</text>`);
+  parts.push(`<text x="${layout.rx}" y="${layout.height - 10}" font-size="16" font-weight="600" fill="${palette.axisLabel}" text-anchor="end">HIGH EFFORT</text>`);
+
+  // Bubbles.
+  points.forEach((p) => {
+    parts.push(`<circle cx="${p.x}" cy="${p.y}" r="${p.r}" fill="${palette.bubbleFill}" stroke="${palette.bubbleStroke}" stroke-width="1.5"/>`);
+  });
+
+  // Quadrant labels.
+  const quadLabels: Array<[number, number, string, string]> = [
+    [layout.left + 14, layout.top + 24, 'QUICK WINS', palette.labelStrong],
+    [layout.cx + 14, layout.top + 24, 'HIGH VALUE', palette.labelMid],
+    [layout.left + 14, layout.cy + 24, 'FOUNDATION', palette.labelMuted],
+    [layout.cx + 14, layout.cy + 24, 'LONG TERM', palette.labelMuted],
+  ];
+  quadLabels.forEach(([x, ly, label, fill]) => {
+    parts.push(`<text x="${x}" y="${ly - 1}" font-size="14" font-weight="${palette.labelWeight}" letter-spacing="0.4" fill="${fill}">${label}</text>`);
+  });
+
+  // Non-overlapping labels: leader line + pill above the bubble.
+  placements
+    .filter((lab) => !lab.onBubble)
+    .forEach((lab) => {
+      const originX = clamp(lab.bubbleX, lab.centerX - lab.width / 2, lab.centerX + lab.width / 2);
+      parts.push(`<line x1="${originX}" y1="${lab.pillBottom}" x2="${lab.bubbleX}" y2="${lab.bubbleTop}" stroke="${palette.bubbleLabelBorder}" stroke-width="1"/>`);
+      parts.push(`<rect x="${lab.centerX - lab.width / 2}" y="${lab.pillBottom - 21}" width="${lab.width}" height="21" rx="6" fill="${palette.bubbleLabelBg}" stroke="${palette.bubbleLabelBorder}"/>`);
+      parts.push(`<text x="${lab.centerX}" y="${lab.pillBottom - 6}" font-size="13" font-weight="600" fill="${palette.hoverLabel}" text-anchor="middle">${escapeXml(lab.title)}</text>`);
+    });
+
+  // Overlapping labels: pill drawn on the bubble.
+  placements
+    .filter((lab) => lab.onBubble)
+    .forEach((lab) => {
+      parts.push(`<rect x="${lab.onX - lab.width / 2}" y="${lab.onY - 10}" width="${lab.width}" height="20" rx="5" fill="${palette.bubbleLabelBg}" stroke="${palette.bubbleLabelBorder}"/>`);
+      parts.push(`<text x="${lab.onX}" y="${lab.onY + 4}" font-size="12" font-weight="600" fill="${palette.hoverLabel}" text-anchor="middle">${escapeXml(lab.title)}</text>`);
+    });
+
+  parts.push('</svg>');
+  return parts.join('');
+}
