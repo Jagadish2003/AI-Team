@@ -1,4 +1,4 @@
-"""User authentication logic — AUTH-1 / AT-233, AUTH-2 / AT-352/353.
+"""User authentication logic — AUTH-1 / AT-233, AUTH-2 / AT-352/353, AT-354.
 
 The identity/credential layer behind the /api/auth/* routes (routes_auth.py is
 AT-234). Pure functions + raw-SQL data access via app.db.connect(), mirroring
@@ -642,6 +642,13 @@ def login(email: str, password: str, ip_address: str) -> dict:
     InvalidCredentialsError with an identical message for every cause and always
     performs one bcrypt verification, so timing does not leak account existence
     (AC5). RateLimitError is raised before any credential check (AC6/AC7).
+
+    AUTH-2 / AT-354: after credential verification, the org's approval_status is
+    checked. pending_approval raises OrgPendingApprovalError (403); rejected raises
+    OrgRejectedError (403). Both are distinct from the generic 401 used for bad
+    credentials. The check occurs after password verification deliberately — this
+    avoids leaking whether a pending/rejected org email exists to callers who supply
+    the wrong password.
     """
     ensure_auth_tables()
     email = email.strip().lower()
@@ -661,6 +668,21 @@ def login(email: str, password: str, ip_address: str) -> dict:
     if not usable or not password_ok:
         record_login_attempt(email, ip_address, succeeded=False)
         raise InvalidCredentialsError()
+
+    # Credentials are valid — now enforce the org approval gate (AUTH-2 / AT-354).
+    approval_status = _get_org_approval_status(membership["org_id"])
+    if approval_status == "pending_approval":
+        record_login_attempt(email, ip_address, succeeded=False)
+        raise OrgPendingApprovalError(
+            "Your organisation is awaiting approval. "
+            "You will receive an email once it is reviewed."
+        )
+    if approval_status == "rejected":
+        record_login_attempt(email, ip_address, succeeded=False)
+        raise OrgRejectedError(
+            "This organisation registration was not approved. "
+            "Contact your CloudFulcrum representative."
+        )
 
     record_login_attempt(email, ip_address, succeeded=True)
     _update_last_login(user["id"])
@@ -726,6 +748,24 @@ def get_org_name(org_id: str | None) -> str | None:
     finally:
         con.close()
     return row[0] if row else None
+
+
+def _get_org_approval_status(org_id: str) -> str:
+    """Return the org's approval_status. Falls back to 'active' when the column
+    does not exist (pre-migration environments) so legacy orgs are never blocked."""
+    con = db.connect()
+    try:
+        cur = con.cursor()
+        cur.execute("SELECT approval_status FROM orgs WHERE id = %s", (org_id,))
+        row = cur.fetchone()
+    except Exception:
+        # Column absent (pre-T1 DB) — treat as active so old envs keep working.
+        return "active"
+    finally:
+        con.close()
+    if row is None:
+        return "active"
+    return row[0] if row[0] else "active"
 
 
 def _get_workspace_member(user_id: str) -> dict | None:
