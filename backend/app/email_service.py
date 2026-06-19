@@ -29,6 +29,9 @@ from __future__ import annotations
 
 import logging
 import os
+import smtplib
+from email.message import EmailMessage
+from email.utils import formataddr
 from functools import lru_cache
 from pathlib import Path
 
@@ -42,6 +45,7 @@ DEFAULT_BASE_URL = "http://localhost:3000"
 SENDGRID_API_URL = "https://api.sendgrid.com/v3/mail/send"
 _TEMPLATES_DIR = Path(__file__).resolve().parent / "templates"
 _HTTP_TIMEOUT_SECONDS = 10
+_SMTP_TIMEOUT_SECONDS = 10
 
 
 # ---------------------------------------------------------------------------
@@ -119,6 +123,8 @@ def send_email(to: str, subject: str, html_body: str) -> bool:
             return _send_sendgrid(to, subject, html_body)
         if provider == "ses":
             return _send_ses(to, subject, html_body)
+        if provider in {"smtp", "office365", "smtp.office365.com"}:
+            return _send_smtp(to, subject, html_body)
         logger.error("EMAIL_PROVIDER not configured or unknown: %r", provider)
         return False
     except Exception:  # defensive backstop — never propagate to the auth route
@@ -176,6 +182,66 @@ def _send_ses(to: str, subject: str, html_body: str) -> bool:
         return True
     logger.error("SES send to %s returned no MessageId: %r", to, resp)
     return False
+
+
+def _env_truthy(name: str, default: bool = False) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+def _smtp_host(provider: str) -> str:
+    configured = os.getenv("SMTP_HOST", "").strip()
+    if configured:
+        return configured
+    # Accept the Office 365 host if it is accidentally placed in EMAIL_PROVIDER.
+    if "." in provider:
+        return provider
+    return ""
+
+
+def _smtp_port() -> int:
+    raw = os.getenv("SMTP_PORT", "587").strip()
+    try:
+        return int(raw)
+    except ValueError:
+        logger.error("SMTP_PORT must be an integer; got %r", raw)
+        return 0
+
+
+def _send_smtp(to: str, subject: str, html_body: str) -> bool:
+    provider = _provider()
+    host = _smtp_host(provider)
+    port = _smtp_port()
+    username = os.getenv("SMTP_USERNAME", "").strip()
+    password = os.getenv("SMTP_PASSWORD", "")
+
+    if not host:
+        logger.error("SMTP_HOST is not set; cannot email %s", to)
+        return False
+    if port <= 0:
+        return False
+    if not username:
+        logger.error("SMTP_USERNAME is not set; cannot email %s", to)
+        return False
+    if not password:
+        logger.error("SMTP_PASSWORD is not set; cannot email %s", to)
+        return False
+
+    message = EmailMessage()
+    message["Subject"] = subject
+    message["From"] = formataddr((_from_name(), _from_email()))
+    message["To"] = to
+    message.set_content("This message contains HTML content.")
+    message.add_alternative(html_body, subtype="html")
+
+    with smtplib.SMTP(host, port, timeout=_SMTP_TIMEOUT_SECONDS) as smtp:
+        if _env_truthy("SMTP_USE_STARTTLS", default=True):
+            smtp.starttls()
+        smtp.login(username, password)
+        smtp.send_message(message)
+    return True
 
 
 # ---------------------------------------------------------------------------

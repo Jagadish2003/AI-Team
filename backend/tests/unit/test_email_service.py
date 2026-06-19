@@ -103,6 +103,94 @@ def test_ses_provider_without_boto3_returns_false(monkeypatch, caplog):
 # ── render_template (Jinja2) ──────────────────────────────────────────────────
 
 
+def test_send_email_returns_true_on_smtp_office365(monkeypatch):
+    monkeypatch.setenv("EMAIL_PROVIDER", "smtp")
+    monkeypatch.setenv("SMTP_HOST", "smtp.office365.com")
+    monkeypatch.setenv("SMTP_PORT", "587")
+    monkeypatch.setenv("SMTP_USERNAME", "notifications@example.com")
+    monkeypatch.setenv("SMTP_PASSWORD", "secret-from-env")
+    monkeypatch.setenv("SMTP_USE_STARTTLS", "true")
+    monkeypatch.setenv("EMAIL_FROM", "notifications@example.com")
+    captured = {}
+
+    class FakeSMTP:
+        def __init__(self, host, port, timeout=None):
+            captured.update(host=host, port=port, timeout=timeout)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            captured["closed"] = True
+
+        def starttls(self):
+            captured["starttls"] = True
+
+        def login(self, username, password):
+            captured.update(username=username, password=password)
+
+        def send_message(self, message):
+            captured["message"] = message
+
+    monkeypatch.setattr(email_service.smtplib, "SMTP", FakeSMTP)
+
+    assert email_service.send_email("user@example.com", "Hi", "<p>hi</p>") is True
+    assert captured["host"] == "smtp.office365.com"
+    assert captured["port"] == 587
+    assert captured["timeout"] == email_service._SMTP_TIMEOUT_SECONDS
+    assert captured["starttls"] is True
+    assert captured["username"] == "notifications@example.com"
+    assert captured["password"] == "secret-from-env"
+    assert captured["message"]["To"] == "user@example.com"
+    assert captured["message"]["From"] == "AgentIQ <notifications@example.com>"
+    assert "<p>hi</p>" in captured["message"].get_body(("html",)).get_content()
+
+
+def test_send_email_false_when_smtp_password_missing(monkeypatch, caplog):
+    monkeypatch.setenv("EMAIL_PROVIDER", "smtp")
+    monkeypatch.setenv("SMTP_HOST", "smtp.office365.com")
+    monkeypatch.setenv("SMTP_PORT", "587")
+    monkeypatch.setenv("SMTP_USERNAME", "notifications@example.com")
+    monkeypatch.delenv("SMTP_PASSWORD", raising=False)
+
+    with caplog.at_level(logging.ERROR, logger="app.email_service"):
+        assert email_service.send_email("user@example.com", "s", "<p>b</p>") is False
+    assert any("SMTP_PASSWORD" in r.getMessage() for r in caplog.records)
+
+
+def test_send_email_accepts_office365_host_as_provider(monkeypatch):
+    monkeypatch.setenv("EMAIL_PROVIDER", "smtp.office365.com")
+    monkeypatch.delenv("SMTP_HOST", raising=False)
+    monkeypatch.setenv("SMTP_PORT", "587")
+    monkeypatch.setenv("SMTP_USERNAME", "notifications@example.com")
+    monkeypatch.setenv("SMTP_PASSWORD", "secret-from-env")
+    captured = {}
+
+    class FakeSMTP:
+        def __init__(self, host, port, timeout=None):
+            captured.update(host=host, port=port)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return None
+
+        def starttls(self):
+            return None
+
+        def login(self, username, password):
+            return None
+
+        def send_message(self, message):
+            return None
+
+    monkeypatch.setattr(email_service.smtplib, "SMTP", FakeSMTP)
+
+    assert email_service.send_email("user@example.com", "Hi", "<p>hi</p>") is True
+    assert captured["host"] == "smtp.office365.com"
+
+
 def test_render_template_renders_and_autoescapes():
     html = email_service.render_template(
         "invite.html",
