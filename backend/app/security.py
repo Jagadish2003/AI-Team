@@ -1,5 +1,4 @@
 import os
-from collections.abc import Callable
 
 from fastapi import Depends, HTTPException
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -82,25 +81,3 @@ def require_auth(creds: HTTPAuthorizationCredentials = Depends(bearer)) -> str:
     except Exception:
         raise HTTPException(status_code=401, detail="Unauthorized")
     return token
-
-
-def require_role(required_role: str) -> Callable[[str], str]:
-    """Return a FastAPI dependency that enforces a minimum role."""
-    required = required_role.strip().lower()
-    required_level = ROLE_LEVELS.get(required)
-    if required_level is None:
-        raise ValueError(f"Unknown role: {required_role}")
-
-    def dependency(token: str = Depends(require_auth)) -> str:
-        if token in _token_roles():
-            role = _token_roles().get(token)
-            token_roles = _DEV_TOKEN_ROLES if token == DEV_JWT else _role_set_for(role)
-        else:
-            # AUTH-1 JWT — role comes from the verified token's claim.
-            role = _jwt_role(token)
-            token_roles = _role_set_for(role)
-        if role is None or required not in token_roles:
-            raise HTTPException(status_code=403, detail="Forbidden")
-        return role
-
-    return dependency

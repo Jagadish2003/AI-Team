@@ -33,3 +33,5 @@ backend/token_generation/strs/server_strs.key
 backend/token_generation/strs/strs_token.json
 backend/token_generation/life_sciences/server_ls.key
 backend/token_generation/life_sciences/ls_token.json
+backend/token_generation/rlm/server_rlm.key
+backend/token_generation/rlm/rlm_token.json

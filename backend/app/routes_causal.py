@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import json
 import logging
-import sqlite3
 
 from fastapi import APIRouter, Depends, FastAPI, HTTPException
 
@@ -33,22 +32,12 @@ logger = logging.getLogger(__name__)
 
 
 def ensure_causal_hypotheses_table() -> None:
-    """Ensure the causal_hypotheses table and its indexes exist.
+    """No-op. The causal_hypotheses table is provisioned externally.
 
-    Idempotent — all DDL statements use CREATE TABLE/INDEX IF NOT EXISTS.
-    Called once at registration time, never per-request.
+    Created by database/provision/provision.sh; the application no longer
+    creates this table at runtime.
     """
-    con = db.connect()
-    try:
-        for ddl in ALL_CAUSAL_HYPOTHESES_DDL:
-            con.execute(ddl)
-        con.commit()
-    except Exception:
-        con.rollback()
-        logger.exception("ensure_causal_hypotheses_table failed")
-        raise
-    finally:
-        con.close()
+    return None
 
 
 @router.get(
@@ -73,14 +62,15 @@ def get_causal_hypothesis(opportunity_id: str) -> dict:
 
     con = db.connect()
     try:
-        con.row_factory = sqlite3.Row
+        cur = con.cursor()
 
         # Phase 1 — does any hypothesis row exist for this opportunity_id?
         # Deliberately NOT filtered by org_id to detect cross-org cases.
-        any_row = con.execute(
-            "SELECT org_id FROM causal_hypotheses WHERE opportunity_id = ? LIMIT 1",
+        cur.execute(
+            "SELECT org_id FROM causal_hypotheses WHERE opportunity_id = %s LIMIT 1",
             (opportunity_id,),
-        ).fetchone()
+        )
+        any_row = cur.fetchone()
 
         if any_row is not None and any_row["org_id"] != org_id:
             # Opportunity exists but belongs to a different org.
@@ -88,7 +78,7 @@ def get_causal_hypothesis(opportunity_id: str) -> dict:
             raise HTTPException(status_code=404, detail="not found")
 
         # Phase 2 — fetch most-recent hypothesis for this org.
-        row = con.execute(
+        cur.execute(
             """
             SELECT id, org_id, opportunity_id, run_id,
                    cause_chain, evidence_links, temporal_support,
@@ -96,13 +86,14 @@ def get_causal_hypothesis(opportunity_id: str) -> dict:
                    preliminary, preliminary_reason, gate_run_count,
                    generated_by, created_at
             FROM causal_hypotheses
-            WHERE opportunity_id = ?
-              AND org_id = ?
+            WHERE opportunity_id = %s
+              AND org_id = %s
             ORDER BY created_at DESC
             LIMIT 1
             """,
             (opportunity_id, org_id),
-        ).fetchone()
+        )
+        row = cur.fetchone()
 
         if row is None:
             if any_row is None:

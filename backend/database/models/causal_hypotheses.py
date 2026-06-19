@@ -53,11 +53,12 @@ CREATE_CH_IDX_ORG_OPP = """
 """
 
 # Partial index for gate-monitoring queries that find pending hypotheses
-# without scanning confirmed rows. SQLite uses integer 1 for True.
+# without scanning confirmed rows. PostgreSQL BOOLEAN predicate (AT-288 Fix 1):
+# `WHERE preliminary` instead of SQLite's integer `WHERE preliminary = 1`.
 CREATE_CH_IDX_ORG_PRELIMINARY = """
     CREATE INDEX IF NOT EXISTS idx_ch_org_preliminary
         ON causal_hypotheses (org_id, preliminary)
-        WHERE preliminary = 1
+        WHERE preliminary
 """
 
 ALL_CAUSAL_HYPOTHESES_DDL: tuple[str, ...] = (
@@ -115,9 +116,10 @@ class CausalHypothesis:
             "evidence_links": json.dumps(self.evidence_links),
             "temporal_support": json.dumps(self.temporal_support) if self.temporal_support is not None else None,
             "confidence": self.confidence,
-            "inferred": int(self.inferred),
+            # PostgreSQL BOOLEAN columns — bind real bools, not 0/1.
+            "inferred": bool(self.inferred),
             "falsifiability_condition": self.falsifiability_condition,
-            "preliminary": int(self.preliminary),
+            "preliminary": bool(self.preliminary),
             "preliminary_reason": self.preliminary_reason,
             "gate_run_count": self.gate_run_count,
             "generated_by": self.generated_by,

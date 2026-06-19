@@ -38,13 +38,13 @@ def upgrade() -> None:
             detector_id          VARCHAR(128) NOT NULL,
             signal_key           VARCHAR(256) NOT NULL,
             metric_name          VARCHAR(128) NOT NULL,
-            metric_value         DOUBLE       NOT NULL,
-            threshold            DOUBLE,
+            metric_value         DOUBLE PRECISION NOT NULL,
+            threshold            DOUBLE PRECISION,
             fired                BOOLEAN      NOT NULL,
             signal_source        VARCHAR(64)  NOT NULL,
             captured_at          TIMESTAMP    NOT NULL,
-            baseline_mean        DOUBLE,
-            baseline_stddev      DOUBLE,
+            baseline_mean        DOUBLE PRECISION,
+            baseline_stddev      DOUBLE PRECISION,
             baseline_window_days INTEGER,
             baseline_calculated_at TIMESTAMP
         )

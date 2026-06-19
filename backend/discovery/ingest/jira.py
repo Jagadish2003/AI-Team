@@ -666,7 +666,6 @@ def ingest(jira_client: Optional[JiraClient] = None) -> Dict[str, Any]:
 
     try:
         issue_metrics = get_issue_metrics(jira_client)
-        print(issue_metrics)
         sprint_velocity = get_sprint_velocity(jira_client)
 
         lending_correlation = get_lending_correlation(jira_client)
@@ -855,7 +854,6 @@ def get_lending_correlation(
             kw_jql = " OR ".join(f'text ~ "{kw}"' for kw in ALL_LENDING_KEYWORDS[:10])
             # jql = f"({kw_jql}) AND created >= -{WINDOW_DAYS}d ORDER BY created DESC"
             jql = f'project = {os.getenv("JIRA_PROJECT_KEY", "AIC")} AND ({kw_jql}) AND created >= -{WINDOW_DAYS}d ORDER BY created DESC'
-            print(f"Jira lending correlation JQL: {jql}")
             raw_issues = client.search_issues(
                 jql=jql,
                 fields=[

@@ -161,22 +161,39 @@ def test_runs_list_is_org_scoped_between_two_orgs(client):
 
 
 def test_alembic_chain_upgrade_then_downgrade_is_clean():
-    tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
-    tmp.close()
-    previous_db_path = os.environ.get("DB_PATH")
-    os.environ["DB_PATH"] = tmp.name
+    """The 0001→0007 Alembic chain upgrades to head and downgrades to base
+    cleanly. AT-288 / Fix 1: runs in an isolated throwaway PostgreSQL schema
+    (via libpq PGOPTIONS search_path) so the destructive `downgrade base` never
+    touches the shared test database the rest of the suite depends on.
+    """
+    import psycopg2
+
+    base_url = os.environ["DATABASE_URL"]
+    schema = f"alembic_chain_{uuid.uuid4().hex[:8]}"
+
+    admin = psycopg2.connect(base_url)
+    admin.autocommit = True
+    with admin.cursor() as cur:
+        cur.execute(f'CREATE SCHEMA "{schema}"')
+    admin.close()
+
+    old_pgoptions = os.environ.get("PGOPTIONS")
+    os.environ["PGOPTIONS"] = f"-c search_path={schema}"
     try:
         cfg = AlembicConfig(str(BACKEND_DIR / "alembic.ini"))
         cfg.set_main_option("script_location", str(BACKEND_DIR / "migrations"))
+        # Skip env.py's fileConfig() so it doesn't disable active loggers mid-suite.
+        cfg.config_file_name = None
         # A broken down_revision chain raises MultipleHeads / KeyError here.
         alembic_command.upgrade(cfg, "head")
         alembic_command.downgrade(cfg, "base")
     finally:
-        if previous_db_path is not None:
-            os.environ["DB_PATH"] = previous_db_path
+        if old_pgoptions is None:
+            os.environ.pop("PGOPTIONS", None)
         else:
-            os.environ.pop("DB_PATH", None)
-        try:
-            os.remove(tmp.name)
-        except OSError:
-            pass
+            os.environ["PGOPTIONS"] = old_pgoptions
+        admin = psycopg2.connect(base_url)
+        admin.autocommit = True
+        with admin.cursor() as cur:
+            cur.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+        admin.close()

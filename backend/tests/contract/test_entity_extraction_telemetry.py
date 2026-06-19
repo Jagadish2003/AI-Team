@@ -91,6 +91,7 @@ class TestRegistryAndTypedDict:
 def _make_mock_entity(resolution_status: str = "resolved") -> MagicMock:
     """Return a minimal Entity mock with the given resolution_status."""
     e = MagicMock()
+    e.id = f"mock-entity-{id(e)}"
     e.resolution_status = resolution_status
     e.run_count = 5
     return e
@@ -148,8 +149,9 @@ class TestEventEmission:
         assert event_type == "entity.extraction_completed"
 
     def test_payload_contains_entity_count(self):
-        """Payload entity_count equals the total number of extracted entities."""
+        """Payload entity_count equals the number of unique resolved entities."""
         resolved = _make_mock_entity("resolved")
+        resolved.id = "entity-001"
 
         with patch("app.entity_extractor._extract_salesforce_entities", return_value=[resolved, resolved]), \
              patch("app.entity_extractor._extract_jira_entities", return_value=[]), \
@@ -168,14 +170,15 @@ class TestEventEmission:
             )
 
         _, payload = mock_record.call_args[0]
-        assert payload["entity_count"] == 2
+        assert payload["entity_count"] == 1
 
     def test_payload_contains_ambiguous_count(self):
         """ambiguous_count reflects entities with resolution_status='ambiguous'."""
         resolved = _make_mock_entity("resolved")
-        ambiguous = _make_mock_entity("ambiguous")
+        ambiguous_1 = _make_mock_entity("ambiguous")
+        ambiguous_2 = _make_mock_entity("ambiguous")
 
-        with patch("app.entity_extractor._extract_salesforce_entities", return_value=[resolved, ambiguous, ambiguous]), \
+        with patch("app.entity_extractor._extract_salesforce_entities", return_value=[resolved, ambiguous_1, ambiguous_2]), \
              patch("app.entity_extractor._extract_jira_entities", return_value=[]), \
              patch("app.entity_extractor._extract_servicenow_entities", return_value=[]), \
              patch("app.entity_extractor._extract_detector_entities", return_value=[]), \

@@ -51,5 +51,39 @@ describe("T3-S13-A RelationshipTracePanel", () => {
 
     const scrollArea = screen.getByTestId("relationship-trace-scroll");
     expect(scrollArea).toHaveClass("max-h-[13.5rem]", "overflow-y-auto", "pr-1");
+    expect(screen.getByTestId("relationship-trace-grid")).toHaveClass(
+      "grid",
+      "grid-cols-1",
+      "gap-2",
+      "sm:grid-cols-2"
+    );
+  });
+
+  it("renders an exact relationship only once", () => {
+    render(
+      <RelationshipTracePanel
+        relationships={[RELATIONSHIPS[0], RELATIONSHIPS[0], RELATIONSHIPS[1]]}
+      />
+    );
+
+    expect(screen.getByText("2 linked")).toBeInTheDocument();
+    expect(
+      screen.getAllByText("Sarah Chen owns Loan Application 1042")
+    ).toHaveLength(1);
+  });
+
+  it("keeps the same person when the relationship target is different", () => {
+    const anotherLoan: RelationshipSummary = {
+      ...RELATIONSHIPS[0],
+      to_entity_name: "Loan Application 2048",
+    };
+
+    render(
+      <RelationshipTracePanel relationships={[RELATIONSHIPS[0], anotherLoan]} />
+    );
+
+    expect(screen.getByText("2 linked")).toBeInTheDocument();
+    expect(screen.getByText("Sarah Chen owns Loan Application 1042")).toBeInTheDocument();
+    expect(screen.getByText("Sarah Chen owns Loan Application 2048")).toBeInTheDocument();
   });
 });
