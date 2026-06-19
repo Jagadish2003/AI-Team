@@ -35,8 +35,15 @@ def test_runner_passes_approval_processes_to_ncino(monkeypatch):
     assert captured["preloaded"] == expected
 
 
-def test_runner_defaults_to_empty_list_when_no_approval_processes(monkeypatch):
-    """When sf_data has no approval_processes, runner passes an empty list (never None)."""
+def test_runner_forwards_none_when_no_approval_processes(monkeypatch):
+    """When sf_data has no approval_processes, runner forwards None — not [].
+
+    CS-4 / AT-310-fix (review issue #2): forwarding an empty list when the
+    Salesforce CRM pass produced no approval data would suppress the nCino
+    ingestor's own independent ProcessInstance fetch, silently dropping nCino
+    approval signals. Passing None instead preserves that fallback (ncino.ingest
+    only reuses preloaded data when it is genuinely provided).
+    """
     from discovery import runner
     from discovery.ingest import ncino, salesforce
 
@@ -53,5 +60,5 @@ def test_runner_defaults_to_empty_list_when_no_approval_processes(monkeypatch):
 
     runner.run("offline", pack="ncino", systems=["salesforce"])
 
-    # Empty list (not None) => ncino.ingest() skips the duplicate fetch.
-    assert captured["preloaded"] == []
+    # None (not []) => ncino.ingest() keeps its independent ProcessInstance fetch.
+    assert captured["preloaded"] is None

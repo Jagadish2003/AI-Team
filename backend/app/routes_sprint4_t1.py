@@ -40,14 +40,13 @@ class ComputeResponse(BaseModel):
     counts: Dict[str, int] = Field(default_factory=dict)
 
 
-class RunStatus(BaseModel):
-    runId: str
-    status: str  # running|complete|failed
-    startedAt: str
-    updatedAt: str
-    error: Optional[str] = None
-    counts: Dict[str, int] = Field(default_factory=dict)
-    current_step: Optional[str] = None  # last step written by db.update_run_step()
+# NOTE (CS-4 / AT-313): the run status model + GET /api/runs/{run_id}/status
+# endpoint live in routes_sprint4_t2.py (StatusResponse / run_status), which is
+# registered before this module in main.py and therefore owns that path. The
+# duplicate RunStatus model and get_status route that used to live here were
+# removed so there is exactly one status implementation (it already returns
+# current_step and failed_steps). This module keeps only the /compute and
+# /connector-health routes.
 
 
 def _now_iso() -> str:
@@ -85,13 +84,6 @@ def _set_status(run_id: str, status: str, counts: Optional[Dict[str, int]] = Non
         run = db.run_get(run_id)
         run["status"] = payload
         db.run_set(run_id, run)
-
-
-def _get_status(run_id: str) -> Dict[str, Any]:
-    if hasattr(db, "run_kv_get"):
-        return db.run_kv_get("status", run_id, {})
-    run = db.run_get(run_id)
-    return run.get("status") or {}
 
 
 def _append_event(run_id: str, stage: str, message: str, level: str = "INFO") -> None:
@@ -423,26 +415,9 @@ def register_sprint4_t1_routes(app: FastAPI) -> None:
             counts={"opportunities": 0, "evidence": 0},
         )
 
-    @app.get(
-        "/api/runs/{run_id}/status",
-        response_model=RunStatus,
-        dependencies=[Depends(require_auth), Depends(require_role("viewer"))],
-    )
-    async def get_status(run_id: str) -> RunStatus:
-        run = db.run_get(run_id)
-        if run is None:
-            raise HTTPException(status_code=404, detail=f"Run '{run_id}' not found")
-
-        st = _get_status(run_id) or {}
-        if not st:
-            # If status not written yet, treat as running (run exists)
-            st = {"runId": run_id, "status": run.get("status") or "running", "startedAt": run.get("startedAt") or _now_iso(), "updatedAt": _now_iso(), "counts": {}}
-
-        # current_step is written into the run payload by db.update_run_step()
-        # (CS-4 T3). Read it from the run record so polling endpoints get a
-        # real-time view of which discovery stage is active. None when absent.
-        current_step = run.get("current_step")
-        return RunStatus(**{**st, "current_step": current_step})
+    # GET /api/runs/{run_id}/status is owned by routes_sprint4_t2.py (see the
+    # module note above) — intentionally not registered here to avoid a
+    # duplicate, divergent implementation of the same path.
 
     @app.get(
         "/api/runs/{run_id}/connector-health",

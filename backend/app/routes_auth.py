@@ -1,4 +1,4 @@
-"""Auth API routes — AUTH-1 / AT-234.
+﻿"""Auth API routes â€” AUTH-1 / AT-234.
 
 All 7 /api/auth/* endpoints. Auth dependency uses verify_jwt (not the legacy
 static-token require_auth) so dynamic JWT tokens issued by register/login/
@@ -14,12 +14,26 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Dict
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request, Response
+from fastapi import (
+    APIRouter,
+    BackgroundTasks,
+    Depends,
+    FastAPI,
+    HTTPException,
+    Request,
+    Response,
+)
 from fastapi.responses import HTMLResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import AliasChoices, BaseModel, Field
 
 from app import db
+from app.email_service import (
+    send_invite_email,
+    send_org_approved_email,
+    send_org_rejected_email,
+    send_password_reset_email,
+)
 from app.auth.user_auth import (
     EmailAlreadyExistsError,
     InvalidCredentialsError,
@@ -36,6 +50,7 @@ from app.auth.user_auth import (
     logout_token,
     mark_password_changed,
     register_org_and_owner,
+    validate_password_strength,
     verify_jwt,
     verify_password,
 )
@@ -48,6 +63,11 @@ _bearer = HTTPBearer(auto_error=False)
 _INVITE_KV_PREFIX = "auth_invite"
 INVITE_TTL_HOURS = 72
 
+# CS-3 forgot/reset-password: the reset token's SHA-256 hash + expiry live in the
+# users table (reset_token_hash / reset_token_expires_at), per the doc. The raw
+# token is never stored. One-hour expiry.
+RESET_TTL_HOURS = 1
+
 AUTH_ROUTE_PATHS = {
     "/api/auth/register",
     "/api/auth/login",
@@ -56,8 +76,10 @@ AUTH_ROUTE_PATHS = {
     "/api/auth/invite",
     "/api/auth/accept-invite",
     "/api/auth/change-password",
+    "/api/auth/forgot-password",
     "/api/auth/org-approval/approve",
     "/api/auth/org-approval/reject",
+    "/api/auth/reset-password",
 }
 
 
@@ -92,6 +114,17 @@ class AcceptInviteRequest(BaseModel):
 
 class ChangePasswordRequest(BaseModel):
     current_password: str
+    new_password: str
+
+
+class ForgotPasswordRequest(BaseModel):
+    email: str
+
+
+class ResetPasswordRequest(BaseModel):
+    # CS-3 Section 5 (and the frontend authApi.resetPassword) send `reset_token`.
+    # Accept `token` too as a backward-compatible alias, mirroring AcceptInvite.
+    reset_token: str = Field(validation_alias=AliasChoices("reset_token", "token"))
     new_password: str
 
 
@@ -185,18 +218,41 @@ def _validate_invite(raw_token: str) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Password strength enforcement (CS-3) â€” the API security boundary.
+# ---------------------------------------------------------------------------
+
+
+def _enforce_password_strength(password: str) -> None:
+    """Reject a weak password with HTTP 422 (CS-3). No-op when it is valid.
+
+    Shared by the password-CREATION routes (register, accept-invite,
+    reset-password). The 422 body lists exactly what is missing, e.g.
+    "Password must contain: at least one uppercase letter, at least one special
+    character". Login NEVER calls this â€” existing users with pre-CS-3 passwords
+    must still authenticate.
+    """
+    errors = validate_password_strength(password)
+    if errors:
+        raise HTTPException(
+            status_code=422,
+            detail="Password must contain: " + ", ".join(errors),
+        )
+
+
+# ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
 
 
 @router.post("/register", status_code=201)
 def register(body: RegisterRequest) -> Dict[str, Any]:
-    """AUTH-2: creates org + user + workspace_member in pending_approval state.
+    """AUTH-2: creates org + owner member in pending_approval state.
 
-    Returns {status: 'pending_approval', message: '...'} — no JWT is issued.
-    The org is inactive until a CloudFulcrum admin approves via email link.
+    CS-3: a weak password is rejected with 422 before any org/user is created.
+    AUTH-2: no JWT is issued until a CloudFulcrum admin approves the org.
     """
     ensure_auth_tables()
+    _enforce_password_strength(body.password)
     try:
         result = register_org_and_owner(
             org_name=body.org_name,
@@ -212,7 +268,7 @@ def register(body: RegisterRequest) -> Dict[str, Any]:
 
 @router.post("/login")
 def login_endpoint(body: LoginRequest, request: Request) -> Dict[str, Any]:
-    """AC4/AC5: rate-limit → validate → read membership → return JWT."""
+    """AC4/AC5: rate-limit â†’ validate â†’ read membership â†’ return JWT."""
     ensure_auth_tables()
     ip = request.client.host if request.client else "unknown"
     try:
@@ -291,40 +347,64 @@ def invite(
     body: InviteRequest,
     owner_payload: dict = Depends(_require_owner),
 ) -> Dict[str, Any]:
-    """AC10: non-production returns invite_token; production returns 501."""
-    environment = os.getenv("ENVIRONMENT", "").strip().lower()
-    if environment == "production":
-        raise HTTPException(
-            status_code=501,
-            detail="Email delivery not configured. Invite tokens cannot be issued in production.",
-        )
+    """Create an invite and email the invitee an accept-invite link (CS-3 T7).
 
+    Always returns 201. The invitation email is sent via send_invite_email and is
+    non-blocking (AC14): if delivery fails the route still returns 201 and the
+    failure is logged. The response reports whether the email was sent
+    (``email_sent``).
+
+    Token visibility (CS-3 Section 4): in non-production the raw ``invite_token``
+    is included for testing convenience; in production it is omitted so a real
+    token is never returned in an API response â€” invitees receive it only by
+    email. The pre-CS-3 production 501 stub is removed: email delivery is now a
+    real supported path.
+    """
     if body.role not in ("owner", "analyst", "viewer"):
         raise HTTPException(status_code=400, detail="role must be owner, analyst, or viewer")
 
     ensure_auth_tables()
     org_id = owner_payload.get("org_id")
     email = body.email.strip().lower()
+    now = db.now_iso()
+    is_active = False
 
     con = db.connect()
     try:
         cur = con.cursor()
         cur.execute("SELECT id, is_active FROM users WHERE email = %s", (email,))
         existing_user = cur.fetchone()
-    finally:
-        con.close()
 
-    if existing_user and bool(existing_user[1]):
-        raise HTTPException(status_code=409, detail="Email already has an active account")
+        if existing_user:
+            user_id = existing_user[0]
+            is_active = bool(existing_user[1])
 
-    if existing_user:
-        user_id = existing_user[0]
-    else:
-        user_id = str(uuid4())
-        now = db.now_iso()
-        con = db.connect()
-        try:
-            cur = con.cursor()
+            cur.execute(
+                "SELECT role FROM workspace_members WHERE org_id = %s AND user_id = %s",
+                (org_id, user_id),
+            )
+            current_membership = cur.fetchone()
+            if current_membership:
+                raise HTTPException(
+                    status_code=409,
+                    detail="Email is already a member of this workspace",
+                )
+
+            cur.execute(
+                "SELECT org_id FROM workspace_members WHERE user_id = %s LIMIT 1",
+                (user_id,),
+            )
+            other_membership = cur.fetchone()
+            if other_membership:
+                raise HTTPException(status_code=409, detail="Email already belongs to another workspace")
+
+            cur.execute(
+                "INSERT INTO workspace_members (org_id, user_id, role, created_at) "
+                "VALUES (%s, %s, %s, %s)",
+                (org_id, user_id, body.role, now),
+            )
+        else:
+            user_id = str(uuid4())
             cur.execute(
                 "INSERT INTO users (id, email, password_hash, is_active, created_at) "
                 "VALUES (%s, %s, '', FALSE, %s)",
@@ -335,14 +415,33 @@ def invite(
                 "VALUES (%s, %s, %s, %s) ON CONFLICT DO NOTHING",
                 (org_id, user_id, body.role, now),
             )
-            con.commit()
-        finally:
-            con.close()
+        con.commit()
+    finally:
+        con.close()
+
+    if is_active:
+        return {}
 
     raw_token = str(uuid4())
     _store_invite(raw_token, user_id=user_id, org_id=org_id, role=body.role)
 
-    return {"invite_token": raw_token}
+    # CS-3 (T7/AC10): email the invitee the accept-invite link. Non-blocking
+    # (AC14) â€” send_invite_email never raises, but we also guard here so the
+    # invite always returns 201 even if email delivery is misconfigured.
+    org_name = get_org_name(org_id)
+    try:
+        email_sent = send_invite_email(email, raw_token, org_name, body.role)
+    except Exception:  # pragma: no cover - email helper already swallows errors
+        logger.exception("invite email dispatch failed (non-blocking)")
+        email_sent = False
+
+    # Token visibility: non-production returns the raw token for testing; production
+    # never returns it (invitees receive it by email only).
+    environment = os.getenv("ENVIRONMENT", "").strip().lower()
+    response: Dict[str, Any] = {"email_sent": email_sent}
+    if environment != "production":
+        response["invite_token"] = raw_token
+    return response
 
 
 @router.get("/invite-info")
@@ -350,7 +449,7 @@ def invite_info(token: str) -> Dict[str, Any]:
     """Resolve an invite token to its org/email WITHOUT consuming it.
 
     Lets the accept-invite page greet the invitee by org name and show an
-    'invalid / expired / already used' state on page load — before any submit, so
+    'invalid / expired / already used' state on page load â€” before any submit, so
     reopening a spent link no longer renders the empty password form. Applies the
     same rejection rules (400) as accept-invite; the token is never marked used.
     """
@@ -379,18 +478,17 @@ def invite_info(token: str) -> Dict[str, Any]:
 
 @router.post("/accept-invite", status_code=200)
 def accept_invite(body: AcceptInviteRequest) -> Dict[str, Any]:
-    """AC11/AC12: validate token → set password + is_active → return JWT."""
-    from app.auth.user_auth import PASSWORD_MIN_LENGTH
+    """AC11/AC12: validate token â†’ enforce password strength â†’ activate â†’ return JWT.
 
+    CS-3: the invited account is activated only once the chosen password passes
+    the strength rule (422 otherwise). Token validation runs first, so an
+    invalid/expired/used token still returns 400 regardless of the password.
+    """
     ensure_auth_tables()
 
     entry = _validate_invite(body.invite_token)
 
-    if len(body.password) < PASSWORD_MIN_LENGTH:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Password must be at least {PASSWORD_MIN_LENGTH} characters",
-        )
+    _enforce_password_strength(body.password)
 
     user_id = entry["user_id"]
     org_id = entry["org_id"]
@@ -474,7 +572,7 @@ def change_password(
     finally:
         con.close()
 
-    # Revoke every JWT issued before this change (issue #4) — including the token
+    # Revoke every JWT issued before this change (issue #4) â€” including the token
     # used to make this request and any session held on a compromised device.
     # The caller must log in again to obtain a fresh token.
     mark_password_changed(user_id)
@@ -488,7 +586,7 @@ def change_password(
 
 
 def _get_org_approval_row(org_id: str) -> dict | None:
-    """Fetch the approval-related columns for an org. Returns None if not found."""
+    """Fetch approval-related columns for an org. Returns None if not found."""
     con = db.connect()
     try:
         cur = con.cursor()
@@ -512,7 +610,7 @@ def _get_org_approval_row(org_id: str) -> dict | None:
 
 
 def _get_org_owner_email(org_id: str) -> str | None:
-    """Return the email of the owner-role member of an org, or None."""
+    """Return the email of the first owner-role member of an org."""
     con = db.connect()
     try:
         cur = con.cursor()
@@ -532,7 +630,7 @@ def _get_org_owner_email(org_id: str) -> str | None:
 def _update_org_approval(
     org_id: str, *, status: str, action: str, now_iso: str
 ) -> None:
-    """Set approval_status, approved_at, approved_by_action, clear token hash."""
+    """Set approval_status, audit action metadata, and consume the token."""
     con = db.connect()
     try:
         cur = con.cursor()
@@ -559,18 +657,23 @@ def _html_page(title: str, heading: str, body: str, status_code: int = 200) -> H
     return HTMLResponse(content=html, status_code=status_code)
 
 
+def _approval_link_expired(expires_at: object) -> bool:
+    if expires_at is None:
+        return False
+    try:
+        if isinstance(expires_at, str):
+            expires_at = datetime.fromisoformat(expires_at)
+        if expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=timezone.utc)
+    except (ValueError, TypeError, AttributeError):
+        return False
+    return datetime.now(timezone.utc) > expires_at
+
+
 @router.get("/org-approval/approve", response_class=HTMLResponse)
 def approve_org(token: str, org_id: str) -> HTMLResponse:
-    """Validate approval token and set org to active. Returns an HTML page.
-
-    Clicked directly from the admin's email client — no JavaScript, no JSON.
-    Single-use: clears approval_token_hash on success. A second click with the
-    same (now-cleared) token returns a harmless 'already processed' page.
-    """
-    from app.email_service import send_org_approved_email
-
+    """Validate approval token and set org to active. Returns an HTML page."""
     org = _get_org_approval_row(org_id)
-
     if org is None or org["approval_status"] != "pending_approval":
         return _html_page(
             "Already Processed",
@@ -581,15 +684,13 @@ def approve_org(token: str, org_id: str) -> HTMLResponse:
 
     stored_hash = org["approval_token_hash"]
     if not stored_hash:
-        # Token was cleared — already processed via an earlier click.
         return _html_page(
             "Already Processed",
             "Registration already processed",
             "This approval link has already been used. No further action is needed.",
         )
 
-    token_hash = hashlib.sha256(token.encode()).hexdigest()
-    if token_hash != stored_hash:
+    if _token_hash(token) != stored_hash:
         return _html_page(
             "Invalid Link",
             "Invalid approval link",
@@ -597,39 +698,23 @@ def approve_org(token: str, org_id: str) -> HTMLResponse:
             status_code=400,
         )
 
-    expires_at = org["approval_token_expires_at"]
-    if expires_at is not None:
-        if isinstance(expires_at, str):
-            try:
-                expires_at = datetime.fromisoformat(expires_at)
-            except (ValueError, TypeError):
-                expires_at = None
-        if expires_at is not None:
-            if expires_at.tzinfo is None:
-                expires_at = expires_at.replace(tzinfo=timezone.utc)
-            if datetime.now(timezone.utc) > expires_at:
-                return _html_page(
-                    "Link Expired",
-                    "Approval link has expired",
-                    "This approval link expired after 7 days. "
-                    "Contact engineering to reissue an approval link.",
-                    status_code=400,
-                )
+    if _approval_link_expired(org["approval_token_expires_at"]):
+        return _html_page(
+            "Link Expired",
+            "Approval link has expired",
+            "This approval link expired after 7 days. "
+            "Contact engineering to reissue an approval link.",
+            status_code=400,
+        )
 
     _update_org_approval(org_id, status="active", action="approved", now_iso=db.now_iso())
 
     registrant_email = _get_org_owner_email(org_id)
     if registrant_email:
-        try:
-            send_org_approved_email(
-                registrant_email=registrant_email,
-                org_name=org["name"],
-            )
-        except Exception:
-            logger.exception(
-                "Failed to send org-approved email for org %s to %s.",
-                org_id, registrant_email,
-            )
+        send_org_approved_email(
+            registrant_email=registrant_email,
+            org_name=org["name"],
+        )
 
     return _html_page(
         "Organisation Approved",
@@ -641,14 +726,8 @@ def approve_org(token: str, org_id: str) -> HTMLResponse:
 
 @router.get("/org-approval/reject", response_class=HTMLResponse)
 def reject_org(token: str, org_id: str) -> HTMLResponse:
-    """Validate approval token and set org to rejected. Returns an HTML page.
-
-    Mirrors approve_org() — same validation, same single-use guarantee.
-    """
-    from app.email_service import send_org_rejected_email
-
+    """Validate approval token and set org to rejected. Returns an HTML page."""
     org = _get_org_approval_row(org_id)
-
     if org is None or org["approval_status"] != "pending_approval":
         return _html_page(
             "Already Processed",
@@ -665,8 +744,7 @@ def reject_org(token: str, org_id: str) -> HTMLResponse:
             "This rejection link has already been used. No further action is needed.",
         )
 
-    token_hash = hashlib.sha256(token.encode()).hexdigest()
-    if token_hash != stored_hash:
+    if _token_hash(token) != stored_hash:
         return _html_page(
             "Invalid Link",
             "Invalid rejection link",
@@ -674,39 +752,23 @@ def reject_org(token: str, org_id: str) -> HTMLResponse:
             status_code=400,
         )
 
-    expires_at = org["approval_token_expires_at"]
-    if expires_at is not None:
-        if isinstance(expires_at, str):
-            try:
-                expires_at = datetime.fromisoformat(expires_at)
-            except (ValueError, TypeError):
-                expires_at = None
-        if expires_at is not None:
-            if expires_at.tzinfo is None:
-                expires_at = expires_at.replace(tzinfo=timezone.utc)
-            if datetime.now(timezone.utc) > expires_at:
-                return _html_page(
-                    "Link Expired",
-                    "Rejection link has expired",
-                    "This rejection link expired after 7 days. "
-                    "Contact engineering to reissue a rejection link.",
-                    status_code=400,
-                )
+    if _approval_link_expired(org["approval_token_expires_at"]):
+        return _html_page(
+            "Link Expired",
+            "Rejection link has expired",
+            "This rejection link expired after 7 days. "
+            "Contact engineering to reissue a rejection link.",
+            status_code=400,
+        )
 
     _update_org_approval(org_id, status="rejected", action="rejected", now_iso=db.now_iso())
 
     registrant_email = _get_org_owner_email(org_id)
     if registrant_email:
-        try:
-            send_org_rejected_email(
-                registrant_email=registrant_email,
-                org_name=org["name"],
-            )
-        except Exception:
-            logger.exception(
-                "Failed to send org-rejected email for org %s to %s.",
-                org_id, registrant_email,
-            )
+        send_org_rejected_email(
+            registrant_email=registrant_email,
+            org_name=org["name"],
+        )
 
     return _html_page(
         "Organisation Rejected",
@@ -714,6 +776,180 @@ def reject_org(token: str, org_id: str) -> HTMLResponse:
         f"<strong>{org['name']}</strong> has been rejected. "
         "The registrant has been notified.",
     )
+
+
+# ---------------------------------------------------------------------------
+# Forgot / reset password (CS-3 Section 5)
+#
+# The reset token's SHA-256 hash and a one-hour expiry are stored in the users
+# table (reset_token_hash / reset_token_expires_at). The raw token is never
+# persisted â€” only its hash â€” so a DB leak does not yield usable reset links.
+# ---------------------------------------------------------------------------
+
+
+def _store_reset_token(user_id: str, raw_token: str) -> None:
+    """Persist the SHA-256 hash of a reset token + a one-hour expiry on the user."""
+    # Store naive UTC: the column is `timestamp without time zone`, so a tz-aware
+    # value could be shifted to the session timezone on write. A naive UTC value
+    # is stored verbatim and re-stamped as UTC on read in _consume_reset_token.
+    expires_at = (
+        datetime.now(timezone.utc) + timedelta(hours=RESET_TTL_HOURS)
+    ).replace(tzinfo=None)
+    con = db.connect()
+    try:
+        cur = con.cursor()
+        cur.execute(
+            "UPDATE users SET reset_token_hash = %s, reset_token_expires_at = %s "
+            "WHERE id = %s",
+            (_token_hash(raw_token), expires_at, user_id),
+        )
+        con.commit()
+    finally:
+        con.close()
+
+
+def _consume_reset_token(raw_token: str) -> dict:
+    """Resolve a raw reset token to its user, enforcing match + expiry.
+
+    Returns {"user_id": ...} on success. Raises HTTPException(400) if the token
+    is unknown, already consumed, malformed, or expired â€” a single 400 surface so
+    the client cannot distinguish the failure modes. Does NOT mutate; the caller
+    clears the token only after the password is written (so a failed write leaves
+    the token usable for a retry).
+    """
+    token_hash = _token_hash(raw_token)
+    con = db.connect()
+    try:
+        cur = con.cursor()
+        cur.execute(
+            "SELECT id, reset_token_expires_at FROM users WHERE reset_token_hash = %s",
+            (token_hash,),
+        )
+        row = cur.fetchone()
+    finally:
+        con.close()
+
+    if row is None or row[1] is None:
+        raise HTTPException(status_code=400, detail="Invalid or expired reset token")
+
+    # psycopg2 returns a datetime for the TIMESTAMP column; tolerate an ISO string
+    # too (e.g. a legacy SQLite-written value) for safety.
+    expires_at = row[1]
+    try:
+        if isinstance(expires_at, str):
+            expires_at = datetime.fromisoformat(expires_at)
+        if expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=timezone.utc)
+    except (ValueError, TypeError):
+        raise HTTPException(status_code=400, detail="Invalid or expired reset token")
+    if datetime.now(timezone.utc) > expires_at:
+        raise HTTPException(status_code=400, detail="Invalid or expired reset token")
+
+    return {"user_id": row[0]}
+
+
+def _dispatch_reset(user_id: str, email: str, raw_token: str) -> None:
+    """Persist the reset token and send the email â€” runs off the request path.
+
+    Scheduled as a BackgroundTask so the registered and unregistered branches of
+    forgot_password do the same (minimal) request-path work, closing the
+    write/email timing side-channel that would otherwise let an attacker
+    distinguish a registered email by response latency. Mirrors how the login
+    path equalizes timing via a dummy bcrypt compare. Never raises.
+    """
+    try:
+        _store_reset_token(user_id, raw_token)
+        send_password_reset_email(email, raw_token)
+    except Exception:  # pragma: no cover - defensive; must never surface
+        logger.warning("password reset dispatch failed (non-blocking)")
+
+
+
+@router.post("/forgot-password", status_code=200)
+def forgot_password(
+    body: ForgotPasswordRequest, background_tasks: BackgroundTasks
+) -> Dict[str, Any]:
+    """CS-3 §5 / AC11: request a password reset.
+
+    Always returns 200 with an identical body whether or not the email is
+    registered, so the endpoint cannot be used to enumerate accounts. When the
+    email IS registered, a UUID reset token is generated and its SHA-256 hash + a
+    one-hour expiry are stored on the user, then send_password_reset_email is
+    called — both off the request path via a BackgroundTask, so the registered
+    and unregistered branches return with equal request-path work (no timing
+    oracle). Email/transport failures are swallowed (logged) — they must not leak
+    account existence or change the response.
+    """
+    ensure_auth_tables()
+    email = body.email.strip().lower()
+
+    con = db.connect()
+    try:
+        cur = con.cursor()
+        cur.execute("SELECT id FROM users WHERE email = %s", (email,))
+        row = cur.fetchone()
+    finally:
+        con.close()
+
+    response: Dict[str, Any] = {"status": "ok"}
+
+    if row is not None:
+        # UUID + SHA-256 are microsecond-cheap; the DB write + email (the real
+        # latency) run in the background so they cannot be timed against the
+        # unregistered path.
+        raw_token = str(uuid4())
+        background_tasks.add_task(_dispatch_reset, row[0], email, raw_token)
+        # Non-production convenience (mirrors the invite flow): expose the raw
+        # token so automated tests / local manual testing can complete the reset
+        # without a live mailer. Never returned in production.
+        if os.getenv("ENVIRONMENT", "").strip().lower() != "production":
+            response["reset_token"] = raw_token
+
+    return response
+
+
+@router.post("/reset-password", status_code=200)
+def reset_password(body: ResetPasswordRequest) -> Dict[str, Any]:
+    """CS-3 §5 / AC12: complete a password reset.
+
+    Hashes the supplied token, finds the matching user, checks expiry (400 on
+    invalid/expired), validates the new password's strength (422 on weak), writes
+    the new password hash, and clears the reset-token fields so the token is
+    single-use. Returns 200 on success.
+    """
+    ensure_auth_tables()
+
+    # 1) Token validity first (400) — before any password work, mirroring invites.
+    entry = _consume_reset_token(body.reset_token)
+    user_id = entry["user_id"]
+
+    # 2) Strength (422). validate_password_strength returns the unmet rules; an
+    # empty list means valid. Matches the same rule registration/invite will use.
+    unmet = validate_password_strength(body.new_password)
+    if unmet:
+        raise HTTPException(
+            status_code=422,
+            detail="Password must contain: " + ", ".join(unmet),
+        )
+
+    # 3) Write the new hash and clear the reset token (single-use) atomically.
+    password_hash = hash_password(body.new_password)
+    con = db.connect()
+    try:
+        cur = con.cursor()
+        cur.execute(
+            "UPDATE users SET password_hash = %s, reset_token_hash = NULL, "
+            "reset_token_expires_at = NULL WHERE id = %s",
+            (password_hash, user_id),
+        )
+        con.commit()
+    finally:
+        con.close()
+
+    # Revoke every JWT issued before this reset (parity with change-password).
+    mark_password_changed(user_id)
+
+    return {"status": "ok"}
 
 
 # ---------------------------------------------------------------------------

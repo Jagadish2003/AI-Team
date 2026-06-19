@@ -146,7 +146,7 @@ describe("AuthContext — login / register", () => {
     await waitFor(() => expect(mockGetMe).toHaveBeenCalledWith("jwt-abc"));
   });
 
-  it("register stores token + user", async () => {
+  it("register creates the account but leaves the user logged out", async () => {
     mockRegister.mockResolvedValue({ token: "jwt-reg", user: OWNER });
     mockGetMe.mockResolvedValue(OWNER);
     const user = userEvent.setup();
@@ -155,10 +155,13 @@ describe("AuthContext — login / register", () => {
     await user.click(screen.getByText("register"));
 
     await waitFor(() =>
-      expect(screen.getByTestId("status").textContent).toBe("authenticated")
+      expect(mockRegister).toHaveBeenCalledWith("Acme", "owner@example.com", "supersecret1")
     );
-    expect(mockRegister).toHaveBeenCalledWith("Acme", "owner@example.com", "supersecret1");
-    expect(screen.getByTestId("token").textContent).toBe("jwt-reg");
+    expect(screen.getByTestId("status").textContent).toBe("anonymous");
+    expect(screen.getByTestId("token").textContent).toBe("none");
+    expect(screen.getByTestId("user").textContent).toBe("none");
+    expect(sessionStorage.getItem("agentiq_auth_token")).toBeNull();
+    expect(mockGetMe).not.toHaveBeenCalled();
   });
 });
 

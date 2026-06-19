@@ -44,6 +44,12 @@ const items = [
   { to: "/executive-report", label: "Executive Report", runScoped: true },
 ] satisfies NavItem[];
 
+function profileNameFromEmail(email: string | null | undefined): string | null {
+  const localPart = email?.trim().split("@", 1)[0]?.trim();
+  if (!localPart) return null;
+  return `${localPart.charAt(0).toUpperCase()}${localPart.slice(1)}`;
+}
+
 export default function TopNav() {
   const loc = useLocation();
   const navigate = useNavigate();
@@ -57,12 +63,10 @@ export default function TopNav() {
   // that don't mount an AuthProvider. In the real app it's always inside one.
   const auth = useAuthOptional();
 
-  // Profile tooltip shows "<org name>'s Profile" once the user record is loaded.
-  // org_id is a UUID, not a display value — we show the org's human-readable
-  // name (orgs.name, surfaced via /api/auth/me) and fall back to "Profile"
-  // rather than ever exposing the raw UUID.
-  const orgName = auth?.user?.org_name;
-  const profileTitle = orgName ? `${orgName}'s Profile` : "Profile";
+  // Profile tooltip uses the user's email local part, e.g.
+  // "srivani@dwp.com" -> "Srivani's Profile".
+  const profileName = profileNameFromEmail(auth?.user?.email);
+  const profileTitle = profileName ? `${profileName}'s Profile` : "Profile";
 
   async function handleLogout() {
     setProfileOpen(false);
@@ -167,13 +171,13 @@ export default function TopNav() {
 
             {/*
              * Themed profile tooltip (replaces the unstyleable native title).
-             * AgentIQ blue family: light-blue fill, accent-tinted 4px-rounded
-             * border. Hidden while the dropdown is open so the two don't overlap.
+             * Matches the Settings dropdown surface and stays hidden while the
+             * dropdown is open so the two don't overlap.
              */}
             {!profileOpen && (
               <span
                 role="tooltip"
-                className="pointer-events-none absolute right-0 top-full z-50 mt-1.5 whitespace-nowrap rounded-[4px] border border-[#93c5fd] bg-[#dbeafe] px-2 py-1 text-xs font-medium text-[#1e3a8a] opacity-0 shadow-md transition-opacity duration-150 group-hover:opacity-100"
+                className="pointer-events-none absolute right-0 top-full z-50 mt-1.5 whitespace-nowrap rounded-[4px] border border-border bg-panel px-3 py-1.5 text-xs font-medium text-text opacity-0 shadow-xl transition-opacity duration-150 group-hover:opacity-100"
               >
                 {profileTitle}
               </span>

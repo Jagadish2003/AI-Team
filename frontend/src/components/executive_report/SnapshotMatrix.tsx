@@ -1,11 +1,95 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { OpportunityCandidate } from '../../types/analystReview';
-import {
-  clamp,
-  computeMatrixGeometry,
-  DEFAULT_MATRIX_HEIGHT,
-  DEFAULT_MATRIX_WIDTH,
-} from '../../utils/matrixLayout';
+
+function clamp(n: number, a: number, b: number) {
+  return Math.max(a, Math.min(b, n));
+}
+
+const DEFAULT_WIDTH = 1440;
+const DEFAULT_HEIGHT = 620;
+
+type MatrixLayout = {
+  width: number;
+  height: number;
+  left: number;
+  top: number;
+  cx: number;
+  cy: number;
+  rx: number;
+  by: number;
+};
+
+function createLayout(width: number, height: number): MatrixLayout {
+  const safeWidth = Math.max(width, 360);
+  const safeHeight = Math.max(height, 360);
+  const left = safeWidth < 640 ? 92 : 150;
+  const right = safeWidth < 640 ? 18 : 36;
+  const top = 28;
+  const bottom = 38;
+  const rx = safeWidth - right;
+  const by = safeHeight - bottom;
+
+  return {
+    width: safeWidth,
+    height: safeHeight,
+    left,
+    top,
+    cx: left + (rx - left) / 2,
+    cy: top + (by - top) / 2,
+    rx,
+    by,
+  };
+}
+
+function buildPoints(opportunities: OpportunityCandidate[], layout: MatrixLayout) {
+  const W = layout.rx - layout.left;
+  const H = layout.by - layout.top;
+  return opportunities.map((o) => ({
+    o,
+    x: layout.left + ((o.effort - 1) / 9) * W,
+    y: layout.by - ((o.impact - 1) / 9) * H,
+    r: clamp(10 + o.impact * 3, 12, 38),
+  }));
+}
+
+export interface OverlapBubble {
+  bubbleX: number;
+  bubbleCy: number;
+  r: number;
+}
+
+/**
+ * Cluster bubbles that physically overlap (centre distance < sum of radii)
+ * using union-find, so a chain of overlapping bubbles (A–B and B–C, but not
+ * A–C directly) is still treated as a single group. Returns one entry per
+ * cluster, each an array of input indices; every input bubble appears in
+ * exactly one cluster (singletons included), so the result is a partition of
+ * the input indices.
+ *
+ * Extracted from the label-placement memo as a pure, side-effect-free helper so
+ * the overlap/transitivity logic can be unit-tested without rendering the SVG.
+ */
+export function clusterOverlappingBubbles(bubbles: OverlapBubble[]): number[][] {
+  const parent = bubbles.map((_, i) => i);
+  const find = (i: number): number =>
+    parent[i] === i ? i : (parent[i] = find(parent[i]));
+  for (let i = 0; i < bubbles.length; i += 1) {
+    for (let j = i + 1; j < bubbles.length; j += 1) {
+      const dist = Math.hypot(
+        bubbles[i].bubbleX - bubbles[j].bubbleX,
+        bubbles[i].bubbleCy - bubbles[j].bubbleCy,
+      );
+      if (dist < bubbles[i].r + bubbles[j].r) parent[find(i)] = find(j);
+    }
+  }
+  const clusters = new Map<number, number[]>();
+  bubbles.forEach((_, i) => {
+    const root = find(i);
+    if (!clusters.has(root)) clusters.set(root, []);
+    clusters.get(root)!.push(i);
+  });
+  return Array.from(clusters.values());
+}
 
 interface SnapshotMatrixProps {
   opportunities: OpportunityCandidate[];
@@ -14,14 +98,78 @@ interface SnapshotMatrixProps {
 export default function SnapshotMatrix({ opportunities }: SnapshotMatrixProps) {
   const plotRef = useRef<HTMLDivElement>(null);
   const [viewport, setViewport] = useState({
-    width: DEFAULT_MATRIX_WIDTH,
-    height: DEFAULT_MATRIX_HEIGHT,
+    width: DEFAULT_WIDTH,
+    height: DEFAULT_HEIGHT,
   });
-
-  const { layout, points, placements: labelPlacements } = useMemo(
-    () => computeMatrixGeometry(opportunities, viewport.width, viewport.height),
-    [opportunities, viewport.height, viewport.width],
+  const layout = useMemo(
+    () => createLayout(viewport.width, viewport.height),
+    [viewport.height, viewport.width],
   );
+  const points = useMemo(
+    () => buildPoints(opportunities, layout).sort((a, b) => b.r - a.r),
+    [opportunities, layout],
+  );
+
+  // Name labels. Non-overlapping bubbles keep their label in a pill just above the
+  // bubble (with a short leader line). Bubbles that physically overlap another bubble
+  // are flagged `onBubble` — their name is written directly on the bubble instead, so
+  // it's obvious which name belongs to which of the overlapping circles.
+  const labelPlacements = useMemo(() => {
+    const LABEL_H = 21;
+
+    const clampX = (cx: number, width: number) =>
+      clamp(cx, layout.left + width / 2 + 2, layout.rx - width / 2 - 2);
+
+    const placed = points.map((p) => {
+      const title = p.o.title.length > 26 ? `${p.o.title.slice(0, 26)}...` : p.o.title;
+      const width = clamp(title.length * 6.7 + 16, 90, 210);
+      return {
+        id: p.o.id,
+        title,
+        width,
+        r: p.r,
+        bubbleX: p.x,
+        bubbleCy: p.y,
+        bubbleTop: p.y - p.r,
+        centerX: clampX(p.x, width),
+        pillBottom: clamp(p.y - p.r - 4, layout.top + LABEL_H, layout.by - 2),
+        onBubble: false,
+        onX: p.x,   // on-bubble label centre x (set for overlapping clusters)
+        onY: p.y,   // on-bubble label centre y
+      };
+    });
+
+    // Cluster bubbles that physically overlap (centre distance < sum of radii)
+    // so a chain of overlapping bubbles is treated as one group. The union-find
+    // clustering is a pure, unit-tested helper (clusterOverlappingBubbles).
+    const clusters = clusterOverlappingBubbles(placed);
+
+    // For each overlapping cluster, draw each name as a bar that sticks OUT of its
+    // bubble: a bubble on the right side of the cluster extends its label to the
+    // right, a bubble on the left extends to the left — the label's inner edge is
+    // anchored at the bubble centre. Vertically each label sits at its own bubble's
+    // centre, so an upper bubble's name rides higher and a lower bubble's rides lower
+    // (matches the requested tag layout).
+    clusters.forEach((idxs) => {
+      if (idxs.length < 2) return;
+      const meanX = idxs.reduce((s, i) => s + placed[i].bubbleX, 0) / idxs.length;
+      idxs.forEach((i) => {
+        placed[i].onBubble = true;
+        const extendRight = placed[i].bubbleX >= meanX;
+        // Inner edge at the bubble centre; the bar then extends outward.
+        const rawX = extendRight
+          ? placed[i].bubbleX + placed[i].width / 2
+          : placed[i].bubbleX - placed[i].width / 2;
+        placed[i].onX = clampX(rawX, placed[i].width);
+        // Drop the left-extending (lower) label to the bottom of its bubble so it
+        // sits clearly below the upper bubble instead of crossing into it.
+        const yOffset = extendRight ? 0 : Math.max(22, placed[i].r * 0.9);
+        placed[i].onY = clamp(placed[i].bubbleCy + yOffset, layout.top + 12, layout.by - 12);
+      });
+    });
+
+    return placed;
+  }, [points, layout]);
 
   useEffect(() => {
     const node = plotRef.current;

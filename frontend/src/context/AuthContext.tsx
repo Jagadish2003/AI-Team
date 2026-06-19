@@ -45,7 +45,7 @@ interface AuthContextValue {
   loading: boolean;
   /** POST /api/auth/login, store token + user in state. Throws ApiError on failure. */
   login: (email: string, password: string) => Promise<void>;
-  /** POST /api/auth/register, store token + user in state. Throws ApiError on failure. */
+  /** POST /api/auth/register, then leave the user logged out. Throws ApiError on failure. */
   register: (orgName: string, email: string, password: string) => Promise<void>;
   /** POST /api/auth/logout (best-effort) and clear all state. */
   logout: () => Promise<void>;
@@ -69,7 +69,7 @@ function readStoredToken(): string | null {
 /**
  * Persist (or clear, with null) the JWT in sessionStorage. The [token] effect
  * below does this on every render, but the auth callbacks call it directly too:
- * the login/register/accept-invite pages trigger a full-document reload right
+ * the login/accept-invite pages trigger a full-document reload right
  * after authenticating (to rebuild all in-session context for the new user),
  * and that reload happens before the post-render effect would have flushed —
  * so without this synchronous write the freshly issued token would be lost.
@@ -122,7 +122,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     writeStoredToken(token);
   }, [token]);
 
-  // Validate the token whenever it is present: right after login/register, and
+  // Validate the token whenever it is present: right after login/accept-invite, and
   // on mount when it was restored from sessionStorage (a refresh). /api/auth/me
   // refreshes the user record; a rejected call (invalid/expired/revoked token)
   // drops the session and clears storage via the effect above.
@@ -160,10 +160,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const register = useCallback(
     async (orgName: string, email: string, password: string) => {
-      const result = await apiRegister(orgName, email, password);
-      writeStoredToken(result.token);
-      setToken(result.token);
-      setUser(result.user);
+      await apiRegister(orgName, email, password);
+      writeStoredToken(null);
+      setToken(null);
+      setUser(null);
     },
     []
   );

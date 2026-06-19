@@ -21,8 +21,8 @@ Schema additions:
 Rollback removes all five columns. SQLite supports ADD COLUMN but not DROP COLUMN
 natively, so downgrade uses batch_alter_table for SQLite compatibility.
 
-Revision ID: 0012
-Revises: 0011
+Revision ID: 0013
+Revises: 0012
 Create Date: 2026-06-19
 """
 from typing import Sequence, Union
@@ -30,8 +30,8 @@ from typing import Sequence, Union
 from alembic import op
 import sqlalchemy as sa
 
-revision: str = "0012"
-down_revision: Union[str, None] = "0011"
+revision: str = "0013"
+down_revision: Union[str, None] = "0012"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

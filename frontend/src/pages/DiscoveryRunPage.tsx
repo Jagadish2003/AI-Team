@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
-import { CheckCircle2, Circle, Info, Loader2 } from "lucide-react";
+import { CheckCircle2, Circle, Info, Loader2, XCircle } from "lucide-react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { InfoPanel } from "../components/common/InfoPanel";
 import LoadingPanel from "../components/common/LoadingPanel";
@@ -12,7 +12,7 @@ import {
   DISCOVERY_SOURCE_REQUIREMENT_MESSAGE,
   isDiscoveryReadyConnector,
 } from "../utils/sourceReadiness";
-import { apiGetRunScoped } from "../lib/apiClient";
+import { apiGet, apiGetRunScoped } from "../lib/apiClient";
 
 // ---------------------------------------------------------------------------
 // DISCOVERY_STEPS — ordered list of all seven discovery stages (CS-4 T5 AC4).
@@ -35,17 +35,16 @@ export const SALESFORCE_DUAL_EXTRACTION_TOOLTIP =
   "serving different detectors. Both passes use your authorised read-only " +
   "token and are logged in the audit trail.";
 
+// Order matches the backend runner's update_run_step() emission order
+// (backend/discovery/runner.py): Salesforce CRM → ServiceNow → Jira → the
+// second Salesforce pass (sf_ncino) → detect → enrich → complete. The second
+// Salesforce pass is emitted AFTER Jira ingestion, so it is listed here after
+// the Jira step — keeping the progress indicator consistent with the run log.
 const DISCOVERY_STEPS: DiscoveryStep[] = [
   {
     id: "sf_crm",
     label: "Salesforce CRM",
     subLabel: "Ingesting case metrics, flows, and approval data",
-    infoTooltip: SALESFORCE_DUAL_EXTRACTION_TOOLTIP,
-  },
-  {
-    id: "sf_ncino",
-    label: "nCino Lending",
-    subLabel: "Ingesting nCino loan origination signals",
     infoTooltip: SALESFORCE_DUAL_EXTRACTION_TOOLTIP,
   },
   {
@@ -57,6 +56,12 @@ const DISCOVERY_STEPS: DiscoveryStep[] = [
     id: "jira",
     label: "Jira",
     subLabel: "Ingesting issue metrics and project activity",
+  },
+  {
+    id: "sf_ncino",
+    label: "nCino Lending",
+    subLabel: "Ingesting nCino loan origination signals",
+    infoTooltip: SALESFORCE_DUAL_EXTRACTION_TOOLTIP,
   },
   {
     id: "detect",
@@ -78,6 +83,97 @@ const DISCOVERY_STEPS: DiscoveryStep[] = [
 const STEP_INDEX = Object.fromEntries(
   DISCOVERY_STEPS.map((s, i) => [s.id, i])
 );
+
+// CS-4: the second Salesforce pass ("sf_ncino" step) reflects the Salesforce
+// product the workspace declared in Integration Hub (SalesforceProductPicker).
+// The step id stays "sf_ncino" so backend current_step progress mapping is
+// unaffected — only the user-facing label/sub-label change. nCino keeps the
+// dual-extraction tooltip narrative; for any other product that nCino-specific
+// explanation no longer applies and is dropped from both Salesforce steps.
+// `tooltipDataset` is the phrase describing the SECOND extraction pass; it is
+// slotted into the dual-extraction tooltip so both Salesforce steps explain the
+// two passes in terms of the declared product.
+const SF_SECOND_PASS_BY_PRODUCT: Record<
+  string,
+  { label: string; subLabel: string; tooltipDataset: string }
+> = {
+  salesforce_ncino: {
+    label: "nCino Lending",
+    subLabel: "Ingesting nCino loan origination signals",
+    tooltipDataset: "nCino lending signals (Loans, Covenants, Checklists)",
+  },
+  salesforce_sc: {
+    label: "Service Cloud",
+    subLabel: "Ingesting case management, service request, and SLA signals",
+    tooltipDataset: "Service Cloud signals (Case management, service requests, SLAs)",
+  },
+  salesforce_pss: {
+    label: "Public Sector Solutions / Benefits",
+    subLabel: "Ingesting benefits administration and member service signals",
+    tooltipDataset:
+      "Public Sector Solutions signals (Benefits administration, member services, PSS objects)",
+  },
+  salesforce_fsc: {
+    label: "Financial Services Cloud",
+    subLabel: "Ingesting wealth management and relationship banking signals",
+    tooltipDataset:
+      "Financial Services Cloud signals (Wealth management, relationship banking)",
+  },
+  salesforce_rc: {
+    label: "Revenue Cloud",
+    subLabel: "Ingesting CPQ, contract, and revenue operation signals",
+    tooltipDataset: "Revenue Cloud signals (CPQ, contracts, revenue operations)",
+  },
+  salesforce_hc: {
+    label: "Health Cloud",
+    subLabel: "Ingesting patient management and care programme signals",
+    tooltipDataset: "Health Cloud signals (Patient management, care programmes)",
+  },
+};
+
+// Compose the dual-extraction explanation for a given second-pass dataset.
+// For nCino this reproduces SALESFORCE_DUAL_EXTRACTION_TOOLTIP verbatim
+// (AT-314 approved wording), so that constant stays the single source of truth.
+function buildDualExtractionTooltip(tooltipDataset: string): string {
+  return (
+    "AgentIQ reads from your Salesforce system in two passes: the first reads " +
+    "CRM signals (Cases, Workflows, Approvals), the second reads " +
+    tooltipDataset +
+    ". These are different datasets serving different detectors. Both passes " +
+    "use your authorised read-only token and are logged in the audit trail."
+  );
+}
+
+// Build the display step list for a declared Salesforce product. When no
+// product is declared (undefined) the default nCino labels/tooltip are used so
+// existing behaviour and tests are unchanged. Both Salesforce steps always
+// carry the dual-extraction tooltip, worded for the declared product.
+function resolveDiscoverySteps(salesforceProduct?: string): DiscoveryStep[] {
+  const productId =
+    salesforceProduct && SF_SECOND_PASS_BY_PRODUCT[salesforceProduct]
+      ? salesforceProduct
+      : "salesforce_ncino";
+  const meta = SF_SECOND_PASS_BY_PRODUCT[productId];
+  const tooltip =
+    productId === "salesforce_ncino"
+      ? SALESFORCE_DUAL_EXTRACTION_TOOLTIP
+      : buildDualExtractionTooltip(meta.tooltipDataset);
+
+  return DISCOVERY_STEPS.map((step) => {
+    if (step.id === "sf_crm") {
+      return { ...step, infoTooltip: tooltip };
+    }
+    if (step.id === "sf_ncino") {
+      return {
+        ...step,
+        label: meta.label,
+        subLabel: meta.subLabel,
+        infoTooltip: tooltip,
+      };
+    }
+    return step;
+  });
+}
 
 // ---------------------------------------------------------------------------
 // StepInfoTooltip — accessible info tooltip for a discovery step (CS-4 T6).
@@ -117,33 +213,52 @@ export function StepInfoTooltip({ text }: { text: string }) {
 export function DiscoveryStepList({
   currentStep,
   runComplete = false,
+  salesforceProduct,
+  failedSteps = [],
 }: {
   currentStep: string | null;
   // True only once the discovery run has truly finished (100%). The backend can
   // emit the "complete" step while the run is still computing post-processing,
   // so the terminal step's green tick is gated on this flag, not on currentStep.
   runComplete?: boolean;
+  // Declared Salesforce product id (e.g. "salesforce_sc"). Drives the label of
+  // the second Salesforce pass so the run reflects the workspace's declaration.
+  salesforceProduct?: string;
+  // Step ids whose ingest failed (from the run status' failed_steps). A failed
+  // step is rendered with an error icon, never as a completed green check — so
+  // a failed stage is not misrepresented as successful (CS-4 / AT-313).
+  failedSteps?: string[];
 }) {
   const activeIdx =
     currentStep != null ? (STEP_INDEX[currentStep] ?? -1) : -1;
+  const steps = resolveDiscoverySteps(salesforceProduct);
 
   return (
     <ol className="space-y-3">
-      {DISCOVERY_STEPS.map((step, idx) => {
+      {steps.map((step, idx) => {
+        // A failed ingest takes precedence over every other state: it must never
+        // show the completed green check, even after the run advances past it.
+        const isFailed = failedSteps.includes(step.id);
         // "complete" is the terminal step. It earns the green check only when the
         // run has actually finished (runComplete). While the run is still running
         // — even if the backend already emitted "complete" — it shows the spinner.
         const isTerminal = step.id === "complete";
-        const isCompleted = isTerminal
-          ? runComplete && activeIdx >= idx
-          : activeIdx > idx;
-        const isActive = !isCompleted && activeIdx === idx;
+        const isCompleted =
+          !isFailed &&
+          (isTerminal ? runComplete && activeIdx >= idx : activeIdx > idx);
+        const isActive = !isFailed && !isCompleted && activeIdx === idx;
 
         return (
           <li key={step.id} className="flex items-start gap-3">
             {/* Icon */}
             <div className="mt-0.5 shrink-0">
-              {isCompleted ? (
+              {isFailed ? (
+                <XCircle
+                  size={20}
+                  className="text-red-400"
+                  aria-label="failed"
+                />
+              ) : isCompleted ? (
                 <CheckCircle2
                   size={20}
                   className="text-emerald-400"
@@ -168,11 +283,13 @@ export function DiscoveryStepList({
             <div className="min-w-0">
               <div
                 className={`flex items-center gap-1.5 text-sm font-semibold leading-5 ${
-                  isCompleted
-                    ? "text-emerald-300"
-                    : isActive
-                      ? "text-text"
-                      : "text-muted/60"
+                  isFailed
+                    ? "text-red-300"
+                    : isCompleted
+                      ? "text-emerald-300"
+                      : isActive
+                        ? "text-text"
+                        : "text-muted/60"
                 }`}
               >
                 <span>{step.label}</span>
@@ -182,10 +299,14 @@ export function DiscoveryStepList({
               </div>
               <div
                 className={`text-xs leading-4 ${
-                  isCompleted || isActive ? "text-muted" : "text-muted/40"
+                  isFailed
+                    ? "text-red-300/80"
+                    : isCompleted || isActive
+                      ? "text-muted"
+                      : "text-muted/40"
                 }`}
               >
-                {step.subLabel}
+                {isFailed ? `${step.subLabel} — failed` : step.subLabel}
               </div>
             </div>
           </li>
@@ -296,48 +417,111 @@ export default function DiscoveryRunPage() {
   // Reads current_step from the response and stops once complete or errored.
   // ---------------------------------------------------------------------------
   const [currentStep, setCurrentStep] = useState<string | null>(null);
+  const [failedSteps, setFailedSteps] = useState<string[]>([]);
 
+  // Reset the step indicator whenever the active run changes. Without this, a
+  // newly started run inherits the previous run's last step (e.g. "complete")
+  // — the /status poll only overwrites currentStep once the backend has written
+  // a non-null current_step, so until the first step lands the progress list
+  // would show every step ticked while the backend is still ingesting. The new
+  // run's real step is then re-applied from its /status response.
+  useEffect(() => {
+    setCurrentStep(null);
+    setFailedSteps([]);
+  }, [runId]);
+
+  // CS-4: the declared Salesforce product (from Integration Hub) decides what
+  // the second Salesforce discovery pass is labelled as. Single declaration
+  // (radio), so the first declared id wins. Failure → undefined → default copy.
+  const [salesforceProduct, setSalesforceProduct] = useState<string | undefined>(
+    undefined
+  );
+
+  useEffect(() => {
+    let cancelled = false;
+    apiGet<{ ok: boolean; products: string[]; labels: string[] }>(
+      "/api/connectors/salesforce/products"
+    )
+      .then((data) => {
+        if (!cancelled) setSalesforceProduct(data?.products?.[0]);
+      })
+      .catch(() => {
+        // Non-blocking: with no declaration the default nCino copy is used.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // CS-4 T5 + AT-313: poll the run status while the run is active. The base
+  // cadence is 2 s (AC4), and it stays at 2 s while the step is actively
+  // advancing. When the step is unchanged between polls (a long-running or
+  // stalled stage) the interval backs off geometrically up to a cap, so a slow
+  // run is not hammered with a fixed 2 s poll for minutes on end. The cadence
+  // resets to the 2 s base as soon as the step advances again. Self-scheduling
+  // setTimeout (not setInterval) so each delay can differ.
   useEffect(() => {
     if (!runId || !computing) return;
 
-    let cancelled = false;
+    const BASE_DELAY_MS = 2000;
+    const MAX_DELAY_MS = 15000;
+    const BACKOFF_FACTOR = 1.5;
 
-    const poll = async () => {
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let delay = BASE_DELAY_MS;
+    // `undefined` = no poll yet; the first observation always counts as a change
+    // so the cadence starts at the base even if current_step is still null.
+    let lastStep: string | null | undefined = undefined;
+
+    const schedule = () => {
+      if (cancelled) return;
+      timer = setTimeout(() => void tick(), delay);
+    };
+
+    const tick = async () => {
       try {
         const st = await apiGetRunScoped<{
           current_step?: string | null;
           status?: string;
+          failed_steps?: string[];
         }>(runId, "/status");
 
         if (cancelled) return;
 
-        if (st.current_step != null) {
-          setCurrentStep(st.current_step);
+        if (st.current_step != null) setCurrentStep(st.current_step);
+        setFailedSteps(Array.isArray(st.failed_steps) ? st.failed_steps : []);
+
+        const step = st.current_step ?? null;
+        if (step !== lastStep) {
+          delay = BASE_DELAY_MS; // progress moved — stay responsive
+        } else {
+          delay = Math.min(delay * BACKOFF_FACTOR, MAX_DELAY_MS);
         }
+        lastStep = step;
 
         // Stop polling once the step reaches complete or the run errors out.
         const done =
-          st.current_step === "complete" ||
+          step === "complete" ||
           (st.status != null &&
             !["running", "queued"].includes(st.status.toLowerCase()));
-        if (done) {
-          clearInterval(intervalId);
-        }
+        if (done) return; // do not reschedule
       } catch {
-        // Non-blocking: polling failures do not surface errors to the UI.
+        // Non-blocking: polling failures do not surface errors to the UI, but
+        // do back off so a persistently failing endpoint is not hammered.
+        if (cancelled) return;
+        delay = Math.min(delay * BACKOFF_FACTOR, MAX_DELAY_MS);
       }
+      schedule();
     };
 
-    void poll();
-    const intervalId = setInterval(() => void poll(), 2000);
+    void tick(); // immediate first poll, then self-scheduled with backoff
 
     return () => {
       cancelled = true;
-      clearInterval(intervalId);
+      if (timer) clearTimeout(timer);
     };
   }, [runId, computing]);
-
-  const TOTAL_STAGES = 10;
 
   const status = run?.status?.toLowerCase();
   const isMaterialized =
@@ -350,9 +534,15 @@ export default function DiscoveryRunPage() {
   const targetPct = useMemo(() => {
     if (isComplete) return 100;
     if (!computing) return 0;
-    const seen = new Set(events.map((e: any) => e.stage).filter(Boolean));
-    return Math.min(Math.round((seen.size / TOTAL_STAGES) * 100), 99);
-  }, [isComplete, computing, events]);
+    // Tie the percentage to the SAME current_step signal that drives the
+    // Discovery Progress checklist, so the number and the green-checked steps
+    // always agree — both reflect the backend's update_run_step() timing.
+    // Each working step is one slice of the pipeline; "complete" maps to 100%.
+    const idx = currentStep != null ? (STEP_INDEX[currentStep] ?? -1) : -1;
+    if (idx < 0) return 0;
+    const lastIdx = DISCOVERY_STEPS.length - 1; // index of the terminal "complete" step
+    return Math.min(Math.round((idx / lastIdx) * 100), 99);
+  }, [isComplete, computing, currentStep]);
 
   // FIX: Safe requestAnimationFrame implementation
   useEffect(() => {
@@ -571,7 +761,12 @@ export default function DiscoveryRunPage() {
         {(computing || currentStep != null) && (
           <div className="mb-4 rounded-xl border border-border bg-panel p-4">
             <div className="mb-4 text-lg font-semibold">Discovery Progress</div>
-            <DiscoveryStepList currentStep={currentStep} runComplete={!computing} />
+            <DiscoveryStepList
+              currentStep={currentStep}
+              runComplete={!computing}
+              salesforceProduct={salesforceProduct}
+              failedSteps={failedSteps}
+            />
           </div>
         )}
 

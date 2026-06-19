@@ -1,74 +1,205 @@
-"""Transactional email service — AUTH-2 / CS-3, AT-355.
+"""Transactional email service for CS-3.
 
-Thin wrapper around SMTP (Office 365 / any STARTTLS-capable server). All config
-comes from environment variables so no credentials live in code.
+This module centralizes outbound account emails for registration, invites, and
+password reset. The current production transport is SMTP over Office 365.
 
-Environment variables (see backend/.env.example):
-    EMAIL_PROVIDER     'smtp' (only supported value; future: 'sendgrid' etc.)
-    SMTP_HOST          e.g. 'smtp.office365.com'
-    SMTP_PORT          e.g. '587'
-    SMTP_USERNAME      sender auth username
-    SMTP_PASSWORD      sender auth password
-    SMTP_USE_STARTTLS  'true' / 'false' (default 'true')
-    EMAIL_FROM         From address, e.g. 'notifications@cloudfulcrum.com'
-    EMAIL_FROM_NAME    Display name, e.g. 'AgentIQ'
-    AGENTIQ_BACKEND_URL  Public base URL of the backend API, used to build
-                         approve/reject links. Default: 'http://localhost:8000'
+Public surface:
+    send_email(to, subject, html_body) -> bool
+    send_invite_email(to, invite_token, org_name, role) -> bool
+    send_welcome_email(to, org_name) -> bool
+    send_password_reset_email(to, reset_token) -> bool
+    send_org_approval_request_email(...) -> bool
+    send_org_approved_email(...) -> bool
+    send_org_rejected_email(...) -> bool
+
+Contract: this module never raises into auth routes. It returns True on a
+confirmed send and False on missing configuration, template errors, or SMTP
+transport errors. Auth flows must continue even if mail delivery is down.
 """
 from __future__ import annotations
 
 import logging
 import os
 import smtplib
-from datetime import datetime, timezone
-from email.mime.multipart import MIMEMultipart
-from email.mime.text import MIMEText
+from datetime import datetime
+from email.message import EmailMessage
+from email.utils import formataddr
+from functools import lru_cache
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-# ---------------------------------------------------------------------------
-# SMTP configuration
-# ---------------------------------------------------------------------------
+DEFAULT_FROM = "noreply@cloudfulcrum.com"
+DEFAULT_FROM_NAME = "AgentIQ"
+DEFAULT_BASE_URL = "http://localhost:3000"
+DEFAULT_SMTP_PORT = 587
 
-_SMTP_HOST = os.getenv("SMTP_HOST", "smtp.office365.com")
-_SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
-_SMTP_USERNAME = os.getenv("SMTP_USERNAME", "")
-_SMTP_PASSWORD = os.getenv("SMTP_PASSWORD", "")
-_SMTP_USE_STARTTLS = os.getenv("SMTP_USE_STARTTLS", "true").strip().lower() == "true"
-_EMAIL_FROM = os.getenv("EMAIL_FROM", "notifications@cloudfulcrum.com")
-_EMAIL_FROM_NAME = os.getenv("EMAIL_FROM_NAME", "AgentIQ")
-_AGENTIQ_BACKEND_URL = os.getenv("AGENTIQ_BACKEND_URL", "http://localhost:8000").rstrip("/")
+_TEMPLATES_DIR = Path(__file__).resolve().parent / "templates"
+_SMTP_TIMEOUT_SECONDS = 10
 
 
-# ---------------------------------------------------------------------------
-# Low-level send helper
-# ---------------------------------------------------------------------------
+def _provider() -> str:
+    return os.getenv("EMAIL_PROVIDER", "smtp").strip().lower()
 
 
-def send_email(to_address: str, subject: str, html_body: str) -> None:
-    """Send a single transactional email via SMTP.
+def _from_email() -> str:
+    return os.getenv("EMAIL_FROM", DEFAULT_FROM).strip()
 
-    Raises on connection / auth / send failure so callers can log and decide
-    whether to surface the error.
-    """
-    msg = MIMEMultipart("alternative")
-    msg["Subject"] = subject
-    msg["From"] = f"{_EMAIL_FROM_NAME} <{_EMAIL_FROM}>"
-    msg["To"] = to_address
-    msg.attach(MIMEText(html_body, "html", "utf-8"))
 
-    with smtplib.SMTP(_SMTP_HOST, _SMTP_PORT) as smtp:
-        if _SMTP_USE_STARTTLS:
+def _from_name() -> str:
+    return os.getenv("EMAIL_FROM_NAME", DEFAULT_FROM_NAME).strip()
+
+
+def _base_url() -> str:
+    """Public frontend URL used for invite and reset-password links."""
+    return os.getenv("PUBLIC_HOSTNAME", DEFAULT_BASE_URL).rstrip("/")
+
+
+def _backend_url() -> str:
+    """Public backend URL used for org approval action links."""
+    return os.getenv("AGENTIQ_BACKEND_URL", "http://localhost:8000").rstrip("/")
+
+
+@lru_cache(maxsize=1)
+def _jinja_env():
+    """Build the Jinja2 environment over app/templates/."""
+    from jinja2 import Environment, FileSystemLoader, select_autoescape
+
+    return Environment(
+        loader=FileSystemLoader(str(_TEMPLATES_DIR)),
+        autoescape=select_autoescape(["html", "xml"]),
+    )
+
+
+def render_template(template_name: str, **context) -> str:
+    """Render an HTML email template from app/templates/."""
+    return _jinja_env().get_template(template_name).render(**context)
+
+
+def send_email(to: str, subject: str, html_body: str) -> bool:
+    """Send one HTML email through SMTP. Never raises to callers."""
+    provider = _provider()
+    try:
+        if provider not in {"smtp", "office365", "smtp.office365.com"}:
+            logger.error("EMAIL_PROVIDER not configured or unknown: %r", provider)
+            return False
+        return _send_smtp(to, subject, html_body)
+    except Exception:
+        logger.exception("send_email failed for %s (provider=%s)", to, provider)
+        return False
+
+
+def _env_truthy(name: str, default: bool = False) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+def _smtp_host(provider: str) -> str:
+    configured = os.getenv("SMTP_HOST", "").strip()
+    if configured:
+        return configured
+    # Support the exact IT handoff style where the Office 365 host is put in
+    # EMAIL_PROVIDER instead of SMTP_HOST.
+    if "." in provider:
+        return provider
+    return ""
+
+
+def _smtp_port() -> int:
+    raw = os.getenv("SMTP_PORT", str(DEFAULT_SMTP_PORT)).strip()
+    try:
+        return int(raw)
+    except ValueError:
+        logger.error("SMTP_PORT must be an integer; got %r", raw)
+        return 0
+
+
+def _send_smtp(to: str, subject: str, html_body: str) -> bool:
+    provider = _provider()
+    host = _smtp_host(provider)
+    port = _smtp_port()
+    username = os.getenv("SMTP_USERNAME", "").strip()
+    password = os.getenv("SMTP_PASSWORD", "")
+    from_email = _from_email()
+
+    if not host:
+        logger.error("SMTP_HOST is not set; cannot email %s", to)
+        return False
+    if port <= 0:
+        return False
+    if not username:
+        logger.error("SMTP_USERNAME is not set; cannot email %s", to)
+        return False
+    if not password:
+        logger.error("SMTP_PASSWORD is not set; cannot email %s", to)
+        return False
+    if not from_email:
+        logger.error("EMAIL_FROM is not set; cannot email %s", to)
+        return False
+
+    message = EmailMessage()
+    message["Subject"] = subject
+    message["From"] = formataddr((_from_name(), from_email))
+    message["To"] = to
+    message.set_content("This message contains HTML content.")
+    message.add_alternative(html_body, subtype="html")
+
+    with smtplib.SMTP(host, port, timeout=_SMTP_TIMEOUT_SECONDS) as smtp:
+        if _env_truthy("SMTP_USE_STARTTLS", default=True):
             smtp.starttls()
-        if _SMTP_USERNAME and _SMTP_PASSWORD:
-            smtp.login(_SMTP_USERNAME, _SMTP_PASSWORD)
-        smtp.sendmail(_EMAIL_FROM, to_address, msg.as_string())
+        smtp.login(username, password)
+        smtp.send_message(message)
+    return True
 
-    logger.info("Email sent to %s: %s", to_address, subject)
+
+def _render_and_send(to: str, subject: str, template_name: str, **context) -> bool:
+    """Render a template and send it. Never raises."""
+    try:
+        html_body = render_template(template_name, **context)
+    except Exception:
+        logger.exception("Failed to render %s for %s", template_name, to)
+        return False
+    return send_email(to, subject, html_body)
+
+
+def send_invite_email(to: str, invite_token: str, org_name: str, role: str) -> bool:
+    """Invitation email with an accept-invite link."""
+    link = f"{_base_url()}/accept-invite?token={invite_token}"
+    return _render_and_send(
+        to,
+        f"You have been invited to {org_name} on AgentIQ",
+        "invite.html",
+        link=link,
+        org=org_name,
+        role=role,
+    )
+
+
+def send_welcome_email(to: str, org_name: str) -> bool:
+    """Welcome email sent after successful registration."""
+    return _render_and_send(
+        to,
+        f"Welcome to AgentIQ - {org_name}",
+        "welcome.html",
+        org=org_name,
+    )
+
+
+def send_password_reset_email(to: str, reset_token: str) -> bool:
+    """Password-reset email with a reset link."""
+    link = f"{_base_url()}/reset-password?token={reset_token}"
+    return _render_and_send(
+        to,
+        "Reset your AgentIQ password",
+        "reset_password.html",
+        link=link,
+    )
 
 
 # ---------------------------------------------------------------------------
-# AUTH-2 approval emails
+# AUTH-2 org approval emails
 # ---------------------------------------------------------------------------
 
 
@@ -79,144 +210,83 @@ def send_org_approval_request_email(
     registrant_email: str,
     approval_token: str,
     org_id: str,
-) -> None:
-    """Send the pending-approval notification to the CloudFulcrum admin inbox.
-
-    Builds approve and reject links pointing to the backend API. The links
-    embed the raw token (not its hash) — the endpoint hashes it on receipt.
-    """
+) -> bool:
+    """Send the pending-approval request to the CloudFulcrum admin inbox."""
     approve_url = (
-        f"{_AGENTIQ_BACKEND_URL}/api/auth/org-approval/approve"
+        f"{_backend_url()}/api/auth/org-approval/approve"
         f"?token={approval_token}&org_id={org_id}"
     )
     reject_url = (
-        f"{_AGENTIQ_BACKEND_URL}/api/auth/org-approval/reject"
+        f"{_backend_url()}/api/auth/org-approval/reject"
         f"?token={approval_token}&org_id={org_id}"
     )
 
-    submitted_at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
-
-    html_body = _render_approval_request(
-        org_name=org_name,
-        registrant_email=registrant_email,
-        submitted_at=submitted_at,
-        approve_url=approve_url,
-        reject_url=reject_url,
-    )
-
-    subject = f"New AgentIQ organisation pending approval: {org_name}"
-    send_email(admin_email, subject, html_body)
-
-
-# ---------------------------------------------------------------------------
-# Inline HTML templates
-# ---------------------------------------------------------------------------
-
-
-def _render_approval_request(
-    *,
-    org_name: str,
-    registrant_email: str,
-    submitted_at: str,
-    approve_url: str,
-    reject_url: str,
-) -> str:
-    return f"""<!DOCTYPE html>
+    submitted_at = datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
+    html_body = f"""<!DOCTYPE html>
 <html>
 <head><meta charset="utf-8"><title>Org Approval Request</title></head>
 <body style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;padding:24px;color:#333">
-  <h2 style="color:#1a1a2e">New AgentIQ Organisation Pending Approval</h2>
-  <p>A new organisation has registered and is awaiting your approval:</p>
+  <h2>New AgentIQ Organisation Pending Approval</h2>
+  <p>A new organisation has registered and is awaiting approval:</p>
   <table style="border-collapse:collapse;width:100%;margin:16px 0">
-    <tr><td style="padding:8px;font-weight:bold;width:140px">Organisation</td>
-        <td style="padding:8px">{_escape(org_name)}</td></tr>
-    <tr style="background:#f9f9f9">
-        <td style="padding:8px;font-weight:bold">Registrant</td>
-        <td style="padding:8px">{_escape(registrant_email)}</td></tr>
-    <tr><td style="padding:8px;font-weight:bold">Submitted</td>
-        <td style="padding:8px">{_escape(submitted_at)}</td></tr>
+    <tr><td style="padding:8px;font-weight:bold">Organisation</td><td style="padding:8px">{_escape(org_name)}</td></tr>
+    <tr><td style="padding:8px;font-weight:bold">Registrant</td><td style="padding:8px">{_escape(registrant_email)}</td></tr>
+    <tr><td style="padding:8px;font-weight:bold">Submitted</td><td style="padding:8px">{_escape(submitted_at)}</td></tr>
   </table>
-  <p style="margin:24px 0">
-    <a href="{approve_url}" style="background:#22c55e;color:#fff;padding:12px 24px;
-       text-decoration:none;border-radius:4px;margin-right:12px;display:inline-block">
-      ✓ Approve this organisation
-    </a>
-    <a href="{reject_url}" style="background:#ef4444;color:#fff;padding:12px 24px;
-       text-decoration:none;border-radius:4px;display:inline-block">
-      ✗ Reject this organisation
-    </a>
+  <p>
+    <a href="{approve_url}" style="background:#15803d;color:#fff;padding:10px 16px;text-decoration:none;border-radius:4px">Approve this organisation</a>
+    <a href="{reject_url}" style="background:#b91c1c;color:#fff;padding:10px 16px;text-decoration:none;border-radius:4px;margin-left:8px">Reject this organisation</a>
   </p>
   <p style="color:#666;font-size:13px">This link expires in 7 days.</p>
-  <p style="color:#666;font-size:12px">
-    If you did not expect this email, ignore it — no action is required.
-  </p>
 </body>
 </html>"""
+    return send_email(
+        admin_email,
+        f"New AgentIQ organisation pending approval: {org_name}",
+        html_body,
+    )
 
 
-def send_org_approved_email(*, registrant_email: str, org_name: str) -> None:
-    """Send the approval-confirmation email to the registrant (T4 / AT-355).
-
-    Called by the approve endpoint after the org is set to 'active'. The
-    registrant can now log in with the credentials they registered with.
-    """
-    html_body = _render_org_approved(org_name=org_name)
-    send_email(
+def send_org_approved_email(*, registrant_email: str, org_name: str) -> bool:
+    """Send approval-confirmation email to the registrant."""
+    html_body = f"""<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>Organisation Approved</title></head>
+<body style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;padding:24px;color:#333">
+  <h2>Your AgentIQ Organisation Has Been Approved</h2>
+  <p><strong>{_escape(org_name)}</strong> has been approved.</p>
+  <p>You can now log in with the email address and password you registered with.</p>
+</body>
+</html>"""
+    return send_email(
         registrant_email,
         f"Your AgentIQ organisation has been approved: {org_name}",
         html_body,
     )
 
 
-def send_org_rejected_email(*, registrant_email: str, org_name: str) -> None:
-    """Send the rejection email to the registrant (T4 / AT-355).
-
-    Called by the reject endpoint after the org is set to 'rejected'.
-    """
-    html_body = _render_org_rejected(org_name=org_name)
-    send_email(
+def send_org_rejected_email(*, registrant_email: str, org_name: str) -> bool:
+    """Send rejection email to the registrant."""
+    html_body = f"""<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>Organisation Registration Not Approved</title></head>
+<body style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;padding:24px;color:#333">
+  <h2>Organisation Registration Not Approved</h2>
+  <p>We are unable to approve the registration for <strong>{_escape(org_name)}</strong> at this time.</p>
+  <p>If you believe this is an error, please contact your CloudFulcrum representative.</p>
+</body>
+</html>"""
+    return send_email(
         registrant_email,
         f"Your AgentIQ organisation registration was not approved: {org_name}",
         html_body,
     )
 
 
-def _render_org_approved(*, org_name: str) -> str:
-    return f"""<!DOCTYPE html>
-<html>
-<head><meta charset="utf-8"><title>Organisation Approved</title></head>
-<body style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;padding:24px;color:#333">
-  <h2 style="color:#15803d">Your AgentIQ Organisation Has Been Approved</h2>
-  <p>Great news! <strong>{_escape(org_name)}</strong> has been approved.</p>
-  <p>You can now log in with the email address and password you registered with.</p>
-  <p style="color:#666;font-size:12px">
-    If you did not register for AgentIQ, please contact
-    <a href="mailto:agentiqadmin@dwpglobal.com">agentiqadmin@dwpglobal.com</a>.
-  </p>
-</body>
-</html>"""
-
-
-def _render_org_rejected(*, org_name: str) -> str:
-    return f"""<!DOCTYPE html>
-<html>
-<head><meta charset="utf-8"><title>Organisation Registration Not Approved</title></head>
-<body style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;padding:24px;color:#333">
-  <h2 style="color:#b91c1c">Organisation Registration Not Approved</h2>
-  <p>We are unable to approve the registration for
-     <strong>{_escape(org_name)}</strong> at this time.</p>
-  <p>If you believe this is an error, please contact your CloudFulcrum representative.</p>
-  <p style="color:#666;font-size:12px">
-    Contact: <a href="mailto:agentiqadmin@dwpglobal.com">agentiqadmin@dwpglobal.com</a>
-  </p>
-</body>
-</html>"""
-
-
-def _escape(value: str) -> str:
-    """Minimal HTML escaping for user-supplied values in email templates."""
+def _escape(value: object) -> str:
+    """Minimal HTML escaping for inline AUTH-2 email bodies."""
     return (
-        str(value)
+        str(value or "")
         .replace("&", "&amp;")
         .replace("<", "&lt;")
         .replace(">", "&gt;")

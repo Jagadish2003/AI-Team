@@ -2,10 +2,13 @@
 
 CS-4 T3 — update_run_step() / DISCOVERY_STEPS integration.
 
-Adds current_step VARCHAR to the runs table so the status-poll endpoint can
-read which discovery stage is actively in progress without a JSON-payload parse.
-The column is nullable: existing rows (and new rows before the first step is
-recorded) carry NULL, which the status endpoint surfaces as None / absent.
+Adds a nullable current_step VARCHAR to the runs table as a denormalized SQL
+mirror of the step that db.update_run_step() also writes into the run JSON
+payload. This column exists for SQL-level queryability/observability (e.g.
+"which runs are stuck at sf_ncino") — it is NOT the API read path: the run
+status endpoint (routes_sprint4_t2.run_status) reads current_step from the run
+JSON payload via get_run(), not from this column. Existing rows (and new rows
+before the first step is recorded) carry NULL, surfaced as None / absent.
 
 Revision ID: 0011
 Revises: 0010

@@ -17,7 +17,7 @@ database/models/users.py and entities.py.
 SQLite-compatible types. PostgreSQL deployment replaces VARCHAR(36) id -> UUID,
 TIMESTAMP -> TIMESTAMP WITH TIME ZONE.
 
-AUTH-2 approval columns (added by migration 0012):
+AUTH-2 approval columns (added by migration 0013):
   approval_status          — state machine: pending_approval | active | rejected.
                              NOT NULL DEFAULT 'pending_approval'. Every org starts
                              pending; transitions are one-directional.

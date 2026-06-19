@@ -11,7 +11,12 @@ export const STATIC_SUMMARY =
   'productionize governance in the 60\u201390 day window.';
 
 /** The "What leadership should do next" checklist. Shared with the PDF export
- *  so the on-screen card and the downloaded report never drift apart. */
+ *  so the on-screen card and the downloaded report never drift apart.
+ *
+ *  TODO(executive-report): these action items are currently static placeholders.
+ *  Make them data-driven (derive from run results — e.g. quick-win count,
+ *  outstanding permission blockers, readiness) or serve them from the run-scoped
+ *  executive-report API so they reflect the actual run instead of fixed copy. */
 export const LEADERSHIP_ACTIONS = [
   'Approve the top 2 quick wins and confirm success metrics.',
   'Grant required permissions for 30-day pilots (read-only first).',

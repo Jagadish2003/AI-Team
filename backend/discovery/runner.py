@@ -352,29 +352,40 @@ def run(
     github_data: Dict[str, Any] = {}
     logger.info(f"Systems: {sorted(list(_systems))}")
 
+    # CS-4 / AT-313: each ingest stage reports success to update_run_step via
+    # ok=. A failed stage is recorded in failed_steps (still advancing
+    # current_step) so the progress UI shows it as failed rather than as a
+    # completed green-check stage. A skipped system (not in _systems) is not a
+    # failure, so ok stays True.
+    sf_ok = True
     try:
         if "salesforce" in _systems:
             sf_data = salesforce.ingest()
             logger.info("Salesforce ingestion: OK")
     except SFError as e:
+        sf_ok = False
         logger.error(f"Salesforce ingestion FAILED: {e}")
-    update_run_step(run_id, "sf_crm")
+    update_run_step(run_id, "sf_crm", ok=sf_ok)
 
+    sn_ok = True
     try:
         if "servicenow" in _systems:
             sn_data = servicenow.ingest()
             if sn_data: logger.info("ServiceNow ingestion: OK")
     except SNError as e:
+        sn_ok = False
         logger.error(f"ServiceNow ingestion FAILED: {e}")
-    update_run_step(run_id, "sn")
+    update_run_step(run_id, "sn", ok=sn_ok)
 
+    jira_ok = True
     try:
         if "jira" in _systems:
             jira_data = jira_mod.ingest()
             if jira_data: logger.info("Jira ingestion: OK")
     except JiraIngestError as e:
+        jira_ok = False
         logger.error(f"Jira ingestion FAILED: {e}")
-    update_run_step(run_id, "jira")
+    update_run_step(run_id, "jira", ok=jira_ok)
 
     if not sf_data and "salesforce" in _systems:
         logger.error("Salesforce data unavailable — cannot run detectors. Aborting.")
@@ -397,16 +408,24 @@ def run(
     # 2a. nCino ingest — if ncino pack, fetch lending signals from nCino objects
     from .packs.pack_config import is_ncino_pack as _is_ncino
     if _is_ncino(pack_id) and "salesforce" in _systems:
+        ncino_ok = True
         try:
             from .ingest.ncino import ingest as ncino_ingest
             # CS-4 / AT-310: ProcessInstance is queried by both salesforce.ingest()
             # and ncino.ingest(). Forward the Salesforce CRM approval data so the
             # nCino ingestor reuses it instead of issuing a duplicate
             # ProcessInstance query, reducing total Salesforce API calls by 1 per
-            # discovery run. Default to an empty list when approval_processes is
-            # absent so ncino.ingest() still skips the duplicate fetch.
+            # discovery run.
+            #
+            # AT-310-fix: forward the approval data ONLY when Salesforce actually
+            # produced it. A missing OR empty value is passed as None so
+            # ncino.ingest() keeps its own independent ProcessInstance fetch
+            # instead of being handed an empty approval set when the Salesforce
+            # CRM pass failed or returned nothing. Passing [] would suppress that
+            # fallback and silently drop nCino approval signals.
+            preloaded = sf_data.get("approval_processes")
             ncino_data = ncino_ingest(
-                preloaded_process_instances=sf_data.get("approval_processes", [])
+                preloaded_process_instances=preloaded if preloaded else None
             )
             # Merge ncino data into sf_data so detectors can find it
             if sf_data is None:
@@ -414,8 +433,9 @@ def run(
             sf_data["ncino"] = ncino_data
             logger.info("nCino ingestion: OK — %d lending metrics", len(ncino_data))
         except Exception as e:
+            ncino_ok = False
             logger.warning("nCino ingestion failed (non-blocking): %s", e)
-        update_run_step(run_id, "sf_ncino")
+        update_run_step(run_id, "sf_ncino", ok=ncino_ok)
 
     # 2b. STRS Benefits ingest — if strs_benefits pack
     from .packs.pack_config import is_strs_benefits_pack as _is_strs

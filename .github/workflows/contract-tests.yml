@@ -17,31 +17,26 @@ jobs:
   contract-tests:
     runs-on: ubuntu-latest
 
-    # Contract tests run against PostgreSQL. Set these repository secrets
-    # (Settings → Secrets and variables → Actions): POSTGRES_DB, POSTGRES_USER,
-    # POSTGRES_PASSWORD. The ephemeral service below and DATABASE_URL are both
-    # derived from them — the CI role owns this throwaway DB, so conftest resets,
-    # migrates and seeds it automatically (no separate seed step needed).
-    #
-    # To use an external PostgreSQL instead: delete the `services:` block and
-    # change the DATABASE_URL line under `env:` to ${{ secrets.DATABASE_URL }}.
+    # Contract tests run against an ephemeral PostgreSQL service. Use fixed
+    # throwaway CI credentials here so pull-request checks do not depend on
+    # repository secrets being present before the service container can start.
     services:
       postgres:
         image: postgres:14-alpine
         env:
-          POSTGRES_DB: ${{ secrets.POSTGRES_DB }}
-          POSTGRES_USER: ${{ secrets.POSTGRES_USER }}
-          POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+          POSTGRES_DB: agentiq_test
+          POSTGRES_USER: agentiq
+          POSTGRES_PASSWORD: agentiq
         ports:
           - 5432:5432
         options: >-
-          --health-cmd pg_isready
+          --health-cmd "pg_isready -U agentiq -d agentiq_test"
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
 
     env:
-      DATABASE_URL: postgresql://${{ secrets.POSTGRES_USER }}:${{ secrets.POSTGRES_PASSWORD }}@localhost:5432/${{ secrets.POSTGRES_DB }}
+      DATABASE_URL: postgresql://agentiq:agentiq@localhost:5432/agentiq_test
 
     defaults:
       run:
