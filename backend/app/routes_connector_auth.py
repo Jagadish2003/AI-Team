@@ -21,6 +21,7 @@ from typing import Dict, Optional
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Response
 from fastapi.responses import RedirectResponse
+from fastapi.security import HTTPAuthorizationCredentials
 
 from app import db
 from app.auth import (
@@ -34,7 +35,7 @@ from app.auth.configs import CONNECTOR_AUTH_CONFIGS
 from app.auth.vault import REFRESH_THRESHOLD_SECONDS, consume_nonce, store_nonce
 from app.middleware.audit import log_event
 from app.rbac import _get_user_id_from_token
-from app.security import require_auth
+from app.security import bearer, require_auth
 from database.models.credentials import (
     ALTER_CREDENTIALS_ADD_REFRESH_FAILED,
     CREATE_CREDENTIALS_IDX_CONNECTOR,
@@ -166,6 +167,43 @@ def _consume_nonce(state: str) -> Optional[str]:
 
 
 # ---------------------------------------------------------------------------
+# Callback auth (dev-gated)
+# ---------------------------------------------------------------------------
+
+
+def _callback_allows_unauth() -> bool:
+    """Whether the OAuth callback may complete without a Bearer header.
+
+    A provider's top-level browser redirect cannot carry an Authorization
+    header, so the live browser flow can only complete locally if the callback
+    accepts an unauthenticated request. This is OFF by default — production
+    behaviour (Bearer required, AC17) is unchanged. Set OAUTH_CALLBACK_ALLOW_UNAUTH=1
+    in a local .env to enable. The route stays protected by the single-use,
+    TTL-bounded state nonce (consume_nonce), which is the real CSRF defence here.
+    """
+    return os.environ.get("OAUTH_CALLBACK_ALLOW_UNAUTH", "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+    )
+
+
+def _callback_auth(
+    creds: Optional[HTTPAuthorizationCredentials] = Depends(bearer),
+) -> Optional[str]:
+    """Require a Bearer token unless OAUTH_CALLBACK_ALLOW_UNAUTH is set.
+
+    When a token is present it is always validated (so a bad token is still
+    rejected). When absent, it is allowed only in the dev-gated case.
+    """
+    if creds is not None and creds.scheme.lower() == "bearer":
+        return require_auth(creds)
+    if _callback_allows_unauth():
+        return None
+    raise HTTPException(status_code=401, detail="Unauthorized")
+
+
+# ---------------------------------------------------------------------------
 # Route registration
 # ---------------------------------------------------------------------------
 
@@ -182,7 +220,7 @@ def register_connector_auth_routes(app: FastAPI) -> None:
         code: Optional[str] = Query(default=None),
         state: Optional[str] = Query(default=None),
         error: Optional[str] = Query(default=None),
-        token: str = Depends(require_auth),
+        token: Optional[str] = Depends(_callback_auth),
     ) -> RedirectResponse:
         """Handle OAuth callback. Requires Bearer auth (called by frontend after provider redirect).
 
@@ -223,7 +261,7 @@ def register_connector_auth_routes(app: FastAPI) -> None:
         log_event(
             "connector_connected",
             connector_id=connector_id,
-            user_id=_get_user_id_from_token(token),
+            user_id=_get_user_id_from_token(token) if token else None,
             scopes_granted=config.scopes,
         )
         # AC2/AC4: redirect target is a hardcoded constant; connector_id comes
