@@ -106,4 +106,20 @@ describe('downloadExecutiveReportPdf (real jsPDF)', () => {
     expect(bytes).toMatch(/Tj|TJ/);
     expect(cap.pdf.getNumberOfPages()).toBeGreaterThanOrEqual(1);
   });
+
+  it('falls back to the text wordmark when the logo cannot be loaded', async () => {
+    // In jsdom there is no server/canvas, so the logo fetch+raster fails — this
+    // exercises the logo fallback path. Generation must still succeed and draw
+    // the "AgentIQ" wordmark (drawn as separate "Agent" + "IQ" text runs).
+    await downloadExecutiveReportPdf(DATA, {
+      filename: 'logo-fallback.pdf',
+      footerText: 'AgentIQ Executive Report — Confidential',
+    });
+
+    expect(cap.pdf).toBeTruthy();
+    const bytes = decodePdf(cap.pdf.output('datauristring'));
+    // "(IQ)" is the standalone wordmark run — the footer renders "AgentIQ ..."
+    // (no standalone "IQ"), so this is specific to the fallback wordmark.
+    expect(bytes).toContain('(IQ)');
+  });
 });

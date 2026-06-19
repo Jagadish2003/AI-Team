@@ -77,6 +77,14 @@ const ascent = (pt: number) => pt * PT_TO_MM * 0.74;
 // (\x20-\xFF) plus common typographic punctuation (U+2010–U+2027, U+2030–U+205E:
 // dashes, smart quotes, bullet, ellipsis), and strips stray CJK/other glyphs from
 // upstream data so they don't render as missing-glyph boxes in the PDF.
+//
+// LIMITATION: this drops non-Latin scripts (CJK, Arabic, Cyrillic beyond Latin-1,
+// etc.) from PDF *text* (org name, opportunity titles, summary). The standard
+// jsPDF fonts are WinAnsi-only, so the proper fix is embedding a Unicode TTF
+// (e.g. Noto Sans via addFileToVFS/addFont) — deferred as it adds a large font
+// asset. NOTE: the Effort vs Impact chart is exempt — it's rasterized from a
+// browser-rendered SVG, which renders any script the system has a font for.
+// TODO(executive-report): embed a Unicode font to support non-Latin report text.
 const STRIP_UNRENDERABLE = new RegExp(
   '[^\\x09\\x0A\\x0D\\x20-\\xFF\\u2010-\\u2027\\u2030-\\u205E]',
   'g',
@@ -241,8 +249,12 @@ export async function downloadExecutiveReportPdf(
   pdf.text('CONFIDENTIAL', RIGHT, ry, { align: 'right' });
   ry += 4.6;
   setFont(8.5, 'normal', MUTED);
-  if (data.orgName) {
-    pdf.text(sanitize(`${data.orgName}'s Profile`), RIGHT, ry, { align: 'right' });
+  // Sanitize the org name on its own and only render the line if something
+  // renderable remains — avoids a broken "'s Profile" with an empty name when
+  // the org name is entirely non-Latin (see sanitize() limitation above).
+  const safeOrgName = sanitize(data.orgName ?? '').trim();
+  if (safeOrgName) {
+    pdf.text(`${safeOrgName}'s Profile`, RIGHT, ry, { align: 'right' });
     ry += 4;
   }
   pdf.text(sanitize(`Date: ${data.generatedAt}`), RIGHT, ry, { align: 'right' });
