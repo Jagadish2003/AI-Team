@@ -63,6 +63,7 @@ from .security import require_auth
 from .auth.configs import CONNECTOR_AUTH_CONFIGS
 from .auth.secrets import validate_all_secrets
 from .middleware.tenancy import get_current_org_id, register_tenancy
+from .middleware.license_gate import register_license_gate
 from .rbac import require_role, seed_owner
 
 _DEV_USER = os.getenv("DEV_JWT", "dev-token-change-me")
@@ -152,6 +153,10 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="AgentIQ Layer 1 API Skeleton", version="0.1.0", lifespan=lifespan)
 register_tenancy(app)
+# LIC-1 / T5 (AT-346): gate discovery-run endpoints when the license is
+# read-only/invalid. Added here so it sits inside CORS (blocked responses still
+# get CORS headers) and outside tenancy; reads/login/valid+grace are untouched.
+register_license_gate(app)
 
 # Register routes in order
 register_stack_builder_routes(app)

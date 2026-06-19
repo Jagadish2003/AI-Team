@@ -441,6 +441,26 @@ def pytest_configure(config):
         con.close()
 
 
+@pytest.fixture(scope="session", autouse=True)
+def _license_gate_valid_by_default():
+    """LIC-1 / T5 (AT-346): run the whole contract session as if a valid license is installed.
+
+    The shipped product carries a real CloudFulcrum-signed license; CI cannot
+    mint one (no private key), so without this the license gate would resolve to
+    read-only/invalid and 402 every discovery-run endpoint the suite exercises.
+    Session-scoped so it also covers session/module-scoped fixtures that start
+    runs during setup (e.g. completed_run_id). Tests that exercise the gate
+    itself (test_license_gate.py) override this per-test with monkeypatch.
+    """
+    from unittest.mock import patch
+
+    with patch(
+        "app.middleware.license_gate.get_current_license_status",
+        lambda *a, **k: {"status": "valid"},
+    ):
+        yield
+
+
 @pytest.fixture(scope="session")
 def client():
     # Session-scoped: `with TestClient(app)` runs the app lifespan (seed_owner,
