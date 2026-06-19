@@ -148,3 +148,43 @@ export async function acceptInvite(
   if (!res.ok) throw new ApiError("POST /api/auth/accept-invite failed", res.status, body);
   return body as AuthResult;
 }
+
+/**
+ * POST /api/auth/forgot-password — CS-3 (Section 5). Public, no auth.
+ * Requests a password-reset link for `email`. The backend ALWAYS returns 200
+ * regardless of whether the email is registered (to prevent email enumeration),
+ * so this resolves on success and the caller shows one fixed message either way.
+ */
+export async function forgotPassword(email: string): Promise<void> {
+  const res = await fetch(`${BASE_URL}/api/auth/forgot-password`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email }),
+  });
+  if (!res.ok) {
+    const body = await parseBody(res);
+    throw new ApiError("POST /api/auth/forgot-password failed", res.status, body);
+  }
+}
+
+/**
+ * POST /api/auth/reset-password — CS-3 (Section 5). Public, no auth.
+ * Sets a new password for the account the reset token belongs to.
+ * 200 on success, 422 if the new password fails strength validation, 400 if the
+ * token is invalid/expired. The token comes from the reset-password URL query
+ * param; the field name on the wire is `reset_token` to match the contract.
+ */
+export async function resetPassword(
+  resetToken: string,
+  newPassword: string
+): Promise<void> {
+  const res = await fetch(`${BASE_URL}/api/auth/reset-password`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ reset_token: resetToken, new_password: newPassword }),
+  });
+  if (!res.ok) {
+    const body = await parseBody(res);
+    throw new ApiError("POST /api/auth/reset-password failed", res.status, body);
+  }
+}
