@@ -190,6 +190,16 @@ export default function LoginPage() {
               </div>
             </div>
 
+            {/* Forgot password — navigates to the public reset-request page. */}
+            <div className="mb-3 mt-1 text-right">
+              <Link
+                to="/forgot-password"
+                className="text-sm font-medium text-accent hover:underline focus:outline-none focus-visible:ring-1 focus-visible:ring-accent/40"
+              >
+                Forgot password?
+              </Link>
+            </div>
+
             <button type="submit" disabled={!canSubmit} className={SUBMIT_CLS}>
               {submitting ? "Signing in…" : "Sign in"}
             </button>

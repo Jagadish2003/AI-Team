@@ -69,6 +69,12 @@ describe("LoginPage", () => {
     expect(link.getAttribute("href")).toBe("/register");
   });
 
+  it("renders a 'Forgot password?' link to /forgot-password (CS-3 AC13)", () => {
+    renderPage();
+    const link = screen.getByRole("link", { name: /forgot password/i });
+    expect(link.getAttribute("href")).toBe("/forgot-password");
+  });
+
   // ── Show/hide password ───────────────────────────────────────────────────────
 
   it("toggles password visibility via the eye button", () => {
