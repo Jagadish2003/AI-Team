@@ -58,7 +58,7 @@ def test_invite_template_has_org_and_accept_cta():
     assert "role" in _jinja_vars(html)  # role conveyed
     # Clear call-to-action link wired to the invite URL (token-bearing link var).
     assert 'href="{{ link }}"' in html
-    assert _jinja_vars(html) <= {"link", "org", "role"}  # no stray variables
+    assert _jinja_vars(html) <= {"link", "logo_url", "org", "role"}  # no stray variables
 
 
 # ── welcome ───────────────────────────────────────────────────────────────────
@@ -70,7 +70,7 @@ def test_welcome_template_confirms_registration():
     assert "{{ org }}" in html
     # Onboarding feel: a clear "get started" / next-steps section.
     assert re.search(r"get started|started", html, re.IGNORECASE)
-    assert _jinja_vars(html) <= {"org"}
+    assert _jinja_vars(html) <= {"logo_url", "org"}
 
 
 # ── reset password ────────────────────────────────────────────────────────────
@@ -85,7 +85,7 @@ def test_reset_template_has_secure_time_limited_link():
     # Safety note for unrequested resets.
     assert re.search(r"didn'?t request|did not request", html, re.IGNORECASE)
     # No sensitive data exposed: the only variable is the (opaque) link.
-    assert _jinja_vars(html) == {"link"}
+    assert _jinja_vars(html) == {"link", "logo_url"}
     assert "{{ token" not in html and "password_hash" not in html.lower()
 
 

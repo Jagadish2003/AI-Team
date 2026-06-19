@@ -51,6 +51,11 @@ def _base_url() -> str:
     return os.getenv("PUBLIC_HOSTNAME", DEFAULT_BASE_URL).rstrip("/")
 
 
+def _logo_url() -> str:
+    """Absolute URL for the public AgentIQ logo used in email templates."""
+    return f"{_base_url()}/Logo-Dark.svg"
+
+
 @lru_cache(maxsize=1)
 def _jinja_env():
     """Build the Jinja2 environment over app/templates/."""
@@ -148,6 +153,7 @@ def _send_smtp(to: str, subject: str, html_body: str) -> bool:
 def _render_and_send(to: str, subject: str, template_name: str, **context) -> bool:
     """Render a template and send it. Never raises."""
     try:
+        context.setdefault("logo_url", _logo_url())
         html_body = render_template(template_name, **context)
     except Exception:
         logger.exception("Failed to render %s for %s", template_name, to)
