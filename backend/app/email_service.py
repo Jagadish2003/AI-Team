@@ -1,4 +1,4 @@
-"""Transactional email service — AUTH-2 / CS-3.
+"""Transactional email service — AUTH-2 / CS-3, AT-355.
 
 Thin wrapper around SMTP (Office 365 / any STARTTLS-capable server). All config
 comes from environment variables so no credentials live in code.
@@ -149,6 +149,65 @@ def _render_approval_request(
   <p style="color:#666;font-size:13px">This link expires in 7 days.</p>
   <p style="color:#666;font-size:12px">
     If you did not expect this email, ignore it — no action is required.
+  </p>
+</body>
+</html>"""
+
+
+def send_org_approved_email(*, registrant_email: str, org_name: str) -> None:
+    """Send the approval-confirmation email to the registrant (T4 / AT-355).
+
+    Called by the approve endpoint after the org is set to 'active'. The
+    registrant can now log in with the credentials they registered with.
+    """
+    html_body = _render_org_approved(org_name=org_name)
+    send_email(
+        registrant_email,
+        f"Your AgentIQ organisation has been approved: {org_name}",
+        html_body,
+    )
+
+
+def send_org_rejected_email(*, registrant_email: str, org_name: str) -> None:
+    """Send the rejection email to the registrant (T4 / AT-355).
+
+    Called by the reject endpoint after the org is set to 'rejected'.
+    """
+    html_body = _render_org_rejected(org_name=org_name)
+    send_email(
+        registrant_email,
+        f"Your AgentIQ organisation registration was not approved: {org_name}",
+        html_body,
+    )
+
+
+def _render_org_approved(*, org_name: str) -> str:
+    return f"""<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>Organisation Approved</title></head>
+<body style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;padding:24px;color:#333">
+  <h2 style="color:#15803d">Your AgentIQ Organisation Has Been Approved</h2>
+  <p>Great news! <strong>{_escape(org_name)}</strong> has been approved.</p>
+  <p>You can now log in with the email address and password you registered with.</p>
+  <p style="color:#666;font-size:12px">
+    If you did not register for AgentIQ, please contact
+    <a href="mailto:agentiqadmin@dwpglobal.com">agentiqadmin@dwpglobal.com</a>.
+  </p>
+</body>
+</html>"""
+
+
+def _render_org_rejected(*, org_name: str) -> str:
+    return f"""<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>Organisation Registration Not Approved</title></head>
+<body style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;padding:24px;color:#333">
+  <h2 style="color:#b91c1c">Organisation Registration Not Approved</h2>
+  <p>We are unable to approve the registration for
+     <strong>{_escape(org_name)}</strong> at this time.</p>
+  <p>If you believe this is an error, please contact your CloudFulcrum representative.</p>
+  <p style="color:#666;font-size:12px">
+    Contact: <a href="mailto:agentiqadmin@dwpglobal.com">agentiqadmin@dwpglobal.com</a>
   </p>
 </body>
 </html>"""
