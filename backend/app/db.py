@@ -13,17 +13,9 @@ from fastapi import HTTPException
 
 logger = logging.getLogger(__name__)
 
-# Ordered step IDs emitted by update_run_step() at each major discovery stage.
-DISCOVERY_STEPS = [
-    "sf_crm",    # after salesforce.ingest()
-    "sf_ncino",  # after ncino_ingest() (ncino pack only)
-    "sn",        # after servicenow.ingest()
-    "jira",      # after jira_mod.ingest()
-    "detect",    # after _run_detector_phase()
-    "enrich",    # before entity extraction / LLM enrichment
-    "complete",  # at the final return
-]
-
+# The canonical discovery step-id list lives in the discovery layer
+# (discovery/steps.py, DISCOVERY_STEPS / DISCOVERY_STEP_IDS). update_run_step()
+# validates against it via _discovery_step_ids() — no local copy is kept here.
 DATABASE_URL = os.getenv("DATABASE_URL")
 
 RUN_ID_RE = re.compile(r"^RUN_(\d+)$")

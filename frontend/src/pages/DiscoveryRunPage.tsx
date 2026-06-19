@@ -523,8 +523,6 @@ export default function DiscoveryRunPage() {
     };
   }, [runId, computing]);
 
-  const TOTAL_STAGES = 10;
-
   const status = run?.status?.toLowerCase();
   const isMaterialized =
     status === "complete" || status === "completed" || status === "partial";
@@ -536,9 +534,15 @@ export default function DiscoveryRunPage() {
   const targetPct = useMemo(() => {
     if (isComplete) return 100;
     if (!computing) return 0;
-    const seen = new Set(events.map((e: any) => e.stage).filter(Boolean));
-    return Math.min(Math.round((seen.size / TOTAL_STAGES) * 100), 99);
-  }, [isComplete, computing, events]);
+    // Tie the percentage to the SAME current_step signal that drives the
+    // Discovery Progress checklist, so the number and the green-checked steps
+    // always agree — both reflect the backend's update_run_step() timing.
+    // Each working step is one slice of the pipeline; "complete" maps to 100%.
+    const idx = currentStep != null ? (STEP_INDEX[currentStep] ?? -1) : -1;
+    if (idx < 0) return 0;
+    const lastIdx = DISCOVERY_STEPS.length - 1; // index of the terminal "complete" step
+    return Math.min(Math.round((idx / lastIdx) * 100), 99);
+  }, [isComplete, computing, currentStep]);
 
   // FIX: Safe requestAnimationFrame implementation
   useEffect(() => {
