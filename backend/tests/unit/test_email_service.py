@@ -194,3 +194,126 @@ def test_helper_returns_false_when_provider_unconfigured(monkeypatch):
     assert (
         email_service.send_password_reset_email("user@example.com", "RTOK") is False
     )
+
+
+# ---------------------------------------------------------------------------
+# AUTH-2 T5 — org approval emails + templates
+# ---------------------------------------------------------------------------
+
+
+def test_org_approval_request_email_to_admin_with_distinct_links(monkeypatch):
+    """T5-AC1: sent to AGENTIQ_ADMIN_EMAIL with org name, registrant, and
+    distinct approve and reject links."""
+    monkeypatch.setenv("AGENTIQ_BACKEND_URL", "https://api.example.com")
+    captured = _capture_send_email(monkeypatch)
+
+    ok = email_service.send_org_approval_request_email(
+        admin_email="agentiqadmin@dwpglobal.com",
+        org_name="Acme Bank",
+        registrant_email="owner@acme.test",
+        approval_token="TOK_ABC123",
+        org_id="org-xyz-789",
+    )
+
+    assert ok is True
+    assert captured["to"] == "agentiqadmin@dwpglobal.com"
+    assert "Acme Bank" in captured["subject"]
+    html = captured["html"]
+    assert "Acme Bank" in html
+    assert "owner@acme.test" in html
+    # Distinct approve and reject endpoints both present.
+    assert "/api/auth/org-approval/approve" in html
+    assert "/api/auth/org-approval/reject" in html
+
+
+def test_org_approval_request_links_carry_token_and_org_id(monkeypatch):
+    """T5-AC2: both links contain the signed token and org_id as query params."""
+    monkeypatch.setenv("AGENTIQ_BACKEND_URL", "https://api.example.com")
+    captured = _capture_send_email(monkeypatch)
+
+    email_service.send_org_approval_request_email(
+        admin_email="agentiqadmin@dwpglobal.com",
+        org_name="Acme Bank",
+        registrant_email="owner@acme.test",
+        approval_token="TOK_ABC123",
+        org_id="org-xyz-789",
+    )
+    html = captured["html"]
+
+    # Token and org_id present as query parameters (autoescaped & is fine in HTML).
+    assert "token=TOK_ABC123" in html
+    assert "org_id=org-xyz-789" in html
+    # Both the approve and the reject URL carry them: two occurrences each.
+    assert html.count("token=TOK_ABC123") >= 2
+    assert html.count("org_id=org-xyz-789") >= 2
+
+
+def test_org_approval_request_states_seven_day_expiry(monkeypatch):
+    """T5-AC3: the request email states the links expire in 7 days."""
+    captured = _capture_send_email(monkeypatch)
+    email_service.send_org_approval_request_email(
+        admin_email="agentiqadmin@dwpglobal.com",
+        org_name="Acme Bank",
+        registrant_email="owner@acme.test",
+        approval_token="TOK",
+        org_id="org-1",
+    )
+    assert "7 days" in captured["html"]
+
+
+def test_send_org_approved_email_uses_template_to_registrant(monkeypatch):
+    """T5-AC4: org_approved.html is rendered and sent to the registrant."""
+    captured = _capture_send_email(monkeypatch)
+    ok = email_service.send_org_approved_email(
+        registrant_email="owner@acme.test", org_name="Acme Bank"
+    )
+    assert ok is True
+    assert captured["to"] == "owner@acme.test"
+    assert "approved" in captured["subject"].lower()
+    assert "Acme Bank" in captured["html"]
+    assert "approved" in captured["html"].lower()
+
+
+def test_send_org_rejected_email_uses_template_to_registrant(monkeypatch):
+    """T5-AC5: org_rejected.html is rendered and sent to the registrant."""
+    captured = _capture_send_email(monkeypatch)
+    ok = email_service.send_org_rejected_email(
+        registrant_email="owner@acme.test", org_name="Acme Bank"
+    )
+    assert ok is True
+    assert captured["to"] == "owner@acme.test"
+    assert "not approved" in captured["subject"].lower()
+    assert "Acme Bank" in captured["html"]
+
+
+def test_all_three_org_templates_render_without_errors():
+    """T5-AC6: all three templates render with valid variables and escape input."""
+    request_html = email_service.render_template(
+        "org_approval_request.html",
+        org_name="A&B Bank",
+        registrant_email="owner@acme.test",
+        submitted_at="2026-06-19 10:00 UTC",
+        approve_url="https://api.example.com/api/auth/org-approval/approve?token=T&org_id=O",
+        reject_url="https://api.example.com/api/auth/org-approval/reject?token=T&org_id=O",
+        expiry_days=7,
+    )
+    assert "owner@acme.test" in request_html
+    assert "A&amp;B Bank" in request_html  # autoescaped
+    assert "7 days" in request_html
+
+    approved_html = email_service.render_template(
+        "org_approved.html", org_name="Acme Bank", login_url="https://app.example.com/login"
+    )
+    assert "Acme Bank" in approved_html
+    assert "https://app.example.com/login" in approved_html
+
+    rejected_html = email_service.render_template(
+        "org_rejected.html", org_name="Acme Bank"
+    )
+    assert "Acme Bank" in rejected_html
+
+
+def test_org_approved_email_renders_when_login_url_absent():
+    """org_approved.html must render even if login_url is not supplied."""
+    html = email_service.render_template("org_approved.html", org_name="Acme Bank")
+    assert "Acme Bank" in html

@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="x-apple-disable-message-reformatting">
+  <title>New AgentIQ organisation pending approval: {{ org_name }}</title>
+  <style>
+    body { margin:0; padding:0; background:#e6eef9; }
+    .wrap { width:100%; background:#e6eef9; padding:28px 12px; }
+    .container { max-width:620px; margin:0 auto; background:#ffffff; border:1px solid #9fb3c8; border-radius:12px; overflow:hidden; box-shadow:0 16px 36px rgba(7,25,58,.14); }
+    .header { padding:24px 32px; background:#ffffff; border-bottom:4px solid #0d55d7; }
+    .brand-fallback { color:#07193a; font:700 22px/1.2 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif; }
+    .tag { margin-top:10px; color:#21335c; font:12px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif; text-transform:uppercase; letter-spacing:.08em; }
+    .body { padding:32px; color:#07193a; font:15px/1.65 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif; }
+    .eyebrow { display:inline-block; margin:0 0 14px; padding:6px 10px; border:1px solid rgba(13,85,215,.28); border-radius:999px; background:rgba(13,85,215,.08); color:#0d55d7; font-size:12px; font-weight:700; letter-spacing:.04em; text-transform:uppercase; }
+    .h1 { margin:0 0 14px; color:#07193a; font-size:24px; line-height:1.25; font-weight:700; }
+    .panel { margin:22px 0; padding:6px 18px; border:1px solid #c8d5e4; border-radius:10px; background:#f2f7fd; }
+    .row { padding:12px 0; border-bottom:1px solid #dce6f2; }
+    .row:last-child { border-bottom:none; }
+    .label { margin:0 0 3px; color:#5f728c; font-size:12px; text-transform:uppercase; letter-spacing:.06em; }
+    .value { margin:0; color:#07193a; font-size:16px; font-weight:700; word-break:break-word; }
+    .actions { margin:26px 0 6px; }
+    .button { display:inline-block; margin:0 10px 10px 0; color:#ffffff !important; text-decoration:none; padding:13px 24px; border-radius:8px; font-weight:700; font-size:15px; }
+    .approve { background:#15803d; }
+    .reject { background:#b91c1c; }
+    .muted { color:#5f728c; font-size:13px; }
+    .link { color:#0d55d7; word-break:break-all; }
+    .expiry { margin-top:18px; padding:12px 16px; border:1px solid #f1d4a0; border-radius:8px; background:#fdf6e7; color:#8a5a00; font-size:13px; }
+    .footer { padding:18px 32px; border-top:1px solid #d6e0ec; color:#5f728c; background:#f8fbff; font:12px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif; }
+    @media only screen and (max-width:600px) {
+      .wrap { padding:0; }
+      .container { border-radius:0; }
+      .header,.body,.footer { padding-left:20px; padding-right:20px; }
+      .button { display:block; text-align:center; margin-right:0; }
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="container">
+      <div class="header">
+        <div class="brand-fallback">AgentIQ</div>
+        <div class="tag">Enterprise discovery workspace</div>
+      </div>
+      <div class="body">
+        <p class="eyebrow">Organisation approval</p>
+        <h1 class="h1">New organisation pending approval</h1>
+        <p>A new organisation has registered and is awaiting approval. Review the
+          details below, then approve or reject the registration.</p>
+
+        <div class="panel">
+          <div class="row">
+            <p class="label">Organisation</p>
+            <p class="value">{{ org_name }}</p>
+          </div>
+          <div class="row">
+            <p class="label">Registrant</p>
+            <p class="value">{{ registrant_email }}</p>
+          </div>
+          <div class="row">
+            <p class="label">Submitted</p>
+            <p class="value">{{ submitted_at }}</p>
+          </div>
+        </div>
+
+        <div class="actions">
+          <a href="{{ approve_url }}" class="button approve">Approve this organisation</a>
+          <a href="{{ reject_url }}" class="button reject">Reject this organisation</a>
+        </div>
+
+        <div class="expiry">
+          These links expire in {{ expiry_days }} days. After that, contact
+          engineering to reissue an approval link.
+        </div>
+
+        <p class="muted" style="margin-top:18px">If the buttons do not open, paste one of these links into your browser:</p>
+        <p class="muted">Approve: <a href="{{ approve_url }}" class="link">{{ approve_url }}</a></p>
+        <p class="muted">Reject: <a href="{{ reject_url }}" class="link">{{ reject_url }}</a></p>
+      </div>
+      <div class="footer">
+        This is an automated AgentIQ administrative notification sent because a new
+        organisation registered and requires approval.
+      </div>
+    </div>
+  </div>
+</body>
+</html>
