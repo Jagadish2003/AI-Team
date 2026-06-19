@@ -133,13 +133,26 @@ export default function ExecutiveReportPage() {
         month: 'long',
         day: 'numeric',
       });
+      // Ensure the PDF uses the same enrichment summary the UI shows. The page's
+      // enrichment fetch is async, so on a fast click it may not have resolved
+      // yet — fetch it now (and cache it) so the PDF never silently falls back to
+      // the static summary while the on-screen Key Insights shows the real one.
+      let enrichmentForPdf = enrichment;
+      if (!enrichmentForPdf && runId) {
+        try {
+          enrichmentForPdf = await fetchRunEnrichment(runId);
+          setEnrichment(enrichmentForPdf);
+        } catch {
+          enrichmentForPdf = null; // genuinely unavailable → static fallback
+        }
+      }
       await downloadExecutiveReportPdf(
         {
           confidence: reportConfidence,
           sourcesLabel,
           quickWinsCount: quickWins.length,
           roadmapStageLabel,
-          summary: resolveExecutiveSummary(enrichment),
+          summary: resolveExecutiveSummary(enrichmentForPdf),
           quickWins,
           stageCounts: roadmap.stages.map((s) => s.opportunities.length),
           blockerCount,

@@ -574,17 +574,19 @@ def org_connectors_list(org_id: str) -> List[Dict[str, Any]]:
     """All connectors visible to org_id: catalog defaults overlaid with this
     org's own connection state. Catalog ordering is preserved."""
     merged = _connector_catalog()
-    merged.update(_org_connector_overrides(org_id))
+    for connector_id, override in _org_connector_overrides(org_id).items():
+        merged[connector_id] = {**merged.get(connector_id, {}), **override}
     return list(merged.values())
 
 
 def org_connector_get(org_id: str, connector_id: str) -> Optional[Dict[str, Any]]:
     """This org's connector record if it has one, else the catalog template.
     Returns None only when the connector id is unknown entirely."""
+    catalog = get_one("connectors", connector_id)
     row = get_one("connectors", f"{org_id}{_ORG_CONNECTOR_SEP}{connector_id}")
     if row is not None:
-        return row
-    return get_one("connectors", connector_id)
+        return {**(catalog or {}), **row}
+    return catalog
 
 
 def org_connector_set(org_id: str, connector_id: str, payload: Dict[str, Any]) -> None:

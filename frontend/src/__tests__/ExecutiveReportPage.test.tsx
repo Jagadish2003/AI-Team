@@ -162,4 +162,24 @@ describe('ExecutiveReportPage — download controls', () => {
     expect(data.opportunities).toHaveLength(2);
     expect(data.quickWins.map((o: OpportunityCandidate) => o.title)).toContain('Checklist Bottleneck');
   });
+
+  it('shows an error toast and re-enables the button when the export fails', async () => {
+    h.mockDownloadPdf.mockRejectedValueOnce(new Error('boom'));
+    renderPage();
+    const pdfBtn = await findDownloadPdfButton();
+
+    await act(async () => {
+      fireEvent.click(pdfBtn);
+    });
+
+    // Error toast surfaced.
+    await waitFor(() =>
+      expect(h.mockPush).toHaveBeenCalledWith(expect.stringMatching(/could not generate/i), 'error'),
+    );
+    // Button is not stuck in the busy ("Generating PDF…") state.
+    await waitFor(() => {
+      const btn = screen.getByRole('button', { name: /download pdf/i });
+      expect(btn).toBeEnabled();
+    });
+  });
 });
