@@ -563,14 +563,18 @@ def change_password(
 
 def _store_reset_token(user_id: str, raw_token: str) -> None:
     """Persist the SHA-256 hash of a reset token + a one-hour expiry on the user."""
+    # Store naive UTC: the column is `timestamp without time zone`, so a tz-aware
+    # value could be shifted to the session timezone on write. A naive UTC value
+    # is stored verbatim and re-stamped as UTC on read in _consume_reset_token.
     expires_at = (
         datetime.now(timezone.utc) + timedelta(hours=RESET_TTL_HOURS)
-    ).isoformat()
+    ).replace(tzinfo=None)
     con = db.connect()
     try:
-        con.execute(
-            "UPDATE users SET reset_token_hash = ?, reset_token_expires_at = ? "
-            "WHERE id = ?",
+        cur = con.cursor()
+        cur.execute(
+            "UPDATE users SET reset_token_hash = %s, reset_token_expires_at = %s "
+            "WHERE id = %s",
             (_token_hash(raw_token), expires_at, user_id),
         )
         con.commit()
@@ -590,19 +594,24 @@ def _consume_reset_token(raw_token: str) -> dict:
     token_hash = _token_hash(raw_token)
     con = db.connect()
     try:
-        row = con.execute(
-            "SELECT id, reset_token_expires_at FROM users WHERE reset_token_hash = ?",
+        cur = con.cursor()
+        cur.execute(
+            "SELECT id, reset_token_expires_at FROM users WHERE reset_token_hash = %s",
             (token_hash,),
-        ).fetchone()
+        )
+        row = cur.fetchone()
     finally:
         con.close()
 
-    if row is None:
+    if row is None or row[1] is None:
         raise HTTPException(status_code=400, detail="Invalid or expired reset token")
 
-    expires_at_str = row[1] or ""
+    # psycopg2 returns a datetime for the TIMESTAMP column; tolerate an ISO string
+    # too (e.g. a legacy SQLite-written value) for safety.
+    expires_at = row[1]
     try:
-        expires_at = datetime.fromisoformat(expires_at_str)
+        if isinstance(expires_at, str):
+            expires_at = datetime.fromisoformat(expires_at)
         if expires_at.tzinfo is None:
             expires_at = expires_at.replace(tzinfo=timezone.utc)
     except (ValueError, TypeError):
@@ -650,7 +659,9 @@ def forgot_password(
 
     con = db.connect()
     try:
-        row = con.execute("SELECT id FROM users WHERE email = ?", (email,)).fetchone()
+        cur = con.cursor()
+        cur.execute("SELECT id FROM users WHERE email = %s", (email,))
+        row = cur.fetchone()
     finally:
         con.close()
 
@@ -699,9 +710,10 @@ def reset_password(body: ResetPasswordRequest) -> Dict[str, Any]:
     password_hash = hash_password(body.new_password)
     con = db.connect()
     try:
-        con.execute(
-            "UPDATE users SET password_hash = ?, reset_token_hash = NULL, "
-            "reset_token_expires_at = NULL WHERE id = ?",
+        cur = con.cursor()
+        cur.execute(
+            "UPDATE users SET password_hash = %s, reset_token_hash = NULL, "
+            "reset_token_expires_at = NULL WHERE id = %s",
             (password_hash, user_id),
         )
         con.commit()
