@@ -15,6 +15,7 @@ from typing import Any, Dict
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request, Response
+from fastapi.responses import HTMLResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import AliasChoices, BaseModel, Field
 
@@ -55,6 +56,8 @@ AUTH_ROUTE_PATHS = {
     "/api/auth/invite",
     "/api/auth/accept-invite",
     "/api/auth/change-password",
+    "/api/auth/org-approval/approve",
+    "/api/auth/org-approval/reject",
 }
 
 
@@ -477,6 +480,240 @@ def change_password(
     mark_password_changed(user_id)
 
     return Response(status_code=204)
+
+
+# ---------------------------------------------------------------------------
+# Org approval endpoints (AUTH-2 / AT-355)
+# ---------------------------------------------------------------------------
+
+
+def _get_org_approval_row(org_id: str) -> dict | None:
+    """Fetch the approval-related columns for an org. Returns None if not found."""
+    con = db.connect()
+    try:
+        cur = con.cursor()
+        cur.execute(
+            "SELECT name, approval_status, approval_token_hash, "
+            "approval_token_expires_at "
+            "FROM orgs WHERE id = %s",
+            (org_id,),
+        )
+        row = cur.fetchone()
+    finally:
+        con.close()
+    if row is None:
+        return None
+    return {
+        "name": row[0],
+        "approval_status": row[1],
+        "approval_token_hash": row[2],
+        "approval_token_expires_at": row[3],
+    }
+
+
+def _get_org_owner_email(org_id: str) -> str | None:
+    """Return the email of the owner-role member of an org, or None."""
+    con = db.connect()
+    try:
+        cur = con.cursor()
+        cur.execute(
+            "SELECT u.email FROM users u "
+            "JOIN workspace_members wm ON wm.user_id = u.id "
+            "WHERE wm.org_id = %s AND wm.role = 'owner' "
+            "ORDER BY wm.created_at ASC LIMIT 1",
+            (org_id,),
+        )
+        row = cur.fetchone()
+    finally:
+        con.close()
+    return row[0] if row else None
+
+
+def _update_org_approval(
+    org_id: str, *, status: str, action: str, now_iso: str
+) -> None:
+    """Set approval_status, approved_at, approved_by_action, clear token hash."""
+    con = db.connect()
+    try:
+        cur = con.cursor()
+        cur.execute(
+            "UPDATE orgs SET approval_status = %s, approved_at = %s, "
+            "approved_by_action = %s, approval_token_hash = NULL "
+            "WHERE id = %s",
+            (status, now_iso, action, org_id),
+        )
+        con.commit()
+    finally:
+        con.close()
+
+
+def _html_page(title: str, heading: str, body: str, status_code: int = 200) -> HTMLResponse:
+    html = (
+        "<!DOCTYPE html><html>"
+        f"<head><meta charset=\"utf-8\"><title>{title}</title></head>"
+        "<body style=\"font-family:Arial,sans-serif;max-width:600px;"
+        "margin:40px auto;padding:24px;color:#333\">"
+        f"<h2>{heading}</h2><p>{body}</p>"
+        "</body></html>"
+    )
+    return HTMLResponse(content=html, status_code=status_code)
+
+
+@router.get("/org-approval/approve", response_class=HTMLResponse)
+def approve_org(token: str, org_id: str) -> HTMLResponse:
+    """Validate approval token and set org to active. Returns an HTML page.
+
+    Clicked directly from the admin's email client — no JavaScript, no JSON.
+    Single-use: clears approval_token_hash on success. A second click with the
+    same (now-cleared) token returns a harmless 'already processed' page.
+    """
+    from app.email_service import send_org_approved_email
+
+    org = _get_org_approval_row(org_id)
+
+    if org is None or org["approval_status"] != "pending_approval":
+        return _html_page(
+            "Already Processed",
+            "Registration already processed",
+            "This registration has already been approved, rejected, or does not exist. "
+            "No further action is needed.",
+        )
+
+    stored_hash = org["approval_token_hash"]
+    if not stored_hash:
+        # Token was cleared — already processed via an earlier click.
+        return _html_page(
+            "Already Processed",
+            "Registration already processed",
+            "This approval link has already been used. No further action is needed.",
+        )
+
+    token_hash = hashlib.sha256(token.encode()).hexdigest()
+    if token_hash != stored_hash:
+        return _html_page(
+            "Invalid Link",
+            "Invalid approval link",
+            "This approval link is invalid. Please check the email and try again.",
+            status_code=400,
+        )
+
+    expires_at = org["approval_token_expires_at"]
+    if expires_at is not None:
+        if isinstance(expires_at, str):
+            try:
+                expires_at = datetime.fromisoformat(expires_at)
+            except (ValueError, TypeError):
+                expires_at = None
+        if expires_at is not None:
+            if expires_at.tzinfo is None:
+                expires_at = expires_at.replace(tzinfo=timezone.utc)
+            if datetime.now(timezone.utc) > expires_at:
+                return _html_page(
+                    "Link Expired",
+                    "Approval link has expired",
+                    "This approval link expired after 7 days. "
+                    "Contact engineering to reissue an approval link.",
+                    status_code=400,
+                )
+
+    _update_org_approval(org_id, status="active", action="approved", now_iso=db.now_iso())
+
+    registrant_email = _get_org_owner_email(org_id)
+    if registrant_email:
+        try:
+            send_org_approved_email(
+                registrant_email=registrant_email,
+                org_name=org["name"],
+            )
+        except Exception:
+            logger.exception(
+                "Failed to send org-approved email for org %s to %s.",
+                org_id, registrant_email,
+            )
+
+    return _html_page(
+        "Organisation Approved",
+        "Organisation approved",
+        f"<strong>{org['name']}</strong> has been approved. "
+        "The registrant has been notified and can now log in.",
+    )
+
+
+@router.get("/org-approval/reject", response_class=HTMLResponse)
+def reject_org(token: str, org_id: str) -> HTMLResponse:
+    """Validate approval token and set org to rejected. Returns an HTML page.
+
+    Mirrors approve_org() — same validation, same single-use guarantee.
+    """
+    from app.email_service import send_org_rejected_email
+
+    org = _get_org_approval_row(org_id)
+
+    if org is None or org["approval_status"] != "pending_approval":
+        return _html_page(
+            "Already Processed",
+            "Registration already processed",
+            "This registration has already been approved, rejected, or does not exist. "
+            "No further action is needed.",
+        )
+
+    stored_hash = org["approval_token_hash"]
+    if not stored_hash:
+        return _html_page(
+            "Already Processed",
+            "Registration already processed",
+            "This rejection link has already been used. No further action is needed.",
+        )
+
+    token_hash = hashlib.sha256(token.encode()).hexdigest()
+    if token_hash != stored_hash:
+        return _html_page(
+            "Invalid Link",
+            "Invalid rejection link",
+            "This rejection link is invalid. Please check the email and try again.",
+            status_code=400,
+        )
+
+    expires_at = org["approval_token_expires_at"]
+    if expires_at is not None:
+        if isinstance(expires_at, str):
+            try:
+                expires_at = datetime.fromisoformat(expires_at)
+            except (ValueError, TypeError):
+                expires_at = None
+        if expires_at is not None:
+            if expires_at.tzinfo is None:
+                expires_at = expires_at.replace(tzinfo=timezone.utc)
+            if datetime.now(timezone.utc) > expires_at:
+                return _html_page(
+                    "Link Expired",
+                    "Rejection link has expired",
+                    "This rejection link expired after 7 days. "
+                    "Contact engineering to reissue a rejection link.",
+                    status_code=400,
+                )
+
+    _update_org_approval(org_id, status="rejected", action="rejected", now_iso=db.now_iso())
+
+    registrant_email = _get_org_owner_email(org_id)
+    if registrant_email:
+        try:
+            send_org_rejected_email(
+                registrant_email=registrant_email,
+                org_name=org["name"],
+            )
+        except Exception:
+            logger.exception(
+                "Failed to send org-rejected email for org %s to %s.",
+                org_id, registrant_email,
+            )
+
+    return _html_page(
+        "Organisation Rejected",
+        "Organisation registration rejected",
+        f"<strong>{org['name']}</strong> has been rejected. "
+        "The registrant has been notified.",
+    )
 
 
 # ---------------------------------------------------------------------------
