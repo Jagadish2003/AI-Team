@@ -59,6 +59,7 @@ from .routes_entities import register_entities_routes
 from .routes_causal import register_causal_routes
 from .routes_graph import register_graph_routes
 from .routes_auth import register_auth_routes
+from .routes_license import register_license_routes
 from .security import require_auth
 from .auth.configs import CONNECTOR_AUTH_CONFIGS
 from .auth.secrets import validate_all_secrets
@@ -179,6 +180,8 @@ register_entities_routes(app)
 register_causal_routes(app)
 register_graph_routes(app)
 register_auth_routes(app)
+# LIC-1 / T6 (AT-347): Owner-only license status + update-key admin routes.
+register_license_routes(app)
 
 origins = [
     o.strip()

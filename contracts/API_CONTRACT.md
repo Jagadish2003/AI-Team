@@ -1,7 +1,16 @@
 # AgentIQ — API_CONTRACT.md (EPIC E0)
-Version: v1.4
-Date: 2026-06-10
+Version: v1.5
+Date: 2026-06-19
 
+> v1.5 — LIC-1 / T6 (AT-347): documented the Owner-only admin license endpoints
+> `GET /api/license` and `POST /api/license/update-key`, and the
+> `LicenseStatusResponse` shape (`status` ∈ valid|grace|readonly|invalid,
+> `customer`, `term`, `expires_at`, `days_remaining`; detail fields are `null`
+> when there is no valid key). `POST /api/license/update-key` validates before
+> storing — an invalid key returns 400 and never replaces the stored key. Both
+> endpoints require the Owner role (Analyst/Viewer → 403). Mirrors
+> `src/types/license.ts`. Additive — no previously documented shape changed.
+>
 > v1.4 — ENT-6 / T3-S16-A: extended `OppEnrichment` with the optional
 > `causal_hypothesis` (`CausalHypothesisSummary`: `cause_chain`,
 > `falsifiability_condition`, `confidence`, `inferred`, `preliminary`,
