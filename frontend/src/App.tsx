@@ -14,6 +14,7 @@ import AuthGuard from "./components/auth/AuthGuard";
 
 import LoginPage from "./pages/LoginPage";
 import RegisterPage from "./pages/RegisterPage";
+import PendingApprovalPage from "./pages/PendingApprovalPage";
 import AcceptInvitePage from "./pages/AcceptInvitePage";
 import ForgotPasswordPage from "./pages/ForgotPasswordPage";
 import ResetPasswordPage from "./pages/ResetPasswordPage";
@@ -60,6 +61,10 @@ export default function App() {
                              */}
                             <Route path="/login" element={<LoginPage />} />
                             <Route path="/register" element={<RegisterPage />} />
+                            {/* AUTH-2 T6: static post-registration confirmation.
+                                Public — the registrant has no session at this
+                                point (registration issues no JWT). */}
+                            <Route path="/pending-approval" element={<PendingApprovalPage />} />
                             <Route path="/accept-invite" element={<AcceptInvitePage />} />
                             <Route path="/forgot-password" element={<ForgotPasswordPage />} />
                             <Route path="/reset-password" element={<ResetPasswordPage />} />
