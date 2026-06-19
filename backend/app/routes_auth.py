@@ -188,7 +188,11 @@ def _validate_invite(raw_token: str) -> dict:
 
 @router.post("/register", status_code=201)
 def register(body: RegisterRequest) -> Dict[str, Any]:
-    """AC2: creates org + user + workspace_member in one transaction; returns JWT."""
+    """AUTH-2: creates org + user + workspace_member in pending_approval state.
+
+    Returns {status: 'pending_approval', message: '...'} — no JWT is issued.
+    The org is inactive until a CloudFulcrum admin approves via email link.
+    """
     ensure_auth_tables()
     try:
         result = register_org_and_owner(
