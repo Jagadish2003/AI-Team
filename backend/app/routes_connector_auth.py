@@ -46,12 +46,13 @@ from database.models.credentials import (
 
 logger = logging.getLogger(__name__)
 
-# Frontend OAuth callback target (CS-2 / AT-325 T3).
+# Frontend OAuth callback target (CS-2 / AT-326 T4; FE route added in AT-325 T3).
 #
 # The provider redirects the browser to the backend callback below; the backend
 # then redirects to the frontend /oauth/callback page (handled by
 # OAuthCallbackPage), which reads ?status, ?connected and ?code, then routes the
-# user back to Integration Hub.
+# user back to Integration Hub. The success/error query formats below are the
+# AT-326 T4 contract and must stay in lock-step with OAuthCallbackPage.
 #
 # The base URL is SERVER-CONTROLLED config (env var), never derived from request
 # input — this preserves the open-redirect protection from T1-S10-A. It defaults
