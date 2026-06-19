@@ -285,24 +285,41 @@ def invite(
     ensure_auth_tables()
     org_id = owner_payload.get("org_id")
     email = body.email.strip().lower()
+    now = db.now_iso()
 
     con = db.connect()
     try:
         cur = con.execute("SELECT id, is_active FROM users WHERE email = ?", (email,))
         existing_user = cur.fetchone()
-    finally:
-        con.close()
 
-    if existing_user and bool(existing_user[1]):
-        raise HTTPException(status_code=409, detail="Email already has an active account")
+        if existing_user:
+            user_id = existing_user[0]
+            is_active = bool(existing_user[1])
 
-    if existing_user:
-        user_id = existing_user[0]
-    else:
-        user_id = str(uuid4())
-        now = db.now_iso()
-        con = db.connect()
-        try:
+            current_membership = con.execute(
+                "SELECT role FROM workspace_members WHERE org_id = ? AND user_id = ?",
+                (org_id, user_id),
+            ).fetchone()
+            if current_membership:
+                raise HTTPException(
+                    status_code=409,
+                    detail="Email is already a member of this workspace",
+                )
+
+            other_membership = con.execute(
+                "SELECT org_id FROM workspace_members WHERE user_id = ? LIMIT 1",
+                (user_id,),
+            ).fetchone()
+            if other_membership:
+                raise HTTPException(status_code=409, detail="Email already belongs to another workspace")
+
+            con.execute(
+                "INSERT INTO workspace_members (org_id, user_id, role, created_at) "
+                "VALUES (?, ?, ?, ?)",
+                (org_id, user_id, body.role, now),
+            )
+        else:
+            user_id = str(uuid4())
             con.execute(
                 "INSERT INTO users (id, email, password_hash, is_active, created_at) "
                 "VALUES (?, ?, '', 0, ?)",
@@ -313,9 +330,12 @@ def invite(
                 "VALUES (?, ?, ?, ?)",
                 (org_id, user_id, body.role, now),
             )
-            con.commit()
-        finally:
-            con.close()
+        con.commit()
+    finally:
+        con.close()
+
+    if existing_user and bool(existing_user[1]):
+        return {}
 
     raw_token = str(uuid4())
     _store_invite(raw_token, user_id=user_id, org_id=org_id, role=body.role)

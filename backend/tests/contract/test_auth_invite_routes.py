@@ -41,6 +41,16 @@ def _create_invite(client, owner_token: str, role: str = "analyst") -> str:
     return resp.json()["invite_token"]
 
 
+def _owner_headers(owner_token: str) -> dict[str, str]:
+    return {"Authorization": f"Bearer {owner_token}"}
+
+
+def _member_for_email(client, owner_token: str, email: str) -> dict | None:
+    members = client.get("/api/workspace/members", headers=_owner_headers(owner_token))
+    assert members.status_code == 200, members.text
+    return next((m for m in members.json() if m["email"] == email), None)
+
+
 def test_accept_invite_accepts_invite_token_field(client):
     """The canonical `invite_token` body field (spec + frontend) is accepted."""
     owner_token = _register_owner(client)
@@ -132,3 +142,83 @@ def test_invite_info_400_for_used_token(client):
 def test_invite_info_400_for_unknown_token(client):
     info = client.get("/api/auth/invite-info?token=not-a-real-token")
     assert info.status_code == 400, info.text
+
+
+def test_reinvite_removed_pending_user_restores_workspace_membership(client):
+    """A removed pending invitee can be invited again with the same email/role.
+
+    The first invite creates users + workspace_members. Removing from Settings
+    deletes only workspace_members. The second invite must recreate that
+    membership so the user appears in Settings again.
+    """
+    owner_token = _register_owner(client)
+    email = _email()
+
+    first = client.post(
+        "/api/auth/invite",
+        headers=_owner_headers(owner_token),
+        json={"email": email, "role": "analyst"},
+    )
+    assert first.status_code == 201, first.text
+
+    member = _member_for_email(client, owner_token, email)
+    assert member is not None
+
+    removed = client.delete(
+        f"/api/workspace/members/{member['user_id']}",
+        headers=_owner_headers(owner_token),
+    )
+    assert removed.status_code == 204, removed.text
+    assert _member_for_email(client, owner_token, email) is None
+
+    second = client.post(
+        "/api/auth/invite",
+        headers=_owner_headers(owner_token),
+        json={"email": email, "role": "analyst"},
+    )
+    assert second.status_code == 201, second.text
+    assert second.json()["invite_token"]
+
+    restored = _member_for_email(client, owner_token, email)
+    assert restored is not None
+    assert restored["role"] == "analyst"
+
+
+def test_reinvite_removed_active_user_restores_workspace_membership(client):
+    """An accepted user removed from the workspace can be added again."""
+    owner_token = _register_owner(client)
+    email = _email()
+
+    invite = client.post(
+        "/api/auth/invite",
+        headers=_owner_headers(owner_token),
+        json={"email": email, "role": "viewer"},
+    )
+    assert invite.status_code == 201, invite.text
+
+    accepted = client.post(
+        "/api/auth/accept-invite",
+        json={"invite_token": invite.json()["invite_token"], "password": "viewerpass1"},
+    )
+    assert accepted.status_code == 200, accepted.text
+    user_id = accepted.json()["user"]["id"]
+
+    removed = client.delete(
+        f"/api/workspace/members/{user_id}",
+        headers=_owner_headers(owner_token),
+    )
+    assert removed.status_code == 204, removed.text
+    assert _member_for_email(client, owner_token, email) is None
+
+    readded = client.post(
+        "/api/auth/invite",
+        headers=_owner_headers(owner_token),
+        json={"email": email, "role": "viewer"},
+    )
+    assert readded.status_code == 201, readded.text
+    assert "invite_token" not in readded.json()
+
+    restored = _member_for_email(client, owner_token, email)
+    assert restored is not None
+    assert restored["user_id"] == user_id
+    assert restored["role"] == "viewer"

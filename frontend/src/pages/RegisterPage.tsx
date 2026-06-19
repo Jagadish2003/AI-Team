@@ -5,7 +5,7 @@
  *   POST /api/auth/register via AuthContext.register().
  *   Creates an org, user (identity only), and workspace_member (owner) in one transaction.
  *   409 → email already registered.
- *   Redirects to /integration-hub on success.
+ *   Redirects to /login on success; the user must sign in explicitly.
  *
  * Layout note: every inline message (email format, password length, mismatch)
  * and the submit error live in fixed-height slots, so the card height stays
@@ -88,9 +88,9 @@ export default function RegisterPage() {
     setSubmitting(true);
     try {
       await register(orgName.trim(), email.trim().toLowerCase(), password);
-      // Full reload (not SPA navigate) so all in-session context is rebuilt for
-      // this user — otherwise the previous user's connector/run state leaks.
-      hardRedirect("/integration-hub");
+      // Full reload (not SPA navigate) clears page-level context and starts the
+      // new account from a clean login flow.
+      hardRedirect("/login");
     } catch (err) {
       setError(registerErrorMessage(err));
     } finally {

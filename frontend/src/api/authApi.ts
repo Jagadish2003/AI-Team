@@ -33,8 +33,8 @@ export interface AuthUser {
   email: string;
   role: Role;
   org_id: string;
-  /** Human-readable organization name (from the orgs table). Used for display
-   * — e.g. the profile tooltip — instead of the raw org_id UUID. */
+  /** Human-readable organization name (from the orgs table). Used for org-level
+   * display instead of the raw org_id UUID. */
   org_name?: string | null;
   /** Present only on GET /api/auth/me. */
   last_login_at?: string | null;

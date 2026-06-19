@@ -194,14 +194,14 @@ describe("RegisterPage", () => {
     });
   });
 
-  it("reloads into /integration-hub on success", async () => {
+  it("reloads into /login on success", async () => {
     mockRegister.mockResolvedValue(undefined);
     renderPage();
     fillForm();
     fireEvent.click(screen.getByRole("button", { name: /create account/i }));
 
     await waitFor(() => {
-      expect(mockHardRedirect).toHaveBeenCalledWith("/integration-hub");
+      expect(mockHardRedirect).toHaveBeenCalledWith("/login");
     });
   });
 
