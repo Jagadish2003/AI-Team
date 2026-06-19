@@ -198,7 +198,7 @@ def test_reinvite_removed_active_user_restores_workspace_membership(client):
 
     accepted = client.post(
         "/api/auth/accept-invite",
-        json={"invite_token": invite.json()["invite_token"], "password": "viewerpass1"},
+        json={"invite_token": invite.json()["invite_token"], "password": "Viewerpass1!"},
     )
     assert accepted.status_code == 200, accepted.text
     user_id = accepted.json()["user"]["id"]
