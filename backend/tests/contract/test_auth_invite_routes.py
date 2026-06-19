@@ -24,7 +24,7 @@ def _register_owner(client) -> str:
         json={
             "org_name": f"Org {uuid.uuid4().hex[:6]}",
             "email": _email(),
-            "password": "ownerpass1",
+            "password": "Ownerpass1!",
         },
     )
     assert resp.status_code == 201, resp.text
@@ -58,7 +58,7 @@ def test_accept_invite_accepts_invite_token_field(client):
 
     resp = client.post(
         "/api/auth/accept-invite",
-        json={"invite_token": invite_token, "password": "analystpass1"},
+        json={"invite_token": invite_token, "password": "Analystpass1!"},
     )
     assert resp.status_code == 200, resp.text
     body = resp.json()
@@ -73,7 +73,7 @@ def test_accept_invite_still_accepts_legacy_token_field(client):
 
     resp = client.post(
         "/api/auth/accept-invite",
-        json={"token": invite_token, "password": "analystpass1"},
+        json={"token": invite_token, "password": "Analystpass1!"},
     )
     assert resp.status_code == 200, resp.text
 
@@ -85,13 +85,13 @@ def test_accept_invite_is_single_use(client):
 
     first = client.post(
         "/api/auth/accept-invite",
-        json={"invite_token": invite_token, "password": "analystpass1"},
+        json={"invite_token": invite_token, "password": "Analystpass1!"},
     )
     assert first.status_code == 200, first.text
 
     second = client.post(
         "/api/auth/accept-invite",
-        json={"invite_token": invite_token, "password": "analystpass1"},
+        json={"invite_token": invite_token, "password": "Analystpass1!"},
     )
     assert second.status_code == 400, second.text
 
@@ -100,7 +100,7 @@ def test_accept_invite_missing_token_is_422(client):
     """Neither `invite_token` nor `token` present → validation error, not 500."""
     resp = client.post(
         "/api/auth/accept-invite",
-        json={"password": "analystpass1"},
+        json={"password": "Analystpass1!"},
     )
     assert resp.status_code == 422, resp.text
 
@@ -119,7 +119,7 @@ def test_invite_info_resolves_org_without_consuming_token(client):
     # Token is still usable — invite-info must not consume it.
     accept = client.post(
         "/api/auth/accept-invite",
-        json={"invite_token": invite_token, "password": "analystpass1"},
+        json={"invite_token": invite_token, "password": "Analystpass1!"},
     )
     assert accept.status_code == 200, accept.text
 
@@ -132,7 +132,7 @@ def test_invite_info_400_for_used_token(client):
 
     client.post(
         "/api/auth/accept-invite",
-        json={"invite_token": invite_token, "password": "analystpass1"},
+        json={"invite_token": invite_token, "password": "Analystpass1!"},
     )
 
     info = client.get(f"/api/auth/invite-info?token={invite_token}")

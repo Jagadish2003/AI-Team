@@ -38,10 +38,13 @@ function renderPage() {
   );
 }
 
+// CS-3: the default password now satisfies the full strength rule (length +
+// uppercase + lowercase + special) so submit is enabled. Tests that need a
+// weak password pass one explicitly.
 function fillForm(
   orgName = "Acme Corp",
   email = "user@example.com",
-  password = "password123",
+  password = "Password1!",
   confirmPassword?: string
 ) {
   fireEvent.change(screen.getByLabelText(/organisation name/i), {
@@ -57,6 +60,11 @@ function fillForm(
   fireEvent.change(confirmField, {
     target: { value: confirmPassword ?? password },
   });
+}
+
+/** The strength-indicator row (the <li data-met>) whose label matches. */
+function requirementRow(label: RegExp | string): HTMLElement | null {
+  return screen.getByText(label).closest("[data-met]");
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -95,28 +103,39 @@ describe("RegisterPage", () => {
 
   it("accepts a dotted-local-part email such as abc.m@xy.org", () => {
     renderPage();
-    fillForm("Acme Corp", "abc.m@xy.org", "password123");
+    fillForm("Acme Corp", "abc.m@xy.org");
     expect(screen.queryByText(/valid email address/i)).toBeNull();
     const btn = screen.getByRole("button", { name: /create account/i }) as HTMLButtonElement;
     expect(btn.disabled).toBe(false);
   });
 
-  // ── Dynamic "min. 8 characters" hint ─────────────────────────────────────────
+  // ── Password strength indicator (CS-3) ───────────────────────────────────────
 
-  it("shows the length hint only while the password is too short", () => {
+  it("renders the four password requirements, all unmet, before typing", () => {
+    renderPage();
+    const rows = screen.getAllByTestId("password-requirement");
+    expect(rows).toHaveLength(4);
+    rows.forEach((row) => expect(row.getAttribute("data-met")).toBe("false"));
+  });
+
+  it("marks the 8-character requirement met only once the password is long enough", () => {
     renderPage();
     const [pwd] = screen.getAllByPlaceholderText("••••••••");
 
-    fireEvent.change(pwd, { target: { value: "abc" } });
-    expect(screen.getByText(/enter minimum of 8 characters/i)).toBeTruthy();
+    fireEvent.change(pwd, { target: { value: "Ab1!" } });
+    expect(requirementRow(/at least 8 characters/i)?.getAttribute("data-met")).toBe("false");
 
-    fireEvent.change(pwd, { target: { value: "abcdefgh" } });
-    expect(screen.queryByText(/enter minimum of 8 characters/i)).toBeNull();
+    fireEvent.change(pwd, { target: { value: "Abcdef1!" } });
+    expect(requirementRow(/at least 8 characters/i)?.getAttribute("data-met")).toBe("true");
   });
 
-  it("does not show the length hint when the password field is empty", () => {
+  it("turns every requirement green for a fully valid password", () => {
     renderPage();
-    expect(screen.queryByText(/enter minimum of 8 characters/i)).toBeNull();
+    const [pwd] = screen.getAllByPlaceholderText("••••••••");
+    fireEvent.change(pwd, { target: { value: "Password1!" } });
+    screen
+      .getAllByTestId("password-requirement")
+      .forEach((row) => expect(row.getAttribute("data-met")).toBe("true"));
   });
 
   // ── Show/hide password ───────────────────────────────────────────────────────
@@ -144,21 +163,28 @@ describe("RegisterPage", () => {
 
   it("submit is disabled when passwords do not match", () => {
     renderPage();
-    fillForm("Acme", "user@example.com", "password123", "different");
+    fillForm("Acme", "user@example.com", "Password1!", "Password2!");
     const btn = screen.getByRole("button", { name: /create account/i }) as HTMLButtonElement;
     expect(btn.disabled).toBe(true);
   });
 
   it("submit is disabled when password is shorter than 8 characters", () => {
     renderPage();
-    fillForm("Acme", "user@example.com", "short", "short");
+    fillForm("Acme", "user@example.com", "Aa1!x", "Aa1!x"); // upper/lower/special but only 5 chars
     const btn = screen.getByRole("button", { name: /create account/i }) as HTMLButtonElement;
     expect(btn.disabled).toBe(true);
   });
 
-  it("submit is enabled with valid matching passwords of 8+ chars", () => {
+  it("submit stays disabled for an 8+ char password missing uppercase and special", () => {
     renderPage();
-    fillForm();
+    fillForm("Acme", "user@example.com", "password"); // 8 chars, lowercase only
+    const btn = screen.getByRole("button", { name: /create account/i }) as HTMLButtonElement;
+    expect(btn.disabled).toBe(true);
+  });
+
+  it("submit is enabled with valid matching passwords meeting all requirements", () => {
+    renderPage();
+    fillForm(); // default password is Password1! — satisfies all four rules
     const btn = screen.getByRole("button", { name: /create account/i }) as HTMLButtonElement;
     expect(btn.disabled).toBe(false);
   });
@@ -182,14 +208,14 @@ describe("RegisterPage", () => {
   it("calls register() with orgName, lowercase email, and password", async () => {
     mockRegister.mockResolvedValue(undefined);
     renderPage();
-    fillForm("Acme Corp", "  USER@Example.COM  ", "password123");
+    fillForm("Acme Corp", "  USER@Example.COM  ", "Password1!");
     fireEvent.click(screen.getByRole("button", { name: /create account/i }));
 
     await waitFor(() => {
       expect(mockRegister).toHaveBeenCalledWith(
         "Acme Corp",
         "user@example.com",
-        "password123"
+        "Password1!"
       );
     });
   });
