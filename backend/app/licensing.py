@@ -19,6 +19,7 @@ made from this module.
 from __future__ import annotations
 
 import base64
+import datetime
 import json
 from typing import Optional
 
@@ -72,7 +73,68 @@ def verify_license_signature(
 
 
 # ===========================================================================
-# T3 (AT-344) section — LicenseStatus + validate_license() go here.
-# Build the status logic on top of verify_license_signature() above; do not
-# duplicate the verification primitive.
+# T3 (AT-344): offline validation core — LicenseStatus + validate_license().
+# Built on top of verify_license_signature() above (no duplicate verification).
+# Pure and side-effect-free: no DB, no telemetry, no main.py wiring (that is T4).
 # ===========================================================================
+class LicenseStatus:
+    """License states. Mirrored by the admin UI badge and the run gate."""
+
+    VALID = "valid"        # within term — full function
+    GRACE = "grace"        # past expiry, within grace_days — warn, still full function
+    READONLY = "readonly"  # past grace — discovery blocked, findings viewable
+    INVALID = "invalid"    # signature failed, no key, or unparseable payload
+
+
+# Exact failure shape returned on any signature/format/parse error (AC2).
+_INVALID_RESULT = {"status": LicenseStatus.INVALID, "reason": "signature_or_format"}
+
+DEFAULT_GRACE_DAYS = 14
+
+
+def validate_license(
+    key_string: str,
+    public_key: Optional[Ed25519PublicKey] = None,
+) -> dict:
+    """Validate a license key fully offline and return a status dict.
+
+    Never raises — any malformed input, bad signature (AC2), or unparseable
+    payload returns ``{'status': 'invalid', 'reason': 'signature_or_format'}``.
+
+    On a verified key, status is derived from the system clock:
+      * ``today <= expires_at``                       -> ``valid``
+      * ``expires_at < today <= expires_at + grace``  -> ``grace``
+      * ``today > expires_at + grace``                -> ``readonly``
+
+    Returns ``{status, customer, expires_at, days_remaining, payload}`` for a
+    verified key. ``public_key`` defaults to the baked-in CloudFulcrum key;
+    tests pass a throwaway key to exercise the date logic without the real
+    private key.
+    """
+    payload = verify_license_signature(key_string, public_key)
+    if payload is None:
+        return dict(_INVALID_RESULT)
+
+    try:
+        today = datetime.date.today()
+        expires = datetime.date.fromisoformat(payload["expires_at"])
+        grace_days = int(payload.get("grace_days", DEFAULT_GRACE_DAYS))
+        grace_end = expires + datetime.timedelta(days=grace_days)
+    except Exception:
+        # Signature verified but the payload is structurally bad — still invalid.
+        return dict(_INVALID_RESULT)
+
+    if today <= expires:
+        status = LicenseStatus.VALID
+    elif today <= grace_end:
+        status = LicenseStatus.GRACE
+    else:
+        status = LicenseStatus.READONLY
+
+    return {
+        "status": status,
+        "customer": payload.get("customer"),
+        "expires_at": payload["expires_at"],
+        "days_remaining": (expires - today).days,
+        "payload": payload,
+    }
