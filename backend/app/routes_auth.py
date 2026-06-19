@@ -360,26 +360,45 @@ def invite(
     ensure_auth_tables()
     org_id = owner_payload.get("org_id")
     email = body.email.strip().lower()
+    now = db.now_iso()
+    is_active = False
 
     con = db.connect()
     try:
         cur = con.cursor()
         cur.execute("SELECT id, is_active FROM users WHERE email = %s", (email,))
         existing_user = cur.fetchone()
-    finally:
-        con.close()
 
-    if existing_user and bool(existing_user[1]):
-        raise HTTPException(status_code=409, detail="Email already has an active account")
+        if existing_user:
+            user_id = existing_user[0]
+            is_active = bool(existing_user[1])
 
-    if existing_user:
-        user_id = existing_user[0]
-    else:
-        user_id = str(uuid4())
-        now = db.now_iso()
-        con = db.connect()
-        try:
-            cur = con.cursor()
+            cur.execute(
+                "SELECT role FROM workspace_members WHERE org_id = %s AND user_id = %s",
+                (org_id, user_id),
+            )
+            current_membership = cur.fetchone()
+            if current_membership:
+                raise HTTPException(
+                    status_code=409,
+                    detail="Email is already a member of this workspace",
+                )
+
+            cur.execute(
+                "SELECT org_id FROM workspace_members WHERE user_id = %s LIMIT 1",
+                (user_id,),
+            )
+            other_membership = cur.fetchone()
+            if other_membership:
+                raise HTTPException(status_code=409, detail="Email already belongs to another workspace")
+
+            cur.execute(
+                "INSERT INTO workspace_members (org_id, user_id, role, created_at) "
+                "VALUES (%s, %s, %s, %s)",
+                (org_id, user_id, body.role, now),
+            )
+        else:
+            user_id = str(uuid4())
             cur.execute(
                 "INSERT INTO users (id, email, password_hash, is_active, created_at) "
                 "VALUES (%s, %s, '', FALSE, %s)",
@@ -390,9 +409,12 @@ def invite(
                 "VALUES (%s, %s, %s, %s) ON CONFLICT DO NOTHING",
                 (org_id, user_id, body.role, now),
             )
-            con.commit()
-        finally:
-            con.close()
+        con.commit()
+    finally:
+        con.close()
+
+    if is_active:
+        return {}
 
     raw_token = str(uuid4())
     _store_invite(raw_token, user_id=user_id, org_id=org_id, role=body.role)
