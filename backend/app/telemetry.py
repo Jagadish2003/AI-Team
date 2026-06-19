@@ -389,6 +389,46 @@ class AuditWriteFailedPayload(TypedDict):
     error: str
 
 
+# LIC-1 / AT-348 (T7) — license lifecycle event payloads.
+# The offline license validator surfaces its state transitions here so
+# CloudFulcrum can spot an approaching/lapsed term in the customer's own
+# telemetry during support and start a proactive renewal conversation.
+# PII GUARD: status, dates, and the license customer id only — NEVER the raw
+# key string, signature, or any secret.
+
+class LicenseValidatedPayload(TypedDict):
+    """license.validated — emitted at each startup/periodic check (T4)."""
+    customer: str
+    status: str            # 'valid' | 'grace' | 'readonly'
+    expires_at: str
+    days_remaining: int
+
+
+class LicenseEnteredGracePayload(TypedDict):
+    """license.entered_grace — first crossing from valid into grace (T4)."""
+    customer: str
+    expires_at: str
+
+
+class LicenseEnteredReadonlyPayload(TypedDict):
+    """license.entered_readonly — first crossing from grace into read-only (T4)."""
+    customer: str
+    expires_at: str
+
+
+class LicenseUpdatedPayload(TypedDict):
+    """license.updated — a new key was installed via the admin route (T6)."""
+    customer: str
+    status: str
+    expires_at: str
+
+
+class LicenseClockAnomalyPayload(TypedDict):
+    """license.clock_anomaly — clock-rollback guard tripped (T4, §6). Dates only."""
+    last_seen: str
+    now: str
+
+
 # ---------------------------------------------------------------------------
 # Registry helpers
 # ---------------------------------------------------------------------------
@@ -458,6 +498,15 @@ register_event_type("graph.context_built", GraphContextBuiltPayload)
 # audit_log write is swallowed, so silent audit-persistence failures become
 # observable and alertable.
 register_event_type("audit.write_failed", AuditWriteFailedPayload)
+# LIC-1 / AT-348 (T7) — license lifecycle events. Registered here so T4
+# (validated / entered_grace / entered_readonly / clock_anomaly) and T6
+# (updated) can emit them. record_event() raises ValueError for an unregistered
+# type, so registration must land before any emission call-site.
+register_event_type("license.validated", LicenseValidatedPayload)
+register_event_type("license.entered_grace", LicenseEnteredGracePayload)
+register_event_type("license.entered_readonly", LicenseEnteredReadonlyPayload)
+register_event_type("license.updated", LicenseUpdatedPayload)
+register_event_type("license.clock_anomaly", LicenseClockAnomalyPayload)
 
 
 # ---------------------------------------------------------------------------
@@ -615,6 +664,11 @@ __all__ = [
     "CausalHypothesisRejectedPayload",      # ENT-6 / T3-S16-A
     "CausalHypothesisGeneratedPayload",     # ENT-6 / T3-S16-A
     "GraphContextBuiltPayload",             # ENT-4 / T3-S14-A
+    "LicenseValidatedPayload",              # LIC-1 / AT-348 (T7)
+    "LicenseEnteredGracePayload",           # LIC-1 / AT-348 (T7)
+    "LicenseEnteredReadonlyPayload",        # LIC-1 / AT-348 (T7)
+    "LicenseUpdatedPayload",                # LIC-1 / AT-348 (T7)
+    "LicenseClockAnomalyPayload",           # LIC-1 / AT-348 (T7)
     "EVENT_PAYLOAD_TYPES",          # AT-211 alias: event_type → TypedDict schema
     "EVENT_REGISTRY",
     "EVENT_TYPE_REGISTRY",          # alias for T1-S10-C unit tests
