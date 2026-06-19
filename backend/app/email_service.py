@@ -203,6 +203,13 @@ def send_password_reset_email(to: str, reset_token: str) -> bool:
 # ---------------------------------------------------------------------------
 
 
+# Approval links live longer than invite tokens (72h) because the CloudFulcrum
+# admin may not check the shared inbox daily. Mirrors
+# user_auth.APPROVAL_TOKEN_EXPIRY_DAYS — kept here so the email copy is correct
+# even though the token itself is minted in user_auth.
+APPROVAL_TOKEN_EXPIRY_DAYS = 7
+
+
 def send_org_approval_request_email(
     *,
     admin_email: str,
@@ -211,7 +218,13 @@ def send_org_approval_request_email(
     approval_token: str,
     org_id: str,
 ) -> bool:
-    """Send the pending-approval request to the CloudFulcrum admin inbox."""
+    """Send the pending-approval request to the CloudFulcrum admin inbox.
+
+    Renders org_approval_request.html with the org name, registrant email, a
+    UTC submission timestamp, and distinct approve/reject links. Each link
+    carries the signed approval token and org_id as query parameters and is
+    valid for APPROVAL_TOKEN_EXPIRY_DAYS days.
+    """
     approve_url = (
         f"{_backend_url()}/api/auth/org-approval/approve"
         f"?token={approval_token}&org_id={org_id}"
@@ -220,75 +233,37 @@ def send_org_approval_request_email(
         f"{_backend_url()}/api/auth/org-approval/reject"
         f"?token={approval_token}&org_id={org_id}"
     )
-
     submitted_at = datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
-    html_body = f"""<!DOCTYPE html>
-<html>
-<head><meta charset="utf-8"><title>Org Approval Request</title></head>
-<body style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;padding:24px;color:#333">
-  <h2>New AgentIQ Organisation Pending Approval</h2>
-  <p>A new organisation has registered and is awaiting approval:</p>
-  <table style="border-collapse:collapse;width:100%;margin:16px 0">
-    <tr><td style="padding:8px;font-weight:bold">Organisation</td><td style="padding:8px">{_escape(org_name)}</td></tr>
-    <tr><td style="padding:8px;font-weight:bold">Registrant</td><td style="padding:8px">{_escape(registrant_email)}</td></tr>
-    <tr><td style="padding:8px;font-weight:bold">Submitted</td><td style="padding:8px">{_escape(submitted_at)}</td></tr>
-  </table>
-  <p>
-    <a href="{approve_url}" style="background:#15803d;color:#fff;padding:10px 16px;text-decoration:none;border-radius:4px">Approve this organisation</a>
-    <a href="{reject_url}" style="background:#b91c1c;color:#fff;padding:10px 16px;text-decoration:none;border-radius:4px;margin-left:8px">Reject this organisation</a>
-  </p>
-  <p style="color:#666;font-size:13px">This link expires in 7 days.</p>
-</body>
-</html>"""
-    return send_email(
+
+    return _render_and_send(
         admin_email,
         f"New AgentIQ organisation pending approval: {org_name}",
-        html_body,
+        "org_approval_request.html",
+        org_name=org_name,
+        registrant_email=registrant_email,
+        submitted_at=submitted_at,
+        approve_url=approve_url,
+        reject_url=reject_url,
+        expiry_days=APPROVAL_TOKEN_EXPIRY_DAYS,
     )
 
 
 def send_org_approved_email(*, registrant_email: str, org_name: str) -> bool:
-    """Send approval-confirmation email to the registrant."""
-    html_body = f"""<!DOCTYPE html>
-<html>
-<head><meta charset="utf-8"><title>Organisation Approved</title></head>
-<body style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;padding:24px;color:#333">
-  <h2>Your AgentIQ Organisation Has Been Approved</h2>
-  <p><strong>{_escape(org_name)}</strong> has been approved.</p>
-  <p>You can now log in with the email address and password you registered with.</p>
-</body>
-</html>"""
-    return send_email(
+    """Send the approval-confirmation email to the registrant (org_approved.html)."""
+    return _render_and_send(
         registrant_email,
         f"Your AgentIQ organisation has been approved: {org_name}",
-        html_body,
+        "org_approved.html",
+        org_name=org_name,
+        login_url=f"{_base_url()}/login",
     )
 
 
 def send_org_rejected_email(*, registrant_email: str, org_name: str) -> bool:
-    """Send rejection email to the registrant."""
-    html_body = f"""<!DOCTYPE html>
-<html>
-<head><meta charset="utf-8"><title>Organisation Registration Not Approved</title></head>
-<body style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;padding:24px;color:#333">
-  <h2>Organisation Registration Not Approved</h2>
-  <p>We are unable to approve the registration for <strong>{_escape(org_name)}</strong> at this time.</p>
-  <p>If you believe this is an error, please contact your CloudFulcrum representative.</p>
-</body>
-</html>"""
-    return send_email(
+    """Send the rejection email to the registrant (org_rejected.html)."""
+    return _render_and_send(
         registrant_email,
         f"Your AgentIQ organisation registration was not approved: {org_name}",
-        html_body,
-    )
-
-
-def _escape(value: object) -> str:
-    """Minimal HTML escaping for inline AUTH-2 email bodies."""
-    return (
-        str(value or "")
-        .replace("&", "&amp;")
-        .replace("<", "&lt;")
-        .replace(">", "&gt;")
-        .replace('"', "&quot;")
+        "org_rejected.html",
+        org_name=org_name,
     )
