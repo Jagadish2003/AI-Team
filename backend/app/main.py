@@ -109,6 +109,12 @@ async def lifespan(app: FastAPI):
     # (CREATE TABLE IF NOT EXISTS — no-op once migrations 0004/0005 have run).
     from .auth.user_auth import ensure_auth_tables
     ensure_auth_tables()
+    # LIC-1 / T4 (AT-345): validate the installed license once at startup.
+    # One-shot and idempotent; never raises (startup must not fail on it) and
+    # runs regardless of AGENTIQ_DISABLE_BACKGROUND_JOBS — only the periodic
+    # re-check below is a gated background job.
+    from .license_runtime import run_startup_validation
+    run_startup_validation()
     # ENT-1: register customer entity-extraction overlays before the first run.
     # No-op by default (no customer overlays hardcoded into the core); the
     # function is the documented hook for deployment-time registration. Never
@@ -127,17 +133,21 @@ async def lifespan(app: FastAPI):
         scheduler as baseline_scheduler,
         start_scheduler as start_baseline_scheduler,
     )
+    # LIC-1 / T4 (AT-345): periodic license re-check (gated background job).
+    from .license_runtime import start_license_scheduler, stop_license_scheduler
 
     background_jobs_disabled = os.getenv("AGENTIQ_DISABLE_BACKGROUND_JOBS") == "1"
     if not background_jobs_disabled:
         start_health_check_job()
         start_baseline_scheduler()
+        start_license_scheduler()
     yield
     # AT-90: shut down scheduler on SIGTERM / graceful shutdown (wait=False).
     if not background_jobs_disabled:
         stop_health_check_job()
         if baseline_scheduler.running:
             baseline_scheduler.shutdown(wait=False)
+        stop_license_scheduler()
 
 
 app = FastAPI(title="AgentIQ Layer 1 API Skeleton", version="0.1.0", lifespan=lifespan)
