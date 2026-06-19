@@ -4,7 +4,6 @@ import os
 import re
 import uuid
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import psycopg2
@@ -14,17 +13,9 @@ from fastapi import HTTPException
 
 logger = logging.getLogger(__name__)
 
-# Ordered step IDs emitted by update_run_step() at each major discovery stage.
-DISCOVERY_STEPS = [
-    "sf_crm",    # after salesforce.ingest()
-    "sf_ncino",  # after ncino_ingest() (ncino pack only)
-    "sn",        # after servicenow.ingest()
-    "jira",      # after jira_mod.ingest()
-    "detect",    # after _run_detector_phase()
-    "enrich",    # before entity extraction / LLM enrichment
-    "complete",  # at the final return
-]
-
+# The canonical discovery step-id list lives in the discovery layer
+# (discovery/steps.py, DISCOVERY_STEPS / DISCOVERY_STEP_IDS). update_run_step()
+# validates against it via _discovery_step_ids() — no local copy is kept here.
 DATABASE_URL = os.getenv("DATABASE_URL")
 
 RUN_ID_RE = re.compile(r"^RUN_(\d+)$")
@@ -169,15 +160,56 @@ def upsert_run(run_id: str, payload: Dict[str, Any]) -> None:
     con.close()
 
 
-def update_run_step(run_id: str, step_id: str) -> None:
+def _discovery_step_ids() -> frozenset:
+    """Return the canonical discovery step-id set from the discovery layer.
+
+    Imported lazily (and tolerant of either package root) so db.py keeps no
+    module-load dependency on the discovery package. Returns an empty set if
+    the module cannot be located, which disables validation rather than
+    breaking step recording.
+    """
+    try:
+        from discovery.steps import DISCOVERY_STEP_IDS
+    except ModuleNotFoundError:
+        try:
+            from backend.discovery.steps import DISCOVERY_STEP_IDS
+        except ModuleNotFoundError:
+            return frozenset()
+    return DISCOVERY_STEP_IDS
+
+
+def update_run_step(run_id: str, step_id: str, ok: bool = True) -> None:
     """Record the current discovery step for run_id.
 
-    Writes step_id into both the current_step SQL column (migration 0011) and
-    the JSON payload so that get_run() surfaces it to status-poll endpoints
-    without a schema-aware query. Falls back to payload-only when the column
-    is absent. Never raises — a step-tracking failure must not abort a
-    discovery run.
+    The run JSON payload is the source of truth: ``current_step`` is written
+    there and is what ``GET /api/runs/{run_id}/status`` reads back (via
+    ``get_run()``) — no schema-aware query is involved. The ``current_step``
+    SQL column (migration 0011) is kept as a denormalized mirror for SQL-level
+    querying/observability only; it is written here but is not the API read
+    path. When the column is absent the payload write still succeeds.
+
+    ``ok=False`` marks the stage as failed: the step is recorded in the
+    payload's ``failed_steps`` list (so the UI can show it as failed rather
+    than as a green-check completion) while ``current_step`` still advances so
+    progress keeps moving. A subsequent ``ok=True`` for the same step clears it
+    from ``failed_steps``.
+
+    ``step_id`` is validated against the canonical discovery step set; an
+    unknown id (e.g. a typo) is logged as a WARNING and skipped rather than
+    silently written, so a misspelled step never clobbers a valid one. Never
+    raises — a step-tracking failure must not abort a discovery run.
     """
+    valid_ids = _discovery_step_ids()
+    if valid_ids and step_id not in valid_ids:
+        logger.warning(
+            "update_run_step: unknown step_id=%r (not in DISCOVERY_STEPS=%s) — "
+            "skipping write for run_id=%s",
+            step_id,
+            sorted(valid_ids),
+            run_id,
+        )
+        return
+
     try:
         con = connect()
         cur = con.cursor()
@@ -188,6 +220,19 @@ def update_run_step(run_id: str, step_id: str) -> None:
             return
         payload = json.loads(row[0])
         payload["current_step"] = step_id
+
+        # Track per-step failure so the progress UI does not render a failed
+        # ingest as a completed (green-check) stage. current_step still advances
+        # so the run keeps progressing; failed_steps records which stages failed.
+        failed_steps = payload.get("failed_steps")
+        if not isinstance(failed_steps, list):
+            failed_steps = []
+        if ok:
+            failed_steps = [s for s in failed_steps if s != step_id]
+        elif step_id not in failed_steps:
+            failed_steps.append(step_id)
+        payload["failed_steps"] = failed_steps
+
         payload_json = json.dumps(payload)
         try:
             cur.execute(
