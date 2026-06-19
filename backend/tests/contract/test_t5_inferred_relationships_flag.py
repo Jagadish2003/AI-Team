@@ -42,7 +42,7 @@ from database.models.entity_relationships import INFERRED_CONFIDENCE, OBSERVED_C
 
 
 def _get_db_path() -> str:
-    return os.environ["DB_PATH"]
+    return os.environ.get("DB_PATH", "")
 
 
 def _seed_run(org_id: str, run_id: str) -> None:
@@ -70,7 +70,6 @@ def _insert_entity(
     )
     row = entity.to_db_row()
     with sqlite3.connect(_get_db_path()) as conn:
-        conn.execute("PRAGMA foreign_keys = OFF")
         conn.execute(
             """INSERT INTO entities (
                 id, org_id, entity_type, canonical_name, display_name,
@@ -78,10 +77,10 @@ def _insert_entity(
                 resolution_status, first_seen_run_id, last_seen_run_id,
                 run_count, metadata, created_at, updated_at
             ) VALUES (
-                :id, :org_id, :entity_type, :canonical_name, :display_name,
-                :source_system, :source_record_id, :resolution_confidence,
-                :resolution_status, :first_seen_run_id, :last_seen_run_id,
-                :run_count, :metadata, :created_at, :updated_at
+                %(id)s, %(org_id)s, %(entity_type)s, %(canonical_name)s, %(display_name)s,
+                %(source_system)s, %(source_record_id)s, %(resolution_confidence)s,
+                %(resolution_status)s, %(first_seen_run_id)s, %(last_seen_run_id)s,
+                %(run_count)s, %(metadata)s, %(created_at)s, %(updated_at)s
             )""",
             row,
         )

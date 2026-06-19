@@ -39,13 +39,13 @@ from __future__ import annotations
 import logging
 import math
 import os
-import sqlite3
 import time
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
 import bcrypt
 import jwt
+import psycopg2
 
 from app import db
 from database.models.login_attempts import ALL_LOGIN_ATTEMPTS_DDL
@@ -182,23 +182,12 @@ _AUTH_TABLES_INITIALISED = False
 
 
 def ensure_auth_tables() -> None:
-    """Create orgs, users, login_attempts and workspace_members if missing."""
-    global _AUTH_TABLES_INITIALISED
-    if _AUTH_TABLES_INITIALISED:
-        return
-    con = db.connect()
-    try:
-        for ddl in (
-            *ALL_ORGS_DDL,
-            *ALL_USERS_DDL,
-            *ALL_LOGIN_ATTEMPTS_DDL,
-        ):
-            con.execute(ddl)
-        con.execute(CREATE_WORKSPACE_MEMBERS_TABLE)
-        con.commit()
-        _AUTH_TABLES_INITIALISED = True
-    finally:
-        con.close()
+    """No-op. orgs/users/login_attempts/workspace_members are provisioned externally.
+
+    Created by database/provision/provision.sh; the application no longer
+    creates these tables at runtime.
+    """
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -374,6 +363,12 @@ def _password_changed_after(user_id: str, payload: dict) -> bool:
 # ---------------------------------------------------------------------------
 # Rate limiting (AC6 / AC7 / AC8)
 # ---------------------------------------------------------------------------
+# NOTE (AUTH-1 AC7 deviation): Per-IP rate limiting was intentionally removed.
+# Reason: per-IP blocking is unreliable behind reverse proxies and NAT without
+# explicit X-Forwarded-For trust configuration, which is not yet in place.
+# Current implementation: per-email rate limiting only (5 failed attempts → lockout).
+# Tech debt: file a ticket to add per-IP limiting once proxy trust is configured.
+# ---------------------------------------------------------------------------
 
 
 def check_login_rate_limit(email: str, ip_address: str) -> None:
@@ -404,14 +399,15 @@ def record_login_attempt(email: str, ip_address: str, succeeded: bool) -> None:
     ensure_auth_tables()
     con = db.connect()
     try:
-        con.execute(
+        cur = con.cursor()
+        cur.execute(
             "INSERT INTO login_attempts (id, email, ip_address, attempted_at, succeeded) "
-            "VALUES (?, ?, ?, ?, ?)",
-            (str(uuid4()), email, ip_address, db.now_iso(), 1 if succeeded else 0),
+            "VALUES (%s, %s, %s, %s, %s)",
+            (str(uuid4()), email, ip_address, db.now_iso(), bool(succeeded)),
         )
         if succeeded:
-            con.execute(
-                "DELETE FROM login_attempts WHERE email = ? AND succeeded = 0",
+            cur.execute(
+                "DELETE FROM login_attempts WHERE email = %s AND succeeded = FALSE",
                 (email,),
             )
         con.commit()
@@ -428,9 +424,10 @@ def _count_failed_attempts(
     value = email if email is not None else ip
     con = db.connect()
     try:
-        cur = con.execute(
+        cur = con.cursor()
+        cur.execute(
             f"SELECT COUNT(*) FROM login_attempts "
-            f"WHERE {column} = ? AND succeeded = 0 AND attempted_at >= ?",
+            f"WHERE {column} = %s AND succeeded = FALSE AND attempted_at >= %s",
             (value, since.isoformat()),
         )
         return int(cur.fetchone()[0])
@@ -455,10 +452,11 @@ def _seconds_until_email_unblocked(email: str) -> int:
     window_start = datetime.now(timezone.utc) - window
     con = db.connect()
     try:
-        cur = con.execute(
+        cur = con.cursor()
+        cur.execute(
             "SELECT attempted_at FROM login_attempts "
-            "WHERE email = ? AND succeeded = 0 AND attempted_at >= ? "
-            "ORDER BY attempted_at DESC LIMIT 1 OFFSET ?",
+            "WHERE email = %s AND succeeded = FALSE AND attempted_at >= %s "
+            "ORDER BY attempted_at DESC LIMIT 1 OFFSET %s",
             (email, window_start.isoformat(), RATE_LIMIT_MAX_ATTEMPTS - 1),
         )
         row = cur.fetchone()
@@ -466,10 +464,18 @@ def _seconds_until_email_unblocked(email: str) -> int:
         con.close()
     if row is None or not row[0]:
         return RATE_LIMIT_WINDOW_MINUTES * 60
-    try:
-        oldest_relevant = datetime.fromisoformat(row[0])
-    except ValueError:
-        return RATE_LIMIT_WINDOW_MINUTES * 60
+    raw_attempted_at = row[0]
+    # attempted_at is a TIMESTAMP column: psycopg2 returns a datetime. Only parse
+    # when the value is a string (defensive for any text-typed source). Checking
+    # `isinstance(..., str)` rather than `isinstance(..., datetime)` keeps this
+    # correct even when a test patches the module-level `datetime` to a subclass.
+    if isinstance(raw_attempted_at, str):
+        try:
+            oldest_relevant = datetime.fromisoformat(raw_attempted_at)
+        except (ValueError, TypeError):
+            return RATE_LIMIT_WINDOW_MINUTES * 60
+    else:
+        oldest_relevant = raw_attempted_at
     if oldest_relevant.tzinfo is None:
         oldest_relevant = oldest_relevant.replace(tzinfo=timezone.utc)
     remaining = (oldest_relevant + window) - datetime.now(timezone.utc)
@@ -523,24 +529,25 @@ def register_org_and_owner(org_name: str, email: str, password: str) -> dict:
 
     con = db.connect()
     try:
+        cur = con.cursor()
         # Always a fresh org — no name-based join. Single transaction: roll back
         # every row if any insert fails.
-        con.execute(
-            "INSERT INTO orgs (id, name, created_at) VALUES (?, ?, ?)",
+        cur.execute(
+            "INSERT INTO orgs (id, name, created_at) VALUES (%s, %s, %s)",
             (org_id, org_name, now),
         )
-        con.execute(
+        cur.execute(
             "INSERT INTO users (id, email, password_hash, is_active, created_at) "
-            "VALUES (?, ?, ?, ?, ?)",
-            (user_id, email, password_hash, 1, now),
+            "VALUES (%s, %s, %s, %s, %s)",
+            (user_id, email, password_hash, True, now),
         )
-        con.execute(
+        cur.execute(
             "INSERT INTO workspace_members (org_id, user_id, role, created_at) "
-            "VALUES (?, ?, ?, ?)",
+            "VALUES (%s, %s, %s, %s)",
             (org_id, user_id, role, now),
         )
         con.commit()
-    except sqlite3.IntegrityError as exc:
+    except psycopg2.IntegrityError as exc:
         con.rollback()
         # Lost the race on the global unique email index.
         raise EmailAlreadyExistsError("Email already registered") from exc
@@ -624,8 +631,9 @@ def login(email: str, password: str, ip_address: str) -> dict:
 def _get_user_by_email(email: str) -> dict | None:
     con = db.connect()
     try:
-        cur = con.execute(
-            "SELECT id, email, password_hash, is_active FROM users WHERE email = ?",
+        cur = con.cursor()
+        cur.execute(
+            "SELECT id, email, password_hash, is_active FROM users WHERE email = %s",
             (email.strip().lower(),),
         )
         row = cur.fetchone()
@@ -652,7 +660,8 @@ def get_org_name(org_id: str | None) -> str | None:
         return None
     con = db.connect()
     try:
-        cur = con.execute("SELECT name FROM orgs WHERE id = ?", (org_id,))
+        cur = con.cursor()
+        cur.execute("SELECT name FROM orgs WHERE id = %s", (org_id,))
         row = cur.fetchone()
     finally:
         con.close()
@@ -663,8 +672,9 @@ def _get_workspace_member(user_id: str) -> dict | None:
     """Return {org_id, role} for the user's workspace membership (POC: one each)."""
     con = db.connect()
     try:
-        cur = con.execute(
-            "SELECT org_id, role FROM workspace_members WHERE user_id = ? "
+        cur = con.cursor()
+        cur.execute(
+            "SELECT org_id, role FROM workspace_members WHERE user_id = %s "
             "ORDER BY created_at ASC LIMIT 1",
             (user_id,),
         )
@@ -679,8 +689,9 @@ def _get_workspace_member(user_id: str) -> dict | None:
 def _update_last_login(user_id: str) -> None:
     con = db.connect()
     try:
-        con.execute(
-            "UPDATE users SET last_login_at = ? WHERE id = ?",
+        cur = con.cursor()
+        cur.execute(
+            "UPDATE users SET last_login_at = %s WHERE id = %s",
             (db.now_iso(), user_id),
         )
         con.commit()

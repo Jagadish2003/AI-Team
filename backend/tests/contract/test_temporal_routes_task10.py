@@ -26,8 +26,9 @@ def seed_roles():
     con = db.connect()
     try:
         con.execute(
-            "INSERT OR REPLACE INTO workspace_members (org_id, user_id, role, created_at) "
-            "VALUES (?, ?, ?, ?)",
+            "INSERT INTO workspace_members (org_id, user_id, role, created_at) "
+            "VALUES (%s, %s, %s, %s) "
+            "ON CONFLICT (org_id, user_id) DO UPDATE SET role=EXCLUDED.role, created_at=EXCLUDED.created_at",
             ("default", "viewer-token", "viewer", datetime.now(timezone.utc).isoformat()),
         )
         con.commit()
@@ -65,7 +66,7 @@ def insert_snapshot(
                 metric_name, metric_value, threshold, fired, signal_source,
                 captured_at, baseline_mean, baseline_stddev,
                 baseline_window_days, baseline_calculated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             """,
             (
                 str(uuid4()),
@@ -245,8 +246,9 @@ def test_trend_endpoint_returns_correct_fields():
     _con = _db.connect()
     try:
         _con.execute(
-            "INSERT OR REPLACE INTO workspace_members (org_id, user_id, role, created_at) "
-            "VALUES (?, ?, 'analyst', ?)",
+            "INSERT INTO workspace_members (org_id, user_id, role, created_at) "
+            "VALUES (%s, %s, 'analyst', %s) "
+            "ON CONFLICT (org_id, user_id) DO UPDATE SET role=EXCLUDED.role, created_at=EXCLUDED.created_at",
             (org_id, os.environ["DEV_JWT"], _dt.now(_tz.utc).isoformat()),
         )
         _con.commit()

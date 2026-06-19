@@ -27,16 +27,8 @@ _MEMBERS_INITIALISED = False
 
 
 def _ensure_members_table() -> None:
-    global _MEMBERS_INITIALISED
-    if _MEMBERS_INITIALISED:
-        return
-    con = db.connect()
-    try:
-        con.execute(CREATE_WORKSPACE_MEMBERS_TABLE)
-        con.commit()
-        _MEMBERS_INITIALISED = True
-    finally:
-        con.close()
+    """No-op. The workspace_members table is provisioned by database/provision/provision.sh."""
+    return None
 
 
 def seed_owner(org_id: str, user_id: str) -> None:
@@ -44,10 +36,12 @@ def seed_owner(org_id: str, user_id: str) -> None:
     _ensure_members_table()
     con = db.connect()
     try:
-        con.execute(
+        cur = con.cursor()
+        cur.execute(
             """
-            INSERT OR IGNORE INTO workspace_members (org_id, user_id, role, created_at)
-            VALUES (?, ?, 'owner', ?)
+            INSERT INTO workspace_members (org_id, user_id, role, created_at)
+            VALUES (%s, %s, 'owner', %s)
+            ON CONFLICT DO NOTHING
             """,
             (org_id, user_id, datetime.now(timezone.utc).isoformat()),
         )
@@ -61,8 +55,9 @@ def get_user_role(org_id: str, user_id: str) -> str | None:
     _ensure_members_table()
     con = db.connect()
     try:
-        cur = con.execute(
-            "SELECT role FROM workspace_members WHERE org_id = ? AND user_id = ?",
+        cur = con.cursor()
+        cur.execute(
+            "SELECT role FROM workspace_members WHERE org_id = %s AND user_id = %s",
             (org_id, user_id),
         )
         row = cur.fetchone()

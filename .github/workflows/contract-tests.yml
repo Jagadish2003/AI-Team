@@ -17,6 +17,32 @@ jobs:
   contract-tests:
     runs-on: ubuntu-latest
 
+    # Contract tests run against PostgreSQL. Set these repository secrets
+    # (Settings → Secrets and variables → Actions): POSTGRES_DB, POSTGRES_USER,
+    # POSTGRES_PASSWORD. The ephemeral service below and DATABASE_URL are both
+    # derived from them — the CI role owns this throwaway DB, so conftest resets,
+    # migrates and seeds it automatically (no separate seed step needed).
+    #
+    # To use an external PostgreSQL instead: delete the `services:` block and
+    # change the DATABASE_URL line under `env:` to ${{ secrets.DATABASE_URL }}.
+    services:
+      postgres:
+        image: postgres:14-alpine
+        env:
+          POSTGRES_DB: ${{ secrets.POSTGRES_DB }}
+          POSTGRES_USER: ${{ secrets.POSTGRES_USER }}
+          POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      DATABASE_URL: postgresql://${{ secrets.POSTGRES_USER }}:${{ secrets.POSTGRES_PASSWORD }}@localhost:5432/${{ secrets.POSTGRES_DB }}
+
     defaults:
       run:
         working-directory: backend
@@ -35,17 +61,10 @@ jobs:
           pip install -r requirements.txt
           pip install pytest httpx
 
-      - name: Seed database
-        env:
-          DB_PATH: database/dev.db
-          SEED_DIR: database/seed
-        run: python database/seed_loader.py
-
       - name: Run contract tests
         env:
           PYTHONPATH: "..:."
           DEV_JWT: dev-token-change-me
-          DB_PATH: database/dev.db
           SEED_DIR: database/seed
           CORS_ORIGINS: http://localhost:5173
           AGENTIQ_DISABLE_BACKGROUND_JOBS: "1"

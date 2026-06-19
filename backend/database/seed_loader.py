@@ -1,18 +1,35 @@
-"""Seed Loader (Task 2) — Core data only (mock data excluded)"""
+"""Seed Loader (Task 2) — Core data only (mock data excluded).
+
+AT-288 / Fix 1: seeds into PostgreSQL via DATABASE_URL using native psycopg2.
+The {id, payload} upsert SQL stays the same.
+"""
 
 import json
 import os
-import sqlite3
 import sys
 from pathlib import Path
 
 _SCRIPT_DIR = Path(__file__).resolve().parent
+_BACKEND_DIR = _SCRIPT_DIR.parent
+
+# Allow "python database/seed_loader.py" to import backend modules (the script's
+# own dir is on sys.path, not backend/, so add backend/).
+if str(_BACKEND_DIR) not in sys.path:
+    sys.path.insert(0, str(_BACKEND_DIR))
+
+import psycopg2  # noqa: E402
+import psycopg2.extras  # noqa: E402
+from dotenv import load_dotenv  # noqa: E402
+
+# Load backend/.env so DATABASE_URL (and SEED_DIR) are honoured without the
+# caller having to export them. override=False — an exported value still wins.
+load_dotenv(_BACKEND_DIR / ".env")
 
 SEED_DIR = Path(os.getenv("SEED_DIR", _SCRIPT_DIR / "seed"))
-DB_PATH = Path(os.getenv("DB_PATH", _SCRIPT_DIR / "dev.db"))
+DATABASE_URL = os.getenv("DATABASE_URL")
 
 print("Seed Path:", SEED_DIR)
-print("DB Path:", DB_PATH)
+print("Database URL:", DATABASE_URL)
 
 TABLES = [
     "connectors", "uploads", "runs", "evidence",
@@ -38,7 +55,7 @@ FILES = {
 }
 
 
-def ensure_db(conn: sqlite3.Connection) -> None:
+def ensure_db(conn) -> None:
     cur = conn.cursor()
 
     for t in TABLES:
@@ -48,6 +65,9 @@ def ensure_db(conn: sqlite3.Connection) -> None:
                 payload TEXT NOT NULL
             )
         """)
+
+    # runs needs the seq insertion-order column (see app/db.py init_tables).
+    cur.execute("ALTER TABLE runs ADD COLUMN IF NOT EXISTS seq BIGSERIAL")
 
     cur.execute("""
         CREATE TABLE IF NOT EXISTS run_events (
@@ -62,11 +82,44 @@ def ensure_db(conn: sqlite3.Connection) -> None:
     conn.commit()
 
 
-def upsert(conn: sqlite3.Connection, table: str, id_: str, payload: dict) -> None:
+# Full reset of the application's schema. PostgreSQL has no DB file to delete;
+# the standard "fresh start" for one app is to drop every table and sequence in
+# the `public` schema (this also removes alembic_version, so a subsequent
+# `alembic upgrade head` re-runs all migrations from scratch). The dynamic drop
+# only needs ownership of the objects (which the agentiq role has) — unlike
+# `DROP SCHEMA public`, it does not require schema ownership, and unlike
+# `DROP DATABASE` it needs no maintenance connection or CREATEDB privilege.
+_RESET_PUBLIC_SCHEMA = """
+DO $$
+DECLARE r RECORD;
+BEGIN
+    FOR r IN (SELECT tablename FROM pg_tables WHERE schemaname = 'public') LOOP
+        EXECUTE 'DROP TABLE IF EXISTS public.' || quote_ident(r.tablename) || ' CASCADE';
+    END LOOP;
+    FOR r IN (SELECT sequencename FROM pg_sequences WHERE schemaname = 'public') LOOP
+        EXECUTE 'DROP SEQUENCE IF EXISTS public.' || quote_ident(r.sequencename) || ' CASCADE';
+    END LOOP;
+END $$;
+"""
+
+
+def reset_public_schema(conn) -> None:
+    """Drop EVERY table + sequence in the public schema (full reset).
+
+    Runs by default (skip with --no-reset). Includes the Alembic-managed tables
+    and alembic_version, so run seed_loader BEFORE `alembic upgrade head` —
+    running it after would wipe the migration tables Alembic just created.
+    """
+    cur = conn.cursor()
+    cur.execute(_RESET_PUBLIC_SCHEMA)
+    conn.commit()
+
+
+def upsert(conn, table: str, id_: str, payload: dict) -> None:
     cur = conn.cursor()
     cur.execute(
-        f"INSERT INTO {table} (id, payload) VALUES (?, ?) "
-        "ON CONFLICT(id) DO UPDATE SET payload=excluded.payload",
+        f"INSERT INTO {table} (id, payload) VALUES (%s, %s) "
+        "ON CONFLICT (id) DO UPDATE SET payload=EXCLUDED.payload",
         (id_, json.dumps(payload))
     )
     conn.commit()
@@ -80,18 +133,24 @@ def load_file(name: str):
 
 
 def main():
-    # Check for --fresh flag to delete existing database
-    fresh = "--fresh" in sys.argv
+    # By DEFAULT this performs a FULL reset of the public schema (the PostgreSQL
+    # equivalent of deleting the SQLite file), then seeds. Run BEFORE
+    # `alembic upgrade head`, which recreates the migration-managed tables.
+    #
+    # --no-reset skips the wipe and only ensures/seeds the core {id, payload}
+    # tables. The test harness (tests/contract/conftest.py) uses it because it
+    # manages its own reset + migration ordering and must NOT have the migration
+    # tables dropped out from under it.
+    skip_reset = "--no-reset" in sys.argv
 
     SEED_DIR.mkdir(parents=True, exist_ok=True)
-    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
 
-    # Delete existing database if --fresh flag is used
-    if fresh and DB_PATH.exists():
-        DB_PATH.unlink()
-        print(f"🗑️  Deleted existing database: {DB_PATH}")
+    conn = psycopg2.connect(DATABASE_URL, cursor_factory=psycopg2.extras.DictCursor)
 
-    conn = sqlite3.connect(str(DB_PATH))
+    if not skip_reset:
+        reset_public_schema(conn)
+        print("Reset: dropped all tables + sequences in the public schema")
+
     ensure_db(conn)
 
     # connectors
@@ -131,7 +190,8 @@ def main():
     mappings_count = len(load_file(FILES["mappings"]))
     permissions_count = len(load_file(FILES["permissions"]))
 
-    print("✅ Seed load complete:", DB_PATH)
+    conn.close()
+    print("Seed load complete:", DATABASE_URL)
     print(f"   {connectors_count} connectors | {mappings_count} mappings")
     print(f"   {permissions_count} permissions | {uploads_count} uploads")
 
@@ -139,14 +199,23 @@ def main():
 if __name__ == "__main__":
     if "--help" in sys.argv or "-h" in sys.argv:
         print("""
-Seed Loader — Populate dev.db with core data
+Seed Loader — Populate the PostgreSQL agentiq DB with core data
 
-Usage:
-    python seed_loader.py              # Upsert data (idempotent, safe)
-    python seed_loader.py --fresh      # Delete existing db and create new one
+Target DB: $DATABASE_URL
+
+Fresh-database workflow (run from backend/, in this order):
+    python database/seed_loader.py              # 1. wipe public schema + create/seed core tables
+    alembic upgrade head                        # 2. create the migration-managed tables
+
+WARNING: by default this DROPS every table + sequence in the public schema
+(incl. alembic_version and the migration tables) before seeding — it is the
+PostgreSQL equivalent of deleting the SQLite file. Run it BEFORE
+`alembic upgrade head` (running it after would wipe the tables Alembic created).
 
 Flags:
-    --fresh       Delete existing dev.db and create a fresh database
+    --no-reset    Do NOT drop anything. Only create-if-missing and upsert the
+                  core {id, payload} tables (idempotent, safe). Used by the test
+                  harness, which manages its own reset/migration ordering.
     --help, -h    Show this help message
 
 Core Data Loaded:

@@ -461,3 +461,28 @@ def test_opp_enrichment_service_account_entities_filtered(client, enriched_run_i
     finally:
         # Restore original KV state
         app_db.run_kv_set("entities", enriched_run_id, current)
+
+
+def test_entity_summary_loader_deduplicates_legacy_payloads(monkeypatch):
+    """Runs saved before the fix must still return one card per entity_id."""
+    from app import routes_sprint4_t6
+
+    duplicate = {
+        "entity_id": "legacy-owner-id",
+        "entity_type": "person",
+        "display_name": "005LEGACYOWNER",
+        "source_system": "salesforce",
+        "resolution_confidence": 1.0,
+        "resolution_status": "resolved",
+        "run_count": 5,
+    }
+    monkeypatch.setattr(
+        routes_sprint4_t6.db,
+        "run_kv_get",
+        lambda *_args, **_kwargs: [duplicate, {**duplicate, "run_count": 6}],
+    )
+
+    summaries = routes_sprint4_t6._load_entity_summaries("run-legacy-duplicates")
+
+    assert len(summaries) == 1
+    assert summaries[0].entity_id == "legacy-owner-id"

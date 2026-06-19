@@ -288,7 +288,7 @@ export default function SnapshotMatrix({ opportunities }: SnapshotMatrixProps) {
             );
           })}
 
-          {/* NON-OVERLAPPING bubbles: name in a pill just above the bubble (unchanged). */}
+          {/* NON-OVERLAPPING bubbles: name in a pill just above the bubble. */}
           {labelPlacements.filter((lab) => !lab.onBubble).map((lab) => (
             <g key={`label-${lab.id}`} pointerEvents="none">
               <rect

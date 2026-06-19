@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import json
 import logging
-import sqlite3
 import time
 from typing import Any, Dict, List
 
@@ -46,48 +45,24 @@ router = APIRouter(tags=["entities"])
 logger = logging.getLogger(__name__)
 
 
-def _table_exists(con: sqlite3.Connection, name: str) -> bool:
-    row = con.execute(
-        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+def _table_exists(con, name: str) -> bool:
+    cur = con.cursor()
+    cur.execute(
+        "SELECT 1 FROM information_schema.tables WHERE table_name = %s",
         (name,),
-    ).fetchone()
+    )
+    row = cur.fetchone()
     return row is not None
 
 
 def ensure_entities_table() -> None:
-    """Ensure dev databases have the Sprint 12 entity schema.
+    """No-op. The entities schema is provisioned externally.
 
-    Older seed databases had a generic payload-backed ``entities`` table used
-    by the retired Evidence Collection mock. The Sprint 12 graph code needs
-    real columns. Preserve the old rows by renaming that legacy table, then
-    create the locked graph schema.
+    The entities table and its indexes are created by
+    database/provision/provision.sh; the application no longer creates or
+    migrates this table at runtime.
     """
-    con = db.connect()
-    try:
-        columns = {
-            row[1]
-            for row in con.execute("PRAGMA table_info(entities)").fetchall()
-        }
-
-        if columns and not REQUIRED_ENTITY_COLUMNS.issubset(columns):
-            legacy_name = "entities_legacy_payload"
-            if _table_exists(con, legacy_name):
-                legacy_name = f"entities_legacy_payload_{int(time.time())}"
-            con.execute(f"ALTER TABLE entities RENAME TO {legacy_name}")
-            logger.warning(
-                "Renamed legacy entities table to %s before creating graph schema",
-                legacy_name,
-            )
-
-        for ddl in ALL_ENTITIES_DDL:
-            con.execute(ddl)
-        con.commit()
-    except Exception:
-        con.rollback()
-        logger.exception("ensure_entities_table failed")
-        raise
-    finally:
-        con.close()
+    return None
 
 
 @router.get(
@@ -134,12 +109,12 @@ def list_entities(run_id: str) -> List[Dict[str, Any]]:
 
     con = db.connect()
     try:
-        con.row_factory = sqlite3.Row
-        # All values are bound parameters (?) — never string-interpolated — so
+        # All values are bound parameters — never string-interpolated — so
         # source_record_id and other external-system values cannot inject SQL.
         # LEFT JOIN keeps entities whose first_seen run row is absent (defensive:
         # never drop a real entity just because its origin run record is gone).
-        rows = con.execute(
+        cur = con.cursor()
+        cur.execute(
             """
             SELECT e.id, e.org_id, e.entity_type, e.canonical_name, e.display_name,
                    e.source_system, e.source_record_id, e.resolution_confidence,
@@ -149,7 +124,8 @@ def list_entities(run_id: str) -> List[Dict[str, Any]]:
             + ENTITIES_VISIBLE_AS_OF_RUN_FROM_WHERE
             + "ORDER BY e.entity_type, e.canonical_name",
             (org_id, run_id),
-        ).fetchall()
+        )
+        rows = cur.fetchall()
         result = []
         for r in rows:
             row_dict = dict(r)

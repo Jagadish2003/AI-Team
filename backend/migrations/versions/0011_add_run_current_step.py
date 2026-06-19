@@ -10,8 +10,8 @@ status endpoint (routes_sprint4_t2.run_status) reads current_step from the run
 JSON payload via get_run(), not from this column. Existing rows (and new rows
 before the first step is recorded) carry NULL, surfaced as None / absent.
 
-Revision ID: 0008
-Revises: 0007
+Revision ID: 0011
+Revises: 0010
 Create Date: 2026-06-16
 """
 from typing import Sequence, Union
@@ -19,8 +19,8 @@ from typing import Sequence, Union
 from alembic import op
 import sqlalchemy as sa
 
-revision: str = "0008"
-down_revision: Union[str, None] = "0007"
+revision: str = "0011"
+down_revision: Union[str, None] = "0010"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
