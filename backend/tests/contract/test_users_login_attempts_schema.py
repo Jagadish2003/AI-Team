@@ -18,6 +18,9 @@ import pytest
 import sqlite3  # routed to PostgreSQL by conftest
 
 # (name, data_type, character_maximum_length, required/NOT NULL, primary_key)
+# reset_token_hash / reset_token_expires_at are appended last by the CS-3
+# password-reset migration (0012 in this integration line) and also live at the
+# end of CREATE_USERS_TABLE, so migrated and fresh schemas align on ordinal order.
 EXPECTED_USERS_COLUMNS = [
     ("id", "character varying", 36, True, True),
     ("email", "character varying", 256, True, False),
@@ -27,6 +30,8 @@ EXPECTED_USERS_COLUMNS = [
     ("invite_token_expires_at", "timestamp without time zone", None, False, False),
     ("created_at", "timestamp without time zone", None, True, False),
     ("last_login_at", "timestamp without time zone", None, False, False),
+    ("reset_token_hash", "character varying", 256, False, False),
+    ("reset_token_expires_at", "timestamp without time zone", None, False, False),
 ]
 
 EXPECTED_LOGIN_ATTEMPTS_COLUMNS = [

@@ -109,7 +109,7 @@ def test_change_password_invalidates_existing_token_end_to_end(client):
     email = _email()
     reg = client.post(
         "/api/auth/register",
-        json={"org_name": f"Org {uuid.uuid4().hex[:6]}", "email": email, "password": "supersecret1"},
+        json={"org_name": f"Org {uuid.uuid4().hex[:6]}", "email": email, "password": "Supersecret1!"},
     )
     assert reg.status_code == 201, reg.text
     token = reg.json()["token"]
@@ -121,7 +121,7 @@ def test_change_password_invalidates_existing_token_end_to_end(client):
     # Rotate the password using that same token.
     changed = client.post(
         "/api/auth/change-password",
-        json={"current_password": "supersecret1", "new_password": "evenbetter2"},
+        json={"current_password": "Supersecret1!", "new_password": "evenbetter2"},
         headers=auth,
     )
     assert changed.status_code == 204, changed.text
@@ -136,7 +136,7 @@ def test_change_password_invalidates_existing_token_end_to_end(client):
 
 
 def test_runs_list_is_org_scoped_between_two_orgs(client):
-    org_a = user_auth.register_org_and_owner(f"A {uuid.uuid4().hex[:6]}", _email(), "supersecret1")
+    org_a = user_auth.register_org_and_owner(f"A {uuid.uuid4().hex[:6]}", _email(), "Supersecret1!")
     org_b = user_auth.register_org_and_owner(f"B {uuid.uuid4().hex[:6]}", _email(), "supersecret2")
     org_a_id, org_b_id = org_a["user"]["org_id"], org_b["user"]["org_id"]
 

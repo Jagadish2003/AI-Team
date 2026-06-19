@@ -39,6 +39,7 @@ from __future__ import annotations
 import logging
 import math
 import os
+import re
 import time
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
@@ -62,6 +63,17 @@ logger = logging.getLogger(__name__)
 BCRYPT_ROUNDS = 12
 PASSWORD_MAX_BYTES = 72  # bcrypt truncates beyond this; cap explicitly.
 PASSWORD_MIN_LENGTH = 8
+
+# CS-3 — the locked password strength rule. Each tuple is (regex, the message
+# returned when the password contains no match). Mirrored on the frontend by
+# PasswordStrengthIndicator.getPasswordRequirements(); keep the two in sync.
+# Digits are deliberately NOT treated as special characters — the special class
+# is exactly the punctuation set below, per the locked CS-3 spec.
+PASSWORD_RULES = [
+    (r"[A-Z]", "at least one uppercase letter"),
+    (r"[a-z]", "at least one lowercase letter"),
+    (r"[!@#$%^&*()_+\-=\[\]{}|;:,.<>?]", "at least one special character"),
+]
 
 JWT_ALGORITHM = "HS256"
 JWT_EXPIRY_HOURS = 8
@@ -188,6 +200,41 @@ def ensure_auth_tables() -> None:
     creates these tables at runtime.
     """
     return None
+
+
+# ---------------------------------------------------------------------------
+# Password strength validation (CS-3)
+# ---------------------------------------------------------------------------
+
+
+def validate_password_strength(password: str) -> list[str]:
+    """Return the CS-3 strength requirements the password fails to meet.
+
+    The rule (locked, CS-3 Section 1): at least PASSWORD_MIN_LENGTH (8)
+    characters, with at least one uppercase letter, one lowercase letter, and one
+    special character from ``!@#$%^&*()_+-=[]{}|;:,.<>?``.
+
+    An empty list means the password is valid. This function NEVER raises and
+    NEVER hashes — it only inspects the plaintext and returns the list of unmet
+    requirements, so each API route can decide how to turn that into an HTTP
+    response (e.g. 422 with ``", ".join(errors)``).
+
+    Strength validation is intended to run on the FULL input before hashing. The
+    bcrypt 72-byte truncation in _password_bytes() is unchanged and independent of
+    this check, so a password longer than 72 bytes that passes here is still
+    accepted and hashed on its first 72 bytes.
+
+    Login does NOT call this: existing users may hold passwords created before the
+    rule and must still be able to sign in (login verifies against the stored hash
+    only). Enforcement lives in the password-CREATION routes, not in login.
+    """
+    errors: list[str] = []
+    if len(password) < PASSWORD_MIN_LENGTH:
+        errors.append(f"at least {PASSWORD_MIN_LENGTH} characters")
+    for pattern, message in PASSWORD_RULES:
+        if not re.search(pattern, password):
+            errors.append(message)
+    return errors
 
 
 # ---------------------------------------------------------------------------
