@@ -166,6 +166,7 @@ def store_nonce(
     nonce: str,
     connector_id: str,
     code_verifier: Optional[str] = None,
+    org_id: Optional[str] = None,
 ) -> None:
     """Store a state nonce with connector context and a 10-minute expiry.
 
@@ -173,6 +174,10 @@ def store_nonce(
     The nonce key is prefixed with 'nonce:' to namespace it in the store.
     `code_verifier`, when provided, is the PKCE verifier bound to this state;
     it is returned by consume_nonce() so the callback can complete the exchange.
+    `org_id`, when provided, captures the tenancy context of the (authenticated)
+    initiation request so the callback — which runs on an unauthenticated browser
+    redirect and has no JWT/org context — can store the token and connection state
+    under the correct org. It is server-side state, never trusted from the callback.
     """
     _init_nonce_table()
 
@@ -181,6 +186,7 @@ def store_nonce(
         "nonce":         nonce,
         "connector_id":  connector_id,
         "code_verifier": code_verifier,
+        "org_id":        org_id,
         "created_at":    now.isoformat(),
         "expires_at":    (now + timedelta(minutes=_NONCE_TTL_MINUTES)).isoformat(),
     })

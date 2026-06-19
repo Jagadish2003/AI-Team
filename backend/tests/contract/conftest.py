@@ -25,6 +25,11 @@ os.environ.setdefault("DEV_JWT", "dev-token-change-me")
 os.environ["INGEST_MODE"] = "offline"
 os.environ["ANTHROPIC_API_KEY"] = ""
 os.environ["AGENTIQ_DISABLE_BACKGROUND_JOBS"] = "1"
+# OAUTH_CALLBACK_ALLOW_UNAUTH is a local-dev convenience that lets the OAuth
+# callback complete without a Bearer header (a provider's browser redirect can
+# carry none). It must NOT be active under tests, or the Bearer-required
+# behaviour (AC17) cannot be asserted. Force it off regardless of backend/.env.
+os.environ["OAUTH_CALLBACK_ALLOW_UNAUTH"] = ""
 
 
 def _resolve_seed_dir() -> Path:
@@ -75,6 +80,7 @@ def pytest_configure(config):
     # ANTHROPIC_API_KEY is treated as "not set" by llm_enrichment.
     os.environ["INGEST_MODE"] = "offline"
     os.environ["ANTHROPIC_API_KEY"] = ""
+    os.environ["OAUTH_CALLBACK_ALLOW_UNAUTH"] = ""
 
     try:
         alembic_cfg = AlembicConfig(str(BACKEND_DIR / "alembic.ini"))

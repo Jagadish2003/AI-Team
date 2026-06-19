@@ -34,6 +34,7 @@ from app.auth import (
 from app.auth.configs import CONNECTOR_AUTH_CONFIGS
 from app.auth.vault import REFRESH_THRESHOLD_SECONDS, consume_nonce, store_nonce
 from app.middleware.audit import log_event
+from app.middleware.tenancy import get_current_org_id, get_current_org_id_optional
 from app.rbac import _get_user_id_from_token
 from app.security import bearer, require_auth
 from database.models.credentials import (
@@ -240,6 +241,9 @@ def register_connector_auth_routes(app: FastAPI) -> None:
             raise HTTPException(status_code=400, detail="Invalid request")
         connector_id = nonce_data["connector_id"]
         code_verifier = nonce_data.get("code_verifier")
+        # Org captured at initiation (the callback has no JWT/org context of its
+        # own). Fall back to the default org for legacy nonces / single-tenant dev.
+        org_id = nonce_data.get("org_id") or _DEFAULT_ORG_ID
 
         config = CONNECTOR_AUTH_CONFIGS.get(connector_id)
         if config is None:
@@ -250,13 +254,27 @@ def register_connector_auth_routes(app: FastAPI) -> None:
 
         try:
             token_response = await exchange_code(config, code, code_verifier=code_verifier)
-            store_token(_DEFAULT_ORG_ID, connector_id, token_response)
+            store_token(org_id, connector_id, token_response)
         except Exception:
             logger.exception("Token exchange failed for connector %s", connector_id)
             return RedirectResponse(
                 OAUTH_ERROR_REDIRECT.format(error_code="exchange_failed"),
                 status_code=302,
             )
+
+        # Reflect the connection in this org's connector state so GET /api/connectors
+        # reports "connected" and the Integration Hub tile updates (CS-2 AC6). The old
+        # POST /api/connectors/{id}/connect set this; the OAuth flow replaced that call
+        # (CS-2 AC8), so the success path must set it here. Display-state only — token
+        # storage above is the source of truth, so a failure here must not fail the
+        # flow (the token is already saved).
+        try:
+            record = db.org_connector_get(org_id, connector_id) or {}
+            record["status"] = "connected"
+            record["lastSynced"] = record.get("lastSynced", "—")
+            db.org_connector_set(org_id, connector_id, record)
+        except Exception:
+            logger.exception("Failed to mark connector %s connected", connector_id)
 
         log_event(
             "connector_connected",
@@ -296,7 +314,15 @@ def register_connector_auth_routes(app: FastAPI) -> None:
         # send its S256 challenge in the authorize URL. Required by providers
         # that enforce PKCE (e.g. Salesforce "Require PKCE").
         code_verifier, code_challenge = generate_pkce_pair()
-        store_nonce(state, connector_id, code_verifier=code_verifier)
+        # Capture the caller's tenancy context now (this request is authenticated)
+        # so the unauthenticated callback can persist the token + connection state
+        # under the right org. Sourced server-side, never from callback input.
+        store_nonce(
+            state,
+            connector_id,
+            code_verifier=code_verifier,
+            org_id=get_current_org_id_optional(),
+        )
         auth_url = build_auth_url(config, state, code_challenge=code_challenge)
         return {"auth_url": auth_url, "connector_id": connector_id}
 
@@ -305,7 +331,17 @@ def register_connector_auth_routes(app: FastAPI) -> None:
     )
     async def delete_token(connector_id: str, token: str = Depends(require_auth)) -> Response:
         """Revoke and delete the stored token for the given connector (AC11/AC12/AC13)."""
-        await revoke_token(_DEFAULT_ORG_ID, connector_id)
+        org_id = get_current_org_id()
+        await revoke_token(org_id, connector_id)
+        # Mirror the connect path: clear this org's connection state so the tile
+        # returns to disconnected after revoke.
+        try:
+            record = db.org_connector_get(org_id, connector_id)
+            if record is not None and record.get("org_id") == org_id:
+                record["status"] = "disconnected"
+                db.org_connector_set(org_id, connector_id, record)
+        except Exception:
+            logger.exception("Failed to clear connector %s connection state", connector_id)
         log_event(
             "connector_disconnected",
             connector_id=connector_id,
@@ -326,7 +362,7 @@ def register_connector_auth_routes(app: FastAPI) -> None:
             cur = con.execute(
                 "SELECT expires_at, refresh_failed FROM credentials "
                 "WHERE org_id = ? AND connector_id = ?",
-                (_DEFAULT_ORG_ID, connector_id),
+                (get_current_org_id(), connector_id),
             )
             row = cur.fetchone()
         finally:

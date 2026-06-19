@@ -1685,6 +1685,61 @@ def test_callback_success_location_uses_status_success(client):
     assert "status=success" in location
 
 
+def test_callback_success_marks_connector_connected(client):
+    """A successful callback flips the org connector to 'connected' so the
+    Integration Hub tile updates (CS-2 AC6). The old POST /connect set this; the
+    OAuth success path must now set it since that POST was removed (AC8)."""
+    with _patch.dict(_os.environ, _vault_env()):
+        r = client.get("/api/connectors/salesforce/auth-url", headers=_AUTH_HEADERS)
+    state = _parse_qs(_urlparse(r.json()["auth_url"]).query)["state"][0]
+
+    fake_token = {"access_token": "tok", "refresh_token": "r", "expires_in": 3600}
+    with _patch.dict(_os.environ, _vault_env()), \
+         _patch("app.routes_connector_auth.exchange_code", new_callable=_AsyncMock, return_value=fake_token), \
+         _patch("app.routes_connector_auth.store_token", return_value=None):
+        resp = client.get(
+            f"/api/connectors/oauth/callback?code=auth-code&state={state}",
+            headers=_AUTH_HEADERS,
+            follow_redirects=False,
+        )
+    assert resp.status_code == 302
+
+    listed = client.get("/api/connectors", headers=_AUTH_HEADERS).json()
+    salesforce = next(c for c in listed if c["id"] == "salesforce")
+    assert salesforce["status"] == "connected"
+
+
+def test_callback_marks_connector_connected_under_initiating_org(client):
+    """The org from the authenticated /auth-url request is threaded through the
+    state nonce, so the (unauthenticated) callback persists connection state under
+    THAT org — not the hardcoded default. Without this, a user whose JWT org is not
+    'default' completes OAuth but the tile stays disconnected (multi-tenant bug)."""
+    org_headers = {**_AUTH_HEADERS, "X-Org-Id": "acme-test-org"}
+    with _patch.dict(_os.environ, _vault_env()):
+        r = client.get("/api/connectors/salesforce/auth-url", headers=org_headers)
+    state = _parse_qs(_urlparse(r.json()["auth_url"]).query)["state"][0]
+
+    fake_token = {"access_token": "tok", "refresh_token": "r", "expires_in": 3600}
+    with _patch.dict(_os.environ, _vault_env()), \
+         _patch("app.routes_connector_auth.exchange_code", new_callable=_AsyncMock, return_value=fake_token), \
+         _patch("app.routes_connector_auth.store_token", return_value=None):
+        # Callback carries no org context of its own — it must use the nonce's org.
+        resp = client.get(
+            f"/api/connectors/oauth/callback?code=auth-code&state={state}",
+            headers=_AUTH_HEADERS,
+            follow_redirects=False,
+        )
+    assert resp.status_code == 302
+
+    # Connection state is written to the INITIATING org's namespaced row — proving
+    # the org from /auth-url (not the callback's default) was used.
+    from app import db as _db
+    acme_row = _db.org_connector_get("acme-test-org", "salesforce")
+    assert acme_row is not None
+    assert acme_row.get("org_id") == "acme-test-org"
+    assert acme_row["status"] == "connected"
+
+
 def test_callback_error_location_uses_status_error_and_code(client):
     """A failed callback (missing code) redirects with status=error and a code param (T3-AC2)."""
     # No code/state → error path, no token exchange attempted.

@@ -49,7 +49,7 @@ CONNECTOR_AUTH_CONFIGS: Dict[str, ConnectorAuthConfig] = {
         secret_key="SALESFORCE_CLIENT_SECRET",
         token_url=f"https://{SALESFORCE_INSTANCE}/services/oauth2/token",
         revocation_url=f"https://{SALESFORCE_INSTANCE}/services/oauth2/revoke",
-        scopes=["api", "refresh_token", "offline_access"],
+        scopes=["openid", "id", "profile", "email", "address", "phone", "web", "full", "api", "refresh_token", "offline_access"],
         authorization_url=f"https://{SALESFORCE_INSTANCE}/services/oauth2/authorize",
         redirect_uri=os.environ.get("SALESFORCE_OAUTH_REDIRECT_URI", ""),
     ),
