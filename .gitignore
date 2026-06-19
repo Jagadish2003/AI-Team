@@ -35,3 +35,10 @@ backend/token_generation/life_sciences/server_ls.key
 backend/token_generation/life_sciences/ls_token.json
 backend/token_generation/rlm/server_rlm.key
 backend/token_generation/rlm/rlm_token.json
+
+# LIC-1 licensing — never commit private keys or generated key material.
+# The public key is embedded as a constant in backend/app/licensing.py instead.
+*.pem
+*.key
+license/.env
+license/.env.*
