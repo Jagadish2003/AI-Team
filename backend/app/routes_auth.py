@@ -23,6 +23,8 @@ from app.auth.user_auth import (
     EmailAlreadyExistsError,
     InvalidCredentialsError,
     InvalidTokenError,
+    OrgPendingApprovalError,
+    OrgRejectedError,
     RateLimitError,
     RegistrationError,
     ensure_auth_tables,
@@ -220,6 +222,16 @@ def login_endpoint(body: LoginRequest, request: Request) -> Dict[str, Any]:
                 "retry_after": exc.retry_after_seconds,
             },
             headers={"Retry-After": str(exc.retry_after_seconds)},
+        )
+    except OrgPendingApprovalError as exc:
+        raise HTTPException(
+            status_code=403,
+            detail={"message": str(exc), "error_code": exc.error_code},
+        )
+    except OrgRejectedError as exc:
+        raise HTTPException(
+            status_code=403,
+            detail={"message": str(exc), "error_code": exc.error_code},
         )
     except InvalidCredentialsError as exc:
         raise HTTPException(status_code=401, detail=str(exc))
