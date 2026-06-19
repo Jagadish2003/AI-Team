@@ -97,7 +97,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   mockConnectApi.mockResolvedValue(undefined as any);
   (configureSyncApi as any).mockResolvedValue(undefined);
-  mockTokenStatus.mockResolvedValue({ status: "valid" } as any);
+  mockTokenStatus.mockResolvedValue({ status: "connected" } as any);
 });
 
 afterEach(() => vi.restoreAllMocks());

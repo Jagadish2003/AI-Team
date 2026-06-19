@@ -37,7 +37,11 @@ export default function ConnectorTile({
     return () => { alive = false; };
   }, [connector.id, isConnected, isEnabled]);
 
-  const tokenExpired = tokenStatus === 'expired' || tokenStatus === 'missing';
+  // The token needs a fresh OAuth round-trip when there is no usable token
+  // (needs_auth = missing/already-expired) or auto-refresh has given up
+  // (refresh_failed). `connected` and `needs_refresh` are still usable, so no
+  // Reconnect prompt. Values mirror the backend token-status contract (AC14).
+  const tokenExpired = tokenStatus === 'needs_auth' || tokenStatus === 'refresh_failed';
 
   // When the token is expired/missing, override the button to "Reconnect"
   const actionLabel = tokenExpired

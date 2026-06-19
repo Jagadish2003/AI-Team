@@ -9,11 +9,23 @@ import type {
   ConfidenceExplanation,
 } from "../types/normalization";
 
-export type TokenStatus = 'valid' | 'expired' | 'missing';
+/**
+ * Token status as returned by GET /api/connectors/{id}/token-status.
+ *
+ * These values mirror the backend contract (AT-77 AC14, enforced by
+ * backend/tests/contract/test_connector_auth.py) — do NOT use valid/expired/
+ * missing here; the backend never emits those:
+ *   - connected      → token present and well beyond the refresh threshold
+ *   - needs_refresh   → within the refresh threshold but still valid (auto-refresh)
+ *   - needs_auth      → no token, or the token has already expired
+ *   - refresh_failed  → a refresh was attempted and failed; user must re-auth
+ */
+export type TokenStatus = 'connected' | 'needs_refresh' | 'needs_auth' | 'refresh_failed';
 
 export interface TokenStatusResponse {
   status: TokenStatus;
-  expires_at: string | null;
+  // Backend currently returns only `status`; kept optional for forward-compat.
+  expires_at?: string | null;
 }
 
 export function fetchConnectors(): Promise<Connector[]> {
