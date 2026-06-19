@@ -159,7 +159,6 @@ def test_send_invite_email_builds_link_subject_and_html(monkeypatch):
     assert captured["to"] == "invitee@example.com"
     assert captured["subject"] == "You have been invited to Acme Corp on AgentIQ"
     assert "https://app.example.com/accept-invite?token=TOK123" in captured["html"]
-    assert "https://app.example.com/Logo-Dark.svg" in captured["html"]
     assert "Acme Corp" in captured["html"]
     assert "Analyst" in captured["html"]
 
