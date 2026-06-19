@@ -25,7 +25,7 @@ def _rows_for_run(run_id: str) -> list[dict]:
                 signal_source,
                 captured_at
             FROM signal_snapshots
-            WHERE run_id = ?
+            WHERE run_id = %s
             ORDER BY detector_id, metric_name
             """,
             (run_id,),
@@ -94,7 +94,13 @@ def test_snapshot_signals_writes_primary_and_additional_rows(monkeypatch):
     rows = _rows_for_run("run_task4_main")
     assert len(rows) == 3
     assert {row["org_id"] for row in rows} == {"org_task4"}
-    assert {row["captured_at"] for row in rows} == {str(run_completed_at)}
+    # captured_at is a TIMESTAMP column → psycopg2 returns a (UTC) datetime.
+    captured = {row["captured_at"] for row in rows}
+    assert len(captured) == 1
+    got = next(iter(captured))
+    if isinstance(got, datetime) and got.tzinfo is None:
+        got = got.replace(tzinfo=timezone.utc)
+    assert got == run_completed_at
 
     primary_fired = next(
         row

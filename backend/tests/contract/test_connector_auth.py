@@ -888,7 +888,7 @@ def _raw_credentials(org_id: str, connector_id: str) -> tuple | None:
     """Return raw DB row (access_token, refresh_token) without decryption."""
     con = _sqlite3.connect(str(_db_path()))
     cur = con.execute(
-        "SELECT access_token, refresh_token FROM credentials WHERE org_id=? AND connector_id=?",
+        "SELECT access_token, refresh_token FROM credentials WHERE org_id=%s AND connector_id=%s",
         (org_id, connector_id),
     )
     row = cur.fetchone()
@@ -1006,7 +1006,7 @@ def test_store_token_upserts_existing_record():
     # Composite unique means only one row should exist
     con = _sqlite3.connect(str(_db_path()))
     count = con.execute(
-        "SELECT COUNT(*) FROM credentials WHERE org_id=? AND connector_id=?",
+        "SELECT COUNT(*) FROM credentials WHERE org_id=%s AND connector_id=%s",
         ("org-ups-1", "github"),
     ).fetchone()[0]
     con.close()
@@ -1820,7 +1820,7 @@ def test_token_status_returns_refresh_failed_when_flagged(client):
         db_path = _os.environ.get("DB_PATH", "database/dev.db")
         con = _sq.connect(db_path)
         con.execute(
-            "UPDATE credentials SET refresh_failed=1 WHERE org_id=? AND connector_id=?",
+            "UPDATE credentials SET refresh_failed=1 WHERE org_id=%s AND connector_id=%s",
             (_DEFAULT_ORG_ID, "confluence"),
         )
         con.commit()
@@ -2184,7 +2184,8 @@ def test_nonce_expiry_rejected(client):
     con = _db.connect()
     try:
         con.execute(
-            "INSERT OR REPLACE INTO nonces (key, data) VALUES (?, ?)",
+            "INSERT INTO nonces (key, data) VALUES (%s, %s) "
+            "ON CONFLICT (key) DO UPDATE SET data=EXCLUDED.data",
             (key, data),
         )
         con.commit()

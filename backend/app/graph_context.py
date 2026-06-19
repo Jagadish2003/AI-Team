@@ -88,19 +88,18 @@ def _load_entities_from_table(org_id: str, run_id: str) -> List[Dict[str, Any]]:
     the rest of this module expects from KV-loaded entities.
     """
     try:
-        import sqlite3
-
         from database.models.entities import ENTITIES_VISIBLE_AS_OF_RUN_FROM_WHERE
 
         con = db.connect()
         try:
-            con.row_factory = sqlite3.Row
-            rows = con.execute(
+            cur = con.cursor()
+            cur.execute(
                 "SELECT e.id AS entity_id, e.display_name, e.entity_type, "
                 "e.source_system, e.resolution_status, e.resolution_confidence "
                 + ENTITIES_VISIBLE_AS_OF_RUN_FROM_WHERE,
                 (org_id, run_id),
-            ).fetchall()
+            )
+            rows = cur.fetchall()
             return [dict(r) for r in rows]
         finally:
             con.close()

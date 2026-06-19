@@ -62,11 +62,18 @@ describe("T3-S12-A EntityTracePanel", () => {
     );
   });
 
-  it("keeps more than four entity rows inside a thin inner scroll area", () => {
+  it("keeps more than four entity rows inside a compact inner scroll area", () => {
     render(<EntityTracePanel entities={MANY_ENTITIES} />);
 
     const scrollArea = screen.getByTestId("entity-trace-scroll");
     expect(screen.getByText("9 linked")).toBeInTheDocument();
-    expect(scrollArea).toHaveClass("max-h-[18.5rem]", "overflow-y-auto", "pr-1");
+    expect(scrollArea).toHaveClass("max-h-[13.5rem]", "overflow-y-auto", "pr-1");
+  });
+
+  it("renders repeated occurrences of the same entity only once", () => {
+    render(<EntityTracePanel entities={[ENTITIES[0], ENTITIES[0], ENTITIES[1]]} />);
+
+    expect(screen.getByText("2 linked")).toBeInTheDocument();
+    expect(screen.getAllByText("Sarah Chen")).toHaveLength(1);
   });
 });

@@ -173,14 +173,29 @@ origins = [
     ).split(",")
     if o.strip()
 ]
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=origins,
-    allow_origin_regex=r"http://localhost:\d+",
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+
+
+def build_cors_kwargs(environment: str, allowed_origins: List[str]) -> Dict[str, Any]:
+    """Build CORS middleware kwargs.
+
+    The permissive ``http://localhost:<port>`` regex is convenient for local dev
+    (it lets any localhost port through), but in production it would allow any
+    localhost process to make authenticated cross-origin requests. We therefore
+    only attach ``allow_origin_regex`` outside of production.
+    """
+    cors_kwargs: Dict[str, Any] = {
+        "allow_origins": allowed_origins,
+        "allow_credentials": True,
+        "allow_methods": ["*"],
+        "allow_headers": ["*"],
+    }
+    if (environment or "").strip().lower() != "production":
+        cors_kwargs["allow_origin_regex"] = r"http://localhost:\d+"
+    return cors_kwargs
+
+
+_environment = os.getenv("ENVIRONMENT", "").strip().lower()
+app.add_middleware(CORSMiddleware, **build_cors_kwargs(_environment, origins))
 
 
 def now_iso() -> str:
@@ -222,7 +237,28 @@ def health() -> Dict[str, Any]:
 
 @app.get("/api/health")
 def api_health() -> Dict[str, Any]:
-    return {"ok": True, "ts": now_iso()}
+    # AT-288 F1-AC6: report database connectivity. A live PostgreSQL connection
+    # (SELECT 1) is required for status 'healthy'. The legacy {ok, ts} fields are
+    # retained for backward compatibility with existing consumers.
+    db_status = "ok"
+    try:
+        con = db.connect()
+        try:
+            cur = con.cursor()
+            cur.execute("SELECT 1")
+            cur.fetchone()
+        finally:
+            con.close()
+    except Exception as exc:
+        logger.warning("health check: database connectivity failed: %s", exc)
+        db_status = "error"
+    healthy = db_status == "ok"
+    return {
+        "ok": healthy,
+        "ts": now_iso(),
+        "status": "healthy" if healthy else "unhealthy",
+        "checks": {"database": {"status": db_status}},
+    }
 
 
 @app.get("/")
@@ -683,13 +719,14 @@ def list_audit_log(
     org_id = get_current_org_id()
     con = db.connect()
     try:
-        cur = con.execute(
+        cur = con.cursor()
+        cur.execute(
             """
             SELECT id, org_id, event_type, user_id, run_id, connector_id, payload, timestamp
             FROM audit_log
-            WHERE org_id = ?
+            WHERE org_id = %s
             ORDER BY timestamp DESC
-            LIMIT ? OFFSET ?
+            LIMIT %s OFFSET %s
             """,
             (org_id, limit, offset),
         )
@@ -726,8 +763,9 @@ def list_members() -> List[Dict[str, Any]]:
     org_id = get_current_org_id()
     con = db.connect()
     try:
-        cur = con.execute(
-            "SELECT org_id, user_id, role, created_at FROM workspace_members WHERE org_id = ?",
+        cur = con.cursor()
+        cur.execute(
+            "SELECT org_id, user_id, role, created_at FROM workspace_members WHERE org_id = %s",
             (org_id,),
         )
         rows = cur.fetchall()
@@ -756,11 +794,12 @@ def add_member(body: Dict[str, Any]) -> Dict[str, Any]:
 
     con = db.connect()
     try:
-        con.execute(
+        cur = con.cursor()
+        cur.execute(
             """
             INSERT INTO workspace_members (org_id, user_id, role, created_at)
-            VALUES (?, ?, ?, ?)
-            ON CONFLICT(org_id, user_id) DO UPDATE SET role = excluded.role
+            VALUES (%s, %s, %s, %s)
+            ON CONFLICT (org_id, user_id) DO UPDATE SET role = EXCLUDED.role
             """,
             (org_id, user_id, role, db.now_iso()),
         )

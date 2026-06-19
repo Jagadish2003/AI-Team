@@ -118,7 +118,7 @@ def _insert_signal_snapshots(snapshots: list[SignalSnapshot]) -> int:
         "baseline_window_days",
         "baseline_calculated_at",
     ]
-    placeholders = ", ".join("?" for _ in columns)
+    placeholders = ", ".join("%s" for _ in columns)
     sql = f"""
         INSERT INTO signal_snapshots ({", ".join(columns)})
         VALUES ({placeholders})
@@ -161,61 +161,12 @@ def _build_signal_snapshot_telemetry(
 
 
 def ensure_signal_snapshots_table() -> None:
-    """Create the signal_snapshots table + indexes if they do not exist.
+    """No-op. The signal_snapshots table is provisioned externally.
 
-    Schema mirrors migrations/versions/0002_create_signal_snapshots.py exactly.
-    All statements are IF NOT EXISTS, so this is a no-op when the alembic
-    migration already created the table (contract tests, production). It exists
-    so a fresh dev.db — created by seed_loader.py, which does not run alembic —
-    still has the table the temporal/baseline enrichment reads from. Without it,
-    every signal-history query raises "no such table" and the broad try/except
-    in temporal_enrichment swallows it, hiding the Baseline Context panel.
+    Created by database/provision/provision.sh; the application no longer
+    creates this table at runtime.
     """
-    con = connect()
-    try:
-        cur = con.cursor()
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS signal_snapshots (
-                id                   VARCHAR(36)  NOT NULL PRIMARY KEY,
-                org_id               VARCHAR(64)  NOT NULL,
-                run_id               VARCHAR(64)  NOT NULL,
-                pack_id              VARCHAR(64)  NOT NULL,
-                detector_id          VARCHAR(128) NOT NULL,
-                signal_key           VARCHAR(256) NOT NULL,
-                metric_name          VARCHAR(128) NOT NULL,
-                metric_value         DOUBLE       NOT NULL,
-                threshold            DOUBLE,
-                fired                BOOLEAN      NOT NULL,
-                signal_source        VARCHAR(64)  NOT NULL,
-                captured_at          TIMESTAMP    NOT NULL,
-                baseline_mean        DOUBLE,
-                baseline_stddev      DOUBLE,
-                baseline_window_days INTEGER,
-                baseline_calculated_at TIMESTAMP
-            )
-        """)
-        cur.execute("""
-            CREATE INDEX IF NOT EXISTS idx_ss_org_signal_time
-                ON signal_snapshots (org_id, signal_key, captured_at DESC)
-        """)
-        cur.execute("""
-            CREATE INDEX IF NOT EXISTS idx_ss_org_run
-                ON signal_snapshots (org_id, run_id)
-        """)
-        cur.execute("""
-            CREATE INDEX IF NOT EXISTS idx_ss_org_detector
-                ON signal_snapshots (org_id, detector_id, captured_at DESC)
-        """)
-        cur.execute("""
-            CREATE INDEX IF NOT EXISTS idx_ss_baseline_stale
-                ON signal_snapshots (baseline_calculated_at)
-        """)
-        con.commit()
-    except Exception as exc:
-        con.rollback()
-        logger.warning("ensure_signal_snapshots_table failed (non-blocking): %s", exc)
-    finally:
-        con.close()
+    return None
 
 
 def snapshot_signals(
@@ -300,10 +251,10 @@ def get_signal_history(
 ) -> List[Dict[str, Any]]:
     signal_filter = (signal_key or "").strip() or PRIMARY_METRIC_NAME
     if "::" in signal_filter:
-        signal_clause = "signal_key = ?"
+        signal_clause = "signal_key = %s"
         signal_value = signal_filter
     else:
-        signal_clause = "metric_name = ?"
+        signal_clause = "metric_name = %s"
         signal_value = signal_filter
 
     con = connect()
@@ -312,9 +263,9 @@ def get_signal_history(
         cur.execute(
             _signal_snapshot_select()
             + f"""
-            WHERE org_id = ? AND detector_id = ? AND {signal_clause}
+            WHERE org_id = %s AND detector_id = %s AND {signal_clause}
             ORDER BY captured_at DESC
-            LIMIT ?
+            LIMIT %s
             """,
             (org_id, detector_id, signal_value, limit),
         )
@@ -347,7 +298,7 @@ def get_baseline(
                       AND counted.signal_key = signal_snapshots.signal_key
                 ) AS run_count
             FROM signal_snapshots
-            WHERE org_id = ? AND detector_id = ? AND metric_name = ?
+            WHERE org_id = %s AND detector_id = %s AND metric_name = %s
             ORDER BY captured_at DESC
             LIMIT 1
             """,
@@ -375,7 +326,7 @@ def get_run_signals(
         cur.execute(
             _signal_snapshot_select()
             + """
-            WHERE org_id = ? AND run_id = ?
+            WHERE org_id = %s AND run_id = %s
             ORDER BY captured_at DESC
             """,
             (org_id, run_id),

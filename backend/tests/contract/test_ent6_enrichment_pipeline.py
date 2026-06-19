@@ -15,7 +15,7 @@ from database.models.entities import Entity
 
 
 def _db_path() -> str:
-    return os.environ["DB_PATH"]
+    return os.environ.get("DB_PATH", "")
 
 
 def _insert_entity(
@@ -49,10 +49,10 @@ def _insert_entity(
                 resolution_status, first_seen_run_id, last_seen_run_id,
                 run_count, metadata, created_at, updated_at
             ) VALUES (
-                :id, :org_id, :entity_type, :canonical_name, :display_name,
-                :source_system, :source_record_id, :resolution_confidence,
-                :resolution_status, :first_seen_run_id, :last_seen_run_id,
-                :run_count, :metadata, :created_at, :updated_at
+                %(id)s, %(org_id)s, %(entity_type)s, %(canonical_name)s, %(display_name)s,
+                %(source_system)s, %(source_record_id)s, %(resolution_confidence)s,
+                %(resolution_status)s, %(first_seen_run_id)s, %(last_seen_run_id)s,
+                %(run_count)s, %(metadata)s, %(created_at)s, %(updated_at)s
             )
             """,
             row,
@@ -79,7 +79,7 @@ def _insert_signal_history(org_id: str, detector_id: str, pack_id: str = "svc") 
                 "metric_value",
                 float(value),
                 15.0,
-                1,
+                True,
                 "test",
                 (captured_at + timedelta(days=index)).isoformat(),
                 None,
@@ -96,7 +96,7 @@ def _insert_signal_history(org_id: str, detector_id: str, pack_id: str = "svc") 
                 metric_name, metric_value, threshold, fired, signal_source,
                 captured_at, baseline_mean, baseline_stddev,
                 baseline_window_days, baseline_calculated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             """,
             rows,
         )
@@ -110,7 +110,7 @@ def _latest_causal_row(org_id: str, opportunity_id: str) -> dict | None:
             """
             SELECT *
             FROM causal_hypotheses
-            WHERE org_id = ? AND opportunity_id = ?
+            WHERE org_id = %s AND opportunity_id = %s
             ORDER BY created_at DESC
             LIMIT 1
             """,
@@ -240,6 +240,6 @@ def test_llm_enrichment_stores_valid_causal_hypothesis(monkeypatch):
     assert row is not None
     assert json.loads(row["cause_chain"]) == llm_payload["cause_chain"]
     assert row["falsifiability_condition"] == llm_payload["falsifiability_condition"]
-    assert row["preliminary"] == 0
+    assert row["preliminary"] == False
     assert row["preliminary_reason"] is None
     assert row["gate_run_count"] == 10

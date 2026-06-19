@@ -6,7 +6,7 @@ Four routes (all require Bearer auth — spec AC17):
   DELETE /api/connectors/{connector_id}/token   — Revoke token
   GET  /api/connectors/{connector_id}/token-status — Token status
 
-State nonce storage: SQLite table oauth_nonces (matching existing raw-sqlite3 pattern in db.py).
+State nonce storage: oauth_nonces table (matching the existing raw-SQL pattern in db.py).
 No session/cookie mechanism exists in this codebase; nonces are stored server-side in the DB
 with a 10-minute TTL and are deleted on first use (single-use guarantee).
 """
@@ -17,6 +17,8 @@ import logging
 import secrets as _secrets_mod
 from datetime import datetime, timedelta, timezone
 from typing import Dict, Optional
+
+import psycopg2
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Response
 from fastapi.responses import RedirectResponse
@@ -65,20 +67,12 @@ CREATE TABLE IF NOT EXISTS oauth_nonces (
 
 
 def _ensure_tables() -> None:
-    import sqlite3 as _sqlite3
-    con = db.connect()
-    try:
-        con.execute(CREATE_CREDENTIALS_TABLE)
-        con.execute(CREATE_CREDENTIALS_IDX_ORG)
-        con.execute(CREATE_CREDENTIALS_IDX_CONNECTOR)
-        try:
-            con.execute(ALTER_CREDENTIALS_ADD_REFRESH_FAILED)
-        except _sqlite3.OperationalError:
-            pass  # Column already exists
-        con.execute(_CREATE_NONCES_TABLE)
-        con.commit()
-    finally:
-        con.close()
+    """No-op. The credentials and oauth_nonces tables are provisioned externally.
+
+    Created by database/provision/provision.sh; the application no longer
+    creates these tables at runtime.
+    """
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -93,8 +87,9 @@ def _store_nonce(nonce: str, connector_id: str) -> None:
     ).isoformat()
     con = db.connect()
     try:
-        con.execute(
-            "INSERT INTO oauth_nonces (nonce, connector_id, expires_at) VALUES (?, ?, ?)",
+        cur = con.cursor()
+        cur.execute(
+            "INSERT INTO oauth_nonces (nonce, connector_id, expires_at) VALUES (%s, %s, %s)",
             (nonce, connector_id, expires_at),
         )
         con.commit()
@@ -113,13 +108,14 @@ def _consume_nonce(state: str) -> Optional[str]:
 
     con = db.connect()
     try:
-        cur = con.execute(
-            "SELECT nonce, connector_id, expires_at FROM oauth_nonces WHERE nonce = ?",
+        cur = con.cursor()
+        cur.execute(
+            "SELECT nonce, connector_id, expires_at FROM oauth_nonces WHERE nonce = %s",
             (state,),
         )
         row = cur.fetchone()
         if row is not None:
-            con.execute("DELETE FROM oauth_nonces WHERE nonce = ?", (state,))
+            cur.execute("DELETE FROM oauth_nonces WHERE nonce = %s", (state,))
             con.commit()
     finally:
         con.close()
@@ -263,9 +259,10 @@ def register_connector_auth_routes(app: FastAPI) -> None:
 
         con = db.connect()
         try:
-            cur = con.execute(
+            cur = con.cursor()
+            cur.execute(
                 "SELECT expires_at, refresh_failed FROM credentials "
-                "WHERE org_id = ? AND connector_id = ?",
+                "WHERE org_id = %s AND connector_id = %s",
                 (_DEFAULT_ORG_ID, connector_id),
             )
             row = cur.fetchone()

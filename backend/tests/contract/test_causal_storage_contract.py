@@ -51,7 +51,7 @@ def _read_row(row_id: str) -> dict | None:
     try:
         conn.row_factory = sqlite3.Row
         row = conn.execute(
-            "SELECT * FROM causal_hypotheses WHERE id = ?", (row_id,)
+            "SELECT * FROM causal_hypotheses WHERE id = %s", (row_id,)
         ).fetchone()
         return dict(row) if row else None
     finally:
@@ -75,11 +75,11 @@ def test_store_confirmed_hypothesis_round_trip():
         "svc::ce1::metric_value": {"trend": "rising", "run_count": 12}
     }
     assert row["falsifiability_condition"] == _FALSIFIABILITY
-    assert row["preliminary"] == 0
+    assert row["preliminary"] is False
     assert row["preliminary_reason"] is None
     assert row["gate_run_count"] == 12
     assert row["generated_by"] == "llm"
-    assert row["inferred"] == 0
+    assert row["inferred"] is False
     assert 0.5 <= row["confidence"] <= 1.0
     assert row["created_at"]
 
@@ -91,7 +91,7 @@ def test_store_preliminary_hypothesis_round_trip():
 
     row = _read_row(row_id)
     assert row is not None
-    assert row["preliminary"] == 1
+    assert row["preliminary"] is True
     assert row["preliminary_reason"] == reason
     assert row["gate_run_count"] == 7
 
@@ -109,7 +109,7 @@ def test_store_inferred_chain_sets_inferred_column():
 
     row = _read_row(row_id)
     assert row is not None
-    assert row["inferred"] == 1
+    assert row["inferred"] is True
 
 
 def test_generated_event_persisted_after_commit():

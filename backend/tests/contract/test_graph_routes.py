@@ -32,8 +32,11 @@ def _headers_for_role(role: str, org_id: str | None = None) -> Dict[str, str]:
     try:
         con.execute(
             """
-            INSERT OR REPLACE INTO workspace_members (org_id, user_id, role, created_at)
-            VALUES (?, ?, ?, ?)
+            INSERT INTO workspace_members (org_id, user_id, role, created_at)
+            VALUES (%s, %s, %s, %s)
+            ON CONFLICT (org_id, user_id) DO UPDATE SET
+                role = EXCLUDED.role,
+                created_at = EXCLUDED.created_at
             """,
             (org, DEV_TOKEN, role, datetime.now(timezone.utc).isoformat()),
         )
@@ -63,8 +66,8 @@ def _insert_entity(
             resolution_status, first_seen_run_id, last_seen_run_id,
             run_count, metadata, created_at, updated_at
         )
-        VALUES (?, ?, ?, ?, ?, 'test', ?, 0.95, ?, 'run-graph',
-                'run-graph', 10, NULL, ?, ?)
+        VALUES (%s, %s, %s, %s, %s, 'test', %s, 0.95, %s, 'run-graph',
+                'run-graph', 10, NULL, %s, %s)
         """,
         (
             entity_id,
@@ -95,15 +98,15 @@ def _insert_relationship(
             confidence, inferred, evidence, first_seen_run_id,
             last_seen_run_id, run_count, created_at
         )
-        VALUES (?, ?, ?, ?, ?, 0.9, 0, NULL, 'run-graph',
-                'run-graph', 1, ?)
+        VALUES (%s, %s, %s, %s, %s, 0.9, FALSE, NULL, 'run-graph',
+                'run-graph', 1, %s)
         """,
         (str(uuid4()), org_id, from_entity_id, to_entity_id, relationship_type, _now()),
     )
 
 
 def _seed_graph(org_id: str) -> dict[str, str]:
-    with sqlite3.connect(os.environ["DB_PATH"]) as conn:
+    with sqlite3.connect(os.environ.get("DB_PATH", "")) as conn:
         a = _insert_entity(conn, org_id, "Loan Intake")
         b = _insert_entity(conn, org_id, "Credit Review")
         c = _insert_entity(conn, org_id, "Approval Desk")

@@ -16,7 +16,7 @@ from app.graph_query import opportunity_neighbourhood
 
 
 def _db_path() -> str:
-    return os.environ["DB_PATH"]
+    return os.environ.get("DB_PATH", "")
 
 
 def _now() -> str:
@@ -38,8 +38,8 @@ def _insert_entity(
             resolution_status, first_seen_run_id, last_seen_run_id,
             run_count, metadata, created_at, updated_at
         )
-        VALUES (?, ?, 'process', ?, ?, 'test', ?, 0.95, 'resolved',
-                'run-cycle', 'run-cycle', ?, NULL, ?, ?)
+        VALUES (%s, %s, 'process', %s, %s, 'test', %s, 0.95, 'resolved',
+                'run-cycle', 'run-cycle', %s, NULL, %s, %s)
         """,
         (
             entity_id,
@@ -68,8 +68,8 @@ def _insert_relationship(
             confidence, inferred, evidence, first_seen_run_id,
             last_seen_run_id, run_count, created_at
         )
-        VALUES (?, ?, ?, ?, 'owns', 0.9, 0, NULL, 'run-cycle',
-                'run-cycle', 1, ?)
+        VALUES (%s, %s, %s, %s, 'owns', 0.9, FALSE, NULL, 'run-cycle',
+                'run-cycle', 1, %s)
         """,
         (
             str(uuid4()),

@@ -219,23 +219,26 @@ export function EntityTracePanel({
 }: {
   entities: EntitySummary[] | undefined;
 }) {
-  if (!entities || entities.length === 0) return null;
+  const uniqueEntities = Array.from(
+    new Map((entities ?? []).map((entity) => [entity.entity_id, entity])).values()
+  );
+  if (uniqueEntities.length === 0) return null;
 
   return (
     <div>
       <div className="mb-2 flex items-center justify-between gap-3">
         <span className="text-xs font-semibold text-text">Entities</span>
         <span className="shrink-0 rounded border border-bg px-1.5 py-0.5 text-xs text-text">
-          {entities.length} linked
+          {uniqueEntities.length} linked
         </span>
       </div>
       <div className="rounded-lg border border-border bg-bg/30 p-3">
         <div
           data-testid="entity-trace-scroll"
-          className="max-h-[18.5rem] overflow-y-auto pr-1 [scrollbar-gutter:stable]"
+          className="max-h-[13.5rem] overflow-y-auto pr-1 [scrollbar-gutter:stable]"
         >
           <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-            {entities.map((entity) => {
+            {uniqueEntities.map((entity) => {
               const isAmbiguous = entity.resolution_status === "ambiguous";
               return (
                 <div
@@ -303,14 +306,30 @@ export function RelationshipTracePanel({
 }: {
   relationships: RelationshipSummary[] | undefined;
 }) {
-  if (!relationships || relationships.length === 0) return null;
+  const relationshipKey = (rel: RelationshipSummary) =>
+    [
+      rel.from_entity_type,
+      rel.from_entity_name.trim().toLowerCase(),
+      rel.relationship_type,
+      rel.to_entity_type,
+      rel.to_entity_name.trim().toLowerCase(),
+    ].join("|");
+  const uniqueRelationships = Array.from(
+    new Map(
+      (relationships ?? []).map((relationship) => [
+        relationshipKey(relationship),
+        relationship,
+      ])
+    ).values()
+  );
+  if (uniqueRelationships.length === 0) return null;
 
   return (
     <div data-testid="relationship-trace-panel">
       <div className="mb-2 flex items-center justify-between gap-3">
         <span className="text-xs font-semibold text-text">Relationships</span>
         <span className="shrink-0 rounded border border-bg px-1.5 py-0.5 text-xs text-text">
-          {relationships.length} linked
+          {uniqueRelationships.length} linked
         </span>
       </div>
       <div className="rounded-lg border border-border bg-bg/30 p-3">
@@ -318,12 +337,15 @@ export function RelationshipTracePanel({
           data-testid="relationship-trace-scroll"
           className="max-h-[13.5rem] overflow-y-auto pr-1 [scrollbar-gutter:stable]"
         >
-          <div className="space-y-2">
-            {relationships.map((rel, index) => {
+          <div
+            data-testid="relationship-trace-grid"
+            className="grid grid-cols-1 gap-2 sm:grid-cols-2"
+          >
+            {uniqueRelationships.map((rel, index) => {
               const confidence = confidenceLabel(rel.confidence);
               return (
                 <div
-                  key={`${rel.from_entity_name}-${rel.relationship_type}-${rel.to_entity_name}-${index}`}
+                  key={relationshipKey(rel)}
                   data-testid={`relationship-trace-${index}`}
                   className="min-w-0 rounded-md border border-border/70 bg-panel/70 px-3 py-2 text-text"
                 >

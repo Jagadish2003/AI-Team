@@ -1,9 +1,10 @@
-"""Create telemetry_events table, indexes, and append-only triggers.
+"""Create telemetry_events table, indexes, and append-only enforcement.
 
 Wide schema — new event types add payload fields in JSON without further
-schema migrations.  Append-only enforcement:
-  - SQLite:     BEFORE UPDATE / BEFORE DELETE triggers (this migration).
-  - PostgreSQL: apply the REVOKE statements in the downgrade docstring.
+schema migrations.  Append-only enforcement (AT-288 / Fix 1, F1-AC5):
+  - PostgreSQL ON UPDATE / ON DELETE DO INSTEAD NOTHING rules (this migration).
+    Rules silently discard UPDATE/DELETE attempts, keeping the table append-only
+    at the DB layer without SQLite-specific BEFORE UPDATE/DELETE triggers.
 
 Revision ID: 0001
 Revises:
@@ -63,31 +64,26 @@ def upgrade() -> None:
     """)
 
     # ------------------------------------------------------------------
-    # Append-only enforcement — SQLite BEFORE UPDATE / DELETE triggers.
+    # Append-only enforcement — PostgreSQL DO INSTEAD NOTHING rules.
     #
-    # PostgreSQL equivalent (run after table creation):
-    #     REVOKE UPDATE, DELETE ON telemetry_events FROM <app_db_user>;
-    #     GRANT  INSERT, SELECT  ON telemetry_events TO  <app_db_user>;
+    # These replace the SQLite BEFORE UPDATE / BEFORE DELETE triggers. Any
+    # UPDATE or DELETE against telemetry_events is silently discarded, keeping
+    # the table append-only at the DB layer. CREATE OR REPLACE makes this
+    # idempotent (the runtime _ensure_telemetry_table() applies the same DDL).
     # ------------------------------------------------------------------
-    op.execute("""
-        CREATE TRIGGER IF NOT EXISTS trg_telemetry_no_update
-        BEFORE UPDATE ON telemetry_events
-        BEGIN
-            SELECT RAISE(ABORT, 'telemetry_events is append-only: UPDATE not permitted');
-        END
-    """)
-    op.execute("""
-        CREATE TRIGGER IF NOT EXISTS trg_telemetry_no_delete
-        BEFORE DELETE ON telemetry_events
-        BEGIN
-            SELECT RAISE(ABORT, 'telemetry_events is append-only: DELETE not permitted');
-        END
-    """)
+    op.execute(
+        "CREATE OR REPLACE RULE trg_telemetry_no_update AS "
+        "ON UPDATE TO telemetry_events DO INSTEAD NOTHING"
+    )
+    op.execute(
+        "CREATE OR REPLACE RULE trg_telemetry_no_delete AS "
+        "ON DELETE TO telemetry_events DO INSTEAD NOTHING"
+    )
 
 
 def downgrade() -> None:
-    op.execute("DROP TRIGGER IF EXISTS trg_telemetry_no_delete")
-    op.execute("DROP TRIGGER IF EXISTS trg_telemetry_no_update")
+    op.execute("DROP RULE IF EXISTS trg_telemetry_no_delete ON telemetry_events")
+    op.execute("DROP RULE IF EXISTS trg_telemetry_no_update ON telemetry_events")
     op.execute("DROP INDEX IF EXISTS idx_telemetry_org_run")
     op.execute("DROP INDEX IF EXISTS idx_telemetry_org_event")
     op.execute("DROP INDEX IF EXISTS idx_telemetry_org_ts")

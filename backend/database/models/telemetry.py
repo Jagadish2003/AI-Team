@@ -61,29 +61,23 @@ CREATE INDEX IF NOT EXISTS idx_telemetry_org_run
 """
 
 # ---------------------------------------------------------------------------
-# Append-only enforcement — SQLite BEFORE UPDATE/DELETE triggers.
+# Append-only enforcement — PostgreSQL DO INSTEAD NOTHING rules (AT-288 Fix 1).
 #
-# These are the SQLite equivalent of:
-#     REVOKE UPDATE, DELETE ON telemetry_events FROM <app_db_user>;
-# which will be applied in the PostgreSQL deployment (see docstring above).
-# In SQLite, per-user grants do not exist, so triggers enforce the same
-# invariant at the DB layer (AC8).
+# These replace the SQLite BEFORE UPDATE/DELETE triggers and enforce the same
+# invariant at the DB layer: any UPDATE or DELETE against telemetry_events is
+# silently discarded. CREATE OR REPLACE keeps the runtime CREATE-IF-NOT-EXISTS
+# path (_ensure_telemetry_table) idempotent. This is the SSOT that
+# 0001_create_telemetry_events.py mirrors (AC8 / F1-AC5).
 # ---------------------------------------------------------------------------
 
 CREATE_TELEMETRY_TRIGGER_NO_UPDATE = """
-CREATE TRIGGER IF NOT EXISTS trg_telemetry_no_update
-BEFORE UPDATE ON telemetry_events
-BEGIN
-    SELECT RAISE(ABORT, 'telemetry_events is append-only: UPDATE not permitted');
-END
+CREATE OR REPLACE RULE trg_telemetry_no_update AS
+ON UPDATE TO telemetry_events DO INSTEAD NOTHING
 """
 
 CREATE_TELEMETRY_TRIGGER_NO_DELETE = """
-CREATE TRIGGER IF NOT EXISTS trg_telemetry_no_delete
-BEFORE DELETE ON telemetry_events
-BEGIN
-    SELECT RAISE(ABORT, 'telemetry_events is append-only: DELETE not permitted');
-END
+CREATE OR REPLACE RULE trg_telemetry_no_delete AS
+ON DELETE TO telemetry_events DO INSTEAD NOTHING
 """
 
 # ---------------------------------------------------------------------------

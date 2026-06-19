@@ -110,6 +110,15 @@ def _append_entity(entities: List[Entity], entity: Optional[Entity]) -> None:
         entities.append(entity)
 
 
+def _deduplicate_entities(entities: List[Entity]) -> List[Entity]:
+    """Return one current Entity object per canonical database row."""
+    by_id: Dict[str, Entity] = {}
+    for entity in entities:
+        # Reassignment preserves first-seen order and retains the freshest state.
+        by_id[str(entity.id)] = entity
+    return list(by_id.values())
+
+
 # Active overlay context for the current extraction, or None when no overlay
 # applies. ContextVar keeps this safe across concurrent extractions.
 _overlay_context: ContextVar[Optional[_OverlayContext]] = ContextVar(
@@ -171,11 +180,13 @@ def _record_entity_source(entity: Entity, source_system: Optional[str]) -> None:
         conn = db.connect()
         try:
             # Serialize the metadata read/merge/write so concurrent runs do not
-            # lose a source_system addition for the same entity row.
-            conn.execute("BEGIN IMMEDIATE")
-            row = conn.execute(
-                "SELECT metadata FROM entities WHERE id = ?", (str(entity.id),)
-            ).fetchone()
+            # lose a source_system addition for the same entity row. Lock the row
+            # FOR UPDATE within the implicit transaction psycopg2 opens.
+            cur = conn.cursor()
+            cur.execute(
+                "SELECT metadata FROM entities WHERE id = %s FOR UPDATE", (str(entity.id),)
+            )
+            row = cur.fetchone()
             if row is None:
                 conn.commit()
                 return
@@ -189,8 +200,8 @@ def _record_entity_source(entity: Entity, source_system: Optional[str]) -> None:
             if source_system not in sources:
                 sources.append(source_system)
             meta["sources"] = sources
-            conn.execute(
-                "UPDATE entities SET metadata = ?, updated_at = ? WHERE id = ?",
+            cur.execute(
+                "UPDATE entities SET metadata = %s, updated_at = %s WHERE id = %s",
                 (json.dumps(meta), datetime.now(timezone.utc).isoformat(), str(entity.id)),
             )
             conn.commit()
@@ -1486,6 +1497,11 @@ def extract_entities(
         # Always detach the overlay context so it never leaks into the next
         # extraction sharing this execution context.
         _overlay_context.reset(ctx_token)
+
+    # A source payload can reference the same owner once per Case or loan.
+    # Resolution maps those occurrences to one row; downstream consumers should
+    # receive that canonical entity only once.
+    all_entities = _deduplicate_entities(all_entities)
 
     # Service accounts filtered (T5 / AC5) — distinct identities skipped by the
     # active overlay's service_account_patterns. 0 when no overlay is active.

@@ -248,8 +248,9 @@ def me(payload: dict = Depends(_require_jwt)) -> Dict[str, Any]:
     if user_id:
         con = db.connect()
         try:
-            cur = con.execute(
-                "SELECT last_login_at FROM users WHERE id = ?", (user_id,)
+            cur = con.cursor()
+            cur.execute(
+                "SELECT last_login_at FROM users WHERE id = %s", (user_id,)
             )
             row = cur.fetchone()
             if row:
@@ -286,55 +287,59 @@ def invite(
     org_id = owner_payload.get("org_id")
     email = body.email.strip().lower()
     now = db.now_iso()
+    is_active = False
 
     con = db.connect()
     try:
-        cur = con.execute("SELECT id, is_active FROM users WHERE email = ?", (email,))
+        cur = con.cursor()
+        cur.execute("SELECT id, is_active FROM users WHERE email = %s", (email,))
         existing_user = cur.fetchone()
 
         if existing_user:
             user_id = existing_user[0]
             is_active = bool(existing_user[1])
 
-            current_membership = con.execute(
-                "SELECT role FROM workspace_members WHERE org_id = ? AND user_id = ?",
+            cur.execute(
+                "SELECT role FROM workspace_members WHERE org_id = %s AND user_id = %s",
                 (org_id, user_id),
-            ).fetchone()
+            )
+            current_membership = cur.fetchone()
             if current_membership:
                 raise HTTPException(
                     status_code=409,
                     detail="Email is already a member of this workspace",
                 )
 
-            other_membership = con.execute(
-                "SELECT org_id FROM workspace_members WHERE user_id = ? LIMIT 1",
+            cur.execute(
+                "SELECT org_id FROM workspace_members WHERE user_id = %s LIMIT 1",
                 (user_id,),
-            ).fetchone()
+            )
+            other_membership = cur.fetchone()
             if other_membership:
                 raise HTTPException(status_code=409, detail="Email already belongs to another workspace")
 
-            con.execute(
+            cur.execute(
                 "INSERT INTO workspace_members (org_id, user_id, role, created_at) "
-                "VALUES (?, ?, ?, ?)",
+                "VALUES (%s, %s, %s, %s)",
                 (org_id, user_id, body.role, now),
             )
         else:
             user_id = str(uuid4())
-            con.execute(
+            cur.execute(
                 "INSERT INTO users (id, email, password_hash, is_active, created_at) "
-                "VALUES (?, ?, '', 0, ?)",
+                "VALUES (%s, %s, '', FALSE, %s)",
                 (user_id, email, now),
             )
-            con.execute(
-                "INSERT OR IGNORE INTO workspace_members (org_id, user_id, role, created_at) "
-                "VALUES (?, ?, ?, ?)",
+            cur.execute(
+                "INSERT INTO workspace_members (org_id, user_id, role, created_at) "
+                "VALUES (%s, %s, %s, %s) ON CONFLICT DO NOTHING",
                 (org_id, user_id, body.role, now),
             )
         con.commit()
     finally:
         con.close()
 
-    if existing_user and bool(existing_user[1]):
+    if is_active:
         return {}
 
     raw_token = str(uuid4())
@@ -360,7 +365,8 @@ def invite_info(token: str) -> Dict[str, Any]:
     if user_id:
         con = db.connect()
         try:
-            cur = con.execute("SELECT email FROM users WHERE id = ?", (user_id,))
+            cur = con.cursor()
+            cur.execute("SELECT email FROM users WHERE id = %s", (user_id,))
             row = cur.fetchone()
             if row:
                 email = row[0]
@@ -396,13 +402,14 @@ def accept_invite(body: AcceptInviteRequest) -> Dict[str, Any]:
     password_hash = hash_password(body.password)
     con = db.connect()
     try:
-        cur = con.execute("SELECT email FROM users WHERE id = ?", (user_id,))
+        cur = con.cursor()
+        cur.execute("SELECT email FROM users WHERE id = %s", (user_id,))
         row = cur.fetchone()
         if row is None:
             raise HTTPException(status_code=400, detail="Invited user not found")
         email = row[0]
-        con.execute(
-            "UPDATE users SET password_hash = ?, is_active = 1 WHERE id = ?",
+        cur.execute(
+            "UPDATE users SET password_hash = %s, is_active = TRUE WHERE id = %s",
             (password_hash, user_id),
         )
         con.commit()
@@ -438,8 +445,9 @@ def change_password(
 
     con = db.connect()
     try:
-        cur = con.execute(
-            "SELECT password_hash FROM users WHERE id = ?", (user_id,)
+        cur = con.cursor()
+        cur.execute(
+            "SELECT password_hash FROM users WHERE id = %s", (user_id,)
         )
         row = cur.fetchone()
     finally:
@@ -460,8 +468,9 @@ def change_password(
     new_hash = hash_password(body.new_password)
     con = db.connect()
     try:
-        con.execute(
-            "UPDATE users SET password_hash = ? WHERE id = ?",
+        cur = con.cursor()
+        cur.execute(
+            "UPDATE users SET password_hash = %s WHERE id = %s",
             (new_hash, user_id),
         )
         con.commit()
