@@ -717,15 +717,20 @@ def login(email: str, password: str, ip_address: str) -> dict:
         raise InvalidCredentialsError()
 
     # Credentials are valid — now enforce the org approval gate (AUTH-2 / AT-354).
+    #
+    # Review #2: a correct-password login for a pending/rejected org is NOT a
+    # failed credential attempt, so it must NOT be recorded as one. Counting it
+    # toward the per-email lockout would lock a registrant out after 5 polite
+    # "is my org approved yet?" attempts. The rate limit exists to throttle
+    # WRONG-password brute force; a correct password against an ungated-yet org
+    # is not that. We record nothing here (neither success nor failure).
     approval_status = _get_org_approval_status(membership["org_id"])
     if approval_status == "pending_approval":
-        record_login_attempt(email, ip_address, succeeded=False)
         raise OrgPendingApprovalError(
             "Your organisation is awaiting approval. "
             "You will receive an email once it is reviewed."
         )
     if approval_status == "rejected":
-        record_login_attempt(email, ip_address, succeeded=False)
         raise OrgRejectedError(
             "This organisation registration was not approved. "
             "Contact your CloudFulcrum representative."

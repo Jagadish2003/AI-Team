@@ -65,9 +65,14 @@
         </div>
 
         <div class="actions">
-          <a href="{{ approve_url }}" class="button approve">Approve this organisation</a>
-          <a href="{{ reject_url }}" class="button reject">Reject this organisation</a>
+          <a href="{{ approve_url }}" class="button approve">Review and approve</a>
+          <a href="{{ reject_url }}" class="button reject">Review and reject</a>
         </div>
+
+        <p class="muted" style="margin-top:6px">
+          Each button opens a confirmation page; the organisation is only approved
+          or rejected after you click the confirm button there.
+        </p>
 
         <div class="expiry">
           These links expire in {{ expiry_days }} days. After that, contact

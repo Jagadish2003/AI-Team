@@ -107,6 +107,21 @@ def _login(client: TestClient, email: str, password: str = PASSWORD):
     return client.post("/api/auth/login", json={"email": email, "password": password})
 
 
+def _approve(client: TestClient, token: str, org_id: str):
+    """Commit an approval — the action is a POST (review #1)."""
+    return client.post(APPROVE_URL, params={"token": token, "org_id": org_id})
+
+
+def _reject(client: TestClient, token: str, org_id: str):
+    """Commit a rejection — the action is a POST (review #1)."""
+    return client.post(REJECT_URL, params={"token": token, "org_id": org_id})
+
+
+def _approve_page(client: TestClient, token: str, org_id: str):
+    """Fetch the GET confirmation page (must NOT mutate)."""
+    return client.get(APPROVE_URL, params={"token": token, "org_id": org_id})
+
+
 def _set_token_expiry(org_id: str, expires_at: datetime) -> None:
     con = db.connect()
     try:
@@ -165,7 +180,7 @@ def test_login_pending_org_returns_403_pending_code(register_org, client):
 
 def test_login_rejected_org_returns_403_distinct_code(register_org, client):
     r = register_org()
-    rej = client.get(REJECT_URL, params={"token": r["approval_token"], "org_id": r["org_id"]})
+    rej = _reject(client, r["approval_token"], r["org_id"])
     assert rej.status_code == 200, rej.text
 
     resp = _login(client, r["email"])
@@ -183,7 +198,7 @@ def test_login_rejected_org_returns_403_distinct_code(register_org, client):
 def test_approve_activates_org_and_login_returns_jwt(register_org, client):
     r = register_org()
 
-    ap = client.get(APPROVE_URL, params={"token": r["approval_token"], "org_id": r["org_id"]})
+    ap = _approve(client, r["approval_token"], r["org_id"])
     assert ap.status_code == 200, ap.text
     assert "approved" in ap.text.lower()
 
@@ -211,7 +226,7 @@ def test_approve_activates_org_and_login_returns_jwt(register_org, client):
 def test_reject_blocks_login_permanently(register_org, client):
     r = register_org()
 
-    rej = client.get(REJECT_URL, params={"token": r["approval_token"], "org_id": r["org_id"]})
+    rej = _reject(client, r["approval_token"], r["org_id"])
     assert rej.status_code == 200, rej.text
 
     row = _get_org_approval_row(r["org_id"])
@@ -226,6 +241,31 @@ def test_reject_blocks_login_permanently(register_org, client):
 
 
 # ---------------------------------------------------------------------------
+# Review #1 (HIGH) — the GET link is a confirmation page that does NOT mutate.
+# An email security scanner pre-fetching the link must not approve/reject.
+# ---------------------------------------------------------------------------
+
+def test_get_link_renders_confirmation_and_does_not_mutate(register_org, client):
+    r = register_org()
+
+    page = _approve_page(client, r["approval_token"], r["org_id"])
+    assert page.status_code == 200, page.text
+    text = page.text.lower()
+    # It is a confirmation page with a POST form — not an auto-action.
+    assert "<form" in text
+    assert 'method="post"' in text
+    assert "confirm" in text
+
+    # Crucially: fetching the GET link did NOT change the org state.
+    assert _get_org_approval_row(r["org_id"])["approval_status"] == "pending_approval"
+    assert _get_org_approval_row(r["org_id"])["approval_token_hash"] is not None
+
+    # The POST (what the human's confirm button submits) is what commits it.
+    assert _approve(client, r["approval_token"], r["org_id"]).status_code == 200
+    assert _get_org_approval_row(r["org_id"])["approval_status"] == "active"
+
+
+# ---------------------------------------------------------------------------
 # T8-AC6 — an expired token is rejected (400) and the org state is unchanged
 # ---------------------------------------------------------------------------
 
@@ -235,7 +275,7 @@ def test_expired_token_returns_400_and_leaves_state_unchanged(register_org, clie
     # Force the token to have expired (registration sets a 7-day window).
     _set_token_expiry(r["org_id"], datetime.now(timezone.utc) - timedelta(days=1))
 
-    ap = client.get(APPROVE_URL, params={"token": r["approval_token"], "org_id": r["org_id"]})
+    ap = _approve(client, r["approval_token"], r["org_id"])
     assert ap.status_code == 400, ap.text
     assert "expired" in ap.text.lower()
 
@@ -255,28 +295,27 @@ def test_expired_token_returns_400_and_leaves_state_unchanged(register_org, clie
 def test_second_approve_is_already_processed_and_no_state_change(register_org, client):
     r = register_org()
 
-    first = client.get(APPROVE_URL, params={"token": r["approval_token"], "org_id": r["org_id"]})
+    first = _approve(client, r["approval_token"], r["org_id"])
     assert first.status_code == 200
     assert _get_org_approval_row(r["org_id"])["approval_status"] == "active"
 
-    # Second click of the same (now-consumed) link must not re-process.
-    second = client.get(APPROVE_URL, params={"token": r["approval_token"], "org_id": r["org_id"]})
-    assert second.status_code == 200
+    # Second submit of the same (now-consumed) token must not re-process. The
+    # uniform response is "invalid or has already been used" (review #5).
+    second = _approve(client, r["approval_token"], r["org_id"])
+    assert second.status_code == 400
     assert "already" in second.text.lower()
     assert _get_org_approval_row(r["org_id"])["approval_status"] == "active"
 
 
 def test_reject_after_approve_cannot_flip_state(register_org, client):
-    """An already-approved org cannot be rejected with the consumed link."""
+    """An already-approved org cannot be rejected with the consumed token."""
     r = register_org()
 
-    assert client.get(
-        APPROVE_URL, params={"token": r["approval_token"], "org_id": r["org_id"]}
-    ).status_code == 200
+    assert _approve(client, r["approval_token"], r["org_id"]).status_code == 200
     assert _get_org_approval_row(r["org_id"])["approval_status"] == "active"
 
-    flip = client.get(REJECT_URL, params={"token": r["approval_token"], "org_id": r["org_id"]})
-    assert flip.status_code == 200
+    flip = _reject(client, r["approval_token"], r["org_id"])
+    assert flip.status_code == 400
     assert "already" in flip.text.lower()
     # Still active — the consumed token cannot move an active org to rejected.
     assert _get_org_approval_row(r["org_id"])["approval_status"] == "active"
@@ -292,21 +331,68 @@ def test_cross_org_token_cannot_approve_or_reject_another_org(register_org, clie
     assert a["org_id"] and b["org_id"] and a["org_id"] != b["org_id"]
 
     # A's token against B's org_id — hashes do not match → invalid link, no change.
-    resp = client.get(APPROVE_URL, params={"token": a["approval_token"], "org_id": b["org_id"]})
+    resp = _approve(client, a["approval_token"], b["org_id"])
     assert resp.status_code == 400, resp.text
     assert "invalid" in resp.text.lower()
     assert _get_org_approval_row(a["org_id"])["approval_status"] == "pending_approval"
     assert _get_org_approval_row(b["org_id"])["approval_status"] == "pending_approval"
 
     # And the same isolation for reject (B's token against A's org_id).
-    resp2 = client.get(REJECT_URL, params={"token": b["approval_token"], "org_id": a["org_id"]})
+    resp2 = _reject(client, b["approval_token"], a["org_id"])
     assert resp2.status_code == 400, resp2.text
     assert "invalid" in resp2.text.lower()
     assert _get_org_approval_row(a["org_id"])["approval_status"] == "pending_approval"
     assert _get_org_approval_row(b["org_id"])["approval_status"] == "pending_approval"
 
     # Each org can still be actioned by ITS OWN token afterwards.
-    assert client.get(
-        APPROVE_URL, params={"token": a["approval_token"], "org_id": a["org_id"]}
-    ).status_code == 200
+    assert _approve(client, a["approval_token"], a["org_id"]).status_code == 200
     assert _get_org_approval_row(a["org_id"])["approval_status"] == "active"
+
+
+# ---------------------------------------------------------------------------
+# Review #5 (LOW) — org approval state is not discoverable via a mismatched
+# token+org_id: a wrong token yields the SAME response whether the org is
+# pending, already processed, or nonexistent.
+# ---------------------------------------------------------------------------
+
+def test_approval_state_not_discoverable_with_wrong_token(register_org, client):
+    pending = register_org()
+    processed = register_org()
+    assert _approve(client, processed["approval_token"], processed["org_id"]).status_code == 200
+    assert _get_org_approval_row(processed["org_id"])["approval_status"] == "active"
+
+    bogus = "definitely-not-the-real-token"
+    r_pending = _approve(client, bogus, pending["org_id"])      # org IS pending
+    r_processed = _approve(client, bogus, processed["org_id"])  # org already active
+    r_unknown = _approve(client, bogus, "org-that-does-not-exist")
+
+    # Indistinguishable: same status code and same body for all three — the
+    # response does not leak which orgs are still pending.
+    assert r_pending.status_code == r_processed.status_code == r_unknown.status_code == 400
+    assert r_pending.text == r_processed.text == r_unknown.text
+
+    # The probe did not mutate the still-pending org.
+    assert _get_org_approval_row(pending["org_id"])["approval_status"] == "pending_approval"
+
+
+# ---------------------------------------------------------------------------
+# Review #9 (LOW) — a correct-password login for a PENDING org must NOT count
+# toward the per-email rate limit, so a registrant polling "am I approved yet?"
+# is never locked out (review #2 behaviour, covered by a contract test).
+# ---------------------------------------------------------------------------
+
+def test_pending_org_correct_password_logins_are_not_rate_limited(register_org, client):
+    r = register_org()
+
+    # The per-email lockout is 5 failed attempts; try well past it with the
+    # CORRECT password. Every attempt must stay the pending 403 — never a 429.
+    for _ in range(7):
+        resp = _login(client, r["email"])
+        assert resp.status_code == 403, resp.text
+        assert resp.json()["detail"]["error_code"] == "org_pending_approval"
+
+    # After approval the same account logs in cleanly — it was never locked.
+    assert _approve(client, r["approval_token"], r["org_id"]).status_code == 200
+    ok = _login(client, r["email"])
+    assert ok.status_code == 200, ok.text
+    assert ok.json().get("token")

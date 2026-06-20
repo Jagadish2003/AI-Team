@@ -88,12 +88,75 @@ def _verify_db_driver_imports() -> None:
             )
 
 
+def _is_production() -> bool:
+    """True when this process should be treated as production.
+
+    Mirrors the two signals already used elsewhere: an explicit
+    ENVIRONMENT=production, or REQUIRE_CONNECTOR_SECRETS=1 (the deployment flag
+    that gates connector-secret enforcement).
+    """
+    return (
+        os.getenv("ENVIRONMENT", "").strip().lower() == "production"
+        or os.getenv("REQUIRE_CONNECTOR_SECRETS") == "1"
+    )
+
+
+def _validate_org_approval_config() -> None:
+    """Validate the AUTH-2 org-approval env config at startup (review #3/#4/#8).
+
+    AGENTIQ_BACKEND_URL backs the approve/reject links in the admin email and
+    AGENTIQ_ADMIN_EMAIL is where that email is sent. If either is unset the code
+    falls back to a localhost URL / a hardcoded address, which silently breaks
+    org approval in a real deployment (links unreachable, emails misdirected).
+    Surface it loudly: warn everywhere, and hard-fail in production so a
+    misconfigured deploy cannot start with broken approvals.
+    """
+    problems: list[str] = []
+
+    backend_url = os.getenv("AGENTIQ_BACKEND_URL", "").strip()
+    if not backend_url:
+        problems.append(
+            "AGENTIQ_BACKEND_URL is not set — org approval links will point to "
+            "localhost and be unreachable for the admin."
+        )
+    elif "localhost" in backend_url or "127.0.0.1" in backend_url:
+        problems.append(
+            f"AGENTIQ_BACKEND_URL points to a local address ({backend_url}) — "
+            "org approval links will be unreachable for the admin."
+        )
+
+    admin_email = os.getenv("AGENTIQ_ADMIN_EMAIL", "").strip()
+    if not admin_email:
+        problems.append(
+            "AGENTIQ_ADMIN_EMAIL is not set — org approval request emails will go "
+            "to the hardcoded default address and may be misdirected."
+        )
+
+    if not problems:
+        return
+
+    production = _is_production()
+    for problem in problems:
+        if production:
+            logger.error("Org approval config: %s", problem)
+        else:
+            logger.warning("Org approval config: %s", problem)
+    if production:
+        raise RuntimeError(
+            "Org registration approval is misconfigured for production: "
+            + " ".join(problems)
+        )
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Only enforce secret presence when REQUIRE_CONNECTOR_SECRETS=1 (production).
     # Dev and test environments run without connector secrets set.
     if os.getenv("REQUIRE_CONNECTOR_SECRETS") == "1":
         validate_all_secrets(CONNECTOR_AUTH_CONFIGS)
+    # AUTH-2 review #3/#4/#8: fail fast (prod) / warn (dev) if the org-approval
+    # email config is missing, so broken approval links never ship silently.
+    _validate_org_approval_config()
     # Seed the dev user as owner of the default org so existing routes pass RBAC.
     seed_owner(_DEV_ORG, _DEV_USER)
     # T2-S12-A: surface Oracle/PostgreSQL driver install issues at startup.

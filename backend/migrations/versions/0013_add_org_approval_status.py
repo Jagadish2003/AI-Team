@@ -18,8 +18,10 @@ Schema additions:
   approved_by_action       VARCHAR(16) NULL
                            'approved' | 'rejected' — recorded alongside approved_at.
 
-Rollback removes all five columns. SQLite supports ADD COLUMN but not DROP COLUMN
-natively, so downgrade uses batch_alter_table for SQLite compatibility.
+Rollback removes all five columns. The project runs on PostgreSQL only (see
+tests/contract/conftest.py and database/provision), which supports DROP COLUMN
+natively, so downgrade uses plain op.drop_column — no batch_alter_table copy
+table dance (review #7).
 
 Revision ID: 0013
 Revises: 0012
@@ -101,6 +103,6 @@ def downgrade() -> None:
     if not cols_present:
         return
 
-    with op.batch_alter_table("orgs") as batch_op:
-        for col in cols_present:
-            batch_op.drop_column(col)
+    # PostgreSQL supports DROP COLUMN directly; no batch_alter_table needed.
+    for col in cols_present:
+        op.drop_column("orgs", col)
