@@ -20,6 +20,7 @@ import type { LicenseStatusResponse } from "../types/license";
 
 const h = vi.hoisted(() => ({
   mockFetch: vi.fn(),
+  mockBanner: vi.fn(),
   mockUpdate: vi.fn(),
   mockPush: vi.fn(),
   role: { current: "owner" as "owner" | "analyst" | "viewer" },
@@ -27,6 +28,7 @@ const h = vi.hoisted(() => ({
 
 vi.mock("../api/licenseApi", () => ({
   fetchLicenseStatus: (...a: unknown[]) => h.mockFetch(...a),
+  fetchLicenseBanner: (...a: unknown[]) => h.mockBanner(...a),
   updateLicenseKey: (...a: unknown[]) => h.mockUpdate(...a),
 }));
 
@@ -45,6 +47,8 @@ vi.mock("../context/AuthContext", () => ({
 // ApiError must be the real class so `instanceof ApiError` works in the page.
 import { ApiError } from "../lib/apiClient";
 import LicensePage from "../pages/LicensePage";
+import { LicenseProvider } from "../context/LicenseContext";
+import LicenseBanner from "../components/common/LicenseBanner";
 
 const VALID: LicenseStatusResponse = {
   status: "valid",
@@ -69,6 +73,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   h.role.current = "owner";
   h.mockFetch.mockResolvedValue(VALID);
+  h.mockBanner.mockResolvedValue({ status: "valid", expires_at: "2027-06-18" });
   h.mockUpdate.mockResolvedValue(VALID);
 });
 
@@ -131,6 +136,39 @@ describe("update key flow", () => {
       expect(badge).toHaveTextContent("Valid");
     });
     expect(screen.getByText("2028-06-18")).toBeInTheDocument();
+  });
+
+  it("clears the global banner after a successful update (T9)", async () => {
+    // Banner starts in grace (visible), then resolves to valid after the update
+    // so the shared LicenseContext refresh clears it without a reload.
+    h.mockBanner
+      .mockResolvedValueOnce({ status: "grace", expires_at: "2026-06-10" })
+      .mockResolvedValue({ status: "valid", expires_at: "2028-06-18" });
+    h.mockFetch.mockResolvedValue({ ...VALID, status: "grace", days_remaining: -1 });
+    h.mockUpdate.mockResolvedValue({ ...VALID, status: "valid" });
+
+    render(
+      <MemoryRouter initialEntries={["/license"]}>
+        <LicenseProvider>
+          <LicenseBanner />
+          <Routes>
+            <Route path="/license" element={<LicensePage />} />
+          </Routes>
+        </LicenseProvider>
+      </MemoryRouter>,
+    );
+
+    // Banner shows initially (grace state).
+    expect(await screen.findByTestId("license-banner")).toBeInTheDocument();
+
+    const field = await screen.findByLabelText("License key");
+    fireEvent.change(field, { target: { value: "good.key" } });
+    fireEvent.click(screen.getByRole("button", { name: /update key/i }));
+
+    await waitFor(() => expect(h.mockUpdate).toHaveBeenCalled());
+    // The shared banner is re-read and clears now that the license is valid.
+    await waitFor(() => expect(screen.queryByTestId("license-banner")).toBeNull());
+    expect(h.mockBanner.mock.calls.length).toBeGreaterThanOrEqual(2);
   });
 
   it("invalid key: shows 'This key is not valid' and does not change status", async () => {

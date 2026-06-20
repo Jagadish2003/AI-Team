@@ -11,15 +11,25 @@
  */
 import { apiGet, apiPost } from "../lib/apiClient";
 import type {
+  LicenseBannerResponse,
   LicenseStatusResponse,
   UpdateLicenseKeyRequest,
 } from "../types/license";
 
-export type { LicenseStatusResponse, UpdateLicenseKeyRequest };
+export type { LicenseBannerResponse, LicenseStatusResponse, UpdateLicenseKeyRequest };
 
-/** GET /api/license — current license status for the Owner. */
+/** GET /api/license — full current license status. Owner-only (admin page). */
 export async function fetchLicenseStatus(): Promise<LicenseStatusResponse> {
   return apiGet<LicenseStatusResponse>("/api/license");
+}
+
+/**
+ * GET /api/license/banner — minimal status for the global expiry banner.
+ * Readable by any authenticated user, so the banner renders for every role
+ * (AC4/AC5), unlike the Owner-only full status above.
+ */
+export async function fetchLicenseBanner(): Promise<LicenseBannerResponse> {
+  return apiGet<LicenseBannerResponse>("/api/license/banner");
 }
 
 /**

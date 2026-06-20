@@ -21,3 +21,21 @@ export interface LicenseStatusResponse {
 export interface UpdateLicenseKeyRequest {
   key: string;
 }
+
+/**
+ * Minimal license signal for the global expiry banner (T9 / GET /api/license/banner).
+ * Readable by any authenticated user (not just Owner), so the banner shows for
+ * every role — including analysts whose discovery runs are blocked (AC4/AC5).
+ */
+export interface LicenseBannerResponse {
+  status: LicenseStatusValue;
+  /** Term boundary, ISO date (YYYY-MM-DD); null when there is no valid key. */
+  expires_at: string | null;
+  /**
+   * Why the license is not valid, when applicable. Lets the banner distinguish a
+   * never-licensed install (`no_license` / `signature_or_format` → "No valid
+   * license installed") from an expired term (null → "License expired") and a
+   * clock anomaly (`clock_rollback`). Null for valid/grace and past-grace expiry.
+   */
+  reason?: string | null;
+}

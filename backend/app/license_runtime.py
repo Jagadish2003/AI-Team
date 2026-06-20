@@ -138,6 +138,21 @@ def get_current_license_status(public_key=None) -> dict:
     return evaluate_license(public_key=public_key, persist=False, emit=False)
 
 
+def persist_validated_status(result: dict, *, today: datetime.date | None = None) -> None:
+    """Persist last_seen_date + last_status from an already-computed result.
+
+    The admin update-key route (T6) validates the pasted key, stores it, then
+    calls this so the cached status (``license:last_status``) and clock baseline
+    (``license:last_seen_date``) immediately reflect the freshly installed key —
+    instead of lagging until the next startup/periodic check. Deliberately does
+    NOT re-verify the signature (the caller already validated) and does NOT emit
+    telemetry (the caller emits ``license.updated``).
+    """
+    today = today or datetime.date.today()
+    kv_set(LICENSE_LAST_SEEN_KV, today.isoformat())
+    kv_set(LICENSE_LAST_STATUS_KV, result.get("status"))
+
+
 # ===========================================================================
 # Telemetry helpers
 # ===========================================================================

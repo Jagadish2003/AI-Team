@@ -20,68 +20,95 @@ for path in (str(REPO_ROOT), str(BACKEND_DIR)):
     if path not in sys.path:
         sys.path.insert(0, path)
 
-# AT-288 / Fix 1: contract tests run against PostgreSQL. The test database is
-# taken from DATABASE_URL (or the documented local default). The schema is
-# dropped and rebuilt from migrations at session start, so the suite stays
-# hermetic without a throwaway SQLite file.
-#
-# Resolve DATABASE_URL the same way the app does: an exported env var wins, else
-# backend/.env, else the documented local default. Without this fallback an
-# unset DATABASE_URL left TEST_DATABASE_URL = None and crashed conftest import.
-def _normalize_database_url(url: str) -> str:
-    """Return a psycopg2-parseable DSN, percent-encoding a raw password if needed.
+# AT-288 / Fix 1: contract tests run against PostgreSQL. The test database is a
+# DEDICATED, disposable database (never the dev DB) — the schema is dropped and
+# rebuilt from migrations at session start, so the suite stays hermetic without a
+# throwaway SQLite file. _resolve_test_database_url() picks/derives that test DB;
+# the helpers below decompose and rebuild the DSN robustly (psycopg2's parser, so
+# special characters in the password don't break URL manipulation).
+load_dotenv(BACKEND_DIR / ".env")
 
-    A DATABASE_URL whose userinfo contains characters that are special in a
-    libpq URI — most commonly a literal ``%`` or ``&`` in the password — fails
-    psycopg2's URI parser with ``invalid percent-encoded token`` before any
-    connection is attempted. Local ``backend/.env`` files often store the raw
-    password, so this helper repairs the value at load time instead of forcing
-    every developer to hand-encode their ``.env``.
 
-    Idempotent: a URL that psycopg2 already accepts is returned unchanged; only
-    a URL that fails to parse has its userinfo (username + password)
-    percent-encoded and is then rebuilt. Non-URI ("key=value") DSNs and URLs
-    without credentials are returned as-is.
+def _dsn_parts(url: str) -> dict:
+    """Decompose a postgres URL or key=value DSN into a params dict.
+
+    Uses psycopg2's parser so a password containing URL-special characters
+    (``&``, ``%``, ``:`` …) is handled correctly — stdlib ``urlsplit`` mis-parses
+    those (e.g. a ``&`` in the password leaks into the port).
     """
-    import re
+    from psycopg2.extensions import parse_dsn
+
+    try:
+        return parse_dsn(url)
+    except Exception:
+        return {}
+
+
+def _db_name_of(url: str) -> str:
+    """Return the database name from a postgres URL/DSN."""
+    return _dsn_parts(url).get("dbname", "")
+
+
+def _db_user_of(url: str) -> str:
+    return _dsn_parts(url).get("user", "agentiq")
+
+
+def _with_db_name(url: str, new_db: str) -> str:
+    """Return ``url`` with its database name replaced by ``new_db``.
+
+    Always rebuilds a clean, percent-encoded URL form so the result is accepted
+    by BOTH psycopg2 and SQLAlchemy (alembic's create_engine) regardless of
+    special characters in the credentials.
+    """
     from urllib.parse import quote
 
-    from psycopg2.extensions import make_dsn
-
-    if not url:
-        return url
-
-    try:
-        make_dsn(url)
-        return url  # already a valid DSN — leave it untouched
-    except Exception:
-        pass
-
-    m = re.match(r"^(?P<scheme>[a-zA-Z][a-zA-Z0-9+.\-]*://)(?P<rest>.*)$", url, re.DOTALL)
-    if not m:
-        return url  # not a URI-form DSN (e.g. "host=... password=...")
-
-    userinfo, at, hostpart = m.group("rest").rpartition("@")
-    if not at:
-        return url  # no credentials to encode
-
-    user, sep, password = userinfo.partition(":")
-    if not sep:
-        return url  # username only, no password component
-
-    rebuilt = f"{m.group('scheme')}{quote(user, safe='')}:{quote(password, safe='')}@{hostpart}"
-    try:
-        make_dsn(rebuilt)
-    except Exception:
-        return url  # encoding did not help — defer to the original error path
-    return rebuilt
+    p = _dsn_parts(url)
+    user = p.get("user", "")
+    password = p.get("password", "")
+    host = p.get("host", "localhost")
+    port = p.get("port", "5432")
+    auth = ""
+    if user:
+        auth = quote(user, safe="")
+        if password:
+            auth += ":" + quote(password, safe="")
+        auth += "@"
+    return f"postgresql://{auth}{host}:{port}/{new_db}"
 
 
-load_dotenv(BACKEND_DIR / ".env")
-TEST_DATABASE_URL = _normalize_database_url(
-    os.environ.get("DATABASE_URL")
-    or "postgresql://agentiq:agentiq@localhost:5432/agentiq"
-)
+def _resolve_test_database_url() -> str:
+    """Resolve the database the contract suite runs against — NEVER the dev DB.
+
+    The suite drops and rebuilds the public schema, so it must point at a
+    dedicated, disposable test database. Precedence:
+
+      1. ``TEST_DATABASE_URL`` — explicit override (use whatever it names).
+      2. ``DATABASE_URL`` whose db name already ends in ``_test`` — used as-is
+         (this is the CI case: ``agentiq_test``).
+      3. Otherwise ``DATABASE_URL`` is a real/dev database (e.g. ``agentiqdev``):
+         redirect to a sibling ``<db>_test`` so the dev DB is never touched.
+
+    This is what stops a local ``pytest`` from wiping or polluting the developer's
+    dev database (the cause of the License page flipping to "invalid" after a test
+    run). ``_ensure_test_database_exists`` then creates the sibling DB if missing.
+    """
+    explicit = os.environ.get("TEST_DATABASE_URL")
+    if explicit:
+        # Rebuild to a clean URL form (handles special chars in credentials).
+        return _with_db_name(explicit, _db_name_of(explicit))
+
+    base = (
+        os.environ.get("DATABASE_URL")
+        or "postgresql://agentiq:agentiq@localhost:5432/agentiq_test"
+    )
+    name = _db_name_of(base)
+    target = name if name.endswith("_test") else f"{name}_test"
+    # Always rebuild a clean URL; redirect a dev DB → <db>_test so the dev DB
+    # (e.g. agentiqdev) is never touched, while CI's agentiq_test stays as-is.
+    return _with_db_name(base, target)
+
+
+TEST_DATABASE_URL = _resolve_test_database_url()
 
 # Keep contract tests hermetic even when backend/.env contains live-mode
 # settings or a real LLM API key. Test modules import app.main at module scope,
@@ -311,10 +338,75 @@ def _reset_database() -> None:
         con.close()
 
 
+def _ensure_test_database_exists(url: str) -> None:
+    """Create the dedicated test database if it does not exist.
+
+    Connects to a maintenance database (``postgres``/``template1``) with the same
+    credentials and issues ``CREATE DATABASE`` when the target is missing. If the
+    role lacks ``CREATEDB`` (common for a locked-down dev role), raises a clear,
+    actionable error with the one-time SQL to run — instead of silently falling
+    back to the dev DB.
+    """
+    from psycopg2.extensions import ISOLATION_LEVEL_AUTOCOMMIT
+
+    name = _db_name_of(url)
+    # Already reachable? Then it exists — nothing to do.
+    try:
+        psycopg2.connect(url).close()
+        return
+    except psycopg2.OperationalError:
+        pass  # likely "database does not exist" — try to create it below
+
+    last_exc = None
+    for maint in ("postgres", "template1"):
+        try:
+            con = psycopg2.connect(_with_db_name(url, maint))
+        except psycopg2.Error as exc:
+            last_exc = exc
+            continue
+        try:
+            con.set_isolation_level(ISOLATION_LEVEL_AUTOCOMMIT)
+            with con.cursor() as cur:
+                cur.execute("SELECT 1 FROM pg_database WHERE datname = %s", (name,))
+                if cur.fetchone():
+                    return
+                cur.execute(f'CREATE DATABASE "{name}"')
+            print(f"[conftest] created test database {name!r}", file=sys.stderr)
+            return
+        except psycopg2.Error as exc:
+            if getattr(exc, "pgcode", None) == "42501" or "permission denied" in str(exc).lower():
+                raise RuntimeError(
+                    f"Contract tests need a dedicated test database {name!r}, but the "
+                    f"current role cannot create it (no CREATEDB privilege).\n"
+                    f"Create it once (as a superuser / in pgAdmin), then re-run:\n\n"
+                    f'    CREATE DATABASE "{name}" OWNER {_db_user_of(url)!r};\n\n'
+                    f"Or point the suite at an existing test DB via TEST_DATABASE_URL.\n"
+                    f"The dev database is never used for tests by design."
+                ) from exc
+            raise
+        finally:
+            con.close()
+    raise RuntimeError(
+        f"Could not reach a maintenance database to create {name!r}: {last_exc}"
+    )
+
+
 def pytest_configure(config):
     """Reset and seed a fresh PostgreSQL schema before any contract tests run."""
     os.environ.setdefault("DEV_JWT", "dev-token-change-me")
     os.environ["DATABASE_URL"] = TEST_DATABASE_URL
+
+    # SAFETY GUARD: never run the destructive reset against a non-test database.
+    # _resolve_test_database_url already redirects a dev DB to <db>_test, but this
+    # is the hard backstop in case of a misconfigured TEST_DATABASE_URL.
+    _test_db = _db_name_of(TEST_DATABASE_URL)
+    if "test" not in _test_db.lower():
+        raise RuntimeError(
+            f"Refusing to run contract tests against {_test_db!r}: the target "
+            f"database name must contain 'test'. Set TEST_DATABASE_URL to a "
+            f"disposable database (the suite drops and rebuilds its schema)."
+        )
+    _ensure_test_database_exists(TEST_DATABASE_URL)
     os.environ["INGEST_MODE"] = "offline"
     os.environ["ANTHROPIC_API_KEY"] = ""
     os.environ["AGENTIQ_DISABLE_BACKGROUND_JOBS"] = "1"
@@ -484,6 +576,45 @@ def _license_gate_valid_by_default():
         lambda *a, **k: {"status": "valid"},
     ):
         yield
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _preserve_installed_license():
+    """Snapshot and restore the app-global license KV rows around the session.
+
+    The license contract tests write/clear ``license:key`` (and ``last_seen`` /
+    ``last_status``) directly in the shared ``kv`` table. When the contract DB
+    cannot be isolated — e.g. this environment lacks the privilege to reset the
+    schema and falls back to the real provisioned DB — those writes land in the
+    developer's dev database and clobber a license they pasted into the UI
+    (symptom: the License page flips to "invalid" after a test run / restart).
+
+    Snapshotting before the suite and restoring after means running the tests
+    never permanently destroys an installed license. Within the session tests
+    still manage their own license state; this only guarantees the pre-existing
+    value is put back at the end.
+    """
+    from app import db
+    from app.license_runtime import (
+        LICENSE_KEY_KV,
+        LICENSE_LAST_SEEN_KV,
+        LICENSE_LAST_STATUS_KV,
+    )
+
+    keys = (LICENSE_KEY_KV, LICENSE_LAST_SEEN_KV, LICENSE_LAST_STATUS_KV)
+    try:
+        saved = {k: db.kv_get(k) for k in keys}
+    except Exception:
+        saved = None  # DB not ready — nothing to preserve
+    try:
+        yield
+    finally:
+        if saved is not None:
+            for k, v in saved.items():
+                try:
+                    db.kv_set(k, v)
+                except Exception:
+                    pass
 
 
 @pytest.fixture(scope="session")

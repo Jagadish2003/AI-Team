@@ -46,6 +46,7 @@ GATE = "app.middleware.license_gate.get_current_license_status"
 
 STATUS_PATH = "/api/license"
 UPDATE_PATH = "/api/license/update-key"
+BANNER_PATH = "/api/license/banner"
 
 # One throwaway keypair for the whole module. We hold the private half so we can
 # mint keys; the public half is patched in as the "baked-in" verification key.
@@ -211,6 +212,9 @@ def test_admin_update_key_updates_status(client):
     assert resp.status_code == 200, resp.text
     assert resp.json()["status"] == LicenseStatus.VALID
     assert db.kv_get(LICENSE_KEY_KV) == key  # validate-before-store persisted it
+    # The cached status is refreshed on update so the DB matches the live status
+    # immediately (no lag until the next periodic check).
+    assert db.kv_get(LICENSE_LAST_STATUS_KV) == LicenseStatus.VALID
 
     status = client.get(STATUS_PATH, headers=headers)
     assert status.status_code == 200
@@ -243,3 +247,39 @@ def test_non_owner_forbidden_on_status(client, role):
 def test_non_owner_forbidden_on_update(client, role):
     resp = client.post(UPDATE_PATH, json={"key": _mint(expires_at=_iso(200))}, headers=_set_role(role))
     assert resp.status_code == 403
+
+
+# ===========================================================================
+# T9 + AC4/AC5: the expiry banner signal is readable by EVERY authenticated
+# role (not just Owner), so the banner shows on every page for analysts/viewers.
+# ===========================================================================
+@pytest.mark.parametrize("role", ["owner", "analyst", "viewer"])
+def test_banner_status_readable_by_every_role(client, role):
+    """Unlike the Owner-only full status, the banner endpoint is auth-only so the
+    global expiry banner renders for every role (AC4/AC5)."""
+    _reset_license_kv()
+    db.kv_set(LICENSE_KEY_KV, _mint(expires_at=_iso(-7), grace_days=14))  # grace
+
+    resp = client.get(BANNER_PATH, headers=_set_role(role))
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["status"] == LicenseStatus.GRACE
+    assert body["expires_at"] == _iso(-7)
+    # Minimal payload only — status/expires_at/reason; no Owner-only admin detail.
+    assert set(body) == {"status", "expires_at", "reason"}
+
+
+def test_banner_reports_no_license_reason_for_fresh_install(client):
+    """AC6 / §5: a never-licensed install surfaces reason=no_license so the banner
+    can say 'No valid license installed' instead of mislabelling it 'expired'."""
+    _reset_license_kv()  # no key installed at all
+    resp = client.get(BANNER_PATH, headers=_set_role("analyst"))
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["status"] == LicenseStatus.READONLY
+    assert body["reason"] == "no_license"
+
+
+def test_banner_requires_authentication(client):
+    resp = client.get(BANNER_PATH)  # no Authorization header
+    assert resp.status_code == 401

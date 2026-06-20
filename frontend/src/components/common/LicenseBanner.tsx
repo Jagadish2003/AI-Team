@@ -5,43 +5,59 @@
  * appears on every authenticated page without per-page wiring. Reads the shared
  * LicenseContext (single fetch, not refetched per route).
  *
- *   grace     → amber: "Your AgentIQ license expired on {date}. Contact
- *                       CloudFulcrum to renew." (app stays fully functional)
- *   readonly  → red:   "License expired. Renew to resume discovery runs."
- *   invalid   → red:   same read-only message (no usable license).
- *   valid     → nothing (banner disappears once a valid key is installed).
+ * Copy is driven by status + reason so a never-licensed install is not mislabelled
+ * as "expired" (§5 / AC6):
+ *
+ *   grace                         → amber: "Your AgentIQ license expired on
+ *                                   {date}. Contact CloudFulcrum to renew."
+ *   readonly / invalid, no_license or
+ *     signature_or_format (no usable key) → red: "No valid license installed.
+ *                                   Paste a valid license key to activate AgentIQ."
+ *   readonly, clock_rollback      → red: clock-inconsistency message.
+ *   readonly, expired past grace  → red: "License expired. Renew to resume
+ *                                   discovery runs."
+ *   valid                         → nothing (banner disappears once valid).
  *
  * Colours use the same amber/red tones as the T8 status badge and the theme's
  * semantic tokens, so the banner respects dark/light mode (ThemeContext).
  */
 import { useLicense } from "../../context/LicenseContext";
 
+const AMBER = "border-b border-amber-500/30 bg-amber-500/15 px-4 py-2 text-center text-sm font-medium text-amber-200";
+const RED = "border-b border-red-500/30 bg-red-500/15 px-4 py-2 text-center text-sm font-medium text-red-300";
+
+const UNLICENSED_MSG = "No valid license installed. Paste a valid license key to activate AgentIQ.";
+const CLOCK_MSG = "License validation is paused — the system clock looks inconsistent. Restore the correct date to resume.";
+const EXPIRED_MSG = "License expired. Renew to resume discovery runs.";
+
 export default function LicenseBanner() {
   const { status } = useLicense();
   const state = status?.status;
+  const reason = status?.reason ?? null;
 
   if (state === "grace") {
     return (
-      <div
-        role="alert"
-        data-testid="license-banner"
-        data-state="grace"
-        className="border-b border-amber-500/30 bg-amber-500/15 px-4 py-2 text-center text-sm font-medium text-amber-200"
-      >
+      <div role="alert" data-testid="license-banner" data-state="grace" className={AMBER}>
         {`Your AgentIQ license expired on ${status?.expires_at ?? ""}. Contact CloudFulcrum to renew.`}
       </div>
     );
   }
 
   if (state === "readonly" || state === "invalid") {
+    // A never-licensed install (no key, or an unverifiable/tampered key) must not
+    // claim the term "expired" — there was no term. invalid always means an
+    // unusable key; readonly covers no_license / clock_rollback / past-grace.
+    let message = EXPIRED_MSG;
+    let dataReason = reason ?? "expired";
+    if (state === "invalid" || reason === "no_license" || reason === "signature_or_format") {
+      message = UNLICENSED_MSG;
+      dataReason = reason ?? "invalid";
+    } else if (reason === "clock_rollback") {
+      message = CLOCK_MSG;
+    }
     return (
-      <div
-        role="alert"
-        data-testid="license-banner"
-        data-state="readonly"
-        className="border-b border-red-500/30 bg-red-500/15 px-4 py-2 text-center text-sm font-medium text-red-300"
-      >
-        License expired. Renew to resume discovery runs.
+      <div role="alert" data-testid="license-banner" data-state="readonly" data-reason={dataReason} className={RED}>
+        {message}
       </div>
     );
   }
