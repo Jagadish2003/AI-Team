@@ -453,12 +453,29 @@ def pytest_configure(config):
     # Only (re)create the schema + reseed on a database this role owns (local
     # throwaway DB or CI). A pre-provisioned shared DB already has both.
     if schema_is_resettable:
+        import logging
+
+        # alembic's env.py calls logging.config.fileConfig(alembic.ini), which
+        # attaches a StreamHandler(sys.stderr) to the ROOT logger. That handler
+        # grabs the pre-pytest stderr and then prints every app WARN/ERROR inline
+        # for the rest of the session, bypassing pytest's per-test log capture —
+        # so the intentional errors raised by failure-path tests (audit failure,
+        # "broken DB" health check, weak-JWT warning, …) leak to the console.
+        # Snapshot the root handlers, run the migration, then remove whatever
+        # fileConfig added so pytest's capture is the only handler left (errors
+        # then surface only when a test actually fails).
+        _root = logging.getLogger()
+        _handlers_before = set(_root.handlers)
         try:
             alembic_cfg = AlembicConfig(str(BACKEND_DIR / "alembic.ini"))
             alembic_cfg.set_main_option("script_location", str(BACKEND_DIR / "migrations"))
             alembic_command.upgrade(alembic_cfg, "head")
         except Exception as exc:
             raise RuntimeError(f"alembic upgrade failed:\n{exc}") from exc
+        finally:
+            for _h in list(_root.handlers):
+                if _h not in _handlers_before:
+                    _root.removeHandler(_h)
 
         # --no-reset: seed_loader now resets the public schema by default, but the
         # conftest already did its own reset + `alembic upgrade head` above, so the
