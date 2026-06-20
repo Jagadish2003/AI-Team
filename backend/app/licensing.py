@@ -21,6 +21,7 @@ from __future__ import annotations
 import base64
 import datetime
 import json
+import os
 from typing import Optional
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
@@ -30,19 +31,34 @@ from cryptography.hazmat.primitives.serialization import load_pem_public_key
 # T2 (AT-343): CloudFulcrum public key — the root of trust.
 # Safe to ship; published in the binary by design. The matching private key is
 # held only by the CloudFulcrum issuing service / secrets manager.
-# Rotation: if the private key is ever compromised, replace the constant below
-# and cut a release. See backend/license/README.md → "Key rotation runbook".
+# Rotation: prefer the LICENSE_PUBLIC_KEY env override (see load_public_key) so a
+# key rotation needs only a config change, not a code change + release. If the
+# private key is compromised, rotate the env value (or, as a last resort, replace
+# the constant below and cut a release). See backend/license/README.md →
+# "Key rotation runbook".
 # ---------------------------------------------------------------------------
 CLOUDFULCRUM_PUBLIC_KEY = """-----BEGIN PUBLIC KEY-----
 MCowBQYDK2VwAyEA6TBkcZABXy0U9JQ8x1TLBmcqFvGbAwxA/juJIdbyNpI=
 -----END PUBLIC KEY-----"""
 
+# Optional env override for the trusted public key (PEM). Lets an operator rotate
+# the root of trust without a release cycle — same pattern as JWT secrets. Falls
+# back to the baked-in constant when unset.
+LICENSE_PUBLIC_KEY_ENV = "LICENSE_PUBLIC_KEY"
 
-def load_public_key(pem: str = CLOUDFULCRUM_PUBLIC_KEY) -> Ed25519PublicKey:
-    """Load the baked-in (or a supplied) Ed25519 public key from PEM text."""
+
+def load_public_key(pem: Optional[str] = None) -> Ed25519PublicKey:
+    """Load the Ed25519 public key from PEM text.
+
+    Resolution order:
+      1. an explicit ``pem`` argument (used by tests with a throwaway key),
+      2. the ``LICENSE_PUBLIC_KEY`` env var (rotation without a release),
+      3. the baked-in ``CLOUDFULCRUM_PUBLIC_KEY`` constant.
+    """
+    pem = pem or os.getenv(LICENSE_PUBLIC_KEY_ENV) or CLOUDFULCRUM_PUBLIC_KEY
     key = load_pem_public_key(pem.encode())
     if not isinstance(key, Ed25519PublicKey):
-        raise TypeError("CLOUDFULCRUM_PUBLIC_KEY is not an Ed25519 public key")
+        raise TypeError("configured license public key is not an Ed25519 public key")
     return key
 
 

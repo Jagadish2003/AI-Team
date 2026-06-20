@@ -47,8 +47,13 @@ _GATED_POST_PATHS = (
     re.compile(r"^/api/stack-builder/launch/?$"),
 )
 
-# Statuses under which discovery runs are blocked. valid/grace never restrict.
-_BLOCKED_STATUSES = frozenset({LicenseStatus.READONLY, LicenseStatus.INVALID})
+# Allow-list, not block-list: a discovery run proceeds ONLY for an explicitly
+# healthy license — valid (within term) or grace (expired, still fully
+# functional). Every other value — readonly, invalid, no_license,
+# clock_rollback, or any unrecognised/future status — fails closed and is
+# blocked. Modelling it as an allow-list means a newly added status can never
+# silently open the gate (it would have to be added here deliberately).
+_RUN_ALLOWED_STATUSES = frozenset({LicenseStatus.VALID, LicenseStatus.GRACE})
 
 
 def _is_gated_run_request(method: str, path: str) -> bool:
@@ -76,7 +81,13 @@ def _blocked_response(status: str) -> JSONResponse:
 
 
 class LicenseGateMiddleware(BaseHTTPMiddleware):
-    """Block run-trigger endpoints when the license is read-only/invalid."""
+    """Block run-trigger endpoints unless the license is live-validated healthy.
+
+    Status is computed LIVE per request via get_current_license_status() (which
+    re-validates the stored key against the current clock); the gate never trusts
+    a cached status, so a failed/stale periodic check cannot open it. A
+    status-check error fails closed.
+    """
 
     async def dispatch(self, request: Request, call_next: Callable) -> Response:
         if _is_gated_run_request(request.method, request.url.path):
@@ -90,8 +101,9 @@ class LicenseGateMiddleware(BaseHTTPMiddleware):
                     request.url.path,
                 )
                 return _blocked_response(LicenseStatus.INVALID)
-            if status in _BLOCKED_STATUSES:
-                return _blocked_response(status)
+            # Fail closed: block unless the live status is explicitly valid/grace.
+            if status not in _RUN_ALLOWED_STATUSES:
+                return _blocked_response(status or LicenseStatus.INVALID)
         # Everything else (reads, auth/login, valid/grace runs) passes through.
         return await call_next(request)
 

@@ -226,11 +226,26 @@ def run_startup_validation() -> dict | None:
 
 
 def run_license_check() -> None:
-    """Periodic job entry point — re-evaluate the license. Never raises."""
+    """Periodic job entry point — re-evaluate the license. Never raises.
+
+    Enforcement does NOT depend on this job succeeding: the run gate
+    (LicenseGateMiddleware) and the banner endpoint both re-validate the stored
+    key LIVE on each request via get_current_license_status(), so a failed
+    periodic check cannot open the gate. As defence in depth, on failure we pin
+    the cached status signal (license:last_status) to read-only so any cache
+    consumer stays conservative (fail-closed) rather than serving a stale
+    "valid".
+    """
     try:
         evaluate_license()
     except Exception:  # pragma: no cover — a scheduled check must not crash
         logger.exception("periodic license validation failed")
+        try:
+            kv_set(LICENSE_LAST_STATUS_KV, LicenseStatus.READONLY)
+        except Exception:
+            logger.exception(
+                "could not pin license status to read-only after a failed check"
+            )
 
 
 def _shutdown_scheduler(*_args) -> None:

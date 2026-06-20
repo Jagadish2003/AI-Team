@@ -30,6 +30,25 @@ const UNLICENSED_MSG = "No valid license installed. Paste a valid license key to
 const CLOCK_MSG = "License validation is paused — the system clock looks inconsistent. Restore the correct date to resume.";
 const EXPIRED_MSG = "License expired. Renew to resume discovery runs.";
 
+/**
+ * Format the license expiry (a plain ISO calendar date, e.g. "2026-06-10") as a
+ * human-readable locale date, matching the date formatting used elsewhere in the
+ * UI. Uses an explicit "en-US" locale + UTC time zone so the rendered day is
+ * deterministic and never shifts across server/CI time zones. Falls back to the
+ * raw value if it cannot be parsed.
+ */
+function formatExpiry(iso: string | null | undefined): string {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  return d.toLocaleDateString("en-US", {
+    year: "numeric",
+    month: "long",
+    day: "numeric",
+    timeZone: "UTC",
+  });
+}
+
 export default function LicenseBanner() {
   const { status } = useLicense();
   const state = status?.status;
@@ -38,7 +57,7 @@ export default function LicenseBanner() {
   if (state === "grace") {
     return (
       <div role="alert" data-testid="license-banner" data-state="grace" className={AMBER}>
-        {`Your AgentIQ license expired on ${status?.expires_at ?? ""}. Contact CloudFulcrum to renew.`}
+        {`Your AgentIQ license expired on ${formatExpiry(status?.expires_at)}. Contact CloudFulcrum to renew.`}
       </div>
     );
   }

@@ -144,6 +144,13 @@ def update_license_key(body: UpdateKeyRequest) -> LicenseStatusResponse:
         raise HTTPException(status_code=400, detail="This key is not valid")
 
     db.kv_set(LICENSE_KEY_KV, body.key)
+    # Refresh the derived status cache (license:last_status / last_seen_date)
+    # IMMEDIATELY after the key write — before the fire-and-forget telemetry,
+    # which does its own DB I/O — so the window where the stored key and the
+    # cached status disagree is as small as possible. (Live consumers such as the
+    # gate/banner re-validate the key directly and never read this cache, but
+    # keeping the two writes adjacent avoids any stale-cache surprise.)
+    persist_validated_status(result)
     record_event(
         "license.updated",
         {
@@ -152,12 +159,6 @@ def update_license_key(body: UpdateKeyRequest) -> LicenseStatusResponse:
             "expires_at": result.get("expires_at"),
         },
     )
-    # Refresh the persisted status cache (license:last_status / last_seen_date)
-    # from the result we just validated, so the stored state matches what the UI
-    # computes live. Without this, the cache — written only by the startup/
-    # periodic checks — lags the freshly installed key until the next check (a
-    # confusing "invalid in the DB, valid in the UI" mismatch).
-    persist_validated_status(result)
     return _to_status_response(result)
 
 

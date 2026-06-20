@@ -50,7 +50,7 @@ describe("LicenseBanner (LIC-1 / T9)", () => {
     renderBanner();
     expect(
       await screen.findByText(
-        "Your AgentIQ license expired on 2026-06-10. Contact CloudFulcrum to renew.",
+        "Your AgentIQ license expired on June 10, 2026. Contact CloudFulcrum to renew.",
       ),
     ).toBeInTheDocument();
   });
