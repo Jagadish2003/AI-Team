@@ -902,16 +902,18 @@ def _run_entity_ids_from_db(org_id: str, run_id: str) -> List[str]:
 
         conn = _db.connect()
         try:
-            rows = conn.execute(
+            cur = conn.cursor()
+            cur.execute(
                 """
                 SELECT id
                 FROM entities
-                WHERE org_id = ? AND last_seen_run_id = ?
+                WHERE org_id = %s AND last_seen_run_id = %s
                 ORDER BY display_name ASC, id ASC
                 LIMIT 50
                 """,
                 (org_id, run_id),
-            ).fetchall()
+            )
+            rows = cur.fetchall()
         finally:
             conn.close()
     except Exception as exc:
@@ -927,20 +929,22 @@ def _run_relationship_entity_ids_from_db(org_id: str, run_id: str) -> List[str]:
 
         conn = _db.connect()
         try:
-            rows = conn.execute(
+            cur = conn.cursor()
+            cur.execute(
                 """
                 SELECT from_entity_id AS entity_id
                 FROM entity_relationships
-                WHERE org_id = ? AND last_seen_run_id = ?
+                WHERE org_id = %s AND last_seen_run_id = %s
                 UNION
                 SELECT to_entity_id AS entity_id
                 FROM entity_relationships
-                WHERE org_id = ? AND last_seen_run_id = ?
+                WHERE org_id = %s AND last_seen_run_id = %s
                 ORDER BY entity_id
                 LIMIT 50
                 """,
                 (org_id, run_id, org_id, run_id),
-            ).fetchall()
+            )
+            rows = cur.fetchall()
         finally:
             conn.close()
     except Exception as exc:
@@ -961,22 +965,24 @@ def _detector_process_entity_id(
 
         conn = _db.connect()
         try:
-            row = conn.execute(
+            cur = conn.cursor()
+            cur.execute(
                 """
                 SELECT id
                 FROM entities
-                WHERE org_id = ?
-                  AND last_seen_run_id = ?
+                WHERE org_id = %s
+                  AND last_seen_run_id = %s
                   AND entity_type = 'process'
                   AND (
-                        lower(display_name) = lower(?)
-                     OR lower(COALESCE(source_record_id, '')) = lower(?)
+                        lower(display_name) = lower(%s)
+                     OR lower(COALESCE(source_record_id, '')) = lower(%s)
                   )
                 ORDER BY id
                 LIMIT 1
                 """,
                 (org_id, run_id, detector_id, detector_id),
-            ).fetchone()
+            )
+            row = cur.fetchone()
         finally:
             conn.close()
     except Exception as exc:

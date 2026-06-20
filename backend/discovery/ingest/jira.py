@@ -655,10 +655,19 @@ def ingest(jira_client: Optional[JiraClient] = None) -> Dict[str, Any]:
         )
         return fixture
 
-    jira_url = os.getenv("JIRA_URL", "")
+    # OAuth-first: the live gateway base comes from the per-run context (DB-sourced
+    # vault token + captured/derived api.atlassian.com gateway, set by
+    # resolve_live_systems); the JIRA_URL env var is only a CLI/standalone fallback.
+    # Gating on the env var alone wrongly skipped Jira even when it was
+    # authenticated via the Integration Hub OAuth flow.
+    from . import get_live_connector
+
+    cred = get_live_connector("jira")
+    jira_url = (cred.get("url") if cred else None) or os.getenv("JIRA_URL", "")
     if not jira_url:
         logger.warning(
-            "JIRA_URL not set — skipping Jira ingestion. "
+            "Jira is not connected (no OAuth credentials for this run, and JIRA_URL "
+            "is unset) — skipping Jira ingestion. "
             "D7 will rely on Salesforce/ServiceNow echo scores only."
         )
         return {}

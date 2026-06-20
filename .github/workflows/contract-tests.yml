@@ -17,6 +17,27 @@ jobs:
   contract-tests:
     runs-on: ubuntu-latest
 
+    # Contract tests run against an ephemeral PostgreSQL service. Use fixed
+    # throwaway CI credentials here so pull-request checks do not depend on
+    # repository secrets being present before the service container can start.
+    services:
+      postgres:
+        image: postgres:14-alpine
+        env:
+          POSTGRES_DB: agentiq_test
+          POSTGRES_USER: agentiq
+          POSTGRES_PASSWORD: agentiq
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U agentiq -d agentiq_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      DATABASE_URL: postgresql://agentiq:agentiq@localhost:5432/agentiq_test
+
     defaults:
       run:
         working-directory: backend
@@ -35,17 +56,10 @@ jobs:
           pip install -r requirements.txt
           pip install pytest httpx
 
-      - name: Seed database
-        env:
-          DB_PATH: database/dev.db
-          SEED_DIR: database/seed
-        run: python database/seed_loader.py
-
       - name: Run contract tests
         env:
           PYTHONPATH: "..:."
           DEV_JWT: dev-token-change-me
-          DB_PATH: database/dev.db
           SEED_DIR: database/seed
           CORS_ORIGINS: http://localhost:5173
           AGENTIQ_DISABLE_BACKGROUND_JOBS: "1"

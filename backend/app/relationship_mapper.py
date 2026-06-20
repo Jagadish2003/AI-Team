@@ -7,8 +7,7 @@ inserting directly.
 
 Natural key: (org_id, from_entity_id, to_entity_id, relationship_type).
 No two rows may share this combination. Duplicate prevention is enforced
-at the SQL level via the UPDATE + INSERT conditional, and at the Python
-level via the explicit existence check.
+by a database unique index and an atomic SQL upsert.
 
 Immutability contract on update path:
   confidence, inferred, and first_seen_run_id are set at creation time and
@@ -31,7 +30,6 @@ from __future__ import annotations
 
 import json
 import logging
-import sqlite3
 import time
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
@@ -78,25 +76,17 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def _connect() -> sqlite3.Connection:
-    conn = db.connect()
-    conn.row_factory = sqlite3.Row
-    return conn
+def _connect() -> Any:
+    return db.connect()
 
 
 def ensure_entity_relationships_table() -> None:
-    """Create the entity_relationships table and indexes if they do not exist.
+    """No-op. The entity_relationships table is provisioned externally.
 
-    Idempotent — safe to call on every app startup or before any insert.
-    Uses IF NOT EXISTS so repeated calls are no-ops.
+    Created by database/provision/provision.sh; the application no longer
+    creates this table at runtime.
     """
-    conn = _connect()
-    try:
-        for ddl in ALL_ENTITY_RELATIONSHIPS_DDL:
-            conn.execute(ddl)
-        conn.commit()
-    finally:
-        conn.close()
+    return None
 
 
 def upsert_relationship(
@@ -118,7 +108,8 @@ def upsert_relationship(
         last_seen_run_id=run_id, and all provided fields.
 
     UPDATE path (existing row found):
-      - Sets last_seen_run_id=run_id and increments run_count by 1.
+      - Sets last_seen_run_id=run_id and increments run_count only when this is
+        the first sighting of the edge in that discovery run.
       - Updates evidence to reflect the most recent run's source context.
       - Does NOT change confidence, inferred, or first_seen_run_id — these
         are immutable after creation.
@@ -149,27 +140,29 @@ def upsert_relationship(
 
     conn = _connect()
     try:
-        existing = conn.execute(
+        cur = conn.cursor()
+        cur.execute(
             """
             SELECT * FROM entity_relationships
-            WHERE org_id = ?
-              AND from_entity_id = ?
-              AND to_entity_id = ?
-              AND relationship_type = ?
+            WHERE org_id = %s
+              AND from_entity_id = %s
+              AND to_entity_id = %s
+              AND relationship_type = %s
             """,
             (org_id, from_str, to_str, relationship_type),
-        ).fetchone()
+        )
+        existing = cur.fetchone()
 
         if existing is None:
             # INSERT path: new edge.
             new_id = str(uuid4())
-            conn.execute(
+            cur.execute(
                 """
                 INSERT INTO entity_relationships (
                     id, org_id, from_entity_id, to_entity_id, relationship_type,
                     confidence, inferred, evidence, first_seen_run_id,
                     last_seen_run_id, run_count, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 1, %s)
                 """,
                 (
                     new_id,
@@ -178,7 +171,7 @@ def upsert_relationship(
                     to_str,
                     relationship_type,
                     confidence,
-                    int(inferred),
+                    bool(inferred),
                     evidence_json,
                     run_id,
                     run_id,
@@ -199,31 +192,49 @@ def upsert_relationship(
                     stored_confidence,
                     float(confidence),
                 )
-            conn.execute(
-                """
-                UPDATE entity_relationships
-                SET last_seen_run_id = ?,
-                    run_count        = run_count + 1,
-                    evidence         = ?
-                WHERE org_id = ?
-                  AND from_entity_id = ?
-                  AND to_entity_id = ?
-                  AND relationship_type = ?
-                """,
-                (run_id, evidence_json, org_id, from_str, to_str, relationship_type),
-            )
+            if run_id == existing["last_seen_run_id"]:
+                # Already counted for this run — refresh evidence only, do NOT
+                # increment run_count (run_count tracks distinct confirming runs,
+                # not call count). See the "first sighting in that run" contract
+                # in this function's docstring.
+                cur.execute(
+                    """
+                    UPDATE entity_relationships
+                    SET evidence = %s
+                    WHERE org_id = %s
+                      AND from_entity_id = %s
+                      AND to_entity_id = %s
+                      AND relationship_type = %s
+                    """,
+                    (evidence_json, org_id, from_str, to_str, relationship_type),
+                )
+            else:
+                cur.execute(
+                    """
+                    UPDATE entity_relationships
+                    SET last_seen_run_id = %s,
+                        run_count        = run_count + 1,
+                        evidence         = %s
+                    WHERE org_id = %s
+                      AND from_entity_id = %s
+                      AND to_entity_id = %s
+                      AND relationship_type = %s
+                    """,
+                    (run_id, evidence_json, org_id, from_str, to_str, relationship_type),
+                )
             conn.commit()
 
-        row = conn.execute(
+        cur.execute(
             """
             SELECT * FROM entity_relationships
-            WHERE org_id = ?
-              AND from_entity_id = ?
-              AND to_entity_id = ?
-              AND relationship_type = ?
+            WHERE org_id = %s
+              AND from_entity_id = %s
+              AND to_entity_id = %s
+              AND relationship_type = %s
             """,
             (org_id, from_str, to_str, relationship_type),
-        ).fetchone()
+        )
+        row = cur.fetchone()
         return EntityRelationship.from_db_row(dict(row))
 
     finally:
@@ -408,9 +419,36 @@ def map_directly_observed(
                        Callers that do not need this metric omit the argument.
 
     Returns:
-        Number of upsert_relationship() calls made (created or updated edges).
+        Number of unique edges created or updated.
     """
     count = 0
+    seen_edges: set[tuple[str, str, str]] = set()
+
+    def write_once(
+        from_entity: Entity,
+        to_entity: Entity,
+        relationship_type: str,
+        evidence: Dict[str, Any],
+    ) -> bool:
+        edge_key = (
+            str(from_entity.id),
+            relationship_type,
+            str(to_entity.id),
+        )
+        if edge_key in seen_edges:
+            return False
+        upsert_relationship(
+            org_id=org_id,
+            from_entity_id=edge_key[0],
+            to_entity_id=edge_key[2],
+            relationship_type=relationship_type,
+            confidence=OBSERVED_CONFIDENCE,
+            inferred=False,
+            run_id=run_id,
+            evidence=evidence,
+        )
+        seen_edges.add(edge_key)
+        return True
 
     # -----------------------------------------------------------------------
     # owns: Salesforce/nCino Person → Object via OwnerId / owner fields
@@ -438,17 +476,13 @@ def map_directly_observed(
                         _counters["skipped_ambiguous"] = _counters.get("skipped_ambiguous", 0) + 1
                     continue
                 source = str(record.get("source_system") or "salesforce")
-                upsert_relationship(
-                    org_id=org_id,
-                    from_entity_id=str(person.id),
-                    to_entity_id=str(obj.id),
-                    relationship_type="owns",
-                    confidence=OBSERVED_CONFIDENCE,
-                    inferred=False,
-                    run_id=run_id,
-                    evidence={"field": "OwnerId", "source": source},
-                )
-                count += 1
+                if write_once(
+                    person,
+                    obj,
+                    "owns",
+                    {"field": "OwnerId", "source": source},
+                ):
+                    count += 1
             except Exception as exc:
                 logger.debug(
                     "map_directly_observed owns — record skipped in %s: %s",
@@ -476,17 +510,13 @@ def map_directly_observed(
                     ):
                         _counters["skipped_ambiguous"] = _counters.get("skipped_ambiguous", 0) + 1
                     continue
-                upsert_relationship(
-                    org_id=org_id,
-                    from_entity_id=str(person.id),
-                    to_entity_id=str(obj.id),
-                    relationship_type="owns",
-                    confidence=OBSERVED_CONFIDENCE,
-                    inferred=False,
-                    run_id=run_id,
-                    evidence={"field": "OwnerId", "source": "ncino"},
-                )
-                count += 1
+                if write_once(
+                    person,
+                    obj,
+                    "owns",
+                    {"field": "OwnerId", "source": "ncino"},
+                ):
+                    count += 1
             except Exception as exc:
                 logger.debug("map_directly_observed ncino owns — record skipped: %s", exc)
 
@@ -512,17 +542,13 @@ def map_directly_observed(
                 ):
                     _counters["skipped_ambiguous"] = _counters.get("skipped_ambiguous", 0) + 1
                 continue
-            upsert_relationship(
-                org_id=org_id,
-                from_entity_id=str(person.id),
-                to_entity_id=str(team.id),
-                relationship_type="member_of",
-                confidence=OBSERVED_CONFIDENCE,
-                inferred=False,
-                run_id=run_id,
-                evidence={"field": "assignment_group", "source": "servicenow"},
-            )
-            count += 1
+            if write_once(
+                person,
+                team,
+                "member_of",
+                {"field": "assignment_group", "source": "servicenow"},
+            ):
+                count += 1
         except Exception as exc:
             logger.debug(
                 "map_directly_observed member_of — incident %s skipped: %s",
@@ -559,17 +585,13 @@ def map_directly_observed(
                 ):
                     _counters["skipped_ambiguous"] = _counters.get("skipped_ambiguous", 0) + 1
                 continue
-            upsert_relationship(
-                org_id=org_id,
-                from_entity_id=str(from_ent.id),
-                to_entity_id=str(to_ent.id),
-                relationship_type="escalates_to",
-                confidence=OBSERVED_CONFIDENCE,
-                inferred=False,
-                run_id=run_id,
-                evidence={"field": "escalated_to", "source": "servicenow"},
-            )
-            count += 1
+            if write_once(
+                from_ent,
+                to_ent,
+                "escalates_to",
+                {"field": "escalated_to", "source": "servicenow"},
+            ):
+                count += 1
         except Exception as exc:
             logger.debug(
                 "map_directly_observed escalates_to SN — incident %s skipped: %s",
@@ -613,17 +635,13 @@ def map_directly_observed(
                 ):
                     _counters["skipped_ambiguous"] = _counters.get("skipped_ambiguous", 0) + 1
                 continue
-            upsert_relationship(
-                org_id=org_id,
-                from_entity_id=str(from_ent.id),
-                to_entity_id=str(to_ent.id),
-                relationship_type="escalates_to",
-                confidence=OBSERVED_CONFIDENCE,
-                inferred=False,
-                run_id=run_id,
-                evidence={"field": "escalation_label", "source": "jira"},
-            )
-            count += 1
+            if write_once(
+                from_ent,
+                to_ent,
+                "escalates_to",
+                {"field": "escalation_label", "source": "jira"},
+            ):
+                count += 1
         except Exception as exc:
             logger.debug(
                 "map_directly_observed escalates_to Jira — issue %s skipped: %s",

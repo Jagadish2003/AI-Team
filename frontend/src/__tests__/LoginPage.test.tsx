@@ -69,6 +69,12 @@ describe("LoginPage", () => {
     expect(link.getAttribute("href")).toBe("/register");
   });
 
+  it("renders a 'Forgot password?' link to /forgot-password (CS-3 AC13)", () => {
+    renderPage();
+    const link = screen.getByRole("link", { name: /forgot password/i });
+    expect(link.getAttribute("href")).toBe("/forgot-password");
+  });
+
   // ── Show/hide password ───────────────────────────────────────────────────────
 
   it("toggles password visibility via the eye button", () => {
@@ -288,5 +294,100 @@ describe("LoginPage", () => {
       expect(screen.getByTestId("login-error")).toBeTruthy();
     });
     expect(mockHardRedirect).not.toHaveBeenCalled();
+  });
+
+  // ── AUTH-2 T7: pending / rejected org states ─────────────────────────────────
+
+  function submitValidLogin() {
+    fireEvent.change(screen.getByLabelText(/email/i), {
+      target: { value: "user@example.com" },
+    });
+    fireEvent.change(screen.getByLabelText("Password"), {
+      target: { value: "password1" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /sign in/i }));
+  }
+
+  it("renders the awaiting-approval message on a 403 org_pending_approval (T7-AC1)", async () => {
+    mockLogin.mockRejectedValue(
+      new ApiError("forbidden", 403, {
+        detail: { message: "pending", error_code: "org_pending_approval" },
+      })
+    );
+    renderPage();
+    submitValidLogin();
+
+    await waitFor(() => {
+      expect(screen.getByTestId("login-pending").textContent).toBe(
+        "Your organisation is awaiting approval."
+      );
+    });
+    // Distinct from the bad-credentials error component.
+    expect(screen.queryByTestId("login-error")).toBeNull();
+    expect(mockHardRedirect).not.toHaveBeenCalled();
+  });
+
+  it("renders the registration-rejected message on a 403 org_rejected (T7-AC2)", async () => {
+    mockLogin.mockRejectedValue(
+      new ApiError("forbidden", 403, {
+        detail: { message: "rejected", error_code: "org_rejected" },
+      })
+    );
+    renderPage();
+    submitValidLogin();
+
+    await waitFor(() => {
+      expect(screen.getByTestId("login-rejected").textContent).toBe(
+        "This registration was not approved. Contact your CloudFulcrum representative."
+      );
+    });
+    expect(screen.queryByTestId("login-error")).toBeNull();
+    expect(mockHardRedirect).not.toHaveBeenCalled();
+  });
+
+  it("renders the three error states via distinct components (T7-AC3)", async () => {
+    // Bad credentials → login-error (red).
+    mockLogin.mockRejectedValue(new ApiError("bad creds", 401, {}));
+    const { unmount: unmountInvalid } = renderPage();
+    submitValidLogin();
+    await waitFor(() => expect(screen.getByTestId("login-error")).toBeTruthy());
+    expect(screen.queryByTestId("login-pending")).toBeNull();
+    expect(screen.queryByTestId("login-rejected")).toBeNull();
+    unmountInvalid();
+
+    // Pending → login-pending (amber), and not the other two.
+    mockLogin.mockReset();
+    mockLogin.mockRejectedValue(
+      new ApiError("forbidden", 403, { detail: { error_code: "org_pending_approval" } })
+    );
+    const { unmount: unmountPending } = renderPage();
+    submitValidLogin();
+    await waitFor(() => expect(screen.getByTestId("login-pending")).toBeTruthy());
+    expect(screen.queryByTestId("login-error")).toBeNull();
+    expect(screen.queryByTestId("login-rejected")).toBeNull();
+    unmountPending();
+
+    // Rejected → login-rejected (slate), and not the other two.
+    mockLogin.mockReset();
+    mockLogin.mockRejectedValue(
+      new ApiError("forbidden", 403, { detail: { error_code: "org_rejected" } })
+    );
+    renderPage();
+    submitValidLogin();
+    await waitFor(() => expect(screen.getByTestId("login-rejected")).toBeTruthy());
+    expect(screen.queryByTestId("login-error")).toBeNull();
+    expect(screen.queryByTestId("login-pending")).toBeNull();
+  });
+
+  it("falls back to the red error box for a 403 without a known error_code (no regression)", async () => {
+    mockLogin.mockRejectedValue(new ApiError("forbidden", 403, {}));
+    renderPage();
+    submitValidLogin();
+
+    await waitFor(() => {
+      expect(screen.getByTestId("login-error").textContent).toMatch(
+        /something went wrong/i
+      );
+    });
   });
 });

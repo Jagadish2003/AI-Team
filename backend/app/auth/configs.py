@@ -3,7 +3,14 @@ from __future__ import annotations
 import os
 from typing import Dict
 
+from dotenv import load_dotenv
+
 from app.auth.models import ConnectorAuthConfig
+
+# Load backend/.env so the per-connector instance/tenant values below can be
+# supplied there (idempotent; other app modules call this too). An already-set
+# process env var still wins (override=False), matching the rest of the app.
+load_dotenv()
 
 # client_id values are non-sensitive per T1-S10-A spec and can be in code.
 # os.getenv() allows override from environment (production); the fallback is a
@@ -25,21 +32,26 @@ from app.auth.models import ConnectorAuthConfig
 # (auth.atlassian.com, github.com, slack.com) that never vary per deployment.
 # ---------------------------------------------------------------------------
 
+# Each value reads from backend/.env first (so a deployment can point the OAuth
+# flows at a different instance/tenant without editing code), falling back to the
+# documented dev/sandbox default. The token / revocation / authorization URLs
+# below are built from these, so one value drives all three together.
+
 # Salesforce login host: "test.salesforce.com" (sandbox),
 # "login.salesforce.com" (production), or your My Domain host
 # e.g. "mycompany.my.salesforce.com".
-SALESFORCE_INSTANCE = "test.salesforce.com"
+SALESFORCE_INSTANCE = os.getenv("SALESFORCE_INSTANCE", "test.salesforce.com")
 
 # ServiceNow instance subdomain only, e.g. "dev198195" → dev198195.service-now.com
-SERVICENOW_INSTANCE = "dev198195"
+SERVICENOW_INSTANCE = os.getenv("SERVICENOW_INSTANCE", "dev198195")
 
 # SAP BTP subaccount subdomain + region, e.g. "05e6c258trial" + "us10"
 # → 05e6c258trial.authentication.us10.hana.ondemand.com
-SAP_SUBDOMAIN = "05e6c258trial"
-SAP_REGION = "us10"
+SAP_SUBDOMAIN = os.getenv("SAP_SUBDOMAIN", "05e6c258trial")
+SAP_REGION = os.getenv("SAP_REGION", "us10")
 
 # Microsoft Entra ID (Azure AD) tenant id (GUID) for Dynamics 365.
-DYNAMICS365_TENANT_ID = "bb612c49-03be-4da1-9974-49f0c8704eb8"
+DYNAMICS365_TENANT_ID = os.getenv("DYNAMICS365_TENANT_ID", "bb612c49-03be-4da1-9974-49f0c8704eb8")
 
 CONNECTOR_AUTH_CONFIGS: Dict[str, ConnectorAuthConfig] = {
     "salesforce": ConnectorAuthConfig(
@@ -52,6 +64,10 @@ CONNECTOR_AUTH_CONFIGS: Dict[str, ConnectorAuthConfig] = {
         scopes=["openid", "id", "profile", "email", "address", "phone", "web", "full", "api", "refresh_token", "offline_access"],
         authorization_url=f"https://{SALESFORCE_INSTANCE}/services/oauth2/authorize",
         redirect_uri=os.environ.get("OAUTH_REDIRECT_URI", ""),
+        # prompt=consent makes Salesforce (re)issue a refresh_token so the access
+        # token can be auto-refreshed. The connected app must also have the
+        # "Perform requests at any time (refresh_token, offline_access)" scope.
+        authorize_params={"prompt": "consent"},
     ),
     "servicenow": ConnectorAuthConfig(
         connector_id="servicenow",
@@ -78,6 +94,10 @@ CONNECTOR_AUTH_CONFIGS: Dict[str, ConnectorAuthConfig] = {
         scopes=["read:jira-work", "read:jira-user", "offline_access"],
         authorization_url="https://auth.atlassian.com/authorize",
         redirect_uri=os.environ.get("OAUTH_REDIRECT_URI", ""),
+        # Atlassian 3LO: audience selects the API, and prompt=consent guarantees a
+        # rotating refresh_token is returned (with offline_access above) so the ~1h
+        # access token auto-refreshes. The vault preserves/rotates it on refresh.
+        authorize_params={"audience": "api.atlassian.com", "prompt": "consent"},
     ),
     "confluence": ConnectorAuthConfig(
         connector_id="confluence",
@@ -93,6 +113,9 @@ CONNECTOR_AUTH_CONFIGS: Dict[str, ConnectorAuthConfig] = {
         ],
         authorization_url="https://auth.atlassian.com/authorize",
         redirect_uri=os.environ.get("OAUTH_REDIRECT_URI", ""),
+        # Atlassian 3LO: audience + prompt=consent → rotating refresh_token issued
+        # (with offline_access) so the access token auto-refreshes.
+        authorize_params={"audience": "api.atlassian.com", "prompt": "consent"},
     ),
     "github": ConnectorAuthConfig(
         connector_id="github",

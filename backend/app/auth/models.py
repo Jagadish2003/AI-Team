@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import List, Literal, Optional
+from typing import Dict, List, Literal, Optional
 
 
 @dataclass
@@ -22,6 +22,12 @@ class ConnectorAuthConfig:
     revocation_url: Optional[str] = None      # None when connector has no revocation endpoint
     redirect_uri: Optional[str] = None        # None for client_credentials flows
     authorization_url: Optional[str] = None   # None for client_credentials flows; added in AT-75
+    # Extra query params merged into the authorization URL. Used to reliably
+    # obtain a long-lived REFRESH token (so access tokens auto-refresh instead of
+    # expiring for good): e.g. Atlassian needs ``audience``+``prompt=consent`` and
+    # Salesforce needs ``prompt=consent`` to (re-)issue a refresh token. Ignored
+    # for client_credentials flows (no browser redirect / no refresh token).
+    authorize_params: Dict[str, str] = field(default_factory=dict)
 
 
 @dataclass

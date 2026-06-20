@@ -40,11 +40,12 @@ def _auth(org_id: str = "default") -> Dict[str, str]:
 
 
 def _seed_workspace_member(org_id: str) -> None:
-    with sqlite3.connect(os.environ["DB_PATH"]) as conn:
+    with sqlite3.connect(os.environ.get("DB_PATH", "")) as conn:
         conn.execute(
             """
-            INSERT OR IGNORE INTO workspace_members (org_id, user_id, role, created_at)
-            VALUES (?, ?, 'owner', ?)
+            INSERT INTO workspace_members (org_id, user_id, role, created_at)
+            VALUES (%s, %s, 'owner', %s)
+            ON CONFLICT (org_id, user_id) DO NOTHING
             """,
             (org_id, os.getenv("DEV_JWT", "dev-token-change-me"), "2026-01-01T00:00:00+00:00"),
         )
@@ -65,8 +66,7 @@ def _insert_entity(org_id: str, entity_type: str, display_name: str, run_id: str
         run_count=1,
     )
     row = entity.to_db_row()
-    with sqlite3.connect(os.environ["DB_PATH"]) as conn:
-        conn.execute("PRAGMA foreign_keys = OFF")
+    with sqlite3.connect(os.environ.get("DB_PATH", "")) as conn:
         conn.execute(
             """INSERT INTO entities (
                 id, org_id, entity_type, canonical_name, display_name,
@@ -74,10 +74,10 @@ def _insert_entity(org_id: str, entity_type: str, display_name: str, run_id: str
                 resolution_status, first_seen_run_id, last_seen_run_id,
                 run_count, metadata, created_at, updated_at
             ) VALUES (
-                :id, :org_id, :entity_type, :canonical_name, :display_name,
-                :source_system, :source_record_id, :resolution_confidence,
-                :resolution_status, :first_seen_run_id, :last_seen_run_id,
-                :run_count, :metadata, :created_at, :updated_at
+                %(id)s, %(org_id)s, %(entity_type)s, %(canonical_name)s, %(display_name)s,
+                %(source_system)s, %(source_record_id)s, %(resolution_confidence)s,
+                %(resolution_status)s, %(first_seen_run_id)s, %(last_seen_run_id)s,
+                %(run_count)s, %(metadata)s, %(created_at)s, %(updated_at)s
             )""",
             row,
         )

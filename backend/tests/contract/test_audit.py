@@ -8,13 +8,13 @@ AC9: Audit failure does not propagate — primary operation continues.
 from __future__ import annotations
 
 import json
-import os
-import sqlite3
-import tempfile
-from pathlib import Path
-from unittest.mock import patch
+import uuid
+from unittest.mock import MagicMock, patch
 
+import psycopg2
 import pytest
+
+from app import db
 
 
 # ---------------------------------------------------------------------------
@@ -22,12 +22,19 @@ import pytest
 # ---------------------------------------------------------------------------
 
 
-def _read_audit_rows(db_path: str, org_id: str = "default") -> list[dict]:
-    con = sqlite3.connect(db_path)
+def _new_org_id() -> str:
+    """A unique org_id so each test sees only its own audit rows in the shared
+    PostgreSQL audit_log table (AT-288 / Fix 1 — replaces per-test SQLite files)."""
+    return f"audit-{uuid.uuid4().hex[:12]}"
+
+
+def _read_audit_rows(org_id: str) -> list[dict]:
+    con = db.connect()
     try:
-        cur = con.execute(
+        cur = con.cursor()
+        cur.execute(
             "SELECT id, org_id, event_type, user_id, run_id, connector_id, payload, timestamp "
-            "FROM audit_log WHERE org_id = ? ORDER BY timestamp DESC",
+            "FROM audit_log WHERE org_id = %s ORDER BY timestamp DESC",
             (org_id,),
         )
         rows = cur.fetchall()
@@ -93,38 +100,22 @@ def _read_audit_rows(db_path: str, org_id: str = "default") -> list[dict]:
 ])
 def test_log_event_writes_correct_record(event_type, kwargs, expected_payload_keys):
     """log_event inserts a row with all required top-level and payload fields (AC3)."""
-    import app.db as db_mod
-    import app.middleware.audit as audit_mod
+    from app.middleware.audit import log_event
 
-    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
-        db_path = f.name
+    org_id = _new_org_id()
+    log_event(event_type, org_id=org_id, **kwargs)
 
-    original_db_path = db_mod.DB_PATH
-    db_mod.DB_PATH = Path(db_path)
-    audit_mod._TABLES_INITIALISED = False
+    rows = _read_audit_rows(org_id)
+    assert len(rows) == 1, f"Expected 1 row, got {len(rows)}"
+    row = rows[0]
+    assert row["event_type"] == event_type
+    assert row["org_id"] == org_id
+    assert row["timestamp"]
 
-    try:
-        from app.middleware.audit import log_event
-        log_event(event_type, **kwargs)
-
-        rows = _read_audit_rows(db_path)
-        assert len(rows) == 1, f"Expected 1 row, got {len(rows)}"
-        row = rows[0]
-        assert row["event_type"] == event_type
-        assert row["org_id"] == "default"
-        assert row["timestamp"]
-
-        if expected_payload_keys:
-            assert row["payload"] is not None
-            for key in expected_payload_keys:
-                assert key in row["payload"], f"Missing payload key: {key}"
-    finally:
-        db_mod.DB_PATH = original_db_path
-        audit_mod._TABLES_INITIALISED = False
-        try:
-            os.unlink(db_path)
-        except OSError:
-            pass  # Windows may still hold a handle; temp dir cleanup handles it
+    if expected_payload_keys:
+        assert row["payload"] is not None
+        for key in expected_payload_keys:
+            assert key in row["payload"], f"Missing payload key: {key}"
 
 
 # ---------------------------------------------------------------------------
@@ -206,41 +197,25 @@ def test_primary_operation_continues_after_audit_failure(client):
 
 def test_run_started_includes_user_id():
     """run_started log_event must include user_id (AC3)."""
-    import app.db as db_mod
-    import app.middleware.audit as audit_mod
-    from pathlib import Path
+    from app.middleware.audit import log_event
 
-    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
-        db_path = f.name
-
-    original = db_mod.DB_PATH
-    db_mod.DB_PATH = Path(db_path)
-    audit_mod._TABLES_INITIALISED = False
-
-    try:
-        from app.middleware.audit import log_event
-        log_event(
-            "run_started",
-            run_id="run_test_001",
-            user_id="dev-token-change-me",
-            pack_id="service_cloud",
-            system_ids=["salesforce", "servicenow"],
-        )
-        rows = _read_audit_rows(db_path)
-        assert len(rows) == 1
-        row = rows[0]
-        assert row["event_type"] == "run_started"
-        assert row["user_id"] == "dev-token-change-me", "user_id must be stored in audit record"
-        assert row["run_id"] == "run_test_001"
-        assert row["payload"]["pack_id"] == "service_cloud"
-        assert row["payload"]["system_ids"] == ["salesforce", "servicenow"]
-    finally:
-        db_mod.DB_PATH = original
-        audit_mod._TABLES_INITIALISED = False
-        try:
-            os.unlink(db_path)
-        except OSError:
-            pass
+    org_id = _new_org_id()
+    log_event(
+        "run_started",
+        org_id=org_id,
+        run_id="run_test_001",
+        user_id="dev-token-change-me",
+        pack_id="service_cloud",
+        system_ids=["salesforce", "servicenow"],
+    )
+    rows = _read_audit_rows(org_id)
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["event_type"] == "run_started"
+    assert row["user_id"] == "dev-token-change-me", "user_id must be stored in audit record"
+    assert row["run_id"] == "run_test_001"
+    assert row["payload"]["pack_id"] == "service_cloud"
+    assert row["payload"]["system_ids"] == ["salesforce", "servicenow"]
 
 
 # ---------------------------------------------------------------------------
@@ -250,37 +225,110 @@ def test_run_started_includes_user_id():
 
 def test_connector_connected_includes_user_id_and_scopes():
     """connector_connected log_event must include user_id and scopes_granted (AC4)."""
-    import app.db as db_mod
+    from app.middleware.audit import log_event
+
+    org_id = _new_org_id()
+    log_event(
+        "connector_connected",
+        org_id=org_id,
+        connector_id="salesforce",
+        user_id="dev-token-change-me",
+        scopes_granted=["api", "refresh_token"],
+    )
+    rows = _read_audit_rows(org_id)
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["event_type"] == "connector_connected"
+    assert row["connector_id"] == "salesforce"
+    assert row["user_id"] == "dev-token-change-me", "user_id must be stored in audit record"
+    assert row["payload"]["scopes_granted"] == ["api", "refresh_token"]
+
+
+# ---------------------------------------------------------------------------
+# AT-292 / FixPack v2 Fix 5 — audit write failures emit telemetry
+#
+# The audit write path migrated to PostgreSQL (AT-288 / Fix 1), so the failing
+# write is simulated with psycopg2.OperationalError — the production equivalent
+# of the sqlite3.OperationalError named in the original AC.
+# ---------------------------------------------------------------------------
+
+
+def _failing_audit_connection() -> MagicMock:
+    """A db connection mock whose cursor.execute raises on the audit write."""
+    mock_con = MagicMock()
+    mock_con.cursor.return_value.execute.side_effect = psycopg2.OperationalError(
+        "simulated audit write failure"
+    )
+    return mock_con
+
+
+def test_audit_write_failure_logs_org_and_event_type(caplog):
+    """F5-AC1 — a failed audit write logs at ERROR with org_id and event_type,
+    and the exception is never re-raised to the caller."""
+    import logging
+
     import app.middleware.audit as audit_mod
-    from pathlib import Path
 
-    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
-        db_path = f.name
+    audit_mod._TABLES_INITIALISED = True  # isolate the failure to the write itself
 
-    original = db_mod.DB_PATH
-    db_mod.DB_PATH = Path(db_path)
-    audit_mod._TABLES_INITIALISED = False
+    with patch("app.middleware.audit.db.connect", return_value=_failing_audit_connection()), \
+            patch("app.telemetry.record_event"):
+        with caplog.at_level(logging.ERROR, logger="app.middleware.audit"):
+            from app.middleware.audit import log_event
 
-    try:
+            # (a) must not raise to the caller
+            log_event("user_login", org_id="org-f5-ac1", user_id="u1")
+
+    error_records = [r for r in caplog.records if r.levelno == logging.ERROR]
+    assert error_records, "expected an ERROR log on audit write failure"
+    combined = " ".join(r.getMessage() for r in error_records)
+    assert "org-f5-ac1" in combined, "logger.error must include org_id"
+    assert "user_login" in combined, "logger.error must include event_type"
+
+
+def test_audit_write_failure_emits_telemetry():
+    """F5-AC3 — a failed audit write (psycopg2.OperationalError, PostgreSQL
+    equivalent of sqlite3.OperationalError) is swallowed and surfaces an
+    'audit.write_failed' telemetry event.
+
+    (a) No exception propagates to the caller.
+    (b) record_event is called with event_type='audit.write_failed'.
+    """
+    import app.middleware.audit as audit_mod
+
+    audit_mod._TABLES_INITIALISED = True
+
+    with patch("app.middleware.audit.db.connect", return_value=_failing_audit_connection()), \
+            patch("app.telemetry.record_event") as mock_record:
         from app.middleware.audit import log_event
-        log_event(
-            "connector_connected",
-            connector_id="salesforce",
-            user_id="dev-token-change-me",
-            scopes_granted=["api", "refresh_token"],
-        )
-        rows = _read_audit_rows(db_path)
-        assert len(rows) == 1
-        row = rows[0]
-        assert row["event_type"] == "connector_connected"
-        assert row["connector_id"] == "salesforce"
-        assert row["user_id"] == "dev-token-change-me", "user_id must be stored in audit record"
-        assert row["payload"]["scopes_granted"] == ["api", "refresh_token"]
-    finally:
-        db_mod.DB_PATH = original
-        audit_mod._TABLES_INITIALISED = False
-        try:
-            os.unlink(db_path)
-        except OSError:
-            pass
+
+        # (a) must not raise
+        log_event("connector_connected", org_id="org-f5-ac3", connector_id="sf")
+
+    # (b) telemetry emitted with the right event type and payload
+    mock_record.assert_called_once()
+    args, _kwargs = mock_record.call_args
+    assert args[0] == "audit.write_failed", "telemetry event_type must be audit.write_failed"
+    payload = args[1]
+    assert payload["event_type"] == "connector_connected"
+    assert payload["org_id"] == "org-f5-ac3"
+    assert payload["error"], "payload must carry the stringified error"
+
+
+def test_audit_write_failed_registered_with_typeddict():
+    """F5-AC2 — audit.write_failed is in REGISTERED_EVENT_TYPES and maps to a
+    TypedDict payload schema with the documented fields."""
+    from typing import get_type_hints
+
+    from app.telemetry import (
+        AuditWriteFailedPayload,
+        EVENT_PAYLOAD_TYPES,
+        REGISTERED_EVENT_TYPES,
+    )
+
+    assert "audit.write_failed" in REGISTERED_EVENT_TYPES
+    assert EVENT_PAYLOAD_TYPES["audit.write_failed"] is AuditWriteFailedPayload
+
+    hints = get_type_hints(AuditWriteFailedPayload)
+    assert {"org_id", "event_type", "error"} <= set(hints)
  

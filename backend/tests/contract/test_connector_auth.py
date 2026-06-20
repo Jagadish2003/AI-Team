@@ -888,7 +888,7 @@ def _raw_credentials(org_id: str, connector_id: str) -> tuple | None:
     """Return raw DB row (access_token, refresh_token) without decryption."""
     con = _sqlite3.connect(str(_db_path()))
     cur = con.execute(
-        "SELECT access_token, refresh_token FROM credentials WHERE org_id=? AND connector_id=?",
+        "SELECT access_token, refresh_token FROM credentials WHERE org_id=%s AND connector_id=%s",
         (org_id, connector_id),
     )
     row = cur.fetchone()
@@ -1006,7 +1006,7 @@ def test_store_token_upserts_existing_record():
     # Composite unique means only one row should exist
     con = _sqlite3.connect(str(_db_path()))
     count = con.execute(
-        "SELECT COUNT(*) FROM credentials WHERE org_id=? AND connector_id=?",
+        "SELECT COUNT(*) FROM credentials WHERE org_id=%s AND connector_id=%s",
         ("org-ups-1", "github"),
     ).fetchone()[0]
     con.close()
@@ -1140,6 +1140,48 @@ async def test_get_token_returns_refreshed_value_after_auto_refresh():
             record = await get_token("org-ref-3", "salesforce")
 
     assert record.access_token == "brand-new"
+    _clear_credentials()
+
+
+@pytest.mark.anyio
+async def test_get_token_preserves_refresh_token_when_provider_omits_it():
+    """A provider that returns NO refresh_token on refresh (e.g. Salesforce keeps
+    the same long-lived refresh token) must not lose it. The existing refresh
+    token is carried forward so repeat auto-refresh keeps working instead of
+    dropping the connector to needs_auth after a single refresh.
+    """
+    from backend.app.auth.vault import store_token, get_token
+
+    # Refresh response intentionally omits refresh_token.
+    no_refresh = _token_response(access_token="refreshed", refresh_token=None, expires_in=7200)
+    mock_refresh = _AsyncMock(return_value=no_refresh)
+
+    with _patch.dict(_os.environ, _vault_env()):
+        store_token(
+            "org-ref-keep",
+            "salesforce",
+            _token_response(access_token="old", refresh_token="keep-me", expires_in=60),
+        )
+
+        with _patch("app.auth.vault._oauth.refresh_token", mock_refresh), \
+             _patch("app.auth.vault.CONNECTOR_AUTH_CONFIGS", {"salesforce": _make_config(connector_id="salesforce")}):
+            record = await get_token("org-ref-keep", "salesforce")
+
+        assert record.access_token == "refreshed"
+        # Carried forward, not nulled.
+        assert record.refresh_token == "keep-me"
+
+        # Persisted (encrypted) so a SECOND refresh still has a token to present.
+        from cryptography.fernet import Fernet
+
+        row = _raw_credentials("org-ref-keep", "salesforce")
+        decrypted_refresh = (
+            Fernet(_os.environ["CREDENTIAL_VAULT_KEY"].encode())
+            .decrypt(row[1].encode())
+            .decode()
+        )
+        assert decrypted_refresh == "keep-me"
+
     _clear_credentials()
 
 
@@ -1941,7 +1983,7 @@ def test_token_status_returns_refresh_failed_when_flagged(client):
         db_path = _os.environ.get("DB_PATH", "database/dev.db")
         con = _sq.connect(db_path)
         con.execute(
-            "UPDATE credentials SET refresh_failed=1 WHERE org_id=? AND connector_id=?",
+            "UPDATE credentials SET refresh_failed=1 WHERE org_id=%s AND connector_id=%s",
             (_DEFAULT_ORG_ID, "confluence"),
         )
         con.commit()
@@ -2305,7 +2347,8 @@ def test_nonce_expiry_rejected(client):
     con = _db.connect()
     try:
         con.execute(
-            "INSERT OR REPLACE INTO nonces (key, data) VALUES (?, ?)",
+            "INSERT INTO nonces (key, data) VALUES (%s, %s) "
+            "ON CONFLICT (key) DO UPDATE SET data=EXCLUDED.data",
             (key, data),
         )
         con.commit()

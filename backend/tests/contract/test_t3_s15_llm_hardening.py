@@ -449,8 +449,8 @@ class TestGraphContextKvFallback:
                     source_system, source_record_id, resolution_confidence,
                     resolution_status, first_seen_run_id, last_seen_run_id,
                     run_count, metadata, created_at, updated_at
-                ) VALUES (?, ?, 'person', 'alice smith', 'Alice Smith', 'jira', NULL,
-                          0.95, 'resolved', ?, ?, 7, NULL, ?, ?)
+                ) VALUES (%s, %s, 'person', 'alice smith', 'Alice Smith', 'jira', NULL,
+                          0.95, 'resolved', %s, %s, 7, NULL, %s, %s)
                 """,
                 (str(uuid.uuid4()), org, prior_run, prior_run, now, now),
             )

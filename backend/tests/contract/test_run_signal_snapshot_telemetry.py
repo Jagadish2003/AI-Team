@@ -32,7 +32,7 @@ def _rows_for_run(run_id: str) -> list[dict]:
             """
             SELECT run_id, org_id, signal_key
             FROM signal_snapshots
-            WHERE run_id = ?
+            WHERE run_id = %s
             """,
             (run_id,),
         )

@@ -66,8 +66,12 @@ def test_resolves_only_authenticated_connectors_with_url(monkeypatch):
     assert get_live_connector("servicenow") is None
 
 
-def test_authenticated_but_missing_instance_url_is_skipped(monkeypatch):
-    """A connector with a token but no URL config is not promoted to live."""
+def test_authenticated_but_unresolvable_url_is_skipped(monkeypatch):
+    """A connector with a token but no resolvable URL is not promoted to live.
+
+    URL resolution order is captured → env → OAuth-derived; when all three yield
+    nothing, the connector degrades to skipped rather than hard-failing the run.
+    """
     monkeypatch.delenv("SF_INSTANCE_URL", raising=False)
     monkeypatch.delenv("SERVICENOW_URL", raising=False)
     monkeypatch.delenv("JIRA_URL", raising=False)
@@ -76,8 +80,67 @@ def test_authenticated_but_missing_instance_url_is_skipped(monkeypatch):
         return _token(connector_id)
 
     monkeypatch.setattr(lic, "get_token", fake_get_token)
+    monkeypatch.setattr(lic, "get_connector_instance_url", lambda o, c: None)
+    # Simulate every connector being underivable (no captured URL, no config host,
+    # Jira gateway lookup fails) so the skip path is what's exercised — and no live
+    # accessible-resources network call is made.
+    monkeypatch.setattr(lic, "_derive_oauth_instance_url", lambda cid, tok: None)
 
     assert lic.resolve_live_systems("default") == []
+
+
+def test_servicenow_derived_from_oauth_config_when_no_url(monkeypatch):
+    """ServiceNow ingests live from OAuth alone — its host is derived from the
+    connector's OAuth config (SERVICENOW_INSTANCE), needing no SERVICENOW_URL env."""
+    from app.auth.configs import CONNECTOR_AUTH_CONFIGS
+
+    monkeypatch.delenv("SERVICENOW_URL", raising=False)
+
+    async def fake_get_token(org_id, connector_id):
+        if connector_id == "servicenow":
+            return _token(connector_id)
+        raise ConnectorNotAuthenticatedError(org_id, connector_id)
+
+    monkeypatch.setattr(lic, "get_token", fake_get_token)
+    monkeypatch.setattr(lic, "get_connector_instance_url", lambda o, c: None)
+    monkeypatch.setattr(lic, "store_connector_instance_url", lambda o, c, u: None)
+
+    live = lic.resolve_live_systems("default")
+
+    assert live == ["servicenow"]
+    cred = get_live_connector("servicenow")
+    expected = lic.capture_instance_url(
+        "servicenow", None, CONNECTOR_AUTH_CONFIGS["servicenow"].token_url
+    )
+    assert cred["url"] == expected
+    assert cred["token"] == "servicenow-access"
+
+
+def test_jira_derived_on_demand_when_no_url(monkeypatch):
+    """Jira ingests live from OAuth alone — the api.atlassian.com gateway base is
+    discovered on demand from the token, needing no JIRA_URL env."""
+    monkeypatch.delenv("JIRA_URL", raising=False)
+
+    async def fake_get_token(org_id, connector_id):
+        if connector_id == "jira":
+            return _token(connector_id)
+        raise ConnectorNotAuthenticatedError(org_id, connector_id)
+
+    async def fake_gateway(token, **kw):
+        assert token == "jira-access"
+        return "https://api.atlassian.com/ex/jira/abc-123"
+
+    monkeypatch.setattr(lic, "get_token", fake_get_token)
+    monkeypatch.setattr(lic, "get_connector_instance_url", lambda o, c: None)
+    monkeypatch.setattr(lic, "store_connector_instance_url", lambda o, c, u: None)
+    monkeypatch.setattr(lic, "fetch_jira_gateway_base", fake_gateway)
+
+    live = lic.resolve_live_systems("default")
+
+    assert live == ["jira"]
+    cred = get_live_connector("jira")
+    assert cred["url"] == "https://api.atlassian.com/ex/jira/abc-123"
+    assert cred["token"] == "jira-access"
 
 
 def test_no_authenticated_connectors_returns_empty(monkeypatch):

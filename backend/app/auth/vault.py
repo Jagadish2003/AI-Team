@@ -9,6 +9,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 import httpx
+import psycopg2
 from cryptography.fernet import Fernet
 
 from app import db
@@ -38,40 +39,17 @@ _NONCE_TTL_MINUTES = 10
 
 
 def _init_credentials_table() -> None:
-    """Create the credentials table and indexes if they don't exist yet.
+    """No-op. The credentials table is provisioned externally.
 
-    Also applies the refresh_failed column migration for pre-existing databases.
+    Created by database/provision/provision.sh; the application no longer
+    creates this table at runtime.
     """
-    import sqlite3 as _sqlite3
-    con = db.connect()
-    try:
-        con.execute(CREATE_CREDENTIALS_TABLE)
-        con.execute(CREATE_CREDENTIALS_IDX_ORG)
-        con.execute(CREATE_CREDENTIALS_IDX_CONNECTOR)
-        try:
-            con.execute(ALTER_CREDENTIALS_ADD_REFRESH_FAILED)
-        except _sqlite3.OperationalError:
-            pass  # Column already exists — idempotent
-        con.commit()
-    finally:
-        con.close()
+    return None
 
 
 def _init_nonce_table() -> None:
-    """Create the nonce store table if it doesn't exist yet."""
-    con = db.connect()
-    try:
-        con.execute(
-            """
-            CREATE TABLE IF NOT EXISTS nonces (
-                key        TEXT PRIMARY KEY,
-                data       TEXT NOT NULL
-            )
-            """
-        )
-        con.commit()
-    finally:
-        con.close()
+    """No-op. The nonces table is provisioned by database/provision/provision.sh."""
+    return None
 
 
 def _get_fernet() -> Fernet:
@@ -194,8 +172,10 @@ def store_nonce(
     key = f"nonce:{nonce}"
     con = db.connect()
     try:
-        con.execute(
-            "INSERT OR REPLACE INTO nonces (key, data) VALUES (?, ?)",
+        cur = con.cursor()
+        cur.execute(
+            "INSERT INTO nonces (key, data) VALUES (%s, %s) "
+            "ON CONFLICT (key) DO UPDATE SET data=EXCLUDED.data, is_deleted=FALSE",
             (key, data),
         )
         con.commit()
@@ -225,9 +205,10 @@ def consume_nonce(nonce: str) -> dict | None:
     key = f"nonce:{nonce}"
     con = db.connect()
     try:
-        # Step 1: Read
-        cur = con.execute(
-            "SELECT data FROM nonces WHERE key = ?",
+        cur = con.cursor()
+        # Step 1: Read (only an active, not-yet-consumed nonce)
+        cur.execute(
+            "SELECT data FROM nonces WHERE key = %s AND is_deleted = FALSE",
             (key,),
         )
         row = cur.fetchone()
@@ -235,8 +216,10 @@ def consume_nonce(nonce: str) -> dict | None:
         if row is None:
             return None  # Already used or never issued
 
-        # Step 2: DELETE immediately — before any further processing
-        con.execute("DELETE FROM nonces WHERE key = ?", (key,))
+        # Step 2: Soft-delete immediately — before any further processing. The app
+        # role has no DELETE; marking is_deleted preserves the single-use guarantee
+        # (the read above filters it out on a second call).
+        cur.execute("UPDATE nonces SET is_deleted = TRUE WHERE key = %s", (key,))
         con.commit()
     finally:
         con.close()
@@ -270,8 +253,9 @@ def _mark_refresh_failed(org_id: str, connector_id: str) -> None:
     """Set refresh_failed=1 for an existing credential row.  No-op if row absent."""
     con = db.connect()
     try:
-        con.execute(
-            "UPDATE credentials SET refresh_failed=1 WHERE org_id=? AND connector_id=?",
+        cur = con.cursor()
+        cur.execute(
+            "UPDATE credentials SET refresh_failed=1 WHERE org_id=%s AND connector_id=%s",
             (org_id, connector_id),
         )
         con.commit()
@@ -303,18 +287,20 @@ def store_token(org_id: str, connector_id: str, token_response: dict) -> TokenRe
 
     con = db.connect()
     try:
-        con.execute(
+        cur = con.cursor()
+        cur.execute(
             """
             INSERT INTO credentials
                 (id, org_id, connector_id, access_token, refresh_token, expires_at, scopes, created_at, updated_at, refresh_failed)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
-            ON CONFLICT(org_id, connector_id) DO UPDATE SET
-                access_token   = excluded.access_token,
-                refresh_token  = excluded.refresh_token,
-                expires_at     = excluded.expires_at,
-                scopes         = excluded.scopes,
-                updated_at     = excluded.updated_at,
-                refresh_failed = 0
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, 0)
+            ON CONFLICT (org_id, connector_id) DO UPDATE SET
+                access_token   = EXCLUDED.access_token,
+                refresh_token  = EXCLUDED.refresh_token,
+                expires_at     = EXCLUDED.expires_at,
+                scopes         = EXCLUDED.scopes,
+                updated_at     = EXCLUDED.updated_at,
+                refresh_failed = 0,
+                is_deleted     = FALSE
             """,
             (record_id, org_id, connector_id, enc_access, enc_refresh, expires_iso, scopes_json, now_iso, now_iso),
         )
@@ -344,12 +330,13 @@ async def get_token(org_id: str, connector_id: str) -> TokenRecord:
 
     con = db.connect()
     try:
-        cur = con.execute(
+        cur = con.cursor()
+        cur.execute(
             """
             SELECT id, org_id, connector_id, access_token, refresh_token,
                    expires_at, scopes, created_at, updated_at
             FROM credentials
-            WHERE org_id = ? AND connector_id = ?
+            WHERE org_id = %s AND connector_id = %s AND is_deleted = FALSE
             """,
             (org_id, connector_id),
         )
@@ -383,6 +370,17 @@ async def get_token(org_id: str, connector_id: str) -> TokenRecord:
             except Exception:
                 pass  # Never let flag-writing block the error propagation
             raise ConnectorNotAuthenticatedError(org_id, connector_id) from exc
+
+        # Preserve the existing refresh token when the provider does NOT return a
+        # new one on refresh. Salesforce (and ServiceNow without token rotation)
+        # keep the same long-lived refresh token and omit it from the refresh
+        # response; only rotating providers (Atlassian/Jira) return a fresh one.
+        # Without this, store_token would overwrite refresh_token with NULL and the
+        # NEXT refresh would have nothing to present — dropping the connector to
+        # needs_auth after a single refresh. Carrying the old token forward keeps
+        # auto-refresh working indefinitely for the life of the refresh token.
+        if not new_response.get("refresh_token"):
+            new_response["refresh_token"] = record.refresh_token
 
         record = store_token(org_id, connector_id, new_response)
 
@@ -420,8 +418,10 @@ async def revoke_token(
     access_token_for_revoke: Optional[str] = None
     con = db.connect()
     try:
-        cur = con.execute(
-            "SELECT access_token FROM credentials WHERE org_id = ? AND connector_id = ?",
+        cur = con.cursor()
+        cur.execute(
+            "SELECT access_token FROM credentials "
+            "WHERE org_id = %s AND connector_id = %s AND is_deleted = FALSE",
             (org_id, connector_id),
         )
         row = cur.fetchone()
@@ -497,11 +497,15 @@ async def revoke_token(
                 "Slack auth.revoke failed for %s/%s: %s", org_id, connector_id, exc
             )
 
-    # --- Step 2: local deletion (always executes regardless of Step 1 outcome) ---
+    # --- Step 2: local soft delete (always executes regardless of Step 1 outcome) ---
+    # The app role has no DELETE; mark inactive. get_token/get_token_status filter
+    # is_deleted, and store_token reactivates the row on reconnect.
     con = db.connect()
     try:
-        con.execute(
-            "DELETE FROM credentials WHERE org_id = ? AND connector_id = ?",
+        cur = con.cursor()
+        cur.execute(
+            "UPDATE credentials SET is_deleted = TRUE "
+            "WHERE org_id = %s AND connector_id = %s",
             (org_id, connector_id),
         )
         con.commit()

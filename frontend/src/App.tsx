@@ -14,8 +14,11 @@ import AuthGuard from "./components/auth/AuthGuard";
 
 import LoginPage from "./pages/LoginPage";
 import RegisterPage from "./pages/RegisterPage";
+import PendingApprovalPage from "./pages/PendingApprovalPage";
 import AcceptInvitePage from "./pages/AcceptInvitePage";
 import OAuthCallbackPage from "./pages/OAuthCallbackPage";
+import ForgotPasswordPage from "./pages/ForgotPasswordPage";
+import ResetPasswordPage from "./pages/ResetPasswordPage";
 
 import IntegrationHubPage from "./pages/IntegrationHubPage";
 import DiscoveryRunPage from "./pages/DiscoveryRunPage";
@@ -26,6 +29,7 @@ import BlueprintPage from "./pages/BlueprintPage";
 import ExecutiveReportPage from "./pages/ExecutiveReportPage";
 import StackBuilderPage from "./pages/StackBuilderPage";
 import SettingsPage from "./pages/SettingsPage";
+import LicensePage from "./pages/LicensePage";
 
 export default function App() {
   return (
@@ -52,10 +56,20 @@ export default function App() {
                              * by AT-239 (LoginPage, RegisterPage, AcceptInvitePage).
                              * Route entries are pre-wired here so AuthGuard's
                              * redirect target exists as soon as AT-238 lands.
+                             *
+                             * CS-3 adds /forgot-password and /reset-password as
+                             * public routes too: a user who cannot sign in must be
+                             * able to request and complete a password reset.
                              */}
                             <Route path="/login" element={<LoginPage />} />
                             <Route path="/register" element={<RegisterPage />} />
+                            {/* AUTH-2 T6: static post-registration confirmation.
+                                Public — the registrant has no session at this
+                                point (registration issues no JWT). */}
+                            <Route path="/pending-approval" element={<PendingApprovalPage />} />
                             <Route path="/accept-invite" element={<AcceptInvitePage />} />
+                            <Route path="/forgot-password" element={<ForgotPasswordPage />} />
+                            <Route path="/reset-password" element={<ResetPasswordPage />} />
 
                             {/*
                              * CS-2 / AT-325: OAuth callback landing page. PUBLIC
@@ -144,6 +158,8 @@ export default function App() {
                                 element={<ExecutiveReportPage />}
                               />
                               <Route path="/settings" element={<SettingsPage />} />
+                              {/* LIC-1 / T8 — Owner-only admin License page. */}
+                              <Route path="/license" element={<LicensePage />} />
                               <Route
                                 path="*"
                                 element={<Navigate to="/integration-hub" replace />}

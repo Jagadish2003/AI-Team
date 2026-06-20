@@ -1,4 +1,4 @@
-"""User authentication logic — AUTH-1 / AT-233.
+"""User authentication logic — AUTH-1 / AT-233, AUTH-2 / AT-352/353, AT-354.
 
 The identity/credential layer behind the /api/auth/* routes (routes_auth.py is
 AT-234). Pure functions + raw-SQL data access via app.db.connect(), mirroring
@@ -33,19 +33,29 @@ Security controls (Section 7):
       per-IP. That was dropped intentionally because it locked out legitimate
       co-located users during POC testing. login_attempts still records the IP
       for audit; it is simply not used as a blocking key.
+
+AUTH-2 approval workflow (AT-353):
+    Every new org starts in approval_status='pending_approval'. A signed token
+    is emailed to AGENTIQ_ADMIN_EMAIL; the admin clicks Approve or Reject.
+    register_org_and_owner() no longer returns a JWT — it returns a
+    pending-approval confirmation. OrgPendingApprovalError and OrgRejectedError
+    are defined here for use by T3 (login-side enforcement, AT-354).
 """
 from __future__ import annotations
 
+import hashlib
 import logging
 import math
 import os
-import sqlite3
+import secrets
+import re
 import time
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
 import bcrypt
 import jwt
+import psycopg2
 
 from app import db
 from database.models.login_attempts import ALL_LOGIN_ATTEMPTS_DDL
@@ -63,11 +73,26 @@ BCRYPT_ROUNDS = 12
 PASSWORD_MAX_BYTES = 72  # bcrypt truncates beyond this; cap explicitly.
 PASSWORD_MIN_LENGTH = 8
 
+# CS-3 — the locked password strength rule. Each tuple is (regex, the message
+# returned when the password contains no match). Mirrored on the frontend by
+# PasswordStrengthIndicator.getPasswordRequirements(); keep the two in sync.
+# Digits are deliberately NOT treated as special characters — the special class
+# is exactly the punctuation set below, per the locked CS-3 spec.
+PASSWORD_RULES = [
+    (r"[A-Z]", "at least one uppercase letter"),
+    (r"[a-z]", "at least one lowercase letter"),
+    (r"[!@#$%^&*()_+\-=\[\]{}|;:,.<>?]", "at least one special character"),
+]
+
 JWT_ALGORITHM = "HS256"
 JWT_EXPIRY_HOURS = 8
 
 RATE_LIMIT_MAX_ATTEMPTS = 5
 RATE_LIMIT_WINDOW_MINUTES = 15
+
+# AUTH-2: approval workflow
+AGENTIQ_ADMIN_EMAIL: str = os.getenv("AGENTIQ_ADMIN_EMAIL", "agentiqadmin@dwpglobal.com")
+APPROVAL_TOKEN_EXPIRY_DAYS = 7
 
 _INVALID_CREDENTIALS_MSG = "Invalid email or password"
 # >= 32 bytes so HS256 does not warn in dev/test; production must set JWT_SECRET.
@@ -172,6 +197,26 @@ class InvalidTokenError(AuthError):
     """JWT is malformed, expired, or revoked — maps to 401 (AC9)."""
 
 
+class OrgPendingApprovalError(AuthError):
+    """Login attempted for an org still awaiting admin approval — maps to 403.
+
+    Distinct from InvalidCredentialsError (401) and OrgRejectedError (403) so
+    the frontend can render the correct message for each state.
+    """
+
+    error_code = "org_pending_approval"
+
+
+class OrgRejectedError(AuthError):
+    """Login attempted for an org whose registration was rejected — maps to 403.
+
+    Distinct from OrgPendingApprovalError so the frontend renders the
+    'contact your representative' copy, not the 'wait for approval' copy.
+    """
+
+    error_code = "org_rejected"
+
+
 # ---------------------------------------------------------------------------
 # Table init — lazy, idempotent. seed_loader.py does not run Alembic, so the
 # runtime creates these the same way ensure_signal_snapshots_table() does.
@@ -182,23 +227,47 @@ _AUTH_TABLES_INITIALISED = False
 
 
 def ensure_auth_tables() -> None:
-    """Create orgs, users, login_attempts and workspace_members if missing."""
-    global _AUTH_TABLES_INITIALISED
-    if _AUTH_TABLES_INITIALISED:
-        return
-    con = db.connect()
-    try:
-        for ddl in (
-            *ALL_ORGS_DDL,
-            *ALL_USERS_DDL,
-            *ALL_LOGIN_ATTEMPTS_DDL,
-        ):
-            con.execute(ddl)
-        con.execute(CREATE_WORKSPACE_MEMBERS_TABLE)
-        con.commit()
-        _AUTH_TABLES_INITIALISED = True
-    finally:
-        con.close()
+    """No-op. orgs/users/login_attempts/workspace_members are provisioned externally.
+
+    Created by database/provision/provision.sh; the application no longer
+    creates these tables at runtime.
+    """
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Password strength validation (CS-3)
+# ---------------------------------------------------------------------------
+
+
+def validate_password_strength(password: str) -> list[str]:
+    """Return the CS-3 strength requirements the password fails to meet.
+
+    The rule (locked, CS-3 Section 1): at least PASSWORD_MIN_LENGTH (8)
+    characters, with at least one uppercase letter, one lowercase letter, and one
+    special character from ``!@#$%^&*()_+-=[]{}|;:,.<>?``.
+
+    An empty list means the password is valid. This function NEVER raises and
+    NEVER hashes — it only inspects the plaintext and returns the list of unmet
+    requirements, so each API route can decide how to turn that into an HTTP
+    response (e.g. 422 with ``", ".join(errors)``).
+
+    Strength validation is intended to run on the FULL input before hashing. The
+    bcrypt 72-byte truncation in _password_bytes() is unchanged and independent of
+    this check, so a password longer than 72 bytes that passes here is still
+    accepted and hashed on its first 72 bytes.
+
+    Login does NOT call this: existing users may hold passwords created before the
+    rule and must still be able to sign in (login verifies against the stored hash
+    only). Enforcement lives in the password-CREATION routes, not in login.
+    """
+    errors: list[str] = []
+    if len(password) < PASSWORD_MIN_LENGTH:
+        errors.append(f"at least {PASSWORD_MIN_LENGTH} characters")
+    for pattern, message in PASSWORD_RULES:
+        if not re.search(pattern, password):
+            errors.append(message)
+    return errors
 
 
 # ---------------------------------------------------------------------------
@@ -374,6 +443,12 @@ def _password_changed_after(user_id: str, payload: dict) -> bool:
 # ---------------------------------------------------------------------------
 # Rate limiting (AC6 / AC7 / AC8)
 # ---------------------------------------------------------------------------
+# NOTE (AUTH-1 AC7 deviation): Per-IP rate limiting was intentionally removed.
+# Reason: per-IP blocking is unreliable behind reverse proxies and NAT without
+# explicit X-Forwarded-For trust configuration, which is not yet in place.
+# Current implementation: per-email rate limiting only (5 failed attempts → lockout).
+# Tech debt: file a ticket to add per-IP limiting once proxy trust is configured.
+# ---------------------------------------------------------------------------
 
 
 def check_login_rate_limit(email: str, ip_address: str) -> None:
@@ -404,14 +479,18 @@ def record_login_attempt(email: str, ip_address: str, succeeded: bool) -> None:
     ensure_auth_tables()
     con = db.connect()
     try:
-        con.execute(
+        cur = con.cursor()
+        cur.execute(
             "INSERT INTO login_attempts (id, email, ip_address, attempted_at, succeeded) "
-            "VALUES (?, ?, ?, ?, ?)",
-            (str(uuid4()), email, ip_address, db.now_iso(), 1 if succeeded else 0),
+            "VALUES (%s, %s, %s, %s, %s)",
+            (str(uuid4()), email, ip_address, db.now_iso(), bool(succeeded)),
         )
         if succeeded:
-            con.execute(
-                "DELETE FROM login_attempts WHERE email = ? AND succeeded = 0",
+            # Soft delete (app role has no DELETE): mark prior failures inactive so
+            # _count_failed_attempts (which filters is_deleted) no longer counts them.
+            cur.execute(
+                "UPDATE login_attempts SET is_deleted = TRUE "
+                "WHERE email = %s AND succeeded = FALSE",
                 (email,),
             )
         con.commit()
@@ -428,9 +507,11 @@ def _count_failed_attempts(
     value = email if email is not None else ip
     con = db.connect()
     try:
-        cur = con.execute(
+        cur = con.cursor()
+        cur.execute(
             f"SELECT COUNT(*) FROM login_attempts "
-            f"WHERE {column} = ? AND succeeded = 0 AND attempted_at >= ?",
+            f"WHERE {column} = %s AND succeeded = FALSE AND is_deleted = FALSE "
+            f"AND attempted_at >= %s",
             (value, since.isoformat()),
         )
         return int(cur.fetchone()[0])
@@ -455,10 +536,12 @@ def _seconds_until_email_unblocked(email: str) -> int:
     window_start = datetime.now(timezone.utc) - window
     con = db.connect()
     try:
-        cur = con.execute(
+        cur = con.cursor()
+        cur.execute(
             "SELECT attempted_at FROM login_attempts "
-            "WHERE email = ? AND succeeded = 0 AND attempted_at >= ? "
-            "ORDER BY attempted_at DESC LIMIT 1 OFFSET ?",
+            "WHERE email = %s AND succeeded = FALSE AND is_deleted = FALSE "
+            "AND attempted_at >= %s "
+            "ORDER BY attempted_at DESC LIMIT 1 OFFSET %s",
             (email, window_start.isoformat(), RATE_LIMIT_MAX_ATTEMPTS - 1),
         )
         row = cur.fetchone()
@@ -466,10 +549,18 @@ def _seconds_until_email_unblocked(email: str) -> int:
         con.close()
     if row is None or not row[0]:
         return RATE_LIMIT_WINDOW_MINUTES * 60
-    try:
-        oldest_relevant = datetime.fromisoformat(row[0])
-    except ValueError:
-        return RATE_LIMIT_WINDOW_MINUTES * 60
+    raw_attempted_at = row[0]
+    # attempted_at is a TIMESTAMP column: psycopg2 returns a datetime. Only parse
+    # when the value is a string (defensive for any text-typed source). Checking
+    # `isinstance(..., str)` rather than `isinstance(..., datetime)` keeps this
+    # correct even when a test patches the module-level `datetime` to a subclass.
+    if isinstance(raw_attempted_at, str):
+        try:
+            oldest_relevant = datetime.fromisoformat(raw_attempted_at)
+        except (ValueError, TypeError):
+            return RATE_LIMIT_WINDOW_MINUTES * 60
+    else:
+        oldest_relevant = raw_attempted_at
     if oldest_relevant.tzinfo is None:
         oldest_relevant = oldest_relevant.replace(tzinfo=timezone.utc)
     remaining = (oldest_relevant + window) - datetime.now(timezone.utc)
@@ -482,7 +573,7 @@ def _seconds_until_email_unblocked(email: str) -> int:
 
 
 def register_org_and_owner(org_name: str, email: str, password: str) -> dict:
-    """Register a brand-new workspace and make the registrant its owner (AC2).
+    """Register a brand-new workspace and submit it for admin approval (AUTH-2).
 
     Registration ALWAYS creates a fresh org (a new org_id) owned by the
     registrant. It never joins an existing workspace, even when the org_name
@@ -497,9 +588,14 @@ def register_org_and_owner(org_name: str, email: str, password: str) -> dict:
     now EXCLUSIVELY via the invite flow (POST /api/auth/invite), which is the
     controlled, owner-gated path.
 
-    Returns {token, user{id,email,role,org_id,org_name}}. Raises
+    AUTH-2: The org is created in approval_status='pending_approval'. A signed
+    approval token (stored as its SHA-256 hash) is emailed to AGENTIQ_ADMIN_EMAIL.
+    No JWT is issued — the response is a pending-approval confirmation only. The
+    registrant cannot log in until a CloudFulcrum admin clicks Approve. Raises
     EmailAlreadyExistsError (409) / RegistrationError (400) on bad input.
     """
+    from app.email_service import send_org_approval_request_email
+
     ensure_auth_tables()
     email = email.strip().lower()
     org_name = (org_name or "").strip()
@@ -521,26 +617,34 @@ def register_org_and_owner(org_name: str, email: str, password: str) -> dict:
     org_id = str(uuid4())
     role = "owner"  # registration always creates and owns a NEW workspace (issue #5)
 
+    # AUTH-2: generate single-use approval token; store only its SHA-256 hash.
+    approval_token = secrets.token_urlsafe(32)
+    approval_token_hash = hashlib.sha256(approval_token.encode()).hexdigest()
+    approval_expires = datetime.now(timezone.utc) + timedelta(days=APPROVAL_TOKEN_EXPIRY_DAYS)
+
     con = db.connect()
     try:
+        cur = con.cursor()
         # Always a fresh org — no name-based join. Single transaction: roll back
         # every row if any insert fails.
-        con.execute(
-            "INSERT INTO orgs (id, name, created_at) VALUES (?, ?, ?)",
-            (org_id, org_name, now),
+        cur.execute(
+            "INSERT INTO orgs "
+            "(id, name, created_at, approval_status, approval_token_hash, approval_token_expires_at) "
+            "VALUES (%s, %s, %s, %s, %s, %s)",
+            (org_id, org_name, now, "pending_approval", approval_token_hash, approval_expires),
         )
-        con.execute(
+        cur.execute(
             "INSERT INTO users (id, email, password_hash, is_active, created_at) "
-            "VALUES (?, ?, ?, ?, ?)",
-            (user_id, email, password_hash, 1, now),
+            "VALUES (%s, %s, %s, %s, %s)",
+            (user_id, email, password_hash, True, now),
         )
-        con.execute(
+        cur.execute(
             "INSERT INTO workspace_members (org_id, user_id, role, created_at) "
-            "VALUES (?, ?, ?, ?)",
+            "VALUES (%s, %s, %s, %s)",
             (org_id, user_id, role, now),
         )
         con.commit()
-    except sqlite3.IntegrityError as exc:
+    except psycopg2.IntegrityError as exc:
         con.rollback()
         # Lost the race on the global unique email index.
         raise EmailAlreadyExistsError("Email already registered") from exc
@@ -550,16 +654,31 @@ def register_org_and_owner(org_name: str, email: str, password: str) -> dict:
     finally:
         con.close()
 
-    token = issue_jwt(user_id=user_id, org_id=org_id, role=role, email=email)
+    # Notify the admin — outside the DB transaction so a transient email failure
+    # does not roll back the registration. The org is persisted; the admin can be
+    # re-notified manually if the email bounces.
+    try:
+        send_org_approval_request_email(
+            admin_email=AGENTIQ_ADMIN_EMAIL,
+            org_name=org_name,
+            registrant_email=email,
+            approval_token=approval_token,
+            org_id=org_id,
+        )
+    except Exception:
+        logger.exception(
+            "Failed to send org approval request email for org %s (%s). "
+            "The org was created in pending_approval state. "
+            "Notify %s manually.",
+            org_id, org_name, AGENTIQ_ADMIN_EMAIL,
+        )
+
     return {
-        "token": token,
-        "user": {
-            "id": user_id,
-            "email": email,
-            "role": role,
-            "org_id": org_id,
-            "org_name": org_name,
-        },
+        "status": "pending_approval",
+        "message": (
+            "Your organisation has been submitted for approval. "
+            "You will be notified once it is reviewed."
+        ),
     }
 
 
@@ -575,6 +694,13 @@ def login(email: str, password: str, ip_address: str) -> dict:
     InvalidCredentialsError with an identical message for every cause and always
     performs one bcrypt verification, so timing does not leak account existence
     (AC5). RateLimitError is raised before any credential check (AC6/AC7).
+
+    AUTH-2 / AT-354: after credential verification, the org's approval_status is
+    checked. pending_approval raises OrgPendingApprovalError (403); rejected raises
+    OrgRejectedError (403). Both are distinct from the generic 401 used for bad
+    credentials. The check occurs after password verification deliberately — this
+    avoids leaking whether a pending/rejected org email exists to callers who supply
+    the wrong password.
     """
     ensure_auth_tables()
     email = email.strip().lower()
@@ -594,6 +720,26 @@ def login(email: str, password: str, ip_address: str) -> dict:
     if not usable or not password_ok:
         record_login_attempt(email, ip_address, succeeded=False)
         raise InvalidCredentialsError()
+
+    # Credentials are valid — now enforce the org approval gate (AUTH-2 / AT-354).
+    #
+    # Review #2: a correct-password login for a pending/rejected org is NOT a
+    # failed credential attempt, so it must NOT be recorded as one. Counting it
+    # toward the per-email lockout would lock a registrant out after 5 polite
+    # "is my org approved yet?" attempts. The rate limit exists to throttle
+    # WRONG-password brute force; a correct password against an ungated-yet org
+    # is not that. We record nothing here (neither success nor failure).
+    approval_status = _get_org_approval_status(membership["org_id"])
+    if approval_status == "pending_approval":
+        raise OrgPendingApprovalError(
+            "Your organisation is awaiting approval. "
+            "You will receive an email once it is reviewed."
+        )
+    if approval_status == "rejected":
+        raise OrgRejectedError(
+            "This organisation registration was not approved. "
+            "Contact your CloudFulcrum representative."
+        )
 
     record_login_attempt(email, ip_address, succeeded=True)
     _update_last_login(user["id"])
@@ -624,8 +770,9 @@ def login(email: str, password: str, ip_address: str) -> dict:
 def _get_user_by_email(email: str) -> dict | None:
     con = db.connect()
     try:
-        cur = con.execute(
-            "SELECT id, email, password_hash, is_active FROM users WHERE email = ?",
+        cur = con.cursor()
+        cur.execute(
+            "SELECT id, email, password_hash, is_active FROM users WHERE email = %s",
             (email.strip().lower(),),
         )
         row = cur.fetchone()
@@ -652,19 +799,40 @@ def get_org_name(org_id: str | None) -> str | None:
         return None
     con = db.connect()
     try:
-        cur = con.execute("SELECT name FROM orgs WHERE id = ?", (org_id,))
+        cur = con.cursor()
+        cur.execute("SELECT name FROM orgs WHERE id = %s", (org_id,))
         row = cur.fetchone()
     finally:
         con.close()
     return row[0] if row else None
 
 
+def _get_org_approval_status(org_id: str) -> str:
+    """Return the org's approval_status. Falls back to 'active' when the column
+    does not exist (pre-migration environments) so legacy orgs are never blocked."""
+    con = db.connect()
+    try:
+        cur = con.cursor()
+        cur.execute("SELECT approval_status FROM orgs WHERE id = %s", (org_id,))
+        row = cur.fetchone()
+    except Exception:
+        # Column absent (pre-T1 DB) — treat as active so old envs keep working.
+        return "active"
+    finally:
+        con.close()
+    if row is None:
+        return "active"
+    return row[0] if row[0] else "active"
+
+
 def _get_workspace_member(user_id: str) -> dict | None:
     """Return {org_id, role} for the user's workspace membership (POC: one each)."""
     con = db.connect()
     try:
-        cur = con.execute(
-            "SELECT org_id, role FROM workspace_members WHERE user_id = ? "
+        cur = con.cursor()
+        cur.execute(
+            "SELECT org_id, role FROM workspace_members "
+            "WHERE user_id = %s AND is_deleted = FALSE "
             "ORDER BY created_at ASC LIMIT 1",
             (user_id,),
         )
@@ -679,10 +847,13 @@ def _get_workspace_member(user_id: str) -> dict | None:
 def _update_last_login(user_id: str) -> None:
     con = db.connect()
     try:
-        con.execute(
-            "UPDATE users SET last_login_at = ? WHERE id = ?",
+        cur = con.cursor()
+        cur.execute(
+            "UPDATE users SET last_login_at = %s WHERE id = %s",
             (db.now_iso(), user_id),
         )
         con.commit()
     finally:
         con.close()
+
+

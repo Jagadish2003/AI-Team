@@ -641,10 +641,19 @@ def ingest(sn_client: Optional[ServiceNowClient] = None) -> Dict[str, Any]:
         )
         return fixture
 
-    sn_url = os.getenv("SERVICENOW_URL", "")
+    # OAuth-first: the live instance URL comes from the per-run context (DB-sourced
+    # vault token + captured/derived URL, set by resolve_live_systems); the
+    # SERVICENOW_URL env var is only a CLI/standalone fallback. Gating on the env
+    # var alone wrongly skipped ServiceNow even when it was authenticated via the
+    # Integration Hub OAuth flow.
+    from . import get_live_connector
+
+    cred = get_live_connector("servicenow")
+    sn_url = (cred.get("url") if cred else None) or os.getenv("SERVICENOW_URL", "")
     if not sn_url:
         logger.warning(
-            "SERVICENOW_URL not set — skipping ServiceNow ingestion. "
+            "ServiceNow is not connected (no OAuth credentials for this run, and "
+            "SERVICENOW_URL is unset) — skipping ServiceNow ingestion. "
             "D7 will rely on Salesforce-side echo score only."
         )
         return {}

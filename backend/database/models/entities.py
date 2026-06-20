@@ -94,13 +94,17 @@ ALL_ENTITIES_DDL: tuple[str, ...] = (
 # so the two chronological-visibility paths can never drift (ENT-4 review #5).
 # Callers prepend their own ``SELECT <cols>`` (aliasing the table ``e``) and may
 # append ``ORDER BY``. Bind parameters, in order: (org_id, run_id).
+#
+# AT-288 / Fix 1: chronological order comes from the ``runs.seq`` insertion-order
+# column (BIGSERIAL) — the PostgreSQL replacement for SQLite's implicit ``rowid``,
+# which has no equivalent in PostgreSQL. ``seq`` is created in db.init_tables().
 ENTITIES_VISIBLE_AS_OF_RUN_FROM_WHERE = """
     FROM entities e
     LEFT JOIN runs r_first ON r_first.id = e.first_seen_run_id
-    WHERE e.org_id = ?
+    WHERE e.org_id = %s
       AND (
-            r_first.rowid IS NULL
-         OR r_first.rowid <= (SELECT rowid FROM runs WHERE id = ?)
+            r_first.seq IS NULL
+         OR r_first.seq <= (SELECT seq FROM runs WHERE id = %s)
       )
 """
 

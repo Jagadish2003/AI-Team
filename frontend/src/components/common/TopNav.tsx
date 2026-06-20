@@ -1,10 +1,11 @@
 import React, { useEffect, useRef, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
-import { LogOut, Menu, Moon, Settings, Sun, User, Zap } from "lucide-react";
+import { KeyRound, LogOut, Menu, Moon, Settings, Sun, User, Zap } from "lucide-react";
 import { useRunContext } from "../../context/RunContext";
 import { useConnectorContext } from "../../context/ConnectorContext";
 import { useTheme } from "../../context/ThemeContext";
 import { useAuthOptional } from "../../context/AuthContext";
+import { profileNameFromEmail } from "../../utils/profileName";
 
 type NavItem = {
   to: string;
@@ -57,12 +58,10 @@ export default function TopNav() {
   // that don't mount an AuthProvider. In the real app it's always inside one.
   const auth = useAuthOptional();
 
-  // Profile tooltip shows "<org name>'s Profile" once the user record is loaded.
-  // org_id is a UUID, not a display value — we show the org's human-readable
-  // name (orgs.name, surfaced via /api/auth/me) and fall back to "Profile"
-  // rather than ever exposing the raw UUID.
-  const orgName = auth?.user?.org_name;
-  const profileTitle = orgName ? `${orgName}'s Profile` : "Profile";
+  // Profile tooltip uses the user's email local part, e.g.
+  // "srivani@dwp.com" -> "Srivani's Profile".
+  const profileName = profileNameFromEmail(auth?.user?.email);
+  const profileTitle = profileName ? `${profileName}'s Profile` : "Profile";
 
   async function handleLogout() {
     setProfileOpen(false);
@@ -167,13 +166,13 @@ export default function TopNav() {
 
             {/*
              * Themed profile tooltip (replaces the unstyleable native title).
-             * AgentIQ blue family: light-blue fill, accent-tinted 4px-rounded
-             * border. Hidden while the dropdown is open so the two don't overlap.
+             * Matches the Settings dropdown surface and stays hidden while the
+             * dropdown is open so the two don't overlap.
              */}
             {!profileOpen && (
               <span
                 role="tooltip"
-                className="pointer-events-none absolute right-0 top-full z-50 mt-1.5 whitespace-nowrap rounded-[4px] border border-[#93c5fd] bg-[#dbeafe] px-2 py-1 text-xs font-medium text-[#1e3a8a] opacity-0 shadow-md transition-opacity duration-150 group-hover:opacity-100"
+                className="pointer-events-none absolute right-0 top-full z-50 mt-1.5 whitespace-nowrap rounded-[4px] border border-border bg-panel px-3 py-1.5 text-xs font-medium text-text opacity-0 shadow-xl transition-opacity duration-150 group-hover:opacity-100"
               >
                 {profileTitle}
               </span>
@@ -196,6 +195,24 @@ export default function TopNav() {
                   <Settings className="h-4 w-4" />
                   Settings
                 </button>
+
+                {/* LIC-1 / T8 — Owner-only admin License page. Analyst/Viewer
+                    never see this entry; the route + data endpoints are also
+                    Owner-gated, so this just makes the page discoverable. */}
+                {auth?.user?.role === "owner" && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setProfileOpen(false);
+                      navigate("/license");
+                    }}
+                    className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm text-text transition-colors hover:bg-navhover focus:outline-none focus:ring-2 focus:ring-accent/50"
+                    role="menuitem"
+                  >
+                    <KeyRound className="h-4 w-4" />
+                    License
+                  </button>
+                )}
 
                 <div
                   className="flex w-full items-center gap-2 rounded-md px-3 py-1 text-sm text-text transition-colors hover:bg-navhover"

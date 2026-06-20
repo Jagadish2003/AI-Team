@@ -1,15 +1,23 @@
 import json
+import logging
 import os
 import re
-import sqlite3
 import uuid
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+import psycopg2
+import psycopg2.extras
+from dotenv import load_dotenv
 from fastapi import HTTPException
 
-DB_PATH = Path(os.getenv("DB_PATH", "database/dev.db"))
+logger = logging.getLogger(__name__)
+
+# The canonical discovery step-id list lives in the discovery layer
+# (discovery/steps.py, DISCOVERY_STEPS / DISCOVERY_STEP_IDS). update_run_step()
+# validates against it via _discovery_step_ids() — no local copy is kept here.
+DATABASE_URL = os.getenv("DATABASE_URL")
+
 RUN_ID_RE = re.compile(r"^RUN_(\d+)$")
 
 
@@ -17,26 +25,32 @@ def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def connect() -> sqlite3.Connection:
-    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    # timeout: how long a connection should wait for the lock to go away before raising an error.
-    # check_same_thread: allow the same connection to be used in multiple threads (FastAPI threads).
-    con = sqlite3.connect(str(DB_PATH), timeout=30.0, check_same_thread=False)
-    # Avoid changing journal mode on every request; that requires an exclusive
-    # lock and can fail under concurrent browser prefetches.
-    con.execute("PRAGMA busy_timeout=30000")
+def connect():
+    # AT-288 F1-AC2: connect() uses psycopg2.connect(DATABASE_URL).
+    # cursor_factory=DictCursor makes con.cursor() yield rows that support both
+    # positional (row[0]) and column-name (row["col"]) access — the stock
+    # psycopg2 equivalent of sqlite3.Row, no custom translation layer.
+    # options=-c timezone=UTC pins the session to UTC so timestamps round-trip
+    # consistently regardless of the server's local timezone. The app stores and
+    # compares ISO-8601 UTC values everywhere.
+    con = psycopg2.connect(
+        DATABASE_URL,
+        cursor_factory=psycopg2.extras.DictCursor,
+        options="-c timezone=UTC",
+    )
+    con.autocommit = False
     return con
 
 
 def get_one(table: str, id_: str) -> Optional[Dict[str, Any]]:
     con = connect()
     cur = con.cursor()
-    cur.execute(f"SELECT payload FROM {table} WHERE id = ?", (id_,))
+    cur.execute(f"SELECT payload FROM {table} WHERE id = %s", (id_,))
     row = cur.fetchone()
     con.close()
     if not row:
         return None
-    return json.loads(row[0])
+    return _loads(row[0])
 
 
 def get_all(table: str) -> List[Dict[str, Any]]:
@@ -45,46 +59,66 @@ def get_all(table: str) -> List[Dict[str, Any]]:
     cur.execute(f"SELECT payload FROM {table} ORDER BY id")
     rows = cur.fetchall()
     con.close()
-    return [json.loads(r[0]) for r in rows]
+    return [_loads(r[0]) for r in rows]
 
 
 def upsert(table: str, id_: str, payload: Dict[str, Any]) -> None:
     con = connect()
     cur = con.cursor()
     cur.execute(
-        f"INSERT INTO {table} (id, payload) VALUES (?, ?) "
-        "ON CONFLICT(id) DO UPDATE SET payload=excluded.payload",
+        f"INSERT INTO {table} (id, payload) VALUES (%s, %s) "
+        "ON CONFLICT (id) DO UPDATE SET payload=EXCLUDED.payload",
         (id_, json.dumps(payload)),
     )
     con.commit()
     con.close()
 
 
+def _loads(value: Any) -> Any:
+    """JSON payload columns are stored as TEXT; decode defensively.
+
+    psycopg2 returns TEXT columns as str. Guard against a value that is already
+    a dict/list (e.g. a JSONB column) so callers get a consistent Python object.
+    """
+    if isinstance(value, (dict, list)):
+        return value
+    return json.loads(value)
+
+
+def _column_exists(cur, table: str, column: str) -> bool:
+    cur.execute(
+        "SELECT 1 FROM information_schema.columns "
+        "WHERE table_name = %s AND column_name = %s",
+        (table, column),
+    )
+    return cur.fetchone() is not None
+
+
+def _table_exists(cur, table: str) -> bool:
+    cur.execute(
+        "SELECT 1 FROM information_schema.tables WHERE table_name = %s",
+        (table,),
+    )
+    return cur.fetchone() is not None
+
+
 def init_tables() -> None:
-    con = connect()
-    cur = con.cursor()
-    cur.execute(
-        "CREATE TABLE IF NOT EXISTS runs (id TEXT PRIMARY KEY, payload TEXT NOT NULL)"
-    )
-    # Migrate run_events if it exists with the old single-key schema
-    cur.execute("PRAGMA table_info(run_events)")
-    existing_cols = {row[1] for row in cur.fetchall()}
-    if existing_cols and "run_id" not in existing_cols:
-        cur.execute("DROP TABLE run_events")
-    cur.execute(
-        "CREATE TABLE IF NOT EXISTS run_events (run_id TEXT NOT NULL, seq INTEGER NOT NULL, payload TEXT NOT NULL, PRIMARY KEY(run_id, seq))"
-    )
-    con.commit()
-    con.close()
+    """No-op. Schema is provisioned externally.
+
+    The runs/run_events tables (and all others) are created by
+    database/provision/provision.sh; the application no longer creates or
+    migrates tables at runtime.
+    """
+    return None
 
 
 def get_run(run_id: str) -> Optional[Dict[str, Any]]:
     con = connect()
     cur = con.cursor()
-    cur.execute("SELECT payload FROM runs WHERE id = ?", (run_id,))
+    cur.execute("SELECT payload FROM runs WHERE id = %s", (run_id,))
     row = cur.fetchone()
     con.close()
-    return None if not row else json.loads(row[0])
+    return None if not row else _loads(row[0])
 
 
 def _current_request_org() -> Optional[str]:
@@ -118,11 +152,110 @@ def upsert_run(run_id: str, payload: Dict[str, Any]) -> None:
     con = connect()
     cur = con.cursor()
     cur.execute(
-        "INSERT INTO runs (id, payload) VALUES (?, ?) ON CONFLICT(id) DO UPDATE SET payload=excluded.payload",
+        "INSERT INTO runs (id, payload) VALUES (%s, %s) "
+        "ON CONFLICT (id) DO UPDATE SET payload=EXCLUDED.payload",
         (run_id, json.dumps(payload)),
     )
     con.commit()
     con.close()
+
+
+def _discovery_step_ids() -> frozenset:
+    """Return the canonical discovery step-id set from the discovery layer.
+
+    Imported lazily (and tolerant of either package root) so db.py keeps no
+    module-load dependency on the discovery package. Returns an empty set if
+    the module cannot be located, which disables validation rather than
+    breaking step recording.
+    """
+    try:
+        from discovery.steps import DISCOVERY_STEP_IDS
+    except ModuleNotFoundError:
+        try:
+            from backend.discovery.steps import DISCOVERY_STEP_IDS
+        except ModuleNotFoundError:
+            return frozenset()
+    return DISCOVERY_STEP_IDS
+
+
+def update_run_step(run_id: str, step_id: str, ok: bool = True) -> None:
+    """Record the current discovery step for run_id.
+
+    The run JSON payload is the source of truth: ``current_step`` is written
+    there and is what ``GET /api/runs/{run_id}/status`` reads back (via
+    ``get_run()``) — no schema-aware query is involved. The ``current_step``
+    SQL column (migration 0011) is kept as a denormalized mirror for SQL-level
+    querying/observability only; it is written here but is not the API read
+    path. When the column is absent the payload write still succeeds.
+
+    ``ok=False`` marks the stage as failed: the step is recorded in the
+    payload's ``failed_steps`` list (so the UI can show it as failed rather
+    than as a green-check completion) while ``current_step`` still advances so
+    progress keeps moving. A subsequent ``ok=True`` for the same step clears it
+    from ``failed_steps``.
+
+    ``step_id`` is validated against the canonical discovery step set; an
+    unknown id (e.g. a typo) is logged as a WARNING and skipped rather than
+    silently written, so a misspelled step never clobbers a valid one. Never
+    raises — a step-tracking failure must not abort a discovery run.
+    """
+    valid_ids = _discovery_step_ids()
+    if valid_ids and step_id not in valid_ids:
+        logger.warning(
+            "update_run_step: unknown step_id=%r (not in DISCOVERY_STEPS=%s) — "
+            "skipping write for run_id=%s",
+            step_id,
+            sorted(valid_ids),
+            run_id,
+        )
+        return
+
+    try:
+        con = connect()
+        cur = con.cursor()
+        cur.execute("SELECT payload FROM runs WHERE id = %s", (run_id,))
+        row = cur.fetchone()
+        if not row:
+            con.close()
+            return
+        payload = json.loads(row[0])
+        payload["current_step"] = step_id
+
+        # Track per-step failure so the progress UI does not render a failed
+        # ingest as a completed (green-check) stage. current_step still advances
+        # so the run keeps progressing; failed_steps records which stages failed.
+        failed_steps = payload.get("failed_steps")
+        if not isinstance(failed_steps, list):
+            failed_steps = []
+        if ok:
+            failed_steps = [s for s in failed_steps if s != step_id]
+        elif step_id not in failed_steps:
+            failed_steps.append(step_id)
+        payload["failed_steps"] = failed_steps
+
+        payload_json = json.dumps(payload)
+        try:
+            cur.execute(
+                "UPDATE runs SET payload = %s, current_step = %s WHERE id = %s",
+                (payload_json, step_id, run_id),
+            )
+        except psycopg2.Error:
+            # current_step column not present — clear the aborted transaction
+            # (PostgreSQL aborts it on error) and update the payload only.
+            con.rollback()
+            cur.execute(
+                "UPDATE runs SET payload = %s WHERE id = %s",
+                (payload_json, run_id),
+            )
+        con.commit()
+        con.close()
+    except Exception as exc:
+        logger.warning(
+            "update_run_step skipped: run_id=%s step_id=%s error=%s",
+            run_id,
+            step_id,
+            exc,
+        )
 
 
 def count_runs() -> int:
@@ -134,8 +267,8 @@ def count_runs() -> int:
     rows = cur.fetchall()
     con.close()
     max_n = 0
-    for (run_id,) in rows:
-        match = RUN_ID_RE.match(str(run_id))
+    for row in rows:
+        match = RUN_ID_RE.match(str(row[0]))
         if match:
             max_n = max(max_n, int(match.group(1)))
     return max_n
@@ -167,9 +300,13 @@ def require_run_exists(run_id: str) -> Dict[str, Any]:
 
 
 def delete_run_events(run_id: str) -> None:
+    # Soft delete: the app DB role has UPDATE but not DELETE. Mark the run's
+    # events deleted; insert_run_events re-activates any (run_id, seq) it rewrites,
+    # and get_run_events filters is_deleted, so a shrunk event list correctly drops
+    # the now-stale higher-seq rows.
     con = connect()
     cur = con.cursor()
-    cur.execute("DELETE FROM run_events WHERE run_id = ?", (run_id,))
+    cur.execute("UPDATE run_events SET is_deleted = TRUE WHERE run_id = %s", (run_id,))
     con.commit()
     con.close()
 
@@ -179,7 +316,9 @@ def insert_run_events(run_id: str, events: List[Dict[str, Any]]) -> None:
     cur = con.cursor()
     for i, ev in enumerate(events):
         cur.execute(
-            "INSERT OR REPLACE INTO run_events (run_id, seq, payload) VALUES (?, ?, ?)",
+            "INSERT INTO run_events (run_id, seq, payload) VALUES (%s, %s, %s) "
+            "ON CONFLICT (run_id, seq) DO UPDATE SET "
+            "payload=EXCLUDED.payload, is_deleted=FALSE",
             (run_id, i, json.dumps(ev)),
         )
     con.commit()
@@ -190,11 +329,13 @@ def get_run_events(run_id: str) -> List[Dict[str, Any]]:
     con = connect()
     cur = con.cursor()
     cur.execute(
-        "SELECT payload FROM run_events WHERE run_id = ? ORDER BY seq ASC", (run_id,)
+        "SELECT payload FROM run_events WHERE run_id = %s AND is_deleted = FALSE "
+        "ORDER BY seq ASC",
+        (run_id,),
     )
     rows = cur.fetchall()
     con.close()
-    return [json.loads(r[0]) for r in rows]
+    return [_loads(r[0]) for r in rows]
 
 
 # --- replay.py db API ---
@@ -211,13 +352,8 @@ def run_set(run_id: str, run: Dict[str, Any]) -> None:
 
 
 def _init_kv_table() -> None:
-    con = connect()
-    cur = con.cursor()
-    cur.execute(
-        "CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, payload TEXT NOT NULL)"
-    )
-    con.commit()
-    con.close()
+    """No-op. The kv table is provisioned by database/provision/provision.sh."""
+    return None
 
 
 def kv_get(key: str) -> Any:
@@ -227,10 +363,10 @@ def kv_get(key: str) -> Any:
     _init_kv_table()
     con = connect()
     cur = con.cursor()
-    cur.execute("SELECT payload FROM kv WHERE key = ?", (key,))
+    cur.execute("SELECT payload FROM kv WHERE key = %s", (key,))
     row = cur.fetchone()
     con.close()
-    return json.loads(row[0]) if row else None
+    return _loads(row[0]) if row else None
 
 
 def kv_set(key: str, value: Any) -> None:
@@ -244,7 +380,8 @@ def kv_set(key: str, value: Any) -> None:
     con = connect()
     cur = con.cursor()
     cur.execute(
-        "INSERT INTO kv (key, payload) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET payload=excluded.payload",
+        "INSERT INTO kv (key, payload) VALUES (%s, %s) "
+        "ON CONFLICT (key) DO UPDATE SET payload=EXCLUDED.payload",
         (key, json.dumps(value)),
     )
     con.commit()
@@ -372,10 +509,10 @@ def tenancy_get_one(table: str, id_: str) -> Optional[Dict[str, Any]]:
 # --- Org-native tables owned by other modules (enforced there) -------------
 #   workspace_members — native org_id; enforced in app/rbac.py ("WHERE org_id").
 #   audit_log         — native org_id; enforced in app/middleware/audit.py and
-#                       the /api/audit-log reader ("WHERE org_id = ?").
+#                       the /api/audit-log reader ("WHERE org_id = %s").
 #   signal_snapshots  — native org_id; enforced in app/temporal.py — every
 #                       query (history, baseline, run-signals) filters
-#                       "WHERE org_id = ?" (verified AT-156).
+#                       "WHERE org_id = %s" (verified AT-156).
 #   telemetry_events  — native org_id column (database/models/telemetry.py).
 #   credentials       — native org_id; UNIQUE(org_id, connector_id); enforced
 #                       in app/auth/vault.py.
@@ -444,17 +581,19 @@ def org_connectors_list(org_id: str) -> List[Dict[str, Any]]:
     """All connectors visible to org_id: catalog defaults overlaid with this
     org's own connection state. Catalog ordering is preserved."""
     merged = _connector_catalog()
-    merged.update(_org_connector_overrides(org_id))
+    for connector_id, override in _org_connector_overrides(org_id).items():
+        merged[connector_id] = {**merged.get(connector_id, {}), **override}
     return list(merged.values())
 
 
 def org_connector_get(org_id: str, connector_id: str) -> Optional[Dict[str, Any]]:
     """This org's connector record if it has one, else the catalog template.
     Returns None only when the connector id is unknown entirely."""
+    catalog = get_one("connectors", connector_id)
     row = get_one("connectors", f"{org_id}{_ORG_CONNECTOR_SEP}{connector_id}")
     if row is not None:
-        return row
-    return get_one("connectors", connector_id)
+        return {**(catalog or {}), **row}
+    return catalog
 
 
 def org_connector_set(org_id: str, connector_id: str, payload: Dict[str, Any]) -> None:

@@ -44,8 +44,9 @@ def _set_role(role: str) -> Dict[str, str]:
     con = db.connect()
     try:
         con.execute(
-            "INSERT OR REPLACE INTO workspace_members (org_id, user_id, role, created_at) "
-            "VALUES (?, ?, ?, ?)",
+            "INSERT INTO workspace_members (org_id, user_id, role, created_at) "
+            "VALUES (%s, %s, %s, %s) "
+            "ON CONFLICT (org_id, user_id) DO UPDATE SET role=EXCLUDED.role, created_at=EXCLUDED.created_at",
             (org_id, DEV_TOKEN, role, datetime.now(timezone.utc).isoformat()),
         )
         con.commit()
@@ -473,3 +474,85 @@ def test_ac23_oauth_readme_documents_reverse_proxy() -> None:
     content = readme.read_text(encoding="utf-8")
     assert "reverse proxy" in content.lower() or "proxy" in content.lower(), \
         "README must document reverse proxy guidance"
+
+
+# ── F6: Every registered route has require_auth or is explicitly public ───────
+
+# Routes that intentionally do not use the legacy static-token require_auth.
+# Two categories are listed here:
+#   (a) Truly public — no authentication required at all (health, root, OpenAPI
+#       schema/doc endpoints, and the auth endpoints that accept credentials or
+#       invite tokens without a prior login).
+#   (b) Auth-module routes — protected by the routes_auth._require_jwt dependency
+#       (dynamic JWT verification) rather than the legacy require_auth. These are
+#       still authenticated; they use a different, equally strict mechanism
+#       specific to the AUTH-1 login/register flow.
+# _PUBLIC_ROUTES is the ONLY place where routes may bypass the require_auth check.
+_PUBLIC_ROUTES = {
+    # (a) Truly public — no credential required
+    "/health",
+    "/api/health",
+    "/",
+    "/api/auth/register",
+    "/api/auth/login",
+    "/api/auth/accept-invite",
+    "/api/auth/invite-info",
+    # CS-3: forgot/reset-password are public by design — a user who cannot sign
+    # in must be able to request and complete a reset without a credential.
+    "/api/auth/forgot-password",
+    "/api/auth/reset-password",
+    # FastAPI / Starlette meta routes (filtered out as non-APIRoute anyway, but
+    # listed here for documentation completeness)
+    "/openapi.json",
+    "/docs",
+    "/redoc",
+    # (b) Auth-module routes protected by _require_jwt (not legacy require_auth)
+    "/api/auth/logout",
+    "/api/auth/me",
+    "/api/auth/invite",
+    "/api/auth/change-password",
+}
+
+
+def test_all_routes_have_auth_or_are_explicitly_public() -> None:
+    """F6-AC1 / F6-AC2 / F6-AC3: Every registered APIRoute either carries
+    require_auth in its dependency list or is declared in _PUBLIC_ROUTES.
+
+    Fails when a new route is added without RBAC, printing the offending paths.
+    _PUBLIC_ROUTES is the sole bypass mechanism — no other code path skips this
+    check (F6-AC3).
+    """
+    from fastapi.routing import APIRoute
+
+    from app.main import app
+    from app.security import require_auth
+
+    violations: list[str] = []
+
+    for route in app.routes:
+        if not isinstance(route, APIRoute):
+            # Skip Starlette Mount / WebSocket / StaticFiles routes — they are
+            # not FastAPI API endpoints and cannot carry Depends() the same way.
+            continue
+
+        if route.path in _PUBLIC_ROUTES:
+            continue
+
+        # Collect require_auth from both sources:
+        #   (1) route-level: @app.get(..., dependencies=[Depends(require_auth)])
+        #   (2) handler parameter: def handler(token=Depends(require_auth))
+        route_level = [d.dependency for d in route.dependencies]
+        handler_level = [
+            d.call
+            for d in route.dependant.dependencies
+        ]
+        all_deps = route_level + handler_level
+
+        if require_auth not in all_deps:
+            methods = ",".join(sorted(route.methods or []))
+            violations.append(f"{methods} {route.path}")
+
+    assert not violations, (
+        "Routes missing require_auth (add to _PUBLIC_ROUTES if intentional):\n"
+        + "\n".join(f"  {v}" for v in sorted(violations))
+    )

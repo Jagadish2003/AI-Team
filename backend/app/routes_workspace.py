@@ -105,11 +105,13 @@ def register_workspace_routes(app) -> None:
         org_id = get_current_org_id()
         con = db.connect()
         try:
-            cur = con.execute(
+            cur = con.cursor()
+            cur.execute(
                 "SELECT wm.user_id, wm.role, wm.created_at, u.email "
                 "FROM workspace_members wm "
                 "LEFT JOIN users u ON u.id = wm.user_id "
-                "WHERE wm.org_id = ? ORDER BY wm.created_at ASC",
+                "WHERE wm.org_id = %s AND wm.is_deleted = FALSE "
+                "ORDER BY wm.created_at ASC",
                 (org_id,),
             )
             rows = cur.fetchall()
@@ -154,9 +156,16 @@ def register_workspace_routes(app) -> None:
         created_at = _now_iso()
         con = db.connect()
         try:
-            con.execute(
+            cur = con.cursor()
+            # Reactivating upsert: get_user_role() above filters soft-deleted rows,
+            # so a previously-removed member reads as "not a member" — but its row
+            # still occupies the (org_id, user_id) PK. Re-activate it rather than
+            # hitting a unique-violation on a plain INSERT.
+            cur.execute(
                 "INSERT INTO workspace_members (org_id, user_id, role, created_at) "
-                "VALUES (?, ?, ?, ?)",
+                "VALUES (%s, %s, %s, %s) "
+                "ON CONFLICT (org_id, user_id) DO UPDATE SET "
+                "role = EXCLUDED.role, created_at = EXCLUDED.created_at, is_deleted = FALSE",
                 (org_id, user_id, body.role, created_at),
             )
             con.commit()
@@ -207,8 +216,13 @@ def register_workspace_routes(app) -> None:
 
         con = db.connect()
         try:
-            con.execute(
-                "DELETE FROM workspace_members WHERE org_id = ? AND user_id = ?",
+            cur = con.cursor()
+            # Soft delete (app role has no DELETE): mark inactive. RBAC/login reads
+            # filter is_deleted, so the member loses access immediately; re-inviting
+            # reactivates the row.
+            cur.execute(
+                "UPDATE workspace_members SET is_deleted = TRUE "
+                "WHERE org_id = %s AND user_id = %s",
                 (org_id, user_id),
             )
             con.commit()

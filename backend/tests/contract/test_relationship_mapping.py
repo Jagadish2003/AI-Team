@@ -4,7 +4,7 @@ map_directly_observed().
 T1 / AC1 coverage:
   - entity_relationships table exists with all 12 columns.
   - inferred and confidence are NOT NULL (load-bearing for T3-S14-A, T3-S15-A).
-  - Three required indexes: idx_er_org_from, idx_er_org_to, idx_er_org_type.
+  - Three lookup indexes plus a unique natural-key index.
   - FK columns from_entity_id and to_entity_id reference entities.id.
   - Table can be created repeatedly without error (idempotent DDL).
   - Rows can be inserted and queried by org_id, from_entity_id,
@@ -18,7 +18,8 @@ T2 / AC7 coverage:
   - last_seen_run_id is updated to the most recent run_id on every call.
   - confidence and inferred are set only on creation; never changed on update.
   - evidence is updated to the most recent run's value on update.
-  - Calling N times on the same key yields run_count=N, one row only.
+  - Calling the same key in N distinct runs yields run_count=N, one row only.
+  - Repeating the same key within one run does not inflate run_count.
   - upsert on a new key always creates a fresh row with run_count=1.
 
 T2 / AC8 coverage (upsert-layer isolation):
@@ -69,6 +70,7 @@ T9 / AC10 coverage:
 import os
 import logging
 import sqlite3
+import psycopg2
 from datetime import datetime, timezone
 from typing import get_type_hints
 from unittest.mock import patch
@@ -77,19 +79,18 @@ from uuid import uuid4
 import pytest
 
 from database.models.entity_relationships import (
-    ALL_ENTITY_RELATIONSHIPS_DDL,
     INFERRED_CONFIDENCE,
     OBSERVED_CONFIDENCE,
     RELATIONSHIP_TYPES,
     EntityRelationship,
 )
-from database.models.entities import ALL_ENTITIES_DDL, Entity
+from database.models.entities import Entity
 from app.relationship_mapper import upsert_relationship, map_relationships
 from app.graph_query import get_entity_relationships
 
 
 def _get_db_path() -> str:
-    return os.environ["DB_PATH"]
+    return os.environ.get("DB_PATH", "")
 
 
 def _insert_entity(conn: sqlite3.Connection, org_id: str, run_id: str = "run-001") -> str:
@@ -114,10 +115,10 @@ def _insert_entity(conn: sqlite3.Connection, org_id: str, run_id: str = "run-001
             resolution_status, first_seen_run_id, last_seen_run_id,
             run_count, metadata, created_at, updated_at
         ) VALUES (
-            :id, :org_id, :entity_type, :canonical_name, :display_name,
-            :source_system, :source_record_id, :resolution_confidence,
-            :resolution_status, :first_seen_run_id, :last_seen_run_id,
-            :run_count, :metadata, :created_at, :updated_at
+            %(id)s, %(org_id)s, %(entity_type)s, %(canonical_name)s, %(display_name)s,
+            %(source_system)s, %(source_record_id)s, %(resolution_confidence)s,
+            %(resolution_status)s, %(first_seen_run_id)s, %(last_seen_run_id)s,
+            %(run_count)s, %(metadata)s, %(created_at)s, %(updated_at)s
         )""",
         row,
     )
@@ -153,9 +154,9 @@ def _insert_relationship(
             confidence, inferred, evidence, first_seen_run_id,
             last_seen_run_id, run_count, created_at
         ) VALUES (
-            :id, :org_id, :from_entity_id, :to_entity_id, :relationship_type,
-            :confidence, :inferred, :evidence, :first_seen_run_id,
-            :last_seen_run_id, :run_count, :created_at
+            %(id)s, %(org_id)s, %(from_entity_id)s, %(to_entity_id)s, %(relationship_type)s,
+            %(confidence)s, %(inferred)s, %(evidence)s, %(first_seen_run_id)s,
+            %(last_seen_run_id)s, %(run_count)s, %(created_at)s
         )""",
         row,
     )
@@ -164,24 +165,48 @@ def _insert_relationship(
 
 
 class TestEntityRelationshipsTableSchema:
-    """AC1: entity_relationships table created with 12 columns and three indexes."""
+    """AC1: entity_relationships table created with 12 columns and required indexes."""
 
     def _columns(self) -> dict[str, dict]:
         with sqlite3.connect(_get_db_path()) as conn:
             conn.row_factory = sqlite3.Row
-            rows = conn.execute("PRAGMA table_info(entity_relationships)").fetchall()
-        return {r["name"]: dict(r) for r in rows}
+            rows = conn.execute(
+                """SELECT column_name, data_type, is_nullable, character_maximum_length
+                   FROM information_schema.columns
+                   WHERE table_name = 'entity_relationships'
+                   ORDER BY ordinal_position"""
+            ).fetchall()
+        return {r["column_name"]: dict(r) for r in rows}
+
+    def _primary_key_columns(self) -> list[str]:
+        with sqlite3.connect(_get_db_path()) as conn:
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute(
+                """SELECT a.attname
+                   FROM pg_index i
+                   JOIN pg_attribute a
+                     ON a.attrelid = i.indrelid AND a.attnum = ANY(i.indkey)
+                   WHERE i.indrelid = 'entity_relationships'::regclass
+                     AND i.indisprimary"""
+            ).fetchall()
+        return [r["attname"] for r in rows]
 
     def _indexes(self) -> list[dict]:
         with sqlite3.connect(_get_db_path()) as conn:
             conn.row_factory = sqlite3.Row
-            return [dict(r) for r in conn.execute("PRAGMA index_list(entity_relationships)").fetchall()]
+            return [
+                dict(r)
+                for r in conn.execute(
+                    """SELECT indexname, indexdef FROM pg_indexes
+                       WHERE tablename = 'entity_relationships'"""
+                ).fetchall()
+            ]
 
-    def _index_columns(self, index_name: str) -> list[str]:
-        with sqlite3.connect(_get_db_path()) as conn:
-            conn.row_factory = sqlite3.Row
-            rows = conn.execute(f"PRAGMA index_info({index_name})").fetchall()
-        return [r["name"] for r in rows]
+    def _index_def(self, index_name: str) -> str:
+        for idx in self._indexes():
+            if idx["indexname"] == index_name:
+                return idx["indexdef"]
+        return ""
 
     def test_table_exists(self):
         cols = self._columns()
@@ -201,63 +226,84 @@ class TestEntityRelationshipsTableSchema:
     def test_inferred_column_not_nullable(self):
         cols = self._columns()
         assert "inferred" in cols, "inferred column missing"
-        assert cols["inferred"]["notnull"] == 1, "inferred must be NOT NULL (load-bearing for T3-S14-A)"
+        assert cols["inferred"]["is_nullable"] == "NO", "inferred must be NOT NULL (load-bearing for T3-S14-A)"
 
     def test_confidence_column_not_nullable(self):
         cols = self._columns()
         assert "confidence" in cols, "confidence column missing"
-        assert cols["confidence"]["notnull"] == 1, "confidence must be NOT NULL (load-bearing for T3-S15-A)"
+        assert cols["confidence"]["is_nullable"] == "NO", "confidence must be NOT NULL (load-bearing for T3-S15-A)"
 
     def test_org_id_not_nullable(self):
         cols = self._columns()
-        assert cols["org_id"]["notnull"] == 1, "org_id must be NOT NULL"
+        assert cols["org_id"]["is_nullable"] == "NO", "org_id must be NOT NULL"
 
     def test_from_entity_id_not_nullable(self):
         cols = self._columns()
-        assert cols["from_entity_id"]["notnull"] == 1, "from_entity_id must be NOT NULL"
+        assert cols["from_entity_id"]["is_nullable"] == "NO", "from_entity_id must be NOT NULL"
 
     def test_to_entity_id_not_nullable(self):
         cols = self._columns()
-        assert cols["to_entity_id"]["notnull"] == 1, "to_entity_id must be NOT NULL"
+        assert cols["to_entity_id"]["is_nullable"] == "NO", "to_entity_id must be NOT NULL"
 
     def test_relationship_type_not_nullable(self):
         cols = self._columns()
-        assert cols["relationship_type"]["notnull"] == 1, "relationship_type must be NOT NULL"
+        assert cols["relationship_type"]["is_nullable"] == "NO", "relationship_type must be NOT NULL"
 
     def test_evidence_is_nullable(self):
         cols = self._columns()
         assert "evidence" in cols, "evidence column missing"
-        assert cols["evidence"]["notnull"] == 0, "evidence must be nullable"
+        assert cols["evidence"]["is_nullable"] == "YES", "evidence must be nullable"
 
     def test_three_indexes_present(self):
-        indexes = {r["name"] for r in self._indexes()}
+        indexes = {r["indexname"] for r in self._indexes()}
         required = {"idx_er_org_from", "idx_er_org_to", "idx_er_org_type"}
         missing = required - indexes
         assert not missing, f"Missing required indexes: {missing}"
 
     def test_idx_er_org_from_columns(self):
-        cols = self._index_columns("idx_er_org_from")
-        assert cols == ["org_id", "from_entity_id"], (
-            f"idx_er_org_from must cover (org_id, from_entity_id), got {cols}"
+        indexdef = self._index_def("idx_er_org_from")
+        assert indexdef, "idx_er_org_from index missing"
+        pos_org = indexdef.find("org_id")
+        pos_from = indexdef.find("from_entity_id")
+        assert pos_org != -1 and pos_from != -1 and pos_org < pos_from, (
+            f"idx_er_org_from must cover (org_id, from_entity_id) in order, got {indexdef}"
         )
 
     def test_idx_er_org_to_columns(self):
-        cols = self._index_columns("idx_er_org_to")
-        assert cols == ["org_id", "to_entity_id"], (
-            f"idx_er_org_to must cover (org_id, to_entity_id), got {cols}"
+        indexdef = self._index_def("idx_er_org_to")
+        assert indexdef, "idx_er_org_to index missing"
+        pos_org = indexdef.find("org_id")
+        pos_to = indexdef.find("to_entity_id")
+        assert pos_org != -1 and pos_to != -1 and pos_org < pos_to, (
+            f"idx_er_org_to must cover (org_id, to_entity_id) in order, got {indexdef}"
         )
 
     def test_idx_er_org_type_columns(self):
-        cols = self._index_columns("idx_er_org_type")
-        assert cols == ["org_id", "relationship_type", "inferred"], (
-            f"idx_er_org_type must cover (org_id, relationship_type, inferred), got {cols}"
+        indexdef = self._index_def("idx_er_org_type")
+        assert indexdef, "idx_er_org_type index missing"
+        pos_org = indexdef.find("org_id")
+        pos_type = indexdef.find("relationship_type")
+        pos_inf = indexdef.find("inferred")
+        assert pos_org != -1 and pos_type != -1 and pos_inf != -1, (
+            f"idx_er_org_type must cover (org_id, relationship_type, inferred), got {indexdef}"
+        )
+        assert pos_org < pos_type < pos_inf, (
+            f"idx_er_org_type columns must be in order (org_id, relationship_type, inferred), got {indexdef}"
         )
 
-    def test_idempotent_ddl_no_error_on_second_apply(self):
-        with sqlite3.connect(_get_db_path()) as conn:
-            for ddl in ALL_ENTITY_RELATIONSHIPS_DDL:
-                conn.execute(ddl)
-            conn.commit()
+    def test_natural_key_unique_index(self):
+        indexdef = self._index_def("idx_er_org_natural_key")
+        assert indexdef, "Missing relationship natural-key unique index"
+        assert "UNIQUE INDEX" in indexdef, f"natural-key index must be UNIQUE, got {indexdef}"
+        positions = [
+            indexdef.find(c)
+            for c in ("org_id", "from_entity_id", "to_entity_id", "relationship_type")
+        ]
+        assert all(p != -1 for p in positions), indexdef
+        assert positions == sorted(positions), (
+            f"natural-key index columns must be in order "
+            f"(org_id, from_entity_id, to_entity_id, relationship_type), got {indexdef}"
+        )
 
 
 class TestEntityRelationshipsInsertAndQuery:
@@ -265,7 +311,6 @@ class TestEntityRelationshipsInsertAndQuery:
 
     def test_insert_observed_relationship(self):
         with sqlite3.connect(_get_db_path()) as conn:
-            conn.execute("PRAGMA foreign_keys = OFF")
             from_id = str(uuid4())
             to_id = str(uuid4())
             rel_id = _insert_relationship(conn, "test-org-insert", from_id, to_id, "owns", inferred=False)
@@ -273,7 +318,7 @@ class TestEntityRelationshipsInsertAndQuery:
         with sqlite3.connect(_get_db_path()) as conn:
             conn.row_factory = sqlite3.Row
             row = conn.execute(
-                "SELECT * FROM entity_relationships WHERE id = ?", (rel_id,)
+                "SELECT * FROM entity_relationships WHERE id = %s", (rel_id,)
             ).fetchone()
 
         assert row is not None
@@ -286,7 +331,6 @@ class TestEntityRelationshipsInsertAndQuery:
 
     def test_insert_inferred_relationship(self):
         with sqlite3.connect(_get_db_path()) as conn:
-            conn.execute("PRAGMA foreign_keys = OFF")
             from_id = str(uuid4())
             to_id = str(uuid4())
             rel_id = _insert_relationship(
@@ -296,7 +340,7 @@ class TestEntityRelationshipsInsertAndQuery:
         with sqlite3.connect(_get_db_path()) as conn:
             conn.row_factory = sqlite3.Row
             row = conn.execute(
-                "SELECT * FROM entity_relationships WHERE id = ?", (rel_id,)
+                "SELECT * FROM entity_relationships WHERE id = %s", (rel_id,)
             ).fetchone()
 
         assert row is not None
@@ -306,14 +350,13 @@ class TestEntityRelationshipsInsertAndQuery:
     def test_query_by_org_id(self):
         org = f"org-query-{uuid4().hex[:8]}"
         with sqlite3.connect(_get_db_path()) as conn:
-            conn.execute("PRAGMA foreign_keys = OFF")
             _insert_relationship(conn, org, str(uuid4()), str(uuid4()))
             _insert_relationship(conn, org, str(uuid4()), str(uuid4()))
 
         with sqlite3.connect(_get_db_path()) as conn:
             conn.row_factory = sqlite3.Row
             rows = conn.execute(
-                "SELECT * FROM entity_relationships WHERE org_id = ?", (org,)
+                "SELECT * FROM entity_relationships WHERE org_id = %s", (org,)
             ).fetchall()
 
         assert len(rows) == 2
@@ -322,7 +365,6 @@ class TestEntityRelationshipsInsertAndQuery:
         org = f"org-from-{uuid4().hex[:8]}"
         from_id = str(uuid4())
         with sqlite3.connect(_get_db_path()) as conn:
-            conn.execute("PRAGMA foreign_keys = OFF")
             _insert_relationship(conn, org, from_id, str(uuid4()))
             _insert_relationship(conn, org, from_id, str(uuid4()))
             _insert_relationship(conn, org, str(uuid4()), str(uuid4()))
@@ -330,7 +372,7 @@ class TestEntityRelationshipsInsertAndQuery:
         with sqlite3.connect(_get_db_path()) as conn:
             conn.row_factory = sqlite3.Row
             rows = conn.execute(
-                "SELECT * FROM entity_relationships WHERE org_id = ? AND from_entity_id = ?",
+                "SELECT * FROM entity_relationships WHERE org_id = %s AND from_entity_id = %s",
                 (org, from_id),
             ).fetchall()
 
@@ -340,7 +382,6 @@ class TestEntityRelationshipsInsertAndQuery:
         org = f"org-to-{uuid4().hex[:8]}"
         to_id = str(uuid4())
         with sqlite3.connect(_get_db_path()) as conn:
-            conn.execute("PRAGMA foreign_keys = OFF")
             _insert_relationship(conn, org, str(uuid4()), to_id)
             _insert_relationship(conn, org, str(uuid4()), to_id)
             _insert_relationship(conn, org, str(uuid4()), str(uuid4()))
@@ -348,7 +389,7 @@ class TestEntityRelationshipsInsertAndQuery:
         with sqlite3.connect(_get_db_path()) as conn:
             conn.row_factory = sqlite3.Row
             rows = conn.execute(
-                "SELECT * FROM entity_relationships WHERE org_id = ? AND to_entity_id = ?",
+                "SELECT * FROM entity_relationships WHERE org_id = %s AND to_entity_id = %s",
                 (org, to_id),
             ).fetchall()
 
@@ -357,7 +398,6 @@ class TestEntityRelationshipsInsertAndQuery:
     def test_query_by_inferred_flag_false(self):
         org = f"org-inferred-false-{uuid4().hex[:8]}"
         with sqlite3.connect(_get_db_path()) as conn:
-            conn.execute("PRAGMA foreign_keys = OFF")
             _insert_relationship(conn, org, str(uuid4()), str(uuid4()), "owns", inferred=False)
             _insert_relationship(conn, org, str(uuid4()), str(uuid4()), "member_of", inferred=False)
             _insert_relationship(conn, org, str(uuid4()), str(uuid4()), "depends_on", inferred=True)
@@ -365,7 +405,7 @@ class TestEntityRelationshipsInsertAndQuery:
         with sqlite3.connect(_get_db_path()) as conn:
             conn.row_factory = sqlite3.Row
             rows = conn.execute(
-                "SELECT * FROM entity_relationships WHERE org_id = ? AND inferred = 0",
+                "SELECT * FROM entity_relationships WHERE org_id = %s AND inferred = FALSE",
                 (org,),
             ).fetchall()
 
@@ -375,7 +415,6 @@ class TestEntityRelationshipsInsertAndQuery:
     def test_query_by_inferred_flag_true(self):
         org = f"org-inferred-true-{uuid4().hex[:8]}"
         with sqlite3.connect(_get_db_path()) as conn:
-            conn.execute("PRAGMA foreign_keys = OFF")
             _insert_relationship(conn, org, str(uuid4()), str(uuid4()), "owns", inferred=False)
             _insert_relationship(conn, org, str(uuid4()), str(uuid4()), "depends_on", inferred=True)
             _insert_relationship(conn, org, str(uuid4()), str(uuid4()), "routes_to", inferred=True)
@@ -383,7 +422,7 @@ class TestEntityRelationshipsInsertAndQuery:
         with sqlite3.connect(_get_db_path()) as conn:
             conn.row_factory = sqlite3.Row
             rows = conn.execute(
-                "SELECT * FROM entity_relationships WHERE org_id = ? AND inferred = 1",
+                "SELECT * FROM entity_relationships WHERE org_id = %s AND inferred = TRUE",
                 (org,),
             ).fetchall()
 
@@ -393,7 +432,6 @@ class TestEntityRelationshipsInsertAndQuery:
     def test_all_five_relationship_types_accepted(self):
         org = f"org-types-{uuid4().hex[:8]}"
         with sqlite3.connect(_get_db_path()) as conn:
-            conn.execute("PRAGMA foreign_keys = OFF")
             for rtype in sorted(RELATIONSHIP_TYPES):
                 inferred = rtype in ("depends_on", "routes_to")
                 _insert_relationship(conn, org, str(uuid4()), str(uuid4()), rtype, inferred=inferred)
@@ -401,7 +439,7 @@ class TestEntityRelationshipsInsertAndQuery:
         with sqlite3.connect(_get_db_path()) as conn:
             conn.row_factory = sqlite3.Row
             rows = conn.execute(
-                "SELECT relationship_type FROM entity_relationships WHERE org_id = ?", (org,)
+                "SELECT relationship_type FROM entity_relationships WHERE org_id = %s", (org,)
             ).fetchall()
 
         stored_types = {r["relationship_type"] for r in rows}
@@ -411,14 +449,13 @@ class TestEntityRelationshipsInsertAndQuery:
         """SQLite CHECK constraint must reject values outside RELATIONSHIP_TYPES."""
         org = f"org-invalid-check-{uuid4().hex[:8]}"
         with sqlite3.connect(_get_db_path()) as conn:
-            conn.execute("PRAGMA foreign_keys = OFF")
-            with pytest.raises(sqlite3.IntegrityError):
+            with pytest.raises(psycopg2.IntegrityError):
                 conn.execute(
                     """INSERT INTO entity_relationships (
                         id, org_id, from_entity_id, to_entity_id, relationship_type,
                         confidence, inferred, evidence, first_seen_run_id,
                         last_seen_run_id, run_count, created_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
                     (
                         str(uuid4()),
                         org,
@@ -426,7 +463,7 @@ class TestEntityRelationshipsInsertAndQuery:
                         str(uuid4()),
                         "invalid_type",
                         OBSERVED_CONFIDENCE,
-                        0,
+                        False,
                         None,
                         "run-invalid-check",
                         "run-invalid-check",
@@ -434,6 +471,7 @@ class TestEntityRelationshipsInsertAndQuery:
                         datetime.now(timezone.utc).isoformat(),
                     ),
                 )
+            conn.rollback()
 
     def test_sqlite_fk_off_allows_orphans_but_graph_join_omits_them(self):
         """Document current SQLite FK behavior: orphans may exist but do not surface."""
@@ -441,10 +479,9 @@ class TestEntityRelationshipsInsertAndQuery:
         from_id = str(uuid4())
         to_id = str(uuid4())
         with sqlite3.connect(_get_db_path()) as conn:
-            conn.execute("PRAGMA foreign_keys = OFF")
             _insert_relationship(conn, org, from_id, to_id, "owns")
             count = conn.execute(
-                "SELECT COUNT(*) FROM entity_relationships WHERE org_id = ?",
+                "SELECT COUNT(*) FROM entity_relationships WHERE org_id = %s",
                 (org,),
             ).fetchone()[0]
 
@@ -467,16 +504,15 @@ class TestEntityRelationshipsInsertAndQuery:
         )
         row = rel.to_db_row()
         with sqlite3.connect(_get_db_path()) as conn:
-            conn.execute("PRAGMA foreign_keys = OFF")
             conn.execute(
                 """INSERT INTO entity_relationships (
                     id, org_id, from_entity_id, to_entity_id, relationship_type,
                     confidence, inferred, evidence, first_seen_run_id,
                     last_seen_run_id, run_count, created_at
                 ) VALUES (
-                    :id, :org_id, :from_entity_id, :to_entity_id, :relationship_type,
-                    :confidence, :inferred, :evidence, :first_seen_run_id,
-                    :last_seen_run_id, :run_count, :created_at
+                    %(id)s, %(org_id)s, %(from_entity_id)s, %(to_entity_id)s, %(relationship_type)s,
+                    %(confidence)s, %(inferred)s, %(evidence)s, %(first_seen_run_id)s,
+                    %(last_seen_run_id)s, %(run_count)s, %(created_at)s
                 )""",
                 row,
             )
@@ -485,7 +521,7 @@ class TestEntityRelationshipsInsertAndQuery:
         with sqlite3.connect(_get_db_path()) as conn:
             conn.row_factory = sqlite3.Row
             db_row = conn.execute(
-                "SELECT * FROM entity_relationships WHERE id = ?", (row["id"],)
+                "SELECT * FROM entity_relationships WHERE id = %s", (row["id"],)
             ).fetchone()
 
         recovered = EntityRelationship.from_db_row(dict(db_row))
@@ -506,16 +542,15 @@ class TestEntityRelationshipsInsertAndQuery:
         )
         row = rel.to_db_row()
         with sqlite3.connect(_get_db_path()) as conn:
-            conn.execute("PRAGMA foreign_keys = OFF")
             conn.execute(
                 """INSERT INTO entity_relationships (
                     id, org_id, from_entity_id, to_entity_id, relationship_type,
                     confidence, inferred, evidence, first_seen_run_id,
                     last_seen_run_id, run_count, created_at
                 ) VALUES (
-                    :id, :org_id, :from_entity_id, :to_entity_id, :relationship_type,
-                    :confidence, :inferred, :evidence, :first_seen_run_id,
-                    :last_seen_run_id, :run_count, :created_at
+                    %(id)s, %(org_id)s, %(from_entity_id)s, %(to_entity_id)s, %(relationship_type)s,
+                    %(confidence)s, %(inferred)s, %(evidence)s, %(first_seen_run_id)s,
+                    %(last_seen_run_id)s, %(run_count)s, %(created_at)s
                 )""",
                 row,
             )
@@ -524,7 +559,7 @@ class TestEntityRelationshipsInsertAndQuery:
         with sqlite3.connect(_get_db_path()) as conn:
             conn.row_factory = sqlite3.Row
             db_row = conn.execute(
-                "SELECT evidence FROM entity_relationships WHERE id = ?", (row["id"],)
+                "SELECT evidence FROM entity_relationships WHERE id = %s", (row["id"],)
             ).fetchone()
 
         assert db_row["evidence"] is None
@@ -537,17 +572,16 @@ class TestEntityRelationshipsCrossOrgIsolation:
         org_a = f"org-a-{uuid4().hex[:8]}"
         org_b = f"org-b-{uuid4().hex[:8]}"
         with sqlite3.connect(_get_db_path()) as conn:
-            conn.execute("PRAGMA foreign_keys = OFF")
             rel_id_a = _insert_relationship(conn, org_a, str(uuid4()), str(uuid4()))
             rel_id_b = _insert_relationship(conn, org_b, str(uuid4()), str(uuid4()))
 
         with sqlite3.connect(_get_db_path()) as conn:
             conn.row_factory = sqlite3.Row
             rows_a = conn.execute(
-                "SELECT * FROM entity_relationships WHERE org_id = ?", (org_a,)
+                "SELECT * FROM entity_relationships WHERE org_id = %s", (org_a,)
             ).fetchall()
             rows_b = conn.execute(
-                "SELECT * FROM entity_relationships WHERE org_id = ?", (org_b,)
+                "SELECT * FROM entity_relationships WHERE org_id = %s", (org_b,)
             ).fetchall()
 
         ids_a = {r["id"] for r in rows_a}
@@ -562,14 +596,13 @@ class TestEntityRelationshipsCrossOrgIsolation:
         org_a = f"org-a-inf-{uuid4().hex[:8]}"
         org_b = f"org-b-inf-{uuid4().hex[:8]}"
         with sqlite3.connect(_get_db_path()) as conn:
-            conn.execute("PRAGMA foreign_keys = OFF")
             _insert_relationship(conn, org_a, str(uuid4()), str(uuid4()), "depends_on", inferred=True)
             _insert_relationship(conn, org_b, str(uuid4()), str(uuid4()), "depends_on", inferred=True)
 
         with sqlite3.connect(_get_db_path()) as conn:
             conn.row_factory = sqlite3.Row
             rows_a = conn.execute(
-                "SELECT * FROM entity_relationships WHERE org_id = ? AND inferred = 1", (org_a,)
+                "SELECT * FROM entity_relationships WHERE org_id = %s AND inferred = TRUE", (org_a,)
             ).fetchall()
 
         assert len(rows_a) == 1
@@ -616,8 +649,8 @@ class TestUpsertRelationshipAC7:
             rows = conn.execute(
                 """
                 SELECT * FROM entity_relationships
-                WHERE org_id = ? AND from_entity_id = ?
-                  AND to_entity_id = ? AND relationship_type = ?
+                WHERE org_id = %s AND from_entity_id = %s
+                  AND to_entity_id = %s AND relationship_type = %s
                 """,
                 (org_id, from_id, to_id, rtype),
             ).fetchall()
@@ -645,7 +678,7 @@ class TestUpsertRelationshipAC7:
         assert rel.run_count == 1
 
     def test_second_call_same_key_yields_run_count_2_one_row(self):
-        """AC7 core: two calls on the same natural key → one row, run_count=2."""
+        """AC7 core: the same natural key in two runs gives run_count=2."""
         org = f"org-dup-{uuid4().hex[:8]}"
         from_id = str(uuid4())
         to_id = str(uuid4())
@@ -673,6 +706,27 @@ class TestUpsertRelationshipAC7:
         assert len(rows) == 1, f"Expected 1 row, got {len(rows)} — duplicate created"
         assert rows[0]["run_count"] == 2
         assert rel2.run_count == 2
+
+    def test_repeated_call_in_same_run_does_not_increment_run_count(self):
+        org = f"org-same-run-{uuid4().hex[:8]}"
+        from_id = str(uuid4())
+        to_id = str(uuid4())
+
+        for _ in range(2):
+            rel = upsert_relationship(
+                org_id=org,
+                from_entity_id=from_id,
+                to_entity_id=to_id,
+                relationship_type="owns",
+                confidence=OBSERVED_CONFIDENCE,
+                inferred=False,
+                run_id="run-same",
+            )
+
+        rows = self._query_rows(org, from_id, to_id, "owns")
+        assert len(rows) == 1
+        assert rows[0]["run_count"] == 1
+        assert rel.run_count == 1
 
     def test_n_calls_yields_run_count_n(self):
         org = f"org-n-{uuid4().hex[:8]}"
@@ -849,7 +903,7 @@ class TestUpsertRelationshipAC7:
         with sqlite3.connect(_get_db_path()) as conn:
             conn.row_factory = sqlite3.Row
             rows = conn.execute(
-                "SELECT * FROM entity_relationships WHERE org_id = ? AND from_entity_id = ? AND to_entity_id = ?",
+                "SELECT * FROM entity_relationships WHERE org_id = %s AND from_entity_id = %s AND to_entity_id = %s",
                 (org, from_id, to_id),
             ).fetchall()
 
@@ -925,12 +979,12 @@ class TestUpsertRelationshipAC8CrossOrg:
             conn.row_factory = sqlite3.Row
             row_a = conn.execute(
                 """SELECT run_count FROM entity_relationships
-                   WHERE org_id = ? AND from_entity_id = ? AND to_entity_id = ? AND relationship_type = ?""",
+                   WHERE org_id = %s AND from_entity_id = %s AND to_entity_id = %s AND relationship_type = %s""",
                 (org_a, from_id, to_id, "owns"),
             ).fetchone()
             row_b = conn.execute(
                 """SELECT run_count FROM entity_relationships
-                   WHERE org_id = ? AND from_entity_id = ? AND to_entity_id = ? AND relationship_type = ?""",
+                   WHERE org_id = %s AND from_entity_id = %s AND to_entity_id = %s AND relationship_type = %s""",
                 (org_b, from_id, to_id, "owns"),
             ).fetchone()
 
@@ -967,7 +1021,7 @@ class TestUpsertRelationshipAC8CrossOrg:
             conn.row_factory = sqlite3.Row
             row_b = conn.execute(
                 """SELECT run_count FROM entity_relationships
-                   WHERE org_id = ? AND from_entity_id = ? AND to_entity_id = ? AND relationship_type = ?""",
+                   WHERE org_id = %s AND from_entity_id = %s AND to_entity_id = %s AND relationship_type = %s""",
                 (org_b, from_id, to_id, "member_of"),
             ).fetchone()
         assert row_b["run_count"] == 1
@@ -1012,19 +1066,18 @@ def _persist_entity(entity: Entity) -> None:
     import json as _json
     row = entity.to_db_row()
     with sqlite3.connect(_get_db_path()) as conn:
-        conn.execute("PRAGMA foreign_keys = OFF")
         conn.execute(
-            """INSERT OR IGNORE INTO entities (
+            """INSERT INTO entities (
                 id, org_id, entity_type, canonical_name, display_name,
                 source_system, source_record_id, resolution_confidence,
                 resolution_status, first_seen_run_id, last_seen_run_id,
                 run_count, metadata, created_at, updated_at
             ) VALUES (
-                :id, :org_id, :entity_type, :canonical_name, :display_name,
-                :source_system, :source_record_id, :resolution_confidence,
-                :resolution_status, :first_seen_run_id, :last_seen_run_id,
-                :run_count, :metadata, :created_at, :updated_at
-            )""",
+                %(id)s, %(org_id)s, %(entity_type)s, %(canonical_name)s, %(display_name)s,
+                %(source_system)s, %(source_record_id)s, %(resolution_confidence)s,
+                %(resolution_status)s, %(first_seen_run_id)s, %(last_seen_run_id)s,
+                %(run_count)s, %(metadata)s, %(created_at)s, %(updated_at)s
+            ) ON CONFLICT DO NOTHING""",
             row,
         )
         conn.commit()
@@ -1034,7 +1087,7 @@ def _get_edges(org_id: str, rtype: str) -> list[dict]:
     with sqlite3.connect(_get_db_path()) as conn:
         conn.row_factory = sqlite3.Row
         rows = conn.execute(
-            "SELECT * FROM entity_relationships WHERE org_id = ? AND relationship_type = ?",
+            "SELECT * FROM entity_relationships WHERE org_id = %s AND relationship_type = %s",
             (org_id, rtype),
         ).fetchall()
     return [dict(r) for r in rows]
@@ -1075,6 +1128,33 @@ class TestMapDirectlyObservedAC2:
         assert edges[0]["to_entity_id"] == str(obj.id)
         assert float(edges[0]["confidence"]) == OBSERVED_CONFIDENCE
         assert int(edges[0]["inferred"]) == 0
+
+    def test_duplicate_source_record_in_same_run_maps_one_edge(self):
+        org = f"org-owns-duplicate-{uuid4().hex[:8]}"
+        run = "run-t3-owns-duplicate"
+
+        person = _make_entity(org, "person", "Sarah Chen", run_id=run)
+        obj = _make_entity(org, "object", "LOAN-001", run_id=run)
+        _persist_entity(person)
+        _persist_entity(obj)
+        record = {
+            "OwnerId": "Sarah Chen",
+            "Id": "LOAN-001",
+            "source_system": "salesforce",
+        }
+        ingestor_data = {
+            "salesforce": {
+                "records": [record],
+                "cases": [dict(record)],
+            }
+        }
+
+        count = map_directly_observed(org, run, ingestor_data, [person, obj])
+
+        edges = _get_edges(org, "owns")
+        assert count == 1
+        assert len(edges) == 1
+        assert edges[0]["run_count"] == 1
 
     def test_owns_edge_matches_source_record_ids(self):
         """owns edge: OwnerId and record Id can match source_record_id values."""
@@ -1897,10 +1977,10 @@ def _insert_named_entity(
             resolution_status, first_seen_run_id, last_seen_run_id,
             run_count, metadata, created_at, updated_at
         ) VALUES (
-            :id, :org_id, :entity_type, :canonical_name, :display_name,
-            :source_system, :source_record_id, :resolution_confidence,
-            :resolution_status, :first_seen_run_id, :last_seen_run_id,
-            :run_count, :metadata, :created_at, :updated_at
+            %(id)s, %(org_id)s, %(entity_type)s, %(canonical_name)s, %(display_name)s,
+            %(source_system)s, %(source_record_id)s, %(resolution_confidence)s,
+            %(resolution_status)s, %(first_seen_run_id)s, %(last_seen_run_id)s,
+            %(run_count)s, %(metadata)s, %(created_at)s, %(updated_at)s
         )""",
         row,
     )
@@ -2238,17 +2318,17 @@ class TestRelationshipMappingTelemetryAC10:
         for ent in (person, obj):
             row = ent.to_db_row()
             conn.execute(
-                """INSERT OR IGNORE INTO entities (
+                """INSERT INTO entities (
                     id, org_id, entity_type, canonical_name, display_name,
                     source_system, source_record_id, resolution_confidence,
                     resolution_status, first_seen_run_id, last_seen_run_id,
                     run_count, metadata, created_at, updated_at
                 ) VALUES (
-                    :id, :org_id, :entity_type, :canonical_name, :display_name,
-                    :source_system, :source_record_id, :resolution_confidence,
-                    :resolution_status, :first_seen_run_id, :last_seen_run_id,
-                    :run_count, :metadata, :created_at, :updated_at
-                )""",
+                    %(id)s, %(org_id)s, %(entity_type)s, %(canonical_name)s, %(display_name)s,
+                    %(source_system)s, %(source_record_id)s, %(resolution_confidence)s,
+                    %(resolution_status)s, %(first_seen_run_id)s, %(last_seen_run_id)s,
+                    %(run_count)s, %(metadata)s, %(created_at)s, %(updated_at)s
+                ) ON CONFLICT DO NOTHING""",
                 row,
             )
         conn.commit()

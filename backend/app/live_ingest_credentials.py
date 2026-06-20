@@ -22,21 +22,30 @@ What it does
 OAuth connectors. For every connector that
 
   1. has a valid (auto-refreshed) token in the vault for ``org_id``, AND
-  2. has its instance-URL config present in the environment,
+  2. has a resolvable instance/site URL,
 
-it exports the decrypted access token into the env var the ingest layer reads
-and includes the connector id in the returned list. The discovery run then
-ingests **live** from exactly those connectors and skips the rest.
+it publishes the decrypted access token + URL to the per-run ingest context and
+includes the connector id in the returned list. The discovery run then ingests
+**live** from exactly those connectors and skips the rest.
 
-Why the instance URL still comes from env
------------------------------------------
-OAuth tokens carry the bearer access token but NOT the instance/site URL
-(Salesforce's ``instance_url``, the ServiceNow instance, the Jira site). Those
-remain server-side config (``SF_INSTANCE_URL`` / ``SERVICENOW_URL`` /
-``JIRA_URL``). A connector that is authenticated but missing its URL config is
-left out rather than promoted to live, so a half-configured connector degrades
-to "skipped" instead of hard-failing the whole run (per the project's
-"degrade, don't crash" ingestion rule).
+How the instance URL is resolved (no env required)
+--------------------------------------------------
+OAuth tokens carry the bearer access token but not always the instance/site URL,
+so the URL is resolved in this order — none of it needs backend/.env config:
+
+  1. The URL captured during the OAuth Connect flow (org-scoped KV in the DB):
+     Salesforce's ``instance_url`` from the token response, ServiceNow's host
+     from its OAuth config, Jira's api.atlassian.com gateway from the cloudId.
+  2. A CLI/standalone env fallback (``SF_INSTANCE_URL`` / ``SERVICENOW_URL`` /
+     ``JIRA_URL``) for non-WebApp use.
+  3. OAuth-only derivation when neither of the above exists, so a connector
+     authenticated purely through Integration Hub still ingests live:
+     ServiceNow is derived from its OAuth config host and Jira's gateway is
+     discovered live from the token (then persisted for next time).
+
+A connector that is authenticated but whose URL still cannot be resolved is left
+out rather than promoted to live, so it degrades to "skipped" instead of
+hard-failing the whole run (per the project's "degrade, don't crash" rule).
 """
 from __future__ import annotations
 
@@ -205,6 +214,36 @@ def _run_coro(coro):
     return asyncio.run(coro)
 
 
+def _derive_oauth_instance_url(connector_id: str, access_token: str) -> Optional[str]:
+    """Derive a connector's instance/site URL purely from OAuth — no env config.
+
+    Used when nothing was captured at connect time and no CLI env var is set, so a
+    connector authenticated through Integration Hub still ingests live:
+
+      * ServiceNow — the instance host is fully determined by the OAuth config
+        (``SERVICENOW_INSTANCE`` → token_url), so the base is derived from it.
+      * Jira Cloud — the api.atlassian.com gateway base depends on the token's
+        cloudId, discovered live via the accessible-resources endpoint.
+      * Salesforce — the instance_url always rides in the token response and is
+        captured at connect, so there is no static fallback here.
+
+    Never raises; returns None when nothing can be derived.
+    """
+    try:
+        if connector_id == "servicenow":
+            from app.auth.configs import CONNECTOR_AUTH_CONFIGS
+
+            cfg = CONNECTOR_AUTH_CONFIGS.get("servicenow")
+            return capture_instance_url(
+                "servicenow", None, cfg.token_url if cfg else None
+            )
+        if connector_id == "jira":
+            return _run_coro(fetch_jira_gateway_base(access_token))
+    except Exception:
+        logger.exception("OAuth instance-URL derivation failed for %s", connector_id)
+    return None
+
+
 def resolve_live_systems(org_id: str) -> List[str]:
     """Return the connectors that should ingest live for ``org_id``.
 
@@ -229,7 +268,15 @@ def resolve_live_systems(org_id: str) -> List[str]:
         try:
             record = _run_coro(get_token(org_id, connector_id))
         except ConnectorNotAuthenticatedError:
-            # Not connected for this org — leave it out (offline/skipped).
+            # Not connected (or token expired and could not be refreshed) for this
+            # org — leave it out. Logged (not silent) so a run that drops a
+            # connector explains why: reconnect it in the Integration Hub.
+            logger.info(
+                "Connector %s not authenticated for org %s (no token, or expired and "
+                "refresh failed) — skipping live ingest; reconnect in Integration Hub.",
+                connector_id,
+                org_id,
+            )
             continue
         except Exception:
             logger.exception(
@@ -243,9 +290,25 @@ def resolve_live_systems(org_id: str) -> List[str]:
         # fall back to env only for CLI/standalone use.
         url = get_connector_instance_url(org_id, connector_id) or os.getenv(url_env)
         if not url:
+            # OAuth-only derivation: a connector authenticated via Integration Hub
+            # should ingest live without any SERVICENOW_URL / JIRA_URL env config.
+            url = _derive_oauth_instance_url(connector_id, record.access_token)
+            if url:
+                url = url.rstrip("/")
+                # Persist so later runs (and the connector status view) reuse it
+                # without re-deriving (a per-token network call for Jira).
+                try:
+                    store_connector_instance_url(org_id, connector_id, url)
+                except Exception:
+                    logger.exception(
+                        "Failed to persist derived instance URL for %s (org=%s)",
+                        connector_id,
+                        org_id,
+                    )
+        if not url:
             logger.warning(
-                "Connector %s is authenticated but no instance URL was captured "
-                "at connect time (and %s is unset); skipping live ingest for it.",
+                "Connector %s is authenticated but no instance URL could be "
+                "captured, derived, or read from %s; skipping live ingest for it.",
                 connector_id,
                 url_env,
             )

@@ -6,7 +6,7 @@ Four routes (all require Bearer auth — spec AC17):
   DELETE /api/connectors/{connector_id}/token   — Revoke token
   GET  /api/connectors/{connector_id}/token-status — Token status
 
-State nonce storage: SQLite table oauth_nonces (matching existing raw-sqlite3 pattern in db.py).
+State nonce storage: oauth_nonces table (matching the existing raw-SQL pattern in db.py).
 No session/cookie mechanism exists in this codebase; nonces are stored server-side in the DB
 with a 10-minute TTL and are deleted on first use (single-use guarantee).
 """
@@ -18,6 +18,8 @@ import os
 import secrets as _secrets_mod
 from datetime import datetime, timedelta, timezone
 from typing import Dict, Optional
+
+import psycopg2
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Response
 from fastapi.responses import RedirectResponse
@@ -90,20 +92,12 @@ CREATE TABLE IF NOT EXISTS oauth_nonces (
 
 
 def _ensure_tables() -> None:
-    import sqlite3 as _sqlite3
-    con = db.connect()
-    try:
-        con.execute(CREATE_CREDENTIALS_TABLE)
-        con.execute(CREATE_CREDENTIALS_IDX_ORG)
-        con.execute(CREATE_CREDENTIALS_IDX_CONNECTOR)
-        try:
-            con.execute(ALTER_CREDENTIALS_ADD_REFRESH_FAILED)
-        except _sqlite3.OperationalError:
-            pass  # Column already exists
-        con.execute(_CREATE_NONCES_TABLE)
-        con.commit()
-    finally:
-        con.close()
+    """No-op. The credentials and oauth_nonces tables are provisioned externally.
+
+    Created by database/provision/provision.sh; the application no longer
+    creates these tables at runtime.
+    """
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -118,8 +112,12 @@ def _store_nonce(nonce: str, connector_id: str) -> None:
     ).isoformat()
     con = db.connect()
     try:
-        con.execute(
-            "INSERT INTO oauth_nonces (nonce, connector_id, expires_at) VALUES (?, ?, ?)",
+        cur = con.cursor()
+        cur.execute(
+            "INSERT INTO oauth_nonces (nonce, connector_id, expires_at) VALUES (%s, %s, %s) "
+            "ON CONFLICT (nonce) DO UPDATE SET "
+            "connector_id = EXCLUDED.connector_id, expires_at = EXCLUDED.expires_at, "
+            "is_deleted = FALSE",
             (nonce, connector_id, expires_at),
         )
         con.commit()
@@ -138,13 +136,19 @@ def _consume_nonce(state: str) -> Optional[str]:
 
     con = db.connect()
     try:
-        cur = con.execute(
-            "SELECT nonce, connector_id, expires_at FROM oauth_nonces WHERE nonce = ?",
+        cur = con.cursor()
+        cur.execute(
+            "SELECT nonce, connector_id, expires_at FROM oauth_nonces "
+            "WHERE nonce = %s AND is_deleted = FALSE",
             (state,),
         )
         row = cur.fetchone()
         if row is not None:
-            con.execute("DELETE FROM oauth_nonces WHERE nonce = ?", (state,))
+            # Soft delete (app role has no DELETE): the filtered read above makes a
+            # replay of the same state return None on the second attempt.
+            cur.execute(
+                "UPDATE oauth_nonces SET is_deleted = TRUE WHERE nonce = %s", (state,)
+            )
             con.commit()
     finally:
         con.close()
@@ -384,12 +388,21 @@ def register_connector_auth_routes(app: FastAPI) -> None:
         """Return token status: connected | needs_refresh | needs_auth | refresh_failed (AC14)."""
         _ensure_tables()
 
+        # Scope to the caller's org — the OAuth callback stores the credential under
+        # the org carried in the state nonce (the authenticated org), and disconnect
+        # reads with get_current_org_id() too. Using a hardcoded "default" here looked
+        # up the wrong org for a real workspace, found no row, and returned needs_auth
+        # → the tile showed "Token expired" / "Reconnect" right after a successful
+        # connect.
+        org_id = get_current_org_id()
+
         con = db.connect()
         try:
-            cur = con.execute(
+            cur = con.cursor()
+            cur.execute(
                 "SELECT expires_at, refresh_failed FROM credentials "
-                "WHERE org_id = ? AND connector_id = ?",
-                (get_current_org_id(), connector_id),
+                "WHERE org_id = %s AND connector_id = %s AND is_deleted = FALSE",
+                (org_id, connector_id),
             )
             row = cur.fetchone()
         finally:

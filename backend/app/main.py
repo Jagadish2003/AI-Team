@@ -59,10 +59,12 @@ from .routes_entities import register_entities_routes
 from .routes_causal import register_causal_routes
 from .routes_graph import register_graph_routes
 from .routes_auth import register_auth_routes
+from .routes_license import register_license_routes
 from .security import require_auth
 from .auth.configs import CONNECTOR_AUTH_CONFIGS
 from .auth.secrets import validate_all_secrets
 from .middleware.tenancy import get_current_org_id, register_tenancy
+from .middleware.license_gate import register_license_gate
 from .rbac import require_role, seed_owner
 
 _DEV_USER = os.getenv("DEV_JWT", "dev-token-change-me")
@@ -88,12 +90,75 @@ def _verify_db_driver_imports() -> None:
             )
 
 
+def _is_production() -> bool:
+    """True when this process should be treated as production.
+
+    Mirrors the two signals already used elsewhere: an explicit
+    ENVIRONMENT=production, or REQUIRE_CONNECTOR_SECRETS=1 (the deployment flag
+    that gates connector-secret enforcement).
+    """
+    return (
+        os.getenv("ENVIRONMENT", "").strip().lower() == "production"
+        or os.getenv("REQUIRE_CONNECTOR_SECRETS") == "1"
+    )
+
+
+def _validate_org_approval_config() -> None:
+    """Validate the AUTH-2 org-approval env config at startup (review #3/#4/#8).
+
+    AGENTIQ_BACKEND_URL backs the approve/reject links in the admin email and
+    AGENTIQ_ADMIN_EMAIL is where that email is sent. If either is unset the code
+    falls back to a localhost URL / a hardcoded address, which silently breaks
+    org approval in a real deployment (links unreachable, emails misdirected).
+    Surface it loudly: warn everywhere, and hard-fail in production so a
+    misconfigured deploy cannot start with broken approvals.
+    """
+    problems: list[str] = []
+
+    backend_url = os.getenv("AGENTIQ_BACKEND_URL", "").strip()
+    if not backend_url:
+        problems.append(
+            "AGENTIQ_BACKEND_URL is not set — org approval links will point to "
+            "localhost and be unreachable for the admin."
+        )
+    elif "localhost" in backend_url or "127.0.0.1" in backend_url:
+        problems.append(
+            f"AGENTIQ_BACKEND_URL points to a local address ({backend_url}) — "
+            "org approval links will be unreachable for the admin."
+        )
+
+    admin_email = os.getenv("AGENTIQ_ADMIN_EMAIL", "").strip()
+    if not admin_email:
+        problems.append(
+            "AGENTIQ_ADMIN_EMAIL is not set — org approval request emails will go "
+            "to the hardcoded default address and may be misdirected."
+        )
+
+    if not problems:
+        return
+
+    production = _is_production()
+    for problem in problems:
+        if production:
+            logger.error("Org approval config: %s", problem)
+        else:
+            logger.warning("Org approval config: %s", problem)
+    if production:
+        raise RuntimeError(
+            "Org registration approval is misconfigured for production: "
+            + " ".join(problems)
+        )
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Only enforce secret presence when REQUIRE_CONNECTOR_SECRETS=1 (production).
     # Dev and test environments run without connector secrets set.
     if os.getenv("REQUIRE_CONNECTOR_SECRETS") == "1":
         validate_all_secrets(CONNECTOR_AUTH_CONFIGS)
+    # AUTH-2 review #3/#4/#8: fail fast (prod) / warn (dev) if the org-approval
+    # email config is missing, so broken approval links never ship silently.
+    _validate_org_approval_config()
     # Seed the dev user as owner of the default org so existing routes pass RBAC.
     seed_owner(_DEV_ORG, _DEV_USER)
     # T2-S12-A: surface Oracle/PostgreSQL driver install issues at startup.
@@ -109,6 +174,12 @@ async def lifespan(app: FastAPI):
     # (CREATE TABLE IF NOT EXISTS — no-op once migrations 0004/0005 have run).
     from .auth.user_auth import ensure_auth_tables
     ensure_auth_tables()
+    # LIC-1 / T4 (AT-345): validate the installed license once at startup.
+    # One-shot and idempotent; never raises (startup must not fail on it) and
+    # runs regardless of AGENTIQ_DISABLE_BACKGROUND_JOBS — only the periodic
+    # re-check below is a gated background job.
+    from .license_runtime import run_startup_validation
+    run_startup_validation()
     # ENT-1: register customer entity-extraction overlays before the first run.
     # No-op by default (no customer overlays hardcoded into the core); the
     # function is the documented hook for deployment-time registration. Never
@@ -127,21 +198,29 @@ async def lifespan(app: FastAPI):
         scheduler as baseline_scheduler,
         start_scheduler as start_baseline_scheduler,
     )
+    # LIC-1 / T4 (AT-345): periodic license re-check (gated background job).
+    from .license_runtime import start_license_scheduler, stop_license_scheduler
 
     background_jobs_disabled = os.getenv("AGENTIQ_DISABLE_BACKGROUND_JOBS") == "1"
     if not background_jobs_disabled:
         start_health_check_job()
         start_baseline_scheduler()
+        start_license_scheduler()
     yield
     # AT-90: shut down scheduler on SIGTERM / graceful shutdown (wait=False).
     if not background_jobs_disabled:
         stop_health_check_job()
         if baseline_scheduler.running:
             baseline_scheduler.shutdown(wait=False)
+        stop_license_scheduler()
 
 
 app = FastAPI(title="AgentIQ Layer 1 API Skeleton", version="0.1.0", lifespan=lifespan)
 register_tenancy(app)
+# LIC-1 / T5 (AT-346): gate discovery-run endpoints when the license is
+# read-only/invalid. Added here so it sits inside CORS (blocked responses still
+# get CORS headers) and outside tenancy; reads/login/valid+grace are untouched.
+register_license_gate(app)
 
 # Register routes in order
 register_stack_builder_routes(app)
@@ -164,6 +243,8 @@ register_entities_routes(app)
 register_causal_routes(app)
 register_graph_routes(app)
 register_auth_routes(app)
+# LIC-1 / T6 (AT-347): Owner-only license status + update-key admin routes.
+register_license_routes(app)
 
 origins = [
     o.strip()
@@ -173,14 +254,29 @@ origins = [
     ).split(",")
     if o.strip()
 ]
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=origins,
-    allow_origin_regex=r"http://localhost:\d+",
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+
+
+def build_cors_kwargs(environment: str, allowed_origins: List[str]) -> Dict[str, Any]:
+    """Build CORS middleware kwargs.
+
+    The permissive ``http://localhost:<port>`` regex is convenient for local dev
+    (it lets any localhost port through), but in production it would allow any
+    localhost process to make authenticated cross-origin requests. We therefore
+    only attach ``allow_origin_regex`` outside of production.
+    """
+    cors_kwargs: Dict[str, Any] = {
+        "allow_origins": allowed_origins,
+        "allow_credentials": True,
+        "allow_methods": ["*"],
+        "allow_headers": ["*"],
+    }
+    if (environment or "").strip().lower() != "production":
+        cors_kwargs["allow_origin_regex"] = r"http://localhost:\d+"
+    return cors_kwargs
+
+
+_environment = os.getenv("ENVIRONMENT", "").strip().lower()
+app.add_middleware(CORSMiddleware, **build_cors_kwargs(_environment, origins))
 
 
 def now_iso() -> str:
@@ -222,7 +318,28 @@ def health() -> Dict[str, Any]:
 
 @app.get("/api/health")
 def api_health() -> Dict[str, Any]:
-    return {"ok": True, "ts": now_iso()}
+    # AT-288 F1-AC6: report database connectivity. A live PostgreSQL connection
+    # (SELECT 1) is required for status 'healthy'. The legacy {ok, ts} fields are
+    # retained for backward compatibility with existing consumers.
+    db_status = "ok"
+    try:
+        con = db.connect()
+        try:
+            cur = con.cursor()
+            cur.execute("SELECT 1")
+            cur.fetchone()
+        finally:
+            con.close()
+    except Exception as exc:
+        logger.warning("health check: database connectivity failed: %s", exc)
+        db_status = "error"
+    healthy = db_status == "ok"
+    return {
+        "ok": healthy,
+        "ts": now_iso(),
+        "status": "healthy" if healthy else "unhealthy",
+        "checks": {"database": {"status": db_status}},
+    }
 
 
 @app.get("/")
@@ -683,13 +800,14 @@ def list_audit_log(
     org_id = get_current_org_id()
     con = db.connect()
     try:
-        cur = con.execute(
+        cur = con.cursor()
+        cur.execute(
             """
             SELECT id, org_id, event_type, user_id, run_id, connector_id, payload, timestamp
             FROM audit_log
-            WHERE org_id = ?
+            WHERE org_id = %s
             ORDER BY timestamp DESC
-            LIMIT ? OFFSET ?
+            LIMIT %s OFFSET %s
             """,
             (org_id, limit, offset),
         )
@@ -726,8 +844,10 @@ def list_members() -> List[Dict[str, Any]]:
     org_id = get_current_org_id()
     con = db.connect()
     try:
-        cur = con.execute(
-            "SELECT org_id, user_id, role, created_at FROM workspace_members WHERE org_id = ?",
+        cur = con.cursor()
+        cur.execute(
+            "SELECT org_id, user_id, role, created_at FROM workspace_members "
+            "WHERE org_id = %s AND is_deleted = FALSE",
             (org_id,),
         )
         rows = cur.fetchall()
@@ -756,11 +876,12 @@ def add_member(body: Dict[str, Any]) -> Dict[str, Any]:
 
     con = db.connect()
     try:
-        con.execute(
+        cur = con.cursor()
+        cur.execute(
             """
             INSERT INTO workspace_members (org_id, user_id, role, created_at)
-            VALUES (?, ?, ?, ?)
-            ON CONFLICT(org_id, user_id) DO UPDATE SET role = excluded.role
+            VALUES (%s, %s, %s, %s)
+            ON CONFLICT (org_id, user_id) DO UPDATE SET role = EXCLUDED.role, is_deleted = FALSE
             """,
             (org_id, user_id, role, db.now_iso()),
         )

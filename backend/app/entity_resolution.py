@@ -21,7 +21,6 @@ fuzzy matching story as intentional data.
 from __future__ import annotations
 
 import logging
-import sqlite3
 from datetime import datetime, timezone
 from typing import Any, Optional
 
@@ -61,19 +60,19 @@ def _canonicalize(display_name: str) -> str:
     return _truncate(" ".join(display_name.split()).lower())
 
 
-def _connect() -> sqlite3.Connection:
+def _connect() -> Any:
     conn = db.connect()
-    conn.row_factory = sqlite3.Row
     return conn
 
 
-def _row_to_entity(row: sqlite3.Row) -> Entity:
+def _row_to_entity(row: Any) -> Entity:
     return Entity.from_db_row(dict(row))
 
 
-def _insert_entity(conn: sqlite3.Connection, entity: Entity) -> None:
+def _insert_entity(conn: Any, entity: Entity) -> None:
     row = entity.to_db_row()
-    conn.execute(
+    cur = conn.cursor()
+    cur.execute(
         """
         INSERT INTO entities (
             id, org_id, entity_type, canonical_name, display_name,
@@ -81,10 +80,10 @@ def _insert_entity(conn: sqlite3.Connection, entity: Entity) -> None:
             resolution_status, first_seen_run_id, last_seen_run_id,
             run_count, metadata, created_at, updated_at
         ) VALUES (
-            :id, :org_id, :entity_type, :canonical_name, :display_name,
-            :source_system, :source_record_id, :resolution_confidence,
-            :resolution_status, :first_seen_run_id, :last_seen_run_id,
-            :run_count, :metadata, :created_at, :updated_at
+            %(id)s, %(org_id)s, %(entity_type)s, %(canonical_name)s, %(display_name)s,
+            %(source_system)s, %(source_record_id)s, %(resolution_confidence)s,
+            %(resolution_status)s, %(first_seen_run_id)s, %(last_seen_run_id)s,
+            %(run_count)s, %(metadata)s, %(created_at)s, %(updated_at)s
         )
         """,
         row,
@@ -92,40 +91,43 @@ def _insert_entity(conn: sqlite3.Connection, entity: Entity) -> None:
 
 
 def get_entities_by_canonical(
-    conn: sqlite3.Connection,
+    conn: Any,
     org_id: str,
     entity_type: str,
     canonical_name: str,
 ) -> list[Entity]:
     """Return all entities matching (org_id, entity_type, canonical_name)."""
-    rows = conn.execute(
+    cur = conn.cursor()
+    cur.execute(
         """
         SELECT * FROM entities
-        WHERE org_id = ? AND entity_type = ? AND canonical_name = ?
+        WHERE org_id = %s AND entity_type = %s AND canonical_name = %s
         ORDER BY created_at ASC
         """,
         (org_id, entity_type, canonical_name),
-    ).fetchall()
+    )
+    rows = cur.fetchall()
     return [_row_to_entity(r) for r in rows]
 
 
-def mark_ambiguous(conn: sqlite3.Connection, entity_id: str) -> None:
+def mark_ambiguous(conn: Any, entity_id: str) -> None:
     """Mark an entity row as ambiguous. Does not merge — intentional N+1."""
-    conn.execute(
-        "UPDATE entities SET resolution_status = 'ambiguous', updated_at = ? WHERE id = ?",
+    cur = conn.cursor()
+    cur.execute(
+        "UPDATE entities SET resolution_status = 'ambiguous', updated_at = %s WHERE id = %s",
         (_now(), str(entity_id)),
     )
 
 
 def update_entity_seen(
-    conn: sqlite3.Connection,
+    conn: Any,
     entity_id: str,
     run_id: str,
     source_system: str,
     new_confidence: Optional[float] = None,
     new_source_record_id: Optional[str] = None,
 ) -> None:
-    """Increment run_count and update last_seen_run_id for a returning entity.
+    """Update a returning entity and count at most one sighting per run.
 
     Confidence upgrade (never downgrade): when a later, higher-quality signal
     arrives for an existing entity — e.g. an incoming record carries a
@@ -140,28 +142,41 @@ def update_entity_seen(
         # COALESCE so a NULL stored source_record_id is backfilled, but an
         # existing one is never overwritten. MAX guarantees confidence only
         # ever rises.
-        conn.execute(
+        cur = conn.cursor()
+        # run_count increments at most once per run: the CASE compares the OLD
+        # last_seen_run_id (PostgreSQL evaluates SET right-hand sides against the
+        # pre-UPDATE row) to the current run_id. The second %s is that run_id —
+        # this is also why the params list carries run_id twice.
+        cur.execute(
             """
             UPDATE entities
-            SET last_seen_run_id    = ?,
-                run_count           = run_count + 1,
-                resolution_confidence = MAX(resolution_confidence, ?),
-                source_record_id    = COALESCE(source_record_id, ?),
-                updated_at          = ?
-            WHERE id = ?
+            SET last_seen_run_id    = %s,
+                run_count           = run_count + CASE WHEN last_seen_run_id <> %s THEN 1 ELSE 0 END,
+                resolution_confidence = GREATEST(resolution_confidence, %s),
+                source_record_id    = COALESCE(source_record_id, %s),
+                updated_at          = %s
+            WHERE id = %s
             """,
-            (run_id, new_confidence, new_source_record_id, _now(), str(entity_id)),
+            (
+                run_id,
+                run_id,
+                new_confidence,
+                new_source_record_id,
+                _now(),
+                str(entity_id),
+            ),
         )
         return
-    conn.execute(
+    cur = conn.cursor()
+    cur.execute(
         """
         UPDATE entities
-        SET last_seen_run_id = ?,
-            run_count        = run_count + 1,
-            updated_at       = ?
-        WHERE id = ?
+        SET last_seen_run_id = %s,
+            run_count        = run_count + CASE WHEN last_seen_run_id <> %s THEN 1 ELSE 0 END,
+            updated_at       = %s
+        WHERE id = %s
         """,
-        (run_id, _now(), str(entity_id)),
+        (run_id, run_id, _now(), str(entity_id)),
     )
 
 
@@ -254,9 +269,11 @@ def resolve_or_create_entity(
                 )
             conn.commit()
             # Return refreshed view
-            row = conn.execute(
-                "SELECT * FROM entities WHERE id = ?", (str(existing.id),)
-            ).fetchone()
+            cur = conn.cursor()
+            cur.execute(
+                "SELECT * FROM entities WHERE id = %s", (str(existing.id),)
+            )
+            row = cur.fetchone()
             return _row_to_entity(row)
 
         # Branch 3 — multiple candidates: ambiguous, create new distinct row.

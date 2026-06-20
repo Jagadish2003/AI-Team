@@ -144,6 +144,45 @@ def get_current_org_id_optional() -> str | None:
     return _current_org_id.get()
 
 
+def resolve_request_org_id(request: Request) -> str:
+    """Resolve the org id for a request directly from its headers.
+
+    Mirrors the precedence TenancyMiddleware uses (verified JWT org claim →
+    dev-token DEV_JWT_ORG → X-Org-Id → DEV_DEFAULT_ORG) but reads the request
+    rather than the ContextVar. Needed by middleware that runs OUTSIDE the
+    tenancy middleware (e.g. the license gate, registered after tenancy and
+    therefore executed before it), where the ContextVar is not yet set.
+
+    Defensive by contract: never raises on a partial/minimal request object — a
+    missing Authorization/X-Org-Id header simply yields ``DEV_DEFAULT_ORG`` — so a
+    fail-closed caller can call it unconditionally. The X-Org-Id impersonation
+    guard is intentionally NOT enforced here; that remains TenancyMiddleware's job
+    (a contradicting X-Org-Id is still rejected once the request reaches it).
+    """
+    try:
+        raw_token = _bearer_token(request)
+    except Exception:
+        raw_token = None
+
+    verified = _verified_jwt_payload(raw_token)
+    if verified is not None:
+        jwt_org_id = verified.get("org_id") or None
+    else:
+        jwt_org_id = _dev_token_org(raw_token)
+
+    if jwt_org_id is not None:
+        return jwt_org_id
+
+    try:
+        x_org_id = request.headers.get("X-Org-Id")
+        if x_org_id is not None:
+            x_org_id = x_org_id.strip() or None
+    except Exception:
+        x_org_id = None
+
+    return x_org_id or DEV_DEFAULT_ORG
+
+
 # ---------------------------------------------------------------------------
 # Middleware
 # ---------------------------------------------------------------------------

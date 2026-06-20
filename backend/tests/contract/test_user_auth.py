@@ -84,14 +84,14 @@ def test_register_creates_org_user_member_and_jwt():
     # All three rows exist.
     con = db.connect()
     try:
-        assert con.execute("SELECT name FROM orgs WHERE id = ?", (org_id,)).fetchone()[0] == "Acme Bank"
-        assert con.execute("SELECT email FROM users WHERE id = ?", (user_id,)).fetchone()[0] == email
+        assert con.execute("SELECT name FROM orgs WHERE id = %s", (org_id,)).fetchone()[0] == "Acme Bank"
+        assert con.execute("SELECT email FROM users WHERE id = %s", (user_id,)).fetchone()[0] == email
         member = con.execute(
-            "SELECT org_id, role FROM workspace_members WHERE user_id = ?", (user_id,)
+            "SELECT org_id, role FROM workspace_members WHERE user_id = %s", (user_id,)
         ).fetchone()
     finally:
         con.close()
-    assert member == (org_id, "owner")
+    assert tuple(member) == (org_id, "owner")
 
 
 def test_register_normalizes_email_case_and_whitespace():
@@ -138,7 +138,7 @@ def test_register_stores_bcrypt_hash_no_plaintext():
     con = db.connect()
     try:
         stored = con.execute(
-            "SELECT password_hash FROM users WHERE id = ?", (result["user"]["id"],)
+            "SELECT password_hash FROM users WHERE id = %s", (result["user"]["id"],)
         ).fetchone()[0]
     finally:
         con.close()
@@ -182,7 +182,7 @@ def test_login_updates_last_login_at():
     con = db.connect()
     try:
         last = con.execute(
-            "SELECT last_login_at FROM users WHERE id = ?", (reg["user"]["id"],)
+            "SELECT last_login_at FROM users WHERE id = %s", (reg["user"]["id"],)
         ).fetchone()[0]
     finally:
         con.close()
@@ -227,12 +227,12 @@ def test_login_inactive_user_is_rejected():
     try:
         con.execute(
             "INSERT INTO users (id, email, password_hash, is_active, created_at) "
-            "VALUES (?, ?, ?, 0, ?)",
+            "VALUES (%s, %s, %s, FALSE, %s)",
             (user_id, email, user_auth.hash_password("supersecret1"), db.now_iso()),
         )
         con.execute(
             "INSERT INTO workspace_members (org_id, user_id, role, created_at) "
-            "VALUES (?, ?, 'analyst', ?)",
+            "VALUES (%s, %s, 'analyst', %s)",
             (org_id, user_id, db.now_iso()),
         )
         con.commit()
@@ -517,7 +517,7 @@ def test_retry_after_boundary_with_frozen_clock(monkeypatch):
         for _ in range(user_auth.RATE_LIMIT_MAX_ATTEMPTS):
             con.execute(
                 "INSERT INTO login_attempts (id, email, ip_address, attempted_at, succeeded) "
-                "VALUES (?, ?, ?, ?, 0)",
+                "VALUES (%s, %s, %s, %s, FALSE)",
                 (str(uuid.uuid4()), email, "10.0.0.1", burst_at.isoformat()),
             )
         con.commit()

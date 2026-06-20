@@ -5,7 +5,9 @@
  *   POST /api/auth/register via AuthContext.register().
  *   Creates an org, user (identity only), and workspace_member (owner) in one transaction.
  *   409 → email already registered.
- *   Redirects to /integration-hub on success.
+ *   AUTH-2: registration creates a pending_approval org with no JWT, so on
+ *   success the user is redirected to /pending-approval (a static confirmation),
+ *   not logged in. They sign in only after a CloudFulcrum admin approves.
  *
  * Layout note: every inline message (email format, password length, mismatch)
  * and the submit error live in fixed-height slots, so the card height stays
@@ -15,6 +17,9 @@ import React, { useState } from "react";
 import { Link } from "react-router-dom";
 
 import PasswordInput from "../components/auth/PasswordInput";
+import PasswordStrengthIndicator, {
+  getPasswordRequirements,
+} from "../components/auth/PasswordStrengthIndicator";
 import { useAuth } from "../context/AuthContext";
 import { useTheme } from "../context/ThemeContext";
 import { ApiError } from "../lib/apiClient";
@@ -69,15 +74,18 @@ export default function RegisterPage() {
 
   // Inline validation — each only surfaces once the user has typed something.
   const emailInvalid = email.trim().length > 0 && !EMAIL_RE.test(email.trim());
-  const passwordTooShort =
-    password.length > 0 && password.length < MIN_PASSWORD_LENGTH;
+  // CS-3: the full strength rule (length + upper + lower + special) replaces the
+  // old length-only check. The indicator below the field and the submit gate
+  // both read this same helper, so they can never disagree. The other conditions
+  // (org name, valid email, confirm match, not submitting) are unchanged.
+  const passwordValid = getPasswordRequirements(password).every((r) => r.met);
   const passwordMismatch =
     confirmPassword.length > 0 && password !== confirmPassword;
 
   const canSubmit =
     orgName.trim().length > 0 &&
     EMAIL_RE.test(email.trim()) &&
-    password.length >= MIN_PASSWORD_LENGTH &&
+    passwordValid &&
     password === confirmPassword &&
     !submitting;
 
@@ -88,9 +96,12 @@ export default function RegisterPage() {
     setSubmitting(true);
     try {
       await register(orgName.trim(), email.trim().toLowerCase(), password);
-      // Full reload (not SPA navigate) so all in-session context is rebuilt for
-      // this user — otherwise the previous user's connector/run state leaks.
-      hardRedirect("/integration-hub");
+      // AUTH-2 T6: registration creates a pending_approval org and issues no
+      // JWT, so the registrant is not logged in. Send them to the static
+      // pending-approval confirmation (not /integration-hub or /login). A full
+      // reload (not SPA navigate) clears any page-level context so the new
+      // account starts from a clean, unauthenticated state.
+      hardRedirect("/pending-approval");
     } catch (err) {
       setError(registerErrorMessage(err));
     } finally {
@@ -167,15 +178,12 @@ export default function RegisterPage() {
                 autoComplete="new-password"
                 required
                 minLength={MIN_PASSWORD_LENGTH}
-                invalid={passwordTooShort}
                 value={password}
                 onChange={setPassword}
                 disabled={submitting}
               />
-              {/* Length hint — red, like the other errors. Shown only while too short. */}
-              <div className={`${HINT_SLOT_CLS} text-red-400`}>
-                {passwordTooShort && "Enter minimum of 8 characters"}
-              </div>
+              {/* CS-3: live requirement checklist replaces the old length-only hint. */}
+              <PasswordStrengthIndicator password={password} />
             </div>
 
             {/* Confirm password */}

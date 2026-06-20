@@ -374,7 +374,7 @@ def run_trackb_and_persist(
         # T7 — temporal enrichment (non-blocking, AT-143)
         try:
             from .llm_enrichment import KV_LLM_ENRICHMENT as _KV_LLM
-            from .jobs.baseline_calculator import calculate_baselines
+            from .jobs.baseline_calculator import calculate_baselines_for_org
             from .telemetry import record_event
             from .temporal_enrichment import enrich_opportunities_with_temporal_context
 
@@ -385,7 +385,9 @@ def run_trackb_and_persist(
             # would never find its own history.
             _org_id = run_org_id
             _pack_id = _pack_id_for_run(run)
-            calculate_baselines()
+            # AT-158: baselines are computed per-org; pass the run's org explicitly
+            # (the old no-arg calculate_baselines() was removed in that refactor).
+            calculate_baselines_for_org(_org_id)
             opps = enrich_opportunities_with_temporal_context(run_id, _org_id, _pack_id or "", opps)
 
             _temporal_keys = (
