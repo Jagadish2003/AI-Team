@@ -5,6 +5,7 @@ import { useRunContext } from "../../context/RunContext";
 import { useConnectorContext } from "../../context/ConnectorContext";
 import { useTheme } from "../../context/ThemeContext";
 import { useAuthOptional } from "../../context/AuthContext";
+import { profileNameFromEmail } from "../../utils/profileName";
 
 type NavItem = {
   to: string;
@@ -43,12 +44,6 @@ const items = [
   },
   { to: "/executive-report", label: "Executive Report", runScoped: true },
 ] satisfies NavItem[];
-
-function profileNameFromEmail(email: string | null | undefined): string | null {
-  const localPart = email?.trim().split("@", 1)[0]?.trim();
-  if (!localPart) return null;
-  return `${localPart.charAt(0).toUpperCase()}${localPart.slice(1)}`;
-}
 
 export default function TopNav() {
   const loc = useLocation();
