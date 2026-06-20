@@ -440,6 +440,31 @@ def pytest_configure(config):
     finally:
         con.close()
 
+    # Guarantee a clean slate for high-churn tables at session start, even when
+    # the schema could NOT be dropped above (a shared/provisioned DB where the
+    # role lacks DROP privilege, so _reset_database() was skipped). On the
+    # resettable path these tables were just recreated empty, so this is a no-op;
+    # on a non-resettable DB it clears rows accumulated by PRIOR sessions that
+    # otherwise inflate count-based assertions (e.g. expected 3, got 15) and
+    # collide on fixed primary keys. DELETE needs only DELETE privilege, which
+    # the app role already exercises at runtime. Children first to respect FKs;
+    # each guarded so a table absent on this DB is simply skipped.
+    for _table in (
+        "entity_relationships",
+        "entities",
+        "signal_snapshots",
+        "telemetry_events",
+    ):
+        _clean_con = psycopg2.connect(os.environ["DATABASE_URL"])
+        try:
+            _clean_con.autocommit = True
+            with _clean_con.cursor() as _cur:
+                _cur.execute(f"DELETE FROM {_table}")
+        except psycopg2.Error:
+            pass  # table missing or not deletable on this DB — skip
+        finally:
+            _clean_con.close()
+
 
 @pytest.fixture(scope="session", autouse=True)
 def _license_gate_valid_by_default():

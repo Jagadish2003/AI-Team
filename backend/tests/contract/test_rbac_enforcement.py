@@ -497,6 +497,10 @@ _PUBLIC_ROUTES = {
     "/api/auth/login",
     "/api/auth/accept-invite",
     "/api/auth/invite-info",
+    # CS-3: forgot/reset-password are public by design — a user who cannot sign
+    # in must be able to request and complete a reset without a credential.
+    "/api/auth/forgot-password",
+    "/api/auth/reset-password",
     # FastAPI / Starlette meta routes (filtered out as non-APIRoute anyway, but
     # listed here for documentation completeness)
     "/openapi.json",
