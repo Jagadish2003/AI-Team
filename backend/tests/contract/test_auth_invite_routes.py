@@ -12,23 +12,33 @@ from __future__ import annotations
 
 import uuid
 
+from auth_helpers import activate_org_by_email
+
 
 def _email() -> str:
     return f"invitee_{uuid.uuid4().hex[:10]}@example.com"
 
 
 def _register_owner(client) -> str:
-    """Register a fresh org + owner and return the owner's JWT."""
+    """Register a fresh org + owner, approve it (AUTH-2 admin step, simulated), and
+    return the owner's JWT — issued on login after approval (register itself no
+    longer returns a JWT under AUTH-2)."""
+    email = _email()
     resp = client.post(
         "/api/auth/register",
         json={
             "org_name": f"Org {uuid.uuid4().hex[:6]}",
-            "email": _email(),
+            "email": email,
             "password": "Ownerpass1!",
         },
     )
     assert resp.status_code == 201, resp.text
-    return resp.json()["token"]
+    activate_org_by_email(email)
+    login = client.post(
+        "/api/auth/login", json={"email": email, "password": "Ownerpass1!"}
+    )
+    assert login.status_code == 200, login.text
+    return login.json()["token"]
 
 
 def _create_invite(client, owner_token: str, role: str = "analyst") -> str:

@@ -36,6 +36,7 @@ import pytest
 
 from app import db
 from app.routes_auth import _INVITE_KV_PREFIX, _token_hash
+from auth_helpers import activate_org_by_email
 
 WORKSPACE_CATALOG = "/api/integration-hub/workspace-catalog"
 
@@ -55,16 +56,26 @@ def _claims(token: str) -> dict:
 
 
 def _register(client, *, org=None, email=None, password="Ownerpass1!"):
-    # Default to a UNIQUE org per call: registering with an existing org_name now
-    # joins that workspace as an analyst (not a new owner), so tests that expect a
-    # fresh owner must use a fresh org name. Tests exercising the join behaviour
-    # pass an explicit shared `org`.
+    """Register an org, approve it (AUTH-2 admin step, simulated), and log in.
+
+    Returns (login_resp, email). Under AUTH-2, register itself issues NO JWT and
+    the org starts pending_approval, so the owner's JWT comes from logging in
+    AFTER approval. The returned response therefore carries {token, user} — the
+    same shape the AUTH-1 register response used to return — so the assertions
+    below are unchanged. (register==201 and login==200 are asserted here.)
+    """
     email = email or _email()
     org = org or f"Org_{uuid.uuid4().hex[:8]}"
-    resp = client.post(
+    reg = client.post(
         "/api/auth/register",
         json={"org_name": org, "email": email, "password": password},
     )
+    assert reg.status_code == 201, reg.text
+    activate_org_by_email(email)
+    resp = client.post(
+        "/api/auth/login", json={"email": email, "password": password}
+    )
+    assert resp.status_code == 200, resp.text
     return resp, email
 
 
@@ -77,7 +88,7 @@ def _auth(token: str) -> dict:
 
 def test_ac2_register_returns_jwt_with_org_and_owner_role(client):
     resp, email = _register(client, org="Acme")
-    assert resp.status_code == 201, resp.text
+    assert resp.status_code == 200, resp.text  # login after approval (register itself is 201, asserted in _register)
     body = resp.json()
     user = body["user"]
     assert user["email"] == email
@@ -94,7 +105,7 @@ def test_ac16_password_hash_is_bcrypt_and_no_plaintext(client):
     # Strong (CS-3) and distinctive so we can assert it is never stored in plaintext.
     password = "Supersecret-Plaintext1!"
     resp, email = _register(client, password=password)
-    assert resp.status_code == 201
+    assert resp.status_code == 200  # login after approval
 
     # No plaintext password in the response body.
     assert password not in resp.text

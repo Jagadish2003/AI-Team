@@ -20,6 +20,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 
 from app import db
+from auth_helpers import activate_org_by_email
 
 STRONG = "Password1!"
 WEAK = "password"  # 8 chars, lowercase only — missing uppercase + special
@@ -64,12 +65,17 @@ def test_ac4_register_weak_password_creates_no_user(client):
 
 
 def test_ac5_register_strong_password_returns_201(client):
+    email = _email()
     resp = client.post(
         "/api/auth/register",
-        json={"org_name": "Acme", "email": _email(), "password": STRONG},
+        json={"org_name": "Acme", "email": email, "password": STRONG},
     )
     assert resp.status_code == 201, resp.text
-    assert resp.json()["token"]
+    # AUTH-2: the JWT is issued on login after approval, not at register.
+    activate_org_by_email(email)
+    login = client.post("/api/auth/login", json={"email": email, "password": STRONG})
+    assert login.status_code == 200, login.text
+    assert login.json()["token"]
 
 
 # ── AC6: login is exempt ──────────────────────────────────────────────────────
@@ -87,6 +93,7 @@ def test_ac6_login_does_not_enforce_strength_for_existing_weak_password(client):
 
     email = _email()
     register_org_and_owner(org_name="Legacy", email=email, password=WEAK)
+    activate_org_by_email(email)  # AUTH-2 admin approval (simulated) so login works
 
     # The register ROUTE would reject this very password…
     rejected = client.post(
@@ -105,11 +112,17 @@ def test_ac6_login_does_not_enforce_strength_for_existing_weak_password(client):
 
 
 def _make_invite(client) -> str:
+    owner_email = _email()
     owner = client.post(
         "/api/auth/register",
-        json={"org_name": f"Org {uuid.uuid4().hex[:6]}", "email": _email(), "password": STRONG},
+        json={"org_name": f"Org {uuid.uuid4().hex[:6]}", "email": owner_email, "password": STRONG},
     )
-    owner_token = owner.json()["token"]
+    assert owner.status_code == 201, owner.text
+    # AUTH-2: approve + login to get the owner JWT.
+    activate_org_by_email(owner_email)
+    owner_token = client.post(
+        "/api/auth/login", json={"email": owner_email, "password": STRONG}
+    ).json()["token"]
     inv = client.post(
         "/api/auth/invite",
         headers=_auth(owner_token),
@@ -146,10 +159,12 @@ def test_ac7_accept_invite_strong_password_activates_and_returns_jwt(client):
 
 def _register_and_get_reset_token(client) -> tuple[str, str]:
     email = _email()
-    client.post(
+    reg = client.post(
         "/api/auth/register",
         json={"org_name": f"Org {uuid.uuid4().hex[:6]}", "email": email, "password": STRONG},
     )
+    assert reg.status_code == 201, reg.text
+    activate_org_by_email(email)  # AUTH-2 admin approval (simulated) so post-reset login works
     fp = client.post("/api/auth/forgot-password", json={"email": email})
     assert fp.status_code == 200, fp.text
     return email, fp.json()["reset_token"]

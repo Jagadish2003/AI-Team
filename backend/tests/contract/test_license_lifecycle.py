@@ -91,12 +91,32 @@ def _use_throwaway_public_key(monkeypatch):
 
 
 def _reset_license(org_id: str = DEV_DEFAULT_ORG) -> None:
-    """Clear an org's installed license row (defaults to the dev/default org)."""
+    """Reset an org's license state between tests (defaults to the dev/default org).
+
+    Prefers a real DELETE (privileged test role). Under the least-privilege app DB
+    role (no DELETE), falls back to clearing the clock baseline + cached status via
+    UPDATE — which is what actually matters for isolation on the reused 'default'
+    org: a prior test's future last_seen_date would otherwise trip the
+    clock-rollback guard in the next default-org test. license_key is overwritten
+    by whichever test installs one, and the no-license tests use fresh unique orgs.
+    Autocommit so a denied DELETE doesn't poison a transaction.
+    """
     con = db.connect()
+    con.autocommit = True
     try:
-        cur = con.cursor()
-        cur.execute("DELETE FROM org_licenses WHERE org_id = %s", (org_id,))
-        con.commit()
+        try:
+            con.cursor().execute("DELETE FROM org_licenses WHERE org_id = %s", (org_id,))
+            return
+        except Exception:
+            pass
+        try:
+            con.cursor().execute(
+                "UPDATE org_licenses SET last_seen_date = NULL, last_status = NULL "
+                "WHERE org_id = %s",
+                (org_id,),
+            )
+        except Exception:
+            pass
     finally:
         con.close()
 

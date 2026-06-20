@@ -17,43 +17,57 @@ import uuid
 from fastapi.testclient import TestClient
 
 from app.auth import user_auth
+from auth_helpers import activate_org_by_email, member_for_email
 
 
 def _email() -> str:
     return f"join_{uuid.uuid4().hex[:10]}@example.com"
 
 
+# AUTH-2: register_org_and_owner returns a pending-approval ack (no user/org), so
+# these isolation tests read each owner's membership directly via member_for_email.
+
+
 def test_same_org_name_creates_distinct_orgs_both_owners(client: TestClient):
     name = f"Shared Workspace {uuid.uuid4().hex[:6]}"
 
-    first = user_auth.register_org_and_owner(name, _email(), "Supersecret1!")
-    second = user_auth.register_org_and_owner(name, _email(), "Supersecret1!")
+    ea, eb = _email(), _email()
+    user_auth.register_org_and_owner(name, ea, "Supersecret1!")
+    user_auth.register_org_and_owner(name, eb, "Supersecret1!")
+    org_a, role_a = member_for_email(ea)
+    org_b, role_b = member_for_email(eb)
 
     # A matching name must NOT join the first workspace — distinct org_ids.
-    assert first["user"]["org_id"] != second["user"]["org_id"], "same name → separate orgs"
+    assert org_a != org_b, "same name → separate orgs"
     # Each registrant owns their own workspace; neither is silently an analyst.
-    assert first["user"]["role"] == "owner"
-    assert second["user"]["role"] == "owner"
+    assert role_a == "owner"
+    assert role_b == "owner"
 
 
 def test_different_org_name_creates_distinct_orgs(client: TestClient):
-    a = user_auth.register_org_and_owner(f"Org A {uuid.uuid4().hex[:6]}", _email(), "Supersecret1!")
-    b = user_auth.register_org_and_owner(f"Org B {uuid.uuid4().hex[:6]}", _email(), "Supersecret1!")
+    ea, eb = _email(), _email()
+    user_auth.register_org_and_owner(f"Org A {uuid.uuid4().hex[:6]}", ea, "Supersecret1!")
+    user_auth.register_org_and_owner(f"Org B {uuid.uuid4().hex[:6]}", eb, "Supersecret1!")
+    org_a, role_a = member_for_email(ea)
+    org_b, role_b = member_for_email(eb)
 
-    assert a["user"]["org_id"] != b["user"]["org_id"], "different name → different org"
-    assert a["user"]["role"] == "owner"
-    assert b["user"]["role"] == "owner"
+    assert org_a != org_b, "different name → different org"
+    assert role_a == "owner"
+    assert role_b == "owner"
 
 
 def test_case_or_whitespace_name_variant_still_isolated(client: TestClient):
     name = f"Casing {uuid.uuid4().hex[:6]}"
 
-    first = user_auth.register_org_and_owner(name, _email(), "Supersecret1!")
-    other = user_auth.register_org_and_owner(f"  {name.upper()}  ", _email(), "Supersecret1!")
+    ef, eo = _email(), _email()
+    user_auth.register_org_and_owner(name, ef, "Supersecret1!")
+    user_auth.register_org_and_owner(f"  {name.upper()}  ", eo, "Supersecret1!")
+    org_first, _ = member_for_email(ef)
+    org_other, role_other = member_for_email(eo)
 
     # Even a case/whitespace variant of an existing name creates its own org.
-    assert other["user"]["org_id"] != first["user"]["org_id"]
-    assert other["user"]["role"] == "owner"
+    assert org_other != org_first
+    assert role_other == "owner"
 
 
 def test_second_registration_same_name_cannot_see_first_users_run(client: TestClient):
@@ -64,12 +78,13 @@ def test_second_registration_same_name_cannot_see_first_users_run(client: TestCl
 
     name = f"DWP {uuid.uuid4().hex[:6]}"
 
+    email_a, email_b = _email(), _email()
     a = client.post(
         "/api/auth/register",
-        json={"org_name": name, "email": _email(), "password": "Supersecret1!"},
+        json={"org_name": name, "email": email_a, "password": "Supersecret1!"},
     )
     assert a.status_code == 201, a.text
-    a_org = a.json()["user"]["org_id"]
+    a_org, _ = member_for_email(email_a)  # AUTH-2: org read from membership, not response
 
     db.upsert_run(
         "run_join_shared",
@@ -79,16 +94,22 @@ def test_second_registration_same_name_cannot_see_first_users_run(client: TestCl
 
     b = client.post(
         "/api/auth/register",
-        json={"org_name": name, "email": _email(), "password": "Supersecret1!"},
+        json={"org_name": name, "email": email_b, "password": "Supersecret1!"},
     )
     assert b.status_code == 201, b.text
-    b_body = b.json()
+    b_org, b_role = member_for_email(email_b)
     # Different workspace, and an owner of their own org — not an analyst joiner.
-    assert b_body["user"]["org_id"] != a_org
-    assert b_body["user"]["role"] == "owner"
+    assert b_org != a_org
+    assert b_role == "owner"
+
+    # Approve org B and log in to get a usable token (AUTH-2).
+    activate_org_by_email(email_b)
+    b_token = client.post(
+        "/api/auth/login", json={"email": email_b, "password": "Supersecret1!"}
+    ).json()["token"]
 
     runs = client.get(
-        "/api/runs", headers={"Authorization": f"Bearer {b_body['token']}"}
+        "/api/runs", headers={"Authorization": f"Bearer {b_token}"}
     )
     assert runs.status_code == 200, runs.text
     # The first user's run is NOT visible to the second org.

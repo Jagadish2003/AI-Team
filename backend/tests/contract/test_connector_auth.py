@@ -877,18 +877,32 @@ def _db_path() -> _Path:
 
 
 def _clear_credentials() -> None:
-    """Truncate the credentials table between tests."""
+    """Clear credentials between tests via SOFT delete.
+
+    The app DB role has no DELETE privilege, so this marks every row
+    is_deleted = TRUE rather than physically deleting. _raw_credentials filters
+    is_deleted = FALSE, so the table reads as empty afterwards, and store_token's
+    upsert reactivates (is_deleted = FALSE) any (org_id, connector_id) reused by a
+    later test — keeping per-test isolation without needing DELETE.
+    """
     con = _sqlite3.connect(str(_db_path()))
-    con.execute("DELETE FROM credentials")
+    con.execute("UPDATE credentials SET is_deleted = TRUE")
     con.commit()
     con.close()
 
 
 def _raw_credentials(org_id: str, connector_id: str) -> tuple | None:
-    """Return raw DB row (access_token, refresh_token) without decryption."""
+    """Return the raw, ACTIVE DB row (access_token, refresh_token) without decryption.
+
+    Filters is_deleted = FALSE so this reflects the app's view of a live credential:
+    revoke_token now SOFT-deletes (UPDATE is_deleted = TRUE) because the app DB role
+    has no DELETE privilege, so a revoked credential is no longer "active" and this
+    returns None — matching the revoke tests' "record is gone" assertions.
+    """
     con = _sqlite3.connect(str(_db_path()))
     cur = con.execute(
-        "SELECT access_token, refresh_token FROM credentials WHERE org_id=%s AND connector_id=%s",
+        "SELECT access_token, refresh_token FROM credentials "
+        "WHERE org_id=%s AND connector_id=%s AND is_deleted = FALSE",
         (org_id, connector_id),
     )
     row = cur.fetchone()

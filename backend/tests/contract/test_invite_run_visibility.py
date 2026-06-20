@@ -17,6 +17,8 @@ import uuid
 
 from fastapi.testclient import TestClient
 
+from auth_helpers import member_for_email, register_approve_login
+
 
 def _bearer(token: str) -> dict:
     return {"Authorization": f"Bearer {token}"}
@@ -34,12 +36,10 @@ def test_invited_analyst_sees_org_run_and_products(client: TestClient):
     # 1. Owner registers org "DWP".
     owner_email = _uniq("owner_dwp")
     analyst_email = _uniq("analyst_dwp")
-    reg = client.post(
-        "/api/auth/register",
-        json={"org_name": "DWP", "email": owner_email, "password": "Password123!"},
+    # AUTH-2: register → approve → login to get the owner's JWT.
+    owner = register_approve_login(
+        client, email=owner_email, password="Password123!", org_name="DWP"
     )
-    assert reg.status_code == 201, reg.text
-    owner = reg.json()
     owner_token = owner["token"]
     owner_org = owner["user"]["org_id"]
 
@@ -106,12 +106,9 @@ def test_invited_analyst_sees_connectors_via_real_endpoints(client: TestClient):
 
     owner_email = _uniq("owner_dwp3")
     analyst_email = _uniq("analyst_dwp3")
-    reg = client.post(
-        "/api/auth/register",
-        json={"org_name": "DWP3", "email": owner_email, "password": "Password123!"},
+    owner = register_approve_login(
+        client, email=owner_email, password="Password123!", org_name="DWP3"
     )
-    assert reg.status_code == 201, reg.text
-    owner = reg.json()
     owner_token = owner["token"]
     owner_org = owner["user"]["org_id"]
 
@@ -173,11 +170,13 @@ def test_invited_analyst_sees_connectors_via_real_endpoints(client: TestClient):
 def test_outsider_in_another_org_does_not_see_the_run(client: TestClient):
     from app import db
 
+    dwp2_email = _uniq("owner_dwp2")
     reg = client.post(
         "/api/auth/register",
-        json={"org_name": "DWP2", "email": _uniq("owner_dwp2"), "password": "Password123!"},
+        json={"org_name": "DWP2", "email": dwp2_email, "password": "Password123!"},
     )
-    owner_org = reg.json()["user"]["org_id"]
+    assert reg.status_code == 201, reg.text
+    owner_org, _ = member_for_email(dwp2_email)  # AUTH-2: org from membership
     db.upsert_run(
         "run_dwp2_only",
         {"id": "run_dwp2_only", "org_id": owner_org, "status": "done",
@@ -185,11 +184,10 @@ def test_outsider_in_another_org_does_not_see_the_run(client: TestClient):
     )
 
     # A separate owner / separate org (mirrors "registered a new account to invite").
-    other = client.post(
-        "/api/auth/register",
-        json={"org_name": "CF", "email": _uniq("owner_cf"), "password": "Password123!"},
+    other = register_approve_login(
+        client, email=_uniq("owner_cf"), password="Password123!", org_name="CF"
     )
-    other_token = other.json()["token"]
+    other_token = other["token"]
 
     runs = client.get("/api/runs", headers=_bearer(other_token))
     assert runs.status_code == 200

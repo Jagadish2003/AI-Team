@@ -35,6 +35,7 @@ from app.email_service import (
     send_org_approved_email,
     send_org_rejected_email,
     send_password_reset_email,
+    send_welcome_email,
 )
 from app.auth.user_auth import (
     EmailAlreadyExistsError,
@@ -265,6 +266,15 @@ def register(body: RegisterRequest) -> Dict[str, Any]:
         raise HTTPException(status_code=409, detail="Email already registered")
     except RegistrationError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+
+    # CS-3 (T7/AC10): send a welcome email to the registrant. Non-blocking
+    # (AC14) — a delivery failure must never break registration, so any error is
+    # swallowed and the pending-approval response is still returned.
+    try:
+        send_welcome_email(body.email, body.org_name)
+    except Exception:  # pragma: no cover - email helper already swallows errors
+        logger.exception("welcome email dispatch failed (non-blocking)")
+
     return result
 
 

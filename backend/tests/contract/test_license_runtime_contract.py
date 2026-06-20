@@ -39,11 +39,16 @@ def _mint(private_key: Ed25519PrivateKey, *, expires_at: str, grace_days: int = 
 
 
 def _delete_org(org_id: str) -> None:
+    # Best-effort cleanup: each test uses a unique org id, so under the
+    # least-privilege app DB role (no DELETE) this no-ops harmlessly. Autocommit so
+    # a denied DELETE doesn't poison a transaction.
     con = db.connect()
     try:
+        con.autocommit = True
         cur = con.cursor()
         cur.execute("DELETE FROM org_licenses WHERE org_id = %s", (org_id,))
-        con.commit()
+    except Exception:
+        pass
     finally:
         con.close()
 

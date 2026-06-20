@@ -40,6 +40,10 @@ EXPECTED_LOGIN_ATTEMPTS_COLUMNS = [
     ("ip_address", "character varying", 64, True, False),
     ("attempted_at", "timestamp without time zone", None, True, False),
     ("succeeded", "boolean", None, True, False),
+    # Soft-delete column (migration 0016): a successful login marks prior failed
+    # attempts is_deleted=TRUE instead of physically deleting them (the app DB
+    # role has no DELETE). NOT NULL DEFAULT FALSE, appended last.
+    ("is_deleted", "boolean", None, True, False),
 ]
 
 # Columns that must NEVER appear on users — they belong to workspace_members.
