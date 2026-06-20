@@ -57,7 +57,7 @@ def test_ac4_register_weak_password_creates_no_user(client):
     assert resp.status_code == 422
     con = db.connect()
     try:
-        row = con.execute("SELECT id FROM users WHERE email = ?", (email,)).fetchone()
+        row = con.execute("SELECT id FROM users WHERE email = %s", (email,)).fetchone()
     finally:
         con.close()
     assert row is None, "no account may be created when the password is rejected"
@@ -207,7 +207,7 @@ def test_reset_password_expired_token_returns_400(client):
     con = db.connect()
     try:
         con.execute(
-            "UPDATE users SET reset_token_expires_at = ? WHERE email = ?",
+            "UPDATE users SET reset_token_expires_at = %s WHERE email = %s",
             (expired_at, email),
         )
         con.commit()

@@ -166,7 +166,7 @@ def test_ac6_login_allows_existing_account_with_old_weak_password(client):
     con = db.connect()
     try:
         con.execute(
-            "UPDATE users SET password_hash = ? WHERE email = ?",
+            "UPDATE users SET password_hash = %s WHERE email = %s",
             (hash_password(old_weak), email),
         )
         con.commit()
@@ -186,7 +186,7 @@ def test_login_does_not_run_strength_validation_path(client):
     con = db.connect()
     try:
         con.execute(
-            "UPDATE users SET password_hash = ? WHERE email = ?",
+            "UPDATE users SET password_hash = %s WHERE email = %s",
             (hash_password(weak), email),
         )
         con.commit()
