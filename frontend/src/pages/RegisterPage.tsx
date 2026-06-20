@@ -5,7 +5,9 @@
  *   POST /api/auth/register via AuthContext.register().
  *   Creates an org, user (identity only), and workspace_member (owner) in one transaction.
  *   409 → email already registered.
- *   Redirects to /login on success; the user must sign in explicitly.
+ *   AUTH-2: registration creates a pending_approval org with no JWT, so on
+ *   success the user is redirected to /pending-approval (a static confirmation),
+ *   not logged in. They sign in only after a CloudFulcrum admin approves.
  *
  * Layout note: every inline message (email format, password length, mismatch)
  * and the submit error live in fixed-height slots, so the card height stays
@@ -94,9 +96,12 @@ export default function RegisterPage() {
     setSubmitting(true);
     try {
       await register(orgName.trim(), email.trim().toLowerCase(), password);
-      // Full reload (not SPA navigate) clears page-level context and starts the
-      // new account from a clean login flow.
-      hardRedirect("/login");
+      // AUTH-2 T6: registration creates a pending_approval org and issues no
+      // JWT, so the registrant is not logged in. Send them to the static
+      // pending-approval confirmation (not /integration-hub or /login). A full
+      // reload (not SPA navigate) clears any page-level context so the new
+      // account starts from a clean, unauthenticated state.
+      hardRedirect("/pending-approval");
     } catch (err) {
       setError(registerErrorMessage(err));
     } finally {

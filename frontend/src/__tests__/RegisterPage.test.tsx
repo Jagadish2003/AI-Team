@@ -220,14 +220,14 @@ describe("RegisterPage", () => {
     });
   });
 
-  it("reloads into /login on success", async () => {
+  it("reloads into /pending-approval on success (AUTH-2 T6)", async () => {
     mockRegister.mockResolvedValue(undefined);
     renderPage();
     fillForm();
     fireEvent.click(screen.getByRole("button", { name: /create account/i }));
 
     await waitFor(() => {
-      expect(mockHardRedirect).toHaveBeenCalledWith("/login");
+      expect(mockHardRedirect).toHaveBeenCalledWith("/pending-approval");
     });
   });
 

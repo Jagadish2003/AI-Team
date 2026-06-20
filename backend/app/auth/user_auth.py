@@ -1,4 +1,4 @@
-"""User authentication logic — AUTH-1 / AT-233.
+"""User authentication logic — AUTH-1 / AT-233, AUTH-2 / AT-352/353, AT-354.
 
 The identity/credential layer behind the /api/auth/* routes (routes_auth.py is
 AT-234). Pure functions + raw-SQL data access via app.db.connect(), mirroring
@@ -33,12 +33,21 @@ Security controls (Section 7):
       per-IP. That was dropped intentionally because it locked out legitimate
       co-located users during POC testing. login_attempts still records the IP
       for audit; it is simply not used as a blocking key.
+
+AUTH-2 approval workflow (AT-353):
+    Every new org starts in approval_status='pending_approval'. A signed token
+    is emailed to AGENTIQ_ADMIN_EMAIL; the admin clicks Approve or Reject.
+    register_org_and_owner() no longer returns a JWT — it returns a
+    pending-approval confirmation. OrgPendingApprovalError and OrgRejectedError
+    are defined here for use by T3 (login-side enforcement, AT-354).
 """
 from __future__ import annotations
 
+import hashlib
 import logging
 import math
 import os
+import secrets
 import re
 import time
 from datetime import datetime, timedelta, timezone
@@ -80,6 +89,10 @@ JWT_EXPIRY_HOURS = 8
 
 RATE_LIMIT_MAX_ATTEMPTS = 5
 RATE_LIMIT_WINDOW_MINUTES = 15
+
+# AUTH-2: approval workflow
+AGENTIQ_ADMIN_EMAIL: str = os.getenv("AGENTIQ_ADMIN_EMAIL", "agentiqadmin@dwpglobal.com")
+APPROVAL_TOKEN_EXPIRY_DAYS = 7
 
 _INVALID_CREDENTIALS_MSG = "Invalid email or password"
 # >= 32 bytes so HS256 does not warn in dev/test; production must set JWT_SECRET.
@@ -182,6 +195,26 @@ class RateLimitError(AuthError):
 
 class InvalidTokenError(AuthError):
     """JWT is malformed, expired, or revoked — maps to 401 (AC9)."""
+
+
+class OrgPendingApprovalError(AuthError):
+    """Login attempted for an org still awaiting admin approval — maps to 403.
+
+    Distinct from InvalidCredentialsError (401) and OrgRejectedError (403) so
+    the frontend can render the correct message for each state.
+    """
+
+    error_code = "org_pending_approval"
+
+
+class OrgRejectedError(AuthError):
+    """Login attempted for an org whose registration was rejected — maps to 403.
+
+    Distinct from OrgPendingApprovalError so the frontend renders the
+    'contact your representative' copy, not the 'wait for approval' copy.
+    """
+
+    error_code = "org_rejected"
 
 
 # ---------------------------------------------------------------------------
@@ -535,7 +568,7 @@ def _seconds_until_email_unblocked(email: str) -> int:
 
 
 def register_org_and_owner(org_name: str, email: str, password: str) -> dict:
-    """Register a brand-new workspace and make the registrant its owner (AC2).
+    """Register a brand-new workspace and submit it for admin approval (AUTH-2).
 
     Registration ALWAYS creates a fresh org (a new org_id) owned by the
     registrant. It never joins an existing workspace, even when the org_name
@@ -550,9 +583,14 @@ def register_org_and_owner(org_name: str, email: str, password: str) -> dict:
     now EXCLUSIVELY via the invite flow (POST /api/auth/invite), which is the
     controlled, owner-gated path.
 
-    Returns {token, user{id,email,role,org_id,org_name}}. Raises
+    AUTH-2: The org is created in approval_status='pending_approval'. A signed
+    approval token (stored as its SHA-256 hash) is emailed to AGENTIQ_ADMIN_EMAIL.
+    No JWT is issued — the response is a pending-approval confirmation only. The
+    registrant cannot log in until a CloudFulcrum admin clicks Approve. Raises
     EmailAlreadyExistsError (409) / RegistrationError (400) on bad input.
     """
+    from app.email_service import send_org_approval_request_email
+
     ensure_auth_tables()
     email = email.strip().lower()
     org_name = (org_name or "").strip()
@@ -574,14 +612,21 @@ def register_org_and_owner(org_name: str, email: str, password: str) -> dict:
     org_id = str(uuid4())
     role = "owner"  # registration always creates and owns a NEW workspace (issue #5)
 
+    # AUTH-2: generate single-use approval token; store only its SHA-256 hash.
+    approval_token = secrets.token_urlsafe(32)
+    approval_token_hash = hashlib.sha256(approval_token.encode()).hexdigest()
+    approval_expires = datetime.now(timezone.utc) + timedelta(days=APPROVAL_TOKEN_EXPIRY_DAYS)
+
     con = db.connect()
     try:
         cur = con.cursor()
         # Always a fresh org — no name-based join. Single transaction: roll back
         # every row if any insert fails.
         cur.execute(
-            "INSERT INTO orgs (id, name, created_at) VALUES (%s, %s, %s)",
-            (org_id, org_name, now),
+            "INSERT INTO orgs "
+            "(id, name, created_at, approval_status, approval_token_hash, approval_token_expires_at) "
+            "VALUES (%s, %s, %s, %s, %s, %s)",
+            (org_id, org_name, now, "pending_approval", approval_token_hash, approval_expires),
         )
         cur.execute(
             "INSERT INTO users (id, email, password_hash, is_active, created_at) "
@@ -604,16 +649,31 @@ def register_org_and_owner(org_name: str, email: str, password: str) -> dict:
     finally:
         con.close()
 
-    token = issue_jwt(user_id=user_id, org_id=org_id, role=role, email=email)
+    # Notify the admin — outside the DB transaction so a transient email failure
+    # does not roll back the registration. The org is persisted; the admin can be
+    # re-notified manually if the email bounces.
+    try:
+        send_org_approval_request_email(
+            admin_email=AGENTIQ_ADMIN_EMAIL,
+            org_name=org_name,
+            registrant_email=email,
+            approval_token=approval_token,
+            org_id=org_id,
+        )
+    except Exception:
+        logger.exception(
+            "Failed to send org approval request email for org %s (%s). "
+            "The org was created in pending_approval state. "
+            "Notify %s manually.",
+            org_id, org_name, AGENTIQ_ADMIN_EMAIL,
+        )
+
     return {
-        "token": token,
-        "user": {
-            "id": user_id,
-            "email": email,
-            "role": role,
-            "org_id": org_id,
-            "org_name": org_name,
-        },
+        "status": "pending_approval",
+        "message": (
+            "Your organisation has been submitted for approval. "
+            "You will be notified once it is reviewed."
+        ),
     }
 
 
@@ -629,6 +689,13 @@ def login(email: str, password: str, ip_address: str) -> dict:
     InvalidCredentialsError with an identical message for every cause and always
     performs one bcrypt verification, so timing does not leak account existence
     (AC5). RateLimitError is raised before any credential check (AC6/AC7).
+
+    AUTH-2 / AT-354: after credential verification, the org's approval_status is
+    checked. pending_approval raises OrgPendingApprovalError (403); rejected raises
+    OrgRejectedError (403). Both are distinct from the generic 401 used for bad
+    credentials. The check occurs after password verification deliberately — this
+    avoids leaking whether a pending/rejected org email exists to callers who supply
+    the wrong password.
     """
     ensure_auth_tables()
     email = email.strip().lower()
@@ -648,6 +715,26 @@ def login(email: str, password: str, ip_address: str) -> dict:
     if not usable or not password_ok:
         record_login_attempt(email, ip_address, succeeded=False)
         raise InvalidCredentialsError()
+
+    # Credentials are valid — now enforce the org approval gate (AUTH-2 / AT-354).
+    #
+    # Review #2: a correct-password login for a pending/rejected org is NOT a
+    # failed credential attempt, so it must NOT be recorded as one. Counting it
+    # toward the per-email lockout would lock a registrant out after 5 polite
+    # "is my org approved yet?" attempts. The rate limit exists to throttle
+    # WRONG-password brute force; a correct password against an ungated-yet org
+    # is not that. We record nothing here (neither success nor failure).
+    approval_status = _get_org_approval_status(membership["org_id"])
+    if approval_status == "pending_approval":
+        raise OrgPendingApprovalError(
+            "Your organisation is awaiting approval. "
+            "You will receive an email once it is reviewed."
+        )
+    if approval_status == "rejected":
+        raise OrgRejectedError(
+            "This organisation registration was not approved. "
+            "Contact your CloudFulcrum representative."
+        )
 
     record_login_attempt(email, ip_address, succeeded=True)
     _update_last_login(user["id"])
@@ -715,6 +802,24 @@ def get_org_name(org_id: str | None) -> str | None:
     return row[0] if row else None
 
 
+def _get_org_approval_status(org_id: str) -> str:
+    """Return the org's approval_status. Falls back to 'active' when the column
+    does not exist (pre-migration environments) so legacy orgs are never blocked."""
+    con = db.connect()
+    try:
+        cur = con.cursor()
+        cur.execute("SELECT approval_status FROM orgs WHERE id = %s", (org_id,))
+        row = cur.fetchone()
+    except Exception:
+        # Column absent (pre-T1 DB) — treat as active so old envs keep working.
+        return "active"
+    finally:
+        con.close()
+    if row is None:
+        return "active"
+    return row[0] if row[0] else "active"
+
+
 def _get_workspace_member(user_id: str) -> dict | None:
     """Return {org_id, role} for the user's workspace membership (POC: one each)."""
     con = db.connect()
@@ -744,3 +849,5 @@ def _update_last_login(user_id: str) -> None:
         con.commit()
     finally:
         con.close()
+
+
