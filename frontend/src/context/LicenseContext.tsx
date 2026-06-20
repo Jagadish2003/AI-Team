@@ -7,19 +7,21 @@
  * LicenseBanner consumes this; the LicensePage (T8) keeps its own Owner-only
  * fetch for the editable admin view.
  *
- * Status comes from the T6 `GET /api/license` endpoint via T8's `licenseApi`
- * wrapper. That endpoint is Owner-gated, so for non-Owner sessions (or any
- * transient error) the fetch fails and status stays null → the banner simply
- * does not render. The authoritative read-only enforcement is the server-side
- * gate (T5); this banner is the user-facing nudge.
+ * Status comes from the T9 `GET /api/license/banner` endpoint via the
+ * `licenseApi` wrapper. That endpoint is auth-only (NOT Owner-gated), so the
+ * banner renders for every authenticated role — including the analysts who can
+ * start runs and need to see why a run is blocked (AC4/AC5). The authoritative
+ * read-only enforcement is the server-side gate (T5); this banner is the
+ * user-facing nudge. Only a transient/network error leaves status null (no
+ * banner). The full admin detail stays Owner-only on `GET /api/license` (T6/T8).
  */
 import React, { createContext, useContext, useEffect, useState } from "react";
 
-import { fetchLicenseStatus } from "../api/licenseApi";
-import type { LicenseStatusResponse } from "../types/license";
+import { fetchLicenseBanner } from "../api/licenseApi";
+import type { LicenseBannerResponse } from "../types/license";
 
 interface LicenseContextValue {
-  status: LicenseStatusResponse | null;
+  status: LicenseBannerResponse | null;
   loading: boolean;
   /** Re-read status after a key update so the banner clears immediately. */
   refresh: () => Promise<void>;
@@ -32,15 +34,15 @@ const LicenseContext = createContext<LicenseContextValue>({
 });
 
 export function LicenseProvider({ children }: { children: React.ReactNode }) {
-  const [status, setStatus] = useState<LicenseStatusResponse | null>(null);
+  const [status, setStatus] = useState<LicenseBannerResponse | null>(null);
   const [loading, setLoading] = useState(true);
 
   async function refresh(): Promise<void> {
     setLoading(true);
     try {
-      setStatus(await fetchLicenseStatus());
+      setStatus(await fetchLicenseBanner());
     } catch {
-      // No usable status (non-Owner 403, network, etc.) → render no banner.
+      // No usable status (network/transient error) → render no banner.
       setStatus(null);
     } finally {
       setLoading(false);

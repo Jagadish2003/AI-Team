@@ -5,23 +5,24 @@
  *   - the grace message renders in grace state
  *   - the read-only message renders past grace (readonly)
  *   - the banner is absent when the license is valid
- *   - the banner is absent when the status source is unavailable (e.g. non-Owner 403)
+ *   - the banner is absent when the status source is unavailable (network error)
  *
- * The status source (api/licenseApi.fetchLicenseStatus) is mocked — no backend
- * is touched. The banner is rendered inside the real LicenseProvider so the
- * shared-fetch flow is exercised end to end.
+ * The status source (api/licenseApi.fetchLicenseBanner) is mocked — no backend
+ * is touched. The banner reads the auth-only banner endpoint so it renders for
+ * every role (AC4/AC5). The banner is rendered inside the real LicenseProvider
+ * so the shared-fetch flow is exercised end to end.
  *
  * Run: npx vitest run src/__tests__/LicenseBanner.test.tsx
  */
 import React from "react";
 import { render, screen, waitFor } from "@testing-library/react";
 import { vi, describe, it, expect, beforeEach } from "vitest";
-import type { LicenseStatusResponse } from "../types/license";
+import type { LicenseBannerResponse } from "../types/license";
 
 const h = vi.hoisted(() => ({ mockFetch: vi.fn() }));
 
 vi.mock("../api/licenseApi", () => ({
-  fetchLicenseStatus: (...a: unknown[]) => h.mockFetch(...a),
+  fetchLicenseBanner: (...a: unknown[]) => h.mockFetch(...a),
 }));
 
 import { LicenseProvider } from "../context/LicenseContext";
@@ -35,12 +36,9 @@ function renderBanner() {
   );
 }
 
-const make = (over: Partial<LicenseStatusResponse>): LicenseStatusResponse => ({
+const make = (over: Partial<LicenseBannerResponse>): LicenseBannerResponse => ({
   status: "valid",
-  customer: "City National Bank",
-  term: 12,
   expires_at: "2026-06-10",
-  days_remaining: 5,
   ...over,
 });
 
@@ -57,11 +55,35 @@ describe("LicenseBanner (LIC-1 / T9)", () => {
     ).toBeInTheDocument();
   });
 
-  it("renders the read-only message past grace", async () => {
-    h.mockFetch.mockResolvedValue(make({ status: "readonly" }));
+  it("renders the read-only 'expired' message past grace (expired term)", async () => {
+    h.mockFetch.mockResolvedValue(make({ status: "readonly", reason: null }));
     renderBanner();
     expect(
       await screen.findByText("License expired. Renew to resume discovery runs."),
+    ).toBeInTheDocument();
+  });
+
+  it("renders 'No valid license installed' for a fresh no-key install (AC6)", async () => {
+    h.mockFetch.mockResolvedValue(make({ status: "readonly", reason: "no_license", expires_at: null }));
+    renderBanner();
+    expect(
+      await screen.findByText("No valid license installed. Paste a valid license key to activate AgentIQ."),
+    ).toBeInTheDocument();
+  });
+
+  it("renders 'No valid license installed' for an invalid/tampered key (AC2)", async () => {
+    h.mockFetch.mockResolvedValue(make({ status: "invalid", reason: "signature_or_format", expires_at: null }));
+    renderBanner();
+    expect(
+      await screen.findByText("No valid license installed. Paste a valid license key to activate AgentIQ."),
+    ).toBeInTheDocument();
+  });
+
+  it("renders a clock-inconsistency message when the clock guard trips (AC8)", async () => {
+    h.mockFetch.mockResolvedValue(make({ status: "readonly", reason: "clock_rollback", expires_at: null }));
+    renderBanner();
+    expect(
+      await screen.findByText(/system clock looks inconsistent/i),
     ).toBeInTheDocument();
   });
 
@@ -73,9 +95,9 @@ describe("LicenseBanner (LIC-1 / T9)", () => {
   });
 
   it("renders nothing when no usable status is available", async () => {
-    // The provider stores null when status can't be read (e.g. a non-Owner 403
-    // is caught) — the banner must render nothing in that case.
-    h.mockFetch.mockResolvedValue(null as unknown as LicenseStatusResponse);
+    // The provider stores null when status can't be read (e.g. a transient
+    // network error is caught) — the banner must render nothing in that case.
+    h.mockFetch.mockResolvedValue(null as unknown as LicenseBannerResponse);
     renderBanner();
     await waitFor(() => expect(h.mockFetch).toHaveBeenCalled());
     expect(screen.queryByTestId("license-banner")).toBeNull();

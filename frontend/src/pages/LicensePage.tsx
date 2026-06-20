@@ -19,6 +19,7 @@ import ErrorPanel from "../components/common/ErrorPanel";
 import Button from "../components/common/Button";
 import { useToast } from "../components/common/Toast";
 import { useAuth } from "../context/AuthContext";
+import { useLicense } from "../context/LicenseContext";
 import { ApiError } from "../lib/apiClient";
 import { fetchLicenseStatus, updateLicenseKey } from "../api/licenseApi";
 import type { LicenseStatusResponse, LicenseStatusValue } from "../types/license";
@@ -65,6 +66,9 @@ function Detail({ label, value }: { label: string; value: React.ReactNode }) {
 export default function LicensePage() {
   const { user } = useAuth();
   const { push } = useToast();
+  // Shared banner status (T9). Refreshed after a successful key update so the
+  // global expiry banner clears immediately, without a page reload.
+  const { refresh: refreshBanner } = useLicense();
 
   const [status, setStatus] = useState<LicenseStatusResponse | null>(null);
   const [loading, setLoading] = useState(true);
@@ -107,7 +111,8 @@ export default function LicensePage() {
     setSubmitting(true);
     try {
       const refreshed = await updateLicenseKey(key);
-      setStatus(refreshed); // refresh immediately, no restart (AC7)
+      setStatus(refreshed); // refresh the page panel immediately, no restart (AC7)
+      void refreshBanner(); // re-read the shared banner status so it clears now
       setKeyInput("");
       push("License updated.", "success");
     } catch (err) {

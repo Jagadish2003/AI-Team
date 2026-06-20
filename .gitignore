@@ -38,7 +38,14 @@ backend/token_generation/rlm/rlm_token.json
 
 # LIC-1 licensing — never commit private keys or generated key material.
 # The public key is embedded as a constant in backend/app/licensing.py instead.
+# NOTE: .gitignore has no inline comments — keep each pattern on its own line.
 *.pem
 *.key
-license/.env
-license/.env.*
+# CloudFulcrum private signing key (the root secret; also matched by *.pem)
+backend/license/cloudfulcrum_private.pem
+backend/license/.env
+backend/license/.env.*
+# Locally-minted dev/test license keys + throwaway dev keypair (dev_mint_test_keys.py)
+backend/license/test_keys/
+# Any exported license token file
+*.license

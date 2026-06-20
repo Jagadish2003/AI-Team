@@ -31,7 +31,7 @@ from cryptography.hazmat.primitives.serialization import load_pem_public_key
 # Safe to ship; published in the binary by design. The matching private key is
 # held only by the CloudFulcrum issuing service / secrets manager.
 # Rotation: if the private key is ever compromised, replace the constant below
-# and cut a release. See license/README.md → "Key rotation runbook".
+# and cut a release. See backend/license/README.md → "Key rotation runbook".
 # ---------------------------------------------------------------------------
 CLOUDFULCRUM_PUBLIC_KEY = """-----BEGIN PUBLIC KEY-----
 MCowBQYDK2VwAyEA6TBkcZABXy0U9JQ8x1TLBmcqFvGbAwxA/juJIdbyNpI=

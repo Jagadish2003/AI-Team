@@ -23,7 +23,11 @@ from fastapi import APIRouter, Depends, FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
 from . import db
-from .license_runtime import LICENSE_KEY_KV, get_current_license_status
+from .license_runtime import (
+    LICENSE_KEY_KV,
+    get_current_license_status,
+    persist_validated_status,
+)
 from .licensing import LicenseStatus, validate_license
 from .rbac import require_role
 from .security import require_auth
@@ -33,6 +37,7 @@ logger = logging.getLogger(__name__)
 
 LICENSE_STATUS_PATH = "/api/license"
 LICENSE_UPDATE_PATH = "/api/license/update-key"
+LICENSE_BANNER_PATH = "/api/license/banner"
 
 router = APIRouter(tags=["license"])
 
@@ -47,6 +52,26 @@ class LicenseStatusResponse(BaseModel):
     term: Optional[int] = None  # term_months from the validated payload
     expires_at: Optional[str] = None
     days_remaining: Optional[int] = None
+
+
+class LicenseBannerResponse(BaseModel):
+    """Minimal license signal for the global expiry banner (T9).
+
+    Readable by ANY authenticated user (not just Owner), because the banner must
+    appear on every page for every role — an analyst whose discovery run is
+    blocked needs to see why (AC4/AC5). Deliberately carries only what the banner
+    renders (``status``, ``expires_at``, ``reason``); the full admin detail stays
+    Owner-only on ``GET /api/license``.
+
+    ``reason`` lets the banner copy distinguish a never-licensed install
+    (``no_license`` / ``signature_or_format`` → "No valid license installed",
+    §5/AC6) from an actually-expired term (no reason → "License expired") and
+    from a clock anomaly (``clock_rollback``). It is ``null`` for valid/grace and
+    for a genuinely expired (past-grace) key."""
+
+    status: str
+    expires_at: Optional[str] = None
+    reason: Optional[str] = None
 
 
 class UpdateKeyRequest(BaseModel):
@@ -79,6 +104,27 @@ def get_license_status() -> LicenseStatusResponse:
     return _to_status_response(get_current_license_status())
 
 
+@router.get(
+    LICENSE_BANNER_PATH,
+    response_model=LicenseBannerResponse,
+    dependencies=[Depends(require_auth)],
+)
+def get_license_banner() -> LicenseBannerResponse:
+    """Any authenticated user: minimal license signal for the global banner.
+
+    Auth-only (no role gate) so the expiry banner renders on every page for
+    every role, including the analysts who can start runs (AC4/AC5). Returns
+    only ``status`` + ``expires_at``; the full admin detail stays Owner-only on
+    ``GET /api/license``. Side-effect-free, like the status route.
+    """
+    result = get_current_license_status()
+    return LicenseBannerResponse(
+        status=result.get("status"),
+        expires_at=result.get("expires_at"),
+        reason=result.get("reason"),
+    )
+
+
 @router.post(
     LICENSE_UPDATE_PATH,
     response_model=LicenseStatusResponse,
@@ -106,6 +152,12 @@ def update_license_key(body: UpdateKeyRequest) -> LicenseStatusResponse:
             "expires_at": result.get("expires_at"),
         },
     )
+    # Refresh the persisted status cache (license:last_status / last_seen_date)
+    # from the result we just validated, so the stored state matches what the UI
+    # computes live. Without this, the cache — written only by the startup/
+    # periodic checks — lags the freshly installed key until the next check (a
+    # confusing "invalid in the DB, valid in the UI" mismatch).
+    persist_validated_status(result)
     return _to_status_response(result)
 
 
