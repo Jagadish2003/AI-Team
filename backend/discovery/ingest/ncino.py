@@ -64,18 +64,6 @@ class NcinoIngestError(Exception):
     pass
 
 
-def _generate_ncino_token(force_refresh: bool = False) -> tuple[str, str]:
-    try:
-        from token_generation.ncino import token_ncino
-    except ImportError as exc:
-        raise NcinoIngestError(
-            "Live mode requires backend/token_generation/token_ncino.py "
-            "or NCINO_INSTANCE_URL/NCINO_ACCESS_TOKEN credentials. Set INGEST_MODE=offline "
-            "to run without credentials."
-        ) from exc
-    return token_ncino.main(force_refresh=force_refresh)
-
-
 # ─────────────────────────────────────────────────────────────────────────────
 # Offline fixture loader
 # ─────────────────────────────────────────────────────────────────────────────
@@ -93,74 +81,43 @@ def _load_fixture() -> Dict[str, Any]:
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-def _get_client() -> "NcinoClient":
-    """Build a minimal REST client from env vars."""
+def _get_client() -> Optional["NcinoClient"]:
+    """Build a REST client for nCino's Salesforce org.
 
-    ACCESS_TOKEN_PATH = (
-        Path(__file__).parent.parent.parent
-        / "token_generation"
-        / "ncino"
-        / "ncino_token.json"
-    )
+    nCino runs against a Salesforce org, so credentials are resolved in order:
+      1. explicit NCINO_INSTANCE_URL / NCINO_ACCESS_TOKEN env (override),
+      2. the per-run Salesforce OAuth context (DB-sourced via the credential
+         vault — see discovery.ingest.get_live_connector),
+      3. SF_INSTANCE_URL / SF_ACCESS_TOKEN env (CLI/standalone fallback).
 
-    # -----------------------------
-    # 1. PRIORITIZE ENV VARS
-    # -----------------------------
-    # Fallback to SF_ vars if NCINO_ vars aren't strictly defined
-    instance_url = os.getenv("NCINO_INSTANCE_URL") or os.getenv("SF_INSTANCE_URL")
-    access_token = os.getenv("NCINO_ACCESS_TOKEN") or os.getenv("SF_ACCESS_TOKEN")
+    The old server-key token-generation fallback (token_generation/ncino) was
+    removed. A missing token surfaces as a clear NcinoIngestError in live mode.
+    """
+    from . import get_live_connector
 
-    # -----------------------------
-    # 2. FALLBACK TO FILE OR GENERATION (if missing from env)
-    # -----------------------------
+    instance_url = os.getenv("NCINO_INSTANCE_URL")
+    access_token = os.getenv("NCINO_ACCESS_TOKEN")
+
     if not instance_url or not access_token:
-        if ACCESS_TOKEN_PATH.exists():
-            try:
-                with open(ACCESS_TOKEN_PATH, encoding="utf-8") as f:
-                    ncino_token = json.load(f)
-                instance_url = instance_url or ncino_token.get("instance_url")
-                access_token = access_token or ncino_token.get("access_token")
-            except Exception as e:
-                logger.warning(f"Failed to read nCino token file: {e}")
+        cred = get_live_connector("salesforce")
+        if cred:
+            instance_url = instance_url or cred.get("url")
+            access_token = access_token or cred.get("token")
 
-        if not instance_url or not access_token:
-            # Try generating (which also checks credentials)
-            try:
-                gen_token, gen_url = _generate_ncino_token()
-                instance_url = instance_url or gen_url
-                access_token = access_token or gen_token
-            except Exception as e:
-                # If we are in live mode and everything failed, we must raise.
-                if is_live():
-                    raise NcinoIngestError(
-                        f"Live mode requires valid NCINO_INSTANCE_URL and NCINO_ACCESS_TOKEN. "
-                        f"Fallback generation also failed: {e}"
-                    ) from e
+    if not instance_url or not access_token:
+        instance_url = instance_url or os.getenv("SF_INSTANCE_URL")
+        access_token = access_token or os.getenv("SF_ACCESS_TOKEN")
 
-    # -----------------------------
-    # 3. FINAL VALIDATION
-    # -----------------------------
     if not instance_url or not access_token:
         if is_live():
             raise NcinoIngestError(
-                "Live mode requires valid NCINO_INSTANCE_URL and NCINO_ACCESS_TOKEN. "
+                "Live mode requires NCINO_INSTANCE_URL/NCINO_ACCESS_TOKEN or a "
+                "connected Salesforce org (OAuth Connect). "
                 "Set INGEST_MODE=offline to run without credentials."
             )
         return None
 
-    # -----------------------------
-    # 4. TOKEN EXPIRY CHECK
-    # -----------------------------
-    access_token = access_token.strip() if access_token else None
-    if is_access_token_expired(instance_url, access_token):
-        logger.info("nCino token expired or invalid format. Refreshing...")
-        access_token, instance_url = _generate_ncino_token(force_refresh=True)
-        access_token = access_token.strip() if access_token else None
-
-    # -----------------------------
-    # 5. RETURN CLIENT
-    # -----------------------------
-    return NcinoClient(instance_url, access_token)
+    return NcinoClient(instance_url, access_token.strip())
 
 
 class NcinoClient:

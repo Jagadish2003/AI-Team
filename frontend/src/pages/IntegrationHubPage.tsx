@@ -254,6 +254,14 @@ export default function IntegrationHubPage() {
     }
   }
 
+  // Reconnect handler (CS-2 AC7). Fired from a tile whose token is expired /
+  // refresh-failed. Re-runs the OAuth flow (auth-url → provider redirect) via
+  // the same context method Connect uses — connectConnector navigates the
+  // browser away, so no follow-up toast is needed here.
+  function handleReconnect(id: string) {
+    connectConnector(id);
+  }
+
   // "Add a source" CTA — navigate to /integration-hub?category={id}
   // When this is the current page (user clicked another group's CTA),
   // scroll to that group instead of navigating away.
@@ -309,6 +317,7 @@ export default function IntegrationHubPage() {
                       selectConnector(id);
                     }}
                     onPrimary={handlePrimary}
+                    onReconnect={handleReconnect}
                     onAddSource={handleAddSource}
                   />
                 </div>

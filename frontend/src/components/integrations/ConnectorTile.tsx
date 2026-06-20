@@ -11,13 +11,18 @@ export default function ConnectorTile({
   icon,
   selected,
   onSelect,
-  onPrimary
+  onPrimary,
+  onReconnect
 }: {
   connector: Connector;
   icon: React.ReactNode;
   selected: boolean;
   onSelect: () => void;
   onPrimary: () => void;
+  // Called when the token is expired/refresh-failed and the user clicks
+  // "Reconnect". Must trigger the OAuth flow again (CS-2 AC7). Falls back to
+  // onPrimary when not supplied so the tile keeps working in isolation.
+  onReconnect?: () => void;
 }) {
   const isConnected = connector.status === 'connected';
   const isConfigured = connector.configured;
@@ -118,7 +123,14 @@ export default function ConnectorTile({
           }`}
           onClick={(e: React.MouseEvent<HTMLButtonElement>) => {
             e.stopPropagation();
-            onPrimary();
+            // When the token needs a fresh OAuth round-trip, "Reconnect" must
+            // start the OAuth flow — not fall through to the connected-tile
+            // "View data" path on the page (CS-2 AC7).
+            if (tokenExpired && onReconnect) {
+              onReconnect();
+            } else {
+              onPrimary();
+            }
           }}
         >
           {actionLabel}

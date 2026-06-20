@@ -39,7 +39,7 @@ function connectedSalesforce() {
   };
 }
 
-function renderTile(onPrimary = vi.fn()) {
+function renderTile(onPrimary = vi.fn(), onReconnect = vi.fn()) {
   render(
     <ConnectorTile
       connector={connectedSalesforce() as any}
@@ -47,9 +47,10 @@ function renderTile(onPrimary = vi.fn()) {
       selected={false}
       onSelect={vi.fn()}
       onPrimary={onPrimary}
+      onReconnect={onReconnect}
     />
   );
-  return { onPrimary };
+  return { onPrimary, onReconnect };
 }
 
 beforeEach(() => vi.clearAllMocks());
@@ -60,14 +61,16 @@ describe("ConnectorTile — token-status mapping (CS-2 AC6/AC7)", () => {
     "%s → shows 'Token expired' badge and a Reconnect button (AC7)",
     async (status) => {
       mockTokenStatus.mockResolvedValue({ status });
-      const { onPrimary } = renderTile();
+      const { onPrimary, onReconnect } = renderTile();
 
       expect(await screen.findByText("Token expired")).toBeInTheDocument();
       const reconnect = await screen.findByRole("button", { name: "Reconnect" });
 
-      // Clicking Reconnect triggers the same OAuth flow via onPrimary (AC7).
+      // Clicking Reconnect triggers the OAuth flow via onReconnect — NOT the
+      // connected-tile onPrimary "View data" path (CS-2 AC7).
       fireEvent.click(reconnect);
-      expect(onPrimary).toHaveBeenCalledTimes(1);
+      expect(onReconnect).toHaveBeenCalledTimes(1);
+      expect(onPrimary).not.toHaveBeenCalled();
     }
   );
 

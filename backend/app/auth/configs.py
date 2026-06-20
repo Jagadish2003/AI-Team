@@ -51,7 +51,7 @@ CONNECTOR_AUTH_CONFIGS: Dict[str, ConnectorAuthConfig] = {
         revocation_url=f"https://{SALESFORCE_INSTANCE}/services/oauth2/revoke",
         scopes=["openid", "id", "profile", "email", "address", "phone", "web", "full", "api", "refresh_token", "offline_access"],
         authorization_url=f"https://{SALESFORCE_INSTANCE}/services/oauth2/authorize",
-        redirect_uri=os.environ.get("SALESFORCE_OAUTH_REDIRECT_URI", ""),
+        redirect_uri=os.environ.get("OAUTH_REDIRECT_URI", ""),
     ),
     "servicenow": ConnectorAuthConfig(
         connector_id="servicenow",
@@ -71,6 +71,10 @@ CONNECTOR_AUTH_CONFIGS: Dict[str, ConnectorAuthConfig] = {
         secret_key="JIRA_CLIENT_SECRET",
         token_url="https://auth.atlassian.com/oauth/token",
         revocation_url="https://auth.atlassian.com/oauth/token/revoke",
+        # offline_access is required for Atlassian to issue a refresh token —
+        # without it the ~1h access token cannot be auto-refreshed by the vault
+        # and live Jira ingest would stop working after expiry. The Atlassian
+        # OAuth (3LO) app must have these scopes enabled (SME-owned).
         scopes=["read:jira-work", "read:jira-user", "offline_access"],
         authorization_url="https://auth.atlassian.com/authorize",
         redirect_uri=os.environ.get("OAUTH_REDIRECT_URI", ""),

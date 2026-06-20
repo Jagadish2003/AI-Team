@@ -96,7 +96,7 @@ Keep this file short and actionable. Prefer reading the relevant code and contra
 
 ### Backend — Token Generation & Tests
 
-* `backend/token_generation/`: per-pack OAuth token generation scripts for Salesforce, nCino, STRS, and Life Sciences. Each has a `token_*.py` and a `server_*.key` file. The `.key` files must never be committed.
+* The `backend/token_generation/` server-key token-minting tooling has been **removed**. All connectors are now credentialed at runtime: Salesforce/Jira/ServiceNow via the Integration Hub OAuth flow (tokens in the credential vault, URLs captured at connect, sourced from the DB per org — see live ingest below); nCino and STRS run against the connected Salesforce org (the OAuth credentials in the per-run context) with optional `NCINO_*`/`STRS_*` env overrides.
 * `backend/tests/contract/`: contract and API tests. Use a temp SQLite DB via `conftest.py`.
 * `backend/tests/contract/fixtures/`: JSON fixtures for audit samples and connector health samples.
 * `backend/tests/unit/`: unit tests for individual backend modules.
@@ -229,8 +229,8 @@ Smoke scripts are Bash scripts under `scripts/` and `backend/scripts/`; run them
 * Frontend auth uses `VITE_DEV_JWT`, defaulting to `dev-token-change-me`.
 * Optional LLM features use `ANTHROPIC_API_KEY`; deterministic fallbacks should still work without it.
 * Set `REQUIRE_CONNECTOR_SECRETS=1` in production to enforce that all connector secrets are present on startup. Dev and test environments intentionally leave this unset.
-* Live ingestion env vars: `SF_INSTANCE_URL`, `SF_ACCESS_TOKEN`, `SERVICENOW_URL`, `SERVICENOW_TOKEN`, `SERVICENOW_USER`, `SERVICENOW_PASS`, `JIRA_URL`, `JIRA_TOKEN`, `JIRA_USER`, `JIRA_PROJECT_KEY`, `NCINO_INSTANCE_URL`, `NCINO_ACCESS_TOKEN`.
-* Token-generation scripts also use `SF_CLIENT_ID`/`SF_USER`, `NCINO_CLIENT_ID`/`NCINO_USER`, `STRS_CLIENT_ID`/`STRS_USER`, `LS_CLIENT_ID`/`LS_USER`.
+* Salesforce/Jira/ServiceNow live ingestion is OAuth-only and DB-sourced: tokens come from the credential vault and instance/site URLs are captured at OAuth connect time, both keyed per org. `app/live_ingest_credentials.py` `resolve_live_systems(org_id)` reads them from the DB and publishes them to a per-run `contextvars` context (`discovery/ingest/__init__.py` `set_live_connectors`/`get_live_connector`) that each connector's `_get_client()` reads — never process-global `os.environ`, so concurrent multi-tenant runs cannot read each other's credentials. `SF_*`/`SERVICENOW_*`/`JIRA_*` env vars are only a CLI/standalone fallback (`JIRA_PROJECT_KEY` is still read for live Jira). The remaining `.env` live ingestion vars are `NCINO_INSTANCE_URL`, `NCINO_ACCESS_TOKEN`.
+* nCino and STRS live ingestion reuse the connected Salesforce org's OAuth credentials from the per-run context, with optional `NCINO_INSTANCE_URL`/`NCINO_ACCESS_TOKEN` and `STRS_INSTANCE_URL`/`STRS_ACCESS_TOKEN` env overrides to target a different instance.
 * OAuth client secrets (production, enforced by `REQUIRE_CONNECTOR_SECRETS`): `SALESFORCE_CLIENT_SECRET`, `SERVICENOW_CLIENT_SECRET`, `JIRA_CLIENT_SECRET`, `GITHUB_CLIENT_SECRET`, `SLACK_CLIENT_SECRET`, `SAP_CLIENT_SECRET`, `DYNAMIC365_CLIENT_SECRET`.
 * `CREDENTIAL_VAULT_KEY`: Fernet key for token vault encryption. Required in production; missing it causes connector secret storage to fail or fall back to plaintext.
 * `DEV_JWT_ROLE`: role override for the dev token (`owner`/`analyst`/`viewer`). Used alongside `ADMIN_JWT`, `ANALYST_JWT`, `VIEWER_JWT` in contract tests.
@@ -323,7 +323,7 @@ alembic upgrade head
 ## Security And Data Hygiene
 
 * Never print full tokens, private keys, or `.env` contents.
-* The repo ignores expected server keys under provider-specific token directories (`backend/token_generation/`). Treat any untracked `*.key` file as sensitive.
+* Connector credentials live in the database (Fernet-encrypted in the `credentials` vault table); there are no provider key files to manage. Treat any stray `*.key`/token JSON as sensitive and never commit it.
 * `CREDENTIAL_VAULT_KEY` must never be committed. Add it only to production secrets management.
 * Generated `.db`, `.venv`, `node_modules`, build output, and token JSON files should stay untracked.
 * If a real credential file appears outside ignored paths, ask before moving it and suggest adding a precise `.gitignore` entry.

@@ -4,11 +4,9 @@ SF-2.3 — ServiceNow Ingestion Module
 Offline mode: reads backend/discovery/ingest/fixtures/servicenow_sample.json
 Live mode:    calls ServiceNow REST Table API
 
-Environment variables for live mode:
-    SERVICENOW_URL    e.g. https://myinstance.service-now.com
-    SERVICENOW_TOKEN  Bearer token (or use SERVICENOW_USER + SERVICENOW_PASS for basic auth)
-    SERVICENOW_USER   (optional) basic auth username
-    SERVICENOW_PASS   (optional) basic auth password
+Environment variables for live mode (OAuth-only):
+    SERVICENOW_URL    e.g. https://myinstance.service-now.com (captured at OAuth connect)
+    SERVICENOW_TOKEN  OAuth Bearer token (hydrated from the credential vault)
 
 Known fix applied (vs earlier stub):
     - total_count is fetched from the aggregate API, not hardcoded as 0
@@ -65,18 +63,12 @@ class ServiceNowClient:
     """
     Minimal ServiceNow Table API client with pagination support.
 
-    Auth priority:
-      1. Bearer token (SERVICENOW_TOKEN)
-      2. Basic auth (SERVICENOW_USER + SERVICENOW_PASS)
+    Auth: OAuth Bearer token (SERVICENOW_TOKEN) only.
     """
 
-    def __init__(
-        self, instance_url: str, token: str = "", user: str = "", password: str = ""
-    ):
+    def __init__(self, instance_url: str, token: str = ""):
         self.instance_url = instance_url.rstrip("/")
         self.token = token
-        self.user = user
-        self.password = password
         self._session = None
 
     def _get_session(self):
@@ -96,11 +88,9 @@ class ServiceNowClient:
             )
             if self.token:
                 self._session.headers["Authorization"] = f"Bearer {self.token}"
-            elif self.user and self.password:
-                self._session.auth = (self.user, self.password)
             else:
                 raise ServiceNowIngestError(
-                    "Live mode requires SERVICENOW_TOKEN or SERVICENOW_USER + SERVICENOW_PASS"
+                    "Live mode requires a ServiceNow OAuth Bearer token (SERVICENOW_TOKEN)."
                 )
         return self._session
 
@@ -181,17 +171,30 @@ class ServiceNowClient:
 
 
 def _get_client() -> ServiceNowClient:
-    sn_url = os.getenv("SERVICENOW_URL", "").rstrip("/")
-    token = os.getenv("SERVICENOW_TOKEN", "")
-    user = os.getenv("SERVICENOW_USER", "")
-    password = os.getenv("SERVICENOW_PASS", "")
+    # OAuth-only. Credentials come from the per-run context (DB-sourced: vault
+    # Bearer token + captured instance URL, isolated per org/run); env vars are
+    # only a CLI/standalone fallback.
+    from . import get_live_connector
+
+    cred = get_live_connector("servicenow")
+    if cred:
+        sn_url = (cred.get("url") or "").rstrip("/")
+        token = cred.get("token") or ""
+    else:
+        sn_url = os.getenv("SERVICENOW_URL", "").rstrip("/")
+        token = os.getenv("SERVICENOW_TOKEN", "")
 
     if not sn_url:
         raise ServiceNowIngestError(
             "Live mode requires SERVICENOW_URL. "
             "Set INGEST_MODE=offline to run without credentials."
         )
-    return ServiceNowClient(sn_url, token=token, user=user, password=password)
+    if not token:
+        raise ServiceNowIngestError(
+            "Live mode requires a ServiceNow OAuth Bearer token (SERVICENOW_TOKEN), "
+            "provided by the ServiceNow OAuth Connect flow."
+        )
+    return ServiceNowClient(sn_url, token=token)
 
 
 def _sn_scalar(value: Any) -> Any:

@@ -257,17 +257,7 @@ class TestErrorHandling:
         monkeypatch.delenv("SF_INSTANCE_URL", raising=False)
         monkeypatch.delenv("SF_ACCESS_TOKEN", raising=False)
 
-        # Mock Path.exists to return False so it doesn't find a fallback file
-        import pathlib
-
-        monkeypatch.setattr(pathlib.Path, "exists", lambda self: False)
-
-        # Mock _generate_salesforce_token to return nothing
-        monkeypatch.setattr(
-            sf_mod,
-            "_generate_salesforce_token",
-            lambda force_refresh=False: (None, None),
-        )
-
+        # Live ingest is OAuth-only now — with no SF_INSTANCE_URL / SF_ACCESS_TOKEN
+        # in the env, _get_client raises (no server-key regeneration fallback).
         with pytest.raises(sf_mod.IngestError, match="SF_INSTANCE_URL"):
             sf_mod._get_client()

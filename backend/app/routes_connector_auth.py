@@ -277,6 +277,32 @@ def register_connector_auth_routes(app: FastAPI) -> None:
         except Exception:
             logger.exception("Failed to mark connector %s connected", connector_id)
 
+        # CS-2 live ingest: capture the instance/site URL discovered during OAuth
+        # so discovery runs can ingest live without separate env config.
+        # Salesforce returns instance_url in the token response; ServiceNow's host
+        # comes from its connector config. Best-effort — never fail the flow.
+        try:
+            from app.live_ingest_credentials import (
+                capture_instance_url,
+                fetch_jira_gateway_base,
+                store_connector_instance_url,
+            )
+
+            instance_url = capture_instance_url(
+                connector_id, token_response, config.token_url
+            )
+            if instance_url is None and connector_id == "jira":
+                # Jira Cloud OAuth: discover the cloudId and build the
+                # api.atlassian.com gateway base so discovery can call /rest/...
+                # through it with the Bearer token.
+                instance_url = await fetch_jira_gateway_base(
+                    token_response.get("access_token", "")
+                )
+            if instance_url:
+                store_connector_instance_url(org_id, connector_id, instance_url)
+        except Exception:
+            logger.exception("Failed to capture instance URL for connector %s", connector_id)
+
         log_event(
             "connector_connected",
             connector_id=connector_id,
