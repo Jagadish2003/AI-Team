@@ -118,6 +118,9 @@ os.environ["DATABASE_URL"] = TEST_DATABASE_URL
 os.environ["INGEST_MODE"] = "offline"
 os.environ["ANTHROPIC_API_KEY"] = ""
 os.environ["AGENTIQ_DISABLE_BACKGROUND_JOBS"] = "1"
+# Hermetic email: never contact a real SMTP server during tests. Per-test
+# overrides via monkeypatch.setenv (e.g. test_email_service.py) still apply.
+os.environ["EMAIL_PROVIDER"] = "noop"
 
 
 # ---------------------------------------------------------------------------
@@ -410,6 +413,7 @@ def pytest_configure(config):
     os.environ["INGEST_MODE"] = "offline"
     os.environ["ANTHROPIC_API_KEY"] = ""
     os.environ["AGENTIQ_DISABLE_BACKGROUND_JOBS"] = "1"
+    os.environ["EMAIL_PROVIDER"] = "noop"  # no real SMTP during tests
     os.environ["SEED_DIR"] = str(_resolve_seed_dir())
     os.environ.setdefault("CORS_ORIGINS", "http://localhost:5173")
 

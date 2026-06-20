@@ -71,6 +71,15 @@ def send_email(to: str, subject: str, html_body: str) -> bool:
     """Send one HTML email through SMTP. Never raises to callers."""
     provider = _provider()
     try:
+        # Test / local-dev transports that never contact a real mail server.
+        if provider in {"noop", "none", "disabled"}:
+            logger.debug(
+                "email suppressed (provider=%s) to=%s subject=%s", provider, to, subject
+            )
+            return True
+        if provider == "console":
+            logger.info("EMAIL (console) to=%s subject=%s\n%s", to, subject, html_body)
+            return True
         if provider not in {"smtp", "office365", "smtp.office365.com"}:
             logger.error("EMAIL_PROVIDER not configured or unknown: %r", provider)
             return False
