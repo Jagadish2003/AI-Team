@@ -3,10 +3,18 @@
  *
  * Section 6 behaviour:
  *   POST /api/auth/login via AuthContext.login().
- *   Shows the submit error (401 / 429) directly below the "Sign in" heading,
- *   in a fixed-height slot so the card never grows/jumps.
+ *   Shows the submit error directly below the "Sign in" heading.
  *   Redirects to /integration-hub on success.
  *   Page refresh = re-login (token lives in React state only, Section 3).
+ *
+ * AUTH-2 T7: login can fail in three distinct ways that must be visually
+ * distinguishable — not one error component with swapped text:
+ *   - bad credentials / rate-limit / generic (401 / 429 / other) → red error.
+ *   - org awaiting approval (403, error_code "org_pending_approval") → amber
+ *     informational notice.
+ *   - org registration rejected (403, error_code "org_rejected") → neutral
+ *     "blocked" notice.
+ *   The backend carries the error_code under detail (FastAPI HTTPException).
  *
  * Client-side validation mirrors RegisterPage: the email must look like
  * you@company.com and the password must be at least 8 characters. Inline hints
@@ -15,6 +23,7 @@
  */
 import React, { useState } from "react";
 import { Link } from "react-router-dom";
+import { Ban, Clock } from "lucide-react";
 
 import PasswordInput from "../components/auth/PasswordInput";
 import { useAuth } from "../context/AuthContext";
@@ -64,20 +73,112 @@ function retryAfterMinutes(body: unknown): number | null {
   return null;
 }
 
-function loginErrorMessage(err: unknown): string {
+// The three visually distinct login outcomes. "invalid" covers bad credentials,
+// rate-limiting, and any unexpected failure (all rendered as the red error box);
+// "pending" and "rejected" are the AUTH-2 org-approval states.
+type LoginNoticeKind = "invalid" | "pending" | "rejected";
+
+interface LoginNotice {
+  kind: LoginNoticeKind;
+  text: string;
+}
+
+/**
+ * Pull the org-approval error_code out of a 403 body. The backend nests it under
+ * `detail` (FastAPI HTTPException → {detail: {message, error_code}}). Tolerates a
+ * top-level error_code too. Returns null when absent.
+ */
+function extractErrorCode(body: unknown): string | null {
+  const detail = (body as { detail?: unknown } | null)?.detail;
+  if (detail && typeof detail === "object") {
+    const code = (detail as { error_code?: unknown }).error_code;
+    if (typeof code === "string") return code;
+  }
+  const top = (body as { error_code?: unknown } | null)?.error_code;
+  return typeof top === "string" ? top : null;
+}
+
+/**
+ * Map a login failure to a distinct notice. A 403 with error_code
+ * "org_pending_approval" or "org_rejected" yields the pending/rejected states;
+ * everything else (401 bad creds, 429 throttle, unexpected) is an "invalid"
+ * red error.
+ */
+function resolveLoginNotice(err: unknown): LoginNotice {
   if (err instanceof ApiError) {
-    if (err.status === 401) return "Invalid email or password.";
+    if (err.status === 403) {
+      const code = extractErrorCode(err.body);
+      if (code === "org_pending_approval") {
+        return { kind: "pending", text: "Your organisation is awaiting approval." };
+      }
+      if (code === "org_rejected") {
+        return {
+          kind: "rejected",
+          text: "This registration was not approved. Contact your CloudFulcrum representative.",
+        };
+      }
+    }
+    if (err.status === 401) return { kind: "invalid", text: "Invalid email or password." };
     if (err.status === 429) {
       const minutes = retryAfterMinutes(err.body);
       if (minutes != null) {
-        return `Too many failed attempts. Wait for ${minutes} ${
-          minutes === 1 ? "minute" : "minutes"
-        }.`;
+        return {
+          kind: "invalid",
+          text: `Too many failed attempts. Wait for ${minutes} ${
+            minutes === 1 ? "minute" : "minutes"
+          }.`,
+        };
       }
-      return "Too many failed attempts. Please wait before trying again.";
+      return {
+        kind: "invalid",
+        text: "Too many failed attempts. Please wait before trying again.",
+      };
     }
   }
-  return "Something went wrong. Please try again.";
+  return { kind: "invalid", text: "Something went wrong. Please try again." };
+}
+
+/**
+ * Render the login notice in one of three visually distinct treatments
+ * (T7-AC3): red error box (invalid), amber informational notice (pending), and
+ * a neutral slate "blocked" notice (rejected) — each with its own colour, icon,
+ * ARIA role, and test id.
+ */
+function LoginNoticeBanner({ notice }: { notice: LoginNotice }) {
+  if (notice.kind === "pending") {
+    return (
+      <p
+        role="status"
+        data-testid="login-pending"
+        className="flex items-start gap-2 rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-300"
+      >
+        <Clock size={14} className="mt-0.5 shrink-0" aria-hidden="true" />
+        <span>{notice.text}</span>
+      </p>
+    );
+  }
+  if (notice.kind === "rejected") {
+    return (
+      <p
+        role="alert"
+        data-testid="login-rejected"
+        className="flex items-start gap-2 rounded-md border border-slate-400/30 bg-slate-500/10 px-3 py-2 text-xs text-slate-300"
+      >
+        <Ban size={14} className="mt-0.5 shrink-0" aria-hidden="true" />
+        <span>{notice.text}</span>
+      </p>
+    );
+  }
+  // invalid / rate-limit / generic — the existing red error treatment.
+  return (
+    <p
+      role="alert"
+      data-testid="login-error"
+      className="rounded-md border border-red-500/20 bg-red-500/10 px-3 py-1.5 text-xs text-red-400"
+    >
+      {notice.text}
+    </p>
+  );
 }
 
 // ── Component ────────────────────────────────────────────────────────────────
@@ -88,7 +189,7 @@ export default function LoginPage() {
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<LoginNotice | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
   // Inline validation — each only surfaces once the user has typed something.
@@ -104,7 +205,7 @@ export default function LoginPage() {
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!canSubmit) return;
-    setError(null);
+    setNotice(null);
     setSubmitting(true);
     try {
       await login(email.trim().toLowerCase(), password);
@@ -112,7 +213,7 @@ export default function LoginPage() {
       // this user — otherwise the previous user's connector/run state leaks.
       hardRedirect("/integration-hub");
     } catch (err) {
-      setError(loginErrorMessage(err));
+      setNotice(resolveLoginNotice(err));
     } finally {
       setSubmitting(false);
     }
@@ -135,17 +236,12 @@ export default function LoginPage() {
         <div className="rounded-xl border border-border bg-panel px-6 py-8 shadow-xl shadow-black/20">
           <h1 className="text-center text-xl font-semibold text-text">Sign in</h1>
 
-          {/* Submit error sits directly below the heading, in a fixed-height slot. */}
+          {/* Submit notice sits directly below the heading. The slot reserves a
+              minimum height so the card does not jump for the single-line cases;
+              the longer rejected/pending notices grow it as needed. The notice is
+              rendered in one of three visually distinct styles (T7-AC3). */}
           <div className="mb-2 mt-2 min-h-[2rem]">
-            {error && (
-              <p
-                role="alert"
-                data-testid="login-error"
-                className="rounded-md border border-red-500/20 bg-red-500/10 px-3 py-1.5 text-xs text-red-400"
-              >
-                {error}
-              </p>
-            )}
+            {notice && <LoginNoticeBanner notice={notice} />}
           </div>
 
           <form onSubmit={handleSubmit} noValidate>

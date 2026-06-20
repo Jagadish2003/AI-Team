@@ -7,11 +7,13 @@ accept-invite are accepted.
 from __future__ import annotations
 
 import hashlib
+import html
 import logging
 import os
 import time
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict
+from urllib.parse import urlencode
 from uuid import uuid4
 
 from fastapi import (
@@ -23,19 +25,23 @@ from fastapi import (
     Request,
     Response,
 )
+from fastapi.responses import HTMLResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import AliasChoices, BaseModel, Field
 
 from app import db
 from app.email_service import (
     send_invite_email,
+    send_org_approved_email,
+    send_org_rejected_email,
     send_password_reset_email,
-    send_welcome_email,
 )
 from app.auth.user_auth import (
     EmailAlreadyExistsError,
     InvalidCredentialsError,
     InvalidTokenError,
+    OrgPendingApprovalError,
+    OrgRejectedError,
     RateLimitError,
     RegistrationError,
     ensure_auth_tables,
@@ -73,6 +79,8 @@ AUTH_ROUTE_PATHS = {
     "/api/auth/accept-invite",
     "/api/auth/change-password",
     "/api/auth/forgot-password",
+    "/api/auth/org-approval/approve",
+    "/api/auth/org-approval/reject",
     "/api/auth/reset-password",
 }
 
@@ -240,9 +248,10 @@ def _enforce_password_strength(password: str) -> None:
 
 @router.post("/register", status_code=201)
 def register(body: RegisterRequest) -> Dict[str, Any]:
-    """AC2: creates org + user + workspace_member in one transaction; returns JWT.
+    """AUTH-2: creates org + owner member in pending_approval state.
 
     CS-3: a weak password is rejected with 422 before any org/user is created.
+    AUTH-2: no JWT is issued until a CloudFulcrum admin approves the org.
     """
     ensure_auth_tables()
     _enforce_password_strength(body.password)
@@ -256,17 +265,6 @@ def register(body: RegisterRequest) -> Dict[str, Any]:
         raise HTTPException(status_code=409, detail="Email already registered")
     except RegistrationError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
-
-    # CS-3 (T7/AC10): send the welcome email after a successful registration.
-    # Non-blocking by design (AC14) â€” send_welcome_email never raises, but we also
-    # guard here so a registration always returns its normal 201 even if email
-    # delivery is misconfigured. Failures are logged, never surfaced to the user.
-    user = result.get("user", {}) if isinstance(result, dict) else {}
-    try:
-        send_welcome_email(user.get("email"), user.get("org_name"))
-    except Exception:  # pragma: no cover - email helper already swallows errors
-        logger.exception("welcome email dispatch failed (non-blocking)")
-
     return result
 
 
@@ -289,6 +287,16 @@ def login_endpoint(body: LoginRequest, request: Request) -> Dict[str, Any]:
                 "retry_after": exc.retry_after_seconds,
             },
             headers={"Retry-After": str(exc.retry_after_seconds)},
+        )
+    except OrgPendingApprovalError as exc:
+        raise HTTPException(
+            status_code=403,
+            detail={"message": str(exc), "error_code": exc.error_code},
+        )
+    except OrgRejectedError as exc:
+        raise HTTPException(
+            status_code=403,
+            detail={"message": str(exc), "error_code": exc.error_code},
         )
     except InvalidCredentialsError as exc:
         raise HTTPException(status_code=401, detail=str(exc))
@@ -572,6 +580,258 @@ def change_password(
     mark_password_changed(user_id)
 
     return Response(status_code=204)
+
+
+# ---------------------------------------------------------------------------
+# Org approval endpoints (AUTH-2 / AT-355)
+# ---------------------------------------------------------------------------
+
+
+def _get_org_approval_row(org_id: str) -> dict | None:
+    """Fetch approval-related columns for an org. Returns None if not found."""
+    con = db.connect()
+    try:
+        cur = con.cursor()
+        cur.execute(
+            "SELECT name, approval_status, approval_token_hash, "
+            "approval_token_expires_at "
+            "FROM orgs WHERE id = %s",
+            (org_id,),
+        )
+        row = cur.fetchone()
+    finally:
+        con.close()
+    if row is None:
+        return None
+    return {
+        "name": row[0],
+        "approval_status": row[1],
+        "approval_token_hash": row[2],
+        "approval_token_expires_at": row[3],
+    }
+
+
+def _get_org_owner_email(org_id: str) -> str | None:
+    """Return the email of the first owner-role member of an org."""
+    con = db.connect()
+    try:
+        cur = con.cursor()
+        cur.execute(
+            "SELECT u.email FROM users u "
+            "JOIN workspace_members wm ON wm.user_id = u.id "
+            "WHERE wm.org_id = %s AND wm.role = 'owner' "
+            "ORDER BY wm.created_at ASC LIMIT 1",
+            (org_id,),
+        )
+        row = cur.fetchone()
+    finally:
+        con.close()
+    return row[0] if row else None
+
+
+def _update_org_approval(
+    org_id: str, *, status: str, action: str, now_iso: str
+) -> None:
+    """Set approval_status, audit action metadata, and consume the token."""
+    con = db.connect()
+    try:
+        cur = con.cursor()
+        cur.execute(
+            "UPDATE orgs SET approval_status = %s, approved_at = %s, "
+            "approved_by_action = %s, approval_token_hash = NULL "
+            "WHERE id = %s",
+            (status, now_iso, action, org_id),
+        )
+        con.commit()
+    finally:
+        con.close()
+
+
+def _html_page(title: str, heading: str, body: str, status_code: int = 200) -> HTMLResponse:
+    html = (
+        "<!DOCTYPE html><html>"
+        f"<head><meta charset=\"utf-8\"><title>{title}</title></head>"
+        "<body style=\"font-family:Arial,sans-serif;max-width:600px;"
+        "margin:40px auto;padding:24px;color:#333\">"
+        f"<h2>{heading}</h2><p>{body}</p>"
+        "</body></html>"
+    )
+    return HTMLResponse(content=html, status_code=status_code)
+
+
+def _approval_link_expired(expires_at: object) -> bool:
+    if expires_at is None:
+        return False
+    try:
+        if isinstance(expires_at, str):
+            expires_at = datetime.fromisoformat(expires_at)
+        if expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=timezone.utc)
+    except (ValueError, TypeError, AttributeError):
+        return False
+    return datetime.now(timezone.utc) > expires_at
+
+
+def _approval_token_state(token: str, org_id: str) -> "tuple[dict | None, str]":
+    """Resolve an approval token against an org WITHOUT leaking org state.
+
+    Returns (org_row, state) where state is one of:
+      "ok"      — org is pending, the token matches, and the link is unexpired.
+      "expired" — the token matches a pending org but the link is past expiry.
+      "invalid" — everything else: unknown org, already processed, token already
+                  consumed (hash cleared), or a wrong token. These are collapsed
+                  into ONE state so a caller WITHOUT the real token cannot tell a
+                  pending org apart from an already-processed/nonexistent one
+                  (security review #5 — org approval state must not be probeable
+                  via differing responses on a mismatched token+org_id).
+    """
+    org = _get_org_approval_row(org_id)
+    if (
+        org is None
+        or org["approval_status"] != "pending_approval"
+        or not org["approval_token_hash"]
+        or _token_hash(token) != org["approval_token_hash"]
+    ):
+        return org, "invalid"
+    if _approval_link_expired(org["approval_token_expires_at"]):
+        return org, "expired"
+    return org, "ok"
+
+
+def _invalid_link_page() -> HTMLResponse:
+    """Uniform response for every non-actionable case (security review #5)."""
+    return _html_page(
+        "Link Not Valid",
+        "This link is no longer valid",
+        "This approval link is invalid or has already been used. "
+        "No further action is needed.",
+        status_code=400,
+    )
+
+
+def _expired_link_page() -> HTMLResponse:
+    return _html_page(
+        "Link Expired",
+        "This link has expired",
+        "This approval link expired after 7 days. "
+        "Contact engineering to reissue an approval link.",
+        status_code=400,
+    )
+
+
+def _confirmation_page(action: str, org_name: str, token: str, org_id: str) -> HTMLResponse:
+    """Render the GET confirmation page whose form POSTs the actual decision.
+
+    The email link is a GET to this page; the state change happens only when the
+    admin submits the form (a POST), so an email security scanner that pre-fetches
+    the GET link cannot approve or reject an org (security review #1, HIGH). The
+    single-use approval token carried in the form is the unguessable action
+    credential, so no separate CSRF token is required.
+    """
+    is_approve = action == "approve"
+    verb = "Approve" if is_approve else "Reject"
+    btn_color = "#15803d" if is_approve else "#b91c1c"
+    post_url = f"/api/auth/org-approval/{action}?" + urlencode(
+        {"token": token, "org_id": org_id}
+    )
+    safe_org = html.escape(org_name or "")
+    safe_url = html.escape(post_url, quote=True)
+    doc = (
+        "<!DOCTYPE html><html><head><meta charset=\"utf-8\">"
+        f"<title>{verb} organisation</title></head>"
+        "<body style=\"font-family:Arial,sans-serif;max-width:600px;margin:40px auto;"
+        "padding:24px;color:#333\">"
+        f"<h2>{verb} {safe_org}?</h2>"
+        f"<p>You are about to <strong>{verb.lower()}</strong> the organisation "
+        f"<strong>{safe_org}</strong>. This action is final and notifies the registrant.</p>"
+        f"<form method=\"post\" action=\"{safe_url}\">"
+        f"<button type=\"submit\" style=\"background:{btn_color};color:#fff;border:none;"
+        "padding:12px 22px;border-radius:6px;font-size:15px;font-weight:700;cursor:pointer\">"
+        f"Confirm {verb.lower()}</button>"
+        "</form>"
+        "<p style=\"color:#666;font-size:13px;margin-top:18px\">"
+        "Nothing changes until you click the button above, so you can safely close "
+        "this page if you did not mean to open it.</p>"
+        "</body></html>"
+    )
+    return HTMLResponse(content=doc)
+
+
+def _process_decision(token, org_id, *, status, action, email_sender) -> HTMLResponse:
+    """Shared POST handler: validate the token then mutate + notify."""
+    org, state = _approval_token_state(token, org_id)
+    if state == "invalid":
+        return _invalid_link_page()
+    if state == "expired":
+        return _expired_link_page()
+
+    _update_org_approval(org_id, status=status, action=action, now_iso=db.now_iso())
+
+    registrant_email = _get_org_owner_email(org_id)
+    if registrant_email:
+        email_sender(registrant_email=registrant_email, org_name=org["name"])
+
+    safe_org = html.escape(org["name"] or "")
+    if status == "active":
+        return _html_page(
+            "Organisation Approved",
+            "Organisation approved",
+            f"<strong>{safe_org}</strong> has been approved. "
+            "The registrant has been notified and can now log in.",
+        )
+    return _html_page(
+        "Organisation Rejected",
+        "Organisation registration rejected",
+        f"<strong>{safe_org}</strong> has been rejected. "
+        "The registrant has been notified.",
+    )
+
+
+@router.get("/org-approval/approve", response_class=HTMLResponse)
+def approve_org_confirm(token: str, org_id: str) -> HTMLResponse:
+    """GET renders a confirmation page only — it never mutates state.
+
+    Enterprise email security gateways (Proofpoint, Mimecast, Microsoft Defender
+    for Office 365) pre-fetch every link in inbound mail, so a state-mutating GET
+    would let the scanner approve/reject an org before the admin reads the email.
+    The decision is committed only by the POST below, triggered by the human
+    clicking the confirmation button (security review #1, HIGH).
+    """
+    org, state = _approval_token_state(token, org_id)
+    if state == "invalid":
+        return _invalid_link_page()
+    if state == "expired":
+        return _expired_link_page()
+    return _confirmation_page("approve", org["name"], token, org_id)
+
+
+@router.post("/org-approval/approve", response_class=HTMLResponse)
+def approve_org(token: str, org_id: str) -> HTMLResponse:
+    """Commit the approval. State-mutating → POST only (link scanners use GET)."""
+    return _process_decision(
+        token, org_id, status="active", action="approved",
+        email_sender=send_org_approved_email,
+    )
+
+
+@router.get("/org-approval/reject", response_class=HTMLResponse)
+def reject_org_confirm(token: str, org_id: str) -> HTMLResponse:
+    """GET renders a confirmation page only — it never mutates state (see approve)."""
+    org, state = _approval_token_state(token, org_id)
+    if state == "invalid":
+        return _invalid_link_page()
+    if state == "expired":
+        return _expired_link_page()
+    return _confirmation_page("reject", org["name"], token, org_id)
+
+
+@router.post("/org-approval/reject", response_class=HTMLResponse)
+def reject_org(token: str, org_id: str) -> HTMLResponse:
+    """Commit the rejection. State-mutating → POST only (link scanners use GET)."""
+    return _process_decision(
+        token, org_id, status="rejected", action="rejected",
+        email_sender=send_org_rejected_email,
+    )
 
 
 # ---------------------------------------------------------------------------

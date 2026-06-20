@@ -8,6 +8,9 @@ Public surface:
     send_invite_email(to, invite_token, org_name, role) -> bool
     send_welcome_email(to, org_name) -> bool
     send_password_reset_email(to, reset_token) -> bool
+    send_org_approval_request_email(...) -> bool
+    send_org_approved_email(...) -> bool
+    send_org_rejected_email(...) -> bool
 
 Contract: this module never raises into auth routes. It returns True on a
 confirmed send and False on missing configuration, template errors, or SMTP
@@ -18,6 +21,7 @@ from __future__ import annotations
 import logging
 import os
 import smtplib
+from datetime import datetime
 from email.message import EmailMessage
 from email.utils import formataddr
 from functools import lru_cache
@@ -49,6 +53,11 @@ def _from_name() -> str:
 def _base_url() -> str:
     """Public frontend URL used for invite and reset-password links."""
     return os.getenv("PUBLIC_HOSTNAME", DEFAULT_BASE_URL).rstrip("/")
+
+
+def _backend_url() -> str:
+    """Public backend URL used for org approval action links."""
+    return os.getenv("AGENTIQ_BACKEND_URL", "http://localhost:8000").rstrip("/")
 
 
 @lru_cache(maxsize=1)
@@ -186,4 +195,75 @@ def send_password_reset_email(to: str, reset_token: str) -> bool:
         "Reset your AgentIQ password",
         "reset_password.html",
         link=link,
+    )
+
+
+# ---------------------------------------------------------------------------
+# AUTH-2 org approval emails
+# ---------------------------------------------------------------------------
+
+
+# Approval links live longer than invite tokens (72h) because the CloudFulcrum
+# admin may not check the shared inbox daily. Mirrors
+# user_auth.APPROVAL_TOKEN_EXPIRY_DAYS — kept here so the email copy is correct
+# even though the token itself is minted in user_auth.
+APPROVAL_TOKEN_EXPIRY_DAYS = 7
+
+
+def send_org_approval_request_email(
+    *,
+    admin_email: str,
+    org_name: str,
+    registrant_email: str,
+    approval_token: str,
+    org_id: str,
+) -> bool:
+    """Send the pending-approval request to the CloudFulcrum admin inbox.
+
+    Renders org_approval_request.html with the org name, registrant email, a
+    UTC submission timestamp, and distinct approve/reject links. Each link
+    carries the signed approval token and org_id as query parameters and is
+    valid for APPROVAL_TOKEN_EXPIRY_DAYS days.
+    """
+    approve_url = (
+        f"{_backend_url()}/api/auth/org-approval/approve"
+        f"?token={approval_token}&org_id={org_id}"
+    )
+    reject_url = (
+        f"{_backend_url()}/api/auth/org-approval/reject"
+        f"?token={approval_token}&org_id={org_id}"
+    )
+    submitted_at = datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
+
+    return _render_and_send(
+        admin_email,
+        f"New AgentIQ organisation pending approval: {org_name}",
+        "org_approval_request.html",
+        org_name=org_name,
+        registrant_email=registrant_email,
+        submitted_at=submitted_at,
+        approve_url=approve_url,
+        reject_url=reject_url,
+        expiry_days=APPROVAL_TOKEN_EXPIRY_DAYS,
+    )
+
+
+def send_org_approved_email(*, registrant_email: str, org_name: str) -> bool:
+    """Send the approval-confirmation email to the registrant (org_approved.html)."""
+    return _render_and_send(
+        registrant_email,
+        f"Your AgentIQ organisation has been approved: {org_name}",
+        "org_approved.html",
+        org_name=org_name,
+        login_url=f"{_base_url()}/login",
+    )
+
+
+def send_org_rejected_email(*, registrant_email: str, org_name: str) -> bool:
+    """Send the rejection email to the registrant (org_rejected.html)."""
+    return _render_and_send(
+        registrant_email,
+        f"Your AgentIQ organisation registration was not approved: {org_name}",
+        "org_rejected.html",
+        org_name=org_name,
     )
