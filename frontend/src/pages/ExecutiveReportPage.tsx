@@ -19,6 +19,7 @@ import KeyInsights, { resolveExecutiveSummary } from '../components/executive_re
 import TopQuickWins from '../components/executive_report/TopQuickWins';
 import PilotRoadmapHighlights from '../components/executive_report/PilotRoadmapHighlights';
 import { downloadExecutiveReportPdf } from '../utils/exportPdf';
+import { profileNameFromEmail } from '../utils/profileName';
 import { runScopedErrorMessage } from '../utils/apiErrors';
 
 export default function ExecutiveReportPage() {
@@ -159,6 +160,7 @@ export default function ExecutiveReportPage() {
           overallReadiness: roadmap.overallReadiness,
           opportunities,
           orgName: auth?.user?.org_name ?? null,
+          userName: profileNameFromEmail(auth?.user?.email),
           generatedAt,
           runId,
         },

@@ -1,7 +1,29 @@
 # AgentIQ — API_CONTRACT.md (EPIC E0)
-Version: v1.4
-Date: 2026-06-10
+Version: v1.6
+Date: 2026-06-20
 
+> v1.6 — LIC-1 / T9 (AT-350): added the auth-only global-banner endpoint
+> `GET /api/license/banner`, returning the minimal `LicenseBannerResponse`
+> shape (`status` ∈ valid|grace|readonly|invalid; `expires_at` — `null` when
+> there is no valid key; `reason` — optional, e.g. `no_license` /
+> `signature_or_format` / `clock_rollback`, `null` for valid/grace and a
+> past-grace expiry). `reason` lets the banner distinguish a never-licensed
+> install ("No valid license installed") from an expired term ("License expired")
+> and a clock anomaly (§5/AC6). Unlike the Owner-only `GET /api/license`, this
+> endpoint requires only authentication (any role) so the global expiry banner
+> renders on every page for every role — including analysts whose discovery runs
+> are blocked (AC4/AC5). Additive — no previously documented shape changed.
+> Mirrors `src/types/license.ts`.
+>
+> v1.5 — LIC-1 / T6 (AT-347): documented the Owner-only admin license endpoints
+> `GET /api/license` and `POST /api/license/update-key`, and the
+> `LicenseStatusResponse` shape (`status` ∈ valid|grace|readonly|invalid,
+> `customer`, `term`, `expires_at`, `days_remaining`; detail fields are `null`
+> when there is no valid key). `POST /api/license/update-key` validates before
+> storing — an invalid key returns 400 and never replaces the stored key. Both
+> endpoints require the Owner role (Analyst/Viewer → 403). Mirrors
+> `src/types/license.ts`. Additive — no previously documented shape changed.
+>
 > v1.4 — ENT-6 / T3-S16-A: extended `OppEnrichment` with the optional
 > `causal_hypothesis` (`CausalHypothesisSummary`: `cause_chain`,
 > `falsifiability_condition`, `confidence`, `inferred`, `preliminary`,

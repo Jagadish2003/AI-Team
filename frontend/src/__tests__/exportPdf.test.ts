@@ -69,6 +69,7 @@ const DATA: ExecutiveReportPdfData = {
     opp({ id: 'c', title: 'Spreading Bottleneck', impact: 8, effort: 5 }),
   ],
   orgName: 'XYZ',
+  userName: 'Likhith',
   generatedAt: 'June 18, 2026',
   runId: 'run_5a62abcd',
 };
@@ -99,8 +100,9 @@ describe('downloadExecutiveReportPdf (real jsPDF)', () => {
     expect(bytes).toContain('Agent Roadmap Highlights');
     expect(bytes).toContain('Effort vs Impact');
     expect(bytes).toContain('Checklist Bottleneck');
-    // Header: possessive profile line + date line.
-    expect(bytes).toContain("XYZ's Profile");
+    // Header: org name line + possessive user-profile line + date line.
+    expect(bytes).toContain('XYZ');
+    expect(bytes).toContain("Likhith's Profile");
     expect(bytes).toContain('Date: June 18, 2026');
     // PDF text-show operators confirm this is text, not an embedded image.
     expect(bytes).toMatch(/Tj|TJ/);

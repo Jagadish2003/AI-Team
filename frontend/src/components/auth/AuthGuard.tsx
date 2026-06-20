@@ -26,6 +26,8 @@
 import { Navigate, Outlet } from "react-router-dom";
 
 import { useAuth } from "../../context/AuthContext";
+import { LicenseProvider } from "../../context/LicenseContext";
+import LicenseBanner from "../common/LicenseBanner";
 import LoadingPanel from "../common/LoadingPanel";
 
 export default function AuthGuard() {
@@ -49,6 +51,14 @@ export default function AuthGuard() {
     return <Navigate to="/login" replace />;
   }
 
-  // Authenticated — render the matched child route.
-  return <Outlet />;
+  // Authenticated — render the matched child route, wrapped so the global
+  // license expiry banner (LIC-1 / T9) shows on every authenticated page from a
+  // single shared status fetch. LicenseProvider stays mounted across child
+  // route changes (layout-route element), so status is not refetched per page.
+  return (
+    <LicenseProvider>
+      <LicenseBanner />
+      <Outlet />
+    </LicenseProvider>
+  );
 }

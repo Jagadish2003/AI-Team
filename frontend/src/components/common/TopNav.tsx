@@ -1,10 +1,11 @@
 import React, { useEffect, useRef, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
-import { LogOut, Menu, Moon, Settings, Sun, User, Zap } from "lucide-react";
+import { KeyRound, LogOut, Menu, Moon, Settings, Sun, User, Zap } from "lucide-react";
 import { useRunContext } from "../../context/RunContext";
 import { useConnectorContext } from "../../context/ConnectorContext";
 import { useTheme } from "../../context/ThemeContext";
 import { useAuthOptional } from "../../context/AuthContext";
+import { profileNameFromEmail } from "../../utils/profileName";
 
 type NavItem = {
   to: string;
@@ -43,12 +44,6 @@ const items = [
   },
   { to: "/executive-report", label: "Executive Report", runScoped: true },
 ] satisfies NavItem[];
-
-function profileNameFromEmail(email: string | null | undefined): string | null {
-  const localPart = email?.trim().split("@", 1)[0]?.trim();
-  if (!localPart) return null;
-  return `${localPart.charAt(0).toUpperCase()}${localPart.slice(1)}`;
-}
 
 export default function TopNav() {
   const loc = useLocation();
@@ -200,6 +195,24 @@ export default function TopNav() {
                   <Settings className="h-4 w-4" />
                   Settings
                 </button>
+
+                {/* LIC-1 / T8 — Owner-only admin License page. Analyst/Viewer
+                    never see this entry; the route + data endpoints are also
+                    Owner-gated, so this just makes the page discoverable. */}
+                {auth?.user?.role === "owner" && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setProfileOpen(false);
+                      navigate("/license");
+                    }}
+                    className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm text-text transition-colors hover:bg-navhover focus:outline-none focus:ring-2 focus:ring-accent/50"
+                    role="menuitem"
+                  >
+                    <KeyRound className="h-4 w-4" />
+                    License
+                  </button>
+                )}
 
                 <div
                   className="flex w-full items-center gap-2 rounded-md px-3 py-1 text-sm text-text transition-colors hover:bg-navhover"

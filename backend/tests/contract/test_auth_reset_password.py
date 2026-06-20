@@ -110,7 +110,7 @@ def test_forgot_stores_only_the_hash_not_the_raw_token(client):
     con = db.connect()
     try:
         row = con.execute(
-            "SELECT reset_token_hash, reset_token_expires_at FROM users WHERE email = ?",
+            "SELECT reset_token_hash, reset_token_expires_at FROM users WHERE email = %s",
             (email,),
         ).fetchone()
     finally:
@@ -199,7 +199,7 @@ def test_reset_clears_token_and_is_single_use(client):
     con = db.connect()
     try:
         row = con.execute(
-            "SELECT reset_token_hash, reset_token_expires_at FROM users WHERE email = ?",
+            "SELECT reset_token_hash, reset_token_expires_at FROM users WHERE email = %s",
             (email,),
         ).fetchone()
     finally:
@@ -236,7 +236,7 @@ def test_ac12_reset_with_expired_token_returns_400(client):
     con = db.connect()
     try:
         con.execute(
-            "UPDATE users SET reset_token_expires_at = ? WHERE email = ?",
+            "UPDATE users SET reset_token_expires_at = %s WHERE email = %s",
             ((datetime.now(timezone.utc) - timedelta(hours=1)).isoformat(), email),
         )
         con.commit()

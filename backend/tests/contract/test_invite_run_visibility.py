@@ -13,6 +13,8 @@ workspace; only cross-org access is denied.
 """
 from __future__ import annotations
 
+import uuid
+
 from fastapi.testclient import TestClient
 
 
@@ -20,13 +22,21 @@ def _bearer(token: str) -> dict:
     return {"Authorization": f"Bearer {token}"}
 
 
+def _uniq(prefix: str) -> str:
+    """A per-run-unique email so the test never collides with a user left in a
+    shared/non-reset test DB by a prior session ('Email already registered')."""
+    return f"{prefix}_{uuid.uuid4().hex[:8]}@example.com"
+
+
 def test_invited_analyst_sees_org_run_and_products(client: TestClient):
     from app import db
 
     # 1. Owner registers org "DWP".
+    owner_email = _uniq("owner_dwp")
+    analyst_email = _uniq("analyst_dwp")
     reg = client.post(
         "/api/auth/register",
-        json={"org_name": "DWP", "email": "owner_dwp@example.com", "password": "Password123!"},
+        json={"org_name": "DWP", "email": owner_email, "password": "Password123!"},
     )
     assert reg.status_code == 201, reg.text
     owner = reg.json()
@@ -51,7 +61,7 @@ def test_invited_analyst_sees_org_run_and_products(client: TestClient):
     inv = client.post(
         "/api/auth/invite",
         headers=_bearer(owner_token),
-        json={"email": "analyst_dwp@example.com", "role": "analyst"},
+        json={"email": analyst_email, "role": "analyst"},
     )
     assert inv.status_code == 201, inv.text
     invite_token = inv.json()["invite_token"]
@@ -94,9 +104,11 @@ def test_invited_analyst_sees_connectors_via_real_endpoints(client: TestClient):
     """
     from app import db
 
+    owner_email = _uniq("owner_dwp3")
+    analyst_email = _uniq("analyst_dwp3")
     reg = client.post(
         "/api/auth/register",
-        json={"org_name": "DWP3", "email": "owner_dwp3@example.com", "password": "Password123!"},
+        json={"org_name": "DWP3", "email": owner_email, "password": "Password123!"},
     )
     assert reg.status_code == 201, reg.text
     owner = reg.json()
@@ -129,7 +141,7 @@ def test_invited_analyst_sees_connectors_via_real_endpoints(client: TestClient):
     inv = client.post(
         "/api/auth/invite",
         headers=_bearer(owner_token),
-        json={"email": "analyst_dwp3@example.com", "role": "analyst"},
+        json={"email": analyst_email, "role": "analyst"},
     )
     assert inv.status_code == 201, inv.text
     acc = client.post(
@@ -163,7 +175,7 @@ def test_outsider_in_another_org_does_not_see_the_run(client: TestClient):
 
     reg = client.post(
         "/api/auth/register",
-        json={"org_name": "DWP2", "email": "owner_dwp2@example.com", "password": "Password123!"},
+        json={"org_name": "DWP2", "email": _uniq("owner_dwp2"), "password": "Password123!"},
     )
     owner_org = reg.json()["user"]["org_id"]
     db.upsert_run(
@@ -175,7 +187,7 @@ def test_outsider_in_another_org_does_not_see_the_run(client: TestClient):
     # A separate owner / separate org (mirrors "registered a new account to invite").
     other = client.post(
         "/api/auth/register",
-        json={"org_name": "CF", "email": "owner_cf@example.com", "password": "Password123!"},
+        json={"org_name": "CF", "email": _uniq("owner_cf"), "password": "Password123!"},
     )
     other_token = other.json()["token"]
 

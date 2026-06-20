@@ -29,6 +29,9 @@ export interface ExecutiveReportPdfData {
   overallReadiness: string;
   opportunities: OpportunityCandidate[];
   orgName?: string | null;
+  /** Display name of the signed-in user (e.g. "Likhith"). Rendered as
+   * "<userName>'s Profile" in the header, with orgName on the line above. */
+  userName?: string | null;
   generatedAt: string;
   runId?: string | null;
 }
@@ -248,15 +251,25 @@ export async function downloadExecutiveReportPdf(
   setFont(8, 'bold', ACCENT);
   pdf.text('CONFIDENTIAL', RIGHT, ry, { align: 'right' });
   ry += 4.6;
-  setFont(8.5, 'normal', MUTED);
-  // Sanitize the org name on its own and only render the line if something
-  // renderable remains — avoids a broken "'s Profile" with an empty name when
-  // the org name is entirely non-Latin (see sanitize() limitation above).
+  // Org name (line above) + "<user>'s Profile" (line below). There are multiple
+  // orgs and users, so the header identifies both: which org this report belongs
+  // to, and whose profile generated it. Each line is sanitized independently and
+  // only rendered when something renderable remains — avoids a broken "'s
+  // Profile" with an empty name when the name is entirely non-Latin (see
+  // sanitize() limitation above).
   const safeOrgName = sanitize(data.orgName ?? '').trim();
   if (safeOrgName) {
-    pdf.text(`${safeOrgName}'s Profile`, RIGHT, ry, { align: 'right' });
-    ry += 4;
+    setFont(8.5, 'normal', MUTED);
+    pdf.text(safeOrgName, RIGHT, ry, { align: 'right' });
+    ry += 4.4;
   }
+  const safeUserName = sanitize(data.userName ?? '').trim();
+  if (safeUserName) {
+    setFont(9, 'bold', NAVY);
+    pdf.text(`${safeUserName}'s Profile`, RIGHT, ry, { align: 'right' });
+    ry += 4.4;
+  }
+  setFont(8.5, 'normal', MUTED);
   pdf.text(sanitize(`Date: ${data.generatedAt}`), RIGHT, ry, { align: 'right' });
   ry += 4;
   if (data.runId) {

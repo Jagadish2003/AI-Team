@@ -1,0 +1,24 @@
+# Root .dockerignore — applies when an image is built with the repository root
+# as the build context (e.g. `docker build -f backend/Dockerfile .`).
+#
+# LIC-1 / AC10: the CloudFulcrum-internal license signing tooling must NEVER be
+# copied into a customer image. It lives at backend/license/; the backend build
+# context excludes it via backend/.dockerignore. This root entry fails closed for
+# a root-context build (`docker build -f backend/Dockerfile .`) too.
+backend/license/
+license/
+
+# Private keys / signing material — never belongs in an image (defence in depth;
+# also covered by .gitignore so it should not be present in a clean checkout).
+*.pem
+*.key
+
+# Common noise, in case of a root-context build.
+.git/
+.gitignore
+**/__pycache__/
+**/*.pyc
+**/.venv/
+**/node_modules/
+**/.env
+**/.env.*

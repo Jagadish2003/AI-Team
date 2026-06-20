@@ -28,6 +28,7 @@ import BlueprintPage from "./pages/BlueprintPage";
 import ExecutiveReportPage from "./pages/ExecutiveReportPage";
 import StackBuilderPage from "./pages/StackBuilderPage";
 import SettingsPage from "./pages/SettingsPage";
+import LicensePage from "./pages/LicensePage";
 
 export default function App() {
   return (
@@ -143,6 +144,8 @@ export default function App() {
                                 element={<ExecutiveReportPage />}
                               />
                               <Route path="/settings" element={<SettingsPage />} />
+                              {/* LIC-1 / T8 — Owner-only admin License page. */}
+                              <Route path="/license" element={<LicensePage />} />
                               <Route
                                 path="*"
                                 element={<Navigate to="/integration-hub" replace />}
