@@ -182,11 +182,34 @@ def run_trackb_and_persist(
     logger = logging.getLogger(__name__)
     logger.info(f"Starting trackb materialization for run {run_id} in mode: {mode}")
 
-    _emit_event(run_id, "CONNECT", f"Connected sources: {', '.join(systems)}")
-
     run = db.run_get(run_id)
     if run is None:
         raise RuntimeError(f"Run '{run_id}' not found — cannot materialise")
+
+    # CS-2: prefer the org's authenticated connectors. If the user connected
+    # Salesforce / ServiceNow / Jira via the Integration Hub OAuth flow, ingest
+    # LIVE from exactly those connectors using their stored OAuth tokens —
+    # instead of the offline-fixture default. Falls back to the requested
+    # mode/systems when nothing is authenticated (offline demo path unchanged).
+    org_id = _org_id_for_run(run, fallback="default")
+    try:
+        from app.live_ingest_credentials import resolve_live_systems
+
+        live_systems = resolve_live_systems(org_id)
+    except Exception:
+        logger.exception("Live connector resolution failed; using requested mode/systems")
+        live_systems = []
+
+    if live_systems:
+        mode = "live"
+        systems = live_systems
+        _emit_event(
+            run_id,
+            "CONNECT",
+            f"Using authenticated connectors: {', '.join(live_systems)}",
+        )
+    else:
+        _emit_event(run_id, "CONNECT", f"Connected sources: {', '.join(systems)}")
 
     per_system: Dict[str, str] = {
         s: "skipped" for s in ["salesforce", "servicenow", "jira"]

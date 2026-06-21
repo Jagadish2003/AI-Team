@@ -3,6 +3,7 @@ from fastapi import BackgroundTasks, Depends
 from . import db
 from .materialize_t2 import get_status, run_trackb_and_persist, set_status
 from .middleware.audit import log_event
+from .middleware.tenancy import get_current_org_id
 from .models_t2 import StartRunRequest, StartRunResponse, StatusResponse
 from .rbac import require_role, _get_user_id_from_token
 from .replay import seed_events
@@ -29,15 +30,21 @@ def register_sprint4_t2_routes(app):
         """
         run_id = db.next_run_id()
 
+        # Capture the caller's org so the background materializer can resolve
+        # this org's authenticated connectors / OAuth tokens (CS-2 live ingest).
+        org_id = get_current_org_id()
+
         run = {
             "id": run_id,
             "status": "running",
             "startedAt": db.now_iso(),
             "updatedAt": db.now_iso(),
+            "orgId": org_id,
             "inputs": {
                 "connectedSources": body.connectedSources,
                 "uploadedFiles": body.uploadedFiles,
                 "sampleWorkspaceEnabled": body.sampleWorkspaceEnabled,
+                "orgId": org_id,
             },
         }
         db.run_set(run_id, run)

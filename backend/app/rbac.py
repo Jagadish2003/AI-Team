@@ -32,7 +32,11 @@ def _ensure_members_table() -> None:
 
 
 def seed_owner(org_id: str, user_id: str) -> None:
-    """Insert the workspace creator as owner (idempotent — ignores conflict)."""
+    """Insert the workspace creator as owner (idempotent).
+
+    Reactivates on conflict: if the owner row was ever soft-deleted (is_deleted),
+    restore it to an active owner rather than leaving the seed user locked out.
+    """
     _ensure_members_table()
     con = db.connect()
     try:
@@ -41,7 +45,8 @@ def seed_owner(org_id: str, user_id: str) -> None:
             """
             INSERT INTO workspace_members (org_id, user_id, role, created_at)
             VALUES (%s, %s, 'owner', %s)
-            ON CONFLICT DO NOTHING
+            ON CONFLICT (org_id, user_id)
+            DO UPDATE SET role = 'owner', is_deleted = FALSE
             """,
             (org_id, user_id, datetime.now(timezone.utc).isoformat()),
         )
@@ -57,7 +62,8 @@ def get_user_role(org_id: str, user_id: str) -> str | None:
     try:
         cur = con.cursor()
         cur.execute(
-            "SELECT role FROM workspace_members WHERE org_id = %s AND user_id = %s",
+            "SELECT role FROM workspace_members "
+            "WHERE org_id = %s AND user_id = %s AND is_deleted = FALSE",
             (org_id, user_id),
         )
         row = cur.fetchone()

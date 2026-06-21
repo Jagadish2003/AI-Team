@@ -9,9 +9,11 @@ Two Owner-only endpoints expose the license to the admin UI (LicensePage, T8):
                                   status. An invalid key is rejected and nothing
                                   is stored (validate-before-store, AC7).
 
-Both endpoints reuse the SAME ``license:key`` kv slot as the T4 startup/periodic
-validator (``license_runtime.LICENSE_KEY_KV``), so the admin update and the
-background validator always read and write one stored license. Validation is
+Both endpoints are scoped to the caller's organisation: status/banner read the
+current org's license via ``get_current_license_status`` (which resolves the org
+from the tenancy context) and update-key writes the pasted key to that org's row
+in ``org_licenses``. Licensing is per-tenant — an org with no installed key
+evaluates to ``no_license`` until its Owner pastes a valid key here. Validation is
 the pure, offline ``licensing.validate_license`` (T3).
 """
 from __future__ import annotations
@@ -22,13 +24,13 @@ from typing import Optional
 from fastapi import APIRouter, Depends, FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
-from . import db
 from .license_runtime import (
-    LICENSE_KEY_KV,
     get_current_license_status,
     persist_validated_status,
+    set_org_license_key,
 )
 from .licensing import LicenseStatus, validate_license
+from .middleware.tenancy import get_current_org_id
 from .rbac import require_role
 from .security import require_auth
 from .telemetry import record_event
@@ -134,23 +136,24 @@ def update_license_key(body: UpdateKeyRequest) -> LicenseStatusResponse:
     """Owner-only: validate a pasted key, then store it only if not invalid.
 
     Validate-before-store (AC7): an invalid/tampered key is rejected with 400
-    and the previously stored key is left untouched, so a bad paste can never
-    replace a working license. A valid key is persisted to the shared
-    ``license:key`` slot and the refreshed status is returned immediately —
+    and the org's previously stored key is left untouched, so a bad paste can
+    never replace a working license. A valid key is persisted to the caller's
+    org row in ``org_licenses`` and the refreshed status is returned immediately —
     no restart required.
     """
     result = validate_license(body.key)
     if result.get("status") == LicenseStatus.INVALID:
         raise HTTPException(status_code=400, detail="This key is not valid")
 
-    db.kv_set(LICENSE_KEY_KV, body.key)
-    # Refresh the derived status cache (license:last_status / last_seen_date)
+    org_id = get_current_org_id()
+    set_org_license_key(org_id, body.key)
+    # Refresh the org's derived status cache (last_status / last_seen_date)
     # IMMEDIATELY after the key write — before the fire-and-forget telemetry,
     # which does its own DB I/O — so the window where the stored key and the
     # cached status disagree is as small as possible. (Live consumers such as the
     # gate/banner re-validate the key directly and never read this cache, but
     # keeping the two writes adjacent avoids any stale-cache surprise.)
-    persist_validated_status(result)
+    persist_validated_status(result, org_id=org_id)
     record_event(
         "license.updated",
         {

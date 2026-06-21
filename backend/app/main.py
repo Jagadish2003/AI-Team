@@ -846,7 +846,8 @@ def list_members() -> List[Dict[str, Any]]:
     try:
         cur = con.cursor()
         cur.execute(
-            "SELECT org_id, user_id, role, created_at FROM workspace_members WHERE org_id = %s",
+            "SELECT org_id, user_id, role, created_at FROM workspace_members "
+            "WHERE org_id = %s AND is_deleted = FALSE",
             (org_id,),
         )
         rows = cur.fetchall()
@@ -880,7 +881,7 @@ def add_member(body: Dict[str, Any]) -> Dict[str, Any]:
             """
             INSERT INTO workspace_members (org_id, user_id, role, created_at)
             VALUES (%s, %s, %s, %s)
-            ON CONFLICT (org_id, user_id) DO UPDATE SET role = EXCLUDED.role
+            ON CONFLICT (org_id, user_id) DO UPDATE SET role = EXCLUDED.role, is_deleted = FALSE
             """,
             (org_id, user_id, role, db.now_iso()),
         )

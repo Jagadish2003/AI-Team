@@ -25,27 +25,10 @@ Thumbs.db
 backend/test_report_artifacts/
 backend/.env
 frontend/.env
-backend/token_generation/salesforce/server_salesforce.key
-backend/token_generation/salesforce/salesforce_token.json
-backend/token_generation/ncino/server_ncino.key
-backend/token_generation/ncino/ncino_token.json
-backend/token_generation/strs/server_strs.key
-backend/token_generation/strs/strs_token.json
-backend/token_generation/life_sciences/server_ls.key
-backend/token_generation/life_sciences/ls_token.json
-backend/token_generation/rlm/server_rlm.key
-backend/token_generation/rlm/rlm_token.json
-
-# LIC-1 licensing — never commit private keys or generated key material.
-# The public key is embedded as a constant in backend/app/licensing.py instead.
-# NOTE: .gitignore has no inline comments — keep each pattern on its own line.
 *.pem
 *.key
-# CloudFulcrum private signing key (the root secret; also matched by *.pem)
 backend/license/cloudfulcrum_private.pem
 backend/license/.env
 backend/license/.env.*
-# Locally-minted dev/test license keys + throwaway dev keypair (dev_mint_test_keys.py)
 backend/license/test_keys/
-# Any exported license token file
 *.license

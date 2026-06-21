@@ -172,11 +172,40 @@ def _run_trackb_and_persist(run_id: str, mode: str, systems: List[str], pack: Op
     logger = logging.getLogger(__name__)
     logger.info(f"Starting trackb materialization for run {run_id} in mode: {mode}")
 
-    _emit_event(run_id, "CONNECT", f"Connected sources: {', '.join(systems)}")
-
     run = db.run_get(run_id)
     if run is None:
         raise RuntimeError(f"Run '{run_id}' not found — cannot materialise")
+
+    # Resolve the run's org once; reused for live-connector resolution and for
+    # the runner's org_id below.
+    from .middleware.tenancy import get_current_org_id_optional
+
+    run_org_id = _org_id_for_run(run, get_current_org_id_optional() or "default")
+
+    # CS-2: prefer the org's authenticated connectors. If the user connected
+    # Salesforce / ServiceNow / Jira via the Integration Hub OAuth flow, ingest
+    # LIVE from exactly those connectors using their stored OAuth tokens —
+    # instead of the requested mode/systems (which would otherwise rely on
+    # offline fixtures or .env credentials). Falls back to the requested
+    # mode/systems when nothing is authenticated.
+    try:
+        from .live_ingest_credentials import resolve_live_systems
+
+        live_systems = resolve_live_systems(run_org_id)
+    except Exception:
+        logger.exception("Live connector resolution failed; using requested mode/systems")
+        live_systems = []
+
+    if live_systems:
+        mode = "live"
+        systems = live_systems
+        _emit_event(
+            run_id,
+            "CONNECT",
+            f"Using authenticated connectors: {', '.join(live_systems)}",
+        )
+    else:
+        _emit_event(run_id, "CONNECT", f"Connected sources: {', '.join(systems)}")
 
     per_system: Dict[str, str] = {
         s: "skipped" for s in ["salesforce", "servicenow", "jira"]
@@ -214,16 +243,14 @@ def _run_trackb_and_persist(run_id: str, mode: str, systems: List[str], pack: Op
 
         from discovery.runner import run as trackb_run
         from discovery.track_a_adapter import export_track_a_seed
-        from .middleware.tenancy import get_current_org_id_optional
 
         _emit_event(
             run_id, "EXTRACT", "Extracting entities and identifying patterns..."
         )
-        # Resolve org_id once and pass it to the runner so signal snapshots are
-        # written under the same org the temporal read uses below. Without an
-        # explicit org_id the runner falls back to its own "demo-org" default,
-        # which never matches the read org and hides the Baseline Context panel.
-        run_org_id = _org_id_for_run(run, get_current_org_id_optional() or "default")
+        # run_org_id resolved above (shared with live-connector resolution). It is
+        # passed to the runner so signal snapshots are written under the same org
+        # the temporal read uses; without it the runner falls back to its own
+        # "demo-org" default, which hides the Baseline Context panel.
         payload = trackb_run(
             mode=mode, systems=succeeded, run_id=run_id, org_id=run_org_id, pack=pack
         )

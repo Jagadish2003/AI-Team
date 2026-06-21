@@ -144,6 +144,7 @@ def store_nonce(
     nonce: str,
     connector_id: str,
     code_verifier: Optional[str] = None,
+    org_id: Optional[str] = None,
 ) -> None:
     """Store a state nonce with connector context and a 10-minute expiry.
 
@@ -151,6 +152,10 @@ def store_nonce(
     The nonce key is prefixed with 'nonce:' to namespace it in the store.
     `code_verifier`, when provided, is the PKCE verifier bound to this state;
     it is returned by consume_nonce() so the callback can complete the exchange.
+    `org_id`, when provided, captures the tenancy context of the (authenticated)
+    initiation request so the callback — which runs on an unauthenticated browser
+    redirect and has no JWT/org context — can store the token and connection state
+    under the correct org. It is server-side state, never trusted from the callback.
     """
     _init_nonce_table()
 
@@ -159,6 +164,7 @@ def store_nonce(
         "nonce":         nonce,
         "connector_id":  connector_id,
         "code_verifier": code_verifier,
+        "org_id":        org_id,
         "created_at":    now.isoformat(),
         "expires_at":    (now + timedelta(minutes=_NONCE_TTL_MINUTES)).isoformat(),
     })
@@ -169,7 +175,7 @@ def store_nonce(
         cur = con.cursor()
         cur.execute(
             "INSERT INTO nonces (key, data) VALUES (%s, %s) "
-            "ON CONFLICT (key) DO UPDATE SET data=EXCLUDED.data",
+            "ON CONFLICT (key) DO UPDATE SET data=EXCLUDED.data, is_deleted=FALSE",
             (key, data),
         )
         con.commit()
@@ -200,9 +206,9 @@ def consume_nonce(nonce: str) -> dict | None:
     con = db.connect()
     try:
         cur = con.cursor()
-        # Step 1: Read
+        # Step 1: Read (only an active, not-yet-consumed nonce)
         cur.execute(
-            "SELECT data FROM nonces WHERE key = %s",
+            "SELECT data FROM nonces WHERE key = %s AND is_deleted = FALSE",
             (key,),
         )
         row = cur.fetchone()
@@ -210,8 +216,10 @@ def consume_nonce(nonce: str) -> dict | None:
         if row is None:
             return None  # Already used or never issued
 
-        # Step 2: DELETE immediately — before any further processing
-        cur.execute("DELETE FROM nonces WHERE key = %s", (key,))
+        # Step 2: Soft-delete immediately — before any further processing. The app
+        # role has no DELETE; marking is_deleted preserves the single-use guarantee
+        # (the read above filters it out on a second call).
+        cur.execute("UPDATE nonces SET is_deleted = TRUE WHERE key = %s", (key,))
         con.commit()
     finally:
         con.close()
@@ -291,7 +299,8 @@ def store_token(org_id: str, connector_id: str, token_response: dict) -> TokenRe
                 expires_at     = EXCLUDED.expires_at,
                 scopes         = EXCLUDED.scopes,
                 updated_at     = EXCLUDED.updated_at,
-                refresh_failed = 0
+                refresh_failed = 0,
+                is_deleted     = FALSE
             """,
             (record_id, org_id, connector_id, enc_access, enc_refresh, expires_iso, scopes_json, now_iso, now_iso),
         )
@@ -327,7 +336,7 @@ async def get_token(org_id: str, connector_id: str) -> TokenRecord:
             SELECT id, org_id, connector_id, access_token, refresh_token,
                    expires_at, scopes, created_at, updated_at
             FROM credentials
-            WHERE org_id = %s AND connector_id = %s
+            WHERE org_id = %s AND connector_id = %s AND is_deleted = FALSE
             """,
             (org_id, connector_id),
         )
@@ -361,6 +370,17 @@ async def get_token(org_id: str, connector_id: str) -> TokenRecord:
             except Exception:
                 pass  # Never let flag-writing block the error propagation
             raise ConnectorNotAuthenticatedError(org_id, connector_id) from exc
+
+        # Preserve the existing refresh token when the provider does NOT return a
+        # new one on refresh. Salesforce (and ServiceNow without token rotation)
+        # keep the same long-lived refresh token and omit it from the refresh
+        # response; only rotating providers (Atlassian/Jira) return a fresh one.
+        # Without this, store_token would overwrite refresh_token with NULL and the
+        # NEXT refresh would have nothing to present — dropping the connector to
+        # needs_auth after a single refresh. Carrying the old token forward keeps
+        # auto-refresh working indefinitely for the life of the refresh token.
+        if not new_response.get("refresh_token"):
+            new_response["refresh_token"] = record.refresh_token
 
         record = store_token(org_id, connector_id, new_response)
 
@@ -400,7 +420,8 @@ async def revoke_token(
     try:
         cur = con.cursor()
         cur.execute(
-            "SELECT access_token FROM credentials WHERE org_id = %s AND connector_id = %s",
+            "SELECT access_token FROM credentials "
+            "WHERE org_id = %s AND connector_id = %s AND is_deleted = FALSE",
             (org_id, connector_id),
         )
         row = cur.fetchone()
@@ -476,12 +497,15 @@ async def revoke_token(
                 "Slack auth.revoke failed for %s/%s: %s", org_id, connector_id, exc
             )
 
-    # --- Step 2: local deletion (always executes regardless of Step 1 outcome) ---
+    # --- Step 2: local soft delete (always executes regardless of Step 1 outcome) ---
+    # The app role has no DELETE; mark inactive. get_token/get_token_status filter
+    # is_deleted, and store_token reactivates the row on reconnect.
     con = db.connect()
     try:
         cur = con.cursor()
         cur.execute(
-            "DELETE FROM credentials WHERE org_id = %s AND connector_id = %s",
+            "UPDATE credentials SET is_deleted = TRUE "
+            "WHERE org_id = %s AND connector_id = %s",
             (org_id, connector_id),
         )
         con.commit()

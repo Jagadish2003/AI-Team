@@ -7,10 +7,11 @@ server. Two interchangeable paths are provided (pick one):
   as the single source of truth, stamps `alembic_version` so future migrations
   apply cleanly, and never drifts from the code.
 - **Path B — Pure SQL bundle** (`psql` only). No Python or repo checkout needed
-  on the DB box. It is a point-in-time snapshot of Path A's result — regenerate
-  it whenever migrations change (see *Regenerating the SQL bundle*).
+  on the DB box. It is a point-in-time snapshot of Path A's result, consolidated
+  into a single [`provision.sql`](provision.sql) — regenerate it whenever
+  migrations change (see *Regenerating the SQL bundle*).
 
-Both produce the **same 25-table schema** plus the core reference seed
+Both produce the **same 26-table schema** plus the core reference seed
 (connectors, mappings, permissions, uploads).
 
 ## Why the schema comes from more than just migrations
@@ -21,7 +22,7 @@ defect this bundle fixes. The three sources:
 
 | Source | Tables |
 |---|---|
-| Alembic migrations (`backend/migrations`) | `telemetry_events`, `signal_snapshots`, `entities`, `users`, `login_attempts`, `orgs`, `entity_relationships`, `causal_hypotheses`, `audit_log`, `workspace_members` (+ `alembic_version`) |
+| Alembic migrations (`backend/migrations`) | `telemetry_events`, `signal_snapshots`, `entities`, `users`, `login_attempts`, `orgs`, `entity_relationships`, `causal_hypotheses`, `audit_log`, `workspace_members`, `org_licenses` (+ `alembic_version`) |
 | `seed_loader.py` (`{id,payload}` tables) | `connectors`, `uploads`, `runs`, `evidence`, `mappings`, `permissions`, `opportunities`, `audit_events`, `executive_reports`, `run_events`, `kv` |
 | Lazy runtime creators (materialised up front by these scripts) | `credentials`, `nonces`, `oauth_nonces` |
 
@@ -40,12 +41,12 @@ Path A runs all three. Path B captures the union as flat SQL.
    ```
 
    The application **role** (`agentiq`) is created automatically:
-   - Path B — by [`01_schema.sql`](01_schema.sql) (idempotent `CREATE ROLE`).
+   - Path B — by [`provision.sql`](provision.sql) (idempotent `CREATE ROLE`).
    - Path A — supply an existing role in `DATABASE_URL` (Alembic does not create
      roles); create it first if needed with
      `psql ... -c "CREATE ROLE agentiq LOGIN PASSWORD '<password>';"`.
 
-   Change the role password (in `01_schema.sql` for Path B) before running on a
+   Change the role password (in `provision.sql` for Path B) before running on a
    shared/production server.
 
 3. The connection string the backend will use:
@@ -95,25 +96,26 @@ You can also call the underlying script directly:
 
 ## Path B — Pure SQL bundle (`psql` only)
 
-No Python needed. After the prerequisite database exists, against an **empty**
-`agentiq` database. Run `01_schema.sql` as a superuser (or the schema owner) —
-it creates the `agentiq` role and assigns schema ownership before creating
-tables:
+No Python needed. After the prerequisite database exists, run the single
+[`provision.sql`](provision.sql) against an **empty** target database as a
+superuser (or the schema owner) — it creates the `agentiq` role and assigns
+schema ownership, then creates all tables and seeds the core reference rows:
 
 ```bash
 export PGPASSWORD='<password>'
-psql -h <DB_HOST> -p 5432 -U postgres -d agentiq -v ON_ERROR_STOP=1 -f 01_schema.sql
-psql -h <DB_HOST> -p 5432 -U agentiq  -d agentiq -v ON_ERROR_STOP=1 -f 02_seed.sql
+psql -h <DB_HOST> -p 5432 -U postgres -d <DB_NAME> -v ON_ERROR_STOP=1 -f provision.sql
 ```
 
-- [`01_schema.sql`](01_schema.sql) — creates the `agentiq` role + schema grants,
-  then all 25 tables, indexes, sequences, and the `alembic_version` stamp (so a
-  later `alembic upgrade head` correctly applies only *new* migrations).
-- [`02_seed.sql`](02_seed.sql) — core reference rows only (connectors, mappings,
-  permissions, uploads). No run/telemetry/audit data.
+- [`provision.sql`](provision.sql) — creates the `agentiq` role + schema grants,
+  then all 26 tables (including `org_licenses`), indexes, sequences, the core
+  reference seed (connectors, mappings, permissions, uploads) as idempotent
+  `INSERT … ON CONFLICT DO NOTHING`, and the `alembic_version` stamp (so a later
+  `alembic upgrade head` applies only *new* migrations). No run/telemetry/audit
+  data.
 
-> The SQL files set `search_path = ''` and fully schema-qualify every object
-> (a pg_dump safety default). Restore into a fresh database, not an existing one
+> `provision.sql` fully schema-qualifies every object and uses plain `INSERT`s
+> (not `COPY … FROM stdin`) and no `psql` meta-commands, so it runs under both
+> `psql` and any SQL client. Restore into a fresh database, not an existing one
 > with conflicting objects — `CREATE TABLE` statements are not `IF NOT EXISTS`.
 
 ---
@@ -121,7 +123,7 @@ psql -h <DB_HOST> -p 5432 -U agentiq  -d agentiq -v ON_ERROR_STOP=1 -f 02_seed.s
 ## Verification (either path)
 
 ```sql
-SELECT count(*) FROM information_schema.tables WHERE table_schema = 'public';  -- 25
+SELECT count(*) FROM information_schema.tables WHERE table_schema = 'public';  -- 26
 SELECT version_num FROM alembic_version;                                       -- current head
 SELECT count(*) FROM connectors;                                               -- > 0 if seeded
 ```
@@ -133,29 +135,34 @@ seeds the dev/owner workspace member and creates anything still missing.
 
 ## Regenerating the SQL bundle (keep Path B in sync)
 
-Path B is a snapshot of Path A. After adding/altering migrations, regenerate it
-from a database that has just been provisioned via Path A (so it is exactly at
-head). With `pg_dump`/`psql` v17 on `PATH` and `DATABASE_URL` exported:
+`provision.sql` is a snapshot of Path A. After adding/altering migrations,
+regenerate it from a database that has just been provisioned via Path A (so it is
+exactly at head). With `pg_dump`/`psql` on `PATH` and `DATABASE_URL` exported:
 
 ```bash
 cd backend
-# derive PG* connection vars from DATABASE_URL, then:
-pg_dump --schema-only --no-owner --no-privileges --no-comments \
-        --quote-all-identifiers "$PGDATABASE" > database/provision/01_schema.sql
-# append the version stamp (schema-qualified — search_path is '' in the dump):
-HEAD=$(psql -tAc "SELECT version_num FROM alembic_version")
-printf '\n-- Alembic version stamp (snapshot at head %s)\n' "$HEAD" >> database/provision/01_schema.sql
-printf 'INSERT INTO "public"."alembic_version" ("version_num") VALUES ('\''%s'\'') ON CONFLICT DO NOTHING;\n' "$HEAD" >> database/provision/01_schema.sql
-
-pg_dump --data-only --no-owner --no-privileges --quote-all-identifiers \
+# derive PG* connection vars from DATABASE_URL, then dump schema + seed into ONE file.
+# --inserts --on-conflict-do-nothing keeps the bundle psql- and client-portable
+# (no COPY FROM stdin); -t limits data to the core reference tables.
+pg_dump --no-owner --no-privileges --no-comments --quote-all-identifiers \
+        --inserts --on-conflict-do-nothing \
+        --schema=public \
         -t connectors -t mappings -t permissions -t uploads \
-        "$PGDATABASE" > database/provision/02_seed.sql
+        "$PGDATABASE" > /tmp/_data.sql        # seed rows only
+
+pg_dump --schema-only --no-owner --no-privileges --no-comments \
+        --quote-all-identifiers "$PGDATABASE" > database/provision/provision.sql
+
+HEAD=$(psql -tAc "SELECT version_num FROM alembic_version")
+cat /tmp/_data.sql >> database/provision/provision.sql
+printf '\nINSERT INTO "public"."alembic_version" ("version_num") VALUES ('\''%s'\'') ON CONFLICT DO NOTHING;\n' \
+       "$HEAD" >> database/provision/provision.sql
 ```
 
-> **After regenerating `01_schema.sql`**, re-add the application-role block that
-> `pg_dump` does not emit (it lived in the former `00_create_role_and_db.sql`).
-> Insert it just after the `SET default_table_access_method` line, before the
-> first `CREATE TABLE`:
+> **After regenerating**, (1) strip any `\restrict` / `\unrestrict` psql
+> meta-commands `pg_dump` emits (so the file runs under non-`psql` clients too),
+> and (2) re-add the application-role block that `pg_dump` does not emit. Insert
+> it just after the `SET` block, before the first `CREATE TABLE`:
 >
 > ```sql
 > DO

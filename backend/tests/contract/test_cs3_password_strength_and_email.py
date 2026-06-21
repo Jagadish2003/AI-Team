@@ -30,6 +30,7 @@ import pytest
 import app.routes_auth as routes_auth
 from app import db
 from app.auth.user_auth import hash_password, validate_password_strength
+from auth_helpers import activate_org_by_email
 
 # A password satisfying every CS-3 rule (>=8, upper, lower, special).
 STRONG = "Password1!"
@@ -52,13 +53,20 @@ def _register(client, *, email=None, password=STRONG):
         "/api/auth/register",
         json={"org_name": f"Org_{uuid.uuid4().hex[:8]}", "email": email, "password": password},
     )
+    # AUTH-2: a successful registration leaves the org pending_approval. Approve it
+    # (simulating the admin click) so the registrant can subsequently log in.
+    if resp.status_code == 201:
+        activate_org_by_email(email)
     return resp, email
 
 
 def _register_owner(client) -> str:
-    resp, _ = _register(client)
+    resp, email = _register(client)
     assert resp.status_code == 201, resp.text
-    return resp.json()["token"]
+    # AUTH-2: the JWT is issued on login (after approval), not at register.
+    login = client.post("/api/auth/login", json={"email": email, "password": STRONG})
+    assert login.status_code == 200, login.text
+    return login.json()["token"]
 
 
 def _create_invite(client, owner_token: str, *, email=None, role="analyst") -> str:
@@ -125,10 +133,14 @@ def test_ac4_register_weak_password_returns_422_with_unmet_rules(client):
 
 
 def test_ac5_register_strong_password_returns_201(client):
-    resp, _ = _register(client, password=STRONG)
+    resp, email = _register(client, password=STRONG)
     assert resp.status_code == 201, resp.text
-    assert resp.json()["token"]
-    assert resp.json()["user"]["role"] == "owner"
+    # AUTH-2: register returns a pending-approval ack; the owner JWT comes from
+    # logging in after approval (_register approved the org above).
+    login = client.post("/api/auth/login", json={"email": email, "password": STRONG})
+    assert login.status_code == 200, login.text
+    assert login.json()["token"]
+    assert login.json()["user"]["role"] == "owner"
 
 
 @pytest.mark.parametrize(
@@ -362,7 +374,9 @@ def test_ac14_register_succeeds_when_welcome_email_raises(client, monkeypatch):
     monkeypatch.setattr(routes_auth, "send_welcome_email", _boom)
     resp, _ = _register(client, password=STRONG)
     assert resp.status_code == 201, resp.text  # registration unaffected
-    assert resp.json()["token"]
+    # AUTH-2: register returns the pending-approval ack (no JWT); the point is the
+    # welcome-email failure didn't break registration.
+    assert resp.json()["status"] == "pending_approval"
 
 
 def test_ac14_invite_succeeds_when_invite_email_raises(client, monkeypatch):

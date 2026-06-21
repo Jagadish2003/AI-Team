@@ -30,6 +30,7 @@ import pytest
 
 from app import db
 from app.auth import user_auth
+from auth_helpers import activate_org_by_email
 
 
 def _email() -> str:
@@ -40,6 +41,33 @@ def _ip() -> str:
     # Unique-per-call IP so unrelated tests never share a rate-limit bucket.
     h = uuid.uuid4().int
     return f"10.{h % 256}.{(h >> 8) % 256}.{(h >> 16) % 256}"
+
+
+def _register_active_owner(org_name: str, email: str, password: str) -> dict:
+    """AUTH-2: register → approve (admin step, simulated) → login.
+
+    register_org_and_owner now returns only a pending-approval acknowledgement
+    (no JWT, no user), so this returns the LOGIN result instead — {token, user
+    {id,email,role,org_id}} — the same shape register used to return pre-AUTH-2.
+    """
+    reg = user_auth.register_org_and_owner(org_name, email, password)
+    assert reg["status"] == "pending_approval"
+    activate_org_by_email(email)
+    return user_auth.login(email, password, _ip())
+
+
+def _member_for_email(email: str) -> tuple[str, str]:
+    """Return (org_id, role) for the owner registered under `email`."""
+    con = db.connect()
+    try:
+        row = con.execute(
+            "SELECT wm.org_id, wm.role FROM workspace_members wm "
+            "JOIN users u ON u.id = wm.user_id WHERE u.email = %s",
+            (email.strip().lower(),),
+        ).fetchone()
+    finally:
+        con.close()
+    return (row[0], row[1])
 
 
 # ---------------------------------------------------------------------------
@@ -68,7 +96,9 @@ def test_password_longer_than_72_bytes_is_capped():
 
 def test_register_creates_org_user_member_and_jwt():
     email = _email()
-    result = user_auth.register_org_and_owner("Acme Bank", email, "supersecret1")
+    # AUTH-2: register itself returns a pending-approval ack (no JWT); the owner's
+    # JWT — carrying org_id + role — is issued on login after the org is approved.
+    result = _register_active_owner("Acme Bank", email, "supersecret1")
 
     assert result["user"]["email"] == email
     assert result["user"]["role"] == "owner"
@@ -96,8 +126,16 @@ def test_register_creates_org_user_member_and_jwt():
 
 def test_register_normalizes_email_case_and_whitespace():
     email = _email().upper()
-    result = user_auth.register_org_and_owner("Org", f"  {email}  ", "supersecret1")
-    assert result["user"]["email"] == email.strip().lower()
+    user_auth.register_org_and_owner("Org", f"  {email}  ", "supersecret1")
+    # AUTH-2: register returns no user; assert the stored email was normalized.
+    con = db.connect()
+    try:
+        row = con.execute(
+            "SELECT email FROM users WHERE email = %s", (email.strip().lower(),)
+        ).fetchone()
+    finally:
+        con.close()
+    assert row is not None and row[0] == email.strip().lower()
 
 
 def test_register_duplicate_email_raises():
@@ -138,15 +176,14 @@ def test_register_stores_bcrypt_hash_no_plaintext():
     con = db.connect()
     try:
         stored = con.execute(
-            "SELECT password_hash FROM users WHERE id = %s", (result["user"]["id"],)
+            "SELECT password_hash FROM users WHERE email = %s", (email,)
         ).fetchone()[0]
     finally:
         con.close()
 
     assert stored.startswith("$2b$12$")
     assert password not in stored
-    # The returned dict must never echo the password back (AC16).
-    assert "password" not in result["user"]
+    # The returned dict (pending-approval ack) must never echo the password (AC16).
     assert password not in str(result)
 
 
@@ -157,10 +194,12 @@ def test_register_stores_bcrypt_hash_no_plaintext():
 
 def test_login_success_returns_jwt_with_required_claims():
     email = _email()
-    reg = user_auth.register_org_and_owner("Claim Org", email, "supersecret1")
+    user_auth.register_org_and_owner("Claim Org", email, "supersecret1")
+    activate_org_by_email(email)  # AUTH-2 admin approval (simulated)
 
     result = user_auth.login(email, "supersecret1", _ip())
-    assert result["user"]["org_id"] == reg["user"]["org_id"]
+    org_id = result["user"]["org_id"]
+    user_id = result["user"]["id"]
     assert result["user"]["role"] == "owner"
 
     payload = jwt.decode(
@@ -168,8 +207,8 @@ def test_login_success_returns_jwt_with_required_claims():
     )
     for claim in ("sub", "org_id", "role", "jti", "iat", "exp"):
         assert claim in payload, f"missing claim {claim}"
-    assert payload["sub"] == reg["user"]["id"]
-    assert payload["org_id"] == reg["user"]["org_id"]
+    assert payload["sub"] == user_id
+    assert payload["org_id"] == org_id
     assert payload["role"] == "owner"
     # 8-hour expiry.
     assert payload["exp"] - payload["iat"] == user_auth.JWT_EXPIRY_HOURS * 3600
@@ -177,12 +216,13 @@ def test_login_success_returns_jwt_with_required_claims():
 
 def test_login_updates_last_login_at():
     email = _email()
-    reg = user_auth.register_org_and_owner("Org", email, "supersecret1")
-    user_auth.login(email, "supersecret1", _ip())
+    user_auth.register_org_and_owner("Org", email, "supersecret1")
+    activate_org_by_email(email)  # AUTH-2 admin approval (simulated)
+    result = user_auth.login(email, "supersecret1", _ip())
     con = db.connect()
     try:
         last = con.execute(
-            "SELECT last_login_at FROM users WHERE id = %s", (reg["user"]["id"],)
+            "SELECT last_login_at FROM users WHERE id = %s", (result["user"]["id"],)
         ).fetchone()[0]
     finally:
         con.close()
@@ -280,6 +320,8 @@ def test_rate_limit_is_scoped_to_email_not_ip():
     other = _email()
     user_auth.register_org_and_owner("Org Blocked", blocked, "supersecret1")
     user_auth.register_org_and_owner("Org Other", other, "supersecret2")
+    activate_org_by_email(blocked)  # AUTH-2 admin approval (simulated)
+    activate_org_by_email(other)
 
     # 5 failures for `blocked` from the shared IP → that email is throttled.
     for _ in range(5):
@@ -299,6 +341,7 @@ def test_rate_limit_is_scoped_to_email_not_ip():
 def test_successful_login_clears_failed_attempts_for_email():
     email = _email()
     user_auth.register_org_and_owner("Org", email, "supersecret1")
+    activate_org_by_email(email)  # AUTH-2 admin approval (simulated)
 
     # 4 failures (under the threshold of 5) on distinct IPs.
     for _ in range(4):
@@ -324,6 +367,7 @@ def test_successful_login_clears_failed_attempts_for_email():
 def test_logout_revokes_token():
     email = _email()
     user_auth.register_org_and_owner("Org", email, "supersecret1")
+    activate_org_by_email(email)  # AUTH-2 admin approval (simulated)
     token = user_auth.login(email, "supersecret1", _ip())["token"]
 
     assert user_auth.verify_jwt(token)["email"] == email  # valid before logout
@@ -335,6 +379,7 @@ def test_logout_revokes_token():
 def test_logout_is_idempotent():
     email = _email()
     user_auth.register_org_and_owner("Org", email, "supersecret1")
+    activate_org_by_email(email)  # AUTH-2 admin approval (simulated)
     token = user_auth.login(email, "supersecret1", _ip())["token"]
     user_auth.logout_token(token)
     user_auth.logout_token(token)  # second call must not raise
@@ -389,15 +434,19 @@ def test_register_same_org_name_creates_separate_org_not_a_join():
     owns; joining an existing workspace is invite-only.
     """
     name = "Shared Bank Name"
-    a = user_auth.register_org_and_owner(name, _email(), "supersecret1")
-    b = user_auth.register_org_and_owner(name, _email(), "supersecret2")
+    email_a, email_b = _email(), _email()
+    user_auth.register_org_and_owner(name, email_a, "supersecret1")
+    user_auth.register_org_and_owner(name, email_b, "supersecret2")
+    # AUTH-2: register returns no user; read each owner's membership directly.
+    org_a, role_a = _member_for_email(email_a)
+    org_b, role_b = _member_for_email(email_b)
 
     # Distinct workspaces — no cross-org membership leaked by name collision.
-    assert a["user"]["org_id"] != b["user"]["org_id"]
+    assert org_a != org_b
     # Each registrant OWNS their own workspace; neither is silently an analyst
     # joined to the other's org.
-    assert a["user"]["role"] == "owner"
-    assert b["user"]["role"] == "owner"
+    assert role_a == "owner"
+    assert role_b == "owner"
 
 
 # ---------------------------------------------------------------------------
@@ -468,8 +517,8 @@ def test_password_change_revokes_existing_tokens():
 
 
 def test_password_change_marker_does_not_affect_other_users():
-    a = user_auth.register_org_and_owner("Org A", _email(), "supersecret1")
-    b = user_auth.register_org_and_owner("Org B", _email(), "supersecret2")
+    a = _register_active_owner("Org A", _email(), "supersecret1")
+    b = _register_active_owner("Org B", _email(), "supersecret2")
     user_auth.mark_password_changed(a["user"]["id"])
     # B's token is untouched — the marker is per-user.
     assert user_auth.verify_jwt(b["token"])["sub"] == b["user"]["id"]

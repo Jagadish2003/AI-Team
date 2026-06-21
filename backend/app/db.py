@@ -300,9 +300,13 @@ def require_run_exists(run_id: str) -> Dict[str, Any]:
 
 
 def delete_run_events(run_id: str) -> None:
+    # Soft delete: the app DB role has UPDATE but not DELETE. Mark the run's
+    # events deleted; insert_run_events re-activates any (run_id, seq) it rewrites,
+    # and get_run_events filters is_deleted, so a shrunk event list correctly drops
+    # the now-stale higher-seq rows.
     con = connect()
     cur = con.cursor()
-    cur.execute("DELETE FROM run_events WHERE run_id = %s", (run_id,))
+    cur.execute("UPDATE run_events SET is_deleted = TRUE WHERE run_id = %s", (run_id,))
     con.commit()
     con.close()
 
@@ -313,7 +317,8 @@ def insert_run_events(run_id: str, events: List[Dict[str, Any]]) -> None:
     for i, ev in enumerate(events):
         cur.execute(
             "INSERT INTO run_events (run_id, seq, payload) VALUES (%s, %s, %s) "
-            "ON CONFLICT (run_id, seq) DO UPDATE SET payload=EXCLUDED.payload",
+            "ON CONFLICT (run_id, seq) DO UPDATE SET "
+            "payload=EXCLUDED.payload, is_deleted=FALSE",
             (run_id, i, json.dumps(ev)),
         )
     con.commit()
@@ -324,7 +329,9 @@ def get_run_events(run_id: str) -> List[Dict[str, Any]]:
     con = connect()
     cur = con.cursor()
     cur.execute(
-        "SELECT payload FROM run_events WHERE run_id = %s ORDER BY seq ASC", (run_id,)
+        "SELECT payload FROM run_events WHERE run_id = %s AND is_deleted = FALSE "
+        "ORDER BY seq ASC",
+        (run_id,),
     )
     rows = cur.fetchall()
     con.close()

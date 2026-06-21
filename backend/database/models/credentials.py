@@ -20,9 +20,15 @@ CREATE TABLE IF NOT EXISTS credentials (
     created_at      TEXT NOT NULL,
     updated_at      TEXT NOT NULL,
     refresh_failed  INTEGER NOT NULL DEFAULT 0,
+    is_deleted      BOOLEAN NOT NULL DEFAULT FALSE,
     UNIQUE(org_id, connector_id)
 )
 """
+
+# Applied for databases that pre-date the soft-delete column (idempotent).
+ALTER_CREDENTIALS_ADD_IS_DELETED = (
+    "ALTER TABLE credentials ADD COLUMN IF NOT EXISTS is_deleted BOOLEAN NOT NULL DEFAULT FALSE"
+)
 
 # Applied for databases that pre-date this column. PostgreSQL supports
 # ADD COLUMN IF NOT EXISTS, so this is idempotent without relying on catching a

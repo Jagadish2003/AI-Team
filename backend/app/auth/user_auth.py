@@ -486,8 +486,11 @@ def record_login_attempt(email: str, ip_address: str, succeeded: bool) -> None:
             (str(uuid4()), email, ip_address, db.now_iso(), bool(succeeded)),
         )
         if succeeded:
+            # Soft delete (app role has no DELETE): mark prior failures inactive so
+            # _count_failed_attempts (which filters is_deleted) no longer counts them.
             cur.execute(
-                "DELETE FROM login_attempts WHERE email = %s AND succeeded = FALSE",
+                "UPDATE login_attempts SET is_deleted = TRUE "
+                "WHERE email = %s AND succeeded = FALSE",
                 (email,),
             )
         con.commit()
@@ -507,7 +510,8 @@ def _count_failed_attempts(
         cur = con.cursor()
         cur.execute(
             f"SELECT COUNT(*) FROM login_attempts "
-            f"WHERE {column} = %s AND succeeded = FALSE AND attempted_at >= %s",
+            f"WHERE {column} = %s AND succeeded = FALSE AND is_deleted = FALSE "
+            f"AND attempted_at >= %s",
             (value, since.isoformat()),
         )
         return int(cur.fetchone()[0])
@@ -535,7 +539,8 @@ def _seconds_until_email_unblocked(email: str) -> int:
         cur = con.cursor()
         cur.execute(
             "SELECT attempted_at FROM login_attempts "
-            "WHERE email = %s AND succeeded = FALSE AND attempted_at >= %s "
+            "WHERE email = %s AND succeeded = FALSE AND is_deleted = FALSE "
+            "AND attempted_at >= %s "
             "ORDER BY attempted_at DESC LIMIT 1 OFFSET %s",
             (email, window_start.isoformat(), RATE_LIMIT_MAX_ATTEMPTS - 1),
         )
@@ -826,7 +831,8 @@ def _get_workspace_member(user_id: str) -> dict | None:
     try:
         cur = con.cursor()
         cur.execute(
-            "SELECT org_id, role FROM workspace_members WHERE user_id = %s "
+            "SELECT org_id, role FROM workspace_members "
+            "WHERE user_id = %s AND is_deleted = FALSE "
             "ORDER BY created_at ASC LIMIT 1",
             (user_id,),
         )

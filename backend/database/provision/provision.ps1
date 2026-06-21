@@ -6,7 +6,7 @@
 .DESCRIPTION
     Maintained provisioning path. Idempotent and safe to re-run. Assumes the
     role and database already exist (the database must be pre-created; the
-    agentiq role is created by 01_schema.sql in the pure-SQL path).
+    agentiq role is created by provision.sql in the pure-SQL path).
 
 .EXAMPLE
     $env:DATABASE_URL = "postgresql://agentiq:secret@db-host:5432/agentiq"

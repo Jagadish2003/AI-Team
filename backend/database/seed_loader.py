@@ -74,9 +74,14 @@ def ensure_db(conn) -> None:
             run_id TEXT NOT NULL,
             seq INTEGER NOT NULL,
             payload TEXT NOT NULL,
+            is_deleted BOOLEAN NOT NULL DEFAULT FALSE,
             PRIMARY KEY (run_id, seq)
         )
     """)
+    # Soft-delete column for DBs created before it existed (idempotent).
+    cur.execute(
+        "ALTER TABLE run_events ADD COLUMN IF NOT EXISTS is_deleted BOOLEAN NOT NULL DEFAULT FALSE"
+    )
 
     cur.execute("CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, payload TEXT NOT NULL)")
     conn.commit()

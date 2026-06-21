@@ -36,6 +36,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 
 from ..license_runtime import get_current_license_status
 from ..licensing import LicenseStatus
+from .tenancy import resolve_request_org_id
 
 logger = logging.getLogger(__name__)
 
@@ -83,16 +84,20 @@ def _blocked_response(status: str) -> JSONResponse:
 class LicenseGateMiddleware(BaseHTTPMiddleware):
     """Block run-trigger endpoints unless the license is live-validated healthy.
 
-    Status is computed LIVE per request via get_current_license_status() (which
-    re-validates the stored key against the current clock); the gate never trusts
-    a cached status, so a failed/stale periodic check cannot open it. A
-    status-check error fails closed.
+    Status is computed LIVE per request for the request's org via
+    get_current_license_status(org_id=...) (which re-validates that org's stored
+    key against the current clock); the gate never trusts a cached status, so a
+    failed/stale periodic check cannot open it. The org is resolved straight from
+    the request (resolve_request_org_id) because this middleware runs OUTSIDE the
+    tenancy middleware, so the tenancy ContextVar is not yet set. A status-check
+    error fails closed.
     """
 
     async def dispatch(self, request: Request, call_next: Callable) -> Response:
         if _is_gated_run_request(request.method, request.url.path):
             try:
-                status = get_current_license_status().get("status")
+                org_id = resolve_request_org_id(request)
+                status = get_current_license_status(org_id=org_id).get("status")
             except Exception:
                 # Fail CLOSED for runs: a status-check error means we cannot
                 # confirm a live license, so do not let a discovery run proceed.

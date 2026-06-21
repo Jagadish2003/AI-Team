@@ -30,6 +30,7 @@ from alembic.config import Config as AlembicConfig
 from app import db, security
 from app.auth import user_auth
 from app.middleware import tenancy
+from auth_helpers import activate_org_by_email, member_for_email
 
 BACKEND_DIR = Path(__file__).resolve().parents[2]
 
@@ -112,7 +113,11 @@ def test_change_password_invalidates_existing_token_end_to_end(client):
         json={"org_name": f"Org {uuid.uuid4().hex[:6]}", "email": email, "password": "Supersecret1!"},
     )
     assert reg.status_code == 201, reg.text
-    token = reg.json()["token"]
+    # AUTH-2: approve + login to get the JWT (register issues none).
+    activate_org_by_email(email)
+    token = client.post(
+        "/api/auth/login", json={"email": email, "password": "Supersecret1!"}
+    ).json()["token"]
     auth = {"Authorization": f"Bearer {token}"}
 
     # Token works before the change.
@@ -136,17 +141,25 @@ def test_change_password_invalidates_existing_token_end_to_end(client):
 
 
 def test_runs_list_is_org_scoped_between_two_orgs(client):
-    org_a = user_auth.register_org_and_owner(f"A {uuid.uuid4().hex[:6]}", _email(), "Supersecret1!")
-    org_b = user_auth.register_org_and_owner(f"B {uuid.uuid4().hex[:6]}", _email(), "supersecret2")
-    org_a_id, org_b_id = org_a["user"]["org_id"], org_b["user"]["org_id"]
+    email_a, email_b = _email(), _email()
+    user_auth.register_org_and_owner(f"A {uuid.uuid4().hex[:6]}", email_a, "Supersecret1!")
+    user_auth.register_org_and_owner(f"B {uuid.uuid4().hex[:6]}", email_b, "supersecret2")
+    # AUTH-2: register returns no user/token — read org ids from membership and get
+    # each owner's JWT by approving + logging in.
+    org_a_id, _ = member_for_email(email_a)
+    org_b_id, _ = member_for_email(email_b)
+    activate_org_by_email(email_a)
+    activate_org_by_email(email_b)
+    token_a = client.post("/api/auth/login", json={"email": email_a, "password": "Supersecret1!"}).json()["token"]
+    token_b = client.post("/api/auth/login", json={"email": email_b, "password": "supersecret2"}).json()["token"]
 
     run_a = f"RUN_A_{uuid.uuid4().hex[:8]}"
     run_b = f"RUN_B_{uuid.uuid4().hex[:8]}"
     db.upsert("runs", run_a, {"id": run_a, "org_id": org_a_id, "status": "complete", "startedAt": "2026-01-01T00:00:00Z"})
     db.upsert("runs", run_b, {"id": run_b, "org_id": org_b_id, "status": "complete", "startedAt": "2026-01-02T00:00:00Z"})
 
-    a_resp = client.get("/api/runs", headers={"Authorization": f"Bearer {org_a['token']}"})
-    b_resp = client.get("/api/runs", headers={"Authorization": f"Bearer {org_b['token']}"})
+    a_resp = client.get("/api/runs", headers={"Authorization": f"Bearer {token_a}"})
+    b_resp = client.get("/api/runs", headers={"Authorization": f"Bearer {token_b}"})
     assert a_resp.status_code == 200 and b_resp.status_code == 200
 
     a_ids = {r["id"] for r in a_resp.json()}

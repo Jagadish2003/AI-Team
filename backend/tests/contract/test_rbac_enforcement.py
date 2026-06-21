@@ -501,6 +501,16 @@ _PUBLIC_ROUTES = {
     # in must be able to request and complete a reset without a credential.
     "/api/auth/forgot-password",
     "/api/auth/reset-password",
+    # AUTH-2: org-approval links are opened by a CloudFulcrum admin from an email;
+    # the unguessable single-use approval token in the query string IS the
+    # credential, so these carry no require_auth (GET renders a confirmation page,
+    # POST commits the decision). See routes_auth.py security notes.
+    "/api/auth/org-approval/approve",
+    "/api/auth/org-approval/reject",
+    # CS-2: the OAuth provider redirects the browser here with no app credential
+    # (the state nonce is the CSRF guard; a prod proxy injects the Bearer, and dev
+    # is gated by OAUTH_CALLBACK_ALLOW_UNAUTH).
+    "/api/connectors/oauth/callback",
     # FastAPI / Starlette meta routes (filtered out as non-APIRoute anyway, but
     # listed here for documentation completeness)
     "/openapi.json",

@@ -16,6 +16,7 @@ import LoginPage from "./pages/LoginPage";
 import RegisterPage from "./pages/RegisterPage";
 import PendingApprovalPage from "./pages/PendingApprovalPage";
 import AcceptInvitePage from "./pages/AcceptInvitePage";
+import OAuthCallbackPage from "./pages/OAuthCallbackPage";
 import ForgotPasswordPage from "./pages/ForgotPasswordPage";
 import ResetPasswordPage from "./pages/ResetPasswordPage";
 
@@ -69,6 +70,19 @@ export default function App() {
                             <Route path="/accept-invite" element={<AcceptInvitePage />} />
                             <Route path="/forgot-password" element={<ForgotPasswordPage />} />
                             <Route path="/reset-password" element={<ResetPasswordPage />} />
+
+                            {/*
+                             * CS-2 / AT-325: OAuth callback landing page. PUBLIC
+                             * (outside AuthGuard) — the backend redirects the
+                             * browser here after the provider round-trip, and the
+                             * session may be momentarily unavailable during the
+                             * redirect cycle. OAuthCallbackPage refetches the
+                             * connector list and routes back to Integration Hub.
+                             */}
+                            <Route
+                              path="/oauth/callback"
+                              element={<OAuthCallbackPage />}
+                            />
 
                             {/*
                              * ── Protected routes ─────────────────────────────

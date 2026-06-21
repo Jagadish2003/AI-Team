@@ -1,7 +1,6 @@
 import os
 import subprocess
 import sys
-from datetime import datetime, timezone
 from pathlib import Path
 
 import psycopg2
@@ -118,6 +117,12 @@ os.environ["DATABASE_URL"] = TEST_DATABASE_URL
 os.environ["INGEST_MODE"] = "offline"
 os.environ["ANTHROPIC_API_KEY"] = ""
 os.environ["AGENTIQ_DISABLE_BACKGROUND_JOBS"] = "1"
+# OAUTH_CALLBACK_ALLOW_UNAUTH is a local-dev convenience that lets the OAuth
+# callback complete without a Bearer header (a provider's browser redirect can
+# carry none). It must NOT be active under tests, or the Bearer-required
+# behaviour (AC17) cannot be asserted. Force it off regardless of backend/.env.
+os.environ["OAUTH_CALLBACK_ALLOW_UNAUTH"] = ""
+
 # Hermetic email: never contact a real SMTP server during tests. Per-test
 # overrides via monkeypatch.setenv (e.g. test_email_service.py) still apply.
 os.environ["EMAIL_PROVIDER"] = "noop"
@@ -497,6 +502,7 @@ def pytest_configure(config):
         # database/provision/provision.sh), so create them here for the
         # resettable test DB. A pre-provisioned shared DB already has them.
         from database.models.credentials import (
+            ALTER_CREDENTIALS_ADD_IS_DELETED,
             ALTER_CREDENTIALS_ADD_REFRESH_FAILED,
             CREATE_CREDENTIALS_IDX_CONNECTOR,
             CREATE_CREDENTIALS_IDX_ORG,
@@ -510,14 +516,17 @@ def pytest_configure(config):
                 _cur.execute(CREATE_CREDENTIALS_IDX_ORG)
                 _cur.execute(CREATE_CREDENTIALS_IDX_CONNECTOR)
                 _cur.execute(ALTER_CREDENTIALS_ADD_REFRESH_FAILED)
+                _cur.execute(ALTER_CREDENTIALS_ADD_IS_DELETED)
                 _cur.execute(
                     "CREATE TABLE IF NOT EXISTS nonces ("
-                    "key TEXT PRIMARY KEY, data TEXT NOT NULL)"
+                    "key TEXT PRIMARY KEY, data TEXT NOT NULL, "
+                    "is_deleted BOOLEAN NOT NULL DEFAULT FALSE)"
                 )
                 _cur.execute(
                     "CREATE TABLE IF NOT EXISTS oauth_nonces ("
                     "nonce TEXT PRIMARY KEY, connector_id TEXT NOT NULL, "
-                    "expires_at TEXT NOT NULL)"
+                    "expires_at TEXT NOT NULL, "
+                    "is_deleted BOOLEAN NOT NULL DEFAULT FALSE)"
                 )
             _lazy_con.commit()
         finally:
@@ -527,31 +536,15 @@ def pytest_configure(config):
     # pass with RBAC applied. The app's lifespan does this for context-managed
     # TestClients, but some test modules instantiate TestClient(app) directly
     # (no lifespan), so seed here to cover the whole suite.
+    #
+    # seed_owner() upserts the owner row using only INSERT/UPDATE — it does NOT
+    # create the workspace_members table. The table is owned by the provisioning
+    # layer (alembic on a resettable DB, or the pre-provisioned shared DB), so the
+    # test harness performs no DDL here. This lets the suite run under a
+    # least-privilege app role that has no CREATE on the public schema.
     from app.rbac import seed_owner
 
     seed_owner("default", os.environ["DEV_JWT"])
-
-    from database.models.workspace_members import CREATE_WORKSPACE_MEMBERS_TABLE
-
-    con = psycopg2.connect(os.environ["DATABASE_URL"])
-    try:
-        with con.cursor() as cur:
-            cur.execute(CREATE_WORKSPACE_MEMBERS_TABLE)
-            cur.execute(
-                """
-                INSERT INTO workspace_members (org_id, user_id, role, created_at)
-                VALUES (%s, %s, 'owner', %s)
-                ON CONFLICT (org_id, user_id) DO NOTHING
-                """,
-                (
-                    "default",
-                    os.environ["DEV_JWT"],
-                    datetime.now(timezone.utc).isoformat(),
-                ),
-            )
-        con.commit()
-    finally:
-        con.close()
 
     # Guarantee a clean slate for high-churn tables at session start, even when
     # the schema could NOT be dropped above (a shared/provisioned DB where the
@@ -601,41 +594,57 @@ def _license_gate_valid_by_default():
 
 @pytest.fixture(scope="session", autouse=True)
 def _preserve_installed_license():
-    """Snapshot and restore the app-global license KV rows around the session.
+    """Snapshot and restore the per-org ``org_licenses`` rows around the session.
 
-    The license contract tests write/clear ``license:key`` (and ``last_seen`` /
-    ``last_status``) directly in the shared ``kv`` table. When the contract DB
-    cannot be isolated — e.g. this environment lacks the privilege to reset the
-    schema and falls back to the real provisioned DB — those writes land in the
-    developer's dev database and clobber a license they pasted into the UI
-    (symptom: the License page flips to "invalid" after a test run / restart).
+    The license contract tests write/clear rows in ``org_licenses`` directly.
+    When the contract DB cannot be isolated — e.g. this environment lacks the
+    privilege to reset the schema and falls back to the real provisioned DB —
+    those writes land in the developer's dev database and clobber a license they
+    pasted into the UI (symptom: the License page flips to "invalid" after a test
+    run / restart).
 
     Snapshotting before the suite and restoring after means running the tests
     never permanently destroys an installed license. Within the session tests
     still manage their own license state; this only guarantees the pre-existing
-    value is put back at the end.
+    rows are put back at the end.
     """
     from app import db
-    from app.license_runtime import (
-        LICENSE_KEY_KV,
-        LICENSE_LAST_SEEN_KV,
-        LICENSE_LAST_STATUS_KV,
-    )
 
-    keys = (LICENSE_KEY_KV, LICENSE_LAST_SEEN_KV, LICENSE_LAST_STATUS_KV)
+    saved = None
     try:
-        saved = {k: db.kv_get(k) for k in keys}
+        con = db.connect()
+        try:
+            cur = con.cursor()
+            cur.execute(
+                "SELECT org_id, license_key, last_seen_date, last_status "
+                "FROM org_licenses"
+            )
+            saved = [tuple(r) for r in cur.fetchall()]
+        finally:
+            con.close()
     except Exception:
-        saved = None  # DB not ready — nothing to preserve
+        saved = None  # DB/table not ready — nothing to preserve
     try:
         yield
     finally:
         if saved is not None:
-            for k, v in saved.items():
+            try:
+                con = db.connect()
                 try:
-                    db.kv_set(k, v)
-                except Exception:
-                    pass
+                    cur = con.cursor()
+                    cur.execute("DELETE FROM org_licenses")
+                    for org_id, license_key, last_seen, last_status in saved:
+                        cur.execute(
+                            "INSERT INTO org_licenses "
+                            "(org_id, license_key, last_seen_date, last_status) "
+                            "VALUES (%s, %s, %s, %s)",
+                            (org_id, license_key, last_seen, last_status),
+                        )
+                    con.commit()
+                finally:
+                    con.close()
+            except Exception:
+                pass
 
 
 @pytest.fixture(scope="session")

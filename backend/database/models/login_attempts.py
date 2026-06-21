@@ -26,7 +26,8 @@ CREATE TABLE IF NOT EXISTS login_attempts (
     email        VARCHAR(256) NOT NULL,
     ip_address   VARCHAR(64)  NOT NULL,
     attempted_at TIMESTAMP    NOT NULL,
-    succeeded    BOOLEAN      NOT NULL
+    succeeded    BOOLEAN      NOT NULL,
+    is_deleted   BOOLEAN      NOT NULL DEFAULT FALSE
 )
 """
 

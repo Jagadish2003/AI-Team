@@ -20,7 +20,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app import db
-from app.license_runtime import LICENSE_KEY_KV
+from app.license_runtime import read_org_license, set_org_license_key
 
 AUTH = {"Authorization": "Bearer dev-token-change-me"}
 DEV_USER = "dev-token-change-me"
@@ -87,16 +87,16 @@ def test_owner_post_valid_key_stores_and_refreshes(client: TestClient, monkeypat
         "app.routes_license.validate_license", lambda *a, **k: dict(_VALID_RESULT)
     )
     headers = _set_role("owner")
+    org_id = headers["X-Org-Id"]
     key = f"valid-key-{uuid.uuid4().hex}"
-    db.kv_set(LICENSE_KEY_KV, None)  # clean slate
 
     resp = client.post(UPDATE_PATH, json={"key": key}, headers=headers)
 
     assert resp.status_code == 200, resp.text
     assert resp.json()["status"] == "valid"
     assert resp.json()["term"] == 12
-    # The valid key was persisted to the shared kv slot the validator reads.
-    assert db.kv_get(LICENSE_KEY_KV) == key
+    # The valid key was persisted to THIS org's row in org_licenses.
+    assert read_org_license(org_id)["license_key"] == key
 
 
 # --------------------------------------------------------------------------
@@ -108,15 +108,16 @@ def test_owner_post_invalid_key_rejected_stores_nothing(client: TestClient, monk
         lambda *a, **k: {"status": "invalid", "reason": "signature_or_format"},
     )
     headers = _set_role("owner")
+    org_id = headers["X-Org-Id"]
     existing = f"good-key-{uuid.uuid4().hex}"
-    db.kv_set(LICENSE_KEY_KV, existing)  # a working key already installed
+    set_org_license_key(org_id, existing)  # a working key already installed
 
     resp = client.post(UPDATE_PATH, json={"key": "tampered.bad"}, headers=headers)
 
     assert resp.status_code == 400
     assert "not valid" in resp.json()["detail"].lower()
     # The previously working key must be untouched.
-    assert db.kv_get(LICENSE_KEY_KV) == existing
+    assert read_org_license(org_id)["license_key"] == existing
 
 
 # --------------------------------------------------------------------------

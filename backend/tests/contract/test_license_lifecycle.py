@@ -32,13 +32,15 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from app import db
 from app.license_runtime import (
-    LICENSE_KEY_KV,
-    LICENSE_LAST_SEEN_KV,
-    LICENSE_LAST_STATUS_KV,
     evaluate_license,
+    persist_org_status,
+    read_org_license,
+    set_org_license_key,
 )
 from app.license_runtime import get_current_license_status as real_status
 from app.licensing import LicenseStatus, validate_license
+
+DEV_DEFAULT_ORG = "default"
 
 AUTH = {"Authorization": "Bearer dev-token-change-me"}
 DEV_USER = "dev-token-change-me"
@@ -88,10 +90,35 @@ def _use_throwaway_public_key(monkeypatch):
     monkeypatch.setattr("app.licensing.load_public_key", lambda *a, **k: _PUB)
 
 
-def _reset_license_kv() -> None:
-    db.kv_set(LICENSE_KEY_KV, None)
-    db.kv_set(LICENSE_LAST_SEEN_KV, None)
-    db.kv_set(LICENSE_LAST_STATUS_KV, None)
+def _reset_license(org_id: str = DEV_DEFAULT_ORG) -> None:
+    """Reset an org's license state between tests (defaults to the dev/default org).
+
+    Prefers a real DELETE (privileged test role). Under the least-privilege app DB
+    role (no DELETE), falls back to clearing the clock baseline + cached status via
+    UPDATE — which is what actually matters for isolation on the reused 'default'
+    org: a prior test's future last_seen_date would otherwise trip the
+    clock-rollback guard in the next default-org test. license_key is overwritten
+    by whichever test installs one, and the no-license tests use fresh unique orgs.
+    Autocommit so a denied DELETE doesn't poison a transaction.
+    """
+    con = db.connect()
+    con.autocommit = True
+    try:
+        try:
+            con.cursor().execute("DELETE FROM org_licenses WHERE org_id = %s", (org_id,))
+            return
+        except Exception:
+            pass
+        try:
+            con.cursor().execute(
+                "UPDATE org_licenses SET last_seen_date = NULL, last_status = NULL "
+                "WHERE org_id = %s",
+                (org_id,),
+            )
+        except Exception:
+            pass
+    finally:
+        con.close()
 
 
 def _set_role(role: str) -> dict:
@@ -152,10 +179,10 @@ def test_tampered_key_is_invalid():
 # 5 + AC8: clock-rollback guard via the runtime
 # ===========================================================================
 def test_clock_rollback_is_readonly_and_emits_anomaly(monkeypatch):
-    _reset_license_kv()
+    _reset_license()
     # A valid key is installed, but the stored last_seen is far in the future.
-    db.kv_set(LICENSE_KEY_KV, _mint(expires_at=_iso(120)))
-    db.kv_set(LICENSE_LAST_SEEN_KV, _iso(10))  # 10 days ahead of "today"
+    set_org_license_key(DEV_DEFAULT_ORG, _mint(expires_at=_iso(120)))
+    persist_org_status(DEV_DEFAULT_ORG, _iso(10), None)  # 10 days ahead of "today"
 
     events: list[tuple] = []
     monkeypatch.setattr(
@@ -163,7 +190,9 @@ def test_clock_rollback_is_readonly_and_emits_anomaly(monkeypatch):
         lambda name, payload=None: events.append((name, payload)),
     )
 
-    result = evaluate_license(today=datetime.date.today(), persist=False, emit=True)
+    result = evaluate_license(
+        org_id=DEV_DEFAULT_ORG, today=datetime.date.today(), persist=False, emit=True
+    )
 
     assert result["status"] == LicenseStatus.READONLY
     assert result["reason"] == "clock_rollback"
@@ -174,8 +203,8 @@ def test_clock_rollback_is_readonly_and_emits_anomaly(monkeypatch):
 # 3 + AC5: past-grace blocks discovery runs but leaves reads viewable
 # ===========================================================================
 def test_readonly_blocks_runs_but_reads_viewable(client, monkeypatch):
-    _reset_license_kv()
-    db.kv_set(LICENSE_KEY_KV, _mint(expires_at=_iso(-30), grace_days=14))  # past grace
+    _reset_license()
+    set_org_license_key(DEV_DEFAULT_ORG, _mint(expires_at=_iso(-30), grace_days=14))  # past grace
     # Point the gate at the REAL status evaluator (overriding the session
     # "always valid" fixture) so it derives read-only from the stored key.
     monkeypatch.setattr(GATE, real_status)
@@ -191,8 +220,8 @@ def test_readonly_blocks_runs_but_reads_viewable(client, monkeypatch):
 
 
 def test_valid_key_does_not_block_runs(client, monkeypatch):
-    _reset_license_kv()
-    db.kv_set(LICENSE_KEY_KV, _mint(expires_at=_iso(120)))
+    _reset_license()
+    set_org_license_key(DEV_DEFAULT_ORG, _mint(expires_at=_iso(120)))
     monkeypatch.setattr(GATE, real_status)
 
     resp = client.post("/api/runs/start", json={}, headers=AUTH)
@@ -204,17 +233,19 @@ def test_valid_key_does_not_block_runs(client, monkeypatch):
 # 6 + AC7: a new key pasted via the admin route updates status
 # ===========================================================================
 def test_admin_update_key_updates_status(client):
-    _reset_license_kv()
     headers = _set_role("owner")
+    org_id = headers["X-Org-Id"]
+    _reset_license(org_id)
     key = _mint(expires_at=_iso(200))
 
     resp = client.post(UPDATE_PATH, json={"key": key}, headers=headers)
     assert resp.status_code == 200, resp.text
     assert resp.json()["status"] == LicenseStatus.VALID
-    assert db.kv_get(LICENSE_KEY_KV) == key  # validate-before-store persisted it
+    # validate-before-store persisted the key to THIS org's row.
+    assert read_org_license(org_id)["license_key"] == key
     # The cached status is refreshed on update so the DB matches the live status
     # immediately (no lag until the next periodic check).
-    assert db.kv_get(LICENSE_LAST_STATUS_KV) == LicenseStatus.VALID
+    assert read_org_license(org_id)["last_status"] == LicenseStatus.VALID
 
     status = client.get(STATUS_PATH, headers=headers)
     assert status.status_code == 200
@@ -223,15 +254,16 @@ def test_admin_update_key_updates_status(client):
 
 
 def test_admin_update_rejects_tampered_key_and_keeps_existing(client):
-    _reset_license_kv()
     headers = _set_role("owner")
+    org_id = headers["X-Org-Id"]
+    _reset_license(org_id)
     good = _mint(expires_at=_iso(200))
-    db.kv_set(LICENSE_KEY_KV, good)  # a working key already installed
+    set_org_license_key(org_id, good)  # a working key already installed
 
     resp = client.post(UPDATE_PATH, json={"key": "tampered.bad"}, headers=headers)
     assert resp.status_code == 400
     assert "not valid" in resp.json()["detail"].lower()
-    assert db.kv_get(LICENSE_KEY_KV) == good  # untouched
+    assert read_org_license(org_id)["license_key"] == good  # untouched
 
 
 # ===========================================================================
@@ -257,10 +289,10 @@ def test_non_owner_forbidden_on_update(client, role):
 def test_banner_status_readable_by_every_role(client, role):
     """Unlike the Owner-only full status, the banner endpoint is auth-only so the
     global expiry banner renders for every role (AC4/AC5)."""
-    _reset_license_kv()
-    db.kv_set(LICENSE_KEY_KV, _mint(expires_at=_iso(-7), grace_days=14))  # grace
+    headers = _set_role(role)
+    set_org_license_key(headers["X-Org-Id"], _mint(expires_at=_iso(-7), grace_days=14))  # grace
 
-    resp = client.get(BANNER_PATH, headers=_set_role(role))
+    resp = client.get(BANNER_PATH, headers=headers)
     assert resp.status_code == 200, resp.text
     body = resp.json()
     assert body["status"] == LicenseStatus.GRACE
@@ -272,7 +304,7 @@ def test_banner_status_readable_by_every_role(client, role):
 def test_banner_reports_no_license_reason_for_fresh_install(client):
     """AC6 / §5: a never-licensed install surfaces reason=no_license so the banner
     can say 'No valid license installed' instead of mislabelling it 'expired'."""
-    _reset_license_kv()  # no key installed at all
+    # A freshly created org has no installed key at all.
     resp = client.get(BANNER_PATH, headers=_set_role("analyst"))
     assert resp.status_code == 200, resp.text
     body = resp.json()

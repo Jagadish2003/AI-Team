@@ -68,6 +68,11 @@ def build_auth_url(
         "state": state,
         "response_type": "code",
     }
+    # Provider-specific params that make a long-lived refresh token reliably
+    # issued (Atlassian audience + prompt=consent, Salesforce prompt=consent), so
+    # access tokens can be auto-refreshed rather than expiring permanently.
+    if config.authorize_params:
+        params.update(config.authorize_params)
     if code_challenge:
         params["code_challenge"] = code_challenge
         params["code_challenge_method"] = "S256"

@@ -877,18 +877,32 @@ def _db_path() -> _Path:
 
 
 def _clear_credentials() -> None:
-    """Truncate the credentials table between tests."""
+    """Clear credentials between tests via SOFT delete.
+
+    The app DB role has no DELETE privilege, so this marks every row
+    is_deleted = TRUE rather than physically deleting. _raw_credentials filters
+    is_deleted = FALSE, so the table reads as empty afterwards, and store_token's
+    upsert reactivates (is_deleted = FALSE) any (org_id, connector_id) reused by a
+    later test — keeping per-test isolation without needing DELETE.
+    """
     con = _sqlite3.connect(str(_db_path()))
-    con.execute("DELETE FROM credentials")
+    con.execute("UPDATE credentials SET is_deleted = TRUE")
     con.commit()
     con.close()
 
 
 def _raw_credentials(org_id: str, connector_id: str) -> tuple | None:
-    """Return raw DB row (access_token, refresh_token) without decryption."""
+    """Return the raw, ACTIVE DB row (access_token, refresh_token) without decryption.
+
+    Filters is_deleted = FALSE so this reflects the app's view of a live credential:
+    revoke_token now SOFT-deletes (UPDATE is_deleted = TRUE) because the app DB role
+    has no DELETE privilege, so a revoked credential is no longer "active" and this
+    returns None — matching the revoke tests' "record is gone" assertions.
+    """
     con = _sqlite3.connect(str(_db_path()))
     cur = con.execute(
-        "SELECT access_token, refresh_token FROM credentials WHERE org_id=%s AND connector_id=%s",
+        "SELECT access_token, refresh_token FROM credentials "
+        "WHERE org_id=%s AND connector_id=%s AND is_deleted = FALSE",
         (org_id, connector_id),
     )
     row = cur.fetchone()
@@ -1140,6 +1154,48 @@ async def test_get_token_returns_refreshed_value_after_auto_refresh():
             record = await get_token("org-ref-3", "salesforce")
 
     assert record.access_token == "brand-new"
+    _clear_credentials()
+
+
+@pytest.mark.anyio
+async def test_get_token_preserves_refresh_token_when_provider_omits_it():
+    """A provider that returns NO refresh_token on refresh (e.g. Salesforce keeps
+    the same long-lived refresh token) must not lose it. The existing refresh
+    token is carried forward so repeat auto-refresh keeps working instead of
+    dropping the connector to needs_auth after a single refresh.
+    """
+    from backend.app.auth.vault import store_token, get_token
+
+    # Refresh response intentionally omits refresh_token.
+    no_refresh = _token_response(access_token="refreshed", refresh_token=None, expires_in=7200)
+    mock_refresh = _AsyncMock(return_value=no_refresh)
+
+    with _patch.dict(_os.environ, _vault_env()):
+        store_token(
+            "org-ref-keep",
+            "salesforce",
+            _token_response(access_token="old", refresh_token="keep-me", expires_in=60),
+        )
+
+        with _patch("app.auth.vault._oauth.refresh_token", mock_refresh), \
+             _patch("app.auth.vault.CONNECTOR_AUTH_CONFIGS", {"salesforce": _make_config(connector_id="salesforce")}):
+            record = await get_token("org-ref-keep", "salesforce")
+
+        assert record.access_token == "refreshed"
+        # Carried forward, not nulled.
+        assert record.refresh_token == "keep-me"
+
+        # Persisted (encrypted) so a SECOND refresh still has a token to present.
+        from cryptography.fernet import Fernet
+
+        row = _raw_credentials("org-ref-keep", "salesforce")
+        decrypted_refresh = (
+            Fernet(_os.environ["CREDENTIAL_VAULT_KEY"].encode())
+            .decrypt(row[1].encode())
+            .decode()
+        )
+        assert decrypted_refresh == "keep-me"
+
     _clear_credentials()
 
 
@@ -1632,6 +1688,127 @@ def test_callback_redirect_does_not_contain_state_value(client):
 
     location = resp.headers.get("location", "")
     assert state not in location, "State value must not appear in redirect location"
+
+
+# ---------------------------------------------------------------------------
+# AT-325 (CS-2 T3): callback redirect format matches OAuthCallbackPage
+#   T3-AC1 — success → ?connected={connector_id}&status=success
+#   T3-AC2 — failure → ?status=error&code={error_code}
+#   T3-AC3 — both target the frontend /oauth/callback path
+# ---------------------------------------------------------------------------
+
+
+def test_success_redirect_format_matches_frontend_callback():
+    """OAUTH_SUCCESS_REDIRECT targets /oauth/callback with connected + status=success (T3-AC1/AC3)."""
+    from app.routes_connector_auth import OAUTH_SUCCESS_REDIRECT
+
+    rendered = OAUTH_SUCCESS_REDIRECT.format(connector_id="salesforce")
+    assert "/oauth/callback?" in rendered
+    assert "connected=salesforce" in rendered
+    assert "status=success" in rendered
+
+
+def test_error_redirect_format_matches_frontend_callback():
+    """OAUTH_ERROR_REDIRECT targets /oauth/callback with status=error + code (T3-AC2/AC3)."""
+    from app.routes_connector_auth import OAUTH_ERROR_REDIRECT
+
+    rendered = OAUTH_ERROR_REDIRECT.format(error_code="exchange_failed")
+    assert "/oauth/callback?" in rendered
+    assert "status=error" in rendered
+    assert "code=exchange_failed" in rendered
+
+
+def test_callback_success_location_uses_status_success(client):
+    """A successful callback redirects with connected=<id> and status=success (T3-AC1)."""
+    with _patch.dict(_os.environ, _vault_env()):
+        r = client.get("/api/connectors/salesforce/auth-url", headers=_AUTH_HEADERS)
+    state = _parse_qs(_urlparse(r.json()["auth_url"]).query)["state"][0]
+
+    fake_token = {"access_token": "tok", "refresh_token": "r", "expires_in": 3600}
+    with _patch.dict(_os.environ, _vault_env()), \
+         _patch("app.routes_connector_auth.exchange_code", new_callable=_AsyncMock, return_value=fake_token), \
+         _patch("app.routes_connector_auth.store_token", return_value=None):
+        resp = client.get(
+            f"/api/connectors/oauth/callback?code=auth-code&state={state}",
+            headers=_AUTH_HEADERS,
+            follow_redirects=False,
+        )
+
+    assert resp.status_code == 302
+    location = resp.headers["location"]
+    assert "/oauth/callback?" in location
+    assert "connected=salesforce" in location
+    assert "status=success" in location
+
+
+def test_callback_success_marks_connector_connected(client):
+    """A successful callback flips the org connector to 'connected' so the
+    Integration Hub tile updates (CS-2 AC6). The old POST /connect set this; the
+    OAuth success path must now set it since that POST was removed (AC8)."""
+    with _patch.dict(_os.environ, _vault_env()):
+        r = client.get("/api/connectors/salesforce/auth-url", headers=_AUTH_HEADERS)
+    state = _parse_qs(_urlparse(r.json()["auth_url"]).query)["state"][0]
+
+    fake_token = {"access_token": "tok", "refresh_token": "r", "expires_in": 3600}
+    with _patch.dict(_os.environ, _vault_env()), \
+         _patch("app.routes_connector_auth.exchange_code", new_callable=_AsyncMock, return_value=fake_token), \
+         _patch("app.routes_connector_auth.store_token", return_value=None):
+        resp = client.get(
+            f"/api/connectors/oauth/callback?code=auth-code&state={state}",
+            headers=_AUTH_HEADERS,
+            follow_redirects=False,
+        )
+    assert resp.status_code == 302
+
+    listed = client.get("/api/connectors", headers=_AUTH_HEADERS).json()
+    salesforce = next(c for c in listed if c["id"] == "salesforce")
+    assert salesforce["status"] == "connected"
+
+
+def test_callback_marks_connector_connected_under_initiating_org(client):
+    """The org from the authenticated /auth-url request is threaded through the
+    state nonce, so the (unauthenticated) callback persists connection state under
+    THAT org — not the hardcoded default. Without this, a user whose JWT org is not
+    'default' completes OAuth but the tile stays disconnected (multi-tenant bug)."""
+    org_headers = {**_AUTH_HEADERS, "X-Org-Id": "acme-test-org"}
+    with _patch.dict(_os.environ, _vault_env()):
+        r = client.get("/api/connectors/salesforce/auth-url", headers=org_headers)
+    state = _parse_qs(_urlparse(r.json()["auth_url"]).query)["state"][0]
+
+    fake_token = {"access_token": "tok", "refresh_token": "r", "expires_in": 3600}
+    with _patch.dict(_os.environ, _vault_env()), \
+         _patch("app.routes_connector_auth.exchange_code", new_callable=_AsyncMock, return_value=fake_token), \
+         _patch("app.routes_connector_auth.store_token", return_value=None):
+        # Callback carries no org context of its own — it must use the nonce's org.
+        resp = client.get(
+            f"/api/connectors/oauth/callback?code=auth-code&state={state}",
+            headers=_AUTH_HEADERS,
+            follow_redirects=False,
+        )
+    assert resp.status_code == 302
+
+    # Connection state is written to the INITIATING org's namespaced row — proving
+    # the org from /auth-url (not the callback's default) was used.
+    from app import db as _db
+    acme_row = _db.org_connector_get("acme-test-org", "salesforce")
+    assert acme_row is not None
+    assert acme_row.get("org_id") == "acme-test-org"
+    assert acme_row["status"] == "connected"
+
+
+def test_callback_error_location_uses_status_error_and_code(client):
+    """A failed callback (missing code) redirects with status=error and a code param (T3-AC2)."""
+    # No code/state → error path, no token exchange attempted.
+    resp = client.get(
+        "/api/connectors/oauth/callback?error=access_denied",
+        headers=_AUTH_HEADERS,
+        follow_redirects=False,
+    )
+    assert resp.status_code == 302
+    location = resp.headers["location"]
+    assert "/oauth/callback?" in location
+    assert "status=error" in location
+    assert "code=" in location
 
 
 # ---------------------------------------------------------------------------

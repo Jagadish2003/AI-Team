@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import hmac
 import logging
+import os
 import secrets as _secrets_mod
 from datetime import datetime, timedelta, timezone
 from typing import Dict, Optional
@@ -22,6 +23,7 @@ import psycopg2
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Response
 from fastapi.responses import RedirectResponse
+from fastapi.security import HTTPAuthorizationCredentials
 
 from app import db
 from app.auth import (
@@ -34,8 +36,9 @@ from app.auth import (
 from app.auth.configs import CONNECTOR_AUTH_CONFIGS
 from app.auth.vault import REFRESH_THRESHOLD_SECONDS, consume_nonce, store_nonce
 from app.middleware.audit import log_event
+from app.middleware.tenancy import get_current_org_id, get_current_org_id_optional
 from app.rbac import _get_user_id_from_token
-from app.security import require_auth
+from app.security import bearer, require_auth
 from database.models.credentials import (
     ALTER_CREDENTIALS_ADD_REFRESH_FAILED,
     CREATE_CREDENTIALS_IDX_CONNECTOR,
@@ -45,9 +48,31 @@ from database.models.credentials import (
 
 logger = logging.getLogger(__name__)
 
-# Hardcoded redirect targets — never constructed from external input
-OAUTH_SUCCESS_REDIRECT = "/integration-hub?connected={connector_id}"
-OAUTH_ERROR_REDIRECT = "/integration-hub?error={error_code}"
+# Frontend OAuth callback target (CS-2 / AT-326 T4; FE route added in AT-325 T3).
+#
+# The provider redirects the browser to the backend callback below; the backend
+# then redirects to the frontend /oauth/callback page (handled by
+# OAuthCallbackPage), which reads ?status, ?connected and ?code, then routes the
+# user back to Integration Hub. The success/error query formats below are the
+# AT-326 T4 contract and must stay in lock-step with OAuthCallbackPage.
+#
+# The base URL is SERVER-CONTROLLED config (env var), never derived from request
+# input — this preserves the open-redirect protection from T1-S10-A. It defaults
+# to a relative path so same-origin / reverse-proxied deployments need no config;
+# set OAUTH_FRONTEND_BASE_URL (e.g. https://app.example.com) when the frontend is
+# served from a different origin than the backend.
+_FRONTEND_BASE_URL = os.environ.get("OAUTH_FRONTEND_BASE_URL", "").rstrip("/")
+_FRONTEND_CALLBACK_PATH = "/oauth/callback"
+
+# Hardcoded redirect templates — only {connector_id} / {error_code} are filled,
+# both from server-side state (the nonce store / fixed error codes), never from
+# request input. status= is a literal so OAuthCallbackPage can branch on it.
+OAUTH_SUCCESS_REDIRECT = (
+    _FRONTEND_BASE_URL + _FRONTEND_CALLBACK_PATH + "?connected={connector_id}&status=success"
+)
+OAUTH_ERROR_REDIRECT = (
+    _FRONTEND_BASE_URL + _FRONTEND_CALLBACK_PATH + "?status=error&code={error_code}"
+)
 
 _NONCE_TTL_SECONDS = 600  # 10-minute window for state nonce validity
 _DEFAULT_ORG_ID = "default"  # Single-tenant dev; org isolation is a T1-S11 concern
@@ -89,7 +114,10 @@ def _store_nonce(nonce: str, connector_id: str) -> None:
     try:
         cur = con.cursor()
         cur.execute(
-            "INSERT INTO oauth_nonces (nonce, connector_id, expires_at) VALUES (%s, %s, %s)",
+            "INSERT INTO oauth_nonces (nonce, connector_id, expires_at) VALUES (%s, %s, %s) "
+            "ON CONFLICT (nonce) DO UPDATE SET "
+            "connector_id = EXCLUDED.connector_id, expires_at = EXCLUDED.expires_at, "
+            "is_deleted = FALSE",
             (nonce, connector_id, expires_at),
         )
         con.commit()
@@ -110,12 +138,17 @@ def _consume_nonce(state: str) -> Optional[str]:
     try:
         cur = con.cursor()
         cur.execute(
-            "SELECT nonce, connector_id, expires_at FROM oauth_nonces WHERE nonce = %s",
+            "SELECT nonce, connector_id, expires_at FROM oauth_nonces "
+            "WHERE nonce = %s AND is_deleted = FALSE",
             (state,),
         )
         row = cur.fetchone()
         if row is not None:
-            cur.execute("DELETE FROM oauth_nonces WHERE nonce = %s", (state,))
+            # Soft delete (app role has no DELETE): the filtered read above makes a
+            # replay of the same state return None on the second attempt.
+            cur.execute(
+                "UPDATE oauth_nonces SET is_deleted = TRUE WHERE nonce = %s", (state,)
+            )
             con.commit()
     finally:
         con.close()
@@ -140,6 +173,43 @@ def _consume_nonce(state: str) -> Optional[str]:
 
 
 # ---------------------------------------------------------------------------
+# Callback auth (dev-gated)
+# ---------------------------------------------------------------------------
+
+
+def _callback_allows_unauth() -> bool:
+    """Whether the OAuth callback may complete without a Bearer header.
+
+    A provider's top-level browser redirect cannot carry an Authorization
+    header, so the live browser flow can only complete locally if the callback
+    accepts an unauthenticated request. This is OFF by default — production
+    behaviour (Bearer required, AC17) is unchanged. Set OAUTH_CALLBACK_ALLOW_UNAUTH=1
+    in a local .env to enable. The route stays protected by the single-use,
+    TTL-bounded state nonce (consume_nonce), which is the real CSRF defence here.
+    """
+    return os.environ.get("OAUTH_CALLBACK_ALLOW_UNAUTH", "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+    )
+
+
+def _callback_auth(
+    creds: Optional[HTTPAuthorizationCredentials] = Depends(bearer),
+) -> Optional[str]:
+    """Require a Bearer token unless OAUTH_CALLBACK_ALLOW_UNAUTH is set.
+
+    When a token is present it is always validated (so a bad token is still
+    rejected). When absent, it is allowed only in the dev-gated case.
+    """
+    if creds is not None and creds.scheme.lower() == "bearer":
+        return require_auth(creds)
+    if _callback_allows_unauth():
+        return None
+    raise HTTPException(status_code=401, detail="Unauthorized")
+
+
+# ---------------------------------------------------------------------------
 # Route registration
 # ---------------------------------------------------------------------------
 
@@ -156,7 +226,7 @@ def register_connector_auth_routes(app: FastAPI) -> None:
         code: Optional[str] = Query(default=None),
         state: Optional[str] = Query(default=None),
         error: Optional[str] = Query(default=None),
-        token: str = Depends(require_auth),
+        token: Optional[str] = Depends(_callback_auth),
     ) -> RedirectResponse:
         """Handle OAuth callback. Requires Bearer auth (called by frontend after provider redirect).
 
@@ -176,6 +246,9 @@ def register_connector_auth_routes(app: FastAPI) -> None:
             raise HTTPException(status_code=400, detail="Invalid request")
         connector_id = nonce_data["connector_id"]
         code_verifier = nonce_data.get("code_verifier")
+        # Org captured at initiation (the callback has no JWT/org context of its
+        # own). Fall back to the default org for legacy nonces / single-tenant dev.
+        org_id = nonce_data.get("org_id") or _DEFAULT_ORG_ID
 
         config = CONNECTOR_AUTH_CONFIGS.get(connector_id)
         if config is None:
@@ -186,7 +259,7 @@ def register_connector_auth_routes(app: FastAPI) -> None:
 
         try:
             token_response = await exchange_code(config, code, code_verifier=code_verifier)
-            store_token(_DEFAULT_ORG_ID, connector_id, token_response)
+            store_token(org_id, connector_id, token_response)
         except Exception:
             logger.exception("Token exchange failed for connector %s", connector_id)
             return RedirectResponse(
@@ -194,10 +267,50 @@ def register_connector_auth_routes(app: FastAPI) -> None:
                 status_code=302,
             )
 
+        # Reflect the connection in this org's connector state so GET /api/connectors
+        # reports "connected" and the Integration Hub tile updates (CS-2 AC6). The old
+        # POST /api/connectors/{id}/connect set this; the OAuth flow replaced that call
+        # (CS-2 AC8), so the success path must set it here. Display-state only — token
+        # storage above is the source of truth, so a failure here must not fail the
+        # flow (the token is already saved).
+        try:
+            record = db.org_connector_get(org_id, connector_id) or {}
+            record["status"] = "connected"
+            record["lastSynced"] = record.get("lastSynced", "—")
+            db.org_connector_set(org_id, connector_id, record)
+        except Exception:
+            logger.exception("Failed to mark connector %s connected", connector_id)
+
+        # CS-2 live ingest: capture the instance/site URL discovered during OAuth
+        # so discovery runs can ingest live without separate env config.
+        # Salesforce returns instance_url in the token response; ServiceNow's host
+        # comes from its connector config. Best-effort — never fail the flow.
+        try:
+            from app.live_ingest_credentials import (
+                capture_instance_url,
+                fetch_jira_gateway_base,
+                store_connector_instance_url,
+            )
+
+            instance_url = capture_instance_url(
+                connector_id, token_response, config.token_url
+            )
+            if instance_url is None and connector_id == "jira":
+                # Jira Cloud OAuth: discover the cloudId and build the
+                # api.atlassian.com gateway base so discovery can call /rest/...
+                # through it with the Bearer token.
+                instance_url = await fetch_jira_gateway_base(
+                    token_response.get("access_token", "")
+                )
+            if instance_url:
+                store_connector_instance_url(org_id, connector_id, instance_url)
+        except Exception:
+            logger.exception("Failed to capture instance URL for connector %s", connector_id)
+
         log_event(
             "connector_connected",
             connector_id=connector_id,
-            user_id=_get_user_id_from_token(token),
+            user_id=_get_user_id_from_token(token) if token else None,
             scopes_granted=config.scopes,
         )
         # AC2/AC4: redirect target is a hardcoded constant; connector_id comes
@@ -232,7 +345,15 @@ def register_connector_auth_routes(app: FastAPI) -> None:
         # send its S256 challenge in the authorize URL. Required by providers
         # that enforce PKCE (e.g. Salesforce "Require PKCE").
         code_verifier, code_challenge = generate_pkce_pair()
-        store_nonce(state, connector_id, code_verifier=code_verifier)
+        # Capture the caller's tenancy context now (this request is authenticated)
+        # so the unauthenticated callback can persist the token + connection state
+        # under the right org. Sourced server-side, never from callback input.
+        store_nonce(
+            state,
+            connector_id,
+            code_verifier=code_verifier,
+            org_id=get_current_org_id_optional(),
+        )
         auth_url = build_auth_url(config, state, code_challenge=code_challenge)
         return {"auth_url": auth_url, "connector_id": connector_id}
 
@@ -241,7 +362,17 @@ def register_connector_auth_routes(app: FastAPI) -> None:
     )
     async def delete_token(connector_id: str, token: str = Depends(require_auth)) -> Response:
         """Revoke and delete the stored token for the given connector (AC11/AC12/AC13)."""
-        await revoke_token(_DEFAULT_ORG_ID, connector_id)
+        org_id = get_current_org_id()
+        await revoke_token(org_id, connector_id)
+        # Mirror the connect path: clear this org's connection state so the tile
+        # returns to disconnected after revoke.
+        try:
+            record = db.org_connector_get(org_id, connector_id)
+            if record is not None and record.get("org_id") == org_id:
+                record["status"] = "disconnected"
+                db.org_connector_set(org_id, connector_id, record)
+        except Exception:
+            logger.exception("Failed to clear connector %s connection state", connector_id)
         log_event(
             "connector_disconnected",
             connector_id=connector_id,
@@ -257,13 +388,21 @@ def register_connector_auth_routes(app: FastAPI) -> None:
         """Return token status: connected | needs_refresh | needs_auth | refresh_failed (AC14)."""
         _ensure_tables()
 
+        # Scope to the caller's org — the OAuth callback stores the credential under
+        # the org carried in the state nonce (the authenticated org), and disconnect
+        # reads with get_current_org_id() too. Using a hardcoded "default" here looked
+        # up the wrong org for a real workspace, found no row, and returned needs_auth
+        # → the tile showed "Token expired" / "Reconnect" right after a successful
+        # connect.
+        org_id = get_current_org_id()
+
         con = db.connect()
         try:
             cur = con.cursor()
             cur.execute(
                 "SELECT expires_at, refresh_failed FROM credentials "
-                "WHERE org_id = %s AND connector_id = %s",
-                (_DEFAULT_ORG_ID, connector_id),
+                "WHERE org_id = %s AND connector_id = %s AND is_deleted = FALSE",
+                (org_id, connector_id),
             )
             row = cur.fetchone()
         finally:

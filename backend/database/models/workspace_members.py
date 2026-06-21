@@ -6,6 +6,7 @@ CREATE TABLE IF NOT EXISTS workspace_members (
     user_id    TEXT NOT NULL,
     role       TEXT NOT NULL CHECK (role IN ('owner', 'analyst', 'viewer')),
     created_at TEXT NOT NULL,
+    is_deleted BOOLEAN NOT NULL DEFAULT FALSE,
     PRIMARY KEY (org_id, user_id)
 )
 """

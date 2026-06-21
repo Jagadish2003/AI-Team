@@ -62,7 +62,12 @@ update_env_var() {
   mv "$tmp" "$file"
 }
 
-update_env_var DATABASE_URL "$SELECTED_URL"
+# Write the value double-quoted (DATABASE_URL="...") so the persisted .env line
+# is well-formed even when the DSN contains characters a bare value could expose;
+# read_env above and provision.sh / python-dotenv all strip the surrounding
+# quotes on read. The exported value below stays unquoted so psycopg2 receives a
+# clean DSN (a literal quote in the live value would break the connection).
+update_env_var DATABASE_URL "\"$SELECTED_URL\""
 
 # Also export it for this process, so the server uses it even before any
 # re-read of .env (the app loads .env with override=False, so this wins too).

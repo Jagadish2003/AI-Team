@@ -20,7 +20,7 @@ so the target database is complete after one invocation:
      is the only place these are created: credentials, nonces, oauth_nonces.
 
 Prerequisite: the target database already exists and DATABASE_URL points at it.
-(The agentiq role is created by the pure-SQL path's 01_schema.sql; this Alembic
+(The agentiq role is created by the pure-SQL path's provision.sql; this Alembic
 runbook connects with whatever role DATABASE_URL specifies.)
 
 Usage (run from the backend/ directory, with the venv active):
@@ -137,6 +137,7 @@ def ensure_lazy_tables() -> None:
     import psycopg2
 
     from database.models.credentials import (
+        ALTER_CREDENTIALS_ADD_IS_DELETED,
         ALTER_CREDENTIALS_ADD_REFRESH_FAILED,
         CREATE_CREDENTIALS_IDX_CONNECTOR,
         CREATE_CREDENTIALS_IDX_ORG,
@@ -150,14 +151,23 @@ def ensure_lazy_tables() -> None:
         cur.execute(CREATE_CREDENTIALS_IDX_ORG)
         cur.execute(CREATE_CREDENTIALS_IDX_CONNECTOR)
         cur.execute(ALTER_CREDENTIALS_ADD_REFRESH_FAILED)
+        cur.execute(ALTER_CREDENTIALS_ADD_IS_DELETED)
         cur.execute(
             "CREATE TABLE IF NOT EXISTS nonces ("
-            "key TEXT PRIMARY KEY, data TEXT NOT NULL)"
+            "key TEXT PRIMARY KEY, data TEXT NOT NULL, "
+            "is_deleted BOOLEAN NOT NULL DEFAULT FALSE)"
+        )
+        cur.execute(
+            "ALTER TABLE nonces ADD COLUMN IF NOT EXISTS is_deleted BOOLEAN NOT NULL DEFAULT FALSE"
         )
         cur.execute(
             "CREATE TABLE IF NOT EXISTS oauth_nonces ("
             "nonce TEXT PRIMARY KEY, connector_id TEXT NOT NULL, "
-            "expires_at TEXT NOT NULL)"
+            "expires_at TEXT NOT NULL, "
+            "is_deleted BOOLEAN NOT NULL DEFAULT FALSE)"
+        )
+        cur.execute(
+            "ALTER TABLE oauth_nonces ADD COLUMN IF NOT EXISTS is_deleted BOOLEAN NOT NULL DEFAULT FALSE"
         )
         con.commit()
     finally:

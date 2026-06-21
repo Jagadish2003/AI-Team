@@ -45,11 +45,12 @@ interface Props {
   selectedId: string | null;
   onSelect:   (id: string) => void;
   onPrimary:  (id: string) => void;
+  onReconnect?: (id: string) => void;
   onAddSource: (categoryId: string) => void;
 }
 
 export default function ConnectorGroupSection({
-  group, selectedId, onSelect, onPrimary, onAddSource,
+  group, selectedId, onSelect, onPrimary, onReconnect, onAddSource,
 }: Props) {
   const hasConnectors = group.connectors.length > 0;
   const shouldScrollConnectors = group.connectors.length > 6;
@@ -91,6 +92,7 @@ export default function ConnectorGroupSection({
                 selected={selectedId === c.id}
                 onSelect={() => onSelect(c.id)}
                 onPrimary={() => onPrimary(c.id)}
+                onReconnect={onReconnect ? () => onReconnect(c.id) : undefined}
               />
             ))}
           </div>

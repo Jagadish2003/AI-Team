@@ -86,6 +86,10 @@ def test_login_allowed_in_readonly(client, monkeypatch):
     )
     assert reg.status_code == 201, reg.text
 
+    # AUTH-2: approve the org (simulated admin step) so login is permitted.
+    from auth_helpers import activate_org_by_email
+    activate_org_by_email(email)
+
     resp = client.post("/api/auth/login", json={"email": email, "password": password})
 
     assert resp.status_code == 200, resp.text

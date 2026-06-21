@@ -29,6 +29,10 @@ def _email() -> str:
 
 
 def _register_owner(client, email=None):
+    """Register, approve (AUTH-2 admin step, simulated), and login. Returns
+    (owner_jwt, email) — the JWT is issued on login after approval."""
+    from auth_helpers import activate_org_by_email
+
     email = email or _email()
     resp = client.post(
         "/api/auth/register",
@@ -39,7 +43,12 @@ def _register_owner(client, email=None):
         },
     )
     assert resp.status_code == 201, resp.text
-    return resp.json()["token"], email
+    activate_org_by_email(email)
+    login = client.post(
+        "/api/auth/login", json={"email": email, "password": "Ownerpass1!"}
+    )
+    assert login.status_code == 200, login.text
+    return login.json()["token"], email
 
 
 def _auth(token: str) -> dict:
@@ -82,7 +91,9 @@ def test_register_still_succeeds_when_welcome_email_fails(client, monkeypatch):
     )
 
     assert resp.status_code == 201, resp.text
-    assert resp.json()["token"]  # normal auth response is returned regardless
+    # AUTH-2: register returns the pending-approval ack (no JWT) regardless of the
+    # welcome-email outcome — the point of AC14 is that registration still succeeds.
+    assert resp.json()["status"] == "pending_approval"
 
 
 # ── AC10: invite email on invite ──────────────────────────────────────────────

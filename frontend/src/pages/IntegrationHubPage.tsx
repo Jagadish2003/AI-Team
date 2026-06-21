@@ -43,7 +43,7 @@
  *   ?category= highlighted group has aria-live="polite" announcement.
  */
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { useNavigate, useSearchParams } from 'react-router-dom';
+import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import PageShell from '../components/common/PageShell';
 import LoadingPanel from '../components/common/LoadingPanel';
 import ErrorPanel from '../components/common/ErrorPanel';
@@ -132,6 +132,7 @@ export default function IntegrationHubPage() {
 
   const { push }         = useToast();
   const navigate         = useNavigate();
+  const location         = useLocation();
   const [searchParams]   = useSearchParams();
 
   // ?category= deep-link param — ENG-IH-2 AC6
@@ -163,6 +164,38 @@ export default function IntegrationHubPage() {
     () => [...recommended, ...standard],
     [recommended, standard],
   );
+
+  // OAuth result feedback (CS-2 / AT-327 T5).
+  // OAuthCallbackPage navigates here after the provider round-trip with
+  // location.state.justConnected (success) or location.state.oauthError
+  // (failure). Show a toast once, then clear the history-entry state so a
+  // re-render or back-navigation does not re-fire it. ?category= lives in the
+  // search string, not state, so preserving location.search keeps the deep-link
+  // behaviour intact.
+  const oauthToastShown = useRef(false);
+  useEffect(() => {
+    const oauthState = location.state as
+      | { justConnected?: string; oauthError?: string }
+      | null;
+    if (!oauthState || oauthToastShown.current) return;
+
+    if (oauthState.justConnected) {
+      // Wait until the connector list has loaded so the toast can name the
+      // connector (T5-AC3) rather than falling back to its id. The effect
+      // re-runs when `loading` flips; the ref guard keeps it single-fire.
+      if (loading) return;
+      oauthToastShown.current = true;
+      const name =
+        allConnectors.find(c => c.id === oauthState.justConnected)?.name ??
+        oauthState.justConnected;
+      push(`${name} connected successfully`, 'success');
+      navigate(`${location.pathname}${location.search}`, { replace: true, state: null });
+    } else if (oauthState.oauthError) {
+      oauthToastShown.current = true;
+      push(`Connection failed: ${oauthState.oauthError}`, 'error');
+      navigate(`${location.pathname}${location.search}`, { replace: true, state: null });
+    }
+  }, [location.state, location.pathname, location.search, allConnectors, loading, push, navigate]);
 
   // Build groups
   const groups: GroupConfig[] = useMemo(
@@ -221,6 +254,14 @@ export default function IntegrationHubPage() {
     }
   }
 
+  // Reconnect handler (CS-2 AC7). Fired from a tile whose token is expired /
+  // refresh-failed. Re-runs the OAuth flow (auth-url → provider redirect) via
+  // the same context method Connect uses — connectConnector navigates the
+  // browser away, so no follow-up toast is needed here.
+  function handleReconnect(id: string) {
+    connectConnector(id);
+  }
+
   // "Add a source" CTA — navigate to /integration-hub?category={id}
   // When this is the current page (user clicked another group's CTA),
   // scroll to that group instead of navigating away.
@@ -276,6 +317,7 @@ export default function IntegrationHubPage() {
                       selectConnector(id);
                     }}
                     onPrimary={handlePrimary}
+                    onReconnect={handleReconnect}
                     onAddSource={handleAddSource}
                   />
                 </div>

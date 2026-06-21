@@ -4,10 +4,10 @@ SF-2.4 — Jira Ingestion Module
 Offline mode: reads backend/discovery/ingest/fixtures/jira_sample.json
 Live mode:    calls Jira REST API v3
 
-Environment variables for live mode:
-    JIRA_URL     e.g. https://mycompany.atlassian.net
-    JIRA_TOKEN   API token (personal access token or OAuth)
-    JIRA_USER    Email address associated with the token (required for cloud)
+Environment variables for live mode (OAuth-only):
+    JIRA_URL     Jira Cloud API gateway base (https://api.atlassian.com/ex/jira/{cloudId}),
+                 captured at OAuth connect from the accessible-resources lookup
+    JIRA_TOKEN   OAuth Bearer access token (hydrated from the credential vault)
 
 Known fixes applied (vs earlier stub):
     1. completed_points was None — now fetched via /rest/agile/1.0/sprint/{id}/issue
@@ -66,16 +66,15 @@ def _load_fixture() -> Dict[str, Any]:
 
 class JiraClient:
     """
-    Minimal Jira REST API v3 client.
+    Minimal Jira Cloud REST API v3 client.
 
-    Auth: API token with basic auth (email:token base64).
-    Jira Cloud requires email + API token (not password).
-    Jira Server/DC supports PAT (personal access token) as Bearer.
+    Auth: OAuth (3LO) Bearer token only. ``base_url`` is the api.atlassian.com
+    gateway (https://api.atlassian.com/ex/jira/{cloudId}) resolved at OAuth
+    connect time, against which the Bearer access token is presented.
     """
 
-    def __init__(self, base_url: str, user: str = "", token: str = ""):
+    def __init__(self, base_url: str, token: str = ""):
         self.base_url = base_url.rstrip("/")
-        self.user = user
         self.token = token
         self._session = None
 
@@ -94,16 +93,11 @@ class JiraClient:
                     "Content-Type": "application/json",
                 }
             )
-            if self.user and self.token:
-                # Jira Cloud: basic auth with email + API token
-                self._session.auth = (self.user, self.token)
-            elif self.token:
-                # Jira Server/DC: Bearer PAT
+            if self.token:
                 self._session.headers["Authorization"] = f"Bearer {self.token}"
             else:
                 raise JiraIngestError(
-                    "Live mode requires JIRA_TOKEN. "
-                    "For Jira Cloud also set JIRA_USER (email). "
+                    "Live mode requires a Jira OAuth Bearer token (JIRA_TOKEN). "
                     "Set INGEST_MODE=offline to run without credentials."
                 )
         return self._session
@@ -228,21 +222,30 @@ class JiraClient:
 
 
 def _get_client() -> JiraClient:
-    jira_url = os.getenv("JIRA_URL", "").rstrip("/")
-    token = os.getenv("JIRA_TOKEN", "")
-    user = os.getenv("JIRA_USER", "")
+    # OAuth-only. Credentials come from the per-run context (DB-sourced: vault
+    # Bearer token + captured api.atlassian.com gateway base, isolated per
+    # org/run); env vars are only a CLI/standalone fallback.
+    from . import get_live_connector
+
+    cred = get_live_connector("jira")
+    if cred:
+        jira_url = (cred.get("url") or "").rstrip("/")
+        token = cred.get("token") or ""
+    else:
+        jira_url = os.getenv("JIRA_URL", "").rstrip("/")
+        token = os.getenv("JIRA_TOKEN", "")
 
     if not jira_url:
         raise JiraIngestError(
-            "Live mode requires JIRA_URL. "
+            "Live mode requires JIRA_URL (the Jira Cloud API gateway base). "
             "Set INGEST_MODE=offline to run without credentials."
         )
     if not token:
         raise JiraIngestError(
-            "Live mode requires JIRA_TOKEN. "
-            "For Jira Cloud also set JIRA_USER (email address)."
+            "Live mode requires a Jira OAuth Bearer token (JIRA_TOKEN), "
+            "provided by the Jira OAuth Connect flow."
         )
-    return JiraClient(jira_url, user=user, token=token)
+    return JiraClient(jira_url, token=token)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -652,10 +655,19 @@ def ingest(jira_client: Optional[JiraClient] = None) -> Dict[str, Any]:
         )
         return fixture
 
-    jira_url = os.getenv("JIRA_URL", "")
+    # OAuth-first: the live gateway base comes from the per-run context (DB-sourced
+    # vault token + captured/derived api.atlassian.com gateway, set by
+    # resolve_live_systems); the JIRA_URL env var is only a CLI/standalone fallback.
+    # Gating on the env var alone wrongly skipped Jira even when it was
+    # authenticated via the Integration Hub OAuth flow.
+    from . import get_live_connector
+
+    cred = get_live_connector("jira")
+    jira_url = (cred.get("url") if cred else None) or os.getenv("JIRA_URL", "")
     if not jira_url:
         logger.warning(
-            "JIRA_URL not set — skipping Jira ingestion. "
+            "Jira is not connected (no OAuth credentials for this run, and JIRA_URL "
+            "is unset) — skipping Jira ingestion. "
             "D7 will rely on Salesforce/ServiceNow echo scores only."
         )
         return {}

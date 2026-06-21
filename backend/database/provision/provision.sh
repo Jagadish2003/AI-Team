@@ -4,7 +4,7 @@
 #
 # Maintained provisioning path. Idempotent and safe to re-run. Assumes the role
 # and database already exist (the database must be pre-created; the agentiq role
-# is created by 01_schema.sql in the pure-SQL path).
+# is created by provision.sql in the pure-SQL path).
 #
 # DATABASE_URL is resolved in this order:
 #   1. an exported DATABASE_URL environment variable (wins), else
