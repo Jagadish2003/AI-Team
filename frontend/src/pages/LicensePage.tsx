@@ -34,7 +34,7 @@ const STATUS_BADGE: Record<LicenseStatusValue, { label: string; tone: BadgeTone 
 };
 
 const TONE_CLS: Record<BadgeTone, string> = {
-  green: "bg-green-500/15 text-green-300 border-green-500/30",
+  green: "bg-emerald-500/15 text-emerald-300 border-emerald-500/30",
   amber: "bg-amber-500/15 text-amber-200 border-amber-500/30",
   red: "bg-red-500/15 text-red-300 border-red-500/30",
 };
