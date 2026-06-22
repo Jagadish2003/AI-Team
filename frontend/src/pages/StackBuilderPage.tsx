@@ -309,7 +309,10 @@ interface Props {
 
 
 export default function StackBuilderPage({
-  apiBase = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000',
+  // Use ?? (not ||) so an explicitly-empty VITE_API_BASE_URL — the same-origin
+  // deployment value, where Nginx proxies /api/* to the backend — is respected.
+  // With ||, an empty string is falsy and wrongly falls back to localhost:8000.
+  apiBase = import.meta.env.VITE_API_BASE_URL ?? (import.meta.env.DEV ? 'http://localhost:8000' : ''),
   token: tokenProp,
 }: Props) {
 
