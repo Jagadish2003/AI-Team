@@ -256,12 +256,20 @@ def _invoke_rewrite_llm(prompt: str) -> Optional[str]:
     """Single LLM call used by the second-pass rewrite.
 
     Isolated so tests can monkeypatch it (to simulate a slow/timed-out call or a
-    clean rewrite) without any network dependency. Delegates to the same Claude
-    caller the first pass uses; returns None when no API key is configured.
+    clean rewrite) without any network dependency. Routes through the model gateway
+    (R16-D1 T3) with the 500ms timeout matching REWRITE_TIMEOUT_MS.
     """
-    from app.llm_enrichment import _call_claude, MAX_TOKENS_OPP
+    from app.llm_enrichment import MAX_TOKENS_OPP
+    from app.model_gateway import GenerationRequest, get_generation_provider
 
-    return _call_claude(prompt, MAX_TOKENS_OPP)
+    result = get_generation_provider().generate(
+        GenerationRequest(
+            prompt=prompt,
+            max_tokens=MAX_TOKENS_OPP,
+            timeout_ms=REWRITE_TIMEOUT_MS,
+        )
+    )
+    return result.text
 
 
 def _build_rewrite_prompt(bullet: str, remove_names: List[str], resolved_names: Iterable[str]) -> str:

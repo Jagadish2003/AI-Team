@@ -34,8 +34,6 @@ logger = logging.getLogger(__name__)
 MODEL            = "claude-sonnet-4-5"
 MAX_TOKENS_OPP   = 1536
 MAX_TOKENS_EXEC  = 512
-API_URL          = "https://api.anthropic.com/v1/messages"
-API_VERSION      = "2023-06-01"
 KV_LLM_ENRICHMENT = "llm_enrichment"
 
 load_dotenv()
@@ -505,49 +503,16 @@ Write exactly one paragraph (3-5 sentences) for a CXO audience.
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Claude API caller
+# Model gateway caller (R16-D1 T3)
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _call_claude(prompt: str, max_tokens: int) -> Optional[str]:
-    import urllib.request
-    import urllib.error
+    from app.model_gateway import GenerationRequest, get_generation_provider
 
-    api_key = os.getenv("ANTHROPIC_API_KEY", "")
-    if not api_key:
-        logger.warning("ANTHROPIC_API_KEY not set — LLM enrichment skipped")
-        return None
-
-    payload = json.dumps({
-        "model":      MODEL,
-        "max_tokens": max_tokens,
-        "messages":   [{"role": "user", "content": prompt}],
-    }).encode("utf-8")
-
-    req = urllib.request.Request(
-        API_URL,
-        data=payload,
-        headers={
-            "Content-Type":      "application/json",
-            "x-api-key":         api_key,
-            "anthropic-version": API_VERSION,
-        },
-        method="POST",
+    result = get_generation_provider().generate(
+        GenerationRequest(prompt=prompt, max_tokens=max_tokens)
     )
-
-    try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-            for block in data.get("content", []):
-                if block.get("type") == "text":
-                    return block["text"].strip()
-        return None
-    except urllib.error.HTTPError as e:
-        body = e.read().decode("utf-8", errors="replace")[:200]
-        logger.error("Claude API HTTP %s: %s", e.code, body)
-        return None
-    except Exception as e:
-        logger.error("Claude API error: %s", e)
-        return None
+    return result.text
 
 
 # ─────────────────────────────────────────────────────────────────────────────
