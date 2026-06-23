@@ -45,12 +45,24 @@ const make = (over: Partial<LicenseBannerResponse>): LicenseBannerResponse => ({
 describe("LicenseBanner (LIC-1 / T9)", () => {
   beforeEach(() => h.mockFetch.mockReset());
 
-  it("renders the grace message in grace state", async () => {
+  it("renders the grace message with a runs-blocked countdown", async () => {
+    h.mockFetch.mockResolvedValue(
+      make({ status: "grace", expires_at: "2026-06-10", grace_days_remaining: 9 }),
+    );
+    renderBanner();
+    expect(
+      await screen.findByText(
+        "Your AgentIQ license expired on June 10, 2026. Discovery runs will be blocked in 9 days — contact CloudFulcrum to renew.",
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it("renders the grace message without a countdown when N is unavailable", async () => {
     h.mockFetch.mockResolvedValue(make({ status: "grace", expires_at: "2026-06-10" }));
     renderBanner();
     expect(
       await screen.findByText(
-        "Your AgentIQ license expired on June 10, 2026. Contact CloudFulcrum to renew.",
+        "Your AgentIQ license expired on June 10, 2026. Discovery runs still work during the grace period — contact CloudFulcrum to renew.",
       ),
     ).toBeInTheDocument();
   });

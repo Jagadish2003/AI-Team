@@ -216,11 +216,16 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="AgentIQ Layer 1 API Skeleton", version="0.1.0", lifespan=lifespan)
-register_tenancy(app)
 # LIC-1 / T5 (AT-346): gate discovery-run endpoints when the license is
-# read-only/invalid. Added here so it sits inside CORS (blocked responses still
-# get CORS headers) and outside tenancy; reads/login/valid+grace are untouched.
+# read-only/invalid. Registered BEFORE tenancy so it runs AFTER TenancyMiddleware
+# in the request path (Starlette runs middleware in reverse registration order):
+# the per-request org context is established before the gate evaluates, and the
+# gate's 402 carries a resolved org for the audit trail. The gate still resolves
+# the org directly from the request (resolve_request_org_id) as a safety net.
+# CORS is added last (below) so it stays outermost and blocked 402s keep their
+# CORS headers; reads/login/valid+grace are untouched.
 register_license_gate(app)
+register_tenancy(app)
 
 # Register routes in order
 register_stack_builder_routes(app)

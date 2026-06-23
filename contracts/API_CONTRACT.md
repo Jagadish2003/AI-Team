@@ -1,7 +1,14 @@
 # AgentIQ — API_CONTRACT.md (EPIC E0)
-Version: v1.6
-Date: 2026-06-20
+Version: v1.7
+Date: 2026-06-22
 
+> v1.7 — LIC-1 (PR review): extended `LicenseBannerResponse`
+> (`GET /api/license/banner`) with the optional `grace_days_remaining`
+> (`int | null`) — days left before a `grace` license crosses into read-only, so
+> the grace banner can say "discovery runs will be blocked in N days" instead of
+> a bare "expired". Populated only in the `grace` state; `null` otherwise.
+> Additive — no previously documented shape changed. Mirrors `src/types/license.ts`.
+>
 > v1.6 — LIC-1 / T9 (AT-350): added the auth-only global-banner endpoint
 > `GET /api/license/banner`, returning the minimal `LicenseBannerResponse`
 > shape (`status` ∈ valid|grace|readonly|invalid; `expires_at` — `null` when
