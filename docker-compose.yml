@@ -44,7 +44,7 @@ services:
       postgres:
         condition: service_healthy
     env_file:
-      - /opt/aiqstore/backend/.env
+      - ${BACKEND_ENV_FILE:-/opt/aiqstore/backend/.env}
     environment:
       DATABASE_URL: "${PROD_DATABASE_URL}"
     ports:

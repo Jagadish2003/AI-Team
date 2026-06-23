@@ -37,27 +37,54 @@ PG_USER=$(read_env POSTGRES_USER)
 PG_PASS=$(read_env POSTGRES_PASSWORD)
 PG_DB=$(read_env POSTGRES_DB)
 
-[[ -z "$PG_USER" ]]  && PG_USER="agentiq"
-[[ -z "$PG_PASS" ]]  && PG_PASS="agentiq_secret"
-[[ -z "$PG_DB" ]]    && PG_DB="agentiqprod"
-
 if [[ -z "$PROD_URL" ]]; then
     echo "ERROR: PROD_DATABASE_URL is empty in $ENV_FILE"
     exit 1
 fi
 
+# If POSTGRES_USER / POSTGRES_PASSWORD are not set explicitly, derive them from
+# PROD_DATABASE_URL so that the postgres container always uses the same credentials
+# the backend expects.  URL format: scheme://user:password@host:port/dbname
+if [[ -z "$PG_USER" ]]; then
+    PG_USER=$(printf '%s' "$PROD_URL" | sed -E 's|^[^:]+://([^:@/]+).*|\1|')
+    [[ -z "$PG_USER" ]] && PG_USER="agentiq"
+fi
+if [[ -z "$PG_PASS" ]]; then
+    PG_PASS=$(printf '%s' "$PROD_URL" | sed -E 's|^[^:]+://[^:]+:([^@]+)@.*|\1|')
+    [[ -z "$PG_PASS" ]] && PG_PASS="agentiq_secret"
+fi
+[[ -z "$PG_DB" ]] && PG_DB="agentiqprod"
+
 echo "    ENV file : $ENV_FILE  [OK]"
-echo "    DB       : $PG_USER@.../$PG_DB"
+echo "    DB user  : $PG_USER  /  database : $PG_DB"
 
 # ── 3. Generate minimal compose env (avoids passing full .env to compose) ─────
-# This prevents docker compose from warning about unrecognised variable names
-# that appear as values (e.g. Fernet keys, JWT secrets) in the .env file.
+# Only the 5 vars compose YAML needs for interpolation — never the full .env.
 COMPOSE_ENV_FILE="$STORE_DIR/.compose.env"
+
+# Generate a sanitized copy of the backend .env where lone $ in values is doubled
+# to $$ so docker compose's env_file loader does not treat them as variable names
+# (e.g. Fernet keys, JWT secrets that contain or look like shell variable references).
+BACKEND_SAFE_ENV="$STORE_DIR/.backend_safe.env"
+awk '!/^[[:space:]]*#/ && /=/ {
+    n = index($0, "=")
+    key = substr($0, 1, n-1)
+    val = substr($0, n+1)
+    # protect already-doubled $$ first, then escape lone $, then restore $$
+    gsub(/\$\$/, "\001DOLDOL\001", val)
+    gsub(/\$/, "$$", val)
+    gsub(/\001DOLDOL\001/, "$$$$", val)
+    print key "=" val
+    next
+} { print }' "$ENV_FILE" > "$BACKEND_SAFE_ENV"
+chmod 600 "$BACKEND_SAFE_ENV"
+
 cat > "$COMPOSE_ENV_FILE" <<EOF
 PROD_DATABASE_URL=${PROD_URL}
 POSTGRES_USER=${PG_USER}
 POSTGRES_PASSWORD=${PG_PASS}
 POSTGRES_DB=${PG_DB}
+BACKEND_ENV_FILE=${BACKEND_SAFE_ENV}
 EOF
 chmod 600 "$COMPOSE_ENV_FILE"
 
