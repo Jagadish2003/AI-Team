@@ -49,7 +49,7 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import Dict
+from typing import Dict, List
 
 from app.model_gateway._interface import (
     GenerationRequest,
@@ -66,6 +66,11 @@ logger = logging.getLogger(__name__)
 _ENV_GENERATION: str = "MODEL_GENERATION_PROVIDER"
 _ENV_EMBEDDING: str = "MODEL_EMBEDDING_PROVIDER"
 _DEFAULT_PROVIDER: str = "hosted"
+
+# Telemetry event types emitted by the gateway call paths (R16-D1 T5 / AT-366).
+# Registered in app.telemetry; recorded exactly once per generate()/embed().
+_GENERATION_EVENT: str = "model.generation_completed"
+_EMBEDDING_EVENT: str = "model.embedding_completed"
 
 
 # ---------------------------------------------------------------------------
@@ -142,6 +147,87 @@ def get_embedding_provider() -> ModelProvider:
 
 
 # ---------------------------------------------------------------------------
+# Provider telemetry  (T5 — AT-366)
+#
+# The gateway records WHICH provider served each call so model usage is
+# observable across hosted, in-boundary, and future customer-tenant modes.
+# Recorded exactly once per generate()/embed() call (never per token, never
+# per retry — retries live inside a single provider call). Telemetry must
+# never break a model call, so any emit failure is swallowed.
+# ---------------------------------------------------------------------------
+
+
+def _record_provider_telemetry(event_type: str, payload: dict) -> None:
+    """Emit one telemetry event for a completed model call.
+
+    Imported lazily to avoid an import-time dependency on the telemetry/DB
+    layer, and wrapped so a telemetry failure never propagates to the caller.
+    record_event() is itself fire-and-forget for DB errors; the guard here
+    covers any unexpected import/registration problem.
+    """
+    try:
+        from app.telemetry import record_event
+
+        record_event(event_type, payload)
+    except Exception:  # pragma: no cover - telemetry is best-effort
+        logger.debug(
+            "model_gateway: telemetry emit failed for %s", event_type, exc_info=True
+        )
+
+
+# ---------------------------------------------------------------------------
+# Instrumented call paths — the entry points the platform calls (T5)
+#
+# These wrap provider.generate()/embed() with a single telemetry write so
+# every model call is observable regardless of which call site made it. The
+# provider result/behaviour is returned unchanged — graceful-failure
+# (text=None on error) is preserved exactly.
+# ---------------------------------------------------------------------------
+
+
+def generate(req: GenerationRequest) -> GenerationResult:
+    """Run a text-generation call through the active provider and record telemetry.
+
+    Resolves the generation provider, performs exactly one ``generate()`` call,
+    and emits exactly one ``model.generation_completed`` telemetry event naming
+    the provider that served it — on success and failure alike (T5-AC1/AC3/AC4).
+    Returns the provider's ``GenerationResult`` unchanged.
+    """
+    result = get_generation_provider().generate(req)
+    # AC1: provider name comes from GenerationResult.provider — the backend
+    # that actually served the request. AC4: emitted even when ok is False.
+    _record_provider_telemetry(
+        _GENERATION_EVENT,
+        {"provider": result.provider, "ok": result.ok},
+    )
+    return result
+
+
+def embed(texts: List[str]) -> List[List[float]]:
+    """Run an embedding call through the active provider and record telemetry.
+
+    Resolves the embedding provider, performs exactly one ``embed()`` call, and
+    emits exactly one ``model.embedding_completed`` telemetry event naming the
+    provider that served it (T5-AC2/AC3). Returns the provider's vectors
+    unchanged (an empty list on graceful failure).
+    """
+    provider = get_embedding_provider()
+    vectors = provider.embed(texts)
+    # ok = the provider returned a vector for every input (empty input is a
+    # successful no-op). AC2: telemetry carries the provider name.
+    _record_provider_telemetry(
+        _EMBEDDING_EVENT,
+        {
+            "provider": provider.name,
+            "ok": len(vectors) == len(texts),
+            "text_count": len(texts),
+            "vector_count": len(vectors),
+        },
+    )
+    return vectors
+
+
+# ---------------------------------------------------------------------------
 # Startup validation  (T2-AC4)
 # ---------------------------------------------------------------------------
 
@@ -185,6 +271,8 @@ __all__ = [
     "GenerationRequest",
     "GenerationResult",
     "ModelProvider",
+    "generate",
+    "embed",
     "get_generation_provider",
     "get_embedding_provider",
     "register_provider",

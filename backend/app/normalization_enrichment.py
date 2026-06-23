@@ -130,15 +130,15 @@ def _call_claude_batch(
     if not fields:
         return None
 
-    from app.model_gateway import GenerationRequest, get_generation_provider
+    from app.model_gateway import GenerationRequest, generate
 
     allowed = set(_entities_for_domain(pack_domain))
     valid_ids = {f["id"] for f in fields}
     prompt = _build_batch_prompt(fields, pack_domain)
 
-    result = get_generation_provider().generate(
-        GenerationRequest(prompt=prompt, max_tokens=1000)
-    )
+    # Route through the gateway's instrumented generate() so the call is
+    # telemetered with the serving provider (R16-D1 T5).
+    result = generate(GenerationRequest(prompt=prompt, max_tokens=1000))
     if not result.ok or result.text is None:
         return None
 

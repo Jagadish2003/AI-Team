@@ -507,11 +507,12 @@ Write exactly one paragraph (3-5 sentences) for a CXO audience.
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _call_claude(prompt: str, max_tokens: int) -> Optional[str]:
-    from app.model_gateway import GenerationRequest, get_generation_provider
+    # Route through the gateway's instrumented generate() so the call is
+    # telemetered with the serving provider (R16-D1 T5). text=None on failure
+    # is preserved — callers already handle None.
+    from app.model_gateway import GenerationRequest, generate
 
-    result = get_generation_provider().generate(
-        GenerationRequest(prompt=prompt, max_tokens=max_tokens)
-    )
+    result = generate(GenerationRequest(prompt=prompt, max_tokens=max_tokens))
     return result.text
 
 
