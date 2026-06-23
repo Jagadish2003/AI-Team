@@ -666,7 +666,7 @@ def _update_org_approval(
 
 
 def _html_page(title: str, heading: str, body: str, status_code: int = 200) -> HTMLResponse:
-    html = (
+    content = (
         "<!DOCTYPE html><html>"
         f"<head><meta charset=\"utf-8\"><title>{title}</title></head>"
         "<body style=\"font-family:Arial,sans-serif;max-width:600px;"
@@ -674,7 +674,104 @@ def _html_page(title: str, heading: str, body: str, status_code: int = 200) -> H
         f"<h2>{heading}</h2><p>{body}</p>"
         "</body></html>"
     )
-    return HTMLResponse(content=html, status_code=status_code)
+    return HTMLResponse(content=content, status_code=status_code)
+
+
+def _modal_page(
+    *,
+    title: str,
+    icon: str,
+    icon_color: str,
+    heading: str,
+    detail: str,
+    extra_note: str = "",
+    status_code: int = 200,
+) -> HTMLResponse:
+    """Centered card page shown after an approve/reject action is committed.
+
+    Attempts window.close() after a 5-second countdown. If the browser blocks
+    the close (tab not opened by script), 'You may now safely close this tab'
+    is displayed as the fallback. Fully self-contained — no external resources.
+    """
+    safe_heading = html.escape(heading)
+    safe_detail = html.escape(detail)
+    safe_extra = html.escape(extra_note) if extra_note else ""
+    extra_html = (
+        f'<p style="margin:0 0 18px;font-size:14px;color:#6b7280">{safe_extra}</p>'
+        if safe_extra else ""
+    )
+    doc = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>{html.escape(title)}</title>
+  <style>
+    *,*::before,*::after{{box-sizing:border-box;margin:0;padding:0}}
+    body{{min-height:100vh;display:flex;align-items:center;justify-content:center;
+         background:#f3f4f6;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",
+         Roboto,Helvetica,Arial,sans-serif;padding:16px}}
+    .card{{background:#fff;border-radius:16px;
+           box-shadow:0 8px 32px rgba(0,0,0,.12),0 2px 8px rgba(0,0,0,.06);
+           padding:40px 36px;max-width:460px;width:100%;text-align:center;
+           animation:fadeIn .35s ease both}}
+    @keyframes fadeIn{{from{{opacity:0;transform:translateY(12px)}}
+                       to{{opacity:1;transform:translateY(0)}}}}
+    .icon-ring{{width:60px;height:60px;border-radius:50%;display:flex;
+               align-items:center;justify-content:center;margin:0 auto 20px;
+               background:{icon_color}1a;border:2px solid {icon_color}33}}
+    .icon{{font-size:28px;line-height:1}}
+    h1{{font-size:20px;font-weight:700;color:#111827;margin-bottom:10px}}
+    .detail{{font-size:15px;color:#374151;margin-bottom:18px;line-height:1.55}}
+    .close-note{{font-size:13px;color:#6b7280;margin-bottom:24px;min-height:1.4em}}
+    .btn{{display:inline-flex;align-items:center;gap:6px;padding:10px 22px;
+          border-radius:8px;border:none;background:#1d4ed8;color:#fff;font-size:14px;
+          font-weight:600;cursor:pointer;transition:background .15s}}
+    .btn:hover{{background:#1e40af}}
+    .btn:focus{{outline:2px solid #93c5fd;outline-offset:2px}}
+    .safe-close{{margin-top:14px;font-size:12px;color:#9ca3af;display:none}}
+  </style>
+</head>
+<body>
+  <div class="card" role="main">
+    <div class="icon-ring" aria-hidden="true">
+      <span class="icon">{icon}</span>
+    </div>
+    <h1>{safe_heading}</h1>
+    <p class="detail">{safe_detail}</p>
+    {extra_html}<p class="close-note" id="countdown" aria-live="polite" style="display:none">
+      This tab will automatically close in <strong id="secs">5</strong> seconds.
+    </p>
+    <button class="btn" onclick="tryClose()" aria-label="Close this tab now">
+      Close Now
+    </button>
+    <p class="safe-close" id="safe-close">
+      You may now safely close this tab.
+    </p>
+  </div>
+  <script>
+    document.getElementById('countdown').style.display = 'block';
+    var remaining = 5;
+    var timer = setInterval(function() {{
+      remaining -= 1;
+      var el = document.getElementById('secs');
+      if (el) el.textContent = remaining;
+      if (remaining <= 0) {{ clearInterval(timer); tryClose(); }}
+    }}, 1000);
+    function tryClose() {{
+      clearInterval(timer);
+      try {{ window.close(); }} catch(e) {{}}
+      setTimeout(function() {{
+        var note = document.getElementById('safe-close');
+        var countdown = document.getElementById('countdown');
+        if (note) note.style.display = 'block';
+        if (countdown) countdown.style.display = 'none';
+      }}, 400);
+    }}
+  </script>
+</body>
+</html>"""
+    return HTMLResponse(content=doc, status_code=status_code)
 
 
 def _approval_link_expired(expires_at: object) -> bool:
@@ -789,19 +886,23 @@ def _process_decision(token, org_id, *, status, action, email_sender) -> HTMLRes
     if registrant_email:
         email_sender(registrant_email=registrant_email, org_name=org["name"])
 
-    safe_org = html.escape(org["name"] or "")
+    org_name = org["name"] or ""
     if status == "active":
-        return _html_page(
-            "Organisation Approved",
-            "Organisation approved",
-            f"<strong>{safe_org}</strong> has been approved. "
-            "The registrant has been notified and can now log in.",
+        return _modal_page(
+            title="Organisation Approved",
+            icon="✓",
+            icon_color="#15803d",
+            heading="Organisation Approved",
+            detail=f'Organisation "{org_name}" has been approved successfully.',
+            extra_note="The registrant has been notified.",
         )
-    return _html_page(
-        "Organisation Rejected",
-        "Organisation registration rejected",
-        f"<strong>{safe_org}</strong> has been rejected. "
-        "The registrant has been notified.",
+    return _modal_page(
+        title="Organisation Rejected",
+        icon="✕",
+        icon_color="#b91c1c",
+        heading="Organisation Rejected",
+        detail=f'Organisation "{org_name}" registration has been rejected.',
+        extra_note="The registrant has been notified.",
     )
 
 
