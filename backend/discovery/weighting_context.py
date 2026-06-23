@@ -197,6 +197,22 @@ class SystemWeighting:
         return not self.role and not self.priority
 
     @property
+    def base_role_weight(self) -> float:
+        """R16-C1 T4: the role authority weight WITHOUT the priority nudge.
+
+        Returns the raw ROLE_WEIGHT for this system's role, ignoring whatever
+        priority the customer assigned.  Used by the provenance guard to enforce
+        the observed-beats-inferred ordering: inferred evidence is capped at this
+        value so the customer's priority preference cannot boost inferred patterns
+        above directly-observed evidence from the same source.
+
+        Returns :data:`WEIGHT_NEUTRAL` (1.0) for neutral/unconfigured systems.
+        """
+        if self.is_neutral:
+            return WEIGHT_NEUTRAL
+        return ROLE_WEIGHT.get(str(self.role).strip(), WEIGHT_NEUTRAL)
+
+    @property
     def source_weight(self) -> float:
         """R16-C1 T2: compute the deterministic source weight for this system.
 
