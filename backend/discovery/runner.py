@@ -709,6 +709,12 @@ def run(
             e,
         )
 
+    # R16-C1 T1: load Stack Builder weighting context from run KV store.
+    # Falls back to neutral (no-op) for older runs that pre-date R16-C1 or
+    # for runs started outside the Stack Builder flow. Never raises.
+    from .weighting_context import load_for_run as _load_weighting_context
+    _weighting_ctx = _load_weighting_context(run_id)
+
     # 4. Score + Evidence
     # ENG-AIQ-NC-4: use lending_scorer for ncino pack, SC scorer for service_cloud
     from .scorer import score as sc_score
@@ -835,7 +841,9 @@ def run(
                 org_id=org_id,
             )
         else:
-            scored = sc_score(dr)
+            # R16-C1 T1: pass weighting context so the scorer can read
+            # role/priority for dr.signal_source (modulation is T2 work).
+            scored = sc_score(dr, weighting_context=_weighting_ctx)
 
         # ── ENT-2: cross-system corroboration (shared engine, non-blocking) ──
         # Evaluate corroboration AFTER the detector fired and the scorer ran,
@@ -857,6 +865,9 @@ def run(
                     run_data=_corr_run_data,
                     run_timestamp=_run_started_dt,
                     org_id=org_id,
+                    # R16-C1 T1: pass weighting context so the corroboration
+                    # engine can read role/priority per system.
+                    weighting_context=_weighting_ctx,
                 )
                 scored["confidence"] = apply_corroboration_confidence(
                     scored.get("confidence", "MEDIUM"), _corr

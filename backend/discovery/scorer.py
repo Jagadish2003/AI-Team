@@ -33,9 +33,10 @@ No other functions are modified.
 from __future__ import annotations
 
 import math
-from typing import Any, Dict, Literal, Tuple
+from typing import Any, Dict, Literal, Optional, Tuple
 
 from .models import DetectorResult
+from .weighting_context import StackBuilderWeightingContext
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Type aliases
@@ -401,17 +402,30 @@ ROADMAP_STAGE: Dict[Tier, str] = {
 }
 
 
-def score(dr: DetectorResult) -> Dict[str, Any]:
+def score(
+    dr: DetectorResult,
+    weighting_context: Optional[StackBuilderWeightingContext] = None,
+) -> Dict[str, Any]:
     """
     Convert a DetectorResult into scored opportunity fields.
 
     Returns dict with keys:
-        impact       int   1–10
-        effort       int   1–10
-        confidence   str   HIGH | MEDIUM | LOW
-        tier         str   Quick Win | Strategic | Complex
-        roadmap_stage str  NEXT_30 | NEXT_60 | NEXT_90
-        score_debug  dict  intermediate factor values (for testing and calibration)
+        impact        int   1–10
+        effort        int   1–10
+        confidence    str   HIGH | MEDIUM | LOW
+        tier          str   Quick Win | Strategic | Complex
+        roadmap_stage str   NEXT_30 | NEXT_60 | NEXT_90
+        score_debug   dict  intermediate factor values (for testing and calibration)
+
+    Parameters
+    ----------
+    dr:
+        The detector result to score.
+    weighting_context:
+        Optional Stack Builder weighting context (R16-C1 T1). When
+        provided, the per-system role and priority are captured in
+        ``score_debug["source_weighting"]`` for auditability.
+        Downstream modulation of impact/confidence is applied in T2.
 
     This function is the implementation contract for SF-1.4.
     """
@@ -423,6 +437,20 @@ def score(dr: DetectorResult) -> Dict[str, Any]:
     # Debug / calibration breakdown
     v, f, c, r, e = _impact_factors(dr)
     raw_sum = v*_W_VOLUME + f*_W_FRICTION + c*_W_CUSTOMER + r*_W_REVENUE + e*_W_EXTERNAL
+
+    # R16-C1 T1: capture the source-system weighting that was in effect when
+    # this detector was scored. Stored in score_debug so tests and the audit
+    # trail can verify the persisted values reached the scorer. Modulation
+    # (adjusting impact/confidence based on role/priority) is T2 work.
+    source_weighting_debug: Optional[Dict[str, Any]] = None
+    if weighting_context is not None and not weighting_context.is_neutral:
+        w = weighting_context.get(dr.signal_source)
+        source_weighting_debug = {
+            "system_id": dr.signal_source,
+            "role":      w.role,
+            "priority":  w.priority,
+            "confirmed": w.confirmed,
+        }
 
     score_debug = {
         "impact_factors": {
@@ -445,6 +473,8 @@ def score(dr: DetectorResult) -> Dict[str, Any]:
         "proxy_ratio": round(
             dr.metric_value / dr.threshold if dr.threshold > 0 else 0.0, 4
         ),
+        # R16-C1 T1: weighting values that were available to the scorer
+        "source_weighting": source_weighting_debug,
     }
 
     return {

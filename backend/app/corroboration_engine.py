@@ -727,6 +727,7 @@ def evaluate_corroboration(
     run_data: Dict[str, Any],
     run_timestamp: datetime,
     org_id: str,
+    weighting_context: Optional[Any] = None,
 ) -> CorroborationResult:
     """Evaluate all applicable corroboration rules for this detector.
 
@@ -736,18 +737,45 @@ def evaluate_corroboration(
 
     Parameters
     ----------
-    detector_id: the detector that fired (e.g. 'COVENANT_TRACKING_GAP').
-    pack_id:     the active pack id (engine is pack-agnostic; accepted for
-                 context and future rules).
-    run_data:    aggregated connected-system data (see module docstring).
-    run_timestamp: the run's timestamp; the corroboration window is relative to it.
-    org_id:      the org id (accepted for context / future org-scoped rules).
+    detector_id:
+        The detector that fired (e.g. ``'COVENANT_TRACKING_GAP'``).
+    pack_id:
+        The active pack id (engine is pack-agnostic; accepted for context
+        and future rules).
+    run_data:
+        Aggregated connected-system data (see module docstring).
+    run_timestamp:
+        The run's timestamp; the corroboration window is relative to it.
+    org_id:
+        The org id (accepted for context / future org-scoped rules).
+    weighting_context:
+        Optional Stack Builder weighting context (R16-C1 T1). When
+        provided, the per-system role and priority are readable inside the
+        engine so future rules can consult them. Accepted as ``Any`` to
+        avoid a hard import dependency from the app layer into discovery.
+        Modulation of corroboration contribution is T2+ work.
 
     Never raises for normal data issues — defensive .get() throughout. The
     caller (scoring pipeline) additionally wraps this in try/except so any
     unexpected failure is non-blocking (ENT-2 AC10).
     """
     run_data = run_data or {}
+
+    # R16-C1 T1: log the weighting context that was passed in so tests can
+    # verify the persisted values are reaching the corroboration engine.
+    # Modulation of corroboration contribution based on role/priority is T2+.
+    if weighting_context is not None and not getattr(weighting_context, "is_neutral", True):
+        try:
+            w = weighting_context.get(detector_id.lower().split("_")[0])
+            logger.debug(
+                "R16-C1 corroboration: detector=%s weighting_context present "
+                "(%d systems). Modulation deferred to T2.",
+                detector_id,
+                len(getattr(weighting_context, "weightings", {})),
+            )
+            del w
+        except Exception:  # noqa: BLE001 — never block corroboration
+            pass
 
     if run_timestamp is None:
         run_timestamp = datetime.now(timezone.utc)
