@@ -1,4 +1,4 @@
-"""R16-D1 T1 — Model Provider Gateway contract tests.
+"""R16-D1 T1 + T2 — Model Provider Gateway contract tests.
 
 Verifies every T1 acceptance criterion:
 
@@ -13,6 +13,19 @@ Verifies every T1 acceptance criterion:
           independently callable and return a ModelProvider instance each.
   T1-AC6  Generation and embedding providers are resolved independently —
           configuring one does not affect the other.
+
+And every T2 acceptance criterion (AT-363):
+
+  T2-AC1  get_generation_provider() reads MODEL_GENERATION_PROVIDER from
+          config and returns the matching registered provider.
+  T2-AC2  get_embedding_provider() reads MODEL_EMBEDDING_PROVIDER from
+          config and returns the matching registered provider.
+  T2-AC3  Both providers are resolved independently — setting generation to
+          one value and embedding to another works without conflict.
+  T2-AC4  An unknown provider value raises a clear ValueError with a helpful
+          message (surfaced via validate_provider_config() at startup).
+  T2-AC5  backend/.env.example documents MODEL_GENERATION_PROVIDER and
+          MODEL_EMBEDDING_PROVIDER with valid example values.
 """
 
 import inspect
@@ -390,3 +403,347 @@ def test_register_different_provider_same_name_raises():
 
     with pytest.raises(ValueError):
         register_provider(_Dup())
+
+
+# =============================================================================
+# T2 — Provider resolution from config (AT-363)
+# =============================================================================
+
+
+# ---------------------------------------------------------------------------
+# T2-AC1 — get_generation_provider() reads MODEL_GENERATION_PROVIDER
+# ---------------------------------------------------------------------------
+
+
+def test_t2_ac1_reads_model_generation_provider_env_var(monkeypatch):
+    """get_generation_provider() uses MODEL_GENERATION_PROVIDER to pick the provider."""
+    from app.model_gateway import (
+        ModelProvider,
+        _PROVIDER_REGISTRY,
+        get_generation_provider,
+        register_provider,
+    )
+    from app.model_gateway._interface import GenerationRequest, GenerationResult
+
+    class _T2GenProvider(ModelProvider):
+        name = "_t2_gen"
+
+        def generate(self, req: GenerationRequest) -> GenerationResult:
+            return GenerationResult(text="t2-gen", provider=self.name, ok=True)
+
+        def embed(self, texts: List[str]) -> List[List[float]]:
+            return []
+
+    provider = _T2GenProvider()
+    register_provider(provider)
+    monkeypatch.setenv("MODEL_GENERATION_PROVIDER", "_t2_gen")
+
+    result = get_generation_provider()
+    assert result is provider
+    assert result.name == "_t2_gen"
+
+    _PROVIDER_REGISTRY.pop("_t2_gen", None)
+
+
+def test_t2_ac1_default_is_hosted_when_env_var_unset(monkeypatch):
+    """MODEL_GENERATION_PROVIDER defaults to 'hosted' when not set."""
+    from app.model_gateway import get_generation_provider
+
+    monkeypatch.delenv("MODEL_GENERATION_PROVIDER", raising=False)
+    assert get_generation_provider().name == "hosted"
+
+
+# ---------------------------------------------------------------------------
+# T2-AC2 — get_embedding_provider() reads MODEL_EMBEDDING_PROVIDER
+# ---------------------------------------------------------------------------
+
+
+def test_t2_ac2_reads_model_embedding_provider_env_var(monkeypatch):
+    """get_embedding_provider() uses MODEL_EMBEDDING_PROVIDER to pick the provider."""
+    from app.model_gateway import (
+        ModelProvider,
+        _PROVIDER_REGISTRY,
+        get_embedding_provider,
+        register_provider,
+    )
+    from app.model_gateway._interface import GenerationRequest, GenerationResult
+
+    class _T2EmbProvider(ModelProvider):
+        name = "_t2_emb"
+
+        def generate(self, req: GenerationRequest) -> GenerationResult:
+            return GenerationResult(text=None, provider=self.name, ok=False)
+
+        def embed(self, texts: List[str]) -> List[List[float]]:
+            return [[0.5]] * len(texts)
+
+    provider = _T2EmbProvider()
+    register_provider(provider)
+    monkeypatch.setenv("MODEL_EMBEDDING_PROVIDER", "_t2_emb")
+
+    result = get_embedding_provider()
+    assert result is provider
+    assert result.name == "_t2_emb"
+
+    _PROVIDER_REGISTRY.pop("_t2_emb", None)
+
+
+def test_t2_ac2_default_is_hosted_when_env_var_unset(monkeypatch):
+    """MODEL_EMBEDDING_PROVIDER defaults to 'hosted' when not set."""
+    from app.model_gateway import get_embedding_provider
+
+    monkeypatch.delenv("MODEL_EMBEDDING_PROVIDER", raising=False)
+    assert get_embedding_provider().name == "hosted"
+
+
+# ---------------------------------------------------------------------------
+# T2-AC3 — Both resolved independently; different values work without conflict
+# ---------------------------------------------------------------------------
+
+
+def test_t2_ac3_different_providers_for_gen_and_emb_work_without_conflict(monkeypatch):
+    """Separate gen and embed providers can be active simultaneously."""
+    from app.model_gateway import (
+        ModelProvider,
+        _PROVIDER_REGISTRY,
+        get_embedding_provider,
+        get_generation_provider,
+        register_provider,
+    )
+    from app.model_gateway._interface import GenerationRequest, GenerationResult
+
+    class _T2IndepGen(ModelProvider):
+        name = "_t2_indep_gen"
+
+        def generate(self, req: GenerationRequest) -> GenerationResult:
+            return GenerationResult(text="gen", provider=self.name, ok=True)
+
+        def embed(self, texts: List[str]) -> List[List[float]]:
+            return []
+
+    class _T2IndepEmb(ModelProvider):
+        name = "_t2_indep_emb"
+
+        def generate(self, req: GenerationRequest) -> GenerationResult:
+            return GenerationResult(text=None, provider=self.name, ok=False)
+
+        def embed(self, texts: List[str]) -> List[List[float]]:
+            return [[1.0]] * len(texts)
+
+    pgen = _T2IndepGen()
+    pemb = _T2IndepEmb()
+    register_provider(pgen)
+    register_provider(pemb)
+
+    monkeypatch.setenv("MODEL_GENERATION_PROVIDER", "_t2_indep_gen")
+    monkeypatch.setenv("MODEL_EMBEDDING_PROVIDER", "_t2_indep_emb")
+
+    gen = get_generation_provider()
+    emb = get_embedding_provider()
+
+    # Both resolved to the correct provider
+    assert gen is pgen
+    assert emb is pemb
+    # They are different objects — setting one didn't clobber the other
+    assert gen is not emb
+
+    _PROVIDER_REGISTRY.pop("_t2_indep_gen", None)
+    _PROVIDER_REGISTRY.pop("_t2_indep_emb", None)
+
+
+def test_t2_ac3_changing_gen_does_not_affect_emb(monkeypatch):
+    """Changing MODEL_GENERATION_PROVIDER leaves MODEL_EMBEDDING_PROVIDER untouched."""
+    from app.model_gateway import (
+        ModelProvider,
+        _PROVIDER_REGISTRY,
+        get_embedding_provider,
+        get_generation_provider,
+        register_provider,
+    )
+    from app.model_gateway._interface import GenerationRequest, GenerationResult
+
+    class _T2AltGen(ModelProvider):
+        name = "_t2_alt_gen"
+
+        def generate(self, req: GenerationRequest) -> GenerationResult:
+            return GenerationResult(text="alt", provider=self.name, ok=True)
+
+        def embed(self, texts: List[str]) -> List[List[float]]:
+            return []
+
+    register_provider(_T2AltGen())
+    monkeypatch.setenv("MODEL_GENERATION_PROVIDER", "_t2_alt_gen")
+    # Do NOT set MODEL_EMBEDDING_PROVIDER → should stay 'hosted'
+    monkeypatch.delenv("MODEL_EMBEDDING_PROVIDER", raising=False)
+
+    assert get_generation_provider().name == "_t2_alt_gen"
+    assert get_embedding_provider().name == "hosted"  # unchanged
+
+    _PROVIDER_REGISTRY.pop("_t2_alt_gen", None)
+
+
+# ---------------------------------------------------------------------------
+# T2-AC4 — Unknown provider raises ValueError with helpful message at startup
+# ---------------------------------------------------------------------------
+
+
+def test_t2_ac4_unknown_generation_provider_raises_value_error(monkeypatch):
+    """get_generation_provider() raises ValueError for an unregistered name."""
+    from app.model_gateway import get_generation_provider
+
+    monkeypatch.setenv("MODEL_GENERATION_PROVIDER", "no_such_provider_xyz")
+
+    with pytest.raises(ValueError) as exc_info:
+        get_generation_provider()
+
+    msg = str(exc_info.value)
+    # Must name the env var in the message
+    assert "MODEL_GENERATION_PROVIDER" in msg
+    # Must mention the bad value
+    assert "no_such_provider_xyz" in msg
+
+
+def test_t2_ac4_unknown_embedding_provider_raises_value_error(monkeypatch):
+    """get_embedding_provider() raises ValueError for an unregistered name."""
+    from app.model_gateway import get_embedding_provider
+
+    monkeypatch.setenv("MODEL_EMBEDDING_PROVIDER", "no_such_provider_xyz")
+
+    with pytest.raises(ValueError) as exc_info:
+        get_embedding_provider()
+
+    msg = str(exc_info.value)
+    assert "MODEL_EMBEDDING_PROVIDER" in msg
+    assert "no_such_provider_xyz" in msg
+
+
+def test_t2_ac4_raises_value_error_not_key_error(monkeypatch):
+    """The exception type is ValueError, not KeyError."""
+    from app.model_gateway import get_generation_provider
+
+    monkeypatch.setenv("MODEL_GENERATION_PROVIDER", "ghost_provider")
+
+    with pytest.raises(ValueError):
+        get_generation_provider()
+
+    # Must NOT raise KeyError
+    monkeypatch.setenv("MODEL_GENERATION_PROVIDER", "ghost_provider")
+    try:
+        get_generation_provider()
+    except ValueError:
+        pass  # expected
+    except KeyError:
+        pytest.fail("Expected ValueError, got KeyError")
+
+
+def test_t2_ac4_error_message_lists_valid_values(monkeypatch):
+    """The error message includes the list of registered provider names."""
+    from app.model_gateway import get_generation_provider
+
+    monkeypatch.setenv("MODEL_GENERATION_PROVIDER", "bad_name")
+
+    with pytest.raises(ValueError) as exc_info:
+        get_generation_provider()
+
+    msg = str(exc_info.value)
+    # 'hosted' is always registered
+    assert "hosted" in msg
+
+
+def test_t2_ac4_validate_provider_config_raises_for_unknown_gen(monkeypatch):
+    """validate_provider_config() raises ValueError on a bad gen provider."""
+    from app.model_gateway import validate_provider_config
+
+    monkeypatch.setenv("MODEL_GENERATION_PROVIDER", "bad_gen_provider")
+    monkeypatch.delenv("MODEL_EMBEDDING_PROVIDER", raising=False)
+
+    with pytest.raises(ValueError) as exc_info:
+        validate_provider_config()
+
+    assert "MODEL_GENERATION_PROVIDER" in str(exc_info.value)
+
+
+def test_t2_ac4_validate_provider_config_raises_for_unknown_emb(monkeypatch):
+    """validate_provider_config() raises ValueError on a bad emb provider."""
+    from app.model_gateway import validate_provider_config
+
+    monkeypatch.delenv("MODEL_GENERATION_PROVIDER", raising=False)
+    monkeypatch.setenv("MODEL_EMBEDDING_PROVIDER", "bad_emb_provider")
+
+    with pytest.raises(ValueError) as exc_info:
+        validate_provider_config()
+
+    assert "MODEL_EMBEDDING_PROVIDER" in str(exc_info.value)
+
+
+def test_t2_ac4_validate_provider_config_passes_for_default(monkeypatch):
+    """validate_provider_config() passes when both env vars are default/unset."""
+    from app.model_gateway import validate_provider_config
+
+    monkeypatch.delenv("MODEL_GENERATION_PROVIDER", raising=False)
+    monkeypatch.delenv("MODEL_EMBEDDING_PROVIDER", raising=False)
+
+    # Must not raise
+    validate_provider_config()
+
+
+def test_t2_ac4_validate_provider_config_passes_when_set_to_hosted(monkeypatch):
+    """validate_provider_config() passes when both vars are explicitly 'hosted'."""
+    from app.model_gateway import validate_provider_config
+
+    monkeypatch.setenv("MODEL_GENERATION_PROVIDER", "hosted")
+    monkeypatch.setenv("MODEL_EMBEDDING_PROVIDER", "hosted")
+
+    validate_provider_config()  # must not raise
+
+
+# ---------------------------------------------------------------------------
+# T2-AC5 — .env.example documents both config keys with valid example values
+# ---------------------------------------------------------------------------
+
+
+def test_t2_ac5_env_example_contains_model_generation_provider():
+    """backend/.env.example must document MODEL_GENERATION_PROVIDER."""
+    import os
+    from pathlib import Path
+
+    backend_dir = Path(__file__).resolve().parents[2]
+    env_example = backend_dir / ".env.example"
+    assert env_example.exists(), ".env.example must exist"
+
+    content = env_example.read_text(encoding="utf-8")
+    assert "MODEL_GENERATION_PROVIDER" in content, (
+        "backend/.env.example must document MODEL_GENERATION_PROVIDER"
+    )
+
+
+def test_t2_ac5_env_example_contains_model_embedding_provider():
+    """backend/.env.example must document MODEL_EMBEDDING_PROVIDER."""
+    from pathlib import Path
+
+    backend_dir = Path(__file__).resolve().parents[2]
+    env_example = backend_dir / ".env.example"
+    content = env_example.read_text(encoding="utf-8")
+    assert "MODEL_EMBEDDING_PROVIDER" in content, (
+        "backend/.env.example must document MODEL_EMBEDDING_PROVIDER"
+    )
+
+
+def test_t2_ac5_env_example_values_are_valid(monkeypatch):
+    """The example values in .env.example are actually registered providers."""
+    import re
+    from pathlib import Path
+
+    from app.model_gateway import _PROVIDER_REGISTRY
+
+    backend_dir = Path(__file__).resolve().parents[2]
+    content = (backend_dir / ".env.example").read_text(encoding="utf-8")
+
+    for env_var in ("MODEL_GENERATION_PROVIDER", "MODEL_EMBEDDING_PROVIDER"):
+        m = re.search(rf"^{env_var}=(.+)$", content, re.MULTILINE)
+        assert m is not None, f"{env_var} must have an example value in .env.example"
+        example_value = m.group(1).strip()
+        assert example_value in _PROVIDER_REGISTRY, (
+            f".env.example example value '{example_value}' for {env_var} "
+            f"is not a registered provider. Valid: {sorted(_PROVIDER_REGISTRY.keys())}"
+        )

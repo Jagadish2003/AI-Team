@@ -30,15 +30,20 @@ Design rules (from R16-D1 spec)
 - On provider failure generate() returns ok=False / text=None.  Callers
   already handle None — behaviour is preserved exactly.
 
-Provider resolution
--------------------
-  MODEL_GENERATION_PROVIDER env var (default: 'hosted')
-  MODEL_EMBEDDING_PROVIDER  env var (default: 'hosted')
+Provider resolution  (T2 — R16-D1 §3)
+---------------------------------------
+  MODEL_GENERATION_PROVIDER  env var (default: 'hosted')
+  MODEL_EMBEDDING_PROVIDER   env var (default: 'hosted')
 
-  'hosted' → AnthropicHostedProvider (Anthropic API, api.anthropic.com)
+  Both are resolved independently at call time.  Setting generation to one
+  value and embedding to another works without conflict (T2-AC3).
 
-  New providers are registered with register_provider().  Adding one requires
-  no change to any calling code (AC7 of the parent story R16-D1).
+  Unknown values raise ``ValueError`` at startup via
+  ``validate_provider_config()`` — before the first model call (T2-AC4).
+
+  1.6 ships the 'hosted' provider (Anthropic API).  1.7 will add
+  'in_boundary' and 'customer_tenant' by registering new implementations
+  via ``register_provider()`` — no calling code changes required (AC7).
 """
 from __future__ import annotations
 
@@ -53,6 +58,15 @@ from app.model_gateway._interface import (
 )
 
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Config key names and the R16-D1 1.6 default
+# ---------------------------------------------------------------------------
+
+_ENV_GENERATION: str = "MODEL_GENERATION_PROVIDER"
+_ENV_EMBEDDING: str = "MODEL_EMBEDDING_PROVIDER"
+_DEFAULT_PROVIDER: str = "hosted"
+
 
 # ---------------------------------------------------------------------------
 # Provider registry
@@ -76,15 +90,22 @@ def register_provider(provider: ModelProvider) -> None:
     _PROVIDER_REGISTRY[provider.name] = provider
 
 
-def _resolve_provider(name: str, capability: str) -> ModelProvider:
-    """Look up ``name`` in the registry; raise clearly if not found."""
+def _resolve_provider(name: str, env_var: str) -> ModelProvider:
+    """Look up ``name`` in the registry; raise ``ValueError`` with a helpful
+    message if not found.
+
+    ``env_var`` is the environment variable the caller read ``name`` from —
+    including it in the error message lets operators find and fix the problem
+    without reading source code.
+    """
     provider = _PROVIDER_REGISTRY.get(name)
     if provider is None:
-        registered = list(_PROVIDER_REGISTRY.keys())
-        raise KeyError(
-            f"No '{capability}' provider registered under name '{name}'. "
-            f"Registered providers: {registered}. "
-            "Call register_provider() before using the gateway."
+        registered = sorted(_PROVIDER_REGISTRY.keys())
+        raise ValueError(
+            f"{env_var}='{name}' is not a registered model provider. "
+            f"Valid values: {registered}. "
+            f"Update {env_var} in your .env file, or call register_provider() "
+            f"before the application starts."
         )
     return provider
 
@@ -98,20 +119,54 @@ def get_generation_provider() -> ModelProvider:
     """Return the active text-generation provider.
 
     Resolved independently from MODEL_GENERATION_PROVIDER (default: 'hosted').
-    Changing this env var does not affect the embedding provider.
+    Changing this env var does not affect the embedding provider (T2-AC3).
+
+    Raises:
+        ValueError: when MODEL_GENERATION_PROVIDER names an unregistered provider.
     """
-    name = os.getenv("MODEL_GENERATION_PROVIDER", "hosted")
-    return _resolve_provider(name, "generation")
+    name = os.getenv(_ENV_GENERATION, _DEFAULT_PROVIDER)
+    return _resolve_provider(name, _ENV_GENERATION)
 
 
 def get_embedding_provider() -> ModelProvider:
     """Return the active embedding provider.
 
     Resolved independently from MODEL_EMBEDDING_PROVIDER (default: 'hosted').
-    Changing this env var does not affect the generation provider.
+    Changing this env var does not affect the generation provider (T2-AC3).
+
+    Raises:
+        ValueError: when MODEL_EMBEDDING_PROVIDER names an unregistered provider.
     """
-    name = os.getenv("MODEL_EMBEDDING_PROVIDER", "hosted")
-    return _resolve_provider(name, "embedding")
+    name = os.getenv(_ENV_EMBEDDING, _DEFAULT_PROVIDER)
+    return _resolve_provider(name, _ENV_EMBEDDING)
+
+
+# ---------------------------------------------------------------------------
+# Startup validation  (T2-AC4)
+# ---------------------------------------------------------------------------
+
+
+def validate_provider_config() -> None:
+    """Validate that the configured provider names exist in the registry.
+
+    Call this from the application lifespan so a misconfigured
+    MODEL_GENERATION_PROVIDER or MODEL_EMBEDDING_PROVIDER is detected before
+    the first model call — surfacing it as a ``ValueError`` at startup rather
+    than mid-run (T2-AC4).
+
+    Raises:
+        ValueError: when either env var names an unregistered provider.
+    """
+    gen_name = os.getenv(_ENV_GENERATION, _DEFAULT_PROVIDER)
+    emb_name = os.getenv(_ENV_EMBEDDING, _DEFAULT_PROVIDER)
+    # Both calls raise ValueError on unknown names (T2-AC4).
+    _resolve_provider(gen_name, _ENV_GENERATION)
+    _resolve_provider(emb_name, _ENV_EMBEDDING)
+    logger.info(
+        "model_gateway config validated: %s=%s %s=%s",
+        _ENV_GENERATION, gen_name,
+        _ENV_EMBEDDING, emb_name,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -133,4 +188,5 @@ __all__ = [
     "get_generation_provider",
     "get_embedding_provider",
     "register_provider",
+    "validate_provider_config",
 ]
