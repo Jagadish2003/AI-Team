@@ -29,6 +29,8 @@ import time
 from typing import Any, Dict, List, Optional
 from dotenv import load_dotenv
 
+from app.provenance import EvidencePointer
+
 logger = logging.getLogger(__name__)
 
 MODEL            = "claude-sonnet-4-5"
@@ -37,6 +39,36 @@ MAX_TOKENS_EXEC  = 512
 API_URL          = "https://api.anthropic.com/v1/messages"
 API_VERSION      = "2023-06-01"
 KV_LLM_ENRICHMENT = "llm_enrichment"
+
+
+def _attach_enrichment_provenance(
+    artifact: Dict[str, Any], *, run_id: str, opp: Dict[str, Any]
+) -> None:
+    """Attach an INFERRED EvidencePointer + grounding evidence ids to an enrichment
+    artifact (R16-B1).
+
+    Enrichment narratives are model/heuristic-generated, so origin='inferred' and
+    the discovery run is named as the extraction job (AC2). grounding_evidence_ids
+    records the evidence the narrative was grounded in, so 1.9's full evidence
+    trace can later walk a narrative back to its sources. Both are written into the
+    artifact dict persisted under the run-scoped enrichment KV — a JSON blob, so no
+    schema change is needed.
+    """
+    grounding = [str(e) for e in (opp.get("evidenceIds") or [])]
+    pointer = EvidencePointer.inferred(
+        source_system="agentiq",
+        source_artifact=str(opp.get("id") or "opportunity"),
+        extraction_job_id=run_id,
+    )
+    if pointer.is_valid():
+        artifact["evidence_pointer"] = pointer.to_dict()
+    else:
+        # Inferred output with no job id must never be surfaced as observed truth.
+        logger.error(
+            "Enrichment provenance invalid for opp %s — pointer omitted",
+            opp.get("id"),
+        )
+    artifact["grounding_evidence_ids"] = grounding
 
 load_dotenv()
 
@@ -1334,6 +1366,7 @@ def run_llm_enrichment(
             result["preliminary"] = preliminary
             result["preliminary_reason"] = reason
 
+            _attach_enrichment_provenance(result, run_id=run_id, opp=opp)
             per_opp[opp_id] = result
             if result.get("llmGenerated"):
                 enriched += 1
@@ -1350,6 +1383,7 @@ def run_llm_enrichment(
             fallback["corroboration_label"] = corroboration_label
             fallback["preliminary"] = True
             fallback["preliminary_reason"] = "Enrichment failed — analyst review required"
+            _attach_enrichment_provenance(fallback, run_id=run_id, opp=opp)
             per_opp[opp_id] = fallback
             failed += 1
 

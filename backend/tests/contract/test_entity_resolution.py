@@ -110,7 +110,11 @@ class TestNewEntityCreation:
         import json
         e = _call(display_name="Fay Kim", org_id="org-ac3g", metadata={"team": "credit"})
         fetched = _get_entity(str(e.id))
-        assert json.loads(fetched["metadata"]) == {"team": "credit"}
+        md = json.loads(fetched["metadata"])
+        # Caller metadata round-trips as JSON; R16-B1 additionally stamps an
+        # observed EvidencePointer onto every created entity.
+        assert md["team"] == "credit"
+        assert md["evidence_pointer"]["origin"] == "observed"
 
 
 # ---------------------------------------------------------------------------
