@@ -301,6 +301,20 @@ CREATE TABLE "public"."orgs" (
 
 
 --
+-- Name: ingestion_checkpoints; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE "public"."ingestion_checkpoints" (
+    "org_id" character varying(64) NOT NULL,
+    "connector_id" character varying(64) NOT NULL,
+    "value" "text" NOT NULL,
+    "captured_at" timestamp with time zone NOT NULL,
+    "updated_at" timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT "ingestion_checkpoints_pkey" PRIMARY KEY ("org_id", "connector_id")
+);
+
+
+--
 -- Name: org_licenses; Type: TABLE; Schema: public; Owner: -
 --
 
