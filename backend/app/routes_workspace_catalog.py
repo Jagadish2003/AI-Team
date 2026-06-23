@@ -7,8 +7,10 @@ from typing import Any, Dict, List
 from fastapi import Depends, FastAPI
 from pydantic import BaseModel, Field
 
-from .db import get_all
+from .db import org_connectors_list
+from .middleware.tenancy import get_current_org_id
 from .security import require_auth
+from .rbac import require_role
 
 
 WORKSPACE_CATALOG_PATH = "/api/integration-hub/workspace-catalog"
@@ -153,9 +155,10 @@ def register_workspace_catalog_routes(app: FastAPI) -> None:
     @app.get(
         WORKSPACE_CATALOG_PATH,
         response_model=WorkspaceCatalogResponse,
-        dependencies=[Depends(require_auth)],
+        dependencies=[Depends(require_auth), Depends(require_role("viewer"))],
         summary="Workspace source catalog grouped by capability category",
         tags=["Integration Hub"],
     )
     def get_workspace_catalog() -> WorkspaceCatalogResponse:
-        return build_workspace_catalog(get_all("connectors"))
+        # Per-org: catalog overlaid with THIS org's connection state + products.
+        return build_workspace_catalog(org_connectors_list(get_current_org_id()))

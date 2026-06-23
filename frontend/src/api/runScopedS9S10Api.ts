@@ -1,5 +1,6 @@
 import { apiGet } from '../lib/apiClient';
 import type { PilotRoadmapModel } from '../types/pilotRoadmap';
+export type { ExecutiveReport } from '../types/executiveReport';
 
 // Backend returns different field names — map to the frontend type.
 function mapRoadmap(raw: any): PilotRoadmapModel {
@@ -17,21 +18,8 @@ export async function fetchRunRoadmap(runId: string): Promise<PilotRoadmapModel>
   return mapRoadmap(raw);
 }
 
-export interface SourcesAnalyzed {
-  recommendedConnected: number;
-  totalConnected: number;
-  uploadedFiles: number;
-  sampleWorkspaceEnabled?: boolean;
-}
-
-export interface ExecutiveReport {
-  confidence: string;
-  sourcesAnalyzed: SourcesAnalyzed;
-  topQuickWins: any[];
-  snapshotBubbles: any[];
-  roadmapHighlights: any;
-}
-
-export async function fetchRunExecutiveReport(runId: string): Promise<ExecutiveReport> {
-  return apiGet<ExecutiveReport>(`/api/runs/${runId}/executive-report`);
+export async function fetchRunExecutiveReport(runId: string) {
+  return apiGet<import('../types/executiveReport').ExecutiveReport>(
+    `/api/runs/${runId}/executive-report`,
+  );
 }

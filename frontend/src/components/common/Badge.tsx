@@ -2,7 +2,7 @@ import React from 'react';
 import { ConnectorStatus } from '../../types/connector';
 
 const map: Record<ConnectorStatus, { label: string; cls: string }> = {
-  connected: { label: 'Connected', cls: 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30' },
+  connected: { label: 'Connected', cls: 'integration-connected-status-pill' },
   not_connected: { label: 'Not connected', cls: 'bg-slate-500/10 text-muted border-border' },
   disconnected: { label: 'Disconnected', cls: 'bg-slate-500/10 text-muted border-border' },
   not_configured: { label: 'Not configured', cls: 'bg-slate-500/10 text-muted border-border' },

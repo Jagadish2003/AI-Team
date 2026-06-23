@@ -23,9 +23,12 @@ CPQ pack slot is reserved but empty — Sprint 6 adds ncino_cpq.
 from __future__ import annotations
 
 import json
+import logging
 import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+
+logger = logging.getLogger(__name__)
 
 # ── Pack registry ─────────────────────────────────────────────────────────────
 
@@ -103,6 +106,74 @@ PACK_REGISTRY: Dict[str, Dict[str, Any]] = {
         ),
     },
 
+    "sqlserver_opsignal": {
+        "packId":        "sqlserver_opsignal",
+        "packName":      "SQL Server Operational Signals",
+        "domain":        "sqlserver_opsignal",
+        "pack_domain":   "sqlserver_opsignal",
+        "detectors": [
+            "discovery.detectors.db_ticket_volume_surge",
+            "discovery.detectors.db_sla_breach_rate",
+            "discovery.detectors.db_queue_depth_elevated",
+        ],
+        "ui_labels_path": str(_PACKS_DIR / "sqlserver_opsignal_ui_labels.json"),
+        "llm_context": (
+            "SQL Server operational database analysis. "
+            "Focus on service ticket volume trends, SLA breach patterns, "
+            "and queue depth accumulation. "
+            "Use IT operations language. "
+            "Cross-reference with ServiceNow and Jira findings where available. "
+            "IMPORTANT: agent surfaces operational signals to IT managers only. "
+            "No automated ticket resolution or SLA override."
+        ),
+    },
+
+    "github_engineering": {
+        "packId":        "github_engineering",
+        "packName":      "GitHub Engineering Signals",
+        "domain":        "github_engineering",
+        "pack_domain":   "github_engineering",
+        "detectors": [
+            "discovery.detectors.github_pr_bottleneck",
+            "discovery.detectors.github_commit_concentration",
+            "discovery.detectors.github_stale_branches",
+        ],
+        "ui_labels_path": str(_PACKS_DIR / "github_engineering_ui_labels.json"),
+        "llm_context": (
+            "GitHub engineering signal analysis. "
+            "Focus on PR review bottlenecks, commit concentration risk, "
+            "and stale branch accumulation. "
+            "Use engineering operations language. "
+            "Cross-reference with Jira open issues where available for "
+            "confidence elevation. "
+            "IMPORTANT: agent surfaces signals to engineering leads only. "
+            "No automated merge approvals, branch deletions, or code changes."
+        ),
+    },
+
+    "enterprise_ops": {
+        "packId":        "enterprise_ops",
+        "packName":      "Enterprise Operations Intelligence",
+        "domain":        "enterprise_ops",
+        "pack_domain":   "enterprise_ops",
+        "detectors": [
+            "discovery.detectors.ent_incident_resolution_lag",
+            "discovery.detectors.ent_change_incident_correlation",
+            "discovery.detectors.ent_sla_breach_by_team",
+        ],
+        "ui_labels_path": str(_PACKS_DIR / "enterprise_ops_ui_labels.json"),
+        "llm_context": (
+            "Enterprise operations intelligence from cross-system analysis of "
+            "ServiceNow and Jira. These findings are not visible from either system "
+            "alone — they emerge from the gap between incident management and issue "
+            "tracking. Use operations leadership language. Avoid IT jargon. "
+            "The audience is a VP of Operations or Chief Operating Officer, "
+            "not an IT manager. "
+            "Focus on organisational impact and team dynamics, "
+            "not system configuration or process compliance."
+        ),
+    },
+
     # CPQ pack slot — reserved for Sprint 6
 
     # "ncino_cpq": {
@@ -111,6 +182,7 @@ PACK_REGISTRY: Dict[str, Dict[str, Any]] = {
     #     "domain":   "ncino",
     #     ...
     # },
+
 }
 
 DEFAULT_PACK = "service_cloud"
@@ -125,9 +197,18 @@ def get_pack(pack_id: Optional[str] = None) -> Dict[str, Any]:
 
     This is the single entry point for pack selection — replaces all
     temporary is_ncino_pack conditionals in AIQ-NC-4 and AIQ-NC-5.
+
+    An unrecognized non-None pack_id logs a WARNING so misconfiguration is
+    visible in logs rather than silently producing wrong detector results.
     """
     if pack_id and pack_id in PACK_REGISTRY:
         return PACK_REGISTRY[pack_id]
+    if pack_id is not None:
+        logger.warning(
+            "get_pack: unrecognized pack_id %r — falling back to '%s'. "
+            "Valid pack IDs: %s",
+            pack_id, DEFAULT_PACK, sorted(PACK_REGISTRY),
+        )
     return PACK_REGISTRY[DEFAULT_PACK]
 
 
@@ -160,10 +241,6 @@ def get_ui_labels(pack_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
 def get_llm_context(pack_id: Optional[str] = None) -> str:
     """Return the LLM context hint string for this pack."""
     return get_pack(pack_id)["llm_context"]
-
-
-
-
 def is_strs_benefits_pack(pack_id: Optional[str] = None) -> bool:
     """
     Returns True when the active pack is STRS Benefits Administration.
@@ -183,4 +260,30 @@ def is_ncino_pack(pack_id: Optional[str] = None) -> bool:
     Returns True when the active pack is nCino domain.
     """
     return get_pack(pack_id)["domain"] == "ncino"
- 
+
+
+def is_sqlserver_opsignal_pack(pack_id: Optional[str] = None) -> bool:
+    """Return True when the active pack is the SQL Server Operational Signal pack.
+
+    Used in runner.py and scorer for pack routing.  Follows the identical
+    pattern as is_ncino_pack() and is_strs_benefits_pack().
+    """
+    return get_pack(pack_id)["domain"] == "sqlserver_opsignal"
+
+
+def is_github_engineering_pack(pack_id: Optional[str] = None) -> bool:
+    """Return True when the active pack is the GitHub Engineering Signal pack.
+
+    Used in runner.py and scorer for pack routing.  Follows the identical
+    pattern as is_ncino_pack() and is_sqlserver_opsignal_pack().
+    """
+    return get_pack(pack_id)["domain"] == "github_engineering"
+
+
+def is_enterprise_ops_pack(pack_id: Optional[str] = None) -> bool:
+    """Return True when the active pack is the Enterprise Operations Intelligence pack.
+
+    Used in runner.py and scorer for pack routing.  Follows the identical
+    pattern as is_ncino_pack() and is_github_engineering_pack().
+    """
+    return get_pack(pack_id)["domain"] == "enterprise_ops"

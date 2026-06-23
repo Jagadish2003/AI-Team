@@ -64,18 +64,6 @@ class NcinoIngestError(Exception):
     pass
 
 
-def _generate_ncino_token(force_refresh: bool = False) -> tuple[str, str]:
-    try:
-        from token_generation.ncino import token_ncino
-    except ImportError as exc:
-        raise NcinoIngestError(
-            "Live mode requires backend/token_generation/token_ncino.py "
-            "or NCINO_INSTANCE_URL/NCINO_ACCESS_TOKEN credentials. Set INGEST_MODE=offline "
-            "to run without credentials."
-        ) from exc
-    return token_ncino.main(force_refresh=force_refresh)
-
-
 # ─────────────────────────────────────────────────────────────────────────────
 # Offline fixture loader
 # ─────────────────────────────────────────────────────────────────────────────
@@ -93,74 +81,43 @@ def _load_fixture() -> Dict[str, Any]:
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-def _get_client() -> "NcinoClient":
-    """Build a minimal REST client from env vars."""
+def _get_client() -> Optional["NcinoClient"]:
+    """Build a REST client for nCino's Salesforce org.
 
-    ACCESS_TOKEN_PATH = (
-        Path(__file__).parent.parent.parent
-        / "token_generation"
-        / "ncino"
-        / "ncino_token.json"
-    )
+    nCino runs against a Salesforce org, so credentials are resolved in order:
+      1. explicit NCINO_INSTANCE_URL / NCINO_ACCESS_TOKEN env (override),
+      2. the per-run Salesforce OAuth context (DB-sourced via the credential
+         vault — see discovery.ingest.get_live_connector),
+      3. SF_INSTANCE_URL / SF_ACCESS_TOKEN env (CLI/standalone fallback).
 
-    # -----------------------------
-    # 1. PRIORITIZE ENV VARS
-    # -----------------------------
-    # Fallback to SF_ vars if NCINO_ vars aren't strictly defined
-    instance_url = os.getenv("NCINO_INSTANCE_URL") or os.getenv("SF_INSTANCE_URL")
-    access_token = os.getenv("NCINO_ACCESS_TOKEN") or os.getenv("SF_ACCESS_TOKEN")
+    The old server-key token-generation fallback (token_generation/ncino) was
+    removed. A missing token surfaces as a clear NcinoIngestError in live mode.
+    """
+    from . import get_live_connector
 
-    # -----------------------------
-    # 2. FALLBACK TO FILE OR GENERATION (if missing from env)
-    # -----------------------------
+    instance_url = os.getenv("NCINO_INSTANCE_URL")
+    access_token = os.getenv("NCINO_ACCESS_TOKEN")
+
     if not instance_url or not access_token:
-        if ACCESS_TOKEN_PATH.exists():
-            try:
-                with open(ACCESS_TOKEN_PATH, encoding="utf-8") as f:
-                    ncino_token = json.load(f)
-                instance_url = instance_url or ncino_token.get("instance_url")
-                access_token = access_token or ncino_token.get("access_token")
-            except Exception as e:
-                logger.warning(f"Failed to read nCino token file: {e}")
+        cred = get_live_connector("salesforce")
+        if cred:
+            instance_url = instance_url or cred.get("url")
+            access_token = access_token or cred.get("token")
 
-        if not instance_url or not access_token:
-            # Try generating (which also checks credentials)
-            try:
-                gen_token, gen_url = _generate_ncino_token()
-                instance_url = instance_url or gen_url
-                access_token = access_token or gen_token
-            except Exception as e:
-                # If we are in live mode and everything failed, we must raise.
-                if is_live():
-                    raise NcinoIngestError(
-                        f"Live mode requires valid NCINO_INSTANCE_URL and NCINO_ACCESS_TOKEN. "
-                        f"Fallback generation also failed: {e}"
-                    ) from e
+    if not instance_url or not access_token:
+        instance_url = instance_url or os.getenv("SF_INSTANCE_URL")
+        access_token = access_token or os.getenv("SF_ACCESS_TOKEN")
 
-    # -----------------------------
-    # 3. FINAL VALIDATION
-    # -----------------------------
     if not instance_url or not access_token:
         if is_live():
             raise NcinoIngestError(
-                "Live mode requires valid NCINO_INSTANCE_URL and NCINO_ACCESS_TOKEN. "
+                "Live mode requires NCINO_INSTANCE_URL/NCINO_ACCESS_TOKEN or a "
+                "connected Salesforce org (OAuth Connect). "
                 "Set INGEST_MODE=offline to run without credentials."
             )
         return None
 
-    # -----------------------------
-    # 4. TOKEN EXPIRY CHECK
-    # -----------------------------
-    access_token = access_token.strip() if access_token else None
-    if is_access_token_expired(instance_url, access_token):
-        logger.info("nCino token expired or invalid format. Refreshing...")
-        access_token, instance_url = _generate_ncino_token(force_refresh=True)
-        access_token = access_token.strip() if access_token else None
-
-    # -----------------------------
-    # 5. RETURN CLIENT
-    # -----------------------------
-    return NcinoClient(instance_url, access_token)
+    return NcinoClient(instance_url, access_token.strip())
 
 
 class NcinoClient:
@@ -344,7 +301,7 @@ def _fetch_spread_periods(client: NcinoClient) -> List[Dict[str, Any]]:
     rows = client.query(f"""
         SELECT Id,
                LLC_BI__Analyst__c,
-               LLC_BI__Is_Locked__c, LLC_BI__Is_Annual__c,
+               IsLocked__c, LLC_BI__Is_Annual__c,
                CreatedDate, LastModifiedDate,
                CreatedById
         FROM LLC_BI__Spread_Statement_Period__c
@@ -642,12 +599,13 @@ def _build_spreading_metrics(
     analyst_map: Dict[str, int] = {}
 
     for sp in spread_periods:
-        is_locked = bool(sp.get("LLC_BI__Is_Locked__c", True))
+        is_locked = bool(sp.get("IsLocked__c", True))
         if is_locked:
             continue
         created = _parse_date(sp.get("CreatedDate"))
         days_open = _days_since(created) or 0
-        if days_open < 14:
+        # if days_open < 14: - Change to this on 24th June 2026.
+        if days_open < 1:
             continue
 
         spread_id = sp.get("LLC_BI__Spread__c", "")
@@ -907,7 +865,24 @@ def is_access_token_expired(instance_url: str, access_token: str) -> bool:
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-def ingest() -> Dict[str, Any]:
+def ingest(preloaded_process_instances: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
+    """
+    Ingest nCino lending signals from Salesforce.
+
+    CS-4 / AT-309: ProcessInstance (standard Salesforce approval workflow) is
+    queried by both the Salesforce CRM ingestor and this nCino ingestor — a
+    genuine duplicate API call. When ``runner.py`` already fetched the approval
+    instances via ``salesforce.ingest()``, it passes them here as
+    ``preloaded_process_instances`` so this ingestor reuses that data instead of
+    issuing a second ProcessInstance query.
+
+    Args:
+        preloaded_process_instances: ProcessInstance records already fetched by
+            the Salesforce CRM ingestor. When ``not None`` (in live mode), the
+            ProcessInstance Salesforce query is skipped entirely and these
+            records are used directly. When ``None``, this ingestor falls back
+            to fetching them itself via ``_fetch_approval_instances``.
+    """
     if is_live():
         client = _get_client()
 
@@ -927,7 +902,19 @@ def ingest() -> Dict[str, Any]:
         checklists = _safe_fetch(_fetch_checklists, "checklists")
         spreads = _safe_fetch(_fetch_spreads, "spreads")
         spread_periods = _safe_fetch(_fetch_spread_periods, "spread_periods")
-        process_instances = _safe_fetch(_fetch_approval_instances, "process_instances")
+        # CS-4 / AT-309: reuse the Salesforce CRM ingestor's ProcessInstance
+        # records when supplied, instead of issuing a duplicate query.
+        if preloaded_process_instances is not None:
+            logger.info(
+                "process_instances=%d (reused from Salesforce ingestor — "
+                "skipped duplicate ProcessInstance query)",
+                len(preloaded_process_instances),
+            )
+            process_instances = preloaded_process_instances
+        else:
+            process_instances = _safe_fetch(
+                _fetch_approval_instances, "process_instances"
+            )
     else:
         fixture = _load_fixture()
         loans = fixture.get("loans", [])

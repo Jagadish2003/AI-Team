@@ -101,16 +101,10 @@ export default function SalesforceProductPicker({ onSaved }: Props) {
       .finally(() => setLoading(false));
   }, []);
 
-  function toggleProduct(id: string) {
-    setSelected(prev => {
-      const next = new Set(prev);
-      if (next.has(id)) {
-        next.delete(id);
-      } else {
-        next.add(id);
-      }
-      return next;
-    });
+  function selectProduct(id: string) {
+    // Radio behaviour: only one product can be selected at a time. Selecting a
+    // product replaces any previous selection; clicking the selected one clears it.
+    setSelected(prev => (prev.has(id) ? new Set() : new Set([id])));
   }
 
   const handleSave = useCallback(async () => {
@@ -127,8 +121,12 @@ export default function SalesforceProductPicker({ onSaved }: Props) {
           : 'Product declaration cleared.',
       );
       onSaved?.();
-      // Reload page to refresh catalog in Stack Builder
-      setTimeout(() => window.location.reload(), 500);
+      // NOTE: do NOT call window.location.reload() here. The auth token lives in
+      // React state only (see AuthContext Section 3), so a full page reload wipes
+      // the session and bounces the user to /login — which looked like an
+      // unexpected logout after saving. Stack Builder reads the product
+      // declaration fresh on its own mount, so no reload is needed; local state
+      // and the onSaved callback already reflect the saved selection.
     } catch (error) {
       push(getSaveErrorMessage(error));
     } finally {
@@ -164,7 +162,7 @@ export default function SalesforceProductPicker({ onSaved }: Props) {
 
       {/* Product toggles */}
       <div
-        role="group"
+        role="radiogroup"
         aria-label="Salesforce products"
         className="space-y-1.5"
       >
@@ -174,30 +172,27 @@ export default function SalesforceProductPicker({ onSaved }: Props) {
             <button
               key={product.id}
               type="button"
-              role="checkbox"
+              role="radio"
               aria-checked={isSelected}
-              onClick={() => toggleProduct(product.id)}
+              onClick={() => selectProduct(product.id)}
               className={[
                 'w-full flex items-start gap-3 rounded-lg border px-3 py-2.5',
                 'text-left transition-[border-color,background-color,box-shadow] cursor-pointer',
                 'focus:outline-none focus-visible:ring-1 focus-visible:ring-accent/35',
                 isSelected
-                  ? 'border-accent bg-accent/10 shadow-[0_8px_22px_rgba(13,85,215,0.14)]'
+                  ? 'border-accent bg-accent/10'
                   : 'border-border bg-panel hover:border-accent/40',
               ].join(' ')}
             >
-              {/* Checkbox indicator */}
+              {/* Radio indicator */}
               <div className={[
-                'mt-0.5 h-3.5 w-3.5 flex-shrink-0 rounded border flex items-center justify-center',
+                'mt-0.5 h-3.5 w-3.5 flex-shrink-0 rounded-full border flex items-center justify-center',
                 isSelected
-                  ? 'border-accent bg-accent'
+                  ? 'border-accent'
                   : 'border-border',
               ].join(' ')}>
                 {isSelected && (
-                  <svg width="8" height="8" viewBox="0 0 8 8" fill="none" aria-hidden>
-                    <path d="M1.5 4L3 5.5L6.5 2" stroke="white"
-                      strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round"/>
-                  </svg>
+                  <div className="h-1.5 w-1.5 rounded-full bg-accent" aria-hidden />
                 )}
               </div>
 

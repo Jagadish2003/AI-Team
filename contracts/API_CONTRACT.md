@@ -1,6 +1,51 @@
 # AgentIQ — API_CONTRACT.md (EPIC E0)
-Version: v1.1 (Contract Freeze)
-Date: 2026-03-18
+Version: v1.6
+Date: 2026-06-20
+
+> v1.6 — LIC-1 / T9 (AT-350): added the auth-only global-banner endpoint
+> `GET /api/license/banner`, returning the minimal `LicenseBannerResponse`
+> shape (`status` ∈ valid|grace|readonly|invalid; `expires_at` — `null` when
+> there is no valid key; `reason` — optional, e.g. `no_license` /
+> `signature_or_format` / `clock_rollback`, `null` for valid/grace and a
+> past-grace expiry). `reason` lets the banner distinguish a never-licensed
+> install ("No valid license installed") from an expired term ("License expired")
+> and a clock anomaly (§5/AC6). Unlike the Owner-only `GET /api/license`, this
+> endpoint requires only authentication (any role) so the global expiry banner
+> renders on every page for every role — including analysts whose discovery runs
+> are blocked (AC4/AC5). Additive — no previously documented shape changed.
+> Mirrors `src/types/license.ts`.
+>
+> v1.5 — LIC-1 / T6 (AT-347): documented the Owner-only admin license endpoints
+> `GET /api/license` and `POST /api/license/update-key`, and the
+> `LicenseStatusResponse` shape (`status` ∈ valid|grace|readonly|invalid,
+> `customer`, `term`, `expires_at`, `days_remaining`; detail fields are `null`
+> when there is no valid key). `POST /api/license/update-key` validates before
+> storing — an invalid key returns 400 and never replaces the stored key. Both
+> endpoints require the Owner role (Analyst/Viewer → 403). Mirrors
+> `src/types/license.ts`. Additive — no previously documented shape changed.
+>
+> v1.4 — ENT-6 / T3-S16-A: extended `OppEnrichment` with the optional
+> `causal_hypothesis` (`CausalHypothesisSummary`: `cause_chain`,
+> `falsifiability_condition`, `confidence`, `inferred`, `preliminary`,
+> `preliminary_reason`). Loaded live from the `causal_hypotheses` table
+> (most-recent row per opportunity); `null` when no hypothesis exists. Additive
+> and backward-compatible — existing fields unchanged. Mirrors
+> `src/types/enrichment.ts`.
+>
+> v1.3 — ENT-3 / T3-S15-A: extended `OppEnrichment` with the LLM enrichment
+> enterprise-hardening fields — graph grounding (`llm_grounded`,
+> `graph_entity_count`, `graph_entity_count_shown`, `graph_truncated`),
+> hallucination-guard outcomes (`hallucination_removals`,
+> `hallucination_rewrites`, `hallucination_llm_rewrites`), the preliminary
+> quality gate (`preliminary`, `preliminary_reason`), and `corroboration_label`.
+> All additive and backward-compatible — existing fields unchanged. Mirrors
+> `src/types/enrichment.ts`.
+>
+> v1.2 — Documented the LLM-enrichment endpoints and the `OppEnrichment` shape,
+> including the Track 3 Stage 1 temporal fields (`baseline_stddev`,
+> `baseline_window_days`, `current_value`, `recent_values`, `signal_key`,
+> `pack_id`) and the Stage 2 `entities` summary list. Mirrors
+> `src/types/enrichment.ts`. No previously documented shape changed.
 
 ## Purpose
 This contract is the **referee** between Frontend and Backend.
@@ -153,6 +198,106 @@ Request:
 { "decision": "APPROVED" }
 ```
 Response: updated `OpportunityCandidate`
+
+---
+
+### F2) LLM Enrichment + Temporal/Entity Context (Screens 4 & 6)
+
+#### GET /api/runs/{runId}/llm-enrichment
+Purpose: enrichment status + executive summary for a run.
+Response: `RunEnrichment` (`src/types/enrichment.ts`)
+- Returns `{ ...defaults, available: false }` (HTTP 200, **not** 404) when
+  enrichment has not been generated yet.
+
+#### GET /api/runs/{runId}/opportunities/{oppId}/enrichment
+Purpose: full enrichment for a single opportunity.
+Response: `OppEnrichment` (`src/types/enrichment.ts`)
+- Always returns a usable object — never 404 for *missing enrichment* (only for
+  an unknown `runId`/`oppId`). Missing-LLM fallback returns the same shape with
+  empty lists and the deterministic rationale surfaced as `aiSummary`.
+- All list fields are always present (empty list when unavailable) so the UI
+  never has to defensive-code around missing fields.
+
+`OppEnrichment` shape (must match the TS type exactly):
+```json
+{
+  "oppId": "opp_006",
+  "aiSummary": "",
+  "aiWhyBullets": [],
+  "aiRisks": [],
+  "aiSuggestedNextSteps": [],
+  "llmGenerated": false,
+  "llmModel": null,
+
+  "baseline_context": null,
+  "trend_direction": null,
+  "anomaly_score": null,
+  "is_anomalous": false,
+  "first_deviation": false,
+  "baseline_mean": null,
+  "baseline_stddev": null,
+  "baseline_window_days": null,
+  "run_count": null,
+  "current_value": null,
+  "recent_values": [],
+  "signal_key": null,
+  "pack_id": null,
+
+  "entities": [
+    {
+      "entity_id": "…",
+      "entity_type": "person",
+      "display_name": "…",
+      "source_system": "jira",
+      "resolution_confidence": 0.8,
+      "resolution_status": "resolved"
+    }
+  ],
+  "relationships": [],
+  "causal_hypothesis": null,
+
+  "llm_grounded": false,
+  "graph_entity_count": 0,
+  "graph_entity_count_shown": 0,
+  "graph_truncated": false,
+  "hallucination_removals": [],
+  "hallucination_rewrites": 0,
+  "hallucination_llm_rewrites": 0,
+  "preliminary": true,
+  "preliminary_reason": null,
+  "corroboration_label": null
+}
+```
+
+> ENT-3 / T3-S15-A fields (v1.3): `llm_grounded` is true when the first-pass
+> prompt was grounded against the ENT-4 graph (>= 3 entities); the
+> `graph_entity_count*` / `graph_truncated` fields reflect the 15-entity cap.
+> `hallucination_*` report what the hallucination guard did to the why-bullets
+> (`hallucination_removals` holds drop reason codes such as `dropped_timeout` /
+> `dropped_generic`, never the dropped text). `preliminary` defaults to `true`
+> ("analyst review required") until the three quality gates pass; when true,
+> `preliminary_reason` carries the human-readable explanation rendered in the
+> evidence trace. `corroboration_label` is carried through from ENT-2.
+
+> ENT-6 / T3-S16-A field (v1.4): `causal_hypothesis` is the optional
+> `CausalHypothesisSummary` for the opportunity, loaded live from the
+> `causal_hypotheses` table (most-recent row, like `relationships` are read live
+> from the graph). It is `null` when no causal hypothesis exists — absence is
+> the normal state and distinct from an empty hypothesis. When present it always
+> carries all six fields: `cause_chain` (ordered steps), `falsifiability_condition`,
+> `confidence` (composite, 0.5–1.0), `inferred` (true when any step rests on an
+> inferred relationship), `preliminary`, and `preliminary_reason`. The frontend
+> branches on it: `null` → omit the section; `preliminary=true` → amber "analyst
+> review required" banner with `preliminary_reason`; `preliminary=false` → full
+> confirmed cause-chain rendering. Note this nested `preliminary`/
+> `preliminary_reason` is the causal-gate status (ENT-6), distinct from the
+> top-level `preliminary` (the ENT-3 enrichment gate).
+
+> Casing note: the temporal/entity fields use `snake_case` (e.g.
+> `baseline_stddev`, `recent_values`) — an intentional, documented exception to
+> the camelCase frontend convention so the backend JSON maps directly to the TS
+> type. `entities` items follow the `EntitySummary` shape and omit
+> `canonical_name` (internal normalisation artifact, never exposed).
 
 ---
 

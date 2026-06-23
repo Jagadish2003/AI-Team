@@ -46,18 +46,17 @@ npm install
 3. Add the `.env` files to both the `AgentIQ/backend` and `AgentIQ/frontend` folders.  
 > **Note:** The `backend/.env` and `frontend/.env` files are not included in the repository. Obtain them from the AgentIQ team and place them at `AgentIQ/backend/.env` and `AgentIQ/frontend/.env` respectively before proceeding.
 
-4. Add the required server key files to their respective folders under `AgentIQ/backend/token_generation`:
-   - `salesforce/server_salesforce.key`
-   - `ncino/server_ncino.key`
-   - `strs/server_strs.key`
+4. Connect enterprise systems from the Integration Hub.
 
-> **Note:** These server key files are not included in the repository. Ask the AgentIQ team for the server keys for `token_generation/salesforce`, `token_generation/ncino`, and `token_generation/strs`, then place them in their respective folders before proceeding.
+> **Note:** Salesforce, Jira, and ServiceNow connect via the in-app OAuth flow (Integration Hub → Connect) — their credentials are stored in the database, not in key files. nCino and STRS run against the connected Salesforce org. The previous `backend/token_generation` server-key tooling has been removed.
 
-5. Generate the local database by running the following command from the `AgentIQ/backend` directory:
+5. Provision the database by running the following command from the `AgentIQ/backend` directory:
 ```shell
-python database/seed_loader.py
+./database/provision/provision.sh
 ```
-> This creates the `dev.db` file required by the backend. You only need to run this once after cloning.
+> This creates the full schema (Alembic migrations + core `{id,payload}` tables + lazy-only tables) and seeds the core reference data in one step. It reads `DATABASE_URL` from `backend/.env`. You only need to run this once after cloning; it is idempotent and safe to re-run.
+>
+> **Note:** This assumes the target PostgreSQL role and `agentiq` database already exist. On a brand-new server, first create the database as a superuser (`CREATE DATABASE agentiq;`) and ensure the connection role exists. The pure-SQL path (`database/provision/provision.sql`) creates the `agentiq` role for you. See `database/provision/README.md` for details.
 
 ---
 
@@ -69,8 +68,10 @@ python database/seed_loader.py
 Open **Bash** from the `AgentIQ\backend` directory (do not close this window):
 ```shell
 source .venv/scripts/activate
-./run.sh
+./run.sh --db dev      # for local development (uses DEV_DATABASE_URL)
+# ./run.sh --db prod   # for deployment/production (uses PROD_DATABASE_URL)
 ```
+> The `--db` flag is **required**. `--db dev` points the backend at `DEV_DATABASE_URL` and `--db prod` at `PROD_DATABASE_URL` (both defined in `backend/.env`). The selected value is written to `DATABASE_URL` so the server — and any later command that reads `.env` (e.g. provisioning) — targets the same database.
 
 ### Step 2: Start the Frontend Server
 Open **Bash** from the `AgentIQ\frontend` directory (do not close this window):

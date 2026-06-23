@@ -1,0 +1,28 @@
+{
+  "_meta": {
+    "story": "ENT-5 / AT-265",
+    "description": "Enterprise Operations Intelligence Pack UI labels for opportunity cards",
+    "status": "READY",
+    "audience": "VP of Operations / Chief Operating Officer",
+    "note": "Loaded per request; no restart required when editing label copy.",
+    "compliance_note": "Agent surfaces operational intelligence to operations leadership only. No automated escalation, ticket closure, SLA override, or change approval."
+  },
+  "ENT_INCIDENT_RESOLUTION_LAG": {
+    "s6_title": "Incident-Issue Resolution Gap Monitor",
+    "agentType": "Monitoring Agent",
+    "s6_why": "Incidents are being closed in ServiceNow while the underlying Jira issues that caused them remain unresolved. This gap between incident closure and root-cause resolution means the same problems recur, consuming team capacity repeatedly without lasting improvement.",
+    "s6_action": "An agent can track incident-to-issue resolution lag weekly, alert operations leads when closed incidents have unresolved root-cause issues, and surface the longest-standing gaps to engineering leadership for prioritisation."
+  },
+  "ENT_CHANGE_INCIDENT_CORRELATION": {
+    "s6_title": "Change-Risk Intelligence Monitor",
+    "agentType": "Monitoring Agent",
+    "s6_why": "Incident rates are significantly elevated in the 72-hour window following approved change requests, indicating that the change management process is not effectively identifying high-risk changes before execution.",
+    "s6_action": "An agent can monitor incident rates following each approved change, calculate the post-change incident ratio in real time, alert the change manager when a change produces a significant incident spike, and trigger a post-implementation review workflow automatically."
+  },
+  "ENT_SLA_BREACH_BY_TEAM": {
+    "s6_title": "SLA Breach Concentration Monitor",
+    "agentType": "Monitoring Agent",
+    "s6_why": "SLA breaches are heavily concentrated in one assignment team, indicating a capacity or process constraint that is driving disproportionate customer impact. The breach rate in this team significantly exceeds the organisation average.",
+    "s6_action": "An agent can track SLA breach rates by team weekly, alert operations leads when one team's breach rate exceeds the threshold, surface the team's ticket backlog from Jira alongside the ServiceNow breach data, and trigger a capacity review workflow when the pattern is sustained."
+  }
+}

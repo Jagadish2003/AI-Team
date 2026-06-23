@@ -194,7 +194,7 @@ export default function SystemWeightingCard({
       className={[
         'mb-3 rounded-xl border bg-panel transition-[border-color,box-shadow] duration-150',
         expanded
-          ? 'border-accent shadow-[0_8px_22px_rgba(13,85,215,0.14)]'
+          ? 'border-accent'
           : weighting.confirmed
           ? 'border-emerald-500/45 shadow-sm'
           : 'border-border shadow-sm',

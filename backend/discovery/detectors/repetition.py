@@ -12,27 +12,34 @@ SF-1.3 thresholds:
 """
 from __future__ import annotations
 from typing import Any, Dict, List
-from ..models import DetectorResult
+from ..models import (
+    DetectorResult,
+    detector_result_from_evaluation,
+    make_detector_evaluation,
+)
 
 DETECTOR_ID = "REPETITIVE_AUTOMATION"
 SCORE_THRESHOLD = 0.6
 ELEMENT_THRESHOLD = 15
 MIN_VOLUME = 50
 
+SIGNAL_METRICS = [
+    "records_90d",                  # workload volume behind the automation signal
+    "element_count",                # flow complexity guard for repeatable automation
+    "active_flow_count_on_object",  # breadth of low-complexity automation candidates
+    "flow_activity_score",          # primary trend score for repetitive automation
+]
 
-def detect(
+
+def evaluate(
     sf_data: Dict[str, Any],
     sn_data: Dict[str, Any] = None,
     jira_data: Dict[str, Any] = None,
-) -> List[DetectorResult]:
+):
     fi = sf_data.get("flow_inventory") or {}
     score = float(fi.get("flow_activity_score", 0.0))
     avg_elements = float(fi.get("avg_element_count", 0.0))
     records_90d = int((sf_data.get("case_metrics") or {}).get("total_cases_90d", 0))
-
-    # Guard: insufficient signal
-    if records_90d < MIN_VOLUME:
-        return []
 
     # Guard: flows exist and are low-complexity AutoLaunched
     flows = fi.get("flows") or []
@@ -41,24 +48,31 @@ def detect(
         if f.get("process_type") == "AutoLaunchedFlow"
         and int(f.get("element_count", 99)) < ELEMENT_THRESHOLD
     ]
-    if not auto_low:
-        return []
-
-    if score <= SCORE_THRESHOLD:
-        return []
-
-    return [DetectorResult(
+    primary_flow = auto_low[0] if auto_low else {}
+    fired = records_90d >= MIN_VOLUME and bool(auto_low) and score > SCORE_THRESHOLD
+    return make_detector_evaluation(
+        module_name=__name__,
         detector_id=DETECTOR_ID,
         signal_source="salesforce",
         metric_value=round(score, 4),
         threshold=SCORE_THRESHOLD,
         raw_evidence={
-            "flow_id": auto_low[0].get("flow_id", ""),
-            "flow_label": auto_low[0].get("flow_label", ""),
+            "flow_id": primary_flow.get("flow_id", ""),
+            "flow_label": primary_flow.get("flow_label", ""),
             "trigger_object": fi.get("trigger_object", ""),
             "records_90d": records_90d,
-            "element_count": int(auto_low[0].get("element_count", 0)),
+            "element_count": int(primary_flow.get("element_count", 0)),
             "active_flow_count_on_object": len(auto_low),
             "flow_activity_score": score,
         },
-    )]
+        fired=fired,
+    )
+
+
+def detect(
+    sf_data: Dict[str, Any],
+    sn_data: Dict[str, Any] = None,
+    jira_data: Dict[str, Any] = None,
+) -> List[DetectorResult]:
+    evaluation = evaluate(sf_data, sn_data, jira_data)
+    return [detector_result_from_evaluation(evaluation)] if evaluation.fired else []

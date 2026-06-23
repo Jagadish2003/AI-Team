@@ -1,25 +1,64 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { Connector } from '../../types/connector';
 import Badge from '../common/Badge';
 import Button from '../common/Button';
+import { fetchTokenStatus, TokenStatus } from '../../services/staticApi';
+
+const ENABLED_CONNECTOR_IDS = ['salesforce', 'servicenow', 'jira'];
 
 export default function ConnectorTile({
   connector,
   icon,
   selected,
   onSelect,
-  onPrimary
+  onPrimary,
+  onReconnect
 }: {
   connector: Connector;
   icon: React.ReactNode;
   selected: boolean;
   onSelect: () => void;
   onPrimary: () => void;
+  // Called when the token is expired/refresh-failed and the user clicks
+  // "Reconnect". Must trigger the OAuth flow again (CS-2 AC7). Falls back to
+  // onPrimary when not supplied so the tile keeps working in isolation.
+  onReconnect?: () => void;
 }) {
   const isConnected = connector.status === 'connected';
   const isConfigured = connector.configured;
-  const actionLabel = isConnected && !isConfigured ? 'Configure & Sync' : isConnected ? 'View data' : 'Connect';
-  const actionVariant = !isConnected ? 'primary' : isConfigured ? 'secondary' : 'tertiary';
+  const isEnabled = ENABLED_CONNECTOR_IDS.includes(connector.id);
+
+  const [tokenStatus, setTokenStatus] = useState<TokenStatus | null>(null);
+
+  useEffect(() => {
+    if (!isConnected || !isEnabled) {
+      setTokenStatus(null);
+      return;
+    }
+    let alive = true;
+    fetchTokenStatus(connector.id)
+      .then((r) => { if (alive) setTokenStatus(r.status); })
+      .catch(() => { /* non-fatal — tile still renders without token status */ });
+    return () => { alive = false; };
+  }, [connector.id, isConnected, isEnabled]);
+
+  // The token needs a fresh OAuth round-trip when there is no usable token
+  // (needs_auth = missing/already-expired) or auto-refresh has given up
+  // (refresh_failed). `connected` and `needs_refresh` are still usable, so no
+  // Reconnect prompt. Values mirror the backend token-status contract (AC14).
+  const tokenExpired = tokenStatus === 'needs_auth' || tokenStatus === 'refresh_failed';
+
+  // When the token is expired/missing, override the button to "Reconnect"
+  const actionLabel = tokenExpired
+    ? 'Reconnect'
+    : isConnected && !isConfigured
+    ? 'Configure & Sync'
+    : isConnected
+    ? 'View data'
+    : 'Connect';
+
+  const actionVariant = (!isConnected || tokenExpired) ? 'primary' : isConfigured ? 'secondary' : 'tertiary';
+  const actionDisabled = !isEnabled;
 
   return (
     <div
@@ -38,7 +77,14 @@ export default function ConnectorTile({
         </div>
         <div className="mt-0.5 flex items-center justify-between gap-2">
           <div className="truncate text-xs text-muted">{connector.category}</div>
-          <div className="shrink-0"><Badge status={connector.status} /></div>
+          <div className="flex shrink-0 items-center gap-1">
+            {tokenExpired && (
+              <span className="inline-flex items-center whitespace-nowrap rounded-full border border-amber-500/30 bg-amber-500/15 px-2 py-0.5 text-xs font-medium leading-none text-amber-200">
+                Token expired
+              </span>
+            )}
+            <Badge status={connector.status} />
+          </div>
         </div>
       </div>
 
@@ -66,14 +112,25 @@ export default function ConnectorTile({
       <div className="mt-auto pb-1 pt-4">
         <Button
           variant={actionVariant}
+          disabled={actionDisabled}
+          title={actionDisabled ? 'Connecting new sources is currently unavailable' : undefined}
           className={`w-full ${
-            isConnected && isConfigured
+            actionDisabled
+              ? '!bg-slate-500/10 !text-muted !border-border !opacity-100'
+              : isConnected && isConfigured && !tokenExpired
               ? 'light-view-data-button !border-accent/50 !text-accent'
               : ''
           }`}
           onClick={(e: React.MouseEvent<HTMLButtonElement>) => {
             e.stopPropagation();
-            onPrimary();
+            // When the token needs a fresh OAuth round-trip, "Reconnect" must
+            // start the OAuth flow — not fall through to the connected-tile
+            // "View data" path on the page (CS-2 AC7).
+            if (tokenExpired && onReconnect) {
+              onReconnect();
+            } else {
+              onPrimary();
+            }
           }}
         >
           {actionLabel}

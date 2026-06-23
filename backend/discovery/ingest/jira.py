@@ -4,10 +4,10 @@ SF-2.4 — Jira Ingestion Module
 Offline mode: reads backend/discovery/ingest/fixtures/jira_sample.json
 Live mode:    calls Jira REST API v3
 
-Environment variables for live mode:
-    JIRA_URL     e.g. https://mycompany.atlassian.net
-    JIRA_TOKEN   API token (personal access token or OAuth)
-    JIRA_USER    Email address associated with the token (required for cloud)
+Environment variables for live mode (OAuth-only):
+    JIRA_URL     Jira Cloud API gateway base (https://api.atlassian.com/ex/jira/{cloudId}),
+                 captured at OAuth connect from the accessible-resources lookup
+    JIRA_TOKEN   OAuth Bearer access token (hydrated from the credential vault)
 
 Known fixes applied (vs earlier stub):
     1. completed_points was None — now fetched via /rest/agile/1.0/sprint/{id}/issue
@@ -66,16 +66,15 @@ def _load_fixture() -> Dict[str, Any]:
 
 class JiraClient:
     """
-    Minimal Jira REST API v3 client.
+    Minimal Jira Cloud REST API v3 client.
 
-    Auth: API token with basic auth (email:token base64).
-    Jira Cloud requires email + API token (not password).
-    Jira Server/DC supports PAT (personal access token) as Bearer.
+    Auth: OAuth (3LO) Bearer token only. ``base_url`` is the api.atlassian.com
+    gateway (https://api.atlassian.com/ex/jira/{cloudId}) resolved at OAuth
+    connect time, against which the Bearer access token is presented.
     """
 
-    def __init__(self, base_url: str, user: str = "", token: str = ""):
+    def __init__(self, base_url: str, token: str = ""):
         self.base_url = base_url.rstrip("/")
-        self.user = user
         self.token = token
         self._session = None
 
@@ -94,16 +93,11 @@ class JiraClient:
                     "Content-Type": "application/json",
                 }
             )
-            if self.user and self.token:
-                # Jira Cloud: basic auth with email + API token
-                self._session.auth = (self.user, self.token)
-            elif self.token:
-                # Jira Server/DC: Bearer PAT
+            if self.token:
                 self._session.headers["Authorization"] = f"Bearer {self.token}"
             else:
                 raise JiraIngestError(
-                    "Live mode requires JIRA_TOKEN. "
-                    "For Jira Cloud also set JIRA_USER (email). "
+                    "Live mode requires a Jira OAuth Bearer token (JIRA_TOKEN). "
                     "Set INGEST_MODE=offline to run without credentials."
                 )
         return self._session
@@ -228,21 +222,30 @@ class JiraClient:
 
 
 def _get_client() -> JiraClient:
-    jira_url = os.getenv("JIRA_URL", "").rstrip("/")
-    token = os.getenv("JIRA_TOKEN", "")
-    user = os.getenv("JIRA_USER", "")
+    # OAuth-only. Credentials come from the per-run context (DB-sourced: vault
+    # Bearer token + captured api.atlassian.com gateway base, isolated per
+    # org/run); env vars are only a CLI/standalone fallback.
+    from . import get_live_connector
+
+    cred = get_live_connector("jira")
+    if cred:
+        jira_url = (cred.get("url") or "").rstrip("/")
+        token = cred.get("token") or ""
+    else:
+        jira_url = os.getenv("JIRA_URL", "").rstrip("/")
+        token = os.getenv("JIRA_TOKEN", "")
 
     if not jira_url:
         raise JiraIngestError(
-            "Live mode requires JIRA_URL. "
+            "Live mode requires JIRA_URL (the Jira Cloud API gateway base). "
             "Set INGEST_MODE=offline to run without credentials."
         )
     if not token:
         raise JiraIngestError(
-            "Live mode requires JIRA_TOKEN. "
-            "For Jira Cloud also set JIRA_USER (email address)."
+            "Live mode requires a Jira OAuth Bearer token (JIRA_TOKEN), "
+            "provided by the Jira OAuth Connect flow."
         )
-    return JiraClient(jira_url, user=user, token=token)
+    return JiraClient(jira_url, token=token)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -304,18 +307,26 @@ def get_issue_metrics(
     if not project_key:
         project_key = os.getenv("JIRA_PROJECT_KEY", "AIC")
 
+    escalation_field = os.getenv("JIRA_ESCALATION_FIELD", "").strip()
+    issue_fields = [
+        "summary",
+        "status",
+        "issuetype",
+        "labels",
+        "customfield_10016",
+        "customfield_10002",
+        "customfield_10004",
+        "assignee",
+        "reporter",
+        "project",
+    ]
+    if escalation_field:
+        issue_fields.append(escalation_field)
+
     # Total issues in window
     all_issues = client.search_issues(
         jql=f"project = {project_key} AND created >= -{WINDOW_DAYS}d",
-        fields=[
-            "summary",
-            "status",
-            "issuetype",
-            "labels",
-            "customfield_10016",
-            "customfield_10002",
-            "customfield_10004",
-        ],
+        fields=issue_fields,
     )
 
     total = len(all_issues)
@@ -353,15 +364,34 @@ def get_issue_metrics(
             }
         )
 
+    normalized_issues: List[Dict[str, Any]] = []
+    for issue in all_issues:
+        fields = issue.get("fields") or {}
+        normalized = {
+            "id": issue.get("id") or issue.get("key"),
+            "key": issue.get("key") or issue.get("id"),
+            "summary": fields.get("summary", ""),
+            "labels": fields.get("labels") or [],
+            "status": (fields.get("status") or {}).get("name", ""),
+            "project": fields.get("project") or project_key,
+            "assignee": fields.get("assignee"),
+            "reporter": fields.get("reporter"),
+        }
+        if escalation_field and fields.get(escalation_field):
+            normalized["escalation_target"] = fields.get(escalation_field)
+        normalized_issues.append(normalized)
+
     return {
         "total_issues_90d": total,
         "project": project_key,
+        "project_key": project_key,
         "salesforce_label_count": salesforce_label_count,
         "jira_echo_score": jira_echo_score,
         "issue_type_breakdown": [
             {"type": k, "count": v} for k, v in type_counts.items()
         ],
         "sample_cross_references": sample_cross_refs,
+        "issues": normalized_issues,
     }
 
 
@@ -498,6 +528,111 @@ def _compute_trend(previous_sprints: List[Dict]) -> str:
 # ─────────────────────────────────────────────────────────────────────────────
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# ENT-5 — Enterprise Operations cross-system blocks (LIVE)
+#
+# These two functions build the Jira blocks the enterprise_ops detectors read.
+# They are implemented and ready, but the CALLS that merge them into ingest()'s
+# return dict are COMMENTED OUT below — uncomment once the SME team confirms the
+# team field and loads the data. See
+# docs/ENT5_enterprise_ops_live_data_requirements.md.
+#
+# Org-specific field name (override via env; default is the common choice):
+#   JIRA_TEAM_FIELD  field representing a team  (default: components)
+#
+# Both functions fail safe: on any query error they return an empty block so an
+# unconfirmed field name never crashes the run — the detector simply won't fire.
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def _jira_team_name(fields: Dict[str, Any], team_field: str) -> Optional[str]:
+    """Extract a team name from a Jira issue's fields for the configured field.
+
+    Handles components (list of {name}), an assignee/custom object ({name|value|
+    displayName}), or a plain string.
+    """
+    val = fields.get(team_field)
+    if isinstance(val, list):
+        if val:
+            first = val[0]
+            return first.get("name") if isinstance(first, dict) else str(first)
+        return None
+    if isinstance(val, dict):
+        return val.get("name") or val.get("value") or val.get("displayName")
+    return str(val) if val else None
+
+
+def get_team_backlog(
+    client: Optional[JiraClient] = None,
+    project_key: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Build the ``team_backlog`` block for ENT_SLA_BREACH_BY_TEAM corroboration.
+
+    Counts OPEN issues (statusCategory != Done) grouped by team
+    (JIRA_TEAM_FIELD). Team names should match ServiceNow assignment_group names.
+    """
+    if not is_live():
+        return {"open_issues_by_team": {}}
+    project_key = project_key or os.getenv("JIRA_PROJECT_KEY", "").strip()
+    team_field = os.getenv("JIRA_TEAM_FIELD", "components").strip()
+    jql = "statusCategory != Done"
+    if project_key:
+        jql = f"project = {project_key} AND {jql}"
+    try:
+        issues = client.search_issues(jql, fields=["status", team_field, "assignee"])
+    except Exception as e:  # noqa: BLE001 — never abort the run on a bad field name
+        logger.warning("ENT-5 team_backlog query failed (degraded): %s", e)
+        return {"open_issues_by_team": {}}
+
+    counts: Dict[str, int] = {}
+    for issue in issues:
+        team = _jira_team_name(issue.get("fields") or {}, team_field)
+        if team:
+            counts[team] = counts.get(team, 0) + 1
+    return {"open_issues_by_team": counts}
+
+
+def get_issue_resolution(
+    client: Optional[JiraClient] = None,
+    project_key: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Build the ``issue_resolution`` block for ENT_INCIDENT_RESOLUTION_LAG.
+
+    Maps each issue key in the window to its status / resolved flag / resolved
+    date so the detector can join ServiceNow incidents to their root-cause issue.
+    """
+    if not is_live():
+        return {"issues": {}}
+    project_key = project_key or os.getenv("JIRA_PROJECT_KEY", "").strip()
+    jql = f"created >= -{WINDOW_DAYS}d"
+    if project_key:
+        jql = f"project = {project_key} AND {jql}"
+    try:
+        issues = client.search_issues(
+            jql, fields=["status", "resolution", "resolutiondate"]
+        )
+    except Exception as e:  # noqa: BLE001
+        logger.warning("ENT-5 issue_resolution query failed (degraded): %s", e)
+        return {"issues": {}}
+
+    _resolved_statuses = {"done", "closed", "resolved", "complete", "completed"}
+    out: Dict[str, Any] = {}
+    for issue in issues:
+        key = issue.get("key")
+        if not key:
+            continue
+        fields = issue.get("fields") or {}
+        status = (fields.get("status") or {}).get("name") or ""
+        resolution_date = fields.get("resolutiondate")
+        resolved = bool(resolution_date) or str(status).strip().lower() in _resolved_statuses
+        out[key] = {
+            "status": status,
+            "resolved": resolved,
+            "resolved_at": resolution_date,
+        }
+    return {"issues": out}
+
+
 def ingest(jira_client: Optional[JiraClient] = None) -> Dict[str, Any]:
     """
     Orchestrate Jira ingestion. Returns combined payload.
@@ -520,10 +655,19 @@ def ingest(jira_client: Optional[JiraClient] = None) -> Dict[str, Any]:
         )
         return fixture
 
-    jira_url = os.getenv("JIRA_URL", "")
+    # OAuth-first: the live gateway base comes from the per-run context (DB-sourced
+    # vault token + captured/derived api.atlassian.com gateway, set by
+    # resolve_live_systems); the JIRA_URL env var is only a CLI/standalone fallback.
+    # Gating on the env var alone wrongly skipped Jira even when it was
+    # authenticated via the Integration Hub OAuth flow.
+    from . import get_live_connector
+
+    cred = get_live_connector("jira")
+    jira_url = (cred.get("url") if cred else None) or os.getenv("JIRA_URL", "")
     if not jira_url:
         logger.warning(
-            "JIRA_URL not set — skipping Jira ingestion. "
+            "Jira is not connected (no OAuth credentials for this run, and JIRA_URL "
+            "is unset) — skipping Jira ingestion. "
             "D7 will rely on Salesforce/ServiceNow echo scores only."
         )
         return {}
@@ -542,6 +686,13 @@ def ingest(jira_client: Optional[JiraClient] = None) -> Dict[str, Any]:
             "issue_metrics": issue_metrics,
             "sprint_velocity": sprint_velocity,
             "lending_correlation": lending_correlation,
+            # ── ENT-5 enterprise_ops cross-system blocks (LIVE) ───────────────
+            # UNCOMMENT the two lines below once the SME team confirms the team
+            # field and loads the data into Jira. Set, if different from the
+            # default: JIRA_TEAM_FIELD (default: components).
+            # See docs/ENT5_enterprise_ops_live_data_requirements.md.
+            # "team_backlog":     get_team_backlog(jira_client),
+            # "issue_resolution": get_issue_resolution(jira_client),
         }
     except JiraIngestError:
         raise
@@ -724,6 +875,7 @@ def get_lending_correlation(
                     "priority",
                     "status",
                     "project",
+                    "created",
                 ],
                 max_results=50,
             )
@@ -745,6 +897,7 @@ def get_lending_correlation(
                         "priority": (fields.get("priority") or {}).get("name", ""),
                         "status": (fields.get("status") or {}).get("name", ""),
                         "project": (fields.get("project") or {}).get("key", ""),
+                        "created": fields.get("created", ""),
                     }
                 )
         except Exception as e:
@@ -778,6 +931,8 @@ def get_lending_correlation(
                 "snippet": snippet,
                 "source": "Jira",
                 "detectorId": detector_id,
+                "status": issue.get("status", ""),
+                "created": issue.get("created", ""),
             }
         )
         by_detector.setdefault(detector_id, []).append(snippet)

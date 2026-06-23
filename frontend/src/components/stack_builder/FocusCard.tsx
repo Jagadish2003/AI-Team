@@ -7,11 +7,11 @@
  *
  * Visual states:
  *   default  - border-border, bg-panel, muted icon, text-text title, muted subtext
- *   hover    - border-emerald-500/40 (no background change)
- *   selected - border-emerald-500, bg-emerald-500/[0.08], emerald icon, emerald title, emerald subtext/80
+ *   hover    - blue accent border with a very light blue background
+ *   selected - blue accent border, blue-tinted background, accent title/subtext
  *
  * Interaction:
- *   focus    - focus:ring-2 focus:ring-emerald-500/50
+ *   focus    - focus:ring-2 focus:ring-accent/35
  *   keyboard - Enter and Space activate selection
  *
  * Layout variants:
@@ -19,10 +19,8 @@
  *   wide     - icon left of title and subtext (row), card spans full grid width (col-span-2)
  *
  * Token note:
- *   Selected state uses emerald-500 (teal family) throughout. The accent token
- *   (#0D55D7, blue) is correct for primary buttons and links in the app shell
- *   but is not the selection color used in the stack builder. All selected
- *   states across the stack builder use the emerald/teal family.
+ *   Discovery-focus cards follow the same blue accent selection treatment as
+ *   the industry/template pills in this panel.
  *
  * Border radius:
  *   rounded-lg - consistent with SystemCard and DiscoveryConfidenceBar.
@@ -61,16 +59,7 @@
  *   </div>
  */
 
-import React from 'react';
-import {
-  GitBranch,
-  Globe2,
-  ListChecks,
-  Settings,
-  ShieldCheck,
-  Shuffle,
-  Users,
-} from 'lucide-react';
+import type React from 'react';
 import { FocusCard as FocusCardType, FocusId } from '../../types/stack_builder';
 
 interface Props {
@@ -81,18 +70,17 @@ interface Props {
   tabIndex?: number;
 }
 
-const FOCUS_ICONS: Record<FocusId, React.ElementType> = {
-  member_customer_service: Users,
-  core_operations: Settings,
-  approvals_compliance: ShieldCheck,
-  cross_system_handoffs: Shuffle,
-  back_office_productivity: ListChecks,
-  engineering_change: GitBranch,
-  enterprise_wide: Globe2,
-};
-
 export default function FocusCard({ card, selected, onSelect, tabIndex = 0 }: Props) {
-  const Icon = FOCUS_ICONS[card.id] ?? Settings;
+  const iconClass = selected ? 'text-accent' : 'text-muted';
+  const titleClass = selected ? 'text-accent' : 'text-text';
+  const subtextClass = selected ? 'text-accent' : 'text-muted';
+
+  function handleKeyDown(event: React.KeyboardEvent<HTMLButtonElement>) {
+    if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault();
+      onSelect(card.id);
+    }
+  }
 
   return (
     <button
@@ -101,42 +89,35 @@ export default function FocusCard({ card, selected, onSelect, tabIndex = 0 }: Pr
       aria-checked={selected}
       tabIndex={tabIndex}
       onClick={() => onSelect(card.id)}
+      onKeyDown={handleKeyDown}
       className={[
-        'w-full cursor-pointer rounded-lg border p-4 text-left transition-[border-color,background-color,box-shadow] duration-150',
+        'w-full cursor-pointer rounded-lg border p-4 text-left transition-colors duration-150',
         'focus:outline-none focus-visible:ring-1 focus-visible:ring-accent/35',
-        card.wide ? 'md:col-span-2' : '',
+        card.wide ? 'col-span-2' : '',
         selected
-          ? 'border-accent bg-accent/10 shadow-[0_8px_22px_rgba(13,85,215,0.14)]'
-          : 'border-border bg-panel hover:border-accent/50 hover:bg-panel2',
+          ? 'border-accent/60 bg-accent/15'
+          : 'border-border bg-panel hover:border-accent/50 hover:bg-accent/5',
       ].filter(Boolean).join(' ')}
     >
       {card.wide ? (
         <div className="flex items-start gap-4">
-          <Icon size={20} strokeWidth={2.2} className={`mt-0.5 flex-shrink-0 ${selected ? 'text-accent' : 'text-muted'}`} aria-hidden="true" />
+          <i className={`${card.icon} mt-0.5 flex-shrink-0 ${iconClass}`} aria-hidden="true" />
           <div>
-            <div className={`text-sm font-medium mb-1 ${
-              selected ? 'text-text' : 'text-text'
-            }`}>
+            <div className={`mb-1 text-sm font-medium ${titleClass}`}>
               {card.title}
             </div>
-            <div className={`text-xs leading-relaxed ${
-              selected ? 'text-blue-100' : 'text-muted'
-            }`}>
+            <div className={`text-xs leading-relaxed ${subtextClass}`}>
               {card.subtext}
             </div>
           </div>
         </div>
       ) : (
         <div>
-          <Icon size={20} strokeWidth={2.2} className={`mb-2 flex-shrink-0 ${selected ? 'text-accent' : 'text-muted'}`} aria-hidden="true" />
-          <div className={`text-sm font-medium mb-1 ${
-            selected ? 'text-text' : 'text-text'
-          }`}>
+          <i className={`${card.icon} mb-2 block ${iconClass}`} aria-hidden="true" />
+          <div className={`mb-1 text-sm font-medium ${titleClass}`}>
             {card.title}
           </div>
-          <div className={`text-xs leading-relaxed ${
-            selected ? 'text-blue-100' : 'text-muted'
-          }`}>
+          <div className={`text-xs leading-relaxed ${subtextClass}`}>
             {card.subtext}
           </div>
         </div>

@@ -12,13 +12,13 @@ import { useRunContext } from '../context/RunContext';
 import { RunRequiredEmptyState } from '../components/common/RunRequiredEmptyState';
 import { fetchRunRoadmap } from '../api/runScopedS9S10Api';
 import type { PilotRoadmapModel } from '../types/pilotRoadmap';
-import { isRunNotFoundError, runScopedErrorMessage } from '../utils/apiErrors';
+import { runScopedErrorMessage } from '../utils/apiErrors';
 
 export default function PilotRoadmapPage() {
   const { select } = useAnalystReviewContext();
   const { push } = useToast();
   const nav = useNavigate();
-  const { runId, clearRunId } = useRunContext();
+  const { runId } = useRunContext();
   const { run, computing } = useDiscoveryRunContext();
   const runStatus = run?.status?.toLowerCase();
 
@@ -53,10 +53,7 @@ export default function PilotRoadmapPage() {
         if (!cancelled) setModel(data);
       } catch (e: any) {
         if (cancelled) return;
-        if (isRunNotFoundError(e)) {
-          clearRunId();
-          return;
-        }
+        setModel(null);
         setError(runScopedErrorMessage(e, 'Failed to load roadmap'));
       } finally {
         if (!cancelled) setLoading(false);
@@ -64,7 +61,7 @@ export default function PilotRoadmapPage() {
     })();
 
     return () => { cancelled = true; };
-  }, [runId, fetchCount, clearRunId]);
+  }, [runId, fetchCount]);
 
   useEffect(() => {
     if (!runId || !resultsPreparing || loading) return;
@@ -124,7 +121,7 @@ export default function PilotRoadmapPage() {
       actions={
         <button
           className="rounded-lg border border-accent/20 bg-accent/5 px-4 py-2 text-sm font-medium text-accent transition-colors hover:border-accent/45 hover:bg-accent/10 focus:outline-none focus-visible:ring-1 focus-visible:ring-accent/40"
-          onClick={() => push('Export will be wired in Screen 10.')}
+          onClick={() => push('Export will be wired in Executive Report.')}
         >
           Export Report
         </button>

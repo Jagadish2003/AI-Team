@@ -15,10 +15,10 @@ function permRowStyle(p: PermissionItem) {
   const status = readinessFromPermission(p);
   const cls =
     status === 'READY'
-      ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-200'
+      ? 'roadmap-permission-ready border-emerald-500/30 bg-emerald-500/10 text-emerald-200'
       : status === 'PENDING'
-        ? 'border-amber-500/30 bg-amber-500/10 text-amber-200'
-        : 'border-red-500/30 bg-red-500/10 text-red-200';
+        ? 'roadmap-permission-pending border-amber-500/30 bg-amber-500/10 text-amber-200'
+        : 'roadmap-permission-missing border-red-500/30 bg-red-500/10 text-red-200';
   return { status, cls };
 }
 
@@ -45,11 +45,11 @@ function ReadinessCounts({
 }) {
   return (
     <span className="flex flex-wrap items-center justify-end gap-x-1 gap-y-0.5 text-xs">
-      <span className="whitespace-nowrap font-semibold text-emerald-300">{ready} READY</span>
+      <span className="roadmap-count-ready whitespace-nowrap font-semibold text-emerald-300">{ready} READY</span>
       <span className="opacity-10">&middot;</span>
-      <span className="whitespace-nowrap font-semibold text-amber-300">{pending} PENDING</span>
+      <span className="roadmap-count-pending whitespace-nowrap font-semibold text-amber-300">{pending} PENDING</span>
       <span className="opacity-10">&middot;</span>
-      <span className="whitespace-nowrap font-semibold text-red-300">{missing} MISSING</span>
+      <span className="roadmap-count-missing whitespace-nowrap font-semibold text-red-300">{missing} MISSING</span>
     </span>
   );
 }
@@ -62,7 +62,7 @@ export default function StageCard({ stage, onOpenReview, renderBlueprintLink }: 
   const pendingCount = stage.requiredPermissions.filter((p) => readinessFromPermission(p) === 'PENDING').length;
   const missingCount = required.filter((p) => readinessFromPermission(p) === 'MISSING').length;
 
-  const gate = stageReadiness(stage.requiredPermissions);
+  const gate = stage.opportunities.length === 0 ? 'MISSING' : stageReadiness(stage.requiredPermissions);
   const dependencyCounts = countsFromStatuses(stage.dependencies);
 
   const hasPermScroll = stage.requiredPermissions.length > 4;
@@ -92,7 +92,7 @@ export default function StageCard({ stage, onOpenReview, renderBlueprintLink }: 
             {stage.opportunities.map((o: OpportunityCandidate) => (
               <button
                 key={o.id}
-                className="w-full rounded-md border border-border bg-bg/20 px-3 py-2 text-left hover:bg-panel2"
+                className="roadmap-light-shadow-item w-full rounded-md border border-border bg-bg/20 px-3 py-2 text-left hover:bg-panel2"
                 onClick={() => onOpenReview(o.id)}
                 data-testid={`opp-row-${o.id}`}
               >
@@ -118,7 +118,7 @@ export default function StageCard({ stage, onOpenReview, renderBlueprintLink }: 
             {stage.requiredPermissions.map((p: PermissionItem, i: number) => {
               const { status, cls } = permRowStyle(p);
               return (
-                <div key={i} className={`rounded-md border px-3 py-2 text-sm ${cls}`}>
+                <div key={i} className={`roadmap-light-shadow-item rounded-md border px-3 py-2 text-sm ${cls}`}>
                   <div className="flex items-center justify-between">
                     <span>{p.label}</span>
                     <ReadinessPill status={status} />

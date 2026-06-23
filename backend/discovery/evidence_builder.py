@@ -667,7 +667,40 @@ def build_evidence(
 
     try:
         evidence = builder(detector_result, confidence, ts, id_factory)
-        return [evidence]
+        result = [evidence]
+
+        # CROSS_SYSTEM_ECHO emits one evidence item for the dominant source.
+        # When Jira contributed signal but is not dominant, its corroboration is
+        # present in raw_evidence but not visible to the normalization layer.
+        # Emit a supplemental Jira evidence item so Source Intelligence reflects it.
+        if (
+            detector_result.detector_id == "CROSS_SYSTEM_ECHO"
+            and detector_result.signal_source != "jira"
+        ):
+            raw = detector_result.raw_evidence
+            jira_score = float(raw.get("jira_echo_score", 0.0))
+            jira_issues = int(raw.get("jira_total_issues", 0))
+            jira_labels = int(raw.get("jira_sf_label_count", 0))
+            if jira_score > 0 and jira_issues > 0:
+                jira_ev = _make_evidence(
+                    id=_make_id("jira", id_factory),
+                    ts_label=ts,
+                    source="Jira",
+                    evidence_type="Log",
+                    title=(
+                        f"Jira cross-system echo: {jira_labels} issues reference Salesforce cases"
+                    ),
+                    snippet=(
+                        f"{jira_labels} of {jira_issues} Jira issues reference Salesforce case IDs "
+                        f"(Jira echo score: {jira_score}). "
+                        f"Corroborates cross-system duplication signal from {jira_issues} issues in 90 days."
+                    ),
+                    entities=["ent_case_all_categories"],
+                    confidence=confidence,
+                )
+                result.append(jira_ev)
+
+        return result
     except ValueError:
         # R1–R7 violation — permissive failure per SF-1.5
         return []

@@ -1,0 +1,82 @@
+{
+  "_description": "ENT-5 Enterprise Operations Intelligence demo seed. The three enterprise_ops detectors read cross-system blocks that the ServiceNow/Jira ingest layer does not yet compute. The runner seeds these blocks (only when absent) when pack=enterprise_ops so the pack produces findings in offline and live runs. Real computed data always wins: any block already present is left untouched. Numbers are crafted to cross every threshold and to trigger the AC5 (entity overlay) and AC9 (Slack COR-06) HIGH-confidence elevations. Dates are anchored to an explicit as_of so lag/window math is deterministic regardless of run date.",
+  "servicenow": {
+    "incident_resolution": {
+      "as_of": "2026-06-01",
+      "degraded_signal": false,
+      "closed_incidents": [
+        {"number": "INC0010101", "jira_issue_key": "OPS-101", "closed_at": "2026-04-20"},
+        {"number": "INC0010102", "jira_issue_key": "OPS-102", "closed_at": "2026-04-20"},
+        {"number": "INC0010103", "jira_issue_key": "OPS-103", "closed_at": "2026-04-20"},
+        {"number": "INC0010104", "jira_issue_key": "OPS-104", "closed_at": "2026-04-20"},
+        {"number": "INC0010105", "jira_issue_key": "OPS-105", "closed_at": "2026-04-20"},
+        {"number": "INC0010106", "jira_issue_key": "OPS-106", "closed_at": "2026-04-20"},
+        {"number": "INC0010107", "jira_issue_key": "OPS-107", "closed_at": "2026-04-20"},
+        {"number": "INC0010108", "jira_issue_key": "OPS-108", "closed_at": "2026-04-20"},
+        {"number": "INC0010109", "jira_issue_key": "OPS-109", "closed_at": "2026-04-20"},
+        {"number": "INC0010110", "jira_issue_key": "OPS-110", "closed_at": "2026-04-20"},
+        {"number": "INC0010111", "jira_issue_key": "OPS-111", "closed_at": "2026-04-20"},
+        {"number": "INC0010112", "jira_issue_key": "OPS-112", "closed_at": "2026-04-20"}
+      ]
+    },
+    "change_correlation": {
+      "as_of": "2026-06-01 00:00:00",
+      "baseline_incident_rate": 0.2,
+      "degraded_signal": false,
+      "changes": [
+        {"number": "CHG0000001", "state": "Implemented", "closed_at": "2026-05-10 09:00:00"},
+        {"number": "CHG0000002", "state": "Implemented", "closed_at": "2026-05-18 09:00:00"},
+        {"number": "CHG0000003", "state": "Implemented", "closed_at": "2026-05-25 09:00:00"}
+      ],
+      "incidents": [
+        {"number": "INC0020001", "opened_at": "2026-05-10 15:00:00"},
+        {"number": "INC0020002", "opened_at": "2026-05-11 10:00:00"},
+        {"number": "INC0020003", "opened_at": "2026-05-18 20:00:00"},
+        {"number": "INC0020004", "opened_at": "2026-05-19 12:00:00"},
+        {"number": "INC0020005", "opened_at": "2026-05-25 14:00:00"},
+        {"number": "INC0020006", "opened_at": "2026-05-26 08:00:00"}
+      ]
+    },
+    "sla_breach_by_team": {
+      "degraded_signal": false,
+      "teams": [
+        {"team": "Commercial Credit", "total_tickets": 40, "breached": 25},
+        {"team": "Retail Banking", "total_tickets": 30, "breached": 6},
+        {"team": "Wealth Management", "total_tickets": 20, "breached": 4},
+        {"team": "Payments Operations", "total_tickets": 15, "breached": 3}
+      ]
+    },
+    "cor06_slack_escalation": {
+      "fired": true
+    },
+    "team_entity_overlay": {
+      "Commercial Credit": "team:commercial-credit",
+      "Comm Credit Team": "team:commercial-credit"
+    }
+  },
+  "jira": {
+    "issue_resolution": {
+      "issues": {
+        "OPS-101": {"resolved": false, "status": "In Progress"},
+        "OPS-102": {"resolved": false, "status": "In Progress"},
+        "OPS-103": {"resolved": false, "status": "In Progress"},
+        "OPS-104": {"resolved": false, "status": "Open"},
+        "OPS-105": {"resolved": false, "status": "Open"},
+        "OPS-106": {"resolved": false, "status": "In Review"},
+        "OPS-107": {"resolved": true, "status": "Done", "resolved_at": "2026-05-10"},
+        "OPS-108": {"resolved": true, "status": "Done", "resolved_at": "2026-05-10"},
+        "OPS-109": {"resolved": true, "status": "Done", "resolved_at": "2026-05-10"},
+        "OPS-110": {"resolved": true, "status": "Closed", "resolved_at": "2026-05-10"},
+        "OPS-111": {"resolved": true, "status": "Closed", "resolved_at": "2026-05-10"},
+        "OPS-112": {"resolved": true, "status": "Resolved", "resolved_at": "2026-05-10"}
+      }
+    },
+    "team_backlog": {
+      "open_issues_by_team": {
+        "Comm Credit Team": 34,
+        "Retail Banking": 8,
+        "Wealth Management": 5
+      }
+    }
+  }
+}

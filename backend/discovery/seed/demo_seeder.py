@@ -191,14 +191,12 @@ def seed_salesforce(state: SeedState, dry_run: bool = False) -> int:
 def seed_servicenow(state: SeedState, dry_run: bool = False) -> int:
     """
     Create incidents in ServiceNow referencing Salesforce CS- Case IDs.
-    Requires SERVICENOW_URL + (SERVICENOW_TOKEN or SERVICENOW_USER+SERVICENOW_PASS).
+    Requires SERVICENOW_URL + SERVICENOW_TOKEN (OAuth Bearer).
 
     Returns: count of incidents created.
     """
     sn_url = os.getenv("SERVICENOW_URL", "").rstrip("/")
     token  = os.getenv("SERVICENOW_TOKEN", "")
-    user   = os.getenv("SERVICENOW_USER", "")
-    passwd = os.getenv("SERVICENOW_PASS", "")
 
     if not sn_url:
         logger.error(
@@ -220,13 +218,10 @@ def seed_servicenow(state: SeedState, dry_run: bool = False) -> int:
 
     session = requests.Session()
     session.headers.update({"Accept": "application/json", "Content-Type": "application/json"})
-    if token:
-        session.headers["Authorization"] = f"Bearer {token}"
-    elif user and passwd:
-        session.auth = (user, passwd)
-    else:
-        logger.error("SERVICENOW_TOKEN or SERVICENOW_USER+SERVICENOW_PASS required")
+    if not token:
+        logger.error("SERVICENOW_TOKEN (OAuth Bearer) required")
         return 0
+    session.headers["Authorization"] = f"Bearer {token}"
 
     created = 0
     for cluster in CROSS_SYSTEM_CLUSTERS:
@@ -268,13 +263,12 @@ def seed_servicenow(state: SeedState, dry_run: bool = False) -> int:
 def seed_jira(state: SeedState, dry_run: bool = False) -> int:
     """
     Create issues in Jira with 'Salesforce' label and CS- reference in summary.
-    Requires JIRA_URL + JIRA_TOKEN (+ JIRA_USER for Cloud).
+    Requires JIRA_URL (Cloud API gateway base) + JIRA_TOKEN (OAuth Bearer).
 
     Returns: count of issues created.
     """
     jira_url     = os.getenv("JIRA_URL", "").rstrip("/")
     token        = os.getenv("JIRA_TOKEN", "")
-    user         = os.getenv("JIRA_USER", "")
     project_key  = os.getenv("JIRA_PROJECT_KEY", "CRM")
 
     if not jira_url or not token:
@@ -295,10 +289,7 @@ def seed_jira(state: SeedState, dry_run: bool = False) -> int:
 
     session = requests.Session()
     session.headers.update({"Accept": "application/json", "Content-Type": "application/json"})
-    if user:
-        session.auth = (user, token)       # Jira Cloud: basic auth
-    else:
-        session.headers["Authorization"] = f"Bearer {token}"  # Server/DC: PAT
+    session.headers["Authorization"] = f"Bearer {token}"  # OAuth Bearer
 
     created = 0
     for cluster in CROSS_SYSTEM_CLUSTERS:
@@ -374,17 +365,12 @@ def rollback(state: SeedState) -> None:
     if state.sn_incident_sys_ids:
         sn_url = os.getenv("SERVICENOW_URL", "").rstrip("/")
         token = os.getenv("SERVICENOW_TOKEN", "")
-        user = os.getenv("SERVICENOW_USER", "")
-        passwd = os.getenv("SERVICENOW_PASS", "")
-        if sn_url:
+        if sn_url and token:
             try:
                 import requests
                 session = requests.Session()
                 session.headers.update({"Accept": "application/json"})
-                if token:
-                    session.headers["Authorization"] = f"Bearer {token}"
-                elif user:
-                    session.auth = (user, passwd)
+                session.headers["Authorization"] = f"Bearer {token}"
                 for sys_id in state.sn_incident_sys_ids:
                     try:
                         resp = session.delete(
@@ -404,16 +390,12 @@ def rollback(state: SeedState) -> None:
     if state.jira_issue_keys:
         jira_url = os.getenv("JIRA_URL", "").rstrip("/")
         token = os.getenv("JIRA_TOKEN", "")
-        user = os.getenv("JIRA_USER", "")
         if jira_url and token:
             try:
                 import requests
                 session = requests.Session()
                 session.headers.update({"Accept": "application/json"})
-                if user:
-                    session.auth = (user, token)
-                else:
-                    session.headers["Authorization"] = f"Bearer {token}"
+                session.headers["Authorization"] = f"Bearer {token}"
                 for key in state.jira_issue_keys:
                     try:
                         resp = session.delete(

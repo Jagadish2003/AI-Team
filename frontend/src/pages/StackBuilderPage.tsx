@@ -9,6 +9,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useRunContext } from '../context/RunContext';
+import { useAuthOptional } from '../context/AuthContext';
 
 // Import components and types
 import { CheckCircle2, Database, Layers3, Loader2, Target } from 'lucide-react';
@@ -106,10 +107,13 @@ const CLOUD_PACK_REGISTRY: Record<string, string> = {
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
+const ORG_ID_HEADER = (import.meta.env.VITE_ORG_ID as string | undefined)?.trim();
+
 function buildAuthHeaders(token: string) {
   return {
     'Content-Type': 'application/json',
     Authorization: `Bearer ${token}`,
+    ...(ORG_ID_HEADER ? { 'X-Org-Id': ORG_ID_HEADER } : {}),
   };
 }
 
@@ -305,14 +309,25 @@ interface Props {
 
 
 export default function StackBuilderPage({
-  apiBase = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000',
-  token = import.meta.env.VITE_DEV_JWT || 'dev-token-change-me',
+  // Use ?? (not ||) so an explicitly-empty VITE_API_BASE_URL — the same-origin
+  // deployment value, where Nginx proxies /api/* to the backend — is respected.
+  // With ||, an empty string is falsy and wrongly falls back to localhost:8000.
+  apiBase = import.meta.env.VITE_API_BASE_URL ?? (import.meta.env.DEV ? 'http://localhost:8000' : ''),
+  token: tokenProp,
 }: Props) {
 
   // Stale Run Fix Part 1: Bring in the context and navigate hook
   const { setRunId } = useRunContext();
   const navigate = useNavigate();
-  const orgId = (import.meta.env.VITE_ORG_ID as string | undefined) ?? 'demo-org';
+  const auth = useAuthOptional();
+
+  // Multi-tenancy: sign catalog/launch/persistence calls with the in-session
+  // JWT and key Stack Builder state by THIS user's org, so a run is created in
+  // and scoped to the right workspace. An explicit `token` prop (tests) wins;
+  // otherwise the session token, then the dev-token fallback.
+  const token =
+    tokenProp ?? auth?.token ?? (import.meta.env.VITE_DEV_JWT || 'dev-token-change-me');
+  const orgId = auth?.user?.org_id ?? ORG_ID_HEADER ?? 'default';
 
   const setupState = useSetupState();
   const [catalog, setCatalog] = useState<WorkspaceCatalogResponse | null>(null);

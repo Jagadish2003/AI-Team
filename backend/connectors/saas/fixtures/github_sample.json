@@ -1,0 +1,25 @@
+{
+  "_description": "T1-S12 GitHub offline fixture. Section 2b payload shape, crafted so all three GitHub Engineering detectors fire (prs_over_threshold>=5, top_author_pct>=0.60 with >=2 contributors, stale_count>=10). Used when GitHub is not connected or when INGEST_MODE!=live. org_id/run_id are stamped in at load time.",
+  "pr_review": {
+    "open_pr_count": 14,
+    "avg_days_open": 6.4,
+    "max_days_open": 21.0,
+    "prs_over_threshold": 8,
+    "degraded_signal": false
+  },
+  "commit_concentration": {
+    "top_author_pct": 0.72,
+    "top_author_name": "priya.sharma",
+    "total_contributors": 5,
+    "degraded_signal": false
+  },
+  "stale_branches": {
+    "stale_count": 17,
+    "total_branches": 34,
+    "oldest_stale_days": 128.0,
+    "degraded_signal": false
+  },
+  "connector_id": "github",
+  "org_id": "",
+  "run_id": ""
+}
