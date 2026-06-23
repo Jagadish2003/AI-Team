@@ -2,9 +2,12 @@ version: "3.9"
 
 services:
 
-  # ── 1. PostgreSQL 18 ─────────────────────────────────────────────────────────
+  # ── 1. PostgreSQL 18 — custom image with user, db, tables baked in ───────────
   postgres:
-    image: postgres:18-alpine
+    build:
+      context: .
+      dockerfile: postgres/Dockerfile
+    image: agentiq-postgres:1.0
     container_name: agentiq-postgres
     environment:
       POSTGRES_USER:     ${POSTGRES_USER:-agentiq}
@@ -12,7 +15,6 @@ services:
       POSTGRES_DB:       ${POSTGRES_DB:-agentiqprod}
     volumes:
       - pgdata:/var/lib/postgresql/data
-      - ./backend/database/provision/provision.sql:/docker-entrypoint-initdb.d/provision.sql:ro
     networks:
       - agentiq-net
     restart: unless-stopped
