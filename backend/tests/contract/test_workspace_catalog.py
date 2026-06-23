@@ -5,7 +5,6 @@ from typing import Any, Dict, List
 
 from fastapi import FastAPI
 
-from app import db as _db
 from app import routes_workspace_catalog as catalog
 
 
@@ -35,16 +34,11 @@ def _connector(
 
 
 def _install_connectors(monkeypatch, connectors: List[Dict[str, Any]]) -> None:
-    # The catalog route now reads connectors through db.org_connectors_list,
-    # which is org-scoped and calls db.get_all("connectors") internally. The
-    # injected rows carry no org_id, so they are treated as shared-catalog rows
-    # and surface for the (default) request org. Patch the db-level get_all so
-    # the org-scoped merge sees the fixture data.
     def fake_get_all(table: str) -> List[Dict[str, Any]]:
         assert table == "connectors"
         return connectors
 
-    monkeypatch.setattr(_db, "get_all", fake_get_all)
+    monkeypatch.setattr(catalog, "get_all", fake_get_all)
 
 
 def _get(client):

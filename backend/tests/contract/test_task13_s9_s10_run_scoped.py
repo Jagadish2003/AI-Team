@@ -12,8 +12,7 @@ def test_s9_roadmap_and_s10_exec_report_are_run_scoped():
     body = {
         "connectedSources": ["ServiceNow", "Jira & Confluence"],
         "uploadedFiles": ["incident_data.csv", "cmdb_records.xlsx"],
-        "sampleWorkspaceEnabled": False,
-        "mode": "offline",
+        "sampleWorkspaceEnabled": False
     }
     r = client.post("/api/runs/start", headers=_auth_headers(), json=body)
     assert r.status_code == 200

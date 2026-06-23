@@ -1,13 +1,25 @@
-import { apiGet } from '../lib/apiClient';
-import type { OppEnrichment, RunEnrichment } from '../types/enrichment';
 
-export type {
-  OppEnrichment,
-  RunEnrichment,
-  EntitySummary,
-  RelationshipSummary,
-  CausalHypothesisSummary,
-} from '../types/enrichment';
+import { apiGet } from '../lib/apiClient';
+
+export interface OppEnrichment {
+  oppId: string;
+  aiSummary: string;
+  aiWhyBullets: string[];
+  aiRisks: string[];
+  aiSuggestedNextSteps: string[];
+  llmGenerated: boolean;
+  llmModel: string | null;
+}
+
+export interface RunEnrichment {
+  runId: string;
+  executiveSummary: string;
+  opportunitiesEnriched: number;
+  opportunitiesFailed: number;
+  generatedAt: string | null;
+  llmModel: string | null;
+  available: boolean;
+}
 
 export async function fetchOppEnrichment(
   runId: string,

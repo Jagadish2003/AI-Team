@@ -27,7 +27,7 @@
  *
  * WHAT DID NOT CHANGE:
  *   - Connect / Configure flow unchanged — same ConnectorTile, same handlers
- *   - Start Discovery Run is managed from the Discovery Run page
+ *   - DiscoveryStartBar flow unchanged
  *   - RightPanel unchanged
  *   - ConnectorContext unchanged
  *   - Dark theme preserved — bg-panel, border-border, text-muted tokens only
@@ -43,14 +43,17 @@
  *   ?category= highlighted group has aria-live="polite" announcement.
  */
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import PageShell from '../components/common/PageShell';
 import LoadingPanel from '../components/common/LoadingPanel';
 import ErrorPanel from '../components/common/ErrorPanel';
 import ConnectorGroupSection, { GroupConfig } from '../components/integrations/ConnectorGroupSection';
 import RightPanel from '../components/integrations/RightPanel';
+import DiscoveryStartBar from '../components/integrations/DiscoveryStartBar';
 import { useToast } from '../components/common/Toast';
 import { useConnectorContext } from '../context/ConnectorContext';
+import { useRunContext } from '../context/RunContext';
+import { useSourceIntakeContext } from '../context/SourceIntakeContext';
 import { isDiscoveryReadyConnector } from '../utils/sourceReadiness';
 import { computeConfidence } from '../utils/confidence';
 import { Connector } from '../types/connector';
@@ -132,8 +135,9 @@ export default function IntegrationHubPage() {
 
   const { push }         = useToast();
   const navigate         = useNavigate();
-  const location         = useLocation();
   const [searchParams]   = useSearchParams();
+  const { runId }        = useRunContext();
+  const { uploadedFiles } = useSourceIntakeContext();
 
   // ?category= deep-link param — ENG-IH-2 AC6
   const deepLinkCategory = searchParams.get('category') ?? null;
@@ -165,38 +169,6 @@ export default function IntegrationHubPage() {
     [recommended, standard],
   );
 
-  // OAuth result feedback (CS-2 / AT-327 T5).
-  // OAuthCallbackPage navigates here after the provider round-trip with
-  // location.state.justConnected (success) or location.state.oauthError
-  // (failure). Show a toast once, then clear the history-entry state so a
-  // re-render or back-navigation does not re-fire it. ?category= lives in the
-  // search string, not state, so preserving location.search keeps the deep-link
-  // behaviour intact.
-  const oauthToastShown = useRef(false);
-  useEffect(() => {
-    const oauthState = location.state as
-      | { justConnected?: string; oauthError?: string }
-      | null;
-    if (!oauthState || oauthToastShown.current) return;
-
-    if (oauthState.justConnected) {
-      // Wait until the connector list has loaded so the toast can name the
-      // connector (T5-AC3) rather than falling back to its id. The effect
-      // re-runs when `loading` flips; the ref guard keeps it single-fire.
-      if (loading) return;
-      oauthToastShown.current = true;
-      const name =
-        allConnectors.find(c => c.id === oauthState.justConnected)?.name ??
-        oauthState.justConnected;
-      push(`${name} connected successfully`, 'success');
-      navigate(`${location.pathname}${location.search}`, { replace: true, state: null });
-    } else if (oauthState.oauthError) {
-      oauthToastShown.current = true;
-      push(`Connection failed: ${oauthState.oauthError}`, 'error');
-      navigate(`${location.pathname}${location.search}`, { replace: true, state: null });
-    }
-  }, [location.state, location.pathname, location.search, allConnectors, loading, push, navigate]);
-
   // Build groups
   const groups: GroupConfig[] = useMemo(
     () =>
@@ -214,6 +186,11 @@ export default function IntegrationHubPage() {
   const selected = useMemo(
     () => allConnectors.find(c => c.id === selectedConnectorId) ?? null,
     [allConnectors, selectedConnectorId],
+  );
+
+  const readyConnectorCount = useMemo(
+    () => allConnectors.filter(isDiscoveryReadyConnector).length,
+    [allConnectors],
   );
 
   const startBarStatusConnectors = useMemo(() => {
@@ -237,6 +214,8 @@ export default function IntegrationHubPage() {
     [startBarStatusConnectors],
   );
 
+  const canStart = readyConnectorCount > 0 || uploadedFiles.length > 0;
+
   // Connect / configure handler (same logic as pre-Sprint-9)
   function handlePrimary(id: string) {
     const c = allConnectors.find(x => x.id === id);
@@ -254,14 +233,6 @@ export default function IntegrationHubPage() {
     }
   }
 
-  // Reconnect handler (CS-2 AC7). Fired from a tile whose token is expired /
-  // refresh-failed. Re-runs the OAuth flow (auth-url → provider redirect) via
-  // the same context method Connect uses — connectConnector navigates the
-  // browser away, so no follow-up toast is needed here.
-  function handleReconnect(id: string) {
-    connectConnector(id);
-  }
-
   // "Add a source" CTA — navigate to /integration-hub?category={id}
   // When this is the current page (user clicked another group's CTA),
   // scroll to that group instead of navigating away.
@@ -277,10 +248,12 @@ export default function IntegrationHubPage() {
   }
 
   return (
-    <PageShell
-      title="Integration Hub"
-      description="Connect enterprise systems to provide data for discovery. Manage credentials and connection status for your workspace."
-    >
+    <>
+      <PageShell
+        title="Integration Hub"
+        description="Connect enterprise systems to provide data for discovery. Manage credentials and connection status for your workspace."
+        contentClassName="pb-56 sm:pb-52 xl:pb-28"
+      >
         {loading && <LoadingPanel />}
         {error && !loading && <ErrorPanel message={error} onRetry={refetch} />}
 
@@ -317,7 +290,6 @@ export default function IntegrationHubPage() {
                       selectConnector(id);
                     }}
                     onPrimary={handlePrimary}
-                    onReconnect={handleReconnect}
                     onAddSource={handleAddSource}
                   />
                 </div>
@@ -351,6 +323,26 @@ export default function IntegrationHubPage() {
             </div>
           </div>
         )}
-    </PageShell>
+      </PageShell>
+
+      {/* Discovery start bar */}
+      {!loading && !error && (
+        <DiscoveryStartBar
+          confidence={startBarConfidence}
+          recommendedReadyCount={startBarReadyCount}
+          recommendedTotal={START_BAR_SOURCE_IDS.length}
+          recommended={recommended}
+          statusConnectors={startBarStatusConnectors}
+          canStart={canStart}
+          onStart={() => {
+            if (runId) {
+              navigate(`/discovery-run?runId=${runId}`);
+            } else {
+              navigate('/discovery-run', { state: { autoStart: true } });
+            }
+          }}
+        />
+      )}
+    </>
   );
 }

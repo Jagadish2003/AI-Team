@@ -16,7 +16,6 @@ from fastapi import BackgroundTasks, Depends, HTTPException, FastAPI
 from pydantic import BaseModel, Field
 
 from .security import require_auth
-from .rbac import require_role
 from . import db
 from .connector_metrics import update_connector_metrics_from_run
 from .trackb_runner import run_trackb
@@ -40,13 +39,13 @@ class ComputeResponse(BaseModel):
     counts: Dict[str, int] = Field(default_factory=dict)
 
 
-# NOTE (CS-4 / AT-313): the run status model + GET /api/runs/{run_id}/status
-# endpoint live in routes_sprint4_t2.py (StatusResponse / run_status), which is
-# registered before this module in main.py and therefore owns that path. The
-# duplicate RunStatus model and get_status route that used to live here were
-# removed so there is exactly one status implementation (it already returns
-# current_step and failed_steps). This module keeps only the /compute and
-# /connector-health routes.
+class RunStatus(BaseModel):
+    runId: str
+    status: str  # running|complete|failed
+    startedAt: str
+    updatedAt: str
+    error: Optional[str] = None
+    counts: Dict[str, int] = Field(default_factory=dict)
 
 
 def _now_iso() -> str:
@@ -86,6 +85,13 @@ def _set_status(run_id: str, status: str, counts: Optional[Dict[str, int]] = Non
         db.run_set(run_id, run)
 
 
+def _get_status(run_id: str) -> Dict[str, Any]:
+    if hasattr(db, "run_kv_get"):
+        return db.run_kv_get("status", run_id, {})
+    run = db.run_get(run_id)
+    return run.get("status") or {}
+
+
 def _append_event(run_id: str, stage: str, message: str, level: str = "INFO") -> None:
     event = {
         "id": f"ev_{int(time.time() * 1000)}_{stage}",
@@ -100,71 +106,9 @@ def _append_event(run_id: str, stage: str, message: str, level: str = "INFO") ->
 from .materialize_t2 import (
     _finalise,
     _emit_event,
-    _org_id_for_run,
-    _pack_id_for_run,
     _probe_systems,
     _selected_system_ids_for_report,
 )
-
-
-def _apply_temporal_enrichment(
-    run_id: str,
-    run: Dict[str, Any],
-    pack: Optional[str],
-    opps: List[Dict[str, Any]],
-    org_id: str,
-) -> List[Dict[str, Any]]:
-    """Attach temporal context to the active compute path without blocking runs.
-
-    org_id must be the same value the signal snapshots were written under (the
-    org_id passed to the runner), otherwise the baseline read finds no history.
-    """
-    try:
-        from .llm_enrichment import KV_LLM_ENRICHMENT
-        from .jobs.baseline_calculator import calculate_baselines_for_org
-        from .telemetry import record_event
-        from .temporal_enrichment import enrich_opportunities_with_temporal_context
-
-        pack_id = _pack_id_for_run(run) or pack or ""
-
-        calculate_baselines_for_org(org_id or "default")
-        opps = enrich_opportunities_with_temporal_context(
-            run_id,
-            org_id or "default",
-            pack_id,
-            opps,
-        )
-
-        temporal_keys = (
-            "baseline_context",
-            "trend_direction",
-            "anomaly_score",
-            "is_anomalous",
-            "first_deviation",
-            "baseline_mean",
-            "run_count",
-            "baseline_stddev",
-            "baseline_window_days",
-            "current_value",
-            "recent_values",
-            "signal_key",
-            "pack_id",
-        )
-        stored = db.run_kv_get(KV_LLM_ENRICHMENT, run_id, {})
-        per_opp = stored.get("perOpportunity", {})
-        for opp in opps:
-            opp_id = opp.get("id", "")
-            if opp_id in per_opp:
-                for key in temporal_keys:
-                    if key in opp:
-                        per_opp[opp_id][key] = opp[key]
-        stored["perOpportunity"] = per_opp
-        db.run_kv_set(KV_LLM_ENRICHMENT, run_id, stored)
-        record_event("temporal.enrichment_completed", {"run_id": run_id})
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("T7 temporal enrichment failed (non-blocking): %s", exc)
-    return opps
-
 
 def _run_trackb_and_persist(run_id: str, mode: str, systems: List[str], pack: Optional[str] = None) -> None:
     """Background task: execute Track B and persist Track A-shaped artifacts."""
@@ -172,40 +116,11 @@ def _run_trackb_and_persist(run_id: str, mode: str, systems: List[str], pack: Op
     logger = logging.getLogger(__name__)
     logger.info(f"Starting trackb materialization for run {run_id} in mode: {mode}")
 
+    _emit_event(run_id, "CONNECT", f"Connected sources: {', '.join(systems)}")
+
     run = db.run_get(run_id)
     if run is None:
         raise RuntimeError(f"Run '{run_id}' not found — cannot materialise")
-
-    # Resolve the run's org once; reused for live-connector resolution and for
-    # the runner's org_id below.
-    from .middleware.tenancy import get_current_org_id_optional
-
-    run_org_id = _org_id_for_run(run, get_current_org_id_optional() or "default")
-
-    # CS-2: prefer the org's authenticated connectors. If the user connected
-    # Salesforce / ServiceNow / Jira via the Integration Hub OAuth flow, ingest
-    # LIVE from exactly those connectors using their stored OAuth tokens —
-    # instead of the requested mode/systems (which would otherwise rely on
-    # offline fixtures or .env credentials). Falls back to the requested
-    # mode/systems when nothing is authenticated.
-    try:
-        from .live_ingest_credentials import resolve_live_systems
-
-        live_systems = resolve_live_systems(run_org_id)
-    except Exception:
-        logger.exception("Live connector resolution failed; using requested mode/systems")
-        live_systems = []
-
-    if live_systems:
-        mode = "live"
-        systems = live_systems
-        _emit_event(
-            run_id,
-            "CONNECT",
-            f"Using authenticated connectors: {', '.join(live_systems)}",
-        )
-    else:
-        _emit_event(run_id, "CONNECT", f"Connected sources: {', '.join(systems)}")
 
     per_system: Dict[str, str] = {
         s: "skipped" for s in ["salesforce", "servicenow", "jira"]
@@ -247,12 +162,8 @@ def _run_trackb_and_persist(run_id: str, mode: str, systems: List[str], pack: Op
         _emit_event(
             run_id, "EXTRACT", "Extracting entities and identifying patterns..."
         )
-        # run_org_id resolved above (shared with live-connector resolution). It is
-        # passed to the runner so signal snapshots are written under the same org
-        # the temporal read uses; without it the runner falls back to its own
-        # "demo-org" default, which hides the Baseline Context panel.
         payload = trackb_run(
-            mode=mode, systems=succeeded, run_id=run_id, org_id=run_org_id, pack=pack
+            mode=mode, systems=succeeded, run_id=run_id, pack=pack
         )
         seed = export_track_a_seed(payload)
 
@@ -358,7 +269,6 @@ def _run_trackb_and_persist(run_id: str, mode: str, systems: List[str], pack: Op
                 evidence=ev,
                 sources_analyzed=sources_analyzed,
                 pack_id=pack,
-                org_id=run_org_id,
             )
             db.run_kv_set(KV_LLM_ENRICHMENT, run_id, enrichment)
             if enrichment.get("executiveSummary"):
@@ -368,9 +278,6 @@ def _run_trackb_and_persist(run_id: str, mode: str, systems: List[str], pack: Op
         except Exception as e:
             errors["llm_enrichment"] = str(e)
             _emit_event(run_id, "AI_ERROR", f"AI analysis failed: {e}", level="WARNING")
-
-        # T7 - temporal enrichment (non-blocking, T3-S11-A)
-        opps = _apply_temporal_enrichment(run_id, run, pack, opps, run_org_id)
 
         status = "complete" if len(succeeded) == len(systems) else "partial"
         audit_action = (
@@ -410,7 +317,7 @@ def register_sprint4_t1_routes(app: FastAPI) -> None:
     @app.post(
         "/api/runs/{run_id}/compute",
         response_model=ComputeResponse,
-        dependencies=[Depends(require_auth), Depends(require_role("analyst"))],
+        dependencies=[Depends(require_auth)],
     )
     async def compute_run(run_id: str, body: ComputeRequest, background_tasks: BackgroundTasks) -> ComputeResponse:
         # Ensure run exists. db.run_get should raise 404; keep defensive for alternate impls.
@@ -442,13 +349,26 @@ def register_sprint4_t1_routes(app: FastAPI) -> None:
             counts={"opportunities": 0, "evidence": 0},
         )
 
-    # GET /api/runs/{run_id}/status is owned by routes_sprint4_t2.py (see the
-    # module note above) — intentionally not registered here to avoid a
-    # duplicate, divergent implementation of the same path.
+    @app.get(
+        "/api/runs/{run_id}/status",
+        response_model=RunStatus,
+        dependencies=[Depends(require_auth)],
+    )
+    async def get_status(run_id: str) -> RunStatus:
+        run = db.run_get(run_id)
+        if run is None:
+            raise HTTPException(status_code=404, detail=f"Run '{run_id}' not found")
+
+        st = _get_status(run_id) or {}
+        if not st:
+            # If status not written yet, treat as running (run exists)
+            st = {"runId": run_id, "status": run.get("status") or "running", "startedAt": run.get("startedAt") or _now_iso(), "updatedAt": _now_iso(), "counts": {}}
+
+        return RunStatus(**st)
 
     @app.get(
         "/api/runs/{run_id}/connector-health",
-        dependencies=[Depends(require_auth), Depends(require_role("viewer"))],
+        dependencies=[Depends(require_auth)],
     )
     async def get_connector_health(run_id: str) -> Dict[str, Any]:
         """

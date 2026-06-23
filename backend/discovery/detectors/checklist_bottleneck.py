@@ -17,11 +17,7 @@ Fires when: overrun_count >= 1  OR  stalled_count >= 1
 """
 from __future__ import annotations
 from typing import Any, Dict, List
-from ..models import (
-    DetectorResult,
-    detector_result_from_evaluation,
-    make_detector_evaluation,
-)
+from ..models import DetectorResult
 
 DETECTOR_ID = "CHECKLIST_BOTTLENECK"
 OVERRUN_THRESHOLD = 1   # any overrun fires
@@ -32,36 +28,25 @@ STALL_DAYS        = 14  # Incomplete status for 14+ days = stalled
 # 'Under Review' and 'On Hold' also indicate no active progress.
 # 'In Progress', 'Complete', 'Rejected' are NOT stall states.
 STALL_STATUSES = frozenset(["To Do", "Under Review", "On Hold"])
-SIGNAL_METRICS = {
-    "overrun_count":    "Number of checklists exceeding expected duration; primary trend",
-    "stalled_count":    "Number of checklists in a stall status; tracks workflow blockage",
-    "max_overrun_days": "Worst-case overrun in days; tracks severity of longest delay",
-    "total_checklists": "Total checklists evaluated; normalises overrun_count as a rate",
-}
 
-SIGNAL_METRICS = [
-    "total_checklists",  # checklist workload volume
-    "overrun_count",     # count of duration-overrun checklist items
-    "stalled_count",     # count of stalled checklist items
-    "max_overrun_days",  # strongest duration-overrun signal
-    "avg_overrun_days",  # average duration-overrun signal
-]
-
-
-def evaluate(sf_data: Dict[str, Any], sn_data=None, jira_data=None):
+def detect(sf_data: Dict[str, Any], sn_data=None, jira_data=None) -> List[DetectorResult]:
     ncino = sf_data.get("ncino") or sf_data
     metrics = ncino.get("checklist_metrics", {})
+    if not metrics:
+        return []
 
     overrun_count = int(metrics.get("overrun_count", 0))
     stalled_count = int(metrics.get("stalled_count", 0))
     total         = int(metrics.get("total_checklists", 0))
     max_overrun   = float(metrics.get("max_overrun_days", 0))
 
+    if overrun_count == 0 and stalled_count == 0:
+        return []
+
     metric_value = float(max_overrun if overrun_count > 0 else stalled_count)
     threshold    = 1.0
 
-    return make_detector_evaluation(
-        module_name=__name__,
+    return [DetectorResult(
         detector_id=DETECTOR_ID,
         signal_source="salesforce",
         metric_value=metric_value,
@@ -74,10 +59,4 @@ def evaluate(sf_data: Dict[str, Any], sn_data=None, jira_data=None):
             "avg_overrun_days": metrics.get("avg_overrun_days", 0),
             "primary_object":   "LLC_BI__Checklist__c",
         },
-        fired=bool(metrics) and (overrun_count > 0 or stalled_count > 0),
-    )
-
-
-def detect(sf_data: Dict[str, Any], sn_data=None, jira_data=None) -> List[DetectorResult]:
-    evaluation = evaluate(sf_data, sn_data, jira_data)
-    return [detector_result_from_evaluation(evaluation)] if evaluation.fired else []
+    )]

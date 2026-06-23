@@ -40,6 +40,18 @@ class IngestError(Exception):
     """Raised when live ingestion fails with a clear, actionable message."""
 
 
+def _generate_salesforce_token(force_refresh: bool = False) -> tuple[str, str]:
+    try:
+        from token_generation.salesforce import token_salesforce
+    except ImportError as exc:
+        raise IngestError(
+            "Live mode requires backend/token_generation/salesforce/token_salesforce.py "
+            "or SF_INSTANCE_URL/SF_ACCESS_TOKEN credentials. Set INGEST_MODE=offline "
+            "to run without Salesforce credentials."
+        ) from exc
+    return token_salesforce.main(force_refresh=force_refresh)
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Offline fixture loader
 # ─────────────────────────────────────────────────────────────────────────────
@@ -57,44 +69,69 @@ def _load_fixture() -> Dict[str, Any]:
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-def _get_client() -> Optional["SalesforceClient"]:
-    """Build a REST client from the OAuth-provided Salesforce credentials.
+def _get_client() -> "SalesforceClient":
+    """Build a minimal REST client from env vars."""
 
-    SF_INSTANCE_URL / SF_ACCESS_TOKEN are populated from the credential vault at
-    run start (CS-2 live ingest): Salesforce returns ``instance_url`` in its
-    token response, and the access token is the stored OAuth token. They may also
-    be set directly in the environment.
+    ACCESS_TOKEN_PATH = (
+        Path(__file__).parent.parent.parent / "token_generation" / "sf_token.json"
+    )
 
-    The old server-key token-generation fallback (token_generation/salesforce)
-    was removed — live ingest now relies solely on the OAuth token. A missing or
-    invalid token surfaces as a clear IngestError (the run degrades that system)
-    instead of silently re-minting a token via the JWT path. An expired token is
-    detected naturally when the first SOQL call returns HTTP 401.
+    # -----------------------------
+    # 1. PRIORITIZE ENV VARS
+    # -----------------------------
+    instance_url = os.getenv("SF_INSTANCE_URL")
+    access_token = os.getenv("SF_ACCESS_TOKEN")
 
-    Credentials are read from the per-run context (DB-sourced: vault token +
-    captured instance URL, isolated per org/run); env vars are only a
-    CLI/standalone fallback.
-    """
-    from . import get_live_connector
+    # -----------------------------
+    # 2. FALLBACK TO FILE OR GENERATION (if missing from env)
+    # -----------------------------
+    if not instance_url or not access_token:
+        if ACCESS_TOKEN_PATH.exists():
+            try:
+                with open(ACCESS_TOKEN_PATH, encoding="utf-8") as f:
+                    sf_token = json.load(f)
+                instance_url = instance_url or sf_token.get("instance_url")
+                access_token = access_token or sf_token.get("access_token")
+            except Exception as e:
+                logger.warning(f"Failed to read Salesforce token file: {e}")
 
-    cred = get_live_connector("salesforce")
-    if cred:
-        instance_url = cred.get("url")
-        access_token = cred.get("token")
-    else:
-        instance_url = os.getenv("SF_INSTANCE_URL")
-        access_token = os.getenv("SF_ACCESS_TOKEN")
+        if not instance_url or not access_token:
+            # Try generating (which also checks credentials)
+            try:
+                gen_token, gen_url = _generate_salesforce_token()
+                instance_url = instance_url or gen_url
+                access_token = access_token or gen_token
+            except Exception as e:
+                # If we are in live mode and everything failed, we must raise.
+                if is_live():
+                    raise IngestError(
+                        f"Live mode requires valid SF_INSTANCE_URL and SF_ACCESS_TOKEN. "
+                        f"Fallback generation also failed: {e}"
+                    ) from e
 
+    # -----------------------------
+    # 3. FINAL VALIDATION
+    # -----------------------------
     if not instance_url or not access_token:
         if is_live():
             raise IngestError(
-                "Live mode requires SF_INSTANCE_URL and SF_ACCESS_TOKEN, provided "
-                "by the Salesforce OAuth Connect flow (credential vault). "
+                "Live mode requires valid SF_INSTANCE_URL and SF_ACCESS_TOKEN. "
                 "Set INGEST_MODE=offline to run without credentials."
             )
         return None
+    # -----------------------------
+    # 3. TOKEN EXPIRY CHECK
+    # -----------------------------
+    access_token = access_token.strip() if access_token else None
+    if is_access_token_expired(instance_url, access_token):
+        logger.info("Salesforce token expired or invalid format. Refreshing...")
+        access_token, instance_url = _generate_salesforce_token(force_refresh=True)
+        access_token = access_token.strip() if access_token else None
 
-    return SalesforceClient(instance_url, access_token.strip())
+    # -----------------------------
+    # 4. RETURN CLIENT
+    # -----------------------------
+    return SalesforceClient(instance_url, access_token)
 
 
 class SalesforceClient:
@@ -910,27 +947,6 @@ def get_cross_system_references(
     }
 
 
-def get_relationship_records(
-    client: Optional[SalesforceClient] = None,
-) -> List[Dict[str, Any]]:
-    """Return a bounded set of source-backed Case ownership records.
-
-    Sprint 13 relationship mapping needs the record Id and OwnerId, not only
-    aggregate case metrics. Keeping this as a separate bounded query preserves
-    the existing detector payload while making Person -> Object ``owns`` edges
-    possible in live Service Cloud runs.
-    """
-    if not is_live():
-        fixture = _load_fixture()
-        return list(fixture.get("cases") or fixture.get("records") or [])
-
-    return client.soql(
-        "SELECT Id, CaseNumber, OwnerId, Status, CreatedDate "
-        "FROM Case WHERE CreatedDate = LAST_N_DAYS:90 "
-        "ORDER BY CreatedDate DESC LIMIT 500"
-    )
-
-
 # ─────────────────────────────────────────────────────────────────────────────
 # Main ingest() — called by runner.py
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1002,10 +1018,6 @@ def ingest(sf_client: Optional[SalesforceClient] = None) -> Dict[str, Any]:
             "get_cross_system_references",
             lambda: get_cross_system_references(sf_client),
         )
-        cases = _timed(
-            "get_relationship_records",
-            lambda: get_relationship_records(sf_client),
-        )
 
         return {
             "case_metrics": case_metrics,
@@ -1013,9 +1025,45 @@ def ingest(sf_client: Optional[SalesforceClient] = None) -> Dict[str, Any]:
             "approval_processes": approval_processes,
             "named_credentials": named_credentials,
             "cross_system_references": cross_system_references,
-            "cases": cases,
         }
     except IngestError:
         raise
     except Exception as e:
         raise IngestError(f"Salesforce ingestion failed unexpectedly: {e}") from e
+
+
+def is_access_token_expired(instance_url: str, access_token: str) -> bool:
+    """
+    Returns True if the Salesforce access token is expired or invalid.
+    Checks the Data API root which is more reliable for checking API access.
+    """
+    import requests
+
+    if not access_token:
+        return True
+
+    try:
+        # Use Data API root instead of userinfo for more robust API check
+        url = f"{instance_url}/services/data/{API_VERSION}/"
+
+        response = requests.get(
+            url, headers={"Authorization": f"Bearer {access_token.strip()}"}, timeout=10
+        )
+
+        # 401 = invalid/expired token.
+        # Also catch specific error messages that indicate a bad token format
+        if response.status_code == 401:
+            return True
+
+        # If the body contains INVALID_JWT_FORMAT even with non-401 (unlikely but safe)
+        if (
+            "INVALID_JWT_FORMAT" in response.text
+            or "INVALID_AUTH_HEADER" in response.text
+        ):
+            return True
+
+        return False
+
+    except Exception:
+        # If we cannot verify (network issue etc.), assume expired for safety
+        return True

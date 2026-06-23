@@ -8,7 +8,7 @@ import {
 } from "../api/analystReviewApi";
 import type { OpportunityCandidate, ReviewAuditEvent } from "../types/analystReview";
 import type { Decision } from "../types/common";
-import { runScopedErrorMessage } from "../utils/apiErrors";
+import { isRunNotFoundError, runScopedErrorMessage } from "../utils/apiErrors";
 import { useDiscoveryRunContext } from "./DiscoveryRunContext";
 
 type AnalystReviewContextValue = {
@@ -53,7 +53,7 @@ function uid(prefix: string): string {
 }
 
 export function AnalystReviewProvider({ children }: { children: React.ReactNode }) {
-  const { runId } = useRunContext();
+  const { runId, clearRunId } = useRunContext();
   const { run } = useDiscoveryRunContext();
   const runStatus = run?.status?.toLowerCase();
 
@@ -98,9 +98,10 @@ export function AnalystReviewProvider({ children }: { children: React.ReactNode 
         setSelectedId((prev) => (prev && opps.some((o) => o.id === prev) ? prev : (opps[0]?.id ?? null)));
       } catch (e: any) {
         if (cancelled) return;
-        setOpportunities([]);
-        setAudit([]);
-        setSelectedId(null);
+        if (isRunNotFoundError(e)) {
+          clearRunId();
+          return;
+        }
         setError(runScopedErrorMessage(e, "Failed to load analyst review data"));
       } finally {
         if (!cancelled) setLoading(false);
@@ -108,7 +109,7 @@ export function AnalystReviewProvider({ children }: { children: React.ReactNode 
     })();
 
     return () => { cancelled = true; };
-  }, [runId, runStatus, fetchCount]);
+  }, [runId, runStatus, fetchCount, clearRunId]);
 
   const setDecision = useCallback(
     async (oppId: string, decision: Decision) => {

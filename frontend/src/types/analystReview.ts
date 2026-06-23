@@ -38,11 +38,6 @@ export interface OpportunityCandidate {
   permissions?: PermissionItem[];  // legacy mock field
   decision: Decision;
   override: OpportunityOverride;
-  // ENT-2 — Cross-System Confidence Elevation (optional; absent on older runs).
-  corroboration_sources?: string[];
-  corroboration_label?: string | null;
-  triple_corroboration?: boolean;
-  corroboration_rule_ids?: string[];
 }
 
 export interface ReviewAuditEvent {

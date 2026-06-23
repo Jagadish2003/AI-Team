@@ -46,9 +46,7 @@ from fastapi import Depends, FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
 from .db import run_kv_set, next_run_id, upsert_run
-from .middleware.tenancy import get_current_org_id
 from .security import require_auth
-from .rbac import require_role
 
 
 # ── Request / response models ─────────────────────────────────────────────────
@@ -98,7 +96,7 @@ def register_stack_builder_launch_routes(app: FastAPI) -> None:
     @app.post(
         "/api/stack-builder/launch",
         response_model=LaunchResponse,
-        dependencies=[Depends(require_auth), Depends(require_role("analyst"))],
+        dependencies=[Depends(require_auth)],
         summary="Launch a discovery run from Stack Builder setup state",
         tags=["Stack Builder"],
     )
@@ -137,7 +135,6 @@ def register_stack_builder_launch_routes(app: FastAPI) -> None:
         # Generate run ID
         run_id = next_run_id()
         now = datetime.now(timezone.utc).isoformat()
-        org_id = get_current_org_id()
 
         # Persist run record
         run_record: Dict[str, Any] = {
@@ -145,7 +142,7 @@ def register_stack_builder_launch_routes(app: FastAPI) -> None:
             "status": "created",
             "startedAt": now,
             "updatedAt": now,
-            "orgId": org_id,
+            "orgId": body.org_id,
             "packId": body.pack_id,
             "focusId": body.focus_id,
             "industryId": body.industry_id,
@@ -170,7 +167,7 @@ def register_stack_builder_launch_routes(app: FastAPI) -> None:
         # Full setup context — weightings, template, all system IDs
         # Available for evidence_builder and enrichment to consume
         run_kv_set("setup_context", run_id, {
-            "org_id":              org_id,
+            "org_id":              body.org_id,
             "focus_id":            body.focus_id,
             "industry_id":         body.industry_id,
             "template_id":         body.template_id,

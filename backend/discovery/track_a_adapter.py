@@ -153,38 +153,6 @@ _DETECTOR_META: Dict[str, Dict[str, str]] = {
         "title_template": "Benefit Election Guardian",
         "category": "Benefit Election",
     },
-    "LOAN_ORIGINATION_ROUTING_FRICTION": {
-        "title_template": "Loan Origination Routing Friction",
-        "category": "Automation Opportunity",
-        "required_permissions": [
-            "Salesforce: read LLC_BI__Loan__c",
-            "Salesforce: read LLC_BI__Loan__History",
-        ],
-    },
-    "COVENANT_TRACKING_GAP": {
-        "title_template": "Covenant Tracking Gap",
-        "category": "Automation Opportunity",
-        "required_permissions": [
-            "Salesforce: read LLC_BI__Covenant2__c",
-            "Salesforce: read LLC_BI__Covenant2__c evaluation/breach fields",
-        ],
-    },
-    "CHECKLIST_BOTTLENECK": {
-        "title_template": "Checklist Bottleneck",
-        "category": "Automation Opportunity",
-        "required_permissions": [
-            "Salesforce: read LLC_BI__Checklist__c",
-            "Salesforce: read LLC_BI__Checklist__c owner/status fields",
-        ],
-    },
-    "SPREADING_BOTTLENECK": {
-        "title_template": "Spreading Bottleneck",
-        "category": "Automation Opportunity",
-        "required_permissions": [
-            "Salesforce: read LLC_BI__Spread_Statement_Period__c",
-            "Salesforce: read LLC_BI__Analyst__c",
-        ],
-    },
 }
 
 
@@ -196,12 +164,6 @@ def _override_default() -> Dict[str, Any]:
         "overrideReason":    "",
         "updatedAt":         None,
     }
-
-
-def get_required_permissions_for_detector(detector_id: str) -> List[str]:
-    meta = _DETECTOR_META.get(detector_id, {})
-    perms = meta.get("required_permissions", [])
-    return list(perms) if isinstance(perms, list) else []
 
 
 def _format_title(detector_id: str, ev: Dict[str, Any]) -> str:
@@ -327,15 +289,8 @@ def to_track_a_opportunities(
             "confidence":  opp.get("confidence", "LOW"),
             "aiRationale": _format_rationale(did, ev, metric_value, threshold),
             "evidenceIds": opp.get("evidenceIds", []),
-            "requiredPermissions": get_required_permissions_for_detector(did),
+            "requiredPermissions": meta.get("required_permissions", []),
             "override":    _override_default(),
-            # ENT-2: carry cross-system corroboration forward to the stored opp
-            # so /api/runs/{id}/opportunities and the enrichment route surface
-            # it. Safe defaults keep single-source opportunities clean.
-            "corroboration_sources":  opp.get("corroboration_sources", []),
-            "corroboration_label":    opp.get("corroboration_label"),
-            "triple_corroboration":   bool(opp.get("triple_corroboration", False)),
-            "corroboration_rule_ids": opp.get("corroboration_rule_ids", []),
             # Keep calibration fields under a debug namespace (not breaking Track A)
             "_debug": {
                 "detector_id":   did,
@@ -364,9 +319,7 @@ def to_track_a_evidence(
     seen_ids = set()
     for opp in runner_payload.get("opportunities", []):
         detector_id = opp.get("detector_id", "")
-        opp_id = opp.get("id", "")
-        opp_ev_list = opp.get("evidence", [])
-        for ev in opp_ev_list:
+        for ev in opp.get("evidence", []):
             eid = ev.get("id")
             if eid and eid not in seen_ids:
                 # SHARED-2: add detectorId to each evidence item so

@@ -36,31 +36,15 @@ function TierBadge({ tier }: { tier?: string }) {
 }
 
 function DecisionBadge({ value }: { value?: string }) {
-  const label = value === 'UNREVIEWED' || !value ? 'PENDING' : value;
+  const label = value === 'UNREVIEWED' ? 'Pending' : (value ?? 'Unknown');
   const cls =
     value === 'APPROVED'
       ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-200'
       : value === 'REJECTED'
         ? 'border-red-500/40 bg-red-500/10 text-red-200'
-        : 'border-amber-500/50 bg-amber-500/15 text-amber-300';
+        : 'border-border bg-bg/20 text-muted';
 
   return <span className={`rounded-full border px-2 py-0.5 text-xs ${cls}`}>{label}</span>;
-}
-
-function ConfidenceBadge({ level }: { level?: string }) {
-  const normalizedLevel = (level ?? 'LOW').toUpperCase();
-  const cls =
-    normalizedLevel === 'HIGH'
-      ? 'border-emerald-500/50 bg-emerald-500/10 text-emerald-300'
-      : normalizedLevel === 'MEDIUM'
-        ? 'border-amber-500/50 bg-amber-500/10 text-amber-300'
-        : 'border-red-500/50 bg-red-500/10 text-red-300';
-
-  return (
-    <span className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold tracking-wide ${cls}`}>
-      {normalizedLevel}
-    </span>
-  );
 }
 
 function StatusPill({ connected }: { connected: boolean }) {
@@ -369,8 +353,12 @@ function EvidencePanel({
                     <div className="mb-1 flex items-center gap-2">
                       <span className="text-xs font-semibold text-accent">{ev.source}</span>
                       <span className="text-xs text-muted">- {ev.evidenceType}</span>
-                      <span className="ml-auto">
-                        <ConfidenceBadge level={ev.confidence} />
+                      <span
+                        className={`ml-auto text-xs font-semibold ${
+                          ev.confidence === 'HIGH' ? 'text-green-400' : 'text-yellow-400'
+                        }`}
+                      >
+                        {ev.confidence}
                       </span>
                     </div>
                     <div className="mb-1 text-sm font-medium text-text">{ev.title}</div>

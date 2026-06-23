@@ -50,15 +50,18 @@ def check_servicenow() -> ConnectorHealth:
     """
     SN-CONNECT-1: Test ServiceNow connectivity.
 
-    Env vars required for live mode (OAuth-only):
+    Env vars required for live mode:
       SERVICENOW_URL    e.g. https://myinstance.service-now.com
-      SERVICENOW_TOKEN  OAuth Bearer token
+      SERVICENOW_TOKEN  Bearer token
+      (or SERVICENOW_USER + SERVICENOW_PASS for basic auth)
 
     Health endpoint: GET /api/now/table/incident?sysparm_limit=1
     Returns ConnectorHealth with status "live", "fixture", or "error".
     """
     sn_url = os.getenv("SERVICENOW_URL", "").rstrip("/")
     sn_token = os.getenv("SERVICENOW_TOKEN", "")
+    sn_user = os.getenv("SERVICENOW_USER", "")
+    sn_pass = os.getenv("SERVICENOW_PASS", "")
 
     if not sn_url:
         return ConnectorHealth(
@@ -67,11 +70,11 @@ def check_servicenow() -> ConnectorHealth:
             message="SERVICENOW_URL not set — using fixture data",
         )
 
-    if not sn_token:
+    if not sn_token and not (sn_user and sn_pass):
         return ConnectorHealth(
             system="ServiceNow",
             status="fixture",
-            message="No credentials set (SERVICENOW_TOKEN) — using fixture data",
+            message="No credentials set (SERVICENOW_TOKEN or SERVICENOW_USER/PASS) — using fixture data",
         )
 
     try:
@@ -86,11 +89,16 @@ def check_servicenow() -> ConnectorHealth:
     url = f"{sn_url}/api/now/table/incident"
     params = {"sysparm_limit": "1", "sysparm_fields": "sys_id"}
 
-    headers = {"Authorization": f"Bearer {sn_token}", "Accept": "application/json"}
+    if sn_token:
+        headers = {"Authorization": f"Bearer {sn_token}", "Accept": "application/json"}
+        auth = None
+    else:
+        headers = {"Accept": "application/json"}
+        auth = (sn_user, sn_pass)
 
     try:
         t0 = time.monotonic()
-        resp = requests.get(url, headers=headers, params=params, timeout=10)
+        resp = requests.get(url, headers=headers, auth=auth, params=params, timeout=10)
         latency_ms = int((time.monotonic() - t0) * 1000)
 
         if resp.status_code == 200:

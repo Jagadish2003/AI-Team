@@ -144,42 +144,6 @@ class TestIndividualFunctions:
 
 # ── Error handling tests ──────────────────────────────────────────────────────
 
-def test_live_issue_metrics_keep_relationship_fields(monkeypatch):
-    from discovery.ingest import jira as jira_mod
-
-    class Client:
-        def search_issues(self, jql, fields=None, max_results=5000):
-            if 'summary ~ "CS-"' in jql:
-                return []
-            assert "customfield_12345" in fields
-            return [{
-                "id": "10001",
-                "key": "AIC-1",
-                "fields": {
-                    "summary": "Escalated approval issue",
-                    "status": {"name": "Open"},
-                    "issuetype": {"name": "Bug"},
-                    "labels": ["escalation"],
-                    "assignee": {"accountId": "u1", "displayName": "Sarah Chen"},
-                    "reporter": {"accountId": "u2", "displayName": "Alex Doe"},
-                    "project": {"id": "p1", "key": "AIC", "name": "AgentIQ"},
-                    "customfield_12345": {
-                        "accountId": "u3",
-                        "displayName": "Loan Ops Lead",
-                    },
-                },
-            }]
-
-    monkeypatch.setattr(jira_mod, "is_live", lambda: True)
-    monkeypatch.setenv("JIRA_ESCALATION_FIELD", "customfield_12345")
-    result = jira_mod.get_issue_metrics(Client(), "AIC")
-
-    issue = result["issues"][0]
-    assert issue["key"] == "AIC-1"
-    assert issue["labels"] == ["escalation"]
-    assert issue["escalation_target"]["displayName"] == "Loan Ops Lead"
-
-
 class TestErrorHandling:
     def test_missing_fixture_raises(self, tmp_path, monkeypatch):
         from discovery.ingest import jira as jira_mod

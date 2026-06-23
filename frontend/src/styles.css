@@ -24,18 +24,16 @@
   --opportunity-matrix-axis-label: rgb(255 255 255 / 0.62);
   --opportunity-matrix-quadrant-primary: rgb(13 85 215 / 0.06);
   --opportunity-matrix-quadrant-muted: rgb(255 255 255 / 0.01);
-  --opportunity-matrix-label-weight: 600;
-  --opportunity-matrix-label-strong: rgb(225 234 246 / 0.88);
-  --opportunity-matrix-label-mid: rgb(215 226 241 / 0.80);
-  --opportunity-matrix-label-muted: rgb(195 210 229 / 0.68);
+  --opportunity-matrix-label-bg: rgb(10 18 40 / 0.65);
+  --opportunity-matrix-label-weight: 700;
+  --opportunity-matrix-label-strong: rgb(255 255 255 / 0.70);
+  --opportunity-matrix-label-mid: rgb(255 255 255 / 0.60);
+  --opportunity-matrix-label-muted: rgb(255 255 255 / 0.40);
   --opportunity-matrix-bubble-fill: rgb(10 22 46 / 0.85);
   --opportunity-matrix-bubble-stroke: rgb(90 110 145);
   --opportunity-matrix-hover-fill: rgb(255 255 255 / 0.12);
   --opportunity-matrix-hover-stroke: rgb(255 255 255 / 0.50);
   --opportunity-matrix-hover-label: rgb(255 255 255 / 0.82);
-  --opportunity-matrix-selected-label: rgb(168 199 255);
-  --opportunity-matrix-bubble-label-bg: rgb(7 25 58 / 0.74);
-  --opportunity-matrix-bubble-label-border: rgb(121 159 220 / 0.22);
 }
 
 :root.theme-light {
@@ -59,18 +57,16 @@
   --opportunity-matrix-axis-label: rgb(64 78 105 / 0.86);
   --opportunity-matrix-quadrant-primary: rgb(13 85 215 / 0.08);
   --opportunity-matrix-quadrant-muted: rgb(13 85 215 / 0.015);
+  --opportunity-matrix-label-bg: rgb(66 82 112 / 0.58);
   --opportunity-matrix-label-weight: 600;
-  --opportunity-matrix-label-strong: rgb(40 55 82 / 0.92);
-  --opportunity-matrix-label-mid: rgb(48 65 96 / 0.84);
-  --opportunity-matrix-label-muted: rgb(64 78 105 / 0.78);
+  --opportunity-matrix-label-strong: rgb(255 255 255 / 0.94);
+  --opportunity-matrix-label-mid: rgb(255 255 255 / 0.88);
+  --opportunity-matrix-label-muted: rgb(255 255 255 / 0.76);
   --opportunity-matrix-bubble-fill: rgb(62 92 138 / 0.24);
   --opportunity-matrix-bubble-stroke: rgb(66 93 132 / 0.62);
   --opportunity-matrix-hover-fill: rgb(13 85 215 / 0.10);
   --opportunity-matrix-hover-stroke: rgb(13 85 215 / 0.45);
   --opportunity-matrix-hover-label: rgb(7 25 58 / 0.86);
-  --opportunity-matrix-selected-label: rgb(12 73 176);
-  --opportunity-matrix-bubble-label-bg: rgb(255 255 255 / 0.88);
-  --opportunity-matrix-bubble-label-border: rgb(13 85 215 / 0.18);
 }
 
 html,
@@ -291,51 +287,14 @@ body *::-webkit-scrollbar-corner {
 .connector-card-selected {
   background-color: rgb(18 31 54);
   border-color: rgb(62 116 216);
-  box-shadow: none !important;
+  box-shadow:
+    0 10px 24px rgb(0 0 0 / 0.22),
+    inset 0 0 0 1px rgb(125 175 255 / 0.1);
 }
 
 .connector-card-selected:hover {
   background-color: rgb(20 38 78);
   border-color: rgb(86 139 236);
-}
-
-.integration-connected-count-pill {
-  border-color: rgb(16 185 129 / 0.35);
-  background-color: rgb(16 185 129 / 0.10);
-  color: rgb(110 231 183);
-  font-weight: 600;
-}
-
-:root.theme-light .integration-connected-count-pill {
-  border-color: rgb(16 185 129 / 0.45);
-  background-color: rgb(209 250 229 / 0.72);
-  color: rgb(4 120 87);
-}
-
-.integration-connected-status-pill {
-  padding: 0.25rem 0.625rem;
-  border-color: rgb(16 185 129 / 0.35);
-  background-color: rgb(16 185 129 / 0.10);
-  color: rgb(110 231 183);
-  font-weight: 600;
-}
-
-:root.theme-light .integration-connected-status-pill {
-  border-color: rgb(16 185 129 / 0.45);
-  background-color: rgb(209 250 229 / 0.72);
-  color: rgb(4 120 87);
-}
-
-.opportunity-round-bullets li > span:first-child {
-  display: inline-block;
-  width: 0.3125rem;
-  height: 0.3125rem;
-  margin-top: 0.55rem;
-  border-radius: 9999px;
-  background-color: rgb(var(--color-muted) / 0.72);
-  color: transparent !important;
-  font-size: 0;
-  line-height: 0;
 }
 
 :root.theme-light .connector-card-selected {
@@ -348,42 +307,10 @@ body *::-webkit-scrollbar-corner {
   border-color: rgb(128 169 241);
 }
 
-.roadmap-permission-missing {
-  border-width: 0 !important;
-  background-color: rgb(212 170 170 / 0.12) !important;
-  color: rgb(255 214 214) !important;
-  box-shadow:
-    0 1px 2px rgb(0 0 0 / 0.14),
-    0 6px 14px rgb(0 0 0 / 0.12);
-}
-
-:root.theme-light .roadmap-light-shadow-item {
-  border-width: 0 !important;
-  box-shadow:
-    0 1px 2px rgb(7 25 58 / 0.05),
-    0 6px 14px rgb(7 25 58 / 0.07);
-}
-
-:root.theme-light .roadmap-light-shadow-item:hover {
-  box-shadow:
-    0 2px 4px rgb(7 25 58 / 0.06),
-    0 8px 18px rgb(7 25 58 / 0.08);
-}
-
-:root.theme-light .roadmap-permission-missing {
-  background-color: rgb(212 170 170 / 0.12) !important;
-  color: rgb(155 49 49) !important;
-}
-
-:root.theme-light .roadmap-permission-pending,
-:root.theme-light .roadmap-count-pending {
-  color: rgb(252 211 77) !important;
-}
-
 .connector-group-tile-scroll {
   max-height: calc((215px * 2) + 0.5rem);
   overflow-y: auto;
-  overscroll-behavior-y: auto;
+  overscroll-behavior: contain;
   scrollbar-gutter: stable;
   scrollbar-color: rgb(var(--color-muted) / 0.62) transparent;
   scrollbar-width: thin;
@@ -478,50 +405,4 @@ body *::-webkit-scrollbar-corner {
   min-width: var(--metric-value-width, 4ch);
   text-align: left;
   font-variant-numeric: tabular-nums;
-}
-
-/*
- * PDF export scope — the Executive Report "Download PDF" action renders a
- * dedicated, off-screen report document wrapped in `.pdf-light-scope`. This
- * class redefines the theme CSS variables to their LIGHT values locally, so the
- * captured document is always light even when the app is in dark mode. Because
- * these are the same variable names the Tailwind color tokens read
- * (bg-panel, text-text, border-border, …), the report's components render light
- * without any global theme switch or visible flash. Mirrors :root.theme-light.
- */
-.pdf-light-scope {
-  color-scheme: light;
-  --color-bgheader: 255 255 255;
-  --color-bg: 230 238 249;
-  --color-panel: 255 255 255;
-  --color-buttonbg: 255 255 255;
-  --color-panel2: 242 247 253;
-  --color-navborder: 17 96 238;
-  --color-border: 159 179 200;
-  --color-text: 7 25 58;
-  --color-muted: 33 51 92;
-  --color-accent: 13 85 215;
-  --color-danger: 239 68 68;
-  --color-navhover: 232 240 249;
-  --color-activenav: 255 255 255;
-  --color-textwhite: 255 255 255;
-  --color-navtext: 7 25 58;
-  --opportunity-matrix-grid: rgb(92 112 145 / 0.62);
-  --opportunity-matrix-axis-label: rgb(64 78 105 / 0.86);
-  --opportunity-matrix-quadrant-primary: rgb(13 85 215 / 0.08);
-  --opportunity-matrix-quadrant-muted: rgb(13 85 215 / 0.015);
-  --opportunity-matrix-label-weight: 600;
-  --opportunity-matrix-label-strong: rgb(40 55 82 / 0.92);
-  --opportunity-matrix-label-mid: rgb(48 65 96 / 0.84);
-  --opportunity-matrix-label-muted: rgb(64 78 105 / 0.78);
-  --opportunity-matrix-bubble-fill: rgb(62 92 138 / 0.24);
-  --opportunity-matrix-bubble-stroke: rgb(66 93 132 / 0.62);
-  --opportunity-matrix-bubble-label-bg: rgb(255 255 255 / 0.88);
-  --opportunity-matrix-bubble-label-border: rgb(13 85 215 / 0.18);
-  --status-emerald-text: 4 120 87;
-  --status-amber-text: 146 64 14;
-  --status-red-text: 185 28 28;
-  --status-blue-text: 29 78 216;
-  background-color: #ffffff;
-  color: rgb(7 25 58);
 }

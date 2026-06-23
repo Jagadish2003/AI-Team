@@ -2,10 +2,7 @@ from fastapi import BackgroundTasks, Depends
 
 from . import db
 from .materialize_t2 import get_status, run_trackb_and_persist, set_status
-from .middleware.audit import log_event
-from .middleware.tenancy import get_current_org_id
 from .models_t2 import StartRunRequest, StartRunResponse, StatusResponse
-from .rbac import require_role, _get_user_id_from_token
 from .replay import seed_events
 from .security import require_auth
 
@@ -17,34 +14,24 @@ def register_sprint4_t2_routes(app):
     @app.post(
         "/api/runs/start",
         response_model=StartRunResponse,
-        dependencies=[Depends(require_auth), Depends(require_role("analyst"))],
+        dependencies=[Depends(require_auth)],
     )
-    async def start_run(
-        body: StartRunRequest,
-        background_tasks: BackgroundTasks,
-        token: str = Depends(require_auth),
-    ):
+    async def start_run(body: StartRunRequest, background_tasks: BackgroundTasks):
         """
         Creates a new run record, marks it RUNNING, and schedules Track B materialization
         in the background. Returns immediately with runId.
         """
         run_id = db.next_run_id()
 
-        # Capture the caller's org so the background materializer can resolve
-        # this org's authenticated connectors / OAuth tokens (CS-2 live ingest).
-        org_id = get_current_org_id()
-
         run = {
             "id": run_id,
             "status": "running",
             "startedAt": db.now_iso(),
             "updatedAt": db.now_iso(),
-            "orgId": org_id,
             "inputs": {
                 "connectedSources": body.connectedSources,
                 "uploadedFiles": body.uploadedFiles,
                 "sampleWorkspaceEnabled": body.sampleWorkspaceEnabled,
-                "orgId": org_id,
             },
         }
         db.run_set(run_id, run)
@@ -73,14 +60,6 @@ def register_sprint4_t2_routes(app):
             run["inputs"],
         )
 
-        log_event(
-            "run_started",
-            run_id=run_id,
-            user_id=_get_user_id_from_token(token),
-            pack_id=body.mode,
-            system_ids=body.systems,
-        )
-
         return StartRunResponse(
             runId=run_id, status="running", startedAt=run["startedAt"]
         )
@@ -88,7 +67,7 @@ def register_sprint4_t2_routes(app):
     @app.get(
         "/api/runs/{run_id}/status",
         response_model=StatusResponse,
-        dependencies=[Depends(require_auth), Depends(require_role("viewer"))],
+        dependencies=[Depends(require_auth)],
     )
     def run_status(run_id: str):
         run = db.run_get(
@@ -97,8 +76,4 @@ def register_sprint4_t2_routes(app):
         s = get_status(run_id)
         s["runId"] = run_id
         s["isReplay"] = run.get("isReplay", False)  # ← add isReplay from run record
-        s["current_step"] = run.get("current_step")
-        # CS-4 / AT-313: steps whose ingest failed, so the progress UI can render
-        # them as failed instead of as completed (green-check) stages.
-        s["failed_steps"] = run.get("failed_steps", [])
         return s

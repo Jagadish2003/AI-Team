@@ -39,7 +39,7 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
                 animate-[slideInRight_0.4s_ease-out]
                 ${
                   isSuccess
-                    ? "bg-emerald-500/10 border-emerald-500/30 text-emerald-200"
+                    ? "bg-green-500/10 border-green-400/30 text-green-200"
                     : isError
                     ? "bg-red-500/10 border-red-400/30 text-red-200"
                     : "bg-blue-500/10 border-blue-400/30 text-blue-200"

@@ -25,7 +25,6 @@ from fastapi import Depends, HTTPException
 from pydantic import BaseModel
 
 from .security import require_auth
-from .rbac import require_role
 from . import db
 from .llm_enrichment import KV_LLM_ENRICHMENT
 from .opportunity_display import with_display_title
@@ -468,7 +467,7 @@ def register_blueprint_routes(app) -> None:
     @app.get(
         "/api/runs/{run_id}/opportunities/{opp_id}/blueprint",
         response_model=BlueprintResponse,
-        dependencies=[Depends(require_auth), Depends(require_role("viewer"))],
+        dependencies=[Depends(require_auth)],
         tags=["blueprint"],
     )
     def get_opportunity_blueprint(run_id: str, opp_id: str) -> BlueprintResponse:

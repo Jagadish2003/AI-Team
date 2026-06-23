@@ -9,8 +9,7 @@ def test_audit_requires_tsEpoch_and_is_sorted_newest_first(client):
     r = client.post("/api/runs/start", headers=_auth_headers(), json={
         "connectedSources": ["ServiceNow", "Jira"],
         "uploadedFiles": ["incident_data.csv"],
-        "sampleWorkspaceEnabled": False,
-        "mode": "offline",
+        "sampleWorkspaceEnabled": False
     })
     assert r.status_code == 200
     run_id = r.json()["runId"]

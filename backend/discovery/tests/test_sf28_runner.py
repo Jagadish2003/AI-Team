@@ -51,32 +51,6 @@ class TestRunnerOffline:
         }
         assert expected == fired_ids, f"Missing detectors: {expected - fired_ids}"
 
-    def test_entity_extraction_failure_does_not_block_pipeline(self, monkeypatch):
-        """AC8 (Issue #18): if extract_entities() raises mid-pipeline, the run
-        must still complete and produce OpportunityCandidates.
-
-        The existing AC8 coverage only proves extract_entities() is exception-safe
-        in isolation. This asserts the *surrounding runner* is genuinely
-        non-blocking: a raising extractor is caught and the run continues to
-        produce its full opportunity set.
-        """
-        import app.entity_extractor as ee
-        from discovery.runner import run
-
-        def _boom(*args, **kwargs):
-            raise RuntimeError("entity extraction exploded")
-
-        # runner imports extract_entities at call time from app.entity_extractor,
-        # so patching the source attribute is sufficient.
-        monkeypatch.setattr(ee, "extract_entities", _boom)
-
-        payload = run(mode="offline", run_id="test-ee-nonblocking")
-        assert isinstance(payload, dict)
-        assert len(payload["opportunities"]) >= 7, (
-            "Run must still produce its full opportunity set when entity "
-            "extraction fails — extraction is non-blocking in the pipeline"
-        )
-
 
 class TestOpportunityCandidateShape:
 

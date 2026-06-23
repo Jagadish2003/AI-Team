@@ -14,31 +14,15 @@ Compliance override: breached_count >= 1 → impact = 9
 """
 from __future__ import annotations
 from typing import Any, Dict, List
-from ..models import (
-    DetectorResult,
-    detector_result_from_evaluation,
-    make_detector_evaluation,
-)
+from ..models import DetectorResult
 
 DETECTOR_ID = "COVENANT_TRACKING_GAP"
-SIGNAL_METRICS = {
-    "overdue_count":            "Number of covenants past evaluation date; primary volume trend",
-    "breached_count":           "Number of breached covenants; compliance severity indicator",
-    "max_days_past_evaluation": "Worst-case days past evaluation; tracks staleness of tracking",
-    "total_covenants":          "Total covenants evaluated; normalises overdue rate",
-}
 
-SIGNAL_METRICS = [
-    "total_covenants",          # covenant workload volume
-    "overdue_count",            # count of overdue covenant evaluations
-    "breached_count",           # count of breached covenants
-    "max_days_past_evaluation", # strongest overdue-age signal
-]
-
-
-def evaluate(sf_data: Dict[str, Any], sn_data=None, jira_data=None):
+def detect(sf_data: Dict[str, Any], sn_data=None, jira_data=None) -> List[DetectorResult]:
     ncino = sf_data.get("ncino") or sf_data
     metrics = ncino.get("covenant_metrics", {})
+    if not metrics:
+        return []
 
     overdue_count  = int(metrics.get("overdue_count", 0))
     breached_count = int(metrics.get("breached_count", 0))
@@ -46,11 +30,13 @@ def evaluate(sf_data: Dict[str, Any], sn_data=None, jira_data=None):
     compliance_override = bool(metrics.get("compliance_override", False))
     max_days_past  = float(metrics.get("max_days_past_evaluation", 0))
 
+    if overdue_count == 0 and breached_count == 0:
+        return []
+
     metric_value = float(breached_count if breached_count > 0 else overdue_count)
     threshold    = 1.0
 
-    return make_detector_evaluation(
-        module_name=__name__,
+    return [DetectorResult(
         detector_id=DETECTOR_ID,
         signal_source="salesforce",
         metric_value=metric_value,
@@ -64,10 +50,4 @@ def evaluate(sf_data: Dict[str, Any], sn_data=None, jira_data=None):
             "primary_object":           "LLC_BI__Covenant_Compliance__c",
             "covenant_object":          "LLC_BI__Covenant2__c",
         },
-        fired=bool(metrics) and (overdue_count > 0 or breached_count > 0),
-    )
-
-
-def detect(sf_data: Dict[str, Any], sn_data=None, jira_data=None) -> List[DetectorResult]:
-    evaluation = evaluate(sf_data, sn_data, jira_data)
-    return [detector_result_from_evaluation(evaluation)] if evaluation.fired else []
+    )]

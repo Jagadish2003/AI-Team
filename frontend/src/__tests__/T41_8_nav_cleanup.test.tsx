@@ -21,7 +21,7 @@
 
 import React from "react";
 import { render, screen, fireEvent } from "@testing-library/react";
-import { MemoryRouter, Navigate, Route, Routes, useLocation } from "react-router-dom";
+import { MemoryRouter } from "react-router-dom";
 import { vi, describe, it, expect } from "vitest";
 
 // ── Shared mocks ──────────────────────────────────────────────────────────────
@@ -84,12 +84,19 @@ vi.mock("../components/common/Toast", () => ({
   useToast: () => ({ push: vi.fn() }),
 }));
 
+vi.mock("../components/common/TopNav", () => ({
+  default: ({ children }: any) => <nav data-testid="top-nav">{children}</nav>,
+}));
+
 // ─────────────────────────────────────────────────────────────────────────────
 // AC1 — Source Intake absent from TopNav
 // ─────────────────────────────────────────────────────────────────────────────
 
 // Import the real items array by rendering TopNav and checking rendered links
 import TopNav from "../components/common/TopNav";
+
+// Un-mock TopNav for this group only — use the real component
+vi.unmock("../components/common/TopNav");
 
 describe("AC1 — Source Intake absent from TopNav", () => {
   it('does not render a "Source Intake" nav link', () => {
@@ -135,49 +142,30 @@ describe("AC1 — Source Intake absent from TopNav", () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// AC2 — /source-intake redirects to /integration-hub
+// AC2 — /source-intake redirects to /integration-hub (REAL routing test)
+// Renders App with MemoryRouter at /source-intake — exercises the actual
+// App.tsx route. If the Navigate element in App.tsx broke, this test fails.
 // ─────────────────────────────────────────────────────────────────────────────
 
-function LocationProbe() {
-  const location = useLocation();
-  return <div data-testid="route-location">{location.pathname}</div>;
-}
+import App from "../App";
 
-function renderSourceIntakeRedirect() {
-  return render(
-    <MemoryRouter initialEntries={["/source-intake"]}>
-      <Routes>
-        <Route
-          path="/source-intake"
-          element={<Navigate to="/integration-hub" replace />}
-        />
-        <Route
-          path="/integration-hub"
-          element={
-            <>
-              <TopNav />
-              <h1>Integration Hub</h1>
-              <LocationProbe />
-            </>
-          }
-        />
-      </Routes>
-    </MemoryRouter>,
-  );
-}
-
-describe("AC2 — /source-intake redirects to /integration-hub", () => {
+describe("AC2 — /source-intake redirects to /integration-hub (real routing)", () => {
   it("renders Integration Hub heading when navigating to /source-intake", () => {
-    renderSourceIntakeRedirect();
+    render(
+      <MemoryRouter initialEntries={["/source-intake"]}>
+        <App />
+      </MemoryRouter>,
+    );
     // Use getAllByText because it appears in both nav and page heading
     expect(screen.getAllByText("Integration Hub").length).toBeGreaterThan(0);
-    expect(screen.getByTestId("route-location")).toHaveTextContent(
-      "/integration-hub",
-    );
   });
 
   it("does NOT render standalone Source Intake page at /source-intake", () => {
-    renderSourceIntakeRedirect();
+    render(
+      <MemoryRouter initialEntries={["/source-intake"]}>
+        <App />
+      </MemoryRouter>,
+    );
     // SourceIntakePage renders a unique "Source Intake" text in its page heading.
     // After the redirect it must be absent — Integration Hub heading replaces it.
     const allText = document.body.textContent ?? "";
@@ -191,7 +179,11 @@ describe("AC2 — /source-intake redirects to /integration-hub", () => {
   });
 
   it("Source Intake is absent from nav after redirect", () => {
-    renderSourceIntakeRedirect();
+    render(
+      <MemoryRouter initialEntries={["/source-intake"]}>
+        <App />
+      </MemoryRouter>,
+    );
     expect(screen.queryByText("Source Intake")).toBeNull();
   });
 });
@@ -343,43 +335,46 @@ describe("AC4 — DiscoveryStartBar Upload Files button removed", () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// AC4-INTEGRATION — upload panel merged into Integration Hub, start bar removed
+// AC4-INTEGRATION — canStart wired to uploadedFiles, not sampleWorkspaceEnabled
+// Proves the full integration path: file in context → canStart → button enabled
 // ─────────────────────────────────────────────────────────────────────────────
 
 import IntegrationHubPage from "../pages/IntegrationHubPage";
 
-function renderIntegrationHubPage() {
-  return render(
-    <MemoryRouter initialEntries={["/integration-hub"]}>
-      <IntegrationHubPage />
-    </MemoryRouter>,
-  );
-}
-
-describe("AC4-INTEGRATION — Integration Hub no longer owns discovery start", () => {
-  it("does not render the old start bar when no connectors and no files", () => {
+describe("AC4-INTEGRATION — uploading file enables Begin Discovery", () => {
+  it("Start Discovery Run is disabled when no connectors and no files", () => {
     mockIntakeState.uploadedFiles = [];
     mockIntakeState.sampleWorkspaceEnabled = false;
 
-    renderIntegrationHubPage();
-
-    expect(screen.getByText("Upload Additional Data")).toBeDefined();
-    expect(screen.queryByText("Start Discovery Run")).toBeNull();
-    expect(screen.queryByText("Upload Files Instead")).toBeNull();
+    render(
+      <MemoryRouter initialEntries={["/integration-hub"]}>
+        <IntegrationHubPage />
+      </MemoryRouter>,
+    );
+    const btn = screen.getByText("Start Discovery Run");
+    // Button is rendered but disabled when canStart=false
+    expect(
+      btn.closest("button")?.disabled ?? btn.closest("[disabled]"),
+    ).toBeTruthy();
   });
 
-  it("sampleWorkspaceEnabled alone does NOT reintroduce a start action", () => {
+  it("sampleWorkspaceEnabled alone does NOT enable Start Discovery (demo path removed)", () => {
     mockIntakeState.uploadedFiles = [];
     mockIntakeState.sampleWorkspaceEnabled = true;
 
-    renderIntegrationHubPage();
-
-    expect(screen.getByText("Upload Additional Data")).toBeDefined();
-    expect(screen.queryByText("Start Discovery Run")).toBeNull();
-    expect(screen.queryByText("Upload Files Instead")).toBeNull();
+    render(
+      <MemoryRouter initialEntries={["/integration-hub"]}>
+        <IntegrationHubPage />
+      </MemoryRouter>,
+    );
+    const btn = screen.getByText("Start Discovery Run");
+    // Must remain disabled — sampleWorkspaceEnabled no longer drives canStart
+    expect(
+      btn.closest("button")?.disabled ?? btn.closest("[disabled]"),
+    ).toBeTruthy();
   });
 
-  it("uploadedFiles stay in SourceConfigPanel without reintroducing the start bar", () => {
+  it("uploadedFiles enables Start Discovery Run via canStart", () => {
     mockIntakeState.uploadedFiles = [
       {
         id: "f1",
@@ -390,12 +385,13 @@ describe("AC4-INTEGRATION — Integration Hub no longer owns discovery start", (
     ];
     mockIntakeState.sampleWorkspaceEnabled = false;
 
-    renderIntegrationHubPage();
-
-    fireEvent.click(screen.getByText("Upload Additional Data"));
-
-    expect(screen.getByText("data.csv")).toBeDefined();
-    expect(screen.queryByText("Start Discovery Run")).toBeNull();
-    expect(screen.queryByText("Upload Files Instead")).toBeNull();
+    render(
+      <MemoryRouter initialEntries={["/integration-hub"]}>
+        <IntegrationHubPage />
+      </MemoryRouter>,
+    );
+    const btn = screen.getByText("Start Discovery Run");
+    // canStart should be true — button enabled
+    expect(btn.closest("button")?.disabled).toBeFalsy();
   });
 });

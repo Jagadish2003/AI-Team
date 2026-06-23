@@ -60,7 +60,3 @@ class StatusResponse(BaseModel):
     errors: Dict[str, str] = Field(default_factory=dict)
     updatedAt: Optional[str] = None
     isReplay: bool = False
-    current_step: Optional[str] = None
-    # CS-4 / AT-313: discovery steps whose ingest failed during this run. The
-    # frontend renders these as failed rather than completed in the step list.
-    failed_steps: List[str] = Field(default_factory=list)

@@ -49,8 +49,8 @@ export default function ReasoningOverride({
               disabled={isDecisionFinalized}
               className={`flex w-full items-center justify-center gap-1.5 rounded-md border px-3 py-2.5 text-sm font-medium transition disabled:cursor-not-allowed disabled:opacity-50 ${
                 opp.decision === 'APPROVED'
-                  ? 'border-emerald-500 bg-emerald-500 text-white'
-                  : 'border-emerald-500 bg-emerald-500 text-white hover:border-[#0ea371] hover:bg-[#0ea371]'
+                  ? 'border-emerald-500/60 bg-emerald-500/20 text-emerald-300'
+                  : 'border-emerald-500/25 bg-emerald-500/5 text-emerald-100 hover:border-emerald-500/50 hover:bg-emerald-500/15 hover:text-emerald-300'
               }`}
             >
               {opp.decision === 'APPROVED' ? 'Approved' : 'Approve'}
@@ -62,8 +62,8 @@ export default function ReasoningOverride({
               disabled={isDecisionFinalized}
               className={`flex w-full items-center justify-center gap-1.5 rounded-md border px-3 py-2.5 text-sm font-medium transition disabled:cursor-not-allowed disabled:opacity-50 ${
                 opp.decision === 'REJECTED'
-                  ? 'border-red-500 bg-red-500 text-white'
-                  : 'border-red-500 bg-red-500 text-white hover:border-[#dc3b3b] hover:bg-[#dc3b3b]'
+                  ? 'border-red-500/60 bg-red-500/20 text-red-300'
+                  : 'border-red-500/25 bg-red-500/5 text-red-100 hover:border-red-500/50 hover:bg-red-500/15 hover:text-red-300'
               }`}
             >
               {opp.decision === 'REJECTED' ? 'Rejected' : 'Reject'}
@@ -135,3 +135,5 @@ export default function ReasoningOverride({
     </div>
   );
 }
+ 
+ 

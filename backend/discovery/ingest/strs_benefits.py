@@ -113,37 +113,15 @@ class StrsIngestError(Exception):
 # ── Salesforce client (reuses SF credentials — same org as nCino) ─────────────
 
 def _get_client():
-    import os
     import requests
-    from . import get_live_connector
+    from token_generation.strs.token_strs import get_token
 
-    # STRS runs against the same Salesforce org as the SF connector. Credentials
-    # are resolved in order: explicit STRS_* env, the per-run Salesforce OAuth
-    # context (DB-sourced via the credential vault), then SF_* env. The old
-    # server-key token-generation path (token_generation/strs) was removed.
-    instance_url = os.getenv("STRS_INSTANCE_URL")
-    access_token = os.getenv("STRS_ACCESS_TOKEN")
+    try:
+        access_token, instance_url = get_token()
+    except Exception as e:
+        raise StrsIngestError(f"STRS token load failed: {e}")
 
-    if not instance_url or not access_token:
-        cred = get_live_connector("salesforce")
-        if cred:
-            instance_url = instance_url or cred.get("url")
-            access_token = access_token or cred.get("token")
-
-    if not instance_url or not access_token:
-        instance_url = instance_url or os.getenv("SF_INSTANCE_URL")
-        access_token = access_token or os.getenv("SF_ACCESS_TOKEN")
-
-    if not instance_url or not access_token:
-        raise StrsIngestError(
-            "STRS live ingest requires a connected Salesforce org (OAuth Connect) "
-            "or STRS_INSTANCE_URL/STRS_ACCESS_TOKEN. "
-            "Set INGEST_MODE=offline to run without credentials."
-        )
-
-    instance_url = instance_url.rstrip("/")
-    access_token = access_token.strip()
-    logger.info("STRS Salesforce client: OK — using OAuth credentials")
+    logger.info("STRS JWT token: OK — loaded from strs_token.json")
 
     class _SFClient:
         def __init__(self, base_url: str, token: str):

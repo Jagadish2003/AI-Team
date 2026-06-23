@@ -31,11 +31,11 @@ def build_executive_report(
     medium_count = sum(1 for o in opps if o.get("confidence") == "MEDIUM")
 
     if high_count >= 2:
-        confidence = "High"
+        confidence = "HIGH"
     elif high_count >= 1 or medium_count >= 3:
-        confidence = "Moderate"
+        confidence = "MODERATE"
     else:
-        confidence = "Low"
+        confidence = "LOW"
 
     next_30 = roadmap.get("NEXT_30", [])
     next_60 = roadmap.get("NEXT_60", [])

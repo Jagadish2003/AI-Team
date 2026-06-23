@@ -114,7 +114,7 @@ export default function SystemCard({
         'relative w-full cursor-pointer rounded-lg border p-3 text-left transition-[border-color,background-color,box-shadow] duration-150',
         'focus:outline-none focus-visible:ring-1 focus-visible:ring-accent/35',
         selected
-          ? 'border-accent bg-accent/10'
+          ? 'border-accent bg-accent/10 shadow-[0_8px_22px_rgba(13,85,215,0.14)]'
           : isRecommended
           ? 'border-accent/30 bg-panel hover:border-accent/60 hover:bg-panel2'
           : 'border-border bg-panel hover:border-accent/50 hover:bg-panel2',

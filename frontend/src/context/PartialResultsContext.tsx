@@ -4,7 +4,7 @@ import { fetchEvidence, fetchEntities } from '../api/runApi';
 import { postEvidenceDecision } from '../api/evidenceApi';
 import { useRunContext } from './RunContext';
 import { useDiscoveryRunContext } from './DiscoveryRunContext';
-import { runScopedErrorMessage } from '../utils/apiErrors';
+import { isRunNotFoundError, runScopedErrorMessage } from '../utils/apiErrors';
 
 type PartialResultsContextValue = {
   entities: ExtractedEntity[];
@@ -67,7 +67,7 @@ const defaultTypes: Record<EntityType, boolean> = {
 };
 
 export function PartialResultsProvider({ children }: { children: React.ReactNode }) {
-  const { runId } = useRunContext();
+  const { runId, clearRunId } = useRunContext();
   const { run } = useDiscoveryRunContext();
   const runStatus = run?.status?.toLowerCase();
   const [entities, setEntities] = useState<ExtractedEntity[]>([]);
@@ -107,16 +107,17 @@ export function PartialResultsProvider({ children }: { children: React.ReactNode
         setSelectedEvidenceId(ev[0]?.id ?? null);
       } catch (e: any) {
         if (cancelled) return;
-        setEvidence([]);
-        setEntities([]);
-        setSelectedEvidenceId(null);
+        if (isRunNotFoundError(e)) {
+          clearRunId();
+          return;
+        }
         setError(runScopedErrorMessage(e, 'Failed to load partial results'));
       } finally {
         if (!cancelled) setLoading(false);
       }
     })();
     return () => { cancelled = true; };
-  }, [runId, runStatus, fetchCount]);
+  }, [runId, runStatus, fetchCount, clearRunId]);
 
   const [selectedEntityIds, setSelectedEntityIds] = useState<string[]>([]);
   const [entityTypes, setEntityTypes] = useState(defaultTypes);

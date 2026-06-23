@@ -25,7 +25,6 @@ from fastapi import Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from .security import require_auth
-from .rbac import require_role
 from . import db
 
 
@@ -105,7 +104,7 @@ def register_sprint4_t4_routes(app) -> None:
     @app.post(
         "/api/runs/{run_id}/replay",
         response_model=ReplayResponse,
-        dependencies=[Depends(require_auth), Depends(require_role("analyst"))],
+        dependencies=[Depends(require_auth)],
         tags=["runs"],
     )
     async def replay_run(run_id: str) -> ReplayResponse:

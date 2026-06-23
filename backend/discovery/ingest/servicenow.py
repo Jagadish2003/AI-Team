@@ -4,9 +4,11 @@ SF-2.3 — ServiceNow Ingestion Module
 Offline mode: reads backend/discovery/ingest/fixtures/servicenow_sample.json
 Live mode:    calls ServiceNow REST Table API
 
-Environment variables for live mode (OAuth-only):
-    SERVICENOW_URL    e.g. https://myinstance.service-now.com (captured at OAuth connect)
-    SERVICENOW_TOKEN  OAuth Bearer token (hydrated from the credential vault)
+Environment variables for live mode:
+    SERVICENOW_URL    e.g. https://myinstance.service-now.com
+    SERVICENOW_TOKEN  Bearer token (or use SERVICENOW_USER + SERVICENOW_PASS for basic auth)
+    SERVICENOW_USER   (optional) basic auth username
+    SERVICENOW_PASS   (optional) basic auth password
 
 Known fix applied (vs earlier stub):
     - total_count is fetched from the aggregate API, not hardcoded as 0
@@ -63,12 +65,18 @@ class ServiceNowClient:
     """
     Minimal ServiceNow Table API client with pagination support.
 
-    Auth: OAuth Bearer token (SERVICENOW_TOKEN) only.
+    Auth priority:
+      1. Bearer token (SERVICENOW_TOKEN)
+      2. Basic auth (SERVICENOW_USER + SERVICENOW_PASS)
     """
 
-    def __init__(self, instance_url: str, token: str = ""):
+    def __init__(
+        self, instance_url: str, token: str = "", user: str = "", password: str = ""
+    ):
         self.instance_url = instance_url.rstrip("/")
         self.token = token
+        self.user = user
+        self.password = password
         self._session = None
 
     def _get_session(self):
@@ -88,9 +96,11 @@ class ServiceNowClient:
             )
             if self.token:
                 self._session.headers["Authorization"] = f"Bearer {self.token}"
+            elif self.user and self.password:
+                self._session.auth = (self.user, self.password)
             else:
                 raise ServiceNowIngestError(
-                    "Live mode requires a ServiceNow OAuth Bearer token (SERVICENOW_TOKEN)."
+                    "Live mode requires SERVICENOW_TOKEN or SERVICENOW_USER + SERVICENOW_PASS"
                 )
         return self._session
 
@@ -171,42 +181,17 @@ class ServiceNowClient:
 
 
 def _get_client() -> ServiceNowClient:
-    # OAuth-only. Credentials come from the per-run context (DB-sourced: vault
-    # Bearer token + captured instance URL, isolated per org/run); env vars are
-    # only a CLI/standalone fallback.
-    from . import get_live_connector
-
-    cred = get_live_connector("servicenow")
-    if cred:
-        sn_url = (cred.get("url") or "").rstrip("/")
-        token = cred.get("token") or ""
-    else:
-        sn_url = os.getenv("SERVICENOW_URL", "").rstrip("/")
-        token = os.getenv("SERVICENOW_TOKEN", "")
+    sn_url = os.getenv("SERVICENOW_URL", "").rstrip("/")
+    token = os.getenv("SERVICENOW_TOKEN", "")
+    user = os.getenv("SERVICENOW_USER", "")
+    password = os.getenv("SERVICENOW_PASS", "")
 
     if not sn_url:
         raise ServiceNowIngestError(
             "Live mode requires SERVICENOW_URL. "
             "Set INGEST_MODE=offline to run without credentials."
         )
-    if not token:
-        raise ServiceNowIngestError(
-            "Live mode requires a ServiceNow OAuth Bearer token (SERVICENOW_TOKEN), "
-            "provided by the ServiceNow OAuth Connect flow."
-        )
-    return ServiceNowClient(sn_url, token=token)
-
-
-def _sn_scalar(value: Any) -> Any:
-    """Return the display value from a ServiceNow ``display_value=all`` field."""
-    if isinstance(value, dict):
-        return (
-            value.get("display_value")
-            or value.get("displayValue")
-            or value.get("value")
-            or value.get("name")
-        )
-    return value
+    return ServiceNowClient(sn_url, token=token, user=user, password=password)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -227,8 +212,7 @@ def get_incident_metrics(client: Optional[ServiceNowClient] = None) -> Dict[str,
         -- Incidents by category with avg resolution
         GET /api/now/table/incident
             ?sysparm_query=sys_created_on>=javascript:gs.daysAgo(90)
-            &sysparm_fields=sys_id,number,category,state,assigned_to,
-                            assignment_group,caller_id,resolved_at,sys_created_on
+            &sysparm_fields=category,state,assignment_group,resolved_at,sys_created_on
             &sysparm_limit=1000
 
     Returns: incident_metrics dict matching servicenow_sample.json shape
@@ -242,27 +226,11 @@ def get_incident_metrics(client: Optional[ServiceNowClient] = None) -> Dict[str,
     total = client.aggregate_count("incident", window_query)
 
     # Incident details for category breakdown
-    fields = [
-        "sys_id",
-        "number",
-        "category",
-        "state",
-        "assigned_to",
-        "assignment_group",
-        "caller_id",
-        "resolved_at",
-        "sys_created_on",
-    ]
-    escalation_field = os.getenv("SERVICENOW_ESCALATION_FIELD", "").strip()
-    if escalation_field:
-        fields.append(escalation_field)
-
     records = client.table_query(
         "incident",
         {
             "sysparm_query": window_query,
-            "sysparm_fields": ",".join(fields),
-            "sysparm_display_value": "all",
+            "sysparm_fields": "category,state,assignment_group,resolved_at,sys_created_on",
         },
     )
 
@@ -272,7 +240,7 @@ def get_incident_metrics(client: Optional[ServiceNowClient] = None) -> Dict[str,
     resolved_count = 0
 
     for r in records:
-        cat = _sn_scalar(r.get("category")) or "uncategorized"
+        cat = r.get("category") or "uncategorized"
         if cat not in category_map:
             category_map[cat] = {
                 "category": cat,
@@ -281,8 +249,8 @@ def get_incident_metrics(client: Optional[ServiceNowClient] = None) -> Dict[str,
             }
         category_map[cat]["volume"] += 1
 
-        resolved_at = _sn_scalar(r.get("resolved_at")) or ""
-        created = _sn_scalar(r.get("sys_created_on")) or ""
+        resolved_at = r.get("resolved_at", "")
+        created = r.get("sys_created_on", "")
         if resolved_at and created:
             try:
                 from datetime import datetime
@@ -314,49 +282,11 @@ def get_incident_metrics(client: Optional[ServiceNowClient] = None) -> Dict[str,
     for v in category_map.values():
         v.pop("_total_hours", None)
 
-    incidents: List[Dict[str, Any]] = []
-    for record in records:
-        incident = {
-            "id": _sn_scalar(record.get("sys_id")) or _sn_scalar(record.get("number")),
-            "number": _sn_scalar(record.get("number")) or _sn_scalar(record.get("sys_id")),
-            "category": _sn_scalar(record.get("category")),
-            "state": _sn_scalar(record.get("state")),
-            "assigned_to": record.get("assigned_to"),
-            "assignment_group": record.get("assignment_group"),
-            "caller_id": record.get("caller_id"),
-        }
-        if escalation_field and record.get(escalation_field):
-            incident["escalated_to"] = record.get(escalation_field)
-        incidents.append(incident)
-
-    assignment_groups: Dict[str, Dict[str, Any]] = {}
-    for incident in incidents:
-        group = incident.get("assignment_group")
-        if isinstance(group, dict):
-            group_name = (
-                group.get("display_value")
-                or group.get("displayName")
-                or group.get("name")
-                or group.get("value")
-            )
-        else:
-            group_name = group
-        if not group_name:
-            continue
-        key = str(group_name).strip()
-        summary = assignment_groups.setdefault(
-            key,
-            {"group_name": key, "incident_count": 0},
-        )
-        summary["incident_count"] += 1
-
     return {
         "total_incidents_90d": total,
         "avg_resolution_hours": avg_resolution,
         "avg_reassignment_count": 0.0,  # Extended in SF-3.2 using reassignment_count field
         "category_breakdown": list(category_map.values()),
-        "incidents": incidents,
-        "assignment_groups": list(assignment_groups.values()),
     }
 
 
@@ -476,147 +406,6 @@ def get_cross_system_references(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# ENT-5 — Enterprise Operations cross-system blocks (LIVE)
-#
-# These three functions build the ServiceNow blocks the enterprise_ops detectors
-# read. They are implemented and ready, but the CALLS that merge them into
-# ingest()'s return dict are COMMENTED OUT below — uncomment them once the SME
-# team confirms field names and loads the data. See
-# docs/ENT5_enterprise_ops_live_data_requirements.md.
-#
-# Org-specific field names (override via env; defaults are the common choice):
-#   SERVICENOW_JIRA_KEY_FIELD  incident field holding the Jira key  (default: correlation_id)
-#   SERVICENOW_SLA_FIELD       incident SLA-attainment boolean      (default: made_sla)
-#
-# Each function fails safe: on any query error it returns a degraded block so an
-# unconfirmed field name never crashes the run — the detector simply won't fire.
-# ─────────────────────────────────────────────────────────────────────────────
-
-
-def get_incident_resolution(client: Optional[ServiceNowClient] = None) -> Dict[str, Any]:
-    """Build the ``incident_resolution`` block for ENT_INCIDENT_RESOLUTION_LAG.
-
-    Reads CLOSED/RESOLVED incidents (state IN 6,7) created in the window that
-    carry a Jira key in SERVICENOW_JIRA_KEY_FIELD, with their close date.
-    """
-    if not is_live():
-        return {"closed_incidents": [], "degraded_signal": False}
-    jira_field = os.getenv("SERVICENOW_JIRA_KEY_FIELD", "correlation_id").strip()
-    query = (
-        f"sys_created_on>=javascript:gs.daysAgo({WINDOW_DAYS})"
-        f"^stateIN6,7^{jira_field}ISNOTEMPTY"
-    )
-    try:
-        records = client.table_query(
-            "incident",
-            {
-                "sysparm_query": query,
-                "sysparm_fields": f"number,state,opened_at,closed_at,resolved_at,{jira_field}",
-                "sysparm_display_value": "all",
-            },
-        )
-    except Exception as e:  # noqa: BLE001 — never abort the run on a bad field name
-        logger.warning("ENT-5 incident_resolution query failed (degraded): %s", e)
-        return {"closed_incidents": [], "degraded_signal": True}
-
-    closed_incidents: List[Dict[str, Any]] = []
-    for r in records:
-        key = _sn_scalar(r.get(jira_field))
-        closed_at = _sn_scalar(r.get("closed_at")) or _sn_scalar(r.get("resolved_at"))
-        if key and closed_at:
-            closed_incidents.append(
-                {
-                    "number": _sn_scalar(r.get("number")),
-                    "jira_issue_key": str(key),
-                    "closed_at": closed_at,
-                }
-            )
-    return {"closed_incidents": closed_incidents, "degraded_signal": False}
-
-
-def get_change_correlation(client: Optional[ServiceNowClient] = None) -> Dict[str, Any]:
-    """Build the ``change_correlation`` block for ENT_CHANGE_INCIDENT_CORRELATION.
-
-    Reads implemented change_request records (with close date) and incidents
-    (with open date) in the window; the detector does the 72h correlation math.
-    """
-    if not is_live():
-        return {"changes": [], "incidents": [], "degraded_signal": False}
-    try:
-        changes_raw = client.table_query(
-            "change_request",
-            {
-                "sysparm_query": (
-                    f"state=Implemented^sys_created_on>=javascript:gs.daysAgo({WINDOW_DAYS})"
-                ),
-                "sysparm_fields": "number,state,closed_at",
-                "sysparm_display_value": "all",
-            },
-        )
-        incidents_raw = client.table_query(
-            "incident",
-            {
-                "sysparm_query": f"opened_at>=javascript:gs.daysAgo({WINDOW_DAYS})",
-                "sysparm_fields": "number,opened_at",
-                "sysparm_display_value": "all",
-            },
-        )
-    except Exception as e:  # noqa: BLE001
-        logger.warning("ENT-5 change_correlation query failed (degraded): %s", e)
-        return {"changes": [], "incidents": [], "degraded_signal": True}
-
-    changes = [
-        {
-            "number": _sn_scalar(c.get("number")),
-            "state": _sn_scalar(c.get("state")),
-            "closed_at": _sn_scalar(c.get("closed_at")),
-        }
-        for c in changes_raw
-    ]
-    incidents = [
-        {"number": _sn_scalar(i.get("number")), "opened_at": _sn_scalar(i.get("opened_at"))}
-        for i in incidents_raw
-    ]
-    return {"changes": changes, "incidents": incidents, "degraded_signal": False}
-
-
-def get_sla_breach_by_team(client: Optional[ServiceNowClient] = None) -> Dict[str, Any]:
-    """Build the ``sla_breach_by_team`` block for ENT_SLA_BREACH_BY_TEAM.
-
-    Reads incidents in the window with their assignment_group and SLA-attainment
-    flag (SERVICENOW_SLA_FIELD, default made_sla where False == breached). Returns
-    raw incidents; the detector groups by team and computes concentration.
-    """
-    if not is_live():
-        return {"incidents": [], "degraded_signal": False}
-    sla_field = os.getenv("SERVICENOW_SLA_FIELD", "made_sla").strip()
-    try:
-        records = client.table_query(
-            "incident",
-            {
-                "sysparm_query": (
-                    f"sys_created_on>=javascript:gs.daysAgo({WINDOW_DAYS})"
-                    f"^assignment_groupISNOTEMPTY"
-                ),
-                "sysparm_fields": f"number,assignment_group,{sla_field}",
-                "sysparm_display_value": "all",
-            },
-        )
-    except Exception as e:  # noqa: BLE001
-        logger.warning("ENT-5 sla_breach_by_team query failed (degraded): %s", e)
-        return {"incidents": [], "degraded_signal": True}
-
-    incidents: List[Dict[str, Any]] = []
-    for r in records:
-        group = _sn_scalar(r.get("assignment_group"))
-        made_sla_raw = _sn_scalar(r.get(sla_field))
-        # made_sla == false → the incident breached its SLA.
-        breached = str(made_sla_raw).strip().lower() in ("false", "0", "no")
-        incidents.append({"assignment_group": group, "made_sla": (not breached)})
-    return {"incidents": incidents, "degraded_signal": False}
-
-
-# ─────────────────────────────────────────────────────────────────────────────
 # Main ingest()
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -641,19 +430,10 @@ def ingest(sn_client: Optional[ServiceNowClient] = None) -> Dict[str, Any]:
         )
         return fixture
 
-    # OAuth-first: the live instance URL comes from the per-run context (DB-sourced
-    # vault token + captured/derived URL, set by resolve_live_systems); the
-    # SERVICENOW_URL env var is only a CLI/standalone fallback. Gating on the env
-    # var alone wrongly skipped ServiceNow even when it was authenticated via the
-    # Integration Hub OAuth flow.
-    from . import get_live_connector
-
-    cred = get_live_connector("servicenow")
-    sn_url = (cred.get("url") if cred else None) or os.getenv("SERVICENOW_URL", "")
+    sn_url = os.getenv("SERVICENOW_URL", "")
     if not sn_url:
         logger.warning(
-            "ServiceNow is not connected (no OAuth credentials for this run, and "
-            "SERVICENOW_URL is unset) — skipping ServiceNow ingestion. "
+            "SERVICENOW_URL not set — skipping ServiceNow ingestion. "
             "D7 will rely on Salesforce-side echo score only."
         )
         return {}
@@ -672,17 +452,6 @@ def ingest(sn_client: Optional[ServiceNowClient] = None) -> Dict[str, Any]:
             "incident_metrics": incident_metrics,
             "cross_system_references": cross_system_references,
             "lending_correlation": lending_correlation,
-            "assignment_groups": incident_metrics.get("assignment_groups", []),
-            # ── ENT-5 enterprise_ops cross-system blocks (LIVE) ───────────────
-            # UNCOMMENT the three lines below once the SME team confirms the
-            # field names and loads the data into ServiceNow. Set, if different
-            # from the defaults:
-            #   SERVICENOW_JIRA_KEY_FIELD  (default: correlation_id)
-            #   SERVICENOW_SLA_FIELD       (default: made_sla)
-            # See docs/ENT5_enterprise_ops_live_data_requirements.md.
-            # "incident_resolution": get_incident_resolution(sn_client),
-            # "change_correlation":  get_change_correlation(sn_client),
-            # "sla_breach_by_team":  get_sla_breach_by_team(sn_client),
         }
     except ServiceNowIngestError:
         raise
@@ -847,7 +616,6 @@ def get_lending_correlation(
                         "subcategory": inc.get("subcategory", "") or "",
                         "priority": inc.get("priority", ""),
                         "state": inc.get("state", ""),
-                        "sys_created_on": inc.get("sys_created_on", ""),
                     }
                 )
         except Exception as e:
@@ -872,8 +640,6 @@ def get_lending_correlation(
                 "snippet": snippet,
                 "source": "ServiceNow",
                 "detectorId": detector_id,
-                "state": incident.get("state", ""),
-                "sys_created_on": incident.get("sys_created_on", ""),
             }
         )
         by_detector.setdefault(detector_id, []).append(snippet)

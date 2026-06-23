@@ -286,7 +286,6 @@ class TestNcinoIngestorOffline:
 
 class TestNcinoLiveModeCredentials:
     def test_live_mode_requires_instance_url(self):
-        # OAuth-only: no NCINO_/SF_ env and no Salesforce OAuth context → raise.
         env = {
             k: v
             for k, v in os.environ.items()
@@ -295,12 +294,14 @@ class TestNcinoLiveModeCredentials:
         env["INGEST_MODE"] = "live"
 
         with patch.dict(os.environ, env, clear=True):
-            from discovery.ingest import clear_live_connectors
             from discovery.ingest.ncino import NcinoIngestError, _get_client
-
-            clear_live_connectors()  # no Salesforce OAuth credentials in context
-            with pytest.raises(NcinoIngestError):
-                _get_client()
+            
+            # Pretend the token file doesn't exist and generation fails
+            with patch("discovery.ingest.ncino.Path.exists", return_value=False), \
+                 patch("discovery.ingest.ncino._generate_ncino_token", side_effect=Exception("mocked fail")):
+                
+                with pytest.raises(NcinoIngestError):
+                    _get_client()
 
     def test_live_mode_requires_access_token(self):
         env = {k: v for k, v in os.environ.items() if k not in ("SF_ACCESS_TOKEN", "NCINO_ACCESS_TOKEN")}
@@ -308,11 +309,13 @@ class TestNcinoLiveModeCredentials:
         env["SF_INSTANCE_URL"] = "https://test.my.salesforce.com"
 
         with patch.dict(os.environ, env, clear=True):
-            from discovery.ingest import clear_live_connectors
             from discovery.ingest.ncino import NcinoIngestError, _get_client
 
-            clear_live_connectors()  # no Salesforce OAuth credentials in context
-            with pytest.raises(NcinoIngestError):
-                _get_client()
+            # Pretend the token file doesn't exist and generation fails
+            with patch("discovery.ingest.ncino.Path.exists", return_value=False), \
+                 patch("discovery.ingest.ncino._generate_ncino_token", side_effect=Exception("mocked fail")):
+                
+                with pytest.raises(NcinoIngestError):
+                    _get_client()
 
  

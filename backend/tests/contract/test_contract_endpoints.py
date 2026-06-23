@@ -6,10 +6,10 @@ import pytest
 from fastapi.testclient import TestClient
 
 os.environ.setdefault("DEV_JWT", "dev-token-change-me")
+os.environ.setdefault("DB_PATH", "database/dev.db")
 os.environ.setdefault("CORS_ORIGINS", "http://localhost:5173")
 
 from app.main import app
-from app import db
 
 client = TestClient(app)
 
@@ -44,8 +44,6 @@ def start_and_materialize(payload: dict) -> str:
     all writes are visible to the read endpoints.  Replay is the guaranteed
     sync point that flushes run-scoped data deterministically.
     """
-    # Ensure offline mode; caller may also include "mode" — that takes precedence via **payload.
-    payload = {"mode": "offline", **payload}
     r = client.post("/api/runs/start", headers=auth_headers(), json=payload)
     assert r.status_code == 200
     run_id = r.json()["runId"]
@@ -98,7 +96,6 @@ def test_start_run_and_run_scoped_reads():
         "connectedSources": ["ServiceNow"],
         "uploadedFiles": [],
         "sampleWorkspaceEnabled": True,
-        "mode": "offline",
     }
 
     # Confirm start returns quickly with correct shape
@@ -125,15 +122,10 @@ def test_start_run_and_run_scoped_reads():
     )
     assert "stage" in events[0]
 
-    # entities endpoint — Stage 2 schema (T3-S12-A). Entity extraction runs in T3
-    # (extract_entities), so the list is empty until that story lands. Verify the
-    # endpoint responds correctly and returns a list with the new column shape.
+    # entities shape (ExtractedEntity)
     ents = client.get(f"/api/runs/{run_id}/entities", headers=auth_headers()).json()
-    assert isinstance(ents, list)
-    # When entities are present they must carry Stage 2 fields, not the legacy seed shape.
-    if ents:
-        assert {"id", "org_id", "entity_type", "canonical_name", "resolution_confidence",
-                "resolution_status"}.issubset(set(ents[0].keys()))
+    assert isinstance(ents, list) and len(ents) >= 1
+    assert {"id", "name", "type", "confidence"}.issubset(set(ents[0].keys()))
 
     # mappings shape
     maps = client.get(f"/api/runs/{run_id}/mappings", headers=auth_headers()).json()
@@ -185,36 +177,6 @@ def test_invalid_run_id_returns_404():
         assert r.status_code == 404, (
             f"{ep} returned {r.status_code} — must return 404 for unknown runId"
         )
-
-
-def test_latest_run_returns_newest_visible_run():
-    old_run_id = "run_latest_contract_old"
-    new_run_id = "run_latest_contract_new"
-    db.run_set(
-        old_run_id,
-        {
-            "id": old_run_id,
-            "status": "complete",
-            "orgId": "default",
-            "startedAt": "2999-01-01T00:00:00+00:00",
-            "updatedAt": "2999-01-01T00:00:00+00:00",
-        },
-    )
-    db.run_set(
-        new_run_id,
-        {
-            "id": new_run_id,
-            "status": "complete",
-            "orgId": "default",
-            "startedAt": "2999-01-02T00:00:00+00:00",
-            "updatedAt": "2999-01-02T00:00:00+00:00",
-        },
-    )
-
-    r = client.get("/api/runs/latest", headers=auth_headers())
-
-    assert r.status_code == 200
-    assert r.json()["id"] == new_run_id
 
 
 def test_permissions_shape():
@@ -331,7 +293,6 @@ def test_replay_is_deterministic():
             "connectedSources": [],
             "uploadedFiles": [],
             "sampleWorkspaceEnabled": False,
-            "mode": "offline",
         },
     )
     assert r.status_code == 200
@@ -395,7 +356,6 @@ def test_start_run_uses_runner_style_run_ids():
             "connectedSources": [],
             "uploadedFiles": [],
             "sampleWorkspaceEnabled": False,
-            "mode": "offline",
         },
     )
 

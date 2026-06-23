@@ -54,7 +54,6 @@ from pydantic import BaseModel
 
 from .db import kv_get, kv_set
 from .security import require_auth
-from .rbac import require_role
 
 from discovery.packs.industry_registry import (
     list_industries,
@@ -116,7 +115,7 @@ def register_stack_builder_routes(app: FastAPI) -> None:
     @app.get(
         "/api/stack-builder/industries",
         response_model=List[IndustryListItem],
-        dependencies=[Depends(require_auth), Depends(require_role("viewer"))],
+        dependencies=[Depends(require_auth)],
         summary="List all industries in the Stack Builder registry",
         tags=["Stack Builder"],
     )
@@ -141,7 +140,7 @@ def register_stack_builder_routes(app: FastAPI) -> None:
     @app.get(
         "/api/stack-builder/industries/{industry_id}/system-defaults",
         response_model=List[SystemDefaultItem],
-        dependencies=[Depends(require_auth), Depends(require_role("viewer"))],
+        dependencies=[Depends(require_auth)],
         summary="Get industry-calibrated system defaults",
         tags=["Stack Builder"],
     )
@@ -176,7 +175,7 @@ def register_stack_builder_routes(app: FastAPI) -> None:
     @app.get(
         "/api/stack-builder/industries/{industry_id}/recommendations",
         response_model=List[RecommendationItem],
-        dependencies=[Depends(require_auth), Depends(require_role("viewer"))],
+        dependencies=[Depends(require_auth)],
         summary="Get recommended system additions for an industry",
         tags=["Stack Builder"],
     )
@@ -224,7 +223,7 @@ def register_stack_builder_routes(app: FastAPI) -> None:
     @app.post(
         "/api/stack-builder/setup-state/{org_id}",
         status_code=204,
-        dependencies=[Depends(require_auth), Depends(require_role("analyst"))],
+        dependencies=[Depends(require_auth)],
         summary="Persist stack builder setup state for an org",
         tags=["Stack Builder"],
     )
@@ -252,24 +251,12 @@ def register_stack_builder_routes(app: FastAPI) -> None:
                 detail=f"Failed to persist setup state: {exc}",
             ) from exc
 
-        try:
-            from app.middleware.audit import log_event
-            systems = payload.state.get("systems") if isinstance(payload.state, dict) else {}
-            pack_id = payload.state.get("pack") if isinstance(payload.state, dict) else None
-            log_event(
-                "setup_state_saved",
-                system_count=len(systems) if isinstance(systems, (list, dict)) else 0,
-                pack_id=pack_id,
-            )
-        except Exception:
-            pass
-
         return Response(status_code=204)
 
     @app.get(
         "/api/stack-builder/setup-state/{org_id}",
         response_model=SetupStatePayload,
-        dependencies=[Depends(require_auth), Depends(require_role("viewer"))],
+        dependencies=[Depends(require_auth)],
         summary="Retrieve persisted stack builder setup state for an org",
         tags=["Stack Builder"],
     )
@@ -294,7 +281,7 @@ def register_stack_builder_routes(app: FastAPI) -> None:
     @app.delete(
         "/api/stack-builder/setup-state/{org_id}",
         status_code=204,
-        dependencies=[Depends(require_auth), Depends(require_role("analyst"))],
+        dependencies=[Depends(require_auth)],
         summary="Clear persisted stack builder setup state for an org",
         tags=["Stack Builder"],
     )

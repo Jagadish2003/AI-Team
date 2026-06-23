@@ -143,11 +143,6 @@ describe('StageCard — render prop integration', () => {
     renderCard(STAGE_EMPTY);
     expect(screen.getByText('No opportunities assigned to this stage yet.')).toBeTruthy();
   });
-
-  it('shows MISSING stage readiness when the stage has no opportunities', () => {
-    renderCard(STAGE_EMPTY);
-    expect(screen.getByText('MISSING')).toBeTruthy();
-  });
 });
 
 // ── StagesGrid tests ──────────────────────────────────────────────────────────

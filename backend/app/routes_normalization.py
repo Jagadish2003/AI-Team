@@ -26,7 +26,6 @@ from fastapi import Depends, HTTPException
 from pydantic import BaseModel
 
 from .security import require_auth
-from .rbac import require_role
 from . import db
 
 from .normalization_enrichment import KV_NORMALIZATION  # shared key — Issue 1 fix
@@ -165,6 +164,7 @@ def _derive_from_evidence(run_id: str) -> List[Dict[str, Any]]:
             "sampleValues": [],
             "notes":        f"Derived from evidence: {title[:60]}",
         })
+
     return rows
 
 
@@ -175,7 +175,7 @@ def register_normalization_routes(app) -> None:
     @app.get(
         "/api/runs/{run_id}/normalization",
         response_model=NormalizationResponse,
-        dependencies=[Depends(require_auth), Depends(require_role("viewer"))],
+        dependencies=[Depends(require_auth)],
         tags=["normalization"],
     )
     def get_run_normalization(run_id: str) -> NormalizationResponse:

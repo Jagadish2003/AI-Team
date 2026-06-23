@@ -8,8 +8,7 @@ def test_roadmap_and_sources_from_run_inputs(client):
     body = {
         "connectedSources": ["ServiceNow", "Jira"],
         "uploadedFiles": ["incident_data.csv", "cmdb_records.xlsx"],
-        "sampleWorkspaceEnabled": False,
-        "mode": "offline",
+        "sampleWorkspaceEnabled": False
     }
     r = client.post("/api/runs/start", headers=_auth_headers(), json=body)
     assert r.status_code == 200
