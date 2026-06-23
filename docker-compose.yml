@@ -45,8 +45,6 @@ services:
         condition: service_healthy
     env_file:
       - ${BACKEND_ENV_FILE:-/opt/aiqstore/backend/.env}
-    environment:
-      DATABASE_URL: "${PROD_DATABASE_URL}"
     ports:
       - "8000:8000"
     networks:

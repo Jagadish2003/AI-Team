@@ -1,8 +1,15 @@
 #!/bin/sh
 set -e
 
-if [ -z "${DATABASE_URL:-}" ]; then
+# Accept either DATABASE_URL (explicit) or PROD_DATABASE_URL (loaded from env_file).
+# This makes the container work whether started via `bash start.sh` (which passes
+# DATABASE_URL through compose interpolation) or via a manual `docker compose up`.
+DATABASE_URL="${DATABASE_URL:-${PROD_DATABASE_URL:-}}"
+export DATABASE_URL
+
+if [ -z "$DATABASE_URL" ]; then
     echo "[entrypoint] ERROR: DATABASE_URL is not set."
+    echo "[entrypoint]        Set DATABASE_URL or PROD_DATABASE_URL in the .env file."
     exit 1
 fi
 
