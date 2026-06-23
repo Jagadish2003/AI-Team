@@ -161,17 +161,23 @@ docker compose \
     up --detach frontend
 
 echo "    Waiting for Frontend to be ready..."
-for i in $(seq 1 20); do
+for i in $(seq 1 30); do
     STATUS=$(docker inspect --format='{{.State.Health.Status}}' agentiq-frontend 2>/dev/null || echo "starting")
     if [[ "$STATUS" == "healthy" ]]; then
         echo "    Frontend ready  [OK]"
         break
     fi
-    if [[ $i -eq 20 ]]; then
+    if [[ "$STATUS" == "unhealthy" ]]; then
         echo ""
-        echo "ERROR: Frontend did not become healthy in time."
+        echo "ERROR: Frontend is unhealthy. Last 20 log lines:"
         docker logs --tail 20 agentiq-frontend
-        exit 1
+        FRONTEND_FAILED=1
+        break
+    fi
+    if [[ $i -eq 30 ]]; then
+        echo ""
+        echo "WARN: Frontend did not report healthy in time (nginx may still be starting)."
+        FRONTEND_FAILED=1
     fi
     printf "."
     sleep 2
@@ -179,17 +185,23 @@ done
 echo ""
 
 # ── 8. Summary ────────────────────────────────────────────────────────────────
+SERVER_IP=$(hostname -I | awk '{print $1}')
 echo "============================================================"
-echo " AgentIQ stack is running"
+echo " AgentIQ stack"
 echo "============================================================"
 docker compose --file "$COMPOSE_FILE" ps \
     --format "table {{.Name}}\t{{.Status}}\t{{.Ports}}"
 echo ""
-SERVER_IP=$(hostname -I | awk '{print $1}')
-echo "  App  : http://${SERVER_IP}"
-echo "  API  : http://${SERVER_IP}:8000/docs"
+echo "  Frontend : http://${SERVER_IP}"
+echo "  API docs : http://${SERVER_IP}:8000/docs"
+echo "  API base : http://${SERVER_IP}:8000/api"
 echo ""
 echo "  Logs : docker compose --file $COMPOSE_FILE logs -f"
 echo "  Stop : docker compose --file $COMPOSE_FILE down"
 echo "  Store: $STORE_DIR"
 echo "============================================================"
+
+if [[ "${FRONTEND_FAILED:-0}" == "1" ]]; then
+    echo "WARN: Frontend health check did not pass — check logs above."
+    exit 1
+fi
