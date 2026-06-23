@@ -1,8 +1,6 @@
-version: "3.9"
-
 services:
 
-  # ── 1. PostgreSQL 18 — custom image with user, db, tables baked in ───────────
+  # ── 1. PostgreSQL 18 ──────────────────────────────────────────────────────────
   postgres:
     build:
       context: .
@@ -14,7 +12,18 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-agentiq_secret}
       POSTGRES_DB:       ${POSTGRES_DB:-agentiqprod}
     volumes:
-      - pgdata:/var/lib/postgresql/data
+      # postgres:18 expects mount at /var/lib/postgresql (parent).
+      # It creates the data/ subdirectory inside, so files land at
+      # /opt/aiqstore/postgres/data/ on the host.
+      - /opt/aiqstore/postgres:/var/lib/postgresql
+    command: >
+      postgres
+      -c max_connections=100
+      -c shared_buffers=128MB
+      -c effective_cache_size=256MB
+      -c timezone=UTC
+      -c log_timezone=UTC
+      -c log_min_duration_statement=500
     networks:
       - agentiq-net
     restart: unless-stopped
@@ -24,7 +33,7 @@ services:
       timeout: 5s
       retries: 12
 
-  # ── 2. Backend — starts only after postgres is healthy ───────────────────────
+  # ── 2. Backend ────────────────────────────────────────────────────────────────
   backend:
     build:
       context: ./backend
@@ -35,7 +44,7 @@ services:
       postgres:
         condition: service_healthy
     env_file:
-      - /opt/v1-5/backend/.env
+      - /opt/aiqstore/backend/.env
     environment:
       DATABASE_URL: "${PROD_DATABASE_URL}"
     ports:
@@ -51,7 +60,7 @@ services:
       start_period: 30s
       retries: 5
 
-  # ── 3. Frontend — starts only after backend is healthy ───────────────────────
+  # ── 3. Frontend ───────────────────────────────────────────────────────────────
   frontend:
     build:
       context: ./frontend
@@ -76,6 +85,3 @@ services:
 networks:
   agentiq-net:
     driver: bridge
-
-volumes:
-  pgdata:
