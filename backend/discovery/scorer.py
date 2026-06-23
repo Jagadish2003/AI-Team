@@ -40,6 +40,7 @@ from .weighting_context import (
     StackBuilderWeightingContext,
     WEIGHT_NEUTRAL,
 )
+from .t3_ceiling_clamp import apply_t3_ceiling_clamp
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Type aliases
@@ -467,11 +468,13 @@ def score(
     """
     # ── R16-C1 T2: resolve source weight ──────────────────────────────────────
     source_weight: float = WEIGHT_NEUTRAL
+    source_role: str = ""
     source_weighting_debug: Optional[Dict[str, Any]] = None
 
     if weighting_context is not None and not weighting_context.is_neutral:
         w = weighting_context.get(dr.signal_source)
         source_weight = w.source_weight   # role × priority, clamped
+        source_role = w.role              # R16-C1 T3: needed for ceiling clamp
         source_weighting_debug = {
             "system_id":     dr.signal_source,
             "role":          w.role,
@@ -484,8 +487,19 @@ def score(
     # ── Compute scored fields using source weight ─────────────────────────────
     impact     = _compute_impact(dr, source_weight)
     effort     = _compute_effort(dr)
-    confidence = _compute_confidence(dr, source_weight)
-    tier       = _assign_tier(effort, confidence)
+
+    # R16-C1 T3: apply hard ceiling clamp AFTER weighting so supporting-only
+    # or Slack-only sources cannot produce HIGH regardless of priority.
+    # _compute_confidence() does NOT enforce the hard rules — that is T3's job.
+    confidence_before_clamp = _compute_confidence(dr, source_weight)
+    confidence = apply_t3_ceiling_clamp(
+        confidence_before_clamp,
+        role=source_role,
+        system_id=dr.signal_source,
+    )
+    t3_clamped = confidence != confidence_before_clamp
+
+    tier = _assign_tier(effort, confidence)
 
     # ── Debug / calibration breakdown ─────────────────────────────────────────
     v, f, c, r, e = _impact_factors(dr)
@@ -517,6 +531,14 @@ def score(
         "effective_proxy_ratio": round(proxy_ratio * source_weight, 4),
         # R16-C1 T1/T2: weighting values and computed weight
         "source_weighting": source_weighting_debug,
+        # R16-C1 T3: ceiling clamp audit trail
+        "t3_ceiling_clamp": {
+            "applied": t3_clamped,
+            "confidence_before_clamp": confidence_before_clamp,
+            "confidence_after_clamp":  confidence,
+            "role":      source_role,
+            "system_id": dr.signal_source,
+        },
     }
 
     return {

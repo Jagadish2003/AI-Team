@@ -863,12 +863,60 @@ def apply_corroboration_confidence(
     assigned a higher (or equal) confidence than the corroboration verdict, the
     scorer's value is preserved. This protects existing pack behaviour
     (nCino/STRS already assign HIGH for several detectors).
+
+    R16-C1 T3 — Hard ceiling defense-in-depth
+    ------------------------------------------
+    Before applying the elevation, this function enforces the Slack-only and
+    single-source ceilings as a second line of defense against any future rule
+    that might accidentally try to elevate beyond MEDIUM for those cases:
+
+    • If only COR-05 (Slack-only, no primary corroborator) fired, the elevated
+      confidence is capped at MEDIUM before comparison. COR-05 already sets
+      ``elevated_confidence = MEDIUM`` — this guard catches any future drift.
+    • If only COR-08 (single source) fired, the elevated confidence is capped
+      at MEDIUM. COR-08 already returns an empty/MEDIUM result — guard for
+      defense-in-depth.
+
+    Neither guard can lower the scorer's own baseline (never-downgrade holds).
     """
     if scorer_confidence is None or not str(scorer_confidence).strip():
         raise ValueError("scorer_confidence is required before corroboration elevation")
     base = str(scorer_confidence).strip().upper()
     if base not in CONFIDENCE_ORDER:
         raise ValueError(f"unknown scorer confidence: {scorer_confidence!r}")
+
+    # R16-C1 T3: enforce hard ceilings on the corroboration verdict before
+    # comparing it against the scorer's baseline.
+    elevated = result.elevated_confidence
+
+    # Slack-only ceiling: if the only fired rule is COR-05 (or no elevating
+    # rules at all because COR-05 is excluded from elevating_rules), the
+    # elevation target cannot exceed MEDIUM.
+    only_slack_rules = bool(result.rule_ids) and all(
+        r in ("COR-05",) for r in result.rule_ids
+    )
+    if only_slack_rules and CONFIDENCE_ORDER.get(elevated, 0) > CONFIDENCE_ORDER[CONFIDENCE_MEDIUM]:
+        elevated = CONFIDENCE_MEDIUM
+        logger.warning(
+            "R16-C1 T3: Slack-only ceiling enforced — corroboration verdict "
+            "clamped from %s to MEDIUM (rules: %s)",
+            result.elevated_confidence,
+            result.rule_ids,
+        )
+
+    # Single-source ceiling: if only COR-08 fired, cap at MEDIUM.
+    only_single_source = bool(result.rule_ids) and all(
+        r in ("COR-08",) for r in result.rule_ids
+    )
+    if only_single_source and CONFIDENCE_ORDER.get(elevated, 0) > CONFIDENCE_ORDER[CONFIDENCE_MEDIUM]:
+        elevated = CONFIDENCE_MEDIUM
+        logger.warning(
+            "R16-C1 T3: Single-source ceiling enforced — corroboration verdict "
+            "clamped from %s to MEDIUM (rules: %s)",
+            result.elevated_confidence,
+            result.rule_ids,
+        )
+
     base_rank = CONFIDENCE_ORDER[base]
-    elevated_rank = CONFIDENCE_ORDER.get(result.elevated_confidence, base_rank)
-    return result.elevated_confidence if elevated_rank > base_rank else base
+    elevated_rank = CONFIDENCE_ORDER.get(elevated, base_rank)
+    return elevated if elevated_rank > base_rank else base
