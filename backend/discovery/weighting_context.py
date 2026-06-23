@@ -1,5 +1,5 @@
 """
-R16-C1 T1 — Stack Builder Weighting Context
+R16-C1 T1/T2 — Stack Builder Weighting Context
 
 Loads per-system role and priority from a run's persisted Stack Builder
 setup context and makes those values available to the scorer and
@@ -10,6 +10,36 @@ never read run_kv_get("setup_context", run_id) directly — they go through
 load_for_run(), which handles the fallback to neutral behavior when no
 weighting context exists (backward compatibility for older runs that pre-
 date Stack Builder weighting).
+
+──────────────────────────────────────────────────────────────────────────
+R16-C1 T2: Deterministic ROLE_WEIGHT + bounded priority modulation
+──────────────────────────────────────────────────────────────────────────
+The source weight for a system is a single float applied to that system's
+evidence contribution in the scorer.  It is the product of two terms:
+
+    source_weight = ROLE_WEIGHT[role] × PRIORITY_NUDGE[priority]
+                    clamped to [WEIGHT_MIN, WEIGHT_MAX]
+
+ROLE_WEIGHT (from R16-C1 Section 2 — authoritative, testable):
+    system_of_record        → 1.0   (full authority)
+    workflow_system         → 0.8   (process authority)
+    operational_signal_source → 0.6 (current-app alias for supporting)
+    supplementary           → 0.6   (contributes, does not lead)
+
+PRIORITY_NUDGE (bounded — cannot override role authority):
+    primary   → ×1.10
+    secondary → ×1.00  (no change)
+    tertiary  → ×0.90
+
+Combined weight is clamped to [0.50, 1.10] so:
+  • No source can be discounted below 50 % of neutral.
+  • No source can exceed 110 % of neutral (prevents a high-priority
+    supporting system from equalling a system-of-record).
+
+CRITICAL: weighting modulates WITHIN the existing rules.  It changes how
+much an evidence source contributes; it does NOT let a Supporting system
+reach HIGH alone, and does NOT lift the Slack MEDIUM ceiling.  Those
+hard-rule clamps are enforced in T3.
 
 Role / priority constants mirror the values stored by the Stack Builder
 frontend (routes_stack_builder_launch.py → LaunchRequest.weightings).
@@ -22,6 +52,79 @@ from typing import Any, Dict, List
 
 logger = logging.getLogger(__name__)
 
+# ─────────────────────────────────────────────────────────────────────────────
+# R16-C1 T2 — Deterministic weight tables  (Section 2 of the spec)
+# ─────────────────────────────────────────────────────────────────────────────
+
+#: Authority multiplier per role (R16-C1 Section 2 — named, testable constants).
+#: The current app uses more granular role strings than the three-term doc model;
+#: they are mapped explicitly here so a reviewer can audit every mapping.
+ROLE_WEIGHT: Dict[str, float] = {
+    "system_of_record":          1.0,   # full authority — doc canonical
+    "workflow_system":           0.8,   # process authority — doc canonical
+    "operational_signal_source": 0.6,   # current-app alias for supporting
+    "supporting":                0.6,   # doc canonical supporting
+    "supplementary":             0.6,   # current-app alias; same as supporting
+}
+
+#: The neutral/fallback weight used when a system has no configured role.
+WEIGHT_NEUTRAL: float = 1.0
+
+#: Hard floor — no source can ever be discounted below this fraction.
+WEIGHT_MIN: float = 0.50
+
+#: Hard ceiling — no source can exceed this fraction of neutral evidence weight.
+#: Keeps a high-priority supporting system below a system-of-record at 1.0.
+WEIGHT_MAX: float = 1.10
+
+#: Priority applies a bounded nudge ON TOP OF the role weight.
+#: Range is ±10 % so it shifts the result without overturning the role authority.
+PRIORITY_NUDGE: Dict[str, float] = {
+    "primary":   1.10,   # additional emphasis
+    "secondary": 1.00,   # no change
+    "tertiary":  0.90,   # de-emphasis
+}
+
+#: Default nudge when priority is not set.
+PRIORITY_NUDGE_DEFAULT: float = 1.00
+
+
+def compute_source_weight(role: str, priority: str) -> float:
+    """Return the bounded source weight for a given *role* / *priority* pair.
+
+    This is the single, authoritative calculation used by the scorer and
+    corroboration engine.  The result is deterministic: the same role and
+    priority always produce the same weight.
+
+    Calculation
+    -----------
+    ::
+
+        raw = ROLE_WEIGHT.get(role, WEIGHT_NEUTRAL)
+              × PRIORITY_NUDGE.get(priority, PRIORITY_NUDGE_DEFAULT)
+        source_weight = clamp(raw, WEIGHT_MIN, WEIGHT_MAX)
+
+    Parameters
+    ----------
+    role:
+        Role string as stored by the Stack Builder, e.g.
+        ``'system_of_record'``, ``'operational_signal_source'``.
+    priority:
+        Priority string as stored by the Stack Builder, e.g.
+        ``'primary'``, ``'secondary'``, ``'tertiary'``.
+
+    Returns
+    -------
+    float
+        A weight in ``[WEIGHT_MIN, WEIGHT_MAX]``.
+    """
+    role_w = ROLE_WEIGHT.get(str(role).strip(), WEIGHT_NEUTRAL)
+    priority_n = PRIORITY_NUDGE.get(str(priority).strip(), PRIORITY_NUDGE_DEFAULT)
+    raw = role_w * priority_n
+    return max(WEIGHT_MIN, min(WEIGHT_MAX, raw))
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Module-level import with fallback so the patch target exists for tests.
 # The try/except handles both the in-package path (app.db) and the root path.
 try:
@@ -93,6 +196,17 @@ class SystemWeighting:
         """True when no meaningful weighting was recorded for this system."""
         return not self.role and not self.priority
 
+    @property
+    def source_weight(self) -> float:
+        """R16-C1 T2: compute the deterministic source weight for this system.
+
+        Returns :data:`WEIGHT_NEUTRAL` (1.0) for neutral/unconfigured systems
+        so no modulation is applied (backward compat for runs without context).
+        """
+        if self.is_neutral:
+            return WEIGHT_NEUTRAL
+        return compute_source_weight(self.role, self.priority)
+
 
 # Sentinel neutral weighting returned when a system has no configuration.
 _NEUTRAL = SystemWeighting(system_id="__neutral__")
@@ -148,6 +262,19 @@ class StackBuilderWeightingContext:
         w = self.weightings.get(system_id)
         return w is not None and not w.is_neutral
 
+    def get_source_weight(self, system_id: str) -> float:
+        """R16-C1 T2: return the bounded source weight for *system_id*.
+
+        Returns :data:`WEIGHT_NEUTRAL` (1.0) when:
+        - the context is neutral (no Stack Builder setup for this run), or
+        - the system has no configured weighting.
+
+        This ensures no modulation occurs for unconfigured or neutral runs.
+        """
+        if self.is_neutral:
+            return WEIGHT_NEUTRAL
+        return self.get(system_id).source_weight
+
     # ── Factory helpers ───────────────────────────────────────────────────────
 
     @classmethod
@@ -160,7 +287,11 @@ class StackBuilderWeightingContext:
         return cls(is_neutral=True)
 
     def to_debug_dict(self) -> Dict[str, Any]:
-        """Compact debug representation for score_debug / audit logging."""
+        """Compact debug representation for score_debug / audit logging.
+
+        Includes the computed ``source_weight`` per system so any consumer
+        can see exactly what multiplier was applied (R16-C1 T2 transparency).
+        """
         return {
             "run_id":               self.run_id,
             "pack_id":              self.pack_id,
@@ -168,9 +299,10 @@ class StackBuilderWeightingContext:
             "selected_system_ids":  self.selected_system_ids,
             "system_weightings": {
                 sid: {
-                    "role":      w.role,
-                    "priority":  w.priority,
-                    "confirmed": w.confirmed,
+                    "role":          w.role,
+                    "priority":      w.priority,
+                    "confirmed":     w.confirmed,
+                    "source_weight": w.source_weight,
                 }
                 for sid, w in self.weightings.items()
             },
