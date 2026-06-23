@@ -29,7 +29,7 @@ fi
 
 # Read required values safely (no sourcing — avoids shell injection from .env)
 read_env() {
-    grep -E "^$1=" "$ENV_FILE" | head -n1 | cut -d= -f2- | tr -d '\r"' | xargs
+    grep -E "^$1=" "$ENV_FILE" 2>/dev/null | head -n1 | cut -d= -f2- | tr -d '\r"' | xargs || true
 }
 
 PROD_URL=$(read_env PROD_DATABASE_URL)
