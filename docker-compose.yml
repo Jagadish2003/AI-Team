@@ -1,0 +1,78 @@
+version: "3.9"
+
+services:
+
+  # ── 1. PostgreSQL 18 ─────────────────────────────────────────────────────────
+  postgres:
+    image: postgres:18-alpine
+    container_name: agentiq-postgres
+    environment:
+      POSTGRES_USER:     ${POSTGRES_USER:-agentiq}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-agentiq_secret}
+      POSTGRES_DB:       ${POSTGRES_DB:-agentiqprod}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    networks:
+      - agentiq-net
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-agentiq} -d ${POSTGRES_DB:-agentiqprod}"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  # ── 2. Backend — starts only after postgres is healthy ───────────────────────
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    image: agentiq-backend:latest
+    container_name: agentiq-backend
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file:
+      - /opt/v1-5/backend/.env
+    environment:
+      DATABASE_URL: "${PROD_DATABASE_URL}"
+    ports:
+      - "8000:8000"
+    networks:
+      - agentiq-net
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 15s
+      timeout: 10s
+      start_period: 30s
+      retries: 5
+
+  # ── 3. Frontend — starts only after backend is healthy ───────────────────────
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    image: agentiq-frontend:1.0
+    container_name: agentiq-frontend
+    depends_on:
+      backend:
+        condition: service_healthy
+    ports:
+      - "80:80"
+    networks:
+      - agentiq-net
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost/health"]
+      interval: 15s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
+
+networks:
+  agentiq-net:
+    driver: bridge
+
+volumes:
+  pgdata:
