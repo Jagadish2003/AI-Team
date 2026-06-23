@@ -260,9 +260,12 @@ def _invoke_rewrite_llm(prompt: str) -> Optional[str]:
     (R16-D1 T3) with the 500ms timeout matching REWRITE_TIMEOUT_MS.
     """
     from app.llm_enrichment import MAX_TOKENS_OPP
-    from app.model_gateway import GenerationRequest, get_generation_provider
+    from app.model_gateway import GenerationRequest, generate
 
-    result = get_generation_provider().generate(
+    # Route through the gateway's instrumented generate() so the rewrite call
+    # is telemetered with the serving provider (R16-D1 T5). The 500ms leash is
+    # still carried as timeout_ms on the request.
+    result = generate(
         GenerationRequest(
             prompt=prompt,
             max_tokens=MAX_TOKENS_OPP,
