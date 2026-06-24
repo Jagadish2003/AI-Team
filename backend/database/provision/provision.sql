@@ -310,6 +310,7 @@ CREATE TABLE "public"."ingestion_checkpoints" (
     "value" "text" NOT NULL,
     "captured_at" timestamp with time zone NOT NULL,
     "updated_at" timestamp with time zone DEFAULT now() NOT NULL,
+    "is_deleted" boolean DEFAULT false NOT NULL,
     CONSTRAINT "ingestion_checkpoints_pkey" PRIMARY KEY ("org_id", "connector_id")
 );
 
