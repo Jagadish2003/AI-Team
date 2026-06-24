@@ -46,8 +46,10 @@ read, threaded back into ``ingest_changes`` as ``since``, and persisted verbatim
 never parsed, compared, or branched on. That is what lets a timestamp source, a
 commit-SHA source, and a change-sequence source all share this one driver.
 
-Out of scope here (deferred to the story this one blocks):
-  * ``ingestion.artifact_changed`` event emission — AT-381.
+Change events (R16-A1 §4, AT-381): for each record in every fully-processed
+batch this runner emits one ``ingestion.artifact_changed`` telemetry event. 1.6
+only EMITS — the Release 1.8 retrieval-freshness layer will consume them. Emission
+is fire-and-forget: it never affects the checkpoint lifecycle or the run outcome.
 """
 from __future__ import annotations
 
@@ -67,6 +69,63 @@ logger = logging.getLogger(__name__)
 ReadCheckpoint = Callable[[str, str], Optional[Checkpoint]]
 SaveCheckpoint = Callable[[Checkpoint], None]
 ProcessBatch = Callable[[DeltaBatch], None]
+
+
+def _utc_iso() -> str:
+    from datetime import datetime, timezone
+
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _emit_artifact_changed(org_id: str, connector_id: str, records: list) -> None:
+    """Emit one ``ingestion.artifact_changed`` telemetry event per changed
+    artifact in a fully-processed batch (R16-A1 §4 / AT-381, AC4).
+
+    Each record carries its own ``artifact_id`` and ``change_kind``
+    ('created' | 'updated' | 'deleted'); ``observed_at`` is stamped here. 1.6 only
+    EMITS — there is no consumer yet (the 1.8 retrieval-freshness layer subscribes
+    later). Fire-and-forget: a telemetry import/write failure must NEVER break
+    ingestion, so the whole path is guarded and any error is only logged.
+
+    ``record_event`` is imported lazily (like the repository's app.db import) to
+    avoid an import cycle with the app package at module load.
+    """
+    if not records:
+        return
+    try:
+        from app.telemetry import record_event
+    except Exception:  # pragma: no cover — telemetry must not break ingestion
+        logger.warning(
+            "change-ingest: telemetry unavailable; skipping artifact_changed events "
+            "for connector=%s",
+            connector_id,
+        )
+        return
+
+    observed_at = _utc_iso()
+    for rec in records:
+        if not isinstance(rec, dict):
+            continue
+        artifact_id = rec.get("artifact_id", rec.get("id"))
+        change_kind = rec.get("change_kind", "updated")
+        try:
+            record_event(
+                "ingestion.artifact_changed",
+                {
+                    "org_id": org_id,
+                    "connector_id": connector_id,
+                    "artifact_id": "" if artifact_id is None else str(artifact_id),
+                    "change_kind": change_kind,
+                    "observed_at": observed_at,
+                },
+            )
+        except Exception:  # pragma: no cover — one bad event must not stop the run
+            logger.warning(
+                "change-ingest: failed to emit artifact_changed (connector=%s "
+                "artifact_id=%s)",
+                connector_id,
+                artifact_id,
+            )
 
 
 @dataclass
@@ -166,6 +225,12 @@ def ingest_with_checkpoint(
                 process_batch(batch)
             result.batches += 1
             result.records += len(batch.records)
+
+            # AT-381 (§4, AC4): emit one ingestion.artifact_changed per changed
+            # artifact in this fully-processed batch. Reached only after
+            # process_batch succeeded; fire-and-forget — never affects the
+            # checkpoint lifecycle or the run outcome.
+            _emit_artifact_changed(org_id, connector_id, batch.records)
 
             if is_first_run:
                 # AC3: resumable full load — checkpoint each fully-processed batch
