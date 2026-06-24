@@ -446,6 +446,27 @@ class IngestionCheckpointResetPayload(TypedDict):
     had_checkpoint: bool
 
 
+class IngestionArtifactChangedPayload(TypedDict):
+    """ingestion.artifact_changed — R16-A1 / AT-381 (§4, AC4).
+
+    Emitted once per changed source artifact when a connector reports a delta, so
+    the Release 1.8 retrieval-freshness layer can later invalidate/refresh exactly
+    the artifacts that changed. 1.6 only EMITS — there is no consumer yet
+    (forward-design rule, §4). Identifiers + change kind only — no artifact content.
+
+    org_id:        The org the artifact belongs to.
+    connector_id:  The source connector that reported the change.
+    artifact_id:   Stable id of the changed item (connector-defined).
+    change_kind:   'created' | 'updated' | 'deleted'.
+    observed_at:   When the change was observed during the run (UTC ISO).
+    """
+    org_id: str
+    connector_id: str
+    artifact_id: str
+    change_kind: str
+    observed_at: str
+
+
 # ---------------------------------------------------------------------------
 # Registry helpers
 # ---------------------------------------------------------------------------
@@ -526,6 +547,8 @@ register_event_type("license.updated", LicenseUpdatedPayload)
 register_event_type("license.clock_anomaly", LicenseClockAnomalyPayload)
 # R16-A1 / AT-383 (T7): admin checkpoint-reset action.
 register_event_type("ingestion.checkpoint_reset", IngestionCheckpointResetPayload)
+# R16-A1 / AT-381 (T5): per-changed-artifact event (emitted by the change runner).
+register_event_type("ingestion.artifact_changed", IngestionArtifactChangedPayload)
 
 
 # ---------------------------------------------------------------------------
@@ -689,6 +712,7 @@ __all__ = [
     "LicenseUpdatedPayload",                # LIC-1 / AT-348 (T7)
     "LicenseClockAnomalyPayload",           # LIC-1 / AT-348 (T7)
     "IngestionCheckpointResetPayload",      # R16-A1 / AT-383 (T7)
+    "IngestionArtifactChangedPayload",      # R16-A1 / AT-381 (T5)
     "EVENT_PAYLOAD_TYPES",          # AT-211 alias: event_type → TypedDict schema
     "EVENT_REGISTRY",
     "EVENT_TYPE_REGISTRY",          # alias for T1-S10-C unit tests
