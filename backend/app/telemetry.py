@@ -429,6 +429,23 @@ class LicenseClockAnomalyPayload(TypedDict):
     now: str
 
 
+class IngestionCheckpointResetPayload(TypedDict):
+    """ingestion.checkpoint_reset — R16-A1 / AT-383 (§3, AC7).
+
+    Emitted when an admin explicitly clears a source's ingestion checkpoint,
+    forcing a full re-read on the next run. Identifiers + outcome only — no
+    source data.
+
+    org_id:          The org whose checkpoint was reset.
+    connector_id:    The source connector whose checkpoint was cleared.
+    had_checkpoint:  True if a checkpoint existed and was removed; False if there
+                     was nothing to clear (already at "first run").
+    """
+    org_id: str
+    connector_id: str
+    had_checkpoint: bool
+
+
 # ---------------------------------------------------------------------------
 # Registry helpers
 # ---------------------------------------------------------------------------
@@ -507,6 +524,8 @@ register_event_type("license.entered_grace", LicenseEnteredGracePayload)
 register_event_type("license.entered_readonly", LicenseEnteredReadonlyPayload)
 register_event_type("license.updated", LicenseUpdatedPayload)
 register_event_type("license.clock_anomaly", LicenseClockAnomalyPayload)
+# R16-A1 / AT-383 (T7): admin checkpoint-reset action.
+register_event_type("ingestion.checkpoint_reset", IngestionCheckpointResetPayload)
 
 
 # ---------------------------------------------------------------------------
@@ -669,6 +688,7 @@ __all__ = [
     "LicenseEnteredReadonlyPayload",        # LIC-1 / AT-348 (T7)
     "LicenseUpdatedPayload",                # LIC-1 / AT-348 (T7)
     "LicenseClockAnomalyPayload",           # LIC-1 / AT-348 (T7)
+    "IngestionCheckpointResetPayload",      # R16-A1 / AT-383 (T7)
     "EVENT_PAYLOAD_TYPES",          # AT-211 alias: event_type → TypedDict schema
     "EVENT_REGISTRY",
     "EVENT_TYPE_REGISTRY",          # alias for T1-S10-C unit tests

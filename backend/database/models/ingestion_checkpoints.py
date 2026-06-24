@@ -30,4 +30,16 @@ CREATE TABLE IF NOT EXISTS ingestion_checkpoints (
 )
 """
 
-ALL_INGESTION_CHECKPOINTS_DDL: tuple[str, ...] = (CREATE_INGESTION_CHECKPOINTS_TABLE,)
+# AT-383 (T7) — admin checkpoint reset is a SOFT delete: the least-privilege app
+# role has UPDATE but not DELETE, so a reset flips ``is_deleted`` rather than
+# removing the row. read_checkpoint filters ``is_deleted = FALSE``; a re-save
+# reactivates the row. Added by migration 0018 for DBs already created at 0017.
+ALTER_INGESTION_CHECKPOINTS_ADD_IS_DELETED = """
+ALTER TABLE ingestion_checkpoints
+    ADD COLUMN IF NOT EXISTS is_deleted BOOLEAN NOT NULL DEFAULT FALSE
+"""
+
+ALL_INGESTION_CHECKPOINTS_DDL: tuple[str, ...] = (
+    CREATE_INGESTION_CHECKPOINTS_TABLE,
+    ALTER_INGESTION_CHECKPOINTS_ADD_IS_DELETED,
+)

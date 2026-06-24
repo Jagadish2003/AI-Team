@@ -49,7 +49,7 @@ def read_checkpoint(org_id: str, connector_id: str) -> Optional[Checkpoint]:
         cur = con.cursor()
         cur.execute(
             "SELECT value, captured_at FROM ingestion_checkpoints "
-            "WHERE org_id = %s AND connector_id = %s",
+            "WHERE org_id = %s AND connector_id = %s AND is_deleted = FALSE",
             (org_id, connector_id),
         )
         row = cur.fetchone()
@@ -86,7 +86,8 @@ def save_checkpoint(checkpoint: Checkpoint) -> None:
             "ON CONFLICT (org_id, connector_id) DO UPDATE SET "
             "value = EXCLUDED.value, "
             "captured_at = EXCLUDED.captured_at, "
-            "updated_at = now()",
+            "updated_at = now(), "
+            "is_deleted = FALSE",  # re-saving reactivates a previously-reset row
             (
                 checkpoint.org_id,
                 checkpoint.connector_id,
@@ -97,3 +98,34 @@ def save_checkpoint(checkpoint: Checkpoint) -> None:
         con.commit()
     finally:
         con.close()
+
+
+def reset_checkpoint(org_id: str, connector_id: str) -> bool:
+    """Clear a source's checkpoint so the next run does a full re-read (AT-383).
+
+    Soft-deletes the ``(org_id, connector_id)`` row (sets ``is_deleted = TRUE``),
+    so a subsequent :func:`read_checkpoint` returns ``None`` — the "first run"
+    path — and the connector performs a streamed full load. A later
+    :func:`save_checkpoint` reactivates the row. This is an explicit,
+    admin-initiated action (R16-A1 §3); it is never triggered automatically.
+
+    Soft-delete (UPDATE) rather than a hard DELETE because the least-privilege
+    application DB role has UPDATE but not DELETE — the same convention used for
+    the other soft-deletable tables in this schema.
+
+    Returns True if a live checkpoint existed and was cleared, False if there was
+    nothing to clear (already reset, or never set — the "first run" state).
+    """
+    con = _connect()
+    try:
+        cur = con.cursor()
+        cur.execute(
+            "UPDATE ingestion_checkpoints SET is_deleted = TRUE, updated_at = now() "
+            "WHERE org_id = %s AND connector_id = %s AND is_deleted = FALSE",
+            (org_id, connector_id),
+        )
+        cleared = cur.rowcount
+        con.commit()
+    finally:
+        con.close()
+    return cleared > 0
