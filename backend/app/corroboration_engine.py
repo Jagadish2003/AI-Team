@@ -141,6 +141,22 @@ _TIMESTAMP_KEYS = (
     "timestamp", "opened_at", "createdAt", "openedAt",
 )
 
+#: R16-C1 C1: a single corroborating source must reach this weighted authority
+#: before it may lead a MEDIUM -> HIGH corroboration elevation. The value is the
+#: workflow_system secondary weight, so system-of-record and workflow/process
+#: authorities can lead, while supporting/documentation sources cannot lead by
+#: priority alone.
+_CORROBORATION_LEAD_WEIGHT_MIN = 0.80
+
+#: Mapping from fired corroboration rules to the system whose configured
+#: role/priority should modulate that corroboration contribution.
+_CORROBORATION_RULE_SYSTEMS: Dict[str, str] = {
+    "COR-01": "servicenow",
+    "COR-02": "jira",
+    "COR-04": "confluence",
+    "COR-07": "jira",
+}
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Result dataclass
@@ -179,6 +195,9 @@ class CorroborationResult:
     elevation_target:
         The confidence level the fired elevating rules target ('HIGH' when any
         elevating rule fired, else 'MEDIUM').
+    corroboration_weight_debug:
+        R16-C1 audit details showing how Stack Builder source role/priority
+        shaped the corroboration verdict.
     """
 
     rule_ids: List[str] = field(default_factory=list)
@@ -189,6 +208,7 @@ class CorroborationResult:
     triple_corroboration: bool = False
     confidence_elevated: bool = False
     elevation_target: str = CONFIDENCE_MEDIUM
+    corroboration_weight_debug: Dict[str, Any] = field(default_factory=dict)
 
 
 def _empty_result(original_confidence: str = CONFIDENCE_MEDIUM) -> CorroborationResult:
@@ -202,6 +222,7 @@ def _empty_result(original_confidence: str = CONFIDENCE_MEDIUM) -> Corroboration
         triple_corroboration=False,
         confidence_elevated=False,
         elevation_target=original_confidence,
+        corroboration_weight_debug={},
     )
 
 
@@ -696,6 +717,88 @@ def check_cor08_single_source(run_data: Dict[str, Any]) -> bool:
     return len(_connected_systems(run_data)) <= 1
 
 
+def _weighting_info_for_system(
+    weighting_context: Optional[Any],
+    system_id: str,
+) -> Dict[str, Any]:
+    """Return role/priority/source_weight for one corroborating system.
+
+    No context, neutral context, missing system config, or malformed context all
+    fall back to neutral weight so older/non-Stack-Builder runs preserve their
+    existing corroboration behavior.
+    """
+    info: Dict[str, Any] = {
+        "system_id": system_id,
+        "role": "",
+        "priority": "",
+        "configured": False,
+        "source_weight": 1.0,
+        "lead_authority": True,
+    }
+
+    if weighting_context is None or getattr(weighting_context, "is_neutral", True):
+        return info
+
+    try:
+        weighting = weighting_context.get(system_id)
+        source_weight = float(getattr(weighting, "source_weight", 1.0))
+        role = str(getattr(weighting, "role", "") or "")
+        priority = str(getattr(weighting, "priority", "") or "")
+        configured = not bool(getattr(weighting, "is_neutral", False))
+    except Exception:  # noqa: BLE001 - corroboration must remain non-blocking.
+        return info
+
+    info.update(
+        {
+            "role": role,
+            "priority": priority,
+            "configured": configured,
+            "source_weight": round(source_weight, 4),
+            "lead_authority": source_weight >= _CORROBORATION_LEAD_WEIGHT_MIN,
+        }
+    )
+    return info
+
+
+def _has_lead_authority(
+    weighting_context: Optional[Any],
+    system_id: str,
+) -> bool:
+    """True when a corroborating system may lead a HIGH elevation."""
+    return bool(_weighting_info_for_system(weighting_context, system_id)["lead_authority"])
+
+
+def _build_corroboration_weight_debug(
+    fired_rules: List[str],
+    weighting_context: Optional[Any],
+) -> Dict[str, Any]:
+    """Build R16-C1 debug details and decide whether HIGH elevation is allowed."""
+    source_debug: Dict[str, Dict[str, Any]] = {}
+    for rule_id in fired_rules:
+        system_id = _CORROBORATION_RULE_SYSTEMS.get(rule_id)
+        if not system_id:
+            continue
+        info = _weighting_info_for_system(weighting_context, system_id)
+        existing = source_debug.get(system_id)
+        if existing is None or info["source_weight"] > existing["source_weight"]:
+            source_debug[system_id] = info
+
+    lead_sources = [
+        system_id for system_id, info in source_debug.items()
+        if info["lead_authority"]
+    ]
+    total_weight = sum(float(info["source_weight"]) for info in source_debug.values())
+
+    return {
+        "applied": weighting_context is not None and not getattr(weighting_context, "is_neutral", True),
+        "lead_weight_min": _CORROBORATION_LEAD_WEIGHT_MIN,
+        "source_contributions": source_debug,
+        "total_non_slack_source_weight": round(total_weight, 4),
+        "lead_sources": lead_sources,
+        "eligible_for_high": bool(lead_sources),
+    }
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Label builder
 # ─────────────────────────────────────────────────────────────────────────────
@@ -749,11 +852,10 @@ def evaluate_corroboration(
     org_id:
         The org id (accepted for context / future org-scoped rules).
     weighting_context:
-        Optional Stack Builder weighting context (R16-C1 T1). When
-        provided, the per-system role and priority are readable inside the
-        engine so future rules can consult them. Accepted as ``Any`` to
-        avoid a hard import dependency from the app layer into discovery.
-        Modulation of corroboration contribution is T2+ work.
+        Optional Stack Builder weighting context (R16-C1). When provided,
+        per-system role and priority modulate whether fired corroboration
+        rules may lead a HIGH elevation. Accepted as ``Any`` to avoid a hard
+        import dependency from the app layer into discovery.
 
     Never raises for normal data issues — defensive .get() throughout. The
     caller (scoring pipeline) additionally wraps this in try/except so any
@@ -761,15 +863,14 @@ def evaluate_corroboration(
     """
     run_data = run_data or {}
 
-    # R16-C1 T1: log the weighting context that was passed in so tests can
-    # verify the persisted values are reaching the corroboration engine.
-    # Modulation of corroboration contribution based on role/priority is T2+.
+    # R16-C1: weighting context is active inside corroboration. Role/priority
+    # values below decide whether fired supporting rules may lead HIGH.
     if weighting_context is not None and not getattr(weighting_context, "is_neutral", True):
         try:
             w = weighting_context.get(detector_id.lower().split("_")[0])
             logger.debug(
                 "R16-C1 corroboration: detector=%s weighting_context present "
-                "(%d systems). Modulation deferred to T2.",
+                "(%d systems). Role/priority modulation active.",
                 detector_id,
                 len(getattr(weighting_context, "weightings", {})),
             )
@@ -821,7 +922,10 @@ def evaluate_corroboration(
     # Slack elevates ONLY with a primary corroborator (ServiceNow/Jira). The
     # Slack ceiling: alone it stays MEDIUM (COR-05), never HIGH.
     if check_cor05_slack_escalation(run_data, run_timestamp):
-        primary_fired = cor01 or cor02
+        primary_fired = (
+            (cor01 and _has_lead_authority(weighting_context, "servicenow")) or
+            (cor02 and _has_lead_authority(weighting_context, "jira"))
+        )
         if check_cor06_slack_with_primary(True, primary_fired):
             fired_rules.append("COR-06")
             sources.append("Slack (escalation pattern)")
@@ -829,10 +933,18 @@ def evaluate_corroboration(
             fired_rules.append("COR-05")          # supporting only — no elevation
             sources.append("Slack (supporting only)")
 
-    # Determine elevation. COR-05 (Slack-only) never elevates — it is the only
-    # rule excluded from the elevating set. COR-08 already returned above.
-    elevating_rules = [r for r in fired_rules if r != "COR-05"]
-    elevated = CONFIDENCE_HIGH if elevating_rules else CONFIDENCE_MEDIUM
+    # Determine elevation. R16-C1 source role/priority now shape corroboration
+    # contribution, while COR-05 remains supporting-only.
+    weight_debug = _build_corroboration_weight_debug(fired_rules, weighting_context)
+    elevating_rules = [
+        r for r in fired_rules
+        if r != "COR-05" and r in _CORROBORATION_RULE_SYSTEMS
+    ]
+    elevated = (
+        CONFIDENCE_HIGH
+        if elevating_rules and weight_debug["eligible_for_high"]
+        else CONFIDENCE_MEDIUM
+    )
     original = CONFIDENCE_MEDIUM
 
     label = _build_label(fired_rules, triple)
@@ -845,7 +957,8 @@ def evaluate_corroboration(
         original_confidence=original,
         triple_corroboration=triple,
         confidence_elevated=CONFIDENCE_ORDER[elevated] > CONFIDENCE_ORDER[original],
-        elevation_target=CONFIDENCE_HIGH if elevating_rules else CONFIDENCE_MEDIUM,
+        elevation_target=elevated,
+        corroboration_weight_debug=weight_debug,
     )
 
 

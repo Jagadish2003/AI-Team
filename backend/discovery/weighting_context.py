@@ -24,6 +24,8 @@ ROLE_WEIGHT (from R16-C1 Section 2 — authoritative, testable):
     system_of_record        → 1.0   (full authority)
     workflow_system         → 0.8   (process authority)
     operational_signal_source → 0.6 (current-app alias for supporting)
+    documentation_system    → 0.6   (supporting interpretation source)
+    engineering_change_system → 0.8 (change/process authority)
     supplementary           → 0.6   (contributes, does not lead)
 
 PRIORITY_NUDGE (bounded — cannot override role authority):
@@ -63,6 +65,8 @@ ROLE_WEIGHT: Dict[str, float] = {
     "system_of_record":          1.0,   # full authority — doc canonical
     "workflow_system":           0.8,   # process authority — doc canonical
     "operational_signal_source": 0.6,   # current-app alias for supporting
+    "documentation_system":      0.6,   # current-app role: supports interpretation, does not lead
+    "engineering_change_system": 0.8,   # current-app role: change/process authority
     "supporting":                0.6,   # doc canonical supporting
     "supplementary":             0.6,   # current-app alias; same as supporting
 }

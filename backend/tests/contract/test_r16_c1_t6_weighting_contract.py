@@ -69,6 +69,10 @@ def _launch(
     *,
     sf_role: str,
     sf_priority: str,
+    servicenow_role: str = "operational_signal_source",
+    servicenow_priority: str = "secondary",
+    jira_role: str = "operational_signal_source",
+    jira_priority: str = "secondary",
     selected: Optional[list] = None,
 ) -> str:
     """Launch a run via the real endpoint and return its run_id.
@@ -95,9 +99,16 @@ def _launch(
             },
             "servicenow": {
                 "systemId": "servicenow",
-                "role": "operational_signal_source",
-                "priority": "secondary",
+                "role": servicenow_role,
+                "priority": servicenow_priority,
                 "workflowFocus": ["incident_management"],
+                "confirmed": True,
+            },
+            "jira": {
+                "systemId": "jira",
+                "role": jira_role,
+                "priority": jira_priority,
+                "workflowFocus": ["backlog_work_queues"],
                 "confirmed": True,
             },
         },
@@ -154,6 +165,18 @@ def _run_data() -> Dict[str, Any]:
 # AC1 — scorer and corroboration read role/priority from the run configuration
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _run_data_with_slack() -> Dict[str, Any]:
+    data = _run_data()
+    data["connected_systems"] = ["salesforce", "servicenow", "slack"]
+    data["slack"] = {
+        "escalation_pattern": {
+            "fired": True,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+    }
+    return data
+
+
 class TestAC1ReadsRunConfiguration:
 
     def test_loader_reads_persisted_role_and_priority(self, client):
@@ -208,6 +231,101 @@ class TestAC1ReadsRunConfiguration:
 
         assert result is not None
         assert result.elevated_confidence in ("HIGH", "MEDIUM", "LOW")
+        assert result.corroboration_weight_debug["applied"] is True
+        assert result.corroboration_weight_debug["source_contributions"]["servicenow"]["role"] == (
+            "operational_signal_source"
+        )
+        assert result.elevated_confidence == "MEDIUM"
+
+    def test_corroboration_role_change_moves_elevation(self, client):
+        """Changing the corroborating source role changes the corroboration verdict."""
+        run_workflow = _launch(
+            client,
+            sf_role="system_of_record",
+            sf_priority="primary",
+            servicenow_role="workflow_system",
+            servicenow_priority="secondary",
+        )
+        run_supporting = _launch(
+            client,
+            sf_role="system_of_record",
+            sf_priority="primary",
+            servicenow_role="operational_signal_source",
+            servicenow_priority="secondary",
+        )
+
+        try:
+            from app.corroboration_engine import evaluate_corroboration
+        except ModuleNotFoundError:
+            from backend.app.corroboration_engine import evaluate_corroboration
+
+        workflow = evaluate_corroboration(
+            detector_id="HANDOFF_FRICTION",
+            pack_id="service_cloud",
+            run_data=_run_data(),
+            run_timestamp=datetime.now(timezone.utc),
+            org_id="test_org_r16c1_t6",
+            weighting_context=load_for_run(run_workflow),
+        )
+        supporting = evaluate_corroboration(
+            detector_id="HANDOFF_FRICTION",
+            pack_id="service_cloud",
+            run_data=_run_data(),
+            run_timestamp=datetime.now(timezone.utc),
+            org_id="test_org_r16c1_t6",
+            weighting_context=load_for_run(run_supporting),
+        )
+
+        assert workflow.elevated_confidence == "HIGH"
+        assert supporting.elevated_confidence == "MEDIUM"
+        assert workflow.corroboration_weight_debug["lead_sources"] == ["servicenow"]
+        assert supporting.corroboration_weight_debug["lead_sources"] == []
+
+    def test_corroboration_priority_change_moves_elevation(self, client):
+        """Priority is bounded but real: workflow primary can lead; tertiary cannot."""
+        run_primary = _launch(
+            client,
+            sf_role="system_of_record",
+            sf_priority="primary",
+            servicenow_role="workflow_system",
+            servicenow_priority="primary",
+        )
+        run_tertiary = _launch(
+            client,
+            sf_role="system_of_record",
+            sf_priority="primary",
+            servicenow_role="workflow_system",
+            servicenow_priority="tertiary",
+        )
+
+        try:
+            from app.corroboration_engine import evaluate_corroboration
+        except ModuleNotFoundError:
+            from backend.app.corroboration_engine import evaluate_corroboration
+
+        primary = evaluate_corroboration(
+            detector_id="HANDOFF_FRICTION",
+            pack_id="service_cloud",
+            run_data=_run_data_with_slack(),
+            run_timestamp=datetime.now(timezone.utc),
+            org_id="test_org_r16c1_t6",
+            weighting_context=load_for_run(run_primary),
+        )
+        tertiary = evaluate_corroboration(
+            detector_id="HANDOFF_FRICTION",
+            pack_id="service_cloud",
+            run_data=_run_data_with_slack(),
+            run_timestamp=datetime.now(timezone.utc),
+            org_id="test_org_r16c1_t6",
+            weighting_context=load_for_run(run_tertiary),
+        )
+
+        assert primary.elevated_confidence == "HIGH"
+        assert "COR-06" in primary.rule_ids
+        assert tertiary.elevated_confidence == "MEDIUM"
+        assert "COR-05" in tertiary.rule_ids
+        assert primary.corroboration_weight_debug["source_contributions"]["servicenow"]["source_weight"] == pytest.approx(0.88)
+        assert tertiary.corroboration_weight_debug["source_contributions"]["servicenow"]["source_weight"] == pytest.approx(0.72)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

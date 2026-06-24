@@ -109,6 +109,12 @@ class TestRoleWeightTable:
     def test_operational_signal_source_is_0_6(self):
         assert ROLE_WEIGHT["operational_signal_source"] == 0.6
 
+    def test_documentation_system_is_0_6(self):
+        assert ROLE_WEIGHT["documentation_system"] == 0.6
+
+    def test_engineering_change_system_is_0_8(self):
+        assert ROLE_WEIGHT["engineering_change_system"] == 0.8
+
     def test_supporting_is_0_6(self):
         assert ROLE_WEIGHT["supporting"] == 0.6
 
@@ -171,6 +177,12 @@ class TestComputeSourceWeight:
     def test_workflow_system_secondary(self):
         # 0.8 × 1.0 = 0.80
         assert compute_source_weight("workflow_system", "secondary") == pytest.approx(0.8)
+
+    def test_documentation_system_secondary(self):
+        assert compute_source_weight("documentation_system", "secondary") == pytest.approx(0.6)
+
+    def test_engineering_change_system_secondary(self):
+        assert compute_source_weight("engineering_change_system", "secondary") == pytest.approx(0.8)
 
     def test_clamp_floor_at_weight_min(self):
         # artificially low scenario: even if raw < WEIGHT_MIN, result >= WEIGHT_MIN
