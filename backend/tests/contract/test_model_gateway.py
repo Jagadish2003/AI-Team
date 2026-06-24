@@ -1,4 +1,10 @@
-"""R16-D1 T1 + T2 — Model Provider Gateway contract tests.
+"""R16-D1 — Model Provider Gateway contract tests.
+
+This is the contract test file named in AT-367 (T6). It holds the T1 and T2
+acceptance tests and the full Section 6 contract suite (T6-AC1..AC7) that
+asserts every story-level acceptance criterion of R16-D1 §6 in one place —
+gateway interface, provider independence, call-site migration, no-bypass
+enforcement, graceful failure, telemetry, and stub-provider extensibility.
 
 Verifies every T1 acceptance criterion:
 
@@ -747,3 +753,525 @@ def test_t2_ac5_env_example_values_are_valid(monkeypatch):
             f".env.example example value '{example_value}' for {env_var} "
             f"is not a registered provider. Valid: {sorted(_PROVIDER_REGISTRY.keys())}"
         )
+
+
+# =============================================================================
+# T6 (AT-367) — Full Section 6 contract suite
+#
+# Asserts the seven story-level acceptance criteria of R16-D1 §6 end to end:
+#
+#   T6-AC1  All model generation flows through get_generation_provider().
+#           generate() — no direct provider calls exist outside the gateway.
+#   T6-AC2  The no-bypass enforcement test fails the build when a direct call
+#           is introduced.
+#   T6-AC3  Generation and embedding providers are resolved independently by
+#           configuring each to a *different* stub.
+#   T6-AC4  The hallucination guard preserves its 500ms timeout and rule-based
+#           fallback through the gateway.
+#   T6-AC5  generate() returns ok=False / text=None on provider failure and no
+#           exception propagates.
+#   T6-AC6  Each model call records the serving provider in telemetry.
+#   T6-AC7  A new stub provider can be registered and all calls route through
+#           it without changing any calling code.
+#
+# AC1/AC2 reuse the exact scanner the T4 CI enforcement test runs, so this
+# suite and the build gate cannot diverge — there is one source of truth.
+# =============================================================================
+
+from app.model_gateway import (  # noqa: E402
+    _PROVIDER_REGISTRY,
+    embed as _gw_embed,
+    generate as _gw_generate,
+    get_embedding_provider as _gw_get_embedding_provider,
+    get_generation_provider as _gw_get_generation_provider,
+    register_provider,
+)
+from app.model_gateway._interface import (  # noqa: E402
+    GenerationRequest as _GenReq,
+    GenerationResult as _GenRes,
+    ModelProvider as _ModelProvider,
+)
+
+# The gateway emits these two event types (registered in app.telemetry).
+_T6_GEN_EVENT = "model.generation_completed"
+_T6_EMB_EVENT = "model.embedding_completed"
+
+
+class _T6StubGenProvider(_ModelProvider):
+    """A registrable stub generation provider with a recognisable output."""
+
+    name = "_t6_stub_gen"
+
+    def __init__(self) -> None:
+        self.generate_calls = 0
+
+    def generate(self, req: _GenReq) -> _GenRes:
+        self.generate_calls += 1
+        # Echo the timeout so a test can prove the request reached the provider
+        # with the caller's timeout_ms intact (used by AC4).
+        return _GenRes(text=f"stub-gen:{req.timeout_ms}", provider=self.name, ok=True)
+
+    def embed(self, texts: List[str]) -> List[List[float]]:
+        return []
+
+
+class _T6StubEmbProvider(_ModelProvider):
+    """A registrable stub embedding provider returning a unit vector per text."""
+
+    name = "_t6_stub_emb"
+
+    def __init__(self) -> None:
+        self.embed_calls = 0
+
+    def generate(self, req: _GenReq) -> _GenRes:
+        return _GenRes(text=None, provider=self.name, ok=False)
+
+    def embed(self, texts: List[str]) -> List[List[float]]:
+        self.embed_calls += 1
+        return [[1.0]] * len(texts)
+
+
+class _T6FailingProvider(_ModelProvider):
+    """A provider that always reports graceful failure (never raises)."""
+
+    name = "_t6_failing"
+
+    def generate(self, req: _GenReq) -> _GenRes:
+        return _GenRes(text=None, provider=self.name, ok=False)
+
+    def embed(self, texts: List[str]) -> List[List[float]]:
+        return []
+
+
+@pytest.fixture
+def t6_captured_events(monkeypatch):
+    """Capture every record_event() call the gateway makes.
+
+    The gateway imports ``record_event`` lazily from ``app.telemetry`` on each
+    call, so patching the module attribute intercepts the real write while still
+    proving the gateway routes through the shared telemetry infrastructure.
+    """
+    events: List[tuple] = []
+
+    def _fake_record_event(event_type, payload=None):
+        events.append((event_type, payload or {}))
+
+    monkeypatch.setattr("app.telemetry.record_event", _fake_record_event)
+    return events
+
+
+def _t6_register_temp(provider: _ModelProvider):
+    """Register a stub and return a cleanup callable for use in a finally."""
+    register_provider(provider)
+    return lambda: _PROVIDER_REGISTRY.pop(provider.name, None)
+
+
+# ---------------------------------------------------------------------------
+# T6-AC1 — All model generation flows through the gateway (no direct calls)
+# ---------------------------------------------------------------------------
+
+
+def test_t6_ac1_no_direct_model_calls_outside_gateway():
+    """No source file outside backend/app/model_gateway/ contains a direct
+    provider endpoint / SDK / api-key reference (R16-D1 §2 + §4).
+
+    Re-uses the exact scanner the CI enforcement test runs, so AC1 and the
+    build gate cannot diverge.
+    """
+    from tests.contract.test_model_gateway_no_bypass import (
+        BACKEND_ROOT,
+        _collect_scan_targets,
+        _scan_file,
+    )
+
+    violations = []
+    for py_file in _collect_scan_targets():
+        for lineno, line, pattern in _scan_file(py_file):
+            rel = py_file.relative_to(BACKEND_ROOT)
+            violations.append(f"  {rel}:{lineno}: [{pattern!r}]  {line}")
+
+    assert not violations, (
+        "AC1 violated — direct model-provider references found outside the "
+        "gateway. Route every model call through get_generation_provider() / "
+        "get_embedding_provider().\n\nViolations:\n" + "\n".join(violations)
+    )
+
+
+def test_t6_ac1_migrated_call_sites_use_the_gateway():
+    """The three known call sites (R16-D1 §4) import and call the gateway.
+
+    Proves the migration target — not just the absence of direct calls. Each
+    site must reference ``app.model_gateway`` and the gateway ``generate``.
+    """
+    from pathlib import Path
+
+    backend_root = Path(__file__).resolve().parents[2]
+    for rel in (
+        "app/llm_enrichment.py",
+        "app/hallucination_guard.py",
+        "app/normalization_enrichment.py",
+    ):
+        src = (backend_root / rel).read_text(encoding="utf-8")
+        assert "app.model_gateway" in src, f"{rel} must import the model gateway"
+        assert "generate(" in src, f"{rel} must call the gateway generate()"
+
+
+# ---------------------------------------------------------------------------
+# T6-AC2 — The enforcement test fails the build when a direct call appears
+# ---------------------------------------------------------------------------
+
+
+def test_t6_ac2_scanner_flags_an_introduced_direct_call(tmp_path):
+    """Writing a file with a forbidden pattern makes the scanner report it.
+
+    This is what makes the build fail the moment a bypass is introduced.
+    """
+    from tests.contract.test_model_gateway_no_bypass import (
+        FORBIDDEN_PATTERNS,
+        _scan_file,
+    )
+
+    # Build the forbidden strings at runtime so THIS file never self-matches.
+    endpoint = "https://api.anthrop" + "ic.com/v1/messages"
+    header = "x-api-" + "key"
+    bypass = tmp_path / "rogue_caller.py"
+    bypass.write_text(
+        f'URL = "{endpoint}"\nHEADERS = {{"{header}": "sk-..."}}\n',
+        encoding="utf-8",
+    )
+
+    violations = _scan_file(bypass)
+    assert violations, "AC2 broken — scanner did not flag an obvious bypass"
+    assert {v[2] for v in violations}.issubset(set(FORBIDDEN_PATTERNS))
+
+
+def test_t6_ac2_clean_file_is_not_flagged(tmp_path):
+    """A file that routes through the gateway is NOT flagged (no false fail)."""
+    from tests.contract.test_model_gateway_no_bypass import _scan_file
+
+    clean = tmp_path / "good_caller.py"
+    clean.write_text(
+        "from app.model_gateway import GenerationRequest, generate\n"
+        "result = generate(GenerationRequest(prompt='hi', max_tokens=10))\n",
+        encoding="utf-8",
+    )
+    assert _scan_file(clean) == []
+
+
+# ---------------------------------------------------------------------------
+# T6-AC3 — Generation and embedding providers resolved independently
+# ---------------------------------------------------------------------------
+
+
+def test_t6_ac3_gen_and_emb_resolve_to_different_stubs(monkeypatch):
+    """Configuring generation and embedding to two different stubs resolves
+    each to its own provider — neither clobbers the other."""
+    gen_stub = _T6StubGenProvider()
+    emb_stub = _T6StubEmbProvider()
+    cleanup_gen = _t6_register_temp(gen_stub)
+    cleanup_emb = _t6_register_temp(emb_stub)
+    try:
+        monkeypatch.setenv("MODEL_GENERATION_PROVIDER", gen_stub.name)
+        monkeypatch.setenv("MODEL_EMBEDDING_PROVIDER", emb_stub.name)
+
+        resolved_gen = _gw_get_generation_provider()
+        resolved_emb = _gw_get_embedding_provider()
+
+        assert resolved_gen is gen_stub
+        assert resolved_emb is emb_stub
+        assert resolved_gen is not resolved_emb
+    finally:
+        cleanup_gen()
+        cleanup_emb()
+
+
+def test_t6_ac3_changing_one_does_not_affect_the_other(monkeypatch):
+    """Setting only the generation provider leaves embedding on its default."""
+    gen_stub = _T6StubGenProvider()
+    cleanup_gen = _t6_register_temp(gen_stub)
+    try:
+        monkeypatch.setenv("MODEL_GENERATION_PROVIDER", gen_stub.name)
+        monkeypatch.delenv("MODEL_EMBEDDING_PROVIDER", raising=False)
+
+        assert _gw_get_generation_provider() is gen_stub
+        # Embedding falls back to the default 'hosted' — untouched.
+        assert _gw_get_embedding_provider().name == "hosted"
+    finally:
+        cleanup_gen()
+
+
+# ---------------------------------------------------------------------------
+# T6-AC4 — Hallucination guard keeps its 500ms timeout + rule-based fallback
+# ---------------------------------------------------------------------------
+
+
+def test_t6_ac4_guard_request_carries_500ms_timeout(monkeypatch):
+    """The hallucination guard's rewrite call reaches the gateway with
+    timeout_ms == REWRITE_TIMEOUT_MS (500), routed through the gateway."""
+    from app import hallucination_guard as hg
+
+    captured: dict = {}
+
+    def _spy_generate(req: _GenReq) -> _GenRes:
+        captured["timeout_ms"] = req.timeout_ms
+        return _GenRes(text="rewritten safely", provider="hosted", ok=True)
+
+    # Patch the gateway symbol as the guard imports it (lazy import inside fn).
+    monkeypatch.setattr("app.model_gateway.generate", _spy_generate)
+
+    out = hg._invoke_rewrite_llm("rewrite this bullet please")
+
+    assert out == "rewritten safely"
+    assert hg.REWRITE_TIMEOUT_MS == 500
+    assert captured["timeout_ms"] == 500, (
+        "the 500ms leash must survive as timeout_ms on the gateway request"
+    )
+
+
+def test_t6_ac4_rule_based_fallback_works_without_llm():
+    """When no LLM rewrite is possible, the guard recovers a hallucinated
+    bullet deterministically (rule-based) and never returns a bad name.
+
+    This exercises the rule-based path with NO gateway/LLM call at all, proving
+    the fallback survives the gateway migration.
+    """
+    from app.hallucination_guard import validate_and_recover
+
+    # "Alice Carter" is not in the resolved set → hallucinated proper noun.
+    out = validate_and_recover(
+        bullet="Alice Carter owns the overdue covenant review",
+        resolved_names=["covenant review"],
+        org_id=None,
+        run_id=None,
+    )
+
+    assert out is not None, "rule-based rewrite should recover this bullet"
+    assert "Alice Carter" not in out, "no hallucinated name may survive"
+
+
+def test_t6_ac4_guard_drops_bullet_when_rewrite_unavailable(monkeypatch):
+    """If the rule-based rewrite is incoherent and the LLM rewrite times out,
+    the guard drops the bullet (returns None) — it never raises and never
+    leaks the hallucinated name. Proves graceful behaviour through the gateway.
+    """
+    from app import hallucination_guard as hg
+
+    # Force the LLM path to behave as a timeout so only the fallback remains.
+    def _timeout_rewrite(*args, **kwargs):
+        raise TimeoutError("simulated slow model")
+
+    monkeypatch.setattr(hg, "llm_rewrite_bullet", _timeout_rewrite)
+    # Make the deterministic rule rewrite look incoherent so we reach step 2b.
+    monkeypatch.setattr(hg, "is_coherent", lambda _text: False)
+    monkeypatch.setattr(hg, "is_worth_saving", lambda *_a, **_k: True)
+
+    out = hg.validate_and_recover(
+        bullet="Zenon Quortib escalated the issue to Marcus Delacroix",
+        resolved_names=["the issue"],
+        org_id=None,
+        run_id=None,
+    )
+    assert out is None  # dropped, not raised
+
+
+# ---------------------------------------------------------------------------
+# T6-AC5 — generate() returns ok=False / text=None on failure, never raises
+# ---------------------------------------------------------------------------
+
+
+def test_t6_ac5_failure_returns_graceful_result(monkeypatch, t6_captured_events):
+    """A provider that reports failure yields ok=False / text=None — no raise."""
+    failing = _T6FailingProvider()
+    cleanup = _t6_register_temp(failing)
+    try:
+        monkeypatch.setenv("MODEL_GENERATION_PROVIDER", failing.name)
+        result = _gw_generate(_GenReq(prompt="x", max_tokens=5))
+    finally:
+        cleanup()
+
+    assert result.ok is False
+    assert result.text is None
+    assert result.provider == failing.name
+
+
+def test_t6_ac5_hosted_missing_key_is_graceful(monkeypatch, t6_captured_events):
+    """The real hosted provider with no API key returns ok=False / text=None
+    rather than raising — the behaviour callers already handle."""
+    monkeypatch.delenv("MODEL_GENERATION_PROVIDER", raising=False)  # default hosted
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "")
+
+    result = _gw_generate(_GenReq(prompt="anything", max_tokens=5))
+
+    assert result.ok is False
+    assert result.text is None
+    assert result.provider == "hosted"
+
+
+def test_t6_ac5_provider_exception_does_not_propagate(monkeypatch, t6_captured_events):
+    """Even when the underlying transport raises, the contract holds: the
+    hosted provider catches everything internally and returns a graceful
+    result (ModelProvider.generate must never raise)."""
+    from app.model_gateway._hosted import AnthropicHostedProvider
+
+    provider = AnthropicHostedProvider()
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "definitely-invalid-key")
+
+    def _boom(*_a, **_k):
+        raise RuntimeError("network exploded")
+
+    # urlopen blowing up must be swallowed into a graceful result.
+    monkeypatch.setattr("urllib.request.urlopen", _boom)
+
+    result = provider.generate(_GenReq(prompt="x", max_tokens=5))
+    assert result.ok is False
+    assert result.text is None
+
+
+# ---------------------------------------------------------------------------
+# T6-AC6 — Each model call records the serving provider in telemetry
+# ---------------------------------------------------------------------------
+
+
+def test_t6_ac6_generate_records_serving_provider(monkeypatch, t6_captured_events):
+    """generate() emits exactly one generation event naming the serving
+    provider taken from GenerationResult.provider."""
+    gen_stub = _T6StubGenProvider()
+    cleanup = _t6_register_temp(gen_stub)
+    try:
+        monkeypatch.setenv("MODEL_GENERATION_PROVIDER", gen_stub.name)
+        _gw_generate(_GenReq(prompt="hi", max_tokens=5))
+    finally:
+        cleanup()
+
+    gen_events = [e for e in t6_captured_events if e[0] == _T6_GEN_EVENT]
+    assert len(gen_events) == 1
+    assert gen_events[0][1]["provider"] == gen_stub.name
+
+
+def test_t6_ac6_embed_records_serving_provider(monkeypatch, t6_captured_events):
+    """embed() emits exactly one embedding event naming the serving provider."""
+    emb_stub = _T6StubEmbProvider()
+    cleanup = _t6_register_temp(emb_stub)
+    try:
+        monkeypatch.setenv("MODEL_EMBEDDING_PROVIDER", emb_stub.name)
+        _gw_embed(["a", "b", "c"])
+    finally:
+        cleanup()
+
+    emb_events = [e for e in t6_captured_events if e[0] == _T6_EMB_EVENT]
+    assert len(emb_events) == 1
+    assert emb_events[0][1]["provider"] == emb_stub.name
+
+
+def test_t6_ac6_failed_call_still_records_provider(monkeypatch, t6_captured_events):
+    """A failed generation still records telemetry — failures stay observable."""
+    failing = _T6FailingProvider()
+    cleanup = _t6_register_temp(failing)
+    try:
+        monkeypatch.setenv("MODEL_GENERATION_PROVIDER", failing.name)
+        _gw_generate(_GenReq(prompt="x", max_tokens=5))
+    finally:
+        cleanup()
+
+    gen_events = [e for e in t6_captured_events if e[0] == _T6_GEN_EVENT]
+    assert len(gen_events) == 1
+    assert gen_events[0][1]["provider"] == failing.name
+    assert gen_events[0][1]["ok"] is False
+
+
+def test_t6_ac6_event_types_registered_before_use():
+    """The gateway's event types are registered, so record_event never raises
+    for them (the telemetry write signature is locked to registered types)."""
+    from app.telemetry import REGISTERED_EVENT_TYPES, record_event
+
+    assert _T6_GEN_EVENT in REGISTERED_EVENT_TYPES
+    assert _T6_EMB_EVENT in REGISTERED_EVENT_TYPES
+    # Must not raise ValueError for an unregistered type.
+    record_event(_T6_GEN_EVENT, {"provider": "hosted", "ok": True})
+    record_event(_T6_EMB_EVENT, {"provider": "hosted", "ok": True, "text_count": 0})
+
+
+# ---------------------------------------------------------------------------
+# T6-AC7 — A new stub provider routes all calls without changing calling code
+# ---------------------------------------------------------------------------
+
+
+def test_t6_ac7_new_provider_routes_generation_without_code_change(
+    monkeypatch, t6_captured_events
+):
+    """Registering a brand-new provider and pointing config at it makes the
+    UNCHANGED gateway generate() entry point route through it.
+
+    The caller code (generate / GenerationRequest) is identical to every other
+    call site — only configuration changed. This is the 1.7 extensibility
+    promise: in-boundary / customer-tenant providers drop in with no caller
+    edits.
+    """
+
+    class _BrandNewProvider(_ModelProvider):
+        name = "_t6_brand_new_gen"
+
+        def generate(self, req: _GenReq) -> _GenRes:
+            return _GenRes(text="from-new-provider", provider=self.name, ok=True)
+
+        def embed(self, texts: List[str]) -> List[List[float]]:
+            return []
+
+    new_provider = _BrandNewProvider()
+    cleanup = _t6_register_temp(new_provider)
+    try:
+        monkeypatch.setenv("MODEL_GENERATION_PROVIDER", new_provider.name)
+
+        # Identical call shape to llm_enrichment / hallucination_guard.
+        result = _gw_generate(_GenReq(prompt="hi", max_tokens=5))
+    finally:
+        cleanup()
+
+    assert result.text == "from-new-provider"
+    assert result.provider == new_provider.name
+    gen_events = [e for e in t6_captured_events if e[0] == _T6_GEN_EVENT]
+    assert gen_events and gen_events[0][1]["provider"] == new_provider.name
+
+
+def test_t6_ac7_new_provider_routes_embedding_without_code_change(
+    monkeypatch, t6_captured_events
+):
+    """The same drop-in extensibility holds for the embedding entry point."""
+
+    class _BrandNewEmb(_ModelProvider):
+        name = "_t6_brand_new_emb"
+
+        def generate(self, req: _GenReq) -> _GenRes:
+            return _GenRes(text=None, provider=self.name, ok=False)
+
+        def embed(self, texts: List[str]) -> List[List[float]]:
+            return [[42.0]] * len(texts)
+
+    new_provider = _BrandNewEmb()
+    cleanup = _t6_register_temp(new_provider)
+    try:
+        monkeypatch.setenv("MODEL_EMBEDDING_PROVIDER", new_provider.name)
+        vectors = _gw_embed(["one", "two"])
+    finally:
+        cleanup()
+
+    assert vectors == [[42.0], [42.0]]
+    emb_events = [e for e in t6_captured_events if e[0] == _T6_EMB_EVENT]
+    assert emb_events and emb_events[0][1]["provider"] == new_provider.name
+
+
+def test_t6_ac7_duplicate_name_different_instance_rejected():
+    """Registering a *different* instance under an existing name is rejected —
+    extensibility never lets a second provider silently hijack a name."""
+
+    class _Impostor(_ModelProvider):
+        name = "hosted"  # collide with the built-in default
+
+        def generate(self, req: _GenReq) -> _GenRes:
+            return _GenRes(text=None, provider=self.name, ok=False)
+
+        def embed(self, texts: List[str]) -> List[List[float]]:
+            return []
+
+    with pytest.raises(ValueError):
+        register_provider(_Impostor())
