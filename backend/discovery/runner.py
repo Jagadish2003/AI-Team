@@ -312,6 +312,7 @@ def run(
     from .packs.pack_config import (
         get_pack,
         get_pack_domain,
+        get_pack_version,
         is_ncino_pack,
         is_sqlserver_opsignal_pack,
         is_github_engineering_pack,
@@ -319,6 +320,9 @@ def run(
     )
     pack_config = get_pack(pack)
     pack_id     = pack_config["packId"]
+    # R16-B1 §4: stamp the pack VERSION (not just the id) onto every opportunity
+    # so governance/debugging can later tell a data change from a pack change.
+    pack_version = get_pack_version(pack)
     pack_domain = pack_config["pack_domain"]
 
     # Default to all systems if None
@@ -926,6 +930,7 @@ def run(
         opp = {
             "runId": run_id, "orgId": org_id, "detector_id": dr.detector_id,
             "packId": pack_id,
+            "packVersion": pack_version,
             "signal_source": dr.signal_source, "metric_value": dr.metric_value,
             "threshold": dr.threshold, "impact": scored["impact"], "effort": scored["effort"],
             "confidence": scored["confidence"], "tier": scored["tier"],
@@ -979,6 +984,7 @@ def run(
     return {
         "runId": run_id, "orgId": org_id, "mode": mode,
         "packId": pack_id,
+        "packVersion": pack_version,
         "startedAt": started_at, "completedAt": datetime.now(timezone.utc).isoformat(),
         "inputs": org_ctx, "opportunities": opportunities,
     }
