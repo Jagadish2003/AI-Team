@@ -57,7 +57,7 @@ import logging
 from dataclasses import dataclass
 from typing import Callable, Iterable, List, Optional
 
-from .base import ChangeBasedIngestor, Checkpoint, DeltaBatch
+from .base import ChangeBasedIngestor, ChangeKind, Checkpoint, DeltaBatch
 from . import checkpoint_repository as _repo
 
 logger = logging.getLogger(__name__)
@@ -107,7 +107,9 @@ def _emit_artifact_changed(org_id: str, connector_id: str, records: list) -> Non
         if not isinstance(rec, dict):
             continue
         artifact_id = rec.get("artifact_id", rec.get("id"))
-        change_kind = rec.get("change_kind", "updated")
+        # change_kind passes through verbatim (created/updated/deleted, §5/AT-382);
+        # a record in a delta with no kind is treated as an update.
+        change_kind = rec.get("change_kind", ChangeKind.UPDATED)
         try:
             record_event(
                 "ingestion.artifact_changed",
