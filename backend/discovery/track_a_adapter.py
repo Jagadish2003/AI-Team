@@ -336,6 +336,11 @@ def to_track_a_opportunities(
             "corroboration_label":    opp.get("corroboration_label"),
             "triple_corroboration":   bool(opp.get("triple_corroboration", False)),
             "corroboration_rule_ids": opp.get("corroboration_rule_ids", []),
+            # R16-B1 §4: stamp the pack id + version that produced this instance
+            # onto the STORED opportunity, so pack governance (1.9) and debugging
+            # have the version history — unreconstructable if not captured now.
+            "packId":      opp.get("packId"),
+            "packVersion": opp.get("packVersion"),
             # Keep calibration fields under a debug namespace (not breaking Track A)
             "_debug": {
                 "detector_id":   did,
@@ -399,6 +404,8 @@ def export_track_a_seed(
             "runId":       runner_payload.get("runId"),
             "orgId":       runner_payload.get("orgId"),
             "mode":        runner_payload.get("mode"),
+            "packId":      runner_payload.get("packId"),
+            "packVersion": runner_payload.get("packVersion"),
             "startedAt":   runner_payload.get("startedAt"),
             "completedAt": runner_payload.get("completedAt"),
             "inputs":      runner_payload.get("inputs", {}),

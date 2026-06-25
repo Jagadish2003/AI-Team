@@ -25,6 +25,7 @@ from datetime import datetime, timezone
 from typing import Any, Optional
 
 from app import db
+from app.provenance import EvidencePointer
 from database.models.entities import Entity, ENTITY_NAME_MAX_LEN
 
 logger = logging.getLogger(__name__)
@@ -34,6 +35,31 @@ _STABLE_ENTITY_TYPES = frozenset({"system", "process"})
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _with_observed_evidence(
+    metadata: Optional[dict[str, Any]],
+    *,
+    source_system: str,
+    source_artifact: str,
+    confidence: float,
+) -> dict[str, Any]:
+    """Return a copy of *metadata* carrying an OBSERVED EvidencePointer (R16-B1).
+
+    An entity is observed directly in a source record, so origin='observed' and no
+    extraction_job_id is needed. The pointer is stored under
+    metadata['evidence_pointer'] — a JSON field that already exists, so no schema
+    change is required (AC8). source_artifact falls back to the canonical name when
+    the source has no stable record id, so the mandatory spine is always populated.
+    """
+    md = dict(metadata or {})
+    md["evidence_pointer"] = EvidencePointer.observed(
+        source_system=source_system,
+        source_artifact=source_artifact,
+        source_timestamp=_now(),
+        confidence=confidence,
+    ).to_dict()
+    return md
 
 
 def _truncate(value: str, max_len: int = ENTITY_NAME_MAX_LEN) -> str:
@@ -241,7 +267,12 @@ def resolve_or_create_entity(
                 first_seen_run_id=run_id,
                 last_seen_run_id=run_id,
                 run_count=1,
-                metadata=metadata,
+                metadata=_with_observed_evidence(
+                    metadata,
+                    source_system=source_system,
+                    source_artifact=source_record_id or canonical,
+                    confidence=confidence,
+                ),
             )
             _insert_entity(conn, entity)
             conn.commit()
@@ -293,7 +324,12 @@ def resolve_or_create_entity(
             first_seen_run_id=run_id,
             last_seen_run_id=run_id,
             run_count=1,
-            metadata=metadata,
+            metadata=_with_observed_evidence(
+                metadata,
+                source_system=source_system,
+                source_artifact=source_record_id or canonical,
+                confidence=0.6,
+            ),
         )
         _insert_entity(conn, entity)
         conn.commit()

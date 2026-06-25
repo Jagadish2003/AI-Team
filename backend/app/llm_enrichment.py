@@ -29,6 +29,8 @@ import time
 from typing import Any, Dict, List, Optional
 from dotenv import load_dotenv
 
+from app.provenance import EvidencePointer
+
 logger = logging.getLogger(__name__)
 
 MODEL            = "claude-sonnet-4-5"
@@ -37,6 +39,74 @@ MAX_TOKENS_EXEC  = 512
 API_URL          = "https://api.anthropic.com/v1/messages"
 API_VERSION      = "2023-06-01"
 KV_LLM_ENRICHMENT = "llm_enrichment"
+
+
+# R16-B1: deterministic 'observed at' for the INFERRED enrichment pointer. The
+# narrative is produced BY the discovery run, so its source-observation time is
+# the run's own recorded time. Resolving it from the run record (rather than a
+# wall-clock default) keeps the no-LLM enrichment output deterministic — the S15
+# hardening contract requires two identical runs to serialise identically, and a
+# fresh utc_now() in every pointer would break that.
+_ENRICHMENT_TS_FALLBACK = "1970-01-01T00:00:00+00:00"
+
+
+def _resolve_run_observed_at(run_id: str) -> str:
+    """Return the run's recorded UTC time for use as the enrichment pointer's
+    deterministic ``source_timestamp``.
+
+    Reads the run record (``completedAt`` then ``startedAt``). Falls back to a
+    stable sentinel only when no run record exists — e.g. isolated unit tests —
+    never a wall clock, which would make the enrichment output non-deterministic.
+    Imported locally so this module keeps no import-time dependency on ``db``.
+    """
+    try:
+        from app import db
+
+        run = db.get_run(run_id)
+        if isinstance(run, dict):
+            ts = run.get("completedAt") or run.get("startedAt")
+            if ts:
+                return str(ts)
+    except Exception:  # noqa: BLE001 — provenance timestamp is best-effort.
+        pass
+    return _ENRICHMENT_TS_FALLBACK
+
+
+def _attach_enrichment_provenance(
+    artifact: Dict[str, Any], *, run_id: str, opp: Dict[str, Any],
+    source_timestamp: Optional[str] = None,
+) -> None:
+    """Attach an INFERRED EvidencePointer + grounding evidence ids to an enrichment
+    artifact (R16-B1).
+
+    Enrichment narratives are model/heuristic-generated, so origin='inferred' and
+    the discovery run is named as the extraction job (AC2). grounding_evidence_ids
+    records the evidence the narrative was grounded in, so 1.9's full evidence
+    trace can later walk a narrative back to its sources. Both are written into the
+    artifact dict persisted under the run-scoped enrichment KV — a JSON blob, so no
+    schema change is needed.
+
+    ``source_timestamp`` is the run's deterministic observation time (see
+    :func:`_resolve_run_observed_at`). When omitted the pointer falls back to its
+    wall-clock default — fine for direct unit calls, but ``run_llm_enrichment``
+    always supplies the deterministic value so the pipeline output stays stable.
+    """
+    grounding = [str(e) for e in (opp.get("evidenceIds") or [])]
+    pointer = EvidencePointer.inferred(
+        source_system="agentiq",
+        source_artifact=str(opp.get("id") or "opportunity"),
+        extraction_job_id=run_id,
+        source_timestamp=source_timestamp,
+    )
+    if pointer.is_valid():
+        artifact["evidence_pointer"] = pointer.to_dict()
+    else:
+        # Inferred output with no job id must never be surfaced as observed truth.
+        logger.error(
+            "Enrichment provenance invalid for opp %s — pointer omitted",
+            opp.get("id"),
+        )
+    artifact["grounding_evidence_ids"] = grounding
 
 load_dotenv()
 
@@ -1262,6 +1332,11 @@ def run_llm_enrichment(
     enriched = 0
     failed   = 0
 
+    # R16-B1: resolve the run's observation time ONCE so every enrichment
+    # provenance pointer in this run shares one deterministic source_timestamp
+    # (keeps the no-LLM pipeline output reproducible — S15 contract).
+    enrichment_source_ts = _resolve_run_observed_at(run_id)
+
     for opp in opps:
         opp_id = opp.get("id", "")
         corroboration_label = _corroboration_for(opp)
@@ -1334,6 +1409,9 @@ def run_llm_enrichment(
             result["preliminary"] = preliminary
             result["preliminary_reason"] = reason
 
+            _attach_enrichment_provenance(
+                result, run_id=run_id, opp=opp, source_timestamp=enrichment_source_ts
+            )
             per_opp[opp_id] = result
             if result.get("llmGenerated"):
                 enriched += 1
@@ -1350,6 +1428,9 @@ def run_llm_enrichment(
             fallback["corroboration_label"] = corroboration_label
             fallback["preliminary"] = True
             fallback["preliminary_reason"] = "Enrichment failed — analyst review required"
+            _attach_enrichment_provenance(
+                fallback, run_id=run_id, opp=opp, source_timestamp=enrichment_source_ts
+            )
             per_opp[opp_id] = fallback
             failed += 1
 
