@@ -69,6 +69,15 @@ SUPPORTING_ONLY_ROLES: frozenset = frozenset({
 #: System identifiers that are always treated as supplementary/Slack sources.
 #: A system with one of these IDs can never produce HIGH from the scorer alone,
 #: regardless of the role configured in Stack Builder.
+#:
+#: MAINTENANCE OBLIGATION (mirrors the _COMMON_WORDS pattern in
+#: hallucination_guard.py): this is the EXHAUSTIVE set of Slack connector IDs.
+#: The ceiling is enforced by exact membership, so any new Slack connector
+#: registered under a different ID (e.g. "slack_enterprise", "slack_grid",
+#: "slack_connect") would silently BYPASS the Slack MEDIUM ceiling until it is
+#: added here. When a new Slack connector ID is introduced, add it to this set
+#: in the same change — otherwise a misconfigured (or simply newer) Slack
+#: integration could manufacture a false HIGH-confidence finding.
 SLACK_SYSTEM_IDS: frozenset = frozenset({
     "slack",
     "slack_workspace",

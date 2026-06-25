@@ -4,7 +4,17 @@ All Sprint 2 modules import DetectorResult from here.
 """
 from __future__ import annotations
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Literal
+
+
+#: The provenance tiers the engine understands. The provenance guard
+#: (provenance_guard.py) only distinguishes "inferred" from everything-else,
+#: so any value outside this set would be silently treated as "observed" — a
+#: future third tier (e.g. "corroborated") would be mis-ranked. We validate
+#: against this set in DetectorResult.__post_init__ so an unrecognised tier
+#: fails loudly at construction rather than being silently downgraded. Any new
+#: tier must be added HERE and taught to provenance_guard.py at the same time.
+VALID_PROVENANCE_TYPES: frozenset = frozenset({"observed", "inferred"})
 
 try:
     from app.temporal import DetectorEvaluation
@@ -33,13 +43,21 @@ class DetectorResult:
     metric_value: float     # the computed value that crossed the threshold
     threshold: float        # the threshold that was crossed
     raw_evidence: dict      # source data — must contain at least one number
-    provenance_type: str = "observed"   # R16-C1 T4: "observed" | "inferred"
+    # R16-C1 T4: validated against VALID_PROVENANCE_TYPES in __post_init__.
+    provenance_type: Literal["observed", "inferred"] = "observed"
 
     def __post_init__(self):
         if not isinstance(self.raw_evidence, dict):
             raise ValueError("raw_evidence must be a dict")
         if not any(isinstance(v, (int, float)) for v in self._all_values(self.raw_evidence)):
             raise ValueError("raw_evidence must contain at least one numeric value")
+        # Fail loudly on an unrecognised provenance tier rather than letting the
+        # provenance guard silently treat it as "observed" (see provenance_guard.py).
+        if self.provenance_type not in VALID_PROVENANCE_TYPES:
+            raise ValueError(
+                f"provenance_type must be one of {sorted(VALID_PROVENANCE_TYPES)}, "
+                f"got {self.provenance_type!r}"
+            )
 
     def _all_values(self, d: dict):
         for v in d.values():
