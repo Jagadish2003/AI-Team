@@ -37,27 +37,85 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+# R16-B1: the source_timestamp on an entity's OBSERVED pointer is the run's
+# observation time — when AgentIQ observed the source during the run — NOT the
+# wall clock at resolution time. utc_now() at resolution would drift on every
+# re-resolution and record processing time rather than observation time. The
+# pointer is written once at entity creation (re-sightings never rewrite it), so
+# stamping the run's recorded time keeps the entity's provenance stable for its
+# lifetime. Cached per run so resolving many entities costs one run lookup.
+_RUN_OBSERVED_AT_CACHE: dict[str, str] = {}
+
+
+def _resolve_run_observed_at(run_id: str) -> str:
+    """Return the run's recorded UTC observation time for an entity pointer.
+
+    Reads the run record (``startedAt`` then ``completedAt``). Falls back to the
+    current UTC time only when no run record exists (e.g. isolated unit tests) —
+    never the per-resolution wall clock used previously, which made the provenance
+    timestamp drift and reflect processing time instead of observation time.
+    """
+    if not run_id:
+        return _now()
+    cached = _RUN_OBSERVED_AT_CACHE.get(run_id)
+    if cached is not None:
+        return cached
+    observed_at = _now()  # fallback: run record not found / no timestamp
+    try:
+        run = db.get_run(run_id)
+        if isinstance(run, dict):
+            ts = run.get("startedAt") or run.get("completedAt")
+            if ts:
+                observed_at = str(ts)
+    except Exception:  # noqa: BLE001 — provenance timestamp is best-effort.
+        pass
+    _RUN_OBSERVED_AT_CACHE[run_id] = observed_at
+    return observed_at
+
+
 def _with_observed_evidence(
     metadata: Optional[dict[str, Any]],
     *,
     source_system: str,
-    source_artifact: str,
+    source_record_id: Optional[str],
+    canonical_name: str,
     confidence: float,
+    run_id: str,
 ) -> dict[str, Any]:
     """Return a copy of *metadata* carrying an OBSERVED EvidencePointer (R16-B1).
 
     An entity is observed directly in a source record, so origin='observed' and no
     extraction_job_id is needed. The pointer is stored under
     metadata['evidence_pointer'] — a JSON field that already exists, so no schema
-    change is required (AC8). source_artifact falls back to the canonical name when
-    the source has no stable record id, so the mandatory spine is always populated.
+    change is required (AC8).
+
+    ``source_artifact`` is the stable ``source_record_id`` when the source
+    provides one; otherwise it falls back to the canonical name so the mandatory
+    spine is always populated. ``source_artifact_type`` records which it is
+    ('record_id' vs 'canonical_name') so a consumer knows whether the artifact
+    can be looked up in the source system — a canonical name is NOT guaranteed
+    stable across resolution-algorithm changes. ``source_timestamp`` is the run's
+    observation time (stable), not the resolution-time wall clock.
     """
+    if source_record_id:
+        source_artifact = source_record_id
+        source_artifact_type = "record_id"
+    else:
+        source_artifact = canonical_name
+        source_artifact_type = "canonical_name"
+        logger.debug(
+            "R16-B1: entity provenance source_artifact falls back to canonical_name "
+            "%r (no stable source_record_id) for source_system=%s — not guaranteed "
+            "stable across resolution changes.",
+            canonical_name, source_system,
+        )
     md = dict(metadata or {})
     md["evidence_pointer"] = EvidencePointer.observed(
         source_system=source_system,
         source_artifact=source_artifact,
-        source_timestamp=_now(),
+        source_timestamp=_resolve_run_observed_at(run_id),
         confidence=confidence,
+        source_artifact_type=source_artifact_type,
     ).to_dict()
     return md
 
@@ -270,8 +328,10 @@ def resolve_or_create_entity(
                 metadata=_with_observed_evidence(
                     metadata,
                     source_system=source_system,
-                    source_artifact=source_record_id or canonical,
+                    source_record_id=source_record_id,
+                    canonical_name=canonical,
                     confidence=confidence,
+                    run_id=run_id,
                 ),
             )
             _insert_entity(conn, entity)
@@ -327,8 +387,10 @@ def resolve_or_create_entity(
             metadata=_with_observed_evidence(
                 metadata,
                 source_system=source_system,
-                source_artifact=source_record_id or canonical,
+                source_record_id=source_record_id,
+                canonical_name=canonical,
                 confidence=0.6,
+                run_id=run_id,
             ),
         )
         _insert_entity(conn, entity)

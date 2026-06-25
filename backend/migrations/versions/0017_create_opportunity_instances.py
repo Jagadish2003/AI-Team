@@ -11,6 +11,13 @@ CI gate) and the runtime ``ensure_opportunity_instances_table()`` helper execute
 the exact same statements — they can never drift. Same approach as
 ``0003_create_entities.py``.
 
+The table carries an ``is_deleted BOOLEAN NOT NULL DEFAULT FALSE`` soft-delete
+column (the pattern established in migration 0016), with the identity index made
+composite ``(opportunity_identity, is_deleted)`` so the active-instances read is
+index-served. Both come from the imported DDL, so they are applied here without
+a separate migration. ``downgrade()`` drops the table, which removes the column
+and its indexes.
+
 Revision ID: 0017
 Revises: 0016
 Create Date: 2026-06-24
