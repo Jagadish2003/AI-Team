@@ -1275,3 +1275,156 @@ def test_t6_ac7_duplicate_name_different_instance_rejected():
 
     with pytest.raises(ValueError):
         register_provider(_Impostor())
+
+
+# ---------------------------------------------------------------------------
+# T3 (AT-407) — Graceful degradation on retry exhaustion
+#
+#   T3-AC1  On retry exhaustion, generate() returns ok=False / text=None —
+#           no exception propagates to callers.
+#   T3-AC2  Existing callers (llm_enrichment, hallucination_guard,
+#           normalization_enrichment) behave exactly as before when the
+#           provider exhausts retries.
+#   T3-AC3  provider='hosted' is always set on the returned GenerationResult,
+#           even on failure.
+# ---------------------------------------------------------------------------
+
+
+def test_t3_ac1_retry_exhaustion_returns_graceful_result(monkeypatch):
+    """HostedModelProvider.generate() returns ok=False/text=None on exhaustion,
+    never raises."""
+    from app.model_gateway.hosted_provider import HostedModelProvider
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "fake-key")
+
+    def _always_fail(req, timeout=None):
+        raise RuntimeError("simulated network failure")
+
+    monkeypatch.setattr("urllib.request.urlopen", _always_fail)
+
+    provider = HostedModelProvider()
+    result = provider.generate(_GenReq(prompt="test", max_tokens=5))
+
+    assert result.ok is False
+    assert result.text is None
+
+
+def test_t3_ac1_no_exception_propagates_on_exhaustion(monkeypatch):
+    """No exception escapes generate() when all retry attempts fail."""
+    import urllib.error as _ue
+    import http.client
+
+    from app.model_gateway.hosted_provider import HostedModelProvider
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "fake-key")
+
+    def _always_429(req, timeout=None):
+        hdrs = http.client.HTTPMessage()
+        raise _ue.HTTPError("http://fake", 429, "Too Many Requests", hdrs, None)
+
+    monkeypatch.setattr("urllib.request.urlopen", _always_429)
+
+    provider = HostedModelProvider()
+    # Must not raise — exhaustion must be swallowed and returned as ok=False.
+    try:
+        result = provider.generate(
+            _GenReq(prompt="test", max_tokens=5, timeout_ms=60000)
+        )
+    except Exception as exc:
+        raise AssertionError(
+            f"T3-AC1 FAIL: generate() raised {type(exc).__name__}: {exc}"
+        ) from exc
+
+    assert result.ok is False
+    assert result.text is None
+
+
+def test_t3_ac2_llm_enrichment_returns_none_on_exhaustion(monkeypatch):
+    """llm_enrichment._call_claude() returns None when the provider exhausts
+    retries — the same value callers have always handled."""
+    from app import llm_enrichment as le
+
+    def _failing_generate(req):
+        return _GenRes(text=None, provider="hosted", ok=False)
+
+    monkeypatch.setattr("app.model_gateway.generate", _failing_generate)
+
+    result = le._call_claude("test prompt", 10)
+    assert result is None
+
+
+def test_t3_ac2_hallucination_guard_returns_none_on_exhaustion(monkeypatch):
+    """hallucination_guard._invoke_rewrite_llm() returns None when the
+    provider exhausts retries — the guard's caller already handles None."""
+    from app import hallucination_guard as hg
+
+    def _failing_generate(req):
+        return _GenRes(text=None, provider="hosted", ok=False)
+
+    monkeypatch.setattr("app.model_gateway.generate", _failing_generate)
+
+    result = hg._invoke_rewrite_llm("rewrite this")
+    assert result is None
+
+
+def test_t3_ac2_normalization_enrichment_returns_none_on_exhaustion(monkeypatch):
+    """normalization_enrichment degrades to None when the provider exhausts
+    retries — the existing ok/text guard is preserved."""
+    from app import normalization_enrichment as ne
+    from app.model_gateway import GenerationRequest
+
+    def _failing_generate(req: GenerationRequest):
+        return _GenRes(text=None, provider="hosted", ok=False)
+
+    monkeypatch.setattr("app.model_gateway.generate", _failing_generate)
+
+    # _call_claude_batch returns None when the gateway returns ok=False.
+    fields = [{"id": "f1", "sourceField": "Account__c", "sourceSystem": "SF", "sampleValues": []}]
+    result = ne._call_claude_batch(fields, "service_cloud")
+    assert result is None
+
+
+def test_t3_ac3_provider_field_is_always_hosted_on_failure(monkeypatch):
+    """GenerationResult.provider is always 'hosted' on any failure path."""
+    from app.model_gateway.hosted_provider import HostedModelProvider
+
+    provider = HostedModelProvider()
+
+    # Missing API key path
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "")
+    result = provider.generate(_GenReq(prompt="test", max_tokens=5))
+    assert result.provider == "hosted", "provider must be 'hosted' on missing-key failure"
+
+    # Exception path
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "fake-key")
+
+    def _boom(req, timeout=None):
+        raise RuntimeError("exploded")
+
+    monkeypatch.setattr("urllib.request.urlopen", _boom)
+    result = provider.generate(_GenReq(prompt="test", max_tokens=5))
+    assert result.provider == "hosted", "provider must be 'hosted' on exception failure"
+
+
+def test_t3_ac3_provider_field_is_hosted_on_exhaustion(monkeypatch):
+    """provider='hosted' is set even when all retry attempts are exhausted."""
+    import urllib.error as _ue
+    import http.client
+
+    from app.model_gateway.hosted_provider import HostedModelProvider
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "fake-key")
+
+    def _always_429(req, timeout=None):
+        hdrs = http.client.HTTPMessage()
+        raise _ue.HTTPError("http://fake", 429, "Too Many Requests", hdrs, None)
+
+    monkeypatch.setattr("urllib.request.urlopen", _always_429)
+
+    provider = HostedModelProvider()
+    result = provider.generate(
+        _GenReq(prompt="test", max_tokens=5, timeout_ms=60000)
+    )
+    assert result.provider == "hosted"
+    assert result.ok is False
+    assert result.text is None

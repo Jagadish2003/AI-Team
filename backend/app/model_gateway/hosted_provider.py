@@ -122,6 +122,11 @@ class HostedModelProvider(ModelProvider):
             if not retryable or attempt >= _MAX_RETRIES:
                 return result
 
+            # T3 contract: exhaustion returns ok=False/text=None/provider='hosted'
+            # without raising.  The caller sees the same stable shape regardless
+            # of whether the failure came from a missing key, a 429, or all
+            # retries being spent — existing callers already handle text=None.
+
             # Compute backoff: exponential, capped, respects Retry-After header.
             backoff_s = min(_BASE_BACKOFF_S * (2 ** attempt), _MAX_BACKOFF_S)
             if retry_after_s is not None:
