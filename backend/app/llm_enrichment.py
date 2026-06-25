@@ -67,6 +67,23 @@ def _resolve_run_observed_at(run_id: str) -> str:
                 return str(ts)
     except Exception:  # noqa: BLE001 — provenance timestamp is best-effort.
         pass
+
+    # Sentinel fired: no run record / no timestamp. The value is deterministic
+    # (S15 contract), but a 1970-01-01 source_timestamp stamped onto stored
+    # provenance is misleading — an analyst can't tell it from real data. Surface
+    # it as a WARNING so the condition is observable in real environments, while
+    # staying quiet under tests (isolated runs with no seeded record are expected
+    # there, and the contract suite leaves ENVIRONMENT unset).
+    if (
+        os.getenv("ENVIRONMENT", "").strip().lower() != "test"
+        and "PYTEST_CURRENT_TEST" not in os.environ
+    ):
+        logger.warning(
+            "R16-B1: no run record/timestamp for run %s — stamping enrichment "
+            "provenance source_timestamp with epoch sentinel %s; evidence-trace "
+            "timestamps for this run will be misleading.",
+            run_id, _ENRICHMENT_TS_FALLBACK,
+        )
     return _ENRICHMENT_TS_FALLBACK
 
 

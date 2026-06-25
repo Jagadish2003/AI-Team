@@ -138,6 +138,30 @@ def test_store_and_get_roundtrip(monkeypatch):
     assert ep.get_evidence_pointers_for_opportunity("run_rt", "opp_999") == []
 
 
+def test_pointers_isolated_by_run(monkeypatch):
+    """Cross-run isolation: pointers are keyed by run, so the SAME opp id stored
+    for run A must NOT surface when queried against run B (same org). A valid opp
+    from a different run returns an empty trail, never run A's pointers — the
+    run_id is part of the lookup key, mirroring opportunity_instances'
+    (opportunity_identity, run_id) keying."""
+    from app import evidence_pointers as ep
+
+    store: Dict[str, object] = {}
+    monkeypatch.setattr(ep.db, "run_kv_set", lambda key, run_id, value: store.__setitem__(f"{key}:{run_id}", value))
+    monkeypatch.setattr(ep.db, "run_kv_get", lambda key, run_id, default=None: store.get(f"{key}:{run_id}", default))
+
+    opps = [{"id": "opp_001", "evidenceIds": ["ev_sf_aaa"],
+             "_debug": {"detector_id": "HANDOFF_FRICTION", "signal_source": "salesforce"}}]
+    evidence = [{"id": "ev_sf_aaa", "source": "Salesforce", "tsLabel": "24 Jun 2026, 10:00"}]
+    ep.store_evidence_pointers("run_a", opps, evidence=evidence, run_completed_at="t")
+
+    # run_a has the trail for opp_001 ...
+    assert len(ep.get_evidence_pointers_for_opportunity("run_a", "opp_001")) == 1
+    # ... but the same opp_id queried against run_b (no pointers stored for it)
+    # returns empty — run A's provenance never leaks across the run boundary.
+    assert ep.get_evidence_pointers_for_opportunity("run_b", "opp_001") == []
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Retrieval helper — org isolation (monkeypatched, no DB)
 # ─────────────────────────────────────────────────────────────────────────────

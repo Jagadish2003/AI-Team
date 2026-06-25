@@ -60,14 +60,19 @@ CREATE_OPPORTUNITY_INSTANCES_TABLE = """
         narrative             TEXT,
         metadata              TEXT,
         created_at            TIMESTAMP     NOT NULL,
+        is_deleted            BOOLEAN       NOT NULL DEFAULT FALSE,
         PRIMARY KEY (opportunity_identity, run_id)
     )
 """
 
 # Cross-run time series for one problem — the read outcome tracking (2.0) needs.
+# Composite with is_deleted so the active-instances query (the common read) is
+# index-served: the soft-delete pattern established in migration 0016 means a
+# logically deleted instance (e.g. an invalidated run) is filtered, not DELETEd,
+# preserving the immutable-audit-trail principle applied to telemetry/audit_log.
 CREATE_OPPORTUNITY_INSTANCES_IDX_IDENTITY = """
     CREATE INDEX IF NOT EXISTS idx_opp_instances_identity
-        ON opportunity_instances (opportunity_identity)
+        ON opportunity_instances (opportunity_identity, is_deleted)
 """
 
 # All instances observed in a single run, org-scoped.
@@ -103,6 +108,7 @@ OPPORTUNITY_INSTANCE_COLUMNS: tuple[str, ...] = (
     "narrative",
     "metadata",
     "created_at",
+    "is_deleted",
 )
 
 
@@ -133,6 +139,10 @@ class OpportunityInstance:
     narrative: Optional[str] = None
     metadata: Optional[dict[str, Any]] = None
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    # Soft-delete flag (R16-B1 review / migration-0016 pattern). False for live
+    # instances; a logically deleted instance is filtered from reads, never
+    # DELETEd, so the per-run observation history stays immutable.
+    is_deleted: bool = False
 
     def __post_init__(self) -> None:
         for fname in ("opportunity_identity", "run_id", "org_id", "pack_id",
@@ -167,6 +177,7 @@ class OpportunityInstance:
             "metadata": json.dumps(self.metadata) if self.metadata is not None else None,
             "created_at": self.created_at.isoformat()
             if isinstance(self.created_at, datetime) else self.created_at,
+            "is_deleted": bool(self.is_deleted),
         }
 
     @classmethod
@@ -200,4 +211,5 @@ class OpportunityInstance:
             narrative=row.get("narrative"),
             metadata=metadata,
             created_at=created_at or datetime.now(timezone.utc),
+            is_deleted=bool(row.get("is_deleted", False)),
         )

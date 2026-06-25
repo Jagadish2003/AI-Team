@@ -65,6 +65,12 @@ class EvidencePointer:
     retrieval_result_id: Optional[str] = None   # set by retrieval (1.8)
     detector_evidence_id: Optional[str] = None  # set by the detector layer later
     confidence: Optional[float] = None
+    # Stability guarantee of source_artifact: 'record_id' is a stable source
+    # system id (resolves to the same record forever); 'canonical_name' is a
+    # mutable, normalised name that can drift across resolution-algorithm
+    # changes. Lets a consumer know whether the artifact can be looked up in the
+    # source system. None when the producer has not declared it.
+    source_artifact_type: Optional[str] = None
 
     def is_valid(self) -> bool:
         """True iff the mandatory spine is populated and the inferred-job rule holds.
@@ -109,11 +115,14 @@ class EvidencePointer:
         source_timestamp: Optional[str] = None,
         confidence: Optional[float] = None,
         detector_evidence_id: Optional[str] = None,
+        source_artifact_type: Optional[str] = None,
     ) -> "EvidencePointer":
         """Build an OBSERVED pointer — knowledge seen directly in a source.
 
         Observed artifacts need no ``extraction_job_id`` and validate without one.
         ``source_timestamp`` defaults to now (UTC) when the caller does not supply it.
+        ``source_artifact_type`` ('record_id' | 'canonical_name') records the
+        stability guarantee of ``source_artifact`` for downstream consumers.
         """
         return cls(
             source_system=source_system,
@@ -122,6 +131,7 @@ class EvidencePointer:
             origin=OBSERVED,
             confidence=confidence,
             detector_evidence_id=detector_evidence_id,
+            source_artifact_type=source_artifact_type,
         )
 
     @classmethod

@@ -224,10 +224,13 @@ def record_opportunity_instances(
 
     insert_cols = ", ".join(OPPORTUNITY_INSTANCE_COLUMNS)
     placeholders = ", ".join(["%s"] * len(OPPORTUNITY_INSTANCE_COLUMNS))
+    # Exclude the PK and is_deleted from the conflict update: re-recording a run
+    # (replay) refreshes its measures but must NOT resurrect an instance that was
+    # soft-deleted out of band (e.g. an invalidated run).
     update_cols = ", ".join(
         f"{c}=EXCLUDED.{c}"
         for c in OPPORTUNITY_INSTANCE_COLUMNS
-        if c not in ("opportunity_identity", "run_id")
+        if c not in ("opportunity_identity", "run_id", "is_deleted")
     )
     sql = (
         f"INSERT INTO opportunity_instances ({insert_cols}) VALUES ({placeholders}) "
@@ -299,7 +302,10 @@ def get_instances_by_identity(
     if not opportunity_identity:
         return []
     cols = ", ".join(OPPORTUNITY_INSTANCE_COLUMNS)
-    sql = f"SELECT {cols} FROM opportunity_instances WHERE opportunity_identity = %s"
+    sql = (
+        f"SELECT {cols} FROM opportunity_instances "
+        "WHERE opportunity_identity = %s AND is_deleted = FALSE"
+    )
     params: List[Any] = [opportunity_identity]
     if org_id is not None:
         sql += " AND org_id = %s"
@@ -325,7 +331,10 @@ def get_instances_for_run(
     if not run_id:
         return []
     cols = ", ".join(OPPORTUNITY_INSTANCE_COLUMNS)
-    sql = f"SELECT {cols} FROM opportunity_instances WHERE run_id = %s"
+    sql = (
+        f"SELECT {cols} FROM opportunity_instances "
+        "WHERE run_id = %s AND is_deleted = FALSE"
+    )
     params: List[Any] = [run_id]
     if org_id is not None:
         sql += " AND org_id = %s"

@@ -25,24 +25,55 @@ from app.relationship_mapper import _relationship_pointer, upsert_relationship
 # ── entities: observed pointer on the create path (AC1) ──────────────────────
 
 
-def test_entity_metadata_carries_valid_observed_pointer():
+def test_entity_metadata_carries_valid_observed_pointer(monkeypatch):
+    # source_timestamp is the run's observation time, not utc_now() at resolution
+    # (R16-B1 review). Stub the run lookup so this stays DB-free and deterministic.
+    import app.entity_resolution as er
+    monkeypatch.setattr(er.db, "get_run", lambda rid: {"startedAt": "2026-06-24T10:00:00+00:00"})
+
     md = _with_observed_evidence(
-        None, source_system="salesforce", source_artifact="001X", confidence=0.9
+        None, source_system="salesforce", source_record_id="001X",
+        canonical_name="acme corp", confidence=0.9, run_id="run_1",
     )
     ptr = md["evidence_pointer"]
     assert ptr["origin"] == "observed"
     assert ptr["source_system"] == "salesforce"
+    # A stable source_record_id is used verbatim and flagged as such.
     assert ptr["source_artifact"] == "001X"
+    assert ptr["source_artifact_type"] == "record_id"
+    # source_timestamp is the run's observation time, NOT the resolution wall clock.
+    assert ptr["source_timestamp"] == "2026-06-24T10:00:00+00:00"
     assert ptr["extraction_job_id"] is None  # observed needs no job id
     assert EvidencePointer.from_dict(ptr).is_valid()
 
 
-def test_entity_pointer_preserves_existing_metadata():
+def test_entity_pointer_falls_back_to_canonical_name_and_flags_it(monkeypatch):
+    # No stable source_record_id -> falls back to the canonical name, and marks
+    # source_artifact_type so a consumer knows the artifact is NOT a stable id.
+    import app.entity_resolution as er
+    monkeypatch.setattr(er.db, "get_run", lambda rid: {"startedAt": "2026-06-24T10:00:00+00:00"})
+
+    md = _with_observed_evidence(
+        None, source_system="agentiq", source_record_id=None,
+        canonical_name="pr_review_bottleneck", confidence=0.8, run_id="run_2",
+    )
+    ptr = md["evidence_pointer"]
+    assert ptr["source_artifact"] == "pr_review_bottleneck"
+    assert ptr["source_artifact_type"] == "canonical_name"
+    assert EvidencePointer.from_dict(ptr).is_valid()
+
+
+def test_entity_pointer_preserves_existing_metadata(monkeypatch):
+    import app.entity_resolution as er
+    monkeypatch.setattr(er.db, "get_run", lambda rid: {"startedAt": "2026-06-24T10:00:00+00:00"})
+
     md = _with_observed_evidence(
         {"source": "crm", "field": "Owner"},
         source_system="salesforce",
-        source_artifact="001X",
+        source_record_id="001X",
+        canonical_name="acme corp",
         confidence=1.0,
+        run_id="run_3",
     )
     assert md["source"] == "crm" and md["field"] == "Owner"
     assert "evidence_pointer" in md

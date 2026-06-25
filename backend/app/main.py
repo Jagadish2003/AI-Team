@@ -232,11 +232,16 @@ register_stack_builder_routes(app)
 register_stack_builder_launch_routes(app)
 register_workspace_catalog_routes(app)
 register_salesforce_products_routes(app)
-register_sprint4_t6_routes(app)
-register_sprint4_t4_routes(app)
-register_sprint4_t3_routes(app)
-register_sprint4_t2_routes(app)
+# Sprint 4 routes are registered in dependency order T1 → T2 → T3 → T4 → T6.
+# FastAPI resolves routes in registration order, so a module registered earlier
+# wins any shared path prefix. T6 (LLM enrichment / evidence-trace) MUST be
+# registered AFTER T1–T4 — its own module contract states "register after T4" —
+# so a future T1–T5 route can never be shadowed by T6's handler.
 register_sprint4_t1_routes(app)
+register_sprint4_t2_routes(app)
+register_sprint4_t3_routes(app)
+register_sprint4_t4_routes(app)
+register_sprint4_t6_routes(app)
 register_blueprint_routes(app)
 register_normalization_routes(app)
 if not any(r.path == "/api/connectors/oauth/callback" for r in app.routes):
