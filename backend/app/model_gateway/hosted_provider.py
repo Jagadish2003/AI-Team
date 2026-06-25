@@ -15,10 +15,23 @@ Design notes
   API does not yet expose a first-class embeddings endpoint.  Callers that
   need embeddings should configure MODEL_EMBEDDING_PROVIDER to a provider
   that supports them; this stub keeps the interface contract satisfied.
-- Credentials are read from ANTHROPIC_API_KEY at call time (not at import
-  time) so a key rotation never requires a restart.
-- The model name is read from MODEL_NAME (default 'claude-sonnet-4-5') so
-  operators can pin a specific version without a code change.
+
+Credential & config handling (R16-D2 T4 / AT-408, Section 3)
+------------------------------------------------------------
+- All credential and endpoint configuration lives in ``_config.HostedConfig``,
+  constructed once at provider instantiation (T4-AC1).  The provider reads the
+  API key, endpoint, API version, and model name only through that object —
+  nothing is hardcoded here.
+- The credential is read from configuration / secrets (the ``ANTHROPIC_API_KEY``
+  config key), never hardcoded (T4-AC1), and never written to logs at any level
+  (T4-AC2).  Only the *presence* of a key is ever logged, never its value.
+- The credential is held privately inside the gateway package and is never
+  returned to, nor reachable by, any caller outside it (T4-AC3).
+- The credential is re-resolved on every call (via ``HostedConfig`` reading the
+  live config value) so a key rotation never requires a restart — preserving
+  the documented zero-downtime behaviour the resilience tests rely on.
+- ``backend/.env.example`` documents ``ANTHROPIC_API_KEY`` as the required
+  credential config key with a placeholder value (T4-AC4).
 
 Resilience (R16-D2 T2)
 -----------------------
@@ -48,12 +61,12 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import time
 import urllib.error
 import urllib.request
 from typing import List, Optional, Tuple
 
+from app.model_gateway._config import CONFIG_KEY_API_KEY, HostedConfig
 from app.model_gateway._interface import (
     GenerationRequest,
     GenerationResult,
@@ -61,10 +74,6 @@ from app.model_gateway._interface import (
 )
 
 logger = logging.getLogger(__name__)
-
-_API_URL = "https://api.anthropic.com/v1/messages"
-_API_VERSION = "2023-06-01"
-_DEFAULT_MODEL = "claude-sonnet-4-5"
 
 # Resilience constants (R16-D2 T2)
 _MAX_RETRIES: int = 3                # bounded — never retries more than this
@@ -109,6 +118,20 @@ class HostedModelProvider(ModelProvider):
 
     name = "hosted"
 
+    def __init__(self) -> None:
+        """Read credential and endpoint configuration at instantiation (T4-AC1).
+
+        ``HostedConfig`` owns the credential entirely (T4-AC3); it is stored on
+        a private attribute and never exposed.  Logging only the presence of a
+        credential — never the value — keeps the secret out of logs (T4-AC2).
+        """
+        self._config = HostedConfig()
+        logger.info(
+            "HostedModelProvider initialised (endpoint=%s, credential_configured=%s)",
+            self._config.endpoint,
+            self._config.has_credential(),
+        )
+
     # ------------------------------------------------------------------
     # ModelProvider interface
     # ------------------------------------------------------------------
@@ -142,12 +165,18 @@ class HostedModelProvider(ModelProvider):
         after this method returns — ensuring exactly-one-event-per-call (T6-AC3).
         Never raises; returns ok=False on every failure path.
         """
-        api_key = os.getenv("ANTHROPIC_API_KEY", "")
+        # Credential is resolved through HostedConfig — read from config/secrets,
+        # never hardcoded (T4-AC1).  Only its presence is logged, never its value
+        # (T4-AC2).
+        api_key = self._config.resolve_api_key()
         if not api_key:
-            logger.warning("ANTHROPIC_API_KEY not set — model generation skipped")
+            logger.warning(
+                "%s credential not configured — model generation skipped",
+                CONFIG_KEY_API_KEY,
+            )
             return GenerationResult(text=None, provider=self.name, ok=False)
 
-        model = os.getenv("MODEL_NAME", _DEFAULT_MODEL)
+        model = self._config.model()
         deadline = time.monotonic() + req.timeout_ms / 1000.0
 
         for attempt in range(_MAX_RETRIES + 1):
@@ -264,12 +293,12 @@ class HostedModelProvider(ModelProvider):
         ).encode("utf-8")
 
         http_req = urllib.request.Request(
-            _API_URL,
+            self._config.endpoint,
             data=payload,
             headers={
                 "Content-Type": "application/json",
                 "x-api-key": api_key,
-                "anthropic-version": _API_VERSION,
+                "anthropic-version": self._config.api_version,
             },
             method="POST",
         )
