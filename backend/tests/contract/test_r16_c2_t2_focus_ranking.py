@@ -52,6 +52,10 @@ def _launch(client: TestClient, *, focus_id: str) -> str:
     ordering can only come from the focus.
     """
     body: Dict[str, Any] = {
+        # Required by the LaunchRequest schema. Its value is ignored by tenancy
+        # (org_id is sourced from the verified JWT, never the request body), but
+        # the field must be present or the endpoint returns 422.
+        "org_id": "body-org-ignored-by-tenancy",
         "focus_id": focus_id,
         "industry_id": "financial_services",
         "template_id": None,
