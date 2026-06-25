@@ -1,0 +1,5 @@
+// Copy this file to config.js and set API_BASE_URL to your backend host before deploying.
+// Do NOT commit config.js — it is gitignored so each deployment carries its own value.
+window.__APP_CONFIG__ = {
+  API_BASE_URL: "http://your-api-host:8000"
+};

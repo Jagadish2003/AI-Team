@@ -32,3 +32,4 @@ backend/license/.env
 backend/license/.env.*
 backend/license/test_keys/
 *.license
+frontend/public/config.js
