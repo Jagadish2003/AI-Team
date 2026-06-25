@@ -28,8 +28,6 @@ from __future__ import annotations
 
 import json
 import os
-import urllib.error
-import urllib.request
 from typing import Any, Dict, List, Optional
 
 # ── Shared KV key — must match routes_normalization.py ───────────────────────
@@ -121,74 +119,52 @@ def _call_claude_batch(
     pack_domain: Optional[str] = None,
 ) -> Optional[Dict[str, Dict[str, Any]]]:
     """
-    One Claude API call for all AMBIGUOUS fields.
+    One model gateway call for all AMBIGUOUS fields (R16-D1 T3).
 
     Returns None on total failure.
-    Returns {} if Claude responded but all items were invalid.
+    Returns {} if the provider responded but all items were invalid.
     Returns {fieldId: result_dict} for valid resolutions.
 
     Issue 2 fix: valid entity types gated by pack_domain.
     """
-    api_key = os.environ.get("ANTHROPIC_API_KEY", "")
-    if not api_key or not fields:
+    if not fields:
         return None
+
+    from app.model_gateway import GenerationRequest, generate
 
     allowed = set(_entities_for_domain(pack_domain))
     valid_ids = {f["id"] for f in fields}
     prompt = _build_batch_prompt(fields, pack_domain)
 
-    payload = json.dumps(
-        {
-            "model": "claude-sonnet-4-20250514",
-            "max_tokens": 1000,
-            "messages": [{"role": "user", "content": prompt}],
-        }
-    ).encode()
-
-    req = urllib.request.Request(
-        "https://api.anthropic.com/v1/messages",
-        data=payload,
-        headers={
-            "x-api-key": api_key,
-            "anthropic-version": "2023-06-01",
-            "content-type": "application/json",
-        },
-        method="POST",
-    )
+    # Route through the gateway's instrumented generate() so the call is
+    # telemetered with the serving provider (R16-D1 T5).
+    result = generate(GenerationRequest(prompt=prompt, max_tokens=1000))
+    if not result.ok or result.text is None:
+        return None
 
     try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            data = json.loads(resp.read())
-            text = data.get("content", [{}])[0].get("text", "").strip()
-            text = text.replace("```json", "").replace("```", "").strip()
-            results = json.loads(text)
+        text = result.text.replace("```json", "").replace("```", "").strip()
+        results = json.loads(text)
 
-            if not isinstance(results, list):
-                return None
+        if not isinstance(results, list):
+            return None
 
-            by_field_id: Dict[str, Dict[str, Any]] = {}
-            for item in results:
-                if not isinstance(item, dict):
-                    continue
-                field_id = item.get("fieldId", "")
-                if not field_id or field_id not in valid_ids:
-                    continue
-                if item.get("entity_type") not in allowed:
-                    continue  # reject types outside this pack's allowed set
-                if item.get("confidence") not in ("HIGH", "MEDIUM", "LOW"):
-                    continue
-                by_field_id[field_id] = item
+        by_field_id: Dict[str, Dict[str, Any]] = {}
+        for item in results:
+            if not isinstance(item, dict):
+                continue
+            field_id = item.get("fieldId", "")
+            if not field_id or field_id not in valid_ids:
+                continue
+            if item.get("entity_type") not in allowed:
+                continue  # reject types outside this pack's allowed set
+            if item.get("confidence") not in ("HIGH", "MEDIUM", "LOW"):
+                continue
+            by_field_id[field_id] = item
 
-            return by_field_id
+        return by_field_id
 
-    except (
-        urllib.error.URLError,
-        json.JSONDecodeError,
-        KeyError,
-        IndexError,
-        ValueError,
-        TypeError,
-    ):
+    except (json.JSONDecodeError, KeyError, IndexError, ValueError, TypeError):
         return None
 
 
