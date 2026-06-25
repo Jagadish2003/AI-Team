@@ -117,6 +117,19 @@ def test_tombstone_rejects_empty_artifact_id():
         tombstone("")
 
 
+def test_tombstone_fixed_keys_cannot_be_overridden_by_fields():
+    # artifact_id is a NAMED parameter, so a caller cannot also smuggle it through
+    # **fields — Python raises TypeError rather than silently overriding it. This
+    # is a stronger guarantee than dict-merge priority.
+    with pytest.raises(TypeError):
+        tombstone("real_id", artifact_id="wrong")
+    # change_kind, by contrast, is not a named parameter, so it lands in **fields —
+    # but the explicit "change_kind": DELETED after {**fields} always wins. Pins
+    # that merge order against an accidental reorder that would let a caller
+    # mislabel a delete.
+    assert tombstone("X", change_kind="created")["change_kind"] == "deleted"
+
+
 # --------------------------------------------------------------------------
 # AC6 part 1: a deletion from a delete-supporting source propagates as a
 # change_kind='deleted' event.

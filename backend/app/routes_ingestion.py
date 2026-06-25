@@ -51,7 +51,11 @@ class CheckpointResetResponse(BaseModel):
 @router.post(
     INGESTION_CHECKPOINT_RESET_PATH,
     response_model=CheckpointResetResponse,
-    dependencies=[Depends(require_auth), Depends(require_role("owner"))],
+    # require_role("owner") already depends on require_auth internally (see
+    # rbac.py), and the token parameter below resolves require_auth to read the
+    # acting user for the audit trail. Listing require_auth again here would be a
+    # third reference to the same dependency, so the RBAC guard alone is enough.
+    dependencies=[Depends(require_role("owner"))],
 )
 def reset_ingestion_checkpoint(
     body: CheckpointResetRequest,

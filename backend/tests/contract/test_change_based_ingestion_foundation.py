@@ -397,7 +397,10 @@ def test_ac8_unchanged_rerun_is_measurably_faster_wallclock():
 
     def costly(_batch):
         # Simulated downstream per-record cost (extraction/embedding stand-in).
-        time.sleep(0.001 * len(_batch.records))
+        # 5ms/record keeps the initial load (N×5ms ≈ 200ms) an order of magnitude
+        # above fixed per-run overhead, so the ratio below stays stable even on a
+        # slow/contended CI runner.
+        time.sleep(0.005 * len(_batch.records))
 
     t0 = time.perf_counter()
     _drive(conn, store, process_batch=costly)
@@ -408,8 +411,11 @@ def test_ac8_unchanged_rerun_is_measurably_faster_wallclock():
     rerun_s = time.perf_counter() - t1
 
     # Initial load paid the per-record cost N times; the unchanged re-run pays it
-    # zero times. Generous bound to stay CI-stable while still proving the point.
-    assert rerun_s < initial_s * 0.5
+    # zero times (empty delta → no batches → no sleep). The re-run cost is pure
+    # fixed overhead, so a 10× margin is both true and CI-resistant. The
+    # deterministic guarantee lives in test_ac8_unchanged_rerun_does_far_less_work;
+    # this test is the wall-clock corroboration of it.
+    assert rerun_s < initial_s * 0.1
 
 
 def test_ac8_no_duplicate_ingestion_across_repeat_runs(captured):

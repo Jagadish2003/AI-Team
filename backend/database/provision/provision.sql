@@ -303,6 +303,12 @@ CREATE TABLE "public"."orgs" (
 --
 -- Name: ingestion_checkpoints; Type: TABLE; Schema: public; Owner: -
 --
+-- SOURCE OF TRUTH: database/models/ingestion_checkpoints.py
+-- (ALL_INGESTION_CHECKPOINTS_DDL), applied by migration 0017/0018 and the runtime
+-- repository. This pure-SQL provisioning path mirrors that schema and MUST be kept
+-- in sync with it — if you change the table there (columns, types, defaults, PK,
+-- is_deleted), make the identical change here. Keep the two definitions equivalent.
+--
 
 CREATE TABLE "public"."ingestion_checkpoints" (
     "org_id" character varying(64) NOT NULL,
