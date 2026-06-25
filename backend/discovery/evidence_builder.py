@@ -700,6 +700,12 @@ def build_evidence(
                 )
                 result.append(jira_ev)
 
+        # R16-C1 T4: stamp provenance_type on every evidence object so consumers
+        # (Source Intelligence, audit views) can identify observed vs inferred.
+        provenance = getattr(detector_result, "provenance_type", "observed")
+        for ev in result:
+            ev["provenanceType"] = provenance
+
         return result
     except ValueError:
         # R1–R7 violation — permissive failure per SF-1.5

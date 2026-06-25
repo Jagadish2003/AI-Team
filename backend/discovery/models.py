@@ -20,12 +20,20 @@ class DetectorResult:
     """
     Output of a single detector firing.
     Matches the schema defined in SF-1.3.
+
+    R16-C1 T4: provenance_type tracks whether the evidence is directly
+    observed from source-system records ("observed") or derived from
+    detector co-firing patterns or relationship inference ("inferred").
+    Defaults to "observed" so all existing callers remain unaffected.
+    The scorer uses this to enforce the observed-beats-inferred ordering
+    per R16-C1 Section 2 — see provenance_guard.py.
     """
     detector_id: str        # e.g. "HANDOFF_FRICTION"
     signal_source: str      # e.g. "salesforce", "servicenow", "jira"
     metric_value: float     # the computed value that crossed the threshold
     threshold: float        # the threshold that was crossed
     raw_evidence: dict      # source data — must contain at least one number
+    provenance_type: str = "observed"   # R16-C1 T4: "observed" | "inferred"
 
     def __post_init__(self):
         if not isinstance(self.raw_evidence, dict):

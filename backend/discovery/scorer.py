@@ -33,9 +33,20 @@ No other functions are modified.
 from __future__ import annotations
 
 import math
-from typing import Any, Dict, Literal, Tuple
+from typing import Any, Dict, Literal, Optional, Tuple
 
 from .models import DetectorResult
+from .weighting_context import (
+    StackBuilderWeightingContext,
+    WEIGHT_NEUTRAL,
+)
+from .t3_ceiling_clamp import apply_t3_ceiling_clamp
+from .provenance_guard import (
+    PROVENANCE_OBSERVED,
+    apply_provenance_weight_cap,
+    apply_provenance_confidence_ceiling,
+    provenance_guard_debug,
+)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Type aliases
@@ -227,17 +238,25 @@ def _impact_factors(dr: DetectorResult) -> Tuple[float, float, float, float, flo
     return volume, friction, customer, revenue, external
 
 
-def _compute_impact(dr: DetectorResult) -> int:
+def _compute_impact(dr: DetectorResult, source_weight: float = WEIGHT_NEUTRAL) -> int:
     """
     Compute Impact score per SF-1.4 formula.
 
     T41-6 patch: apply _rescale_impact() instead of direct round() to map
     the full theoretical raw range onto [1, 10].  Factor derivation is unchanged.
+
+    R16-C1 T2: multiply the raw weighted sum by *source_weight* before rescaling.
+    A system_of_record (weight=1.0) contributes at full strength; an
+    operational_signal_source (weight≤0.66) is proportionally discounted.
+    The rescaling still maps the weighted sum onto [1, 10] so the output
+    contract is unchanged — only the relative position within that range shifts.
     """
     v, f, c, r, e = _impact_factors(dr)
     raw = (v * _W_VOLUME + f * _W_FRICTION + c * _W_CUSTOMER +
            r * _W_REVENUE + e * _W_EXTERNAL)
-    return _rescale_impact(raw)  # T41-6: was max(1, min(10, round(raw)))
+    # R16-C1 T2: apply source weight deterministically
+    weighted_raw = raw * source_weight
+    return _rescale_impact(weighted_raw)  # T41-6: was max(1, min(10, round(raw)))
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -315,7 +334,10 @@ def _compute_effort(dr: DetectorResult) -> int:
 # Confidence assignment  (SF-1.4 Section 5 — updated rules)
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _compute_confidence(dr: DetectorResult) -> Confidence:
+def _compute_confidence(
+    dr: DetectorResult,
+    source_weight: float = WEIGHT_NEUTRAL,
+) -> Confidence:
     """
     Confidence rules (first match wins):
         HIGH   = Tier A AND proxy_ratio > 2.0 AND volume > 100
@@ -325,11 +347,25 @@ def _compute_confidence(dr: DetectorResult) -> Confidence:
     All Track B detectors use Tier A data — condition always met.
     proxy_ratio = metric_value / threshold
     volume = meaningful record count for this detector.
+
+    R16-C1 T2: *source_weight* is applied to the effective proxy ratio before
+    the HIGH/MEDIUM/LOW thresholds are checked.  A lower-authority source
+    (supporting, weight=0.6) needs a proportionally stronger signal to reach
+    the same confidence band as a system-of-record (weight=1.0).
+
+        effective_proxy_ratio = proxy_ratio × source_weight
+
+    This is deterministic — same weight always produces the same threshold
+    shift.  It does NOT eliminate the hard rules (the T3 ceiling clamp is
+    applied separately by the caller after this function returns).
     """
     ev = dr.raw_evidence
     did = dr.detector_id
 
     proxy_ratio = dr.metric_value / dr.threshold if dr.threshold > 0 else 0.0
+
+    # R16-C1 T2: lower-authority sources need proportionally more evidence
+    effective_proxy_ratio = proxy_ratio * source_weight
 
     # Volume: the most meaningful count for each detector
     volume_map = {
@@ -347,9 +383,9 @@ def _compute_confidence(dr: DetectorResult) -> Confidence:
     # If non-User actors present, cap confidence at MEDIUM even if HIGH criteria met
     has_unreliable_approvers = "Role/Queue/Group" in str(ev.get("approver_type_notes", ""))
 
-    if proxy_ratio > 2.0 and volume > 100 and not has_unreliable_approvers:
+    if effective_proxy_ratio > 2.0 and volume > 100 and not has_unreliable_approvers:
         return "HIGH"
-    if proxy_ratio >= 1.0 and volume >= 20:
+    if effective_proxy_ratio >= 1.0 and volume >= 20:
         return "MEDIUM"
     return "LOW"
 
@@ -401,28 +437,99 @@ ROADMAP_STAGE: Dict[Tier, str] = {
 }
 
 
-def score(dr: DetectorResult) -> Dict[str, Any]:
+def score(
+    dr: DetectorResult,
+    weighting_context: Optional[StackBuilderWeightingContext] = None,
+) -> Dict[str, Any]:
     """
     Convert a DetectorResult into scored opportunity fields.
 
     Returns dict with keys:
-        impact       int   1–10
-        effort       int   1–10
-        confidence   str   HIGH | MEDIUM | LOW
-        tier         str   Quick Win | Strategic | Complex
-        roadmap_stage str  NEXT_30 | NEXT_60 | NEXT_90
-        score_debug  dict  intermediate factor values (for testing and calibration)
+        impact        int   1–10
+        effort        int   1–10
+        confidence    str   HIGH | MEDIUM | LOW
+        tier          str   Quick Win | Strategic | Complex
+        roadmap_stage str   NEXT_30 | NEXT_60 | NEXT_90
+        score_debug   dict  intermediate factor values (for testing and calibration)
+
+    Parameters
+    ----------
+    dr:
+        The detector result to score.
+    weighting_context:
+        Optional Stack Builder weighting context (R16-C1 T1/T2). When
+        provided, the per-system role and priority are used to compute a
+        ``source_weight`` that modulates impact and effective proxy ratio.
+        Falls back to neutral weight (1.0) for older runs without context.
 
     This function is the implementation contract for SF-1.4.
-    """
-    impact     = _compute_impact(dr)
-    effort     = _compute_effort(dr)
-    confidence = _compute_confidence(dr)
-    tier       = _assign_tier(effort, confidence)
 
-    # Debug / calibration breakdown
+    R16-C1 T2 changes
+    -----------------
+    *source_weight* is extracted from *weighting_context* for
+    ``dr.signal_source``, then passed to ``_compute_impact`` and
+    ``_compute_confidence``.  Every step is exposed in ``score_debug``
+    so the calculation is fully auditable — a reviewer can see exactly
+    what role, priority, weight, and effective proxy ratio were used.
+    """
+    # ── R16-C1 T2: resolve source weight ──────────────────────────────────────
+    source_weight: float = WEIGHT_NEUTRAL
+    base_role_weight: float = WEIGHT_NEUTRAL   # R16-C1 T4: role authority without priority
+    source_role: str = ""
+    source_weighting_debug: Optional[Dict[str, Any]] = None
+
+    if weighting_context is not None and not weighting_context.is_neutral:
+        w = weighting_context.get(dr.signal_source)
+        source_weight = w.source_weight        # role × priority, clamped
+        base_role_weight = w.base_role_weight  # role only — T4 provenance cap
+        source_role = w.role                   # R16-C1 T3: needed for ceiling clamp
+        source_weighting_debug = {
+            "system_id":       dr.signal_source,
+            "role":            w.role,
+            "priority":        w.priority,
+            "confirmed":       w.confirmed,
+            "source_weight":   round(source_weight, 4),
+            "base_role_weight": round(base_role_weight, 4),  # R16-C1 T4
+        }
+
+    # ── R16-C1 T4: apply provenance weight cap (observed-beats-inferred) ──────
+    # For inferred evidence the priority nudge is stripped: effective weight is
+    # capped at the base ROLE_WEIGHT so a "primary priority" setting cannot push
+    # inferred patterns above what directly-observed evidence would produce.
+    provenance_type: str = getattr(dr, "provenance_type", PROVENANCE_OBSERVED)
+    effective_weight: float = apply_provenance_weight_cap(
+        source_weight,
+        base_role_weight,
+        provenance_type,
+    )
+
+    # ── Compute scored fields using effective (provenance-adjusted) weight ────
+    impact = _compute_impact(dr, effective_weight)
+    effort = _compute_effort(dr)
+
+    # R16-C1 T4: apply provenance confidence ceiling BEFORE the T3 clamp.
+    # Inferred evidence cannot assert HIGH on its own regardless of weight.
+    confidence_pre_provenance = _compute_confidence(dr, effective_weight)
+    confidence_post_provenance = apply_provenance_confidence_ceiling(
+        confidence_pre_provenance,
+        provenance_type,
+    )
+
+    # R16-C1 T3: apply hard ceiling clamp (supporting-only / Slack ceiling).
+    confidence_before_clamp = confidence_post_provenance
+    confidence = apply_t3_ceiling_clamp(
+        confidence_before_clamp,
+        role=source_role,
+        system_id=dr.signal_source,
+    )
+    t3_clamped = confidence != confidence_before_clamp
+
+    tier = _assign_tier(effort, confidence)
+
+    # ── Debug / calibration breakdown ─────────────────────────────────────────
     v, f, c, r, e = _impact_factors(dr)
     raw_sum = v*_W_VOLUME + f*_W_FRICTION + c*_W_CUSTOMER + r*_W_REVENUE + e*_W_EXTERNAL
+    proxy_ratio = dr.metric_value / dr.threshold if dr.threshold > 0 else 0.0
 
     score_debug = {
         "impact_factors": {
@@ -432,6 +539,8 @@ def score(dr: DetectorResult) -> Dict[str, Any]:
             "revenue_pts":  r,
             "external_pts": e,
             "raw_sum":      round(raw_sum, 4),
+            # R16-C1 T2/T4: expose weighted raw (uses effective_weight post-provenance cap)
+            "weighted_raw": round(raw_sum * effective_weight, 4),
             # T41-6: expose rescaling inputs for calibration visibility
             "raw_impact_min": _RAW_IMPACT_MIN,
             "raw_impact_max": _RAW_IMPACT_MAX,
@@ -442,9 +551,28 @@ def score(dr: DetectorResult) -> Dict[str, Any]:
             "sys_pts":     _sys_pts(_SYSTEM_BOUNDARIES.get(dr.detector_id, 1)),
             "proc_pts":    _PROCESS_COMPLEXITY.get(dr.detector_id, 2.0),
         },
-        "proxy_ratio": round(
-            dr.metric_value / dr.threshold if dr.threshold > 0 else 0.0, 4
+        "proxy_ratio": round(proxy_ratio, 4),
+        # R16-C1 T2/T4: effective proxy ratio after provenance-adjusted weight
+        "effective_proxy_ratio": round(proxy_ratio * effective_weight, 4),
+        # R16-C1 T1/T2: weighting values and computed weight
+        "source_weighting": source_weighting_debug,
+        # R16-C1 T4: provenance guard audit trail
+        "t4_provenance": provenance_guard_debug(
+            provenance_type=provenance_type,
+            source_weight=source_weight,
+            base_role_weight=base_role_weight,
+            effective_weight=effective_weight,
+            confidence_before_provenance=confidence_pre_provenance,
+            confidence_after_provenance=confidence_post_provenance,
         ),
+        # R16-C1 T3: ceiling clamp audit trail
+        "t3_ceiling_clamp": {
+            "applied": t3_clamped,
+            "confidence_before_clamp": confidence_before_clamp,
+            "confidence_after_clamp":  confidence,
+            "role":      source_role,
+            "system_id": dr.signal_source,
+        },
     }
 
     return {
