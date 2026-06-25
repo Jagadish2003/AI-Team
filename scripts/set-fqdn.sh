@@ -117,6 +117,51 @@ while true; do
   esac
 done
 
+# ── Step 3: SMTP details ──────────────────────────────────────────────────────
+echo ""
+printf "  ${BOLD}SMTP details${N}  ${DIM}(press Enter to leave blank)${N}\n"
+printf "  SMTP_HOST           : "; IFS= read -r NEW_SMTP_HOST
+printf "  SMTP_PORT           : "; IFS= read -r NEW_SMTP_PORT
+printf "  SMTP_USERNAME       : "; IFS= read -r NEW_SMTP_USERNAME
+printf "  SMTP_PASSWORD       : "; IFS= read -rs NEW_SMTP_PASSWORD; echo ""
+echo ""
+printf "  SMTP_USE_STARTTLS   [true/false, Enter=blank]: "
+while true; do
+  IFS= read -r starttls_in
+  case "$starttls_in" in
+    true|false|"") NEW_SMTP_USE_STARTTLS="$starttls_in"; break ;;
+    *) printf "  ${R}Enter true, false, or press Enter to skip.${N}\n  SMTP_USE_STARTTLS   [true/false, Enter=blank]: " ;;
+  esac
+done
+printf "  EMAIL_FROM          : "; IFS= read -r NEW_EMAIL_FROM
+printf "  EMAIL_FROM_NAME     : "; IFS= read -r NEW_EMAIL_FROM_NAME
+printf "  AGENTIQ_ADMIN_EMAIL : "; IFS= read -r NEW_AGENTIQ_ADMIN_EMAIL
+
+# ── Step 4: Anthropic API Key ─────────────────────────────────────────────────
+echo ""
+printf "  ${BOLD}Anthropic API Key${N}  ${DIM}(press Enter to leave blank)${N}\n"
+printf "  ANTHROPIC_API_KEY   : "; IFS= read -rs NEW_ANTHROPIC_API_KEY; echo ""
+
+# ── Step 5: Salesforce details ────────────────────────────────────────────────
+echo ""
+printf "  ${BOLD}Salesforce details${N}  ${DIM}(press Enter to leave blank)${N}\n"
+printf "  SALESFORCE_INSTANCE      : "; IFS= read -r NEW_SALESFORCE_INSTANCE
+printf "  SALESFORCE_CLIENT_ID     : "; IFS= read -r NEW_SALESFORCE_CLIENT_ID
+printf "  SALESFORCE_CLIENT_SECRET : "; IFS= read -rs NEW_SALESFORCE_CLIENT_SECRET; echo ""
+
+# ── Step 6: ServiceNow details ────────────────────────────────────────────────
+echo ""
+printf "  ${BOLD}ServiceNow details${N}  ${DIM}(press Enter to leave blank)${N}\n"
+printf "  SERVICENOW_INSTANCE      : "; IFS= read -r NEW_SERVICENOW_INSTANCE
+printf "  SERVICENOW_CLIENT_ID     : "; IFS= read -r NEW_SERVICENOW_CLIENT_ID
+printf "  SERVICENOW_CLIENT_SECRET : "; IFS= read -rs NEW_SERVICENOW_CLIENT_SECRET; echo ""
+
+# ── Step 7: Jira details ──────────────────────────────────────────────────────
+echo ""
+printf "  ${BOLD}Jira details${N}  ${DIM}(press Enter to leave blank)${N}\n"
+printf "  JIRA_CLIENT_ID     : "; IFS= read -r NEW_JIRA_CLIENT_ID
+printf "  JIRA_CLIENT_SECRET : "; IFS= read -rs NEW_JIRA_CLIENT_SECRET; echo ""
+
 # ── Build values ──────────────────────────────────────────────────────────────
 BASE_URL="${SCHEME}://${FQDN}"
 
@@ -154,6 +199,23 @@ printf "    CREDENTIAL_VAULT_KEY         = ${C}\"...\"${N}\n"
 printf "    INFERRED_RELATIONSHIPS_ENABLED = ${C}\"%s\"${N}\n" "$NEW_INFERRED_RELATIONSHIPS_ENABLED"
 printf "    EMAIL_PROVIDER               = ${C}\"%s\"${N}\n" "$NEW_EMAIL_PROVIDER"
 printf "    LICENSE_API_URL              = ${C}\"...\"${N}\n"
+printf "    SMTP_HOST                    = ${C}\"%s\"${N}\n" "$NEW_SMTP_HOST"
+printf "    SMTP_PORT                    = ${C}\"%s\"${N}\n" "$NEW_SMTP_PORT"
+printf "    SMTP_USERNAME                = ${C}\"%s\"${N}\n" "$NEW_SMTP_USERNAME"
+printf "    SMTP_PASSWORD                = ${C}%s${N}\n" "${NEW_SMTP_PASSWORD:+(set — hidden)}"
+printf "    SMTP_USE_STARTTLS            = ${C}\"%s\"${N}\n" "$NEW_SMTP_USE_STARTTLS"
+printf "    EMAIL_FROM                   = ${C}\"%s\"${N}\n" "$NEW_EMAIL_FROM"
+printf "    EMAIL_FROM_NAME              = ${C}\"%s\"${N}\n" "$NEW_EMAIL_FROM_NAME"
+printf "    AGENTIQ_ADMIN_EMAIL          = ${C}\"%s\"${N}\n" "$NEW_AGENTIQ_ADMIN_EMAIL"
+printf "    ANTHROPIC_API_KEY            = ${C}%s${N}\n" "${NEW_ANTHROPIC_API_KEY:+(set — hidden)}"
+printf "    SALESFORCE_INSTANCE          = ${C}\"%s\"${N}\n" "$NEW_SALESFORCE_INSTANCE"
+printf "    SALESFORCE_CLIENT_ID         = ${C}\"%s\"${N}\n" "$NEW_SALESFORCE_CLIENT_ID"
+printf "    SALESFORCE_CLIENT_SECRET     = ${C}%s${N}\n" "${NEW_SALESFORCE_CLIENT_SECRET:+(set — hidden)}"
+printf "    SERVICENOW_INSTANCE          = ${C}\"%s\"${N}\n" "$NEW_SERVICENOW_INSTANCE"
+printf "    SERVICENOW_CLIENT_ID         = ${C}\"%s\"${N}\n" "$NEW_SERVICENOW_CLIENT_ID"
+printf "    SERVICENOW_CLIENT_SECRET     = ${C}%s${N}\n" "${NEW_SERVICENOW_CLIENT_SECRET:+(set — hidden)}"
+printf "    JIRA_CLIENT_ID               = ${C}\"%s\"${N}\n" "$NEW_JIRA_CLIENT_ID"
+printf "    JIRA_CLIENT_SECRET           = ${C}%s${N}\n" "${NEW_JIRA_CLIENT_SECRET:+(set — hidden)}"
 
 # ── Create directory if needed ────────────────────────────────────────────────
 if [[ ! -d "$TARGET_DIR" ]]; then
@@ -194,6 +256,23 @@ if [[ -f "$TARGET_FILE" ]]; then
   CUR_INFERRED=$(read_existing INFERRED_RELATIONSHIPS_ENABLED)
   CUR_EMAIL=$(read_existing EMAIL_PROVIDER)
   CUR_LICENSE=$(read_existing LICENSE_API_URL)
+  CUR_SMTP_HOST=$(read_existing SMTP_HOST)
+  CUR_SMTP_PORT=$(read_existing SMTP_PORT)
+  CUR_SMTP_USERNAME=$(read_existing SMTP_USERNAME)
+  CUR_SMTP_PASSWORD=$(read_existing SMTP_PASSWORD)
+  CUR_SMTP_USE_STARTTLS=$(read_existing SMTP_USE_STARTTLS)
+  CUR_EMAIL_FROM=$(read_existing EMAIL_FROM)
+  CUR_EMAIL_FROM_NAME=$(read_existing EMAIL_FROM_NAME)
+  CUR_AGENTIQ_ADMIN_EMAIL=$(read_existing AGENTIQ_ADMIN_EMAIL)
+  CUR_ANTHROPIC_API_KEY=$(read_existing ANTHROPIC_API_KEY)
+  CUR_SALESFORCE_INSTANCE=$(read_existing SALESFORCE_INSTANCE)
+  CUR_SALESFORCE_CLIENT_ID=$(read_existing SALESFORCE_CLIENT_ID)
+  CUR_SALESFORCE_CLIENT_SECRET=$(read_existing SALESFORCE_CLIENT_SECRET)
+  CUR_SERVICENOW_INSTANCE=$(read_existing SERVICENOW_INSTANCE)
+  CUR_SERVICENOW_CLIENT_ID=$(read_existing SERVICENOW_CLIENT_ID)
+  CUR_SERVICENOW_CLIENT_SECRET=$(read_existing SERVICENOW_CLIENT_SECRET)
+  CUR_JIRA_CLIENT_ID=$(read_existing JIRA_CLIENT_ID)
+  CUR_JIRA_CLIENT_SECRET=$(read_existing JIRA_CLIENT_SECRET)
 
   # Check all keys match
   if [[ "$CUR_INGEST_MODE"     == "$NEW_INGEST_MODE"               ]] &&
@@ -209,7 +288,24 @@ if [[ -f "$TARGET_FILE" ]]; then
      [[ "$CUR_VAULT_KEY"       == "$NEW_CREDENTIAL_VAULT_KEY"       ]] &&
      [[ "$CUR_INFERRED"        == "$NEW_INFERRED_RELATIONSHIPS_ENABLED" ]] &&
      [[ "$CUR_EMAIL"           == "$NEW_EMAIL_PROVIDER"             ]] &&
-     [[ "$CUR_LICENSE"         == "$NEW_LICENSE_API_URL"            ]]; then
+     [[ "$CUR_LICENSE"         == "$NEW_LICENSE_API_URL"            ]] &&
+     [[ "$CUR_SMTP_HOST"       == "$NEW_SMTP_HOST"                  ]] &&
+     [[ "$CUR_SMTP_PORT"       == "$NEW_SMTP_PORT"                  ]] &&
+     [[ "$CUR_SMTP_USERNAME"   == "$NEW_SMTP_USERNAME"              ]] &&
+     [[ "$CUR_SMTP_PASSWORD"   == "$NEW_SMTP_PASSWORD"              ]] &&
+     [[ "$CUR_SMTP_USE_STARTTLS" == "$NEW_SMTP_USE_STARTTLS"        ]] &&
+     [[ "$CUR_EMAIL_FROM"      == "$NEW_EMAIL_FROM"                 ]] &&
+     [[ "$CUR_EMAIL_FROM_NAME" == "$NEW_EMAIL_FROM_NAME"            ]] &&
+     [[ "$CUR_AGENTIQ_ADMIN_EMAIL" == "$NEW_AGENTIQ_ADMIN_EMAIL"    ]] &&
+     [[ "$CUR_ANTHROPIC_API_KEY"   == "$NEW_ANTHROPIC_API_KEY"      ]] &&
+     [[ "$CUR_SALESFORCE_INSTANCE" == "$NEW_SALESFORCE_INSTANCE"    ]] &&
+     [[ "$CUR_SALESFORCE_CLIENT_ID" == "$NEW_SALESFORCE_CLIENT_ID"  ]] &&
+     [[ "$CUR_SALESFORCE_CLIENT_SECRET" == "$NEW_SALESFORCE_CLIENT_SECRET" ]] &&
+     [[ "$CUR_SERVICENOW_INSTANCE" == "$NEW_SERVICENOW_INSTANCE"    ]] &&
+     [[ "$CUR_SERVICENOW_CLIENT_ID" == "$NEW_SERVICENOW_CLIENT_ID"  ]] &&
+     [[ "$CUR_SERVICENOW_CLIENT_SECRET" == "$NEW_SERVICENOW_CLIENT_SECRET" ]] &&
+     [[ "$CUR_JIRA_CLIENT_ID"  == "$NEW_JIRA_CLIENT_ID"             ]] &&
+     [[ "$CUR_JIRA_CLIENT_SECRET" == "$NEW_JIRA_CLIENT_SECRET"      ]]; then
     echo ""
     printf "  ${G}✓ No changes needed — %s already matches.${N}\n" "$TARGET_FILE"
     exit 0
@@ -232,8 +328,25 @@ if [[ -f "$TARGET_FILE" ]]; then
   diff_row "OAUTH_CALLBACK_ALLOW_UNAUTH"    "$CUR_CALLBACK_UNAUTH" "$NEW_OAUTH_CALLBACK_ALLOW_UNAUTH"
   diff_row "CREDENTIAL_VAULT_KEY"           "$CUR_VAULT_KEY"       "$NEW_CREDENTIAL_VAULT_KEY"
   diff_row "INFERRED_RELATIONSHIPS_ENABLED" "$CUR_INFERRED"        "$NEW_INFERRED_RELATIONSHIPS_ENABLED"
-  diff_row "EMAIL_PROVIDER"                 "$CUR_EMAIL"           "$NEW_EMAIL_PROVIDER"
-  diff_row "LICENSE_API_URL"                "$CUR_LICENSE"         "$NEW_LICENSE_API_URL"
+  diff_row "EMAIL_PROVIDER"                 "$CUR_EMAIL"                    "$NEW_EMAIL_PROVIDER"
+  diff_row "LICENSE_API_URL"                "$CUR_LICENSE"                  "$NEW_LICENSE_API_URL"
+  diff_row "SMTP_HOST"                      "$CUR_SMTP_HOST"                "$NEW_SMTP_HOST"
+  diff_row "SMTP_PORT"                      "$CUR_SMTP_PORT"                "$NEW_SMTP_PORT"
+  diff_row "SMTP_USERNAME"                  "$CUR_SMTP_USERNAME"            "$NEW_SMTP_USERNAME"
+  diff_row "SMTP_PASSWORD"                  "$CUR_SMTP_PASSWORD"            "$NEW_SMTP_PASSWORD"
+  diff_row "SMTP_USE_STARTTLS"              "$CUR_SMTP_USE_STARTTLS"        "$NEW_SMTP_USE_STARTTLS"
+  diff_row "EMAIL_FROM"                     "$CUR_EMAIL_FROM"               "$NEW_EMAIL_FROM"
+  diff_row "EMAIL_FROM_NAME"               "$CUR_EMAIL_FROM_NAME"          "$NEW_EMAIL_FROM_NAME"
+  diff_row "AGENTIQ_ADMIN_EMAIL"           "$CUR_AGENTIQ_ADMIN_EMAIL"      "$NEW_AGENTIQ_ADMIN_EMAIL"
+  diff_row "ANTHROPIC_API_KEY"             "$CUR_ANTHROPIC_API_KEY"        "$NEW_ANTHROPIC_API_KEY"
+  diff_row "SALESFORCE_INSTANCE"           "$CUR_SALESFORCE_INSTANCE"      "$NEW_SALESFORCE_INSTANCE"
+  diff_row "SALESFORCE_CLIENT_ID"          "$CUR_SALESFORCE_CLIENT_ID"     "$NEW_SALESFORCE_CLIENT_ID"
+  diff_row "SALESFORCE_CLIENT_SECRET"      "$CUR_SALESFORCE_CLIENT_SECRET" "$NEW_SALESFORCE_CLIENT_SECRET"
+  diff_row "SERVICENOW_INSTANCE"           "$CUR_SERVICENOW_INSTANCE"      "$NEW_SERVICENOW_INSTANCE"
+  diff_row "SERVICENOW_CLIENT_ID"          "$CUR_SERVICENOW_CLIENT_ID"     "$NEW_SERVICENOW_CLIENT_ID"
+  diff_row "SERVICENOW_CLIENT_SECRET"      "$CUR_SERVICENOW_CLIENT_SECRET" "$NEW_SERVICENOW_CLIENT_SECRET"
+  diff_row "JIRA_CLIENT_ID"                "$CUR_JIRA_CLIENT_ID"           "$NEW_JIRA_CLIENT_ID"
+  diff_row "JIRA_CLIENT_SECRET"            "$CUR_JIRA_CLIENT_SECRET"       "$NEW_JIRA_CLIENT_SECRET"
 
   echo ""
   printf "  ${Y}Overwrite %s with new values? [y/N]${N} " "$TARGET_FILE"
@@ -264,6 +377,28 @@ INFERRED_RELATIONSHIPS_ENABLED=${NEW_INFERRED_RELATIONSHIPS_ENABLED}
 EMAIL_PROVIDER="${NEW_EMAIL_PROVIDER}"
 # License API URL
 LICENSE_API_URL="${NEW_LICENSE_API_URL}"
+#SMTP details
+SMTP_HOST="${NEW_SMTP_HOST}"
+SMTP_PORT="${NEW_SMTP_PORT}"
+SMTP_USERNAME="${NEW_SMTP_USERNAME}"
+SMTP_PASSWORD="${NEW_SMTP_PASSWORD}"
+SMTP_USE_STARTTLS="${NEW_SMTP_USE_STARTTLS}"
+EMAIL_FROM="${NEW_EMAIL_FROM}"
+EMAIL_FROM_NAME="${NEW_EMAIL_FROM_NAME}"
+AGENTIQ_ADMIN_EMAIL="${NEW_AGENTIQ_ADMIN_EMAIL}"
+#Anthropic API Key details
+ANTHROPIC_API_KEY="${NEW_ANTHROPIC_API_KEY}"
+#Sales force details
+SALESFORCE_INSTANCE="${NEW_SALESFORCE_INSTANCE}"
+SALESFORCE_CLIENT_ID="${NEW_SALESFORCE_CLIENT_ID}"
+SALESFORCE_CLIENT_SECRET="${NEW_SALESFORCE_CLIENT_SECRET}"
+# ServiceNow details
+SERVICENOW_INSTANCE="${NEW_SERVICENOW_INSTANCE}"
+SERVICENOW_CLIENT_ID="${NEW_SERVICENOW_CLIENT_ID}"
+SERVICENOW_CLIENT_SECRET="${NEW_SERVICENOW_CLIENT_SECRET}"
+# Jira
+JIRA_CLIENT_ID="${NEW_JIRA_CLIENT_ID}"
+JIRA_CLIENT_SECRET="${NEW_JIRA_CLIENT_SECRET}"
 EOF
 
 chmod 600 "$TARGET_FILE"
