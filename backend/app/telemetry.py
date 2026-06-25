@@ -429,6 +429,44 @@ class LicenseClockAnomalyPayload(TypedDict):
     now: str
 
 
+class IngestionCheckpointResetPayload(TypedDict):
+    """ingestion.checkpoint_reset — R16-A1 / AT-383 (§3, AC7).
+
+    Emitted when an admin explicitly clears a source's ingestion checkpoint,
+    forcing a full re-read on the next run. Identifiers + outcome only — no
+    source data.
+
+    org_id:          The org whose checkpoint was reset.
+    connector_id:    The source connector whose checkpoint was cleared.
+    had_checkpoint:  True if a checkpoint existed and was removed; False if there
+                     was nothing to clear (already at "first run").
+    """
+    org_id: str
+    connector_id: str
+    had_checkpoint: bool
+
+
+class IngestionArtifactChangedPayload(TypedDict):
+    """ingestion.artifact_changed — R16-A1 / AT-381 (§4, AC4).
+
+    Emitted once per changed source artifact when a connector reports a delta, so
+    the Release 1.8 retrieval-freshness layer can later invalidate/refresh exactly
+    the artifacts that changed. 1.6 only EMITS — there is no consumer yet
+    (forward-design rule, §4). Identifiers + change kind only — no artifact content.
+
+    org_id:        The org the artifact belongs to.
+    connector_id:  The source connector that reported the change.
+    artifact_id:   Stable id of the changed item (connector-defined).
+    change_kind:   'created' | 'updated' | 'deleted'.
+    observed_at:   When the change was observed during the run (UTC ISO).
+    """
+    org_id: str
+    connector_id: str
+    artifact_id: str
+    change_kind: str
+    observed_at: str
+
+
 # R16-D1 / AT-366 (T5) — model provider gateway telemetry.
 # Emitted once per gateway generate()/embed() call so model usage is observable
 # across hosted, in-boundary, and future customer-tenant modes. The provider
@@ -543,6 +581,10 @@ register_event_type("license.entered_grace", LicenseEnteredGracePayload)
 register_event_type("license.entered_readonly", LicenseEnteredReadonlyPayload)
 register_event_type("license.updated", LicenseUpdatedPayload)
 register_event_type("license.clock_anomaly", LicenseClockAnomalyPayload)
+# R16-A1 / AT-383 (T7): admin checkpoint-reset action.
+register_event_type("ingestion.checkpoint_reset", IngestionCheckpointResetPayload)
+# R16-A1 / AT-381 (T5): per-changed-artifact event (emitted by the change runner).
+register_event_type("ingestion.artifact_changed", IngestionArtifactChangedPayload)
 # R16-D1 / AT-366 (T5) — model provider gateway telemetry. Registered here so
 # the gateway's generate()/embed() paths can emit them; record_event() raises
 # ValueError for an unregistered type, so registration must land before any
@@ -711,6 +753,8 @@ __all__ = [
     "LicenseEnteredReadonlyPayload",        # LIC-1 / AT-348 (T7)
     "LicenseUpdatedPayload",                # LIC-1 / AT-348 (T7)
     "LicenseClockAnomalyPayload",           # LIC-1 / AT-348 (T7)
+    "IngestionCheckpointResetPayload",      # R16-A1 / AT-383 (T7)
+    "IngestionArtifactChangedPayload",      # R16-A1 / AT-381 (T5)
     "ModelGenerationCompletedPayload",      # R16-D1 / AT-366 (T5)
     "ModelEmbeddingCompletedPayload",       # R16-D1 / AT-366 (T5)
     "EVENT_PAYLOAD_TYPES",          # AT-211 alias: event_type → TypedDict schema

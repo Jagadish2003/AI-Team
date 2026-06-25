@@ -42,6 +42,13 @@ SCOPE_DECLARED = "scope_declared"
 USER_LOGIN = "user_login"
 SETUP_STATE_SAVED = "setup_state_saved"
 SCHEMA_DISCOVERED = "schema_discovered"
+# R16-A1 / AT-383 (T7): admin cleared a source's ingestion checkpoint.
+# NOTE: this is the AUDIT event name and is intentionally snake_case, matching
+# every other audit-event constant in this module. It is a DIFFERENT system from
+# the telemetry event for the same action, which uses dot notation
+# ("ingestion.checkpoint_reset", registered in app/telemetry.py). Searching the
+# codebase for "checkpoint_reset" will surface both — that is expected.
+INGESTION_CHECKPOINT_RESET = "ingestion_checkpoint_reset"
 
 # ---------------------------------------------------------------------------
 # Registry — every accepted event type listed here.
@@ -60,6 +67,7 @@ AUDIT_EVENT_REGISTRY: frozenset[str] = frozenset({
     USER_LOGIN,
     SETUP_STATE_SAVED,
     SCHEMA_DISCOVERED,
+    INGESTION_CHECKPOINT_RESET,
 })
 
 # ---------------------------------------------------------------------------

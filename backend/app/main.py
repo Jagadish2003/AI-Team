@@ -60,6 +60,7 @@ from .routes_causal import register_causal_routes
 from .routes_graph import register_graph_routes
 from .routes_auth import register_auth_routes
 from .routes_license import register_license_routes
+from .routes_ingestion import register_ingestion_routes
 from .security import require_auth
 from .auth.configs import CONNECTOR_AUTH_CONFIGS
 from .auth.secrets import validate_all_secrets
@@ -250,6 +251,8 @@ register_graph_routes(app)
 register_auth_routes(app)
 # LIC-1 / T6 (AT-347): Owner-only license status + update-key admin routes.
 register_license_routes(app)
+# R16-A1 / AT-383 (T7): admin ingestion-checkpoint reset.
+register_ingestion_routes(app)
 
 origins = [
     o.strip()
