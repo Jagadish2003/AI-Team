@@ -33,6 +33,16 @@ Resilience (R16-D2 T2)
   they never hammer a throttled endpoint.
 - Retry is bounded by ``_MAX_RETRIES`` — the provider never retries
   indefinitely regardless of error type.
+
+Telemetry (R16-D2 T6 / AT-410)
+--------------------------------
+- generate() and embed() each emit exactly one telemetry event after the call
+  completes (success or failure) — never per retry, never per token.
+- The event types (model.generation_completed / model.embedding_completed) are
+  registered in app.telemetry; record_event() is imported lazily to avoid a
+  circular import at module load time.
+- Telemetry failures are swallowed — a DB or import problem never propagates
+  to the caller.  Credentials and prompt text are never included in the payload.
 """
 from __future__ import annotations
 
@@ -66,6 +76,28 @@ _TRANSIENT_5XX_CODES: frozenset = frozenset({500, 502, 503, 504})
 # to avoid an attempt that would instantly time out.
 _MIN_ATTEMPT_BUDGET_S: float = 0.05
 
+# Telemetry event types (R16-D2 T6 / AT-410)
+_GENERATION_EVENT: str = "model.generation_completed"
+_EMBEDDING_EVENT: str = "model.embedding_completed"
+
+
+def _record_hosted_telemetry(event_type: str, payload: dict) -> None:
+    """Emit one telemetry event for a completed hosted-provider call.
+
+    Imported lazily to avoid a circular import at module load time (the same
+    pattern the gateway uses in _record_provider_telemetry).  Wrapped so a
+    telemetry failure never propagates to the caller — model calls are not
+    conditional on telemetry succeeding.
+    """
+    try:
+        from app.telemetry import record_event
+
+        record_event(event_type, payload)
+    except Exception:  # pragma: no cover - telemetry is best-effort
+        logger.debug(
+            "hosted_provider: telemetry emit failed for %s", event_type, exc_info=True
+        )
+
 
 class HostedModelProvider(ModelProvider):
     """ModelProvider backed by the Anthropic hosted API.
@@ -91,6 +123,24 @@ class HostedModelProvider(ModelProvider):
         Returns ``GenerationResult(text=None, ok=False, provider='hosted')``
         on permanent failure — missing API key, non-transient HTTP error, or
         exhausted retries/budget.  Never raises.
+
+        Emits exactly one ``model.generation_completed`` telemetry event after
+        all retry attempts finish — never per retry, never per token (T6-AC1/AC3).
+        Telemetry is emitted on both success and failure (T6-AC4).
+        """
+        result = self._run_generate(req)
+        _record_hosted_telemetry(
+            _GENERATION_EVENT,
+            {"provider": self.name, "ok": result.ok},
+        )
+        return result
+
+    def _run_generate(self, req: GenerationRequest) -> GenerationResult:
+        """Internal generate logic — bounded retry with exponential backoff.
+
+        Called exclusively by generate(); telemetry is emitted there, once,
+        after this method returns — ensuring exactly-one-event-per-call (T6-AC3).
+        Never raises; returns ok=False on every failure path.
         """
         api_key = os.getenv("ANTHROPIC_API_KEY", "")
         if not api_key:
@@ -161,6 +211,11 @@ class HostedModelProvider(ModelProvider):
         Returns an empty list so callers degrade gracefully.  Configure
         MODEL_EMBEDDING_PROVIDER to a provider that supports embeddings when
         vector search is required.
+
+        Emits exactly one ``model.embedding_completed`` telemetry event after
+        the call completes (T6-AC2/AC3/AC4).  ok=False when texts were supplied
+        but no vectors returned (the provider returned fewer vectors than inputs).
+        ok=True for an empty-texts no-op call (0 == 0 is vacuously satisfied).
         """
         if texts:
             logger.debug(
@@ -168,7 +223,17 @@ class HostedModelProvider(ModelProvider):
                 "embeddings not available on the hosted provider; returning []",
                 len(texts),
             )
-        return []
+        vectors: List[List[float]] = []
+        _record_hosted_telemetry(
+            _EMBEDDING_EVENT,
+            {
+                "provider": self.name,
+                "ok": len(vectors) == len(texts),
+                "text_count": len(texts),
+                "vector_count": len(vectors),
+            },
+        )
+        return vectors
 
     # ------------------------------------------------------------------
     # Internal helpers
