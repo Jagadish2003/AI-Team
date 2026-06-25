@@ -42,6 +42,8 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.main import app
+from app.db import get_run
+from app.middleware.tenancy import DEV_DEFAULT_ORG
 
 from discovery.weighting_context import load_for_run
 from discovery.scorer import score
@@ -58,6 +60,14 @@ def client():
 
 def _auth() -> Dict[str, str]:
     return {"Authorization": f"Bearer {os.getenv('DEV_JWT', 'dev-token-change-me')}"}
+
+
+#: A deliberately-wrong org placed in the launch request body. The architecture
+#: invariant is that org_id is sourced ONLY from the verified JWT
+#: (get_current_org_id() → TenancyMiddleware), never from the request body. The
+#: launch route must ignore this value entirely; TestAC1TenancyEnforcement
+#: proves the persisted run carries the JWT org rather than this sentinel.
+_BODY_ORG_SENTINEL = "body-org-must-be-ignored"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -83,7 +93,8 @@ def _launch(
     if selected is None:
         selected = ["salesforce", "servicenow"]
     body: Dict[str, Any] = {
-        "org_id": "test_org_r16c1_t6",
+        # Intentionally wrong: tenancy must source org_id from the JWT, not here.
+        "org_id": _BODY_ORG_SENTINEL,
         "focus_id": "approvals_compliance",
         "industry_id": "financial_services",
         "template_id": None,
@@ -326,6 +337,39 @@ class TestAC1ReadsRunConfiguration:
         assert "COR-05" in tertiary.rule_ids
         assert primary.corroboration_weight_debug["source_contributions"]["servicenow"]["source_weight"] == pytest.approx(0.88)
         assert tertiary.corroboration_weight_debug["source_contributions"]["servicenow"]["source_weight"] == pytest.approx(0.72)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# AC1 (tenancy) — org_id comes from the JWT, never from the request body
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestAC1TenancyEnforcement:
+    """The launch body carries a deliberately-wrong org_id (_BODY_ORG_SENTINEL).
+
+    These tests prove the route ignores it and sources org from the verified
+    JWT — so they fail (rather than silently passing on a 200) if a future
+    handler ever trusts the request body for tenancy.
+    """
+
+    def test_persisted_run_uses_jwt_org_not_body_org(self, client):
+        run_id = _launch(client, sf_role="system_of_record", sf_priority="primary")
+
+        run = get_run(run_id)
+        assert run is not None
+        # The wrong body org must NOT have been persisted...
+        assert run["orgId"] != _BODY_ORG_SENTINEL
+        # ...and the JWT-derived dev org must have been used instead.
+        assert run["orgId"] == DEV_DEFAULT_ORG
+
+    def test_setup_context_org_matches_jwt_org_not_body(self, client):
+        run_id = _launch(client, sf_role="system_of_record", sf_priority="primary")
+
+        # The setup_context blob the weighting layer reads is also JWT-scoped.
+        from app.db import run_kv_get
+        ctx = run_kv_get("setup_context", run_id)
+        assert ctx is not None
+        assert ctx["org_id"] != _BODY_ORG_SENTINEL
+        assert ctx["org_id"] == DEV_DEFAULT_ORG
 
 
 # ─────────────────────────────────────────────────────────────────────────────

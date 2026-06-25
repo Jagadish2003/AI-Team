@@ -18,7 +18,7 @@
  *      the run reflects the customer's selection (the observable AC2/AC3 path).
  */
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import {
   STEP_COPY,
   buildStackBuilderLaunchPayload,
@@ -153,5 +153,52 @@ describe('R16-C1 T5 — the run reflects the customer selection', () => {
     const b = buildStackBuilderLaunchPayload(setupState(), 'service_cloud', 'default');
 
     expect(JSON.stringify(a)).toEqual(JSON.stringify(b));
+  });
+});
+
+// ── 4. A selected system missing a weighting is surfaced, not silently dropped ─
+
+describe('R16-C1 — missing weighting is surfaced at launch', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('warns when a selected system has no weighting entry', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    // servicenow is selected but only salesforce has a weighting entry.
+    const state = setupState({
+      selectedSystemIds: ['salesforce', 'servicenow'],
+      weightings: {
+        salesforce: weighting({ systemId: 'salesforce', role: 'system_of_record', priority: 'primary' }),
+      },
+    });
+
+    buildStackBuilderLaunchPayload(state, 'service_cloud', 'default');
+
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls[0][0]).toContain('servicenow');
+  });
+
+  it('does not warn when every selected system has a weighting', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    buildStackBuilderLaunchPayload(setupState(), 'service_cloud', 'default');
+
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it('still sends the weightings it does have (warning is non-blocking)', () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const state = setupState({
+      selectedSystemIds: ['salesforce', 'servicenow'],
+      weightings: {
+        salesforce: weighting({ systemId: 'salesforce', role: 'system_of_record', priority: 'primary' }),
+      },
+    });
+
+    const payload = buildStackBuilderLaunchPayload(state, 'service_cloud', 'default');
+
+    expect(payload.selected_system_ids).toEqual(['salesforce', 'servicenow']);
+    expect(Object.keys(payload.weightings)).toEqual(['salesforce']);
   });
 });

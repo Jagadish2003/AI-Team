@@ -193,6 +193,23 @@ export function buildStackBuilderLaunchPayload(
   packId: string,
   orgId: string,
 ): StackBuilderLaunchPayload {
+  // Surface the silent-mismatch case: every selected system should carry a
+  // confirmed weighting. If one is missing (e.g. a system was selected but its
+  // weighting was lost to a browser-state glitch before reaching launch), the
+  // backend's load_for_run() falls back to NEUTRAL scoring for it with no error
+  // — so the customer's "weight evidence correctly" promise would be partially
+  // ignored without anyone knowing. Warn loudly so it is at least visible.
+  const missingWeightings = state.selectedSystemIds.filter(
+    id => !(id in state.weightings),
+  );
+  if (missingWeightings.length > 0) {
+    console.warn(
+      `[StackBuilder] Launching with ${missingWeightings.length} selected ` +
+        `system(s) that have no weighting entry: ${missingWeightings.join(', ')}. ` +
+        `These will be scored with neutral weighting by discovery.`,
+    );
+  }
+
   return {
     org_id: orgId,
     focus_id: state.focusId,
