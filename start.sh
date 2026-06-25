@@ -11,10 +11,12 @@ echo "==> Setting up storage at $STORE_DIR..."
 mkdir -p "$STORE_DIR/backend"
 mkdir -p "$STORE_DIR/postgres"
 mkdir -p "$STORE_DIR/logs"
+mkdir -p "$STORE_DIR/ssl"
 
 echo "    $STORE_DIR/backend/   — backend .env"
 echo "    $STORE_DIR/postgres/  — postgres data (persistent)"
 echo "    $STORE_DIR/logs/      — log files"
+echo "    $STORE_DIR/ssl/       — SSL certificates (cert.pem fullchain.pem privkey.pem)"
 
 # ── 2. Preflight: check .env ──────────────────────────────────────────────────
 echo ""
@@ -186,12 +188,7 @@ echo ""
 
 # ── 8. Summary ────────────────────────────────────────────────────────────────
 SERVER_IP=$(hostname -I | awk '{print $1}')
-SSL_CERT="/opt/certs/ssl/fullchain.pem"
-if [[ -f "$SSL_CERT" ]]; then
-    FRONTEND_URL="https://${SERVER_IP}"
-else
-    FRONTEND_URL="http://${SERVER_IP}"
-fi
+SSL_CERT="$STORE_DIR/ssl/fullchain.pem"
 
 echo "============================================================"
 echo " AgentIQ stack"
@@ -199,9 +196,15 @@ echo "============================================================"
 docker compose --file "$COMPOSE_FILE" ps \
     --format "table {{.Name}}\t{{.Status}}\t{{.Ports}}"
 echo ""
-echo "  Frontend : ${FRONTEND_URL}"
-echo "  API docs : http://${SERVER_IP}:8000/docs"
-echo "  API base : http://${SERVER_IP}:8000/api"
+if [[ -f "$SSL_CERT" ]]; then
+    echo "  Frontend  : http://${SERVER_IP}   (HTTP)"
+    echo "  Frontend  : https://${SERVER_IP}  (HTTPS)"
+else
+    echo "  Frontend  : http://${SERVER_IP}"
+    echo "  (Place certs in $STORE_DIR/ssl/ and restart to enable HTTPS)"
+fi
+echo "  API docs  : http://${SERVER_IP}:8000/docs"
+echo "  API base  : http://${SERVER_IP}:8000/api"
 echo ""
 echo "  Logs : docker compose --file $COMPOSE_FILE logs -f"
 echo "  Stop : docker compose --file $COMPOSE_FILE down"

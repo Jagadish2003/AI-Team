@@ -12,7 +12,7 @@
 # =============================================================================
 set -euo pipefail
 
-CERTS_DIR="/opt/certs/ssl"
+CERTS_DIR="/opt/aiqstore/ssl"
 CONTAINER="agentiq-frontend"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 SSL_CONF="$SCRIPT_DIR/../frontend/nginx-ssl.conf"
