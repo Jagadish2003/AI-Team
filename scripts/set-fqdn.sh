@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # =============================================================================
 # AgentIQ — FQDN / URL Configuration
-# Creates /opt/aiqtestdir/.env with the five URL-related variables.
+# Creates /opt/aiqtestdir/.env with URL variables and static config lines.
 #
 # Behaviour:
 #   - /opt/aiqtestdir/ created if it does not exist
@@ -120,19 +120,40 @@ done
 # ── Build values ──────────────────────────────────────────────────────────────
 BASE_URL="${SCHEME}://${FQDN}"
 
+# Dynamic (from prompts)
 NEW_OAUTH_FRONTEND_BASE_URL="$BASE_URL"
 NEW_CORS_ORIGINS="$BASE_URL"
 NEW_PUBLIC_HOSTNAME="$BASE_URL"
 NEW_AGENTIQ_BACKEND_URL="$BASE_URL"
 NEW_OAUTH_REDIRECT_URI="${BASE_URL}/api/connectors/oauth/callback"
 
+# Static (fixed — written as-is with comments)
+NEW_INGEST_MODE="live"
+NEW_TRACKB_RUNNER_MODE="in_process"
+NEW_PROD_DATABASE_URL="postgresql://aiqprodusr:iW18nhBs9dMrUl@agentiq-postgres:5432/agentiqprod"
+NEW_DATABASE_URL="postgresql://aiqprodusr:iW18nhBs9dMrUl@agentiq-postgres:5432/agentiqprod"
+NEW_OAUTH_CALLBACK_ALLOW_UNAUTH="1"
+NEW_CREDENTIAL_VAULT_KEY="dAAmXyxZFyZ4H1J8My722jOP4hUGPScLuEMX86tM9SI="
+NEW_INFERRED_RELATIONSHIPS_ENABLED="true"
+NEW_EMAIL_PROVIDER="smtp"
+NEW_LICENSE_API_URL="https://qbusfbie3c.execute-api.us-east-1.amazonaws.com/prod/license"
+
 echo ""
 printf "  ${BOLD}Values to write${N}\n"
-printf "    OAUTH_FRONTEND_BASE_URL = ${C}\"%s\"${N}\n" "$NEW_OAUTH_FRONTEND_BASE_URL"
-printf "    CORS_ORIGINS            = ${C}\"%s\"${N}\n" "$NEW_CORS_ORIGINS"
-printf "    PUBLIC_HOSTNAME         = ${C}\"%s\"${N}\n" "$NEW_PUBLIC_HOSTNAME"
-printf "    AGENTIQ_BACKEND_URL     = ${C}\"%s\"${N}\n" "$NEW_AGENTIQ_BACKEND_URL"
-printf "    OAUTH_REDIRECT_URI      = ${C}\"%s\"${N}\n" "$NEW_OAUTH_REDIRECT_URI"
+printf "    INGEST_MODE                  = ${C}\"%s\"${N}\n" "$NEW_INGEST_MODE"
+printf "    TRACKB_RUNNER_MODE           = ${C}\"%s\"${N}\n" "$NEW_TRACKB_RUNNER_MODE"
+printf "    PROD_DATABASE_URL            = ${C}\"postgresql://...\"${N}\n"
+printf "    DATABASE_URL                 = ${C}\"postgresql://...\"${N}\n"
+printf "    OAUTH_FRONTEND_BASE_URL      = ${C}\"%s\"${N}\n" "$NEW_OAUTH_FRONTEND_BASE_URL"
+printf "    CORS_ORIGINS                 = ${C}\"%s\"${N}\n" "$NEW_CORS_ORIGINS"
+printf "    PUBLIC_HOSTNAME              = ${C}\"%s\"${N}\n" "$NEW_PUBLIC_HOSTNAME"
+printf "    AGENTIQ_BACKEND_URL          = ${C}\"%s\"${N}\n" "$NEW_AGENTIQ_BACKEND_URL"
+printf "    OAUTH_REDIRECT_URI           = ${C}\"%s\"${N}\n" "$NEW_OAUTH_REDIRECT_URI"
+printf "    OAUTH_CALLBACK_ALLOW_UNAUTH  = ${C}1${N}\n"
+printf "    CREDENTIAL_VAULT_KEY         = ${C}\"...\"${N}\n"
+printf "    INFERRED_RELATIONSHIPS_ENABLED = ${C}\"%s\"${N}\n" "$NEW_INFERRED_RELATIONSHIPS_ENABLED"
+printf "    EMAIL_PROVIDER               = ${C}\"%s\"${N}\n" "$NEW_EMAIL_PROVIDER"
+printf "    LICENSE_API_URL              = ${C}\"...\"${N}\n"
 
 # ── Create directory if needed ────────────────────────────────────────────────
 if [[ ! -d "$TARGET_DIR" ]]; then
@@ -149,18 +170,46 @@ read_existing() {
 
 # ── Compare with existing .env ────────────────────────────────────────────────
 if [[ -f "$TARGET_FILE" ]]; then
+  diff_row() {
+    local key="$1" old="$2" new="$3"
+    if [[ "$old" != "$new" ]]; then
+      printf "    ${Y}%-38s${N}\n" "$key"
+      printf "      ${DIM}current :${N} \"%s\"\n" "$old"
+      printf "      ${G}new     :${N} \"%s\"\n" "$new"
+    fi
+  }
+
+  # Read all keys from existing file
+  CUR_INGEST_MODE=$(read_existing INGEST_MODE)
+  CUR_TRACKB=$(read_existing TRACKB_RUNNER_MODE)
+  CUR_PROD_DB=$(read_existing PROD_DATABASE_URL)
+  CUR_DB=$(read_existing DATABASE_URL)
   CUR_OAUTH_FRONTEND=$(read_existing OAUTH_FRONTEND_BASE_URL)
   CUR_CORS=$(read_existing CORS_ORIGINS)
   CUR_PUBLIC=$(read_existing PUBLIC_HOSTNAME)
   CUR_BACKEND=$(read_existing AGENTIQ_BACKEND_URL)
   CUR_REDIRECT=$(read_existing OAUTH_REDIRECT_URI)
+  CUR_CALLBACK_UNAUTH=$(read_existing OAUTH_CALLBACK_ALLOW_UNAUTH)
+  CUR_VAULT_KEY=$(read_existing CREDENTIAL_VAULT_KEY)
+  CUR_INFERRED=$(read_existing INFERRED_RELATIONSHIPS_ENABLED)
+  CUR_EMAIL=$(read_existing EMAIL_PROVIDER)
+  CUR_LICENSE=$(read_existing LICENSE_API_URL)
 
-  # Check all five match
-  if [[ "$CUR_OAUTH_FRONTEND" == "$NEW_OAUTH_FRONTEND_BASE_URL" ]] &&
-     [[ "$CUR_CORS"           == "$NEW_CORS_ORIGINS"           ]] &&
-     [[ "$CUR_PUBLIC"         == "$NEW_PUBLIC_HOSTNAME"        ]] &&
-     [[ "$CUR_BACKEND"        == "$NEW_AGENTIQ_BACKEND_URL"    ]] &&
-     [[ "$CUR_REDIRECT"       == "$NEW_OAUTH_REDIRECT_URI"     ]]; then
+  # Check all keys match
+  if [[ "$CUR_INGEST_MODE"     == "$NEW_INGEST_MODE"               ]] &&
+     [[ "$CUR_TRACKB"          == "$NEW_TRACKB_RUNNER_MODE"         ]] &&
+     [[ "$CUR_PROD_DB"         == "$NEW_PROD_DATABASE_URL"          ]] &&
+     [[ "$CUR_DB"              == "$NEW_DATABASE_URL"               ]] &&
+     [[ "$CUR_OAUTH_FRONTEND"  == "$NEW_OAUTH_FRONTEND_BASE_URL"    ]] &&
+     [[ "$CUR_CORS"            == "$NEW_CORS_ORIGINS"               ]] &&
+     [[ "$CUR_PUBLIC"          == "$NEW_PUBLIC_HOSTNAME"            ]] &&
+     [[ "$CUR_BACKEND"         == "$NEW_AGENTIQ_BACKEND_URL"        ]] &&
+     [[ "$CUR_REDIRECT"        == "$NEW_OAUTH_REDIRECT_URI"         ]] &&
+     [[ "$CUR_CALLBACK_UNAUTH" == "$NEW_OAUTH_CALLBACK_ALLOW_UNAUTH" ]] &&
+     [[ "$CUR_VAULT_KEY"       == "$NEW_CREDENTIAL_VAULT_KEY"       ]] &&
+     [[ "$CUR_INFERRED"        == "$NEW_INFERRED_RELATIONSHIPS_ENABLED" ]] &&
+     [[ "$CUR_EMAIL"           == "$NEW_EMAIL_PROVIDER"             ]] &&
+     [[ "$CUR_LICENSE"         == "$NEW_LICENSE_API_URL"            ]]; then
     echo ""
     printf "  ${G}✓ No changes needed — %s already matches.${N}\n" "$TARGET_FILE"
     exit 0
@@ -171,20 +220,20 @@ if [[ -f "$TARGET_FILE" ]]; then
   printf "  ${Y}⚠  WARNING: %s exists with different values:${N}\n" "$TARGET_FILE"
   echo ""
 
-  diff_row() {
-    local key="$1" old="$2" new="$3"
-    if [[ "$old" != "$new" ]]; then
-      printf "    ${Y}%-30s${N}\n" "$key"
-      printf "      ${DIM}current  :${N} \"%s\"\n" "$old"
-      printf "      ${G}new      :${N} \"%s\"\n" "$new"
-    fi
-  }
-
-  diff_row "OAUTH_FRONTEND_BASE_URL" "$CUR_OAUTH_FRONTEND" "$NEW_OAUTH_FRONTEND_BASE_URL"
-  diff_row "CORS_ORIGINS"            "$CUR_CORS"           "$NEW_CORS_ORIGINS"
-  diff_row "PUBLIC_HOSTNAME"         "$CUR_PUBLIC"         "$NEW_PUBLIC_HOSTNAME"
-  diff_row "AGENTIQ_BACKEND_URL"     "$CUR_BACKEND"        "$NEW_AGENTIQ_BACKEND_URL"
-  diff_row "OAUTH_REDIRECT_URI"      "$CUR_REDIRECT"       "$NEW_OAUTH_REDIRECT_URI"
+  diff_row "INGEST_MODE"                    "$CUR_INGEST_MODE"     "$NEW_INGEST_MODE"
+  diff_row "TRACKB_RUNNER_MODE"             "$CUR_TRACKB"          "$NEW_TRACKB_RUNNER_MODE"
+  diff_row "PROD_DATABASE_URL"              "$CUR_PROD_DB"         "$NEW_PROD_DATABASE_URL"
+  diff_row "DATABASE_URL"                   "$CUR_DB"              "$NEW_DATABASE_URL"
+  diff_row "OAUTH_FRONTEND_BASE_URL"        "$CUR_OAUTH_FRONTEND"  "$NEW_OAUTH_FRONTEND_BASE_URL"
+  diff_row "CORS_ORIGINS"                   "$CUR_CORS"            "$NEW_CORS_ORIGINS"
+  diff_row "PUBLIC_HOSTNAME"                "$CUR_PUBLIC"          "$NEW_PUBLIC_HOSTNAME"
+  diff_row "AGENTIQ_BACKEND_URL"            "$CUR_BACKEND"         "$NEW_AGENTIQ_BACKEND_URL"
+  diff_row "OAUTH_REDIRECT_URI"             "$CUR_REDIRECT"        "$NEW_OAUTH_REDIRECT_URI"
+  diff_row "OAUTH_CALLBACK_ALLOW_UNAUTH"    "$CUR_CALLBACK_UNAUTH" "$NEW_OAUTH_CALLBACK_ALLOW_UNAUTH"
+  diff_row "CREDENTIAL_VAULT_KEY"           "$CUR_VAULT_KEY"       "$NEW_CREDENTIAL_VAULT_KEY"
+  diff_row "INFERRED_RELATIONSHIPS_ENABLED" "$CUR_INFERRED"        "$NEW_INFERRED_RELATIONSHIPS_ENABLED"
+  diff_row "EMAIL_PROVIDER"                 "$CUR_EMAIL"           "$NEW_EMAIL_PROVIDER"
+  diff_row "LICENSE_API_URL"                "$CUR_LICENSE"         "$NEW_LICENSE_API_URL"
 
   echo ""
   printf "  ${Y}Overwrite %s with new values? [y/N]${N} " "$TARGET_FILE"
@@ -197,11 +246,24 @@ fi
 
 # ── Write .env ────────────────────────────────────────────────────────────────
 cat > "$TARGET_FILE" <<EOF
+INGEST_MODE="${NEW_INGEST_MODE}"
+TRACKB_RUNNER_MODE="${NEW_TRACKB_RUNNER_MODE}"
+# Databases
+PROD_DATABASE_URL="${NEW_PROD_DATABASE_URL}"
+DATABASE_URL="${NEW_DATABASE_URL}"
 OAUTH_FRONTEND_BASE_URL="${NEW_OAUTH_FRONTEND_BASE_URL}"
 CORS_ORIGINS="${NEW_CORS_ORIGINS}"
 PUBLIC_HOSTNAME="${NEW_PUBLIC_HOSTNAME}"
 AGENTIQ_BACKEND_URL="${NEW_AGENTIQ_BACKEND_URL}"
 OAUTH_REDIRECT_URI="${NEW_OAUTH_REDIRECT_URI}"
+OAUTH_CALLBACK_ALLOW_UNAUTH=${NEW_OAUTH_CALLBACK_ALLOW_UNAUTH}
+CREDENTIAL_VAULT_KEY="${NEW_CREDENTIAL_VAULT_KEY}"
+#For Realtionship mapping UI
+INFERRED_RELATIONSHIPS_ENABLED=${NEW_INFERRED_RELATIONSHIPS_ENABLED}
+# Transactional Email
+EMAIL_PROVIDER="${NEW_EMAIL_PROVIDER}"
+# License API URL
+LICENSE_API_URL="${NEW_LICENSE_API_URL}"
 EOF
 
 chmod 600 "$TARGET_FILE"
