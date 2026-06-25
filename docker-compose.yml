@@ -68,8 +68,14 @@ services:
     depends_on:
       backend:
         condition: service_healthy
+    volumes:
+      # SSL certs — bind-mounted read-only. When present the container's
+      # 99-select-ssl.sh startup hook auto-activates the HTTPS nginx config.
+      # If /opt/certs/ssl does not exist on the host, nginx runs HTTP-only.
+      - /opt/certs/ssl:/etc/nginx/ssl:ro
     ports:
       - "80:80"
+      - "443:443"
     networks:
       - agentiq-net
     restart: unless-stopped

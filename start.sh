@@ -186,13 +186,20 @@ echo ""
 
 # ── 8. Summary ────────────────────────────────────────────────────────────────
 SERVER_IP=$(hostname -I | awk '{print $1}')
+SSL_CERT="/opt/certs/ssl/fullchain.pem"
+if [[ -f "$SSL_CERT" ]]; then
+    FRONTEND_URL="https://${SERVER_IP}"
+else
+    FRONTEND_URL="http://${SERVER_IP}"
+fi
+
 echo "============================================================"
 echo " AgentIQ stack"
 echo "============================================================"
 docker compose --file "$COMPOSE_FILE" ps \
     --format "table {{.Name}}\t{{.Status}}\t{{.Ports}}"
 echo ""
-echo "  Frontend : http://${SERVER_IP}"
+echo "  Frontend : ${FRONTEND_URL}"
 echo "  API docs : http://${SERVER_IP}:8000/docs"
 echo "  API base : http://${SERVER_IP}:8000/api"
 echo ""
