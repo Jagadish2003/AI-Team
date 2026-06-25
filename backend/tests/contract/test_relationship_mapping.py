@@ -1213,7 +1213,13 @@ class TestMapDirectlyObservedAC2:
         map_directly_observed(org, run, ingestor_data, [person, obj])
 
         evidence = json.loads(_get_edges(org, "owns")[0]["evidence"])
-        assert evidence == {"field": "OwnerId", "source": "salesforce"}
+        # R16-B1: the mapper now also stamps an EvidencePointer onto each edge.
+        # The source metadata (field/source) is unchanged — assert it as a subset
+        # — and keep the PII guard over the FULL evidence blob (pointer included),
+        # since the pointer must likewise carry no display names or record values.
+        assert evidence["field"] == "OwnerId"
+        assert evidence["source"] == "salesforce"
+        assert evidence["evidence_pointer"]["origin"] == "observed"
         assert "Private User" not in json.dumps(evidence)
         assert "LOAN-PII-001" not in json.dumps(evidence)
         assert "Sensitive Loan Title" not in json.dumps(evidence)
