@@ -60,18 +60,36 @@ function _handle401(): void {
 
 // ---------------------------------------------------------------------------
 
-const ENV_BASE_URL = import.meta.env.VITE_API_BASE_URL as string | undefined;
 const ORG_ID_HEADER = (import.meta.env.VITE_ORG_ID as string | undefined)?.trim();
 
-const BASE_URL =
-  ENV_BASE_URL ??
-  (import.meta.env.DEV
-    ? "http://localhost:8000"
-    : (() => {
-        throw new Error(
-          "VITE_API_BASE_URL is not set. Copy .env.development.example to .env.development (or set env in hosting)."
-        );
-      })());
+let _cachedBaseUrl: string | null = null;
+
+function getBaseUrl(): string {
+  if (_cachedBaseUrl) return _cachedBaseUrl;
+
+  // Runtime config (public/config.js) takes priority — edit that file and refresh to change without restarting.
+  const runtimeUrl = window.__APP_CONFIG__?.API_BASE_URL;
+  if (runtimeUrl) {
+    _cachedBaseUrl = runtimeUrl.replace(/\/$/, "");
+    return _cachedBaseUrl;
+  }
+
+  // Build-time env var fallback.
+  const envUrl = import.meta.env.VITE_API_BASE_URL as string | undefined;
+  if (envUrl) {
+    _cachedBaseUrl = envUrl.replace(/\/$/, "");
+    return _cachedBaseUrl;
+  }
+
+  if (import.meta.env.DEV) {
+    _cachedBaseUrl = "http://localhost:8000";
+    return _cachedBaseUrl;
+  }
+
+  throw new Error(
+    "API_BASE_URL is not set. Create public/config.js from public/config.js.example or set VITE_API_BASE_URL."
+  );
+}
 
 export class ApiError extends Error {
   status: number;
@@ -106,7 +124,7 @@ async function parseBody(res: Response): Promise<unknown> {
 }
 
 export async function apiGet<T>(path: string): Promise<T> {
-  const res = await fetch(`${BASE_URL}${path}`, {
+  const res = await fetch(`${getBaseUrl()}${path}`, {
     headers: { ...authHeader() },
   });
   const body = await parseBody(res);
@@ -118,7 +136,7 @@ export async function apiGet<T>(path: string): Promise<T> {
 }
 
 export async function apiPost<T>(path: string, payload: unknown): Promise<T> {
-  const res = await fetch(`${BASE_URL}${path}`, {
+  const res = await fetch(`${getBaseUrl()}${path}`, {
     method: "POST",
     headers: { "Content-Type": "application/json", ...authHeader() },
     body: JSON.stringify(payload),
@@ -132,7 +150,7 @@ export async function apiPost<T>(path: string, payload: unknown): Promise<T> {
 }
 
 export async function apiPatch<T>(path: string, payload: unknown): Promise<T> {
-  const res = await fetch(`${BASE_URL}${path}`, {
+  const res = await fetch(`${getBaseUrl()}${path}`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json", ...authHeader() },
     body: JSON.stringify(payload),
@@ -146,7 +164,7 @@ export async function apiPatch<T>(path: string, payload: unknown): Promise<T> {
 }
 
 export async function apiDelete<T = void>(path: string): Promise<T> {
-  const res = await fetch(`${BASE_URL}${path}`, {
+  const res = await fetch(`${getBaseUrl()}${path}`, {
     method: "DELETE",
     headers: { ...authHeader() },
   });
@@ -178,7 +196,7 @@ export async function apiDelete<T = void>(path: string): Promise<T> {
  * // Store this ID in RunContext via setRunId(newRun.id)
  */
 export async function apiStartRun<T>(payload?: unknown): Promise<T> {
-  const res = await fetch(`${BASE_URL}/api/runs/start`, {
+  const res = await fetch(`${getBaseUrl()}/api/runs/start`, {
     method: "POST",
     headers: { "Content-Type": "application/json", ...authHeader() },
     body: JSON.stringify(payload ?? {}),
@@ -208,7 +226,7 @@ export async function apiStartRun<T>(payload?: unknown): Promise<T> {
  */
 export async function apiGetRun<T>(runId: string): Promise<T> {
   if (!runId) throw new Error("runId is required for apiGetRun");
-  const res = await fetch(`${BASE_URL}/api/runs/${runId}`, {
+  const res = await fetch(`${getBaseUrl()}/api/runs/${runId}`, {
     headers: { ...authHeader() },
   });
   const body = await parseBody(res);
@@ -237,7 +255,7 @@ export async function apiGetRun<T>(runId: string): Promise<T> {
  */
 export async function apiGetRunEvents<T>(runId: string): Promise<T> {
   if (!runId) throw new Error("runId is required for apiGetRunEvents");
-  const res = await fetch(`${BASE_URL}/api/runs/${runId}/events`, {
+  const res = await fetch(`${getBaseUrl()}/api/runs/${runId}/events`, {
     headers: { ...authHeader() },
   });
   const body = await parseBody(res);
@@ -276,7 +294,7 @@ export async function apiGetRunEventsPaginated<T>(
     limit: limit.toString(),
     offset: offset.toString(),
   });
-  const res = await fetch(`${BASE_URL}/api/runs/${runId}/events?${queryParams}`, {
+  const res = await fetch(`${getBaseUrl()}/api/runs/${runId}/events?${queryParams}`, {
     headers: { ...authHeader() },
   });
   const body = await parseBody(res);
@@ -305,7 +323,7 @@ export async function apiGetRunEventsPaginated<T>(
  */
 export async function apiGetRunScoped<T>(runId: string, path: string): Promise<T> {
   if (!runId) throw new Error("runId is required for apiGetRunScoped");
-  const res = await fetch(`${BASE_URL}/api/runs/${runId}${path}`, {
+  const res = await fetch(`${getBaseUrl()}/api/runs/${runId}${path}`, {
     headers: { ...authHeader() },
   });
   const body = await parseBody(res);
@@ -339,7 +357,7 @@ export async function apiPostRunScoped<T>(
   payload?: unknown
 ): Promise<T> {
   if (!runId) throw new Error("runId is required for apiPostRunScoped");
-  const res = await fetch(`${BASE_URL}/api/runs/${runId}${path}`, {
+  const res = await fetch(`${getBaseUrl()}/api/runs/${runId}${path}`, {
     method: "POST",
     headers: { "Content-Type": "application/json", ...authHeader() },
     body: JSON.stringify(payload ?? {}),

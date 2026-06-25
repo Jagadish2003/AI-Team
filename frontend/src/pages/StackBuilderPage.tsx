@@ -14,6 +14,7 @@ import { useAuthOptional } from '../context/AuthContext';
 // Import components and types
 import { CheckCircle2, Database, Layers3, Loader2, Target } from 'lucide-react';
 import type { WorkspaceCatalogResponse } from '../types/workspace_catalog';
+import type { SetupState, SystemWeighting } from '../types/stack_builder';
 import PageShell from '../components/common/PageShell';
 import {
   DiscoveryConfidenceBar,
@@ -40,7 +41,15 @@ const INDUSTRY_PACK_HINTS: Record<string, string[]> = {
   technology: ['service_cloud'],
 };
 
-const STEP_COPY: Record<number, { title: string; description: string }> = {
+// R16-C1 T5 — Truthfulness check.
+// Step 3's "weight evidence correctly" promise is intentionally retained:
+// after R16-C1 T1–T4 the discovery engine now reads the per-system role and
+// priority from the persisted Stack Builder configuration and applies a
+// deterministic, bounded weighting (ROLE_WEIGHT in
+// backend/discovery/weighting_context.py). The copy is no longer a
+// credibility trap — it describes real engine behavior. Do not soften or
+// remove it without first confirming the backend wiring still holds.
+export const STEP_COPY: Record<number, { title: string; description: string }> = {
   1: {
     title: 'Stack Builder',
     description: 'Choose the discovery focus and optional accelerators that shape the initial analysis.',
@@ -157,6 +166,59 @@ function resolvePackId(
 
   // Priority 3: Default to service_cloud
   return 'service_cloud';
+}
+
+// ── Launch payload builder ─────────────────────────────────────────────────────
+//
+// R16-C1 T5 — the configuration the customer selected is the configuration that
+// runs. This pure builder is the single place the launch payload is assembled,
+// so the "weight evidence correctly" promise on Screen 3 is enforceable: it
+// always carries the per-system weightings (role + priority + confirmed +
+// workflowFocus) captured and confirmed in the Stack Builder through to the
+// backend launch endpoint, which persists them into the run's setup_context for
+// the scorer and corroboration engine to read.
+
+export interface StackBuilderLaunchPayload {
+  org_id: string;
+  focus_id: SetupState['focusId'];
+  industry_id: SetupState['industryId'];
+  template_id: SetupState['templateId'];
+  selected_system_ids: string[];
+  pack_id: string;
+  weightings: Record<string, SystemWeighting>;
+}
+
+export function buildStackBuilderLaunchPayload(
+  state: SetupState,
+  packId: string,
+  orgId: string,
+): StackBuilderLaunchPayload {
+  // Surface the silent-mismatch case: every selected system should carry a
+  // confirmed weighting. If one is missing (e.g. a system was selected but its
+  // weighting was lost to a browser-state glitch before reaching launch), the
+  // backend's load_for_run() falls back to NEUTRAL scoring for it with no error
+  // — so the customer's "weight evidence correctly" promise would be partially
+  // ignored without anyone knowing. Warn loudly so it is at least visible.
+  const missingWeightings = state.selectedSystemIds.filter(
+    id => !(id in state.weightings),
+  );
+  if (missingWeightings.length > 0) {
+    console.warn(
+      `[StackBuilder] Launching with ${missingWeightings.length} selected ` +
+        `system(s) that have no weighting entry: ${missingWeightings.join(', ')}. ` +
+        `These will be scored with neutral weighting by discovery.`,
+    );
+  }
+
+  return {
+    org_id: orgId,
+    focus_id: state.focusId,
+    industry_id: state.industryId,
+    template_id: state.templateId,
+    selected_system_ids: state.selectedSystemIds,
+    pack_id: packId,
+    weightings: state.weightings,
+  };
 }
 
 function normaliseSystems(selectedIds: string[]): string[] {
@@ -404,15 +466,7 @@ export default function StackBuilderPage({
         method: 'POST',
         credentials: 'omit',
         headers,
-        body: JSON.stringify({
-          org_id: orgId,
-          focus_id: state.focusId,
-          industry_id: state.industryId,
-          template_id: state.templateId,
-          selected_system_ids: state.selectedSystemIds,
-          pack_id: packId,
-          weightings: state.weightings,
-        }),
+        body: JSON.stringify(buildStackBuilderLaunchPayload(state, packId, orgId)),
       });
       if (!launchResp.ok) {
         throw new Error(`Launch failed: ${launchResp.status}`);

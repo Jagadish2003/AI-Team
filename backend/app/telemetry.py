@@ -467,6 +467,42 @@ class IngestionArtifactChangedPayload(TypedDict):
     observed_at: str
 
 
+# R16-D1 / AT-366 (T5) — model provider gateway telemetry.
+# Emitted once per gateway generate()/embed() call so model usage is observable
+# across hosted, in-boundary, and future customer-tenant modes. The provider
+# name records WHICH backend served the call.
+# PII GUARD: provider name, ok flag, and counts only — NEVER the prompt text,
+# generated output, input texts, or embedding vectors.
+
+class ModelGenerationCompletedPayload(TypedDict, total=False):
+    """model.generation_completed — emitted once per gateway generate() call (T5).
+
+    provider is the name from GenerationResult.provider — the backend that
+    actually served the request. Emitted on success and failure alike so a
+    provider error (ok=False) is observable.
+    """
+    provider: NotRequired[str]
+    ok: NotRequired[bool]
+    org_id: NotRequired[str]
+    run_id: NotRequired[str]
+    source: NotRequired[str]
+
+
+class ModelEmbeddingCompletedPayload(TypedDict, total=False):
+    """model.embedding_completed — emitted once per gateway embed() call (T5).
+
+    provider is the active embedding provider's name. text_count/vector_count
+    carry only sizes — never the texts or vectors themselves.
+    """
+    provider: NotRequired[str]
+    ok: NotRequired[bool]
+    text_count: NotRequired[int]
+    vector_count: NotRequired[int]
+    org_id: NotRequired[str]
+    run_id: NotRequired[str]
+    source: NotRequired[str]
+
+
 # ---------------------------------------------------------------------------
 # Registry helpers
 # ---------------------------------------------------------------------------
@@ -549,6 +585,12 @@ register_event_type("license.clock_anomaly", LicenseClockAnomalyPayload)
 register_event_type("ingestion.checkpoint_reset", IngestionCheckpointResetPayload)
 # R16-A1 / AT-381 (T5): per-changed-artifact event (emitted by the change runner).
 register_event_type("ingestion.artifact_changed", IngestionArtifactChangedPayload)
+# R16-D1 / AT-366 (T5) — model provider gateway telemetry. Registered here so
+# the gateway's generate()/embed() paths can emit them; record_event() raises
+# ValueError for an unregistered type, so registration must land before any
+# emission call-site (T5-AC5).
+register_event_type("model.generation_completed", ModelGenerationCompletedPayload)
+register_event_type("model.embedding_completed", ModelEmbeddingCompletedPayload)
 
 
 # ---------------------------------------------------------------------------
@@ -713,6 +755,8 @@ __all__ = [
     "LicenseClockAnomalyPayload",           # LIC-1 / AT-348 (T7)
     "IngestionCheckpointResetPayload",      # R16-A1 / AT-383 (T7)
     "IngestionArtifactChangedPayload",      # R16-A1 / AT-381 (T5)
+    "ModelGenerationCompletedPayload",      # R16-D1 / AT-366 (T5)
+    "ModelEmbeddingCompletedPayload",       # R16-D1 / AT-366 (T5)
     "EVENT_PAYLOAD_TYPES",          # AT-211 alias: event_type → TypedDict schema
     "EVENT_REGISTRY",
     "EVENT_TYPE_REGISTRY",          # alias for T1-S10-C unit tests

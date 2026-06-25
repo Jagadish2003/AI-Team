@@ -162,6 +162,11 @@ async def lifespan(app: FastAPI):
     _validate_org_approval_config()
     # Seed the dev user as owner of the default org so existing routes pass RBAC.
     seed_owner(_DEV_ORG, _DEV_USER)
+    # R16-D1 T2: validate model provider config at startup so an unknown
+    # MODEL_GENERATION_PROVIDER or MODEL_EMBEDDING_PROVIDER value raises a
+    # clear ValueError before the first model call (T2-AC4).
+    from .model_gateway import validate_provider_config
+    validate_provider_config()
     # T2-S12-A: surface Oracle/PostgreSQL driver install issues at startup.
     _verify_db_driver_imports()
     # Ensure the temporal signal_snapshots table exists. A fresh dev.db is built
