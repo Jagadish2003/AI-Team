@@ -53,6 +53,10 @@ def read_checkpoint(org_id: str, connector_id: str) -> Optional[Checkpoint]:
             (org_id, connector_id),
         )
         row = cur.fetchone()
+        # Close the implicit read transaction cleanly. psycopg2 opens a
+        # transaction on the SELECT (autocommit is off in app.db.connect());
+        # commit it here so the connection is not left idle-in-transaction.
+        con.commit()
     finally:
         con.close()
     if not row:
@@ -96,6 +100,12 @@ def save_checkpoint(checkpoint: Checkpoint) -> None:
             ),
         )
         con.commit()
+    except Exception:
+        # Make the failure path explicit rather than relying on psycopg2's
+        # implicit rollback on close. The exception propagates so the runner
+        # knows the checkpoint did NOT advance (write-only-on-full-success).
+        con.rollback()
+        raise
     finally:
         con.close()
 
@@ -126,6 +136,11 @@ def reset_checkpoint(org_id: str, connector_id: str) -> bool:
         )
         cleared = cur.rowcount
         con.commit()
+    except Exception:
+        # Explicit failure path, mirroring save_checkpoint(): on a failed
+        # commit the row stays in its prior state and the error propagates.
+        con.rollback()
+        raise
     finally:
         con.close()
     return cleared > 0

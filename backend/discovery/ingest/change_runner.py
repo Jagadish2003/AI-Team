@@ -77,6 +77,29 @@ def _utc_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _is_persistable_checkpoint(value: str, connector_id: str, org_id: str) -> bool:
+    """Reject an empty opaque checkpoint value before it is persisted (PR #239).
+
+    ``value`` is opaque to the runner, but an empty string is degenerate: on the
+    next run :func:`read_checkpoint` would return a ``Checkpoint(value="")`` and a
+    connector handed an empty ``since.value`` typically treats it as "beginning of
+    time" and silently performs a full re-read — indistinguishable from an
+    intentional first run. The runner is non-blocking, so we do NOT raise; we log
+    a warning and skip the write, leaving the prior known-good position intact and
+    surfacing the connector contract violation rather than masking it.
+    """
+    if value != "":
+        return True
+    logger.warning(
+        "change-ingest: connector=%s org=%s yielded an EMPTY next_checkpoint for a "
+        "completed batch; not persisting it (an empty checkpoint would force a "
+        "silent full re-read next run). This is a connector contract violation.",
+        connector_id,
+        org_id,
+    )
+    return False
+
+
 def _emit_artifact_changed(org_id: str, connector_id: str, records: list) -> None:
     """Emit one ``ingestion.artifact_changed`` telemetry event per changed
     artifact in a fully-processed batch (R16-A1 §4 / AT-381, AC4).
@@ -234,7 +257,9 @@ def ingest_with_checkpoint(
             # checkpoint lifecycle or the run outcome.
             _emit_artifact_changed(org_id, connector_id, batch.records)
 
-            if is_first_run:
+            if is_first_run and _is_persistable_checkpoint(
+                batch.next_checkpoint, connector_id, org_id
+            ):
                 # AC3: resumable full load — checkpoint each fully-processed batch
                 # so an interruption resumes from the last saved batch, not the
                 # start. The value is opaque; persisted verbatim.
@@ -255,10 +280,12 @@ def ingest_with_checkpoint(
         # happened per-batch above.) An unchanged/partial incremental source that
         # yields no terminal batch leaves the prior checkpoint untouched (AC2).
         if not is_first_run and saw_complete:
-            new_cp = Checkpoint.create(connector_id, org_id, terminal_value or "")
-            save_checkpoint(new_cp)
-            result.checkpoint_advanced = True
-            result.new_checkpoint = new_cp
+            terminal = terminal_value or ""
+            if _is_persistable_checkpoint(terminal, connector_id, org_id):
+                new_cp = Checkpoint.create(connector_id, org_id, terminal)
+                save_checkpoint(new_cp)
+                result.checkpoint_advanced = True
+                result.new_checkpoint = new_cp
 
         if result.checkpoint_advanced:
             logger.info(
