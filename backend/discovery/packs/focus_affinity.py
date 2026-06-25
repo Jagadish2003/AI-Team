@@ -46,9 +46,19 @@ operations. Every non-enterprise detector appears in at least one focus.
 from __future__ import annotations
 
 import logging
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
+
+# Module-level import with fallback so the run-KV loader works from both the
+# in-package path (app.db) and the root path, mirroring weighting_context.py.
+try:
+    from app.db import run_kv_get
+except ModuleNotFoundError:
+    try:
+        from backend.app.db import run_kv_get
+    except ModuleNotFoundError:
+        run_kv_get = None  # type: ignore[assignment]
 
 # ── Focus ids ─────────────────────────────────────────────────────────────────
 # Mirrors the frontend ``FocusId`` union (frontend/src/types/stack_builder.ts).
@@ -210,3 +220,102 @@ def all_affinity_detector_ids() -> Tuple[str, ...]:
         if detectors:
             seen.update(detectors)
     return tuple(sorted(seen))
+
+
+# ── R16-C2 T2: emphasis at ranking time ─────────────────────────────────────
+
+# Sort rank for a finding that the focus emphasises. Lower sorts earlier, so
+# emphasised findings (0) rank ahead of non-emphasised findings (1). These are
+# the only two values the ranking primitive yields — focus orders, it does not
+# score, and it never censors (emphasis, not exclusion).
+FOCUS_EMPHASIS_RANK = 0
+FOCUS_NEUTRAL_RANK = 1
+
+
+def focus_emphasis_rank(focus_id: Optional[str], detector_id: Optional[str]) -> int:
+    """
+    Deterministic ranking primitive: return ``FOCUS_EMPHASIS_RANK`` (0) when
+    ``detector_id`` is emphasised by ``focus_id``, else ``FOCUS_NEUTRAL_RANK`` (1).
+
+    For ``enterprise_wide`` (and any unknown/None focus, which degrades to the
+    unbiased view) every detector returns the neutral rank, so ordering is
+    identical to the unbiased baseline — no bias is applied.
+    """
+    return FOCUS_EMPHASIS_RANK if detector_matches_focus(focus_id, detector_id) else FOCUS_NEUTRAL_RANK
+
+
+def build_focus_emphasis(focus_id: Optional[str], detector_id: Optional[str]) -> Dict[str, Any]:
+    """
+    Build the additive, contract-safe ``focus_emphasis`` annotation attached to
+    each opportunity by the discovery runner.
+
+    The annotation is purely descriptive emphasis metadata — it never replaces
+    or mutates impact, effort, confidence, tier, roadmap stage, evidence ids,
+    or corroboration fields. It records:
+
+      * ``focus_id``       — the focus the run was launched with (or None),
+      * ``matched``        — whether this detector is emphasised by that focus,
+      * ``rank``           — the deterministic ranking primitive (0 emphasised,
+                             1 neutral) consumed by the shared ranking utility,
+      * ``affinity``       — the focus's affinity detector ids (() for no bias),
+      * ``rationale``      — a short, human-readable explanation for the UI/debug.
+
+    Always returns a fully-populated dict (every key present) so the field is
+    contract-stable regardless of focus.
+    """
+    norm = _normalize(focus_id)
+    affinity = get_focus_affinity(focus_id)
+    matched = detector_matches_focus(focus_id, detector_id)
+
+    if affinity is None:
+        # enterprise_wide or unknown/None focus -> the full, unbiased view.
+        if norm == FOCUS_ENTERPRISE_WIDE:
+            rationale = "Enterprise-wide focus: no affinity bias — full unweighted view."
+        elif norm is None:
+            rationale = "No focus selected: no affinity bias — full unweighted view."
+        else:
+            rationale = "Unrecognised focus: no affinity bias — full unweighted view."
+    elif matched:
+        rationale = f"Emphasised by '{norm}' focus affinity."
+    else:
+        rationale = f"Outside '{norm}' focus affinity — surfaced but not emphasised."
+
+    return {
+        "focus_id": focus_id,
+        "matched": matched,
+        "rank": focus_emphasis_rank(focus_id, detector_id),
+        "affinity": list(affinity) if affinity else [],
+        "rationale": rationale,
+    }
+
+
+def load_focus_for_run(run_id: Optional[str]) -> Optional[str]:
+    """
+    Load the persisted ``focus_id`` for a run from the run-KV store.
+
+    Reads the dedicated ``focus_id`` KV entry written by the Stack Builder
+    launch endpoint, falling back to ``setup_context["focus_id"]``. Returns
+    ``None`` when no run id, no KV accessor, or no stored focus is available.
+
+    Never raises — all failures return ``None`` (the unbiased view) so the
+    discovery pipeline always has a usable value. Mirrors
+    ``weighting_context.load_for_run`` for the focus dimension.
+    """
+    if not run_id or run_kv_get is None:
+        return None
+    try:
+        focus = run_kv_get("focus_id", run_id)
+        if isinstance(focus, str) and focus.strip():
+            return focus
+        ctx = run_kv_get("setup_context", run_id)
+        if isinstance(ctx, dict):
+            ctx_focus = ctx.get("focus_id")
+            if isinstance(ctx_focus, str) and ctx_focus.strip():
+                return ctx_focus
+        return None
+    except Exception as exc:  # noqa: BLE001 — never break the pipeline
+        logger.warning(
+            "R16-C2: failed to load focus_id for run_id=%s (non-blocking): %s",
+            run_id, exc,
+        )
+        return None

@@ -304,6 +304,9 @@ def to_track_a_opportunities(
         id_counter = itertools.count(1)
 
     opportunities = runner_payload.get("opportunities", [])
+    # R16-C2 T2: the focus the run was launched with drives focus emphasis in
+    # the shared ranking utility below. None => unbiased (enterprise-wide) view.
+    focus_id = runner_payload.get("focusId")
     result: List[Dict[str, Any]] = []
 
     for opp in opportunities:
@@ -336,6 +339,9 @@ def to_track_a_opportunities(
             "corroboration_label":    opp.get("corroboration_label"),
             "triple_corroboration":   bool(opp.get("triple_corroboration", False)),
             "corroboration_rule_ids": opp.get("corroboration_rule_ids", []),
+            # R16-C2 T2: carry the additive focus-emphasis annotation forward so
+            # the stored opp and ranking reflect the selected Discovery Focus.
+            "focus_emphasis":         opp.get("focus_emphasis"),
             # Keep calibration fields under a debug namespace (not breaking Track A)
             "_debug": {
                 "detector_id":   did,
@@ -348,8 +354,11 @@ def to_track_a_opportunities(
         }
         result.append(track_a_opp)
 
-    # Apply shared ranking (SF-3.3) — seed order matches calibration
-    return rank_opportunities(result)
+    # Apply shared ranking (SF-3.3) — seed order matches calibration.
+    # R16-C2 T2: pass the run's focus so matching findings are emphasised in the
+    # ordering. The seed opps also carry focus_emphasis.rank, so ranking stays
+    # correct even when focus_id is absent (None => unbiased baseline order).
+    return rank_opportunities(result, focus_id=focus_id)
 
 
 def to_track_a_evidence(
