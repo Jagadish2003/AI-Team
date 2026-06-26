@@ -297,8 +297,11 @@ def test_banner_status_readable_by_every_role(client, role):
     body = resp.json()
     assert body["status"] == LicenseStatus.GRACE
     assert body["expires_at"] == _iso(-7)
-    # Minimal payload only — status/expires_at/reason; no Owner-only admin detail.
-    assert set(body) == {"status", "expires_at", "reason"}
+    # Minimal payload only — status/expires_at/reason plus the v1.7 grace
+    # countdown (grace_days_remaining); no Owner-only admin detail.
+    assert set(body) == {"status", "expires_at", "reason", "grace_days_remaining"}
+    # In grace: grace_days + days_remaining = 14 + (-7) = 7 days left before read-only.
+    assert body["grace_days_remaining"] == 7
 
 
 def test_banner_reports_no_license_reason_for_fresh_install(client):
