@@ -259,8 +259,41 @@ def _run_trackb_and_persist(run_id: str, mode: str, systems: List[str], pack: Op
         opps = seed.get("opportunities", [])
         ev = seed.get("evidence", [])
 
+        # R16-B1 (§2): stamp the stable cross-run opportunity_identity onto each
+        # stored opportunity BEFORE it is persisted, so the served record carries
+        # the id used to group an opportunity with its own history. Idempotent and
+        # additive (a value already stamped upstream is recomputed to the same id);
+        # non-blocking — never breaks the run.
+        try:
+            from .opportunity_instances import stamp_opportunity_identities
+
+            stamp_opportunity_identities(opps, run_id, org_id=run_org_id)
+        except Exception as e:  # noqa: BLE001
+            errors["opportunity_identity"] = str(e)
+            logger.warning("Opportunity identity stamping failed (non-blocking): %s", e)
+
         db.run_kv_set("opps", run_id, opps)
         db.run_kv_set("evidence", run_id, ev)
+
+        # R16-B1 (T4): persist one per-run opportunity_instance per opportunity,
+        # carrying the stable opportunity_identity + run-specific score/confidence/
+        # evidence/narrative (R16-B1 §2a). Built from the RAW runner opportunities
+        # (payload["opportunities"]) because those keep orgId + detector_id +
+        # signal_source at top level — the inputs identity is derived from. The
+        # same identity recurring across runs is what later outcome tracking (2.0)
+        # compares. Non-blocking: a storage failure never breaks the run.
+        try:
+            from .opportunity_instances import record_opportunity_instances
+
+            n_instances = record_opportunity_instances(
+                run_id, payload.get("opportunities", []), org_id=run_org_id
+            )
+            logger.info("Recorded %d opportunity instances for run %s", n_instances, run_id)
+        except Exception as e:  # noqa: BLE001
+            errors["opportunity_instances"] = str(e)
+            logger.warning(
+                "Opportunity instance recording failed (non-blocking): %s", e
+            )
 
         # Keep Integration Hub connector cards in sync with the actual run data.
         from .connector_metrics import update_connector_metrics_from_run

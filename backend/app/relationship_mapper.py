@@ -43,6 +43,7 @@ from database.models.entity_relationships import (
     INFERRED_CONFIDENCE,
     OBSERVED_CONFIDENCE,
 )
+from app.provenance import EvidencePointer
 
 try:
     from discovery.detectors.checklist_bottleneck import DETECTOR_ID as CHECKLIST_BOTTLENECK_DETECTOR_ID
@@ -89,6 +90,48 @@ def ensure_entity_relationships_table() -> None:
     return None
 
 
+def _relationship_pointer(
+    *,
+    inferred: bool,
+    run_id: str,
+    evidence: dict[str, Any],
+    from_id: str,
+    to_id: str,
+    relationship_type: str,
+    confidence: float,
+) -> EvidencePointer:
+    """Build the EvidencePointer for an edge from what the mapper already knows.
+
+    Observed edges carry the source system/field they were read from; inferred
+    (co-firing) edges name the run as their extraction job and reference the
+    detectors that produced the inference. Callers that supply richer provenance
+    in the evidence dict (source / source_artifact / source_timestamp) have it
+    honoured; otherwise sensible, stable fallbacks are used.
+    """
+    source_system = evidence.get("source") or "agentiq"
+    source_artifact = (
+        evidence.get("source_artifact")
+        or evidence.get("field")
+        or "+".join(evidence.get("detector_ids") or [])
+        or f"{from_id}|{relationship_type}|{to_id}"
+    )
+    source_timestamp = evidence.get("source_timestamp")
+    if inferred:
+        return EvidencePointer.inferred(
+            source_system=source_system,
+            source_artifact=source_artifact,
+            extraction_job_id=run_id,
+            source_timestamp=source_timestamp,
+            confidence=confidence,
+        )
+    return EvidencePointer.observed(
+        source_system=source_system,
+        source_artifact=source_artifact,
+        source_timestamp=source_timestamp,
+        confidence=confidence,
+    )
+
+
 def upsert_relationship(
     org_id: str,
     from_entity_id: str,
@@ -98,7 +141,7 @@ def upsert_relationship(
     inferred: bool,
     run_id: str,
     evidence: Optional[dict[str, Any]] = None,
-) -> EntityRelationship:
+) -> Optional[EntityRelationship]:
     """Persist a directed edge, creating or updating as needed.
 
     Natural key: (org_id, from_entity_id, to_entity_id, relationship_type).
@@ -136,7 +179,33 @@ def upsert_relationship(
     # PII guard: mapper-owned evidence stores field/source names, detector IDs,
     # and rationale only. Do not pass raw display names, case titles, amounts,
     # or external record values into this generic persistence helper.
-    evidence_json = json.dumps(evidence) if evidence is not None else None
+    #
+    # R16-B1: every edge carries an EvidencePointer. Observed edges => origin
+    # 'observed' (no job id); inferred (co-firing) edges => origin 'inferred' and
+    # MUST name the run as their extraction job. An inferred edge whose pointer is
+    # invalid (no extraction_job_id) is refused here — inferred content must never
+    # be persisted as if it were directly observed truth (AC2).
+    evidence_with_pointer = dict(evidence) if evidence else {}
+    pointer = _relationship_pointer(
+        inferred=inferred,
+        run_id=run_id,
+        evidence=evidence_with_pointer,
+        from_id=from_str,
+        to_id=to_str,
+        relationship_type=relationship_type,
+        confidence=confidence,
+    )
+    if not pointer.is_valid():
+        logger.error(
+            "Refusing to persist %s edge %s -> %s: invalid provenance pointer "
+            "(inferred edges require an extraction_job_id)",
+            relationship_type,
+            from_str,
+            to_str,
+        )
+        return None
+    evidence_with_pointer["evidence_pointer"] = pointer.to_dict()
+    evidence_json = json.dumps(evidence_with_pointer)
 
     conn = _connect()
     try:

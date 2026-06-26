@@ -38,6 +38,7 @@ PACK_REGISTRY: Dict[str, Dict[str, Any]] = {
 
     "service_cloud": {
         "packId":        "service_cloud",
+        "packVersion":   "1.0.0",
         "packName":      "Service Cloud",
         "domain":        "service_cloud",
         "pack_domain":   "service_cloud",
@@ -59,6 +60,7 @@ PACK_REGISTRY: Dict[str, Dict[str, Any]] = {
 
     "ncino": {
         "packId":        "ncino",
+        "packVersion":   "1.0.0",
         "packName":      "nCino Lending",
         "domain":        "ncino",
         "pack_domain":   "ncino",
@@ -84,6 +86,7 @@ PACK_REGISTRY: Dict[str, Dict[str, Any]] = {
 
     "strs_benefits": {
         "packId":        "strs_benefits",
+        "packVersion":   "1.0.0",
         "packName":      "STRS Benefits Administration",
         "domain":        "strs_benefits",
         "pack_domain":   "strs_benefits",
@@ -108,6 +111,7 @@ PACK_REGISTRY: Dict[str, Dict[str, Any]] = {
 
     "sqlserver_opsignal": {
         "packId":        "sqlserver_opsignal",
+        "packVersion":   "1.0.0",
         "packName":      "SQL Server Operational Signals",
         "domain":        "sqlserver_opsignal",
         "pack_domain":   "sqlserver_opsignal",
@@ -130,6 +134,7 @@ PACK_REGISTRY: Dict[str, Dict[str, Any]] = {
 
     "github_engineering": {
         "packId":        "github_engineering",
+        "packVersion":   "1.0.0",
         "packName":      "GitHub Engineering Signals",
         "domain":        "github_engineering",
         "pack_domain":   "github_engineering",
@@ -153,6 +158,7 @@ PACK_REGISTRY: Dict[str, Dict[str, Any]] = {
 
     "enterprise_ops": {
         "packId":        "enterprise_ops",
+        "packVersion":   "1.0.0",
         "packName":      "Enterprise Operations Intelligence",
         "domain":        "enterprise_ops",
         "pack_domain":   "enterprise_ops",
@@ -187,6 +193,14 @@ PACK_REGISTRY: Dict[str, Dict[str, Any]] = {
 
 DEFAULT_PACK = "service_cloud"
 
+# R16-B1 §4: the version of a pack's detector/scoring logic, stamped onto every
+# opportunity instance so pack governance (1.9) and debugging can later tell
+# whether a changed output came from changed DATA or a changed PACK VERSION.
+# Bump a pack's "packVersion" in PACK_REGISTRY whenever its detector or scoring
+# logic changes. DEFAULT_PACK_VERSION is the fallback for a pack that has not
+# declared one explicitly.
+DEFAULT_PACK_VERSION = "1.0.0"
+
 
 # ── Public API ────────────────────────────────────────────────────────────────
 
@@ -215,6 +229,15 @@ def get_pack(pack_id: Optional[str] = None) -> Dict[str, Any]:
 def get_pack_domain(pack_id: Optional[str] = None) -> str:
     """Return the pack_domain string for use with enrich_ambiguous_mappings()."""
     return get_pack(pack_id)["pack_domain"]
+
+
+def get_pack_version(pack_id: Optional[str] = None) -> str:
+    """Return the pack version that produced a finding (R16-B1 §4).
+
+    Stamped onto every opportunity instance alongside the pack id. Falls back to
+    DEFAULT_PACK_VERSION for a pack that has not declared a "packVersion".
+    """
+    return get_pack(pack_id).get("packVersion", DEFAULT_PACK_VERSION)
 
 
 def get_detector_modules(pack_id: Optional[str] = None) -> List[str]:

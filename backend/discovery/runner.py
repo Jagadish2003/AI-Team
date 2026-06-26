@@ -312,6 +312,7 @@ def run(
     from .packs.pack_config import (
         get_pack,
         get_pack_domain,
+        get_pack_version,
         is_ncino_pack,
         is_sqlserver_opsignal_pack,
         is_github_engineering_pack,
@@ -319,6 +320,9 @@ def run(
     )
     pack_config = get_pack(pack)
     pack_id     = pack_config["packId"]
+    # R16-B1 §4: stamp the pack VERSION (not just the id) onto every opportunity
+    # so governance/debugging can later tell a data change from a pack change.
+    pack_version = get_pack_version(pack)
     pack_domain = pack_config["pack_domain"]
 
     # Default to all systems if None
@@ -745,6 +749,11 @@ def run(
         is_enterprise_ops_detector,
     )
     from .evidence_builder import build_evidence
+    # R16-B1 (T3): stable cross-run opportunity identity, computed at assembly.
+    from .opportunity_identity import (
+        compute_opportunity_identity,
+        primary_entity_keys_for_detector,
+    )
     # ENT-2: shared cross-system corroboration engine (non-pack-specific).
     # Imported defensively so a failure to import never breaks the run.
     try:
@@ -946,9 +955,26 @@ def run(
             if corroboration_count > 0:
                 logger.info("  %s: +%d corroborating evidence items (Jira/SN)",
                             dr.detector_id, corroboration_count)
+        # ── R16-B1 (T3): stable, cross-run opportunity identity ──
+        # Derived ONLY from run-invariant inputs (org, pack, detector/signal,
+        # resolved primary entity keys) so the same real-world problem carries
+        # the same id run after run. Deliberately excludes score, confidence,
+        # run timestamp, and narrative — those drift between runs for the SAME
+        # opportunity and must not change its identity, or outcome tracking and
+        # feedback history (1.9/2.0) would treat every run as a brand-new find.
+        opportunity_identity = compute_opportunity_identity(
+            org_id=org_id,
+            pack_id=pack_id,
+            signal_key=dr.detector_id,
+            primary_entity_ids=primary_entity_keys_for_detector(
+                dr.detector_id, dr.signal_source
+            ),
+        )
+
         opp = {
             "runId": run_id, "orgId": org_id, "detector_id": dr.detector_id,
-            "packId": pack_id,
+            "packId": pack_id, "opportunity_identity": opportunity_identity,
+            "packVersion": pack_version,
             "signal_source": dr.signal_source, "metric_value": dr.metric_value,
             "threshold": dr.threshold, "impact": scored["impact"], "effort": scored["effort"],
             "confidence": scored["confidence"], "tier": scored["tier"],
@@ -1008,6 +1034,7 @@ def run(
         # R16-C2 T2: surface the selected focus so the seed/ranking path can
         # apply focus emphasis deterministically (None => unbiased view).
         "focusId": _focus_id,
+        "packVersion": pack_version,
         "startedAt": started_at, "completedAt": datetime.now(timezone.utc).isoformat(),
         "inputs": org_ctx, "opportunities": opportunities,
     }

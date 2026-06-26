@@ -342,6 +342,11 @@ def to_track_a_opportunities(
             # R16-C2 T2: carry the additive focus-emphasis annotation forward so
             # the stored opp and ranking reflect the selected Discovery Focus.
             "focus_emphasis":         opp.get("focus_emphasis"),
+            # R16-B1 §4: stamp the pack id + version that produced this instance
+            # onto the STORED opportunity, so pack governance (1.9) and debugging
+            # have the version history — unreconstructable if not captured now.
+            "packId":      opp.get("packId"),
+            "packVersion": opp.get("packVersion"),
             # Keep calibration fields under a debug namespace (not breaking Track A)
             "_debug": {
                 "detector_id":   did,
@@ -408,6 +413,8 @@ def export_track_a_seed(
             "runId":       runner_payload.get("runId"),
             "orgId":       runner_payload.get("orgId"),
             "mode":        runner_payload.get("mode"),
+            "packId":      runner_payload.get("packId"),
+            "packVersion": runner_payload.get("packVersion"),
             "startedAt":   runner_payload.get("startedAt"),
             "completedAt": runner_payload.get("completedAt"),
             "inputs":      runner_payload.get("inputs", {}),
