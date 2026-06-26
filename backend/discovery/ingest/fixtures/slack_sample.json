@@ -1,0 +1,32 @@
+{
+  "_comment": "R16-A2 / AT-416 — deterministic offline fixture for the Slack change-based ingestor. Channels exercise the public-only / invited-only access rule (AC4): only public channels AgentIQ is a member of are read. Per-channel messages are intentionally interleaved across timestamps so incremental (since-checkpoint) and resumable first-load batching can both be tested. Message ts values are Slack-native 'epoch.micro' strings, ordered by float value within each channel.",
+  "team": {"id": "T0001", "name": "acme-engineering"},
+  "channels": [
+    {"id": "C001", "name": "ops-incidents", "is_private": false, "is_member": true, "is_archived": false},
+    {"id": "C002", "name": "deploys", "is_private": false, "is_member": true, "is_archived": false},
+    {"id": "C900", "name": "leadership-private", "is_private": true, "is_member": true, "is_archived": false},
+    {"id": "C901", "name": "general-not-invited", "is_private": false, "is_member": false, "is_archived": false},
+    {"id": "C902", "name": "archived-ops", "is_private": false, "is_member": true, "is_archived": true}
+  ],
+  "messages": {
+    "C001": [
+      {"ts": "1718000000.000100", "user": "U100", "text": "Pager just went off for the payments API", "reply_count": 0, "reply_users_count": 0, "reactions": []},
+      {"ts": "1718000600.000200", "user": "U101", "text": "Looking — looks related to INC-4821 in ServiceNow", "reply_count": 4, "reply_users_count": 3, "reactions": [{"name": "eyes", "count": 2}]},
+      {"ts": "1718003600.000300", "user": "U102", "text": "Rolled back, see PR-2290", "reply_count": 1, "reply_users_count": 1, "reactions": []},
+      {"ts": "1718090000.000400", "user": "U100", "text": "Post-incident review scheduled", "reply_count": 0, "reply_users_count": 0, "reactions": [], "edited": {"ts": "1718090100.000000"}}
+    ],
+    "C002": [
+      {"ts": "1718001000.000100", "user": "U200", "text": "Deploying release 1.6 to staging", "reply_count": 0, "reply_users_count": 0, "reactions": []},
+      {"ts": "1718004000.000200", "user": "U201", "text": "Staging green, promoting to prod", "reply_count": 2, "reply_users_count": 2, "reactions": [{"name": "rocket", "count": 5}]}
+    ],
+    "C900": [
+      {"ts": "1718000000.000100", "user": "U900", "text": "private channel content that must never be read", "reply_count": 0, "reply_users_count": 0, "reactions": []}
+    ],
+    "C901": [
+      {"ts": "1718000000.000100", "user": "U901", "text": "channel AgentIQ was never invited to", "reply_count": 0, "reply_users_count": 0, "reactions": []}
+    ],
+    "C902": [
+      {"ts": "1717000000.000100", "user": "U902", "text": "archived channel message", "reply_count": 0, "reply_users_count": 0, "reactions": []}
+    ]
+  }
+}
