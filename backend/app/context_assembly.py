@@ -1,4 +1,4 @@
-"""R16-B2 — Context Assembly Foundation: deterministic ordering rules.
+"""R16-B2 — Context Assembly Foundation: deterministic context selection.
 
 This module is the one place that decides, *deterministically and reproducibly*,
 what context each opportunity is built from. Given an opportunity it produces a
@@ -33,18 +33,23 @@ Rule 3 is the load-bearing one: it is the assembly-layer enforcement of
 (R16-B1) enforces at capture time, enforced again here at selection time.
 
 Determinism note: freshness is measured against a reference derived from the
-*inputs* (the newest candidate), never the wall clock, so two calls at different
-times still produce a byte-identical package (AC1). The half-life weights how
-fast older context decays; it never reorders items of equal confidence whose
-timestamps are equal.
+*inputs* (the newest candidate, or an explicit precomputed ``freshness_days``),
+never the wall clock, so two calls at different times still produce a
+byte-identical package (AC1). The selection_log is likewise fully ordered
+independently of input order — included items by rank position, exclusions by a
+stable key — so the audit trail itself is reproducible.
 
 Forward-compatibility (Section 4): :func:`assemble_context` accepts an
 ``evidence_source`` that is ``None`` in 1.6 (no retrieval yet). When the
 retrieval substrate lands in 1.8 it is passed here and the SAME rules (floor,
 ranking, budget, logging) apply to retrieved evidence chunks — no caller change.
+The hook is deliberately permissive (callable, retrieval-style object, or plain
+iterable) and advisory (a failing source yields no evidence, never an error),
+so a stub source verifies it today and the real substrate plugs in unchanged.
 """
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Callable, List, Optional, Tuple
@@ -61,6 +66,8 @@ except ModuleNotFoundError:  # Runtime inside backend/ where app is top-level.
         GRAPH_CONTEXT_MAX_RELATIONSHIPS,
     )
     from app.provenance import INFERRED, OBSERVED
+
+logger = logging.getLogger(__name__)
 
 # Budget for retrieved evidence chunks. The entity/relationship caps are the
 # enterprise-safety constants owned by ``app.graph_constants`` (imported above,
@@ -96,6 +103,9 @@ __all__ = [
     "KIND_ENTITY",
     "KIND_RELATIONSHIP",
     "KIND_EVIDENCE",
+    "REASON_BELOW_FLOOR",
+    "REASON_BUDGET_EXHAUSTED",
+    "REASON_RANKED_OUT",
 ]
 
 
@@ -127,17 +137,19 @@ class Candidate:
 
     A candidate normalises the provenance the rules need (the same fields the
     Evidence & Identity Spine records): its ``origin`` (observed vs inferred),
-    ``confidence``, and a ``source_timestamp`` for freshness. ``candidate_id`` is
-    the stable tiebreaker (an entity id, relationship id, or evidence/chunk id).
-    ``payload`` is the underlying object returned in the package when selected.
+    ``confidence``, and freshness — either a precomputed ``freshness_days`` or a
+    ``source_timestamp`` it is derived from. ``candidate_id`` is the stable
+    tiebreaker (an entity id, relationship id, or evidence/chunk id). ``payload``
+    is the underlying object returned in the package when selected.
     """
 
     candidate_id: str
-    kind: str                              # entity | relationship | evidence
-    origin: str                            # observed | inferred
+    kind: str                               # entity | relationship | evidence
+    origin: str                             # observed | inferred
     confidence: float = 0.0
     source_timestamp: Optional[str] = None  # ISO-8601; None => unknown freshness
     payload: Any = None
+    freshness_days: Optional[float] = None  # precomputed age in days, if known
 
 
 @dataclass
@@ -184,28 +196,48 @@ def _reference_timestamp(candidates: List[Candidate]) -> Optional[datetime]:
     return max(stamps) if stamps else None
 
 
+def _age_days(candidate: Candidate, reference: Optional[datetime]) -> Optional[float]:
+    """Age of a candidate in days, or None when its freshness is unknown.
+
+    A precomputed ``freshness_days`` wins when present (a producer may carry the
+    age directly); otherwise the age is derived from ``source_timestamp``
+    relative to the shared reference. None means undated (least fresh).
+    """
+    if candidate.freshness_days is not None:
+        try:
+            return max(0.0, float(candidate.freshness_days))
+        except (TypeError, ValueError):
+            return None
+    ts = _parse_ts(candidate.source_timestamp)
+    if ts is None or reference is None:
+        return None
+    return max(0.0, (reference - ts).total_seconds() / 86400.0)
+
+
 def _freshness_score(
     candidate: Candidate, reference: Optional[datetime], halflife_days: float
 ) -> float:
     """Half-life weighted freshness in (0, 1]; 1.0 == as fresh as the reference.
 
-    Older context decays geometrically by ``halflife_days``. A missing or
-    unparseable timestamp scores 0.0 (least fresh), so timestamped context
-    outranks undated context at equal confidence.
+    Older context decays geometrically by ``halflife_days``. Undated context
+    scores 0.0 (least fresh), so timestamped/dated context outranks undated
+    context at equal confidence.
     """
-    ts = _parse_ts(candidate.source_timestamp)
-    if ts is None or reference is None:
+    age = _age_days(candidate, reference)
+    if age is None:
         return 0.0
-    age_days = (reference - ts).total_seconds() / 86400.0
-    if age_days <= 0:
+    if age <= 0:
         return 1.0
     if halflife_days <= 0:
         return 0.0
-    return 0.5 ** (age_days / halflife_days)
+    return 0.5 ** (age / halflife_days)
 
 
-def _freshness_days(candidate: Candidate, reference: Optional[datetime]) -> Optional[int]:
-    """Whole-day age relative to the reference, or None when undated."""
+def _freshness_days(candidate: Candidate, reference: Optional[datetime]):
+    """The freshness recorded in the selection_log: the precomputed value when
+    supplied, else whole-day age relative to the reference, else None."""
+    if candidate.freshness_days is not None:
+        return candidate.freshness_days
     ts = _parse_ts(candidate.source_timestamp)
     if ts is None or reference is None:
         return None
@@ -282,14 +314,13 @@ def select_candidates(
         reference = _reference_timestamp(candidates)
     halflife = policy.freshness_halflife_days
 
-    log: List[dict] = []
-
     # Rule 1 — exclude anything below the confidence floor. Done first so weak
     # context can never occupy budget ahead of stronger context (AC2).
+    below_floor: List[Candidate] = []
     eligible: List[Candidate] = []
     for candidate in candidates:
         if _confidence(candidate) < policy.confidence_floor:
-            log.append(_log_entry(candidate, DECISION_EXCLUDED, REASON_BELOW_FLOOR, reference))
+            below_floor.append(candidate)
         else:
             eligible.append(candidate)
 
@@ -316,7 +347,12 @@ def select_candidates(
     selected = ordered[:cap]
     excluded = ordered[cap:]
 
-    # Rule 6 — record every decision.
+    # Rule 6 — record every decision. The log is fully deterministic regardless
+    # of input order (AC1): below-floor entries sorted by id, then included items
+    # by rank position, then ranked/budget exclusions in ranked order.
+    log: List[dict] = []
+    for candidate in sorted(below_floor, key=lambda c: c.candidate_id):
+        log.append(_log_entry(candidate, DECISION_EXCLUDED, REASON_BELOW_FLOOR, reference))
     for position, candidate in enumerate(selected, start=1):
         log.append(
             _log_entry(candidate, DECISION_INCLUDED, _reason_included(position), reference)
@@ -363,12 +399,23 @@ def _get_first(obj: Any, names: Tuple[str, ...], default: Any = None) -> Any:
     return default
 
 
-def _entities_to_candidates(graph: Any) -> List[Candidate]:
-    """Adapt a graph's entities into observed entity candidates.
+def _coerce_float(value: Any) -> Optional[float]:
+    """Best-effort float, or None when the value is absent/unparseable."""
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
 
-    Entities are resolved from source-system records, so they are ``observed``.
-    Tolerant of GraphContext-style objects (``EntityContext`` with ``entity_id``
-    / ``confidence``) and of plain dicts; never raises on a missing field.
+
+def _entities_to_candidates(graph: Any) -> List[Candidate]:
+    """Adapt a graph's entities into entity candidates.
+
+    Entities are resolved from source-system records, so they default to
+    ``observed``. Tolerant of GraphContext-style objects (``EntityContext`` with
+    ``entity_id`` / ``confidence``), entity-table rows (``resolution_confidence``)
+    and plain dicts; never raises on a missing field.
     """
     entities = _get(graph, "entities", []) or []
     candidates: List[Candidate] = []
@@ -383,6 +430,7 @@ def _entities_to_candidates(graph: Any) -> List[Candidate]:
                     _get_first(ent, ("confidence", "resolution_confidence"), 0.0) or 0.0
                 ),
                 source_timestamp=_get(ent, "source_timestamp"),
+                freshness_days=_coerce_float(_get(ent, "freshness_days")),
                 payload=ent,
             )
         )
@@ -393,29 +441,24 @@ def _relationship_id(rel: Any) -> str:
     """A stable id for a relationship candidate.
 
     Prefers an explicit id; otherwise derives a deterministic composite key from
-    the edge endpoints + type so the tiebreaker is stable across runs even when
-    the edge object carries no id of its own.
+    the edge endpoints + type (``from->to:type``) so the tiebreaker is stable
+    across runs even when the edge object carries no id of its own. Endpoint
+    fields are read by both their id and their name spellings.
     """
     rid = _get_first(rel, ("relationship_id", "id", "candidate_id"))
     if rid:
         return str(rid)
-    return "|".join(
-        str(
-            _get_first(rel, names, "")
-        )
-        for names in (
-            ("from_name", "from_entity_name"),
-            ("to_name", "to_entity_name"),
-            ("relationship_type",),
-        )
-    )
+    frm = _get_first(rel, ("from_id", "from_entity_id", "from_name", "from_entity_name"), "?")
+    to = _get_first(rel, ("to_id", "to_entity_id", "to_name", "to_entity_name"), "?")
+    rtype = _get_first(rel, ("relationship_type", "type"), "?")
+    return f"{frm}->{to}:{rtype}"
 
 
 def _relationships_to_candidates(graph: Any) -> List[Candidate]:
     """Adapt a graph's relationships into candidates, observed vs inferred.
 
     An edge's ``inferred`` flag maps onto the observed/inferred origin the rules
-    partition on.
+    partition on (an explicit ``origin`` wins when present).
     """
     relationships = _get(graph, "relationships", []) or []
     candidates: List[Candidate] = []
@@ -430,38 +473,59 @@ def _relationships_to_candidates(graph: Any) -> List[Candidate]:
                 origin=origin,
                 confidence=float(_get(rel, "confidence", 0.0) or 0.0),
                 source_timestamp=_get(rel, "source_timestamp"),
+                freshness_days=_coerce_float(_get(rel, "freshness_days")),
                 payload=rel,
             )
         )
     return candidates
 
 
-def _resolve_evidence(evidence_source: Any, opportunity: Any) -> List[Any]:
-    """Pull raw evidence chunks from whatever an evidence source is.
+def _call_source(fn: Callable, opportunity: Any, policy: AssemblyPolicy) -> Any:
+    """Call an evidence source supporting both ``(opportunity, policy)`` and
+    ``(opportunity)`` signatures, so a 1.6 stub and a 1.8 retrieval source both
+    plug in unchanged."""
+    try:
+        return fn(opportunity, policy)
+    except TypeError:
+        return fn(opportunity)
+
+
+def _resolve_evidence(evidence_source: Any, opportunity: Any, policy: AssemblyPolicy) -> List[Any]:
+    """Pull raw evidence chunks from whatever an evidence source is (Section 4).
 
     In 1.6 ``evidence_source`` is None and this returns ``[]``. The interface is
-    deliberately loose so the 1.8 retrieval substrate can plug in unchanged:
-    a source may be a callable ``source(opportunity)``, an object exposing
-    ``retrieve``/``fetch``/``search``, or a plain iterable of chunks.
+    deliberately loose so the 1.8 retrieval substrate can plug in unchanged: a
+    source may be a callable, an object exposing
+    ``retrieve``/``fetch``/``search``/``fetch_evidence``/``get_evidence``, or a
+    plain iterable of chunks. Advisory: any failure yields no evidence rather
+    than breaking assembly.
     """
     if evidence_source is None:
         return []
-    if callable(evidence_source):
-        return list(evidence_source(opportunity) or [])
-    for method in ("retrieve", "fetch", "search"):
-        fn = getattr(evidence_source, method, None)
-        if callable(fn):
-            return list(fn(opportunity) or [])
     try:
-        return list(evidence_source)
-    except TypeError:
+        if callable(evidence_source):
+            result = _call_source(evidence_source, opportunity, policy)
+        else:
+            result = None
+            for method in ("retrieve", "fetch", "search", "fetch_evidence", "get_evidence"):
+                fn = getattr(evidence_source, method, None)
+                if callable(fn):
+                    result = _call_source(fn, opportunity, policy)
+                    break
+            if result is None:
+                result = list(evidence_source)  # plain iterable of chunks
+        return list(result) if result is not None else []
+    except Exception as exc:  # noqa: BLE001 — evidence is advisory in 1.6.
+        logger.warning("context_assembly: evidence_source failed (advisory): %s", exc)
         return []
 
 
-def _evidence_to_candidates(evidence_source: Any, opportunity: Any) -> List[Candidate]:
+def _evidence_to_candidates(
+    evidence_source: Any, opportunity: Any, policy: AssemblyPolicy
+) -> List[Candidate]:
     """Adapt retrieved evidence chunks into candidates (empty until 1.8)."""
     candidates: List[Candidate] = []
-    for idx, chunk in enumerate(_resolve_evidence(evidence_source, opportunity)):
+    for idx, chunk in enumerate(_resolve_evidence(evidence_source, opportunity, policy)):
         cid = (
             _get(chunk, "chunk_id")
             or _get(chunk, "evidence_id")
@@ -476,6 +540,7 @@ def _evidence_to_candidates(evidence_source: Any, opportunity: Any) -> List[Cand
                 origin=_get(chunk, "origin", OBSERVED),
                 confidence=float(_get(chunk, "confidence", 0.0) or 0.0),
                 source_timestamp=_get(chunk, "source_timestamp"),
+                freshness_days=_coerce_float(_get(chunk, "freshness_days")),
                 payload=chunk,
             )
         )
@@ -512,7 +577,7 @@ def assemble_context(
 
     entity_candidates = _entities_to_candidates(graph)
     relationship_candidates = _relationships_to_candidates(graph)
-    evidence_candidates = _evidence_to_candidates(evidence_source, opportunity)
+    evidence_candidates = _evidence_to_candidates(evidence_source, opportunity, policy)
 
     # One freshness reference across every kind so decay is comparable.
     reference = _reference_timestamp(
