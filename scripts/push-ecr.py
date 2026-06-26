@@ -59,6 +59,9 @@ _ensure_packages()
 import base64  # noqa: E402
 import ctypes  # noqa: E402
 import getpass  # noqa: E402
+import json
+import os
+import pathlib
 
 import boto3  # noqa: E402
 from botocore.exceptions import ClientError, NoCredentialsError  # noqa: E402
@@ -185,23 +188,27 @@ def main() -> None:
         # Get short-lived ECR authorization token (valid 12 hours)
         step("Fetching ECR authorization token...")
         token_response = ecr_client.get_authorization_token()
+        # auth_data is already base64(AWS:token) — exactly what Docker config expects
         auth_data = token_response["authorizationData"][0]["authorizationToken"]
         decoded = base64.b64decode(auth_data).decode("utf-8")
-        docker_username, docker_password = decoded.split(":", 1)
+        _, docker_password = decoded.split(":", 1)
 
-        # docker login using the temporary token
-        step(f"Authenticating Docker to {ECR_REGISTRY}...")
-        login_proc = subprocess.run(
-            ["docker", "login", "--username", docker_username,
-             "--password-stdin", ECR_REGISTRY],
-            input=docker_password,
-            text=True,
-            capture_output=True,
-        )
-        if login_proc.returncode != 0:
-            print(f"\nDocker login failed:\n{login_proc.stderr}")
-            sys.exit(1)
-        ok("Docker authenticated to ECR.")
+        # Write credentials directly to ~/.docker/config.json — bypasses docker login
+        # network verification which fails in Docker-in-container setups.
+        step(f"Writing ECR credentials to Docker config (no network call)...")
+        docker_config_path = pathlib.Path.home() / ".docker" / "config.json"
+        docker_config_path.parent.mkdir(parents=True, exist_ok=True)
+
+        config = {}
+        if docker_config_path.exists():
+            try:
+                config = json.loads(docker_config_path.read_text())
+            except json.JSONDecodeError:
+                config = {}
+
+        config.setdefault("auths", {})[ECR_REGISTRY] = {"auth": auth_data}
+        docker_config_path.write_text(json.dumps(config, indent=2))
+        ok("Docker credentials written. Ready to push.")
 
         # Tag and push each image
         step("Tagging and pushing images...")
@@ -222,18 +229,23 @@ def main() -> None:
         sys.exit(1)
 
     finally:
+        # Remove ECR entry from ~/.docker/config.json
+        try:
+            docker_config_path = pathlib.Path.home() / ".docker" / "config.json"
+            if docker_config_path.exists():
+                config = json.loads(docker_config_path.read_text())
+                config.get("auths", {}).pop(ECR_REGISTRY, None)
+                docker_config_path.write_text(json.dumps(config, indent=2))
+        except Exception:
+            pass
+
         # Clear credentials from memory
         _zero_string(access_key)
         _zero_string(secret_key)
         if docker_password:
             _zero_string(docker_password)
         del access_key, secret_key, docker_password
-        # Log out Docker from ECR so the token isn't cached in ~/.docker/config.json
-        subprocess.run(
-            ["docker", "logout", ECR_REGISTRY],
-            capture_output=True,
-        )
-        print("\n[--] AWS credentials cleared. Docker logged out from ECR.")
+        print("\n[--] AWS credentials cleared. ECR entry removed from Docker config.")
 
 
 if __name__ == "__main__":
