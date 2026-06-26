@@ -153,6 +153,18 @@ _DETECTOR_META: Dict[str, Dict[str, str]] = {
         "title_template": "Benefit Election Guardian",
         "category": "Benefit Election",
     },
+    # STRS Benefits compliance detectors emphasised under approvals_compliance
+    # (see discovery/packs/focus_affinity.py). Listed here so the Track A
+    # adapter emits a meaningful title/category instead of falling back to the
+    # generic capitalised detector id + "Pattern detected by AgentIQ ..." stub.
+    "DISBURSEMENT_OVERDUE": {
+        "title_template": "Benefit Disbursement Guardian",
+        "category": "Benefit Disbursement",
+    },
+    "DISABILITY_REVIEW_BOTTLENECK": {
+        "title_template": "Disability Review Monitor",
+        "category": "Disability Review",
+    },
     "LOAN_ORIGINATION_ROUTING_FRICTION": {
         "title_template": "Loan Origination Routing Friction",
         "category": "Automation Opportunity",
@@ -415,6 +427,10 @@ def export_track_a_seed(
             "mode":        runner_payload.get("mode"),
             "packId":      runner_payload.get("packId"),
             "packVersion": runner_payload.get("packVersion"),
+            # R16-C2 T2: record the focus the run was launched with so replay,
+            # audit, and debugging can reconstruct what shaped the original
+            # ranking from the snapshot alone. None => unbiased (enterprise-wide).
+            "focusId":     runner_payload.get("focusId"),
             "startedAt":   runner_payload.get("startedAt"),
             "completedAt": runner_payload.get("completedAt"),
             "inputs":      runner_payload.get("inputs", {}),
