@@ -21,6 +21,14 @@ and its indexes.
 Revision ID: 0019
 Revises: 0018
 Create Date: 2026-06-24
+
+Note (R16-B2 integration): originally authored as revision ``0017``, which
+collided with ``0017_create_ingestion_checkpoints`` once both feature branches
+merged into the R16-B2 base — two migrations sharing one revision id left alembic
+with duplicate/multiple heads and broke ``alembic upgrade head`` (the CI gate).
+This migration creates a standalone table with no dependency on the
+ingestion-checkpoints lineage, so it was re-chained to the end (``0018`` ->
+``0019``) to restore a single linear head. Migration content is unchanged.
 """
 import os
 import sys
