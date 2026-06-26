@@ -89,8 +89,11 @@ def test_included_entries_record_position():
     pkg = assemble_context({}, g, AssemblyPolicy())
     included = [l for l in pkg.selection_log if l["decision"] == "included"]
     assert len(included) == 2
+    # Positions are 1-based, matching the canonical T7 contract test
+    # (tests/contract/test_context_assembly.py) — reconciled during R16-B2
+    # integration so both suites agree on the included@position_N numbering.
     assert sorted(l["reason"] for l in included) == [
-        "included@position_0", "included@position_1",
+        "included@position_1", "included@position_2",
     ]
 
 
