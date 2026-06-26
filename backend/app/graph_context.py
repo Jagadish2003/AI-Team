@@ -35,6 +35,7 @@ from typing import Any, Dict, List, Optional
 from pydantic import BaseModel, Field
 
 from app import db
+from app.context_assembly import AssemblyPolicy, assemble_context
 from app.graph_constants import (
     GRAPH_CONTEXT_MAX_ENTITIES as MAX_GRAPH_ENTITIES,
     SPARSE_GRAPH_THRESHOLD,
@@ -68,6 +69,10 @@ class GraphContext(BaseModel):
     observed_summary: str = ""            # DIRECTLY OBSERVED section body
     truncation_note: str = ""             # appended under observed_summary when truncated
     relationship_count: int = 0           # edges included in the summary
+    # R16-B2: the include/exclude decisions made by the context assembly service
+    # for this run's graph context — surfaced for auditability (why each entity /
+    # edge was kept or dropped). Empty when assembly logged nothing.
+    selection_log: List[Dict[str, Any]] = Field(default_factory=list)
 
 
 def _entity_get(entity: Any, key: str, default: Any = None) -> Any:
@@ -206,20 +211,31 @@ def build_graph_context(
     if relationships is None:
         relationships = _load_relationships(org_id, run_id) if org_id else []
 
-    # Deterministic ordering so the same graph always yields the same prompt.
     safe_entities = [e for e in (entities or []) if isinstance(e, dict)]
-    safe_entities.sort(
-        key=lambda e: (
-            str(_entity_get(e, "display_name", "")).lower(),
-            str(_entity_get(e, "entity_id", "")),
-        )
-    )
+    safe_relationships = list(relationships or [])
 
+    # Totals are measured BEFORE selection: entity_count / is_sparse / truncated
+    # describe the whole graph the run touched, not just what survived the cap.
     total = len(safe_entities)
     truncated = total > MAX_GRAPH_ENTITIES
-    shown_entities = safe_entities[:MAX_GRAPH_ENTITIES]
-    shown = len(shown_entities)
     is_sparse = total < SPARSE_GRAPH_THRESHOLD
+
+    # R16-B2 (T5/AC8): the final context-SELECTION policy — budget/caps,
+    # deterministic ranking, observed-first, and the selection log — lives in ONE
+    # place: the context assembly service. This module still PRODUCES the graph
+    # (loads entities/edges and renders the observed summary), but it no longer
+    # decides the selection itself. Routing the enrichment grounding context
+    # through assemble_context() means enrichment, retrieval (1.8) and future
+    # causal reasoning all share the same rules, so the chosen context is
+    # explainable and reproducible everywhere. evidence_source is None in 1.6.
+    package = assemble_context(
+        opportunity={"run_id": run_id},
+        graph={"entities": safe_entities, "relationships": safe_relationships},
+        policy=AssemblyPolicy(),
+    )
+    shown_entities = package.entities          # selected, ordered, <= 15
+    shown_relationships = package.relationships  # selected, ordered, <= 20
+    shown = len(shown_entities)
 
     resolved_names = [
         str(_entity_get(e, "display_name", "")).lower()
@@ -236,7 +252,7 @@ def build_graph_context(
             f"not infer the names of entities that are not listed."
         )
 
-    observed_summary = _render_observed_summary(shown_entities, relationships or [])
+    observed_summary = _render_observed_summary(shown_entities, shown_relationships)
 
     return GraphContext(
         entity_count=total,
@@ -246,5 +262,6 @@ def build_graph_context(
         resolved_names=resolved_names,
         observed_summary=observed_summary,
         truncation_note=truncation_note,
-        relationship_count=len(relationships or []),
+        relationship_count=len(shown_relationships),
+        selection_log=package.selection_log,
     )
