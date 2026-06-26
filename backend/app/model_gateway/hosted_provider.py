@@ -118,6 +118,11 @@ class HostedModelProvider(ModelProvider):
 
     name = "hosted"
 
+    # This provider records its own per-call telemetry (T6 / AT-410), so when it
+    # runs as the gateway default (T5 / AT-409) the gateway's instrumented
+    # generate()/embed() wrappers skip their emission — one call, one event.
+    emits_own_telemetry = True
+
     def __init__(self) -> None:
         """Read credential and endpoint configuration at instantiation (T4-AC1).
 
