@@ -72,6 +72,11 @@ FOCUS_BACK_OFFICE_PRODUCTIVITY = "back_office_productivity"
 FOCUS_ENGINEERING_CHANGE = "engineering_change"
 FOCUS_ENTERPRISE_WIDE = "enterprise_wide"
 
+# Explicit no-op affinity used by enterprise_wide. Keeping this named constant
+# makes the product contract clear: enterprise_wide intentionally applies no
+# focus modifier and is the full, unbiased baseline view.
+FOCUS_NO_AFFINITY_BIAS: Optional[Tuple[str, ...]] = None
+
 
 # ── Affinity mapping ───────────────────────────────────────────────────────────
 # Each focus maps to a deterministic, ordered tuple of canonical DETECTOR_ID
@@ -131,7 +136,7 @@ FOCUS_AFFINITY: Dict[str, Optional[Tuple[str, ...]]] = {
         "ENT_CHANGE_INCIDENT_CORRELATION", # change-driven incidents
     ),
     # The unbiased, full view — no affinity bias.
-    FOCUS_ENTERPRISE_WIDE: None,
+    FOCUS_ENTERPRISE_WIDE: FOCUS_NO_AFFINITY_BIAS,
 }
 
 # Frozen set of the seven valid focus ids, derived from the mapping so the two
@@ -153,6 +158,11 @@ def is_valid_focus(focus_id: Optional[str]) -> bool:
     return _normalize(focus_id) in VALID_FOCUS_IDS
 
 
+def is_enterprise_wide_focus(focus_id: Optional[str]) -> bool:
+    """Return True when ``focus_id`` is the explicit unbiased full-view mode."""
+    return _normalize(focus_id) == FOCUS_ENTERPRISE_WIDE
+
+
 def get_focus_affinity(focus_id: Optional[str]) -> Optional[Tuple[str, ...]]:
     """
     Return the ordered tuple of emphasised DETECTOR_IDs for ``focus_id``.
@@ -166,6 +176,8 @@ def get_focus_affinity(focus_id: Optional[str]) -> Optional[Tuple[str, ...]]:
     convention as ``pack_config.get_pack()``.
     """
     norm = _normalize(focus_id)
+    if norm == FOCUS_ENTERPRISE_WIDE:
+        return FOCUS_NO_AFFINITY_BIAS
     if norm in FOCUS_AFFINITY:
         return FOCUS_AFFINITY[norm]
     logger.warning(
@@ -183,6 +195,8 @@ def has_affinity_bias(focus_id: Optional[str]) -> bool:
     ``enterprise_wide`` (and any unknown/None focus, which degrades to the
     unbiased view) returns False.
     """
+    if is_enterprise_wide_focus(focus_id):
+        return False
     return get_focus_affinity(focus_id) is not None
 
 
@@ -269,8 +283,11 @@ def build_focus_emphasis(focus_id: Optional[str], detector_id: Optional[str]) ->
 
     if affinity is None:
         # enterprise_wide or unknown/None focus -> the full, unbiased view.
-        if norm == FOCUS_ENTERPRISE_WIDE:
-            rationale = "Enterprise-wide focus: no affinity bias — full unweighted view."
+        if is_enterprise_wide_focus(focus_id):
+            rationale = (
+                "Enterprise-wide focus: no affinity bias; full unweighted view "
+                "across selected systems and active pack."
+            )
         elif norm is None:
             rationale = "No focus selected: no affinity bias — full unweighted view."
         else:

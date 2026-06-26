@@ -155,6 +155,41 @@ def _guardrail_seed_order(run_id: str) -> List[str]:
     return [o["_debug"]["detector_id"] for o in seed["opportunities"]]
 
 
+def _enterprise_payload_with_stale_annotation(run_id: str) -> Dict[str, Any]:
+    focus = load_focus_for_run(run_id)
+    return {
+        "runId": run_id,
+        "focusId": focus,
+        "opportunities": [
+            {
+                "detector_id": "APPROVAL_BOTTLENECK",
+                "tier": "Complex",
+                "impact": 5,
+                "effort": 5,
+                "confidence": "MEDIUM",
+                "metric_value": 3.0,
+                "threshold": 2.0,
+                "raw_evidence": {},
+                "evidenceIds": [],
+                # Deliberately stale: enterprise_wide must not trust this bias.
+                "focus_emphasis": {"rank": 0, "matched": True},
+            },
+            {
+                "detector_id": "HANDOFF_FRICTION",
+                "tier": "Quick Win",
+                "impact": 8,
+                "effort": 2,
+                "confidence": "MEDIUM",
+                "metric_value": 3.0,
+                "threshold": 2.0,
+                "raw_evidence": {},
+                "evidenceIds": [],
+                "focus_emphasis": {"rank": 1, "matched": False},
+            },
+        ],
+    }
+
+
 # ── AC: focus is persisted and read back ────────────────────────────────────────
 
 def test_focus_id_is_persisted_and_loadable(client):
@@ -211,6 +246,15 @@ def test_enterprise_wide_is_baseline(client):
     order = _seed_order(run_enterprise)
     # Pure tier ordering — no focus bias.
     assert order == ["HANDOFF_FRICTION", "KNOWLEDGE_GAP", "APPROVAL_BOTTLENECK"]
+
+
+def test_enterprise_wide_seed_ranking_ignores_stale_focus_emphasis(client):
+    run_enterprise = _launch(client, focus_id="enterprise_wide")
+
+    seed = export_track_a_seed(_enterprise_payload_with_stale_annotation(run_enterprise))
+    order = [o["_debug"]["detector_id"] for o in seed["opportunities"]]
+
+    assert order == ["HANDOFF_FRICTION", "APPROVAL_BOTTLENECK"]
 
 
 # ── AC5 — deterministic ─────────────────────────────────────────────────────────
