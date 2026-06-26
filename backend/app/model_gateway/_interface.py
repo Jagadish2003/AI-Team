@@ -43,6 +43,16 @@ class ModelProvider(ABC):
 
     name: str  # declared on each concrete subclass, not as an instance attr
 
+    #: Whether this provider emits its own per-call telemetry event.
+    #:
+    #: The gateway's instrumented generate()/embed() wrappers record one
+    #: telemetry event per call so every model call is observable.  A provider
+    #: that already records its own per-call event (e.g. the D2
+    #: HostedModelProvider) sets this True so the gateway SKIPS its emission and
+    #: a single logical call produces exactly one event — never two.  Providers
+    #: that don't self-report leave it False and stay observable via the gateway.
+    emits_own_telemetry: bool = False
+
     @abstractmethod
     def generate(self, req: GenerationRequest) -> GenerationResult:
         """Generate text for the given prompt.
