@@ -324,11 +324,17 @@ def register_connector_auth_routes(app: FastAPI) -> None:
         "/api/connectors/{connector_id}/auth-url",
         dependencies=[Depends(require_auth)],
     )
-    def get_auth_url(connector_id: str) -> Dict[str, str]:
+    def get_auth_url(connector_id: str) -> Dict[str, object]:
         """Generate a one-time authorization URL for the given connector.
 
         State nonce is cryptographically random (secrets.token_urlsafe(32)),
         stored server-side, and contains no redirect URL or user data (AC1).
+
+        The response also echoes the exact OAuth ``scopes`` being requested so the
+        admin can be shown what permissions are about to be granted *before* the
+        consent redirect (R16-A2 §3 / AT-420: "surface the requested scopes to
+        the admin during the consent step"). For Slack these are the minimal,
+        public-channels-only read scopes.
         """
         config = CONNECTOR_AUTH_CONFIGS.get(connector_id)
         if config is None:
@@ -355,7 +361,11 @@ def register_connector_auth_routes(app: FastAPI) -> None:
             org_id=get_current_org_id_optional(),
         )
         auth_url = build_auth_url(config, state, code_challenge=code_challenge)
-        return {"auth_url": auth_url, "connector_id": connector_id}
+        return {
+            "auth_url": auth_url,
+            "connector_id": connector_id,
+            "scopes": list(config.scopes),
+        }
 
     @app.delete(
         "/api/connectors/{connector_id}/token",

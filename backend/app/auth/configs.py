@@ -135,7 +135,16 @@ CONNECTOR_AUTH_CONFIGS: Dict[str, ConnectorAuthConfig] = {
         secret_key="SLACK_CLIENT_SECRET",
         token_url="https://slack.com/api/oauth.v2.access",
         revocation_url=None,                                                        # Slack uses auth.revoke Web API — see vault.py revoke_token()
-        scopes=["channels:read", "channels:history", "users:read", "team:read"],
+        # R16-A2 §3 / AT-420 (AC4): minimal, public-channels-only scopes — only
+        # what the reach-phase ingestor needs to read public channel messages.
+        #   channels:read    → list the public channels AgentIQ was invited to
+        #   channels:history → read those public channels' messages
+        # Deliberately NO private-channel (groups:*), DM (im:*) or group-DM
+        # (mpim:*) scopes, and no write scopes — so private channels and DMs can
+        # never be accessed (the privacy guarantee is enforced at the scope level,
+        # in addition to the SlackIngestor public-only channel filter). Slack's
+        # own OAuth consent screen shows exactly these scopes to the admin.
+        scopes=["channels:read", "channels:history"],
         authorization_url="https://slack.com/oauth/v2/authorize",
         redirect_uri=os.environ.get("OAUTH_REDIRECT_URI", ""),
     ),
