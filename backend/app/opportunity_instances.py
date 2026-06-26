@@ -43,7 +43,7 @@ _TABLE_READY = False
 def ensure_opportunity_instances_table() -> None:
     """Create the opportunity_instances table + indexes if absent (idempotent).
 
-    The authoritative creator is migration ``0017`` (run by alembic in tests and
+    The authoritative creator is migration ``0019`` (run by alembic in tests and
     by provisioning in prod); this runtime helper is a safety net so the write
     path works on a dev DB that has not yet been migrated — mirroring
     ``ensure_entities_table()``. Runs at most once per process. Never raises: on
