@@ -208,7 +208,7 @@ def generate(req: GenerationRequest) -> GenerationResult:
     # AC1: provider name comes from GenerationResult.provider — the backend
     # that actually served the request. AC4: emitted even when ok is False.
     # Skip when the provider already emitted (avoids a duplicate event).
-    if not getattr(provider, "emits_own_telemetry", False):
+    if not provider.emits_own_telemetry:
         _record_provider_telemetry(
             _GENERATION_EVENT,
             {"provider": result.provider, "ok": result.ok},
@@ -229,7 +229,7 @@ def embed(texts: List[str]) -> List[List[float]]:
     # ok = the provider returned a vector for every input (empty input is a
     # successful no-op). AC2: telemetry carries the provider name.
     # Skip when the provider already emitted its own event (exactly-once).
-    if not getattr(provider, "emits_own_telemetry", False):
+    if not provider.emits_own_telemetry:
         _record_provider_telemetry(
             _EMBEDDING_EVENT,
             {

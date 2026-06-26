@@ -1111,9 +1111,9 @@ def test_t6_ac5_provider_exception_does_not_propagate(monkeypatch, t6_captured_e
     """Even when the underlying transport raises, the contract holds: the
     hosted provider catches everything internally and returns a graceful
     result (ModelProvider.generate must never raise)."""
-    from app.model_gateway._hosted import AnthropicHostedProvider
+    from app.model_gateway.hosted_provider import HostedModelProvider
 
-    provider = AnthropicHostedProvider()
+    provider = HostedModelProvider()
     monkeypatch.setenv("ANTHROPIC_API_KEY", "definitely-invalid-key")
 
     def _boom(*_a, **_k):
