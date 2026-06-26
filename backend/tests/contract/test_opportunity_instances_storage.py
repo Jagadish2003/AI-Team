@@ -1,6 +1,6 @@
 """Contract tests for opportunity_instance storage (R16-B1 Part Two / T4).
 
-Exercises the real PostgreSQL table created by migration 0017 (the contract
+Exercises the real PostgreSQL table created by migration 0019 (the contract
 suite runs ``alembic upgrade head`` in conftest), proving the per-run instances
 persist and can be queried back into the cross-run time series outcome tracking
 (2.0) will compare.

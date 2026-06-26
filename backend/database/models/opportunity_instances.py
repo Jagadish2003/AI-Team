@@ -8,7 +8,7 @@ problem: its score, confidence, evidence and narrative at that point in time
 exactly what before/after outcome comparison (2.0) needs.
 
 This module owns the ``opportunity_instances`` table schema (the single source
-of truth for its DDL). The migration ``0017_create_opportunity_instances.py``
+of truth for its DDL). The migration ``0019_create_opportunity_instances.py``
 and the runtime ``ensure_opportunity_instances_table()`` helper both execute the
 exact statements in ``ALL_OPPORTUNITY_INSTANCES_DDL`` — mirroring the locked
 entities pattern (``database/models/entities.py``) so the migration-applied and
