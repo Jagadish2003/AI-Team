@@ -53,6 +53,8 @@ import re
 from datetime import datetime, timezone
 from typing import Any, Dict, Iterable, List, Optional
 
+from app.provenance import EvidencePointer, utc_now_iso
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Escalation thresholds (participation / back-and-forth)
 # ─────────────────────────────────────────────────────────────────────────────
@@ -96,6 +98,34 @@ def _slack_ts_to_iso(ts: str) -> Optional[str]:
         return datetime.fromtimestamp(float(ts), tz=timezone.utc).isoformat()
     except (TypeError, ValueError):
         return None
+
+
+def build_evidence_pointer(channel_id: str, ts: str) -> Dict[str, Any]:
+    """Build the R16-B1 EvidencePointer for a single Slack message signal (AT-418).
+
+    Every Slack signal must be traceable back to its source message, so each
+    record carries a fully-populated, OBSERVED provenance pointer (AC5):
+
+      * ``source_system`` = ``'slack'``
+      * ``source_artifact`` = the message identity ``"{channel_id}:{ts}"`` — the
+        unique id of the source message (stable, so ``source_artifact_type`` is
+        ``'record_id'``); for a threaded reply this is still the reply message's
+        own ``channel:ts``, which uniquely identifies it within the thread.
+      * ``source_timestamp`` = the message's own UTC ISO-8601 timestamp (derived
+        from the Slack ``epoch.micro`` ts); falls back to now only if the ts is
+        missing/unparseable, so the mandatory spine is always populated.
+      * ``origin`` = ``'observed'`` — read directly from Slack, never inferred, so
+        no ``extraction_job_id`` is required.
+
+    Returned as a JSON-serialisable dict (the extensible 1.6 detail fields are
+    present-but-null) ready to attach to the delta record's metadata.
+    """
+    return EvidencePointer.observed(
+        source_system="slack",
+        source_artifact=f"{channel_id}:{ts}",
+        source_timestamp=_slack_ts_to_iso(ts) or utc_now_iso(),
+        source_artifact_type="record_id",
+    ).to_dict()
 
 
 def extract_cross_reference_markers(text: Optional[str]) -> List[Dict[str, str]]:

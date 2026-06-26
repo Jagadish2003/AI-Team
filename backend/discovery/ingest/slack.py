@@ -14,10 +14,12 @@ This file is the change-based ingestor: checkpointed incremental message
 ingestion plus a resumable, checkpointed first load (AT-416 / T1, AC2 + AC3).
 Each delta record also carries an extracted ``signals`` block (cross-reference
 markers + escalation signal) via :mod:`discovery.ingest.slack_signals`
-(AT-417 / T2) so reach-phase signal travels with the delta. The remaining
-downstream pieces are deliberately separate stories and are NOT done here:
+(AT-417 / T2) so reach-phase signal travels with the delta, plus a fully
+populated ``evidence_pointer`` (R16-B1, ``origin='observed'``) attached to every
+record so each Slack signal is traceable back to its source message (AT-418 /
+T3, AC5). The remaining downstream pieces are deliberately separate stories and
+are NOT done here:
 
-  * EvidencePointer attachment (R16-B1) — T3 / AT-418.
   * The Slack MEDIUM corroboration ceiling — T4 / AT-419.
   * OAuth connect wiring (auth-url / callback / vault) — T5 / AT-420 (the Slack
     OAuth config already exists in ``app/auth/configs.py``).
@@ -75,6 +77,7 @@ from typing import Any, Dict, Iterator, List, Optional
 from . import get_live_connector, is_live
 from .base import ChangeBasedIngestor, ChangeKind, Checkpoint, DeltaBatch
 from .slack_signals import (
+    build_evidence_pointer,
     extract_cross_reference_markers,
     extract_escalation_signal,
 )
@@ -296,6 +299,12 @@ class SlackIngestor(ChangeBasedIngestor):
         so the reach-phase signal travels with the delta to downstream
         corroboration. Channel-level activity (volume/cadence/bursts) is derived
         across records by :func:`slack_signals.build_slack_signal`.
+
+        R16-A2 / AT-418 (T3): every record also carries a fully-populated
+        ``evidence_pointer`` (R16-B1) with ``source_system='slack'``, the
+        message id, the message timestamp, and ``origin='observed'`` — so no
+        Slack signal enters the system without a verifiable, auditable source
+        reference (AC5).
         """
         ts = msg.get("ts", "")
         # An edited message is an update to an artifact we may already have seen;
@@ -320,6 +329,9 @@ class SlackIngestor(ChangeBasedIngestor):
                 "cross_references": extract_cross_reference_markers(text),
                 "escalation": extract_escalation_signal(msg),
             },
+            # R16-B1 provenance (AT-418 / AC5): observed pointer back to this
+            # exact Slack message.
+            "evidence_pointer": build_evidence_pointer(channel["id"], ts),
         }
 
     # ── Source access: offline fixture vs live Slack Web API ─────────────────
