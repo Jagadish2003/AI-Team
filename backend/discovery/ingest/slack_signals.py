@@ -337,6 +337,37 @@ def build_slack_signal(records: Iterable[Dict[str, Any]]) -> Dict[str, Any]:
     }
 
 
+#: The connector's own source identity in the corroboration input. The engine
+#: keys the Slack MEDIUM ceiling off this exact system id (COR-05/COR-06 and the
+#: T3 ``SLACK_SYSTEM_IDS`` clamp), so the block MUST be fed under this key and the
+#: signal MUST be reported as Slack — never relabelled as another system, which
+#: would bypass the ceiling.
+SLACK_CORROBORATION_KEY = "slack"
+
+
+def build_slack_corroboration_payload(
+    records: Iterable[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """Package Slack signal into the corroboration-engine input block (AT-419 / T4).
+
+    Wraps :func:`build_slack_signal` under the ``'slack'`` key that the
+    corroboration engine's ``_find_corroboration_block('slack', …)`` recognises.
+    The engine reads the ``escalation_pattern`` from this block to fire COR-05
+    (Slack supporting-only, stays MEDIUM) or COR-06 (Slack WITH a primary system
+    corroborator, elevates to HIGH).
+
+    This function only *feeds* Slack signal in the shape the engine consumes — it
+    deliberately attaches no confidence and performs no elevation. The Slack
+    MEDIUM ceiling (a Slack-only signal is capped at MEDIUM and never produces a
+    standalone HIGH finding, AC6) is enforced entirely by the corroboration
+    engine (COR-05's ``elevates=False`` / exclusion from elevating rules and the
+    defence-in-depth clamp in ``apply_corroboration_confidence``) and the T3
+    ceiling clamp. Reporting the signal as ``'slack'`` is exactly what lets those
+    existing rules apply the cap — do not relabel it or add a confidence here.
+    """
+    return {SLACK_CORROBORATION_KEY: build_slack_signal(records)}
+
+
 def _is_float(value: Any) -> bool:
     try:
         float(value)
