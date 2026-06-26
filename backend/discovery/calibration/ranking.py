@@ -203,5 +203,25 @@ def rank_opportunities(
     emphasis (R16-C2 T2). Omitting it preserves the original ranking behavior.
     Python's sort is stable, so ties beyond the key keep input order
     deterministically.
+
+    ``focus_id=None`` vs ``focus_id="enterprise_wide"`` are NOT equivalent when
+    opportunities carry a stored ``focus_emphasis`` annotation:
+
+      * ``focus_id="enterprise_wide"`` always recomputes a fully neutral view
+        live (every detector gets the neutral rank), ignoring any stored
+        annotation. Use this for replay / re-ranking when you want a guaranteed
+        unbiased order regardless of what focus the original run used.
+      * ``focus_id=None`` does NOT recompute; it preserves whatever
+        ``focus_emphasis.rank`` the runner attached during the original run (see
+        ``_emphasis_rank``). This is the Track A seed path, where ``focus_id``
+        is not threaded through and the stored annotation is the only available
+        focus signal — so the original run's emphasis is honoured.
+
+    Consequence: if an opportunity was annotated under one focus and is later
+    re-ranked with ``focus_id=None``, that stale annotation still biases the
+    order. Callers wanting a truly neutral view must pass
+    ``focus_id="enterprise_wide"`` explicitly, not ``None``. Callers wanting the
+    live focus applied must pass the actual ``focus_id`` (then the annotation is
+    bypassed in favour of a live recompute).
     """
     return sorted(opportunities, key=lambda o: rank_key(o, focus_id))
