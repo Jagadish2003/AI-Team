@@ -264,6 +264,20 @@ def run_trackb_and_persist(
         db.run_kv_set("opps", run_id, opps)
         db.run_kv_set("evidence", run_id, ev)
 
+        # R16-B1 (T6): persist the queryable evidence-pointer trail so a finding
+        # can later be walked back to the source artifacts that produced it
+        # (source_system + source_artifact + source_timestamp). Additive and
+        # non-blocking — never aborts materialization.
+        try:
+            from .evidence_pointers import store_evidence_pointers
+
+            store_evidence_pointers(
+                run_id, opps, evidence=ev,
+                run_completed_at=payload.get("completedAt"),
+            )
+        except Exception as e:  # noqa: BLE001 — provenance storage is additive.
+            errors["evidence_pointers"] = str(e)
+
         # Keep Integration Hub connector cards in sync with the actual run data.
         from .connector_metrics import update_connector_metrics_from_run
 

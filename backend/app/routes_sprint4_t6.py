@@ -164,6 +164,37 @@ class RunEnrichment(BaseModel):
     available:              bool = False
 
 
+class EvidencePointerSummary(BaseModel):
+    """R16-B1 (T6) — one provenance pointer in an opportunity's source trail.
+
+    Mirrors the EvidencePointer spine (T1): the mandatory spine is always
+    populated; origin records observed-vs-inferred so inferred content is never
+    mistaken for ground truth. The extensible retrieval fields (chunk_id,
+    retrieval_result_id) are present and null in 1.6 (AC8) — retrieval (1.8)
+    fills them with no schema change.
+    """
+    source_system:        str
+    source_artifact:      str
+    source_timestamp:     str
+    origin:               str = "observed"
+    extraction_job_id:    Optional[str] = None
+    # extensible detail — null in 1.6 (AC8)
+    chunk_id:             Optional[str] = None
+    retrieval_result_id:  Optional[str] = None
+    detector_evidence_id: Optional[str] = None
+    confidence:           Optional[float] = None
+
+
+class EvidenceTrace(BaseModel):
+    """The source trail for one opportunity — what the full evidence trace
+    (1.9) will render. ``available`` is False (never 404) when no pointers were
+    stored for the opportunity, mirroring the enrichment route's contract."""
+    runId:     str
+    oppId:     str
+    pointers:  List[EvidencePointerSummary] = Field(default_factory=list)
+    available: bool = False
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Helpers
 # ─────────────────────────────────────────────────────────────────────────────
@@ -474,6 +505,63 @@ def _load_relationship_summaries(
         return []
 
 
+def _load_evidence_pointers(run_id: str, opp_id: str) -> List[EvidencePointerSummary]:
+    """Load the org-scoped evidence-pointer trail for one opportunity (T6 / AC7).
+
+    Tenant boundary is load-bearing here: provenance points back to real
+    business systems, so a run that belongs to a different org than the request
+    must yield NO pointers — the same guard _load_relationship_summaries uses.
+    Reads from the run-scoped pointer index written at materialization.
+
+    Never raises — the trace is advisory; returns [] when the org context is
+    missing, the run belongs to another org, or any lookup error occurs.
+    """
+    try:
+        from app.middleware.tenancy import get_current_org_id
+        org_id = get_current_org_id()
+    except Exception as exc:
+        logger.debug("evidence trace skipped — org context unavailable: %s", exc)
+        return []
+    try:
+        run = db.get_run(run_id)
+    except Exception as exc:
+        logger.debug("evidence trace skipped — run lookup failed for %s: %s", run_id, exc)
+        return []
+    if run is None:
+        return []
+    run_org_id = _run_org_id(run)
+    if run_org_id is not None and run_org_id != org_id:
+        logger.debug(
+            "evidence trace skipped — run %s belongs to org %s, request org %s",
+            run_id, run_org_id, org_id,
+        )
+        return []
+    try:
+        from .evidence_pointers import get_evidence_pointers_for_opportunity
+        raw = get_evidence_pointers_for_opportunity(run_id, opp_id)
+    except Exception as exc:
+        logger.debug("evidence trace load failed for run %s opp %s: %s", run_id, opp_id, exc)
+        return []
+
+    summaries: List[EvidencePointerSummary] = []
+    for p in raw:
+        try:
+            summaries.append(EvidencePointerSummary(
+                source_system=p["source_system"],
+                source_artifact=p["source_artifact"],
+                source_timestamp=p["source_timestamp"],
+                origin=p.get("origin", "observed"),
+                extraction_job_id=p.get("extraction_job_id"),
+                chunk_id=p.get("chunk_id"),
+                retrieval_result_id=p.get("retrieval_result_id"),
+                detector_evidence_id=p.get("detector_evidence_id"),
+                confidence=p.get("confidence"),
+            ))
+        except (KeyError, TypeError, ValueError):
+            pass  # malformed pointer — skip silently
+    return summaries
+
+
 def _load_causal_hypothesis(
     org_id: Optional[str], opportunity_id: str, run_id: str
 ) -> Optional[CausalHypothesisSummary]:
@@ -674,4 +762,40 @@ def register_sprint4_t6_routes(app) -> None:
             generatedAt=enrichment.get("generatedAt"),
             llmModel=enrichment.get("llmModel"),
             available=True,
+        )
+
+    @app.get(
+        "/api/runs/{run_id}/opportunities/{opp_id}/evidence-trace",
+        response_model=EvidenceTrace,
+        dependencies=[Depends(require_auth), Depends(require_role("viewer"))],
+        tags=["runs"],
+    )
+    def get_evidence_trace(run_id: str, opp_id: str) -> EvidenceTrace:
+        """R16-B1 (T6 / AC7) — walk an opportunity back to its source artifacts.
+
+        Returns the provenance trail (source_system + source_artifact +
+        source_timestamp per pointer) the full evidence trace will render in 1.9.
+        The backend can answer 'where did this finding come from' even though the
+        frontend may not display the trail yet.
+
+        Org-scoped: a run belonging to another org yields an empty (available:
+        false) trail, never another tenant's provenance. Returns 404 only for an
+        unknown run or an opportunity absent from the run — mirroring the
+        enrichment route's contract (never 404 for a merely empty trail).
+        """
+        _require_run(run_id)
+
+        stored_opp = _find_stored_opp(run_id, opp_id)
+        if stored_opp is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Opportunity '{opp_id}' not found in run '{run_id}'",
+            )
+
+        pointers = _load_evidence_pointers(run_id, opp_id)
+        return EvidenceTrace(
+            runId=run_id,
+            oppId=opp_id,
+            pointers=pointers,
+            available=bool(pointers),
         )
