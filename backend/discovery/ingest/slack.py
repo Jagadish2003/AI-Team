@@ -8,13 +8,15 @@ timestamp (``ts``) ordering within a channel, so the connector encodes its
 position as the opaque checkpoint value and asks each channel only for messages
 newer than the last-seen ``ts``.
 
-Scope (reach phase, AT-416 / T1 only)
--------------------------------------
-This file is *just* the change-based ingestor: checkpointed incremental message
-ingestion plus a resumable, checkpointed first load (AC2, AC3). The downstream
-pieces are deliberately separate stories and are NOT done here:
+Scope (reach phase)
+-------------------
+This file is the change-based ingestor: checkpointed incremental message
+ingestion plus a resumable, checkpointed first load (AT-416 / T1, AC2 + AC3).
+Each delta record also carries an extracted ``signals`` block (cross-reference
+markers + escalation signal) via :mod:`discovery.ingest.slack_signals`
+(AT-417 / T2) so reach-phase signal travels with the delta. The remaining
+downstream pieces are deliberately separate stories and are NOT done here:
 
-  * Signal extraction (activity / escalation / cross-reference markers) — T2 / AT-417.
   * EvidencePointer attachment (R16-B1) — T3 / AT-418.
   * The Slack MEDIUM corroboration ceiling — T4 / AT-419.
   * OAuth connect wiring (auth-url / callback / vault) — T5 / AT-420 (the Slack
@@ -72,6 +74,10 @@ from typing import Any, Dict, Iterator, List, Optional
 
 from . import get_live_connector, is_live
 from .base import ChangeBasedIngestor, ChangeKind, Checkpoint, DeltaBatch
+from .slack_signals import (
+    extract_cross_reference_markers,
+    extract_escalation_signal,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -279,17 +285,24 @@ class SlackIngestor(ChangeBasedIngestor):
         """Shape one Slack message into a change-delta record.
 
         Carries structured message *signal* only (AC8): identity, channel,
-        author, timestamps, and the engagement counts that later feed escalation
-        detection (T2). The raw ``text`` is passed through for downstream
-        cross-reference marker scanning (ticket/PR mentions, Section 2) — no NLP
-        / meaning extraction is done here. ``artifact_id`` + ``change_kind`` let
-        the shared runner emit ``ingestion.artifact_changed`` events (AC7).
+        author, timestamps, and the engagement counts that feed escalation
+        detection. The raw ``text`` is passed through for cross-reference marker
+        scanning (ticket/PR mentions, Section 2) — no NLP / meaning extraction is
+        done here. ``artifact_id`` + ``change_kind`` let the shared runner emit
+        ``ingestion.artifact_changed`` events (AC7).
+
+        R16-A2 / AT-417 (T2): each record also carries an extracted ``signals``
+        block — the per-message cross-reference markers and escalation signal —
+        so the reach-phase signal travels with the delta to downstream
+        corroboration. Channel-level activity (volume/cadence/bursts) is derived
+        across records by :func:`slack_signals.build_slack_signal`.
         """
         ts = msg.get("ts", "")
         # An edited message is an update to an artifact we may already have seen;
         # everything else newly appearing is a creation. (Pure metadata — no
         # content inspection.)
         change_kind = ChangeKind.UPDATED if msg.get("edited") else ChangeKind.CREATED
+        text = msg.get("text", "")
         return {
             "artifact_id": f"{channel['id']}:{ts}",
             "change_kind": change_kind,
@@ -302,7 +315,11 @@ class SlackIngestor(ChangeBasedIngestor):
             "reply_count": msg.get("reply_count", 0),
             "reply_users_count": msg.get("reply_users_count", 0),
             "reactions": msg.get("reactions", []),
-            "text": msg.get("text", ""),
+            "text": text,
+            "signals": {
+                "cross_references": extract_cross_reference_markers(text),
+                "escalation": extract_escalation_signal(msg),
+            },
         }
 
     # ── Source access: offline fixture vs live Slack Web API ─────────────────
