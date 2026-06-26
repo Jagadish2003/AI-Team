@@ -348,6 +348,21 @@ def _get(obj: Any, name: str, default: Any = None) -> Any:
     return getattr(obj, name, default)
 
 
+def _get_first(obj: Any, names: Tuple[str, ...], default: Any = None) -> Any:
+    """First present (non-None) value among ``names``, else default.
+
+    Lets the adapters accept the several real field spellings already in the
+    codebase (e.g. an entity's confidence is ``resolution_confidence`` in the
+    entities table but ``confidence`` on an ``EntityContext``) without coupling
+    the assembler to any one producer.
+    """
+    for name in names:
+        val = _get(obj, name, None)
+        if val is not None:
+            return val
+    return default
+
+
 def _entities_to_candidates(graph: Any) -> List[Candidate]:
     """Adapt a graph's entities into observed entity candidates.
 
@@ -358,13 +373,15 @@ def _entities_to_candidates(graph: Any) -> List[Candidate]:
     entities = _get(graph, "entities", []) or []
     candidates: List[Candidate] = []
     for ent in entities:
-        eid = _get(ent, "entity_id") or _get(ent, "id") or _get(ent, "candidate_id")
+        eid = _get_first(ent, ("entity_id", "id", "candidate_id"))
         candidates.append(
             Candidate(
                 candidate_id=str(eid),
                 kind=KIND_ENTITY,
-                origin=_get(ent, "origin", OBSERVED),
-                confidence=float(_get(ent, "confidence", 0.0) or 0.0),
+                origin=_get_first(ent, ("origin",), OBSERVED),
+                confidence=float(
+                    _get_first(ent, ("confidence", "resolution_confidence"), 0.0) or 0.0
+                ),
                 source_timestamp=_get(ent, "source_timestamp"),
                 payload=ent,
             )
@@ -379,12 +396,18 @@ def _relationship_id(rel: Any) -> str:
     the edge endpoints + type so the tiebreaker is stable across runs even when
     the edge object carries no id of its own.
     """
-    rid = _get(rel, "relationship_id") or _get(rel, "id") or _get(rel, "candidate_id")
+    rid = _get_first(rel, ("relationship_id", "id", "candidate_id"))
     if rid:
         return str(rid)
     return "|".join(
-        str(_get(rel, name, ""))
-        for name in ("from_name", "to_name", "relationship_type")
+        str(
+            _get_first(rel, names, "")
+        )
+        for names in (
+            ("from_name", "from_entity_name"),
+            ("to_name", "to_entity_name"),
+            ("relationship_type",),
+        )
     )
 
 
