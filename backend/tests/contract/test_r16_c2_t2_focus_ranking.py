@@ -108,6 +108,53 @@ def _seed_order(run_id: str) -> List[str]:
     return [o["_debug"]["detector_id"] for o in seed["opportunities"]]
 
 
+def _guardrail_payload_for(run_id: str) -> Dict[str, Any]:
+    focus = load_focus_for_run(run_id)
+    detectors = [
+        ("APPROVAL_BOTTLENECK", "Quick Win", 7, 2, {}),
+        ("PERMISSION_BOTTLENECK", "Quick Win", 6, 2, {}),
+        ("COVENANT_TRACKING_GAP", "Strategic", 8, 4, {}),
+        ("DB_SLA_BREACH_RATE", "Strategic", 7, 3, {}),
+        ("ENT_SLA_BREACH_BY_TEAM", "Strategic", 6, 3, {}),
+        ("BENEFIT_ELECTION_DEADLINE", "Complex", 8, 5, {}),
+        (
+            "HANDOFF_FRICTION",
+            "Complex",
+            9,
+            5,
+            {
+                "confidence": "HIGH",
+                "corroboration_sources": ["ServiceNow", "Jira"],
+                "corroboration_label": "Triple corroboration: Salesforce + ServiceNow + Jira",
+                "triple_corroboration": True,
+                "corroboration_rule_ids": ["COR-01", "COR-02", "COR-03"],
+            },
+        ),
+    ]
+    opps = []
+    for det, tier, impact, effort, extra in detectors:
+        opp = {
+            "detector_id": det,
+            "tier": tier,
+            "impact": impact,
+            "effort": effort,
+            "confidence": "MEDIUM",
+            "metric_value": 3.0,
+            "threshold": 2.0,
+            "raw_evidence": {},
+            "evidenceIds": [],
+            "focus_emphasis": build_focus_emphasis(focus, det),
+        }
+        opp.update(extra)
+        opps.append(opp)
+    return {"runId": run_id, "focusId": focus, "opportunities": opps}
+
+
+def _guardrail_seed_order(run_id: str) -> List[str]:
+    seed = export_track_a_seed(_guardrail_payload_for(run_id))
+    return [o["_debug"]["detector_id"] for o in seed["opportunities"]]
+
+
 # ── AC: focus is persisted and read back ────────────────────────────────────────
 
 def test_focus_id_is_persisted_and_loadable(client):
@@ -144,6 +191,17 @@ def test_focus_emphasises_above_enterprise_wide(client):
     assert enterprise_order[-1] == "APPROVAL_BOTTLENECK"
     # ...the compliance focus lifts it to the top.
     assert compliance_order[0] == "APPROVAL_BOTTLENECK"
+
+
+def test_high_corroborated_out_of_focus_finding_remains_surfaced(client):
+    run_compliance = _launch(client, focus_id="approvals_compliance")
+
+    order = _guardrail_seed_order(run_compliance)
+
+    assert "HANDOFF_FRICTION" in order
+    assert order.index("HANDOFF_FRICTION") < 5
+    assert order[0] == "HANDOFF_FRICTION"
+    assert len(order) == 7
 
 
 # ── AC4 — enterprise_wide is the unbiased baseline ──────────────────────────────

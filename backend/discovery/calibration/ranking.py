@@ -24,6 +24,12 @@ R16-C2 T2 — Discovery Focus emphasis:
   Determinism: emphasis is a pure function of (focus_id, detector_id). Same
   data + same focus => identical ordering, every run. No LLM, no randomness.
 
+R16-C2 T3 -- Emphasis, not exclusion guardrail:
+  Focus is a lens, not a blindfold. A HIGH finding with corroboration support
+  remains surfaced even when it is outside the chosen focus. The full input list
+  is still returned; the guardrail only prevents focus affinity from dominating
+  serious confidence/corroboration signals.
+
 This module is the single source of truth. Any change to ranking logic
 must be made here and will propagate to all three consumers.
 """
@@ -39,11 +45,89 @@ except ImportError:  # pragma: no cover - defensive, keep ranking usable standal
     def focus_emphasis_rank(focus_id, detector_id):  # type: ignore[misc]
         return FOCUS_NEUTRAL_RANK
 
+try:
+    from ..packs.corroboration_rules import is_elevating_rule
+except ImportError:  # pragma: no cover - defensive, keep ranking usable standalone
+    _ELEVATING_CORROBORATION_RULE_IDS = {
+        "COR-01",
+        "COR-02",
+        "COR-03",
+        "COR-04",
+        "COR-06",
+        "COR-07",
+    }
+
+    def is_elevating_rule(rule_id):  # type: ignore[misc]
+        return str(rule_id).upper() in _ELEVATING_CORROBORATION_RULE_IDS
+
 TIER_ORDER: Dict[str, int] = {
     "Quick Win": 1,
     "Strategic": 2,
     "Complex":   3,
 }
+
+SURFACE_GUARDRAIL_RANK = 0
+STANDARD_SURFACE_RANK = 1
+
+_NON_ELEVATING_SOURCE_MARKERS = (
+    "supporting only",
+    "single source",
+)
+
+
+def _string_values(value: Any) -> List[str]:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, (list, tuple, set)):
+        return [str(item) for item in value if item is not None]
+    return []
+
+
+def _has_elevating_corroboration_rule(opp: Dict[str, Any]) -> bool:
+    rule_ids = _string_values(opp.get("corroboration_rule_ids"))
+    # Some callers work with the raw CorroborationResult shape before adapter
+    # materialisation, where the field is named rule_ids.
+    rule_ids.extend(_string_values(opp.get("rule_ids")))
+    return any(is_elevating_rule(rule_id) for rule_id in rule_ids)
+
+
+def _has_real_corroboration_source(opp: Dict[str, Any]) -> bool:
+    sources = _string_values(opp.get("corroboration_sources"))
+    for source in sources:
+        normalised = source.strip().lower()
+        if not normalised:
+            continue
+        if any(marker in normalised for marker in _NON_ELEVATING_SOURCE_MARKERS):
+            continue
+        return True
+    return False
+
+
+def is_high_well_corroborated(opp: Dict[str, Any]) -> bool:
+    """
+    Return True for the R16-C2 T3 protected case: a HIGH-confidence finding with
+    explicit corroboration support.
+
+    The check uses fields already carried through discovery: rule ids, triple
+    corroboration, source chips, and older pack-specific corroborated markers.
+    Non-elevating rule/source labels such as Slack-only or single-source do not
+    qualify by themselves.
+    """
+    if str(opp.get("confidence", "")).upper() != "HIGH":
+        return False
+    if bool(opp.get("triple_corroboration", False)):
+        return True
+    if _has_elevating_corroboration_rule(opp):
+        return True
+    if bool(opp.get("corroborated", False)) and _has_real_corroboration_source(opp):
+        return True
+    return _has_real_corroboration_source(opp)
+
+
+def _surface_guardrail_rank(opp: Dict[str, Any]) -> int:
+    return SURFACE_GUARDRAIL_RANK if is_high_well_corroborated(opp) else STANDARD_SURFACE_RANK
 
 
 def _emphasis_rank(opp: Dict[str, Any], focus_id: Optional[str]) -> int:
@@ -87,15 +171,16 @@ def rank_key(opp: Dict[str, Any], focus_id: Optional[str] = None):
         sorted(opportunities, key=lambda o: rank_key(o, focus))  # focus-aware
 
     When ``focus_id`` is None and the opportunity carries no ``focus_emphasis``
-    annotation, the leading emphasis term is constant across all opportunities,
-    so the result orders identically to the original (tier, -net_value, effort)
-    key.
+    annotation, the leading focus term is constant across all opportunities.
+    The R16-C2 T3 surface term only differs for HIGH well-corroborated findings,
+    keeping legacy order unchanged for ordinary opportunities.
     """
+    surface   = _surface_guardrail_rank(opp)
     emphasis  = _emphasis_rank(opp, focus_id)
     tier_rank = TIER_ORDER.get(opp.get("tier", "Complex"), 3)
     net_value = opp.get("impact", 0) - opp.get("effort", 10)
     effort    = opp.get("effort", 10)
-    return (emphasis, tier_rank, -net_value, effort)
+    return (surface, emphasis, tier_rank, -net_value, effort)
 
 
 def rank_opportunities(
