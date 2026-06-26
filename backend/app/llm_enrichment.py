@@ -1288,6 +1288,10 @@ def run_llm_enrichment(
 
     # ENT-3: build the run's graph context once. Deterministic, never raises —
     # an empty/sparse context routes every opportunity to the fallback path.
+    # R16-B2 (T5/AC8): build_graph_context() now selects that context through the
+    # context assembly service, so enrichment no longer picks its own context
+    # independently — the budget/ranking/observed-first policy is applied in one
+    # place. Enrichment consumes the already-selected context unchanged.
     from . import db
     from .graph_context import build_graph_context
     from .enrichment_quality import evaluate_preliminary_status
