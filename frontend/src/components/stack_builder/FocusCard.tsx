@@ -74,6 +74,7 @@ export default function FocusCard({ card, selected, onSelect, tabIndex = 0 }: Pr
   const iconClass = selected ? 'text-accent' : 'text-muted';
   const titleClass = selected ? 'text-accent' : 'text-text';
   const subtextClass = selected ? 'text-accent' : 'text-muted';
+  const hasBoundaryCopy = Boolean(card.useWhen || card.notWhen);
 
   function handleKeyDown(event: React.KeyboardEvent<HTMLButtonElement>) {
     if (event.key === 'Enter' || event.key === ' ') {
@@ -81,6 +82,23 @@ export default function FocusCard({ card, selected, onSelect, tabIndex = 0 }: Pr
       onSelect(card.id);
     }
   }
+
+  const boundaryCopy = hasBoundaryCopy ? (
+    <div className="mt-3 space-y-1.5 border-t border-border/60 pt-3 text-[11px] leading-relaxed">
+      {card.useWhen && (
+        <p className={subtextClass}>
+          <span className="font-semibold uppercase">Use when</span>{' '}
+          {card.useWhen}
+        </p>
+      )}
+      {card.notWhen && (
+        <p className={subtextClass}>
+          <span className="font-semibold uppercase">Not when</span>{' '}
+          {card.notWhen}
+        </p>
+      )}
+    </div>
+  ) : null;
 
   return (
     <button
@@ -109,6 +127,7 @@ export default function FocusCard({ card, selected, onSelect, tabIndex = 0 }: Pr
             <div className={`text-xs leading-relaxed ${subtextClass}`}>
               {card.subtext}
             </div>
+            {boundaryCopy}
           </div>
         </div>
       ) : (
@@ -120,6 +139,7 @@ export default function FocusCard({ card, selected, onSelect, tabIndex = 0 }: Pr
           <div className={`text-xs leading-relaxed ${subtextClass}`}>
             {card.subtext}
           </div>
+          {boundaryCopy}
         </div>
       )}
     </button>

@@ -38,6 +38,8 @@ export interface FocusCard {
   id: FocusId;
   title: string;
   subtext: string;
+  useWhen?: string;
+  notWhen?: string;
   icon: string;               // Tabler icon name e.g. 'ti-users'
   wide?: boolean;             // true = full-width card (Enterprise-Wide)
 }

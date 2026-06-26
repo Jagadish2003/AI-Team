@@ -14,47 +14,70 @@ import {
 } from '../components/stack_builder';
 import { useSetupState } from '../components/stack_builder';
 
-const FOCUS_CARDS: FocusCardType[] = [
+// R16-C2 T5 — Tile boundary copy (Section 3).
+// Each subtext now states what the focus EMPHASISES and draws an explicit
+// boundary against the adjacent tile it is most often confused with. This is
+// honest copy: after R16-C2 T1–T4 each focus genuinely re-ranks discovery
+// toward the detector affinities listed in backend/discovery/packs/
+// focus_affinity.py (emphasis, not exclusion), so the boundary language
+// describes real, differentiated behaviour rather than overlapping marketing.
+// Keep these crisp and scannable — they are selection cards, not docs.
+// Exported so the AC6 differentiation can be asserted in tests.
+export const FOCUS_CARDS: FocusCardType[] = [
   {
     id: 'member_customer_service',
     title: 'Member / customer service',
-    subtext: 'Service requests, status updates, escalations, and backlogs where member or customer outcomes are at stake.',
+    subtext: 'Emphasises front-line service quality — repetitive case handling, agent knowledge gaps, and stalled member or customer requests. Use when outcomes for the person being served are at stake; for internal staff effort, choose Back-office productivity.',
+    useWhen: 'the pain shows up in cases, requests, escalations, or customer-facing follow-up.',
+    notWhen: 'the blocker is primarily an approval gate, compliance control, or internal queue.',
     icon: 'ti-users',
   },
   {
     id: 'core_operations',
     title: 'Core operations',
-    subtext: 'Queue management, handoffs, throughput, and processing delays across the main operating workflow.',
+    subtext: 'Emphasises throughput in the main operating workflow — queue backlogs, volume surges, and slow resolution. Use when work piles up in one place; not blocked at an approval gate (Approvals / compliance) or stuck between systems (Cross-system handoffs).',
+    useWhen: 'volume, backlog, throughput, or processing speed is the main operating concern.',
+    notWhen: 'a specific regulatory gate or cross-system ownership break is the main bottleneck.',
     icon: 'ti-settings',
   },
   {
     id: 'approvals_compliance',
     title: 'Approvals / compliance',
-    subtext: 'Approval gates, compliance deadlines, audit trails, and workflows with regulatory obligations.',
+    subtext: 'Emphasises work blocked at a gate — approval and permission bottlenecks, SLA breaches, compliance deadlines, and regulatory control points. Use when a stuck approval gate is the bottleneck; for work stuck moving between teams, choose Cross-system handoffs.',
+    useWhen: 'a gate, deadline, audit trail, permission, or regulatory control is slowing work.',
+    notWhen: 'the issue is ordinary queue volume or a handoff between teams and tools.',
     icon: 'ti-shield',
   },
   {
     id: 'cross_system_handoffs',
     title: 'Cross-system handoffs',
-    subtext: 'Work getting lost between systems, duplicate effort, ownership friction, and integration-point failures.',
+    subtext: 'Emphasises work lost moving between teams and tools — ownership friction, dropped handoffs, cross-system echo, and integration-point failures. Use when work stalls in the gap between systems; if it is held at a gate, choose Approvals / compliance.',
+    useWhen: 'work is lost between teams, duplicated across tools, or waiting on ownership transfer.',
+    notWhen: 'one approval or compliance gate is the bottleneck inside a single workflow.',
     icon: 'ti-switch-horizontal',
   },
   {
     id: 'back_office_productivity',
     title: 'Back-office productivity',
-    subtext: 'Repetitive manual work, checklist stalls, and admin-heavy processes with clear automation upside.',
+    subtext: 'Emphasises internal staff effort — repetitive manual work, checklist stalls, and admin-heavy prep with clear automation upside. Use when the cost is back-office time; for front-line member or customer outcomes, choose Member / customer service.',
+    useWhen: 'manual admin, document prep, checklists, or data clean-up consume staff time.',
+    notWhen: 'front-line service outcomes or engineering release health are the main lens.',
     icon: 'ti-list-check',
   },
   {
     id: 'engineering_change',
     title: 'Engineering / change',
-    subtext: 'Change coordination, delivery friction, backlog signals, and release-related bottlenecks.',
+    subtext: 'Emphasises delivery and release health — pull-request review bottlenecks, commit concentration risk, stale branches, and change-driven incidents. Use when engineering change flow is the friction; for operational queues, choose Core operations.',
+    useWhen: 'PR review, release flow, change incidents, branches, or engineering backlog drive risk.',
+    notWhen: 'business approvals, service queues, or back-office admin are the main concern.',
     icon: 'ti-git-branch',
   },
   {
     id: 'enterprise_wide',
     title: 'Enterprise-wide discovery',
-    subtext: 'Broad discovery with no strong operating lens preselected. AgentIQ surfaces signals across all connected systems.',
+    subtext: 'No lens applied — the unbiased, full view across every connected system. Use this when you do not want to pre-commit to a focus: AgentIQ ranks all findings on merit and emphasises nothing over anything else. Not a specialised focus.',
+    useWhen: 'you want the unbiased full view across the selected systems and active pack.',
+    notWhen: 'you want one operational lens boosted ahead of the rest from the start.',
     icon: 'ti-world',
     wide: true,
   },
