@@ -78,11 +78,13 @@ function renderFocusCard(
 describe("SB-3 v1.1 FocusCard acceptance criteria", () => {
   it("renders the selected state with the theme accent styling", () => {
     const { radio } = renderFocusCard(cards[0], { selected: true });
-    const icon = radio.querySelector("i");
 
     expect(radio).toHaveAttribute("aria-checked", "true");
     expect(radio).toHaveAttribute("tabindex", "0");
     expect(radio).toHaveClass(
+      "flex",
+      "h-full",
+      "items-start",
       "rounded-lg",
       "border-accent/60",
       "bg-accent/15",
@@ -90,14 +92,13 @@ describe("SB-3 v1.1 FocusCard acceptance criteria", () => {
     );
     expect(radio.className).not.toContain("bg-panel2");
 
-    expect(icon).toHaveClass("text-accent");
+    expect(radio.querySelector("i")).toBeNull();
     expect(screen.getByText(cards[0].title)).toHaveClass("text-accent");
     expect(screen.getByText(cards[0].subtext)).toHaveClass("text-accent");
   });
 
   it("renders the default and hover state with neutral panel styling", () => {
     const { radio } = renderFocusCard(cards[1], { selected: false });
-    const icon = radio.querySelector("i");
 
     expect(radio).toHaveAttribute("aria-checked", "false");
     expect(radio).toHaveClass(
@@ -109,7 +110,7 @@ describe("SB-3 v1.1 FocusCard acceptance criteria", () => {
       "duration-150",
     );
 
-    expect(icon).toHaveClass("text-muted");
+    expect(radio.querySelector("i")).toBeNull();
     expect(screen.getByText(cards[1].title)).toHaveClass("text-text");
     expect(screen.getByText(cards[1].subtext)).toHaveClass("text-muted");
   });
@@ -117,26 +118,26 @@ describe("SB-3 v1.1 FocusCard acceptance criteria", () => {
   it("renders boundary copy when the focus card provides it", () => {
     renderFocusCard(cards[0]);
 
-    expect(screen.getByText("Use when")).toBeInTheDocument();
-    expect(screen.getByText("Not when")).toBeInTheDocument();
+    expect(screen.getByText("Use when:")).toBeInTheDocument();
+    expect(screen.getByText("Not when:")).toBeInTheDocument();
     expect(screen.getByText(/customer-facing follow-up is the main pain/i)).toBeInTheDocument();
     expect(screen.getByText(/approval gates or internal queues are the blocker/i)).toBeInTheDocument();
   });
 
-  it("uses separate standard and wide layout branches", () => {
+  it("keeps standard and wide cards on the same top-aligned layout", () => {
     const { radio: standard } = renderFocusCard(cards[2]);
-    const standardIcon = standard.querySelector("i");
 
     expect(standard).not.toHaveClass("col-span-2");
-    expect(standardIcon).toHaveClass("block", "mb-2");
+    expect(standard).toHaveClass("flex", "items-start", "justify-start");
+    expect(standard.firstElementChild).toHaveClass("w-full");
+    expect(standard.querySelector("i")).toBeNull();
 
     const { radio: wide } = renderFocusCard(cards[6]);
-    const wideIcon = wide.querySelector("i");
-    const wideLayout = wide.firstElementChild;
 
     expect(wide).toHaveClass("col-span-2");
-    expect(wideLayout).toHaveClass("flex", "items-start", "gap-4");
-    expect(wideIcon).toHaveClass("flex-shrink-0", "mt-0.5");
+    expect(wide).toHaveClass("flex", "items-start", "justify-start");
+    expect(wide.firstElementChild).toHaveClass("w-full");
+    expect(wide.querySelector("i")).toBeNull();
   });
 
   it("supports the tabIndex prop while preserving the default of 0", () => {
