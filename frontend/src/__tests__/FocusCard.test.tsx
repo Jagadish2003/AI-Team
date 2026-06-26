@@ -11,6 +11,8 @@ const cards: FocusCardType[] = [
     id: "member_customer_service",
     title: "Member and Customer Service",
     subtext: "Front-line service, cases, requests, and follow-up work.",
+    useWhen: "customer-facing follow-up is the main pain.",
+    notWhen: "approval gates or internal queues are the blocker.",
     icon: "ti-users",
   },
   {
@@ -110,6 +112,15 @@ describe("SB-3 v1.1 FocusCard acceptance criteria", () => {
     expect(icon).toHaveClass("text-muted");
     expect(screen.getByText(cards[1].title)).toHaveClass("text-text");
     expect(screen.getByText(cards[1].subtext)).toHaveClass("text-muted");
+  });
+
+  it("renders boundary copy when the focus card provides it", () => {
+    renderFocusCard(cards[0]);
+
+    expect(screen.getByText("Use when")).toBeInTheDocument();
+    expect(screen.getByText("Not when")).toBeInTheDocument();
+    expect(screen.getByText(/customer-facing follow-up is the main pain/i)).toBeInTheDocument();
+    expect(screen.getByText(/approval gates or internal queues are the blocker/i)).toBeInTheDocument();
   });
 
   it("uses separate standard and wide layout branches", () => {

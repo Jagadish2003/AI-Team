@@ -130,6 +130,18 @@ def _surface_guardrail_rank(opp: Dict[str, Any]) -> int:
     return SURFACE_GUARDRAIL_RANK if is_high_well_corroborated(opp) else STANDARD_SURFACE_RANK
 
 
+def _detector_id_for_ranking(opp: Dict[str, Any]) -> Optional[str]:
+    detector_id = opp.get("detector_id")
+    if detector_id is not None:
+        return str(detector_id)
+    debug = opp.get("_debug")
+    if isinstance(debug, dict):
+        nested = debug.get("detector_id")
+        if nested is not None:
+            return str(nested)
+    return None
+
+
 def _emphasis_rank(opp: Dict[str, Any], focus_id: Optional[str]) -> int:
     """
     Resolve the focus-emphasis rank for an opportunity (0 = emphasised, sorts
@@ -137,22 +149,18 @@ def _emphasis_rank(opp: Dict[str, Any], focus_id: Optional[str]) -> int:
 
     Two sources, in precedence order:
       1. An explicit ``focus_id`` passed to ranking — recomputed live against
-         the opportunity's top-level ``detector_id`` when present.
+         the opportunity's detector id, either top-level or under ``_debug``.
       2. The additive ``focus_emphasis`` annotation the runner already attached
-         to the opportunity. This is the fallback used when no focus_id is
-         threaded through, AND when a focus_id is given but ``detector_id`` is
-         not at the top level (e.g. the Track A seed opp, where it is nested
-         under ``_debug``).
+         to the opportunity. This fallback is used when no focus_id is threaded
+         through, or when no detector id is available anywhere.
 
     Falls back to the neutral rank when neither is available, preserving the
     historical (focus-unaware) ordering exactly.
     """
     if focus_id is not None:
-        detector_id = opp.get("detector_id")
+        detector_id = _detector_id_for_ranking(opp)
         if detector_id is not None:
             return focus_emphasis_rank(focus_id, detector_id)
-        # focus_id given but detector_id is nested (Track A seed) — fall through
-        # to the annotation the runner already computed for this run's focus.
     fe = opp.get("focus_emphasis")
     if isinstance(fe, dict) and "rank" in fe:
         try:

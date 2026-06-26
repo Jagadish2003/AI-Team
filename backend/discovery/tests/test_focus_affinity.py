@@ -52,6 +52,9 @@ def test_all_seven_focuses_present():
 
 
 def test_enterprise_wide_has_no_bias():
+    assert fa.FOCUS_NO_AFFINITY_BIAS is None
+    assert fa.FOCUS_AFFINITY[fa.FOCUS_ENTERPRISE_WIDE] is fa.FOCUS_NO_AFFINITY_BIAS
+    assert fa.is_enterprise_wide_focus(" enterprise_wide ") is True
     assert fa.FOCUS_AFFINITY["enterprise_wide"] is None
     assert fa.get_focus_affinity("enterprise_wide") is None
     assert fa.has_affinity_bias("enterprise_wide") is False
@@ -134,6 +137,12 @@ def test_enterprise_wide_emphasises_nothing():
     """No bias means detector_matches_focus is False for everything -> unbiased."""
     for det in REGISTERED_DETECTOR_IDS:
         assert fa.detector_matches_focus("enterprise_wide", det) is False
+        assert fa.focus_emphasis_rank("enterprise_wide", det) == fa.FOCUS_NEUTRAL_RANK
+        emphasis = fa.build_focus_emphasis("enterprise_wide", det)
+        assert emphasis["matched"] is False
+        assert emphasis["rank"] == fa.FOCUS_NEUTRAL_RANK
+        assert emphasis["affinity"] == []
+        assert "full unweighted view" in emphasis["rationale"]
 
 
 # ── Safe degradation ───────────────────────────────────────────────────────────

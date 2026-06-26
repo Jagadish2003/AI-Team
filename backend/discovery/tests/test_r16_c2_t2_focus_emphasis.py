@@ -61,6 +61,32 @@ def test_enterprise_wide_equals_baseline():
     assert _ids(rank_opportunities(opps, focus_id=None)) == baseline
 
 
+def test_enterprise_wide_ignores_stale_focus_emphasis_annotation():
+    opps = [
+        {
+            "tier": "Complex",
+            "impact": 5,
+            "effort": 5,
+            "_debug": {"detector_id": "APPROVAL_BOTTLENECK"},
+            "focus_emphasis": {"rank": fa.FOCUS_EMPHASIS_RANK, "matched": True},
+        },
+        {
+            "tier": "Quick Win",
+            "impact": 8,
+            "effort": 2,
+            "_debug": {"detector_id": "HANDOFF_FRICTION"},
+            "focus_emphasis": {"rank": fa.FOCUS_NEUTRAL_RANK, "matched": False},
+        },
+    ]
+
+    ranked = rank_opportunities(opps, focus_id="enterprise_wide")
+
+    assert [o["_debug"]["detector_id"] for o in ranked] == [
+        "HANDOFF_FRICTION",
+        "APPROVAL_BOTTLENECK",
+    ]
+
+
 def test_unknown_focus_degrades_to_baseline():
     opps = _dataset()
     baseline = _ids(rank_opportunities(opps))
