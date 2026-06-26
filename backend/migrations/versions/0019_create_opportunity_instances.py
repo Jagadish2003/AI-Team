@@ -18,8 +18,8 @@ index-served. Both come from the imported DDL, so they are applied here without
 a separate migration. ``downgrade()`` drops the table, which removes the column
 and its indexes.
 
-Revision ID: 0017
-Revises: 0016
+Revision ID: 0019
+Revises: 0018
 Create Date: 2026-06-24
 """
 import os
@@ -28,8 +28,8 @@ from typing import Sequence, Union
 
 from alembic import op
 
-revision: str = "0017"
-down_revision: Union[str, None] = "0016"
+revision: str = "0019"
+down_revision: Union[str, None] = "0018"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
