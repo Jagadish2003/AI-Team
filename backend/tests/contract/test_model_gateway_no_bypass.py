@@ -189,8 +189,9 @@ def test_ac4_new_bypass_detected(tmp_path):
 def test_gateway_package_excluded_from_scan():
     """The gateway package is NOT in the scan targets.
 
-    If it were included, _hosted.py would always fail the enforcement test —
-    defeating its purpose as the single permitted location for direct calls.
+    If it were included, hosted_provider.py would always fail the enforcement
+    test — defeating its purpose as the single permitted location for direct
+    calls.
     """
     targets = _collect_scan_targets()
     gateway_files = [f for f in targets if GATEWAY_PACKAGE in f.parents]

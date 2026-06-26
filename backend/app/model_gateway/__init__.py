@@ -182,6 +182,11 @@ def _record_provider_telemetry(event_type: str, payload: dict) -> None:
 # every model call is observable regardless of which call site made it. The
 # provider result/behaviour is returned unchanged — graceful-failure
 # (text=None on error) is preserved exactly.
+#
+# Exactly-once across layers: a provider may record its own per-call event
+# (ModelProvider.emits_own_telemetry). When it does — as the default
+# HostedModelProvider does (R16-D2 T6) — the wrapper skips its emission so a
+# single logical call yields exactly one event, never a duplicate.
 # ---------------------------------------------------------------------------
 
 
@@ -192,14 +197,22 @@ def generate(req: GenerationRequest) -> GenerationResult:
     and emits exactly one ``model.generation_completed`` telemetry event naming
     the provider that served it — on success and failure alike (T5-AC1/AC3/AC4).
     Returns the provider's ``GenerationResult`` unchanged.
+
+    Exactly-once across layers: a provider that records its own per-call event
+    (``emits_own_telemetry``, e.g. the D2 HostedModelProvider that is now the
+    default — R16-D2 T5/AT-409) owns the single event, so the gateway skips its
+    emission here.  One logical call always produces exactly one event.
     """
-    result = get_generation_provider().generate(req)
+    provider = get_generation_provider()
+    result = provider.generate(req)
     # AC1: provider name comes from GenerationResult.provider — the backend
     # that actually served the request. AC4: emitted even when ok is False.
-    _record_provider_telemetry(
-        _GENERATION_EVENT,
-        {"provider": result.provider, "ok": result.ok},
-    )
+    # Skip when the provider already emitted (avoids a duplicate event).
+    if not provider.emits_own_telemetry:
+        _record_provider_telemetry(
+            _GENERATION_EVENT,
+            {"provider": result.provider, "ok": result.ok},
+        )
     return result
 
 
@@ -215,15 +228,17 @@ def embed(texts: List[str]) -> List[List[float]]:
     vectors = provider.embed(texts)
     # ok = the provider returned a vector for every input (empty input is a
     # successful no-op). AC2: telemetry carries the provider name.
-    _record_provider_telemetry(
-        _EMBEDDING_EVENT,
-        {
-            "provider": provider.name,
-            "ok": len(vectors) == len(texts),
-            "text_count": len(texts),
-            "vector_count": len(vectors),
-        },
-    )
+    # Skip when the provider already emitted its own event (exactly-once).
+    if not provider.emits_own_telemetry:
+        _record_provider_telemetry(
+            _EMBEDDING_EVENT,
+            {
+                "provider": provider.name,
+                "ok": len(vectors) == len(texts),
+                "text_count": len(texts),
+                "vector_count": len(vectors),
+            },
+        )
     return vectors
 
 
@@ -256,15 +271,31 @@ def validate_provider_config() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Bootstrap: register the default 'hosted' provider at import time.
-# Imported at the bottom to avoid a circular import: _hosted.py imports
-# ModelProvider/GenerationRequest/GenerationResult from _interface.py, not
-# from this module, so there is no cycle.
+# Bootstrap: register HostedModelProvider as the default 'hosted' provider at
+# import time (R16-D2 T5 / AT-409).
+#
+# HostedModelProvider is the full R16-D2 implementation — bounded retry,
+# exponential backoff, per-request deadline enforcement, rate-limit-aware
+# backoff (T2), credential/config hygiene owned inside the gateway (T4), and
+# provider telemetry (T6).  Because it registers under name 'hosted', BOTH
+# get_generation_provider() and get_embedding_provider() resolve to it when
+# MODEL_GENERATION_PROVIDER / MODEL_EMBEDDING_PROVIDER are unset or set to
+# 'hosted' — so the platform works out of the box (T5-AC1 / T5-AC2).
+#
+# This registration is "the default, not the only" (R16-D2 §4): it goes through
+# the same register_provider() any future in-boundary / customer-tenant provider
+# will use, makes no assumption that hosted is the sole mode (T5-AC4), and
+# selecting a different provider is purely a config change — no caller is
+# affected (T5-AC3).
+#
+# Imported at the bottom to avoid a circular import: hosted_provider.py imports
+# ModelProvider/GenerationRequest/GenerationResult from _interface.py, not from
+# this module, so there is no cycle.
 # ---------------------------------------------------------------------------
 
-from app.model_gateway._hosted import AnthropicHostedProvider as _AnthropicHostedProvider  # noqa: E402
+from app.model_gateway.hosted_provider import HostedModelProvider as _HostedModelProvider  # noqa: E402
 
-register_provider(_AnthropicHostedProvider())
+register_provider(_HostedModelProvider())
 
 
 __all__ = [
