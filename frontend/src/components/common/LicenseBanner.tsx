@@ -55,9 +55,18 @@ export default function LicenseBanner() {
   const reason = status?.reason ?? null;
 
   if (state === "grace") {
+    // Grace = past expiry but discovery runs STILL WORK. Say so explicitly, with
+    // a countdown when available, so admins neither panic ("expired!") nor grow
+    // complacent ("runs still work, nothing to do"). N days come from the backend
+    // (expires_at + grace_days − today); fall back to a non-numeric nudge if absent.
+    const n = status?.grace_days_remaining;
+    const tail =
+      typeof n === "number" && n > 0
+        ? `Discovery runs will be blocked in ${n} day${n === 1 ? "" : "s"} — contact CloudFulcrum to renew.`
+        : "Discovery runs still work during the grace period — contact CloudFulcrum to renew.";
     return (
       <div role="alert" data-testid="license-banner" data-state="grace" className={AMBER}>
-        {`Your AgentIQ license expired on ${formatExpiry(status?.expires_at)}. Contact CloudFulcrum to renew.`}
+        {`Your AgentIQ license expired on ${formatExpiry(status?.expires_at)}. ${tail}`}
       </div>
     );
   }

@@ -13,10 +13,15 @@ private key.
 """
 from __future__ import annotations
 
+import base64
+import datetime
+import json
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime as _datetime, timezone
 
 import pytest
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from fastapi.testclient import TestClient
 
 from app import db
@@ -37,6 +42,32 @@ _VALID_RESULT = {
 }
 
 
+def _pub_pem(priv: Ed25519PrivateKey) -> str:
+    return priv.public_key().public_bytes(
+        serialization.Encoding.PEM,
+        serialization.PublicFormat.SubjectPublicKeyInfo,
+    ).decode()
+
+
+def _mint(priv: Ed25519PrivateKey, *, expires_at: str, term_months: int = 12, grace_days: int = 14) -> str:
+    payload = {
+        "customer": "City National Bank",
+        "license_id": "cnb-2026-001",
+        "issued_at": "2026-01-01",
+        "expires_at": expires_at,
+        "term_months": term_months,
+        "grace_days": grace_days,
+        "limits": {"max_workspaces": None, "enabled_packs": None},
+    }
+    payload_b64 = base64.b64encode(json.dumps(payload, sort_keys=True).encode()).decode()
+    sig_b64 = base64.b64encode(priv.sign(payload_b64.encode())).decode()
+    return f"{payload_b64}.{sig_b64}"
+
+
+def _future(days: int = 200) -> str:
+    return (datetime.date.today() + datetime.timedelta(days=days)).isoformat()
+
+
 def _set_role(role: str) -> dict:
     """Put the dev user in a freshly seeded org with the given role; return headers."""
     from app.rbac import _ensure_members_table
@@ -49,7 +80,7 @@ def _set_role(role: str) -> dict:
             "INSERT INTO workspace_members (org_id, user_id, role, created_at) "
             "VALUES (%s, %s, %s, %s) "
             "ON CONFLICT (org_id, user_id) DO UPDATE SET role=EXCLUDED.role, created_at=EXCLUDED.created_at",
-            (org_id, DEV_USER, role, datetime.now(timezone.utc).isoformat()),
+            (org_id, DEV_USER, role, _datetime.now(timezone.utc).isoformat()),
         )
         con.commit()
     finally:
@@ -81,14 +112,18 @@ def test_owner_get_status_returns_shape(client: TestClient, monkeypatch):
 
 # --------------------------------------------------------------------------
 # Owner POST valid key → stores and refreshes (AC7)
+#
+# Exercises REAL Ed25519 verification end-to-end: the key is minted with a
+# throwaway private key and the route trusts the matching public key via the
+# LICENSE_PUBLIC_KEY env override — validate_license is NOT mocked, so the
+# security-critical verify path runs for real (AC1).
 # --------------------------------------------------------------------------
 def test_owner_post_valid_key_stores_and_refreshes(client: TestClient, monkeypatch):
-    monkeypatch.setattr(
-        "app.routes_license.validate_license", lambda *a, **k: dict(_VALID_RESULT)
-    )
+    priv = Ed25519PrivateKey.generate()
+    monkeypatch.setenv("LICENSE_PUBLIC_KEY", _pub_pem(priv))
     headers = _set_role("owner")
     org_id = headers["X-Org-Id"]
-    key = f"valid-key-{uuid.uuid4().hex}"
+    key = _mint(priv, expires_at=_future())
 
     resp = client.post(UPDATE_PATH, json={"key": key}, headers=headers)
 
@@ -100,23 +135,49 @@ def test_owner_post_valid_key_stores_and_refreshes(client: TestClient, monkeypat
 
 
 # --------------------------------------------------------------------------
-# Owner POST invalid key → 400, stores nothing
+# Owner POST key signed by the WRONG keypair → 400, stores nothing.
+# Real signature rejection (AC1/AC2) — no mock of validate_license.
 # --------------------------------------------------------------------------
-def test_owner_post_invalid_key_rejected_stores_nothing(client: TestClient, monkeypatch):
-    monkeypatch.setattr(
-        "app.routes_license.validate_license",
-        lambda *a, **k: {"status": "invalid", "reason": "signature_or_format"},
-    )
+def test_owner_post_wrong_signer_rejected_stores_nothing(client: TestClient, monkeypatch):
+    trusted = Ed25519PrivateKey.generate()
+    attacker = Ed25519PrivateKey.generate()
+    monkeypatch.setenv("LICENSE_PUBLIC_KEY", _pub_pem(trusted))
     headers = _set_role("owner")
     org_id = headers["X-Org-Id"]
     existing = f"good-key-{uuid.uuid4().hex}"
     set_org_license_key(org_id, existing)  # a working key already installed
 
-    resp = client.post(UPDATE_PATH, json={"key": "tampered.bad"}, headers=headers)
+    forged = _mint(attacker, expires_at=_future())  # signed by the wrong key
+
+    resp = client.post(UPDATE_PATH, json={"key": forged}, headers=headers)
 
     assert resp.status_code == 400
     assert "not valid" in resp.json()["detail"].lower()
     # The previously working key must be untouched.
+    assert read_org_license(org_id)["license_key"] == existing
+
+
+# --------------------------------------------------------------------------
+# Owner POST a key whose payload was edited after signing → 400 (AC2).
+# Real tamper detection: extend expires_at but keep the original signature.
+# --------------------------------------------------------------------------
+def test_owner_post_tampered_payload_rejected(client: TestClient, monkeypatch):
+    trusted = Ed25519PrivateKey.generate()
+    monkeypatch.setenv("LICENSE_PUBLIC_KEY", _pub_pem(trusted))
+    headers = _set_role("owner")
+    org_id = headers["X-Org-Id"]
+    existing = f"good-key-{uuid.uuid4().hex}"
+    set_org_license_key(org_id, existing)
+
+    payload_b64, sig_b64 = _mint(trusted, expires_at=_future(10)).split(".")
+    payload = json.loads(base64.b64decode(payload_b64))
+    payload["expires_at"] = "2099-01-01"  # forge a longer term, reuse old signature
+    forged_b64 = base64.b64encode(json.dumps(payload, sort_keys=True).encode()).decode()
+    tampered = f"{forged_b64}.{sig_b64}"
+
+    resp = client.post(UPDATE_PATH, json={"key": tampered}, headers=headers)
+
+    assert resp.status_code == 400
     assert read_org_license(org_id)["license_key"] == existing
 
 
