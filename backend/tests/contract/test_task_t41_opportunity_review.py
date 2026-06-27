@@ -160,6 +160,21 @@ def test_decision_back_to_unreviewed(client, live_run, first_opp):
     assert r.status_code == 200
 
 
+def test_decision_response_keeps_matrix_coordinates(client, live_run, first_opp):
+    """A decision must NOT move the Effort-vs-Impact bubble: the decision response's
+    impact/effort must equal the list endpoint's (same stable display offset), so
+    the bubble stays put when its colour changes on approve/reject.
+    """
+    r = client.post(
+        f"/api/runs/{live_run}/opportunities/{first_opp['id']}/decision",
+        headers=_auth(), json={"decision": "APPROVED"},
+    )
+    assert r.status_code == 200
+    updated = r.json()
+    assert updated["impact"] == first_opp["impact"]
+    assert updated["effort"] == first_opp["effort"]
+
+
 # ── Override ──────────────────────────────────────────────────────────────────
 
 def test_save_override_valid(client, live_run, first_opp):
@@ -187,6 +202,20 @@ def test_save_override_empty_both_ok(client, live_run, first_opp):
         json={"rationaleOverride": "", "overrideReason": "", "isLocked": False},
     )
     assert r.status_code == 200
+
+
+def test_override_response_keeps_matrix_coordinates(client, live_run, first_opp):
+    """An override save must NOT move the bubble either: the override response's
+    impact/effort must match the list endpoint's stable display offset."""
+    r = client.post(
+        f"/api/runs/{live_run}/opportunities/{first_opp['id']}/override",
+        headers=_auth(),
+        json={"rationaleOverride": "x", "overrideReason": "y", "isLocked": False},
+    )
+    assert r.status_code == 200
+    updated = r.json()
+    assert updated["impact"] == first_opp["impact"]
+    assert updated["effort"] == first_opp["effort"]
 
 
 # ── Quadrant data integrity ───────────────────────────────────────────────────

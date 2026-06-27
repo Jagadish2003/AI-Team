@@ -256,8 +256,10 @@ def resolve_live_systems(org_id: str) -> List[str]:
 
     The returned list is the subset of {salesforce, servicenow, jira} that is
     both authenticated in the vault and has an instance URL (captured, or env as
-    a CLI fallback). Never raises — any failure for a single connector simply
-    excludes it.
+    a CLI fallback), plus ``slack`` and ``github`` when authenticated (both are
+    URL-less, resolved by token alone — see :func:`_resolve_slack` /
+    :func:`_resolve_github`). Never raises — any failure for a single connector
+    simply excludes it.
     """
     from discovery.ingest import set_live_connectors
 
@@ -318,6 +320,86 @@ def resolve_live_systems(org_id: str) -> List[str]:
         live.append(connector_id)
         logger.info("Live ingest enabled for connector %s (org=%s)", connector_id, org_id)
 
+    # Slack — URL-less SaaS connector (R16-A2). Slack's Web API host is global
+    # (slack.com), so it has no per-org instance URL and does NOT go through the
+    # instance-URL loop above (which excludes any connector without a URL). When
+    # Slack is authenticated in the vault, publish just its access token to the
+    # per-run context and include it in the live set, so the discovery run
+    # ingests it through the change runner (emitting ingestion.artifact_changed
+    # and advancing the checkpoint) and feeds its escalation signal to
+    # corroboration. The Slack MEDIUM ceiling is enforced downstream by the
+    # corroboration engine — nothing here elevates confidence.
+    _resolve_slack(org_id, connectors, live)
+
+    # GitHub — URL-less SaaS connector (T1-S12). Unlike Slack it reads its own
+    # token straight from the vault inside the connector, so nothing is published
+    # to the per-run context; it only needs the run promoted to live (see below).
+    _resolve_github(org_id, live)
+
     # Publish to the per-run context (empty dict clears any prior credentials).
     set_live_connectors(connectors)
     return live
+
+
+def _resolve_github(org_id: str, live: List[str]) -> None:
+    """Add GitHub to the live set when authenticated (T1-S12 live-path wiring).
+
+    GitHub is URL-less AND fetches its own token directly from the vault in
+    ``connectors/saas/github.ingest()`` (``get_token(org, 'github')``) — it does
+    NOT read the per-run context — so nothing is published to ``connectors`` here.
+    Its only requirement to ingest live data is that the run's ``INGEST_MODE`` is
+    'live', which materialize sets when ``resolve_live_systems`` returns a
+    non-empty list. Including ``'github'`` here is what flips a GitHub-connected
+    run to live; the ``github_engineering`` pack gating in the runner still decides
+    whether GitHub is actually ingested. Mutates ``live`` in place; never raises.
+    """
+    try:
+        _run_coro(get_token(org_id, "github"))
+    except ConnectorNotAuthenticatedError:
+        logger.info(
+            "Connector github not authenticated for org %s — skipping live ingest; "
+            "connect it in the Integration Hub.",
+            org_id,
+        )
+        return
+    except Exception:
+        logger.exception(
+            "Failed to load vault token for connector github (org=%s); skipping live ingest",
+            org_id,
+        )
+        return
+
+    live.append("github")
+    logger.info("Live ingest enabled for connector github (org=%s)", org_id)
+
+
+def _resolve_slack(
+    org_id: str,
+    connectors: Dict[str, Dict[str, str]],
+    live: List[str],
+) -> None:
+    """Add Slack to the live set when authenticated, keyed by token only (no URL).
+
+    Mutates ``connectors`` and ``live`` in place. Never raises — any failure
+    simply leaves Slack out (degrade, don't crash), matching the systems-of-record
+    handling above.
+    """
+    try:
+        record = _run_coro(get_token(org_id, "slack"))
+    except ConnectorNotAuthenticatedError:
+        logger.info(
+            "Connector slack not authenticated for org %s — skipping live ingest; "
+            "connect it in the Integration Hub.",
+            org_id,
+        )
+        return
+    except Exception:
+        logger.exception(
+            "Failed to load vault token for connector slack (org=%s); skipping live ingest",
+            org_id,
+        )
+        return
+
+    connectors["slack"] = {"token": record.access_token}
+    live.append("slack")
+    logger.info("Live ingest enabled for connector slack (org=%s)", org_id)

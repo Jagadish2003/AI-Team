@@ -4,7 +4,12 @@ import Badge from '../common/Badge';
 import Button from '../common/Button';
 import { fetchTokenStatus, TokenStatus } from '../../services/staticApi';
 
-const ENABLED_CONNECTOR_IDS = ['salesforce', 'servicenow', 'jira'];
+// Connectors whose real OAuth backend is wired (CONNECTOR_AUTH_CONFIGS) so the
+// tile's Connect button can drive a live OAuth flow rather than a dead end.
+// R16-A2 / AT-422 (T7): add 'slack' — its OAuth config (AT-420, minimal
+// public-channels-only scopes) and the generic auth-url → callback flow already
+// exist, so enabling it here makes the existing Slack catalog tile connect for real.
+const ENABLED_CONNECTOR_IDS = ['salesforce', 'servicenow', 'jira', 'slack', 'github'];
 
 export default function ConnectorTile({
   connector,

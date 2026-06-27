@@ -104,6 +104,7 @@ from .materialize_t2 import (
     _pack_id_for_run,
     _probe_systems,
     _selected_system_ids_for_report,
+    resolve_effective_pack,
 )
 
 
@@ -206,6 +207,16 @@ def _run_trackb_and_persist(run_id: str, mode: str, systems: List[str], pack: Op
         )
     else:
         _emit_event(run_id, "CONNECT", f"Connected sources: {', '.join(systems)}")
+
+    # Default a GitHub-connected run to the github_engineering pack unless a pack
+    # was explicitly selected. `pack` flows to the runner + enrichment + temporal
+    # calls below, so setting it here covers them all. Mirrors materialize_t2.
+    _effective_pack = resolve_effective_pack(pack, live_systems)
+    if _effective_pack and _effective_pack != pack:
+        pack = _effective_pack
+        _emit_event(
+            run_id, "CONNECT", f"GitHub connected — defaulting to the {_effective_pack} pack"
+        )
 
     per_system: Dict[str, str] = {
         s: "skipped" for s in ["salesforce", "servicenow", "jira"]

@@ -56,6 +56,7 @@ Keep this file short and actionable. Prefer reading the relevant code and contra
 * `backend/app/connector_health.py` / `connector_metrics.py`: connector health status and metrics.
 * `backend/app/jobs/connector_health.py`: background connector health check job — starts on app startup, shuts down on SIGTERM. Do not block startup waiting for connectors.
 * `backend/app/jobs/baseline_calculator.py`: background baseline metrics job — interval and window controlled by `BASELINE_*` env vars.
+* `backend/app/jobs/token_refresher.py`: background OAuth token-refresher job — proactively renews vault tokens that are due to expire (via `vault.get_token(..., min_validity_seconds=...)`) so connected sources stay live without re-running the OAuth flow. Interval/lookahead via `TOKEN_REFRESH_*` env vars; gated by `AGENTIQ_DISABLE_BACKGROUND_JOBS`.
 * `backend/app/middleware/tenancy.py`: multi-tenancy middleware, org scoping per request. Default local org is `default`.
 * `backend/app/middleware/audit.py`: audit trail middleware — runs alongside tenancy middleware.
 * `backend/app/auth/oauth.py`: OAuth `authorization_code` and `client_credentials` flows.
@@ -238,9 +239,10 @@ Smoke scripts are Bash scripts under `scripts/` and `backend/scripts/`; run them
 * `REPLAY_RESETS_DECISIONS`: set to `1` to clear analyst overrides on replay. Default is off.
 * `TRACKB_PYTHON` / `TRACKB_RUNNER_MODE`: Python path and mode (`offline`/`live`) for the Track B subprocess runner.
 * `BASELINE_JOB_INTERVAL_HOURS` / `BASELINE_MIN_RUNS` / `BASELINE_WINDOW_DAYS`: control the background baseline calculator job.
+* `TOKEN_REFRESH_JOB_INTERVAL_MINUTES` (default `10`) / `TOKEN_REFRESH_AHEAD_SECONDS` (default `900`): control the proactive OAuth token-refresher job. The job renews any vault token expiring within the lookahead window; keep the interval comfortably below the lookahead so a token is always refreshed before it lapses.
 * Oracle native DB connector env vars: `ORACLE_HOST`, `ORACLE_PORT` (default `1521`), `ORACLE_DATABASE` (service name, default `ORCL`), `ORACLE_DB_USERNAME`, `ORACLE_DB_PASSWORD`. These diverge from the `{CONNECTOR_NAME}_CLIENT_SECRET` convention because native DB connectors authenticate with a database username/password pair (resolved via `username_key`/`password_key`), not an OAuth client secret.
 * PostgreSQL native DB connector env vars: `POSTGRESQL_HOST`, `POSTGRESQL_PORT` (default `5432`), `POSTGRESQL_DATABASE` (default `postgres`), `POSTGRESQL_USERNAME`, `POSTGRESQL_PASSWORD`, and `POSTGRESQL_SSL_MODE` (`require`/`prefer`/`disable`). Same divergence rationale as Oracle above.
-* `AGENTIQ_DISABLE_BACKGROUND_JOBS`: set to `1` to skip starting background jobs (connector health, baseline calculator) on app startup. Useful for tests and isolated runs.
+* `AGENTIQ_DISABLE_BACKGROUND_JOBS`: set to `1` to skip starting background jobs (connector health, baseline calculator, OAuth token refresher) on app startup. Useful for tests and isolated runs.
 
 ## Architecture Notes
 
@@ -260,6 +262,7 @@ Smoke scripts are Bash scripts under `scripts/` and `backend/scripts/`; run them
 * Audit trail is enforced via `middleware/audit.py`. All mutating requests are logged automatically.
 * A background connector health check job starts on app startup (`jobs/connector_health.py`) and shuts down on SIGTERM. Do not block startup waiting for connectors.
 * A background baseline calculator job (`jobs/baseline_calculator.py`) recalculates scoring baselines on a configurable interval.
+* A background OAuth token-refresher job (`jobs/token_refresher.py`) proactively renews vault tokens before they expire so connected sources stay live without the user re-running the OAuth flow. It only refreshes rows that hold a refresh token and have not previously failed; a genuine failure is left as `refresh_failed` for the user to reconnect.
 * Telemetry events are tracked via `telemetry.py`. Do not log sensitive field values (tokens, PII) in telemetry events.
 * Telemetry has a locked write signature: `record_event(event_type, payload)`. The `event_type` must be in `REGISTERED_EVENT_TYPES` — `record_event()` raises `ValueError` for an unregistered type. Register new event types (and their payload schema) before emitting them.
 * Entity extraction (`entity_extractor.py`) is a non-blocking Stage 2 step — failures are logged and never break the run. Resolution (`entity_resolution.py`) is conservative and uses an N+1 lookup for ambiguous rows. Never write `canonical_name` from caller-supplied values; it is normalized internally. Display filtering uses `ENTITY_MIN_RUN_COUNT`, imported from `database/models/entities.py` — import it, do not redefine the threshold locally.

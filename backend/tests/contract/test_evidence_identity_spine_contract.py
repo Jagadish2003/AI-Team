@@ -311,7 +311,7 @@ def test_ac5_different_org_yields_different_identity():
 def _opportunity_instances_table_ready() -> bool:
     """True if the opportunity_instances table is usable in this environment.
 
-    CI provisions it via migration 0017; a restricted local role that cannot
+    CI provisions it via migration 0019; a restricted local role that cannot
     CREATE the table makes the persistence round-trip un-runnable here, so those
     tests skip with a clear reason (the structure test below still runs, and CI
     asserts the full round-trip)."""
@@ -347,7 +347,7 @@ def test_ac6_built_instance_is_self_describing():
 def test_ac6_persisted_instance_round_trips_identity_run_pack_version():
     if not _opportunity_instances_table_ready():
         pytest.skip("opportunity_instances table not provisioned here "
-                    "(needs migration 0017 / CREATE privilege); asserted in CI")
+                    "(needs migration 0019 / CREATE privilege); asserted in CI")
     from app.opportunity_instances import (
         build_opportunity_instance,
         get_instances_by_identity,
