@@ -3,6 +3,7 @@ import logging
 import os
 import re
 import uuid
+from contextlib import closing
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
@@ -43,35 +44,35 @@ def connect():
 
 
 def get_one(table: str, id_: str) -> Optional[Dict[str, Any]]:
-    con = connect()
-    cur = con.cursor()
-    cur.execute(f"SELECT payload FROM {table} WHERE id = %s", (id_,))
-    row = cur.fetchone()
-    con.close()
+    # closing() guarantees the connection is returned even if the query raises —
+    # without it a failed query leaks the connection, and on the shared remote DB
+    # those accumulate until max_connections is hit and every new connect() hangs.
+    with closing(connect()) as con:
+        cur = con.cursor()
+        cur.execute(f"SELECT payload FROM {table} WHERE id = %s", (id_,))
+        row = cur.fetchone()
     if not row:
         return None
     return _loads(row[0])
 
 
 def get_all(table: str) -> List[Dict[str, Any]]:
-    con = connect()
-    cur = con.cursor()
-    cur.execute(f"SELECT payload FROM {table} ORDER BY id")
-    rows = cur.fetchall()
-    con.close()
+    with closing(connect()) as con:
+        cur = con.cursor()
+        cur.execute(f"SELECT payload FROM {table} ORDER BY id")
+        rows = cur.fetchall()
     return [_loads(r[0]) for r in rows]
 
 
 def upsert(table: str, id_: str, payload: Dict[str, Any]) -> None:
-    con = connect()
-    cur = con.cursor()
-    cur.execute(
-        f"INSERT INTO {table} (id, payload) VALUES (%s, %s) "
-        "ON CONFLICT (id) DO UPDATE SET payload=EXCLUDED.payload",
-        (id_, json.dumps(payload)),
-    )
-    con.commit()
-    con.close()
+    with closing(connect()) as con:
+        cur = con.cursor()
+        cur.execute(
+            f"INSERT INTO {table} (id, payload) VALUES (%s, %s) "
+            "ON CONFLICT (id) DO UPDATE SET payload=EXCLUDED.payload",
+            (id_, json.dumps(payload)),
+        )
+        con.commit()
 
 
 def _loads(value: Any) -> Any:
@@ -113,11 +114,10 @@ def init_tables() -> None:
 
 
 def get_run(run_id: str) -> Optional[Dict[str, Any]]:
-    con = connect()
-    cur = con.cursor()
-    cur.execute("SELECT payload FROM runs WHERE id = %s", (run_id,))
-    row = cur.fetchone()
-    con.close()
+    with closing(connect()) as con:
+        cur = con.cursor()
+        cur.execute("SELECT payload FROM runs WHERE id = %s", (run_id,))
+        row = cur.fetchone()
     return None if not row else _loads(row[0])
 
 
@@ -149,15 +149,14 @@ def upsert_run(run_id: str, payload: Dict[str, Any]) -> None:
         org_id = _current_request_org()
         if org_id is not None:
             payload = {**payload, "org_id": org_id}
-    con = connect()
-    cur = con.cursor()
-    cur.execute(
-        "INSERT INTO runs (id, payload) VALUES (%s, %s) "
-        "ON CONFLICT (id) DO UPDATE SET payload=EXCLUDED.payload",
-        (run_id, json.dumps(payload)),
-    )
-    con.commit()
-    con.close()
+    with closing(connect()) as con:
+        cur = con.cursor()
+        cur.execute(
+            "INSERT INTO runs (id, payload) VALUES (%s, %s) "
+            "ON CONFLICT (id) DO UPDATE SET payload=EXCLUDED.payload",
+            (run_id, json.dumps(payload)),
+        )
+        con.commit()
 
 
 def _discovery_step_ids() -> frozenset:
@@ -210,13 +209,13 @@ def update_run_step(run_id: str, step_id: str, ok: bool = True) -> None:
         )
         return
 
+    con = None
     try:
         con = connect()
         cur = con.cursor()
         cur.execute("SELECT payload FROM runs WHERE id = %s", (run_id,))
         row = cur.fetchone()
         if not row:
-            con.close()
             return
         payload = json.loads(row[0])
         payload["current_step"] = step_id
@@ -248,7 +247,6 @@ def update_run_step(run_id: str, step_id: str, ok: bool = True) -> None:
                 (payload_json, run_id),
             )
         con.commit()
-        con.close()
     except Exception as exc:
         logger.warning(
             "update_run_step skipped: run_id=%s step_id=%s error=%s",
@@ -256,16 +254,18 @@ def update_run_step(run_id: str, step_id: str, ok: bool = True) -> None:
             step_id,
             exc,
         )
+    finally:
+        if con is not None:
+            con.close()
 
 
 def count_runs() -> int:
     """Return the highest legacy RUN_### number."""
     init_tables()
-    con = connect()
-    cur = con.cursor()
-    cur.execute("SELECT id FROM runs")
-    rows = cur.fetchall()
-    con.close()
+    with closing(connect()) as con:
+        cur = con.cursor()
+        cur.execute("SELECT id FROM runs")
+        rows = cur.fetchall()
     max_n = 0
     for row in rows:
         match = RUN_ID_RE.match(str(row[0]))
@@ -304,37 +304,34 @@ def delete_run_events(run_id: str) -> None:
     # events deleted; insert_run_events re-activates any (run_id, seq) it rewrites,
     # and get_run_events filters is_deleted, so a shrunk event list correctly drops
     # the now-stale higher-seq rows.
-    con = connect()
-    cur = con.cursor()
-    cur.execute("UPDATE run_events SET is_deleted = TRUE WHERE run_id = %s", (run_id,))
-    con.commit()
-    con.close()
+    with closing(connect()) as con:
+        cur = con.cursor()
+        cur.execute("UPDATE run_events SET is_deleted = TRUE WHERE run_id = %s", (run_id,))
+        con.commit()
 
 
 def insert_run_events(run_id: str, events: List[Dict[str, Any]]) -> None:
-    con = connect()
-    cur = con.cursor()
-    for i, ev in enumerate(events):
-        cur.execute(
-            "INSERT INTO run_events (run_id, seq, payload) VALUES (%s, %s, %s) "
-            "ON CONFLICT (run_id, seq) DO UPDATE SET "
-            "payload=EXCLUDED.payload, is_deleted=FALSE",
-            (run_id, i, json.dumps(ev)),
-        )
-    con.commit()
-    con.close()
+    with closing(connect()) as con:
+        cur = con.cursor()
+        for i, ev in enumerate(events):
+            cur.execute(
+                "INSERT INTO run_events (run_id, seq, payload) VALUES (%s, %s, %s) "
+                "ON CONFLICT (run_id, seq) DO UPDATE SET "
+                "payload=EXCLUDED.payload, is_deleted=FALSE",
+                (run_id, i, json.dumps(ev)),
+            )
+        con.commit()
 
 
 def get_run_events(run_id: str) -> List[Dict[str, Any]]:
-    con = connect()
-    cur = con.cursor()
-    cur.execute(
-        "SELECT payload FROM run_events WHERE run_id = %s AND is_deleted = FALSE "
-        "ORDER BY seq ASC",
-        (run_id,),
-    )
-    rows = cur.fetchall()
-    con.close()
+    with closing(connect()) as con:
+        cur = con.cursor()
+        cur.execute(
+            "SELECT payload FROM run_events WHERE run_id = %s AND is_deleted = FALSE "
+            "ORDER BY seq ASC",
+            (run_id,),
+        )
+        rows = cur.fetchall()
     return [_loads(r[0]) for r in rows]
 
 
@@ -361,11 +358,10 @@ def kv_get(key: str) -> Any:
         run_id = key[len("events:") :]
         return get_run_events(run_id)
     _init_kv_table()
-    con = connect()
-    cur = con.cursor()
-    cur.execute("SELECT payload FROM kv WHERE key = %s", (key,))
-    row = cur.fetchone()
-    con.close()
+    with closing(connect()) as con:
+        cur = con.cursor()
+        cur.execute("SELECT payload FROM kv WHERE key = %s", (key,))
+        row = cur.fetchone()
     return _loads(row[0]) if row else None
 
 
@@ -377,15 +373,14 @@ def kv_set(key: str, value: Any) -> None:
             insert_run_events(run_id, value)
         return
     _init_kv_table()
-    con = connect()
-    cur = con.cursor()
-    cur.execute(
-        "INSERT INTO kv (key, payload) VALUES (%s, %s) "
-        "ON CONFLICT (key) DO UPDATE SET payload=EXCLUDED.payload",
-        (key, json.dumps(value)),
-    )
-    con.commit()
-    con.close()
+    with closing(connect()) as con:
+        cur = con.cursor()
+        cur.execute(
+            "INSERT INTO kv (key, payload) VALUES (%s, %s) "
+            "ON CONFLICT (key) DO UPDATE SET payload=EXCLUDED.payload",
+            (key, json.dumps(value)),
+        )
+        con.commit()
 
 
 def run_kv_get(key: str, run_id: str, default: Any = None) -> Any:

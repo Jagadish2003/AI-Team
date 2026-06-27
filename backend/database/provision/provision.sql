@@ -1,10 +1,11 @@
 --
--- AgentIQ — consolidated provisioning script (schema + seed), head 0015.
+-- AgentIQ — consolidated provisioning script (schema + seed), head 0019.
 --
 -- Single self-contained replacement for the former 01_schema.sql / 02_seed.sql /
--- 03_lazy_runtime_tables.sql. Creates the agentiq role, all 26 tables (incl.
--- org_licenses), indexes/constraints/rules, seeds the core reference rows, and
--- stamps alembic_version to head 0015.
+-- 03_lazy_runtime_tables.sql. Creates the agentiq role, all 27 tables (incl.
+-- org_licenses, ingestion_checkpoints, opportunity_instances),
+-- indexes/constraints/rules, seeds the core reference rows, and stamps
+-- alembic_version to head 0019.
 --
 -- Run connected to the TARGET database (which must already exist), as a
 -- superuser or the schema owner:
@@ -332,6 +333,40 @@ CREATE TABLE "public"."org_licenses" (
     "last_status" character varying(32),
     "updated_at" timestamp with time zone DEFAULT now() NOT NULL,
     CONSTRAINT "org_licenses_pkey" PRIMARY KEY ("org_id")
+);
+
+
+--
+-- Name: opportunity_instances; Type: TABLE; Schema: public; Owner: -
+--
+-- SOURCE OF TRUTH: database/models/opportunity_instances.py
+-- (ALL_OPPORTUNITY_INSTANCES_DDL), applied by migration 0019 and the runtime
+-- ensure_opportunity_instances_table() helper. This pure-SQL provisioning path
+-- mirrors that schema and MUST be kept in sync with it — if you change the table
+-- there (columns, types, defaults, PK, indexes), make the identical change here.
+--
+
+CREATE TABLE "public"."opportunity_instances" (
+    "opportunity_identity" character varying(64) NOT NULL,
+    "run_id" character varying(64) NOT NULL,
+    "org_id" character varying(64) NOT NULL,
+    "pack_id" character varying(64) NOT NULL,
+    "pack_version" character varying(32) NOT NULL,
+    "detector_id" character varying(128) NOT NULL,
+    "signal_source" character varying(128),
+    "opportunity_ref" character varying(64),
+    "impact" integer,
+    "effort" integer,
+    "score" double precision,
+    "confidence" character varying(16),
+    "tier" character varying(32),
+    "evidence_ids" "text",
+    "evidence_count" integer DEFAULT 0 NOT NULL,
+    "narrative" "text",
+    "metadata" "text",
+    "created_at" timestamp without time zone NOT NULL,
+    "is_deleted" boolean DEFAULT false NOT NULL,
+    CONSTRAINT "opportunity_instances_pkey" PRIMARY KEY ("opportunity_identity", "run_id")
 );
 
 
@@ -796,6 +831,20 @@ CREATE INDEX "idx_login_attempts_ip" ON "public"."login_attempts" USING "btree" 
 
 
 --
+-- Name: idx_opp_instances_identity; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX "idx_opp_instances_identity" ON "public"."opportunity_instances" USING "btree" ("opportunity_identity", "is_deleted");
+
+
+--
+-- Name: idx_opp_instances_org_run; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX "idx_opp_instances_org_run" ON "public"."opportunity_instances" USING "btree" ("org_id", "run_id");
+
+
+--
 -- Name: idx_ss_baseline_stale; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -933,4 +982,4 @@ INSERT INTO "public"."permissions" ("id", "payload") VALUES ('p_sn_inc', '{"id":
 
 -- uploads (0 rows)
 
-INSERT INTO "public"."alembic_version" ("version_num") VALUES ('0015') ON CONFLICT DO NOTHING;
+INSERT INTO "public"."alembic_version" ("version_num") VALUES ('0019') ON CONFLICT DO NOTHING;

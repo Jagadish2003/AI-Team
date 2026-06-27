@@ -46,9 +46,16 @@ def ensure_opportunity_instances_table() -> None:
     The authoritative creator is migration ``0019`` (run by alembic in tests and
     by provisioning in prod); this runtime helper is a safety net so the write
     path works on a dev DB that has not yet been migrated — mirroring
-    ``ensure_entities_table()``. Runs at most once per process. Never raises: on
-    a least-privilege role without CREATE the table already exists from
-    provisioning, so the subsequent write still succeeds.
+    ``ensure_entities_table()``. Runs at most once per process. Never raises.
+
+    Least-privilege roles: production runs the app under a role with only
+    INSERT/UPDATE (no CREATE on the schema), where the table is already
+    provisioned (provision.sql / migration 0019). We therefore do a READ-ONLY
+    existence check first (information_schema needs only SELECT) and skip the DDL
+    entirely when the table exists — issuing ``CREATE TABLE`` is rejected up front
+    with "permission denied for schema public" even with ``IF NOT EXISTS``, which
+    is the warning this avoids. The DDL runs only on a dev DB where the table is
+    genuinely absent (and the role can create it).
     """
     global _TABLE_READY
     if _TABLE_READY:
@@ -57,11 +64,19 @@ def ensure_opportunity_instances_table() -> None:
         con = db.connect()
         try:
             cur = con.cursor()
-            for ddl in ALL_OPPORTUNITY_INSTANCES_DDL:
-                cur.execute(ddl)
+            cur.execute(
+                "SELECT 1 FROM information_schema.tables WHERE table_name = %s",
+                ("opportunity_instances",),
+            )
+            table_exists = cur.fetchone() is not None
+            if not table_exists:
+                for ddl in ALL_OPPORTUNITY_INSTANCES_DDL:
+                    cur.execute(ddl)
             con.commit()
         finally:
             con.close()
+        # Provisioned (or just created) — the write path can proceed; don't probe
+        # or attempt DDL again this process.
         _TABLE_READY = True
     except Exception as exc:  # noqa: BLE001
         logger.warning(

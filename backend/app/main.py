@@ -32,6 +32,7 @@ from .db import (
 )
 from .normalization_enrichment import enrich_ambiguous_mappings
 from .opportunity_display import (
+    with_display,
     with_display_title,
     with_display_titles,
     with_exec_report_display_titles,
@@ -204,6 +205,12 @@ async def lifespan(app: FastAPI):
         scheduler as baseline_scheduler,
         start_scheduler as start_baseline_scheduler,
     )
+    # Proactive OAuth token refresher: renews vault tokens before they expire so
+    # connected sources stay live without the user re-running the OAuth flow.
+    from .jobs.token_refresher import (
+        scheduler as token_refresh_scheduler,
+        start_scheduler as start_token_refresh_scheduler,
+    )
     # LIC-1 / T4 (AT-345): periodic license re-check (gated background job).
     from .license_runtime import start_license_scheduler, stop_license_scheduler
 
@@ -211,6 +218,7 @@ async def lifespan(app: FastAPI):
     if not background_jobs_disabled:
         start_health_check_job()
         start_baseline_scheduler()
+        start_token_refresh_scheduler()
         start_license_scheduler()
     yield
     # AT-90: shut down scheduler on SIGTERM / graceful shutdown (wait=False).
@@ -218,6 +226,8 @@ async def lifespan(app: FastAPI):
         stop_health_check_job()
         if baseline_scheduler.running:
             baseline_scheduler.shutdown(wait=False)
+        if token_refresh_scheduler.running:
+            token_refresh_scheduler.shutdown(wait=False)
         stop_license_scheduler()
 
 
@@ -604,16 +614,10 @@ def list_opportunities(run_id: str) -> List[Dict[str, Any]]:
             status_code=404,
             detail=f"No opportunities for run '{run_id}'. T2 materialisation may not have completed.",
         )
-    opps = with_display_titles(opps)
-
-    for opp in opps:
-        if "impact" in opp and "effort" in opp:
-            _id = str(opp.get("id", "0"))
-            stable_offset = (sum(ord(c) for c in _id) % 5) * 0.15
-            opp["impact"] = float(opp["impact"]) + stable_offset
-            opp["effort"] = float(opp["effort"]) + stable_offset
-
-    return opps
+    # Apply the full display shaping (title overrides + the stable matrix score
+    # offset). The decision/override endpoints below apply the SAME shaping via
+    # with_display(), so a bubble keeps its coordinates when its decision changes.
+    return [with_display(opp) for opp in opps]
 
 
 @app.post(
@@ -652,7 +656,10 @@ def set_opp_decision(run_id: str, opp_id: str, body: Dict[str, Any]) -> Dict[str
     }
     audit = run_kv_get("audit", run_id, default_audit())
     run_kv_set("audit", run_id, [event, *audit])
-    return with_display_title(o)
+    # with_display (not just title) so impact/effort carry the same stable matrix
+    # offset as the list endpoint — otherwise the bubble jumps when its decision
+    # response replaces the listed opportunity in the UI.
+    return with_display(o)
 
 
 @app.post(
@@ -711,7 +718,9 @@ def set_opp_override(run_id: str, opp_id: str, body: Dict[str, Any]) -> Dict[str
     }
     audit = run_kv_get("audit", run_id, default_audit())
     run_kv_set("audit", run_id, [event, *audit])
-    return with_display_title(o)
+    # with_display so the override response carries the same stable matrix offset
+    # as the list endpoint (keeps the bubble coordinate-stable on override save).
+    return with_display(o)
 
 
 @app.get("/api/runs/{run_id}/audit", dependencies=[Depends(require_auth), Depends(require_role("owner"))])

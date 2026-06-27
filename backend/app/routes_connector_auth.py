@@ -410,7 +410,7 @@ def register_connector_auth_routes(app: FastAPI) -> None:
         try:
             cur = con.cursor()
             cur.execute(
-                "SELECT expires_at, refresh_failed FROM credentials "
+                "SELECT expires_at, refresh_failed, refresh_token FROM credentials "
                 "WHERE org_id = %s AND connector_id = %s AND is_deleted = FALSE",
                 (org_id, connector_id),
             )
@@ -421,7 +421,14 @@ def register_connector_auth_routes(app: FastAPI) -> None:
         if row is None:
             return {"status": "needs_auth"}
 
-        expires_at_str, refresh_failed_flag = row[0], row[1]
+        expires_at_str, refresh_failed_flag, refresh_token_enc = row[0], row[1], row[2]
+        # A stored refresh token means the vault can silently mint a new access
+        # token on the next use (get_token auto-refreshes within/after the expiry
+        # window). So an expired access token is NOT a re-auth prompt as long as a
+        # refresh token is held and the last refresh did not fail — otherwise the
+        # user would be forced to re-run the OAuth flow every time the short-lived
+        # access token lapses (ServiceNow ~30 min, Salesforce/Jira ~1 h).
+        has_refresh_token = refresh_token_enc is not None and str(refresh_token_enc) != ""
         expires_at = datetime.fromisoformat(expires_at_str)
         if expires_at.tzinfo is None:
             expires_at = expires_at.replace(tzinfo=timezone.utc)
@@ -429,11 +436,15 @@ def register_connector_auth_routes(app: FastAPI) -> None:
         now = datetime.now(timezone.utc)
         seconds_left = (expires_at - now).total_seconds()
 
-        if seconds_left <= 0:
-            return {"status": "needs_auth"}
+        # Near-expiry OR already expired: refreshable unless the refresh token is
+        # gone or a prior refresh failed. 'needs_refresh' keeps the connector shown
+        # as connected (the tile only prompts re-auth on needs_auth/refresh_failed).
         if seconds_left <= REFRESH_THRESHOLD_SECONDS:
             if refresh_failed_flag:
                 return {"status": "refresh_failed"}
-            return {"status": "needs_refresh"}
+            if has_refresh_token:
+                return {"status": "needs_refresh"}
+            # No refresh token to fall back on — the user must reconnect.
+            return {"status": "needs_auth"}
         return {"status": "connected"}
  

@@ -188,35 +188,52 @@ def _ingest_github(org_id: str, run_id: str) -> Dict[str, Any]:
 
 
 def _ingest_slack_corroboration(org_id: str, run_id: str) -> Dict[str, Any]:
-    """Build the Slack corroboration block fed to the ENT-2 corroboration engine.
+    """Drive Slack change-based ingestion and build its corroboration block.
 
-    R16-A2 / AT-419 (T4): when Slack is connected, read its public-channel signal
-    via :class:`SlackIngestor` and aggregate it into the
-    ``{escalation_pattern, activity, cross_references}`` block the engine reads,
-    wrapped under the ``'slack'`` key that ``_find_corroboration_block('slack', …)``
-    recognises (see :func:`slack_signals.build_slack_corroboration_payload`).
+    R16-A2 / AT-421 (T6) + AT-419 (T4): Slack is ingested through the shared
+    change runner (R16-A1), so this one path satisfies both stories:
 
-    This only *feeds* the signal in the engine's expected shape — the Slack MEDIUM
-    ceiling (Slack-only stays MEDIUM, never standalone HIGH; it elevates only WITH
-    a primary system corroborator) is enforced by the engine's COR-05/COR-06 rules
-    and the T3 clamp, never here. Returns ``{}`` on any failure so a Slack read
-    never aborts the run (non-blocking, matching the other connectors).
+      * the runner owns the checkpoint lifecycle — incremental reads against the
+        stored ``(org_id, 'slack')`` checkpoint, resumable streamed first load,
+        and write-only-on-full-success — so Slack is NOT re-read in full every
+        run; and
+      * it emits one ``ingestion.artifact_changed`` event per changed Slack
+        artifact in every fully-processed batch (AC7), reusing the R16-A1 event
+        path — no events are minted here.
+
+    The changed records from each batch are collected via ``process_batch`` and
+    aggregated into the ``{escalation_pattern, activity, cross_references}`` block
+    the corroboration engine reads, wrapped under the ``'slack'`` key that
+    ``_find_corroboration_block('slack', …)`` recognises
+    (:func:`slack_signals.build_slack_corroboration_payload`).
+
+    The Slack MEDIUM ceiling (Slack-only stays MEDIUM, never standalone HIGH; it
+    elevates only WITH a primary corroborator) is enforced by the engine's
+    COR-05/COR-06 rules and the T3 clamp, never here. Non-blocking: any failure
+    degrades to an empty block (``{}``) so a Slack read never aborts the run — the
+    change runner itself swallows ingestion errors and leaves the checkpoint
+    unadvanced (next run re-reads), and the guards here cover import/everything else.
     """
     try:
+        from .ingest import change_runner
         from .ingest.slack import SlackIngestor
         from .ingest.slack_signals import build_slack_corroboration_payload
     except Exception as e:  # noqa: BLE001 — Slack corroboration is optional.
         logger.warning("Slack connector import failed (non-blocking): %s", e)
         return {}
 
+    collected: List[Dict[str, Any]] = []
     try:
-        records = [
-            record
-            for batch in SlackIngestor().ingest_changes(org_id, None)
-            for record in batch.records
-        ]
-        return build_slack_corroboration_payload(records)
-    except Exception as e:  # noqa: BLE001 — non-blocking.
+        # The runner reads the checkpoint, streams the delta, emits an
+        # artifact_changed event per changed record, and advances the checkpoint
+        # only on full success. process_batch hands us each fully-processed
+        # batch's records for the corroboration block.
+        result = change_runner.ingest_with_checkpoint(
+            SlackIngestor(),
+            org_id,
+            process_batch=lambda batch: collected.extend(batch.records),
+        )
+    except Exception as e:  # noqa: BLE001 — belt-and-braces; runner is non-raising.
         # Type name only — the exception str may carry a Bearer token from the
         # Slack client's request reprs.
         logger.warning(
@@ -224,6 +241,23 @@ def _ingest_slack_corroboration(org_id: str, run_id: str) -> Dict[str, Any]:
             org_id, run_id, type(e).__name__,
         )
         return {}
+
+    if result.error is not None:
+        # The runner swallows ingestion errors and leaves the checkpoint
+        # unadvanced so the next run re-reads; surface it without aborting. Any
+        # records already collected from completed batches still feed corroboration.
+        logger.warning(
+            "Slack change ingest reported an error (non-blocking) org=%s run=%s: [%s]",
+            org_id, run_id, type(result.error).__name__,
+        )
+    else:
+        logger.info(
+            "Slack change ingest: %s — %d batch(es), %d changed record(s), checkpoint_advanced=%s",
+            "first run (streamed full load)" if result.first_run else "incremental",
+            result.batches, result.records, result.checkpoint_advanced,
+        )
+
+    return build_slack_corroboration_payload(collected)
 
 
 _ENTERPRISE_OPS_DEMO_PATH = (
@@ -581,14 +615,16 @@ def run(
             except Exception as e:
                 logger.warning("PostgreSQL ingestion failed (non-blocking): %s", e)
 
-    # 2f. Slack corroboration signal — R16-A2 / AT-419 (T4).
-    # Slack is a cross-cutting *supporting* source: when connected, feed its
-    # escalation pattern (+ activity / cross-references) into the corroboration
-    # engine so it can corroborate findings from systems of record. Gated on
-    # "slack" ∈ connected systems (the engine only reads the block when Slack is
-    # connected). The MEDIUM ceiling — Slack-only stays MEDIUM, never standalone
-    # HIGH; it elevates only WITH a primary corroborator (COR-06) — is enforced by
-    # the engine and the T3 clamp; this only feeds signal in the expected shape.
+    # 2f. Slack change ingest — R16-A2 / AT-421 (T6) + AT-419 (T4).
+    # When Slack is connected, ingest it through the shared change runner: this
+    # advances the per-(org, 'slack') checkpoint (incremental, not a full re-read)
+    # and emits an ingestion.artifact_changed event per changed Slack artifact
+    # (AC7). The changed records are also aggregated into the corroboration block
+    # so Slack's escalation pattern (+ activity / cross-references) can corroborate
+    # findings from systems of record. Gated on "slack" ∈ connected systems (the
+    # engine only reads the block when Slack is connected). The MEDIUM ceiling —
+    # Slack-only stays MEDIUM, never standalone HIGH; it elevates only WITH a
+    # primary corroborator (COR-06) — is enforced by the engine and the T3 clamp.
     if "slack" in _systems:
         slack_data = _ingest_slack_corroboration(org_id, run_id) or {}
         if slack_data.get("slack", {}).get("escalation_pattern", {}).get("fired"):

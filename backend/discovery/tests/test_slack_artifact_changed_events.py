@@ -57,6 +57,19 @@ class Store:
         self.data[(cp.org_id, cp.connector_id)] = cp
 
 
+@pytest.fixture(autouse=True)
+def _offline_ingest(monkeypatch):
+    """Pin offline so the real SlackIngestor reads the deterministic fixture.
+
+    The connector chooses live vs offline from ``INGEST_MODE`` at call time. Run
+    in isolation (without the full suite or a backend/.env that sets
+    ``INGEST_MODE=live``), it would otherwise attempt a live Slack API call and
+    fail for lack of a token. Forcing offline here makes these AC7 tests
+    deterministic regardless of environment or test order.
+    """
+    monkeypatch.setenv("INGEST_MODE", "offline")
+
+
 @pytest.fixture
 def captured(monkeypatch):
     """Capture telemetry events (the runner lazily imports record_event at emit)."""

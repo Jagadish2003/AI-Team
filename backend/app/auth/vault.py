@@ -320,10 +320,18 @@ def store_token(org_id: str, connector_id: str, token_response: dict) -> TokenRe
     )
 
 
-async def get_token(org_id: str, connector_id: str) -> TokenRecord:
+async def get_token(
+    org_id: str,
+    connector_id: str,
+    *,
+    min_validity_seconds: int = REFRESH_THRESHOLD_SECONDS,
+) -> TokenRecord:
     """Return a valid, decrypted TokenRecord for the given org+connector.
 
-    Auto-refreshes if the token is within REFRESH_THRESHOLD_SECONDS of expiry.
+    Auto-refreshes if the token has ``min_validity_seconds`` or less left before
+    expiry (default ``REFRESH_THRESHOLD_SECONDS``). The proactive token-refresher
+    background job passes a larger lookahead so tokens are renewed *before* they
+    lapse, rather than only on the read that happens to fall inside the window.
     Raises ConnectorNotAuthenticatedError when no token exists or refresh fails.
     """
     _init_credentials_table()
@@ -352,7 +360,7 @@ async def get_token(org_id: str, connector_id: str) -> TokenRecord:
     now = datetime.now(timezone.utc)
     seconds_left = (record.expires_at - now).total_seconds()
 
-    if seconds_left <= REFRESH_THRESHOLD_SECONDS:
+    if seconds_left <= min_validity_seconds:
         if record.refresh_token is None:
             raise ConnectorNotAuthenticatedError(org_id, connector_id)
 

@@ -50,7 +50,8 @@ def test_resolves_only_authenticated_connectors_with_url(monkeypatch):
         monkeypatch.delenv(var, raising=False)
 
     async def fake_get_token(org_id, connector_id):
-        if connector_id == "servicenow":
+        # servicenow + slack + github not connected in this scenario.
+        if connector_id in ("servicenow", "slack", "github"):
             raise ConnectorNotAuthenticatedError(org_id, connector_id)
         return _token(connector_id)
 
@@ -71,12 +72,16 @@ def test_authenticated_but_unresolvable_url_is_skipped(monkeypatch):
 
     URL resolution order is captured → env → OAuth-derived; when all three yield
     nothing, the connector degrades to skipped rather than hard-failing the run.
+    (Scoped to the URL-requiring systems of record — Slack is URL-less and is not
+    connected in this scenario.)
     """
     monkeypatch.delenv("SF_INSTANCE_URL", raising=False)
     monkeypatch.delenv("SERVICENOW_URL", raising=False)
     monkeypatch.delenv("JIRA_URL", raising=False)
 
     async def fake_get_token(org_id, connector_id):
+        if connector_id in ("slack", "github"):
+            raise ConnectorNotAuthenticatedError(org_id, connector_id)
         return _token(connector_id)
 
     monkeypatch.setattr(lic, "get_token", fake_get_token)
@@ -271,7 +276,7 @@ def test_unexpected_vault_error_excludes_connector(monkeypatch):
     async def fake_get_token(org_id, connector_id):
         if connector_id == "salesforce":
             raise RuntimeError("vault boom")
-        if connector_id == "jira":
+        if connector_id in ("jira", "slack", "github"):
             raise ConnectorNotAuthenticatedError(org_id, connector_id)
         return _token(connector_id)
 
@@ -280,3 +285,105 @@ def test_unexpected_vault_error_excludes_connector(monkeypatch):
     live = lic.resolve_live_systems("default")
 
     assert live == ["servicenow"]
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Slack — URL-less SaaS connector (R16-A2 / live-ingest wiring)
+# ─────────────────────────────────────────────────────────────────────────────
+def test_slack_resolved_by_token_without_url(monkeypatch):
+    """Slack is URL-less: when authenticated it joins the live set keyed by token
+    alone (no instance URL), published to the per-run context."""
+    async def fake_get_token(org_id, connector_id):
+        if connector_id == "slack":
+            return _token(connector_id)
+        raise ConnectorNotAuthenticatedError(org_id, connector_id)
+
+    monkeypatch.setattr(lic, "get_token", fake_get_token)
+
+    live = lic.resolve_live_systems("default")
+
+    assert live == ["slack"]
+    cred = get_live_connector("slack")
+    assert cred == {"token": "slack-access"}
+    assert "url" not in cred  # Slack's Web API host is global — no per-org URL
+
+
+def test_slack_excluded_when_not_authenticated(monkeypatch):
+    """Unconnected Slack is left out and publishes no per-run credential."""
+    async def fake_get_token(org_id, connector_id):
+        raise ConnectorNotAuthenticatedError(org_id, connector_id)
+
+    monkeypatch.setattr(lic, "get_token", fake_get_token)
+
+    assert lic.resolve_live_systems("default") == []
+    assert get_live_connector("slack") is None
+
+
+def test_slack_and_servicenow_both_live(monkeypatch):
+    """Slack (URL-less) coexists with a system of record so the corroboration
+    path can elevate Slack via COR-06 in a live run."""
+    monkeypatch.delenv("SERVICENOW_URL", raising=False)
+
+    async def fake_get_token(org_id, connector_id):
+        if connector_id in ("servicenow", "slack"):
+            return _token(connector_id)
+        raise ConnectorNotAuthenticatedError(org_id, connector_id)
+
+    monkeypatch.setattr(lic, "get_token", fake_get_token)
+    monkeypatch.setattr(lic, "get_connector_instance_url", lambda o, c: None)
+    monkeypatch.setattr(lic, "store_connector_instance_url", lambda o, c, u: None)
+
+    live = lic.resolve_live_systems("default")
+
+    assert set(live) == {"servicenow", "slack"}
+    assert get_live_connector("slack") == {"token": "slack-access"}
+    assert get_live_connector("servicenow")["token"] == "servicenow-access"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# GitHub — URL-less, vault-direct connector (T1-S12 live-path wiring)
+# ─────────────────────────────────────────────────────────────────────────────
+def test_github_resolved_promotes_run_to_live(monkeypatch):
+    """GitHub joins the live set when authenticated so the run is promoted to live
+    (INGEST_MODE=live). It reads its token straight from the vault, so — unlike
+    Slack — it is NOT published to the per-run context."""
+    async def fake_get_token(org_id, connector_id):
+        if connector_id == "github":
+            return _token(connector_id)
+        raise ConnectorNotAuthenticatedError(org_id, connector_id)
+
+    monkeypatch.setattr(lic, "get_token", fake_get_token)
+
+    live = lic.resolve_live_systems("default")
+
+    assert live == ["github"]
+    # GitHub fetches from the vault itself — nothing in the per-run context.
+    assert get_live_connector("github") is None
+
+
+def test_github_excluded_when_not_authenticated(monkeypatch):
+    """Unconnected GitHub is left out — the run is not forced live by it."""
+    async def fake_get_token(org_id, connector_id):
+        raise ConnectorNotAuthenticatedError(org_id, connector_id)
+
+    monkeypatch.setattr(lic, "get_token", fake_get_token)
+
+    assert lic.resolve_live_systems("default") == []
+    assert get_live_connector("github") is None
+
+
+def test_github_and_slack_both_live_without_url(monkeypatch):
+    """The two URL-less connectors resolve together; Slack is in the per-run
+    context (it reads it), GitHub is not (it reads the vault directly)."""
+    async def fake_get_token(org_id, connector_id):
+        if connector_id in ("github", "slack"):
+            return _token(connector_id)
+        raise ConnectorNotAuthenticatedError(org_id, connector_id)
+
+    monkeypatch.setattr(lic, "get_token", fake_get_token)
+
+    live = lic.resolve_live_systems("default")
+
+    assert set(live) == {"slack", "github"}
+    assert get_live_connector("slack") == {"token": "slack-access"}
+    assert get_live_connector("github") is None

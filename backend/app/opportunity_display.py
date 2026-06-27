@@ -39,6 +39,37 @@ def with_display_titles(opps: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     return [with_display_title(opp) for opp in opps]
 
 
+def with_display_scores(opp: Dict[str, Any]) -> Dict[str, Any]:
+    """Apply the stable, display-only impact/effort offset for the Effort-vs-Impact matrix.
+
+    Opportunities that share identical raw impact/effort scores would stack on a
+    single point in the quadrant chart, so a small deterministic per-id offset
+    spreads them. Because it is keyed off the opportunity id, the SAME opportunity
+    always lands at the SAME coordinates.
+
+    This is the reason every endpoint that returns an opportunity to the matrix
+    (list, decision, override) MUST apply this: the matrix positions a bubble from
+    impact/effort, so if the decision/override response returned RAW scores while
+    the list returned OFFSET scores, the bubble would visibly jump the moment its
+    decision changed. Returns a copy; the raw stored scores are never mutated.
+    """
+    if "impact" not in opp or "effort" not in opp:
+        return dict(opp)
+    _id = str(opp.get("id", "0"))
+    stable_offset = (sum(ord(c) for c in _id) % 5) * 0.15
+    display_opp = dict(opp)
+    display_opp["impact"] = float(opp["impact"]) + stable_offset
+    display_opp["effort"] = float(opp["effort"]) + stable_offset
+    return display_opp
+
+
+def with_display(opp: Dict[str, Any]) -> Dict[str, Any]:
+    """Full single-opportunity display shaping: title overrides + the stable matrix
+    score offset. Use at every opportunity return site so list/decision/override
+    responses are coordinate-consistent."""
+    return with_display_scores(with_display_title(opp))
+
+
 def with_roadmap_display_titles(roadmap: Dict[str, Any]) -> Dict[str, Any]:
     display_roadmap = dict(roadmap)
     stages = display_roadmap.get("stages")

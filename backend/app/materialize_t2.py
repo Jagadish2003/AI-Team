@@ -36,6 +36,25 @@ def _pack_id_for_run(run: Dict[str, Any] | None) -> str | None:
     return input_pack_id or run.get("packId") or None
 
 
+def resolve_effective_pack(
+    explicit_pack_id: str | None, live_systems: List[str] | None
+) -> str | None:
+    """Choose the pack for a run, defaulting a GitHub-connected run to its pack.
+
+    An explicit pack (Stack Builder selection / run input) ALWAYS wins. Otherwise,
+    when the GitHub connector is among the org's live systems, default to
+    ``github_engineering`` so a GitHub-connected run fires the GitHub detectors
+    instead of falling back to ``service_cloud`` (which ingests nothing for GitHub
+    and would leave the connection a no-op). Returns ``None`` when neither applies
+    — the runner then falls back to ``service_cloud`` as before.
+    """
+    if explicit_pack_id:
+        return explicit_pack_id
+    if live_systems and "github" in live_systems:
+        return "github_engineering"
+    return None
+
+
 def _org_id_for_run(run: Dict[str, Any] | None, fallback: str | None = None) -> str | None:
     if not run:
         return fallback
@@ -108,6 +127,18 @@ def _probe_systems(
         except Exception as e:
             per_system[system] = "failed"
             errors[system] = str(e)
+
+    # Slack (R16-A2) and GitHub (T1-S12) are ingested INSIDE the discovery pipeline
+    # (discovery.runner.run), not probed here: Slack via the shared change runner
+    # (which owns its checkpoint lifecycle and emits ingestion.artifact_changed),
+    # GitHub via the github_engineering pack (reading its token straight from the
+    # vault). Pass them through to `succeeded` so the pipeline receives them in
+    # `systems` and the "no data ingested" gate does not trip a connector-only run.
+    for _pipeline_ingested in ("slack", "github"):
+        if _pipeline_ingested in systems:
+            per_system[_pipeline_ingested] = "ok"
+            if _pipeline_ingested not in succeeded:
+                succeeded.append(_pipeline_ingested)
 
     return per_system, succeeded, errors
 
@@ -210,6 +241,17 @@ def run_trackb_and_persist(
         )
     else:
         _emit_event(run_id, "CONNECT", f"Connected sources: {', '.join(systems)}")
+
+    # Default a GitHub-connected run to the github_engineering pack unless the run
+    # explicitly selected a pack. Stored on the in-memory run so every downstream
+    # _pack_id_for_run(run) (runner, enrichment, temporal) resolves to it.
+    _explicit_pack = _pack_id_for_run(run)
+    _effective_pack = resolve_effective_pack(_explicit_pack, live_systems)
+    if _effective_pack and _effective_pack != _explicit_pack:
+        run["packId"] = _effective_pack
+        _emit_event(
+            run_id, "CONNECT", f"GitHub connected — defaulting to the {_effective_pack} pack"
+        )
 
     per_system: Dict[str, str] = {
         s: "skipped" for s in ["salesforce", "servicenow", "jira"]
