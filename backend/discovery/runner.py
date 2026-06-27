@@ -810,6 +810,18 @@ def run(
     from .weighting_context import load_for_run as _load_weighting_context
     _weighting_ctx = _load_weighting_context(run_id)
 
+    # R16-C2 T2: load the selected Discovery Focus from the run KV store and
+    # annotate each opportunity with additive focus-emphasis metadata, so the
+    # shared ranking utility can emphasise findings matching the focus affinity.
+    # Emphasis, not exclusion: this only reorders; it never filters detectors or
+    # mutates impact/effort/confidence/tier. None / enterprise_wide / unknown
+    # focus => no bias => unchanged ordering. Never raises.
+    from .packs.focus_affinity import (
+        load_focus_for_run as _load_focus_for_run,
+        build_focus_emphasis as _build_focus_emphasis,
+    )
+    _focus_id = _load_focus_for_run(run_id)
+
     # 4. Score + Evidence
     # ENG-AIQ-NC-4: use lending_scorer for ncino pack, SC scorer for service_cloud
     from .scorer import score as sc_score
@@ -1064,6 +1076,9 @@ def run(
             "corroboration_label": corr_fields["corroboration_label"],
             "triple_corroboration": corr_fields["triple_corroboration"],
             "corroboration_rule_ids": corr_fields["corroboration_rule_ids"],
+            # R16-C2 T2: additive Discovery Focus emphasis annotation (always
+            # present; descriptive only — never mutates scoring fields).
+            "focus_emphasis": _build_focus_emphasis(_focus_id, dr.detector_id),
         }
         # ENG-AIQ-NC-5 Issue 1: inject approved UI labels from pack UI label files.
         # Deterministic config text — not LLM generated:
@@ -1107,6 +1122,9 @@ def run(
     return {
         "runId": run_id, "orgId": org_id, "mode": mode,
         "packId": pack_id,
+        # R16-C2 T2: surface the selected focus so the seed/ranking path can
+        # apply focus emphasis deterministically (None => unbiased view).
+        "focusId": _focus_id,
         "packVersion": pack_version,
         "startedAt": started_at, "completedAt": datetime.now(timezone.utc).isoformat(),
         "inputs": org_ctx, "opportunities": opportunities,

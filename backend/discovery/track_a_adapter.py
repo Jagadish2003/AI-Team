@@ -153,6 +153,18 @@ _DETECTOR_META: Dict[str, Dict[str, str]] = {
         "title_template": "Benefit Election Guardian",
         "category": "Benefit Election",
     },
+    # STRS Benefits compliance detectors emphasised under approvals_compliance
+    # (see discovery/packs/focus_affinity.py). Listed here so the Track A
+    # adapter emits a meaningful title/category instead of falling back to the
+    # generic capitalised detector id + "Pattern detected by AgentIQ ..." stub.
+    "DISBURSEMENT_OVERDUE": {
+        "title_template": "Benefit Disbursement Guardian",
+        "category": "Benefit Disbursement",
+    },
+    "DISABILITY_REVIEW_BOTTLENECK": {
+        "title_template": "Disability Review Monitor",
+        "category": "Disability Review",
+    },
     "LOAN_ORIGINATION_ROUTING_FRICTION": {
         "title_template": "Loan Origination Routing Friction",
         "category": "Automation Opportunity",
@@ -304,6 +316,9 @@ def to_track_a_opportunities(
         id_counter = itertools.count(1)
 
     opportunities = runner_payload.get("opportunities", [])
+    # R16-C2 T2: the focus the run was launched with drives focus emphasis in
+    # the shared ranking utility below. None => unbiased (enterprise-wide) view.
+    focus_id = runner_payload.get("focusId")
     result: List[Dict[str, Any]] = []
 
     for opp in opportunities:
@@ -336,6 +351,9 @@ def to_track_a_opportunities(
             "corroboration_label":    opp.get("corroboration_label"),
             "triple_corroboration":   bool(opp.get("triple_corroboration", False)),
             "corroboration_rule_ids": opp.get("corroboration_rule_ids", []),
+            # R16-C2 T2: carry the additive focus-emphasis annotation forward so
+            # the stored opp and ranking reflect the selected Discovery Focus.
+            "focus_emphasis":         opp.get("focus_emphasis"),
             # R16-B1 §4: stamp the pack id + version that produced this instance
             # onto the STORED opportunity, so pack governance (1.9) and debugging
             # have the version history — unreconstructable if not captured now.
@@ -353,8 +371,11 @@ def to_track_a_opportunities(
         }
         result.append(track_a_opp)
 
-    # Apply shared ranking (SF-3.3) — seed order matches calibration
-    return rank_opportunities(result)
+    # Apply shared ranking (SF-3.3) — seed order matches calibration.
+    # R16-C2 T2: pass the run's focus so matching findings are emphasised in the
+    # ordering. The seed opps also carry focus_emphasis.rank, so ranking stays
+    # correct even when focus_id is absent (None => unbiased baseline order).
+    return rank_opportunities(result, focus_id=focus_id)
 
 
 def to_track_a_evidence(
@@ -406,6 +427,10 @@ def export_track_a_seed(
             "mode":        runner_payload.get("mode"),
             "packId":      runner_payload.get("packId"),
             "packVersion": runner_payload.get("packVersion"),
+            # R16-C2 T2: record the focus the run was launched with so replay,
+            # audit, and debugging can reconstruct what shaped the original
+            # ranking from the snapshot alone. None => unbiased (enterprise-wide).
+            "focusId":     runner_payload.get("focusId"),
             "startedAt":   runner_payload.get("startedAt"),
             "completedAt": runner_payload.get("completedAt"),
             "inputs":      runner_payload.get("inputs", {}),

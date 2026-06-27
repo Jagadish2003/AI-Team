@@ -69,11 +69,18 @@ class LicenseBannerResponse(BaseModel):
     (``no_license`` / ``signature_or_format`` → "No valid license installed",
     §5/AC6) from an actually-expired term (no reason → "License expired") and
     from a clock anomaly (``clock_rollback``). It is ``null`` for valid/grace and
-    for a genuinely expired (past-grace) key."""
+    for a genuinely expired (past-grace) key.
+
+    ``grace_days_remaining`` is the number of days left before a grace-state
+    license crosses into read-only (discovery runs blocked). It lets the grace
+    banner say "runs will be blocked in N days" rather than a bare "expired",
+    which would either cause panic or — because runs still work in grace — false
+    complacency. Only populated in the ``grace`` state; ``null`` otherwise."""
 
     status: str
     expires_at: Optional[str] = None
     reason: Optional[str] = None
+    grace_days_remaining: Optional[int] = None
 
 
 class UpdateKeyRequest(BaseModel):
@@ -120,10 +127,20 @@ def get_license_banner() -> LicenseBannerResponse:
     ``GET /api/license``. Side-effect-free, like the status route.
     """
     result = get_current_license_status()
+    # In grace, surface days-until-read-only so the banner can say "runs blocked
+    # in N days". days_remaining is (expires - today) → negative once expired, so
+    # grace_days + days_remaining = days left in the grace window.
+    grace_days_remaining = None
+    if result.get("status") == LicenseStatus.GRACE:
+        days_remaining = result.get("days_remaining")
+        if days_remaining is not None:
+            payload = result.get("payload") or {}
+            grace_days_remaining = int(payload.get("grace_days", 14)) + int(days_remaining)
     return LicenseBannerResponse(
         status=result.get("status"),
         expires_at=result.get("expires_at"),
         reason=result.get("reason"),
+        grace_days_remaining=grace_days_remaining,
     )
 
 

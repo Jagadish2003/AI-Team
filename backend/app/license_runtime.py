@@ -193,6 +193,18 @@ def evaluate_license(
 
     # 2 / 3. Resolve the org's installed key; none → read-only "no valid license".
     key_string = record.get("license_key") if record else None
+    # Type-safety guard: license_key is a TEXT column (str | None), but defend
+    # against a non-string ever reaching validate_license().split(".") — e.g. a
+    # JSON object written to the slot by a future/other code path. Without this,
+    # the split would AttributeError, get swallowed in verify_license_signature,
+    # and the org would sit in permanent read-only with no indication why.
+    if key_string is not None and not isinstance(key_string, str):
+        logger.warning(
+            "org %s license_key is %s, not str — treating as no_license",
+            org_id,
+            type(key_string).__name__,
+        )
+        key_string = None
     if not key_string:
         result = {"status": LicenseStatus.READONLY, "reason": "no_license"}
     else:

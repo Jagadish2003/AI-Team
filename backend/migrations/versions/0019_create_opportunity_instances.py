@@ -28,6 +28,14 @@ ingestion branch), which produced a duplicate revision id and a two-headed
 migration tree. Re-numbered to 0019 and chained after 0018 to linearise the tree
 into a single head. The opportunity_instances and ingestion_checkpoints tables
 are independent, so apply order does not matter.
+
+Note (R16-B2 integration): originally authored as revision ``0017``, which
+collided with ``0017_create_ingestion_checkpoints`` once both feature branches
+merged into the R16-B2 base — two migrations sharing one revision id left alembic
+with duplicate/multiple heads and broke ``alembic upgrade head`` (the CI gate).
+This migration creates a standalone table with no dependency on the
+ingestion-checkpoints lineage, so it was re-chained to the end (``0018`` ->
+``0019``) to restore a single linear head. Migration content is unchanged.
 """
 import os
 import sys

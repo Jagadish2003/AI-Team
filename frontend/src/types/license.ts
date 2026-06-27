@@ -38,4 +38,10 @@ export interface LicenseBannerResponse {
    * clock anomaly (`clock_rollback`). Null for valid/grace and past-grace expiry.
    */
   reason?: string | null;
+  /**
+   * Days left before a `grace` license crosses into read-only (discovery runs
+   * blocked). Lets the grace banner say "runs blocked in N days" instead of a
+   * bare "expired". Only populated in the `grace` state; null otherwise.
+   */
+  grace_days_remaining?: number | null;
 }

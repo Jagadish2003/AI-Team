@@ -6,7 +6,7 @@
  * Enterprise-Wide card (wide=true, col-span-2).
  *
  * Visual states:
- *   default  - border-border, bg-panel, muted icon, text-text title, muted subtext
+ *   default  - border-border, bg-panel, text-text title, muted subtext
  *   hover    - blue accent border with a very light blue background
  *   selected - blue accent border, blue-tinted background, accent title/subtext
  *
@@ -15,8 +15,8 @@
  *   keyboard - Enter and Space activate selection
  *
  * Layout variants:
- *   standard - icon above title and subtext (column)
- *   wide     - icon left of title and subtext (row), card spans full grid width (col-span-2)
+ *   standard - title, subtext, and optional boundary copy.
+ *   wide     - same top-aligned content, spanning the full grid width (col-span-2).
  *
  * Token note:
  *   Discovery-focus cards follow the same blue accent selection treatment as
@@ -37,7 +37,6 @@
  *   aria-checked reflects selection state.
  *   tabIndex prop - see above.
  *   Enter and Space toggle selection.
- *   Icon is aria-hidden.
  *
  * Props:
  *   card      - FocusCard type: { id, title, subtext, icon, wide? }
@@ -71,9 +70,10 @@ interface Props {
 }
 
 export default function FocusCard({ card, selected, onSelect, tabIndex = 0 }: Props) {
-  const iconClass = selected ? 'text-accent' : 'text-muted';
   const titleClass = selected ? 'text-accent' : 'text-text';
   const subtextClass = selected ? 'text-accent' : 'text-muted';
+  const boundaryLabelBase = 'shrink-0 font-medium';
+  const hasBoundaryCopy = Boolean(card.useWhen || card.notWhen);
 
   function handleKeyDown(event: React.KeyboardEvent<HTMLButtonElement>) {
     if (event.key === 'Enter' || event.key === ' ') {
@@ -81,6 +81,23 @@ export default function FocusCard({ card, selected, onSelect, tabIndex = 0 }: Pr
       onSelect(card.id);
     }
   }
+
+  const boundaryCopy = hasBoundaryCopy ? (
+    <div className="mt-3 space-y-2 border-t border-border/60 pt-3 text-xs leading-relaxed">
+      {card.useWhen && (
+        <p className={`grid grid-cols-[max-content_1fr] gap-x-1.5 ${subtextClass}`}>
+          <span className={`${boundaryLabelBase} text-emerald-300`}>Use when:</span>
+          <span>{card.useWhen}</span>
+        </p>
+      )}
+      {card.notWhen && (
+        <p className={`grid grid-cols-[max-content_1fr] gap-x-1.5 ${subtextClass}`}>
+          <span className={`${boundaryLabelBase} text-red-400`}>Not when:</span>
+          <span>{card.notWhen}</span>
+        </p>
+      )}
+    </div>
+  ) : null;
 
   return (
     <button
@@ -91,7 +108,7 @@ export default function FocusCard({ card, selected, onSelect, tabIndex = 0 }: Pr
       onClick={() => onSelect(card.id)}
       onKeyDown={handleKeyDown}
       className={[
-        'w-full cursor-pointer rounded-lg border p-4 text-left transition-colors duration-150',
+        'flex h-full w-full cursor-pointer items-start justify-start rounded-lg border p-4 text-left transition-colors duration-150',
         'focus:outline-none focus-visible:ring-1 focus-visible:ring-accent/35',
         card.wide ? 'col-span-2' : '',
         selected
@@ -99,29 +116,15 @@ export default function FocusCard({ card, selected, onSelect, tabIndex = 0 }: Pr
           : 'border-border bg-panel hover:border-accent/50 hover:bg-accent/5',
       ].filter(Boolean).join(' ')}
     >
-      {card.wide ? (
-        <div className="flex items-start gap-4">
-          <i className={`${card.icon} mt-0.5 flex-shrink-0 ${iconClass}`} aria-hidden="true" />
-          <div>
-            <div className={`mb-1 text-sm font-medium ${titleClass}`}>
-              {card.title}
-            </div>
-            <div className={`text-xs leading-relaxed ${subtextClass}`}>
-              {card.subtext}
-            </div>
-          </div>
+      <div className="w-full">
+        <div className={`mb-1 text-sm font-medium ${titleClass}`}>
+          {card.title}
         </div>
-      ) : (
-        <div>
-          <i className={`${card.icon} mb-2 block ${iconClass}`} aria-hidden="true" />
-          <div className={`mb-1 text-sm font-medium ${titleClass}`}>
-            {card.title}
-          </div>
-          <div className={`text-xs leading-relaxed ${subtextClass}`}>
-            {card.subtext}
-          </div>
+        <div className={`text-xs leading-relaxed ${subtextClass}`}>
+          {card.subtext}
         </div>
-      )}
+        {boundaryCopy}
+      </div>
     </button>
   );
 }
