@@ -32,6 +32,18 @@ echo   "  ╚══════════════════════�
 printf "${N}"
 printf "  Output : ${C}%s${N}\n\n" "$TARGET_FILE"
 
+# ── Early exit if .env already exists ────────────────────────────────────────
+if [[ -f "$TARGET_FILE" ]]; then
+  printf "  ${Y}⚠  Configuration file already exists:${N} %s\n\n" "$TARGET_FILE"
+  printf "  Reconfigure and overwrite? [y/N] "
+  IFS= read -r _early_confirm
+  if [[ "${_early_confirm,,}" != "y" ]]; then
+    printf "\n  ${G}✓ Keeping existing configuration. No changes made.${N}\n\n"
+    exit 0
+  fi
+  echo ""
+fi
+
 # ── FQDN validation ───────────────────────────────────────────────────────────
 # Returns 0 (valid domain) or 1 (IP address or invalid format)
 is_valid_domain() {
