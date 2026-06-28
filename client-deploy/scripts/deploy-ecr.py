@@ -92,11 +92,11 @@ AWS_REGION     = "us-east-1"
 ECR_REPO       = "agentiq"
 ECR_REGISTRY   = f"{AWS_ACCOUNT_ID}.dkr.ecr.{AWS_REGION}.amazonaws.com"
 
-# (ecr_tag, local_image_name) — local names must match docker-compose.yml
+# ECR tags to pull — docker-compose.yml references these directly via ${ECR_REGISTRY}
 IMAGES = [
-    ("postgres-1.0",   "agentiq-postgres:1.0"),
-    ("backend-latest", "agentiq-backend:latest"),
-    ("frontend-1.0",   "agentiq-frontend:1.0"),
+    "postgres-1.0",
+    "backend-latest",
+    "frontend-1.0",
 ]
 
 STORE_DIR    = pathlib.Path("/opt/aiqstore")
@@ -300,12 +300,11 @@ def pull_images(access_key: str, secret_key: str) -> None:
         _write_docker_config(auth_data)
         ok("ECR credentials written to Docker config.")
 
-        for ecr_tag, local_name in IMAGES:
+        for ecr_tag in IMAGES:
             remote = f"{ECR_REGISTRY}/{ECR_REPO}:{ecr_tag}"
             print(f"\n  Pulling  {remote}")
             run(["docker", "pull", remote])
-            run(["docker", "tag",  remote, local_name])
-            ok(f"Tagged   {remote}  ->  {local_name}")
+            ok(f"Pulled   {remote}")
 
     except (ClientError, NoCredentialsError) as e:
         fail(f"AWS error: {e}")
@@ -341,6 +340,7 @@ def generate_compose_env(pg_user: str, pg_pass: str, pg_db: str,
     os.chmod(backend_safe_env, 0o600)
 
     compose_env.write_text(
+        f"ECR_REGISTRY={ECR_REGISTRY}\n"
         f"PROD_DATABASE_URL={prod_url}\n"
         f"POSTGRES_USER={pg_user}\n"
         f"POSTGRES_PASSWORD={pg_pass}\n"

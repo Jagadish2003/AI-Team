@@ -2,10 +2,7 @@ services:
 
   # ── 1. PostgreSQL 18 ──────────────────────────────────────────────────────────
   postgres:
-    build:
-      context: .
-      dockerfile: postgres/Dockerfile
-    image: agentiq-postgres:1.0
+    image: ${ECR_REGISTRY}/agentiq:postgres-1.0
     container_name: agentiq-postgres
     environment:
       POSTGRES_USER:     ${POSTGRES_USER:-agentiq}
@@ -35,10 +32,7 @@ services:
 
   # ── 2. Backend ────────────────────────────────────────────────────────────────
   backend:
-    build:
-      context: ./backend
-      dockerfile: Dockerfile
-    image: agentiq-backend:latest
+    image: ${ECR_REGISTRY}/agentiq:backend-latest
     container_name: agentiq-backend
     depends_on:
       postgres:
@@ -60,10 +54,7 @@ services:
 
   # ── 3. Frontend ───────────────────────────────────────────────────────────────
   frontend:
-    build:
-      context: ./frontend
-      dockerfile: Dockerfile
-    image: agentiq-frontend:1.0
+    image: ${ECR_REGISTRY}/agentiq:frontend-1.0
     container_name: agentiq-frontend
     depends_on:
       backend:
