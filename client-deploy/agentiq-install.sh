@@ -7,7 +7,7 @@
 #   2. scripts/deploy-ecr.py — configures .env, pulls images, starts the stack
 #
 # Usage:
-#   bash install.sh
+#   bash agentiq-install.sh
 #   (sudo escalation happens automatically — you will be prompted once)
 # =============================================================================
 set -Eeuo pipefail
@@ -88,6 +88,13 @@ echo ""
 # Step 2 — Deploy
 # =============================================================================
 printf "${BOLD}  ══ Step 2 / 2 — Application Deployment ═══════════════════${N}\n\n"
+
+# Strip Windows CRLF (\r) from all Python and shell scripts in the package.
+# Git on Windows stores CRLF which breaks Python's tokenizer and bash on Linux.
+printf "  Normalising line endings ...\n"
+find "$SCRIPT_DIR" -type f \( -name "*.py" -o -name "*.sh" \) \
+  -exec sed -i 's/\r//' {} +
+printf "  ${G}done${N}\n\n"
 
 # python3 is guaranteed to exist at this point (installed by step 1).
 python3 "$DEPLOY_SCRIPT"
