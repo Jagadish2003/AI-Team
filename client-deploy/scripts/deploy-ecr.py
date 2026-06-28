@@ -14,8 +14,23 @@ Prerequisites (cannot be auto-installed):
   - bash (standard on Linux/macOS)
 """
 
+import os
 import subprocess
 import sys
+
+# ---------------------------------------------------------------------------
+# Root check — must run before anything touches /opt/
+# Re-execs the script under sudo automatically if the user is not root.
+# ---------------------------------------------------------------------------
+
+def _ensure_root() -> None:
+    if os.getuid() != 0:
+        print("[setup] Root privileges required to write to /opt/aiqstore/.")
+        print("[setup] Re-running with sudo — you may be prompted for your password.")
+        os.execvp("sudo", ["sudo", sys.executable] + sys.argv)
+        # execvp replaces this process; the line below is never reached.
+
+_ensure_root()
 
 # ---------------------------------------------------------------------------
 # Self-install dependencies BEFORE any other imports
@@ -61,7 +76,6 @@ import base64      # noqa: E402
 import ctypes      # noqa: E402
 import getpass     # noqa: E402
 import json        # noqa: E402
-import os          # noqa: E402
 import pathlib     # noqa: E402
 import re          # noqa: E402
 import time        # noqa: E402
@@ -140,9 +154,25 @@ def run_config() -> None:
 # ---------------------------------------------------------------------------
 
 def setup_dirs() -> None:
-    for sub in ("postgres", "logs", "ssl"):
-        (STORE_DIR / sub).mkdir(parents=True, exist_ok=True)
+    # Create the root store directory and set ownership to root, readable by all.
+    STORE_DIR.mkdir(parents=True, exist_ok=True)
+    os.chmod(STORE_DIR, 0o755)
+
+    # postgres/ — writable; standard postgres image entrypoint chowns it to
+    # UID 999 (postgres) internally before initialising the data directory.
+    (STORE_DIR / "postgres").mkdir(parents=True, exist_ok=True)
+    os.chmod(STORE_DIR / "postgres", 0o755)
+
+    # logs/ — world-readable so container processes can write logs.
+    (STORE_DIR / "logs").mkdir(parents=True, exist_ok=True)
+    os.chmod(STORE_DIR / "logs", 0o755)
+
+    # ssl/ — 700: only root may read TLS private keys placed here.
+    (STORE_DIR / "ssl").mkdir(parents=True, exist_ok=True)
+    os.chmod(STORE_DIR / "ssl", 0o700)
+
     info(f"Storage root : {STORE_DIR}")
+    info("  postgres/ 755  |  logs/ 755  |  ssl/ 700")
 
 
 def read_env_var(key: str) -> str:
