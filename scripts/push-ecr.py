@@ -9,10 +9,12 @@ held only in-memory, and explicitly cleared after the push completes.
 Standard practice: build images with the ECR-qualified name from the start,
 then push directly — no docker tag step required.
 
-Build images before running this script:
-    docker build -t 070206924228.dkr.ecr.us-east-1.amazonaws.com/agentiq:postgres-1.0  ./postgres
-    docker build -t 070206924228.dkr.ecr.us-east-1.amazonaws.com/agentiq:backend-latest ./backend
-    docker build -t 070206924228.dkr.ecr.us-east-1.amazonaws.com/agentiq:frontend-1.0   ./frontend
+Build images with short names before running this script:
+    docker build -t agentiq-postgres:1.0   ./postgres
+    docker build -t agentiq-backend:latest ./backend
+    docker build -t agentiq-frontend:1.0   ./frontend
+
+This script handles the ECR tagging, push, and local cleanup automatically.
 
 Only prerequisites that cannot be auto-installed:
     - Python 3.8+
@@ -79,12 +81,14 @@ AWS_REGION = "us-east-1"
 ECR_REPO = "agentiq"
 ECR_REGISTRY = f"{AWS_ACCOUNT_ID}.dkr.ecr.{AWS_REGION}.amazonaws.com"
 
-# Images are built with the ECR-qualified name — no docker tag step needed.
-# Format: <registry>/<repo>:<tag>
+# (local_image_name, ecr_tag)
+# Local images are built with short names for development convenience.
+# This script tags them with the ECR registry name, pushes, then removes
+# the ECR alias so only the original short name remains locally.
 IMAGES = [
-    "postgres-1.0",
-    "backend-latest",
-    "frontend-1.0",
+    ("agentiq-postgres:1.0",   "postgres-1.0"),
+    ("agentiq-backend:latest", "backend-latest"),
+    ("agentiq-frontend:1.0",   "frontend-1.0"),
 ]
 
 # ---------------------------------------------------------------------------
@@ -135,20 +139,13 @@ def ensure_local_images() -> None:
         capture_output=True, text=True, check=True,
     )
     available = set(result.stdout.strip().splitlines())
-    missing = []
-    for ecr_tag in IMAGES:
-        full_name = f"{ECR_REGISTRY}/{ECR_REPO}:{ecr_tag}"
-        if full_name not in available:
-            missing.append(full_name)
+    missing = [img for img, _ in IMAGES if img not in available]
     if missing:
-        print("\n[ERROR] The following images are missing — build them first:")
+        print("\n[ERROR] The following local images are missing — build them first:")
         for m in missing:
             print(f"  {m}")
-        print("\nExample build commands:")
-        for ecr_tag in IMAGES:
-            print(f"  docker build -t {ECR_REGISTRY}/{ECR_REPO}:{ecr_tag} ./<service-dir>")
         sys.exit(1)
-    ok("All images found.")
+    ok("All local images found.")
 
 # ---------------------------------------------------------------------------
 # Main
@@ -223,17 +220,20 @@ def main() -> None:
         docker_config_path.write_text(json.dumps(config, indent=2))
         ok("Docker credentials written. Ready to push.")
 
-        # Push directly — images are already built with the ECR-qualified name
-        step("Pushing images to ECR...")
-        for ecr_tag in IMAGES:
+        # Tag with ECR name, push, then remove the ECR alias locally.
+        # The original short-name image (agentiq-postgres:1.0 etc.) is kept intact.
+        step("Tagging, pushing, and cleaning up...")
+        for local_img, ecr_tag in IMAGES:
             remote = f"{ECR_REGISTRY}/{ECR_REPO}:{ecr_tag}"
-            print(f"\n  Pushing  {remote}")
+            print(f"\n  {local_img}  →  {remote}")
+            run(["docker", "tag",  local_img, remote])
             run(["docker", "push", remote])
+            run(["docker", "rmi",  remote])
             ok(f"Pushed {remote}")
 
         banner("All images pushed successfully")
         print("\nImages now available at:")
-        for ecr_tag in IMAGES:
+        for _, ecr_tag in IMAGES:
             print(f"  {ECR_REGISTRY}/{ECR_REPO}:{ecr_tag}")
 
     except (ClientError, NoCredentialsError) as e:
