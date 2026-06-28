@@ -1,0 +1,230 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}AgentIQ{% endblock %}</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:            #090d16;
+      --surface:       #111827;
+      --surface-up:    #1a2440;
+      --border:        #2a3a5c;
+      --border-focus:  #4a7cf7;
+      --accent:        #4a7cf7;
+      --accent-dim:    rgba(74, 124, 247, 0.12);
+      --text:          #dce6f5;
+      --text-muted:    #8b9dbf;
+      --text-faint:    #4d5f80;
+      --success:       #34d399;
+      --success-dim:   rgba(52, 211, 153, 0.12);
+      --error:         #f87171;
+      --error-dim:     rgba(248, 113, 113, 0.10);
+      --terminal-bg:   #050810;
+      --terminal-text: #7ec87e;
+      --radius:        10px;
+      --radius-sm:     6px;
+      --sans:          -apple-system, "Segoe UI", system-ui, sans-serif;
+      --mono:          ui-monospace, "Cascadia Code", "Fira Code", "Consolas", monospace;
+    }
+
+    html, body {
+      min-height: 100vh;
+      background: var(--bg);
+      color: var(--text);
+      font-family: var(--sans);
+      font-size: 15px;
+      line-height: 1.6;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    body {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 2rem 1rem;
+      min-height: 100vh;
+    }
+
+    /* ── Brand ── */
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 2rem;
+    }
+    .brand-mark {
+      width: 36px;
+      height: 36px;
+      background: var(--accent);
+      border-radius: 8px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+    }
+    .brand-mark svg { display: block; }
+    .brand-name {
+      font-size: 1.1rem;
+      font-weight: 600;
+      letter-spacing: -0.01em;
+      color: var(--text);
+    }
+    .brand-name span {
+      color: var(--text-muted);
+      font-weight: 400;
+    }
+
+    /* ── Card ── */
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 2.25rem 2.5rem;
+      width: 100%;
+      box-shadow: 0 4px 32px rgba(0,0,0,0.4), 0 0 0 1px rgba(74,124,247,0.06);
+    }
+
+    /* ── Typography ── */
+    h1 {
+      font-size: 1.35rem;
+      font-weight: 600;
+      letter-spacing: -0.02em;
+      color: var(--text);
+      text-wrap: balance;
+      line-height: 1.3;
+      margin-bottom: 0.5rem;
+    }
+    .subtitle {
+      color: var(--text-muted);
+      font-size: 0.875rem;
+      line-height: 1.55;
+      text-wrap: balance;
+    }
+    .divider {
+      height: 1px;
+      background: var(--border);
+      margin: 1.75rem 0;
+    }
+
+    /* ── Form ── */
+    .field { display: flex; flex-direction: column; gap: 0.4rem; }
+    label {
+      font-size: 0.8rem;
+      font-weight: 500;
+      color: var(--text-muted);
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+    }
+    input[type="email"] {
+      background: var(--surface-up);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      color: var(--text);
+      font-family: var(--sans);
+      font-size: 0.9375rem;
+      padding: 0.65rem 0.875rem;
+      width: 100%;
+      outline: none;
+      transition: border-color 0.15s, box-shadow 0.15s;
+    }
+    input[type="email"]::placeholder { color: var(--text-faint); }
+    input[type="email"]:focus {
+      border-color: var(--border-focus);
+      box-shadow: 0 0 0 3px var(--accent-dim);
+    }
+
+    /* ── Buttons ── */
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0.5rem;
+      font-family: var(--sans);
+      font-size: 0.9375rem;
+      font-weight: 500;
+      border: none;
+      border-radius: var(--radius-sm);
+      cursor: pointer;
+      text-decoration: none;
+      transition: filter 0.15s, transform 0.1s;
+    }
+    .btn:active { transform: translateY(1px); }
+    .btn-primary {
+      background: var(--accent);
+      color: #fff;
+      padding: 0.7rem 1.25rem;
+      width: 100%;
+    }
+    .btn-primary:hover { filter: brightness(1.1); }
+    .btn-download {
+      background: var(--accent);
+      color: #fff;
+      padding: 0.7rem 1.5rem;
+    }
+    .btn-download:hover { filter: brightness(1.1); }
+
+    /* ── Alert ── */
+    .alert {
+      border-radius: var(--radius-sm);
+      padding: 0.7rem 0.9rem;
+      font-size: 0.875rem;
+      line-height: 1.5;
+      margin-bottom: 1.25rem;
+      display: flex;
+      gap: 0.6rem;
+      align-items: flex-start;
+    }
+    .alert-error {
+      background: var(--error-dim);
+      border: 1px solid rgba(248,113,113,0.25);
+      color: #fca5a5;
+    }
+    .alert-success {
+      background: var(--success-dim);
+      border: 1px solid rgba(52,211,153,0.25);
+      color: #6ee7b7;
+    }
+
+    /* ── Badge ── */
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      font-size: 0.75rem;
+      font-weight: 500;
+      padding: 0.2rem 0.55rem;
+      border-radius: 20px;
+      letter-spacing: 0.02em;
+    }
+    .badge-blue {
+      background: var(--accent-dim);
+      border: 1px solid rgba(74,124,247,0.25);
+      color: #93b4fd;
+    }
+    .badge-green {
+      background: var(--success-dim);
+      border: 1px solid rgba(52,211,153,0.25);
+      color: var(--success);
+    }
+
+    /* ── Footer ── */
+    .page-footer {
+      margin-top: 1.5rem;
+      font-size: 0.8rem;
+      color: var(--text-faint);
+      text-align: center;
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { transition: none !important; }
+    }
+  </style>
+  {% block head %}{% endblock %}
+</head>
+<body>
+  {% block body %}{% endblock %}
+</body>
+</html>

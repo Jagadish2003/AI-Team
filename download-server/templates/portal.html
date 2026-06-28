@@ -1,0 +1,356 @@
+{% extends "base.html" %}
+
+{% block title %}AgentIQ — Download Ready{% endblock %}
+
+{% block head %}
+<style>
+  .card { max-width: 600px; }
+
+  /* ── Header row ── */
+  .portal-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 0.75rem;
+    margin-bottom: 1.5rem;
+  }
+  .portal-meta { display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; }
+  .email-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    font-size: 0.8rem;
+    color: var(--text-muted);
+    background: var(--surface-up);
+    border: 1px solid var(--border);
+    border-radius: 20px;
+    padding: 0.2rem 0.65rem 0.2rem 0.45rem;
+  }
+  .email-chip-dot {
+    width: 6px; height: 6px;
+    border-radius: 50%;
+    background: var(--success);
+    flex-shrink: 0;
+  }
+
+  /* ── Package info ── */
+  .package-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    flex-wrap: wrap;
+    margin-bottom: 1.25rem;
+  }
+  .package-info { display: flex; flex-direction: column; gap: 0.25rem; }
+  .package-label {
+    font-size: 0.75rem;
+    font-weight: 500;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--text-faint);
+  }
+  .package-name {
+    font-size: 1rem;
+    font-weight: 600;
+    color: var(--text);
+  }
+  .package-date {
+    font-size: 0.8rem;
+    color: var(--text-muted);
+  }
+
+  /* ── Contents list ── */
+  .contents {
+    background: var(--surface-up);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 0.75rem 1rem;
+    margin-bottom: 1.25rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.45rem;
+  }
+  .contents-row {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-size: 0.8375rem;
+    color: var(--text-muted);
+    font-family: var(--mono);
+  }
+  .contents-row svg { flex-shrink: 0; color: var(--text-faint); }
+
+  /* ── Terminal block ── */
+  .terminal-label {
+    font-size: 0.75rem;
+    font-weight: 500;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--text-faint);
+    margin-bottom: 0.5rem;
+  }
+  .terminal {
+    background: var(--terminal-bg);
+    border: 1px solid #1a2035;
+    border-radius: var(--radius-sm);
+    padding: 1rem 1.1rem;
+    position: relative;
+    margin-bottom: 0.6rem;
+  }
+  .terminal-prompt {
+    font-size: 0.75rem;
+    color: #3d5080;
+    font-family: var(--mono);
+    margin-bottom: 0.35rem;
+    user-select: none;
+  }
+  .terminal-cmd {
+    font-family: var(--mono);
+    font-size: 0.825rem;
+    color: var(--terminal-text);
+    word-break: break-all;
+    line-height: 1.65;
+    white-space: pre-wrap;
+  }
+  .copy-btn {
+    position: absolute;
+    top: 0.6rem;
+    right: 0.6rem;
+    background: #1a2340;
+    border: 1px solid #2a3a5c;
+    border-radius: 5px;
+    color: var(--text-muted);
+    font-family: var(--sans);
+    font-size: 0.75rem;
+    font-weight: 500;
+    padding: 0.25rem 0.6rem;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 0.3rem;
+    transition: background 0.15s, color 0.15s;
+  }
+  .copy-btn:hover { background: #222e4a; color: var(--text); }
+  .copy-btn.copied {
+    background: var(--success-dim);
+    border-color: rgba(52,211,153,0.3);
+    color: var(--success);
+  }
+  .terminal-hint {
+    font-size: 0.775rem;
+    color: var(--text-faint);
+    margin-bottom: 1.75rem;
+  }
+
+  /* ── Steps ── */
+  .steps { display: flex; flex-direction: column; gap: 0.8rem; margin-bottom: 1.5rem; }
+  .step {
+    display: flex;
+    gap: 0.85rem;
+    align-items: flex-start;
+  }
+  .step-num {
+    flex-shrink: 0;
+    width: 22px; height: 22px;
+    border-radius: 50%;
+    background: var(--surface-up);
+    border: 1px solid var(--border);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 0.7rem;
+    font-weight: 600;
+    color: var(--text-muted);
+    margin-top: 1px;
+    font-variant-numeric: tabular-nums;
+  }
+  .step-body { display: flex; flex-direction: column; gap: 0.15rem; }
+  .step-title { font-size: 0.875rem; font-weight: 500; color: var(--text); }
+  .step-desc  { font-size: 0.8rem; color: var(--text-muted); line-height: 1.5; }
+
+  /* ── Expiry notice ── */
+  .expiry-notice {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-size: 0.8rem;
+    color: var(--text-faint);
+    padding-top: 1rem;
+    border-top: 1px solid var(--border);
+  }
+</style>
+{% endblock %}
+
+{% block body %}
+
+  <div class="brand">
+    <div class="brand-mark">
+      <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+        <path d="M10 2L3 6v8l7 4 7-4V6L10 2z" stroke="white" stroke-width="1.5"
+              stroke-linejoin="round" fill="none"/>
+        <path d="M10 2v12M3 6l7 4 7-4" stroke="white" stroke-width="1.5"
+              stroke-linejoin="round"/>
+      </svg>
+    </div>
+    <div class="brand-name">AgentIQ <span>/ Deployment</span></div>
+  </div>
+
+  <div class="card">
+
+    <div class="portal-header">
+      <div>
+        <h1>Package Ready</h1>
+        <p class="subtitle" style="margin-top:0.25rem">
+          Download and deploy AgentIQ to your data centre.
+        </p>
+      </div>
+      <div class="portal-meta">
+        <span class="badge badge-blue">v{{ version }}</span>
+        <span class="email-chip">
+          <span class="email-chip-dot"></span>
+          {{ email }}
+        </span>
+      </div>
+    </div>
+
+    <!-- Package info + download button -->
+    <div class="package-row">
+      <div class="package-info">
+        <span class="package-label">Package</span>
+        <span class="package-name">agentiq-deploy-{{ version }}.tar.gz</span>
+        <span class="package-date">Released {{ release_date }}</span>
+      </div>
+      <a href="{{ download_url }}" class="btn btn-download" download>
+        <svg width="15" height="15" viewBox="0 0 15 15" fill="none">
+          <path d="M7.5 1v8M4.5 6.5l3 3 3-3" stroke="white" stroke-width="1.4"
+                stroke-linecap="round" stroke-linejoin="round"/>
+          <path d="M2 11v1.5a.5.5 0 00.5.5h10a.5.5 0 00.5-.5V11"
+                stroke="white" stroke-width="1.4" stroke-linecap="round"/>
+        </svg>
+        Download
+      </a>
+    </div>
+
+    <!-- Package contents -->
+    <div class="contents">
+      <div class="contents-row">
+        <svg width="13" height="13" viewBox="0 0 13 13" fill="none">
+          <rect x="1" y="1" width="11" height="11" rx="2" stroke="currentColor" stroke-width="1.2"/>
+          <path d="M4 6.5h5M4 4.5h3M4 8.5h2" stroke="currentColor" stroke-width="1.2"
+                stroke-linecap="round"/>
+        </svg>
+        docker-compose.yml
+      </div>
+      <div class="contents-row">
+        <svg width="13" height="13" viewBox="0 0 13 13" fill="none">
+          <rect x="1" y="1" width="11" height="11" rx="2" stroke="currentColor" stroke-width="1.2"/>
+          <path d="M4 6.5h5M4 4.5h3M4 8.5h2" stroke="currentColor" stroke-width="1.2"
+                stroke-linecap="round"/>
+        </svg>
+        .env.example &nbsp;<span style="color:var(--text-faint)">(fill in → /opt/aiqstore/backend/.env)</span>
+      </div>
+      <div class="contents-row">
+        <svg width="13" height="13" viewBox="0 0 13 13" fill="none">
+          <rect x="1" y="1" width="11" height="11" rx="2" stroke="currentColor" stroke-width="1.2"/>
+          <path d="M4 6.5h5M4 4.5h3M4 8.5h2" stroke="currentColor" stroke-width="1.2"
+                stroke-linecap="round"/>
+        </svg>
+        scripts/deploy-ecr.py &nbsp;<span style="color:var(--text-faint)">(pulls images + starts stack)</span>
+      </div>
+    </div>
+
+    <div class="divider"></div>
+
+    <!-- Command block -->
+    <p class="terminal-label">Run in your Ubuntu terminal</p>
+    <div class="terminal">
+      <p class="terminal-prompt">ubuntu@your-server:~$</p>
+      <p class="terminal-cmd" id="cmd">{{ command }}</p>
+      <button class="copy-btn" id="copyBtn" onclick="copyCommand()" type="button">
+        <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
+          <rect x="4" y="4" width="7" height="7" rx="1.2" stroke="currentColor" stroke-width="1.2"/>
+          <path d="M1 8V1h7" stroke="currentColor" stroke-width="1.2"
+                stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+        <span id="copyLabel">Copy</span>
+      </button>
+    </div>
+    <p class="terminal-hint">
+      The command downloads the package, extracts it, and runs the deploy
+      script — boto3 is auto-installed if missing.
+    </p>
+
+    <!-- Steps -->
+    <div class="steps">
+      <div class="step">
+        <span class="step-num">1</span>
+        <div class="step-body">
+          <span class="step-title">Run the command above</span>
+          <span class="step-desc">Paste it into your Ubuntu Docker machine terminal.</span>
+        </div>
+      </div>
+      <div class="step">
+        <span class="step-num">2</span>
+        <div class="step-body">
+          <span class="step-title">Fill in the environment file</span>
+          <span class="step-desc">
+            Copy <code style="font-family:var(--mono);font-size:0.8em;color:var(--text-muted)">.env.example</code>
+            to <code style="font-family:var(--mono);font-size:0.8em;color:var(--text-muted)">/opt/aiqstore/backend/.env</code>
+            and set <code style="font-family:var(--mono);font-size:0.8em;color:var(--text-muted)">PROD_DATABASE_URL</code>,
+            <code style="font-family:var(--mono);font-size:0.8em;color:var(--text-muted)">JWT_SECRET</code>,
+            and <code style="font-family:var(--mono);font-size:0.8em;color:var(--text-muted)">CREDENTIAL_VAULT_KEY</code>.
+          </span>
+        </div>
+      </div>
+      <div class="step">
+        <span class="step-num">3</span>
+        <div class="step-body">
+          <span class="step-title">Enter AWS credentials when prompted</span>
+          <span class="step-desc">
+            Access Key ID and Secret — held in memory only, cleared after pull.
+          </span>
+        </div>
+      </div>
+      <div class="step">
+        <span class="step-num">4</span>
+        <div class="step-body">
+          <span class="step-title">Stack starts automatically</span>
+          <span class="step-desc">
+            PostgreSQL → Backend → Frontend, each with health checks before the next
+            service starts.
+          </span>
+        </div>
+      </div>
+    </div>
+
+    <div class="expiry-notice">
+      <svg width="13" height="13" viewBox="0 0 13 13" fill="none">
+        <circle cx="6.5" cy="6.5" r="5.5" stroke="currentColor" stroke-width="1.2"/>
+        <path d="M6.5 3.5V7l2 1.5" stroke="currentColor" stroke-width="1.2"
+              stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+      This download link expires in {{ ttl_hours }} hours.
+      After that, return to this page and verify your email again.
+    </div>
+
+  </div>
+
+  <p class="page-footer">AgentIQ &nbsp;·&nbsp; v{{ version }}</p>
+
+  <script>
+    function copyCommand() {
+      const cmd  = document.getElementById('cmd').innerText;
+      const btn  = document.getElementById('copyBtn');
+      const lbl  = document.getElementById('copyLabel');
+      navigator.clipboard.writeText(cmd).then(() => {
+        btn.classList.add('copied');
+        lbl.textContent = 'Copied';
+        setTimeout(() => {
+          btn.classList.remove('copied');
+          lbl.textContent = 'Copy';
+        }, 2000);
+      });
+    }
+  </script>
+
+{% endblock %}
