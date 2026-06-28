@@ -44,7 +44,7 @@ services:
       postgres:
         condition: service_healthy
     env_file:
-      - ${BACKEND_ENV_FILE:-/opt/aiqstore/backend/.env}
+      - ${BACKEND_ENV_FILE:-/opt/aiqstore/.env}
     ports:
       - "8000:8000"
     networks:

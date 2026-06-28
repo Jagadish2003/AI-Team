@@ -1,16 +1,17 @@
 #!/usr/bin/env python3
 """
-deploy-ecr.py — Pull AgentIQ images from AWS ECR and start the stack.
+deploy-ecr.py — Single entry point for AgentIQ on-premise deployment.
 
-Self-installs boto3. No AWS CLI required. Credentials are entered
-interactively, held only in-memory, and cleared after pull completes.
+What it does (in order):
+  1. Runs Configfile-create.sh  — collects FQDN/SMTP/keys, writes /opt/aiqstore/.env
+  2. Pulls images from AWS ECR  — no AWS CLI required; credentials cleared after pull
+  3. Starts PostgreSQL, Backend, Frontend sequentially with health-check polling
+  4. Prints the application URL
 
 Prerequisites (cannot be auto-installed):
-    - Python 3.8+
-    - Docker running
-    - docker-compose.yml present alongside this script (or at repo root)
-    - /opt/aiqstore/backend/.env — backend environment file
-      (copy from backend/.env.example and fill in values)
+  - Python 3.8+
+  - Docker running
+  - bash (standard on Linux/macOS)
 """
 
 import subprocess
@@ -85,9 +86,10 @@ IMAGES = [
 ]
 
 STORE_DIR    = pathlib.Path("/opt/aiqstore")
-ENV_FILE     = STORE_DIR / "backend" / ".env"
+ENV_FILE     = STORE_DIR / ".env"                    # written by Configfile-create.sh
 SCRIPT_DIR   = pathlib.Path(__file__).resolve().parent
 COMPOSE_FILE = SCRIPT_DIR.parent / "docker-compose.yml"
+CONFIG_SCRIPT = SCRIPT_DIR.parent / "Configfile-create.sh"
 
 # ---------------------------------------------------------------------------
 # Output helpers
@@ -120,11 +122,25 @@ def run(cmd: list, check: bool = True, capture: bool = False) -> subprocess.Comp
                           capture_output=capture, text=capture)
 
 # ---------------------------------------------------------------------------
+# Step 1: configuration (.env creation)
+# ---------------------------------------------------------------------------
+
+def run_config() -> None:
+    """Invoke Configfile-create.sh to collect inputs and write /opt/aiqstore/.env."""
+    if not CONFIG_SCRIPT.exists():
+        fail(f"Configfile-create.sh not found at {CONFIG_SCRIPT}")
+        sys.exit(1)
+    result = subprocess.run(["bash", str(CONFIG_SCRIPT)])
+    if result.returncode != 0:
+        fail("Configuration step failed. Fix the errors above and re-run.")
+        sys.exit(1)
+
+# ---------------------------------------------------------------------------
 # Pre-flight checks
 # ---------------------------------------------------------------------------
 
 def setup_dirs() -> None:
-    for sub in ("backend", "postgres", "logs", "ssl"):
+    for sub in ("postgres", "logs", "ssl"):
         (STORE_DIR / sub).mkdir(parents=True, exist_ok=True)
     info(f"Storage root : {STORE_DIR}")
 
@@ -145,10 +161,9 @@ def read_env_var(key: str) -> str:
 
 
 def check_env() -> tuple:
-    """Validate .env and return (pg_user, pg_pass, pg_db, prod_url)."""
+    """Validate .env and return (pg_user, pg_pass, pg_db, prod_url, public_url)."""
     if not ENV_FILE.exists():
-        fail(f"{ENV_FILE} not found.")
-        print(f"       Copy .env.example to {ENV_FILE} and fill in values.")
+        fail(f"{ENV_FILE} not found — configuration step should have created it.")
         sys.exit(1)
 
     prod_url = read_env_var("PROD_DATABASE_URL")
@@ -169,9 +184,18 @@ def check_env() -> tuple:
     if not pg_db:
         pg_db = "agentiqprod"
 
+    # Read the public URL set by Configfile-create.sh
+    public_url = (
+        read_env_var("PUBLIC_HOSTNAME")
+        or read_env_var("OAUTH_FRONTEND_BASE_URL")
+        or ""
+    )
+
     ok(f"ENV file   : {ENV_FILE}")
     info(f"DB user    : {pg_user}  /  database : {pg_db}")
-    return pg_user, pg_pass, pg_db, prod_url
+    if public_url:
+        info(f"Public URL : {public_url}")
+    return pg_user, pg_pass, pg_db, prod_url, public_url
 
 
 def check_docker() -> None:
@@ -338,19 +362,23 @@ def wait_healthy(container: str, timeout_secs: int,
 # ---------------------------------------------------------------------------
 
 def main() -> None:
-    banner("AgentIQ — ECR Deploy")
+    banner("AgentIQ — On-Premise Deployment")
     print(f"  Registry : {ECR_REGISTRY}")
     print(f"  Repo     : {ECR_REPO}")
     print(f"  Region   : {AWS_REGION}")
 
-    step("1/7", "Setting up storage directories...")
-    setup_dirs()
+    # ── Step 1: configuration ──────────────────────────────────────────────
+    step("1/7", "Application configuration — collecting URL and integration settings...")
+    run_config()
 
+    # ── Step 2: pre-flight ─────────────────────────────────────────────────
     step("2/7", "Checking prerequisites...")
+    setup_dirs()
     check_docker()
     check_compose_file()
-    pg_user, pg_pass, pg_db, prod_url = check_env()
+    pg_user, pg_pass, pg_db, prod_url, public_url = check_env()
 
+    # ── Step 3: AWS credentials ────────────────────────────────────────────
     step("3/7", "Enter AWS credentials (not stored — cleared after pull):")
     access_key = input("  AWS Access Key ID     : ").strip()
     secret_key = getpass.getpass("  AWS Secret Access Key : ")
@@ -358,6 +386,7 @@ def main() -> None:
         fail("Both Access Key ID and Secret Access Key are required.")
         sys.exit(1)
 
+    # ── Step 4: pull images ────────────────────────────────────────────────
     step("4/7", "Pulling images from ECR...")
     pull_images(access_key, secret_key)
     _zero_string(access_key)
@@ -365,10 +394,12 @@ def main() -> None:
     del access_key, secret_key
     info("AWS credentials cleared from memory.")
 
+    # ── Step 5: compose env ────────────────────────────────────────────────
     step("5/7", "Generating compose environment...")
     compose_env = generate_compose_env(pg_user, pg_pass, pg_db, prod_url)
     ok(f"Compose env : {compose_env}")
 
+    # ── Step 6: start services ─────────────────────────────────────────────
     step("6/7", "[1/3] Starting PostgreSQL...")
     compose_up("postgres", compose_env)
     info("Waiting for PostgreSQL to be healthy...")
@@ -397,6 +428,7 @@ def main() -> None:
     else:
         print("\n    WARN: Frontend health check timed out — nginx may still be starting.")
 
+    # ── Summary ────────────────────────────────────────────────────────────
     try:
         server_ip = subprocess.run(
             ["hostname", "-I"], capture_output=True, text=True
@@ -406,19 +438,28 @@ def main() -> None:
 
     ssl_cert = STORE_DIR / "ssl" / "fullchain.pem"
 
-    banner("AgentIQ stack is up")
+    banner("AgentIQ is up and running")
     subprocess.run([
         "docker", "compose",
         "--file", str(COMPOSE_FILE),
         "ps", "--format", "table {{.Name}}\t{{.Status}}\t{{.Ports}}",
     ])
     print()
-    if ssl_cert.exists():
-        print(f"  Frontend  : http://{server_ip}   (HTTP)")
-        print(f"  Frontend  : https://{server_ip}  (HTTPS)")
+
+    # Prefer the configured FQDN over the bare IP
+    if public_url:
+        print(f"  Application : {public_url}")
+        if ssl_cert.exists():
+            https_url = public_url.replace("http://", "https://")
+            if https_url != public_url:
+                print(f"              {https_url}  (HTTPS)")
+    elif ssl_cert.exists():
+        print(f"  Application : http://{server_ip}   (HTTP)")
+        print(f"                https://{server_ip}  (HTTPS)")
     else:
-        print(f"  Frontend  : http://{server_ip}")
+        print(f"  Application : http://{server_ip}")
         print(f"  (Place certs in {STORE_DIR}/ssl/ and restart to enable HTTPS)")
+
     print(f"  API docs  : http://{server_ip}:8000/docs")
     print(f"  API base  : http://{server_ip}:8000/api")
     print()
