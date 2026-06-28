@@ -210,14 +210,15 @@ def main() -> None:
         docker_config_path.write_text(json.dumps(config, indent=2))
         ok("Docker credentials written. Ready to push.")
 
-        # Tag and push each image
+        # Tag, push, then remove the ECR tag so it doesn't linger locally
         step("Tagging and pushing images...")
         for local_img, ecr_tag in IMAGES:
             remote = f"{ECR_REGISTRY}/{ECR_REPO}:{ecr_tag}"
             print(f"\n  {local_img}  =>  {remote}")
-            run(["docker", "tag", local_img, remote])
+            run(["docker", "tag",  local_img, remote])
             run(["docker", "push", remote])
-            ok(f"Pushed {remote}")
+            run(["docker", "rmi",  remote])
+            ok(f"Pushed and cleaned up local ECR tag: {remote}")
 
         banner("All images pushed successfully")
         print("\nImages now available at:")
