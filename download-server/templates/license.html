@@ -1,0 +1,168 @@
+{% extends "base.html" %}
+{% block title %}AgentIQ — License Key{% endblock %}
+
+{% block head %}
+<style>
+  .card { max-width: 480px; }
+
+  .form-stack { display: flex; flex-direction: column; gap: 1.1rem; margin-top: 1.5rem; }
+  .field { display: flex; flex-direction: column; gap: 0.4rem; }
+  input[type="email"], input[type="text"], input[type="password"] {
+    background: var(--surface-up); border: 1px solid var(--border);
+    border-radius: var(--radius-sm); color: var(--text); font-family: var(--sans);
+    font-size: 0.9375rem; padding: 0.65rem 0.875rem; width: 100%; outline: none;
+    transition: border-color 0.15s, box-shadow 0.15s;
+  }
+  input:focus {
+    border-color: var(--border-focus);
+    box-shadow: 0 0 0 3px var(--accent-dim);
+  }
+
+  /* ── Key result box ── */
+  .key-result {
+    margin-top: 1.5rem;
+    background: #071209; border: 1px solid rgba(52,211,153,0.3);
+    border-radius: var(--radius); padding: 1.25rem 1.5rem;
+  }
+  .key-result-head {
+    display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.6rem;
+    font-size: 0.78rem; font-weight: 600; text-transform: uppercase;
+    letter-spacing: 0.07em; color: #4d9b6f;
+  }
+  .key-value {
+    font-family: var(--mono); font-size: 0.85rem; color: var(--success);
+    word-break: break-all; line-height: 1.55;
+    background: #050d08; border: 1px solid rgba(52,211,153,0.15);
+    border-radius: var(--radius-sm); padding: 0.75rem 1rem;
+    margin-bottom: 0.9rem;
+    user-select: all;
+  }
+  .copy-key {
+    width: 100%; background: rgba(52,211,153,0.1);
+    border: 1px solid rgba(52,211,153,0.3); border-radius: var(--radius-sm);
+    color: var(--success); font-family: var(--sans);
+    font-size: 0.875rem; font-weight: 500; padding: 0.55rem 1rem;
+    cursor: pointer; transition: background 0.15s;
+  }
+  .copy-key:hover { background: rgba(52,211,153,0.18); }
+
+  /* ── Retrieve another link ── */
+  .secondary-action {
+    margin-top: 1.5rem; text-align: center;
+  }
+  .secondary-action a {
+    font-size: 0.825rem; color: var(--text-faint); text-decoration: none;
+  }
+  .secondary-action a:hover { color: var(--text-muted); }
+
+  /* ── Nav links ── */
+  .nav-links {
+    display: flex; gap: 1.25rem; margin-bottom: 1.75rem;
+  }
+  .nav-links a {
+    font-size: 0.8rem; color: var(--text-faint); text-decoration: none;
+    display: flex; align-items: center; gap: 0.3rem;
+    padding-bottom: 2px; border-bottom: 1px solid transparent;
+    transition: color 0.15s, border-color 0.15s;
+  }
+  .nav-links a:hover { color: var(--text-muted); border-color: var(--border); }
+  .nav-links a.active { color: var(--accent); border-color: var(--accent); }
+</style>
+{% endblock %}
+
+{% block body %}
+  <div class="brand">
+    <div class="brand-mark">
+      <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+        <path d="M10 2L3 6v8l7 4 7-4V6L10 2z" stroke="white" stroke-width="1.5"
+              stroke-linejoin="round" fill="none"/>
+        <path d="M10 2v12M3 6l7 4 7-4" stroke="white" stroke-width="1.5"
+              stroke-linejoin="round"/>
+      </svg>
+    </div>
+    <div class="brand-name">AgentIQ <span>/ Deployment</span></div>
+  </div>
+
+  <div class="card">
+    <div class="nav-links">
+      <a href="/">Download</a>
+      <a href="/license" class="active">License Key</a>
+    </div>
+
+    {% if error %}
+    <div class="alert alert-error" role="alert">
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="none" style="flex-shrink:0;margin-top:2px">
+        <circle cx="8" cy="8" r="7" stroke="#f87171" stroke-width="1.5"/>
+        <path d="M8 5v3.5M8 10.5v.5" stroke="#f87171" stroke-width="1.5" stroke-linecap="round"/>
+      </svg>
+      {{ error }}
+    </div>
+    {% endif %}
+
+    {% if not license_key %}
+    <!-- ── Form state ── -->
+    <h1>Retrieve License Key</h1>
+    <p class="subtitle">
+      Enter the email address your AgentIQ license was issued to and the
+      passcode shared by your sales representative.
+    </p>
+
+    <form class="form-stack" method="post" action="/license">
+      <div class="field">
+        <label for="email">Registered email address</label>
+        <input type="email" id="email" name="email"
+               placeholder="you@company.com" autocomplete="email"
+               required autofocus>
+      </div>
+      <div class="field">
+        <label for="passcode">Passcode</label>
+        <input type="password" id="passcode" name="passcode"
+               placeholder="Passcode from sales email"
+               autocomplete="off" required>
+      </div>
+      <button type="submit" class="btn btn-primary" style="margin-top:0.25rem">
+        Retrieve License Key
+      </button>
+    </form>
+
+    {% else %}
+    <!-- ── Result state ── -->
+    <h1>License Key</h1>
+    <p class="subtitle">
+      Your license key for <strong style="color:var(--text)">{{ email }}</strong>.
+      Copy and store it securely — keep a backup in your password manager.
+    </p>
+
+    <div class="key-result">
+      <div class="key-result-head">
+        <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
+          <path d="M4.5 7.5a3 3 0 100-6 3 3 0 000 6z"
+                stroke="#4d9b6f" stroke-width="1.2"/>
+          <path d="M6.5 5.5l4 4M9 8.5l1.5 1"
+                stroke="#4d9b6f" stroke-width="1.2" stroke-linecap="round"/>
+        </svg>
+        License Key
+      </div>
+      <div class="key-value" id="licenseKeyValue">{{ license_key }}</div>
+      <button class="copy-key" onclick="copyKey(this)">Copy license key</button>
+    </div>
+
+    <div class="secondary-action">
+      <a href="/license">← Retrieve a different license</a>
+    </div>
+
+    <script>
+      function copyKey(btn) {
+        const v = document.getElementById('licenseKeyValue').innerText;
+        navigator.clipboard.writeText(v).then(() => {
+          btn.textContent = '✓ Copied to clipboard';
+          setTimeout(() => btn.textContent = 'Copy license key', 2500);
+        });
+      }
+    </script>
+    {% endif %}
+
+  </div>
+
+  <p class="page-footer">AgentIQ &nbsp;·&nbsp; License Portal</p>
+{% endblock %}

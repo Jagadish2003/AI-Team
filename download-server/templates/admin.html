@@ -1,0 +1,481 @@
+{% extends "base.html" %}
+{% block title %}AgentIQ Admin{% endblock %}
+
+{% block head %}
+<style>
+  body { justify-content: flex-start; padding: 0; }
+
+  /* ── Top bar ── */
+  .topbar {
+    width: 100%; background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    padding: 0 2rem;
+    display: flex; align-items: center; justify-content: space-between;
+    height: 52px; flex-shrink: 0;
+    position: sticky; top: 0; z-index: 10;
+  }
+  .topbar-left { display: flex; align-items: center; gap: 0.75rem; }
+  .topbar-brand { display: flex; align-items: center; gap: 8px; }
+  .topbar-brand-mark {
+    width: 28px; height: 28px; background: var(--accent);
+    border-radius: 6px; display: flex; align-items: center; justify-content: center;
+  }
+  .topbar-name { font-size: 0.95rem; font-weight: 600; }
+  .topbar-name span { color: var(--text-muted); font-weight: 400; }
+  .admin-pill {
+    font-size: 0.7rem; font-weight: 600; letter-spacing: 0.07em; text-transform: uppercase;
+    background: rgba(74,124,247,0.12); border: 1px solid rgba(74,124,247,0.25);
+    color: #93b4fd; border-radius: 4px; padding: 0.15rem 0.5rem;
+  }
+  .topbar-right { display: flex; align-items: center; gap: 1rem; }
+  .topbar-user { font-size: 0.8rem; color: var(--text-muted); }
+  .logout-btn {
+    font-size: 0.8rem; color: var(--text-faint); text-decoration: none;
+    padding: 0.3rem 0.7rem; border: 1px solid var(--border);
+    border-radius: var(--radius-sm); transition: color 0.15s, border-color 0.15s;
+  }
+  .logout-btn:hover { color: var(--text); border-color: var(--text-faint); }
+
+  /* ── Main layout ── */
+  .main { width: 100%; max-width: 980px; margin: 0 auto; padding: 2rem 1.5rem 4rem; }
+
+  /* ── Flash message ── */
+  .flash {
+    border-radius: var(--radius-sm); padding: 0.65rem 0.9rem;
+    font-size: 0.875rem; margin-bottom: 1.5rem;
+    display: flex; align-items: center; gap: 0.6rem;
+  }
+  .flash-ok { background: var(--success-dim); border: 1px solid rgba(52,211,153,0.25); color: #6ee7b7; }
+  .flash-err { background: var(--error-dim); border: 1px solid rgba(248,113,113,0.25); color: #fca5a5; }
+
+  /* ── Reveal banner ── */
+  .reveal-banner {
+    background: #0d1f14; border: 1px solid rgba(52,211,153,0.3);
+    border-radius: var(--radius); padding: 1.25rem 1.5rem; margin-bottom: 1.75rem;
+  }
+  .reveal-banner h3 {
+    font-size: 0.875rem; font-weight: 600; color: var(--success); margin-bottom: 0.4rem;
+    display: flex; align-items: center; gap: 0.5rem;
+  }
+  .reveal-banner p { font-size: 0.8rem; color: #6ee7b7; margin-bottom: 0.85rem; }
+  .reveal-row {
+    display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap;
+  }
+  .reveal-field { display: flex; flex-direction: column; gap: 0.2rem; flex: 1; min-width: 200px; }
+  .reveal-label { font-size: 0.72rem; font-weight: 500; text-transform: uppercase;
+                  letter-spacing: 0.07em; color: #4d9b6f; }
+  .reveal-value {
+    font-family: var(--mono); font-size: 0.875rem; color: var(--success);
+    background: #071209; border: 1px solid rgba(52,211,153,0.2);
+    border-radius: var(--radius-sm); padding: 0.45rem 0.75rem;
+    word-break: break-all;
+  }
+  .copy-sm {
+    flex-shrink: 0; background: rgba(52,211,153,0.1);
+    border: 1px solid rgba(52,211,153,0.3); border-radius: var(--radius-sm);
+    color: var(--success); font-family: var(--sans); font-size: 0.775rem;
+    font-weight: 500; padding: 0.3rem 0.75rem; cursor: pointer;
+    transition: background 0.15s;
+  }
+  .copy-sm:hover { background: rgba(52,211,153,0.18); }
+
+  /* ── Section ── */
+  .section { margin-bottom: 2.5rem; }
+  .section-head {
+    display: flex; align-items: center; gap: 0.75rem; margin-bottom: 1.25rem;
+  }
+  .section-head h2 {
+    font-size: 1rem; font-weight: 600; letter-spacing: -0.01em;
+  }
+  .count-badge {
+    font-size: 0.72rem; font-weight: 600; padding: 0.15rem 0.5rem;
+    border-radius: 20px; background: var(--surface-up);
+    border: 1px solid var(--border); color: var(--text-muted);
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* ── Add form ── */
+  .add-form {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 1.1rem 1.25rem; margin-bottom: 1rem;
+    display: flex; flex-wrap: wrap; gap: 0.65rem; align-items: flex-end;
+  }
+  .add-form .ff { display: flex; flex-direction: column; gap: 0.3rem; }
+  .add-form label { font-size: 0.75rem; font-weight: 500; text-transform: uppercase;
+                    letter-spacing: 0.05em; color: var(--text-faint); }
+  .add-form input, .add-form textarea, .add-form select {
+    background: var(--surface-up); border: 1px solid var(--border);
+    border-radius: var(--radius-sm); color: var(--text); font-family: var(--sans);
+    font-size: 0.875rem; padding: 0.5rem 0.75rem; outline: none;
+    transition: border-color 0.15s, box-shadow 0.15s;
+  }
+  .add-form input:focus, .add-form textarea:focus {
+    border-color: var(--border-focus); box-shadow: 0 0 0 3px var(--accent-dim);
+  }
+  .add-form input[type="date"] { color-scheme: dark; }
+  .add-form textarea { resize: vertical; min-height: 70px; font-family: var(--mono);
+                       font-size: 0.8rem; width: 100%; }
+  .ff-wide { flex: 1; min-width: 180px; }
+  .ff-key  { width: 100%; }
+  .generate-btn {
+    background: var(--surface-up); border: 1px solid var(--border);
+    border-radius: var(--radius-sm); color: var(--text-muted);
+    font-family: var(--sans); font-size: 0.78rem; font-weight: 500;
+    padding: 0.5rem 0.75rem; cursor: pointer; transition: color 0.15s;
+    white-space: nowrap;
+  }
+  .generate-btn:hover { color: var(--text); }
+  .btn-add {
+    background: var(--accent); color: #fff; border: none;
+    border-radius: var(--radius-sm); font-family: var(--sans);
+    font-size: 0.875rem; font-weight: 500; padding: 0.5rem 1.1rem;
+    cursor: pointer; white-space: nowrap;
+    transition: filter 0.15s;
+  }
+  .btn-add:hover { filter: brightness(1.1); }
+
+  /* ── Table ── */
+  .tbl-wrap { overflow-x: auto; border-radius: var(--radius); border: 1px solid var(--border); }
+  table { width: 100%; border-collapse: collapse; font-size: 0.8375rem; }
+  thead th {
+    background: var(--surface-up); text-align: left; padding: 0.6rem 1rem;
+    font-weight: 500; font-size: 0.75rem; text-transform: uppercase;
+    letter-spacing: 0.05em; color: var(--text-faint);
+    border-bottom: 1px solid var(--border);
+  }
+  tbody tr { border-bottom: 1px solid var(--border); }
+  tbody tr:last-child { border-bottom: none; }
+  tbody tr:hover { background: rgba(255,255,255,0.02); }
+  td { padding: 0.7rem 1rem; color: var(--text-muted); vertical-align: middle; }
+  td.em { color: var(--text); font-weight: 500; }
+  td.mono { font-family: var(--mono); font-size: 0.8rem; }
+
+  .empty-row td {
+    text-align: center; padding: 2rem; color: var(--text-faint); font-style: italic;
+  }
+
+  /* ── Status dot ── */
+  .dot { width: 7px; height: 7px; border-radius: 50%; display: inline-block; margin-right: 5px; }
+  .dot-green  { background: var(--success); }
+  .dot-orange { background: #f59e0b; }
+  .dot-grey   { background: var(--text-faint); }
+
+  /* ── Actions ── */
+  .actions { display: flex; gap: 0.4rem; align-items: center; }
+  .act-btn {
+    font-size: 0.775rem; font-weight: 500; padding: 0.25rem 0.6rem;
+    border-radius: 5px; border: 1px solid var(--border);
+    background: transparent; cursor: pointer; font-family: var(--sans);
+    text-decoration: none; transition: background 0.12s, color 0.12s;
+    color: var(--text-muted);
+  }
+  .act-btn:hover { background: var(--surface-up); color: var(--text); }
+  .act-del { color: #f87171; border-color: rgba(248,113,113,0.2); }
+  .act-del:hover { background: var(--error-dim); border-color: rgba(248,113,113,0.4); color: #fca5a5; }
+
+  /* ── Edit modal overlay ── */
+  .modal-overlay {
+    display: none; position: fixed; inset: 0;
+    background: rgba(0,0,0,0.65); z-index: 100;
+    align-items: center; justify-content: center;
+  }
+  .modal-overlay.open { display: flex; }
+  .modal {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 1.75rem; width: 420px; max-width: 90vw;
+    box-shadow: 0 8px 40px rgba(0,0,0,0.5);
+  }
+  .modal h3 { font-size: 1rem; font-weight: 600; margin-bottom: 1.25rem; }
+  .modal-fields { display: flex; flex-direction: column; gap: 0.9rem; margin-bottom: 1.25rem; }
+  .modal-row { display: flex; gap: 0.5rem; }
+  .modal input, .modal select {
+    background: var(--surface-up); border: 1px solid var(--border);
+    border-radius: var(--radius-sm); color: var(--text); font-family: var(--sans);
+    font-size: 0.875rem; padding: 0.5rem 0.75rem; width: 100%; outline: none;
+  }
+  .modal input[type="date"] { color-scheme: dark; }
+  .modal input:focus { border-color: var(--border-focus); }
+  .modal-foot { display: flex; gap: 0.6rem; justify-content: flex-end; }
+  .btn-cancel {
+    background: transparent; border: 1px solid var(--border); border-radius: var(--radius-sm);
+    color: var(--text-muted); font-family: var(--sans); font-size: 0.875rem;
+    font-weight: 500; padding: 0.5rem 1rem; cursor: pointer;
+  }
+  .btn-save {
+    background: var(--accent); border: none; border-radius: var(--radius-sm);
+    color: #fff; font-family: var(--sans); font-size: 0.875rem;
+    font-weight: 500; padding: 0.5rem 1.1rem; cursor: pointer;
+  }
+</style>
+{% endblock %}
+
+{% block body %}
+<!-- Top bar -->
+<div class="topbar">
+  <div class="topbar-left">
+    <div class="topbar-brand">
+      <div class="topbar-brand-mark">
+        <svg width="16" height="16" viewBox="0 0 20 20" fill="none">
+          <path d="M10 2L3 6v8l7 4 7-4V6L10 2z" stroke="white" stroke-width="1.6"
+                stroke-linejoin="round" fill="none"/>
+          <path d="M10 2v12M3 6l7 4 7-4" stroke="white" stroke-width="1.6"
+                stroke-linejoin="round"/>
+        </svg>
+      </div>
+      <span class="topbar-name">AgentIQ <span>/ Deployment</span></span>
+    </div>
+    <span class="admin-pill">Admin</span>
+  </div>
+  <div class="topbar-right">
+    <span class="topbar-user">{{ request.cookies.get('aiq_admin', '') and 'Signed in' or '' }}</span>
+    <a href="/admin/logout" class="logout-btn">Sign out</a>
+  </div>
+</div>
+
+<div class="main">
+
+  {% if msg %}
+  <div class="flash {{ 'flash-err' if msg.startswith('Error') else 'flash-ok' }}">
+    {{ msg }}
+  </div>
+  {% endif %}
+
+  <!-- Passcode reveal banner — shown once after adding a license -->
+  {% if reveal_data %}
+  <div class="reveal-banner">
+    <h3>
+      <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+        <path d="M7 1l1.5 3.5L12 5l-2.5 2.5.6 3.5L7 9.5l-3.1 1.5.6-3.5L2 5l3.5-.5L7 1z"
+              fill="#34d399"/>
+      </svg>
+      License key added — copy passcode before leaving this page
+    </h3>
+    <p>
+      This passcode is shown <strong>once only</strong>. Share it with
+      <strong>{{ reveal_data.email }}</strong> via email or your agreed channel.
+    </p>
+    <div class="reveal-row">
+      <div class="reveal-field">
+        <span class="reveal-label">Client email</span>
+        <span class="reveal-value">{{ reveal_data.email }}</span>
+      </div>
+      <div class="reveal-field">
+        <span class="reveal-label">Passcode to share</span>
+        <span class="reveal-value" id="revealPasscode">{{ reveal_data.passcode }}</span>
+      </div>
+      <button class="copy-sm" onclick="copyReveal()">Copy passcode</button>
+    </div>
+  </div>
+  {% endif %}
+
+  <!-- ──────────────────────────────────────────────────────────
+       Section 1: Client Access
+  ─────────────────────────────────────────────────────────── -->
+  <div class="section">
+    <div class="section-head">
+      <h2>Client Access</h2>
+      <span class="count-badge">{{ clients | length }}</span>
+    </div>
+
+    <form class="add-form" method="post" action="/admin/clients/add">
+      <div class="ff ff-wide">
+        <label>Email address</label>
+        <input type="email" name="email" placeholder="client@company.com" required>
+      </div>
+      <div class="ff">
+        <label>Expiry date (optional)</label>
+        <input type="date" name="expiry_date">
+      </div>
+      <button type="submit" class="btn-add">Add Client</button>
+    </form>
+
+    <div class="tbl-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Email</th>
+            <th>Expiry</th>
+            <th>Status</th>
+            <th>Added</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% if not clients %}
+          <tr class="empty-row"><td colspan="5">No clients yet. Add one above.</td></tr>
+          {% endif %}
+          {% for c in clients %}
+          {% set today = namespace(val='') %}
+          {% set expired = c.expiry_date and c.expiry_date < '2026-06-28' %}
+          <tr>
+            <td class="em">{{ c.email }}</td>
+            <td>{{ c.expiry_date or '—' }}</td>
+            <td>
+              {% if not c.is_active %}
+                <span class="dot dot-grey"></span>Inactive
+              {% elif c.expiry_date and c.expiry_date < '2026-06-28' %}
+                <span class="dot dot-orange"></span>Expired
+              {% else %}
+                <span class="dot dot-green"></span>Active
+              {% endif %}
+            </td>
+            <td>{{ c.created_at }}</td>
+            <td>
+              <div class="actions">
+                <button class="act-btn"
+                  onclick="openEdit({{ c.id }}, '{{ c.email }}', '{{ c.expiry_date or '' }}', {{ c.is_active }})">
+                  Edit
+                </button>
+                <form method="post" action="/admin/clients/{{ c.id }}/delete"
+                      onsubmit="return confirm('Remove {{ c.email }}?')">
+                  <button type="submit" class="act-btn act-del">Remove</button>
+                </form>
+              </div>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- ──────────────────────────────────────────────────────────
+       Section 2: License Keys
+  ─────────────────────────────────────────────────────────── -->
+  <div class="section">
+    <div class="section-head">
+      <h2>License Keys</h2>
+      <span class="count-badge">{{ licenses | length }}</span>
+    </div>
+
+    <form class="add-form" method="post" action="/admin/licenses/add"
+          style="flex-direction:column;align-items:stretch">
+      <div style="display:flex;gap:0.65rem;flex-wrap:wrap;align-items:flex-end">
+        <div class="ff ff-wide">
+          <label>Client email</label>
+          <input type="email" name="email" placeholder="client@company.com" required>
+        </div>
+        <div class="ff" style="flex:1;min-width:160px">
+          <label>Passcode to share with client</label>
+          <div style="display:flex;gap:0.4rem">
+            <input type="text" name="passcode" id="passcodeInput"
+                   placeholder="auto-generate or type" required style="flex:1">
+            <button type="button" class="generate-btn" onclick="genPasscode()">
+              Generate
+            </button>
+          </div>
+        </div>
+        <button type="submit" class="btn-add" style="align-self:flex-end">
+          Add License
+        </button>
+      </div>
+      <div class="ff ff-key" style="margin-top:0.4rem">
+        <label>License key</label>
+        <textarea name="license_key" placeholder="Paste the full license key here…" required></textarea>
+      </div>
+    </form>
+
+    <div class="tbl-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Email</th>
+            <th>License key (preview)</th>
+            <th>Added</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% if not licenses %}
+          <tr class="empty-row"><td colspan="4">No license keys yet. Add one above.</td></tr>
+          {% endif %}
+          {% for l in licenses %}
+          <tr>
+            <td class="em">{{ l.email }}</td>
+            <td class="mono">
+              {{ l.license_key[:18] }}…
+              <span style="color:var(--text-faint)">({{ l.license_key | length }} chars)</span>
+            </td>
+            <td>{{ l.created_at }}</td>
+            <td>
+              <form method="post" action="/admin/licenses/{{ l.id }}/delete"
+                    onsubmit="return confirm('Delete license for {{ l.email }}?')">
+                <button type="submit" class="act-btn act-del">Delete</button>
+              </form>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+</div>
+
+<!-- Edit client modal -->
+<div class="modal-overlay" id="editModal" onclick="if(event.target===this)closeEdit()">
+  <div class="modal">
+    <h3>Edit Client</h3>
+    <form method="post" id="editForm">
+      <div class="modal-fields">
+        <div>
+          <label style="font-size:.75rem;font-weight:500;text-transform:uppercase;
+                        letter-spacing:.05em;color:var(--text-faint);display:block;
+                        margin-bottom:.3rem">Email address</label>
+          <input type="email" name="email" id="editEmail" required>
+        </div>
+        <div>
+          <label style="font-size:.75rem;font-weight:500;text-transform:uppercase;
+                        letter-spacing:.05em;color:var(--text-faint);display:block;
+                        margin-bottom:.3rem">Expiry date (leave blank for no expiry)</label>
+          <input type="date" name="expiry_date" id="editExpiry">
+        </div>
+        <div>
+          <label style="font-size:.75rem;font-weight:500;text-transform:uppercase;
+                        letter-spacing:.05em;color:var(--text-faint);display:block;
+                        margin-bottom:.3rem">Status</label>
+          <select name="is_active" id="editActive"
+                  style="background:var(--surface-up);border:1px solid var(--border);
+                         border-radius:var(--radius-sm);color:var(--text);
+                         font-size:.875rem;padding:.5rem .75rem;width:100%;outline:none">
+            <option value="1">Active</option>
+            <option value="0">Inactive</option>
+          </select>
+        </div>
+      </div>
+      <div class="modal-foot">
+        <button type="button" class="btn-cancel" onclick="closeEdit()">Cancel</button>
+        <button type="submit" class="btn-save">Save changes</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<script>
+  function openEdit(id, email, expiry, active) {
+    document.getElementById('editForm').action = '/admin/clients/' + id + '/update';
+    document.getElementById('editEmail').value  = email;
+    document.getElementById('editExpiry').value = expiry;
+    document.getElementById('editActive').value = active;
+    document.getElementById('editModal').classList.add('open');
+  }
+  function closeEdit() {
+    document.getElementById('editModal').classList.remove('open');
+  }
+
+  function genPasscode() {
+    const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789';
+    let p = '';
+    for (let i = 0; i < 12; i++) p += chars[Math.floor(Math.random() * chars.length)];
+    document.getElementById('passcodeInput').value = p;
+  }
+
+  function copyReveal() {
+    const v = document.getElementById('revealPasscode').innerText;
+    navigator.clipboard.writeText(v).then(() => {
+      event.target.textContent = '✓ Copied';
+      setTimeout(() => event.target.textContent = 'Copy passcode', 2000);
+    });
+  }
+</script>
+{% endblock %}
