@@ -6,13 +6,17 @@ Self-installs all Python dependencies (boto3) automatically.
 Does NOT require AWS CLI. Credentials are entered interactively,
 held only in-memory, and explicitly cleared after the push completes.
 
+Standard practice: build images with the ECR-qualified name from the start,
+then push directly — no docker tag step required.
+
+Build images before running this script:
+    docker build -t 070206924228.dkr.ecr.us-east-1.amazonaws.com/agentiq:postgres-1.0  ./postgres
+    docker build -t 070206924228.dkr.ecr.us-east-1.amazonaws.com/agentiq:backend-latest ./backend
+    docker build -t 070206924228.dkr.ecr.us-east-1.amazonaws.com/agentiq:frontend-1.0   ./frontend
+
 Only prerequisites that cannot be auto-installed:
-    - Python 3.8+ (already present if you can run this script)
-    - Docker Desktop running locally
-    - Local images built:
-        agentiq-postgres:1.0
-        agentiq-backend:latest
-        agentiq-frontend:1.0
+    - Python 3.8+
+    - Docker running
 """
 
 import subprocess
@@ -75,10 +79,12 @@ AWS_REGION = "us-east-1"
 ECR_REPO = "agentiq"
 ECR_REGISTRY = f"{AWS_ACCOUNT_ID}.dkr.ecr.{AWS_REGION}.amazonaws.com"
 
+# Images are built with the ECR-qualified name — no docker tag step needed.
+# Format: <registry>/<repo>:<tag>
 IMAGES = [
-    ("agentiq-postgres:1.0",   "postgres-1.0"),
-    ("agentiq-backend:latest", "backend-latest"),
-    ("agentiq-frontend:1.0",   "frontend-1.0"),
+    "postgres-1.0",
+    "backend-latest",
+    "frontend-1.0",
 ]
 
 # ---------------------------------------------------------------------------
@@ -129,13 +135,20 @@ def ensure_local_images() -> None:
         capture_output=True, text=True, check=True,
     )
     available = set(result.stdout.strip().splitlines())
-    missing = [img for img, _ in IMAGES if img not in available]
+    missing = []
+    for ecr_tag in IMAGES:
+        full_name = f"{ECR_REGISTRY}/{ECR_REPO}:{ecr_tag}"
+        if full_name not in available:
+            missing.append(full_name)
     if missing:
-        print("\n[ERROR] The following local images are missing — build them first:")
+        print("\n[ERROR] The following images are missing — build them first:")
         for m in missing:
             print(f"  {m}")
+        print("\nExample build commands:")
+        for ecr_tag in IMAGES:
+            print(f"  docker build -t {ECR_REGISTRY}/{ECR_REPO}:{ecr_tag} ./<service-dir>")
         sys.exit(1)
-    ok("All local images found.")
+    ok("All images found.")
 
 # ---------------------------------------------------------------------------
 # Main
@@ -210,19 +223,17 @@ def main() -> None:
         docker_config_path.write_text(json.dumps(config, indent=2))
         ok("Docker credentials written. Ready to push.")
 
-        # Tag, push, then remove the ECR tag so it doesn't linger locally
-        step("Tagging and pushing images...")
-        for local_img, ecr_tag in IMAGES:
+        # Push directly — images are already built with the ECR-qualified name
+        step("Pushing images to ECR...")
+        for ecr_tag in IMAGES:
             remote = f"{ECR_REGISTRY}/{ECR_REPO}:{ecr_tag}"
-            print(f"\n  {local_img}  =>  {remote}")
-            run(["docker", "tag",  local_img, remote])
+            print(f"\n  Pushing  {remote}")
             run(["docker", "push", remote])
-            run(["docker", "rmi",  remote])
-            ok(f"Pushed and cleaned up local ECR tag: {remote}")
+            ok(f"Pushed {remote}")
 
         banner("All images pushed successfully")
         print("\nImages now available at:")
-        for _, ecr_tag in IMAGES:
+        for ecr_tag in IMAGES:
             print(f"  {ECR_REGISTRY}/{ECR_REPO}:{ecr_tag}")
 
     except (ClientError, NoCredentialsError) as e:
