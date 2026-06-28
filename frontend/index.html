@@ -15,8 +15,8 @@
   </head>
   <body class="bg-bg">
     <div id="root"></div>
-    <!-- Runtime config: copy public/config.js.example → public/config.js and set API_BASE_URL before deploying -->
-    <script src="/config.js" onerror="console.error('[AgentIQ] config.js not found — copy public/config.js.example to public/config.js and set API_BASE_URL')"></script>
+    <!-- Runtime config: edit public/config.js to change API_BASE_URL without restarting -->
+    <script src="/config.js"></script>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

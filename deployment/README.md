@@ -24,25 +24,6 @@ config store is therefore not required for the POC. The `workspace_config`
 single shared multi-tenant deployment is on the table — that work is deferred
 to a post-POC story.
 
-## Frontend Runtime Config
-
-The frontend reads its API base URL from `frontend/public/config.js` at page load.
-This file is **gitignored** so it is never committed with a hardcoded value.
-
-**Before every deployment (or first-time dev setup):**
-
-```bash
-cp frontend/public/config.js.example frontend/public/config.js
-# Edit config.js and set API_BASE_URL to the backend host, e.g.:
-#   window.__APP_CONFIG__ = { API_BASE_URL: "https://api.yourdomain.com" };
-```
-
-The built `dist/` folder must contain this file. If `config.js` is missing,
-the browser logs: `[AgentIQ] config.js not found` and falls back to
-`VITE_API_BASE_URL` (build-time env var) or fails with a clear error in production.
-
----
-
 ## OAuth Connector Secrets
 
 Each connector's client secret is resolved from the environment at runtime via `secret_key`

@@ -62,32 +62,19 @@ function _handle401(): void {
 
 const ORG_ID_HEADER = (import.meta.env.VITE_ORG_ID as string | undefined)?.trim();
 
-let _cachedBaseUrl: string | null = null;
-
 function getBaseUrl(): string {
-  if (_cachedBaseUrl) return _cachedBaseUrl;
-
   // Runtime config (public/config.js) takes priority — edit that file and refresh to change without restarting.
   const runtimeUrl = window.__APP_CONFIG__?.API_BASE_URL;
-  if (runtimeUrl) {
-    _cachedBaseUrl = runtimeUrl.replace(/\/$/, "");
-    return _cachedBaseUrl;
-  }
+  if (runtimeUrl) return runtimeUrl;
 
   // Build-time env var fallback.
   const envUrl = import.meta.env.VITE_API_BASE_URL as string | undefined;
-  if (envUrl) {
-    _cachedBaseUrl = envUrl.replace(/\/$/, "");
-    return _cachedBaseUrl;
-  }
+  if (envUrl) return envUrl;
 
-  if (import.meta.env.DEV) {
-    _cachedBaseUrl = "http://localhost:8000";
-    return _cachedBaseUrl;
-  }
+  if (import.meta.env.DEV) return "http://localhost:8000";
 
   throw new Error(
-    "API_BASE_URL is not set. Create public/config.js from public/config.js.example or set VITE_API_BASE_URL."
+    "API_BASE_URL is not set. Edit public/config.js or set VITE_API_BASE_URL."
   );
 }
 
