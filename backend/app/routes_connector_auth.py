@@ -34,6 +34,7 @@ from app.auth import (
     store_token,
 )
 from app.auth.configs import CONNECTOR_AUTH_CONFIGS
+from app.auth.oauth_state import decode_state, encode_state
 from app.auth.vault import REFRESH_THRESHOLD_SECONDS, consume_nonce, store_nonce
 from app.middleware.audit import log_event
 from app.middleware.tenancy import get_current_org_id
@@ -239,29 +240,53 @@ def register_connector_auth_routes(app: FastAPI) -> None:
                 status_code=302,
             )
 
-        nonce_data = consume_nonce(state)
+        # T2 (AT-447): the initiating org is carried in the signed `state` param.
+        # Verify the HMAC signature FIRST — a tampered or forged state (e.g. one
+        # whose org_id was swapped to another tenant) fails here and is rejected
+        # before any nonce lookup or token exchange.
+        decoded = decode_state(state)
+        if decoded is None:
+            # AC3: HTTP 400 on state mismatch/tamper, generic message, no detail.
+            raise HTTPException(status_code=400, detail="Invalid request")
+        state_org_id = decoded["org_id"]
+        nonce = decoded["nonce"]
+
+        # Consume the single-use, server-side nonce the state points at. This both
+        # enforces single-use (replay → None) and yields the connector_id, PKCE
+        # verifier, and the org bound to the flow at initiation.
+        nonce_data = consume_nonce(nonce)
         if nonce_data is None:
-            # AC3: HTTP 400 on state mismatch, generic message, no detail
             raise HTTPException(status_code=400, detail="Invalid request")
         connector_id = nonce_data["connector_id"]
         code_verifier = nonce_data.get("code_verifier")
-        # Org carried from initiation: the callback runs on an unauthenticated
-        # browser redirect with no JWT/org context of its own, so the authenticated
-        # org is captured in get_auth_url and threaded through the server-side state
-        # nonce, then read back here. There is NO hardcoded 'default' fallback
-        # (R17-D3 §1): a nonce with no org cannot be safely bound to a tenant, so the
-        # flow fails closed rather than storing the token under the wrong org.
-        org_id = nonce_data.get("org_id")
-        if not org_id:
+        # The callback runs on an unauthenticated browser redirect with no JWT/org
+        # context of its own. The authenticated org was captured at initiation
+        # (get_auth_url) and stored server-side AND signed into the state. There is
+        # NO hardcoded 'default' fallback (R17-D3 §1): a flow with no bound org
+        # fails closed rather than storing the token under the wrong tenant.
+        stored_org_id = nonce_data.get("org_id")
+        if not stored_org_id:
             logger.error(
-                "OAuth callback for connector %s has no authenticated org in state "
-                "nonce — refusing to store token under a default org",
+                "OAuth callback for connector %s has no authenticated org bound to "
+                "its state nonce — refusing to store token under a default org",
                 connector_id,
             )
             return RedirectResponse(
                 OAUTH_ERROR_REDIRECT.format(error_code="no_org"),
                 status_code=302,
             )
+        # T2-AC2/AC3: the org carried in the (signature-verified) state must match
+        # the org the server bound to this nonce when the flow started. A mismatch
+        # means the callback is being associated with a different tenant than the
+        # one that initiated the authorization — refuse it (generic 400, no detail).
+        if not hmac.compare_digest(state_org_id, stored_org_id):
+            logger.error(
+                "OAuth callback tenant mismatch for connector %s: state org and "
+                "nonce org disagree — refusing to bind the flow to the wrong tenant",
+                connector_id,
+            )
+            raise HTTPException(status_code=400, detail="Invalid request")
+        org_id = stored_org_id
 
         config = CONNECTOR_AUTH_CONFIGS.get(connector_id)
         if config is None:
@@ -340,8 +365,11 @@ def register_connector_auth_routes(app: FastAPI) -> None:
     def get_auth_url(connector_id: str) -> Dict[str, object]:
         """Generate a one-time authorization URL for the given connector.
 
-        State nonce is cryptographically random (secrets.token_urlsafe(32)),
-        stored server-side, and contains no redirect URL or user data (AC1).
+        The state parameter is built from a cryptographically random, single-use
+        nonce (secrets.token_urlsafe(32)) stored server-side, plus the initiating
+        org carried HMAC-signed alongside it (R17-D3 / AT-447 T2). It contains no
+        redirect URL and no user PII (AC1) — the org_id is a non-secret internal
+        id, and the signature makes the carried tenant tamper-evident.
 
         The response also echoes the exact OAuth ``scopes`` being requested so the
         admin can be shown what permissions are about to be granted *before* the
@@ -359,23 +387,28 @@ def register_connector_auth_routes(app: FastAPI) -> None:
                 detail="Connector does not use authorization_code flow",
             )
 
-        state = _secrets_mod.token_urlsafe(32)
+        nonce = _secrets_mod.token_urlsafe(32)
         # PKCE (RFC 7636): bind a per-request verifier to the state nonce and
         # send its S256 challenge in the authorize URL. Required by providers
         # that enforce PKCE (e.g. Salesforce "Require PKCE").
         code_verifier, code_challenge = generate_pkce_pair()
         # Capture the AUTHENTICATED org now (this route is Bearer-protected, so the
-        # tenancy middleware has resolved a real org) and thread it through the
-        # server-side state nonce. The unauthenticated callback reads it back to
-        # persist the token + connection state under the right tenant — never a
-        # hardcoded 'default' (R17-D3 §1). Sourced server-side, never from callback
-        # input.
+        # tenancy middleware has resolved a real org). It is bound server-side to
+        # the single-use nonce AND carried — HMAC-signed — through the OAuth state
+        # parameter (R17-D3 §1 / AT-447 T2). The unauthenticated callback reads the
+        # org back from both and verifies they agree, so the flow can only ever be
+        # completed for the tenant that started it — never a hardcoded 'default',
+        # and never another tenant. Sourced server-side, never from callback input.
+        org_id = get_current_org_id()
         store_nonce(
-            state,
+            nonce,
             connector_id,
             code_verifier=code_verifier,
-            org_id=get_current_org_id(),
+            org_id=org_id,
         )
+        # The state the provider echoes back carries the org + nonce, signed so the
+        # callback can detect any tampering with the bound tenant (T2-AC1).
+        state = encode_state(org_id, nonce)
         auth_url = build_auth_url(config, state, code_challenge=code_challenge)
         return {
             "auth_url": auth_url,
