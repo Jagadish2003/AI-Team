@@ -133,7 +133,7 @@ class InBoundaryModelProvider(ModelProvider):
                 api_key=cfg.resolve_api_key(),
                 timeout_s=_DEFAULT_EMBED_TIMEOUT_S,
             )
-            vectors = _extract_embedding_vectors(data)
+            vectors = _extract_embedding_vectors(data, expected_count=len(texts))
             if len(vectors) != len(texts):
                 logger.warning(
                     "InBoundaryModelProvider embedding response count mismatch "
@@ -202,8 +202,12 @@ def _extract_generation_text(data: Any) -> Optional[str]:
     return None
 
 
-def _extract_embedding_vectors(data: Any) -> List[List[float]]:
-    """Extract ordered embedding vectors from a provider-compatible response."""
+def _extract_embedding_vectors(
+    data: Any,
+    *,
+    expected_count: Optional[int] = None,
+) -> List[List[float]]:
+    """Extract input-ordered embedding vectors from a provider-compatible response."""
     if not isinstance(data, dict):
         return []
 
@@ -211,10 +215,26 @@ def _extract_embedding_vectors(data: Any) -> List[List[float]]:
     if not isinstance(rows, list):
         return []
 
+    if not all(isinstance(row, dict) for row in rows):
+        return []
+
+    indexed = [row for row in rows if "index" in row]
+    if indexed:
+        if len(indexed) != len(rows):
+            return []
+
+        indexes = [row.get("index") for row in rows]
+        if not all(isinstance(index, int) and not isinstance(index, bool) for index in indexes):
+            return []
+        if len(set(indexes)) != len(indexes):
+            return []
+        if expected_count is not None and sorted(indexes) != list(range(expected_count)):
+            return []
+
+        rows = sorted(rows, key=lambda row: row["index"])
+
     vectors: List[List[float]] = []
     for row in rows:
-        if not isinstance(row, dict):
-            return []
         embedding = row.get("embedding")
         if not isinstance(embedding, list):
             return []
