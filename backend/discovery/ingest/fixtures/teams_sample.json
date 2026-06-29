@@ -1,5 +1,5 @@
 {
-  "_comment": "R17-A1 / AT-430 — deterministic offline fixture for the Teams change-based ingestor. Channels exercise the granted-standard-only access rule (AC4): only standard channels AgentIQ is explicitly granted are read; private channels, ungranted channels and archived channels are excluded, and private chats / DMs are never modelled (the connector never enumerates the /chats surface). Per-channel messages carry a monotonic 'change_seq' modelling the Microsoft Graph delta ordering, so incremental (since-deltatoken) and resumable first-load batching can both be tested. The delta-token map in the checkpoint is keyed by '{team_id}/{channel_id}'.",
+  "_comment": "R17-A1 / AT-430 — deterministic offline fixture for the Teams change-based ingestor. Channels exercise the granted-standard-only access rule (AC4): only standard channels AgentIQ is explicitly granted are read; private channels, ungranted channels and archived channels are excluded, and private chats / DMs are never modelled (the connector never enumerates the /chats surface). Each message carries the Microsoft Graph 'createdDateTime' (and 'lastModifiedDateTime' once edited) the connector uses as its change marker / delta-token position, ordered within each channel, so incremental (since-deltatoken) and resumable first-load batching can both be tested. The delta-token map in the checkpoint is keyed by '{team_id}/{channel_id}'.",
   "teams": [
     {"id": "T-eng", "displayName": "Engineering"}
   ],
@@ -14,23 +14,23 @@
   },
   "messages": {
     "T-eng/19:ops": [
-      {"id": "m100", "change_seq": 100, "createdDateTime": "2026-06-10T09:00:00Z", "from": {"user": {"id": "U100", "displayName": "Ada"}}, "body": {"contentType": "text", "content": "Pager just went off for the payments API"}, "reply_count": 0, "mentions": [], "reactions": []},
-      {"id": "m200", "change_seq": 200, "createdDateTime": "2026-06-10T09:10:00Z", "from": {"user": {"id": "U101", "displayName": "Lin"}}, "body": {"contentType": "text", "content": "Looking - looks related to INC-4821 in ServiceNow"}, "reply_count": 4, "mentions": [{"id": 0, "mentionText": "U100"}], "reactions": [{"reactionType": "like", "count": 2}]},
-      {"id": "m300", "change_seq": 300, "createdDateTime": "2026-06-10T10:00:00Z", "from": {"user": {"id": "U102", "displayName": "Sam"}}, "body": {"contentType": "text", "content": "Rolled back, see PR-2290"}, "reply_count": 1, "mentions": [], "reactions": []},
-      {"id": "m400", "change_seq": 400, "createdDateTime": "2026-06-11T08:00:00Z", "lastModifiedDateTime": "2026-06-11T08:05:00Z", "from": {"user": {"id": "U100", "displayName": "Ada"}}, "body": {"contentType": "text", "content": "Post-incident review scheduled"}, "reply_count": 0, "mentions": [], "reactions": []}
+      {"id": "m100", "createdDateTime": "2026-06-10T09:00:00Z", "from": {"user": {"id": "U100", "displayName": "Ada"}}, "body": {"contentType": "text", "content": "Pager just went off for the payments API"}, "reply_count": 0, "mentions": [], "reactions": []},
+      {"id": "m200", "createdDateTime": "2026-06-10T09:10:00Z", "from": {"user": {"id": "U101", "displayName": "Lin"}}, "body": {"contentType": "text", "content": "Looking - looks related to INC-4821 in ServiceNow"}, "reply_count": 4, "mentions": [{"id": 0, "mentionText": "U100"}], "reactions": [{"reactionType": "like", "count": 2}]},
+      {"id": "m300", "createdDateTime": "2026-06-10T10:00:00Z", "from": {"user": {"id": "U102", "displayName": "Sam"}}, "body": {"contentType": "text", "content": "Rolled back, see PR-2290"}, "reply_count": 1, "mentions": [], "reactions": []},
+      {"id": "m400", "createdDateTime": "2026-06-11T08:00:00Z", "lastModifiedDateTime": "2026-06-11T08:05:00Z", "from": {"user": {"id": "U100", "displayName": "Ada"}}, "body": {"contentType": "text", "content": "Post-incident review scheduled"}, "reply_count": 0, "mentions": [], "reactions": []}
     ],
     "T-eng/19:deploys": [
-      {"id": "d100", "change_seq": 100, "createdDateTime": "2026-06-10T09:05:00Z", "from": {"user": {"id": "U200", "displayName": "Rae"}}, "body": {"contentType": "text", "content": "Deploying release 1.7 to staging"}, "reply_count": 0, "mentions": [], "reactions": []},
-      {"id": "d200", "change_seq": 200, "createdDateTime": "2026-06-10T09:30:00Z", "from": {"user": {"id": "U201", "displayName": "Kai"}}, "body": {"contentType": "text", "content": "Staging green, promoting to prod"}, "reply_count": 2, "mentions": [], "reactions": [{"reactionType": "rocket", "count": 5}]}
+      {"id": "d100", "createdDateTime": "2026-06-10T09:05:00Z", "from": {"user": {"id": "U200", "displayName": "Rae"}}, "body": {"contentType": "text", "content": "Deploying release 1.7 to staging"}, "reply_count": 0, "mentions": [], "reactions": []},
+      {"id": "d200", "createdDateTime": "2026-06-10T09:30:00Z", "from": {"user": {"id": "U201", "displayName": "Kai"}}, "body": {"contentType": "text", "content": "Staging green, promoting to prod"}, "reply_count": 2, "mentions": [], "reactions": [{"reactionType": "rocket", "count": 5}]}
     ],
     "T-eng/19:leads-private": [
-      {"id": "p100", "change_seq": 100, "createdDateTime": "2026-06-10T09:00:00Z", "from": {"user": {"id": "U900", "displayName": "Exec"}}, "body": {"contentType": "text", "content": "private channel content that must never be read"}, "reply_count": 0, "mentions": [], "reactions": []}
+      {"id": "p100", "createdDateTime": "2026-06-10T09:00:00Z", "from": {"user": {"id": "U900", "displayName": "Exec"}}, "body": {"contentType": "text", "content": "private channel content that must never be read"}, "reply_count": 0, "mentions": [], "reactions": []}
     ],
     "T-eng/19:not-granted": [
-      {"id": "n100", "change_seq": 100, "createdDateTime": "2026-06-10T09:00:00Z", "from": {"user": {"id": "U901", "displayName": "Stranger"}}, "body": {"contentType": "text", "content": "channel AgentIQ was never granted"}, "reply_count": 0, "mentions": [], "reactions": []}
+      {"id": "n100", "createdDateTime": "2026-06-10T09:00:00Z", "from": {"user": {"id": "U901", "displayName": "Stranger"}}, "body": {"contentType": "text", "content": "channel AgentIQ was never granted"}, "reply_count": 0, "mentions": [], "reactions": []}
     ],
     "T-eng/19:archived-ops": [
-      {"id": "a100", "change_seq": 100, "createdDateTime": "2026-05-01T09:00:00Z", "from": {"user": {"id": "U902", "displayName": "Old"}}, "body": {"contentType": "text", "content": "archived channel message"}, "reply_count": 0, "mentions": [], "reactions": []}
+      {"id": "a100", "createdDateTime": "2026-05-01T09:00:00Z", "from": {"user": {"id": "U902", "displayName": "Old"}}, "body": {"contentType": "text", "content": "archived channel message"}, "reply_count": 0, "mentions": [], "reactions": []}
     ]
   }
 }

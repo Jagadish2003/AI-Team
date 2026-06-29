@@ -143,18 +143,19 @@ def test_ac2_first_run_loads_all_accessible_messages():
     )
     assert res.ok and res.checkpoint_advanced
     assert sorted(seen) == sorted(_ALL)
-    # Checkpoint is an opaque JSON delta-token map covering both channels at their heads.
+    # Checkpoint is an opaque JSON delta-token map covering both channels at their
+    # heads (each token is the channel head's high-water change marker).
     tokens = _decode_checkpoint(store.read("org1", "teams").value)
     assert tokens == {
-        "T-eng/19:ops": "400",
-        "T-eng/19:deploys": "200",
+        "T-eng/19:ops": "2026-06-11T08:05:00Z",      # m400 lastModifiedDateTime
+        "T-eng/19:deploys": "2026-06-10T09:30:00Z",  # d200 createdDateTime
     }
 
 
 def test_ac2_incremental_returns_only_newer_than_delta_token():
     # Delta token mid-ops (after m200) and deploys entirely absent from the map.
     since = Checkpoint.create(
-        "teams", "org1", _encode_checkpoint({"T-eng/19:ops": "200"})
+        "teams", "org1", _encode_checkpoint({"T-eng/19:ops": "2026-06-10T09:10:00Z"})
     )
     batches = list(TeamsIngestor().ingest_changes("org1", since))
     ids = [r["artifact_id"] for b in batches for r in b.records]
@@ -181,15 +182,20 @@ def test_ac2_unchanged_delta_is_single_empty_batch_echoing_position():
     since = Checkpoint.create(
         "teams",
         "org1",
-        _encode_checkpoint({"T-eng/19:ops": "400", "T-eng/19:deploys": "200"}),
+        _encode_checkpoint(
+            {
+                "T-eng/19:ops": "2026-06-11T08:05:00Z",
+                "T-eng/19:deploys": "2026-06-10T09:30:00Z",
+            }
+        ),
     )
     batches = list(TeamsIngestor().ingest_changes("org1", since))
     assert len(batches) == 1
     assert batches[0].records == []
     assert batches[0].is_complete is True
     assert _decode_checkpoint(batches[0].next_checkpoint) == {
-        "T-eng/19:ops": "400",
-        "T-eng/19:deploys": "200",
+        "T-eng/19:ops": "2026-06-11T08:05:00Z",
+        "T-eng/19:deploys": "2026-06-10T09:30:00Z",
     }
 
 
@@ -225,7 +231,7 @@ def test_ac3_failure_midload_resumes_without_loss_or_duplication():
     # checkpoint was written, so the stored position marks the last good batch.
     assert res1.batches_checkpointed == 2
     tokens = _decode_checkpoint(store.read("org1", "teams").value)
-    assert tokens == {"T-eng/19:ops": "200"}  # after batch 2 only
+    assert tokens == {"T-eng/19:ops": "2026-06-10T09:10:00Z"}  # after batch 2 (m200) only
 
     # Run 2: store has a checkpoint → incremental/resume mode. It must pick up
     # exactly where it left off — no re-processing of batches 1 & 2.
@@ -247,8 +253,8 @@ def test_ac3_failure_midload_resumes_without_loss_or_duplication():
     assert len(combined) == len(set(combined)) == 6
     # Final checkpoint is at the head of both channels.
     assert _decode_checkpoint(store.read("org1", "teams").value) == {
-        "T-eng/19:ops": "400",
-        "T-eng/19:deploys": "200",
+        "T-eng/19:ops": "2026-06-11T08:05:00Z",
+        "T-eng/19:deploys": "2026-06-10T09:30:00Z",
     }
 
 

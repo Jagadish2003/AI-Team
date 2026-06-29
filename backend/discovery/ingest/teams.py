@@ -42,9 +42,12 @@ Checkpoint shape (opaque to the runner)
 A single ``(org_id, 'teams')`` checkpoint row is persisted by the runner, but a
 Teams workspace has many channels (across teams) each with its own Graph delta
 position. The connector therefore encodes a per-channel delta-token MAP as the
-opaque checkpoint value, keyed by ``"{team_id}/{channel_id}"``::
+opaque checkpoint value, keyed by ``"{team_id}/{channel_id}"``. Each token is the
+high-water change marker (the last-modified/created timestamp) of the newest
+message seen in that channel — opaque to the runner, owned by this connector::
 
-    {"v": 1, "channels": {"T-eng/19:ops": "200", "T-eng/19:deploys": "200"}}
+    {"v": 1, "channels": {"T-eng/19:ops": "2026-06-11T08:05:00Z",
+                          "T-eng/19:deploys": "2026-06-10T09:30:00Z"}}
 
 The runner never interprets this — it persists and returns the string verbatim
 (R16-A1 AC5). Only this connector, which owns the shape, parses it back. A
@@ -80,6 +83,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional
 
@@ -160,22 +164,52 @@ def _decode_checkpoint(value: Optional[str]) -> Dict[str, str]:
     return {str(k): str(v) for k, v in channels.items() if v is not None}
 
 
-def _seq_gt(seq: Any, token: Optional[str]) -> bool:
-    """True when a message's change sequence is strictly newer than ``token``.
+def _change_marker(msg: Dict[str, Any]) -> str:
+    """Return a message's change position: its last-modified (else created) time.
 
-    The Graph delta token is opaque to the runner but owned by this connector:
-    in the fixture model it encodes the channel's highest-seen change sequence,
-    so "newer than the delta token" is a numeric comparison. ``token is None``
-    (channel absent from the checkpoint map) means read from the beginning — the
-    first-load / resume-a-new-channel case.
+    Microsoft Graph stamps every channel message with ``createdDateTime`` and,
+    once edited, ``lastModifiedDateTime`` — both present on live Graph messages
+    AND in the offline fixture. This timestamp is the per-message change signal
+    the connector advances its opaque delta token to, exactly as the Slack
+    connector advances per-channel by message ``ts``. An edit moves the marker
+    forward (newer ``lastModifiedDateTime``), so a re-modified message re-surfaces
+    in the next delta.
+    """
+    return msg.get("lastModifiedDateTime") or msg.get("createdDateTime") or ""
+
+
+def _marker_epoch(marker: Optional[str]) -> Optional[float]:
+    """Parse an ISO-8601 change marker (Graph uses ``...Z``) to epoch seconds.
+
+    Returns None for a missing/unparseable marker so callers can fall back to a
+    string compare. The opaque checkpoint stores the ISO string verbatim; only
+    comparison goes through epoch, so ordering is correct regardless of offset
+    format.
+    """
+    if not marker:
+        return None
+    try:
+        return datetime.fromisoformat(marker.replace("Z", "+00:00")).timestamp()
+    except (TypeError, ValueError):
+        return None
+
+
+def _marker_gt(marker: str, token: Optional[str]) -> bool:
+    """True when a message's change marker is strictly newer than the delta token.
+
+    The delta token is opaque to the runner but owned by this connector: it is the
+    ISO-8601 high-water change marker of the last message seen in a channel.
+    ``token`` falsy (channel absent from the checkpoint map) means read from the
+    beginning — the first-load / resume-a-new-channel case. Comparison is by parsed
+    timestamp, falling back to a lexicographic compare if either side is
+    unparseable.
     """
     if not token:
         return True
-    try:
-        return float(seq) > float(token)
-    except (TypeError, ValueError):
-        # Fall back to string compare if a sequence is somehow non-numeric.
-        return str(seq) > str(token)
+    me, te = _marker_epoch(marker), _marker_epoch(token)
+    if me is None or te is None:
+        return str(marker) > str(token)
+    return me > te
 
 
 class TeamsIngestor(ChangeBasedIngestor):
@@ -266,10 +300,10 @@ class TeamsIngestor(ChangeBasedIngestor):
             for start in range(0, len(messages), self.batch_size):
                 page = messages[start : start + self.batch_size]
                 records = [self._to_record(channel, m) for m in page]
-                # Advance this channel's delta token to the newest change seq in
-                # the page (Graph returns a new deltaLink after each delta call;
-                # the fixture models that token as the highest change sequence).
-                running[key] = str(page[-1]["change_seq"])
+                # Advance this channel's delta token to the newest change marker in
+                # the page — the high-water last-modified/created timestamp. This is
+                # the opaque position the next run resumes the delta query from.
+                running[key] = _change_marker(page[-1])
                 emitted += 1
                 yield DeltaBatch(
                     records=records,
@@ -309,16 +343,16 @@ class TeamsIngestor(ChangeBasedIngestor):
     ) -> List[Dict[str, Any]]:
         """Return this channel's messages changed since ``token``, oldest-first.
 
-        This is the Graph delta query: ``token is None`` (channel absent from the
+        This is the Graph delta query: ``token`` falsy (channel absent from the
         checkpoint map) means a full enumeration from the beginning — the
         first-load / resume-a-new-channel case; otherwise only messages whose
-        change sequence is strictly newer than the stored delta token are
-        returned. Sorting oldest-first (by change sequence) guarantees the
-        checkpoint advances monotonically as batches are emitted.
+        change marker is strictly newer than the stored delta token are returned.
+        Sorting oldest-first (by change marker) guarantees the checkpoint advances
+        monotonically as batches are emitted.
         """
         messages = self._raw_messages(org_id, channel)
-        fresh = [m for m in messages if _seq_gt(m.get("change_seq"), token)]
-        fresh.sort(key=lambda m: float(m.get("change_seq", 0) or 0))
+        fresh = [m for m in messages if _marker_gt(_change_marker(m), token)]
+        fresh.sort(key=lambda m: _marker_epoch(_change_marker(m)) or float("-inf"))
         return fresh
 
     def _to_record(self, channel: Dict[str, Any], msg: Dict[str, Any]) -> Dict[str, Any]:
