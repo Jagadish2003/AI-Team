@@ -15,7 +15,7 @@
   "messages": {
     "T-eng/19:ops": [
       {"id": "m100", "createdDateTime": "2026-06-10T09:00:00Z", "from": {"user": {"id": "U100", "displayName": "Ada"}}, "body": {"contentType": "text", "content": "Pager just went off for the payments API"}, "reply_count": 0, "mentions": [], "reactions": []},
-      {"id": "m200", "createdDateTime": "2026-06-10T09:10:00Z", "from": {"user": {"id": "U101", "displayName": "Lin"}}, "body": {"contentType": "text", "content": "Looking - looks related to INC-4821 in ServiceNow"}, "reply_count": 4, "mentions": [{"id": 0, "mentionText": "U100"}], "reactions": [{"reactionType": "like", "count": 2}]},
+      {"id": "m200", "createdDateTime": "2026-06-10T09:10:00Z", "from": {"user": {"id": "U101", "displayName": "Lin"}}, "body": {"contentType": "text", "content": "Looking - looks related to INC-4821 in ServiceNow"}, "reply_count": 4, "reply_users_count": 3, "mentions": [{"id": 0, "mentionText": "U100"}], "reactions": [{"reactionType": "like", "count": 2}]},
       {"id": "m300", "createdDateTime": "2026-06-10T10:00:00Z", "from": {"user": {"id": "U102", "displayName": "Sam"}}, "body": {"contentType": "text", "content": "Rolled back, see PR-2290"}, "reply_count": 1, "mentions": [], "reactions": []},
       {"id": "m400", "createdDateTime": "2026-06-11T08:00:00Z", "lastModifiedDateTime": "2026-06-11T08:05:00Z", "from": {"user": {"id": "U100", "displayName": "Ada"}}, "body": {"contentType": "text", "content": "Post-incident review scheduled"}, "reply_count": 0, "mentions": [], "reactions": []}
     ],

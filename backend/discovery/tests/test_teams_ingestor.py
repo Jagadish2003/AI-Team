@@ -93,10 +93,10 @@ def test_records_carry_artifact_id_and_change_kind():
     assert edited["change_kind"] == "updated"
 
 
-def test_records_carry_raw_signal_fields_for_downstream_passes():
-    """T1 carries the raw message fields the T2 signal pass consumes (body text,
-    team/channel identity, author, engagement counts) — without extracting
-    signal here (AC8: structured signal only, no deep-content NLP)."""
+def test_records_carry_core_metadata_and_raw_text():
+    """Records carry the structured message metadata and raw body text (AC8:
+    structured signal only — the text is passed through verbatim for marker
+    scanning, never transformed or summarised)."""
     batches = list(TeamsIngestor().ingest_changes("org1", None))
     rec = next(
         r for b in batches for r in b.records
@@ -107,7 +107,9 @@ def test_records_carry_raw_signal_fields_for_downstream_passes():
     assert rec["channel_name"] == "ops-incidents"
     assert rec["user"] == "U101"
     assert "INC-4821" in rec["text"]  # raw text passed through, not interpreted
-    assert "signals" not in rec  # signal extraction is the separate T2 subtask
+    # T2/T3 enrich each record with a signals block and an evidence pointer.
+    assert "signals" in rec
+    assert "evidence_pointer" in rec
 
 
 # ─────────────────────────────────────────────────────────────────────────────
