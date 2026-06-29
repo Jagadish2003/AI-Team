@@ -294,8 +294,10 @@ def validate_provider_config() -> None:
 # ---------------------------------------------------------------------------
 
 from app.model_gateway.hosted_provider import HostedModelProvider as _HostedModelProvider  # noqa: E402
+from app.model_gateway.in_boundary_provider import InBoundaryModelProvider as _InBoundaryModelProvider  # noqa: E402
 
 register_provider(_HostedModelProvider())
+register_provider(_InBoundaryModelProvider())
 
 
 __all__ = [
