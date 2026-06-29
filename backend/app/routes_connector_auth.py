@@ -36,7 +36,7 @@ from app.auth import (
 from app.auth.configs import CONNECTOR_AUTH_CONFIGS
 from app.auth.vault import REFRESH_THRESHOLD_SECONDS, consume_nonce, store_nonce
 from app.middleware.audit import log_event
-from app.middleware.tenancy import get_current_org_id, get_current_org_id_optional
+from app.middleware.tenancy import get_current_org_id
 from app.rbac import _get_user_id_from_token
 from app.security import bearer, require_auth
 from database.models.credentials import (
@@ -75,7 +75,6 @@ OAUTH_ERROR_REDIRECT = (
 )
 
 _NONCE_TTL_SECONDS = 600  # 10-minute window for state nonce validity
-_DEFAULT_ORG_ID = "default"  # Single-tenant dev; org isolation is a T1-S11 concern
 
 _CREATE_NONCES_TABLE = """
 CREATE TABLE IF NOT EXISTS oauth_nonces (
@@ -246,9 +245,23 @@ def register_connector_auth_routes(app: FastAPI) -> None:
             raise HTTPException(status_code=400, detail="Invalid request")
         connector_id = nonce_data["connector_id"]
         code_verifier = nonce_data.get("code_verifier")
-        # Org captured at initiation (the callback has no JWT/org context of its
-        # own). Fall back to the default org for legacy nonces / single-tenant dev.
-        org_id = nonce_data.get("org_id") or _DEFAULT_ORG_ID
+        # Org carried from initiation: the callback runs on an unauthenticated
+        # browser redirect with no JWT/org context of its own, so the authenticated
+        # org is captured in get_auth_url and threaded through the server-side state
+        # nonce, then read back here. There is NO hardcoded 'default' fallback
+        # (R17-D3 §1): a nonce with no org cannot be safely bound to a tenant, so the
+        # flow fails closed rather than storing the token under the wrong org.
+        org_id = nonce_data.get("org_id")
+        if not org_id:
+            logger.error(
+                "OAuth callback for connector %s has no authenticated org in state "
+                "nonce — refusing to store token under a default org",
+                connector_id,
+            )
+            return RedirectResponse(
+                OAUTH_ERROR_REDIRECT.format(error_code="no_org"),
+                status_code=302,
+            )
 
         config = CONNECTOR_AUTH_CONFIGS.get(connector_id)
         if config is None:
@@ -351,14 +364,17 @@ def register_connector_auth_routes(app: FastAPI) -> None:
         # send its S256 challenge in the authorize URL. Required by providers
         # that enforce PKCE (e.g. Salesforce "Require PKCE").
         code_verifier, code_challenge = generate_pkce_pair()
-        # Capture the caller's tenancy context now (this request is authenticated)
-        # so the unauthenticated callback can persist the token + connection state
-        # under the right org. Sourced server-side, never from callback input.
+        # Capture the AUTHENTICATED org now (this route is Bearer-protected, so the
+        # tenancy middleware has resolved a real org) and thread it through the
+        # server-side state nonce. The unauthenticated callback reads it back to
+        # persist the token + connection state under the right tenant — never a
+        # hardcoded 'default' (R17-D3 §1). Sourced server-side, never from callback
+        # input.
         store_nonce(
             state,
             connector_id,
             code_verifier=code_verifier,
-            org_id=get_current_org_id_optional(),
+            org_id=get_current_org_id(),
         )
         auth_url = build_auth_url(config, state, code_challenge=code_challenge)
         return {
