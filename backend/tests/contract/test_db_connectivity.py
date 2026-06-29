@@ -693,6 +693,11 @@ class TestApiRoutes:
     ) -> None:
         org_id = "contract_invalid_org"
         connector_id = "sqlserver"
+        # Route resolves org from auth context (X-Org-Id below); give the dev user
+        # a role there so the test reaches scope validation, not the RBAC gate.
+        from app.rbac import seed_owner
+
+        seed_owner(org_id, "dev-token-change-me")
         config = _config(org_id=org_id, connector_id=connector_id)
         discovered = SchemaDiscoveryResult(
             schemas=["dbo"],
@@ -725,10 +730,13 @@ class TestApiRoutes:
             lambda conn, loaded_connector_id: discovered,
         )
 
+        # R17-D3 / AT-448: the route resolves org from the authenticated context
+        # (X-Org-Id fallback for the dev token), never from the request body, so
+        # validation runs against this org's discovered schema.
         response = client.post(
             f"/api/db-connectors/{connector_id}/scope",
-            headers=AUTH,
-            json={"org_id": org_id, "schemas": ["dbo"], "tables": ["missing_table"]},
+            headers={**AUTH, "X-Org-Id": org_id},
+            json={"schemas": ["dbo"], "tables": ["missing_table"]},
         )
 
         assert response.status_code == 400

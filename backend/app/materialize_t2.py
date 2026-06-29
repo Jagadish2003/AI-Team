@@ -323,7 +323,7 @@ def run_trackb_and_persist(
         # Keep Integration Hub connector cards in sync with the actual run data.
         from .connector_metrics import update_connector_metrics_from_run
 
-        update_connector_metrics_from_run(payload, succeeded)
+        update_connector_metrics_from_run(payload, succeeded, run_org_id)
 
         _emit_event(
             run_id,
