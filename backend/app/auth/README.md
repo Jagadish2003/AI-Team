@@ -18,6 +18,7 @@ Pattern: `{CONNECTOR_ID_UPPER}_CLIENT_SECRET`
 | slack       | `SLACK_CLIENT_SECRET`             |
 | sap         | `SAP_CLIENT_SECRET`               |
 | dynamics365 | `DYNAMICS365_CLIENT_SECRET`       |
+| teams       | `TEAMS_CLIENT_SECRET`             |
 
 At runtime, callers resolve the secret via `os.environ[config.secret_key]` (implemented in T2/secrets.py).
 
@@ -39,11 +40,14 @@ Any change that renames or removes a field is a breaking change and requires a n
 | `secrets.py`  | `resolve_secret(secret_key)` — reads env var, fails fast if missing | T2 |
 | `oauth.py`    | `authorization_code_flow()`, `client_credentials_flow()`, token refresh | T3/T4 |
 | `vault.py`    | `get_token()`, `store_token()`, `revoke_token()` — Fernet encryption at rest | T5/T6 |
-| `configs.py`  | Per-connector `ConnectorAuthConfig` instances for all 8 connectors | T9 |
+| `configs.py`  | Per-connector `ConnectorAuthConfig` instances for all connectors | T9 |
 
 ## Flows
 
-- `authorization_code`: used by Salesforce, ServiceNow, Jira, Confluence, GitHub (has revocation endpoint)
+- `authorization_code`: used by Salesforce, ServiceNow, Jira, Confluence, GitHub, Slack, Teams.
+  Salesforce/ServiceNow/Jira/Confluence have a revocation endpoint; GitHub, Slack and Teams
+  do not (Slack revokes via the `auth.revoke` Web API; Teams/Microsoft has no revocation
+  endpoint, so revoke removes the vault token).
 - `client_credentials`: used by SAP, Dynamic365; no `refresh_token`, no `redirect_uri`
 
 ## Two-Phase OAuth Callback Pattern
