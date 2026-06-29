@@ -462,7 +462,10 @@ def run_trackb_and_persist(
                             _per_opp[_oid][_k] = _opp[_k]
             _stored["perOpportunity"] = _per_opp
             db.run_kv_set(_KV_LLM, run_id, _stored)
-            record_event("temporal.enrichment_completed", {"run_id": run_id})
+            record_event(
+                "temporal.enrichment_completed",
+                {"run_id": run_id, "org_id": _org_id},
+            )
         except Exception as e:
             logger.warning("T7 temporal enrichment failed (non-blocking): %s", e)
 
