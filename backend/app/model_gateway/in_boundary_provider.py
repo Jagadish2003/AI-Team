@@ -1,4 +1,4 @@
-"""R17-D1 T1/T3 - In-boundary model provider implementation.
+"""R17-D1 T1/T3/T5 - In-boundary model provider implementation.
 
 ``InBoundaryModelProvider`` is the gateway adapter for a customer-operated
 model endpoint running inside the customer's own network. CloudFulcrum owns
@@ -35,6 +35,26 @@ responses, transport errors, and exhausted retries/deadlines all become
 degrades to an empty list on every failure path.  AgentIQ's model output is
 consumed as proposed/inferred content, so when the model is unavailable the
 system surfaces fewer findings rather than unsafe or unverified facts.
+
+Provider-identity telemetry (R17-D1 T5, mirrors R16-D2 hosted mode)
+-------------------------------------------------------------------
+Like the hosted provider, this provider records its OWN per-call telemetry so
+every in-boundary call is observable no matter how it is invoked — directly or
+through the gateway.  ``emits_own_telemetry = True`` tells the gateway wrappers
+to skip their emission, so a single logical call always produces exactly one
+event (never a duplicate).
+
+- ``generate()`` emits exactly one ``model.generation_completed`` event after
+  the call completes; ``embed()`` emits exactly one ``model.embedding_completed``
+  event — on success and failure alike, never per retry, never per token.
+- Every event carries ``provider='in_boundary'`` so support/audit teams (and
+  regulated customers) can prove which provider served each model call.
+- PII GUARD: the payload carries only the provider name, the ok flag, and
+  (for embeddings) text/vector counts.  It NEVER carries prompt text, generated
+  output, input texts, embedding vectors, endpoint credentials, or any customer
+  secret.
+- Telemetry is best-effort: a DB/import problem is swallowed and never
+  propagates into the model call, preserving the graceful-failure contract.
 """
 from __future__ import annotations
 
@@ -73,11 +93,46 @@ _TRANSIENT_5XX_CODES: frozenset = frozenset({500, 502, 503, 504})
 # to avoid an attempt that would instantly time out.
 _MIN_ATTEMPT_BUDGET_S: float = 0.05
 
+# Telemetry event types (R17-D1 T5). These are the same event types the gateway
+# and hosted provider use — registered in app.telemetry — so in-boundary usage
+# is observable through the existing telemetry_events store with no new table.
+_GENERATION_EVENT: str = "model.generation_completed"
+_EMBEDDING_EVENT: str = "model.embedding_completed"
+
+
+def _record_in_boundary_telemetry(event_type: str, payload: dict) -> None:
+    """Emit one telemetry event for a completed in-boundary call (R17-D1 T5).
+
+    Imported lazily to avoid a circular import at module load time (the same
+    pattern the gateway and hosted provider use).  Wrapped so a telemetry
+    failure never propagates to the caller — model calls are not conditional on
+    telemetry succeeding.
+
+    PII GUARD: callers pass only the provider name, the ok flag, and counts.
+    Prompt text, generated output, input texts, embedding vectors, and
+    credentials must never appear in ``payload``.
+    """
+    try:
+        from app.telemetry import record_event
+
+        record_event(event_type, payload)
+    except Exception:  # pragma: no cover - telemetry is best-effort
+        logger.debug(
+            "in_boundary_provider: telemetry emit failed for %s",
+            event_type,
+            exc_info=True,
+        )
+
 
 class InBoundaryModelProvider(ModelProvider):
     """ModelProvider backed by a customer-operated in-network endpoint."""
 
     name = IN_BOUNDARY_PROVIDER_NAME
+
+    # This provider records its own per-call telemetry (T5), so the gateway's
+    # instrumented generate()/embed() wrappers skip their emission — one logical
+    # call always produces exactly one event, never a duplicate.
+    emits_own_telemetry = True
 
     def __init__(self) -> None:
         self._config = InBoundaryConfig()
@@ -89,14 +144,29 @@ class InBoundaryModelProvider(ModelProvider):
         )
 
     def generate(self, req: GenerationRequest) -> GenerationResult:
-        """Generate text through the configured in-boundary endpoint.
+        """Generate text through the in-boundary endpoint, recording telemetry.
+
+        Performs the resilient generation call and emits exactly one
+        ``model.generation_completed`` telemetry event after it completes — on
+        success and failure alike (T5). The event carries ``provider='in_boundary'``
+        and the ok flag only; never the prompt or generated text.
+        """
+        result = self._run_generate(req)
+        _record_in_boundary_telemetry(
+            _GENERATION_EVENT,
+            {"provider": result.provider, "ok": result.ok},
+        )
+        return result
+
+    def _run_generate(self, req: GenerationRequest) -> GenerationResult:
+        """Resilient generation call. Telemetry is emitted once by generate().
 
         Applies the hosted-mode resilience posture: transient failures (429/529,
         transient 5xx, network timeouts) are retried with bounded exponential
         backoff inside the ``req.timeout_ms`` wall-clock deadline.
 
-        The provider never raises to callers. Missing config, malformed
-        responses, transport errors, and exhausted retries/deadlines all become
+        Never raises to callers. Missing config, malformed responses, transport
+        errors, and exhausted retries/deadlines all become
         ``GenerationResult(text=None, provider='in_boundary', ok=False)``.
         """
         cfg = InBoundaryConfig()
@@ -142,9 +212,31 @@ class InBoundaryModelProvider(ModelProvider):
         return GenerationResult(text=text, provider=self.name, ok=True)
 
     def embed(self, texts: List[str]) -> List[List[float]]:
-        """Return embeddings from the configured in-boundary endpoint.
+        """Return embeddings from the in-boundary endpoint, recording telemetry.
 
-        Applies the same resilience posture as generate(): transient failures
+        Performs the resilient embedding call and emits exactly one
+        ``model.embedding_completed`` telemetry event after it completes (T5).
+        The event carries ``provider='in_boundary'``, the ok flag, and the
+        text/vector counts only — never the input texts or the vectors.
+        ``ok`` is True when a vector was returned for every input (an empty-input
+        no-op is vacuously ok).
+        """
+        vectors = self._run_embed(texts)
+        _record_in_boundary_telemetry(
+            _EMBEDDING_EVENT,
+            {
+                "provider": self.name,
+                "ok": len(vectors) == len(texts),
+                "text_count": len(texts),
+                "vector_count": len(vectors),
+            },
+        )
+        return vectors
+
+    def _run_embed(self, texts: List[str]) -> List[List[float]]:
+        """Resilient embedding call. Telemetry is emitted once by embed().
+
+        Applies the same resilience posture as generation: transient failures
         are retried with bounded backoff inside a wall-clock deadline. Empty
         input is a successful no-op. Any endpoint/config/parse failure or
         exhausted retries returns an empty list so embedding callers degrade
