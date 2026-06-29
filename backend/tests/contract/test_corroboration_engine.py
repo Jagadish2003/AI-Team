@@ -545,9 +545,10 @@ class TestDetectorLinkage:
 # ─────────────────────────────────────────────────────────────────────────────
 
 class TestRuleRegistry:
-    def test_eight_rules_defined(self):
-        assert len(CORROBORATION_RULES) == 8
-        for i in range(1, 9):
+    def test_nine_rules_defined(self):
+        # COR-09 (R17-A3 Java application runtime corroboration) is the ninth rule.
+        assert len(CORROBORATION_RULES) == 9
+        for i in range(1, 10):
             assert f"COR-{i:02d}" in CORROBORATION_RULES
 
     def test_slack_only_and_single_source_never_elevate(self):
@@ -555,7 +556,8 @@ class TestRuleRegistry:
         assert is_elevating_rule("COR-08") is False
 
     def test_primary_rules_elevate(self):
-        for rid in ("COR-01", "COR-02", "COR-03", "COR-04", "COR-06", "COR-07"):
+        # COR-09 elevates: Java runtime is observed, first-class evidence.
+        for rid in ("COR-01", "COR-02", "COR-03", "COR-04", "COR-06", "COR-07", "COR-09"):
             assert is_elevating_rule(rid) is True
 
     def test_every_rule_has_description_and_target(self):

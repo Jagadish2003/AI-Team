@@ -896,29 +896,161 @@ def build_java_app_signal(
     }
 
 
+#: Per-signal-type confidence stamped on a mapped corroboration record. Observed
+#: operational signal is trustworthy; the clearest failure signals are HIGH, the
+#: trend/pressure signals MEDIUM. This is signal STRENGTH metadata only — it does
+#: NOT create a separate Java confidence system. The cross-system confidence
+#: decision stays entirely in the corroboration engine (COR-09).
+_SIGNAL_CONFIDENCE: Dict[str, str] = {
+    "service_unhealthy": "HIGH",
+    "error_rate_rise": "HIGH",
+    "recurring_exception": "HIGH",
+    "latency_degradation": "MEDIUM",
+    "throughput_degradation": "MEDIUM",
+    "memory_pressure": "MEDIUM",
+    "cpu_pressure": "MEDIUM",
+    "thread_pool_pressure": "MEDIUM",
+    "queue_pressure": "MEDIUM",
+    "error_pattern": "MEDIUM",
+}
+
+
+def _corroboration_record(
+    *,
+    service: str,
+    signal_type: str,
+    timestamp: Optional[str],
+    evidence: Dict[str, Any],
+    evidence_pointer: Dict[str, Any],
+    detector_ids: Optional[Iterable[str]],
+) -> Dict[str, Any]:
+    """Build one cross-system corroboration record from a Java operational signal."""
+    record = {
+        "source_system": JAVA_APP_SYSTEM,
+        "service": service,
+        "signal_type": signal_type,
+        "confidence": _SIGNAL_CONFIDENCE.get(signal_type, "MEDIUM"),
+        "origin": "observed",
+        "timestamp": timestamp,
+        "evidence": evidence,
+        "evidence_pointer": evidence_pointer,
+    }
+    if detector_ids:
+        record["detector_ids"] = [str(d) for d in detector_ids]
+    return record
+
+
+def build_java_app_corroboration_records(
+    signal: Dict[str, Any], *, detector_ids: Optional[Iterable[str]] = None
+) -> List[Dict[str, Any]]:
+    """Map an aggregated Java signal into engine-ready corroboration records (T5).
+
+    Each record is the cross-system shape the corroboration engine consumes for
+    COR-09 (R17-A3): ``source_system``, the ``service`` identity, the
+    ``signal_type``, a ``confidence``, the observed ``origin``, a ``timestamp``,
+    and the supporting ``evidence`` (plus the R16-B1 ``evidence_pointer``). Java
+    plugs into the SAME cross-system corroboration model — there is no separate
+    Java confidence path.
+
+    ``detector_ids`` optionally links the records to the specific detector/finding
+    they corroborate; when omitted the records are treated as pre-filtered-relevant
+    by the engine (the same linkage convention ServiceNow/Jira records use).
+    """
+    app_id = signal.get("application_id", JAVA_APP_SYSTEM)
+    records: List[Dict[str, Any]] = []
+
+    def _evidence(d: Dict[str, Any]) -> Dict[str, Any]:
+        # Supporting evidence = the structured signal minus the provenance pointer
+        # (carried separately on the record).
+        return {k: v for k, v in d.items() if k != "evidence_pointer"}
+
+    # Latency / throughput / error-rate / health degradation.
+    for d in signal.get("degradations", []):
+        records.append(
+            _corroboration_record(
+                service=d.get("service", app_id),
+                signal_type=d["kind"],
+                timestamp=d.get("last_seen"),
+                evidence=_evidence(d),
+                evidence_pointer=d.get("evidence_pointer", {}),
+                detector_ids=detector_ids,
+            )
+        )
+
+    # Recurring exception clusters (the recurring problem areas).
+    for c in signal.get("exception_clusters", []):
+        if not c.get("recurring"):
+            continue
+        records.append(
+            _corroboration_record(
+                service=app_id,
+                signal_type="recurring_exception",
+                timestamp=c.get("last_seen"),
+                evidence=_evidence(c),
+                evidence_pointer=c.get("evidence_pointer", {}),
+                detector_ids=detector_ids,
+            )
+        )
+
+    # Resource pressure (memory / CPU / thread-pool / queue).
+    for p in signal.get("resource_pressure", []):
+        records.append(
+            _corroboration_record(
+                service=p.get("service", app_id),
+                signal_type=p["kind"],
+                timestamp=p.get("timestamp"),
+                evidence=_evidence(p),
+                evidence_pointer=p.get("evidence_pointer", {}),
+                detector_ids=detector_ids,
+            )
+        )
+
+    # Error patterns (timeouts / failed downstream calls / retry loops / recurring).
+    for e in signal.get("error_patterns", []):
+        records.append(
+            _corroboration_record(
+                service=app_id,
+                signal_type="error_pattern",
+                timestamp=e.get("last_seen"),
+                evidence=_evidence(e),
+                evidence_pointer=e.get("evidence_pointer", {}),
+                detector_ids=detector_ids,
+            )
+        )
+
+    return records
+
+
 def build_java_app_corroboration_payload(
     *,
     log_entries: Optional[Iterable[Dict[str, Any]]] = None,
     metric_samples: Optional[Iterable[Dict[str, Any]]] = None,
     application_id: str = JAVA_APP_SYSTEM,
+    detector_ids: Optional[Iterable[str]] = None,
 ) -> Dict[str, Any]:
-    """Package Java-app signal into the corroboration-engine input block (feeds T5).
+    """Package Java-app signal into the corroboration-engine input block (T5 / AC5).
 
-    Wraps :func:`build_java_app_signal` under the ``'java_app'`` key the
-    corroboration engine reads, and surfaces the compact ``corroboration_markers``
-    a cross-system rule needs: the affected service names plus ``fired`` + latest
-    ``timestamp`` blocks for the signals that naturally corroborate other systems
-    (a rising error rate / latency degradation / unhealthy service corroborating a
-    ServiceNow incident spike for the same service — story Section 3 / AC5).
+    Wraps the signal under the ``'java_app'`` key the corroboration engine reads
+    (COR-09) and includes:
 
-    This function only *produces* the signal in a shape the engine can consume; it
-    attaches no confidence and performs no elevation. Wiring the corroboration
-    rule itself is the separate T5 task. Operational signals are OBSERVED evidence,
-    so — unlike the Slack MEDIUM ceiling — they are first-class corroborators.
+      * ``signals`` — the mapped, engine-ready corroboration records
+        (:func:`build_java_app_corroboration_records`); each carries source system,
+        service identity, signal type, confidence, observed origin, timestamp, and
+        supporting evidence. ``check_cor09_java_app_runtime`` reads these.
+      * ``corroboration_markers`` — a compact summary (affected services plus
+        ``fired`` + latest ``timestamp`` blocks for the signals that naturally
+        corroborate other systems, e.g. a rising error rate corroborating a
+        ServiceNow incident spike for the same service — story Section 3 / AC5).
+
+    Operational signals are OBSERVED evidence, so — unlike the Slack MEDIUM ceiling
+    — they are first-class corroborators that elevate through the existing engine.
+    This helper only *produces* the consumable shape; the elevation decision lives
+    entirely in the corroboration engine.
     """
     signal = build_java_app_signal(
         log_entries=log_entries, metric_samples=metric_samples, application_id=application_id
     )
+    records = build_java_app_corroboration_records(signal, detector_ids=detector_ids)
 
     def _marker(kinds: set) -> Dict[str, Any]:
         hits = [d for d in signal["degradations"] if d["kind"] in kinds]
@@ -943,4 +1075,10 @@ def build_java_app_corroboration_payload(
         "friction": {"fired": signal["summary"]["has_friction"]},
     }
 
-    return {JAVA_APP_CORROBORATION_KEY: {**signal, "corroboration_markers": markers}}
+    return {
+        JAVA_APP_CORROBORATION_KEY: {
+            **signal,
+            "signals": records,
+            "corroboration_markers": markers,
+        }
+    }

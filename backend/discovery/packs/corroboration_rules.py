@@ -32,6 +32,16 @@ ceiling for Slack-only corroboration is MEDIUM. Under no circumstances should a
 future rule elevate Slack-only to HIGH. This is a hardcoded enterprise
 principle, represented explicitly in the COR-05 entry below
 (elevation_target = "MEDIUM", elevates = False).
+
+JAVA APPLICATION RUNTIME EVIDENCE (COR-09, R17-A3)
+--------------------------------------------------
+COR-09 lets a Java application's OBSERVED operational signal (rising error
+rate, latency/throughput degradation, recurring exceptions, unhealthy service,
+resource pressure) corroborate a finding visible in another system. Unlike
+Slack, Java operational signal is directly measured — first-class observed
+evidence — so it elevates MEDIUM -> HIGH like a ServiceNow/Jira corroborator.
+It deliberately reuses the SAME engine and confidence model (no separate Java
+confidence path), and only OBSERVED signals corroborate.
 """
 from __future__ import annotations
 
@@ -207,6 +217,31 @@ CORROBORATION_RULES: Dict[str, CorroborationRule] = {
             "No elevation: a single system cannot self-corroborate."
         ),
     ),
+    "COR-09": CorroborationRule(
+        rule_id="COR-09",
+        primary_signal="Any detector fires",
+        corroborating_signal=(
+            "A configured Java application exposes an OBSERVED runtime operational "
+            "signal — rising error rate, latency/throughput degradation, recurring "
+            "exceptions, an unhealthy service, or resource pressure — for the same "
+            "service within 30 days (R17-A3)"
+        ),
+        # Java operational signal is directly measured (observed) first-class
+        # evidence — exactly like a ServiceNow incident or a Jira issue — so a
+        # matching signal elevates MEDIUM -> HIGH. This is NOT a separate Java
+        # confidence system: Java plugs into the SAME cross-system model. Only
+        # OBSERVED signals corroborate; an inferred signal never elevates,
+        # preserving the observed-vs-inferred discipline (R16-B1 / R16-C1 T4).
+        elevation_target=CONFIDENCE_HIGH,
+        elevates=True,
+        source_label="Java application (runtime signal)",
+        description=(
+            "Corroborated by Java application runtime behaviour. Runtime evidence "
+            "from the actual Java service (observed) raises trust in a finding that "
+            "is also visible in tickets/process systems. MEDIUM -> HIGH, like a "
+            "ServiceNow/Jira corroborator. Inferred signals never corroborate."
+        ),
+    ),
 }
 
 
@@ -230,6 +265,7 @@ RULE_CARD_LABELS: Dict[str, str] = {
     "COR-06": "Corroborated by ServiceNow + Slack escalation pattern",
     "COR-07": "Corroborated by Jira sprint velocity decline",
     "COR-08": SINGLE_SOURCE_LABEL,
+    "COR-09": "Corroborated by Java application runtime signals",
 }
 
 

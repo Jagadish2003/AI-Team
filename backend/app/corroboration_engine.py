@@ -71,6 +71,25 @@ does not corroborate.
                 "timestamp": "2026-06-01T10:00:00Z",
             },
         },
+
+        "java_app": {                                # COR-09 (R17-A3)
+            # Mapped, engine-ready Java operational signals. Each carries the
+            # cross-system corroboration spine: source system, service identity,
+            # signal type, confidence, observed origin, timestamp, and evidence.
+            "signals": [
+                {
+                    "source_system": "java_app",
+                    "service": "payments-service",       # app/service identity
+                    "signal_type": "error_rate_rise",    # observed signal type
+                    "confidence": "HIGH",
+                    "origin": "observed",                # only observed corroborates
+                    "timestamp": "2026-06-01T10:00:00Z",
+                    "evidence": {"baseline_value": 0.002, "current_value": 0.06},
+                    "detector_ids": ["COVENANT_TRACKING_GAP"],  # optional linkage
+                },
+                ...
+            ],
+        },
     }
 
 ────────────────────────────────────────────────────────────────────────────
@@ -155,7 +174,15 @@ _CORROBORATION_RULE_SYSTEMS: Dict[str, str] = {
     "COR-02": "jira",
     "COR-04": "confluence",
     "COR-07": "jira",
+    # R17-A3 / COR-09: Java app runtime evidence is an elevating corroborator,
+    # weighted through the same Stack Builder source-role path as the others.
+    "COR-09": "java_app",
 }
+
+#: R17-A3 — the source_system every Java application operational signal carries
+#: (see discovery/ingest/java_app_signals.py). The corroboration block is read
+#: under this key, mirroring the Slack/Confluence wiring.
+_JAVA_APP_SYSTEM = "java_app"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -585,6 +612,14 @@ def build_corroboration_run_data(
         if slack:
             data["slack"] = slack
 
+    # R17-A3 / COR-09: carry the Java application operational signal block into the
+    # engine, exactly like Slack/Confluence — only when java_app is connected, so a
+    # stray block in a payload cannot inflate corroboration.
+    if _JAVA_APP_SYSTEM in connected:
+        java_app = _find_corroboration_block(_JAVA_APP_SYSTEM, payloads)
+        if java_app:
+            data[_JAVA_APP_SYSTEM] = java_app
+
     return data
 
 
@@ -717,6 +752,61 @@ def check_cor08_single_source(run_data: Dict[str, Any]) -> bool:
     return len(_connected_systems(run_data)) <= 1
 
 
+def _java_app_signals(run_data: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Return the Java application operational signal records (R17-A3 / COR-09).
+
+    The Java app corroboration block (built by
+    ``discovery.ingest.java_app_signals.build_java_app_corroboration_payload``)
+    carries its mapped, engine-ready signals under ``signals``. Defensive: a
+    missing/malformed block or list yields ``[]`` so corroboration stays
+    non-blocking.
+    """
+    signals = _system_block(run_data, _JAVA_APP_SYSTEM).get("signals")
+    if isinstance(signals, list):
+        return [s for s in signals if isinstance(s, dict)]
+    return []
+
+
+def _is_observed_signal(record: Dict[str, Any]) -> bool:
+    """True when a corroboration signal is OBSERVED (directly measured) evidence.
+
+    Preserves the observed-vs-inferred discipline (R16-B1 / R16-C1 T4): only
+    observed Java operational signal may strengthen a finding. The origin is read
+    from the record's ``origin`` field, falling back to its ``evidence_pointer``
+    provenance. A signal explicitly marked ``inferred`` never corroborates; a
+    missing origin defaults to observed (Java operational signal is measured).
+    """
+    origin = record.get("origin")
+    if origin is None:
+        ptr = record.get("evidence_pointer")
+        if isinstance(ptr, dict):
+            origin = ptr.get("origin")
+    return str(origin or "observed").strip().lower() == "observed"
+
+
+def check_cor09_java_app_runtime(
+    detector_id: str,
+    run_data: Dict[str, Any],
+    run_timestamp: datetime,
+) -> bool:
+    """COR-09: a Java application's OBSERVED runtime signal corroborates the finding.
+
+    Fires when at least one Java operational signal is observed, within the
+    corroboration window, and linked to this detector (or pre-filtered relevant —
+    same linkage rule as ServiceNow/Jira). Runtime evidence from the actual Java
+    service raises trust in a finding also visible in other systems, elevating
+    MEDIUM -> HIGH through the existing cross-system model.
+    """
+    for signal in _java_app_signals(run_data):
+        if (
+            _linked_to_detector(signal, detector_id)
+            and _is_observed_signal(signal)
+            and _within_window(signal, run_timestamp)
+        ):
+            return True
+    return False
+
+
 def _weighting_info_for_system(
     weighting_context: Optional[Any],
     system_id: str,
@@ -814,7 +904,7 @@ def _build_label(fired_rules: List[str], triple: bool) -> Optional[str]:
     if triple:
         return TRIPLE_CORROBORATION_LABEL
     # Priority order for the headline label among non-derived rules.
-    for rule_id in ("COR-06", "COR-01", "COR-02", "COR-04", "COR-07", "COR-05", "COR-08"):
+    for rule_id in ("COR-06", "COR-01", "COR-02", "COR-04", "COR-07", "COR-09", "COR-05", "COR-08"):
         if rule_id in fired_rules:
             return RULE_CARD_LABELS.get(rule_id)
     return RULE_CARD_LABELS.get(fired_rules[0])
@@ -917,6 +1007,12 @@ def evaluate_corroboration(
     if check_cor07_jira_sprint_velocity(detector_id, run_data, run_timestamp):
         fired_rules.append("COR-07")
         sources.append("Jira (sprint velocity decline)")
+
+    # COR-09: Java application runtime operational signal (R17-A3). Observed,
+    # first-class evidence that elevates like a ServiceNow/Jira corroborator.
+    if check_cor09_java_app_runtime(detector_id, run_data, run_timestamp):
+        fired_rules.append("COR-09")
+        sources.append("Java application (runtime signal)")
 
     # COR-05 / COR-06: Slack escalation pattern.
     # Slack elevates ONLY with a primary corroborator (ServiceNow/Jira). The
