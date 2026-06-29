@@ -207,6 +207,29 @@ CORROBORATION_RULES: Dict[str, CorroborationRule] = {
             "No elevation: a single system cannot self-corroborate."
         ),
     ),
+    "COR-09": CorroborationRule(
+        rule_id="COR-09",
+        primary_signal="Any detector fires",
+        corroborating_signal=(
+            "A Java application shows operational friction within 30 days "
+            "(rising error rate, latency degradation, resource pressure, or a "
+            "recurring exception cluster) for the same service"
+        ),
+        # R17-A3 §3: operational signals are DIRECTLY MEASURED, so they are
+        # first-class OBSERVED evidence — not inferred content subject to the
+        # inferred-edge discipline. Java-app operational friction therefore
+        # elevates exactly as a system-of-record corroborator does (unlike the
+        # Slack ceiling in COR-05), e.g. an error-rate rise corroborating a
+        # ServiceNow incident spike for the same service.
+        elevation_target=CONFIDENCE_HIGH,
+        elevates=True,
+        source_label="Java application (operational signal)",
+        description=(
+            "Corroborated by Java application operational signal "
+            "(framework health/diagnostics + logs). MEDIUM -> HIGH. "
+            "Operational signals are observed evidence (R17-A3)."
+        ),
+    ),
 }
 
 
@@ -230,6 +253,7 @@ RULE_CARD_LABELS: Dict[str, str] = {
     "COR-06": "Corroborated by ServiceNow + Slack escalation pattern",
     "COR-07": "Corroborated by Jira sprint velocity decline",
     "COR-08": SINGLE_SOURCE_LABEL,
+    "COR-09": "Corroborated by Java application operational signal",
 }
 
 
