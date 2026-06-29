@@ -161,7 +161,10 @@ def _apply_temporal_enrichment(
                         per_opp[opp_id][key] = opp[key]
         stored["perOpportunity"] = per_opp
         db.run_kv_set(KV_LLM_ENRICHMENT, run_id, stored)
-        record_event("temporal.enrichment_completed", {"run_id": run_id})
+        record_event(
+            "temporal.enrichment_completed",
+            {"run_id": run_id, "org_id": org_id},
+        )
     except Exception as exc:  # noqa: BLE001
         logger.warning("T7 temporal enrichment failed (non-blocking): %s", exc)
     return opps

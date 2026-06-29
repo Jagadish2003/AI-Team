@@ -448,10 +448,13 @@ class TestAuditAndTelemetry:
             "run_telemetry",
         )
 
+        # R17-D3 / AT-450 (T5): the DB-query telemetry now carries org_id so the
+        # background (no-request-context) query event is attributed to its tenant.
         assert telemetry_calls == [
             (
                 "db.query_executed",
                 {
+                    "org_id": "org_a",
                     "connector_id": "sqlserver",
                     "query_hash": result.query_hash,
                     "row_count": 1,

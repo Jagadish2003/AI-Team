@@ -302,11 +302,14 @@ def _degraded_queue_depth() -> dict:
     }
 
 
-def _emit_ingestor_completed(query_count: int, signal_count: int, degraded_count: int, duration_ms: int) -> None:
+def _emit_ingestor_completed(
+    org_id: str, query_count: int, signal_count: int, degraded_count: int, duration_ms: int
+) -> None:
     try:
         record_event(
             "db.ingestor_completed",
             {
+                "org_id": org_id,
                 "connector_id": CONNECTOR_ID,
                 "pack_id": "sqlserver_opsignal",
                 "query_count": query_count,
@@ -321,6 +324,7 @@ def _emit_ingestor_completed(query_count: int, signal_count: int, degraded_count
 
 def _degraded_output(org_id: str, run_id: str, duration_ms: int) -> dict:
     _emit_ingestor_completed(
+        org_id=org_id,
         query_count=0,
         signal_count=0,
         degraded_count=3,
@@ -493,7 +497,7 @@ def ingest(
     )
     duration_ms = max(0, int((time.monotonic() - start_ms) * 1000))
 
-    _emit_ingestor_completed(query_count, signal_count, degraded_count, duration_ms)
+    _emit_ingestor_completed(org_id, query_count, signal_count, degraded_count, duration_ms)
 
     return {
         "ticket_volume": ticket_volume,
