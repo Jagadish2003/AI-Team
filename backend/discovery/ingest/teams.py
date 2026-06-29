@@ -11,18 +11,18 @@ the new position. The connector encodes that delta token as the opaque checkpoin
 value (R16-A1 §1) and, on an incremental run, asks each channel only for what
 changed since its stored token.
 
-Scope (this subtask — AT-430 / T1, AC2 + AC3)
+Scope (AT-430 / T1, AT-431 / T2, AT-432 / T3)
 ---------------------------------------------
-This file is *only* the change-based ingestor: checkpointed incremental message
-ingestion via Graph delta queries (AC2) plus a resumable, checkpointed first
-load (AC3). Each delta record carries the structured message metadata and the
-raw body text a later signal pass needs, but the downstream pieces are
-deliberately SEPARATE stories and are NOT done here:
+This file is the change-based ingestor: checkpointed incremental message
+ingestion via Graph delta queries plus a resumable, checkpointed first load
+(AT-430 / T1, AC2 + AC3). Each delta record also carries an extracted ``signals``
+block — the per-message cross-reference markers + escalation signal — via
+:mod:`discovery.ingest.teams_signals` (AT-431 / T2, AC8), plus a fully-populated
+``evidence_pointer`` (R16-B1, ``origin='observed'``) attached to every record so
+each Teams signal is traceable back to its source message (AT-432 / T3, AC5). The
+remaining downstream pieces are deliberately SEPARATE stories and are NOT done
+here:
 
-  * Signal extraction (channel activity / escalation / cross-reference markers,
-    Section 2) — T2 / AT-431. This ingestor only carries the raw fields through.
-  * EvidencePointer on every Teams signal (R16-B1, ``origin='observed'``) —
-    T3 / AT-433.
   * The Teams MEDIUM corroboration ceiling — T4.
   * Microsoft Graph OAuth connect wiring (auth-url / callback / vault) — T5 /
     AT-434. The Teams catalog tile already exists; this ingestor reads whatever
@@ -33,9 +33,9 @@ deliberately SEPARATE stories and are NOT done here:
 
 Per the reach/depth boundary (AC8), this ingestor reads only structured message
 *signal* — it carries message metadata (id, author, timestamps, reply/mention
-counts, the raw body text for later cross-reference marker scanning) through to
-the records. It does NOT do deep conversation-content NLP; that is the separate
-1.8 deep-content story.
+counts, the raw body text for cross-reference marker scanning) through to the
+records and extracts only counts/timing/pattern-matched markers. It does NOT do
+deep conversation-content NLP; that is the separate 1.8 deep-content story.
 
 Checkpoint shape (opaque to the runner)
 ---------------------------------------
@@ -89,6 +89,11 @@ from typing import Any, Dict, Iterator, List, Optional
 
 from . import get_live_connector, is_live
 from .base import ChangeBasedIngestor, ChangeKind, Checkpoint, DeltaBatch
+from .teams_signals import (
+    build_evidence_pointer,
+    extract_cross_reference_markers,
+    extract_escalation_signal,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -359,16 +364,22 @@ class TeamsIngestor(ChangeBasedIngestor):
         """Shape one Teams message into a change-delta record.
 
         Carries structured message *signal* only (AC8): identity, team, channel,
-        author, timestamps, and the engagement counts that feed later escalation
+        author, timestamps, and the engagement counts that feed escalation
         detection. The raw ``text`` is passed through for cross-reference marker
         scanning (ticket/PR mentions, Section 2) — no NLP / meaning extraction is
         done here. ``artifact_id`` + ``change_kind`` let the shared runner emit
         ``ingestion.artifact_changed`` events (AC7).
 
-        Signal extraction (the ``signals`` block) and the R16-B1
-        ``evidence_pointer`` are deliberately NOT attached here — they are the
-        separate T2 / AT-431 and T3 / AT-433 subtasks. This record carries the
-        raw fields those passes consume.
+        R17-A1 / AT-431 (T2): each record also carries an extracted ``signals``
+        block — the per-message cross-reference markers and escalation signal — so
+        the reach-phase signal travels with the delta to downstream corroboration.
+        Channel-level activity (volume/cadence/bursts) is derived across records by
+        :func:`teams_signals.build_teams_signal`.
+
+        R17-A1 / AT-432 (T3): every record also carries a fully-populated
+        ``evidence_pointer`` (R16-B1) with ``source_system='teams'``, the message
+        id, the message timestamp, and ``origin='observed'`` — so no Teams signal
+        enters the system without a verifiable, auditable source reference (AC5).
         """
         team_id = channel["team_id"]
         channel_id = channel["id"]
@@ -386,6 +397,10 @@ class TeamsIngestor(ChangeBasedIngestor):
         body = msg.get("body") or {}
         text = body.get("content", "") if isinstance(body, dict) else ""
         sender = (msg.get("from") or {}).get("user") or {}
+        reply_count = msg.get("reply_count", 0)
+        reply_users_count = msg.get("reply_users_count", 0)
+        mentions = msg.get("mentions", [])
+        reactions = msg.get("reactions", [])
         return {
             "artifact_id": f"{team_id}/{channel_id}:{message_id}",
             "change_kind": change_kind,
@@ -399,10 +414,28 @@ class TeamsIngestor(ChangeBasedIngestor):
             "last_modified_at": last_modified,
             "user": sender.get("id"),
             "user_display_name": sender.get("displayName"),
-            "reply_count": msg.get("reply_count", 0),
-            "mentions": msg.get("mentions", []),
-            "reactions": msg.get("reactions", []),
+            "reply_count": reply_count,
+            "reply_users_count": reply_users_count,
+            "mentions": mentions,
+            "reactions": reactions,
             "text": text,
+            # R17-A1 / AT-431 (T2): reach-phase signal travels with the delta.
+            "signals": {
+                "cross_references": extract_cross_reference_markers(text),
+                "escalation": extract_escalation_signal(
+                    {
+                        "reply_count": reply_count,
+                        "reply_users_count": reply_users_count,
+                        "mentions": mentions,
+                        "reactions": reactions,
+                    }
+                ),
+            },
+            # R17-A1 / AT-432 (T3, AC5): observed provenance pointer back to this
+            # exact Teams message.
+            "evidence_pointer": build_evidence_pointer(
+                team_id, channel_id, message_id, created
+            ),
         }
 
     # ── Source access: offline fixture vs live Microsoft Graph API ───────────
