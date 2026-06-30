@@ -181,6 +181,61 @@ def test_ac4_new_bypass_detected(tmp_path):
     )
 
 
+def test_ac4_full_scan_pipeline_collects_and_flags_bypass_under_backend(
+    tmp_path, monkeypatch
+):
+    """End-to-end: a bypass file placed anywhere under BACKEND_ROOT is both
+    COLLECTED by _collect_scan_targets() AND flagged by _scan_file().
+
+    test_ac4_new_bypass_detected above exercises _scan_file() in isolation on a
+    file written to tmp_path (outside BACKEND_ROOT), so it would still pass even
+    if _collect_scan_targets() had a bug that wrongly excluded a real directory
+    (e.g. backend/tests/unit/). This test covers the collection step too: it
+    points BACKEND_ROOT / GATEWAY_PACKAGE at a temporary backend layout and
+    drives the exact loop the production scan uses.
+
+    The temp tree is built under tmp_path — never inside the real repo — so a
+    crash can never leave a bypass file behind that would fail the real
+    enforcement scan on the next run.
+    """
+    import sys
+
+    fake_root = tmp_path / "backend"
+    gateway = fake_root / "app" / "model_gateway"
+    gateway.mkdir(parents=True)
+    rogue_dir = fake_root / "tests" / "unit"
+    rogue_dir.mkdir(parents=True)
+
+    # Construct the forbidden string at runtime so THIS file does not self-match.
+    forbidden = "x-api-" + "key"
+
+    # A direct-call bypass OUTSIDE the gateway — must be collected and flagged.
+    rogue = rogue_dir / "rogue_caller.py"
+    rogue.write_text(f'HEADERS = {{"{forbidden}": "sk-..."}}\n', encoding="utf-8")
+    # The same pattern INSIDE the gateway — the permitted location, must be excluded.
+    allowed = gateway / "permitted_provider.py"
+    allowed.write_text(f'HEADERS = {{"{forbidden}": "sk-..."}}\n', encoding="utf-8")
+
+    module = sys.modules[__name__]
+    monkeypatch.setattr(module, "BACKEND_ROOT", fake_root)
+    monkeypatch.setattr(module, "GATEWAY_PACKAGE", gateway)
+
+    # Collection step: rogue file is included; gateway file is excluded.
+    targets = _collect_scan_targets()
+    assert rogue in targets, (
+        "the full scan pipeline must COLLECT a bypass file placed under BACKEND_ROOT"
+    )
+    assert allowed not in targets, (
+        "gateway-package files must be excluded from the collected scan targets"
+    )
+
+    # Scan step driven over the collected targets — the same loop the production
+    # test (test_no_direct_model_calls_outside_gateway) runs.
+    flagged = {t for t in targets if _scan_file(t)}
+    assert rogue in flagged, "the collected bypass file must be flagged by the scanner"
+    assert allowed not in flagged, "gateway file must never be flagged (it was excluded)"
+
+
 # ---------------------------------------------------------------------------
 # Sanity — gateway package itself is excluded from scanning
 # ---------------------------------------------------------------------------

@@ -261,8 +261,24 @@ def validate_provider_config() -> None:
     gen_name = os.getenv(_ENV_GENERATION, _DEFAULT_PROVIDER)
     emb_name = os.getenv(_ENV_EMBEDDING, _DEFAULT_PROVIDER)
     # Both calls raise ValueError on unknown names (T2-AC4).
-    _resolve_provider(gen_name, _ENV_GENERATION)
-    _resolve_provider(emb_name, _ENV_EMBEDDING)
+    gen_provider = _resolve_provider(gen_name, _ENV_GENERATION)
+    emb_provider = _resolve_provider(emb_name, _ENV_EMBEDDING)
+
+    # Per-provider completeness check for the SELECTED providers. A provider may
+    # be a registered name yet still be misconfigured — e.g. in_boundary selected
+    # with no endpoint URL would pass name resolution but then fail every call at
+    # runtime with ok=False. provider.validate() logs a startup warning so that
+    # boot-time misconfiguration is visible, not silent. It never raises, but we
+    # also guard here so a hook bug can never block startup. Dedupe by identity so
+    # a provider serving both roles is validated once.
+    for provider in {id(gen_provider): gen_provider, id(emb_provider): emb_provider}.values():
+        try:
+            provider.validate()
+        except Exception:  # pragma: no cover - validation must never block startup
+            logger.debug(
+                "model_gateway: provider %s validate() raised", provider.name, exc_info=True
+            )
+
     logger.info(
         "model_gateway config validated: %s=%s %s=%s",
         _ENV_GENERATION, gen_name,

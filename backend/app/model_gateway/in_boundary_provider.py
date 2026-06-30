@@ -73,7 +73,9 @@ from app.model_gateway._interface import (
 from app.model_gateway.in_boundary_config import (
     CONFIG_KEY_BASE_URL,
     CONFIG_KEY_EMBEDDING_ENDPOINT,
+    CONFIG_KEY_EMBEDDING_MODEL,
     CONFIG_KEY_GENERATION_ENDPOINT,
+    CONFIG_KEY_GENERATION_MODEL,
     CONFIG_KEY_MODEL,
     IN_BOUNDARY_PROVIDER_NAME,
     InBoundaryConfig,
@@ -135,6 +137,11 @@ class InBoundaryModelProvider(ModelProvider):
     emits_own_telemetry = True
 
     def __init__(self) -> None:
+        # Snapshot-at-init, used ONLY for the startup log line below. The live
+        # per-call config is re-read fresh inside _run_generate()/_run_embed()
+        # (each constructs a new InBoundaryConfig) so endpoint/token/model
+        # changes take effect without a restart. Do NOT treat self._config as
+        # the live config source — read a fresh InBoundaryConfig() instead.
         self._config = InBoundaryConfig()
         logger.info(
             "InBoundaryModelProvider initialised "
@@ -142,6 +149,44 @@ class InBoundaryModelProvider(ModelProvider):
             bool(self._config.generation_endpoint),
             bool(self._config.embedding_endpoint),
         )
+
+    def validate(self) -> None:
+        """Warn at startup when in_boundary is selected but not fully configured.
+
+        Called by ``validate_provider_config()`` only when in_boundary is the
+        selected generation and/or embedding provider. The runtime
+        graceful-failure contract (every call returns ok=False / [] when the
+        endpoint is unset) is correct for transient failures, but it is NOT an
+        acceptable *sole* signal for a boot-time misconfiguration: an operator
+        who sets ``MODEL_GENERATION_PROVIDER=in_boundary`` without any endpoint
+        URL would otherwise see the system silently surface no findings, run no
+        enrichment, and emit no error. Surface a clear warning instead.
+
+        Never raises — startup must not be blocked.
+        """
+        cfg = InBoundaryConfig()
+        if not (cfg.base_url or cfg.generation_endpoint or cfg.embedding_endpoint):
+            logger.warning(
+                "in_boundary provider is active but no endpoint URL is configured "
+                "(%s / %s / %s all unset) — all model calls will fail "
+                "(generation returns ok=False, embedding returns []) until an "
+                "endpoint is configured.",
+                CONFIG_KEY_BASE_URL,
+                CONFIG_KEY_GENERATION_ENDPOINT,
+                CONFIG_KEY_EMBEDDING_ENDPOINT,
+            )
+            return
+
+        # Endpoint present but no model name is also a guaranteed-failure config.
+        if not (cfg.generation_model() or cfg.embedding_model()):
+            logger.warning(
+                "in_boundary provider has an endpoint configured but no model name "
+                "(%s / %s / %s all unset) — model calls will fail until a model "
+                "name is configured.",
+                CONFIG_KEY_MODEL,
+                CONFIG_KEY_GENERATION_MODEL,
+                CONFIG_KEY_EMBEDDING_MODEL,
+            )
 
     def generate(self, req: GenerationRequest) -> GenerationResult:
         """Generate text through the in-boundary endpoint, recording telemetry.
@@ -387,6 +432,21 @@ class InBoundaryModelProvider(ModelProvider):
                          rate-limiting; None otherwise.
 
         Never raises — every failure mode maps onto the returned tuple.
+
+        Known limitation — socket vs. total read time:
+            ``urllib.request.urlopen(..., timeout=timeout_s)`` sets a *socket*
+            timeout: each individual socket operation (connect, each recv) must
+            complete within ``timeout_s``. It does NOT bound the total wall-clock
+            time to read the full response body, so a slow endpoint that trickles
+            a large body in many sub-``timeout_s`` chunks could let a single
+            attempt exceed ``timeout_s``. The deadline check in
+            ``_post_with_resilience`` guards *between* attempts, not *within* one
+            urlopen. This is acceptable here because in-boundary responses are not
+            streamed chunk-by-chunk to urllib and ``max_tokens`` bounds the body
+            size. If full read-time coverage is ever required, switch to
+            ``httpx.Client`` with ``httpx.Timeout(read=timeout_s, connect=...)``,
+            which the rest of the codebase already uses for dedicated read
+            timeouts.
         """
         headers = {"Content-Type": "application/json"}
         if api_key:
@@ -400,6 +460,8 @@ class InBoundaryModelProvider(ModelProvider):
         )
 
         try:
+            # timeout is a per-socket-op deadline, not a total-read deadline — see
+            # the "Known limitation" note in this method's docstring.
             with urllib.request.urlopen(http_req, timeout=timeout_s) as resp:
                 raw = resp.read().decode("utf-8")
             return True, json.loads(raw), False, None
