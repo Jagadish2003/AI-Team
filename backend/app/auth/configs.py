@@ -59,7 +59,11 @@ DYNAMICS365_TENANT_ID = os.getenv("DYNAMICS365_TENANT_ID", "bb612c49-03be-4da1-9
 # tenant (most restrictive); "organizations" allows any work/school tenant; "common"
 # also allows personal Microsoft accounts. Teams is a work/school product, so the
 # default is "organizations" — never "common" (no personal-account sign-in).
-TEAMS_TENANT_ID = os.getenv("TEAMS_TENANT_ID", "organizations")
+# The trailing ``or "organizations"`` guards the empty-string trap: a blank
+# ``TEAMS_TENANT_ID=""`` in .env is present-but-empty, so os.getenv returns ""
+# (not the default), which would build a malformed authorize URL with a double
+# slash (login.microsoftonline.com//oauth2/...). Coerce blank → the default.
+TEAMS_TENANT_ID = os.getenv("TEAMS_TENANT_ID", "organizations").strip() or "organizations"
 
 CONNECTOR_AUTH_CONFIGS: Dict[str, ConnectorAuthConfig] = {
     "salesforce": ConnectorAuthConfig(
@@ -191,10 +195,17 @@ CONNECTOR_AUTH_CONFIGS: Dict[str, ConnectorAuthConfig] = {
         ],
         authorization_url=f"https://login.microsoftonline.com/{TEAMS_TENANT_ID}/oauth2/v2.0/authorize",
         redirect_uri=os.environ.get("OAUTH_REDIRECT_URI", ""),
-        # prompt=consent guarantees Microsoft (re)issues a refresh_token (with
-        # offline_access above) and forces the consent screen so the admin always
-        # sees the requested scopes before granting (AT-434: surface scopes at consent).
-        authorize_params={"prompt": "consent"},
+        # NOTE: deliberately NO prompt=consent here. The Teams Graph scopes
+        # (ChannelMessage.Read.All, Team/Channel.ReadBasic.All) require Entra
+        # ADMIN consent. Microsoft's `prompt=consent` FORCES the consent/approval
+        # screen on every authorize request, so a non-admin user is shown
+        # "Approval required" again on every (re)connect even after an admin has
+        # already granted tenant-wide consent — the repeated-approval bug. With
+        # prompt omitted, Microsoft skips the screen once consent is granted, and
+        # offline_access (above) still yields a refresh token, so nothing is lost.
+        # The one-time tenant admin-consent grant is an Entra setup step (Azure
+        # portal → Enterprise applications → AgentIQ → Permissions → Grant admin
+        # consent, or the /adminconsent endpoint), not a per-connect prompt.
     ),
     "sap": ConnectorAuthConfig(
         connector_id="sap",

@@ -131,6 +131,28 @@ function normalizeSource(value: string): string {
   return (value ?? "").trim().toLowerCase();
 }
 
+// Proper display names for connectors rendered as generic source stages, so a
+// raw lower-cased id ("teams", "github") shows with correct branding/casing
+// (e.g. "Salesforce CRM" alongside) rather than "teams" / "github".
+const SOURCE_DISPLAY_NAMES: Record<string, string> = {
+  github: "GitHub",
+  teams: "Microsoft Teams",
+  slack: "Slack",
+};
+
+// Human-friendly label for a connected source: a known brand name, else the raw
+// value Title-Cased (so the first letter is always capitalised).
+function prettySourceLabel(value: string): string {
+  const n = normalizeSource(value);
+  if (SOURCE_DISPLAY_NAMES[n]) return SOURCE_DISPLAY_NAMES[n];
+  return (value ?? "")
+    .trim()
+    .split(/[\s_-]+/)
+    .filter(Boolean)
+    .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+    .join(" ");
+}
+
 // True when a known source step's source is among the connected sources.
 // Salesforce is matched by prefix so product-specific ids (e.g. "salesforce_sc")
 // still resolve to the Salesforce passes.
@@ -350,11 +372,14 @@ export function DiscoveryStepList({
           seenGeneric.add(n);
           return true;
         })
-        .map((src) => ({
-          id: `src:${normalizeSource(src)}`,
-          label: src,
-          subLabel: `Ingesting ${src} signals`,
-        }))
+        .map((src) => {
+          const label = prettySourceLabel(src);
+          return {
+            id: `src:${normalizeSource(src)}`,
+            label,
+            subLabel: `Ingesting ${label} signals`,
+          };
+        })
     : [];
 
   // 3. Processing stages — always shown, in canonical order.

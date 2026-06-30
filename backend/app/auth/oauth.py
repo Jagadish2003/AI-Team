@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import logging
 import os
 import secrets
 from typing import Optional
@@ -11,6 +12,8 @@ import httpx
 
 from app.auth.models import ConnectorAuthConfig
 from app.auth.secrets import resolve_secret
+
+logger = logging.getLogger(__name__)
 
 OAUTH_HTTP_TIMEOUT = int(os.environ.get("OAUTH_HTTP_TIMEOUT_SECONDS", "30"))
 
@@ -22,6 +25,39 @@ OAUTH_HTTP_TIMEOUT = int(os.environ.get("OAUTH_HTTP_TIMEOUT_SECONDS", "30"))
 # provider already returns JSON and honours this header, so sending it is safe
 # and correct for all of them.
 _JSON_ACCEPT = {"Accept": "application/json"}
+
+
+def _raise_for_token_error(config: ConnectorAuthConfig, response: httpx.Response) -> None:
+    """Log the provider's OAuth error code, then raise :class:`OAuthError`.
+
+    A failed token request otherwise surfaces only as a bare status code (e.g.
+    "401"), which is undiagnosable. OAuth error RESPONSE bodies carry an
+    ``error`` / ``error_description`` (Microsoft: ``AADSTS...``; GitHub:
+    ``bad_verification_code``; etc.) that pinpoints the cause — and they NEVER
+    contain the client secret or token, so logging just those two fields is safe.
+    The request body (which does hold the secret) is never logged. The first line
+    of ``error_description`` is capped so a long Microsoft trace is not dumped.
+    """
+    err = desc = ""
+    try:
+        body = response.json()
+        if isinstance(body, dict):
+            err = str(body.get("error") or "")
+            raw_desc = body.get("error_description") or ""
+            desc = str(raw_desc).splitlines()[0][:300] if raw_desc else ""
+    except Exception:  # noqa: BLE001 — non-JSON/empty error body; log status only.
+        pass
+    logger.warning(
+        "OAuth token request failed: connector=%s status=%s error=%r description=%r",
+        config.connector_id,
+        response.status_code,
+        err,
+        desc,
+    )
+    # Surface the provider error code (no secret) in the exception too, so it
+    # appears in the callback traceback — e.g. "401 (invalid_client: AADSTS...)".
+    detail = ": ".join(p for p in (err, desc) if p) or None
+    raise OAuthError(config.connector_id, response.status_code, detail=detail)
 
 
 def _parse_token_response(response: httpx.Response) -> dict:
@@ -46,13 +82,24 @@ def _parse_token_response(response: httpx.Response) -> dict:
 class OAuthError(Exception):
     """Raised when an OAuth HTTP call fails.
 
-    Never includes upstream response body or secret values.
+    ``reason`` is the HTTP status (or "timeout"). ``detail`` is the provider's
+    own OAuth error code / description (e.g. Microsoft ``invalid_client:
+    AADSTS7000215 ...``), which pinpoints the cause and is SAFE to surface — OAuth
+    error bodies never contain the client secret or token. It is included in the
+    message so it appears in the callback traceback, not just a separate log line.
+    The upstream request body (which holds the secret) is never included.
     """
 
-    def __init__(self, connector_id: str, reason: str | int) -> None:
+    def __init__(
+        self, connector_id: str, reason: str | int, detail: Optional[str] = None
+    ) -> None:
         self.connector_id = connector_id
         self.reason = reason
-        super().__init__(f"OAuth error for connector '{connector_id}': {reason}")
+        self.detail = detail
+        msg = f"OAuth error for connector '{connector_id}': {reason}"
+        if detail:
+            msg += f" ({detail})"
+        super().__init__(msg)
 
 
 def generate_pkce_pair() -> tuple[str, str]:
@@ -137,7 +184,7 @@ async def exchange_code(
         except httpx.TimeoutException:
             raise OAuthError(config.connector_id, "timeout")
     if response.status_code != 200:
-        raise OAuthError(config.connector_id, response.status_code)
+        _raise_for_token_error(config, response)
     return _parse_token_response(response)
 
 
@@ -167,7 +214,7 @@ async def refresh_token(
         except httpx.TimeoutException:
             raise OAuthError(config.connector_id, "timeout")
     if response.status_code != 200:
-        raise OAuthError(config.connector_id, response.status_code)
+        _raise_for_token_error(config, response)
     return _parse_token_response(response)
 
 
@@ -196,5 +243,5 @@ async def get_client_credentials_token(
         except httpx.TimeoutException:
             raise OAuthError(config.connector_id, "timeout")
     if response.status_code != 200:
-        raise OAuthError(config.connector_id, response.status_code)
+        _raise_for_token_error(config, response)
     return _parse_token_response(response)

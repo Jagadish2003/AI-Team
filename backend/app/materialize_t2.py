@@ -129,12 +129,13 @@ def _probe_systems(
             errors[system] = str(e)
 
     # Slack (R16-A2) and GitHub (T1-S12) are ingested INSIDE the discovery pipeline
-    # (discovery.runner.run), not probed here: Slack via the shared change runner
-    # (which owns its checkpoint lifecycle and emits ingestion.artifact_changed),
-    # GitHub via the github_engineering pack (reading its token straight from the
-    # vault). Pass them through to `succeeded` so the pipeline receives them in
-    # `systems` and the "no data ingested" gate does not trip a connector-only run.
-    for _pipeline_ingested in ("slack", "github"):
+    # (discovery.runner.run), not probed here: Slack and Teams via the shared
+    # change runner (which owns their checkpoint lifecycle and emits
+    # ingestion.artifact_changed), GitHub via the github_engineering pack (reading
+    # its token straight from the vault). Pass them through to `succeeded` so the
+    # pipeline receives them in `systems`, the "no data ingested" gate does not
+    # trip a connector-only run, and the NORMALIZE log lists them as ingested.
+    for _pipeline_ingested in ("slack", "teams", "github"):
         if _pipeline_ingested in systems:
             per_system[_pipeline_ingested] = "ok"
             if _pipeline_ingested not in succeeded:
