@@ -37,7 +37,7 @@ ECR_REPO     = "agentiq"
 ECR_REGISTRY = f"{ECR_ACCOUNT}.dkr.ecr.{ECR_REGION}.amazonaws.com"
 
 STORE_DIR     = Path("/opt/aiqstore")
-ENV_FILE      = STORE_DIR / ".env"
+ENV_FILE      = STORE_DIR / "backend" / ".env"   # /opt/aiqstore/backend/.env
 COMPOSE_FILE  = Path(__file__).resolve().parent.parent / "docker-compose.yml"
 COMPOSE_ENV   = STORE_DIR / ".compose.env"
 
@@ -204,7 +204,6 @@ def generate_compose_env(env: dict) -> Path:
         f"POSTGRES_PASSWORD={pg_password}",
         f"POSTGRES_USER={pg_user}",
         f"POSTGRES_DB={pg_db}",
-        f"BACKEND_ENV_FILE={ENV_FILE}",
     ]
     COMPOSE_ENV.write_text("\n".join(lines) + "\n")
     os.chmod(COMPOSE_ENV, 0o600)
@@ -278,7 +277,7 @@ def main():
     if not ENV_FILE.exists():
         sys.exit(
             f"\n  ERROR: {ENV_FILE} not found.\n"
-            "  Run Configfile-create.sh first to configure the environment.\n"
+            "  Run Configfile-create.sh first to create /opt/aiqstore/backend/.env\n"
         )
     env = _read_env(ENV_FILE)
 
@@ -310,9 +309,9 @@ def main():
         compose_env = generate_compose_env(env)
         print(f"  Wrote {compose_env}")
 
-        # ── Create SSL directory if missing ───────────────────────────────────
-        ssl_dir = STORE_DIR / "ssl"
-        ssl_dir.mkdir(parents=True, exist_ok=True)
+        # ── Ensure required host directories exist ───────────────────────────
+        (STORE_DIR / "ssl").mkdir(parents=True, exist_ok=True)
+        (STORE_DIR / "backend").mkdir(parents=True, exist_ok=True)
 
         # ── Start containers ─────────────────────────────────────────────────
         print()
@@ -358,10 +357,14 @@ def main():
     else:
         print("  URL : http://<your-server-ip>")
         print()
-        print("  To enable HTTPS, place cert.pem and key.pem in:")
-        print(f"    {STORE_DIR}/ssl/")
-        print("  then restart: docker compose restart frontend")
+        print("  To enable HTTPS:")
+        print(f"    Place cert.pem + key.pem in /opt/aiqstore/ssl/")
+        print(f"    then: docker compose -f {COMPOSE_FILE} restart frontend")
 
+    print()
+    print("  To update backend configuration:")
+    print(f"    Edit   : /opt/aiqstore/backend/.env")
+    print(f"    Reload : docker compose -f {COMPOSE_FILE} restart backend")
     print()
     print("  Useful commands:")
     print(f"    docker compose -f {COMPOSE_FILE} ps")

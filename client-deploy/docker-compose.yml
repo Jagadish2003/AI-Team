@@ -20,13 +20,13 @@ services:
 
   backend:
     image: ${ECR_REGISTRY}/agentiq:backend-latest
-    # env_file makes all vars available as environment variables in the container
-    env_file:
-      - ${BACKEND_ENV_FILE:-/opt/aiqstore/.env}
-    # Volume mount makes the .env file readable on disk inside the container
-    # so python-dotenv (load_dotenv) finds it at /app/.env
+    # Bind-mount the host .env file into the container at /app/.env (read-only).
+    # python-dotenv (load_dotenv) reads /app/.env on startup — the WORKDIR is /app.
+    # Edit /opt/aiqstore/backend/.env on the host, then:
+    #   docker compose restart backend
+    # to apply the new values without rebuilding the image.
     volumes:
-      - ${BACKEND_ENV_FILE:-/opt/aiqstore/.env}:/app/.env:ro
+      - /opt/aiqstore/backend/.env:/app/.env:ro
       - backend_data:/app/database
     networks:
       - agentiq
@@ -47,7 +47,8 @@ services:
   frontend:
     image: ${ECR_REGISTRY}/agentiq:frontend-1.0
     volumes:
-      # SSL certs are optional — if cert.pem/key.pem are present nginx uses HTTPS
+      # SSL certs are optional — place cert.pem + key.pem in /opt/aiqstore/ssl/
+      # nginx entrypoint detects them at startup and enables HTTPS automatically
       - /opt/aiqstore/ssl:/etc/nginx/ssl:ro
     networks:
       - agentiq

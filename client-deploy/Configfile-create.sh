@@ -7,7 +7,7 @@
 set -euo pipefail
 
 STORE_DIR="/opt/aiqstore"
-TARGET_FILE="$STORE_DIR/.env"
+TARGET_FILE="$STORE_DIR/backend/.env"
 LOG_DIR="$STORE_DIR/logs"
 
 # ── Colour helpers ────────────────────────────────────────────────────────────
@@ -28,7 +28,7 @@ if [[ -f "$TARGET_FILE" ]]; then
 fi
 
 # ── Create directories ────────────────────────────────────────────────────────
-mkdir -p "$STORE_DIR"
+mkdir -p "$STORE_DIR/backend"
 mkdir -p "$LOG_DIR"
 mkdir -p "$STORE_DIR/ssl"
 
@@ -36,7 +36,9 @@ echo
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo "  AgentIQ — Environment Configuration"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo "  This wizard creates $TARGET_FILE"
+echo "  Creates : $TARGET_FILE"
+echo "  Mounted into the backend container at /app/.env (read-only)."
+echo "  Edit this file and run: docker compose restart backend — to apply changes."
 echo "  Press Enter to accept the default shown in [brackets]."
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
@@ -185,5 +187,6 @@ chmod 600 "$TARGET_FILE"
 echo
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 info "Configuration saved to $TARGET_FILE"
-info "File permissions set to 600 (root read-only)."
+info "File permissions set to 600 (owner read-only)."
+info "To apply changes after editing: docker compose restart backend"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
