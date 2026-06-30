@@ -34,9 +34,22 @@ const MANY_ENTITIES: EntitySummary[] = Array.from({ length: 9 }, (_, index) => (
 }));
 
 describe("T3-S12-A EntityTracePanel", () => {
-  it("renders nothing when no entity summaries are available", () => {
-    const { container } = render(<EntityTracePanel entities={[]} />);
+  it("renders nothing before enrichment entities are loaded", () => {
+    const { container } = render(<EntityTracePanel entities={undefined} />);
     expect(container.firstChild).toBeNull();
+  });
+
+  it("shows the run-history message when no visible entities are available yet", () => {
+    render(<EntityTracePanel entities={[]} runCount={2} />);
+
+    expect(screen.getByText("Entities")).toBeInTheDocument();
+    expect(screen.getByText("Hidden until 3 runs")).toBeInTheDocument();
+    expect(
+      screen.getByText("Entities will appear after 3 or more discovery runs.")
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/retaining early entity signals for graph completeness/i)
+    ).toBeInTheDocument();
   });
 
   it("renders entity summaries below the baseline context contract", () => {
@@ -75,5 +88,31 @@ describe("T3-S12-A EntityTracePanel", () => {
 
     expect(screen.getByText("2 linked")).toBeInTheDocument();
     expect(screen.getAllByText("Sarah Chen")).toHaveLength(1);
+  });
+
+  it("does not render entities with optional run_count below the display threshold", () => {
+    render(
+      <EntityTracePanel
+        entities={[
+          {
+            ...ENTITIES[0],
+            entity_id: "ent_early",
+            display_name: "Early Entity",
+            run_count: 2,
+          },
+          {
+            ...ENTITIES[1],
+            entity_id: "ent_ready",
+            display_name: "Ready Entity",
+            run_count: 3,
+          },
+        ]}
+        runCount={3}
+      />
+    );
+
+    expect(screen.queryByText("Early Entity")).not.toBeInTheDocument();
+    expect(screen.getByText("Ready Entity")).toBeInTheDocument();
+    expect(screen.getByText("1 linked")).toBeInTheDocument();
   });
 });
