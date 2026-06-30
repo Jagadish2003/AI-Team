@@ -170,6 +170,11 @@ _CORROBORATION_RULE_SYSTEMS: Dict[str, str] = {
     "COR-09": "java_app",
 }
 
+#: R17-A3 — the source_system every Java application operational signal carries
+#: (see discovery/ingest/java_app_signals.py). The corroboration block is read
+#: under this key, mirroring the Slack/Confluence wiring.
+_JAVA_APP_SYSTEM = "java_app"
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Result dataclass
