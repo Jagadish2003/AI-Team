@@ -9,7 +9,12 @@ import { fetchTokenStatus, TokenStatus } from '../../services/staticApi';
 // R16-A2 / AT-422 (T7): add 'slack' — its OAuth config (AT-420, minimal
 // public-channels-only scopes) and the generic auth-url → callback flow already
 // exist, so enabling it here makes the existing Slack catalog tile connect for real.
-const ENABLED_CONNECTOR_IDS = ['salesforce', 'servicenow', 'jira', 'slack', 'github'];
+// R17-A1 / AT-436 (T7): add 'teams' — its Microsoft Graph OAuth config (AT-434,
+// least-privilege read-only channel scopes, no private chat/DM access) and the
+// same generic auth-url → callback flow exist, so enabling it here makes the
+// existing Microsoft Teams catalog tile drive the real OAuth connect flow end to
+// end instead of being a dead-end placeholder.
+const ENABLED_CONNECTOR_IDS = ['salesforce', 'servicenow', 'jira', 'slack', 'github', 'teams'];
 
 export default function ConnectorTile({
   connector,
