@@ -1,0 +1,45 @@
+{
+  "_comment": "R17-A3 / T1 — deterministic offline fixture for the Java application change-based ingestor. Operational surface only (AC8): normalised Spring Boot Actuator metric samples (health/error-rate/latency/throughput/JVM-heap/CPU) and application log entries — NO source code. 'payments-api' degrades across its samples (rising error rate, latency degradation, throughput decline, heap+CPU pressure, DOWN health, and a recurring TimeoutException cluster in its logs) so operational friction fires; 'ledger-svc' stays healthy so an idle/quiet service yields no friction. Credentials are NEVER in this config — each target references the vault via 'credential_ref'. Metric samples are ordered by sample_ts; log entries by offset, so incremental (since-checkpoint) and resumable first-load batching can both be tested.",
+  "targets": [
+    {
+      "app_id": "payments-api",
+      "name": "Payments API",
+      "actuator_url": "https://payments.internal.example/actuator",
+      "log_source": "https://payments.internal.example/logs",
+      "metadata": {"service": "payments", "environment": "prod", "owner": "payments-team"},
+      "credential_ref": "java_app"
+    },
+    {
+      "app_id": "ledger-svc",
+      "name": "Ledger Service",
+      "actuator_url": "https://ledger.internal.example/actuator",
+      "log_source": "https://ledger.internal.example/logs",
+      "metadata": {"service": "ledger", "environment": "prod", "owner": "ledger-team"},
+      "credential_ref": "java_app"
+    }
+  ],
+  "metrics": {
+    "payments-api": [
+      {"sample_ts": "2026-06-10T08:00:00+00:00", "health": "UP", "error_rate": 0.01, "latency_p95_ms": 300, "throughput_rpm": 1200, "jvm_memory_used_ratio": 0.55, "system_cpu_usage": 0.40},
+      {"sample_ts": "2026-06-10T08:05:00+00:00", "health": "UP", "error_rate": 0.03, "latency_p95_ms": 600, "throughput_rpm": 1100, "jvm_memory_used_ratio": 0.70, "system_cpu_usage": 0.62},
+      {"sample_ts": "2026-06-10T08:10:00+00:00", "health": "DOWN", "error_rate": 0.12, "latency_p95_ms": 1800, "throughput_rpm": 700, "jvm_memory_used_ratio": 0.91, "system_cpu_usage": 0.88}
+    ],
+    "ledger-svc": [
+      {"sample_ts": "2026-06-10T08:00:00+00:00", "health": "UP", "error_rate": 0.001, "latency_p95_ms": 120, "throughput_rpm": 800, "jvm_memory_used_ratio": 0.40, "system_cpu_usage": 0.30},
+      {"sample_ts": "2026-06-10T08:05:00+00:00", "health": "UP", "error_rate": 0.002, "latency_p95_ms": 130, "throughput_rpm": 820, "jvm_memory_used_ratio": 0.42, "system_cpu_usage": 0.31}
+    ]
+  },
+  "logs": {
+    "payments-api": [
+      {"offset": 1, "ts": "2026-06-10T08:01:12+00:00", "level": "ERROR", "logger": "com.example.payments.GatewayClient", "exception_type": "TimeoutException", "retry": false, "message": "Upstream timeout calling settlement gateway after 3000ms"},
+      {"offset": 2, "ts": "2026-06-10T08:03:45+00:00", "level": "ERROR", "logger": "com.example.payments.GatewayClient", "exception_type": "TimeoutException", "retry": true, "message": "Retry 1 failed: upstream timeout after 3000ms"},
+      {"offset": 3, "ts": "2026-06-10T08:04:01+00:00", "level": "INFO", "logger": "com.example.payments.HealthIndicator", "exception_type": null, "retry": false, "message": "Liveness probe ok"},
+      {"offset": 4, "ts": "2026-06-10T08:09:30+00:00", "level": "ERROR", "logger": "com.example.payments.GatewayClient", "exception_type": "TimeoutException", "retry": true, "message": "Retry 2 failed: upstream timeout after 3000ms"},
+      {"offset": 5, "ts": "2026-06-10T08:09:55+00:00", "level": "WARN", "logger": "com.example.payments.CircuitBreaker", "exception_type": null, "retry": false, "message": "Circuit breaker opened for settlement-gateway"}
+    ],
+    "ledger-svc": [
+      {"offset": 1, "ts": "2026-06-10T08:00:30+00:00", "level": "INFO", "logger": "com.example.ledger.PostingService", "exception_type": null, "retry": false, "message": "Posted 1842 ledger entries"},
+      {"offset": 2, "ts": "2026-06-10T08:05:30+00:00", "level": "INFO", "logger": "com.example.ledger.PostingService", "exception_type": null, "retry": false, "message": "Posted 1907 ledger entries"}
+    ]
+  }
+}
