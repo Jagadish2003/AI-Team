@@ -483,6 +483,32 @@ def run(
         })
         return _empty_run(run_id, org_id, mode, started_at)
 
+    # 2-pre. Slack change ingest — R16-A2 / AT-421 (T6) + AT-419 (T4).
+    # Slack is a connected SOURCE, so it ingests here — after the systems of
+    # record (Salesforce CRM / ServiceNow / Jira) and BEFORE the pack-specific
+    # second Salesforce pass (sf_ncino) below — so the Discovery Progress list
+    # shows all connected sources first, then the selected pack. When Slack is
+    # connected, ingest it through the shared change runner: this advances the
+    # per-(org, 'slack') checkpoint (incremental, not a full re-read) and emits an
+    # ingestion.artifact_changed event per changed Slack artifact (AC7). The
+    # changed records are also aggregated into the corroboration block so Slack's
+    # escalation pattern (+ activity / cross-references) can corroborate findings
+    # from systems of record. Gated on "slack" ∈ connected systems (the engine
+    # only reads the block when Slack is connected). The MEDIUM ceiling —
+    # Slack-only stays MEDIUM, never standalone HIGH; it elevates only WITH a
+    # primary corroborator (COR-06) — is enforced by the engine and the T3 clamp.
+    if "slack" in _systems:
+        slack_data = _ingest_slack_corroboration(org_id, run_id) or {}
+        if slack_data.get("slack", {}).get("escalation_pattern", {}).get("fired"):
+            logger.info("Slack corroboration: escalation pattern present for this run")
+        else:
+            logger.info("Slack corroboration: no escalation pattern this run (supporting signal only)")
+    # Emit the Slack stage so a connected Slack source appears in the Discovery
+    # Progress checklist alongside the systems of record (ordered before the
+    # pack). Slack ingest is non-blocking so the stage is reported ok (failures
+    # degrade to an empty corroboration block rather than a failed run).
+    update_run_step(run_id, "slack", ok=True)
+
     # 2a. nCino ingest — if ncino pack, fetch lending signals from nCino objects
     from .packs.pack_config import is_ncino_pack as _is_ncino
     if _is_ncino(pack_id) and "salesforce" in _systems:
@@ -615,22 +641,9 @@ def run(
             except Exception as e:
                 logger.warning("PostgreSQL ingestion failed (non-blocking): %s", e)
 
-    # 2f. Slack change ingest — R16-A2 / AT-421 (T6) + AT-419 (T4).
-    # When Slack is connected, ingest it through the shared change runner: this
-    # advances the per-(org, 'slack') checkpoint (incremental, not a full re-read)
-    # and emits an ingestion.artifact_changed event per changed Slack artifact
-    # (AC7). The changed records are also aggregated into the corroboration block
-    # so Slack's escalation pattern (+ activity / cross-references) can corroborate
-    # findings from systems of record. Gated on "slack" ∈ connected systems (the
-    # engine only reads the block when Slack is connected). The MEDIUM ceiling —
-    # Slack-only stays MEDIUM, never standalone HIGH; it elevates only WITH a
-    # primary corroborator (COR-06) — is enforced by the engine and the T3 clamp.
-    if "slack" in _systems:
-        slack_data = _ingest_slack_corroboration(org_id, run_id) or {}
-        if slack_data.get("slack", {}).get("escalation_pattern", {}).get("fired"):
-            logger.info("Slack corroboration: escalation pattern present for this run")
-        else:
-            logger.info("Slack corroboration: no escalation pattern this run (supporting signal only)")
+    # (Slack change ingest runs earlier — before the pack-specific second
+    # Salesforce pass — so every connected source appears in Discovery Progress
+    # ahead of the selected pack. See the "Slack change ingest" block above.)
 
     # 2. Context
     org_ctx = build_org_context(sf_data, sn_data, jira_data)
