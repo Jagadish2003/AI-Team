@@ -72,11 +72,14 @@ class InBoundaryConfig:
     happen without process restart.
     """
 
+    # Only non-secret endpoint values are held on the instance. The API key is
+    # never cached: resolve_api_key() reads os.getenv() live on every call so a
+    # token rotation takes effect without a restart (there is deliberately no
+    # _api_key slot).
     __slots__ = (
         "_base_url",
         "_generation_endpoint",
         "_embedding_endpoint",
-        "_api_key_at_init",
     )
 
     def __init__(self) -> None:
@@ -91,7 +94,6 @@ class InBoundaryConfig:
             self._base_url,
             _DEFAULT_EMBEDDING_PATH,
         )
-        self._api_key_at_init: str = os.getenv(CONFIG_KEY_API_KEY, "")
 
     @property
     def base_url(self) -> str:
