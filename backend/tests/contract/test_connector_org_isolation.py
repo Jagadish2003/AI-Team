@@ -90,3 +90,96 @@ def test_list_connectors_route_is_fresh_for_default_org(client: TestClient):
     assert sn.get("status") != "connected", (
         "default org must not inherit some_other_org's connection state"
     )
+
+
+# ---------------------------------------------------------------------------
+# DB-connector scope routes — org resolved from auth context, never the body
+# (R17-D3 / AT-448). The dev token carries no JWT org claim in tests, so the
+# X-Org-Id header drives the per-request org.
+# ---------------------------------------------------------------------------
+
+
+def _seed_discovered_schema(org_id: str, connector_id: str) -> None:
+    try:
+        from backend.app.db_connectors.models import (
+            ColumnMeta,
+            SchemaDiscoveryResult,
+            TableMeta,
+        )
+        from backend.connectors.db.scope import save_discovered_schema
+    except ModuleNotFoundError:
+        from app.db_connectors.models import (
+            ColumnMeta,
+            SchemaDiscoveryResult,
+            TableMeta,
+        )
+        from connectors.db.scope import save_discovered_schema
+
+    save_discovered_schema(
+        org_id,
+        connector_id,
+        SchemaDiscoveryResult(
+            schemas=["dbo"],
+            tables=[TableMeta(schema="dbo", table="accounts")],
+            columns=[ColumnMeta(schema="dbo", table="accounts", column="id")],
+            estimated_row_counts=None,
+        ),
+    )
+
+
+def test_db_connector_scope_saved_in_one_org_is_not_visible_to_another(client: TestClient):
+    from app.rbac import seed_owner
+
+    connector_id = "sqlserver"
+    # Give the dev user a role in both orgs so the scope routes pass RBAC and the
+    # test exercises org-scoped persistence/isolation rather than the role gate.
+    seed_owner("org_scope_A", "dev-token-change-me")
+    seed_owner("org_scope_B", "dev-token-change-me")
+    _seed_discovered_schema("org_scope_A", connector_id)
+
+    # org_A declares scope.
+    created = client.post(
+        f"/api/db-connectors/{connector_id}/scope",
+        headers={**AUTH, "X-Org-Id": "org_scope_A"},
+        json={"schemas": ["dbo"], "tables": ["accounts"]},
+    )
+    assert created.status_code == 201
+    assert created.json()["org_id"] == "org_scope_A"
+
+    # org_A reads its scope back.
+    own = client.get(
+        f"/api/db-connectors/{connector_id}/scope",
+        headers={**AUTH, "X-Org-Id": "org_scope_A"},
+    )
+    assert own.status_code == 200
+    assert own.json()["org_id"] == "org_scope_A"
+
+    # org_B never declared scope for this connector → 404, no cross-org read.
+    other = client.get(
+        f"/api/db-connectors/{connector_id}/scope",
+        headers={**AUTH, "X-Org-Id": "org_scope_B"},
+    )
+    assert other.status_code == 404
+
+
+def test_db_connector_scope_ignores_body_org_id(client: TestClient):
+    """A caller cannot redirect a scope write to another org via the body."""
+    from app import db
+    from app.rbac import seed_owner
+
+    connector_id = "sqlserver"
+    seed_owner("org_real", "dev-token-change-me")
+    _seed_discovered_schema("org_real", connector_id)
+
+    resp = client.post(
+        f"/api/db-connectors/{connector_id}/scope",
+        headers={**AUTH, "X-Org-Id": "org_real"},
+        # Attempt to spoof a different org through the (now-ignored) body field.
+        json={"org_id": "org_victim", "schemas": ["dbo"], "tables": ["accounts"]},
+    )
+    assert resp.status_code == 201
+    assert resp.json()["org_id"] == "org_real"
+
+    # Persisted only under the authenticated org, never the body-supplied one.
+    assert db.kv_get("db_connector_scope:org_real:sqlserver") is not None
+    assert db.kv_get("db_connector_scope:org_victim:sqlserver") is None

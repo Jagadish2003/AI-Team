@@ -58,7 +58,17 @@ provider's OAuth app registration before going to production.
 | `OAUTH_FRONTEND_BASE_URL` | Frontend origin the backend redirects to after the OAuth callback (CS-2 / AT-325). Backend appends `/oauth/callback?connected=…&status=success` or `/oauth/callback?status=error&code=…`. Leave blank for relative (same-origin / proxied) deploys; set to the frontend origin when FE/BE differ |
 | `DEV_JWT`               | Bearer token for local dev auth (`dev-token-change-me` by default) |
 | `JWT_SECRET`            | HS256 signing secret for user-login JWTs (AUTH-1). **Required in production** — issuance fails closed if unset when `ENVIRONMENT=production`. Generate with `openssl rand -hex 32`. |
-| `ENVIRONMENT`           | `production` enforces `JWT_SECRET` and fail-closed invite behaviour; unset for dev/test. |
+| `OAUTH_STATE_SECRET`    | Dedicated HMAC secret for signing the OAuth `state` parameter (R17-D3 / AT-447). Keep **separate** from `JWT_SECRET` so rotating the session key does not invalidate in-flight OAuth flows. Falls back to `JWT_SECRET` if unset. Generate with `openssl rand -hex 32`. |
+| `ENVIRONMENT`           | `production` enforces `JWT_SECRET`, fail-closed invite behaviour, and force-disables the dev-only OAuth bypass flags below; unset for dev/test. |
+
+> ⚠️ **Dev-only security bypass — never set in production:** `OAUTH_CALLBACK_ALLOW_UNAUTH`
+> lets the OAuth callback complete without a Bearer token (a provider's browser redirect
+> carries none), which is a local-dev convenience only. It **disables the callback's
+> tenant-binding auth**, so it must never be enabled in a shared/staging/production
+> deploy. It is **force-ignored when `ENVIRONMENT=production`** (logged at WARNING), and
+> CI sets it to empty. Likewise the `X-Org-Id` header is honoured as an org fallback
+> **only outside production** — in production tenant context comes solely from the signed
+> JWT org claim. Leave both unset in any shared environment.
 
 ### Notes
 
@@ -66,12 +76,12 @@ provider's OAuth app registration before going to production.
   use separate `JIRA_CLIENT_SECRET` / `CONFLUENCE_CLIENT_SECRET` values.
 - SAP and Dynamics 365 use client_credentials flow — no OAuth redirect URI is needed.
 - Slack revocation uses the `auth.revoke` Web API (not RFC 7009). No extra config required.
-- Microsoft Teams uses Microsoft Graph OAuth. Set `TEAMS_TENANT_ID` to the customer's
-  Entra tenant GUID (or `organizations` for any work/school tenant; defaults to
-  `organizations`). It requests only channels-only Graph scopes (`Team.ReadBasic.All`,
-  `Channel.ReadBasic.All`, `ChannelMessage.Read.All`, `offline_access`) — no chat/DM or
-  write scopes. Microsoft has no token-revocation endpoint, so revoke removes the token
-  from the vault.
+- **Deploy note (R17-D3):** connector tokens are now stored under the authenticated
+  org instead of a hardcoded `default` org. Any connector tokens stored under `default`
+  by a pre-R17-D3 build are orphaned — connectors connected before the upgrade will show
+  as **disconnected** and must be reconnected once. No data is lost; the stale rows are
+  simply not read under the real org. Communicate this one-time reconnect to early-access
+  customers when deploying this change.
 
 ---
 

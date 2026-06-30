@@ -161,7 +161,10 @@ def _apply_temporal_enrichment(
                         per_opp[opp_id][key] = opp[key]
         stored["perOpportunity"] = per_opp
         db.run_kv_set(KV_LLM_ENRICHMENT, run_id, stored)
-        record_event("temporal.enrichment_completed", {"run_id": run_id})
+        record_event(
+            "temporal.enrichment_completed",
+            {"run_id": run_id, "org_id": org_id},
+        )
     except Exception as exc:  # noqa: BLE001
         logger.warning("T7 temporal enrichment failed (non-blocking): %s", exc)
     return opps
@@ -309,7 +312,7 @@ def _run_trackb_and_persist(run_id: str, mode: str, systems: List[str], pack: Op
         # Keep Integration Hub connector cards in sync with the actual run data.
         from .connector_metrics import update_connector_metrics_from_run
 
-        update_connector_metrics_from_run(payload, succeeded)
+        update_connector_metrics_from_run(payload, succeeded, run_org_id)
 
         _emit_event(
             run_id,
@@ -511,6 +514,13 @@ def register_sprint4_t1_routes(app: FastAPI) -> None:
                            "message": "...", "latencyMs": 40, "isLive": true},
           }
         """
+        # Tenant isolation (R17-D3 / AT-448): verify the run belongs to the
+        # authenticated org BEFORE reading or writing its run-scoped KV. run_kv_get
+        # keys only by run_id, so without this guard an authenticated user in one
+        # org could read (and lazily overwrite) another org's connector health by
+        # run id. require_run_exists denies cross-org access as 404.
+        db.require_run_exists(run_id)
+
         # Try stored health from run start first
         if hasattr(db, "run_kv_get"):
             stored = db.run_kv_get("connector_health", run_id, None)

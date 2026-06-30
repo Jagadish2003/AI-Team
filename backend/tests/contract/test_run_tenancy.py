@@ -137,6 +137,45 @@ def test_get_run_route_legacy_untagged_visible_any_org(client: TestClient, monke
 
 
 # ---------------------------------------------------------------------------
+# Run-scoped artifact endpoints must funnel through the run-ownership guard.
+# GET /api/runs/{run_id}/connector-health reads run-scoped KV (keyed only by
+# run_id), so without an explicit require_run_exists it would leak one org's
+# connector health to another org that knows the run id (R17-D3 / AT-448).
+# ---------------------------------------------------------------------------
+
+
+def test_connector_health_route_isolates_by_org(client: TestClient, monkeypatch):
+    from app import db
+    from app.rbac import seed_owner
+
+    # The connector-health route is viewer+; give the dev user a role in BOTH
+    # orgs so the test exercises the tenancy guard (404), not the RBAC gate (403).
+    seed_owner("org_ch_owner", "dev-token-change-me")
+    seed_owner("org_ch_other", "dev-token-change-me")
+
+    db.upsert_run(
+        "run_conn_health_iso",
+        {"id": "run_conn_health_iso", "org_id": "org_ch_owner", "status": "done"},
+    )
+    db.run_kv_set(
+        "connector_health",
+        "run_conn_health_iso",
+        {"ServiceNow": {"system": "ServiceNow", "status": "live", "isLive": True}},
+    )
+
+    # Owning org can read the stored health.
+    monkeypatch.setenv("DEV_JWT_ORG", "org_ch_owner")
+    ok = client.get("/api/runs/run_conn_health_iso/connector-health", headers=AUTH)
+    assert ok.status_code == 200
+    assert ok.json()["ServiceNow"]["status"] == "live"
+
+    # A different org is denied as 404 — never sees the owner's connector health.
+    monkeypatch.setenv("DEV_JWT_ORG", "org_ch_other")
+    denied = client.get("/api/runs/run_conn_health_iso/connector-health", headers=AUTH)
+    assert denied.status_code == 404
+
+
+# ---------------------------------------------------------------------------
 # GET /api/runs — org-scoped list, newest-first
 # Lets any org member (and the creator after logout) re-find the workspace's
 # run instead of it living only in one browser's localStorage.
