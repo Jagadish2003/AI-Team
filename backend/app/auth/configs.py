@@ -27,7 +27,7 @@ load_dotenv()
 # Note: configs are evaluated once at import, so a backend restart is required
 # for a change to take effect (these are not hot-reloaded per request).
 #
-# Only Salesforce, ServiceNow, SAP and Dynamics365 have a per-customer
+# Only Salesforce, ServiceNow, SAP, Dynamics365 and Teams have a per-customer
 # instance/tenant. Jira, Confluence, GitHub and Slack use fixed global hosts
 # (auth.atlassian.com, github.com, slack.com) that never vary per deployment.
 # ---------------------------------------------------------------------------
@@ -52,6 +52,13 @@ SAP_REGION = os.getenv("SAP_REGION", "us10")
 
 # Microsoft Entra ID (Azure AD) tenant id (GUID) for Dynamics 365.
 DYNAMICS365_TENANT_ID = os.getenv("DYNAMICS365_TENANT_ID", "bb612c49-03be-4da1-9974-49f0c8704eb8")
+
+# Microsoft Entra ID (Azure AD) tenant for Microsoft Teams (Microsoft Graph).
+# "common" lets any work/school tenant's admin consent for their organisation;
+# set a specific tenant GUID to lock the Teams connector to one Microsoft 365
+# tenant. Teams authenticates against Microsoft Graph via the Microsoft identity
+# platform v2.0 endpoints built from this value.
+TEAMS_TENANT_ID = os.getenv("TEAMS_TENANT_ID", "common")
 
 CONNECTOR_AUTH_CONFIGS: Dict[str, ConnectorAuthConfig] = {
     "salesforce": ConnectorAuthConfig(
@@ -127,6 +134,33 @@ CONNECTOR_AUTH_CONFIGS: Dict[str, ConnectorAuthConfig] = {
         scopes=["repo:status", "read:org", "read:user"],
         authorization_url="https://github.com/login/oauth/authorize",
         redirect_uri=os.environ.get("OAUTH_REDIRECT_URI", ""),
+    ),
+    "teams": ConnectorAuthConfig(
+        connector_id="teams",
+        flow="authorization_code",
+        client_id=os.getenv("TEAMS_CLIENT_ID", "teams-dev-client-id"),
+        secret_key="TEAMS_CLIENT_SECRET",
+        token_url=f"https://login.microsoftonline.com/{TEAMS_TENANT_ID}/oauth2/v2.0/token",
+        revocation_url=None,                                                        # Microsoft identity platform has no OAuth2 revoke endpoint; tokens expire + refresh
+        # R17-A1 §3 / AT-434: least-privilege, READ-ONLY Microsoft Graph scopes —
+        # only what the reach-phase Teams ingestor needs to list the granted teams
+        # / channels and read those channels' messages. Deliberately NO Chat.*
+        # scopes (1:1 / group direct messages) and NO write/send scopes, so
+        # private chats and DMs can never be accessed (AC4) — the privacy
+        # guarantee is enforced at the OAuth-scope level, and Microsoft's own
+        # consent screen shows the admin exactly these permissions. offline_access
+        # yields a refresh token so the access token auto-refreshes in the vault.
+        scopes=[
+            "offline_access",
+            "https://graph.microsoft.com/Team.ReadBasic.All",
+            "https://graph.microsoft.com/Channel.ReadBasic.All",
+            "https://graph.microsoft.com/ChannelMessage.Read.All",
+        ],
+        authorization_url=f"https://login.microsoftonline.com/{TEAMS_TENANT_ID}/oauth2/v2.0/authorize",
+        redirect_uri=os.environ.get("OAUTH_REDIRECT_URI", ""),
+        # Microsoft v2.0: prompt=consent guarantees the admin sees the requested
+        # scopes and a refresh_token is issued (with offline_access above).
+        authorize_params={"prompt": "consent"},
     ),
     "slack": ConnectorAuthConfig(
         connector_id="slack",

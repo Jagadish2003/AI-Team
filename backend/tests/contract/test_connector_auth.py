@@ -1481,27 +1481,28 @@ _AUTH_HEADERS = {"Authorization": "Bearer dev-token-change-me"}
 
 
 # ---------------------------------------------------------------------------
-# AC16: CONNECTOR_AUTH_CONFIGS has 8 entries, correct flows, correct revocation_url values
+# AC16: CONNECTOR_AUTH_CONFIGS has 9 entries, correct flows, correct revocation_url values
+# (8 originally; +1 for Teams Microsoft Graph OAuth — R17-A1 / AT-434+AT-436.)
 # ---------------------------------------------------------------------------
 
 
-def test_connector_auth_configs_has_8_entries():
-    """CONNECTOR_AUTH_CONFIGS must have exactly 8 connectors (AC16)."""
+def test_connector_auth_configs_has_9_entries():
+    """CONNECTOR_AUTH_CONFIGS must have exactly 9 connectors (AC16; +Teams)."""
     from backend.app.auth.configs import CONNECTOR_AUTH_CONFIGS
 
-    assert len(CONNECTOR_AUTH_CONFIGS) == 8, (
-        f"Expected 8 connectors, got {len(CONNECTOR_AUTH_CONFIGS)}: "
+    assert len(CONNECTOR_AUTH_CONFIGS) == 9, (
+        f"Expected 9 connectors, got {len(CONNECTOR_AUTH_CONFIGS)}: "
         f"{list(CONNECTOR_AUTH_CONFIGS)}"
     )
 
 
 def test_connector_auth_configs_flow_types():
-    """authorization_code connectors: salesforce, servicenow, jira, confluence, github, slack.
+    """authorization_code connectors: salesforce, servicenow, jira, confluence, github, slack, teams.
     client_credentials connectors: sap, dynamics365. (AC16)
     """
     from backend.app.auth.configs import CONNECTOR_AUTH_CONFIGS
 
-    auth_code = {"salesforce", "servicenow", "jira", "confluence", "github", "slack"}
+    auth_code = {"salesforce", "servicenow", "jira", "confluence", "github", "slack", "teams"}
     client_creds = {"sap", "dynamics365"}
 
     for cid in auth_code:
@@ -1516,12 +1517,12 @@ def test_connector_auth_configs_flow_types():
 
 def test_connector_auth_configs_revocation_url_values():
     """Connectors with revocation_url set: salesforce, servicenow, jira, confluence.
-    Connectors with revocation_url=None: github, slack, sap, dynamics365. (AC16)
+    Connectors with revocation_url=None: github, slack, sap, dynamics365, teams. (AC16)
     """
     from backend.app.auth.configs import CONNECTOR_AUTH_CONFIGS
 
     has_revocation = {"salesforce", "servicenow", "jira", "confluence"}
-    no_revocation = {"github", "slack", "sap", "dynamics365"}
+    no_revocation = {"github", "slack", "sap", "dynamics365", "teams"}
 
     for cid in has_revocation:
         assert CONNECTOR_AUTH_CONFIGS[cid].revocation_url is not None, (
