@@ -32,3 +32,11 @@ backend/license/.env
 backend/license/.env.*
 backend/license/test_keys/
 *.license
+
+# Local connector token files (secrets) — must never be committed (R17-A3)
+backend/token_generation/
+*_token.json
+
+# Local review/smoke artifacts
+.codex-doc-review/
+frontend-smoke.png
