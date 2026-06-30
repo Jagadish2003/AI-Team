@@ -1465,7 +1465,7 @@ def test_vault_symbols_importable_from_package():
 #   AC13 — DELETE route returns 204 even when revocation endpoint is unreachable
 #   AC14 — token-status returns needs_refresh when within REFRESH_THRESHOLD_SECONDS
 #   AC15 — nonce is single-use: replay returns 400
-#   AC16 — CONNECTOR_AUTH_CONFIGS has 8 entries with correct flow types and revocation_url values
+#   AC16 — CONNECTOR_AUTH_CONFIGS has the expected entries with correct flow types and revocation_url values
 #   AC17 — unauthenticated requests to auth-url, DELETE /token, token-status return 401
 #   AC18 — full import surface round-trip (already covered above)
 # ===========================================================================
@@ -1481,19 +1481,25 @@ _AUTH_HEADERS = {"Authorization": "Bearer dev-token-change-me"}
 
 
 # ---------------------------------------------------------------------------
-# AC16: CONNECTOR_AUTH_CONFIGS has 9 entries, correct flows, correct revocation_url values
-# (8 originally; +1 for Teams Microsoft Graph OAuth — R17-A1 / AT-434+AT-436.)
+# AC16: CONNECTOR_AUTH_CONFIGS entries, correct flows, correct revocation_url values
+# (Originally 8 connectors; R17-A1 / AT-434 adds Teams as the 9th — Microsoft
+# Graph OAuth, authorization_code, no revocation endpoint.)
 # ---------------------------------------------------------------------------
 
 
-def test_connector_auth_configs_has_9_entries():
-    """CONNECTOR_AUTH_CONFIGS must have exactly 9 connectors (AC16; +Teams)."""
+def test_connector_auth_configs_has_expected_entries():
+    """CONNECTOR_AUTH_CONFIGS must contain exactly the expected connectors (AC16;
+    +teams per R17-A1 / AT-434)."""
     from backend.app.auth.configs import CONNECTOR_AUTH_CONFIGS
 
-    assert len(CONNECTOR_AUTH_CONFIGS) == 9, (
-        f"Expected 9 connectors, got {len(CONNECTOR_AUTH_CONFIGS)}: "
-        f"{list(CONNECTOR_AUTH_CONFIGS)}"
+    expected = {
+        "salesforce", "servicenow", "jira", "confluence", "github", "slack",
+        "teams", "sap", "dynamics365",
+    }
+    assert set(CONNECTOR_AUTH_CONFIGS) == expected, (
+        f"Unexpected connector set: {sorted(CONNECTOR_AUTH_CONFIGS)}"
     )
+    assert len(CONNECTOR_AUTH_CONFIGS) == len(expected)
 
 
 def test_connector_auth_configs_flow_types():
@@ -1517,12 +1523,12 @@ def test_connector_auth_configs_flow_types():
 
 def test_connector_auth_configs_revocation_url_values():
     """Connectors with revocation_url set: salesforce, servicenow, jira, confluence.
-    Connectors with revocation_url=None: github, slack, sap, dynamics365, teams. (AC16)
+    Connectors with revocation_url=None: github, slack, teams, sap, dynamics365. (AC16)
     """
     from backend.app.auth.configs import CONNECTOR_AUTH_CONFIGS
 
     has_revocation = {"salesforce", "servicenow", "jira", "confluence"}
-    no_revocation = {"github", "slack", "sap", "dynamics365", "teams"}
+    no_revocation = {"github", "slack", "teams", "sap", "dynamics365"}
 
     for cid in has_revocation:
         assert CONNECTOR_AUTH_CONFIGS[cid].revocation_url is not None, (

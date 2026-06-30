@@ -28,8 +28,9 @@ load_dotenv()
 # for a change to take effect (these are not hot-reloaded per request).
 #
 # Only Salesforce, ServiceNow, SAP, Dynamics365 and Teams have a per-customer
-# instance/tenant. Jira, Confluence, GitHub and Slack use fixed global hosts
-# (auth.atlassian.com, github.com, slack.com) that never vary per deployment.
+# instance/tenant (Teams via its Microsoft Entra tenant segment). Jira, Confluence,
+# GitHub and Slack use fixed global hosts (auth.atlassian.com, github.com,
+# slack.com) that never vary per deployment.
 # ---------------------------------------------------------------------------
 
 # Each value reads from backend/.env first (so a deployment can point the OAuth
@@ -53,12 +54,12 @@ SAP_REGION = os.getenv("SAP_REGION", "us10")
 # Microsoft Entra ID (Azure AD) tenant id (GUID) for Dynamics 365.
 DYNAMICS365_TENANT_ID = os.getenv("DYNAMICS365_TENANT_ID", "bb612c49-03be-4da1-9974-49f0c8704eb8")
 
-# Microsoft Entra ID (Azure AD) tenant for Microsoft Teams (Microsoft Graph).
-# "common" lets any work/school tenant's admin consent for their organisation;
-# set a specific tenant GUID to lock the Teams connector to one Microsoft 365
-# tenant. Teams authenticates against Microsoft Graph via the Microsoft identity
-# platform v2.0 endpoints built from this value.
-TEAMS_TENANT_ID = os.getenv("TEAMS_TENANT_ID", "common")
+# Microsoft Entra ID (Azure AD) tenant for the Microsoft Teams / Graph OAuth app
+# (R17-A1 / AT-434). A specific tenant GUID locks the connector to one customer
+# tenant (most restrictive); "organizations" allows any work/school tenant; "common"
+# also allows personal Microsoft accounts. Teams is a work/school product, so the
+# default is "organizations" — never "common" (no personal-account sign-in).
+TEAMS_TENANT_ID = os.getenv("TEAMS_TENANT_ID", "organizations")
 
 CONNECTOR_AUTH_CONFIGS: Dict[str, ConnectorAuthConfig] = {
     "salesforce": ConnectorAuthConfig(
@@ -181,6 +182,46 @@ CONNECTOR_AUTH_CONFIGS: Dict[str, ConnectorAuthConfig] = {
         scopes=["channels:read", "channels:history"],
         authorization_url="https://slack.com/oauth/v2/authorize",
         redirect_uri=os.environ.get("OAUTH_REDIRECT_URI", ""),
+    ),
+    "teams": ConnectorAuthConfig(
+        connector_id="teams",
+        flow="authorization_code",
+        client_id=os.getenv("TEAMS_CLIENT_ID", "teams-dev-client-id"),
+        secret_key="TEAMS_CLIENT_SECRET",
+        # Microsoft identity platform (v2.0) endpoints. The tenant segment is
+        # driven by TEAMS_TENANT_ID above so a deployment can lock the OAuth flow
+        # to a single customer tenant without a code change.
+        token_url=f"https://login.microsoftonline.com/{TEAMS_TENANT_ID}/oauth2/v2.0/token",
+        # Microsoft identity has no RFC-7009 token-revocation endpoint (sign-out /
+        # admin token revocation is a portal/Graph action, not a token POST), so —
+        # like GitHub and Slack — there is no revocation_url; revoke_token() simply
+        # removes the credential from the vault.
+        revocation_url=None,
+        # R17-A1 / AT-434 (AC4): minimal, channels-only Microsoft Graph scopes —
+        # exactly what the reach-phase TeamsIngestor needs to read channel messages
+        # and their metadata, and nothing more:
+        #   Team.ReadBasic.All     → list the teams AgentIQ has joined (/me/joinedTeams)
+        #   Channel.ReadBasic.All  → list a team's channels + their metadata
+        #   ChannelMessage.Read.All→ read those channels' messages (the delta query)
+        #   offline_access         → issue a refresh token so the access token
+        #                            auto-refreshes (vault) instead of expiring for good
+        # Deliberately NO Chat.* / ChatMessage.* scopes (the 1:1 / group-DM surface)
+        # and NO write scopes (*.ReadWrite, *.Send), so private chats and DMs can
+        # NEVER be accessed — the AC4 privacy guarantee is enforced at the scope
+        # level, in addition to the TeamsIngestor's standard-channels-only filter.
+        # Microsoft's own consent screen shows exactly these scopes to the admin.
+        scopes=[
+            "offline_access",
+            "Team.ReadBasic.All",
+            "Channel.ReadBasic.All",
+            "ChannelMessage.Read.All",
+        ],
+        authorization_url=f"https://login.microsoftonline.com/{TEAMS_TENANT_ID}/oauth2/v2.0/authorize",
+        redirect_uri=os.environ.get("OAUTH_REDIRECT_URI", ""),
+        # prompt=consent guarantees Microsoft (re)issues a refresh_token (with
+        # offline_access above) and forces the consent screen so the admin always
+        # sees the requested scopes before granting (AT-434: surface scopes at consent).
+        authorize_params={"prompt": "consent"},
     ),
     "sap": ConnectorAuthConfig(
         connector_id="sap",

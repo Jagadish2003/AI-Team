@@ -44,6 +44,7 @@ See `backend/.env.example` for the full list including non-secret client IDs.
 | Slack         | `SLACK_CLIENT_SECRET`        | authorization_code    |
 | SAP           | `SAP_CLIENT_SECRET`          | client_credentials    |
 | Dynamics 365  | `DYNAMICS365_CLIENT_SECRET`  | client_credentials    |
+| Microsoft Teams | `TEAMS_CLIENT_SECRET`      | authorization_code    |
 
 Set each to `your_secret_here` as a placeholder; replace with the real value from the
 provider's OAuth app registration before going to production.
@@ -65,6 +66,12 @@ provider's OAuth app registration before going to production.
   use separate `JIRA_CLIENT_SECRET` / `CONFLUENCE_CLIENT_SECRET` values.
 - SAP and Dynamics 365 use client_credentials flow — no OAuth redirect URI is needed.
 - Slack revocation uses the `auth.revoke` Web API (not RFC 7009). No extra config required.
+- Microsoft Teams uses Microsoft Graph OAuth. Set `TEAMS_TENANT_ID` to the customer's
+  Entra tenant GUID (or `organizations` for any work/school tenant; defaults to
+  `organizations`). It requests only channels-only Graph scopes (`Team.ReadBasic.All`,
+  `Channel.ReadBasic.All`, `ChannelMessage.Read.All`, `offline_access`) — no chat/DM or
+  write scopes. Microsoft has no token-revocation endpoint, so revoke removes the token
+  from the vault.
 
 ---
 
