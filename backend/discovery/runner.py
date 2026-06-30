@@ -260,6 +260,54 @@ def _ingest_slack_corroboration(org_id: str, run_id: str) -> Dict[str, Any]:
     return build_slack_corroboration_payload(collected)
 
 
+def _ingest_teams_changes(org_id: str, run_id: str) -> None:
+    """Drive Teams change-based ingestion so changed artifacts emit events.
+
+    R17-A1 / AT-435 (T6): when Teams is connected, ingest it through the shared
+    change runner (R16-A1). The runner advances the per-(org, 'teams') checkpoint
+    (incremental Microsoft Graph delta, not a full re-read) and emits one
+    ``ingestion.artifact_changed`` event per changed Teams artifact in each
+    fully-processed batch (AC7) — using the ``artifact_id`` + ``change_kind`` that
+    every ``TeamsIngestor`` record already carries. An empty/unchanged delta emits
+    nothing (the runner only emits for batches with records).
+
+    Non-blocking: any failure degrades to a logged warning so a Teams read never
+    aborts the run (the runner itself swallows ingestion errors and leaves the
+    checkpoint unadvanced, so the next run re-reads from the last known-good
+    position). Feeding Teams signal into the corroboration engine is the separate
+    T4 (AT-433) story this one blocks — here we only emit the change events.
+    """
+    try:
+        from .ingest import change_runner
+        from .ingest.teams import TeamsIngestor
+    except Exception as e:  # noqa: BLE001 — Teams change ingest is optional.
+        logger.warning("Teams connector import failed (non-blocking): %s", e)
+        return
+
+    try:
+        result = change_runner.ingest_with_checkpoint(TeamsIngestor(), org_id)
+    except Exception as e:  # noqa: BLE001 — belt-and-braces; the runner is non-raising.
+        # Type name only — the exception str may carry a Bearer token from the
+        # Graph client's request reprs.
+        logger.warning(
+            "Teams ingestion failed (non-blocking) org=%s run=%s: [%s]",
+            org_id, run_id, type(e).__name__,
+        )
+        return
+
+    if result.error is not None:
+        logger.warning(
+            "Teams change ingest reported an error (non-blocking) org=%s run=%s: [%s]",
+            org_id, run_id, type(result.error).__name__,
+        )
+    else:
+        logger.info(
+            "Teams change ingest: %s — %d batch(es), %d changed record(s), checkpoint_advanced=%s",
+            "first run (streamed full load)" if result.first_run else "incremental",
+            result.batches, result.records, result.checkpoint_advanced,
+        )
+
+
 _ENTERPRISE_OPS_DEMO_PATH = (
     Path(__file__).parent / "ingest" / "fixtures" / "enterprise_ops_demo.json"
 )
@@ -503,6 +551,16 @@ def run(
             logger.info("Slack corroboration: escalation pattern present for this run")
         else:
             logger.info("Slack corroboration: no escalation pattern this run (supporting signal only)")
+
+    # 2-pre. Teams change ingest — R17-A1 / AT-435 (T6).
+    # Like Slack, Teams is a connected conversation SOURCE. When connected, drive
+    # it through the shared change runner so changed Teams artifacts emit
+    # ingestion.artifact_changed events (AC7) and the per-(org, 'teams') Graph
+    # delta checkpoint advances (incremental, not a full re-read). Feeding Teams
+    # signal into the corroboration engine is the separate T4 (AT-433) story this
+    # subtask blocks; here we only emit the change events.
+    if "teams" in _systems:
+        _ingest_teams_changes(org_id, run_id)
     # Emit the Slack stage so a connected Slack source appears in the Discovery
     # Progress checklist alongside the systems of record (ordered before the
     # pack). Slack ingest is non-blocking so the stage is reported ok (failures
