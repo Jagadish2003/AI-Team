@@ -260,6 +260,67 @@ def _ingest_slack_corroboration(org_id: str, run_id: str) -> Dict[str, Any]:
     return build_slack_corroboration_payload(collected)
 
 
+def _ingest_java_app_changes(org_id: str, run_id: str):
+    """Drive Java application change ingestion so changed artifacts emit events (R17-A3 / T6).
+
+    Makes Java ingestion participate in the existing change-ingestion telemetry
+    model. The Java ingestor (R17-A3 / T1) is a ``ChangeBasedIngestor`` whose
+    records each carry an ``artifact_id`` and ``change_kind``; driving it through
+    the shared R16-A1 change runner (``change_runner.ingest_with_checkpoint``)
+    therefore emits one ``ingestion.artifact_changed`` event per changed log
+    artifact / fresh Actuator sample, identifying ``org_id``, ``connector_id``
+    (``'java_app'``), ``artifact_id`` and ``change_kind``.
+
+    This REUSES the existing mechanism — it deliberately does NOT mint a
+    Java-specific event path. Two invariants come for free from the shared runner:
+
+      * events are emitted ONLY for fully-processed batches — emission happens
+        after ``process_batch`` succeeds, so a failure before a batch is processed
+        never reports its artifacts as handled; and
+      * the per-``(org_id, 'java_app')`` checkpoint advances only on success, so
+        the next run re-reads from the last known-good position and unchanged
+        artifacts never re-emit.
+
+    Non-blocking: any failure degrades (logged, no events for the failed batch)
+    without aborting the discovery run. Returns the runner's ``IngestionResult``
+    (or ``None`` if the connector could not be imported) for the caller to log.
+    """
+    try:
+        from .ingest import change_runner
+        from .ingest.java_app import JavaAppIngestor
+    except Exception as e:  # noqa: BLE001 — Java-app ingestion is optional.
+        logger.warning("Java app connector import failed (non-blocking): %s", e)
+        return None
+
+    try:
+        # The runner reads the checkpoint, streams the delta, emits one
+        # ingestion.artifact_changed per changed record in each fully-processed
+        # batch, and advances the checkpoint only on full success. T6 needs no
+        # process_batch — the emission and checkpoint lifecycle are the deliverable.
+        result = change_runner.ingest_with_checkpoint(JavaAppIngestor(), org_id)
+    except Exception as e:  # noqa: BLE001 — belt-and-braces; runner is non-raising.
+        # Type name only — an exception str could carry a credential from a live
+        # HTTP client's request repr.
+        logger.warning(
+            "Java app ingestion failed (non-blocking) org=%s run=%s: [%s]",
+            org_id, run_id, type(e).__name__,
+        )
+        return None
+
+    if result.error is not None:
+        logger.warning(
+            "Java app change ingest reported an error (non-blocking) org=%s run=%s: [%s]",
+            org_id, run_id, type(result.error).__name__,
+        )
+    else:
+        logger.info(
+            "Java app change ingest: %s — %d batch(es), %d changed artifact(s) emitted, checkpoint_advanced=%s",
+            "first run (streamed full load)" if result.first_run else "incremental",
+            result.batches, result.records, result.checkpoint_advanced,
+        )
+    return result
+
+
 _ENTERPRISE_OPS_DEMO_PATH = (
     Path(__file__).parent / "ingest" / "fixtures" / "enterprise_ops_demo.json"
 )
@@ -631,6 +692,15 @@ def run(
             logger.info("Slack corroboration: escalation pattern present for this run")
         else:
             logger.info("Slack corroboration: no escalation pattern this run (supporting signal only)")
+
+    # 2g. Java application change ingest — R17-A3 / T6. When a Java application is
+    # connected, drive it through the shared R16-A1 change runner so each changed
+    # log artifact / fresh Actuator sample emits an ingestion.artifact_changed
+    # event (org_id, connector_id='java_app', artifact_id, change_kind), reusing
+    # the existing telemetry path — no Java-specific event path. Gated on
+    # "java_app" ∈ connected systems. Non-blocking (the helper degrades on error).
+    if "java_app" in _systems:
+        _ingest_java_app_changes(org_id, run_id)
 
     # 2. Context
     org_ctx = build_org_context(sf_data, sn_data, jira_data)
