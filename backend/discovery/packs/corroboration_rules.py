@@ -32,16 +32,6 @@ ceiling for Slack-only corroboration is MEDIUM. Under no circumstances should a
 future rule elevate Slack-only to HIGH. This is a hardcoded enterprise
 principle, represented explicitly in the COR-05 entry below
 (elevation_target = "MEDIUM", elevates = False).
-
-JAVA APPLICATION RUNTIME EVIDENCE (COR-09, R17-A3)
---------------------------------------------------
-COR-09 lets a Java application's OBSERVED operational signal (rising error
-rate, latency/throughput degradation, recurring exceptions, unhealthy service,
-resource pressure) corroborate a finding visible in another system. Unlike
-Slack, Java operational signal is directly measured — first-class observed
-evidence — so it elevates MEDIUM -> HIGH like a ServiceNow/Jira corroborator.
-It deliberately reuses the SAME engine and confidence model (no separate Java
-confidence path), and only OBSERVED signals corroborate.
 """
 from __future__ import annotations
 
