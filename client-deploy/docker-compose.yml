@@ -1,0 +1,73 @@
+services:
+
+  postgres:
+    image: ${ECR_REGISTRY}/agentiq:postgres-1.0
+    environment:
+      POSTGRES_DB:       ${POSTGRES_DB:-agentiq}
+      POSTGRES_USER:     ${POSTGRES_USER:-agentiq}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - agentiq
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-agentiq} -d ${POSTGRES_DB:-agentiq}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  backend:
+    image: ${ECR_REGISTRY}/agentiq:backend-latest
+    # env_file makes all vars available as environment variables in the container
+    env_file:
+      - ${BACKEND_ENV_FILE:-/opt/aiqstore/.env}
+    # Volume mount makes the .env file readable on disk inside the container
+    # so python-dotenv (load_dotenv) finds it at /app/.env
+    volumes:
+      - ${BACKEND_ENV_FILE:-/opt/aiqstore/.env}:/app/.env:ro
+      - backend_data:/app/database
+    networks:
+      - agentiq
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "8000:8000"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request; urllib.request.urlopen('http://localhost:8000/docs')"]
+      interval: 30s
+      timeout: 15s
+      retries: 3
+      start_period: 60s
+
+  frontend:
+    image: ${ECR_REGISTRY}/agentiq:frontend-1.0
+    volumes:
+      # SSL certs are optional — if cert.pem/key.pem are present nginx uses HTTPS
+      - /opt/aiqstore/ssl:/etc/nginx/ssl:ro
+    networks:
+      - agentiq
+    depends_on:
+      - backend
+    ports:
+      - "80:80"
+      - "443:443"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+networks:
+  agentiq:
+    driver: bridge
+
+volumes:
+  postgres_data:
+  backend_data:

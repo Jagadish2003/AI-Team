@@ -131,6 +131,12 @@ COPY . .
 # Set Python path so `import app` resolves correctly (matches run.sh behaviour)
 ENV PYTHONPATH=/app
 
+# Ensure database directory exists for SQLite volume mount
+RUN mkdir -p /app/database
+
+COPY docker-entrypoint.sh /docker-entrypoint.sh
+RUN chmod +x /docker-entrypoint.sh
+
 EXPOSE 8000
 
-CMD ["python", "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+ENTRYPOINT ["/docker-entrypoint.sh"]
