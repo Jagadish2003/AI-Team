@@ -260,6 +260,74 @@ def _ingest_slack_corroboration(org_id: str, run_id: str) -> Dict[str, Any]:
     return build_slack_corroboration_payload(collected)
 
 
+def _ingest_java_app_corroboration(org_id: str, run_id: str) -> Dict[str, Any]:
+    """Drive Java application change-based ingestion and build its corroboration block.
+
+    R17-A3 / T1+T5+T6: the Java application source is ingested through the shared
+    change runner (R16-A1), so this one path satisfies several tasks at once:
+
+      * the runner owns the checkpoint lifecycle — incremental reads against the
+        stored ``(org_id, 'java_app')`` checkpoint, resumable streamed first load,
+        and write-only-on-full-success — so a Java app is NOT re-read in full
+        every run (T1, AC2); and
+      * it emits one ``ingestion.artifact_changed`` event per changed Java
+        operational artifact in every fully-processed batch (T6, AC6), reusing the
+        R16-A1 event path — no events are minted here.
+
+    The changed records from each batch are collected via ``process_batch`` and
+    aggregated into the ``{operational_friction, services}`` block the
+    corroboration engine reads, wrapped under the ``'java_app'`` key that
+    ``_find_corroboration_block('java_app', …)`` recognises
+    (:func:`java_app_signals.build_java_app_corroboration_payload`). A Java-app
+    operational signal can then corroborate a finding in another connected system
+    (COR-09, T5/AC5).
+
+    Operational surface only (AC8): the ingestor reads framework
+    health/diagnostics endpoints + logs, never application source code.
+    Non-blocking: any failure degrades to an empty block (``{}``) so a Java read
+    never aborts the run — the change runner swallows ingestion errors and leaves
+    the checkpoint unadvanced (next run re-reads), and the guards here cover
+    import/everything else.
+    """
+    try:
+        from .ingest import change_runner
+        from .ingest.java_app import JavaAppIngestor
+        from .ingest.java_app_signals import build_java_app_corroboration_payload
+    except Exception as e:  # noqa: BLE001 — Java-app corroboration is optional.
+        logger.warning("Java app connector import failed (non-blocking): %s", e)
+        return {}
+
+    collected: List[Dict[str, Any]] = []
+    try:
+        result = change_runner.ingest_with_checkpoint(
+            JavaAppIngestor(),
+            org_id,
+            process_batch=lambda batch: collected.extend(batch.records),
+        )
+    except Exception as e:  # noqa: BLE001 — belt-and-braces; runner is non-raising.
+        # Type name only — an exception str could carry a Bearer token from a
+        # live HTTP client's request repr.
+        logger.warning(
+            "Java app ingestion failed (non-blocking) org=%s run=%s: [%s]",
+            org_id, run_id, type(e).__name__,
+        )
+        return {}
+
+    if result.error is not None:
+        logger.warning(
+            "Java app change ingest reported an error (non-blocking) org=%s run=%s: [%s]",
+            org_id, run_id, type(result.error).__name__,
+        )
+    else:
+        logger.info(
+            "Java app change ingest: %s — %d batch(es), %d changed record(s), checkpoint_advanced=%s",
+            "first run (streamed full load)" if result.first_run else "incremental",
+            result.batches, result.records, result.checkpoint_advanced,
+        )
+
+    return build_java_app_corroboration_payload(collected)
+
+
 _ENTERPRISE_OPS_DEMO_PATH = (
     Path(__file__).parent / "ingest" / "fixtures" / "enterprise_ops_demo.json"
 )
@@ -428,6 +496,7 @@ def run(
     sf_data, sn_data, jira_data = {}, {}, {}
     github_data: Dict[str, Any] = {}
     slack_data: Dict[str, Any] = {}
+    java_data: Dict[str, Any] = {}
     logger.info(f"Systems: {sorted(list(_systems))}")
 
     # CS-4 / AT-313: each ingest stage reports success to update_run_step via
@@ -631,6 +700,22 @@ def run(
             logger.info("Slack corroboration: escalation pattern present for this run")
         else:
             logger.info("Slack corroboration: no escalation pattern this run (supporting signal only)")
+
+    # 2g. Java application change ingest — R17-A3 / T1+T5+T6 (AgentIQ's first
+    # non-SaaS enterprise source). When a Java app is connected, ingest its
+    # operational surface (framework health/diagnostics + logs) through the shared
+    # change runner: this advances the per-(org, 'java_app') checkpoint
+    # (incremental, not a full re-read), emits an ingestion.artifact_changed event
+    # per changed operational artifact (AC6), and aggregates the changed records
+    # into the corroboration block so Java-app operational friction can corroborate
+    # findings from other systems (COR-09, AC5). Operational surface only —
+    # no source code (AC8). Gated on "java_app" ∈ connected systems.
+    if "java_app" in _systems:
+        java_data = _ingest_java_app_corroboration(org_id, run_id) or {}
+        if java_data.get("java_app", {}).get("operational_friction", {}).get("fired"):
+            logger.info("Java app corroboration: operational friction present for this run")
+        else:
+            logger.info("Java app corroboration: no operational friction this run")
 
     # 2. Context
     org_ctx = build_org_context(sf_data, sn_data, jira_data)
@@ -919,7 +1004,7 @@ def run(
                 sn_by_detector=sn_by_detector,
                 jira_by_detector=jira_by_detector,
                 run_timestamp_iso=_run_ts_iso,
-                source_payloads=[sf_data, sn_data, jira_data, github_data, db_data, slack_data],
+                source_payloads=[sf_data, sn_data, jira_data, github_data, db_data, slack_data, java_data],
             )
         except Exception as _corr_data_err:  # noqa: BLE001 — non-blocking.
             logger.warning("ENT-2 corroboration run_data build failed (non-blocking): %s", _corr_data_err)

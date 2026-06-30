@@ -71,6 +71,15 @@ does not corroborate.
                 "timestamp": "2026-06-01T10:00:00Z",
             },
         },
+
+        "java_app": {                                # COR-09 (R17-A3)
+            "operational_friction": {
+                "fired": True,
+                "timestamp": "2026-06-01T10:00:00Z",
+                "services": ["payments"],
+                "reasons": ["elevated error rate", "latency degradation"],
+            },
+        },
     }
 
 ────────────────────────────────────────────────────────────────────────────
@@ -155,6 +164,10 @@ _CORROBORATION_RULE_SYSTEMS: Dict[str, str] = {
     "COR-02": "jira",
     "COR-04": "confluence",
     "COR-07": "jira",
+    # R17-A3 §3: Java-app operational friction is first-class OBSERVED evidence
+    # (directly measured), so COR-09 is an ELEVATING corroborator like COR-01/02 —
+    # not a supporting-only ceiling like Slack (COR-05).
+    "COR-09": "java_app",
 }
 
 
@@ -585,6 +598,13 @@ def build_corroboration_run_data(
         if slack:
             data["slack"] = slack
 
+    # R17-A3 / COR-09: carry the Java-app operational-friction block through when
+    # the Java application source is connected for this run.
+    if "java_app" in connected:
+        java_app = _find_corroboration_block("java_app", payloads)
+        if java_app:
+            data["java_app"] = java_app
+
     return data
 
 
@@ -717,6 +737,36 @@ def check_cor08_single_source(run_data: Dict[str, Any]) -> bool:
     return len(_connected_systems(run_data)) <= 1
 
 
+def check_cor09_java_app_operational(
+    run_data: Dict[str, Any],
+    run_timestamp: datetime,
+) -> bool:
+    """COR-09: a Java application shows operational friction within the window.
+
+    R17-A3 §3: a Java-app operational signal (rising error rate, latency
+    degradation, resource pressure, or a recurring exception cluster) corroborates
+    a finding in another connected system — e.g. an error-rate rise corroborating
+    a ServiceNow incident spike for the same service. Unlike the Slack ceiling
+    (COR-05), this is an ELEVATING corroborator: operational signals are directly
+    measured, so they are first-class observed evidence.
+
+    Fires when the Java-app ``operational_friction`` block reports ``fired`` and,
+    if it carries a timestamp, that timestamp is within the corroboration window.
+    A friction block with no timestamp is accepted (it is computed for the current
+    run), mirroring the Slack escalation check.
+    """
+    java = _system_block(run_data, "java_app")
+    friction = java.get("operational_friction")
+    if not isinstance(friction, dict) or not friction:
+        # Alternative shape: a boolean flag.
+        return bool(java.get("operational_friction_fired", False))
+    if not friction.get("fired", False):
+        return False
+    if _record_timestamp(friction) is not None:
+        return _within_window(friction, run_timestamp)
+    return True
+
+
 def _weighting_info_for_system(
     weighting_context: Optional[Any],
     system_id: str,
@@ -814,7 +864,7 @@ def _build_label(fired_rules: List[str], triple: bool) -> Optional[str]:
     if triple:
         return TRIPLE_CORROBORATION_LABEL
     # Priority order for the headline label among non-derived rules.
-    for rule_id in ("COR-06", "COR-01", "COR-02", "COR-04", "COR-07", "COR-05", "COR-08"):
+    for rule_id in ("COR-06", "COR-01", "COR-02", "COR-04", "COR-07", "COR-09", "COR-05", "COR-08"):
         if rule_id in fired_rules:
             return RULE_CARD_LABELS.get(rule_id)
     return RULE_CARD_LABELS.get(fired_rules[0])
@@ -917,6 +967,12 @@ def evaluate_corroboration(
     if check_cor07_jira_sprint_velocity(detector_id, run_data, run_timestamp):
         fired_rules.append("COR-07")
         sources.append("Jira (sprint velocity decline)")
+
+    # COR-09: Java application operational friction (R17-A3). First-class observed
+    # evidence — an ELEVATING corroborator like ServiceNow/Jira (not Slack-capped).
+    if check_cor09_java_app_operational(run_data, run_timestamp):
+        fired_rules.append("COR-09")
+        sources.append("Java application (operational signal)")
 
     # COR-05 / COR-06: Slack escalation pattern.
     # Slack elevates ONLY with a primary corroborator (ServiceNow/Jira). The
