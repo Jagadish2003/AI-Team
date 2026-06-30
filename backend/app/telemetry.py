@@ -159,9 +159,16 @@ class EntityExtractionCompletedPayload(TypedDict, total=False):
 
 
 class TemporalEnrichmentCompletedPayload(TypedDict, total=False):
-    """T3-S11-A — emitted once per run after temporal enrichment completes."""
+    """T3-S11-A — emitted once per run after temporal enrichment completes.
+
+    org_id is threaded by materialize_t2 so the event is attributed to the run's
+    org (R17-D3 / AT-450 T5). record_event validates the event TYPE only — not
+    payload keys — so this declaration is documentation of the emitted shape rather
+    than a runtime gate, but it keeps the registered schema honest (review L2).
+    """
     run_id: NotRequired[str]
     opp_count: NotRequired[int]
+    org_id: NotRequired[str]
 
 
 class RelationshipMappingCompletedPayload(TypedDict, total=False):
@@ -649,7 +656,13 @@ def record_event(event_type: str, payload: Optional[dict] = None) -> None:
             from app.middleware.tenancy import resolve_event_org_id
             org_id = resolve_event_org_id(payload.get("org_id"))
         except Exception:
-            org_id = payload.get("org_id") or "unknown"
+            # Use the shared sentinel (M3), not a bare "unknown" literal. Guard the
+            # import: this branch runs when importing from tenancy may have failed.
+            try:
+                from app.middleware.tenancy import UNATTRIBUTED_ORG as _unattr
+            except Exception:
+                _unattr = "_unattributed"
+            org_id = payload.get("org_id") or _unattr
 
         payload_str = json.dumps(payload)
 

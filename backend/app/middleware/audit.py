@@ -130,7 +130,15 @@ def log_event(event_type: str, **kwargs: Any) -> None:
 
         org_id = resolve_event_org_id(explicit_org_id)
     except Exception:
-        org_id = explicit_org_id or "unknown"
+        # Fall back to the shared sentinel (M3) rather than a bare "unknown"
+        # literal, so unresolved events are filed under one unambiguous value.
+        # Guard the import too: this branch runs precisely when importing from
+        # tenancy may be the thing that failed, and log_event must never raise.
+        try:
+            from app.middleware.tenancy import UNATTRIBUTED_ORG as _unattr
+        except Exception:
+            _unattr = "_unattributed"
+        org_id = explicit_org_id or _unattr
 
     try:
         _ensure_table()

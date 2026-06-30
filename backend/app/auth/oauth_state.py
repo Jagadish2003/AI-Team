@@ -19,29 +19,49 @@ State format — three dot-separated segments::
                 makes the org_id tamper-evident: the browser/provider cannot alter
                 the org without invalidating the signature (T2-AC2/AC3).
 
-The server secret is the same server-controlled JWT signing secret used to sign
-user sessions (:func:`app.auth.user_auth._jwt_secret`) — already required to be
-strong in production, so there is no second secret to provision. Verification
-uses :func:`hmac.compare_digest` (never ``==``) so state validation is
-timing-safe, matching the nonce-comparison policy elsewhere in this package.
+The signing key is a DEDICATED ``OAUTH_STATE_SECRET`` when set, falling back to
+the server's JWT signing secret otherwise (see :func:`_state_secret`). Keeping the
+two keys separable matters: OAuth-state signing and user-session signing are
+different security domains, so rotating ``JWT_SECRET`` (e.g. after a suspected
+session-token compromise) must not also invalidate every in-flight OAuth ``state``
+(R17-D3 review H1). Verification uses :func:`hmac.compare_digest` (never ``==``) so
+state validation is timing-safe, matching the nonce-comparison policy elsewhere in
+this package.
+
+Disclosure trade-off (R17-D3 review L1): ``org_id`` travels in the state as PLAIN
+TEXT, so it is visible to the OAuth provider and to any HTTP intermediary that sees
+the redirect URL. In production it is an opaque internal UUID (never PII), and the
+HMAC makes it tamper-evident, so this is a deliberate, low-risk choice favouring
+inspectability over opacity — documented here so a future maintainer does not
+mistake it for an oversight.
 """
 from __future__ import annotations
 
 import hashlib
 import hmac
 import logging
+import os
 from typing import Optional
 
 logger = logging.getLogger(__name__)
 
 
 def _state_secret() -> bytes:
-    """Return the HMAC key for state signing — the server's JWT signing secret.
+    """Return the HMAC key used to sign/verify the OAuth ``state``.
 
-    Resolved at call time (never cached at import) so a rotated ``JWT_SECRET``
-    takes effect without a process restart, and so importing this module never
-    forces secret resolution at startup.
+    Prefers a DEDICATED ``OAUTH_STATE_SECRET`` so the OAuth-state signing key and
+    the user-session JWT signing key stay in separate security domains: rotating
+    ``JWT_SECRET`` must not also invalidate every in-flight OAuth ``state`` (H1).
+    Falls back to the JWT signing secret when ``OAUTH_STATE_SECRET`` is unset, so
+    existing deployments keep working until the dedicated key is provisioned.
+
+    Resolved at call time (never cached at import) so a rotated secret takes effect
+    without a process restart, and so importing this module never forces secret
+    resolution at startup.
     """
+    dedicated = os.environ.get("OAUTH_STATE_SECRET")
+    if dedicated:
+        return dedicated.encode("utf-8")
     from app.auth.user_auth import _jwt_secret
 
     return _jwt_secret().encode("utf-8")
