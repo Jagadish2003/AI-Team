@@ -136,33 +136,6 @@ CONNECTOR_AUTH_CONFIGS: Dict[str, ConnectorAuthConfig] = {
         authorization_url="https://github.com/login/oauth/authorize",
         redirect_uri=os.environ.get("OAUTH_REDIRECT_URI", ""),
     ),
-    "teams": ConnectorAuthConfig(
-        connector_id="teams",
-        flow="authorization_code",
-        client_id=os.getenv("TEAMS_CLIENT_ID", "teams-dev-client-id"),
-        secret_key="TEAMS_CLIENT_SECRET",
-        token_url=f"https://login.microsoftonline.com/{TEAMS_TENANT_ID}/oauth2/v2.0/token",
-        revocation_url=None,                                                        # Microsoft identity platform has no OAuth2 revoke endpoint; tokens expire + refresh
-        # R17-A1 §3 / AT-434: least-privilege, READ-ONLY Microsoft Graph scopes —
-        # only what the reach-phase Teams ingestor needs to list the granted teams
-        # / channels and read those channels' messages. Deliberately NO Chat.*
-        # scopes (1:1 / group direct messages) and NO write/send scopes, so
-        # private chats and DMs can never be accessed (AC4) — the privacy
-        # guarantee is enforced at the OAuth-scope level, and Microsoft's own
-        # consent screen shows the admin exactly these permissions. offline_access
-        # yields a refresh token so the access token auto-refreshes in the vault.
-        scopes=[
-            "offline_access",
-            "https://graph.microsoft.com/Team.ReadBasic.All",
-            "https://graph.microsoft.com/Channel.ReadBasic.All",
-            "https://graph.microsoft.com/ChannelMessage.Read.All",
-        ],
-        authorization_url=f"https://login.microsoftonline.com/{TEAMS_TENANT_ID}/oauth2/v2.0/authorize",
-        redirect_uri=os.environ.get("OAUTH_REDIRECT_URI", ""),
-        # Microsoft v2.0: prompt=consent guarantees the admin sees the requested
-        # scopes and a refresh_token is issued (with offline_access above).
-        authorize_params={"prompt": "consent"},
-    ),
     "slack": ConnectorAuthConfig(
         connector_id="slack",
         flow="authorization_code",
@@ -186,7 +159,7 @@ CONNECTOR_AUTH_CONFIGS: Dict[str, ConnectorAuthConfig] = {
     "teams": ConnectorAuthConfig(
         connector_id="teams",
         flow="authorization_code",
-        client_id=os.getenv("TEAMS_CLIENT_ID", "teams-dev-client-id"),
+        client_id=os.getenv("TEAMS_CLIENT_ID") or "teams-dev-client-id",
         secret_key="TEAMS_CLIENT_SECRET",
         # Microsoft identity platform (v2.0) endpoints. The tenant segment is
         # driven by TEAMS_TENANT_ID above so a deployment can lock the OAuth flow

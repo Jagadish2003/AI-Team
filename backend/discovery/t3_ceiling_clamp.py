@@ -83,9 +83,31 @@ SLACK_SYSTEM_IDS: frozenset = frozenset({
     "slack_workspace",
 })
 
-#: Source-label substrings that identify Slack in corroboration_sources lists.
-#: Compared case-insensitively.
+#: Microsoft Teams connector IDs (R17-A1 / AT-433). Teams is a conversation source
+#: with the SAME MEDIUM ceiling discipline as Slack. Same maintenance obligation as
+#: SLACK_SYSTEM_IDS: any new Teams connector ID must be added here or it would
+#: silently bypass the ceiling.
+TEAMS_SYSTEM_IDS: frozenset = frozenset({
+    "teams",
+    "teams_workspace",
+})
+
+#: All conversation sources (Slack + Teams). A finding scored from any of these
+#: can never reach HIGH from the scorer alone — they are noisy, supplementary
+#: signal and only corroborate findings carried by a system of record.
+CONVERSATION_SOURCE_IDS: frozenset = SLACK_SYSTEM_IDS | TEAMS_SYSTEM_IDS
+
+#: Source-label substrings that identify a conversation source (Slack / Teams) in
+#: corroboration_sources lists. Compared case-insensitively.
 _SLACK_SOURCE_LABEL = "slack"
+_TEAMS_SOURCE_LABEL = "teams"
+_CONVERSATION_SOURCE_LABELS = (_SLACK_SOURCE_LABEL, _TEAMS_SOURCE_LABEL)
+
+
+def _is_conversation_source_label(label: str) -> bool:
+    """True when a corroboration-source label denotes a conversation source."""
+    low = label.lower()
+    return any(cl in low for cl in _CONVERSATION_SOURCE_LABELS)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -162,21 +184,26 @@ def apply_t3_ceiling_clamp(
     if role_key in SUPPORTING_ONLY_ROLES:
         return CONFIDENCE_MEDIUM
 
-    # ── Rule 2: Slack system-ID always caps at MEDIUM ─────────────────────────
+    # ── Rule 2: conversation-source system-ID always caps at MEDIUM ───────────
+    # Slack and Teams are supplementary conversation sources; even if a customer
+    # incorrectly assigns a system_of_record role to one, the system-ID clamp
+    # enforces the ceiling.
     sid = system_id.strip().lower() if system_id else ""
-    if sid in SLACK_SYSTEM_IDS:
+    if sid in CONVERSATION_SOURCE_IDS:
         return CONFIDENCE_MEDIUM
 
-    # ── Rule 3: Slack-only corroboration cannot reach HIGH ────────────────────
+    # ── Rule 3: conversation-source-only corroboration cannot reach HIGH ──────
+    # When the only corroborating evidence is conversation sources (Slack and/or
+    # Teams) with no primary system-of-record corroborator, confidence stays
+    # MEDIUM. Reinforces COR-05: conversation escalation alone never elevates.
     if corroboration_sources is not None:
-        has_slack = any(
-            _SLACK_SOURCE_LABEL in s.lower() for s in corroboration_sources
+        has_conversation = any(
+            _is_conversation_source_label(s) for s in corroboration_sources
         )
-        has_non_slack = any(
-            _SLACK_SOURCE_LABEL not in s.lower() for s in corroboration_sources
+        has_primary = any(
+            not _is_conversation_source_label(s) for s in corroboration_sources
         )
-        # Slack sources present, no non-Slack primary corroborator → MEDIUM
-        if has_slack and not has_non_slack:
+        if has_conversation and not has_primary:
             return CONFIDENCE_MEDIUM
 
     # ── Rule 4: Single-source cannot self-corroborate to HIGH ────────────────
