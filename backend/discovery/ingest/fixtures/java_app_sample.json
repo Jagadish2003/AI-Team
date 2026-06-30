@@ -1,0 +1,60 @@
+{
+  "_comment": "R17-A3 / T1 — deterministic offline fixture for the Java application change-based ingestor (JavaAppIngestor). Models the OPERATIONAL surface only (Spring Boot Actuator health/metrics/info samples + application logs) — phase one reads what a running app exposes, NEVER its source code (AC8). 'payments-api' shows runtime friction (health flips UP->DOWN, error-rate/p99-latency/heap pressure rise, ERROR+exception logs); 'inventory-api' is healthy and quiet (one nominal sample, no error logs) so incremental and empty-delta behaviour can be exercised. Actuator samples carry observed_at timestamps; log entries carry monotonically increasing per-app offsets. No credentials are present in offline mode.",
+  "apps": [
+    {"app_id": "payments-api", "actuator_base": "http://payments-api.internal:8080/actuator", "log_source": "/var/log/payments-api/app.log"},
+    {"app_id": "inventory-api", "actuator_base": "http://inventory-api.internal:8080/actuator", "log_source": "/var/log/inventory-api/app.log"}
+  ],
+  "actuator_samples": {
+    "payments-api": [
+      {
+        "observed_at": "2026-06-28T09:00:00+00:00",
+        "health": {"status": "UP", "components": {"db": "UP", "diskSpace": "UP", "ledgerService": "UP"}},
+        "metrics": {
+          "http.server.requests.error.rate": 0.02,
+          "http.server.requests.p99.ms": 420.0,
+          "http.server.requests.throughput.rps": 180.0,
+          "jvm.memory.heap.used.ratio": 0.55,
+          "system.cpu.usage": 0.34
+        },
+        "info": {"app": {"name": "payments-api", "version": "3.2.1"}, "build": {"time": "2026-06-20T12:00:00+00:00"}}
+      },
+      {
+        "observed_at": "2026-06-28T10:00:00+00:00",
+        "health": {"status": "DOWN", "components": {"db": "UP", "diskSpace": "DOWN", "ledgerService": "DOWN"}},
+        "metrics": {
+          "http.server.requests.error.rate": 0.18,
+          "http.server.requests.p99.ms": 1850.0,
+          "http.server.requests.throughput.rps": 95.0,
+          "jvm.memory.heap.used.ratio": 0.93,
+          "system.cpu.usage": 0.88
+        },
+        "info": {"app": {"name": "payments-api", "version": "3.2.1"}, "build": {"time": "2026-06-20T12:00:00+00:00"}}
+      }
+    ],
+    "inventory-api": [
+      {
+        "observed_at": "2026-06-28T09:30:00+00:00",
+        "health": {"status": "UP", "components": {"db": "UP", "diskSpace": "UP"}},
+        "metrics": {
+          "http.server.requests.error.rate": 0.001,
+          "http.server.requests.p99.ms": 110.0,
+          "http.server.requests.throughput.rps": 60.0,
+          "jvm.memory.heap.used.ratio": 0.41,
+          "system.cpu.usage": 0.22
+        },
+        "info": {"app": {"name": "inventory-api", "version": "1.9.0"}}
+      }
+    ]
+  },
+  "logs": {
+    "payments-api": [
+      {"offset": 1, "ts": "2026-06-28T09:05:00+00:00", "level": "INFO", "logger": "c.f.payments.Bootstrap", "message": "Started PaymentsApplication in 8.42s"},
+      {"offset": 2, "ts": "2026-06-28T09:58:11+00:00", "level": "WARN", "logger": "c.f.payments.gw.RetryClient", "message": "Retry 1/3 calling ledger-service: read timed out"},
+      {"offset": 3, "ts": "2026-06-28T10:00:03+00:00", "level": "ERROR", "logger": "c.f.payments.gw.LedgerClient", "message": "Failed to post ledger entry for order 88213", "exception": "java.net.SocketTimeoutException: Read timed out"},
+      {"offset": 4, "ts": "2026-06-28T10:00:42+00:00", "level": "ERROR", "logger": "c.f.payments.web.PaymentController", "message": "Unhandled error processing POST /api/payments", "exception": "org.springframework.dao.QueryTimeoutException: Statement cancelled due to timeout"}
+    ],
+    "inventory-api": [
+      {"offset": 1, "ts": "2026-06-28T09:31:00+00:00", "level": "INFO", "logger": "c.f.inventory.Bootstrap", "message": "Started InventoryApplication in 5.10s"}
+    ]
+  }
+}
