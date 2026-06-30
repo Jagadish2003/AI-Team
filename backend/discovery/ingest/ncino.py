@@ -604,8 +604,7 @@ def _build_spreading_metrics(
             continue
         created = _parse_date(sp.get("CreatedDate"))
         days_open = _days_since(created) or 0
-        # if days_open < 14: - Change to this on 24th June 2026.
-        if days_open < 1:
+        if days_open < 14:
             continue
 
         spread_id = sp.get("LLC_BI__Spread__c", "")

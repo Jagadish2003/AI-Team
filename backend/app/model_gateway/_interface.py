@@ -69,3 +69,18 @@ class ModelProvider(ABC):
         Returns an empty list on failure (degrades gracefully).
         """
         ...
+
+    def validate(self) -> None:
+        """Optional startup configuration check for the SELECTED provider.
+
+        Called by ``validate_provider_config()`` at app startup for whichever
+        providers ``MODEL_GENERATION_PROVIDER`` / ``MODEL_EMBEDDING_PROVIDER``
+        resolve to.  A provider may be a registered *name* yet still be
+        misconfigured (e.g. selected with no endpoint URL); implementations
+        should log a clear warning here so a boot-time misconfiguration is
+        visible instead of silently degrading every runtime call to ok=False.
+
+        Must never raise — startup must not be blocked by a validation hook.
+        The default is a no-op for providers with nothing to validate.
+        """
+        return None
