@@ -585,6 +585,52 @@ async def test_exchange_code_200_returns_json():
 
 
 @pytest.mark.anyio
+async def test_exchange_code_parses_github_form_encoded_and_sends_json_accept():
+    """GitHub's token endpoint returns application/x-www-form-urlencoded by
+    default and only switches to JSON when the request sends
+    ``Accept: application/json``. Without that header ``response.json()`` raised
+    on the form body and the whole connect flow failed as "exchange_failed".
+
+    exchange_code must (a) send the Accept header so a correct GitHub app returns
+    JSON, and (b) still parse a form-encoded body as a defensive fallback so the
+    access token is captured either way (regression for the GitHub OAuth bug)."""
+    from unittest.mock import patch
+    from urllib.parse import urlencode as _urlencode
+
+    from backend.app.auth.oauth import exchange_code
+
+    captured: dict = {}
+
+    class _FormTransport(httpx.AsyncBaseTransport):
+        async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+            captured["accept"] = request.headers.get("accept")
+            body = _urlencode(
+                {
+                    "access_token": "gho_token",
+                    "scope": "repo:status,read:org",
+                    "token_type": "bearer",
+                }
+            )
+            return httpx.Response(
+                200,
+                content=body.encode("utf-8"),
+                headers={"content-type": "application/x-www-form-urlencoded; charset=utf-8"},
+            )
+
+    config = _make_config(connector_id="github")
+    with patch.dict(_os.environ, {"_TEST_OAUTH_SECRET": "s3cr3t"}):
+        result = await exchange_code(config, code="gh-code", _transport=_FormTransport())
+
+    # (a) Accept: application/json is sent so a correct GitHub app returns JSON.
+    assert captured["accept"] == "application/json"
+    # (b) Even a form-encoded body is parsed (fallback) — the token is captured,
+    #     so the callback stores it and the tile flips to Connected (no
+    #     "exchange_failed").
+    assert result["access_token"] == "gho_token"
+    assert result["token_type"] == "bearer"
+
+
+@pytest.mark.anyio
 async def test_exchange_code_400_raises_oauth_error():
     """exchange_code raises OAuthError on HTTP 400."""
     from unittest.mock import patch

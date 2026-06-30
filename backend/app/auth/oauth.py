@@ -5,7 +5,7 @@ import hashlib
 import os
 import secrets
 from typing import Optional
-from urllib.parse import urlencode
+from urllib.parse import parse_qsl, urlencode
 
 import httpx
 
@@ -13,6 +13,34 @@ from app.auth.models import ConnectorAuthConfig
 from app.auth.secrets import resolve_secret
 
 OAUTH_HTTP_TIMEOUT = int(os.environ.get("OAUTH_HTTP_TIMEOUT_SECONDS", "30"))
+
+# Ask the token endpoint for a JSON response. GitHub's token endpoint
+# (https://github.com/login/oauth/access_token) returns
+# application/x-www-form-urlencoded BY DEFAULT and only switches to JSON when the
+# request sends this header — without it ``response.json()`` raises on the form
+# body and the whole connect flow fails as "exchange_failed". Every other
+# provider already returns JSON and honours this header, so sending it is safe
+# and correct for all of them.
+_JSON_ACCEPT = {"Accept": "application/json"}
+
+
+def _parse_token_response(response: httpx.Response) -> dict:
+    """Parse an OAuth token response body into a dict.
+
+    Prefers JSON (what every provider returns once asked via ``Accept:
+    application/json``), but falls back to decoding an
+    ``application/x-www-form-urlencoded`` body so a token is never dropped if a
+    provider ignores the Accept header (GitHub's historical default). Returning
+    a partial/empty dict here is fine — the caller's ``store_token`` validates
+    that an ``access_token`` is present.
+    """
+    content_type = response.headers.get("content-type", "")
+    if "application/json" in content_type.lower():
+        return response.json()
+    try:
+        return response.json()
+    except Exception:
+        return dict(parse_qsl(response.text))
 
 
 class OAuthError(Exception):
@@ -105,12 +133,12 @@ async def exchange_code(
         data["code_verifier"] = code_verifier
     async with httpx.AsyncClient(timeout=OAUTH_HTTP_TIMEOUT, transport=_transport) as client:
         try:
-            response = await client.post(config.token_url, data=data)
+            response = await client.post(config.token_url, data=data, headers=_JSON_ACCEPT)
         except httpx.TimeoutException:
             raise OAuthError(config.connector_id, "timeout")
     if response.status_code != 200:
         raise OAuthError(config.connector_id, response.status_code)
-    return response.json()
+    return _parse_token_response(response)
 
 
 async def refresh_token(
@@ -134,12 +162,13 @@ async def refresh_token(
                     "client_id": config.client_id,
                     "client_secret": resolve_secret(config.secret_key),
                 },
+                headers=_JSON_ACCEPT,
             )
         except httpx.TimeoutException:
             raise OAuthError(config.connector_id, "timeout")
     if response.status_code != 200:
         raise OAuthError(config.connector_id, response.status_code)
-    return response.json()
+    return _parse_token_response(response)
 
 
 async def get_client_credentials_token(
@@ -162,9 +191,10 @@ async def get_client_credentials_token(
                     "client_secret": resolve_secret(config.secret_key),
                     "scope": " ".join(config.scopes),
                 },
+                headers=_JSON_ACCEPT,
             )
         except httpx.TimeoutException:
             raise OAuthError(config.connector_id, "timeout")
     if response.status_code != 200:
         raise OAuthError(config.connector_id, response.status_code)
-    return response.json()
+    return _parse_token_response(response)
