@@ -50,6 +50,7 @@ from .db_connectors.models import (
     ScopeDeclaration,
 )
 from .middleware.audit import SCHEMA_DISCOVERED, log_event
+from .middleware.tenancy import get_current_org_id
 from .security import require_auth
 from .rbac import require_role
 
@@ -74,19 +75,20 @@ except ModuleNotFoundError:  # Runtime inside backend/ where connectors is top-l
 _KV_CONFIG_PREFIX: str = "db_connector_config"
 _KV_SCOPE_PREFIX: str = "db_connector_scope"
 
-# Default org_id used in dev/single-tenant mode.
-# Production: derive from authenticated JWT claims.
-_DEV_ORG_ID: str = "default"
-
 # ---------------------------------------------------------------------------
 # Pydantic request / response models
 # ---------------------------------------------------------------------------
 
 
 class ScopeRequest(BaseModel):
-    """Body for POST /api/db-connectors/{connector_id}/scope."""
+    """Body for POST /api/db-connectors/{connector_id}/scope.
 
-    org_id: str = _DEV_ORG_ID
+    org_id is intentionally NOT a request-body field (R17-D3 / AT-448): scope is
+    always declared for the authenticated org resolved from the tenancy context,
+    never from caller-supplied input. Trusting a body org_id would let an
+    authenticated user in one org declare/overwrite scope for another org.
+    """
+
     schemas: List[str]
     tables: List[str] = []
 
@@ -267,7 +269,7 @@ def get_schema(
     token: str = Depends(require_auth),
     _role: str = Depends(require_role("analyst")),
 ) -> SchemaDiscoveryResponse:
-    org_id = _DEV_ORG_ID
+    org_id = get_current_org_id()
 
     config = _load_config(org_id, connector_id)
     if config is None:
@@ -337,7 +339,7 @@ def post_scope(
     token: str = Depends(require_auth),
     _role: str = Depends(require_role("analyst")),
 ) -> Dict[str, Any]:
-    org_id = body.org_id
+    org_id = get_current_org_id()
 
     scope = ScopeDeclaration(
         org_id=org_id,
@@ -373,7 +375,7 @@ def get_scope(
     token: str = Depends(require_auth),
     _role: str = Depends(require_role("viewer")),
 ) -> ScopeResponse:
-    org_id = _DEV_ORG_ID
+    org_id = get_current_org_id()
 
     scope = load_scope(org_id, connector_id)
 
@@ -407,7 +409,7 @@ def get_connection_test(
     token: str = Depends(require_auth),
     _role: str = Depends(require_role("analyst")),
 ) -> ConnectionTestResponse:
-    org_id = _DEV_ORG_ID
+    org_id = get_current_org_id()
 
     config = _load_config(org_id, connector_id)
     if config is None:

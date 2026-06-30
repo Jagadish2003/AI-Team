@@ -71,9 +71,11 @@ def test_stack_builder_compute_flow_writes_temporal_fields(monkeypatch):
     enriched = stored[KV_LLM_ENRICHMENT]["perOpportunity"]["opp_001"]
     assert calls["baseline_calculated"] is True
     assert calls["enrich_args"] == ("run_123", "demo-org", "service_cloud")
+    # R17-D3 / AT-450 (T5): the event now carries org attribution so the
+    # background (no-request-context) emission is filed under the right tenant.
     assert calls["event"] == (
         "temporal.enrichment_completed",
-        {"run_id": "run_123"},
+        {"run_id": "run_123", "org_id": "demo-org"},
     )
     assert enriched["baseline_context"] == "Stable - within normal range"
     assert enriched["trend_direction"] == "stable"

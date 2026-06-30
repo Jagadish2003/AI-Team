@@ -542,6 +542,7 @@ def test_auth_url_endpoint_emits_pkce_bound_to_stored_verifier(client):
     import base64 as _b64
     import hashlib as _hashlib
 
+    from app.auth.oauth_state import decode_state
     from app.auth.vault import consume_nonce
 
     with _patch.dict(_os.environ, _vault_env()):
@@ -553,8 +554,10 @@ def test_auth_url_endpoint_emits_pkce_bound_to_stored_verifier(client):
     challenge = qs["code_challenge"][0]
     state = qs["state"][0]
 
-    # The stored nonce carries the verifier; its S256 hash must equal the challenge.
-    data = consume_nonce(state)
+    # The state carries the org + the raw nonce (AT-447 T2); the server stores the
+    # verifier under that raw nonce, so decode the state before looking it up.
+    nonce = decode_state(state)["nonce"]
+    data = consume_nonce(nonce)
     assert data is not None and data.get("code_verifier")
     expected = (
         _b64.urlsafe_b64encode(_hashlib.sha256(data["code_verifier"].encode("ascii")).digest())
@@ -1479,6 +1482,13 @@ from urllib.parse import urlparse as _urlparse
 
 _AUTH_HEADERS = {"Authorization": "Bearer dev-token-change-me"}
 
+# The dev token carries no signed org claim, so the tenancy middleware resolves it
+# to DEV_DEFAULT_ORG. Tests that pre-seed a credential and then read it back through
+# an authenticated route must store under THIS org — the route now derives the org
+# from the authenticated request (get_current_org_id), not a hardcoded 'default'
+# (R17-D3 / AT-446). Replaces the removed routes_connector_auth._DEFAULT_ORG_ID.
+from app.middleware.tenancy import DEV_DEFAULT_ORG as _AUTH_ORG_ID
+
 
 # ---------------------------------------------------------------------------
 # AC16: CONNECTOR_AUTH_CONFIGS has 8 entries, correct flows, correct revocation_url values
@@ -1796,6 +1806,160 @@ def test_callback_marks_connector_connected_under_initiating_org(client):
     assert acme_row["status"] == "connected"
 
 
+def test_callback_no_org_in_nonce_fails_closed(client):
+    """R17-D3 / AT-446 T1-AC1: with the hardcoded _DEFAULT_ORG_ID removed, a state
+    nonce that carries no org cannot be silently bound to the 'default' tenant. The
+    callback must fail closed (redirect to the error page, no token stored) rather
+    than store the credential under 'default'."""
+    from app.auth.oauth_state import encode_state
+
+    # A validly-signed state (so it passes signature verification) whose backing
+    # server-side nonce has no bound org.
+    state = encode_state("acme-test-org", "raw-nonce-no-org")
+    nonce_without_org = {
+        "connector_id": "salesforce",
+        "code_verifier": None,
+        "org_id": None,
+    }
+    fake_token = {"access_token": "tok", "refresh_token": "r", "expires_in": 3600}
+    with _patch.dict(_os.environ, _vault_env()), \
+         _patch("app.routes_connector_auth.consume_nonce", return_value=nonce_without_org), \
+         _patch("app.routes_connector_auth.exchange_code", new_callable=_AsyncMock, return_value=fake_token) as mock_exchange, \
+         _patch("app.routes_connector_auth.store_token", return_value=None) as mock_store:
+        resp = client.get(
+            f"/api/connectors/oauth/callback?code=auth-code&state={state}",
+            headers=_AUTH_HEADERS,
+            follow_redirects=False,
+        )
+
+    assert resp.status_code == 302
+    location = resp.headers["location"]
+    assert "status=error" in location
+    assert "code=no_org" in location
+    # No token exchange or storage may happen without a resolved tenant.
+    mock_exchange.assert_not_awaited()
+    mock_store.assert_not_called()
+
+
+def test_default_org_id_removed_from_oauth_path(client):
+    """T1-AC1: the hardcoded _DEFAULT_ORG_ID literal is completely gone from the
+    OAuth path module."""
+    import app.routes_connector_auth as _mod
+
+    assert not hasattr(_mod, "_DEFAULT_ORG_ID")
+
+
+# ---------------------------------------------------------------------------
+# AT-447 (T2): org carried & verified through the OAuth state parameter
+# ---------------------------------------------------------------------------
+
+
+def test_auth_url_state_carries_initiating_org(client):
+    """T2-AC1: the state emitted by auth-url carries — and verifies back to — the
+    org that initiated the flow."""
+    from app.auth.oauth_state import decode_state
+
+    org_headers = {**_AUTH_HEADERS, "X-Org-Id": "acme-test-org"}
+    with _patch.dict(_os.environ, _vault_env()):
+        r = client.get("/api/connectors/salesforce/auth-url", headers=org_headers)
+    assert r.status_code == 200
+    state = _parse_qs(_urlparse(r.json()["auth_url"]).query)["state"][0]
+
+    decoded = decode_state(state)
+    assert decoded is not None, "state must verify under the server signing secret"
+    assert decoded["org_id"] == "acme-test-org"
+    assert decoded["nonce"], "state must carry the single-use nonce"
+
+
+def test_callback_tampered_state_org_is_rejected(client):
+    """T2-AC2: swapping the org embedded in the state without re-signing it is
+    detected (HMAC mismatch) and rejected with a generic 400 — no token exchange."""
+    from app.auth.oauth_state import encode_state
+
+    state = encode_state("org-aaaa", "raw-nonce-1")
+    # Tamper: rewrite the org segment but keep the original signature.
+    tampered = state.replace("org-aaaa", "org-bbbb", 1)
+    assert tampered != state
+
+    with _patch.dict(_os.environ, _vault_env()), \
+         _patch("app.routes_connector_auth.consume_nonce") as mock_consume, \
+         _patch("app.routes_connector_auth.exchange_code", new_callable=_AsyncMock) as mock_exchange, \
+         _patch("app.routes_connector_auth.store_token", return_value=None) as mock_store:
+        resp = client.get(
+            f"/api/connectors/oauth/callback?code=c&state={tampered}",
+            headers=_AUTH_HEADERS,
+            follow_redirects=False,
+        )
+
+    assert resp.status_code == 400
+    # A tampered state never even reaches the nonce store or token exchange.
+    mock_consume.assert_not_called()
+    mock_exchange.assert_not_awaited()
+    mock_store.assert_not_called()
+
+
+def test_callback_state_org_mismatching_nonce_org_is_rejected(client):
+    """T2-AC3: a callback cannot be bound to a different tenant than initiated it.
+
+    Even a validly-signed state whose org differs from the org the server bound to
+    the nonce at initiation is refused — proving the binding holds even against an
+    attacker who could mint a signed state for their own org but replays a victim's
+    nonce."""
+    from app.auth.oauth_state import encode_state
+
+    # State legitimately signed for the attacker's org...
+    state = encode_state("attacker-org", "raw-nonce-2")
+    # ...but the server bound THIS nonce to the victim's org when the flow started.
+    nonce_data = {
+        "connector_id": "salesforce",
+        "code_verifier": None,
+        "org_id": "victim-org",
+    }
+    with _patch.dict(_os.environ, _vault_env()), \
+         _patch("app.routes_connector_auth.consume_nonce", return_value=nonce_data), \
+         _patch("app.routes_connector_auth.exchange_code", new_callable=_AsyncMock) as mock_exchange, \
+         _patch("app.routes_connector_auth.store_token", return_value=None) as mock_store:
+        resp = client.get(
+            f"/api/connectors/oauth/callback?code=c&state={state}",
+            headers=_AUTH_HEADERS,
+            follow_redirects=False,
+        )
+
+    assert resp.status_code == 400
+    # The mismatch is caught before the code is ever exchanged or a token stored.
+    mock_exchange.assert_not_awaited()
+    mock_store.assert_not_called()
+
+
+def test_callback_state_org_matches_nonce_org_succeeds(client):
+    """T2 happy path: when the signed-state org matches the nonce's bound org, the
+    callback completes and stores the token under that org."""
+    from app.auth.oauth_state import encode_state
+
+    state = encode_state("acme-test-org", "raw-nonce-3")
+    nonce_data = {
+        "connector_id": "salesforce",
+        "code_verifier": None,
+        "org_id": "acme-test-org",
+    }
+    fake_token = {"access_token": "tok", "refresh_token": "r", "expires_in": 3600}
+    captured = {}
+    with _patch.dict(_os.environ, _vault_env()), \
+         _patch("app.routes_connector_auth.consume_nonce", return_value=nonce_data), \
+         _patch("app.routes_connector_auth.exchange_code", new_callable=_AsyncMock, return_value=fake_token), \
+         _patch("app.routes_connector_auth.store_token", side_effect=lambda org, cid, tok: captured.update(org=org)):
+        resp = client.get(
+            f"/api/connectors/oauth/callback?code=c&state={state}",
+            headers=_AUTH_HEADERS,
+            follow_redirects=False,
+        )
+
+    assert resp.status_code == 302
+    assert "connected=salesforce" in resp.headers["location"]
+    # The token is stored under the verified, mutually-agreed org.
+    assert captured.get("org") == "acme-test-org"
+
+
 def test_callback_error_location_uses_status_error_and_code(client):
     """A failed callback (missing code) redirects with status=error and a code param (T3-AC2)."""
     # No code/state → error path, no token exchange attempted.
@@ -1920,8 +2084,7 @@ def test_delete_token_unreachable_revocation_still_returns_204(client):
     from app.auth.vault import store_token as _store_token_vault
     with _patch.dict(_os.environ, _vault_env()):
         # Store a token so revoke_token has something to work with
-        from app.routes_connector_auth import _DEFAULT_ORG_ID
-        _store_token_vault(_DEFAULT_ORG_ID, "confluence", _token_response())
+        _store_token_vault(_AUTH_ORG_ID, "confluence", _token_response())
 
         with _patch("app.routes_connector_auth.revoke_token", new_callable=_AsyncMock, return_value=None) as mock_revoke:
             resp = client.delete(
@@ -1952,10 +2115,9 @@ def test_token_status_returns_needs_auth_when_no_token(client):
 def test_token_status_returns_connected_for_fresh_token(client):
     """token-status returns connected when token expiry is well beyond threshold (AC14)."""
     from app.auth.vault import store_token as _store_token_vault
-    from app.routes_connector_auth import _DEFAULT_ORG_ID
 
     with _patch.dict(_os.environ, _vault_env()):
-        _store_token_vault(_DEFAULT_ORG_ID, "salesforce", _token_response(expires_in=7200))
+        _store_token_vault(_AUTH_ORG_ID, "salesforce", _token_response(expires_in=7200))
         resp = client.get(
             "/api/connectors/salesforce/token-status",
             headers=_AUTH_HEADERS,
@@ -1969,11 +2131,10 @@ def test_token_status_returns_connected_for_fresh_token(client):
 def test_token_status_returns_needs_refresh_when_within_threshold(client):
     """token-status returns needs_refresh when token expires within REFRESH_THRESHOLD_SECONDS (AC14)."""
     from app.auth.vault import store_token as _store_token_vault
-    from app.routes_connector_auth import _DEFAULT_ORG_ID
 
     with _patch.dict(_os.environ, _vault_env()):
         # Token expires in 60 seconds (well within default 300s threshold)
-        _store_token_vault(_DEFAULT_ORG_ID, "jira", _token_response(expires_in=60))
+        _store_token_vault(_AUTH_ORG_ID, "jira", _token_response(expires_in=60))
         resp = client.get(
             "/api/connectors/jira/token-status",
             headers=_AUTH_HEADERS,
@@ -1988,17 +2149,16 @@ def test_token_status_returns_refresh_failed_when_flagged(client):
     """token-status returns refresh_failed when refresh_failed flag is set and token is near expiry (AC14)."""
     import sqlite3 as _sq
     from app.auth.vault import store_token as _store_token_vault
-    from app.routes_connector_auth import _DEFAULT_ORG_ID
 
     with _patch.dict(_os.environ, _vault_env()):
         # Store a near-expiry token
-        _store_token_vault(_DEFAULT_ORG_ID, "confluence", _token_response(expires_in=60))
+        _store_token_vault(_AUTH_ORG_ID, "confluence", _token_response(expires_in=60))
         # Directly set refresh_failed=1 (simulating vault marking the flag after a failed refresh)
         db_path = _os.environ.get("DB_PATH", "database/dev.db")
         con = _sq.connect(db_path)
         con.execute(
             "UPDATE credentials SET refresh_failed=1 WHERE org_id=%s AND connector_id=%s",
-            (_DEFAULT_ORG_ID, "confluence"),
+            (_AUTH_ORG_ID, "confluence"),
         )
         con.commit()
         con.close()
@@ -2017,7 +2177,6 @@ def test_token_status_returns_needs_auth_for_expired_token(client):
     """token-status returns needs_auth when token has already expired (AC14)."""
     from datetime import timedelta
     from app.auth.vault import store_token as _store_token_vault
-    from app.routes_connector_auth import _DEFAULT_ORG_ID
 
     with _patch.dict(_os.environ, _vault_env()):
         # Store a token with a negative expires_in (effectively already expired)
@@ -2025,7 +2184,7 @@ def test_token_status_returns_needs_auth_for_expired_token(client):
             "access_token": "expired-tok",
             "expires_at": (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat(),
         }
-        _store_token_vault(_DEFAULT_ORG_ID, "github", resp_dict)
+        _store_token_vault(_AUTH_ORG_ID, "github", resp_dict)
         resp = client.get(
             "/api/connectors/github/token-status",
             headers=_AUTH_HEADERS,
@@ -2046,7 +2205,6 @@ def test_token_status_expired_with_refresh_token_is_refreshable(client):
     """
     from datetime import timedelta
     from app.auth.vault import store_token as _store_token_vault
-    from app.routes_connector_auth import _DEFAULT_ORG_ID
 
     with _patch.dict(_os.environ, _vault_env()):
         resp_dict = {
@@ -2054,7 +2212,7 @@ def test_token_status_expired_with_refresh_token_is_refreshable(client):
             "refresh_token": "still-valid-refresh",
             "expires_at": (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat(),
         }
-        _store_token_vault(_DEFAULT_ORG_ID, "salesforce", resp_dict)
+        _store_token_vault(_AUTH_ORG_ID, "salesforce", resp_dict)
         resp = client.get(
             "/api/connectors/salesforce/token-status",
             headers=_AUTH_HEADERS,

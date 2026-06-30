@@ -121,6 +121,7 @@ def execute_query(
         record_event(
             "db.query_executed",
             {
+                "org_id": org_id,
                 "connector_id": config.connector_id,
                 "query_hash": query_hash,
                 "row_count": result.row_count,

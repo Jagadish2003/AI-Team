@@ -144,6 +144,47 @@ def get_current_org_id_optional() -> str | None:
     return _current_org_id.get()
 
 
+# Sentinel attributed to an audit/telemetry event when no org can be resolved.
+# Deliberately NOT a real tenant org (e.g. "default"): attributing an
+# unresolved event to a real org would silently misfile it under that tenant
+# (R17-D3 / AT-450 T5-AC3). "unknown" is inert — it is queried/alerted on, never
+# served as a tenant's data.
+UNATTRIBUTED_ORG = "unknown"
+
+
+def resolve_event_org_id(explicit_org_id: str | None = None) -> str:
+    """Resolve the org an audit or telemetry event should be attributed to.
+
+    Single source of truth for event org attribution (R17-D3 / AT-450), used by
+    both ``telemetry.record_event`` and ``middleware.audit.log_event`` so the two
+    trails can never disagree. Priority:
+
+      1. The authenticated request org (tenancy ContextVar) — the source of
+         truth whenever the event is emitted inside a request.
+      2. An ``explicit_org_id`` supplied by a caller with no request context
+         (background work: the discovery runner, DB ingestors, the token
+         refresher and other jobs pass the run's / workspace's org directly).
+      3. ``UNATTRIBUTED_ORG`` as a last resort, logged at WARNING so a call site
+         that forgot to thread its org is observable — never a real tenant's org.
+
+    Context wins over ``explicit_org_id`` on purpose: every in-request call site
+    derives the explicit value from the same authenticated context anyway, and
+    preferring context means a stale or mistaken explicit value can never
+    misattribute an event to the wrong tenant.
+    """
+    ctx = _current_org_id.get()
+    if ctx:
+        return ctx
+    if explicit_org_id:
+        return explicit_org_id
+    logger.warning(
+        "event org attribution unresolved (no request context, no explicit "
+        "org_id) — attributing to %r",
+        UNATTRIBUTED_ORG,
+    )
+    return UNATTRIBUTED_ORG
+
+
 def resolve_request_org_id(request: Request) -> str:
     """Resolve the org id for a request directly from its headers.
 
