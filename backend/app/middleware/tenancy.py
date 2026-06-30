@@ -97,6 +97,20 @@ def _verified_jwt_payload(token: str | None) -> dict | None:
         return None
 
 
+def _x_org_header_trusted() -> bool:
+    """Whether the X-Org-Id header may set org context (dev/test only — H2).
+
+    X-Org-Id is a convenience for the static dev token, which carries no signed org
+    claim. It is honoured ONLY outside production: in production every caller
+    presents a signed JWT (whose org claim wins and is checked against any X-Org-Id
+    by the impersonation guard), so trusting a bare header there would let a request
+    set tenant context with no signed claim — the exact spoof R17-D3 review H2 flags
+    (especially dangerous alongside OAUTH_CALLBACK_ALLOW_UNAUTH). Production callers
+    without a JWT claim therefore fall through to DEV_DEFAULT_ORG, never the header.
+    """
+    return os.environ.get("ENVIRONMENT", "").strip().lower() != "production"
+
+
 def _dev_token_org(token: str | None) -> str | None:
     """org claim for the static dev token (from DEV_JWT_ORG), else None.
 
@@ -145,11 +159,14 @@ def get_current_org_id_optional() -> str | None:
 
 
 # Sentinel attributed to an audit/telemetry event when no org can be resolved.
-# Deliberately NOT a real tenant org (e.g. "default"): attributing an
-# unresolved event to a real org would silently misfile it under that tenant
-# (R17-D3 / AT-450 T5-AC3). "unknown" is inert — it is queried/alerted on, never
-# served as a tenant's data.
-UNATTRIBUTED_ORG = "unknown"
+# Deliberately NOT a real tenant org (e.g. "default"): attributing an unresolved
+# event to a real org would silently misfile it under that tenant
+# (R17-D3 / AT-450 T5-AC3). The leading-underscore "_unattributed" form is also
+# deliberately distinct from any plausible real or user-supplied org value
+# (R17-D3 review M3): an analyst querying WHERE org_id = '_unattributed' gets
+# exactly the data-quality gaps, never a tenant literally named "unknown". It is
+# inert — queried/alerted on, never served as a tenant's data.
+UNATTRIBUTED_ORG = "_unattributed"
 
 
 def resolve_event_org_id(explicit_org_id: str | None = None) -> str:
@@ -213,6 +230,10 @@ def resolve_request_org_id(request: Request) -> str:
 
     if jwt_org_id is not None:
         return jwt_org_id
+
+    # X-Org-Id is honoured only outside production (H2); see _x_org_header_trusted.
+    if not _x_org_header_trusted():
+        return DEV_DEFAULT_ORG
 
     try:
         x_org_id = request.headers.get("X-Org-Id")
@@ -280,11 +301,15 @@ class TenancyMiddleware(BaseHTTPMiddleware):
             )
 
         # org_id comes from the JWT claim when present; X-Org-Id never overrides
-        # it. Dev fallback (no JWT claim): X-Org-Id, then DEV_DEFAULT_ORG.
+        # it. Dev fallback (no JWT claim): X-Org-Id, then DEV_DEFAULT_ORG — but the
+        # header is trusted only outside production (H2), so a prod request with no
+        # signed org claim resolves to DEV_DEFAULT_ORG, never an attacker's header.
         if jwt_org_id is not None:
             org_id = jwt_org_id
-        else:
+        elif _x_org_header_trusted():
             org_id = x_org_id or DEV_DEFAULT_ORG
+        else:
+            org_id = DEV_DEFAULT_ORG
 
         token = _current_org_id.set(org_id)
         try:

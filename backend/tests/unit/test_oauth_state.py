@@ -77,3 +77,39 @@ def test_org_id_with_dots_is_preserved():
     state = encode_state("a.b.c", "nonce-1")
     decoded = decode_state(state)
     assert decoded == {"org_id": "a.b.c", "nonce": "nonce-1"}
+
+
+# ---------------------------------------------------------------------------
+# R17-D3 review H1 — dedicated OAUTH_STATE_SECRET, separable from JWT_SECRET
+# ---------------------------------------------------------------------------
+
+
+def test_state_secret_prefers_dedicated_oauth_secret(monkeypatch):
+    """H1: when OAUTH_STATE_SECRET is set, rotating JWT_SECRET must NOT invalidate
+    an in-flight state — the two signing keys are independent."""
+    monkeypatch.setenv("OAUTH_STATE_SECRET", "dedicated-oauth-state-secret")
+    monkeypatch.setenv("JWT_SECRET", "jwt-secret-value")
+
+    state = encode_state("org-a", "nonce-1")
+    assert decode_state(state) == {"org_id": "org-a", "nonce": "nonce-1"}
+
+    # Rotate the session-signing key — the OAuth state is signed by the dedicated
+    # secret, so it stays verifiable.
+    monkeypatch.setenv("JWT_SECRET", "rotated-jwt-secret")
+    assert decode_state(state) == {"org_id": "org-a", "nonce": "nonce-1"}
+
+
+def test_state_secret_falls_back_to_jwt_when_dedicated_unset(monkeypatch):
+    """H1 backward-compat: with no OAUTH_STATE_SECRET, the JWT secret signs the
+    state (so existing deployments keep working until the dedicated key is set)."""
+    monkeypatch.delenv("OAUTH_STATE_SECRET", raising=False)
+    monkeypatch.setenv("JWT_SECRET", "jwt-only-secret")
+
+    state = encode_state("org-b", "nonce-2")
+    assert decode_state(state) == {"org_id": "org-b", "nonce": "nonce-2"}
+
+    # Documents the fallback's coupling: with no dedicated secret, rotating the JWT
+    # secret DOES invalidate in-flight states — exactly the risk H1's dedicated key
+    # removes.
+    monkeypatch.setenv("JWT_SECRET", "rotated-jwt-secret")
+    assert decode_state(state) is None

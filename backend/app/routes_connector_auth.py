@@ -177,6 +177,15 @@ def _consume_nonce(state: str) -> Optional[str]:
 # ---------------------------------------------------------------------------
 
 
+def _is_production() -> bool:
+    """True when ENVIRONMENT names a production deployment.
+
+    Mirrors the check in app.auth.user_auth so dangerous dev-only flags share one
+    notion of "production" across the codebase.
+    """
+    return os.environ.get("ENVIRONMENT", "").strip().lower() == "production"
+
+
 def _callback_allows_unauth() -> bool:
     """Whether the OAuth callback may complete without a Bearer header.
 
@@ -185,13 +194,28 @@ def _callback_allows_unauth() -> bool:
     accepts an unauthenticated request. This is OFF by default — production
     behaviour (Bearer required, AC17) is unchanged. Set OAUTH_CALLBACK_ALLOW_UNAUTH=1
     in a local .env to enable. The route stays protected by the single-use,
-    TTL-bounded state nonce (consume_nonce), which is the real CSRF defence here.
+    TTL-bounded, HMAC-signed state nonce, which is the real CSRF/tenant defence.
+
+    SECURITY BOUNDARY (R17-D3 review M1/H2): this flag effectively disables the
+    callback's tenant-binding auth, so it is honoured ONLY outside production. When
+    ENVIRONMENT=production it is force-ignored (and warned about) even if the env
+    var is set, so a staging/prod misconfiguration cannot open the unauthenticated
+    path.
     """
-    return os.environ.get("OAUTH_CALLBACK_ALLOW_UNAUTH", "").strip().lower() in (
+    # WARNING: never set OAUTH_CALLBACK_ALLOW_UNAUTH in a shared/staging/production
+    # deployment — it is a local-dev convenience only and is force-disabled in prod.
+    enabled = os.environ.get("OAUTH_CALLBACK_ALLOW_UNAUTH", "").strip().lower() in (
         "1",
         "true",
         "yes",
     )
+    if enabled and _is_production():
+        logger.warning(
+            "OAUTH_CALLBACK_ALLOW_UNAUTH is set but ENVIRONMENT=production — "
+            "ignoring it; the OAuth callback still requires a Bearer token."
+        )
+        return False
+    return enabled
 
 
 def _callback_auth(
