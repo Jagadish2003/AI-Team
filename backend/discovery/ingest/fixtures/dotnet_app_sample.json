@@ -1,0 +1,45 @@
+{
+  "_comment": "R17-A4 / T1 — deterministic offline fixture for the .NET application change-based ingestor. Operational surface only: normalised ASP.NET Core health checks + EventCounters samples (health/error-rate/latency/throughput/managed-GC-heap/CPU) and application log entries — NO source code, no external APM. 'orders-api' degrades across its samples (rising error rate, latency degradation, throughput decline, heap+CPU pressure, Unhealthy health, and a recurring System.TimeoutException cluster in its logs) so operational friction fires and can corroborate a matching finding in another system (COR-10); 'inventory-svc' stays healthy so a quiet service yields no friction. Log levels use .NET-native LogLevel spellings (Error/Critical/Warning/Information) so the .NET level normalisation is exercised. Credentials are NEVER in this config — each target references the vault via 'credential_ref'.",
+  "targets": [
+    {
+      "app_id": "orders-api",
+      "name": "Orders API",
+      "diagnostics_url": "https://orders.internal.example/diagnostics",
+      "log_source": "https://orders.internal.example/logs",
+      "metadata": {"service": "orders", "environment": "prod", "owner": "orders-team"},
+      "credential_ref": "dotnet_app"
+    },
+    {
+      "app_id": "inventory-svc",
+      "name": "Inventory Service",
+      "diagnostics_url": "https://inventory.internal.example/diagnostics",
+      "log_source": "https://inventory.internal.example/logs",
+      "metadata": {"service": "inventory", "environment": "prod", "owner": "inventory-team"},
+      "credential_ref": "dotnet_app"
+    }
+  ],
+  "metrics": {
+    "orders-api": [
+      {"sample_ts": "2026-06-10T08:00:00+00:00", "health": "Healthy", "error_rate": 0.01, "latency_p95_ms": 250, "throughput_rpm": 1500, "memory_used_ratio": 0.50, "cpu_usage": 0.35},
+      {"sample_ts": "2026-06-10T08:05:00+00:00", "health": "Healthy", "error_rate": 0.04, "latency_p95_ms": 700, "throughput_rpm": 1300, "memory_used_ratio": 0.72, "cpu_usage": 0.60},
+      {"sample_ts": "2026-06-10T08:10:00+00:00", "health": "Unhealthy", "error_rate": 0.15, "latency_p95_ms": 2100, "throughput_rpm": 600, "memory_used_ratio": 0.93, "cpu_usage": 0.90}
+    ],
+    "inventory-svc": [
+      {"sample_ts": "2026-06-10T08:00:00+00:00", "health": "Healthy", "error_rate": 0.001, "latency_p95_ms": 90, "throughput_rpm": 900, "memory_used_ratio": 0.38, "cpu_usage": 0.28},
+      {"sample_ts": "2026-06-10T08:05:00+00:00", "health": "Healthy", "error_rate": 0.002, "latency_p95_ms": 95, "throughput_rpm": 920, "memory_used_ratio": 0.40, "cpu_usage": 0.30}
+    ]
+  },
+  "logs": {
+    "orders-api": [
+      {"offset": 1, "ts": "2026-06-10T08:01:10+00:00", "level": "Error", "logger": "Orders.Api.GatewayClient", "exception_type": "System.TimeoutException", "retry": false, "message": "Upstream timeout calling settlement gateway after 3000ms"},
+      {"offset": 2, "ts": "2026-06-10T08:03:40+00:00", "level": "Error", "logger": "Orders.Api.GatewayClient", "exception_type": "System.TimeoutException", "retry": true, "message": "Retry 1 failed: upstream timeout after 3000ms"},
+      {"offset": 3, "ts": "2026-06-10T08:04:05+00:00", "level": "Information", "logger": "Orders.Api.HealthCheck", "exception_type": null, "retry": false, "message": "Liveness probe ok"},
+      {"offset": 4, "ts": "2026-06-10T08:09:20+00:00", "level": "Critical", "logger": "Orders.Api.GatewayClient", "exception_type": "System.TimeoutException", "retry": true, "message": "Retry 2 failed: upstream timeout after 3000ms"},
+      {"offset": 5, "ts": "2026-06-10T08:09:50+00:00", "level": "Warning", "logger": "Orders.Api.CircuitBreaker", "exception_type": null, "retry": false, "message": "Circuit breaker opened for settlement-gateway"}
+    ],
+    "inventory-svc": [
+      {"offset": 1, "ts": "2026-06-10T08:00:25+00:00", "level": "Information", "logger": "Inventory.Svc.StockService", "exception_type": null, "retry": false, "message": "Reconciled 1842 stock entries"},
+      {"offset": 2, "ts": "2026-06-10T08:05:25+00:00", "level": "Information", "logger": "Inventory.Svc.StockService", "exception_type": null, "retry": false, "message": "Reconciled 1907 stock entries"}
+    ]
+  }
+}

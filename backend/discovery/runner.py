@@ -328,6 +328,63 @@ def _ingest_java_app_corroboration(org_id: str, run_id: str) -> Dict[str, Any]:
     return build_java_app_corroboration_payload(collected)
 
 
+def _ingest_dotnet_app_corroboration(org_id: str, run_id: str) -> Dict[str, Any]:
+    """Drive .NET application change ingestion and build its corroboration block.
+
+    R17-A4 / T5: the .NET application source is ingested through the shared change
+    runner (R16-A1) exactly like the Java source, then its changed records are
+    aggregated into the ``{operational_friction, services}`` block the corroboration
+    engine reads — wrapped under the ``'dotnet_app'`` key that
+    ``_find_corroboration_block('dotnet_app', …)`` recognises
+    (:func:`dotnet_app_signals.build_dotnet_app_corroboration_payload`). A .NET-app
+    operational signal can then corroborate a finding in another connected system
+    (COR-10) — the ticket system AND the running application both showing the same
+    problem. This is the SAME cross-system corroboration approach used by every other
+    source (no separate .NET confidence model).
+
+    Operational surface only: the ingestor reads the .NET health/diagnostics surface
+    + logs — never source code, never an external APM. The whole path is wrapped so
+    any import/ingest failure is non-blocking.
+    """
+    try:
+        from .ingest import change_runner
+        from .ingest.dotnet_app import DotNetAppIngestor
+        from .ingest.dotnet_app_signals import build_dotnet_app_corroboration_payload
+    except Exception as e:  # noqa: BLE001 — .NET-app corroboration is optional.
+        logger.warning(".NET app connector import failed (non-blocking): %s", e)
+        return {}
+
+    collected: List[Dict[str, Any]] = []
+    try:
+        result = change_runner.ingest_with_checkpoint(
+            DotNetAppIngestor(),
+            org_id,
+            process_batch=lambda batch: collected.extend(batch.records),
+        )
+    except Exception as e:  # noqa: BLE001 — belt-and-braces; runner is non-raising.
+        # Type name only — an exception str could carry a Bearer token from a live
+        # HTTP client's request repr.
+        logger.warning(
+            ".NET app ingestion failed (non-blocking) org=%s run=%s: [%s]",
+            org_id, run_id, type(e).__name__,
+        )
+        return {}
+
+    if result.error is not None:
+        logger.warning(
+            ".NET app change ingest reported an error (non-blocking) org=%s run=%s: [%s]",
+            org_id, run_id, type(result.error).__name__,
+        )
+    else:
+        logger.info(
+            ".NET app change ingest: %s — %d batch(es), %d changed record(s), checkpoint_advanced=%s",
+            "first run (streamed full load)" if result.first_run else "incremental",
+            result.batches, result.records, result.checkpoint_advanced,
+        )
+
+    return build_dotnet_app_corroboration_payload(collected)
+
+
 def _ingest_teams_corroboration(org_id: str, run_id: str) -> Dict[str, Any]:
     """Drive Teams change-based ingestion and build its corroboration block.
 
@@ -558,6 +615,7 @@ def run(
     github_data: Dict[str, Any] = {}
     slack_data: Dict[str, Any] = {}
     java_data: Dict[str, Any] = {}
+    dotnet_data: Dict[str, Any] = {}
     teams_data: Dict[str, Any] = {}
     logger.info(f"Systems: {sorted(list(_systems))}")
 
@@ -806,6 +864,19 @@ def run(
             logger.info("Java app corroboration: operational friction present for this run")
         else:
             logger.info("Java app corroboration: no operational friction this run")
+
+    # 2h. .NET application change ingest — R17-A4 / T5. The .NET counterpart to the
+    # Java app source above: same shared change runner, same cross-system
+    # corroboration approach (COR-10). Aggregates the changed .NET operational
+    # records into the corroboration block so .NET-app operational friction can
+    # corroborate findings from other systems — the ticket system AND the running
+    # application agreeing. Gated on "dotnet_app" ∈ connected systems.
+    if "dotnet_app" in _systems:
+        dotnet_data = _ingest_dotnet_app_corroboration(org_id, run_id) or {}
+        if dotnet_data.get("dotnet_app", {}).get("operational_friction", {}).get("fired"):
+            logger.info(".NET app corroboration: operational friction present for this run")
+        else:
+            logger.info(".NET app corroboration: no operational friction this run")
 
     # 2. Context
     org_ctx = build_org_context(sf_data, sn_data, jira_data)
@@ -1094,7 +1165,7 @@ def run(
                 sn_by_detector=sn_by_detector,
                 jira_by_detector=jira_by_detector,
                 run_timestamp_iso=_run_ts_iso,
-                source_payloads=[sf_data, sn_data, jira_data, github_data, db_data, slack_data, teams_data, java_data],
+                source_payloads=[sf_data, sn_data, jira_data, github_data, db_data, slack_data, teams_data, java_data, dotnet_data],
             )
         except Exception as _corr_data_err:  # noqa: BLE001 — non-blocking.
             logger.warning("ENT-2 corroboration run_data build failed (non-blocking): %s", _corr_data_err)

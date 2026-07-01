@@ -80,6 +80,15 @@ does not corroborate.
                 "reasons": ["elevated error rate", "latency degradation"],
             },
         },
+
+        "dotnet_app": {                              # COR-10 (R17-A4)
+            "operational_friction": {                # same shape as java_app —
+                "fired": True,                       # observed evidence, elevates
+                "timestamp": "2026-06-01T10:00:00Z",
+                "services": ["orders"],
+                "reasons": ["elevated error rate", "latency degradation"],
+            },
+        },
     }
 
 ────────────────────────────────────────────────────────────────────────────
@@ -168,6 +177,10 @@ _CORROBORATION_RULE_SYSTEMS: Dict[str, str] = {
     # (directly measured), so COR-09 is an ELEVATING corroborator like COR-01/02 —
     # not a supporting-only ceiling like Slack (COR-05).
     "COR-09": "java_app",
+    # R17-A4 §3: the .NET counterpart to COR-09 — same observed-evidence basis, so
+    # COR-10 elevates identically. Not a separate confidence model; the .NET signal
+    # plugs into this same cross-system corroboration mapping.
+    "COR-10": "dotnet_app",
 }
 
 
@@ -604,6 +617,11 @@ def build_corroboration_run_data(
         java_app = _find_corroboration_block("java_app", payloads)
         if java_app:
             data["java_app"] = java_app
+    # R17-A4 / COR-10: same for the .NET application source (parallel to Java).
+    if "dotnet_app" in connected:
+        dotnet_app = _find_corroboration_block("dotnet_app", payloads)
+        if dotnet_app:
+            data["dotnet_app"] = dotnet_app
     if "teams" in connected:
         teams = _find_corroboration_block("teams", payloads)
         if teams:
@@ -796,6 +814,38 @@ def check_cor09_java_app_operational(
     return True
 
 
+def check_cor10_dotnet_app_operational(
+    run_data: Dict[str, Any],
+    run_timestamp: datetime,
+) -> bool:
+    """COR-10: a .NET application shows operational friction within the window.
+
+    R17-A4 §3: the .NET counterpart to COR-09. A .NET-app operational signal
+    (rising error rate, latency degradation, resource pressure, or a recurring
+    exception cluster) corroborates a finding in another connected system — e.g. a
+    .NET error/latency rise corroborating a ServiceNow incident spike for the same
+    service. Unlike the Slack ceiling (COR-05), this is an ELEVATING corroborator:
+    operational signals are directly measured from the running application's
+    logs/diagnostics, so they are first-class observed evidence — identical to Java,
+    because the two share the same signal language and the same corroboration model.
+
+    Fires when the .NET-app ``operational_friction`` block reports ``fired`` and, if
+    it carries a timestamp, that timestamp is within the corroboration window. A
+    friction block with no timestamp is accepted (it is computed for the current
+    run), mirroring the Java / Slack checks.
+    """
+    dotnet = _system_block(run_data, "dotnet_app")
+    friction = dotnet.get("operational_friction")
+    if not isinstance(friction, dict) or not friction:
+        # Alternative shape: a boolean flag.
+        return bool(dotnet.get("operational_friction_fired", False))
+    if not friction.get("fired", False):
+        return False
+    if _record_timestamp(friction) is not None:
+        return _within_window(friction, run_timestamp)
+    return True
+
+
 def _weighting_info_for_system(
     weighting_context: Optional[Any],
     system_id: str,
@@ -893,7 +943,7 @@ def _build_label(fired_rules: List[str], triple: bool) -> Optional[str]:
     if triple:
         return TRIPLE_CORROBORATION_LABEL
     # Priority order for the headline label among non-derived rules.
-    for rule_id in ("COR-06", "COR-01", "COR-02", "COR-04", "COR-07", "COR-09", "COR-05", "COR-08"):
+    for rule_id in ("COR-06", "COR-01", "COR-02", "COR-04", "COR-07", "COR-09", "COR-10", "COR-05", "COR-08"):
         if rule_id in fired_rules:
             return RULE_CARD_LABELS.get(rule_id)
     return RULE_CARD_LABELS.get(fired_rules[0])
@@ -1002,6 +1052,12 @@ def evaluate_corroboration(
     if check_cor09_java_app_operational(run_data, run_timestamp):
         fired_rules.append("COR-09")
         sources.append("Java application (operational signal)")
+
+    # COR-10: .NET application operational friction (R17-A4). The .NET counterpart
+    # to COR-09 — same observed-evidence basis, so it elevates identically.
+    if check_cor10_dotnet_app_operational(run_data, run_timestamp):
+        fired_rules.append("COR-10")
+        sources.append(".NET application (operational signal)")
 
     # COR-05 / COR-06: conversation-source escalation (Slack, Teams).
     # A conversation source elevates ONLY with a primary corroborator

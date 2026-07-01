@@ -545,10 +545,11 @@ class TestDetectorLinkage:
 # ─────────────────────────────────────────────────────────────────────────────
 
 class TestRuleRegistry:
-    def test_nine_rules_defined(self):
-        # R17-A3 added COR-09 (Java application operational corroboration).
-        assert len(CORROBORATION_RULES) == 9
-        for i in range(1, 10):
+    def test_all_rules_defined(self):
+        # R17-A3 added COR-09 (Java operational corroboration); R17-A4 added COR-10
+        # (its .NET counterpart — .NET operational friction into the same flow).
+        assert len(CORROBORATION_RULES) == 10
+        for i in range(1, 11):
             assert f"COR-{i:02d}" in CORROBORATION_RULES
 
     def test_slack_only_and_single_source_never_elevate(self):
@@ -556,9 +557,10 @@ class TestRuleRegistry:
         assert is_elevating_rule("COR-08") is False
 
     def test_primary_rules_elevate(self):
-        # COR-09 (Java-app operational friction) is first-class observed evidence
-        # and elevates like the system-of-record corroborators (R17-A3 §3).
-        for rid in ("COR-01", "COR-02", "COR-03", "COR-04", "COR-06", "COR-07", "COR-09"):
+        # COR-09 (Java-app) and COR-10 (.NET-app) operational friction are
+        # first-class observed evidence and elevate like the system-of-record
+        # corroborators (R17-A3 §3 / R17-A4 §3).
+        for rid in ("COR-01", "COR-02", "COR-03", "COR-04", "COR-06", "COR-07", "COR-09", "COR-10"):
             assert is_elevating_rule(rid) is True
 
     def test_every_rule_has_description_and_target(self):
