@@ -118,6 +118,19 @@ class CustomerTenantConfig:
         """The customer's managed endpoint base URL, if provided (non-secret)."""
         return self._endpoint
 
+    def has_endpoint(self) -> bool:
+        """True when an endpoint base OR an explicit full-URL override is set.
+
+        Distinguishes "no endpoint configured at all" from "endpoint present but
+        no deployment name", so startup validation can point the operator at the
+        exact missing config rather than emitting one generic warning.
+        """
+        return bool(
+            self._endpoint
+            or self._explicit_generation_url
+            or self._explicit_embedding_url
+        )
+
     def api_version(self) -> str:
         """The managed-service API version, resolved live (non-secret)."""
         return os.getenv(CONFIG_KEY_API_VERSION, "").strip() or _DEFAULT_API_VERSION
