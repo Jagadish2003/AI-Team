@@ -345,6 +345,13 @@ def resolve_live_systems(org_id: str) -> List[str]:
     # to the per-run context; it only needs the run promoted to live (see below).
     _resolve_github(org_id, live)
 
+    # Java application — R17-A3, AgentIQ's first non-SaaS source. Like Slack it is
+    # URL-less here (each target carries its own actuator_url/log_source in the
+    # per-deployment config); when a Java-app credential is in the vault, publish
+    # its token to the per-run context so the ingestor resolves the secret safely
+    # (never from config — AC3) and include it in the live set.
+    _resolve_java_app(org_id, connectors, live)
+
     # Publish to the per-run context (empty dict clears any prior credentials).
     set_live_connectors(connectors)
     return live
@@ -412,6 +419,45 @@ def _resolve_slack(
     connectors["slack"] = {"token": record.access_token}
     live.append("slack")
     logger.info("Live ingest enabled for connector slack (org=%s)", org_id)
+
+
+def _resolve_java_app(
+    org_id: str,
+    connectors: Dict[str, Dict[str, str]],
+    live: List[str],
+) -> None:
+    """Add the Java application source to the live set when a credential exists (R17-A3).
+
+    The Java applications in scope are configured per deployment (their Actuator
+    URLs + log sources live in ``JAVA_APP_TARGETS``, never here); this resolver
+    only handles the credential. When a ``java_app`` token is in the vault for the
+    org, its decrypted value is published to the per-run context under the
+    ``java_app`` key so the ingestor's ``resolve_secret`` reads it safely (AC3) —
+    the secret never touches config or logs. AgentIQ does NOT scan the network:
+    a deployment with no configured targets simply yields no Java records.
+
+    Mutates ``connectors`` and ``live`` in place. Never raises — any failure
+    leaves Java out (degrade, don't crash), matching the other resolvers.
+    """
+    try:
+        record = _run_coro(get_token(org_id, "java_app"))
+    except ConnectorNotAuthenticatedError:
+        logger.info(
+            "Connector java_app not authenticated for org %s — skipping live ingest; "
+            "configure its credential in the vault.",
+            org_id,
+        )
+        return
+    except Exception:
+        logger.exception(
+            "Failed to load vault token for connector java_app (org=%s); skipping live ingest",
+            org_id,
+        )
+        return
+
+    connectors["java_app"] = {"token": record.access_token}
+    live.append("java_app")
+    logger.info("Live ingest enabled for connector java_app (org=%s)", org_id)
 
 
 def _resolve_teams(
