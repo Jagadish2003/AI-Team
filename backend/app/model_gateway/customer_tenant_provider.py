@@ -229,6 +229,18 @@ class CustomerTenantModelProvider(ModelProvider):
             )
             return GenerationResult(text=None, provider=self.name, ok=False)
 
+        # R17-D2 T2: resolve the tenant credential from the vault (env fallback).
+        # A missing/revoked credential short-circuits to a graceful failure — no
+        # network call — rather than authenticating without a key (AC2/AC5). The
+        # value is never logged.
+        api_key = cfg.resolve_api_key()
+        if not api_key:
+            logger.warning(
+                "CustomerTenantModelProvider generation skipped: no tenant "
+                "credential resolved (missing or revoked)"
+            )
+            return GenerationResult(text=None, provider=self.name, ok=False)
+
         payload = {
             "max_tokens": req.max_tokens,
             "messages": [{"role": "user", "content": req.prompt}],
@@ -238,7 +250,7 @@ class CustomerTenantModelProvider(ModelProvider):
         data = self._post_with_resilience(
             url=url,
             payload=payload,
-            api_key=cfg.resolve_api_key(),
+            api_key=api_key,
             total_timeout_s=max(req.timeout_ms / 1000.0, _MIN_ATTEMPT_BUDGET_S),
             label="generation",
         )
@@ -295,13 +307,23 @@ class CustomerTenantModelProvider(ModelProvider):
             )
             return []
 
+        # R17-D2 T2: a missing/revoked tenant credential degrades to [] with no
+        # network call, rather than authenticating without a key (AC2/AC5).
+        api_key = cfg.resolve_api_key()
+        if not api_key:
+            logger.warning(
+                "CustomerTenantModelProvider embedding skipped: no tenant "
+                "credential resolved (missing or revoked)"
+            )
+            return []
+
         payload = {"input": texts}
 
         # Never raises: the resilient POST returns None on every failure path.
         data = self._post_with_resilience(
             url=url,
             payload=payload,
-            api_key=cfg.resolve_api_key(),
+            api_key=api_key,
             total_timeout_s=_DEFAULT_EMBED_TIMEOUT_S,
             label="embedding",
         )
