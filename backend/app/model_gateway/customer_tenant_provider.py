@@ -84,8 +84,10 @@ from app.model_gateway._interface import (
 from app.model_gateway.customer_tenant_config import (
     CONFIG_KEY_DEPLOYMENT,
     CONFIG_KEY_EMBEDDING_DEPLOYMENT,
+    CONFIG_KEY_EMBEDDING_ENDPOINT,
     CONFIG_KEY_ENDPOINT,
     CONFIG_KEY_GENERATION_DEPLOYMENT,
+    CONFIG_KEY_GENERATION_ENDPOINT,
     CUSTOMER_TENANT_PROVIDER_NAME,
     CustomerTenantConfig,
 )
@@ -177,16 +179,31 @@ class CustomerTenantModelProvider(ModelProvider):
         """
         cfg = CustomerTenantConfig()
         if not (cfg.generation_endpoint() or cfg.embedding_endpoint()):
-            logger.warning(
-                "customer_tenant provider is active but no usable endpoint is "
-                "configured (%s and %s / %s / %s incomplete) — all model calls "
-                "will fail (generation returns ok=False, embedding returns []) "
-                "until an endpoint and deployment are configured.",
-                CONFIG_KEY_ENDPOINT,
-                CONFIG_KEY_DEPLOYMENT,
-                CONFIG_KEY_GENERATION_DEPLOYMENT,
-                CONFIG_KEY_EMBEDDING_DEPLOYMENT,
-            )
+            # Distinguish the two root causes so the fix is unambiguous: an
+            # endpoint that was never set vs. an endpoint base with no deployment
+            # name (Azure addresses a model by deployment, so the URL cannot be
+            # built without one).
+            if not cfg.has_endpoint():
+                logger.warning(
+                    "customer_tenant provider is active but no endpoint is "
+                    "configured (%s unset; or set %s / %s for a full-URL override) "
+                    "— all model calls will fail (generation returns ok=False, "
+                    "embedding returns []) until an endpoint is configured.",
+                    CONFIG_KEY_ENDPOINT,
+                    CONFIG_KEY_GENERATION_ENDPOINT,
+                    CONFIG_KEY_EMBEDDING_ENDPOINT,
+                )
+            else:
+                logger.warning(
+                    "customer_tenant provider has an endpoint base (%s) but no "
+                    "deployment name (%s / %s / %s all unset) — the request URL "
+                    "cannot be built, so all model calls will fail until a "
+                    "deployment is configured.",
+                    CONFIG_KEY_ENDPOINT,
+                    CONFIG_KEY_DEPLOYMENT,
+                    CONFIG_KEY_GENERATION_DEPLOYMENT,
+                    CONFIG_KEY_EMBEDDING_DEPLOYMENT,
+                )
             return
 
         if not cfg.has_credential():
