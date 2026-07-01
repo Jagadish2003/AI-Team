@@ -61,8 +61,9 @@ def test_discovery_steps_live_in_discovery_layer():
 
     assert DISCOVERY_STEPS[0] == "sf_crm"
     assert DISCOVERY_STEPS[-1] == "complete"
-    # Emission order: CRM -> ServiceNow -> Jira -> second SF pass -> detect ...
-    assert DISCOVERY_STEPS == ["sf_crm", "sn", "jira", "sf_ncino", "detect", "enrich", "complete"]
+    # Emission order: connected sources first (CRM -> ServiceNow -> Jira -> Slack),
+    # then the pack-specific second SF pass (sf_ncino), then detect/enrich/complete.
+    assert DISCOVERY_STEPS == ["sf_crm", "sn", "jira", "slack", "sf_ncino", "detect", "enrich", "complete"]
     assert DISCOVERY_STEP_IDS == frozenset(DISCOVERY_STEPS)
     # It must NOT be re-exported from app.db anymore.
     assert not hasattr(db, "DISCOVERY_STEPS")

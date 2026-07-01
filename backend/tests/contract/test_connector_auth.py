@@ -588,6 +588,52 @@ async def test_exchange_code_200_returns_json():
 
 
 @pytest.mark.anyio
+async def test_exchange_code_parses_github_form_encoded_and_sends_json_accept():
+    """GitHub's token endpoint returns application/x-www-form-urlencoded by
+    default and only switches to JSON when the request sends
+    ``Accept: application/json``. Without that header ``response.json()`` raised
+    on the form body and the whole connect flow failed as "exchange_failed".
+
+    exchange_code must (a) send the Accept header so a correct GitHub app returns
+    JSON, and (b) still parse a form-encoded body as a defensive fallback so the
+    access token is captured either way (regression for the GitHub OAuth bug)."""
+    from unittest.mock import patch
+    from urllib.parse import urlencode as _urlencode
+
+    from backend.app.auth.oauth import exchange_code
+
+    captured: dict = {}
+
+    class _FormTransport(httpx.AsyncBaseTransport):
+        async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+            captured["accept"] = request.headers.get("accept")
+            body = _urlencode(
+                {
+                    "access_token": "gho_token",
+                    "scope": "repo:status,read:org",
+                    "token_type": "bearer",
+                }
+            )
+            return httpx.Response(
+                200,
+                content=body.encode("utf-8"),
+                headers={"content-type": "application/x-www-form-urlencoded; charset=utf-8"},
+            )
+
+    config = _make_config(connector_id="github")
+    with patch.dict(_os.environ, {"_TEST_OAUTH_SECRET": "s3cr3t"}):
+        result = await exchange_code(config, code="gh-code", _transport=_FormTransport())
+
+    # (a) Accept: application/json is sent so a correct GitHub app returns JSON.
+    assert captured["accept"] == "application/json"
+    # (b) Even a form-encoded body is parsed (fallback) — the token is captured,
+    #     so the callback stores it and the tile flips to Connected (no
+    #     "exchange_failed").
+    assert result["access_token"] == "gho_token"
+    assert result["token_type"] == "bearer"
+
+
+@pytest.mark.anyio
 async def test_exchange_code_400_raises_oauth_error():
     """exchange_code raises OAuthError on HTTP 400."""
     from unittest.mock import patch
@@ -1468,7 +1514,7 @@ def test_vault_symbols_importable_from_package():
 #   AC13 — DELETE route returns 204 even when revocation endpoint is unreachable
 #   AC14 — token-status returns needs_refresh when within REFRESH_THRESHOLD_SECONDS
 #   AC15 — nonce is single-use: replay returns 400
-#   AC16 — CONNECTOR_AUTH_CONFIGS has 8 entries with correct flow types and revocation_url values
+#   AC16 — CONNECTOR_AUTH_CONFIGS has the expected entries with correct flow types and revocation_url values
 #   AC17 — unauthenticated requests to auth-url, DELETE /token, token-status return 401
 #   AC18 — full import surface round-trip (already covered above)
 # ===========================================================================
@@ -1491,27 +1537,34 @@ from app.middleware.tenancy import DEV_DEFAULT_ORG as _AUTH_ORG_ID
 
 
 # ---------------------------------------------------------------------------
-# AC16: CONNECTOR_AUTH_CONFIGS has 8 entries, correct flows, correct revocation_url values
+# AC16: CONNECTOR_AUTH_CONFIGS entries, correct flows, correct revocation_url values
+# (Originally 8 connectors; R17-A1 / AT-434 adds Teams as the 9th — Microsoft
+# Graph OAuth, authorization_code, no revocation endpoint.)
 # ---------------------------------------------------------------------------
 
 
-def test_connector_auth_configs_has_8_entries():
-    """CONNECTOR_AUTH_CONFIGS must have exactly 8 connectors (AC16)."""
+def test_connector_auth_configs_has_expected_entries():
+    """CONNECTOR_AUTH_CONFIGS must contain exactly the expected connectors (AC16;
+    +teams per R17-A1 / AT-434)."""
     from backend.app.auth.configs import CONNECTOR_AUTH_CONFIGS
 
-    assert len(CONNECTOR_AUTH_CONFIGS) == 8, (
-        f"Expected 8 connectors, got {len(CONNECTOR_AUTH_CONFIGS)}: "
-        f"{list(CONNECTOR_AUTH_CONFIGS)}"
+    expected = {
+        "salesforce", "servicenow", "jira", "confluence", "github", "slack",
+        "teams", "sap", "dynamics365",
+    }
+    assert set(CONNECTOR_AUTH_CONFIGS) == expected, (
+        f"Unexpected connector set: {sorted(CONNECTOR_AUTH_CONFIGS)}"
     )
+    assert len(CONNECTOR_AUTH_CONFIGS) == len(expected)
 
 
 def test_connector_auth_configs_flow_types():
-    """authorization_code connectors: salesforce, servicenow, jira, confluence, github, slack.
+    """authorization_code connectors: salesforce, servicenow, jira, confluence, github, slack, teams.
     client_credentials connectors: sap, dynamics365. (AC16)
     """
     from backend.app.auth.configs import CONNECTOR_AUTH_CONFIGS
 
-    auth_code = {"salesforce", "servicenow", "jira", "confluence", "github", "slack"}
+    auth_code = {"salesforce", "servicenow", "jira", "confluence", "github", "slack", "teams"}
     client_creds = {"sap", "dynamics365"}
 
     for cid in auth_code:
@@ -1526,12 +1579,12 @@ def test_connector_auth_configs_flow_types():
 
 def test_connector_auth_configs_revocation_url_values():
     """Connectors with revocation_url set: salesforce, servicenow, jira, confluence.
-    Connectors with revocation_url=None: github, slack, sap, dynamics365. (AC16)
+    Connectors with revocation_url=None: github, slack, teams, sap, dynamics365. (AC16)
     """
     from backend.app.auth.configs import CONNECTOR_AUTH_CONFIGS
 
     has_revocation = {"salesforce", "servicenow", "jira", "confluence"}
-    no_revocation = {"github", "slack", "sap", "dynamics365"}
+    no_revocation = {"github", "slack", "teams", "sap", "dynamics365"}
 
     for cid in has_revocation:
         assert CONNECTOR_AUTH_CONFIGS[cid].revocation_url is not None, (

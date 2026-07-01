@@ -604,6 +604,10 @@ def build_corroboration_run_data(
         java_app = _find_corroboration_block("java_app", payloads)
         if java_app:
             data["java_app"] = java_app
+    if "teams" in connected:
+        teams = _find_corroboration_block("teams", payloads)
+        if teams:
+            data["teams"] = teams
 
     return data
 
@@ -677,22 +681,38 @@ def check_cor04_confluence_doc_gap(
     return present is False
 
 
-def check_cor05_slack_escalation(
+#: Conversation sources subject to COR-05/06 (the MEDIUM corroboration ceiling).
+#: Both Slack (R16-A2) and Teams (R17-A1 / AT-433) are noisy conversation sources:
+#: their escalation pattern corroborates a finding but never elevates it ALONE —
+#: it reaches HIGH only WITH a primary system-of-record corroborator. Teams reuses
+#: the EXACT same rule IDs (COR-05 supporting / COR-06 with primary) as Slack — no
+#: new rule or mechanism is introduced, so the apply_corroboration_confidence
+#: COR-05-only clamp and the T3 ceiling clamp treat both identically.
+_CONVERSATION_SOURCES: tuple[tuple[str, str], ...] = (
+    ("slack", "Slack"),
+    ("teams", "Teams"),
+)
+
+
+def check_cor05_conversation_escalation(
     run_data: Dict[str, Any],
     run_timestamp: datetime,
+    source_id: str,
 ) -> bool:
-    """COR-05/06 precondition: Slack ESCALATION_PATTERN fired within the window.
+    """COR-05/06 precondition: a conversation source's ESCALATION_PATTERN fired
+    within the window.
 
-    This detects the Slack escalation signal. Whether it ELEVATES depends on
-    the presence of a primary corroborator (decided in evaluate_corroboration):
-      - Slack alone           -> COR-05 (supporting only, no elevation)
-      - Slack + ServiceNow/Jira -> COR-06 (elevates)
+    Source-agnostic over conversation sources (``slack`` / ``teams``): detects the
+    escalation signal for ``source_id``. Whether it ELEVATES depends on a primary
+    corroborator (decided in evaluate_corroboration):
+      - conversation source alone        -> COR-05 (supporting only, no elevation)
+      - conversation source + ServiceNow/Jira -> COR-06 (elevates)
     """
-    slack = _system_block(run_data, "slack")
-    escalation = slack.get("escalation_pattern")
+    block = _system_block(run_data, source_id)
+    escalation = block.get("escalation_pattern")
     if not isinstance(escalation, dict) or not escalation:
         # Alternative shape: a boolean flag.
-        return bool(slack.get("escalation_pattern_fired", False))
+        return bool(block.get("escalation_pattern_fired", False))
     if not escalation.get("fired", False):
         return False
     # If a timestamp is present, enforce the window; if absent, accept (the
@@ -700,6 +720,15 @@ def check_cor05_slack_escalation(
     if _record_timestamp(escalation) is not None:
         return _within_window(escalation, run_timestamp)
     return True
+
+
+def check_cor05_slack_escalation(
+    run_data: Dict[str, Any],
+    run_timestamp: datetime,
+) -> bool:
+    """COR-05/06 precondition for Slack — thin wrapper over the conversation-source
+    check (kept for backward compatibility / Slack-specific callers)."""
+    return check_cor05_conversation_escalation(run_data, run_timestamp, "slack")
 
 
 def check_cor06_slack_with_primary(slack_fired: bool, primary_fired: bool) -> bool:
@@ -974,20 +1003,27 @@ def evaluate_corroboration(
         fired_rules.append("COR-09")
         sources.append("Java application (operational signal)")
 
-    # COR-05 / COR-06: Slack escalation pattern.
-    # Slack elevates ONLY with a primary corroborator (ServiceNow/Jira). The
-    # Slack ceiling: alone it stays MEDIUM (COR-05), never HIGH.
-    if check_cor05_slack_escalation(run_data, run_timestamp):
-        primary_fired = (
-            (cor01 and _has_lead_authority(weighting_context, "servicenow")) or
-            (cor02 and _has_lead_authority(weighting_context, "jira"))
-        )
+    # COR-05 / COR-06: conversation-source escalation (Slack, Teams).
+    # A conversation source elevates ONLY with a primary corroborator
+    # (ServiceNow/Jira). The conversation-source ceiling: alone it stays MEDIUM
+    # (COR-05), never HIGH. Teams (R17-A1 / AT-433) reuses the SAME rule IDs and
+    # ceiling as Slack (R16-A2) — no new mechanism — so the COR-05-only clamp in
+    # apply_corroboration_confidence and the T3 ceiling clamp cap both identically.
+    primary_fired = (
+        (cor01 and _has_lead_authority(weighting_context, "servicenow")) or
+        (cor02 and _has_lead_authority(weighting_context, "jira"))
+    )
+    for _src_id, _src_label in _CONVERSATION_SOURCES:
+        if not check_cor05_conversation_escalation(run_data, run_timestamp, _src_id):
+            continue
         if check_cor06_slack_with_primary(True, primary_fired):
-            fired_rules.append("COR-06")
-            sources.append("Slack (escalation pattern)")
+            if "COR-06" not in fired_rules:
+                fired_rules.append("COR-06")
+            sources.append(f"{_src_label} (escalation pattern)")
         else:
-            fired_rules.append("COR-05")          # supporting only — no elevation
-            sources.append("Slack (supporting only)")
+            if "COR-05" not in fired_rules:      # supporting only — no elevation
+                fired_rules.append("COR-05")
+            sources.append(f"{_src_label} (supporting only)")
 
     # Determine elevation. R16-C1 source role/priority now shape corroboration
     # contribution, while COR-05 remains supporting-only.

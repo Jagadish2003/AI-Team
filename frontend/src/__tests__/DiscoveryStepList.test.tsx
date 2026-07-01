@@ -16,8 +16,8 @@ describe("DiscoveryStepList step state (CS-4 T5)", () => {
   it("shows the terminal Complete step as completed (check) only once the run has finished", () => {
     render(<DiscoveryStepList currentStep="complete" runComplete />);
 
-    // All seven steps — including "Complete" — render the completed check.
-    expect(screen.getAllByLabelText("completed").length).toBe(7);
+    // All eight steps — including "Complete" — render the completed check.
+    expect(screen.getAllByLabelText("completed").length).toBe(8);
     // No spinner remains once the run has finished.
     expect(screen.queryByLabelText("active")).not.toBeInTheDocument();
   });
@@ -25,9 +25,22 @@ describe("DiscoveryStepList step state (CS-4 T5)", () => {
   it("keeps Complete as a spinner while the run is still computing at the complete step", () => {
     render(<DiscoveryStepList currentStep="complete" runComplete={false} />);
 
-    // The six preceding steps are done, but Complete is not ticked yet.
-    expect(screen.getAllByLabelText("completed").length).toBe(6);
+    // The seven preceding steps are done, but Complete is not ticked yet.
+    expect(screen.getAllByLabelText("completed").length).toBe(7);
     // Complete shows the active spinner until the run reaches 100%.
+    expect(screen.getByLabelText("active")).toBeInTheDocument();
+  });
+
+  it("renders a Slack stage so a connected Slack source shows in Discovery Progress", () => {
+    // Slack is a connected source, ingested after the systems of record and
+    // BEFORE the pack-specific second pass, so its step is active while
+    // current_step === "slack" and the three systems of record precede it.
+    render(<DiscoveryStepList currentStep="slack" />);
+
+    expect(screen.getByText("Slack")).toBeInTheDocument();
+    // sf_crm, sn, jira precede Slack → 3 completed; Slack itself active. The pack
+    // pass (sf_ncino) now comes after Slack, so it is still pending.
+    expect(screen.getAllByLabelText("completed").length).toBe(3);
     expect(screen.getByLabelText("active")).toBeInTheDocument();
   });
 });
@@ -55,16 +68,94 @@ describe("DiscoveryStepList Salesforce product labelling (CS-4)", () => {
     expect(screen.queryByText("nCino Lending")).not.toBeInTheDocument();
   });
 
-  it("places the Service Cloud pass after Jira, matching backend log order", () => {
+  it("places the Service Cloud (pack) pass after all connected sources", () => {
     render(
       <DiscoveryStepList
         currentStep="sf_ncino"
         salesforceProduct="salesforce_sc"
       />
     );
-    // sf_ncino is now index 3 (after sf_crm, sn, jira) → three completed steps,
-    // confirming the Service Cloud pass renders after Jira ingestion.
-    expect(screen.getAllByLabelText("completed").length).toBe(3);
+    // The pack pass (sf_ncino) is index 4, after every connected source
+    // (sf_crm, sn, jira, slack) → four completed steps, confirming the selected
+    // pack renders after all connected sources.
+    expect(screen.getAllByLabelText("completed").length).toBe(4);
     expect(screen.getByLabelText("active")).toBeInTheDocument();
+  });
+});
+
+describe("DiscoveryStepList dynamic connected-source progress", () => {
+  it("shows a stage for every connected source (matching the run's sources)", () => {
+    render(
+      <DiscoveryStepList
+        currentStep="slack"
+        connectedSources={["salesforce", "servicenow", "jira", "slack"]}
+      />
+    );
+    // Every connected source has a stage, plus the processing stages.
+    expect(screen.getByText("Salesforce CRM")).toBeInTheDocument();
+    expect(screen.getByText("ServiceNow")).toBeInTheDocument();
+    expect(screen.getByText("Jira")).toBeInTheDocument();
+    expect(screen.getByText("Slack")).toBeInTheDocument();
+    expect(screen.getByText("Pattern Detection")).toBeInTheDocument();
+    expect(screen.getByText("Complete")).toBeInTheDocument();
+  });
+
+  it("omits sources that are not connected", () => {
+    // Only Salesforce + Slack connected → ServiceNow and Jira must not appear.
+    render(
+      <DiscoveryStepList
+        currentStep="slack"
+        connectedSources={["salesforce", "slack"]}
+      />
+    );
+    expect(screen.getByText("Salesforce CRM")).toBeInTheDocument();
+    expect(screen.getByText("Slack")).toBeInTheDocument();
+    expect(screen.queryByText("ServiceNow")).not.toBeInTheDocument();
+    expect(screen.queryByText("Jira")).not.toBeInTheDocument();
+    // Processing stages remain.
+    expect(screen.getByText("Pattern Detection")).toBeInTheDocument();
+
+    // Only sf_crm (0) precedes Slack (3) here → 1 completed; Slack active. The
+    // pack pass (sf_ncino) is rendered after Slack and is still pending.
+    expect(screen.getAllByLabelText("completed").length).toBe(1);
+    expect(screen.getByLabelText("active")).toBeInTheDocument();
+  });
+
+  it("accepts display names as well as ids (case-insensitive)", () => {
+    render(
+      <DiscoveryStepList
+        currentStep="sn"
+        connectedSources={["ServiceNow", "Jira"]}
+      />
+    );
+    expect(screen.getByText("ServiceNow")).toBeInTheDocument();
+    expect(screen.getByText("Jira")).toBeInTheDocument();
+    expect(screen.queryByText("Salesforce CRM")).not.toBeInTheDocument();
+    expect(screen.queryByText("Slack")).not.toBeInTheDocument();
+  });
+
+  it("renders a generic stage for a connected source with no dedicated step", () => {
+    // A connector without its own pipeline step (e.g. Microsoft Teams) still
+    // appears so every connected source is represented in progress.
+    render(
+      <DiscoveryStepList
+        currentStep="complete"
+        runComplete
+        connectedSources={["Microsoft Teams"]}
+      />
+    );
+    expect(screen.getByText("Microsoft Teams")).toBeInTheDocument();
+    // Once the run is complete the generic source stage is ticked too.
+    // Generic Teams + Pattern Detection + Entity Enrichment + Complete = 4.
+    expect(screen.getAllByLabelText("completed").length).toBe(4);
+  });
+
+  it("shows only processing stages when no sources are connected", () => {
+    render(<DiscoveryStepList currentStep={null} connectedSources={[]} />);
+    expect(screen.queryByText("Salesforce CRM")).not.toBeInTheDocument();
+    expect(screen.queryByText("Slack")).not.toBeInTheDocument();
+    expect(screen.getByText("Pattern Detection")).toBeInTheDocument();
+    expect(screen.getByText("Entity Enrichment")).toBeInTheDocument();
+    expect(screen.getByText("Complete")).toBeInTheDocument();
   });
 });
