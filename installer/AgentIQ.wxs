@@ -1,0 +1,196 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  AgentIQ Windows Installer
+  Built with WiX Toolset v4.
+  Run build.ps1 to compile — do not edit staging\ or downloads\ by hand.
+-->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
+     xmlns:ui="http://wixtoolset.org/schemas/v4/wxs/ui"
+     xmlns:util="http://wixtoolset.org/schemas/v4/wxs/util">
+
+  <Package Name="AgentIQ"
+           Language="1033"
+           Version="1.6.0.0"
+           Manufacturer="CloudFulcrum"
+           UpgradeCode="5A7B2C1D-3E4F-5A6B-7C8D-9E0F1A2B3C4D"
+           Compressed="yes"
+           InstallerVersion="500"
+           Scope="perMachine">
+
+    <!-- Prevent downgrade -->
+    <MajorUpgrade DowngradeErrorMessage="A newer version of AgentIQ is already installed. Please uninstall it first." />
+    <MediaTemplate EmbedCab="yes" CompressionLevel="high" />
+
+    <!-- ── UI ──────────────────────────────────────────────────────────────── -->
+    <ui:WixUI Id="WixUI_InstallDir" />
+    <Property Id="WIXUI_INSTALLDIR" Value="INSTALLFOLDER" />
+    <WixVariable Id="WixUILicenseRtf" Value="License.rtf" />
+
+    <!-- Finish-dialog checkbox: open browser after install -->
+    <Property Id="WIXUI_EXITDIALOGOPTIONALCHECKBOXTEXT" Value="Open AgentIQ in your browser" />
+    <Property Id="WIXUI_EXITDIALOGOPTIONALCHECKBOX"     Value="1" />
+
+    <!-- ── Directory structure ────────────────────────────────────────────── -->
+    <!--
+      Default install: C:\AgentIQ\
+      Paths without spaces are required — the PowerShell custom action passes
+      the install dir as an unquoted argument.
+    -->
+    <Property Id="INSTALLFOLDER" Value="C:\AgentIQ\" />
+
+    <Directory Id="TARGETDIR" Name="SourceDir">
+      <Directory Id="INSTALLFOLDER">
+        <Directory Id="SCRIPTSDIR"   Name="scripts"   />
+        <Directory Id="DOWNLOADSDIR" Name="downloads" />
+        <Directory Id="LOGSDIR"      Name="logs"      />
+      </Directory>
+
+      <!-- Start Menu shortcuts -->
+      <Directory Id="ProgramMenuFolder">
+        <Directory Id="AgentIQMenuDir" Name="AgentIQ" />
+      </Directory>
+    </Directory>
+
+    <!-- ── Components ─────────────────────────────────────────────────────── -->
+
+    <!-- Main application bundle (zip extracted by Install.ps1) -->
+    <ComponentGroup Id="AppBundle" Directory="INSTALLFOLDER">
+      <Component Guid="B1C2D3E4-F5A6-7890-BCDE-F12345678901">
+        <File Id="AppZip" Source="staging\AgentIQ-app.zip" KeyPath="yes" />
+      </Component>
+    </ComponentGroup>
+
+    <!-- PowerShell scripts -->
+    <ComponentGroup Id="Scripts" Directory="SCRIPTSDIR">
+      <Component Guid="C2D3E4F5-A6B7-8901-CDEF-234567890123">
+        <File Id="InstallScript"   Source="scripts\Install.ps1"   KeyPath="yes" />
+      </Component>
+      <Component Guid="D3E4F5A6-B7C8-9012-DEF0-345678901234">
+        <File Id="UninstallScript" Source="scripts\Uninstall.ps1" KeyPath="yes" />
+      </Component>
+      <Component Guid="E4F5A6B7-C8D9-0123-EF01-456789012345">
+        <File Id="ConfigScript"    Source="scripts\Configure.ps1" KeyPath="yes" />
+      </Component>
+    </ComponentGroup>
+
+    <!-- Bundled prerequisite installers (pre-downloaded by build.ps1) -->
+    <ComponentGroup Id="Downloads" Directory="DOWNLOADSDIR">
+      <Component Guid="F5A6B7C8-D9E0-1234-F012-567890123456">
+        <File Id="PythonInstaller"   Source="downloads\python-3.11.9-amd64.exe"                   KeyPath="yes" />
+      </Component>
+      <Component Guid="A6B7C8D9-E0F1-2345-0123-678901234567">
+        <File Id="ARRInstaller"      Source="downloads\requestRouter_amd64.msi"                   KeyPath="yes" />
+      </Component>
+      <Component Guid="B7C8D9E0-F1A2-3456-1234-789012345678">
+        <File Id="URLRewriteInst"    Source="downloads\rewrite_amd64_en-US.msi"                   KeyPath="yes" />
+      </Component>
+      <Component Guid="C8D9E0F1-A2B3-4567-2345-890123456789">
+        <File Id="NSSMZip"           Source="downloads\nssm-2.24.zip"                             KeyPath="yes" />
+      </Component>
+      <Component Guid="D9E0F1A2-B3C4-5678-3456-901234567890">
+        <File Id="PostgreSQLZip"     Source="downloads\postgresql-16-windows-x64-binaries.zip"    KeyPath="yes" />
+      </Component>
+      <Component Guid="E0F1A2B3-C4D5-6789-4567-012345678901">
+        <File Id="VCRedistInst"      Source="downloads\vc_redist.x64.exe"                         KeyPath="yes" />
+      </Component>
+      <Component Guid="F1A2B3C4-D5E6-7890-5678-123456789012">
+        <File Id="ODBCInst"          Source="downloads\msodbcsql18_amd64.msi"                     KeyPath="yes" />
+      </Component>
+    </ComponentGroup>
+
+    <!-- Registry entries (install path + version) -->
+    <Component Id="RegistryEntries" Directory="INSTALLFOLDER"
+               Guid="A2B3C4D5-E6F7-8901-6789-234567890123">
+      <RegistryValue Root="HKLM" Key="SOFTWARE\AgentIQ"
+                     Name="InstallPath" Value="[INSTALLFOLDER]" Type="string" KeyPath="yes" />
+      <RegistryValue Root="HKLM" Key="SOFTWARE\AgentIQ"
+                     Name="Version"     Value="1.6.0"            Type="string" />
+    </Component>
+
+    <!-- Start Menu shortcuts -->
+    <Component Id="StartMenuShortcuts" Directory="AgentIQMenuDir"
+               Guid="B3C4D5E6-F7A8-9012-7890-345678901234">
+      <Shortcut Id="ConfigShortcut"
+                Name="Configure AgentIQ"
+                Description="Reconfigure AgentIQ settings"
+                Target="[SystemFolder]WindowsPowerShell\v1.0\powershell.exe"
+                Arguments="-ExecutionPolicy Bypass -File [SCRIPTSDIR]Configure.ps1"
+                WorkingDirectory="SCRIPTSDIR" />
+      <Shortcut Id="OpenAppShortcut"
+                Name="Open AgentIQ"
+                Description="Open AgentIQ in your browser"
+                Target="[SystemFolder]cmd.exe"
+                Arguments="/c start http://localhost" />
+      <Shortcut Id="UninstallShortcut"
+                Name="Uninstall AgentIQ"
+                Description="Remove AgentIQ from this computer"
+                Target="[SystemFolder]msiexec.exe"
+                Arguments="/x [ProductCode]" />
+      <RemoveFolder Id="RemoveAgentIQMenuDir" Directory="AgentIQMenuDir" On="uninstall" />
+      <RegistryValue Root="HKCU" Key="SOFTWARE\AgentIQ\Shortcuts"
+                     Name="Installed" Value="1" Type="integer" KeyPath="yes" />
+    </Component>
+
+    <!-- Empty logs directory marker -->
+    <Component Id="LogsDir" Directory="LOGSDIR"
+               Guid="C4D5E6F7-A8B9-0123-8901-456789012345">
+      <CreateFolder />
+      <RegistryValue Root="HKCU" Key="SOFTWARE\AgentIQ\Logs"
+                     Name="Path" Value="[LOGSDIR]" Type="string" KeyPath="yes" />
+    </Component>
+
+    <!-- ── Feature ─────────────────────────────────────────────────────────── -->
+    <Feature Id="ProductFeature" Title="AgentIQ" Level="1">
+      <ComponentGroupRef Id="AppBundle"      />
+      <ComponentGroupRef Id="Scripts"        />
+      <ComponentGroupRef Id="Downloads"      />
+      <ComponentRef      Id="RegistryEntries"/>
+      <ComponentRef      Id="StartMenuShortcuts" />
+      <ComponentRef      Id="LogsDir"        />
+    </Feature>
+
+    <!-- ── Custom Actions ──────────────────────────────────────────────────── -->
+
+    <!-- Pass install dir to the deferred install CA via CustomActionData -->
+    <SetProperty Id="CA_RunInstall"
+                 Before="CA_RunInstall"
+                 Sequence="execute"
+                 Value="[INSTALLFOLDER]" />
+
+    <!-- Main install: runs Install.ps1 with SYSTEM privileges -->
+    <CustomAction Id="CA_RunInstall"
+                  Execute="deferred"
+                  Impersonate="no"
+                  Return="check"
+                  ExeCommand="[SystemFolder]WindowsPowerShell\v1.0\powershell.exe -ExecutionPolicy Bypass -NonInteractive -File [CustomActionData]scripts\Install.ps1 -InstallDir [CustomActionData]" />
+
+    <!-- Uninstall: runs Uninstall.ps1 -->
+    <SetProperty Id="CA_RunUninstall"
+                 Before="CA_RunUninstall"
+                 Sequence="execute"
+                 Value="[INSTALLFOLDER]" />
+
+    <CustomAction Id="CA_RunUninstall"
+                  Execute="deferred"
+                  Impersonate="no"
+                  Return="ignore"
+                  ExeCommand="[SystemFolder]WindowsPowerShell\v1.0\powershell.exe -ExecutionPolicy Bypass -NonInteractive -File [CustomActionData]scripts\Uninstall.ps1 -InstallDir [CustomActionData]" />
+
+    <!-- Open browser (async, no wait — fires only if checkbox is ticked) -->
+    <CustomAction Id="CA_OpenBrowser"
+                  Execute="immediate"
+                  Return="asyncNoWait"
+                  ExeCommand="[SystemFolder]cmd.exe /c start http://localhost" />
+
+    <!-- ── Sequences ───────────────────────────────────────────────────────── -->
+    <InstallExecuteSequence>
+      <!-- Run install script after files are placed, before finalizing -->
+      <Custom Action="CA_RunInstall"   Before="InstallFinalize">NOT Installed AND NOT REMOVE</Custom>
+      <!-- Run uninstall script before files are removed -->
+      <Custom Action="CA_RunUninstall" Before="RemoveFiles">Installed AND REMOVE~="ALL"</Custom>
+      <!-- Open browser on successful install if checkbox ticked -->
+      <Custom Action="CA_OpenBrowser"  OnExit="success">WIXUI_EXITDIALOGOPTIONALCHECKBOX = 1 AND NOT Installed AND NOT REMOVE</Custom>
+    </InstallExecuteSequence>
+
+  </Package>
+</Wix>
