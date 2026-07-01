@@ -35,7 +35,7 @@ import os
 # ---------------------------------------------------------------------------
 # Configuration key names — the single source of truth for where the hosted
 # provider's credential and endpoint config come from.  Documented in
-# backend/.env.example (T4-AC4).
+# backend/.env.template (T4-AC4).
 # ---------------------------------------------------------------------------
 
 #: Secret. The hosted-provider API credential. Read from config/secrets only.

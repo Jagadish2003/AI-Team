@@ -30,7 +30,7 @@ Each connector's client secret is resolved from the environment at runtime via `
 in `ConnectorAuthConfig`. No secret value is ever stored in code.
 
 Set the following variables in your deployment environment (or `.env` for local dev).
-See `backend/.env.example` for the full list including non-secret client IDs.
+See `backend/.env.template` for the full list including non-secret client IDs.
 
 ### Required connector secrets
 

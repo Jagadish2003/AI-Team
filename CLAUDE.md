@@ -174,7 +174,7 @@ source .venv/Scripts/activate
 ./run.sh
 ```
 
-Reference `backend/.env.example` for the full list of env vars needed before first run.
+Reference `backend/.env.template` for the full list of env vars needed before first run.
 
 ## Verification Commands
 
@@ -226,7 +226,7 @@ Smoke scripts are Bash scripts under `scripts/` and `backend/scripts/`; run them
 
 ## Runtime And Env Notes
 
-* Backend `.env` and frontend `.env` are intentionally untracked. Use `backend/.env.example` as the setup reference.
+* Backend `.env` and frontend `.env` are intentionally untracked. Use `backend/.env.template` as the setup reference.
 * Backend database defaults to `backend/database/dev.db`. Override with `DB_PATH` for tests or isolated runs.
 * Seed data location defaults to `backend/database/seed`; override with `SEED_DIR`.
 * Local backend CORS defaults allow `localhost:5173` through `localhost:5176`. Override the allowed origins list with `CORS_ORIGINS` (comma-separated) for non-default dev ports or staging.

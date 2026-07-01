@@ -10,7 +10,7 @@ Acceptance Criteria
           never hardcoded.
   T4-AC2  Credentials never appear in logs at any log level.
   T4-AC3  No caller outside backend/app/model_gateway/ can access the credential.
-  T4-AC4  backend/.env.example documents the required credential config key with
+  T4-AC4  backend/.env.template documents the required credential config key with
           a placeholder value.
 """
 from __future__ import annotations
@@ -146,14 +146,14 @@ def test_t4_ac3_config_module_is_private():
 
 
 # ---------------------------------------------------------------------------
-# T4-AC4 — .env.example documents the credential config key with a placeholder
+# T4-AC4 — .env.template documents the credential config key with a placeholder
 # ---------------------------------------------------------------------------
 
 
 def test_t4_ac4_env_example_documents_credential_key():
-    """backend/.env.example documents ANTHROPIC_API_KEY with a placeholder value."""
-    env_example = Path(__file__).resolve().parents[2] / ".env.example"
-    assert env_example.exists(), "backend/.env.example is missing"
+    """backend/.env.template documents ANTHROPIC_API_KEY with a placeholder value."""
+    env_example = Path(__file__).resolve().parents[2] / ".env.template"
+    assert env_example.exists(), "backend/.env.template is missing"
     text = env_example.read_text(encoding="utf-8")
 
     line = next(
@@ -164,6 +164,6 @@ def test_t4_ac4_env_example_documents_credential_key():
         ),
         None,
     )
-    assert line is not None, f"{CONFIG_KEY_API_KEY} not documented in .env.example"
+    assert line is not None, f"{CONFIG_KEY_API_KEY} not documented in .env.template"
     placeholder = line.split("=", 1)[1].strip()
     assert placeholder, "credential config key must have a placeholder value"
