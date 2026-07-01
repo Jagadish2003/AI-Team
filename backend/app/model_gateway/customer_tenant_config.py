@@ -159,12 +159,24 @@ class CustomerTenantConfig:
     def resolve_api_key(self) -> str:
         """Return the live tenant credential without logging it.
 
-        Read live on every call so a rotation or revocation by the customer
-        takes effect immediately. Returns "" when unset; the provider treats
-        that as "skip the call, degrade gracefully". Must never be logged and
-        must never be returned to a caller outside the gateway package.
+        Delegates to the gateway-owned resolver (R17-D2 T2), which reads the
+        Fernet-encrypted credential vault first (the secure production source of
+        truth for rotation and revocation) and falls back to the
+        ``CUSTOMER_TENANT_API_KEY`` environment variable for dev/standalone runs.
+        Read live on every call so a rotation or revocation by the customer takes
+        effect immediately. Returns "" when no credential is available anywhere;
+        the provider treats that as "skip the call, degrade gracefully". Must
+        never be logged and must never be returned to a caller outside the gateway
+        package.
+
+        Imported lazily so importing this config module at gateway startup does
+        not pull in the vault/DB subsystem (and to avoid any import cycle).
         """
-        return os.getenv(CONFIG_KEY_API_KEY, "")
+        from app.model_gateway.customer_tenant_vault import (
+            resolve_customer_tenant_api_key,
+        )
+
+        return resolve_customer_tenant_api_key()
 
     def has_credential(self) -> bool:
         """True when a non-empty tenant credential is configured (live read)."""
