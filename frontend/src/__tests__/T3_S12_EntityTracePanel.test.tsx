@@ -5,6 +5,8 @@ import { describe, expect, it } from "vitest";
 import { EntityTracePanel } from "../components/analyst_review/OpportunityDetail";
 import type { EntitySummary } from "../api/enrichmentApi";
 
+const ENTITY_MIN_RUN_COUNT_FROM_API = 3;
+
 const ENTITIES: EntitySummary[] = [
   {
     entity_id: "ent_person_1",
@@ -40,7 +42,13 @@ describe("T3-S12-A EntityTracePanel", () => {
   });
 
   it("shows the run-history message when no visible entities are available yet", () => {
-    render(<EntityTracePanel entities={[]} runCount={2} />);
+    render(
+      <EntityTracePanel
+        entities={[]}
+        runCount={2}
+        entityMinRunCount={ENTITY_MIN_RUN_COUNT_FROM_API}
+      />
+    );
 
     expect(screen.getByText("Entities")).toBeInTheDocument();
     expect(screen.getByText("Hidden until 3 runs")).toBeInTheDocument();
@@ -52,13 +60,32 @@ describe("T3-S12-A EntityTracePanel", () => {
     ).toBeInTheDocument();
   });
 
-  it("shows the run-history message when enrichment loaded without an entities field", () => {
+  it("does not claim run-history hiding when enrichment loaded without a run count", () => {
     render(<EntityTracePanel entities={undefined} enrichmentLoaded />);
 
     expect(screen.getByText("Entities")).toBeInTheDocument();
-    expect(screen.getByText("Hidden until 3 runs")).toBeInTheDocument();
+    expect(screen.getByText("0 linked")).toBeInTheDocument();
+    expect(screen.getByText("No entities linked to this opportunity.")).toBeInTheDocument();
+    expect(screen.queryByText("Hidden until 3 runs")).not.toBeInTheDocument();
     expect(
-      screen.getByText("Entities will appear after 3 or more discovery runs.")
+      screen.queryByText("Entities will appear after 3 or more discovery runs.")
+    ).not.toBeInTheDocument();
+  });
+
+  it("shows a neutral empty state for a mature run with no linked entities", () => {
+    render(
+      <EntityTracePanel
+        entities={[]}
+        runCount={10}
+        entityMinRunCount={ENTITY_MIN_RUN_COUNT_FROM_API}
+      />
+    );
+
+    expect(screen.getByText("0 linked")).toBeInTheDocument();
+    expect(screen.getByText("No entities linked to this opportunity.")).toBeInTheDocument();
+    expect(screen.queryByText("Hidden until 3 runs")).not.toBeInTheDocument();
+    expect(
+      screen.getByText(/will show linked people, systems, and process entities/i)
     ).toBeInTheDocument();
   });
 
@@ -100,6 +127,20 @@ describe("T3-S12-A EntityTracePanel", () => {
     expect(screen.getAllByText("Sarah Chen")).toHaveLength(1);
   });
 
+  it("shows entities without row-level run_count even when panel runCount is below threshold", () => {
+    render(
+      <EntityTracePanel
+        entities={ENTITIES}
+        runCount={2}
+        entityMinRunCount={ENTITY_MIN_RUN_COUNT_FROM_API}
+      />
+    );
+
+    expect(screen.getByText("2 linked")).toBeInTheDocument();
+    expect(screen.getByText("Sarah Chen")).toBeInTheDocument();
+    expect(screen.queryByText("Hidden until 3 runs")).not.toBeInTheDocument();
+  });
+
   it("does not render entities with optional run_count below the display threshold", () => {
     render(
       <EntityTracePanel
@@ -118,6 +159,7 @@ describe("T3-S12-A EntityTracePanel", () => {
           },
         ]}
         runCount={3}
+        entityMinRunCount={ENTITY_MIN_RUN_COUNT_FROM_API}
       />
     );
 
