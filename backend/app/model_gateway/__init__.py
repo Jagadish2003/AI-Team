@@ -41,9 +41,10 @@ Provider resolution  (T2 — R16-D1 §3)
   Unknown values raise ``ValueError`` at startup via
   ``validate_provider_config()`` — before the first model call (T2-AC4).
 
-  1.6 ships the 'hosted' provider (Anthropic API).  1.7 will add
-  'in_boundary' and 'customer_tenant' by registering new implementations
-  via ``register_provider()`` — no calling code changes required (AC7).
+  1.6 ships the 'hosted' provider (Anthropic API).  1.7 adds 'in_boundary'
+  (R17-D1) and 'customer_tenant' (R17-D2) by registering new implementations
+  via ``register_provider()`` — no calling code changes required (AC7).  All
+  three modes are now selectable, independently, for generation and embedding.
 """
 from __future__ import annotations
 
@@ -311,9 +312,11 @@ def validate_provider_config() -> None:
 
 from app.model_gateway.hosted_provider import HostedModelProvider as _HostedModelProvider  # noqa: E402
 from app.model_gateway.in_boundary_provider import InBoundaryModelProvider as _InBoundaryModelProvider  # noqa: E402
+from app.model_gateway.customer_tenant_provider import CustomerTenantModelProvider as _CustomerTenantModelProvider  # noqa: E402
 
 register_provider(_HostedModelProvider())
 register_provider(_InBoundaryModelProvider())
+register_provider(_CustomerTenantModelProvider())
 
 
 __all__ = [
