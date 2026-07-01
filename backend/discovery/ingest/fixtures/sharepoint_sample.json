@@ -1,0 +1,39 @@
+{
+  "_comment": "R17-A2 / AT-459 — deterministic offline fixture for the SharePoint change-based ingestor. Drives (document libraries) exercise the granted-only access boundary: only libraries AgentIQ is explicitly granted are read; ungranted libraries (is_accessible=false), hidden/system libraries (is_hidden=true) and ungranted sites (is_accessible=false) are excluded. Each driveItem carries the Microsoft Graph 'createdDateTime' (and 'lastModifiedDateTime' once edited) the connector uses as its change marker / delta-token position, ordered within each library, so incremental (since-deltatoken) and resumable first-load batching can both be tested. The per-library delta-token map in the checkpoint is keyed by '{site_id}/{drive_id}'. Item markers deliberately mirror the Teams fixture (heads at 2026-06-11T08:05:00Z and 2026-06-10T09:30:00Z) so the two paired connectors share a test shape.",
+  "sites": [
+    {"id": "S-eng", "displayName": "Engineering", "webUrl": "https://contoso.sharepoint.com/sites/eng", "is_accessible": true},
+    {"id": "S-secret", "displayName": "Executive (not granted)", "webUrl": "https://contoso.sharepoint.com/sites/exec", "is_accessible": false}
+  ],
+  "drives": {
+    "S-eng": [
+      {"id": "b-docs", "name": "Documents", "driveType": "documentLibrary", "is_accessible": true, "is_hidden": false},
+      {"id": "b-specs", "name": "Specs", "driveType": "documentLibrary", "is_accessible": true, "is_hidden": false},
+      {"id": "b-private", "name": "HR-private", "driveType": "documentLibrary", "is_accessible": false, "is_hidden": false},
+      {"id": "b-hidden", "name": "Form Templates", "driveType": "documentLibrary", "is_accessible": true, "is_hidden": true}
+    ],
+    "S-secret": [
+      {"id": "x-docs", "name": "Board Documents", "driveType": "documentLibrary", "is_accessible": true, "is_hidden": false}
+    ]
+  },
+  "items": {
+    "S-eng/b-docs": [
+      {"id": "f100", "name": "roadmap.docx", "createdDateTime": "2026-06-10T09:00:00Z", "size": 24576, "webUrl": "https://contoso.sharepoint.com/sites/eng/Documents/roadmap.docx", "file": {"mimeType": "application/vnd.openxmlformats-officedocument.wordprocessingml.document"}, "createdBy": {"user": {"id": "U100", "displayName": "Ada"}}, "lastModifiedBy": {"user": {"id": "U100", "displayName": "Ada"}}, "parentReference": {"driveId": "b-docs", "path": "/drive/root:"}},
+      {"id": "f200", "name": "budget.xlsx", "createdDateTime": "2026-06-10T09:10:00Z", "size": 40960, "webUrl": "https://contoso.sharepoint.com/sites/eng/Documents/budget.xlsx", "file": {"mimeType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"}, "createdBy": {"user": {"id": "U101", "displayName": "Lin"}}, "lastModifiedBy": {"user": {"id": "U101", "displayName": "Lin"}}, "parentReference": {"driveId": "b-docs", "path": "/drive/root:"}},
+      {"id": "fold300", "name": "Archive", "createdDateTime": "2026-06-10T10:00:00Z", "webUrl": "https://contoso.sharepoint.com/sites/eng/Documents/Archive", "folder": {"childCount": 3}, "createdBy": {"user": {"id": "U102", "displayName": "Sam"}}, "lastModifiedBy": {"user": {"id": "U102", "displayName": "Sam"}}, "parentReference": {"driveId": "b-docs", "path": "/drive/root:"}},
+      {"id": "f400", "name": "postmortem.md", "createdDateTime": "2026-06-11T08:00:00Z", "lastModifiedDateTime": "2026-06-11T08:05:00Z", "size": 8192, "webUrl": "https://contoso.sharepoint.com/sites/eng/Documents/postmortem.md", "file": {"mimeType": "text/markdown"}, "createdBy": {"user": {"id": "U100", "displayName": "Ada"}}, "lastModifiedBy": {"user": {"id": "U101", "displayName": "Lin"}}, "parentReference": {"driveId": "b-docs", "path": "/drive/root:"}}
+    ],
+    "S-eng/b-specs": [
+      {"id": "s100", "name": "api-spec.md", "createdDateTime": "2026-06-10T09:05:00Z", "size": 15000, "webUrl": "https://contoso.sharepoint.com/sites/eng/Specs/api-spec.md", "file": {"mimeType": "text/markdown"}, "createdBy": {"user": {"id": "U200", "displayName": "Rae"}}, "lastModifiedBy": {"user": {"id": "U200", "displayName": "Rae"}}, "parentReference": {"driveId": "b-specs", "path": "/drive/root:"}},
+      {"id": "s200", "name": "design.md", "createdDateTime": "2026-06-10T09:30:00Z", "size": 22000, "webUrl": "https://contoso.sharepoint.com/sites/eng/Specs/design.md", "file": {"mimeType": "text/markdown"}, "createdBy": {"user": {"id": "U201", "displayName": "Kai"}}, "lastModifiedBy": {"user": {"id": "U201", "displayName": "Kai"}}, "parentReference": {"driveId": "b-specs", "path": "/drive/root:"}}
+    ],
+    "S-eng/b-private": [
+      {"id": "p100", "name": "salaries.xlsx", "createdDateTime": "2026-06-10T09:00:00Z", "size": 5000, "file": {"mimeType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"}, "createdBy": {"user": {"id": "U900", "displayName": "HR"}}, "lastModifiedBy": {"user": {"id": "U900", "displayName": "HR"}}, "parentReference": {"driveId": "b-private", "path": "/drive/root:"}}
+    ],
+    "S-eng/b-hidden": [
+      {"id": "h100", "name": "template.dotx", "createdDateTime": "2026-06-10T09:00:00Z", "size": 3000, "file": {"mimeType": "application/vnd.openxmlformats-officedocument.wordprocessingml.template"}, "createdBy": {"user": {"id": "U000", "displayName": "System"}}, "lastModifiedBy": {"user": {"id": "U000", "displayName": "System"}}, "parentReference": {"driveId": "b-hidden", "path": "/drive/root:"}}
+    ],
+    "S-secret/x-docs": [
+      {"id": "x100", "name": "board-minutes.docx", "createdDateTime": "2026-06-10T09:00:00Z", "size": 9000, "file": {"mimeType": "application/vnd.openxmlformats-officedocument.wordprocessingml.document"}, "createdBy": {"user": {"id": "U999", "displayName": "Board"}}, "lastModifiedBy": {"user": {"id": "U999", "displayName": "Board"}}, "parentReference": {"driveId": "x-docs", "path": "/drive/root:"}}
+    ]
+  }
+}
