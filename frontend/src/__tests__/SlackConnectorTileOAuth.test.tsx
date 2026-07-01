@@ -47,8 +47,11 @@ function slackDisconnected() {
   };
 }
 
-function teamsDisconnected() {
-  return { ...slackDisconnected(), id: "teams", name: "Microsoft Teams" };
+// A connector that is NOT in ConnectorTile's ENABLED_CONNECTOR_IDS allowlist, so
+// its Connect button must stay disabled. (Teams used to serve this role; it is
+// now OAuth-enabled per AT-436, so a still-unwired connector is used instead.)
+function nonOauthDisconnected() {
+  return { ...slackDisconnected(), id: "workday", name: "Workday" };
 }
 
 describe("AT-422 — Slack tile is enabled for the OAuth connect flow", () => {
@@ -71,11 +74,11 @@ describe("AT-422 — Slack tile is enabled for the OAuth connect flow", () => {
     expect(onPrimary).toHaveBeenCalledTimes(1);
   });
 
-  it("leaves a non-OAuth connector (Teams) disabled — allowlist stays scoped", () => {
+  it("leaves a non-OAuth connector (Workday) disabled — allowlist stays scoped", () => {
     render(
       <ConnectorTile
-        connector={teamsDisconnected() as any}
-        icon={<span>MT</span>}
+        connector={nonOauthDisconnected() as any}
+        icon={<span>WD</span>}
         selected={false}
         onSelect={vi.fn()}
         onPrimary={vi.fn()}

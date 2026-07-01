@@ -36,10 +36,13 @@ export const SALESFORCE_DUAL_EXTRACTION_TOOLTIP =
   "token and are logged in the audit trail.";
 
 // Order matches the backend runner's update_run_step() emission order
-// (backend/discovery/runner.py): Salesforce CRM → ServiceNow → Jira → the
-// second Salesforce pass (sf_ncino) → detect → enrich → complete. The second
-// Salesforce pass is emitted AFTER Jira ingestion, so it is listed here after
-// the Jira step — keeping the progress indicator consistent with the run log.
+// (backend/discovery/runner.py): Salesforce CRM → ServiceNow → Jira → Slack →
+// the pack-specific second Salesforce pass (sf_ncino) → detect → enrich →
+// complete. All connected SOURCES (systems of record + conversation sources like
+// Slack) are emitted first; the pack-specific second pass (labelled by the
+// selected pack — Service Cloud / nCino / etc.) is emitted last among the ingest
+// steps, so Discovery Progress shows every connected source before the selected
+// pack — consistent with the run log.
 const DISCOVERY_STEPS: DiscoveryStep[] = [
   {
     id: "sf_crm",
@@ -56,6 +59,11 @@ const DISCOVERY_STEPS: DiscoveryStep[] = [
     id: "jira",
     label: "Jira",
     subLabel: "Ingesting issue metrics and project activity",
+  },
+  {
+    id: "slack",
+    label: "Slack",
+    subLabel: "Ingesting channel activity, escalation, and cross-reference signals",
   },
   {
     id: "sf_ncino",
@@ -82,6 +90,89 @@ const DISCOVERY_STEPS: DiscoveryStep[] = [
 
 const STEP_INDEX = Object.fromEntries(
   DISCOVERY_STEPS.map((s, i) => [s.id, i])
+);
+
+// ---------------------------------------------------------------------------
+// Connected-source → discovery-step mapping (dynamic progress).
+//
+// The Discovery Progress list is NOT a fixed pipeline: it shows a stage for
+// every source actually connected for the run (the same set surfaced in the
+// Discovery Log / Run Summary), plus the always-present processing stages
+// (Pattern Detection → Entity Enrichment → Complete). A source that is not
+// connected is not shown.
+//
+// SOURCE_STEP_IDS are the pipeline steps that correspond to an ingested source
+// (everything except the processing stages). STEP_SOURCE_TOKENS maps each such
+// step to the connector id/name token(s) that mean "this source is connected".
+// Salesforce drives two passes (CRM + the declared second product), so both
+// sf_crm and sf_ncino map to the salesforce source.
+// ---------------------------------------------------------------------------
+const SOURCE_STEP_IDS = new Set(["sf_crm", "sn", "jira", "sf_ncino", "slack"]);
+
+// The pack-specific second Salesforce pass (labelled by the selected pack —
+// Service Cloud / nCino / …). It is a source step, but it is rendered LAST among
+// the source stages — after every connected source — so the progress list reads
+// "all connected sources → the selected pack".
+const PACK_STEP_IDS = new Set(["sf_ncino"]);
+
+const STEP_SOURCE_TOKENS: Record<string, string[]> = {
+  sf_crm: ["salesforce"],
+  sf_ncino: ["salesforce"],
+  sn: ["servicenow"],
+  jira: ["jira"],
+  slack: ["slack"],
+};
+
+// Normalise a connected-source label/id for matching: lower-cased, trimmed.
+// Connected sources arrive either as connector ids ("salesforce", "servicenow")
+// or display names ("Salesforce", "ServiceNow", "Microsoft Teams"); lower-casing
+// reconciles both for the single-word source ids we map.
+function normalizeSource(value: string): string {
+  return (value ?? "").trim().toLowerCase();
+}
+
+// Proper display names for connectors rendered as generic source stages, so a
+// raw lower-cased id ("teams", "github") shows with correct branding/casing
+// (e.g. "Salesforce CRM" alongside) rather than "teams" / "github".
+const SOURCE_DISPLAY_NAMES: Record<string, string> = {
+  github: "GitHub",
+  teams: "Microsoft Teams",
+  slack: "Slack",
+};
+
+// Human-friendly label for a connected source: a known brand name, else the raw
+// value Title-Cased (so the first letter is always capitalised).
+function prettySourceLabel(value: string): string {
+  const n = normalizeSource(value);
+  if (SOURCE_DISPLAY_NAMES[n]) return SOURCE_DISPLAY_NAMES[n];
+  return (value ?? "")
+    .trim()
+    .split(/[\s_-]+/)
+    .filter(Boolean)
+    .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+    .join(" ");
+}
+
+// True when a known source step's source is among the connected sources.
+// Salesforce is matched by prefix so product-specific ids (e.g. "salesforce_sc")
+// still resolve to the Salesforce passes.
+function isSourceStepConnected(
+  stepId: string,
+  connected: Set<string>
+): boolean {
+  const tokens = STEP_SOURCE_TOKENS[stepId] ?? [];
+  return tokens.some(
+    (t) =>
+      connected.has(t) ||
+      (t === "salesforce" &&
+        [...connected].some((c) => c.startsWith("salesforce")))
+  );
+}
+
+// Every connector id/name token covered by a known source step — used to decide
+// which connected sources need a generic (catch-all) step instead.
+const KNOWN_SOURCE_TOKENS = new Set(
+  Object.values(STEP_SOURCE_TOKENS).flat()
 );
 
 // CS-4: the second Salesforce pass ("sf_ncino" step) reflects the Salesforce
@@ -215,6 +306,7 @@ export function DiscoveryStepList({
   runComplete = false,
   salesforceProduct,
   failedSteps = [],
+  connectedSources,
 }: {
   currentStep: string | null;
   // True only once the discovery run has truly finished (100%). The backend can
@@ -228,14 +320,89 @@ export function DiscoveryStepList({
   // step is rendered with an error icon, never as a completed green check — so
   // a failed stage is not misrepresented as successful (CS-4 / AT-313).
   failedSteps?: string[];
+  // The sources actually connected for this run (connector ids/names — the same
+  // set shown in the Discovery Log / Run Summary). When provided, the progress
+  // list shows a stage for each connected source (plus the processing stages)
+  // and omits unconnected sources. When omitted (undefined), every known source
+  // stage is shown — the legacy fixed-pipeline behaviour.
+  connectedSources?: string[];
 }) {
   const activeIdx =
     currentStep != null ? (STEP_INDEX[currentStep] ?? -1) : -1;
-  const steps = resolveDiscoverySteps(salesforceProduct);
+  // Processing stages always finish before/at this boundary; a generic source
+  // (one with no dedicated backend step) is considered ingested once the run has
+  // reached detection.
+  const detectIdx = STEP_INDEX["detect"];
+
+  const canonical = resolveDiscoverySteps(salesforceProduct);
+  const connectedProvided = connectedSources !== undefined;
+  const connectedNorm = new Set(
+    (connectedSources ?? []).map(normalizeSource)
+  );
+
+  // 1. Known source stages, in canonical (backend emission) order — filtered to
+  //    the connected sources when a connected-source list is provided. Split the
+  //    pack-specific pass (sf_ncino) out so it can be rendered AFTER every
+  //    connected source ("all connected sources → selected pack").
+  const knownSourceSteps = canonical.filter((s) => {
+    if (!SOURCE_STEP_IDS.has(s.id) || PACK_STEP_IDS.has(s.id)) return false;
+    if (!connectedProvided) return true; // legacy: show all known source stages
+    return isSourceStepConnected(s.id, connectedNorm);
+  });
+  const packSteps = canonical.filter((s) => {
+    if (!PACK_STEP_IDS.has(s.id)) return false;
+    if (!connectedProvided) return true; // legacy: show the pack stage
+    return isSourceStepConnected(s.id, connectedNorm);
+  });
+
+  // 2. Generic stages for connected sources with no dedicated pipeline step
+  //    (e.g. a newly added connector). These still appear so "every connected
+  //    source shows in progress"; they have no backend current_step, so their
+  //    state is derived from overall pipeline progress (ingested by detection).
+  const seenGeneric = new Set<string>();
+  const genericSourceSteps: DiscoveryStep[] = connectedProvided
+    ? (connectedSources ?? [])
+        .filter((src) => {
+          const n = normalizeSource(src);
+          if (!n) return false;
+          if (KNOWN_SOURCE_TOKENS.has(n) || n.startsWith("salesforce")) {
+            return false; // already covered by a known source stage
+          }
+          if (seenGeneric.has(n)) return false; // de-dupe
+          seenGeneric.add(n);
+          return true;
+        })
+        .map((src) => {
+          const label = prettySourceLabel(src);
+          return {
+            id: `src:${normalizeSource(src)}`,
+            label,
+            subLabel: `Ingesting ${label} signals`,
+          };
+        })
+    : [];
+
+  // 3. Processing stages — always shown, in canonical order.
+  const processingSteps = canonical.filter((s) => !SOURCE_STEP_IDS.has(s.id));
+
+  // Display order: every connected source first (systems of record + Slack +
+  // any generic connector), THEN the selected pack, THEN the processing stages.
+  const steps = [
+    ...knownSourceSteps,
+    ...genericSourceSteps,
+    ...packSteps,
+    ...processingSteps,
+  ];
 
   return (
     <ol className="space-y-3">
-      {steps.map((step, idx) => {
+      {steps.map((step) => {
+        const isGeneric = step.id.startsWith("src:");
+        // Known/processing stages map to a canonical backend index; generic
+        // source stages do not (no backend step), so their state comes from the
+        // detection boundary instead.
+        const canonicalIdx = isGeneric ? -1 : (STEP_INDEX[step.id] ?? -1);
+
         // A failed ingest takes precedence over every other state: it must never
         // show the completed green check, even after the run advances past it.
         const isFailed = failedSteps.includes(step.id);
@@ -243,10 +410,23 @@ export function DiscoveryStepList({
         // run has actually finished (runComplete). While the run is still running
         // — even if the backend already emitted "complete" — it shows the spinner.
         const isTerminal = step.id === "complete";
-        const isCompleted =
-          !isFailed &&
-          (isTerminal ? runComplete && activeIdx >= idx : activeIdx > idx);
-        const isActive = !isFailed && !isCompleted && activeIdx === idx;
+
+        let isCompleted: boolean;
+        let isActive: boolean;
+        if (isGeneric) {
+          // Ingested once the pipeline reaches detection (all sources read);
+          // shows the spinner while source ingestion is still in progress.
+          isCompleted = !isFailed && activeIdx >= detectIdx;
+          isActive =
+            !isFailed && !isCompleted && activeIdx >= 0 && activeIdx < detectIdx;
+        } else {
+          isCompleted =
+            !isFailed &&
+            (isTerminal
+              ? runComplete && activeIdx >= canonicalIdx
+              : activeIdx > canonicalIdx);
+          isActive = !isFailed && !isCompleted && activeIdx === canonicalIdx;
+        }
 
         return (
           <li key={step.id} className="flex items-start gap-3">
@@ -766,6 +946,7 @@ export default function DiscoveryRunPage() {
               runComplete={!computing}
               salesforceProduct={salesforceProduct}
               failedSteps={failedSteps}
+              connectedSources={summaryInputs.connectedSources}
             />
           </div>
         )}
