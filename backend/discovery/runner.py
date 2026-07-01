@@ -260,6 +260,135 @@ def _ingest_slack_corroboration(org_id: str, run_id: str) -> Dict[str, Any]:
     return build_slack_corroboration_payload(collected)
 
 
+def _ingest_java_app_corroboration(org_id: str, run_id: str) -> Dict[str, Any]:
+    """Drive Java application change-based ingestion and build its corroboration block.
+
+    R17-A3 / T1+T5+T6: the Java application source is ingested through the shared
+    change runner (R16-A1), so this one path satisfies several tasks at once:
+
+      * the runner owns the checkpoint lifecycle — incremental reads against the
+        stored ``(org_id, 'java_app')`` checkpoint, resumable streamed first load,
+        and write-only-on-full-success — so a Java app is NOT re-read in full
+        every run (T1, AC2); and
+      * it emits one ``ingestion.artifact_changed`` event per changed Java
+        operational artifact in every fully-processed batch (T6, AC6), reusing the
+        R16-A1 event path — no events are minted here.
+
+    The changed records from each batch are collected via ``process_batch`` and
+    aggregated into the ``{operational_friction, services}`` block the
+    corroboration engine reads, wrapped under the ``'java_app'`` key that
+    ``_find_corroboration_block('java_app', …)`` recognises
+    (:func:`java_app_signals.build_java_app_corroboration_payload`). A Java-app
+    operational signal can then corroborate a finding in another connected system
+    (COR-09, T5/AC5).
+
+    Operational surface only (AC8): the ingestor reads framework
+    health/diagnostics endpoints + logs, never application source code.
+    Non-blocking: any failure degrades to an empty block (``{}``) so a Java read
+    never aborts the run — the change runner swallows ingestion errors and leaves
+    the checkpoint unadvanced (next run re-reads), and the guards here cover
+    import/everything else.
+    """
+    try:
+        from .ingest import change_runner
+        from .ingest.java_app import JavaAppIngestor
+        from .ingest.java_app_signals import build_java_app_corroboration_payload
+    except Exception as e:  # noqa: BLE001 — Java-app corroboration is optional.
+        logger.warning("Java app connector import failed (non-blocking): %s", e)
+        return {}
+
+    collected: List[Dict[str, Any]] = []
+    try:
+        result = change_runner.ingest_with_checkpoint(
+            JavaAppIngestor(),
+            org_id,
+            process_batch=lambda batch: collected.extend(batch.records),
+        )
+    except Exception as e:  # noqa: BLE001 — belt-and-braces; runner is non-raising.
+        # Type name only — an exception str could carry a Bearer token from a
+        # live HTTP client's request repr.
+        logger.warning(
+            "Java app ingestion failed (non-blocking) org=%s run=%s: [%s]",
+            org_id, run_id, type(e).__name__,
+        )
+        return {}
+
+    if result.error is not None:
+        logger.warning(
+            "Java app change ingest reported an error (non-blocking) org=%s run=%s: [%s]",
+            org_id, run_id, type(result.error).__name__,
+        )
+    else:
+        logger.info(
+            "Java app change ingest: %s — %d batch(es), %d changed record(s), checkpoint_advanced=%s",
+            "first run (streamed full load)" if result.first_run else "incremental",
+            result.batches, result.records, result.checkpoint_advanced,
+        )
+
+    return build_java_app_corroboration_payload(collected)
+
+
+def _ingest_teams_corroboration(org_id: str, run_id: str) -> Dict[str, Any]:
+    """Drive Teams change-based ingestion and build its corroboration block.
+
+    R17-A1 / AT-435 (T6) + AT-433 (T4): Teams is ingested through the shared change
+    runner (R16-A1), so this one path satisfies both stories:
+
+      * the runner advances the per-(org, 'teams') checkpoint (incremental
+        Microsoft Graph delta, not a full re-read) and emits one
+        ``ingestion.artifact_changed`` event per changed Teams artifact in each
+        fully-processed batch (AC7), using the ``artifact_id`` + ``change_kind``
+        every ``TeamsIngestor`` record already carries; and
+      * the changed records are aggregated into the ``{escalation_pattern,
+        activity, cross_references}`` block the corroboration engine reads, wrapped
+        under the ``'teams'`` key (T4 / AT-433).
+
+    The Teams MEDIUM ceiling — Teams-only stays MEDIUM, never standalone HIGH; it
+    elevates only WITH a primary system-of-record corroborator (COR-06) — is
+    enforced by the engine's conversation-source COR-05/COR-06 rules and the T3
+    clamp, never here. Non-blocking: any failure degrades to an empty block (`{}`)
+    so a Teams read never aborts the run (the runner swallows ingestion errors and
+    leaves the checkpoint unadvanced for the next run to re-read).
+    """
+    try:
+        from .ingest import change_runner
+        from .ingest.teams import TeamsIngestor
+        from .ingest.teams_signals import build_teams_corroboration_payload
+    except Exception as e:  # noqa: BLE001 — Teams corroboration is optional.
+        logger.warning("Teams connector import failed (non-blocking): %s", e)
+        return {}
+
+    collected: List[Dict[str, Any]] = []
+    try:
+        result = change_runner.ingest_with_checkpoint(
+            TeamsIngestor(),
+            org_id,
+            process_batch=lambda batch: collected.extend(batch.records),
+        )
+    except Exception as e:  # noqa: BLE001 — belt-and-braces; the runner is non-raising.
+        # Type name only — the exception str may carry a Bearer token from the
+        # Graph client's request reprs.
+        logger.warning(
+            "Teams ingestion failed (non-blocking) org=%s run=%s: [%s]",
+            org_id, run_id, type(e).__name__,
+        )
+        return {}
+
+    if result.error is not None:
+        logger.warning(
+            "Teams change ingest reported an error (non-blocking) org=%s run=%s: [%s]",
+            org_id, run_id, type(result.error).__name__,
+        )
+    else:
+        logger.info(
+            "Teams change ingest: %s — %d batch(es), %d changed record(s), checkpoint_advanced=%s",
+            "first run (streamed full load)" if result.first_run else "incremental",
+            result.batches, result.records, result.checkpoint_advanced,
+        )
+
+    return build_teams_corroboration_payload(collected)
+
+
 _ENTERPRISE_OPS_DEMO_PATH = (
     Path(__file__).parent / "ingest" / "fixtures" / "enterprise_ops_demo.json"
 )
@@ -428,6 +557,8 @@ def run(
     sf_data, sn_data, jira_data = {}, {}, {}
     github_data: Dict[str, Any] = {}
     slack_data: Dict[str, Any] = {}
+    java_data: Dict[str, Any] = {}
+    teams_data: Dict[str, Any] = {}
     logger.info(f"Systems: {sorted(list(_systems))}")
 
     # CS-4 / AT-313: each ingest stage reports success to update_run_step via
@@ -482,6 +613,47 @@ def run(
             "system_count": len(_systems),
         })
         return _empty_run(run_id, org_id, mode, started_at)
+
+    # 2-pre. Slack change ingest — R16-A2 / AT-421 (T6) + AT-419 (T4).
+    # Slack is a connected SOURCE, so it ingests here — after the systems of
+    # record (Salesforce CRM / ServiceNow / Jira) and BEFORE the pack-specific
+    # second Salesforce pass (sf_ncino) below — so the Discovery Progress list
+    # shows all connected sources first, then the selected pack. When Slack is
+    # connected, ingest it through the shared change runner: this advances the
+    # per-(org, 'slack') checkpoint (incremental, not a full re-read) and emits an
+    # ingestion.artifact_changed event per changed Slack artifact (AC7). The
+    # changed records are also aggregated into the corroboration block so Slack's
+    # escalation pattern (+ activity / cross-references) can corroborate findings
+    # from systems of record. Gated on "slack" ∈ connected systems (the engine
+    # only reads the block when Slack is connected). The MEDIUM ceiling —
+    # Slack-only stays MEDIUM, never standalone HIGH; it elevates only WITH a
+    # primary corroborator (COR-06) — is enforced by the engine and the T3 clamp.
+    if "slack" in _systems:
+        slack_data = _ingest_slack_corroboration(org_id, run_id) or {}
+        if slack_data.get("slack", {}).get("escalation_pattern", {}).get("fired"):
+            logger.info("Slack corroboration: escalation pattern present for this run")
+        else:
+            logger.info("Slack corroboration: no escalation pattern this run (supporting signal only)")
+
+    # 2-pre. Teams change ingest — R17-A1 / AT-435 (T6) + AT-433 (T4).
+    # Like Slack, Teams is a connected conversation SOURCE. When connected, drive
+    # it through the shared change runner so changed Teams artifacts emit
+    # ingestion.artifact_changed events (AC7) and the per-(org, 'teams') Graph
+    # delta checkpoint advances (incremental, not a full re-read). The changed
+    # records are aggregated into the corroboration block so Teams escalation can
+    # corroborate findings from systems of record — capped at MEDIUM unless a
+    # primary corroborator is present (the conversation-source ceiling, AC6).
+    if "teams" in _systems:
+        teams_data = _ingest_teams_corroboration(org_id, run_id) or {}
+        if teams_data.get("teams", {}).get("escalation_pattern", {}).get("fired"):
+            logger.info("Teams corroboration: escalation pattern present for this run")
+        else:
+            logger.info("Teams corroboration: no escalation pattern this run (supporting signal only)")
+    # Emit the Slack stage so a connected Slack source appears in the Discovery
+    # Progress checklist alongside the systems of record (ordered before the
+    # pack). Slack ingest is non-blocking so the stage is reported ok (failures
+    # degrade to an empty corroboration block rather than a failed run).
+    update_run_step(run_id, "slack", ok=True)
 
     # 2a. nCino ingest — if ncino pack, fetch lending signals from nCino objects
     from .packs.pack_config import is_ncino_pack as _is_ncino
@@ -615,22 +787,25 @@ def run(
             except Exception as e:
                 logger.warning("PostgreSQL ingestion failed (non-blocking): %s", e)
 
-    # 2f. Slack change ingest — R16-A2 / AT-421 (T6) + AT-419 (T4).
-    # When Slack is connected, ingest it through the shared change runner: this
-    # advances the per-(org, 'slack') checkpoint (incremental, not a full re-read)
-    # and emits an ingestion.artifact_changed event per changed Slack artifact
-    # (AC7). The changed records are also aggregated into the corroboration block
-    # so Slack's escalation pattern (+ activity / cross-references) can corroborate
-    # findings from systems of record. Gated on "slack" ∈ connected systems (the
-    # engine only reads the block when Slack is connected). The MEDIUM ceiling —
-    # Slack-only stays MEDIUM, never standalone HIGH; it elevates only WITH a
-    # primary corroborator (COR-06) — is enforced by the engine and the T3 clamp.
-    if "slack" in _systems:
-        slack_data = _ingest_slack_corroboration(org_id, run_id) or {}
-        if slack_data.get("slack", {}).get("escalation_pattern", {}).get("fired"):
-            logger.info("Slack corroboration: escalation pattern present for this run")
+    # (Slack change ingest runs earlier — before the pack-specific second
+    # Salesforce pass — so every connected source appears in Discovery Progress
+    # ahead of the selected pack. See the "Slack change ingest" block above.)
+
+    # 2g. Java application change ingest — R17-A3 / T1+T5+T6 (AgentIQ's first
+    # non-SaaS enterprise source). When a Java app is connected, ingest its
+    # operational surface (framework health/diagnostics + logs) through the shared
+    # change runner: this advances the per-(org, 'java_app') checkpoint
+    # (incremental, not a full re-read), emits an ingestion.artifact_changed event
+    # per changed operational artifact (AC6), and aggregates the changed records
+    # into the corroboration block so Java-app operational friction can corroborate
+    # findings from other systems (COR-09, AC5). Operational surface only —
+    # no source code (AC8). Gated on "java_app" ∈ connected systems.
+    if "java_app" in _systems:
+        java_data = _ingest_java_app_corroboration(org_id, run_id) or {}
+        if java_data.get("java_app", {}).get("operational_friction", {}).get("fired"):
+            logger.info("Java app corroboration: operational friction present for this run")
         else:
-            logger.info("Slack corroboration: no escalation pattern this run (supporting signal only)")
+            logger.info("Java app corroboration: no operational friction this run")
 
     # 2. Context
     org_ctx = build_org_context(sf_data, sn_data, jira_data)
@@ -919,7 +1094,7 @@ def run(
                 sn_by_detector=sn_by_detector,
                 jira_by_detector=jira_by_detector,
                 run_timestamp_iso=_run_ts_iso,
-                source_payloads=[sf_data, sn_data, jira_data, github_data, db_data, slack_data],
+                source_payloads=[sf_data, sn_data, jira_data, github_data, db_data, slack_data, teams_data, java_data],
             )
         except Exception as _corr_data_err:  # noqa: BLE001 — non-blocking.
             logger.warning("ENT-2 corroboration run_data build failed (non-blocking): %s", _corr_data_err)

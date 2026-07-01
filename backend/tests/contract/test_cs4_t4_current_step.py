@@ -154,7 +154,7 @@ def test_current_step_full_sequence(client):
     rid = f"run_t4_full_{int(time.time() * 1000)}"
     _make_run(rid)
 
-    step_sequence = ["sf_crm", "sn", "jira", "detect", "enrich", "complete"]
+    step_sequence = ["sf_crm", "sn", "jira", "slack", "detect", "enrich", "complete"]
     for step in step_sequence:
         _set_step(rid, step)
         r = client.get(f"/api/runs/{rid}/status", headers=_auth())

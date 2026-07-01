@@ -13,9 +13,15 @@ cycle (``discovery.runner`` already imports ``app.db``; this module never
 imports back into ``app``).
 
 The list order matches the exact order ``runner.run()`` emits the steps:
-``sf_crm`` (Salesforce CRM) -> ``sn`` (ServiceNow) -> ``jira`` -> ``sf_ncino``
-(the second Salesforce pass for nCino/declared product) -> ``detect`` ->
-``enrich`` -> ``complete``.
+``sf_crm`` (Salesforce CRM) -> ``sn`` (ServiceNow) -> ``jira`` -> ``slack``
+(Slack change-based ingest) -> ``sf_ncino`` (the pack-specific second Salesforce
+pass for the declared product) -> ``detect`` -> ``enrich`` -> ``complete``.
+
+All connected SOURCES (the systems of record plus conversation sources like
+Slack, and Teams when it lands) are emitted first; the pack-specific second
+Salesforce pass (``sf_ncino``, labelled by the selected pack — Service Cloud /
+nCino / etc.) is emitted last among the ingest steps, so the Discovery Progress
+list shows every connected source before the selected pack.
 """
 from __future__ import annotations
 
@@ -25,7 +31,8 @@ DISCOVERY_STEPS: List[str] = [
     "sf_crm",    # after salesforce.ingest()
     "sn",        # after servicenow.ingest()
     "jira",      # after jira_mod.ingest()
-    "sf_ncino",  # after ncino_ingest() (second Salesforce pass)
+    "slack",     # after _ingest_slack_corroboration() (Slack change-based ingest)
+    "sf_ncino",  # after ncino_ingest() — pack-specific second Salesforce pass
     "detect",    # after _run_detector_phase()
     "enrich",    # before entity extraction / LLM enrichment
     "complete",  # at the final return

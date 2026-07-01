@@ -119,16 +119,26 @@ def log_event(event_type: str, **kwargs: Any) -> None:
     (AT-292 / FixPack v2 Fix 5).
     """
     # Resolve org_id up front so it is available to the failure handler even if
-    # the DB write below raises before the row is built.
-    org_id = kwargs.pop("org_id", None)
-    if not org_id:
-        try:
-            from app.middleware.tenancy import get_current_org_id_optional
+    # the DB write below raises before the row is built. Attribution goes through
+    # the shared resolver (R17-D3 / AT-450 T5-AC2/AC3): the authenticated request
+    # org wins, an explicit org_id (background callers) is the fallback, and an
+    # unresolved event is marked UNATTRIBUTED — never silently filed under the
+    # real "default" tenant as it was before.
+    explicit_org_id = kwargs.pop("org_id", None)
+    try:
+        from app.middleware.tenancy import resolve_event_org_id
 
-            org_id = get_current_org_id_optional()
+        org_id = resolve_event_org_id(explicit_org_id)
+    except Exception:
+        # Fall back to the shared sentinel (M3) rather than a bare "unknown"
+        # literal, so unresolved events are filed under one unambiguous value.
+        # Guard the import too: this branch runs precisely when importing from
+        # tenancy may be the thing that failed, and log_event must never raise.
+        try:
+            from app.middleware.tenancy import UNATTRIBUTED_ORG as _unattr
         except Exception:
-            org_id = None
-    org_id = org_id or "default"
+            _unattr = "_unattributed"
+        org_id = explicit_org_id or _unattr
 
     try:
         _ensure_table()

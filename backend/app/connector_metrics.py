@@ -63,27 +63,39 @@ def _metric_value(value: int) -> str:
 
 
 def _update_connector(
+    org_id: str,
     connector_id: str,
     metrics: List[Dict[str, str]],
     signal_strength: Optional[int] = None,
 ) -> None:
-    connector = db.get_one("connectors", connector_id)
+    # Tenant isolation (R17-D3 / AT-448): run-derived connector metrics belong to
+    # the org that ran the discovery, not the shared catalog. Reading/writing the
+    # raw catalog row leaked one org's run metrics (lastSynced / signalStrength /
+    # metrics) into the Integration Hub cards of every other org. Read and write
+    # through the org-namespaced connector overlay instead.
+    connector = db.org_connector_get(org_id, connector_id)
     if not connector:
         return
     connector["metrics"] = metrics
     connector["lastSynced"] = "Just now"
     if signal_strength is not None:
         connector["signalStrength"] = signal_strength
-    db.upsert("connectors", connector_id, connector)
+    db.org_connector_set(org_id, connector_id, connector)
 
 
-def update_connector_metrics_from_run(payload: Dict[str, Any], systems: List[str]) -> None:
+def update_connector_metrics_from_run(
+    payload: Dict[str, Any], systems: List[str], org_id: str
+) -> None:
     """
     Refresh Integration Hub metrics from the completed run payload.
 
     The seed data remains the initial display state; these values override it
     after a real run completes. This is deliberately non-blocking so connector
     metric persistence can never fail the discovery run itself.
+
+    org_id scopes the write to the org that owns the run (R17-D3 / AT-448): the
+    refreshed metrics are stored on that org's connector overlay only, so they
+    never appear on another tenant's Integration Hub cards.
     """
     try:
         opps = payload.get("opportunities") or []
@@ -130,6 +142,7 @@ def update_connector_metrics_from_run(payload: Dict[str, Any], systems: List[str
         if "salesforce" in system_set:
             if is_strs:
                 _update_connector(
+                    org_id,
                     "salesforce",
                     [
                         {"label": "Applications", "value": _metric_value(applications)},
@@ -139,6 +152,7 @@ def update_connector_metrics_from_run(payload: Dict[str, Any], systems: List[str
                 )
             else:
                 _update_connector(
+                    org_id,
                     "salesforce",
                     [
                         {"label": "Loans", "value": _metric_value(loans)},
@@ -149,6 +163,7 @@ def update_connector_metrics_from_run(payload: Dict[str, Any], systems: List[str
 
         if "servicenow" in system_set:
             _update_connector(
+                org_id,
                 "servicenow",
                 [
                     {"label": "Incidents (90d)", "value": _metric_value(sn_incident_count)},
@@ -158,6 +173,7 @@ def update_connector_metrics_from_run(payload: Dict[str, Any], systems: List[str
 
         if "jira" in system_set or "jira_confluence" in system_set:
             _update_connector(
+                org_id,
                 "jira_confluence",
                 [
                     {"label": "Issues (90d)", "value": _metric_value(jira_issue_count)},

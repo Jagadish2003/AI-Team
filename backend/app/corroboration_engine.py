@@ -71,6 +71,15 @@ does not corroborate.
                 "timestamp": "2026-06-01T10:00:00Z",
             },
         },
+
+        "java_app": {                                # COR-09 (R17-A3)
+            "operational_friction": {
+                "fired": True,
+                "timestamp": "2026-06-01T10:00:00Z",
+                "services": ["payments"],
+                "reasons": ["elevated error rate", "latency degradation"],
+            },
+        },
     }
 
 ────────────────────────────────────────────────────────────────────────────
@@ -155,6 +164,10 @@ _CORROBORATION_RULE_SYSTEMS: Dict[str, str] = {
     "COR-02": "jira",
     "COR-04": "confluence",
     "COR-07": "jira",
+    # R17-A3 §3: Java-app operational friction is first-class OBSERVED evidence
+    # (directly measured), so COR-09 is an ELEVATING corroborator like COR-01/02 —
+    # not a supporting-only ceiling like Slack (COR-05).
+    "COR-09": "java_app",
 }
 
 
@@ -585,6 +598,17 @@ def build_corroboration_run_data(
         if slack:
             data["slack"] = slack
 
+    # R17-A3 / COR-09: carry the Java-app operational-friction block through when
+    # the Java application source is connected for this run.
+    if "java_app" in connected:
+        java_app = _find_corroboration_block("java_app", payloads)
+        if java_app:
+            data["java_app"] = java_app
+    if "teams" in connected:
+        teams = _find_corroboration_block("teams", payloads)
+        if teams:
+            data["teams"] = teams
+
     return data
 
 
@@ -657,22 +681,38 @@ def check_cor04_confluence_doc_gap(
     return present is False
 
 
-def check_cor05_slack_escalation(
+#: Conversation sources subject to COR-05/06 (the MEDIUM corroboration ceiling).
+#: Both Slack (R16-A2) and Teams (R17-A1 / AT-433) are noisy conversation sources:
+#: their escalation pattern corroborates a finding but never elevates it ALONE —
+#: it reaches HIGH only WITH a primary system-of-record corroborator. Teams reuses
+#: the EXACT same rule IDs (COR-05 supporting / COR-06 with primary) as Slack — no
+#: new rule or mechanism is introduced, so the apply_corroboration_confidence
+#: COR-05-only clamp and the T3 ceiling clamp treat both identically.
+_CONVERSATION_SOURCES: tuple[tuple[str, str], ...] = (
+    ("slack", "Slack"),
+    ("teams", "Teams"),
+)
+
+
+def check_cor05_conversation_escalation(
     run_data: Dict[str, Any],
     run_timestamp: datetime,
+    source_id: str,
 ) -> bool:
-    """COR-05/06 precondition: Slack ESCALATION_PATTERN fired within the window.
+    """COR-05/06 precondition: a conversation source's ESCALATION_PATTERN fired
+    within the window.
 
-    This detects the Slack escalation signal. Whether it ELEVATES depends on
-    the presence of a primary corroborator (decided in evaluate_corroboration):
-      - Slack alone           -> COR-05 (supporting only, no elevation)
-      - Slack + ServiceNow/Jira -> COR-06 (elevates)
+    Source-agnostic over conversation sources (``slack`` / ``teams``): detects the
+    escalation signal for ``source_id``. Whether it ELEVATES depends on a primary
+    corroborator (decided in evaluate_corroboration):
+      - conversation source alone        -> COR-05 (supporting only, no elevation)
+      - conversation source + ServiceNow/Jira -> COR-06 (elevates)
     """
-    slack = _system_block(run_data, "slack")
-    escalation = slack.get("escalation_pattern")
+    block = _system_block(run_data, source_id)
+    escalation = block.get("escalation_pattern")
     if not isinstance(escalation, dict) or not escalation:
         # Alternative shape: a boolean flag.
-        return bool(slack.get("escalation_pattern_fired", False))
+        return bool(block.get("escalation_pattern_fired", False))
     if not escalation.get("fired", False):
         return False
     # If a timestamp is present, enforce the window; if absent, accept (the
@@ -680,6 +720,15 @@ def check_cor05_slack_escalation(
     if _record_timestamp(escalation) is not None:
         return _within_window(escalation, run_timestamp)
     return True
+
+
+def check_cor05_slack_escalation(
+    run_data: Dict[str, Any],
+    run_timestamp: datetime,
+) -> bool:
+    """COR-05/06 precondition for Slack — thin wrapper over the conversation-source
+    check (kept for backward compatibility / Slack-specific callers)."""
+    return check_cor05_conversation_escalation(run_data, run_timestamp, "slack")
 
 
 def check_cor06_slack_with_primary(slack_fired: bool, primary_fired: bool) -> bool:
@@ -715,6 +764,36 @@ def check_cor08_single_source(run_data: Dict[str, Any]) -> bool:
     Fires when the connected_systems list contains one or zero systems.
     """
     return len(_connected_systems(run_data)) <= 1
+
+
+def check_cor09_java_app_operational(
+    run_data: Dict[str, Any],
+    run_timestamp: datetime,
+) -> bool:
+    """COR-09: a Java application shows operational friction within the window.
+
+    R17-A3 §3: a Java-app operational signal (rising error rate, latency
+    degradation, resource pressure, or a recurring exception cluster) corroborates
+    a finding in another connected system — e.g. an error-rate rise corroborating
+    a ServiceNow incident spike for the same service. Unlike the Slack ceiling
+    (COR-05), this is an ELEVATING corroborator: operational signals are directly
+    measured, so they are first-class observed evidence.
+
+    Fires when the Java-app ``operational_friction`` block reports ``fired`` and,
+    if it carries a timestamp, that timestamp is within the corroboration window.
+    A friction block with no timestamp is accepted (it is computed for the current
+    run), mirroring the Slack escalation check.
+    """
+    java = _system_block(run_data, "java_app")
+    friction = java.get("operational_friction")
+    if not isinstance(friction, dict) or not friction:
+        # Alternative shape: a boolean flag.
+        return bool(java.get("operational_friction_fired", False))
+    if not friction.get("fired", False):
+        return False
+    if _record_timestamp(friction) is not None:
+        return _within_window(friction, run_timestamp)
+    return True
 
 
 def _weighting_info_for_system(
@@ -814,7 +893,7 @@ def _build_label(fired_rules: List[str], triple: bool) -> Optional[str]:
     if triple:
         return TRIPLE_CORROBORATION_LABEL
     # Priority order for the headline label among non-derived rules.
-    for rule_id in ("COR-06", "COR-01", "COR-02", "COR-04", "COR-07", "COR-05", "COR-08"):
+    for rule_id in ("COR-06", "COR-01", "COR-02", "COR-04", "COR-07", "COR-09", "COR-05", "COR-08"):
         if rule_id in fired_rules:
             return RULE_CARD_LABELS.get(rule_id)
     return RULE_CARD_LABELS.get(fired_rules[0])
@@ -918,20 +997,33 @@ def evaluate_corroboration(
         fired_rules.append("COR-07")
         sources.append("Jira (sprint velocity decline)")
 
-    # COR-05 / COR-06: Slack escalation pattern.
-    # Slack elevates ONLY with a primary corroborator (ServiceNow/Jira). The
-    # Slack ceiling: alone it stays MEDIUM (COR-05), never HIGH.
-    if check_cor05_slack_escalation(run_data, run_timestamp):
-        primary_fired = (
-            (cor01 and _has_lead_authority(weighting_context, "servicenow")) or
-            (cor02 and _has_lead_authority(weighting_context, "jira"))
-        )
+    # COR-09: Java application operational friction (R17-A3). First-class observed
+    # evidence — an ELEVATING corroborator like ServiceNow/Jira (not Slack-capped).
+    if check_cor09_java_app_operational(run_data, run_timestamp):
+        fired_rules.append("COR-09")
+        sources.append("Java application (operational signal)")
+
+    # COR-05 / COR-06: conversation-source escalation (Slack, Teams).
+    # A conversation source elevates ONLY with a primary corroborator
+    # (ServiceNow/Jira). The conversation-source ceiling: alone it stays MEDIUM
+    # (COR-05), never HIGH. Teams (R17-A1 / AT-433) reuses the SAME rule IDs and
+    # ceiling as Slack (R16-A2) — no new mechanism — so the COR-05-only clamp in
+    # apply_corroboration_confidence and the T3 ceiling clamp cap both identically.
+    primary_fired = (
+        (cor01 and _has_lead_authority(weighting_context, "servicenow")) or
+        (cor02 and _has_lead_authority(weighting_context, "jira"))
+    )
+    for _src_id, _src_label in _CONVERSATION_SOURCES:
+        if not check_cor05_conversation_escalation(run_data, run_timestamp, _src_id):
+            continue
         if check_cor06_slack_with_primary(True, primary_fired):
-            fired_rules.append("COR-06")
-            sources.append("Slack (escalation pattern)")
+            if "COR-06" not in fired_rules:
+                fired_rules.append("COR-06")
+            sources.append(f"{_src_label} (escalation pattern)")
         else:
-            fired_rules.append("COR-05")          # supporting only — no elevation
-            sources.append("Slack (supporting only)")
+            if "COR-05" not in fired_rules:      # supporting only — no elevation
+                fired_rules.append("COR-05")
+            sources.append(f"{_src_label} (supporting only)")
 
     # Determine elevation. R16-C1 source role/priority now shape corroboration
     # contribution, while COR-05 remains supporting-only.

@@ -80,6 +80,9 @@ Keep this file short and actionable. Prefer reading the relevant code and contra
 * `backend/discovery/offline_export.py`: offline fixture/data export utilities.
 * `backend/discovery/ingest/live_validator.py`: live data validation at ingest time.
 * `backend/discovery/ingest/strs_jira_corroboration.py` / `strs_sn_corroboration.py`: STRS cross-source corroboration against Jira and ServiceNow.
+* `backend/discovery/ingest/java_app.py`: R17-A3 Java application change-based ingestor — AgentIQ's first non-SaaS source. Implements `ChangeBasedIngestor` over the OPERATIONAL surface only (Spring Boot Actuator health/diagnostics endpoints + application logs); never reads source code or external APM (AC8). Opaque per-app `{log_offset, metrics_ts, metrics_seq}` checkpoint. The live `JavaAppClient` closes its HTTP session after each read; operational SIGNAL is aggregated over the whole delta by `java_app_signals`, never per-record.
+* `backend/discovery/ingest/java_app_config.py`: R17-A3 per-deployment Java app target configuration + vault credential resolution. Targets come from config (`JAVA_APP_TARGETS` / offline fixture), never network scanning; inline secrets in config are rejected and credentials resolve from the vault, never logged (AC3).
+* `backend/discovery/ingest/java_app_signals.py`: R17-A3 Java operational signal extraction (error patterns, latency/throughput degradation, exception clustering, resource pressure), the observed `EvidencePointer` builder (`source_system='java_app'`, `origin='observed'`), and the COR-09 corroboration payload builder.
 * `backend/discovery/calibration/calibrator.py` / `ranking.py`: confidence calibration and entity ranking.
 * `backend/discovery/packs/pack_config.py`: centralized pack selection. Current packs: `service_cloud`, `ncino`, `strs_benefits`, `sqlserver_opsignal`, `github_engineering`.
 
@@ -127,7 +130,8 @@ Keep this file short and actionable. Prefer reading the relevant code and contra
 * `docs/AUTH_SETUP.md`: auth configuration guide.
 * `docs/proxy_metrics.md`: proxy metric definitions.
 * `docs/SMOKE_DEMO_*.md` (5 files): smoke test walkthroughs.
-* `docs/INTEGRATE_*.md` (4 files): integration guides per connector.
+* `docs/INTEGRATE_*.md` (5 files): integration guides per connector — includes `docs/INTEGRATE_JAVA_APP.md` (R17-A3 Java application ingestion setup + design-review reference).
+* `docs/R17-A3_JAVA_APP_SCOPE.md`: R17-A3 Java application ingestion phase-one scope & boundaries (operational surfaces only — no source code (1.8) and no external APM), with the engineering/QA/product finding-evaluation rubric.
 * `deployment/README.md`: production env var guide covering OAuth secrets, vault, and `CREDENTIAL_VAULT_KEY`.
 * `scripts/`: shell smoke tests and contract helper. Bash — run from Git Bash or WSL.
 
@@ -232,10 +236,12 @@ Smoke scripts are Bash scripts under `scripts/` and `backend/scripts/`; run them
 * Set `REQUIRE_CONNECTOR_SECRETS=1` in production to enforce that all connector secrets are present on startup. Dev and test environments intentionally leave this unset.
 * Salesforce/Jira/ServiceNow live ingestion is OAuth-only and DB-sourced: tokens come from the credential vault and instance/site URLs are captured at OAuth connect time, both keyed per org. `app/live_ingest_credentials.py` `resolve_live_systems(org_id)` reads them from the DB and publishes them to a per-run `contextvars` context (`discovery/ingest/__init__.py` `set_live_connectors`/`get_live_connector`) that each connector's `_get_client()` reads — never process-global `os.environ`, so concurrent multi-tenant runs cannot read each other's credentials. `SF_*`/`SERVICENOW_*`/`JIRA_*` env vars are only a CLI/standalone fallback (`JIRA_PROJECT_KEY` is still read for live Jira). The remaining `.env` live ingestion vars are `NCINO_INSTANCE_URL`, `NCINO_ACCESS_TOKEN`.
 * nCino and STRS live ingestion reuse the connected Salesforce org's OAuth credentials from the per-run context, with optional `NCINO_INSTANCE_URL`/`NCINO_ACCESS_TOKEN` and `STRS_INSTANCE_URL`/`STRS_ACCESS_TOKEN` env overrides to target a different instance.
-* OAuth client secrets (production, enforced by `REQUIRE_CONNECTOR_SECRETS`): `SALESFORCE_CLIENT_SECRET`, `SERVICENOW_CLIENT_SECRET`, `JIRA_CLIENT_SECRET`, `GITHUB_CLIENT_SECRET`, `SLACK_CLIENT_SECRET`, `SAP_CLIENT_SECRET`, `DYNAMIC365_CLIENT_SECRET`.
+* OAuth client secrets (production, enforced by `REQUIRE_CONNECTOR_SECRETS`): `SALESFORCE_CLIENT_SECRET`, `SERVICENOW_CLIENT_SECRET`, `JIRA_CLIENT_SECRET`, `GITHUB_CLIENT_SECRET`, `SLACK_CLIENT_SECRET`, `TEAMS_CLIENT_SECRET`, `SAP_CLIENT_SECRET`, `DYNAMIC365_CLIENT_SECRET`. Teams (Microsoft Graph) also reads `TEAMS_TENANT_ID` (Entra tenant GUID, or `organizations`; default `organizations`) — see `app/auth/configs.py`.
 * `CREDENTIAL_VAULT_KEY`: Fernet key for token vault encryption. Required in production; missing it causes connector secret storage to fail or fall back to plaintext.
 * `DEV_JWT_ROLE`: role override for the dev token (`owner`/`analyst`/`viewer`). Used alongside `ADMIN_JWT`, `ANALYST_JWT`, `VIEWER_JWT` in contract tests.
 * `INGEST_MODE`: `online`/`offline`/`test` — controls the ingestion path.
+* Model provider gateway (R16-D1 / R17-D1): `MODEL_GENERATION_PROVIDER` and `MODEL_EMBEDDING_PROVIDER` select which provider serves generation and embedding **independently** (valid values: `hosted` (default), `in_boundary`). Resolved at call time; unknown values raise at startup via `validate_provider_config()`.
+* In-boundary provider config (R17-D1, used only when a provider above is set to `in_boundary`; all owned inside `backend/app/model_gateway/` — no caller reads these): `IN_BOUNDARY_BASE_URL` (common OpenAI-compatible base; the adapter derives `/v1/chat/completions` and `/v1/embeddings`), `IN_BOUNDARY_GENERATION_ENDPOINT` / `IN_BOUNDARY_EMBEDDING_ENDPOINT` (override either path independently), `IN_BOUNDARY_API_KEY` (bearer token, resolved live per call — never logged), and the model names `IN_BOUNDARY_MODEL` (common fallback) / `IN_BOUNDARY_GENERATION_MODEL` / `IN_BOUNDARY_EMBEDDING_MODEL`. Leave all blank unless in-boundary mode is in use. If `in_boundary` is selected with no endpoint URL configured, `validate_provider_config()` logs a startup warning (calls never raise — they degrade to `ok=False`/`[]`).
 * `REPLAY_RESETS_DECISIONS`: set to `1` to clear analyst overrides on replay. Default is off.
 * `TRACKB_PYTHON` / `TRACKB_RUNNER_MODE`: Python path and mode (`offline`/`live`) for the Track B subprocess runner.
 * `BASELINE_JOB_INTERVAL_HOURS` / `BASELINE_MIN_RUNS` / `BASELINE_WINDOW_DAYS`: control the background baseline calculator job.

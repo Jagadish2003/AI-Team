@@ -129,12 +129,13 @@ def _probe_systems(
             errors[system] = str(e)
 
     # Slack (R16-A2) and GitHub (T1-S12) are ingested INSIDE the discovery pipeline
-    # (discovery.runner.run), not probed here: Slack via the shared change runner
-    # (which owns its checkpoint lifecycle and emits ingestion.artifact_changed),
-    # GitHub via the github_engineering pack (reading its token straight from the
-    # vault). Pass them through to `succeeded` so the pipeline receives them in
-    # `systems` and the "no data ingested" gate does not trip a connector-only run.
-    for _pipeline_ingested in ("slack", "github"):
+    # (discovery.runner.run), not probed here: Slack and Teams via the shared
+    # change runner (which owns their checkpoint lifecycle and emits
+    # ingestion.artifact_changed), GitHub via the github_engineering pack (reading
+    # its token straight from the vault). Pass them through to `succeeded` so the
+    # pipeline receives them in `systems`, the "no data ingested" gate does not
+    # trip a connector-only run, and the NORMALIZE log lists them as ingested.
+    for _pipeline_ingested in ("slack", "teams", "github"):
         if _pipeline_ingested in systems:
             per_system[_pipeline_ingested] = "ok"
             if _pipeline_ingested not in succeeded:
@@ -323,7 +324,7 @@ def run_trackb_and_persist(
         # Keep Integration Hub connector cards in sync with the actual run data.
         from .connector_metrics import update_connector_metrics_from_run
 
-        update_connector_metrics_from_run(payload, succeeded)
+        update_connector_metrics_from_run(payload, succeeded, run_org_id)
 
         _emit_event(
             run_id,
@@ -462,7 +463,10 @@ def run_trackb_and_persist(
                             _per_opp[_oid][_k] = _opp[_k]
             _stored["perOpportunity"] = _per_opp
             db.run_kv_set(_KV_LLM, run_id, _stored)
-            record_event("temporal.enrichment_completed", {"run_id": run_id})
+            record_event(
+                "temporal.enrichment_completed",
+                {"run_id": run_id, "org_id": _org_id},
+            )
         except Exception as e:
             logger.warning("T7 temporal enrichment failed (non-blocking): %s", e)
 

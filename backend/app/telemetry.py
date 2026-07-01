@@ -159,9 +159,16 @@ class EntityExtractionCompletedPayload(TypedDict, total=False):
 
 
 class TemporalEnrichmentCompletedPayload(TypedDict, total=False):
-    """T3-S11-A — emitted once per run after temporal enrichment completes."""
+    """T3-S11-A — emitted once per run after temporal enrichment completes.
+
+    org_id is threaded by materialize_t2 so the event is attributed to the run's
+    org (R17-D3 / AT-450 T5). record_event validates the event TYPE only — not
+    payload keys — so this declaration is documentation of the emitted shape rather
+    than a runtime gate, but it keeps the registered schema honest (review L2).
+    """
     run_id: NotRequired[str]
     opp_count: NotRequired[int]
+    org_id: NotRequired[str]
 
 
 class RelationshipMappingCompletedPayload(TypedDict, total=False):
@@ -315,8 +322,13 @@ class ConnectorRegisteredEvent(TypedDict):
     org_id: str
 
 
-class DbQueryExecutedEvent(TypedDict):
-    """T1-S10-C T2 events — written after every connector DB/API query."""
+class DbQueryExecutedEvent(TypedDict, total=False):
+    """T1-S10-C T2 events — written after every connector DB/API query.
+
+    org_id is threaded by the (background) DB connector query path so the event
+    is attributed to the org that owns the run (R17-D3 / AT-450 T5-AC1).
+    """
+    org_id: NotRequired[str]
     connector_id: str
     query_hash: str
     row_count: int
@@ -358,7 +370,12 @@ class DBIngestorCompletedPayload(TypedDict):
     duration_ms:
         Total wall-clock time for the entire ingestor execution in
         milliseconds, from first query to return.
+    org_id:
+        The org that owns the run. Threaded by every DB ingestor so the
+        completed event is attributed to the right tenant (R17-D3 / AT-450
+        T5-AC1), since ingestion runs in a background context with no request.
     """
+    org_id: NotRequired[str]
     connector_id: str
     pack_id: str
     query_count: int
@@ -630,12 +647,22 @@ def record_event(event_type: str, payload: Optional[dict] = None) -> None:
         # Persist to telemetry_events table.
         _ensure_telemetry_table()
 
-        # org_id priority: tenancy context → payload["org_id"] → "unknown"
+        # Org attribution via the shared resolver (R17-D3 / AT-450 T5-AC1/AC3):
+        # the authenticated request org wins; otherwise the payload's org_id
+        # (threaded by background emitters — discovery runner, DB ingestors); and
+        # an event that can resolve neither is marked UNATTRIBUTED rather than
+        # mis-filed under a real tenant.
         try:
-            from app.middleware.tenancy import get_current_org_id_optional
-            org_id = get_current_org_id_optional() or payload.get("org_id", "unknown")
+            from app.middleware.tenancy import resolve_event_org_id
+            org_id = resolve_event_org_id(payload.get("org_id"))
         except Exception:
-            org_id = payload.get("org_id", "unknown")
+            # Use the shared sentinel (M3), not a bare "unknown" literal. Guard the
+            # import: this branch runs when importing from tenancy may have failed.
+            try:
+                from app.middleware.tenancy import UNATTRIBUTED_ORG as _unattr
+            except Exception:
+                _unattr = "_unattributed"
+            org_id = payload.get("org_id") or _unattr
 
         payload_str = json.dumps(payload)
 

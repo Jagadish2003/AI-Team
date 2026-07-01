@@ -535,6 +535,7 @@ def ingest(
         record_event(
             "db.ingestor_completed",
             {
+                "org_id": org_id,
                 "connector_id": CONNECTOR_ID,
                 "pack_id": "sqlserver_opsignal",
                 "query_count": query_count,
