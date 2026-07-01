@@ -95,6 +95,7 @@ from app.provenance import EvidencePointer, utc_now_iso
 
 from . import get_live_connector, is_live
 from .base import ChangeBasedIngestor, ChangeKind, Checkpoint, DeltaBatch
+from .sharepoint_signals import build_item_signals
 
 logger = logging.getLogger(__name__)
 
@@ -418,7 +419,7 @@ class SharePointIngestor(ChangeBasedIngestor):
         created_by = (item.get("createdBy") or {}).get("user") or {}
         modified_by = (item.get("lastModifiedBy") or {}).get("user") or {}
         parent = item.get("parentReference") or {}
-        return {
+        record = {
             "artifact_id": f"{site_id}/{drive_id}:{item_id}",
             "change_kind": change_kind,
             "source_system": "sharepoint",
@@ -443,6 +444,12 @@ class SharePointIngestor(ChangeBasedIngestor):
                 site_id, drive_id, item_id, last_modified or created
             ),
         }
+        # R17-A2 / AT-460 (T3): reach-phase signal (cross-reference markers from
+        # the item name + structural metadata) travels with the delta. Library-
+        # level activity + active/dormant estates are derived across records by
+        # sharepoint_signals.build_sharepoint_signal.
+        record["signals"] = build_item_signals(record)
+        return record
 
     # ── Source access: offline fixture vs live Microsoft Graph API ───────────
     def _raw_sites(self, org_id: str) -> List[Dict[str, Any]]:
