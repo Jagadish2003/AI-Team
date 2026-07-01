@@ -30,11 +30,11 @@ Built on the change-based foundation (R16-A1 / §2, AC2 + AC3)
 -------------------------------------------------------------
 Java operational data is inherently incremental: logs are read forward from a
 position and metrics endpoints are sampled over time. The connector encodes its
-read position — a per-app ``{log_offset, metrics_ts}`` map — as the opaque
-checkpoint value, so each run processes only new operational data rather than
-re-reading history. The runner persists/returns the value verbatim and never
-interprets it (R16-A1 AC5). An idle application yields an empty (or minimal)
-delta that echoes the incoming position (AC2).
+read position — a per-app ``{log_offset, metrics_ts, metrics_seq}`` map — as the
+opaque checkpoint value, so each run processes only new operational data rather
+than re-reading history. The runner persists/returns the value verbatim and
+never interprets it (R16-A1 AC5). An idle application yields an empty (or
+minimal) delta that echoes the incoming position (AC2).
 
 Checkpoint shape (opaque to the runner)
 ---------------------------------------
@@ -42,12 +42,15 @@ A single ``(org_id, 'java_app')`` checkpoint row is persisted by the runner, but
 a deployment has many configured apps each with its own read position. The
 connector encodes a per-app cursor MAP as the opaque value::
 
-    {"v": 1, "apps": {"payments-api": {"log_offset": 42, "metrics_ts": "2026-06-01T10:00:00Z"}}}
+    {"v": 1, "apps": {"payments-api": {"log_offset": 42, "metrics_ts": "2026-06-01T10:00:00Z", "metrics_seq": 1}}}
 
+``metrics_seq`` is the number of samples already consumed AT ``metrics_ts`` — so a
+second sample sharing the same timestamp (rapid polling / coarse-resolution
+clocks) is still ingested exactly once rather than lost or re-read (M2). A cursor
+without ``metrics_seq`` (a hand-set or legacy checkpoint) means "everything at
+``metrics_ts`` is already consumed" — the original strict-greater-than semantics.
 An app absent from the map is read from the beginning, which is what makes a
-first load resumable (R16-A1 §3): if a streamed first load fails partway, the
-next run finds a checkpoint covering the apps already loaded and resumes the
-rest.
+first load resumable (R16-A1 §3).
 
 Provenance & change events
 --------------------------
@@ -55,8 +58,11 @@ Every record carries a fully-populated, OBSERVED ``evidence_pointer`` (R16-B1,
 ``source_system='java_app'``, ``origin='observed'`` — T4 / AC4) plus an
 ``artifact_id`` and ``change_kind`` so the shared change runner emits one
 ``ingestion.artifact_changed`` event per changed artifact (R16-A1 / AT-381 —
-T6 / AC6). Records also carry an extracted operational ``signals`` block (T2) so
-friction signal travels with the delta to corroboration (T5 / AC5).
+T6 / AC6). Operational SIGNAL is extracted as a window operation over the whole
+delta by :func:`java_app_signals.build_java_app_corroboration_payload` (the
+runner calls it over the collected records — T2 / T5), NOT per-record: a single
+sample cannot show a degradation *trend*, so per-record signal would be
+meaningless.
 
 Offline vs live
 ---------------
@@ -85,10 +91,7 @@ from typing import Any, Dict, Iterator, List, Optional
 from . import is_live
 from .base import ChangeBasedIngestor, ChangeKind, Checkpoint, DeltaBatch
 from .java_app_config import JavaAppTarget, load_targets, resolve_secret
-from .java_app_signals import (
-    build_evidence_pointer,
-    build_service_signal,
-)
+from .java_app_signals import build_evidence_pointer
 
 logger = logging.getLogger(__name__)
 
@@ -129,6 +132,9 @@ def _decode_checkpoint(value: Optional[str]) -> Dict[str, Dict[str, Any]]:
     Tolerant by design: a missing, empty, or unparseable value yields an empty
     map (read every app from the beginning) rather than raising — a degenerate
     checkpoint must degrade to a safe full re-read, never crash the run.
+
+    ``metrics_seq`` is preserved only when present; a cursor without it keeps the
+    strict "everything at metrics_ts already consumed" semantics (M2).
     """
     if not value:
         return {}
@@ -146,29 +152,36 @@ def _decode_checkpoint(value: Optional[str]) -> Dict[str, Dict[str, Any]]:
     out: Dict[str, Dict[str, Any]] = {}
     for app_id, cur in apps.items():
         if isinstance(cur, dict):
-            out[str(app_id)] = {
+            decoded = {
                 "log_offset": int(cur.get("log_offset", 0) or 0),
                 "metrics_ts": str(cur.get("metrics_ts", "") or ""),
             }
+            if cur.get("metrics_seq") is not None:
+                decoded["metrics_seq"] = int(cur.get("metrics_seq") or 0)
+            out[str(app_id)] = decoded
     return out
 
 
 def _app_cursor(cursors: Dict[str, Dict[str, Any]], app_id: str) -> Dict[str, Any]:
     """Return the cursor for one app, defaulting to the beginning of time."""
     cur = cursors.get(app_id) or {}
-    return {
+    out: Dict[str, Any] = {
         "log_offset": int(cur.get("log_offset", 0) or 0),
         "metrics_ts": str(cur.get("metrics_ts", "") or ""),
     }
+    if cur.get("metrics_seq") is not None:
+        out["metrics_seq"] = int(cur.get("metrics_seq") or 0)
+    return out
 
 
 class JavaAppIngestor(ChangeBasedIngestor):
     """Change-based Java application ingestor (R17-A3 / T1).
 
-    Encodes its position as a per-app ``{log_offset, metrics_ts}`` cursor map
-    (opaque to the runner) and yields only new metric samples / log entries per
-    app. A first run (``since is None``) performs a full initial load of every
-    configured app, streamed as resumable, individually-checkpointed batches.
+    Encodes its position as a per-app ``{log_offset, metrics_ts, metrics_seq}``
+    cursor map (opaque to the runner) and yields only new metric samples / log
+    entries per app. A first run (``since is None``) performs a full initial load
+    of every configured app, streamed as resumable, individually-checkpointed
+    batches.
 
     Operational surface only (AC8): reads the configured Actuator endpoints and
     log sources — never the application's source code.
@@ -194,10 +207,10 @@ class JavaAppIngestor(ChangeBasedIngestor):
 
         First run (``since is None``): full load of every configured app,
         streamed as checkpointed batches (resumable — AC3). Incremental run: only
-        metric samples newer than the stored ``metrics_ts`` and log entries past
-        the stored ``log_offset`` per app (AC2). An idle deployment yields a
-        single empty :class:`DeltaBatch` whose ``next_checkpoint`` echoes the
-        incoming position (AC2).
+        metric samples newer than the stored position and log entries past the
+        stored ``log_offset`` per app (AC2). An idle deployment yields a single
+        empty :class:`DeltaBatch` whose ``next_checkpoint`` echoes the incoming
+        position (AC2).
         """
         cursors = _decode_checkpoint(since.value if since else None)
         running = {app_id: dict(cur) for app_id, cur in cursors.items()}
@@ -259,15 +272,28 @@ class JavaAppIngestor(ChangeBasedIngestor):
 
         Returns ``(records, new_cursor)`` where records are the changed
         operational artifacts (oldest-first) and new_cursor is the advanced
-        ``{log_offset, metrics_ts}`` for the app. Operational surface only — no
-        source code is read (AC8).
+        ``{log_offset, metrics_ts, metrics_seq}`` for the app. Operational surface
+        only — no source code is read (AC8).
+
+        Metric selection is sequence-aware (M2): samples strictly newer than
+        ``metrics_ts`` are always fresh; samples sharing ``metrics_ts`` are fresh
+        only beyond the ``metrics_seq`` already consumed at that timestamp — so a
+        late-arriving same-timestamp sample is ingested once, never dropped or
+        re-read. A cursor with no ``metrics_seq`` keeps the strict-> semantics.
         """
         raw = self._raw_operational(org_id, target)
 
-        # Metric samples newer than the stored metrics_ts.
-        last_ts = cursor.get("metrics_ts", "")
+        # Metric samples: strictly newer, plus not-yet-consumed same-timestamp ones.
+        last_ts = str(cursor.get("metrics_ts", "") or "")
+        last_seq = cursor.get("metrics_seq")  # None → legacy: strict-> (no boundary carry)
         samples = sorted(raw.get("metrics", []), key=lambda s: str(s.get("sample_ts", "")))
-        fresh_samples = [s for s in samples if str(s.get("sample_ts", "")) > last_ts]
+        newer = [s for s in samples if str(s.get("sample_ts", "")) > last_ts]
+        if last_ts and last_seq is not None:
+            same_ts = [s for s in samples if str(s.get("sample_ts", "")) == last_ts]
+            fresh_same = same_ts[int(last_seq):]
+        else:
+            fresh_same = []
+        fresh_samples = fresh_same + newer  # same-ts (== last_ts) first, then newer
 
         # Log entries past the stored offset.
         last_offset = int(cursor.get("log_offset", 0) or 0)
@@ -275,15 +301,31 @@ class JavaAppIngestor(ChangeBasedIngestor):
         fresh_logs = [e for e in logs if int(e.get("offset", 0) or 0) > last_offset]
 
         records: List[Dict[str, Any]] = []
+        # Per-timestamp index so duplicate-timestamp samples get distinct
+        # artifact ids (M2). Boundary samples continue from the consumed count.
+        ts_index: Dict[str, int] = {}
+        if last_ts and last_seq is not None:
+            ts_index[last_ts] = int(last_seq)
         for sample in fresh_samples:
-            records.append(self._to_metric_record(target, sample))
+            ts = str(sample.get("sample_ts", ""))
+            idx = ts_index.get(ts, 0)
+            records.append(self._to_metric_record(target, sample, idx))
+            ts_index[ts] = idx + 1
         for entry in fresh_logs:
             records.append(self._to_log_record(target, entry))
 
-        new_cursor = {
-            "metrics_ts": str(fresh_samples[-1]["sample_ts"]) if fresh_samples else last_ts,
+        new_cursor: Dict[str, Any] = {
+            "metrics_ts": last_ts,
             "log_offset": int(fresh_logs[-1]["offset"]) if fresh_logs else last_offset,
         }
+        if fresh_samples:
+            new_ts = str(samples[-1].get("sample_ts", ""))
+            new_cursor["metrics_ts"] = new_ts
+            new_cursor["metrics_seq"] = sum(
+                1 for s in samples if str(s.get("sample_ts", "")) == new_ts
+            )
+        elif last_seq is not None:
+            new_cursor["metrics_seq"] = int(last_seq)
         return records, new_cursor
 
     def _advance_cursor(
@@ -292,32 +334,53 @@ class JavaAppIngestor(ChangeBasedIngestor):
         """Advance a cursor to the newest reading in a page of records.
 
         Keeps the encoded checkpoint monotonic so any single yielded batch is a
-        valid resume point on the next run.
+        valid resume point on the next run. ``metrics_seq`` accumulates across
+        pages: a new max timestamp resets it to 1, a repeat of the current max
+        increments it — so the final streamed checkpoint matches the authoritative
+        cursor from :meth:`_read_operational` even when duplicate timestamps span
+        a batch boundary (M2).
         """
         cur = dict(current or {"log_offset": 0, "metrics_ts": ""})
+        metrics_ts = str(cur.get("metrics_ts", "") or "")
+        metrics_seq = int(cur.get("metrics_seq", 0) or 0)
+        log_offset = int(cur.get("log_offset", 0) or 0)
         for rec in page:
             if rec.get("artifact_kind") == "metrics":
                 ts = str(rec.get("observed_ts", ""))
-                if ts > cur.get("metrics_ts", ""):
-                    cur["metrics_ts"] = ts
+                if ts > metrics_ts:
+                    metrics_ts = ts
+                    metrics_seq = 1
+                elif ts == metrics_ts:
+                    metrics_seq += 1
             elif rec.get("artifact_kind") == "log":
                 off = int(rec.get("log_offset", 0) or 0)
-                if off > int(cur.get("log_offset", 0) or 0):
-                    cur["log_offset"] = off
-        return cur
+                if off > log_offset:
+                    log_offset = off
+        advanced: Dict[str, Any] = {"log_offset": log_offset, "metrics_ts": metrics_ts}
+        if metrics_ts:
+            advanced["metrics_seq"] = metrics_seq
+        return advanced
 
-    def _to_metric_record(self, target: JavaAppTarget, sample: Dict[str, Any]) -> Dict[str, Any]:
+    def _to_metric_record(
+        self, target: JavaAppTarget, sample: Dict[str, Any], seq_index: int = 0
+    ) -> Dict[str, Any]:
         """Shape one Actuator metric sample into a change-delta record (T2/T4).
 
         Carries the normalised operational reading (health, error rate, latency,
         throughput, resource gauges) the running application reports about itself,
-        plus a per-record operational signal and an OBSERVED evidence pointer.
-        ``artifact_id`` + ``change_kind`` let the shared runner emit
-        ``ingestion.artifact_changed`` (AC6).
+        plus an OBSERVED evidence pointer. ``artifact_id`` + ``change_kind`` let
+        the shared runner emit ``ingestion.artifact_changed`` (AC6). ``seq_index``
+        disambiguates samples that share a timestamp so their artifact ids stay
+        unique (M2); the first sample at a timestamp keeps the bare id.
+
+        Operational SIGNAL is NOT computed here — it is a window operation over
+        the whole delta (java_app_signals), so a single-sample view would be
+        meaningless.
         """
         ts = str(sample.get("sample_ts", ""))
+        ref = ts if seq_index <= 0 else f"{ts}:{seq_index}"
         record = {
-            "artifact_id": f"{target.app_id}:metrics:{ts}",
+            "artifact_id": f"{target.app_id}:metrics:{ref}",
             "change_kind": ChangeKind.CREATED,  # a new sample is a new observation
             "source_system": "java_app",
             "app_id": target.app_id,
@@ -332,12 +395,9 @@ class JavaAppIngestor(ChangeBasedIngestor):
             "jvm_memory_used_ratio": sample.get("jvm_memory_used_ratio"),
             "system_cpu_usage": sample.get("system_cpu_usage"),
             "evidence_pointer": build_evidence_pointer(
-                target.app_id, "metrics", ts, ts
+                target.app_id, "metrics", ref, ts
             ),
         }
-        # Per-record operational signal (single-sample view); the run-level
-        # rollup is computed across all records by java_app_signals.
-        record["signals"] = build_service_signal(target.service, [record])
         return record
 
     def _to_log_record(self, target: JavaAppTarget, entry: Dict[str, Any]) -> Dict[str, Any]:
@@ -369,7 +429,6 @@ class JavaAppIngestor(ChangeBasedIngestor):
                 target.app_id, "log", str(offset), ts
             ),
         }
-        record["signals"] = build_service_signal(target.service, [record])
         return record
 
     # ── Source access: offline fixture vs live Actuator / log read ───────────
@@ -378,7 +437,8 @@ class JavaAppIngestor(ChangeBasedIngestor):
 
         Offline reads the deterministic fixture; live samples the Actuator
         endpoints and tails the log source using the vault-resolved credential
-        (AC3). Operational surface only — no source code (AC8).
+        (AC3). Operational surface only — no source code (AC8). The live client's
+        HTTP session is always closed after the read (M1 — no connection leak).
         """
         if not is_live():
             fixture = self._fixture()
@@ -386,7 +446,8 @@ class JavaAppIngestor(ChangeBasedIngestor):
                 "metrics": list(fixture.get("metrics", {}).get(target.app_id, [])),
                 "logs": list(fixture.get("logs", {}).get(target.app_id, [])),
             }
-        return self._client(org_id, target).read_operational()
+        with self._client(org_id, target) as client:
+            return client.read_operational()
 
     def _fixture(self) -> Dict[str, Any]:
         if not FIXTURE_PATH.exists():
@@ -417,6 +478,10 @@ class JavaAppClient:
     a Bearer header; it is held only for the life of the request session and never
     logged. Operational surface only — this client has no path that reads source
     code (AC8).
+
+    Use as a context manager (or call :meth:`close`) so the underlying
+    ``requests.Session`` — and its pooled TCP connections — is released after the
+    read; a long-lived FastAPI process reads many targets across many runs (M1).
     """
 
     def __init__(self, *, actuator_url: str, log_source: str, secret: Optional[str]):
@@ -424,6 +489,20 @@ class JavaAppClient:
         self.log_source = log_source
         self._secret = secret
         self._session = None
+
+    def __enter__(self) -> "JavaAppClient":
+        return self
+
+    def __exit__(self, *exc: Any) -> None:
+        self.close()
+
+    def close(self) -> None:
+        """Close the HTTP session and release its pooled connections (M1)."""
+        if self._session is not None:
+            try:
+                self._session.close()
+            finally:
+                self._session = None
 
     def _sess(self):
         try:
@@ -438,7 +517,7 @@ class JavaAppClient:
                 self._session.headers.update({"Authorization": f"Bearer {self._secret}"})
         return self._session
 
-    def read_operational(self) -> Dict[str, Any]:  # pragma: no cover - exercised live only
+    def read_operational(self) -> Dict[str, Any]:
         """Sample the Actuator endpoints and tail the log source.
 
         Returns the same ``{"metrics": [...], "logs": [...]}`` shape the offline
@@ -450,33 +529,140 @@ class JavaAppClient:
         logs = self._read_logs() if self.log_source else []
         return {"metrics": metrics, "logs": logs}
 
-    def _sample_actuator(self) -> Dict[str, Any]:  # pragma: no cover - exercised live only
-        """Read /health, /metrics, /info and normalise into one sample."""
+    # ── Actuator metric reads (H1) ───────────────────────────────────────────
+    def _get_json(self, path: str, params: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
+        """GET an Actuator endpoint and return parsed JSON, or None on non-OK."""
+        resp = self._sess().get(
+            f"{self.actuator_url}/{path}", params=params, timeout=_REQUEST_TIMEOUT
+        )
+        if not resp.ok:
+            return None
+        try:
+            return resp.json()
+        except ValueError:
+            return None
+
+    def _metric(
+        self, name: str, statistic: str = "VALUE", tag: Optional[str] = None
+    ) -> Optional[float]:
+        """Read one measurement from ``GET /metrics/{name}`` (optionally tag-filtered).
+
+        Spring Boot Actuator returns ``{"name", "measurements": [{"statistic",
+        "value"}], ...}``. Returns the value for ``statistic`` (COUNT / VALUE /
+        TOTAL_TIME / MAX), or None when the metric/statistic is unavailable.
+        """
+        body = self._get_json(f"metrics/{name}", params={"tag": tag} if tag else None)
+        if not isinstance(body, dict):
+            return None
+        for m in body.get("measurements", []) or []:
+            if isinstance(m, dict) and m.get("statistic") == statistic:
+                try:
+                    return float(m.get("value"))
+                except (TypeError, ValueError):
+                    return None
+        return None
+
+    def _sample_actuator(self) -> Dict[str, Any]:
+        """Read health + request/JVM/CPU metrics into one normalised sample (H1).
+
+        Maps the standard Actuator endpoints to the operational reading fields the
+        signal extractor consumes:
+
+          * ``error_rate``            — ``http.server.requests`` SERVER_ERROR count
+                                        / total count.
+          * ``latency_p95_ms``        — ``http.server.requests`` MAX (seconds→ms):
+                                        the high-percentile proxy Actuator exposes
+                                        without a percentile histogram.
+          * ``throughput_rpm``        — ``http.server.requests`` cumulative COUNT
+                                        (rate windowing across samples is a later
+                                        enhancement; single-sample reads only see
+                                        the running total).
+          * ``jvm_memory_used_ratio`` — ``jvm.memory.used`` / ``jvm.memory.max``.
+          * ``system_cpu_usage``      — ``system.cpu.usage`` (0..1).
+
+        Any endpoint that is absent simply yields None for that field, which the
+        signal extractor treats as "not reported" rather than a false zero.
+        """
         from datetime import datetime, timezone
 
-        def _get(path: str) -> Dict[str, Any]:
-            resp = self._sess().get(f"{self.actuator_url}/{path}", timeout=_REQUEST_TIMEOUT)
-            if not resp.ok:
-                raise JavaAppIngestError(f"Actuator {path} HTTP {resp.status_code}")
-            return resp.json()
+        health = self._get_json("health") or {}
 
-        health = _get("health")
-        # Real Actuator metric reads would aggregate /metrics/{name}; kept compact
-        # here. The shape mirrors the fixture so signal extraction is identical.
-        sample_ts = datetime.now(timezone.utc).isoformat()
+        total = self._metric("http.server.requests", "COUNT")
+        errors = self._metric("http.server.requests", "COUNT", tag="outcome:SERVER_ERROR")
+        error_rate = (
+            round(errors / total, 4) if total and total > 0 and errors is not None else None
+        )
+        max_seconds = self._metric("http.server.requests", "MAX")
+        latency_p95_ms = round(max_seconds * 1000.0, 2) if max_seconds is not None else None
+
+        heap_used = self._metric("jvm.memory.used")
+        heap_max = self._metric("jvm.memory.max")
+        heap_ratio = (
+            round(heap_used / heap_max, 4)
+            if heap_used is not None and heap_max and heap_max > 0
+            else None
+        )
+
         return {
-            "sample_ts": sample_ts,
+            "sample_ts": datetime.now(timezone.utc).isoformat(),
             "health": str(health.get("status", "")),
+            "error_rate": error_rate,
+            "latency_p95_ms": latency_p95_ms,
+            "throughput_rpm": total,
+            "jvm_memory_used_ratio": heap_ratio,
+            "system_cpu_usage": self._metric("system.cpu.usage"),
         }
 
-    def _read_logs(self) -> List[Dict[str, Any]]:  # pragma: no cover - exercised live only
-        """Tail the configured log source from the last offset forward."""
+    # ── Log tail (M4) ────────────────────────────────────────────────────────
+    def _read_logs(self) -> List[Dict[str, Any]]:
+        """Tail the configured log source, accepting JSON, NDJSON, or plain text.
+
+        Spring Boot application logs are commonly a JSON array / ``{"entries": []}``
+        wrapper, NDJSON (one JSON object per line), or plain-text lines. All three
+        are handled so live log signal is actually ingested (M4); a truly
+        unparseable body yields no entries rather than raising.
+        """
         resp = self._sess().get(self.log_source, timeout=_REQUEST_TIMEOUT)
         if not resp.ok:
             raise JavaAppIngestError(f"log read HTTP {resp.status_code}")
+
+        # 1. Structured JSON: a list or an {"entries": [...]} wrapper.
         try:
             payload = resp.json()
         except ValueError:
-            return []
-        entries = payload.get("entries", payload) if isinstance(payload, dict) else payload
-        return [e for e in entries if isinstance(e, dict)] if isinstance(entries, list) else []
+            payload = None
+        if payload is not None:
+            entries = payload.get("entries", payload) if isinstance(payload, dict) else payload
+            if isinstance(entries, list):
+                return [e for e in entries if isinstance(e, dict)]
+
+        text = resp.text or ""
+        records: List[Dict[str, Any]] = []
+        offset = 0
+        for line in text.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            offset += 1
+            # 2. NDJSON: one JSON object per line.
+            if line.startswith("{"):
+                try:
+                    obj = json.loads(line)
+                    if isinstance(obj, dict):
+                        obj.setdefault("offset", offset)
+                        records.append(obj)
+                        continue
+                except ValueError:
+                    pass
+            # 3. Plain-text line: keep the raw message; level parsed best-effort.
+            records.append({"offset": offset, "message": line, "level": _plain_text_level(line)})
+        return records
+
+
+def _plain_text_level(line: str) -> str:
+    """Best-effort log level from a plain-text log line (no NLP — AC8)."""
+    upper = line.upper()
+    for level in ("FATAL", "SEVERE", "ERROR", "WARN", "INFO", "DEBUG", "TRACE"):
+        if level in upper:
+            return level
+    return ""

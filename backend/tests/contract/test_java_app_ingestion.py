@@ -46,7 +46,6 @@ from discovery.ingest import change_runner, clear_live_connectors
 from discovery.ingest.base import ChangeBasedIngestor, Checkpoint
 from discovery.ingest import java_app as java_app_mod
 from discovery.ingest import java_app_config as java_app_config_mod
-from discovery.ingest import java_app_provenance as java_app_provenance_mod
 from discovery.ingest import java_app_signals as java_app_signals_mod
 from discovery.ingest.java_app import JavaAppIngestor, _decode_checkpoint, _encode_checkpoint
 from discovery.ingest.java_app_config import (
@@ -177,10 +176,14 @@ def test_ac1_produces_operational_signal_from_the_surfaces():
     assert any(c["is_cluster"] for c in pay["exception_clusters"])  # clustering
 
 
-def test_ac1_every_record_carries_a_per_record_signal_block():
+def test_ac1_operational_signal_is_aggregated_over_the_whole_delta():
+    # Signal is a WINDOW operation (trend across samples), computed over all
+    # collected records by java_app_signals — not per single-sample record.
     records, _ = _records()
     assert records
-    assert all("signals" in r for r in records)
+    signal = build_java_app_signal(records)
+    assert signal["operational_friction"]["fired"] is True
+    assert "payments" in signal["services"]
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -201,7 +204,10 @@ def test_ac2_first_run_reads_all_available_operational_data():
     final_cp = batches[-1].next_checkpoint
     assert isinstance(final_cp, str) and final_cp        # opaque, persistable
     cursors = _decode_checkpoint(final_cp)
-    assert cursors["payments-api"] == {"log_offset": 5, "metrics_ts": FRESH_TS}
+    # metrics_seq = number of samples consumed AT the newest timestamp (M2).
+    assert cursors["payments-api"] == {
+        "log_offset": 5, "metrics_ts": FRESH_TS, "metrics_seq": 1,
+    }
 
 
 def test_ac2_second_run_with_checkpoint_is_an_empty_minimal_delta():
@@ -525,8 +531,7 @@ def test_ac8_no_external_apm_or_code_analysis_dependency():
     )
     sources = "\n".join(
         inspect.getsource(m) for m in (
-            java_app_mod, java_app_signals_mod,
-            java_app_config_mod, java_app_provenance_mod,
+            java_app_mod, java_app_signals_mod, java_app_config_mod,
         )
     ).lower()
     leaked = [tok for tok in forbidden if tok in sources]

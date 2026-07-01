@@ -80,6 +80,9 @@ Keep this file short and actionable. Prefer reading the relevant code and contra
 * `backend/discovery/offline_export.py`: offline fixture/data export utilities.
 * `backend/discovery/ingest/live_validator.py`: live data validation at ingest time.
 * `backend/discovery/ingest/strs_jira_corroboration.py` / `strs_sn_corroboration.py`: STRS cross-source corroboration against Jira and ServiceNow.
+* `backend/discovery/ingest/java_app.py`: R17-A3 Java application change-based ingestor — AgentIQ's first non-SaaS source. Implements `ChangeBasedIngestor` over the OPERATIONAL surface only (Spring Boot Actuator health/diagnostics endpoints + application logs); never reads source code or external APM (AC8). Opaque per-app `{log_offset, metrics_ts, metrics_seq}` checkpoint. The live `JavaAppClient` closes its HTTP session after each read; operational SIGNAL is aggregated over the whole delta by `java_app_signals`, never per-record.
+* `backend/discovery/ingest/java_app_config.py`: R17-A3 per-deployment Java app target configuration + vault credential resolution. Targets come from config (`JAVA_APP_TARGETS` / offline fixture), never network scanning; inline secrets in config are rejected and credentials resolve from the vault, never logged (AC3).
+* `backend/discovery/ingest/java_app_signals.py`: R17-A3 Java operational signal extraction (error patterns, latency/throughput degradation, exception clustering, resource pressure), the observed `EvidencePointer` builder (`source_system='java_app'`, `origin='observed'`), and the COR-09 corroboration payload builder.
 * `backend/discovery/calibration/calibrator.py` / `ranking.py`: confidence calibration and entity ranking.
 * `backend/discovery/packs/pack_config.py`: centralized pack selection. Current packs: `service_cloud`, `ncino`, `strs_benefits`, `sqlserver_opsignal`, `github_engineering`.
 
@@ -127,7 +130,8 @@ Keep this file short and actionable. Prefer reading the relevant code and contra
 * `docs/AUTH_SETUP.md`: auth configuration guide.
 * `docs/proxy_metrics.md`: proxy metric definitions.
 * `docs/SMOKE_DEMO_*.md` (5 files): smoke test walkthroughs.
-* `docs/INTEGRATE_*.md` (4 files): integration guides per connector.
+* `docs/INTEGRATE_*.md` (5 files): integration guides per connector — includes `docs/INTEGRATE_JAVA_APP.md` (R17-A3 Java application ingestion setup + design-review reference).
+* `docs/R17-A3_JAVA_APP_SCOPE.md`: R17-A3 Java application ingestion phase-one scope & boundaries (operational surfaces only — no source code (1.8) and no external APM), with the engineering/QA/product finding-evaluation rubric.
 * `deployment/README.md`: production env var guide covering OAuth secrets, vault, and `CREDENTIAL_VAULT_KEY`.
 * `scripts/`: shell smoke tests and contract helper. Bash — run from Git Bash or WSL.
 

@@ -20,6 +20,7 @@ import pytest
 from discovery.ingest import change_runner
 from discovery.ingest.base import Checkpoint, DeltaBatch
 from discovery.ingest.java_app import JavaAppIngestor, _decode_checkpoint, _encode_checkpoint
+from discovery.ingest.java_app_signals import build_java_app_signal
 
 
 @pytest.fixture(autouse=True)
@@ -85,17 +86,16 @@ def test_first_run_reads_metrics_and_logs():
 
 def test_records_carry_operational_signal():
     _res, _store, collected = _collect(JavaAppIngestor(), "org-1")
-    # Every record carries an extracted operational signal block (T2).
-    assert all("signals" in r for r in collected)
     payments_logs = [
         r for r in collected if r["app_id"] == "payments-api" and r["artifact_kind"] == "log"
     ]
     assert payments_logs
-    # The friction is visible in the produced signal: payments shows reasons.
-    metric_rec = next(
-        r for r in collected if r["app_id"] == "payments-api" and r["artifact_kind"] == "metrics"
-    )
-    assert metric_rec["signals"]["service"] == "payments"
+    # Signal is a WINDOW operation over the whole delta (T2), not per single
+    # sample: the friction is visible in the aggregated signal, where the
+    # degrading payments service fires and the healthy ledger service does not.
+    signal = build_java_app_signal(collected)
+    assert signal["services"]["payments"]["fired"] is True
+    assert signal["services"]["ledger"]["fired"] is False
 
 
 def test_checkpoint_advances_and_is_opaque_json():
