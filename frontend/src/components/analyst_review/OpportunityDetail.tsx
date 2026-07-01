@@ -233,25 +233,27 @@ function isEarlyEntity(entity: EntitySummary): boolean {
 export function EntityTracePanel({
   entities,
   runCount,
+  enrichmentLoaded = false,
 }: {
-  entities: EntitySummary[] | undefined;
+  entities: EntitySummary[] | null | undefined;
   runCount?: number | null;
+  enrichmentLoaded?: boolean;
 }) {
-  if (!entities) return null;
+  if (!enrichmentLoaded && !entities) return null;
 
+  const entityList = entities ?? [];
   const uniqueEntities = Array.from(
     new Map(
-      entities
+      entityList
         .filter(shouldShowEntity)
         .map((entity) => [entity.entity_id, entity])
     ).values()
   );
   const isWaitingForRunHistory =
     (typeof runCount === "number" && runCount < MIN_VISIBLE_ENTITY_RUN_COUNT) ||
-    entities.some(isEarlyEntity);
-  const emptyTitle = isWaitingForRunHistory
-    ? "Entities will appear after 3 or more discovery runs."
-    : "No entities linked yet.";
+    entityList.some(isEarlyEntity) ||
+    uniqueEntities.length === 0;
+  const emptyTitle = "Entities will appear after 3 or more discovery runs.";
   const emptyDescription = isWaitingForRunHistory
     ? "AgentIQ is already retaining early entity signals for graph completeness. They stay hidden here until enough run history is available, so this section shows stable, repeatable entities."
     : "AgentIQ will show linked people, systems, and process entities here when eligible entity evidence is available.";
@@ -745,6 +747,7 @@ export default function OpportunityDetail({
         <EntityTracePanel
           entities={enrichment?.entities}
           runCount={enrichment?.run_count}
+          enrichmentLoaded={Boolean(enrichment)}
         />
 
         {/* T3-S13-A: Relationship trace shown after entity trace. */}

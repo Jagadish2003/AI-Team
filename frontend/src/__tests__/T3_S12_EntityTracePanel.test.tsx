@@ -52,6 +52,16 @@ describe("T3-S12-A EntityTracePanel", () => {
     ).toBeInTheDocument();
   });
 
+  it("shows the run-history message when enrichment loaded without an entities field", () => {
+    render(<EntityTracePanel entities={undefined} enrichmentLoaded />);
+
+    expect(screen.getByText("Entities")).toBeInTheDocument();
+    expect(screen.getByText("Hidden until 3 runs")).toBeInTheDocument();
+    expect(
+      screen.getByText("Entities will appear after 3 or more discovery runs.")
+    ).toBeInTheDocument();
+  });
+
   it("renders entity summaries below the baseline context contract", () => {
     render(<EntityTracePanel entities={ENTITIES} />);
 
