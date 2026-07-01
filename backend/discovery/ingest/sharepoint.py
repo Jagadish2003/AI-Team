@@ -23,12 +23,18 @@ R17-A2 are deliberately SEPARATE subtasks and are NOT done here:
 
   * Reach-phase signal *aggregation* (library activity/cadence, cross-references)
     into the corroboration payload — T3.
-  * Microsoft Graph OAuth connect wiring (auth-url / callback / vault) — T5. The
-    SharePoint catalog tile already exists; this ingestor reads whatever OAuth
-    token that flow lands in the per-run credential context.
-  * ``ingestion.artifact_changed`` event emission — handled by the shared runner
-    (``change_runner.py``, AT-381); every record this ingestor yields already
-    carries ``artifact_id`` + ``change_kind`` so the runner can emit them.
+  * Microsoft Graph OAuth connect wiring (auth-url / callback / vault) — T5
+    (AT-462, done). The SharePoint catalog tile already exists; this ingestor
+    reads whatever OAuth token that flow lands in the per-run credential context.
+
+``ingestion.artifact_changed`` event emission (T6 / AT-463) is handled by the
+shared runner (``change_runner.py``, AT-381) with no connector-specific code:
+every record this ingestor yields already carries ``artifact_id`` + ``change_kind``,
+so when the connector is driven through :func:`change_runner.ingest_with_checkpoint`
+the runner emits one event per changed driveItem in each fully-processed batch
+(source system = ``connector_id`` ``'sharepoint'``, plus artifact id + timestamp),
+and nothing on an empty delta. Validated end-to-end against the real connector in
+``tests/test_sharepoint_artifact_changed_events.py``.
 
 Per the reach/depth boundary (R17-A2 §2), this ingestor reads only document
 activity and metadata *signal* — what exists, how active it is, who touches it.

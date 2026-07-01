@@ -23,9 +23,15 @@ and are NOT done here:
     contributor patterns, cross-reference markers) — T3 / AT-460. This ingestor
     only carries the raw metadata fields through.
   * EvidencePointer on every signal (R16-B1, ``origin='observed'``) — T4.
-  * ``ingestion.artifact_changed`` event emission — handled by the shared runner
-    (``change_runner.py``, AT-381); every record this ingestor yields already
-    carries ``artifact_id`` + ``change_kind`` so the runner can emit them.
+
+``ingestion.artifact_changed`` event emission (T6 / AT-463) is handled by the
+shared runner (``change_runner.py``, AT-381) with no connector-specific code:
+every record this ingestor yields already carries ``artifact_id`` + ``change_kind``,
+so when the connector is driven through :func:`change_runner.ingest_with_checkpoint`
+the runner emits one event per changed page/blogpost in each fully-processed batch
+(source system = ``connector_id`` ``'confluence'``, plus artifact id + timestamp),
+and nothing on an empty delta. Validated end-to-end against the real connector in
+``tests/test_confluence_artifact_changed_events.py``.
 
 Reach vs depth (AC7): this ingestor reads only content **metadata and activity**
 signal. It deliberately does NOT read the page/document *body* — that is the
