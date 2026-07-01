@@ -78,6 +78,7 @@ from typing import Any, Dict, Iterator, List, Optional
 
 from . import get_live_connector, is_live
 from .base import ChangeBasedIngestor, ChangeKind, Checkpoint, DeltaBatch
+from .confluence_signals import build_page_signals
 
 logger = logging.getLogger(__name__)
 
@@ -332,6 +333,13 @@ class ConfluenceIngestor(ChangeBasedIngestor):
         the separate 1.8 story. ``artifact_id`` + ``change_kind`` let the shared
         runner emit ``ingestion.artifact_changed`` events (AC6).
 
+        R17-A2 / AT-460 (T3): each record also carries a ``signals`` block — the
+        per-page cross-reference markers (from the title, metadata) and edit
+        activity — so the reach-phase signal travels with the delta to downstream
+        corroboration. Space-level activity (inventory/cadence/churn) and the
+        stale-but-load-bearing set are derived across records by
+        :func:`confluence_signals.build_confluence_signal`.
+
         A version number > 1 is an update to a page we may already have seen;
         version 1 is a creation. (Pure metadata — no body inspection.)
         """
@@ -342,7 +350,7 @@ class ConfluenceIngestor(ChangeBasedIngestor):
         version = content.get("version") or {}
         by = version.get("by") or {}
         links = content.get("_links") or {}
-        return {
+        record = {
             "artifact_id": f"{space_key}:{content_id}",
             "change_kind": change_kind,
             "source_system": "confluence",
@@ -357,6 +365,9 @@ class ConfluenceIngestor(ChangeBasedIngestor):
             "modified_by": by.get("accountId") or by.get("displayName"),
             "url": links.get("webui"),
         }
+        # R17-A2 / AT-460 (T3): reach-phase signal travels with the delta.
+        record["signals"] = build_page_signals(record)
+        return record
 
     # ── Source access: offline fixture vs live Confluence Cloud REST API ─────
     def _raw_spaces(self, org_id: str) -> List[Dict[str, Any]]:

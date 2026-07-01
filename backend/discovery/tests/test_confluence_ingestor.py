@@ -100,7 +100,9 @@ def test_records_carry_metadata_but_no_body():
     assert rec["modified_at"] == "2026-06-10T09:10:00Z"
     # No page/document body is ever read in the reach phase.
     assert "body" not in rec
-    assert "signals" not in rec  # signal extraction is the separate T3 subtask
+    # T3 enriches each record with a reach-phase signals block (metadata only).
+    assert "signals" in rec
+    assert set(rec["signals"].keys()) == {"cross_references", "activity"}
 
 
 # ─────────────────────────────────────────────────────────────────────────────
