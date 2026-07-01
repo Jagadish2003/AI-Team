@@ -1,0 +1,28 @@
+{
+  "_comment": "R17-A2 / AT-457 — deterministic offline fixture for the Confluence change-based ingestor. Spaces exercise the granted-only access rule (AC4): only spaces AgentIQ is granted (is_accessible) and not archived are read; an ungranted space and an archived space are excluded, and their content must never be emitted. Each content item carries the Confluence 'version.when' last-modified timestamp (and version.number) the connector uses as its change marker / opaque checkpoint position, ordered within each space so incremental (since-checkpoint) and resumable first-load batching can both be tested. Only page/blogpost types are ingested. The per-space cursor map in the checkpoint is keyed by space key. No body content is present — the reach phase reads metadata only.",
+  "spaces": [
+    {"key": "ENG", "name": "Engineering", "status": "current", "is_accessible": true},
+    {"key": "OPS", "name": "Operations", "status": "current", "is_accessible": true},
+    {"key": "HR", "name": "Human Resources", "status": "current", "is_accessible": false},
+    {"key": "OLD", "name": "Archived Wiki", "status": "archived", "is_accessible": true}
+  ],
+  "content": {
+    "ENG": [
+      {"id": "100", "type": "page", "title": "Payments API runbook", "status": "current", "version": {"number": 1, "when": "2026-06-10T09:00:00Z", "by": {"accountId": "u1", "displayName": "Ada"}}, "_links": {"webui": "/spaces/ENG/pages/100"}},
+      {"id": "200", "type": "page", "title": "Incident INC-4821 postmortem", "status": "current", "version": {"number": 3, "when": "2026-06-10T09:10:00Z", "by": {"accountId": "u2", "displayName": "Lin"}}, "_links": {"webui": "/spaces/ENG/pages/200"}},
+      {"id": "300", "type": "blogpost", "title": "Release notes 1.7 (see PR-2290)", "status": "current", "version": {"number": 1, "when": "2026-06-10T10:00:00Z", "by": {"accountId": "u3", "displayName": "Sam"}}, "_links": {"webui": "/spaces/ENG/blog/300"}},
+      {"id": "400", "type": "page", "title": "Architecture overview", "status": "current", "version": {"number": 2, "when": "2026-06-11T08:05:00Z", "by": {"accountId": "u1", "displayName": "Ada"}}, "_links": {"webui": "/spaces/ENG/pages/400"}},
+      {"id": "450", "type": "comment", "title": "Re: Architecture overview", "status": "current", "version": {"number": 1, "when": "2026-06-11T09:00:00Z", "by": {"accountId": "u4", "displayName": "Kai"}}}
+    ],
+    "OPS": [
+      {"id": "500", "type": "page", "title": "On-call rota", "status": "current", "version": {"number": 1, "when": "2026-06-10T09:05:00Z", "by": {"accountId": "u5", "displayName": "Rae"}}, "_links": {"webui": "/spaces/OPS/pages/500"}},
+      {"id": "600", "type": "page", "title": "Deployment checklist", "status": "current", "version": {"number": 4, "when": "2026-06-10T09:30:00Z", "by": {"accountId": "u6", "displayName": "Jo"}}, "_links": {"webui": "/spaces/OPS/pages/600"}}
+    ],
+    "HR": [
+      {"id": "900", "type": "page", "title": "confidential HR space that must never be read", "status": "current", "version": {"number": 1, "when": "2026-06-10T09:00:00Z", "by": {"accountId": "u9", "displayName": "HR"}}, "_links": {"webui": "/spaces/HR/pages/900"}}
+    ],
+    "OLD": [
+      {"id": "950", "type": "page", "title": "archived space page", "status": "current", "version": {"number": 1, "when": "2026-05-01T09:00:00Z", "by": {"accountId": "u0", "displayName": "Old"}}, "_links": {"webui": "/spaces/OLD/pages/950"}}
+    ]
+  }
+}
