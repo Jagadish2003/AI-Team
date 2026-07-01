@@ -11,13 +11,13 @@ Fixes vs previous version:
      when postgres and backend are healthy.
 
 Usage:
-    python3 scripts/deploy-ecr.py          # reads /opt/aiqstore/.env
+    python3 scripts/deploy-ecr.py          # reads /opt/aiqstore/backend/.env
     sudo python3 scripts/deploy-ecr.py     # required for /opt/aiqstore access
 
 Requires:
     pip install boto3
     Docker + docker-compose (or docker compose plugin)
-    /opt/aiqstore/.env populated by Configfile-create.sh
+    /opt/aiqstore/backend/.env populated by Configfile-create.sh
 """
 
 import sys
@@ -212,10 +212,19 @@ def generate_compose_env(env: dict) -> Path:
 
 # ── Health polling ────────────────────────────────────────────────────────────
 
-def _container_name(service: str) -> str:
-    """Guess the container name from the compose project (client-deploy folder name)."""
-    project = COMPOSE_FILE.parent.name.replace("-", "")  # e.g. "clientdeploy"
-    return f"{project}-{service}-1"
+def _service_container_id(service: str) -> str:
+    """
+    Return the running container ID for a compose service.
+    Uses 'docker compose ps -q' — never guesses the name.
+    COMPOSE_ENV must exist before calling this (written by generate_compose_env).
+    """
+    r = subprocess.run(
+        _compose_cmd() + ["-f", str(COMPOSE_FILE), "--env-file", str(COMPOSE_ENV),
+                          "ps", "-q", service],
+        capture_output=True, text=True,
+    )
+    lines = [l.strip() for l in r.stdout.strip().splitlines() if l.strip()]
+    return lines[0] if lines else ""
 
 
 def wait_healthy(service: str, timeout: int, advisory: bool = False) -> bool:
@@ -225,10 +234,14 @@ def wait_healthy(service: str, timeout: int, advisory: bool = False) -> bool:
     advisory=True  → timeout/unhealthy prints a warning but returns True (success).
     advisory=False → timeout/unhealthy returns False (caller decides what to do).
     """
-    container = _container_name(service)
-    deadline  = time.time() + timeout
-    spinner   = ["⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷"]
-    tick      = 0
+    container = _service_container_id(service)
+    if not container:
+        print(f"  [{service}] WARNING: could not resolve container ID — skipping health check")
+        return advisory  # advisory → True (continue), required → False (caller exits)
+
+    deadline = time.time() + timeout
+    spinner  = ["⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷"]
+    tick     = 0
 
     while time.time() < deadline:
         r = subprocess.run(
@@ -328,7 +341,7 @@ def main():
         if not pg_ok:
             sys.exit(
                 "\n  ERROR: postgres container is not healthy.\n"
-                "  Check logs: docker logs clientdeploy-postgres-1\n"
+                f"  Check logs: docker compose -f {COMPOSE_FILE} logs postgres\n"
             )
 
         # Backend — required
@@ -336,7 +349,7 @@ def main():
         if not be_ok:
             sys.exit(
                 "\n  ERROR: backend container is not healthy.\n"
-                "  Check logs: docker logs clientdeploy-backend-1\n"
+                f"  Check logs: docker compose -f {COMPOSE_FILE} logs backend\n"
             )
 
         # Frontend — advisory only (healthcheck may lag behind actual readiness)
