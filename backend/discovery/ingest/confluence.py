@@ -12,17 +12,19 @@ each accessible space only for content modified after that position.
 
 Scope (this subtask — AT-457 / T1, AC2 + AC3)
 ---------------------------------------------
-This file is *only* the change-based ingestor: checkpointed incremental content
+This file is the change-based ingestor: checkpointed incremental content
 ingestion via modification timestamps (AC2) plus a resumable, checkpointed first
 load (AC3). Each delta record carries the page/blogpost **metadata** (id, space,
-type, title, version, last-modifier, modified timestamp, web link) that a later
-signal pass consumes. The downstream pieces are deliberately SEPARATE stories
-and are NOT done here:
+type, title, version, last-modifier, modified timestamp, web link) that the
+signal pass consumes, plus:
 
   * Reach-phase signal extraction (space/page activity, cadence, churn,
-    contributor patterns, cross-reference markers) — T3 / AT-460. This ingestor
-    only carries the raw metadata fields through.
-  * EvidencePointer on every signal (R16-B1, ``origin='observed'``) — T4.
+    contributor patterns, cross-reference markers) — T3 / AT-460, in the
+    ``signals`` block via :func:`confluence_signals.build_page_signals`.
+  * A fully-populated OBSERVED ``EvidencePointer`` (R16-B1) on every record —
+    T4 / AT-461, via :func:`_build_evidence_pointer` (``source_system='confluence'``,
+    page/blogpost id, timestamp, ``origin='observed'``) so any finding is traceable
+    back to its exact source page (AC5).
 
 ``ingestion.artifact_changed`` event emission (T6 / AT-463) is handled by the
 shared runner (``change_runner.py``, AT-381) with no connector-specific code:
@@ -81,6 +83,8 @@ import os
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional
+
+from app.provenance import EvidencePointer, utc_now_iso
 
 from . import get_live_connector, is_live
 from .base import ChangeBasedIngestor, ChangeKind, Checkpoint, DeltaBatch
@@ -195,6 +199,34 @@ def _modified_gt(when: str, cursor: Optional[str]) -> bool:
     if w is None or c is None:
         return str(when) > str(cursor)
     return w > c
+
+
+def _build_evidence_pointer(
+    space_key: str, content_id: str, timestamp: Optional[str]
+) -> Dict[str, Any]:
+    """Build the R16-B1 EvidencePointer for one Confluence content signal (AT-461).
+
+    Every Confluence signal must be traceable back to its exact source page /
+    blog post, so each record carries a fully-populated, OBSERVED provenance
+    pointer (mirrors the paired SharePoint connector's ``_build_evidence_pointer``):
+
+      * ``source_system`` = ``'confluence'``
+      * ``source_artifact`` = the content identity ``"{space_key}:{content_id}"`` —
+        the stable id of the source page/blogpost (so ``source_artifact_type`` is
+        ``'record_id'``), identical to the record's ``artifact_id``.
+      * ``source_timestamp`` = the content's own last-modified (``version.when``) UTC
+        ISO-8601 timestamp; falls back to now only if it is missing/unparseable, so
+        the mandatory spine is always populated and a signal is never dropped for
+        provenance.
+      * ``origin`` = ``'observed'`` — read directly from Confluence, never inferred,
+        so no ``extraction_job_id`` is required.
+    """
+    return EvidencePointer.observed(
+        source_system="confluence",
+        source_artifact=f"{space_key}:{content_id}",
+        source_timestamp=timestamp or utc_now_iso(),
+        source_artifact_type="record_id",
+    ).to_dict()
 
 
 class ConfluenceIngestor(ChangeBasedIngestor):
@@ -337,7 +369,10 @@ class ConfluenceIngestor(ChangeBasedIngestor):
         space, type, title, version, last-modifier, and the modified timestamp.
         The page/document *body* is deliberately NOT read here — deep content is
         the separate 1.8 story. ``artifact_id`` + ``change_kind`` let the shared
-        runner emit ``ingestion.artifact_changed`` events (AC6).
+        runner emit ``ingestion.artifact_changed`` events (AC6), and every record
+        carries a fully-populated OBSERVED ``evidence_pointer`` (R16-B1 / AT-461)
+        so no Confluence signal enters the system without a verifiable source
+        reference (AC5).
 
         R17-A2 / AT-460 (T3): each record also carries a ``signals`` block — the
         per-page cross-reference markers (from the title, metadata) and edit
@@ -356,6 +391,7 @@ class ConfluenceIngestor(ChangeBasedIngestor):
         version = content.get("version") or {}
         by = version.get("by") or {}
         links = content.get("_links") or {}
+        modified_at = _modified_iso(content)
         record = {
             "artifact_id": f"{space_key}:{content_id}",
             "change_kind": change_kind,
@@ -367,9 +403,12 @@ class ConfluenceIngestor(ChangeBasedIngestor):
             "title": content.get("title", ""),
             "status": content.get("status"),
             "version_number": number,
-            "modified_at": _modified_iso(content),
+            "modified_at": modified_at,
             "modified_by": by.get("accountId") or by.get("displayName"),
             "url": links.get("webui"),
+            # R17-A2 / AT-461 (T4): observed provenance pointer back to this exact
+            # page/blogpost, so any finding is traceable to its source (AC5).
+            "evidence_pointer": _build_evidence_pointer(space_key, content_id, modified_at),
         }
         # R17-A2 / AT-460 (T3): reach-phase signal travels with the delta.
         record["signals"] = build_page_signals(record)
