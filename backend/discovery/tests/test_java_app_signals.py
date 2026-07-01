@@ -66,7 +66,7 @@ def test_exception_clusters_ignore_non_error_levels():
 # ─────────────────────────────────────────────────────────────────────────────
 def _sample(ts, **kw):
     base = {"sample_ts": ts, "health": "UP", "error_rate": 0.0, "latency_p95_ms": 100,
-            "throughput_rpm": 1000, "jvm_memory_used_ratio": 0.4, "system_cpu_usage": 0.3}
+            "throughput_rpm": 1000, "memory_used_ratio": 0.4, "cpu_usage": 0.3}
     base.update(kw)
     return base
 
@@ -76,7 +76,7 @@ def test_metrics_signal_detects_degradation_and_pressure():
         _sample("2026-06-10T08:00:00+00:00", latency_p95_ms=300, throughput_rpm=1200),
         _sample("2026-06-10T08:10:00+00:00", health="DOWN", error_rate=0.12,
                 latency_p95_ms=1800, throughput_rpm=700,
-                jvm_memory_used_ratio=0.91, system_cpu_usage=0.88),
+                memory_used_ratio=0.91, cpu_usage=0.88),
     ]
     sig = extract_metrics_signal(samples)
     assert sig["max_error_rate"] == 0.12
@@ -116,13 +116,13 @@ def test_build_signal_marks_only_friction_services():
         # friction service: a degraded metric sample + clustered errors
         _record("payments", "metrics", "2026-06-10T08:10:00+00:00", health="DOWN",
                 error_rate=0.2, latency_p95_ms=2000, throughput_rpm=100,
-                jvm_memory_used_ratio=0.95, system_cpu_usage=0.9),
+                memory_used_ratio=0.95, cpu_usage=0.9),
         _record("payments", "log", "2026-06-10T08:09:00+00:00", level="ERROR",
                 exception_type="TimeoutException"),
         # quiet service: healthy sample, no errors
         _record("ledger", "metrics", "2026-06-10T08:00:00+00:00", health="UP",
                 error_rate=0.0, latency_p95_ms=100, throughput_rpm=900,
-                jvm_memory_used_ratio=0.3, system_cpu_usage=0.2),
+                memory_used_ratio=0.3, cpu_usage=0.2),
     ]
     sig = build_java_app_signal(records)
     assert sig["operational_friction"]["fired"] is True
