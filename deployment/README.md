@@ -45,6 +45,7 @@ See `backend/.env.template` for the full list including non-secret client IDs.
 | SAP           | `SAP_CLIENT_SECRET`          | client_credentials    |
 | Dynamics 365  | `DYNAMICS365_CLIENT_SECRET`  | client_credentials    |
 | Microsoft Teams | `TEAMS_CLIENT_SECRET`      | authorization_code    |
+| SharePoint      | `SHAREPOINT_CLIENT_SECRET`   | authorization_code    |
 
 Set each to `your_secret_here` as a placeholder; replace with the real value from the
 provider's OAuth app registration before going to production.
@@ -74,6 +75,12 @@ provider's OAuth app registration before going to production.
 
 - Jira and Confluence share a single Atlassian OAuth app. Set `ATLASSIAN_CLIENT_ID` and
   use separate `JIRA_CLIENT_SECRET` / `CONFLUENCE_CLIENT_SECRET` values.
+- SharePoint (R17-A2 / AT-462) reuses the **Teams** Microsoft Graph app registration:
+  `SHAREPOINT_CLIENT_ID` defaults to `TEAMS_CLIENT_ID` and `SHAREPOINT_TENANT_ID` defaults
+  to `TEAMS_TENANT_ID`, so a single Graph app can serve both. Set them only when SharePoint
+  uses a dedicated app/tenant. The per-connector `SHAREPOINT_CLIENT_SECRET` is still required
+  (framework convention) — set it to the shared Teams app's secret when reusing that app.
+  SharePoint requests minimal read-only Graph scopes (`Sites.Read.All`, `offline_access`).
 - SAP and Dynamics 365 use client_credentials flow — no OAuth redirect URI is needed.
 - Slack revocation uses the `auth.revoke` Web API (not RFC 7009). No extra config required.
 - **Deploy note (R17-D3):** connector tokens are now stored under the authenticated

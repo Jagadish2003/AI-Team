@@ -65,6 +65,16 @@ DYNAMICS365_TENANT_ID = os.getenv("DYNAMICS365_TENANT_ID", "bb612c49-03be-4da1-9
 # slash (login.microsoftonline.com//oauth2/...). Coerce blank → the default.
 TEAMS_TENANT_ID = os.getenv("TEAMS_TENANT_ID", "organizations").strip() or "organizations"
 
+# Microsoft Entra ID (Azure AD) tenant for the SharePoint / Microsoft Graph OAuth
+# app (R17-A2 / AT-462). SharePoint reuses the Graph app registration set up for
+# the Teams connector (R17-A1 / R17-A2 §6), so its tenant DEFAULTS to
+# TEAMS_TENANT_ID — a deployment only needs a distinct SHAREPOINT_TENANT_ID if it
+# registers a separate Graph app for SharePoint. The trailing ``or TEAMS_TENANT_ID``
+# guards the empty-string trap: a blank ``SHAREPOINT_TENANT_ID=""`` in .env is
+# present-but-empty, so os.getenv returns "" (not the default), which would build a
+# malformed authorize URL with a double slash — coerce blank → the Teams tenant.
+SHAREPOINT_TENANT_ID = os.getenv("SHAREPOINT_TENANT_ID", "").strip() or TEAMS_TENANT_ID
+
 CONNECTOR_AUTH_CONFIGS: Dict[str, ConnectorAuthConfig] = {
     "salesforce": ConnectorAuthConfig(
         connector_id="salesforce",
@@ -206,6 +216,56 @@ CONNECTOR_AUTH_CONFIGS: Dict[str, ConnectorAuthConfig] = {
         # The one-time tenant admin-consent grant is an Entra setup step (Azure
         # portal → Enterprise applications → AgentIQ → Permissions → Grant admin
         # consent, or the /adminconsent endpoint), not a per-connect prompt.
+    ),
+    "sharepoint": ConnectorAuthConfig(
+        connector_id="sharepoint",
+        flow="authorization_code",
+        # SharePoint reuses the Microsoft Graph app registration set up for Teams
+        # (R17-A2 §6 / AT-462): the client id defaults to TEAMS_CLIENT_ID so a
+        # single Graph app can serve both connectors, while SHAREPOINT_CLIENT_ID
+        # can point at a dedicated app registration if a deployment prefers one.
+        client_id=os.getenv("SHAREPOINT_CLIENT_ID")
+        or os.getenv("TEAMS_CLIENT_ID")
+        or "sharepoint-dev-client-id",
+        secret_key="SHAREPOINT_CLIENT_SECRET",
+        # Microsoft identity platform (v2.0) endpoints; the tenant segment is driven
+        # by SHAREPOINT_TENANT_ID above (defaulting to the shared Teams tenant) so a
+        # deployment can lock the OAuth flow to a single customer tenant.
+        token_url=f"https://login.microsoftonline.com/{SHAREPOINT_TENANT_ID}/oauth2/v2.0/token",
+        # Microsoft identity has no RFC-7009 token-revocation endpoint (same as
+        # Teams), so — like Teams/GitHub/Slack — there is no revocation_url;
+        # revoke_token() simply removes the credential from the vault.
+        revocation_url=None,
+        # R17-A2 / AT-462 (AC4): minimal, READ-ONLY Microsoft Graph scopes — exactly
+        # what the reach-phase SharePointIngestor needs to enumerate granted sites,
+        # their document libraries, and changed driveItems (the drive delta query),
+        # and NOTHING more:
+        #   Sites.Read.All → read items in all site collections the token is granted
+        #                    (the /sites, /sites/{id}/drives and /drives/{id}/root/delta
+        #                    metadata reads the connector performs)
+        #   offline_access → issue a refresh token so the access token auto-refreshes
+        #                    (vault) instead of expiring for good
+        # Deliberately NO write scope (*.ReadWrite, Sites.Manage.All,
+        # Sites.FullControl.All) and NO Files.* scope — the connector only reads
+        # document activity/metadata SIGNAL; it never mutates SharePoint and never
+        # reads document bodies (that is the 1.8 deep-content story). Microsoft Graph
+        # only returns the sites/libraries the token is scoped to, so ungranted
+        # sites can never be read — the AC4 least-privilege guarantee is enforced at
+        # the scope level, in addition to the SharePointIngestor's granted-only
+        # library filter. Microsoft's own consent screen shows exactly these scopes.
+        scopes=[
+            "offline_access",
+            "Sites.Read.All",
+        ],
+        authorization_url=f"https://login.microsoftonline.com/{SHAREPOINT_TENANT_ID}/oauth2/v2.0/authorize",
+        redirect_uri=os.environ.get("OAUTH_REDIRECT_URI", ""),
+        # NOTE: deliberately NO prompt=consent (same rationale as Teams).
+        # Sites.Read.All is an admin-consent Graph permission; Microsoft's
+        # prompt=consent forces the approval screen on every authorize request, so a
+        # non-admin user would be shown "Approval required" again on every
+        # (re)connect even after an admin has granted tenant-wide consent. With
+        # prompt omitted, Microsoft skips the screen once consent is granted, and
+        # offline_access still yields a refresh token so nothing is lost.
     ),
     "sap": ConnectorAuthConfig(
         connector_id="sap",
