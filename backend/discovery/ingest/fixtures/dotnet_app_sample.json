@@ -1,0 +1,45 @@
+{
+  "_comment": "R17-A4 / T1 — deterministic offline fixture for the .NET application change-based ingestor. Operational surface only (AC8): .NET health-check + runtime-metric (EventCounters) samples and application log entries — NO source code. Metric samples carry .NET-native field names (request_error_rate, requests_per_second, gc_heap_used_ratio, cpu_usage, health) which the ingestor's COLLECTION layer normalises into the canonical operational-reading fields the SHARED extraction (java_app_signals) consumes — only collection differs, extraction is shared (AC3). 'orders-api' degrades across its samples (rising error rate, latency degradation, throughput decline, GC-heap + CPU pressure, Unhealthy health, and a recurring TimeoutException cluster in its logs) so operational friction fires; 'catalog-api' stays healthy so a quiet service yields no friction. Credentials are NEVER in this config — each target references the vault via 'credential_ref'. Metric samples ordered by sample_ts; logs by offset, so incremental (since-checkpoint) and resumable first-load batching can both be tested.",
+  "targets": [
+    {
+      "app_id": "orders-api",
+      "name": "Orders API",
+      "diagnostics_url": "https://orders.internal.example",
+      "log_source": "https://orders.internal.example/logs",
+      "metadata": {"service": "orders", "environment": "prod", "owner": "orders-team", "runtime": "dotnet"},
+      "credential_ref": "dotnet_app"
+    },
+    {
+      "app_id": "catalog-api",
+      "name": "Catalog API",
+      "diagnostics_url": "https://catalog.internal.example",
+      "log_source": "https://catalog.internal.example/logs",
+      "metadata": {"service": "catalog", "environment": "prod", "owner": "catalog-team", "runtime": "dotnet"},
+      "credential_ref": "dotnet_app"
+    }
+  ],
+  "metrics": {
+    "orders-api": [
+      {"sample_ts": "2026-06-20T08:00:00+00:00", "health": "Healthy", "request_error_rate": 0.01, "latency_p95_ms": 220, "requests_per_second": 90, "gc_heap_used_ratio": 0.52, "cpu_usage": 0.41},
+      {"sample_ts": "2026-06-20T08:05:00+00:00", "health": "Degraded", "request_error_rate": 0.04, "latency_p95_ms": 640, "requests_per_second": 74, "gc_heap_used_ratio": 0.71, "cpu_usage": 0.63},
+      {"sample_ts": "2026-06-20T08:10:00+00:00", "health": "Unhealthy", "request_error_rate": 0.15, "latency_p95_ms": 1720, "requests_per_second": 38, "gc_heap_used_ratio": 0.92, "cpu_usage": 0.89}
+    ],
+    "catalog-api": [
+      {"sample_ts": "2026-06-20T08:00:00+00:00", "health": "Healthy", "request_error_rate": 0.001, "latency_p95_ms": 95, "requests_per_second": 140, "gc_heap_used_ratio": 0.38, "cpu_usage": 0.27},
+      {"sample_ts": "2026-06-20T08:05:00+00:00", "health": "Healthy", "request_error_rate": 0.002, "latency_p95_ms": 101, "requests_per_second": 145, "gc_heap_used_ratio": 0.40, "cpu_usage": 0.29}
+    ]
+  },
+  "logs": {
+    "orders-api": [
+      {"offset": 1, "ts": "2026-06-20T08:01:05+00:00", "level": "ERROR", "logger": "Orders.Api.Gateway.PaymentClient", "exception_type": "System.TimeoutException", "retry": false, "message": "Timeout calling payment-gateway after 3000ms"},
+      {"offset": 2, "ts": "2026-06-20T08:03:20+00:00", "level": "ERROR", "logger": "Orders.Api.Gateway.PaymentClient", "exception_type": "System.TimeoutException", "retry": true, "message": "Retry 1 failed: payment-gateway timeout after 3000ms"},
+      {"offset": 3, "ts": "2026-06-20T08:04:10+00:00", "level": "INFO", "logger": "Orders.Api.Health.LivenessCheck", "exception_type": null, "retry": false, "message": "Liveness probe ok"},
+      {"offset": 4, "ts": "2026-06-20T08:09:15+00:00", "level": "ERROR", "logger": "Orders.Api.Gateway.PaymentClient", "exception_type": "System.TimeoutException", "retry": true, "message": "Retry 2 failed: payment-gateway timeout after 3000ms"},
+      {"offset": 5, "ts": "2026-06-20T08:09:48+00:00", "level": "WARN", "logger": "Orders.Api.Resilience.CircuitBreaker", "exception_type": null, "retry": false, "message": "Circuit breaker opened for payment-gateway"}
+    ],
+    "catalog-api": [
+      {"offset": 1, "ts": "2026-06-20T08:00:40+00:00", "level": "INFO", "logger": "Catalog.Api.Query.ProductService", "exception_type": null, "retry": false, "message": "Served 2043 catalog queries"},
+      {"offset": 2, "ts": "2026-06-20T08:05:40+00:00", "level": "INFO", "logger": "Catalog.Api.Query.ProductService", "exception_type": null, "retry": false, "message": "Served 2101 catalog queries"}
+    ]
+  }
+}
