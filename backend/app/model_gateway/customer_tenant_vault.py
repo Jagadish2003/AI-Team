@@ -16,6 +16,12 @@ Resolution order (secure first, dev fallback second)
    production the credential lives ONLY in the vault (the env var is unset), so
    revoking the vault credential fully revokes access.
 
+The env fallback is enforced dev-only by ``REQUIRE_CONNECTOR_SECRETS`` — the same
+production signal the connector auth framework uses. When it is ``"1"`` the
+fallback is skipped entirely, so a stray ``CUSTOMER_TENANT_API_KEY`` can never
+silently bypass the vault and a customer's vault revoke fully cuts access
+(R17-D2 §2, AC2).
+
 Contract
 --------
 - Returns "" when neither source yields a credential. The provider then degrades
@@ -76,4 +82,13 @@ def resolve_customer_tenant_api_key() -> str:
         )
 
     # 2) Dev/standalone fallback: the environment variable.
+    #
+    # Production guard: when REQUIRE_CONNECTOR_SECRETS=1 the credential must come
+    # ONLY from the vault. Skip the env fallback so a stray CUSTOMER_TENANT_API_KEY
+    # cannot silently bypass the vault and a customer's vault revoke fully cuts
+    # access (R17-D2 §2, AC2). Returns "" (the no-credential sentinel), so the
+    # provider still degrades gracefully rather than raising.
+    if os.getenv("REQUIRE_CONNECTOR_SECRETS") == "1":
+        return ""
+
     return os.getenv(CONFIG_KEY_API_KEY, "")

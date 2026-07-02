@@ -268,7 +268,38 @@ CUSTOMER_TENANT_CONNECTOR_ID = "customer_tenant"
 
 #: A static credential has no natural expiry, but expires_at is NOT NULL. A
 #: far-future sentinel documents "no expiry" without special-casing the schema.
+#: This value is NEVER evaluated by the OAuth token-refresher job: customer_tenant
+#: rows are written with refresh_token = NULL, and jobs/token_refresher.py
+#: get_refreshable_credentials() only selects rows WHERE refresh_token IS NOT NULL,
+#: so it skips them regardless of expires_at. Do NOT replace this with NULL — the
+#: expires_at column is NOT NULL.
 _STATIC_CREDENTIAL_EXPIRY_ISO = datetime(9999, 12, 31, tzinfo=timezone.utc).isoformat()
+
+
+def assert_customer_tenant_namespace_unclaimed() -> None:
+    """Fail fast if a real connector claims the reserved customer_tenant id.
+
+    The customer-tenant model credential is vaulted in the shared `credentials`
+    table under the reserved ``CUSTOMER_TENANT_CONNECTOR_ID``. If a real OAuth
+    connector were ever registered under the same id, the two subsystems would
+    read and overwrite the same ``(org_id, connector_id)`` row — silently
+    cross-contaminating a customer's tenant credential with an OAuth token. That
+    is a correctness and security hazard, so surface it loudly at startup rather
+    than letting it corrupt credentials at runtime.
+
+    Called from the model gateway's ``validate_provider_config()`` startup hook.
+    Raises ``ValueError`` when the reserved id collides with a registered
+    connector; returns ``None`` otherwise (the normal case — the reserved id is
+    not, and must not be, a real Integration Hub connector).
+    """
+    if CUSTOMER_TENANT_CONNECTOR_ID in CONNECTOR_AUTH_CONFIGS:
+        raise ValueError(
+            f"connector_id '{CUSTOMER_TENANT_CONNECTOR_ID}' is reserved for the "
+            "customer-tenant model credential vault (R17-D2) and must not be "
+            "registered as a real Integration Hub connector — doing so would "
+            "cross-contaminate the tenant credential with an OAuth token in the "
+            "shared credentials table. Rename the connector or the reserved id."
+        )
 
 
 def store_customer_tenant_credential(

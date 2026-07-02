@@ -257,8 +257,24 @@ def validate_provider_config() -> None:
     than mid-run (T2-AC4).
 
     Raises:
-        ValueError: when either env var names an unregistered provider.
+        ValueError: when either env var names an unregistered provider, or when a
+            real connector has claimed the reserved ``customer_tenant`` credential
+            namespace (R17-D2 — see ``assert_customer_tenant_namespace_unclaimed``).
     """
+    # R17-D2: enforce the reserved customer_tenant credential namespace at
+    # startup. If a real Integration Hub connector ever claims that id, the tenant
+    # credential and an OAuth token would fight over the same credentials row —
+    # fail fast rather than silently corrupt credentials. The invariant lives in
+    # the vault module (the owner of the reserved id); import it lazily so this
+    # validator keeps no hard dependency on the auth subsystem (a missing auth
+    # subsystem must not block startup, but a genuine collision must).
+    try:
+        from app.auth.vault import assert_customer_tenant_namespace_unclaimed
+    except Exception:  # pragma: no cover - auth subsystem optional in some contexts
+        assert_customer_tenant_namespace_unclaimed = None
+    if assert_customer_tenant_namespace_unclaimed is not None:
+        assert_customer_tenant_namespace_unclaimed()
+
     gen_name = os.getenv(_ENV_GENERATION, _DEFAULT_PROVIDER)
     emb_name = os.getenv(_ENV_EMBEDDING, _DEFAULT_PROVIDER)
     # Both calls raise ValueError on unknown names (T2-AC4).
