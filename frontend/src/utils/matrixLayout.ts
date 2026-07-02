@@ -174,6 +174,75 @@ export function computeLabelPlacements(
     });
   });
 
+  // Final pass: nudge any label boxes that still overlap each other apart
+  // vertically. Clustering above only writes overlapping *bubbles* on their
+  // circles; two bubbles that are merely close (not physically overlapping) can
+  // still have their pill labels collide, as can an on-bubble label and a nearby
+  // pill. This resolves all remaining label-vs-label overlap.
+  return resolveLabelOverlaps(placed, layout);
+}
+
+/**
+ * De-collide label boxes by nudging overlapping ones apart vertically.
+ *
+ * Each placement has a rendered box — a pill above its bubble (``onBubble``
+ * false) or a bar on its bubble (``onBubble`` true). Two boxes collide when they
+ * overlap both horizontally and vertically. This runs a short iterative
+ * relaxation: for every colliding pair the upper box moves up and the lower box
+ * moves down (ties broken by index, so it is deterministic), until no boxes
+ * overlap or the iteration cap is hit. Boxes stay clamped within the plot. Only
+ * the vertical position is changed (``pillBottom`` / ``onY``); the horizontal
+ * position and the leader-line anchor (the bubble) are untouched, so each label
+ * still clearly points at its bubble — it just sits higher or lower to avoid its
+ * neighbours. Pure and side-effect-free apart from mutating the passed array.
+ */
+export function resolveLabelOverlaps(
+  placed: MatrixLabelPlacement[],
+  layout: MatrixLayout,
+): MatrixLabelPlacement[] {
+  const V_GAP = 4; // minimum vertical gap between two label boxes
+  const H_GAP = 2; // horizontal tolerance before two boxes count as overlapping
+
+  const boxes = placed.map((p) => {
+    const h = p.onBubble ? 20 : 21;
+    return {
+      p,
+      w: p.width,
+      h,
+      cx: p.onBubble ? p.onX : p.centerX,
+      cy: p.onBubble ? p.onY : p.pillBottom - h / 2,
+    };
+  });
+
+  const minCy = layout.top + 12;
+  const maxCy = layout.by - 12;
+
+  for (let iter = 0; iter < 240; iter += 1) {
+    let moved = false;
+    for (let i = 0; i < boxes.length; i += 1) {
+      for (let j = i + 1; j < boxes.length; j += 1) {
+        const a = boxes[i];
+        const b = boxes[j];
+        const overlapX = (a.w + b.w) / 2 + H_GAP - Math.abs(a.cx - b.cx);
+        if (overlapX <= 0) continue;
+        const overlapY = (a.h + b.h) / 2 + V_GAP - Math.abs(a.cy - b.cy);
+        if (overlapY <= 0) continue;
+        const aIsUpper = a.cy < b.cy || (a.cy === b.cy && i < j);
+        const upper = aIsUpper ? a : b;
+        const lower = aIsUpper ? b : a;
+        const shift = overlapY / 2;
+        upper.cy = clamp(upper.cy - shift, minCy, maxCy);
+        lower.cy = clamp(lower.cy + shift, minCy, maxCy);
+        moved = true;
+      }
+    }
+    if (!moved) break;
+  }
+
+  boxes.forEach(({ p, h, cy }) => {
+    if (p.onBubble) p.onY = cy;
+    else p.pillBottom = cy + h / 2;
+  });
   return placed;
 }
 

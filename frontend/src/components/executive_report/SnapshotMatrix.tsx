@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { OpportunityCandidate } from '../../types/analystReview';
+import { resolveLabelOverlaps } from '../../utils/matrixLayout';
 
 function clamp(n: number, a: number, b: number) {
   return Math.max(a, Math.min(b, n));
@@ -168,7 +169,10 @@ export default function SnapshotMatrix({ opportunities }: SnapshotMatrixProps) {
       });
     });
 
-    return placed;
+    // Nudge any label boxes that still overlap apart vertically (close-but-not-
+    // overlapping bubbles' pills, or an on-bubble label near a pill). Shared with
+    // the PDF export so the downloaded chart matches the on-screen one.
+    return resolveLabelOverlaps(placed, layout);
   }, [points, layout]);
 
   useEffect(() => {
