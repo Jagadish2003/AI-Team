@@ -3,17 +3,19 @@ R17-A4 / T1 + T2 (AC3) — .NET reuses the SHARED operational-signal extraction.
 
 The signal-extraction logic (error/exception clustering, latency-degradation and
 throughput-decline detection, resource-pressure flags) is identical between Java
-and .NET, so it is genuinely shared code — reused from the Java ingestor, NOT
-duplicated (R17-A4 §2, Architectural Note "Share the extraction, not just the
-idea"). These tests prove the .NET ingestor's signal is produced by the same
-extractor, and that .NET's collection-layer normalisation feeds it correctly.
+and .NET, so it is genuinely shared code — :mod:`discovery.ingest.operational_signals`
+is reused by BOTH platform adapters, NOT duplicated (R17-A4 §2, Architectural Note
+"Share the extraction, not just the idea"). These tests prove the .NET ingestor's
+signal is produced by the same extractor objects the Java ingestor uses, and that
+.NET's collection-layer normalisation feeds it correctly.
 """
 from __future__ import annotations
 
 import pytest
 
-from discovery.ingest import dotnet_app, java_app_signals
-from discovery.ingest.dotnet_app import DotNetAppIngestor, build_dotnet_app_signal
+from discovery.ingest import dotnet_app_signals, java_app_signals, operational_signals
+from discovery.ingest.dotnet_app import DotNetAppIngestor
+from discovery.ingest.dotnet_app_signals import build_dotnet_app_signal
 
 
 @pytest.fixture(autouse=True)
@@ -26,9 +28,10 @@ def _records(since=None):
 
 
 def test_extraction_is_reused_not_duplicated():
-    # The .NET ingestor imports and delegates to the Java signal extractor — the
-    # SAME function object, so the extraction is genuinely shared, not copied.
-    assert dotnet_app.build_java_app_signal is java_app_signals.build_java_app_signal
+    # Both platform adapters delegate to the SAME shared extraction module — the
+    # same function objects, so the extraction is genuinely shared, not copied.
+    assert dotnet_app_signals.build_operational_signal is operational_signals.build_operational_signal
+    assert java_app_signals.build_operational_signal is operational_signals.build_operational_signal
     records = _records()
     assert build_dotnet_app_signal(records) == java_app_signals.build_java_app_signal(records)
 
@@ -54,13 +57,22 @@ def test_shared_extraction_clusters_dotnet_exceptions():
 
 def test_healthy_dotnet_service_shows_no_friction():
     signal = build_dotnet_app_signal(_records())
-    assert signal["services"]["catalog"]["fired"] is False
+    assert signal["services"]["inventory"]["fired"] is False
 
 
-def test_collection_layer_normalises_dotnet_metrics_to_canonical_fields():
-    # The .NET-native readings are mapped onto the canonical fields the shared
-    # extractor consumes; the native readings are kept for traceability.
+def test_collection_layer_normalises_dotnet_readings_to_canonical_fields():
+    # The .NET readings are mapped onto the platform-neutral fields the shared
+    # extractor consumes (memory_used_ratio for the managed GC heap, etc.).
     metric = next(r for r in _records() if r["artifact_kind"] == "metrics")
-    assert "error_rate" in metric and "jvm_memory_used_ratio" in metric
-    assert "system_cpu_usage" in metric and "throughput_rpm" in metric
-    assert metric["dotnet_metrics"]["gc_heap_used_ratio"] is not None  # native kept
+    assert "error_rate" in metric and "memory_used_ratio" in metric
+    assert "cpu_usage" in metric and "throughput_rpm" in metric
+
+
+def test_collection_layer_normalises_dotnet_log_levels():
+    # .NET LogLevel spellings (Error/Critical/Warning/Information) are normalised
+    # onto the shared canonical vocabulary so the shared error counting reads them
+    # identically to Java levels — this mapping is the .NET collection edge.
+    logs = [r for r in _records() if r["artifact_kind"] == "log"]
+    levels = {r["level"] for r in logs}
+    assert levels <= {"TRACE", "DEBUG", "INFO", "WARN", "ERROR", "CRITICAL", "FATAL", ""}
+    assert "CRITICAL" in levels          # fixture's 'Critical' entry, normalised
