@@ -525,7 +525,7 @@ def get_latest_run() -> Dict[str, Any]:
     return max(visible_runs, key=_run_order_key)
 
 
-@app.get("/api/runs/{run_id}", dependencies=[Depends(require_auth)])
+@app.get("/api/runs/{run_id}", dependencies=[Depends(require_auth), Depends(require_role("viewer"))])
 def get_run(run_id: str) -> Dict[str, Any]:
     try:
         return read_run(run_id)
@@ -533,7 +533,7 @@ def get_run(run_id: str) -> Dict[str, Any]:
         raise HTTPException(404, "run not found")
 
 
-@app.get("/api/runs/{run_id}/events", dependencies=[Depends(require_auth)])
+@app.get("/api/runs/{run_id}/events", dependencies=[Depends(require_auth), Depends(require_role("viewer"))])
 def get_events(run_id: str) -> List[Dict[str, Any]]:
     try:
         return read_run_events(run_id)
@@ -559,7 +559,7 @@ def list_evidence(run_id: str) -> List[Dict[str, Any]]:
 
 @app.post(
     "/api/runs/{run_id}/evidence/{evidence_id}/decision",
-    dependencies=[Depends(require_auth)],
+    dependencies=[Depends(require_auth), Depends(require_role("analyst"))],
 )
 def set_evidence_decision(
     run_id: str, evidence_id: str, body: Dict[str, Any]
@@ -595,7 +595,7 @@ def set_evidence_decision(
 
 
 
-@app.get("/api/runs/{run_id}/mappings", dependencies=[Depends(require_auth)])
+@app.get("/api/runs/{run_id}/mappings", dependencies=[Depends(require_auth), Depends(require_role("viewer"))])
 def list_mappings(run_id: str) -> List[Dict[str, Any]]:
     try:
         read_run(run_id)
@@ -627,7 +627,7 @@ def list_opportunities(run_id: str) -> List[Dict[str, Any]]:
 
 @app.post(
     "/api/runs/{run_id}/opportunities/{opp_id}/decision",
-    dependencies=[Depends(require_auth)],
+    dependencies=[Depends(require_auth), Depends(require_role("analyst"))],
 )
 def set_opp_decision(run_id: str, opp_id: str, body: Dict[str, Any]) -> Dict[str, Any]:
     try:
@@ -669,7 +669,7 @@ def set_opp_decision(run_id: str, opp_id: str, body: Dict[str, Any]) -> Dict[str
 
 @app.post(
     "/api/runs/{run_id}/opportunities/{opp_id}/override",
-    dependencies=[Depends(require_auth)],
+    dependencies=[Depends(require_auth), Depends(require_role("analyst"))],
 )
 def set_opp_override(run_id: str, opp_id: str, body: Dict[str, Any]) -> Dict[str, Any]:
     # --- VALIDATION START ---

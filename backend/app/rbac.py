@@ -77,21 +77,23 @@ def _get_user_id_from_token(token: str) -> str:
 
     AUTH-1 JWTs carry the user_id in their `sub` claim (workspace_members rows
     are keyed on that UUID). Static dev/test tokens are not valid JWTs, so the
-    decode fails and the token string itself is the identifier — a row is seeded
-    with user_id = token for those (unchanged dev behaviour). Signature is not
-    verified here; require_auth already validated the token.
+    decode returns None and the token string itself is the identifier — a row is
+    seeded with user_id = token for those (unchanged dev behaviour).
+
+    Fail-closed: the signature (and expiry) are verified via decode_signed before
+    the `sub` claim is trusted. A forged or tampered token yields None here, so
+    even a caller that reaches this without an upstream require_auth cannot be
+    tricked into attributing an action to a spoofed `sub` (privilege-escalation /
+    audit-spoofing guard). This mirrors security._jwt_role's fail-closed decode.
     """
     try:
-        import jwt as _pyjwt
+        from app.auth.user_auth import decode_signed
 
-        payload = _pyjwt.decode(
-            token,
-            options={"verify_signature": False, "verify_exp": False},
-            algorithms=["HS256"],
-        )
-        sub = payload.get("sub")
-        if sub:
-            return sub
+        payload = decode_signed(token)
+        if payload:
+            sub = payload.get("sub")
+            if sub:
+                return sub
     except Exception:
         pass
     return token

@@ -1835,6 +1835,11 @@ def test_callback_marks_connector_connected_under_initiating_org(client):
     state nonce, so the (unauthenticated) callback persists connection state under
     THAT org — not the hardcoded default. Without this, a user whose JWT org is not
     'default' completes OAuth but the tile stays disconnected (multi-tenant bug)."""
+    from app.rbac import seed_owner
+
+    # Initiating OAuth is an analyst+ "connect" action (RBAC): the dev user must be
+    # a member of the initiating org before /auth-url will issue a flow.
+    seed_owner("acme-test-org", "dev-token-change-me")
     org_headers = {**_AUTH_HEADERS, "X-Org-Id": "acme-test-org"}
     with _patch.dict(_os.environ, _vault_env()):
         r = client.get("/api/connectors/salesforce/auth-url", headers=org_headers)
@@ -1913,7 +1918,11 @@ def test_auth_url_state_carries_initiating_org(client):
     """T2-AC1: the state emitted by auth-url carries — and verifies back to — the
     org that initiated the flow."""
     from app.auth.oauth_state import decode_state
+    from app.rbac import seed_owner
 
+    # Initiating OAuth is an analyst+ "connect" action (RBAC): the dev user must be
+    # a member of the initiating org before /auth-url will issue a flow.
+    seed_owner("acme-test-org", "dev-token-change-me")
     org_headers = {**_AUTH_HEADERS, "X-Org-Id": "acme-test-org"}
     with _patch.dict(_os.environ, _vault_env()):
         r = client.get("/api/connectors/salesforce/auth-url", headers=org_headers)
