@@ -14,7 +14,15 @@ import { fetchTokenStatus, TokenStatus } from '../../services/staticApi';
 // same generic auth-url → callback flow exist, so enabling it here makes the
 // existing Microsoft Teams catalog tile drive the real OAuth connect flow end to
 // end instead of being a dead-end placeholder.
-const ENABLED_CONNECTOR_IDS = ['salesforce', 'servicenow', 'jira', 'slack', 'github', 'teams'];
+// R17-A2 / AT-464 (T7): add 'confluence' and 'sharepoint' — their OAuth configs
+// (AT-462: Atlassian read-only scopes for Confluence, minimal Microsoft Graph
+// Sites.Read.All for SharePoint) and the generic auth-url → callback flow already
+// exist, so enabling them here makes the existing Confluence and SharePoint
+// catalog tiles drive the real OAuth connect flow end to end instead of being
+// dead-end placeholders.
+const ENABLED_CONNECTOR_IDS = [
+  'salesforce', 'servicenow', 'jira', 'slack', 'github', 'teams', 'confluence', 'sharepoint',
+];
 
 export default function ConnectorTile({
   connector,
