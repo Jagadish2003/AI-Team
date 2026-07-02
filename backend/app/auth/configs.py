@@ -1,11 +1,38 @@
 from __future__ import annotations
 
+import logging
 import os
+import re
 from typing import Dict
 
 from dotenv import load_dotenv
 
 from app.auth.models import ConnectorAuthConfig
+
+logger = logging.getLogger(__name__)
+
+# Recognised Microsoft identity tenant segments: a directory (tenant) GUID, or one
+# of the well-known aliases. Used to surface a malformed TEAMS_TENANT_ID /
+# SHAREPOINT_TENANT_ID at import (startup) rather than only when a user connects
+# and Microsoft rejects the authorize URL (M4).
+_MS_TENANT_ALIASES = {"common", "organizations", "consumers"}
+_MS_TENANT_GUID_RE = re.compile(
+    r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+)
+
+
+def _warn_if_malformed_ms_tenant(env_var: str, value: str) -> None:
+    """Log a WARNING at import if a Microsoft tenant value is neither a GUID nor a
+    known alias — the authorize/token URLs are built from it at import, so a typo
+    would otherwise only surface as an OAuth failure at connect time (M4)."""
+    if value not in _MS_TENANT_ALIASES and not _MS_TENANT_GUID_RE.match(value):
+        logger.warning(
+            "%s=%r is neither a directory (tenant) GUID nor a known alias "
+            "(common/organizations/consumers); the Microsoft OAuth authorize/token "
+            "URLs built from it may be invalid and connecting will fail.",
+            env_var,
+            value,
+        )
 
 # Load backend/.env so the per-connector instance/tenant values below can be
 # supplied there (idempotent; other app modules call this too). An already-set
@@ -74,6 +101,13 @@ TEAMS_TENANT_ID = os.getenv("TEAMS_TENANT_ID", "organizations").strip() or "orga
 # present-but-empty, so os.getenv returns "" (not the default), which would build a
 # malformed authorize URL with a double slash — coerce blank → the Teams tenant.
 SHAREPOINT_TENANT_ID = os.getenv("SHAREPOINT_TENANT_ID", "").strip() or TEAMS_TENANT_ID
+
+# Surface a malformed Microsoft tenant at import/startup (M4) rather than only at
+# connect time. Both the Teams and SharePoint authorize/token URLs are built from
+# these below, so a typo'd tenant would otherwise fail silently until a user tries
+# to connect. (SharePoint defaults to the Teams tenant, so validate both.)
+_warn_if_malformed_ms_tenant("TEAMS_TENANT_ID", TEAMS_TENANT_ID)
+_warn_if_malformed_ms_tenant("SHAREPOINT_TENANT_ID", SHAREPOINT_TENANT_ID)
 
 CONNECTOR_AUTH_CONFIGS: Dict[str, ConnectorAuthConfig] = {
     "salesforce": ConnectorAuthConfig(

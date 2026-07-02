@@ -389,6 +389,112 @@ def _ingest_teams_corroboration(org_id: str, run_id: str) -> Dict[str, Any]:
     return build_teams_corroboration_payload(collected)
 
 
+def _ingest_confluence_corroboration(org_id: str, run_id: str) -> Dict[str, Any]:
+    """Drive Confluence change-based ingestion and build its corroboration block.
+
+    R17-A2: Confluence is a connected knowledge SOURCE. When connected, drive it
+    through the shared change runner (R16-A1) so — in one path —
+
+      * the runner advances the per-(org, 'confluence') checkpoint (incremental
+        content-modified delta, not a full re-read) and emits one
+        ``ingestion.artifact_changed`` event per changed page/blog post (AC6),
+        using the ``artifact_id`` + ``change_kind`` every record carries; and
+      * the changed records are aggregated into the ``{activity, cross_references,
+        stale_load_bearing}`` block downstream corroboration reads, wrapped under
+        the ``'confluence'`` key.
+
+    Non-blocking: any failure degrades to an empty block (`{}`) so a Confluence
+    read never aborts the run (the runner swallows ingestion errors and leaves the
+    checkpoint unadvanced for the next run to re-read).
+    """
+    try:
+        from .ingest import change_runner
+        from .ingest.confluence import ConfluenceIngestor
+        from .ingest.confluence_signals import build_confluence_corroboration_payload
+    except Exception as e:  # noqa: BLE001 — Confluence corroboration is optional.
+        logger.warning("Confluence connector import failed (non-blocking): %s", e)
+        return {}
+
+    collected: List[Dict[str, Any]] = []
+    try:
+        result = change_runner.ingest_with_checkpoint(
+            ConfluenceIngestor(),
+            org_id,
+            process_batch=lambda batch: collected.extend(batch.records),
+        )
+    except Exception as e:  # noqa: BLE001 — belt-and-braces; the runner is non-raising.
+        logger.warning(
+            "Confluence ingestion failed (non-blocking) org=%s run=%s: [%s]",
+            org_id, run_id, type(e).__name__,
+        )
+        return {}
+
+    if result.error is not None:
+        logger.warning(
+            "Confluence change ingest reported an error (non-blocking) org=%s run=%s: [%s]",
+            org_id, run_id, type(result.error).__name__,
+        )
+    else:
+        logger.info(
+            "Confluence change ingest: %s — %d batch(es), %d changed record(s), checkpoint_advanced=%s",
+            "first run (streamed full load)" if result.first_run else "incremental",
+            result.batches, result.records, result.checkpoint_advanced,
+        )
+
+    return build_confluence_corroboration_payload(collected)
+
+
+def _ingest_sharepoint_corroboration(org_id: str, run_id: str) -> Dict[str, Any]:
+    """Drive SharePoint change-based ingestion and build its corroboration block.
+
+    R17-A2: SharePoint is a connected document SOURCE. Like Teams it authenticates
+    via Microsoft Graph and is driven through the shared change runner so — in one
+    path — the per-(org, 'sharepoint') Graph delta checkpoint advances
+    (incremental, not a full re-read), one ``ingestion.artifact_changed`` event is
+    emitted per changed driveItem (AC6), and the changed records are aggregated
+    into the ``{activity, cross_references, estates}`` block wrapped under the
+    ``'sharepoint'`` key. Non-blocking: any failure degrades to an empty block so a
+    SharePoint read never aborts the run.
+    """
+    try:
+        from .ingest import change_runner
+        from .ingest.sharepoint import SharePointIngestor
+        from .ingest.sharepoint_signals import build_sharepoint_corroboration_payload
+    except Exception as e:  # noqa: BLE001 — SharePoint corroboration is optional.
+        logger.warning("SharePoint connector import failed (non-blocking): %s", e)
+        return {}
+
+    collected: List[Dict[str, Any]] = []
+    try:
+        result = change_runner.ingest_with_checkpoint(
+            SharePointIngestor(),
+            org_id,
+            process_batch=lambda batch: collected.extend(batch.records),
+        )
+    except Exception as e:  # noqa: BLE001 — belt-and-braces; the runner is non-raising.
+        # Type name only — the exception str may carry a Bearer token from the
+        # Graph client's request reprs.
+        logger.warning(
+            "SharePoint ingestion failed (non-blocking) org=%s run=%s: [%s]",
+            org_id, run_id, type(e).__name__,
+        )
+        return {}
+
+    if result.error is not None:
+        logger.warning(
+            "SharePoint change ingest reported an error (non-blocking) org=%s run=%s: [%s]",
+            org_id, run_id, type(result.error).__name__,
+        )
+    else:
+        logger.info(
+            "SharePoint change ingest: %s — %d batch(es), %d changed record(s), checkpoint_advanced=%s",
+            "first run (streamed full load)" if result.first_run else "incremental",
+            result.batches, result.records, result.checkpoint_advanced,
+        )
+
+    return build_sharepoint_corroboration_payload(collected)
+
+
 _ENTERPRISE_OPS_DEMO_PATH = (
     Path(__file__).parent / "ingest" / "fixtures" / "enterprise_ops_demo.json"
 )
@@ -559,6 +665,8 @@ def run(
     slack_data: Dict[str, Any] = {}
     java_data: Dict[str, Any] = {}
     teams_data: Dict[str, Any] = {}
+    confluence_data: Dict[str, Any] = {}
+    sharepoint_data: Dict[str, Any] = {}
     logger.info(f"Systems: {sorted(list(_systems))}")
 
     # CS-4 / AT-313: each ingest stage reports success to update_run_step via
@@ -649,6 +757,25 @@ def run(
             logger.info("Teams corroboration: escalation pattern present for this run")
         else:
             logger.info("Teams corroboration: no escalation pattern this run (supporting signal only)")
+
+    # 2-pre. Confluence & SharePoint change ingest — R17-A2. Both are connected
+    # knowledge/document SOURCES driven through the shared change runner (like
+    # Slack/Teams): changed pages/documents emit ingestion.artifact_changed events
+    # and advance the per-(org, connector) checkpoint, and the changed records are
+    # aggregated into the connector's corroboration block. Gated on the connector
+    # being in the org's connected/live systems.
+    if "confluence" in _systems:
+        confluence_data = _ingest_confluence_corroboration(org_id, run_id) or {}
+        logger.info(
+            "Confluence ingest: %d space activity block(s) this run",
+            len(confluence_data.get("confluence", {}).get("activity", {})),
+        )
+    if "sharepoint" in _systems:
+        sharepoint_data = _ingest_sharepoint_corroboration(org_id, run_id) or {}
+        logger.info(
+            "SharePoint ingest: %d library activity block(s) this run",
+            len(sharepoint_data.get("sharepoint", {}).get("activity", {})),
+        )
     # Emit the Slack stage so a connected Slack source appears in the Discovery
     # Progress checklist alongside the systems of record (ordered before the
     # pack). Slack ingest is non-blocking so the stage is reported ok (failures
@@ -1094,7 +1221,7 @@ def run(
                 sn_by_detector=sn_by_detector,
                 jira_by_detector=jira_by_detector,
                 run_timestamp_iso=_run_ts_iso,
-                source_payloads=[sf_data, sn_data, jira_data, github_data, db_data, slack_data, teams_data, java_data],
+                source_payloads=[sf_data, sn_data, jira_data, github_data, db_data, slack_data, teams_data, java_data, confluence_data, sharepoint_data],
             )
         except Exception as _corr_data_err:  # noqa: BLE001 — non-blocking.
             logger.warning("ENT-2 corroboration run_data build failed (non-blocking): %s", _corr_data_err)

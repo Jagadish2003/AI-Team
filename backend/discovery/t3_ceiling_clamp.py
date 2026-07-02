@@ -217,17 +217,32 @@ def apply_t3_ceiling_clamp(
 # Convenience: corroboration-source-based Slack-only check
 # ─────────────────────────────────────────────────────────────────────────────
 
-def is_slack_only_corroboration(corroboration_sources: List[str]) -> bool:
-    """Return True when ``corroboration_sources`` contains only Slack labels.
+def is_conversation_only_corroboration(corroboration_sources: List[str]) -> bool:
+    """Return True when ``corroboration_sources`` contains only conversation-source
+    labels — i.e. Slack and/or Teams — and no system-of-record label.
 
-    Used by the corroboration engine to apply the Slack ceiling defensively.
-    A list with any non-Slack label present returns False (primary corroborator
-    exists → COR-06 applies and HIGH is permissible).
+    Used to apply the conversation-source ceiling (MEDIUM) defensively: a list with
+    any non-conversation label present returns False (a primary corroborator
+    exists → COR-06 applies and HIGH is permissible). An empty list returns False
+    (no corroboration at all is not conversation-only).
 
-    An empty list returns False (no corroboration at all is not Slack-only).
+    Covers BOTH Slack and Teams (the two conversation sources) via
+    :data:`_CONVERSATION_SOURCE_LABELS` — a Teams-only finding is clamped exactly
+    like a Slack-only one. (Previously named ``is_slack_only_corroboration``; the
+    Slack-only name masked that it must also gate Teams — see M1.)
     """
     if not corroboration_sources:
         return False
-    has_slack = any(_SLACK_SOURCE_LABEL in s.lower() for s in corroboration_sources)
-    has_non_slack = any(_SLACK_SOURCE_LABEL not in s.lower() for s in corroboration_sources)
-    return has_slack and not has_non_slack
+
+    def _is_conversation(label: str) -> bool:
+        low = label.lower()
+        return any(cl in low for cl in _CONVERSATION_SOURCE_LABELS)
+
+    has_conversation = any(_is_conversation(s) for s in corroboration_sources)
+    has_non_conversation = any(not _is_conversation(s) for s in corroboration_sources)
+    return has_conversation and not has_non_conversation
+
+
+#: Backwards-compatible alias. The ceiling applies to all conversation sources
+#: (Slack + Teams), not Slack alone; prefer ``is_conversation_only_corroboration``.
+is_slack_only_corroboration = is_conversation_only_corroboration

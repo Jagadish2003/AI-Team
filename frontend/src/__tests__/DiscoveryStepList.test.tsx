@@ -1,7 +1,11 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from "vitest";
 import { render, screen } from "@testing-library/react";
-import { DiscoveryStepList } from "../pages/DiscoveryRunPage";
+import {
+  DiscoveryStepList,
+  orderSourcesByConnectLog,
+  parseConnectOrder,
+} from "../pages/DiscoveryRunPage";
 
 describe("DiscoveryStepList step state (CS-4 T5)", () => {
   it("marks an in-progress step active and earlier steps completed", () => {
@@ -157,5 +161,108 @@ describe("DiscoveryStepList dynamic connected-source progress", () => {
     expect(screen.getByText("Pattern Detection")).toBeInTheDocument();
     expect(screen.getByText("Entity Enrichment")).toBeInTheDocument();
     expect(screen.getByText("Complete")).toBeInTheDocument();
+  });
+
+  it("renders source stages in the connected-source list order (mirrors the log)", () => {
+    // The caller passes sources in Discovery Log CONNECT order; the progress
+    // stages must appear in exactly that order (systems of record and generic
+    // connectors interleaved as logged), then the pack pass, then processing.
+    render(
+      <DiscoveryStepList
+        currentStep={null}
+        connectedSources={[
+          "servicenow",
+          "jira",
+          "teams",
+          "confluence",
+          "sharepoint",
+          "github",
+          "salesforce",
+        ]}
+        salesforceProduct="salesforce_sc"
+      />
+    );
+    const labels = screen
+      .getAllByRole("listitem")
+      .map((li) => li.querySelector("span")?.textContent ?? "");
+    expect(labels).toEqual([
+      "ServiceNow",
+      "Jira",
+      "Microsoft Teams",
+      "Confluence",
+      "Sharepoint",
+      "GitHub",
+      "Salesforce CRM",
+      "Service Cloud", // pack second pass, appended after every connected source
+      "Pattern Detection",
+      "Entity Enrichment",
+      "Complete",
+    ]);
+  });
+});
+
+describe("parseConnectOrder", () => {
+  it("parses the live 'authenticated connectors' log line in order", () => {
+    const order = parseConnectOrder([
+      { stage: "QUEUED", message: "Discovery run queued." },
+      {
+        stage: "CONNECT",
+        message:
+          "Using authenticated connectors: servicenow, jira, teams, confluence, sharepoint, github",
+      },
+      { stage: "INGEST", message: "Ingesting data from enterprise systems" },
+    ]);
+    expect(order).toEqual([
+      "servicenow",
+      "jira",
+      "teams",
+      "confluence",
+      "sharepoint",
+      "github",
+    ]);
+  });
+
+  it("parses the offline 'Connected sources' log line", () => {
+    expect(
+      parseConnectOrder([
+        { stage: "CONNECT", message: "Connected sources: salesforce, slack" },
+      ])
+    ).toEqual(["salesforce", "slack"]);
+  });
+
+  it("returns null when there is no CONNECT event yet", () => {
+    expect(
+      parseConnectOrder([{ stage: "QUEUED", message: "Discovery run queued." }])
+    ).toBeNull();
+  });
+});
+
+describe("orderSourcesByConnectLog", () => {
+  it("reorders the run's sources to follow the log order", () => {
+    const ordered = orderSourcesByConnectLog(
+      ["salesforce", "jira", "servicenow", "github", "teams"],
+      ["servicenow", "jira", "teams", "github"]
+    );
+    // Logged sources sort by log position; salesforce (not logged) trails.
+    expect(ordered).toEqual([
+      "servicenow",
+      "jira",
+      "teams",
+      "github",
+      "salesforce",
+    ]);
+  });
+
+  it("maps Salesforce product variants to the salesforce log rank", () => {
+    const ordered = orderSourcesByConnectLog(
+      ["salesforce_sc", "servicenow"],
+      ["servicenow", "salesforce"]
+    );
+    expect(ordered).toEqual(["servicenow", "salesforce_sc"]);
+  });
+
+  it("returns the input unchanged when there is no log order", () => {
+    const input = ["salesforce", "jira"];
+    expect(orderSourcesByConnectLog(input, null)).toEqual(input);
   });
 });

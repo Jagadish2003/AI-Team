@@ -192,6 +192,69 @@ async def fetch_jira_gateway_base(
     return JIRA_CLOUD_GATEWAY_TEMPLATE.format(cloud_id=cloud_id)
 
 
+#: Confluence Cloud OAuth (3LO): like Jira, REST calls go through the
+#: api.atlassian.com gateway keyed by the site's cloudId (discovered via the
+#: shared accessible-resources endpoint), never the raw site URL.
+CONFLUENCE_CLOUD_GATEWAY_TEMPLATE = "https://api.atlassian.com/ex/confluence/{cloud_id}"
+
+
+async def fetch_confluence_gateway_base(
+    access_token: str,
+    *,
+    _transport: Optional[httpx.AsyncBaseTransport] = None,
+) -> Optional[str]:
+    """Resolve the Confluence Cloud API gateway base URL for an OAuth (3LO) token.
+
+    Mirrors :func:`fetch_jira_gateway_base`: the cloudId is discovered via the
+    shared Atlassian accessible-resources endpoint, then Confluence Cloud REST
+    goes through ``https://api.atlassian.com/ex/confluence/{cloudId}`` (the base
+    the ``ConfluenceClient`` prefixes ``/wiki/rest/api`` onto). Returns the gateway
+    base or None on any failure. ``_transport`` is injected only in tests.
+    """
+    if not access_token:
+        return None
+
+    try:
+        async with httpx.AsyncClient(timeout=30, transport=_transport) as client:
+            resp = await client.get(
+                ATLASSIAN_ACCESSIBLE_RESOURCES_URL,
+                headers={
+                    "Authorization": f"Bearer {access_token}",
+                    "Accept": "application/json",
+                },
+            )
+    except Exception:
+        logger.exception("Confluence accessible-resources request failed")
+        return None
+
+    if resp.status_code != 200:
+        logger.warning("Confluence accessible-resources returned HTTP %s", resp.status_code)
+        return None
+
+    try:
+        resources = resp.json()
+    except Exception:
+        logger.warning("Confluence accessible-resources returned a non-JSON body")
+        return None
+
+    if not resources:
+        logger.warning("Confluence OAuth token has no accessible sites")
+        return None
+
+    if len(resources) > 1:
+        logger.warning(
+            "Confluence OAuth token grants %d sites; using the first (%s)",
+            len(resources),
+            resources[0].get("url"),
+        )
+
+    cloud_id = resources[0].get("id")
+    if not cloud_id:
+        return None
+
+    return CONFLUENCE_CLOUD_GATEWAY_TEMPLATE.format(cloud_id=cloud_id)
+
+
 def _run_coro(coro):
     """Run an async coroutine from sync code, safely.
 
@@ -256,9 +319,11 @@ def resolve_live_systems(org_id: str) -> List[str]:
 
     The returned list is the subset of {salesforce, servicenow, jira} that is
     both authenticated in the vault and has an instance URL (captured, or env as
-    a CLI fallback), plus ``slack``, ``teams`` and ``github`` when authenticated
-    (all URL-less, resolved by token alone — see :func:`_resolve_slack` /
-    :func:`_resolve_teams` / :func:`_resolve_github`). Never raises — any failure
+    a CLI fallback); plus ``slack``, ``teams``, ``sharepoint`` and ``github`` when
+    authenticated (URL-less, resolved by token alone — see :func:`_resolve_slack`
+    / :func:`_resolve_teams` / :func:`_resolve_sharepoint` / :func:`_resolve_github`);
+    plus ``confluence`` when authenticated and its api.atlassian.com gateway can be
+    derived (:func:`_resolve_confluence`, like Jira). Never raises — any failure
     for a single connector simply excludes it.
     """
     from discovery.ingest import set_live_connectors
@@ -339,6 +404,15 @@ def resolve_live_systems(org_id: str) -> List[str]:
     # in the live set, so the discovery run ingests it through the change runner.
     # The Teams MEDIUM ceiling is enforced downstream by the corroboration engine.
     _resolve_teams(org_id, connectors, live)
+
+    # Confluence (Atlassian, URL via the api.atlassian.com gateway like Jira) and
+    # SharePoint (Microsoft Graph, URL-less like Teams) — R17-A2 knowledge/document
+    # connectors. When authenticated in the vault, publish their creds to the
+    # per-run context and add them to the live set so the discovery run ingests
+    # them through the change runner and lists them among the authenticated
+    # connectors — matching the catalog/Discovery-Progress view.
+    _resolve_confluence(org_id, connectors, live)
+    _resolve_sharepoint(org_id, connectors, live)
 
     # GitHub — URL-less SaaS connector (T1-S12). Unlike Slack it reads its own
     # token straight from the vault inside the connector, so nothing is published
@@ -493,3 +567,90 @@ def _resolve_teams(
     connectors["teams"] = {"token": record.access_token}
     live.append("teams")
     logger.info("Live ingest enabled for connector teams (org=%s)", org_id)
+
+
+def _resolve_sharepoint(
+    org_id: str,
+    connectors: Dict[str, Dict[str, str]],
+    live: List[str],
+) -> None:
+    """Add SharePoint to the live set when authenticated, keyed by token only.
+
+    SharePoint is URL-less (the Microsoft Graph host is global), so like Teams it
+    does not go through the instance-URL loop. When authenticated in the vault,
+    publish its access token to the per-run context (read by
+    ``SharePointIngestor._client`` via ``get_live_connector('sharepoint')``) and
+    include it in the live set. Mutates ``connectors`` and ``live`` in place; never
+    raises — any failure simply leaves SharePoint out (degrade, don't crash)."""
+    try:
+        record = _run_coro(get_token(org_id, "sharepoint"))
+    except ConnectorNotAuthenticatedError:
+        logger.info(
+            "Connector sharepoint not authenticated for org %s — skipping live "
+            "ingest; connect it in the Integration Hub.",
+            org_id,
+        )
+        return
+    except Exception:
+        logger.exception(
+            "Failed to load vault token for connector sharepoint (org=%s); skipping live ingest",
+            org_id,
+        )
+        return
+
+    connectors["sharepoint"] = {"token": record.access_token}
+    live.append("sharepoint")
+    logger.info("Live ingest enabled for connector sharepoint (org=%s)", org_id)
+
+
+def _resolve_confluence(
+    org_id: str,
+    connectors: Dict[str, Dict[str, str]],
+    live: List[str],
+) -> None:
+    """Add Confluence to the live set when authenticated, keyed by token + gateway.
+
+    Confluence Cloud OAuth (3LO) is reached through the api.atlassian.com gateway
+    (like Jira), so the site URL is derived from the token's cloudId rather than
+    configured. Prefer a captured URL, else derive it on demand (and persist it).
+    Mutates ``connectors`` and ``live`` in place; never raises — a connector that
+    is authenticated but whose gateway cannot be derived is left out (degrade,
+    don't crash), matching the systems-of-record handling above."""
+    try:
+        record = _run_coro(get_token(org_id, "confluence"))
+    except ConnectorNotAuthenticatedError:
+        logger.info(
+            "Connector confluence not authenticated for org %s — skipping live "
+            "ingest; connect it in the Integration Hub.",
+            org_id,
+        )
+        return
+    except Exception:
+        logger.exception(
+            "Failed to load vault token for connector confluence (org=%s); skipping live ingest",
+            org_id,
+        )
+        return
+
+    url = get_connector_instance_url(org_id, "confluence")
+    if not url:
+        url = _run_coro(fetch_confluence_gateway_base(record.access_token))
+        if url:
+            url = url.rstrip("/")
+            try:
+                store_connector_instance_url(org_id, "confluence", url)
+            except Exception:
+                logger.exception(
+                    "Failed to persist derived gateway URL for confluence (org=%s)",
+                    org_id,
+                )
+    if not url:
+        logger.warning(
+            "Connector confluence is authenticated but its api.atlassian.com "
+            "gateway could not be derived; skipping live ingest for it.",
+        )
+        return
+
+    connectors["confluence"] = {"url": url.rstrip("/"), "token": record.access_token}
+    live.append("confluence")
+    logger.info("Live ingest enabled for connector confluence (org=%s)", org_id)
