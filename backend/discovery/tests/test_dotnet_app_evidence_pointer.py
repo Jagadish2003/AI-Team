@@ -5,9 +5,18 @@ Every signal must carry a valid R16-B1 EvidencePointer with
 ``source_system='dotnet_app'``, an artifact id, a timestamp, and
 ``origin='observed'`` — operational signals are directly measured, so they are
 first-class observed evidence, never inferred (R17-A4 §3). Built through the
-shared Evidence & Identity Spine, not a bespoke model. These tests run offline
-against the deterministic fixture; the checkpoint store is in-memory and telemetry
-is silenced, so no DB is needed.
+shared Evidence & Identity Spine, not a bespoke model.
+
+Drives the ingestor over the deterministic offline fixture and asserts, for EVERY
+emitted signal record — across both operational surfaces (diagnostics + logs), on
+a first run AND an incremental run — that it carries a valid
+:class:`EvidencePointer` from the shared spine:
+
+  * source_system == 'dotnet_app'                         (distinguishes .NET evidence)
+  * a non-empty source_artifact == the record's artifact id   (traceability)
+  * a non-empty source_timestamp == the observation time      (when observed)
+  * origin == 'observed', extraction_job_id is None           (not inferred)
+  * EvidencePointer.from_dict(ptr).is_valid() is True         (spine-valid)
 """
 from __future__ import annotations
 
@@ -18,6 +27,8 @@ from discovery.ingest import change_runner
 from discovery.ingest.base import Checkpoint
 from discovery.ingest.dotnet_app import DotNetAppIngestor, _encode_checkpoint
 from discovery.ingest.dotnet_app_signals import build_evidence_pointer
+
+_SPINE = ("source_system", "source_artifact", "source_timestamp", "origin")
 
 
 @pytest.fixture(autouse=True)
@@ -52,6 +63,19 @@ def _records(since=None):
     return [r for b in DotNetAppIngestor().ingest_changes("org-1", since) for r in b.records]
 
 
+def _assert_valid_observed_pointer(record):
+    ep = record.get("evidence_pointer")
+    aid = record["artifact_id"]
+    assert ep is not None, f"missing evidence_pointer on {aid}"
+    for field in _SPINE:
+        assert ep.get(field), f"empty spine field {field!r} on {aid}"
+    assert ep["source_system"] == "dotnet_app"
+    assert ep["origin"] == OBSERVED
+    assert ep["extraction_job_id"] is None               # observed → no job id
+    assert ep["source_artifact"] == aid                  # traces back to this signal
+    assert EvidencePointer.from_dict(ep).is_valid() is True
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # AC5 — every record carries a valid observed pointer
 # ─────────────────────────────────────────────────────────────────────────────
@@ -59,13 +83,17 @@ def test_every_record_has_a_valid_observed_pointer():
     records = _all_records()
     assert records
     for r in records:
-        ep = r.get("evidence_pointer")
-        assert ep is not None, f"missing evidence_pointer on {r['artifact_id']}"
-        assert ep["source_system"] == "dotnet_app"
-        assert ep["origin"] == OBSERVED
-        assert ep["source_artifact"]
-        assert ep["source_timestamp"]
-        assert EvidencePointer.from_dict(ep).is_valid() is True
+        _assert_valid_observed_pointer(r)
+
+
+def test_ac5_holds_for_both_surfaces():
+    by_kind = {}
+    for r in _all_records():
+        by_kind.setdefault(r["artifact_kind"], []).append(r)
+    assert set(by_kind) == {"metrics", "log"}
+    for recs in by_kind.values():
+        for r in recs:
+            _assert_valid_observed_pointer(r)
 
 
 def test_pointer_artifact_traces_to_the_exact_reading():
@@ -81,6 +109,14 @@ def test_pointer_timestamp_is_the_observation_time():
         assert r["evidence_pointer"]["source_timestamp"] == r["observed_ts"]
 
 
+def test_log_with_native_event_id_traces_to_that_event():
+    # A native log event id is the most precise handle on the exact log event, so
+    # it is preferred over the stream offset as the artifact reference (T4).
+    rec = next(r for r in _records() if r.get("event_id") == "evt-orders-0042")
+    assert rec["artifact_id"] == "orders-api:log:event:evt-orders-0042"
+    assert rec["evidence_pointer"]["source_artifact"] == "orders-api:log:event:evt-orders-0042"
+
+
 def test_observed_pointers_carry_no_extraction_job_id():
     for r in _all_records():
         assert r["evidence_pointer"].get("extraction_job_id") is None
@@ -93,9 +129,7 @@ def test_holds_on_incremental_run():
     records = _records(since)
     assert records
     for r in records:
-        ep = r["evidence_pointer"]
-        assert ep["source_system"] == "dotnet_app" and ep["origin"] == OBSERVED
-        assert EvidencePointer.from_dict(ep).is_valid() is True
+        _assert_valid_observed_pointer(r)
 
 
 def test_pointer_reuses_the_spine_dataclass():

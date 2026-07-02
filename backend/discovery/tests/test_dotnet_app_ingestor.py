@@ -30,9 +30,11 @@ from discovery.ingest.dotnet_app_signals import build_dotnet_app_signal
 
 FRESH_TS = "2026-06-10T08:10:00+00:00"
 
-# Deterministic fixture artifact identities (dotnet_app_sample.json).
+# Deterministic fixture artifact identities (dotnet_app_sample.json). The offset-4
+# log carries a native event_id, so its artifact reference is event-based (T4).
 _ORDERS_METRICS = [f"orders-api:metrics:2026-06-10T08:{m}:00+00:00" for m in ("00", "05", "10")]
-_ORDERS_LOGS = [f"orders-api:log:{i}" for i in (1, 2, 3, 4, 5)]
+_ORDERS_LOGS = ["orders-api:log:1", "orders-api:log:2", "orders-api:log:3",
+                "orders-api:log:event:evt-orders-0042", "orders-api:log:5"]
 _INVENTORY_METRICS = [f"inventory-svc:metrics:2026-06-10T08:{m}:00+00:00" for m in ("00", "05")]
 _INVENTORY_LOGS = [f"inventory-svc:log:{i}" for i in (1, 2)]
 _ALL = _ORDERS_METRICS + _ORDERS_LOGS + _INVENTORY_METRICS + _INVENTORY_LOGS
@@ -213,7 +215,8 @@ def test_incremental_sequence_aware_same_timestamp_consumed():
     }))
     ids = [r["artifact_id"] for r in _records(since)]
     assert sorted(ids) == sorted(
-        [f"orders-api:metrics:{FRESH_TS}", "orders-api:log:3", "orders-api:log:4", "orders-api:log:5"]
+        [f"orders-api:metrics:{FRESH_TS}", "orders-api:log:3",
+         "orders-api:log:event:evt-orders-0042", "orders-api:log:5"]
         + _INVENTORY_METRICS + _INVENTORY_LOGS
     )
     assert "orders-api:log:1" not in ids

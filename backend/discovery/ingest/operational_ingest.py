@@ -455,11 +455,18 @@ class OperationalChangeIngestor(ChangeBasedIngestor):
         extraction is done (AC8). ``level`` lets a platform pass its already-
         normalised level (e.g. .NET ``Critical`` → ``CRITICAL``); when omitted the
         entry's own ``level`` is used verbatim.
+
+        A native log ``event_id``, when the entry carries one, is preferred as the
+        artifact reference (``{app}:log:event:{event_id}``) — the most precise
+        handle on the exact log event; otherwise the log-stream ``offset`` pins the
+        reading. The cursor math always uses ``log_offset`` either way.
         """
         offset = int(entry.get("offset", 0) or 0)
         ts = str(entry.get("ts", ""))
+        event_id = str(entry.get("event_id") or "").strip()
+        ref = f"event:{event_id}" if event_id else str(offset)
         return {
-            "artifact_id": f"{target.app_id}:log:{offset}",
+            "artifact_id": f"{target.app_id}:log:{ref}",
             "change_kind": ChangeKind.CREATED,
             "source_system": self.source_system,
             "app_id": target.app_id,
@@ -468,12 +475,13 @@ class OperationalChangeIngestor(ChangeBasedIngestor):
             "observed_ts": ts,
             "log_offset": offset,
             "log_source": log_source,
+            "event_id": event_id or None,
             "level": level if level is not None else entry.get("level"),
             "logger": entry.get("logger"),
             "exception_type": entry.get("exception_type"),
             "retry": bool(entry.get("retry", False)),
             "message": entry.get("message", ""),
             "evidence_pointer": build_evidence_pointer(
-                self.source_system, target.app_id, "log", str(offset), ts
+                self.source_system, target.app_id, "log", ref, ts
             ),
         }
