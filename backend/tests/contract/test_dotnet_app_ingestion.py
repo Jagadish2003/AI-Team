@@ -50,10 +50,16 @@ from discovery.ingest import dotnet_app as dotnet_app_mod
 from discovery.ingest import dotnet_app_config as dotnet_app_config_mod
 from discovery.ingest import dotnet_app_signals as dotnet_app_signals_mod
 from discovery.ingest import java_app_signals as java_app_signals_mod
-from discovery.ingest.dotnet_app import DotNetAppIngestor, _decode_checkpoint, _encode_checkpoint
+from discovery.ingest.dotnet_app import (
+    DotNetAppClient,
+    DotNetAppIngestor,
+    _decode_checkpoint,
+    _encode_checkpoint,
+)
 from discovery.ingest.dotnet_app_config import (
     DotNetAppTarget,
     load_targets,
+    log_endpoint_failure,
     resolve_secret,
 )
 from discovery.ingest.dotnet_app_signals import (
@@ -144,6 +150,71 @@ def _run_data(connected, **systems):
     return data
 
 
+class _FakeResp:
+    def __init__(self, *, ok=True, status_code=200, json_data=None, text="", raise_json=False):
+        self.ok = ok
+        self.status_code = status_code
+        self._json_data = json_data
+        self.text = text
+        self._raise_json = raise_json
+
+    def json(self):
+        if self._raise_json:
+            raise ValueError("not JSON")
+        return self._json_data
+
+
+class _FakeSession:
+    def __init__(self, handler):
+        self.handler = handler
+        self.calls: list[tuple[str, int | None]] = []
+
+    def get(self, url, timeout=None, params=None):
+        self.calls.append((url, timeout))
+        return self.handler(url)
+
+
+def _configured_live_client(secret="VAULT_TOKEN_123"):
+    diagnostics_url = "https://orders.internal.example/diagnostics"
+    log_source = "https://orders.internal.example/logs"
+
+    def handler(url):
+        if url == f"{diagnostics_url}/health":
+            return _FakeResp(json_data={"status": "Unhealthy"})
+        if url == f"{diagnostics_url}/counters":
+            return _FakeResp(json_data={
+                "counters": [
+                    {"name": "total-requests", "value": 100.0},
+                    {"name": "failed-requests", "value": 12.0},
+                    {"name": "request-duration", "value": 1800.0},
+                    {"name": "requests-per-second", "value": 25.0},
+                    {"name": "gc-heap-size", "value": 92.0},
+                    {"name": "gc-committed", "value": 100.0},
+                    {"name": "cpu-usage", "value": 91.0},
+                ]
+            })
+        if url == log_source:
+            return _FakeResp(json_data=[{
+                "offset": 6,
+                "ts": FRESH_TS,
+                "level": "Critical",
+                "logger": "Orders.Api.GatewayClient",
+                "exception_type": "System.TimeoutException",
+                "retry": True,
+                "message": "Retry failed after upstream timeout",
+            }])
+        return _FakeResp(ok=False, status_code=404, raise_json=True)
+
+    session = _FakeSession(handler)
+    client = DotNetAppClient(
+        diagnostics_url=diagnostics_url,
+        log_source=log_source,
+        secret=secret,
+    )
+    client._session = session
+    return client, session, diagnostics_url, log_source
+
+
 # ═════════════════════════════════════════════════════════════════════════════
 # AC1 — reads health/diagnostics endpoints + logs, produces operational signal
 # ═════════════════════════════════════════════════════════════════════════════
@@ -176,6 +247,37 @@ def test_ac1_produces_operational_signal_from_the_surfaces():
     assert o["metrics"]["throughput_declined"] is True     # throughput decline
     assert o["metrics"]["heap_pressure"] is True           # resource pressure
     assert any(c["is_cluster"] for c in o["exception_clusters"])  # clustering
+
+
+def test_ac1_live_collection_reads_configured_endpoints_and_feeds_signal():
+    client, session, diagnostics_url, log_source = _configured_live_client()
+    payload = client.read_operational()
+
+    assert [url for url, _ in session.calls] == [
+        f"{diagnostics_url}/health",
+        f"{diagnostics_url}/counters",
+        log_source,
+    ]
+    assert payload["metrics"][0]["health"] == "Unhealthy"
+    assert payload["metrics"][0]["error_rate"] == 0.12
+    assert payload["logs"][0]["level"] == "Critical"
+
+    target = DotNetAppTarget(
+        app_id="orders-api",
+        name="Orders API",
+        diagnostics_url=diagnostics_url,
+        log_source=log_source,
+        metadata={"service": "orders"},
+    )
+    ingestor = DotNetAppIngestor()
+    records = [
+        ingestor._to_metric_record(target, payload["metrics"][0]),
+        ingestor._to_log_record(target, payload["logs"][0]),
+    ]
+    signal = build_dotnet_app_signal(records)
+    assert signal["operational_friction"]["fired"] is True
+    assert signal["services"]["orders"]["metrics"]["heap_pressure"] is True
+    assert signal["services"]["orders"]["error_patterns"]["error_count"] == 1
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -320,6 +422,34 @@ def test_ac4_resolved_secret_is_never_logged(caplog):
     assert secret == "VAULT_SECRET_XYZ"
     assert "VAULT_SECRET_XYZ" not in caplog.text
     assert "VAULT_SECRET_XYZ" not in repr(target)
+
+
+def test_ac4_live_read_outputs_do_not_include_resolved_secret():
+    secret = "VAULT_SECRET_DO_NOT_LEAK"
+    client, _session, _diagnostics_url, _log_source = _configured_live_client(secret=secret)
+    payload = client.read_operational()
+    assert secret not in json.dumps(payload)
+
+
+def test_ac4_endpoint_failure_logs_only_safe_fields(caplog):
+    target = DotNetAppTarget(
+        app_id="orders-api",
+        name="Orders API",
+        diagnostics_url="https://orders.internal.example/diagnostics",
+        log_source="https://orders.internal.example/logs",
+        environment="production",
+    )
+    exc = RuntimeError("403 Forbidden for bearer token VAULT_SECRET_DO_NOT_LOG")
+
+    with caplog.at_level(logging.WARNING):
+        safe = log_endpoint_failure(ORG, target, "logs", exc)
+
+    blob = json.dumps(safe) + caplog.text
+    assert safe["app_id"] == "orders-api"
+    assert safe["endpoint_type"] == "logs"
+    assert safe["error_category"] == "auth_error"
+    assert "VAULT_SECRET_DO_NOT_LOG" not in blob
+    assert "Forbidden for bearer token" not in blob
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -477,6 +607,19 @@ def test_ac8_no_record_carries_source_code_fields():
     for r in records:
         leaked = FORBIDDEN_SOURCE_FIELDS & set(r.keys())
         assert not leaked, f"source-code field(s) leaked into a record: {leaked}"
+
+
+def test_ac8_live_client_requests_only_operational_surfaces():
+    client, session, diagnostics_url, log_source = _configured_live_client()
+    client.read_operational()
+
+    urls = [url for url, _ in session.calls]
+    assert urls == [f"{diagnostics_url}/health", f"{diagnostics_url}/counters", log_source]
+    forbidden = (
+        "/source", "/repo", "/repository", "/code", "/classes", "/assemblies",
+        "/apm", "/newrelic", "/datadog", "/dynatrace",
+    )
+    assert not any(token in url.lower() for url in urls for token in forbidden)
 
 
 def test_ac8_no_external_apm_or_code_analysis_dependency():
