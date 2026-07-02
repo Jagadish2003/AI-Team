@@ -80,6 +80,15 @@ does not corroborate.
                 "reasons": ["elevated error rate", "latency degradation"],
             },
         },
+
+        "dotnet_app": {                              # COR-10 (R17-A4)
+            "operational_friction": {                # same shape as java_app —
+                "fired": True,                       # observed evidence, elevates
+                "timestamp": "2026-06-01T10:00:00Z",
+                "services": ["orders"],
+                "reasons": ["elevated error rate", "latency degradation"],
+            },
+        },
     }
 
 ────────────────────────────────────────────────────────────────────────────
@@ -169,7 +178,8 @@ _CORROBORATION_RULE_SYSTEMS: Dict[str, str] = {
     # not a supporting-only ceiling like Slack (COR-05).
     "COR-09": "java_app",
     # R17-A4 §3: the .NET counterpart to COR-09 — same observed-evidence basis, so
-    # COR-10 elevates identically.
+    # COR-10 elevates identically. Not a separate confidence model; the .NET signal
+    # plugs into this same cross-system corroboration mapping.
     "COR-10": "dotnet_app",
 }
 
@@ -812,14 +822,16 @@ def check_cor10_dotnet_app_operational(
 
     R17-A4 §3: the .NET counterpart to COR-09. A .NET-app operational signal
     (rising error rate, latency degradation, resource pressure, or a recurring
-    exception cluster) corroborates a finding in another connected system. Unlike
-    the Slack ceiling (COR-05), this is an ELEVATING corroborator: operational
-    signals are directly measured, so they are first-class observed evidence —
-    identical to Java, because the two share the same signal language.
+    exception cluster) corroborates a finding in another connected system — e.g. a
+    .NET error/latency rise corroborating a ServiceNow incident spike for the same
+    service. Unlike the Slack ceiling (COR-05), this is an ELEVATING corroborator:
+    operational signals are directly measured from the running application's
+    logs/diagnostics, so they are first-class observed evidence — identical to Java,
+    because the two share the same signal language and the same corroboration model.
 
-    Fires when the .NET-app ``operational_friction`` block reports ``fired`` and,
-    if it carries a timestamp, that timestamp is within the corroboration window.
-    A friction block with no timestamp is accepted (it is computed for the current
+    Fires when the .NET-app ``operational_friction`` block reports ``fired`` and, if
+    it carries a timestamp, that timestamp is within the corroboration window. A
+    friction block with no timestamp is accepted (it is computed for the current
     run), mirroring the Java / Slack checks.
     """
     dotnet = _system_block(run_data, "dotnet_app")

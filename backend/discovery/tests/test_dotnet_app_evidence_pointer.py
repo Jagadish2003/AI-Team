@@ -26,7 +26,10 @@ from app.provenance import OBSERVED, EvidencePointer
 from discovery.ingest import change_runner
 from discovery.ingest.base import Checkpoint
 from discovery.ingest.dotnet_app import DotNetAppIngestor, _encode_checkpoint
-from discovery.ingest.dotnet_app_signals import build_evidence_pointer
+from discovery.ingest.dotnet_app_signals import (
+    build_dotnet_app_corroboration_payload,
+    build_evidence_pointer,
+)
 
 _SPINE = ("source_system", "source_artifact", "source_timestamp", "origin")
 
@@ -155,3 +158,34 @@ def test_build_evidence_pointer_shape():
 def test_build_evidence_pointer_falls_back_to_now_when_ts_missing():
     ep = build_evidence_pointer("svc", "log", "7", None)
     assert ep["source_timestamp"]   # never empty — mandatory spine always populated
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# AC5 — the corroboration payload carries everything the engine needs to reason
+# ─────────────────────────────────────────────────────────────────────────────
+def test_corroboration_payload_carries_the_engine_understandable_shape():
+    payload = build_dotnet_app_corroboration_payload(_all_records())
+
+    # Source system: the payload key the engine keys COR-10 off.
+    assert "dotnet_app" in payload
+    block = payload["dotnet_app"]
+
+    friction = block["operational_friction"]
+    # fired + confidence-related friction; timestamp for windowing; signal type
+    # (reasons); application identity (the affected service).
+    assert friction["fired"] is True
+    assert friction["timestamp"]                         # timestamp
+    assert "orders" in friction["services"]              # application identity
+    assert friction["reasons"]                           # signal type(s)
+
+    # Per-service rollup carries the confidence-related gauges + signal families.
+    orders = block["services"]["orders"]
+    assert orders["metrics"]["max_error_rate"] >= 0.05
+    assert orders["metrics"]["latency_degraded"] is True
+    assert orders["metrics"]["heap_pressure"] is True
+    assert any(c["is_cluster"] for c in orders["exception_clusters"])
+
+
+def test_empty_payload_is_still_well_shaped():
+    payload = build_dotnet_app_corroboration_payload([])
+    assert payload["dotnet_app"]["operational_friction"]["fired"] is False

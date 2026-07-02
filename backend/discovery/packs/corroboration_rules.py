@@ -251,16 +251,15 @@ CORROBORATION_RULES: Dict[str, CorroborationRule] = {
             "(rising error rate, latency degradation, resource pressure, or a "
             "recurring exception cluster) for the same service"
         ),
-        # R17-A4 §3: the .NET counterpart to COR-09. A .NET application's
-        # operational signal is DIRECTLY MEASURED, so — exactly like Java — it is
-        # first-class OBSERVED evidence and elevates as a system-of-record
-        # corroborator does (unlike the Slack/Teams conversation-source ceiling).
-        # The same single-source ceiling applies: a run with only ``dotnet_app``
-        # connected has no finding to corroborate and is capped at MEDIUM by
-        # COR-08. HIGH is reached only when the .NET signal co-fires with the
-        # finding's own (non-.NET) source, i.e. two independent systems agree.
-        # Java and .NET share the same signal language, so their corroboration
-        # behaviour is identical by construction.
+        # R17-A4 §3: the .NET counterpart to COR-09. A .NET application's operational
+        # signal is DIRECTLY MEASURED from its runtime logs/diagnostics, so — exactly
+        # like Java — it is first-class OBSERVED evidence and elevates as a
+        # system-of-record corroborator does (unlike the Slack/Teams conversation-
+        # source ceiling). This is NOT a separate .NET confidence model: it plugs
+        # into the same cross-system corroboration approach. The single-source
+        # ceiling still applies — a run with only ``dotnet_app`` connected has no
+        # finding to corroborate and stays MEDIUM (COR-08); HIGH is reached only when
+        # the .NET signal co-fires with the finding's own (non-.NET) source.
         elevation_target=CONFIDENCE_HIGH,
         elevates=True,
         source_label=".NET application (operational signal)",
