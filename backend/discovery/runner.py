@@ -328,6 +328,68 @@ def _ingest_java_app_corroboration(org_id: str, run_id: str) -> Dict[str, Any]:
     return build_java_app_corroboration_payload(collected)
 
 
+def _ingest_dotnet_app_changes(org_id: str, run_id: str):
+    """Drive .NET application change ingestion so changed artifacts emit events (R17-A4 / T6).
+
+    Makes .NET ingestion participate in the existing change-based telemetry model,
+    exactly as the Java ingestor does. The .NET ingestor is a
+    ``ChangeBasedIngestor`` whose records each carry an ``artifact_id`` and
+    ``change_kind``; driving it through the shared R16-A1 change runner
+    (``change_runner.ingest_with_checkpoint``) therefore emits one
+    ``ingestion.artifact_changed`` event per changed log artifact / fresh
+    diagnostics sample, identifying ``org_id``, ``connector_id`` (``'dotnet_app'``),
+    ``artifact_id`` and ``change_kind``.
+
+    This REUSES the existing mechanism — it does NOT mint a .NET-specific event
+    path. Two invariants come for free from the shared runner:
+
+      * events are emitted ONLY for fully-processed batches — emission happens
+        after ``process_batch`` succeeds, so a batch that fails before completion
+        never reports its artifacts as handled; and
+      * the per-``(org_id, 'dotnet_app')`` checkpoint advances only on success, so
+        the next run re-reads from the last known-good position and unchanged
+        artifacts never re-emit.
+
+    Non-blocking: any failure degrades (logged, no events for the failed batch)
+    without aborting the discovery run. Returns the runner's ``IngestionResult``
+    (or ``None`` if the connector could not be imported) for the caller to log.
+    """
+    try:
+        from .ingest import change_runner
+        from .ingest.dotnet_app import DotNetAppIngestor
+    except Exception as e:  # noqa: BLE001 — .NET-app ingestion is optional.
+        logger.warning("dotnet app connector import failed (non-blocking): %s", e)
+        return None
+
+    try:
+        # The runner reads the checkpoint, streams the delta, emits one
+        # ingestion.artifact_changed per changed record in each fully-processed
+        # batch, and advances the checkpoint only on full success. T6 needs no
+        # process_batch — the emission and checkpoint lifecycle are the deliverable.
+        result = change_runner.ingest_with_checkpoint(DotNetAppIngestor(), org_id)
+    except Exception as e:  # noqa: BLE001 — belt-and-braces; runner is non-raising.
+        # Type name only — an exception str could carry a credential from a live
+        # HTTP client's request repr.
+        logger.warning(
+            "dotnet app ingestion failed (non-blocking) org=%s run=%s: [%s]",
+            org_id, run_id, type(e).__name__,
+        )
+        return None
+
+    if result.error is not None:
+        logger.warning(
+            "dotnet app change ingest reported an error (non-blocking) org=%s run=%s: [%s]",
+            org_id, run_id, type(result.error).__name__,
+        )
+    else:
+        logger.info(
+            "dotnet app change ingest: %s — %d batch(es), %d changed artifact(s) emitted, checkpoint_advanced=%s",
+            "first run (streamed full load)" if result.first_run else "incremental",
+            result.batches, result.records, result.checkpoint_advanced,
+        )
+    return result
+
+
 def _ingest_teams_corroboration(org_id: str, run_id: str) -> Dict[str, Any]:
     """Drive Teams change-based ingestion and build its corroboration block.
 
@@ -806,6 +868,15 @@ def run(
             logger.info("Java app corroboration: operational friction present for this run")
         else:
             logger.info("Java app corroboration: no operational friction this run")
+
+    # 2h. .NET application change ingest — R17-A4 / T6. When a .NET application is
+    # connected, drive it through the shared R16-A1 change runner so each changed
+    # log artifact / fresh diagnostics sample emits an ingestion.artifact_changed
+    # event (org_id, connector_id='dotnet_app', artifact_id, change_kind), reusing
+    # the existing telemetry path — no .NET-specific event path. Gated on
+    # "dotnet_app" ∈ connected systems. Non-blocking (the helper degrades on error).
+    if "dotnet_app" in _systems:
+        _ingest_dotnet_app_changes(org_id, run_id)
 
     # 2. Context
     org_ctx = build_org_context(sf_data, sn_data, jira_data)
