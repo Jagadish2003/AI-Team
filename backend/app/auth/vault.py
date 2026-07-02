@@ -245,6 +245,171 @@ def consume_nonce(nonce: str) -> dict | None:
 
 
 # ---------------------------------------------------------------------------
+# Customer-tenant model credential (R17-D2 T2)
+#
+# Customer-Tenant Model Mode authenticates into the customer's own cloud tenant
+# (e.g. Azure's managed model service) using a credential the customer provides
+# and controls.
+# Those credentials get the SAME vault-grade handling as connector OAuth tokens:
+# Fernet-encrypted at rest under CREDENTIAL_VAULT_KEY, stored in the SAME
+# `credentials` table (reused — no schema change), never written in plaintext,
+# never logged, and revocable by the customer at any time (R17-D2 §2, AC2).
+#
+# The tenant credential is a STATIC key, not an OAuth token: there is no refresh
+# flow and no natural expiry, so it is vaulted under a reserved connector_id and
+# read back synchronously without the OAuth auto-refresh path get_token() runs.
+# Only the model gateway package resolves this credential — see
+# app/model_gateway/customer_tenant_vault.py.
+# ---------------------------------------------------------------------------
+
+#: Reserved connector_id under which the customer-tenant model credential is
+#: vaulted in the shared `credentials` table. Not a real OAuth connector.
+CUSTOMER_TENANT_CONNECTOR_ID = "customer_tenant"
+
+#: A static credential has no natural expiry, but expires_at is NOT NULL. A
+#: far-future sentinel documents "no expiry" without special-casing the schema.
+#:
+#: Dependency (do not break): the background token_refresher.py job only selects
+#: rows WHERE refresh_token IS NOT NULL. Customer-tenant rows store
+#: refresh_token = NULL (a static key has no OAuth refresh path), so this
+#: sentinel date is never evaluated by the refresher. Do NOT replace it with
+#: None — the expires_at column is NOT NULL and the INSERT would fail.
+_STATIC_CREDENTIAL_EXPIRY_ISO = datetime(9999, 12, 31, tzinfo=timezone.utc).isoformat()
+
+
+def store_customer_tenant_credential(
+    org_id: str,
+    api_key: str,
+    *,
+    connector_id: str = CUSTOMER_TENANT_CONNECTOR_ID,
+) -> None:
+    """Fernet-encrypt and upsert the customer-tenant model credential for an org.
+
+    Reuses the encrypted `credentials` table and CREDENTIAL_VAULT_KEY exactly as
+    connector OAuth tokens do — no schema change. The plaintext key is encrypted
+    before it touches the DB and is never logged. Calling again with a new value
+    ROTATES the credential in place (single row per org+connector), and a
+    previously revoked (soft-deleted) row is reactivated.
+
+    Raises ValueError for an empty key and MissingSecretError when
+    CREDENTIAL_VAULT_KEY is absent (encryption is impossible) — both are operator
+    configuration errors surfaced at store time, off the model-call path.
+    """
+    if not api_key or not api_key.strip():
+        raise ValueError("customer-tenant credential must be a non-empty value")
+
+    _init_credentials_table()
+
+    now = datetime.now(timezone.utc)
+    now_iso = now.isoformat()
+    enc_access = _encrypt(api_key)  # raises MissingSecretError if key unset
+    record_id = str(uuid.uuid4())
+
+    con = db.connect()
+    try:
+        cur = con.cursor()
+        cur.execute(
+            """
+            INSERT INTO credentials
+                (id, org_id, connector_id, access_token, refresh_token, expires_at, scopes, created_at, updated_at, refresh_failed)
+            VALUES (%s, %s, %s, %s, NULL, %s, %s, %s, %s, 0)
+            ON CONFLICT (org_id, connector_id) DO UPDATE SET
+                access_token   = EXCLUDED.access_token,
+                refresh_token  = NULL,
+                expires_at     = EXCLUDED.expires_at,
+                updated_at     = EXCLUDED.updated_at,
+                refresh_failed = 0,
+                is_deleted     = FALSE
+            """,
+            (
+                record_id, org_id, connector_id, enc_access,
+                _STATIC_CREDENTIAL_EXPIRY_ISO, "[]", now_iso, now_iso,
+            ),
+        )
+        con.commit()
+    finally:
+        con.close()
+
+
+def get_customer_tenant_credential(
+    org_id: str,
+    *,
+    connector_id: str = CUSTOMER_TENANT_CONNECTOR_ID,
+) -> Optional[str]:
+    """Return the decrypted customer-tenant credential for an org, or None.
+
+    Returns None — never raises and never logs the value — when:
+      * no active row exists (never stored, or revoked/soft-deleted), or
+      * the stored ciphertext cannot be decrypted (missing/rotated vault key,
+        corrupted or tampered value).
+
+    None means "no usable credential", so the model gateway degrades to a
+    graceful auth failure rather than crashing the run (R17-D2 §2, AC5). This is
+    the READ path the model call depends on, so it is defensively total.
+    """
+    try:
+        _init_credentials_table()
+        con = db.connect()
+        try:
+            cur = con.cursor()
+            cur.execute(
+                "SELECT access_token FROM credentials "
+                "WHERE org_id = %s AND connector_id = %s AND is_deleted = FALSE",
+                (org_id, connector_id),
+            )
+            row = cur.fetchone()
+        finally:
+            con.close()
+    except Exception:
+        logger.warning(
+            "customer-tenant credential lookup failed for org %s (returning none)",
+            org_id,
+        )
+        return None
+
+    if row is None or row[0] is None:
+        return None
+
+    try:
+        return _decrypt(row[0])
+    except Exception:
+        # Undecryptable ciphertext (wrong/rotated key, corruption, tampering).
+        # Treat as no usable credential; never surface the raw value.
+        logger.warning(
+            "customer-tenant credential for org %s could not be decrypted "
+            "(treating as unavailable)",
+            org_id,
+        )
+        return None
+
+
+def revoke_customer_tenant_credential(
+    org_id: str,
+    *,
+    connector_id: str = CUSTOMER_TENANT_CONNECTOR_ID,
+) -> None:
+    """Soft-delete the customer-tenant credential for an org (customer revocation).
+
+    Mirrors revoke_token's local deletion: the app DB role has no DELETE, so the
+    row is marked is_deleted = TRUE. A subsequent get returns None → the gateway
+    fails gracefully; a later store reactivates the row. Idempotent when no
+    credential exists.
+    """
+    _init_credentials_table()
+    con = db.connect()
+    try:
+        cur = con.cursor()
+        cur.execute(
+            "UPDATE credentials SET is_deleted = TRUE "
+            "WHERE org_id = %s AND connector_id = %s",
+            (org_id, connector_id),
+        )
+        con.commit()
+    finally:
+        con.close()
+
+
+# ---------------------------------------------------------------------------
 # Public vault API
 # ---------------------------------------------------------------------------
 
