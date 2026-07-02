@@ -50,22 +50,29 @@ reports *about itself*.
 
 | Surface | What it yields |
 | --- | --- |
-| Health/diagnostics endpoints (ASP.NET Core health checks + EventCounters/diagnostics) | Service health state, runtime metrics (throughput, latency, error rates, GC/resource pressure), application metadata — the live operational behaviour. |
+| Health/diagnostics endpoints (ASP.NET Core health checks, diagnostics endpoints, runtime metrics, and EventCounters) | Service health state, runtime metrics (throughput, latency, error rates, GC/resource pressure), application metadata — the live operational behaviour. |
 | Application logs | Error patterns, exception clustering, retry/failure signals, process-level friction visible over time. |
 
 ### Explicitly OUT of scope (phase one) — AC8
 
 * **Application SOURCE CODE.** Reading the application's source is the **separate
   1.8 code-and-structure phase** (which pairs Java and .NET again). This story does
-  **not** clone repositories, parse source/IL, or read configuration files. The
-  ingestor has no code path that reads source.
+  **not** inspect repositories, source files, classes, methods, dependencies, or
+  code structure. It does not clone repositories, parse source/IL, analyse package
+  or assembly graphs, or read project/configuration files for code/content
+  analysis. The ingestor has no code path that reads source.
 * **External APM / observability-platform data** (Datadog, New Relic, Dynatrace,
-  Application Insights, OpenTelemetry collectors, etc.). Out of scope for phase one.
+  AppDynamics, Application Insights, OpenTelemetry collectors, etc.). These may be
+  future extensions, but they are out of scope for phase one.
 
 The code enforces this boundary: every record the ingestor emits is either a
 `metrics` sample or a `log` entry, and contract/discovery tests assert that no
 record carries source-code/repository fields and that the modules reference no
 external-APM or source/IL-parser dependency.
+
+This distinction is intentional. R17-A4 delivers value quickly by reading what the
+running .NET application reports about itself, while leaving deeper source-code and
+structure analysis for the later 1.8 story.
 
 ---
 

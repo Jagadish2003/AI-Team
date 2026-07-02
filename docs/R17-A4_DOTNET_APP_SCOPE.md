@@ -70,7 +70,7 @@ scope; the **1.8 code-and-structure** phase pairs Java and .NET again.
 
 | Surface | What AgentIQ reads | What it yields |
 | --- | --- | --- |
-| **Health / diagnostics endpoints** — ASP.NET Core **health checks** + **EventCounters/diagnostics** | Service health state, runtime metrics (throughput, latency, error rates, GC/resource pressure), application metadata | The live operational behaviour of the running application |
+| **Health / diagnostics endpoints** — ASP.NET Core **health checks**, diagnostics endpoints, runtime metrics, and **EventCounters** | Service health state, runtime metrics (throughput, latency, error rates, GC/resource pressure), application metadata | The live operational behaviour of the running application |
 | **Application logs** | Error/exception lines, retry/failure markers, structured log fields (level, category, exception type) over time | Error patterns, exception clustering, retry/failure signals, process-level friction |
 
 From these two surfaces the ingestor produces **operational SIGNAL** — where a
@@ -87,19 +87,52 @@ first-class evidence that can corroborate and elevate findings in other systems.
 
 Reading the application's **source to find where the application itself could be
 improved** is the separate **Release 1.8 code-and-structure** story (paired with
-Java). This story does **not** read repositories, classes/methods, dependency or
-import graphs, application structure, or source/config files for their content. The
-ingestor has **no code path that reads source or IL** — the only things it touches
-are the configured health/diagnostics endpoints and the configured log sources.
+Java). This story does **not** read or inspect any of the following:
+
+* **Repositories** — no clone, fetch, checkout, or repository scan.
+* **Source files** — no reading `.cs`, project, solution, or configuration files
+  for code/content analysis.
+* **Classes and methods** — no parsing of types, members, method bodies, or call
+  sites.
+* **Dependencies** — no package, assembly, dependency graph, import graph, or
+  build-file analysis.
+* **Code structure** — no namespace/module architecture, layer, ownership, or
+  application-structure inspection.
+
+The ingestor has **no code path that reads source or IL**. The only things it
+touches are the configured health/diagnostics endpoints, runtime metrics,
+EventCounters, and the configured log sources.
 
 ### 2. External APM / observability platforms — a possible later extension
 
 This story does **not** ingest from external Application Performance Monitoring or
 observability platforms, including **Datadog, New Relic, Dynatrace, AppDynamics,
 Azure Application Insights**, OpenTelemetry collectors, and similar systems.
+Those tools may become future extensions, but they are **not** part of R17-A4.
 Operational signal in this story comes only from the application's **own** health
 checks, EventCounters, and logs — not from a third-party monitoring product sitting
 in front of it.
+
+---
+
+## Why this distinction matters
+
+R17-A4 is intentionally the **operational phase**. It gives AgentIQ useful signal
+quickly by reading what the running .NET application already reports about itself:
+health checks, diagnostics endpoints, runtime metrics, EventCounters, and logs.
+That makes the story focused, testable, and safe to deploy without requiring
+repository access or observability-platform integrations.
+
+The deeper **code-and-structure** analysis belongs to the later **1.8** story.
+Keeping the phases separate lets engineering, QA, and product validate this
+release against the correct promise:
+
+* **Engineering** should implement and review collection from configured
+  operational surfaces only.
+* **QA** should test endpoint/log ingestion, checkpoints, provenance, telemetry,
+  and the absence of source/APM reads.
+* **Product** should describe the value as observed runtime friction from running
+  .NET applications, not source-code analysis or APM integration.
 
 ---
 
