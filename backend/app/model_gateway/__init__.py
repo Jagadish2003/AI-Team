@@ -265,6 +265,30 @@ def validate_provider_config() -> None:
     gen_provider = _resolve_provider(gen_name, _ENV_GENERATION)
     emb_provider = _resolve_provider(emb_name, _ENV_EMBEDDING)
 
+    # R17-D2 T2 — reserved-connector-id collision guard. The customer-tenant model
+    # credential is vaulted in the shared `credentials` table under a reserved
+    # connector_id ("customer_tenant"). If a REAL OAuth connector were ever
+    # registered under that same id, the two would read/write the same credential
+    # row and silently corrupt each other. Fail fast at startup so the collision
+    # is caught in review, never in production. Import lazily and skip if the auth
+    # subsystem is not importable in a minimal context.
+    try:
+        from app.auth.configs import CONNECTOR_AUTH_CONFIGS
+        from app.auth.vault import CUSTOMER_TENANT_CONNECTOR_ID
+    except ImportError:
+        logger.debug(
+            "model_gateway: auth subsystem not importable; skipping reserved "
+            "connector-id collision check", exc_info=True
+        )
+    else:
+        if CUSTOMER_TENANT_CONNECTOR_ID in CONNECTOR_AUTH_CONFIGS:
+            raise ValueError(
+                f"connector_id '{CUSTOMER_TENANT_CONNECTOR_ID}' is reserved for the "
+                "customer-tenant model credential vault, but a real connector is "
+                "registered under the same id in CONNECTOR_AUTH_CONFIGS. This would "
+                "corrupt the shared credentials row — rename the connector."
+            )
+
     # Per-provider completeness check for the SELECTED providers. A provider may
     # be a registered name yet still be misconfigured — e.g. in_boundary selected
     # with no endpoint URL would pass name resolution but then fail every call at

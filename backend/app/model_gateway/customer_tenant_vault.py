@@ -76,4 +76,18 @@ def resolve_customer_tenant_api_key() -> str:
         )
 
     # 2) Dev/standalone fallback: the environment variable.
+    #
+    # Suppressed in production. When REQUIRE_CONNECTOR_SECRETS=1 (the production
+    # posture the rest of the auth framework enforces), the credential MUST come
+    # from the vault so that customer rotation/revocation is authoritative. If we
+    # fell back to CUSTOMER_TENANT_API_KEY here, a revoked vault credential could
+    # be silently overridden by a stale env var — bypassing the vault entirely.
+    # In that case return "" so the provider degrades gracefully (ok=False / [])
+    # exactly as it does for any missing credential.
+    if os.getenv("REQUIRE_CONNECTOR_SECRETS") == "1":
+        logger.debug(
+            "customer_tenant: REQUIRE_CONNECTOR_SECRETS=1 — env fallback disabled; "
+            "credential must come from the vault"
+        )
+        return ""
     return os.getenv(CONFIG_KEY_API_KEY, "")

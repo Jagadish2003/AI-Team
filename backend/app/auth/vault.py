@@ -268,6 +268,12 @@ CUSTOMER_TENANT_CONNECTOR_ID = "customer_tenant"
 
 #: A static credential has no natural expiry, but expires_at is NOT NULL. A
 #: far-future sentinel documents "no expiry" without special-casing the schema.
+#:
+#: Dependency (do not break): the background token_refresher.py job only selects
+#: rows WHERE refresh_token IS NOT NULL. Customer-tenant rows store
+#: refresh_token = NULL (a static key has no OAuth refresh path), so this
+#: sentinel date is never evaluated by the refresher. Do NOT replace it with
+#: None — the expires_at column is NOT NULL and the INSERT would fail.
 _STATIC_CREDENTIAL_EXPIRY_ISO = datetime(9999, 12, 31, tzinfo=timezone.utc).isoformat()
 
 

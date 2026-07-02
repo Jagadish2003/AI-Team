@@ -23,6 +23,9 @@ from app.auth.vault import (
     revoke_customer_tenant_credential,
     store_customer_tenant_credential,
 )
+from app.middleware import tenancy
+from app.model_gateway.customer_tenant_config import CONFIG_KEY_API_KEY
+from app.model_gateway.customer_tenant_vault import resolve_customer_tenant_api_key
 
 _VAULT_KEY = Fernet.generate_key().decode()
 
@@ -168,3 +171,51 @@ def test_get_returns_none_when_vault_key_unavailable(monkeypatch):
     finally:
         with patch.dict(os.environ, _vault_env()):
             revoke_customer_tenant_credential(org)
+
+
+# ---------------------------------------------------------------------------
+# resolve_customer_tenant_api_key — env-fallback production guard (review HIGH).
+# In production (REQUIRE_CONNECTOR_SECRETS=1) the credential must come from the
+# vault; the CUSTOMER_TENANT_API_KEY env fallback must be suppressed so a stale
+# env var can never override a revoked vault credential and bypass the vault.
+# ---------------------------------------------------------------------------
+
+
+def test_env_fallback_active_when_not_production(monkeypatch):
+    """Dev/standalone: with no vault credential, the env var is used (unchanged)."""
+    monkeypatch.delenv("REQUIRE_CONNECTOR_SECRETS", raising=False)
+    monkeypatch.delenv("CREDENTIAL_VAULT_KEY", raising=False)  # no usable vault
+    monkeypatch.setenv(CONFIG_KEY_API_KEY, _FAKE_AZURE_KEY)
+    token = tenancy._current_org_id.set("org-ct-envfallback-dev")
+    try:
+        assert resolve_customer_tenant_api_key() == _FAKE_AZURE_KEY
+    finally:
+        tenancy._current_org_id.reset(token)
+
+
+def test_env_fallback_suppressed_in_production(monkeypatch):
+    """REQUIRE_CONNECTOR_SECRETS=1 + no vault credential → '' (no env fallback)."""
+    monkeypatch.setenv("REQUIRE_CONNECTOR_SECRETS", "1")
+    monkeypatch.delenv("CREDENTIAL_VAULT_KEY", raising=False)  # no usable vault
+    monkeypatch.setenv(CONFIG_KEY_API_KEY, _FAKE_AZURE_KEY)  # present but ignored
+    token = tenancy._current_org_id.set("org-ct-envfallback-prod")
+    try:
+        assert resolve_customer_tenant_api_key() == ""
+    finally:
+        tenancy._current_org_id.reset(token)
+
+
+def test_vault_credential_still_used_in_production(monkeypatch):
+    """The guard suppresses only the ENV fallback — a vaulted credential still
+    resolves normally under REQUIRE_CONNECTOR_SECRETS=1."""
+    org = "org-ct-prod-vault"
+    monkeypatch.setenv("REQUIRE_CONNECTOR_SECRETS", "1")
+    monkeypatch.setenv("CREDENTIAL_VAULT_KEY", _VAULT_KEY)
+    monkeypatch.delenv(CONFIG_KEY_API_KEY, raising=False)
+    store_customer_tenant_credential(org, _FAKE_AZURE_KEY)
+    token = tenancy._current_org_id.set(org)
+    try:
+        assert resolve_customer_tenant_api_key() == _FAKE_AZURE_KEY
+    finally:
+        tenancy._current_org_id.reset(token)
+        revoke_customer_tenant_credential(org)

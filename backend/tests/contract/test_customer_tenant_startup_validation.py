@@ -259,6 +259,38 @@ def test_customer_tenant_embedding_with_other_generation(monkeypatch):
     assert get_embedding_provider().name == CUSTOMER_TENANT_PROVIDER_NAME
 
 
+# ---------------------------------------------------------------------------
+# Reserved-connector-id collision guard (review HIGH).
+# The customer-tenant credential is vaulted under a reserved connector_id. If a
+# real OAuth connector were ever registered under the same id, the two would
+# share (and corrupt) one credentials row. Startup validation fails fast.
+# ---------------------------------------------------------------------------
+
+
+def test_reserved_connector_id_is_clean_on_real_registry(monkeypatch):
+    """On the real connector registry the reserved id does not collide, so
+    validate_provider_config() does not raise for that reason."""
+    monkeypatch.delenv("MODEL_GENERATION_PROVIDER", raising=False)
+    monkeypatch.delenv("MODEL_EMBEDDING_PROVIDER", raising=False)
+    validate_provider_config()  # must not raise
+
+
+def test_collision_with_real_connector_fails_fast(monkeypatch):
+    """If a real connector is registered under the reserved id, startup validation
+    raises so the credential-row collision is caught before production."""
+    from app.auth import configs
+    from app.auth.vault import CUSTOMER_TENANT_CONNECTOR_ID
+
+    # Simulate a real connector registered under the reserved id (value irrelevant;
+    # the guard checks key membership). monkeypatch reverts this after the test.
+    monkeypatch.setitem(
+        configs.CONNECTOR_AUTH_CONFIGS, CUSTOMER_TENANT_CONNECTOR_ID, object()
+    )
+
+    with pytest.raises(ValueError, match="reserved"):
+        validate_provider_config()
+
+
 def test_customer_tenant_for_both_generation_and_embedding(monkeypatch):
     """customer_tenant selectable for both roles at once (AC8)."""
     monkeypatch.setenv("MODEL_GENERATION_PROVIDER", CUSTOMER_TENANT_PROVIDER_NAME)
