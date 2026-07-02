@@ -214,67 +214,139 @@ function sourceLabel(value: string): string {
   return SOURCE_LABELS[value.toLowerCase()] ?? labelize(value);
 }
 
+function isValidRunThreshold(value: number | null | undefined): value is number {
+  return typeof value === "number" && Number.isFinite(value) && value > 0;
+}
+
+function runLabel(count: number): string {
+  return `${count} run${count === 1 ? "" : "s"}`;
+}
+
+function shouldShowEntity(
+  entity: EntitySummary,
+  entityMinRunCount: number | null | undefined
+): boolean {
+  if (!isValidRunThreshold(entityMinRunCount)) return true;
+  return (
+    typeof entity.run_count !== "number" ||
+    entity.run_count >= entityMinRunCount
+  );
+}
+
+function isEarlyEntity(
+  entity: EntitySummary,
+  entityMinRunCount: number | null | undefined
+): boolean {
+  if (!isValidRunThreshold(entityMinRunCount)) return false;
+  return (
+    typeof entity.run_count === "number" &&
+    entity.run_count < entityMinRunCount
+  );
+}
+
 export function EntityTracePanel({
   entities,
+  runCount,
+  entityMinRunCount,
+  enrichmentLoaded = false,
 }: {
-  entities: EntitySummary[] | undefined;
+  entities: EntitySummary[] | null | undefined;
+  runCount?: number | null;
+  entityMinRunCount?: number | null;
+  enrichmentLoaded?: boolean;
 }) {
+  if (!enrichmentLoaded && !entities) return null;
+
+  const entityList = entities ?? [];
+  const hasRunThreshold = isValidRunThreshold(entityMinRunCount);
   const uniqueEntities = Array.from(
-    new Map((entities ?? []).map((entity) => [entity.entity_id, entity])).values()
+    new Map(
+      entityList
+        .filter((entity) => shouldShowEntity(entity, entityMinRunCount))
+        .map((entity) => [entity.entity_id, entity])
+    ).values()
   );
-  if (uniqueEntities.length === 0) return null;
+  const isWaitingForRunHistory =
+    hasRunThreshold &&
+    uniqueEntities.length === 0 &&
+    (
+      (typeof runCount === "number" && runCount < entityMinRunCount) ||
+      entityList.some((entity) => isEarlyEntity(entity, entityMinRunCount))
+    );
+  const thresholdLabel = hasRunThreshold ? runLabel(entityMinRunCount) : null;
+  const emptyTitle = isWaitingForRunHistory && thresholdLabel
+    ? `Entities will appear after ${entityMinRunCount} or more discovery runs.`
+    : "No entities linked to this opportunity.";
+  const emptyDescription = isWaitingForRunHistory
+    ? "AgentIQ is already retaining early entity signals for graph completeness. They stay hidden here until enough run history is available, so this section shows stable, repeatable entities."
+    : "AgentIQ will show linked people, systems, and process entities here when eligible entity evidence is available.";
 
   return (
     <div>
       <div className="mb-2 flex items-center justify-between gap-3">
         <span className="text-xs font-semibold text-text">Entities</span>
         <span className="shrink-0 rounded border border-bg px-1.5 py-0.5 text-xs text-text">
-          {uniqueEntities.length} linked
+          {uniqueEntities.length > 0
+            ? `${uniqueEntities.length} linked`
+            : isWaitingForRunHistory
+              ? `Hidden until ${thresholdLabel}`
+              : "0 linked"}
         </span>
       </div>
       <div className="rounded-lg border border-border bg-bg/30 p-3">
-        <div
-          data-testid="entity-trace-scroll"
-          className="max-h-[13.5rem] overflow-y-auto pr-1 [scrollbar-gutter:stable]"
-        >
-          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-            {uniqueEntities.map((entity) => {
-              const isAmbiguous = entity.resolution_status === "ambiguous";
-              return (
-                <div
-                  key={entity.entity_id}
-                  data-testid={`entity-trace-${entity.entity_id}`}
-                  className={`min-h-16 min-w-0 rounded-md border px-3 py-2 ${
-                    isAmbiguous
-                      ? "border-border/60 bg-panel/40 text-muted opacity-75"
-                      : "border-border/70 bg-panel/70 text-text"
-                  }`}
-                >
-                  <div className="flex min-w-0 items-start justify-between gap-3">
-                    <div className="min-w-0">
-                      <div className="truncate text-xs font-semibold leading-snug">
-                        {entity.display_name}
-                      </div>
-                      <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] leading-tight text-muted">
-                        <span>{labelize(entity.entity_type)}</span>
-                        <span aria-hidden="true">/</span>
-                        <span>{sourceLabel(entity.source_system)}</span>
-                      </div>
-                    </div>
-                    <span className="shrink-0 rounded border border-border/70 px-1.5 py-0.5 text-[11px] leading-tight">
-                      {confidenceLabel(entity.resolution_confidence)}
-                    </span>
-                  </div>
-                  {isAmbiguous && (
-                    <div className="mt-1.5 text-[11px] leading-tight text-muted">
-                      Ambiguous
-                    </div>
-                  )}
-                </div>
-              );
-            })}
+        {uniqueEntities.length === 0 ? (
+          <div data-testid="entity-trace-empty" className="px-1 py-1">
+            <div className="text-sm font-bold leading-snug text-text">
+              {emptyTitle}
+            </div>
+            <p className="mt-2 text-xs leading-relaxed text-muted">
+              {emptyDescription}
+            </p>
           </div>
-        </div>
+        ) : (
+          <div
+            data-testid="entity-trace-scroll"
+            className="max-h-[13.5rem] overflow-y-auto pr-1 [scrollbar-gutter:stable]"
+          >
+            <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+              {uniqueEntities.map((entity) => {
+                const isAmbiguous = entity.resolution_status === "ambiguous";
+                return (
+                  <div
+                    key={entity.entity_id}
+                    data-testid={`entity-trace-${entity.entity_id}`}
+                    className={`min-h-16 min-w-0 rounded-md border px-3 py-2 ${
+                      isAmbiguous
+                        ? "border-border/60 bg-panel/40 text-muted opacity-75"
+                        : "border-border/70 bg-panel/70 text-text"
+                    }`}
+                  >
+                    <div className="flex min-w-0 items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <div className="truncate text-xs font-semibold leading-snug">
+                          {entity.display_name}
+                        </div>
+                        <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] leading-tight text-muted">
+                          <span>{labelize(entity.entity_type)}</span>
+                          <span aria-hidden="true">/</span>
+                          <span>{sourceLabel(entity.source_system)}</span>
+                        </div>
+                      </div>
+                      <span className="shrink-0 rounded border border-border/70 px-1.5 py-0.5 text-[11px] leading-tight">
+                        {confidenceLabel(entity.resolution_confidence)}
+                      </span>
+                    </div>
+                    {isAmbiguous && (
+                      <div className="mt-1.5 text-[11px] leading-tight text-muted">
+                        Ambiguous
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -695,7 +767,12 @@ export default function OpportunityDetail({
         <BaselineContextPanel enrichment={enrichment} />
 
         {/* T3-S12-A: Entity trace shown after temporal baseline context. */}
-        <EntityTracePanel entities={enrichment?.entities} />
+        <EntityTracePanel
+          entities={enrichment?.entities}
+          runCount={enrichment?.run_count}
+          entityMinRunCount={enrichment?.entity_min_run_count}
+          enrichmentLoaded={Boolean(enrichment)}
+        />
 
         {/* T3-S13-A: Relationship trace shown after entity trace. */}
         <RelationshipTracePanel relationships={enrichment?.relationships} />

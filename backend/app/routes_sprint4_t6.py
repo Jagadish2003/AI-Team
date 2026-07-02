@@ -40,10 +40,9 @@ from . import db
 from .llm_enrichment import KV_LLM_ENRICHMENT
 from .temporal import get_baseline, get_signal_history
 from .graph_query import RelationshipSummary, select_relationships_for_opportunity
+from database.models.entities import ENTITY_MIN_RUN_COUNT
 
 logger = logging.getLogger(__name__)
-
-_MIN_ENTITY_RUN_COUNT = 3  # service-account filter threshold (Section 8)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -115,6 +114,9 @@ class OppEnrichment(BaseModel):
     # default_factory=list ensures backward compat for code that constructs
     # OppEnrichment without an entity list (existing tests, fallback paths).
     entities:             List[EntitySummary] = Field(default_factory=list)
+    # Entity display threshold shared with the backend filter. The frontend uses
+    # this API value so it does not duplicate ENTITY_MIN_RUN_COUNT locally.
+    entity_min_run_count:  int = ENTITY_MIN_RUN_COUNT
     # Track 3 Stage 2 — T3-S13-A relationship edges.
     # Flag-gated (INFERRED_RELATIONSHIPS_ENABLED): observed-only by default,
     # observed + inferred when the flag is on. default_factory=list keeps the
@@ -422,9 +424,10 @@ def _load_entity_summaries(run_id: str) -> List[EntitySummary]:
     """Load unique entity summaries and apply the service-account filter.
 
     The KV store holds entities pre-populated by entity_extractor after each run.
-    Service-account filter (run_count < 3) is applied here per Section 8 spec —
-    low-count entities remain in the DB for graph completeness but are hidden
-    from the evidence trace. Deduplication also protects legacy run payloads.
+    Service-account filter (run_count < ENTITY_MIN_RUN_COUNT) is applied here
+    per Section 8 spec. Low-count entities remain in the DB for graph
+    completeness but are hidden from the evidence trace. Deduplication also
+    protects legacy run payloads.
     """
     raw: List[Dict[str, Any]] = db.run_kv_get("entities", run_id, []) or []
     unique_raw: Dict[str, Dict[str, Any]] = {}
@@ -440,7 +443,7 @@ def _load_entity_summaries(run_id: str) -> List[EntitySummary]:
 
     summaries: List[EntitySummary] = []
     for e in unique_raw.values():
-        if e.get("run_count", 0) < _MIN_ENTITY_RUN_COUNT:
+        if e.get("run_count", 0) < ENTITY_MIN_RUN_COUNT:
             continue
         try:
             summaries.append(EntitySummary(
@@ -645,7 +648,7 @@ def register_sprint4_t6_routes(app) -> None:
         run = _require_run(run_id)
 
         # Load entity summaries once for this run (shared across all opportunities).
-        # Service-account filter (run_count < 3) is applied here per spec Section 8.
+        # Service-account filter is applied here per spec Section 8.
         entity_summaries = _load_entity_summaries(run_id)
 
         enrichment = db.run_kv_get(KV_LLM_ENRICHMENT, run_id, None)
