@@ -8,7 +8,7 @@ export interface EntitySummary {
   resolution_confidence: number;
   resolution_status: 'resolved' | 'ambiguous';
   // Optional defensive field. The backend already filters OppEnrichment entities
-  // to run_count >= 3, but the UI also hides early entities if a payload carries it.
+  // by entity_min_run_count, but the UI also hides early entities if a payload carries it.
   run_count?: number | null;
 }
 
@@ -67,8 +67,10 @@ export interface OppEnrichment {
   recent_values?: number[];
   signal_key?: string | null;
   pack_id?: string | null;
-  // Stage 2 entity list — empty array when no entities extracted yet.
-  entities: EntitySummary[];
+  // Stage 2 entity list — empty array/null when no entities extracted yet.
+  entities: EntitySummary[] | null;
+  // Backend-owned display threshold for entity summaries.
+  entity_min_run_count?: number | null;
   // Stage 2 relationship edges — empty array by default. Observed edges only
   // unless INFERRED_RELATIONSHIPS_ENABLED is set on the backend, in which case
   // inferred edges (inferred=true) are also included.
