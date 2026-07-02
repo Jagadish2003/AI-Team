@@ -19,6 +19,7 @@ import uuid
 import pytest
 
 from app.licensing import LicenseStatus
+from auth_helpers import rand_org_name
 
 AUTH = {"Authorization": "Bearer dev-token-change-me"}
 GATE = "app.middleware.license_gate.get_current_license_status"
@@ -82,7 +83,7 @@ def test_login_allowed_in_readonly(client, monkeypatch):
     password = "Str0ng!Passw0rd123"
     reg = client.post(
         "/api/auth/register",
-        json={"org_name": f"Org {uuid.uuid4().hex[:6]}", "email": email, "password": password},
+        json={"org_name": rand_org_name(), "email": email, "password": password},
     )
     assert reg.status_code == 201, reg.text
 

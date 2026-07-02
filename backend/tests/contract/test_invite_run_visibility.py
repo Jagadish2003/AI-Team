@@ -107,7 +107,7 @@ def test_invited_analyst_sees_connectors_via_real_endpoints(client: TestClient):
     owner_email = _uniq("owner_dwp3")
     analyst_email = _uniq("analyst_dwp3")
     owner = register_approve_login(
-        client, email=owner_email, password="Password123!", org_name="DWP3"
+        client, email=owner_email, password="Password123!", org_name="DWPthree"
     )
     owner_token = owner["token"]
     owner_org = owner["user"]["org_id"]
@@ -173,7 +173,7 @@ def test_outsider_in_another_org_does_not_see_the_run(client: TestClient):
     dwp2_email = _uniq("owner_dwp2")
     reg = client.post(
         "/api/auth/register",
-        json={"org_name": "DWP2", "email": dwp2_email, "password": "Password123!"},
+        json={"org_name": "DWPtwo", "email": dwp2_email, "password": "Password123!"},
     )
     assert reg.status_code == 201, reg.text
     owner_org, _ = member_for_email(dwp2_email)  # AUTH-2: org from membership

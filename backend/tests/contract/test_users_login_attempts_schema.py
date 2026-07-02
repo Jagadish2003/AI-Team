@@ -5,8 +5,10 @@ pg_indexes instead of SQLite PRAGMA. The conftest migrates the test database to
 head before the suite runs, so this proves migration 0004 applied cleanly.
 
 Covers:
-  AC1  — users has NO org_id and NO role column; identity lives here, role and
-         org_id live in workspace_members only.
+  AC1  — users has NO role column (role lives in workspace_members only). Since
+         migration 0021, users DOES carry a nullable org_id FK -> orgs.id, a
+         denormalized convenience pointer set at registration; workspace_members
+         remains the source of truth for org membership/role.
   AC16 — (schema side) password_hash column exists, is NOT NULL, and stores a
          bcrypt hash beginning with '$2b$12$' verbatim with no plaintext.
 """
@@ -32,6 +34,8 @@ EXPECTED_USERS_COLUMNS = [
     ("last_login_at", "timestamp without time zone", None, False, False),
     ("reset_token_hash", "character varying", 256, False, False),
     ("reset_token_expires_at", "timestamp without time zone", None, False, False),
+    # org_id FK -> orgs.id, appended last by migration 0021. Nullable, not a PK.
+    ("org_id", "character varying", 36, False, False),
 ]
 
 EXPECTED_LOGIN_ATTEMPTS_COLUMNS = [
@@ -46,8 +50,10 @@ EXPECTED_LOGIN_ATTEMPTS_COLUMNS = [
     ("is_deleted", "boolean", None, True, False),
 ]
 
-# Columns that must NEVER appear on users — they belong to workspace_members.
-FORBIDDEN_USERS_COLUMNS = {"org_id", "role"}
+# role must NEVER appear on users — it belongs to workspace_members. (org_id was
+# deliberately added as a denormalized FK in migration 0021, so it is no longer
+# forbidden — see test_users_has_org_id_fk_and_no_role_column.)
+FORBIDDEN_USERS_COLUMNS = {"role"}
 
 
 @pytest.fixture()
@@ -100,13 +106,32 @@ def test_users_schema_matches_spec(conn):
     _assert_columns(conn, "users", EXPECTED_USERS_COLUMNS)
 
 
-def test_users_has_no_org_id_or_role_column(conn):
-    """AC1 — identity only. org_id and role live in workspace_members."""
+def test_users_has_org_id_fk_and_no_role_column(conn):
+    """AC1 — role still lives in workspace_members only; org_id is a new FK (0021)."""
     columns = {r["column_name"] for r in _columns(conn, "users")}
+    # role must never appear on users.
     assert FORBIDDEN_USERS_COLUMNS.isdisjoint(columns), (
         f"users must not contain {FORBIDDEN_USERS_COLUMNS & columns}; "
-        "role/org_id belong to workspace_members only"
+        "role belongs to workspace_members only"
     )
+    # org_id IS expected now, backed by a foreign key to orgs.id.
+    assert "org_id" in columns, "migration 0021 must add users.org_id"
+    fk = conn.execute(
+        """
+        SELECT ccu.table_name AS referenced_table, kcu.column_name
+        FROM information_schema.table_constraints tc
+        JOIN information_schema.key_column_usage kcu
+          ON kcu.constraint_name = tc.constraint_name
+        JOIN information_schema.constraint_column_usage ccu
+          ON ccu.constraint_name = tc.constraint_name
+        WHERE tc.table_name = 'users'
+          AND tc.constraint_type = 'FOREIGN KEY'
+          AND tc.constraint_name = 'fk_users_org_id'
+        """
+    ).fetchone()
+    assert fk is not None, "fk_users_org_id must exist"
+    assert fk["referenced_table"] == "orgs"
+    assert fk["column_name"] == "org_id"
 
 
 def test_users_email_unique_index_exists(conn):

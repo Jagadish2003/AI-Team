@@ -18,6 +18,17 @@ import uuid
 
 from app import db
 
+# Org-name validation now rejects anything but ASCII letters, so test org names
+# can no longer embed a uuid hex suffix (digits) or spaces/underscores. Map the
+# hex digits 0-9 to letters so the name stays unique per call AND letters-only;
+# dedup then treats each generated name as its own org.
+_HEX_TO_ALPHA = str.maketrans("0123456789", "ghijklmnop")
+
+
+def rand_org_name(prefix: str = "Org") -> str:
+    """Return a unique, letters-only org name (safe under the letters-only rule)."""
+    return prefix + uuid.uuid4().hex[:12].translate(_HEX_TO_ALPHA)
+
 
 def member_for_email(email: str) -> tuple[str, str]:
     """Return (org_id, role) for the workspace member registered under ``email``.
@@ -66,7 +77,7 @@ def register_approve_login(
     Mirrors the shape the AUTH-1 register response used to return, so a caller can
     swap ``register(...).json()`` for this and keep using ``["token"]`` / ``["user"]``.
     """
-    org_name = org_name or f"Org_{uuid.uuid4().hex[:8]}"
+    org_name = org_name or rand_org_name()
     reg = client.post(
         "/api/auth/register",
         json={"org_name": org_name, "email": email, "password": password},
