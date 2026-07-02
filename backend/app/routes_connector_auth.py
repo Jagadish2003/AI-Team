@@ -38,7 +38,7 @@ from app.auth.oauth_state import decode_state, encode_state
 from app.auth.vault import REFRESH_THRESHOLD_SECONDS, consume_nonce, store_nonce
 from app.middleware.audit import log_event
 from app.middleware.tenancy import get_current_org_id
-from app.rbac import _get_user_id_from_token
+from app.rbac import _get_user_id_from_token, require_role
 from app.security import bearer, require_auth
 from database.models.credentials import (
     ALTER_CREDENTIALS_ADD_REFRESH_FAILED,
@@ -411,7 +411,7 @@ def register_connector_auth_routes(app: FastAPI) -> None:
 
     @app.get(
         "/api/connectors/{connector_id}/auth-url",
-        dependencies=[Depends(require_auth)],
+        dependencies=[Depends(require_auth), Depends(require_role("analyst"))],
     )
     def get_auth_url(connector_id: str) -> Dict[str, object]:
         """Generate a one-time authorization URL for the given connector.
@@ -469,6 +469,7 @@ def register_connector_auth_routes(app: FastAPI) -> None:
 
     @app.delete(
         "/api/connectors/{connector_id}/token",
+        dependencies=[Depends(require_auth), Depends(require_role("analyst"))],
     )
     async def delete_token(connector_id: str, token: str = Depends(require_auth)) -> Response:
         """Revoke and delete the stored token for the given connector (AC11/AC12/AC13)."""
@@ -492,7 +493,7 @@ def register_connector_auth_routes(app: FastAPI) -> None:
 
     @app.get(
         "/api/connectors/{connector_id}/token-status",
-        dependencies=[Depends(require_auth)],
+        dependencies=[Depends(require_auth), Depends(require_role("viewer"))],
     )
     async def get_token_status(connector_id: str) -> Dict[str, str]:
         """Return token status: connected | needs_refresh | needs_auth | refresh_failed (AC14)."""
