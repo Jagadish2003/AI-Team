@@ -659,3 +659,33 @@ def client():
     from app.main import app
     with TestClient(app) as c:
         yield c
+
+
+# === TEMP DEBUG PROBE (remove after diagnosing table-drop pollution) =========
+import psycopg2 as _probe_psycopg2  # noqa: E402
+
+_PROBE_STATE = {"broken": False}
+
+
+def pytest_runtest_teardown(item):
+    """After each test, check public.credentials / public.workspace_members still
+    exist. Log the FIRST test after which either disappears."""
+    if _PROBE_STATE["broken"]:
+        return
+    try:
+        con = _probe_psycopg2.connect(TEST_DATABASE_URL)
+        con.autocommit = True
+        cur = con.cursor()
+        cur.execute("SELECT to_regclass('public.credentials'), to_regclass('public.workspace_members')")
+        cred, wm = cur.fetchone()
+        con.close()
+    except Exception as exc:  # noqa: BLE001
+        with open("/tmp/probe_pollution.log", "a") as fh:
+            fh.write(f"PROBE-ERROR after {item.nodeid}: {exc}\n")
+        return
+    if cred is None or wm is None:
+        _PROBE_STATE["broken"] = True
+        with open("/tmp/probe_pollution.log", "a") as fh:
+            fh.write(f"POLLUTER: after {item.nodeid} -> credentials={cred} workspace_members={wm}\n")
+        print(f"\n\n*** POLLUTER FOUND: after {item.nodeid} credentials={cred} workspace_members={wm} ***\n")
+# === END TEMP DEBUG PROBE ====================================================
