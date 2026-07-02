@@ -50,8 +50,9 @@ def test_resolves_only_authenticated_connectors_with_url(monkeypatch):
         monkeypatch.delenv(var, raising=False)
 
     async def fake_get_token(org_id, connector_id):
-        # servicenow + slack + teams + github + java_app not connected in this scenario.
-        if connector_id in ("servicenow", "slack", "teams", "github", "java_app"):
+        # servicenow + slack + teams + github + java_app + dotnet_app not connected
+        # in this scenario.
+        if connector_id in ("servicenow", "slack", "teams", "github", "java_app", "dotnet_app"):
             raise ConnectorNotAuthenticatedError(org_id, connector_id)
         return _token(connector_id)
 
@@ -80,7 +81,7 @@ def test_authenticated_but_unresolvable_url_is_skipped(monkeypatch):
     monkeypatch.delenv("JIRA_URL", raising=False)
 
     async def fake_get_token(org_id, connector_id):
-        if connector_id in ("slack", "teams", "github", "java_app"):
+        if connector_id in ("slack", "teams", "github", "java_app", "dotnet_app"):
             raise ConnectorNotAuthenticatedError(org_id, connector_id)
         return _token(connector_id)
 
@@ -276,7 +277,7 @@ def test_unexpected_vault_error_excludes_connector(monkeypatch):
     async def fake_get_token(org_id, connector_id):
         if connector_id == "salesforce":
             raise RuntimeError("vault boom")
-        if connector_id in ("jira", "slack", "teams", "github", "java_app"):
+        if connector_id in ("jira", "slack", "teams", "github", "java_app", "dotnet_app"):
             raise ConnectorNotAuthenticatedError(org_id, connector_id)
         return _token(connector_id)
 
@@ -475,3 +476,35 @@ def test_java_app_excluded_when_not_authenticated(monkeypatch):
 
     assert lic.resolve_live_systems("default") == []
     assert get_live_connector("java_app") is None
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# .NET application — URL-less, vault-credentialed source (R17-A4 live-path wiring)
+# ─────────────────────────────────────────────────────────────────────────────
+def test_dotnet_app_resolved_by_token_without_url(monkeypatch):
+    """The .NET app source is URL-less here (each target carries its own
+    diagnostics_url/log_source in config); when its credential is in the vault it
+    joins the live set keyed by token alone, published to the per-run context so
+    the ingestor resolves the secret safely (never from config — AC4)."""
+    async def fake_get_token(org_id, connector_id):
+        if connector_id == "dotnet_app":
+            return _token(connector_id)
+        raise ConnectorNotAuthenticatedError(org_id, connector_id)
+
+    monkeypatch.setattr(lic, "get_token", fake_get_token)
+
+    live = lic.resolve_live_systems("default")
+
+    assert live == ["dotnet_app"]
+    assert get_live_connector("dotnet_app") == {"token": "dotnet_app-access"}
+
+
+def test_dotnet_app_excluded_when_not_authenticated(monkeypatch):
+    """Unconnected .NET app is left out and publishes no per-run credential."""
+    async def fake_get_token(org_id, connector_id):
+        raise ConnectorNotAuthenticatedError(org_id, connector_id)
+
+    monkeypatch.setattr(lic, "get_token", fake_get_token)
+
+    assert lic.resolve_live_systems("default") == []
+    assert get_live_connector("dotnet_app") is None

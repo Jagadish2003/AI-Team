@@ -20,13 +20,13 @@
   ],
   "metrics": {
     "payments-api": [
-      {"sample_ts": "2026-06-10T08:00:00+00:00", "health": "UP", "error_rate": 0.01, "latency_p95_ms": 300, "throughput_rpm": 1200, "jvm_memory_used_ratio": 0.55, "system_cpu_usage": 0.40},
-      {"sample_ts": "2026-06-10T08:05:00+00:00", "health": "UP", "error_rate": 0.03, "latency_p95_ms": 600, "throughput_rpm": 1100, "jvm_memory_used_ratio": 0.70, "system_cpu_usage": 0.62},
-      {"sample_ts": "2026-06-10T08:10:00+00:00", "health": "DOWN", "error_rate": 0.12, "latency_p95_ms": 1800, "throughput_rpm": 700, "jvm_memory_used_ratio": 0.91, "system_cpu_usage": 0.88}
+      {"sample_ts": "2026-06-10T08:00:00+00:00", "health": "UP", "error_rate": 0.01, "latency_p95_ms": 300, "throughput_rpm": 1200, "memory_used_ratio": 0.55, "cpu_usage": 0.40},
+      {"sample_ts": "2026-06-10T08:05:00+00:00", "health": "UP", "error_rate": 0.03, "latency_p95_ms": 600, "throughput_rpm": 1100, "memory_used_ratio": 0.70, "cpu_usage": 0.62},
+      {"sample_ts": "2026-06-10T08:10:00+00:00", "health": "DOWN", "error_rate": 0.12, "latency_p95_ms": 1800, "throughput_rpm": 700, "memory_used_ratio": 0.91, "cpu_usage": 0.88}
     ],
     "ledger-svc": [
-      {"sample_ts": "2026-06-10T08:00:00+00:00", "health": "UP", "error_rate": 0.001, "latency_p95_ms": 120, "throughput_rpm": 800, "jvm_memory_used_ratio": 0.40, "system_cpu_usage": 0.30},
-      {"sample_ts": "2026-06-10T08:05:00+00:00", "health": "UP", "error_rate": 0.002, "latency_p95_ms": 130, "throughput_rpm": 820, "jvm_memory_used_ratio": 0.42, "system_cpu_usage": 0.31}
+      {"sample_ts": "2026-06-10T08:00:00+00:00", "health": "UP", "error_rate": 0.001, "latency_p95_ms": 120, "throughput_rpm": 800, "memory_used_ratio": 0.40, "cpu_usage": 0.30},
+      {"sample_ts": "2026-06-10T08:05:00+00:00", "health": "UP", "error_rate": 0.002, "latency_p95_ms": 130, "throughput_rpm": 820, "memory_used_ratio": 0.42, "cpu_usage": 0.31}
     ]
   },
   "logs": {
