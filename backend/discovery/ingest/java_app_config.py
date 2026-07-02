@@ -66,6 +66,10 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
 from . import get_live_connector, is_live
+from .operational_config import (
+    find_inline_secret_keys,
+    resolve_target_secret,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -74,30 +78,13 @@ FIXTURE_PATH = Path(__file__).parent / "fixtures" / "java_app_sample.json"
 #: Env var (live mode) holding a JSON array of target configs for the deployment.
 _TARGETS_ENV = "JAVA_APP_TARGETS"
 
+#: Env var (CLI/standalone) holding the credential for the default ``java_app``
+#: vault key. A custom ``credential_ref`` namespaces its own ``{REF}_TOKEN``.
+_DEFAULT_ENV_TOKEN_KEY = "JAVA_APP_TOKEN"
+
 #: Default vault connector key used when a target does not name its own
 #: ``credential_ref``. Mirrors the connector_id of the ingestor.
 DEFAULT_CREDENTIAL_REF = "java_app"
-
-#: Field names that must NEVER appear in a target config entry — a credential
-#: belongs in the vault, not in deployment config (AC3). A target carrying any of
-#: these is rejected by :func:`load_targets` so a pasted secret cannot slip
-#: through into config files or logs.
-_FORBIDDEN_SECRET_KEYS: frozenset[str] = frozenset(
-    {
-        "password",
-        "passwd",
-        "token",
-        "access_token",
-        "secret",
-        "client_secret",
-        "api_key",
-        "apikey",
-        "basic_auth",
-        "authorization",
-        "bearer",
-        "credentials",
-    }
-)
 
 
 class JavaAppConfigError(Exception):
@@ -153,9 +140,7 @@ def _coerce_target(entry: Dict[str, Any]) -> JavaAppTarget:
     if not isinstance(entry, dict):
         raise JavaAppConfigError("each Java app target must be a JSON object")
 
-    inline_secrets = sorted(
-        k for k in entry.keys() if str(k).strip().lower() in _FORBIDDEN_SECRET_KEYS
-    )
+    inline_secrets = find_inline_secret_keys(entry)
     if inline_secrets:
         # Do NOT echo the values — only the offending key names — so a rejected
         # secret is never written to the log either (AC3).
@@ -260,31 +245,16 @@ def resolve_secret(
 
     The returned secret is handed straight to the HTTP/log client and is never
     attached to the target, logged, or echoed. ``connector_lookup``/``env`` are
-    injectable so tests can exercise resolution without a live vault.
+    injectable so tests can exercise resolution without a live vault. The actual
+    vault-first/env-fallback resolution is the shared
+    :func:`operational_config.resolve_target_secret` (identical for Java and .NET).
     """
-    ref = target.credential_ref
-    if not ref:
-        return None  # endpoint declared as needing no credential
-
-    cred = None
-    try:
-        cred = connector_lookup(ref)
-    except Exception:  # noqa: BLE001 — credential lookup must not break the run.
-        logger.warning(
-            "java_app: credential lookup failed for target '%s' (org=%s); "
-            "trying env fallback",
-            target.app_id,
-            org_id,
-        )
-    if cred and cred.get("token"):
-        return str(cred["token"]).strip()
-
-    environ = env if env is not None else os.environ
-    # Env fallback key: JAVA_APP_TOKEN for the default ref, else {REF}_TOKEN.
-    env_key = (
-        "JAVA_APP_TOKEN"
-        if ref == DEFAULT_CREDENTIAL_REF
-        else f"{ref.upper()}_TOKEN"
+    return resolve_target_secret(
+        org_id,
+        app_id=target.app_id,
+        credential_ref=target.credential_ref,
+        default_credential_ref=DEFAULT_CREDENTIAL_REF,
+        default_env_token_key=_DEFAULT_ENV_TOKEN_KEY,
+        connector_lookup=connector_lookup,
+        env=env,
     )
-    token = environ.get(env_key)
-    return token.strip() if token else None

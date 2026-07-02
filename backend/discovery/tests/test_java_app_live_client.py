@@ -84,8 +84,8 @@ def test_h1_sample_actuator_populates_all_metric_fields():
     assert sample["error_rate"] == 0.12            # 120 / 1000
     assert sample["latency_p95_ms"] == 1800.0      # 1.8s -> ms (MAX proxy)
     assert sample["throughput_rpm"] == 1000.0      # cumulative request COUNT
-    assert sample["jvm_memory_used_ratio"] == 0.91  # 910 / 1000
-    assert sample["system_cpu_usage"] == 0.88
+    assert sample["memory_used_ratio"] == 0.91      # 910 / 1000 (JVM heap → neutral field)
+    assert sample["cpu_usage"] == 0.88
     assert sample["sample_ts"]
 
 
@@ -98,8 +98,8 @@ def test_h1_missing_metric_endpoints_yield_none_not_false_zero():
     assert sample["health"] == "UP"
     assert sample["error_rate"] is None
     assert sample["latency_p95_ms"] is None
-    assert sample["jvm_memory_used_ratio"] is None
-    assert sample["system_cpu_usage"] is None
+    assert sample["memory_used_ratio"] is None
+    assert sample["cpu_usage"] is None
 
 
 # ── M1: session is closed after use ──────────────────────────────────────────
