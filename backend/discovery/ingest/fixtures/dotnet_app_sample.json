@@ -1,0 +1,41 @@
+{
+  "_comment": "R17-A4 / T3 — deterministic offline fixture for the .NET application ingestor's per-deployment configuration. The 'targets' array is the source of truth for load_targets() offline (parity with java_app_sample.json). Operational surface only (AC8): diagnostics endpoints (ASP.NET Core health checks / runtime metrics / EventCounters) and application logs — NO source code. Credentials are NEVER in this config — each target references the vault via 'credential_ref'. The metrics/logs sections mirror the Java fixture shape so the T1 ingestor can read them; T3 only consumes 'targets'.",
+  "targets": [
+    {
+      "app_id": "orders-api",
+      "name": "Orders API",
+      "diagnostics_url": "https://orders.internal.example/diagnostics",
+      "log_source": "https://orders.internal.example/logs",
+      "environment": "production",
+      "metadata": {"service": "orders", "team": "commerce", "runtime": ".NET 8"},
+      "credential_ref": "dotnet_app"
+    },
+    {
+      "app_id": "billing-svc",
+      "name": "Billing Service",
+      "diagnostics_url": "https://billing.internal.example/healthz",
+      "log_source": "https://billing.internal.example/logs",
+      "environment": "production",
+      "metadata": {"service": "billing", "team": "finance", "runtime": ".NET 8"},
+      "credential_ref": "dotnet_app"
+    }
+  ],
+  "metrics": {
+    "orders-api": [
+      {"sample_ts": "2026-07-01T08:00:00+00:00", "health": "Healthy", "error_rate": 0.01, "latency_p95_ms": 280, "throughput_rpm": 1400, "gc_pause_ratio": 0.03, "cpu_usage": 0.38},
+      {"sample_ts": "2026-07-01T08:05:00+00:00", "health": "Unhealthy", "error_rate": 0.11, "latency_p95_ms": 1900, "throughput_rpm": 640, "gc_pause_ratio": 0.22, "cpu_usage": 0.9}
+    ],
+    "billing-svc": [
+      {"sample_ts": "2026-07-01T08:00:00+00:00", "health": "Healthy", "error_rate": 0.002, "latency_p95_ms": 140, "throughput_rpm": 700, "gc_pause_ratio": 0.02, "cpu_usage": 0.3}
+    ]
+  },
+  "logs": {
+    "orders-api": [
+      {"offset": 1, "ts": "2026-07-01T08:01:10+00:00", "level": "Error", "logger": "Orders.PaymentGatewayClient", "exception_type": "System.Net.Http.HttpRequestException", "retry": false, "message": "Upstream timeout calling settlement gateway"},
+      {"offset": 2, "ts": "2026-07-01T08:04:20+00:00", "level": "Error", "logger": "Orders.PaymentGatewayClient", "exception_type": "System.Net.Http.HttpRequestException", "retry": true, "message": "Retry 1 failed: upstream timeout"}
+    ],
+    "billing-svc": [
+      {"offset": 1, "ts": "2026-07-01T08:00:30+00:00", "level": "Information", "logger": "Billing.PostingService", "exception_type": null, "retry": false, "message": "Posted 1842 invoices"}
+    ]
+  }
+}
