@@ -6,6 +6,7 @@
       "name": "Orders API",
       "diagnostics_url": "https://orders.internal.example/diagnostics",
       "log_source": "https://orders.internal.example/logs",
+      "environment": "production",
       "metadata": {"service": "orders", "environment": "prod", "owner": "orders-team"},
       "credential_ref": "dotnet_app"
     },
@@ -14,6 +15,7 @@
       "name": "Inventory Service",
       "diagnostics_url": "https://inventory.internal.example/diagnostics",
       "log_source": "https://inventory.internal.example/logs",
+      "environment": "production",
       "metadata": {"service": "inventory", "environment": "prod", "owner": "inventory-team"},
       "credential_ref": "dotnet_app"
     }

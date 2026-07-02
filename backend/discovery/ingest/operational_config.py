@@ -27,11 +27,15 @@ logger = logging.getLogger(__name__)
 #: Field names that must NEVER appear in a target config entry — a credential
 #: belongs in the vault, not in deployment config (AC4). A target carrying any of
 #: these is rejected by the platform loader so a pasted secret cannot slip through
-#: into config files or logs.
+#: into config files or logs. Note the *_ref forms (``credential_ref``,
+#: ``certificate_ref``) are references, NOT secrets, and are deliberately allowed.
 FORBIDDEN_SECRET_KEYS: frozenset[str] = frozenset(
     {
         "password",
         "passwd",
+        "pwd",
+        "username",
+        "user",
         "token",
         "access_token",
         "secret",
@@ -42,6 +46,14 @@ FORBIDDEN_SECRET_KEYS: frozenset[str] = frozenset(
         "authorization",
         "bearer",
         "credentials",
+        "connection_string",
+        "connectionstring",
+        "certificate",
+        "cert",
+        "private_key",
+        "pfx",
+        "pfx_password",
+        "sas_token",
     }
 )
 

@@ -25,12 +25,36 @@ allowed to read:
                           OPERATIONAL surface only (R17-A4 §1) — never source code.
   * ``log_source``      — where the application's logs are read from (a file path
                           or a log endpoint).
-  * ``metadata``        — non-secret service metadata (service name, environment,
-                          owning team) used to link the signal back to the right
+  * ``environment``     — the deployment environment (``production`` / ``staging``
+                          / ...), so a signal can be scoped to the right stage.
+  * ``metadata``        — non-secret service metadata (service name, owning team,
+                          runtime) used to link the signal back to the right
                           service for cross-system corroboration (R17-A4 §3).
   * ``credential_ref``  — a *reference* (a vault connector key), NOT a credential.
-                          The actual secret is resolved at ingest time from the
+                          The actual secret — API key, token, or certificate
+                          reference — is resolved at ingest time from the
                           credential vault, never stored here.
+
+The credential rule (AC4) — secrets live in the vault, never in config or logs
+------------------------------------------------------------------------------
+API keys, tokens, usernames, passwords, certificate references, connection
+strings, and any other secret MUST NOT appear in the target configuration, in
+code, or in logs. The configuration carries only a ``credential_ref`` naming
+where the secret lives; :func:`resolve_secret` reads the decrypted value from the
+per-run credential context and falls back to an env var only for CLI/standalone
+use. To make the rule enforceable rather than merely documented,
+:func:`load_targets` REJECTS any target entry that carries an inline
+secret-looking field (the shared ``FORBIDDEN_SECRET_KEYS``) — a misconfigured
+deployment that pastes a credential into config surfaces as a rejected target
+rather than silently persisting a plaintext secret.
+
+Safe failure reporting
+----------------------
+When a diagnostics or log endpoint fails, error handling must report only SAFE
+information — application id, endpoint type, and an error *category* — never
+credentials or sensitive connection strings (which frequently appear inside raw
+driver/HTTP exception messages). :func:`safe_endpoint_error` builds exactly that
+credential-free record; callers log it instead of the raw exception.
 
 Offline vs live
 ---------------
@@ -90,6 +114,7 @@ class DotNetAppTarget:
     name: str
     diagnostics_url: str
     log_source: str
+    environment: str = ""
     metadata: Dict[str, Any] = field(default_factory=dict)
     #: Vault connector key naming where this app's secret lives. None means the
     #: endpoint needs no credential (e.g. an internal unauthenticated surface).
@@ -152,6 +177,7 @@ def _coerce_target(entry: Dict[str, Any]) -> DotNetAppTarget:
         name=str(entry.get("name", entry.get("app_id", ""))).strip(),
         diagnostics_url=str(entry.get("diagnostics_url", "")).strip(),
         log_source=str(entry.get("log_source", "")).strip(),
+        environment=str(entry.get("environment", "")).strip(),
         metadata=metadata,
         credential_ref=credential_ref,
     )
@@ -190,8 +216,9 @@ def load_targets(org_id: str) -> List[DotNetAppTarget]:
 
     The customer decides which applications AgentIQ may read; this returns exactly
     that configured set (no auto-discovery). A single malformed/insecure entry is
-    skipped (logged by app_id, never by value) so one bad target does not block the
-    rest — matching the project's "degrade, don't crash" ingestion rule.
+    skipped (logged by app_id / offending key, never by value) so one bad target
+    does not block the rest — matching the project's "degrade, don't crash"
+    ingestion rule.
     """
     targets: List[DotNetAppTarget] = []
     seen: set[str] = set()
@@ -239,3 +266,86 @@ def resolve_secret(
         connector_lookup=connector_lookup,
         env=env,
     )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Safe failure reporting (AC4 — never log credentials / connection strings)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def classify_endpoint_error(exc: BaseException) -> str:
+    """Map an endpoint failure to a SAFE, credential-free error category.
+
+    The category is derived by inspecting the exception type/message, but ONLY the
+    category string is ever returned — the raw message (which can embed a
+    connection string or credential) is never surfaced. Categories:
+    ``timeout`` | ``connection_error`` | ``auth_error`` | ``tls_error`` |
+    ``http_error`` | ``parse_error`` | ``unknown_error``.
+    """
+    name = type(exc).__name__.lower()
+    msg = str(exc).lower()
+    if "timeout" in name or "timeout" in msg or "timed out" in msg:
+        return "timeout"
+    if any(t in name for t in ("ssl", "certificate")) or "certificate" in msg or "tls" in msg:
+        return "tls_error"
+    if (
+        "auth" in name
+        or "unauthorized" in msg
+        or "forbidden" in msg
+        or " 401" in f" {msg}"
+        or " 403" in f" {msg}"
+    ):
+        return "auth_error"
+    if "connection" in name or "connection" in msg or "refused" in msg or "unreachable" in msg:
+        return "connection_error"
+    if "http" in name or any(code in msg for code in ("404", "500", "502", "503")):
+        return "http_error"
+    if any(t in name for t in ("json", "decode", "parse", "value")):
+        return "parse_error"
+    return "unknown_error"
+
+
+def safe_endpoint_error(
+    target: DotNetAppTarget,
+    endpoint_type: str,
+    exc: BaseException,
+) -> Dict[str, str]:
+    """Build a credential-free error record for a failed endpoint read (AC4).
+
+    Reports only SAFE information — application id, endpoint type, error category,
+    and the exception CLASS name — so a diagnostics/log failure can be logged and
+    audited without leaking credentials or sensitive connection strings. The raw
+    exception message is deliberately excluded (it commonly embeds a connection
+    string or secret). ``endpoint_type`` is a caller-supplied label such as
+    ``"diagnostics"`` or ``"logs"``.
+    """
+    return {
+        "app_id": target.app_id,
+        "endpoint_type": str(endpoint_type),
+        "error_category": classify_endpoint_error(exc),
+        "exception_type": type(exc).__name__,
+        "environment": target.environment,
+    }
+
+
+def log_endpoint_failure(
+    org_id: str,
+    target: DotNetAppTarget,
+    endpoint_type: str,
+    exc: BaseException,
+) -> Dict[str, str]:
+    """Log a failed endpoint read using ONLY safe fields, and return the safe record.
+
+    Convenience wrapper so collection code logs a credential-free line
+    consistently. Returns the same dict :func:`safe_endpoint_error` builds so the
+    caller can also attach it to a degraded-signal payload.
+    """
+    safe = safe_endpoint_error(target, endpoint_type, exc)
+    logger.warning(
+        "dotnet_app: endpoint read failed org=%s app_id=%s endpoint=%s category=%s (%s)",
+        org_id,
+        safe["app_id"],
+        safe["endpoint_type"],
+        safe["error_category"],
+        safe["exception_type"],
+    )
+    return safe
