@@ -749,6 +749,47 @@ class TestSalesforceUserNameResolution:
         assert persons[0]["display_name"] == "005Qy000004DDD"
         assert persons[0]["source_record_id"] == "005Qy000004DDD"
 
+    def test_later_user_name_updates_existing_id_row(self):
+        org = f"sf-un-upgrade-{_uuid.uuid4().hex[:8]}"
+        owner_id = "005Qy000005EEE"
+        first_run = "run-sf-un-upgrade-1"
+        second_run = "run-sf-un-upgrade-2"
+
+        _extract(
+            org_id=org,
+            run_id=first_run,
+            ingestor_data={"salesforce": {
+                "cases": [{"Id": "500CASE010", "CaseNumber": "000010", "OwnerId": owner_id}]
+            }},
+        )
+        _extract(
+            org_id=org,
+            run_id=second_run,
+            ingestor_data={"salesforce": {
+                "cases": [{"Id": "500CASE010", "CaseNumber": "000010", "OwnerId": owner_id}],
+                "user_names": {owner_id: "Nora Patel"},
+            }},
+        )
+
+        with sqlite3.connect(_get_db_path()) as conn:
+            conn.row_factory = sqlite3.Row
+            rows = [
+                dict(r) for r in conn.execute(
+                    """
+                    SELECT * FROM entities
+                    WHERE org_id = %s
+                      AND entity_type = 'person'
+                      AND source_record_id = %s
+                    """,
+                    (org, owner_id),
+                ).fetchall()
+            ]
+
+        assert len(rows) == 1
+        assert rows[0]["display_name"] == "Nora Patel"
+        assert rows[0]["canonical_name"] == "nora patel"
+        assert rows[0]["last_seen_run_id"] == second_run
+
 
 class TestSalesforceOwnerDeduplication:
     """Repeated source records must expose one entity per Salesforce owner."""
@@ -943,6 +984,111 @@ class TestTeamAndObjectExtraction:
         )
         objects = _db_entities_by_type(org, run, "object")
         assert any(e["display_name"] == "INC0000001" for e in objects)
+
+    def test_salesforce_case_subject_creates_object_display_name(self):
+        org, run = "obj-sf-subject", "run-obj-sf-subject"
+        _extract(
+            org_id=org, run_id=run,
+            ingestor_data={"salesforce": {
+                "cases": [
+                    {
+                        "Id": "500CASE001",
+                        "CaseNumber": "000001",
+                        "Subject": "Customer login blocked",
+                        "OwnerId": "005OWNER001",
+                    }
+                ]
+            }},
+        )
+        objects = _db_entities_by_type(org, run, "object")
+        case = next((o for o in objects if o["source_record_id"] == "500CASE001"), None)
+        assert case is not None
+        assert case["display_name"] == "Customer login blocked"
+
+    def test_salesforce_case_number_used_when_subject_missing(self):
+        org, run = "obj-sf-case-number", "run-obj-sf-case-number"
+        _extract(
+            org_id=org, run_id=run,
+            ingestor_data={"salesforce": {
+                "cases": [
+                    {"Id": "500CASE002", "CaseNumber": "000002", "OwnerId": "005OWNER002"}
+                ]
+            }},
+        )
+        objects = _db_entities_by_type(org, run, "object")
+        case = next((o for o in objects if o["source_record_id"] == "500CASE002"), None)
+        assert case is not None
+        assert case["display_name"] == "000002"
+
+    def test_later_case_subject_updates_existing_case_number_row(self):
+        org = f"obj-sf-upgrade-{_uuid.uuid4().hex[:8]}"
+        first_run = "run-obj-sf-upgrade-1"
+        second_run = "run-obj-sf-upgrade-2"
+
+        _extract(
+            org_id=org,
+            run_id=first_run,
+            ingestor_data={"salesforce": {
+                "cases": [
+                    {"Id": "500CASE003", "CaseNumber": "000003", "OwnerId": "005OWNER003"}
+                ]
+            }},
+        )
+        _extract(
+            org_id=org,
+            run_id=second_run,
+            ingestor_data={"salesforce": {
+                "cases": [
+                    {
+                        "Id": "500CASE003",
+                        "CaseNumber": "000003",
+                        "Subject": "Customer refund blocked",
+                        "OwnerId": "005OWNER003",
+                    }
+                ]
+            }},
+        )
+
+        with sqlite3.connect(_get_db_path()) as conn:
+            conn.row_factory = sqlite3.Row
+            rows = [
+                dict(r) for r in conn.execute(
+                    """
+                    SELECT * FROM entities
+                    WHERE org_id = %s
+                      AND entity_type = 'object'
+                      AND source_record_id = %s
+                    """,
+                    (org, "500CASE003"),
+                ).fetchall()
+            ]
+
+        assert len(rows) == 1
+        assert rows[0]["display_name"] == "Customer refund blocked"
+        assert rows[0]["canonical_name"] == "customer refund blocked"
+        assert rows[0]["last_seen_run_id"] == second_run
+
+    def test_ncino_loan_name_creates_object_display_name(self):
+        org, run = "obj-ncino-name", "run-obj-ncino-name"
+        _extract(
+            org_id=org, run_id=run,
+            pack_id="ncino",
+            ingestor_data={"salesforce": {
+                "ncino": {
+                    "loans": [
+                        {
+                            "Id": "LOAN001",
+                            "Name": "Commercial Term Loan - Acme",
+                            "OwnerId": "005OWNER003",
+                        }
+                    ]
+                }
+            }},
+        )
+        objects = _db_entities_by_type(org, run, "object")
+        loan = next((o for o in objects if o["source_record_id"] == "LOAN001"), None)
+        assert loan is not None
+        assert loan["display_name"] == "Commercial Term Loan - Acme"
 
     def test_jira_object_has_source_record_id(self):
         """Jira Object entity carries source_record_id = issue_key."""

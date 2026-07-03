@@ -1015,7 +1015,7 @@ def get_relationship_records(
         return list(fixture.get("cases") or fixture.get("records") or [])
 
     return client.soql(
-        "SELECT Id, CaseNumber, OwnerId, Status, CreatedDate "
+        "SELECT Id, CaseNumber, Subject, OwnerId, Status, CreatedDate "
         "FROM Case WHERE CreatedDate = LAST_N_DAYS:90 "
         "ORDER BY CreatedDate DESC LIMIT 500"
     )

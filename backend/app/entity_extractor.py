@@ -5,7 +5,7 @@ and detector results, then calls resolve_or_create_entity() for every entity
 found. It must never raise — failures are logged and the run continues.
 
 Extraction sources per Section 4b:
-  Salesforce/nCino: Person (OwnerId/approver_ids), Object (record IDs),
+  Salesforce/nCino: Person (OwnerId/approver_ids), Object (record names/IDs),
                     Process (detector_id)
   Jira:             Person (assignee, reporter), Team (project), Object (issue.key)
   ServiceNow:       Person (assigned_to, caller_id), Team (assignment_group),
@@ -324,6 +324,27 @@ def _ref_name_and_id(value: Any) -> tuple[Optional[str], Optional[str]]:
     return text, text
 
 
+_OBJECT_DISPLAY_FIELDS = (
+    "Name",
+    "name",
+    "Subject",
+    "subject",
+    "Title",
+    "title",
+    "CaseNumber",
+    "case_number",
+    "number",
+    "record_name",
+    "loan_number",
+    "application_name",
+    "loan_name",
+    "record_id",
+    "Id",
+    "id",
+    "loan_id",
+)
+
+
 # ---------------------------------------------------------------------------
 # Per-source extractors
 # ---------------------------------------------------------------------------
@@ -428,20 +449,7 @@ def _extract_salesforce_entities(
                     "LoanId",
                 ),
             )
-            display_name = _first_record_str(
-                record,
-                (
-                    "Name",
-                    "name",
-                    "CaseNumber",
-                    "case_number",
-                    "number",
-                    "record_name",
-                    "record_id",
-                    "Id",
-                    "id",
-                ),
-            )
+            display_name = _first_record_str(record, _OBJECT_DISPLAY_FIELDS)
             if not display_name:
                 continue
             try:
@@ -565,10 +573,7 @@ def _extract_salesforce_entities(
                 except Exception as exc:
                     logger.warning("nCino person extraction failed for %s: %s", owner_id, exc)
 
-            object_name = _first_record_str(
-                record,
-                ("Name", "name", "loan_number", "Id", "id", "loan_id"),
-            )
+            object_name = _first_record_str(record, _OBJECT_DISPLAY_FIELDS)
             if object_name:
                 try:
                     e = resolve_or_create_entity(
@@ -1334,7 +1339,7 @@ def _apply_overlay_rules(
     for rule in overlay.object_rules:
         for record in records_by_type.get(rule.object_api_name, []):
             display_name = _first_record_str(
-                record, (rule.name_field, "Name", "name", "Id", "id")
+                record, (rule.name_field, *_OBJECT_DISPLAY_FIELDS)
             )
             if not display_name:
                 continue
