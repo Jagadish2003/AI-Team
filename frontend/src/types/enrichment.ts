@@ -7,6 +7,9 @@ export interface EntitySummary {
   source_system: string;
   resolution_confidence: number;
   resolution_status: 'resolved' | 'ambiguous';
+  // Optional defensive field. The backend already filters OppEnrichment entities
+  // to run_count >= 3, but the UI also hides early entities if a payload carries it.
+  run_count?: number | null;
 }
 
 // Stage 2 relationship edge (T3-S13-A) — surfaced in the evidence trace.
