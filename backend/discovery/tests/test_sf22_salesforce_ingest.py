@@ -261,3 +261,47 @@ class TestErrorHandling:
         # in the env, _get_client raises (no server-key regeneration fallback).
         with pytest.raises(sf_mod.IngestError, match="SF_INSTANCE_URL"):
             sf_mod._get_client()
+
+
+class TestUserNameResolution:
+    """Owner/approver User Ids resolve to display names in one batched query."""
+
+    def test_offline_ingest_includes_fixture_user_names(self, sf_data):
+        # Offline fixture carries a user_names map so the knowledge graph shows
+        # real names instead of raw 005... Ids without live credentials.
+        names = sf_data.get("user_names") or {}
+        assert names.get("005xx000001AAA1") == "Sarah Chen"
+        assert names.get("005xx000001AAA2") == "Marcus Rivera"
+
+    def test_resolve_user_names_batches_and_aliases(self):
+        from discovery.ingest.salesforce import resolve_user_names
+
+        id18 = "005Qy00000123456AB"  # canonical 18-char Salesforce Id
+        assert len(id18) == 18
+        id15 = id18[:15]
+        calls = []
+
+        def fake_query(q):
+            calls.append(q)
+            return [
+                {"Id": id18, "Name": "Sarah Chen"},
+                {"Id": "005Qy000002BBB", "Name": "Marcus Rivera"},
+            ]
+
+        names = resolve_user_names(fake_query, [id18, "005Qy000002BBB", id18, ""])
+        # One batched query for all distinct Ids — never one per owner.
+        assert len(calls) == 1
+        assert names["005Qy000002BBB"] == "Marcus Rivera"
+        # 18-char Id is also reachable by its 15-char case-sensitive prefix.
+        assert names[id15] == "Sarah Chen"
+
+    def test_resolve_user_names_is_graceful_on_failure(self):
+        from discovery.ingest.salesforce import resolve_user_names
+
+        def boom(q):
+            raise RuntimeError("SOQL failed")
+
+        # A lookup failure degrades to an empty map; the run never breaks.
+        assert resolve_user_names(boom, ["005Qy000001AAA"]) == {}
+        assert resolve_user_names(None, ["005Qy000001AAA"]) == {}
+        assert resolve_user_names(lambda q: [], []) == {}

@@ -926,8 +926,27 @@ def ingest(preloaded_process_instances: Optional[List[Dict[str, Any]]] = None) -
 
     loan_ids = {l["Id"] for l in loans}
 
+    # Resolve loan owner User Ids to display names so entity extraction shows a
+    # real name instead of the raw ``005...`` Id. Batched and best-effort: in
+    # offline mode or on failure this is empty and extraction falls back to the
+    # raw Id. nCino runs against the same Salesforce org, so its client's SOQL
+    # entry point (``query``) drives the shared resolver.
+    user_names: Dict[str, str] = {}
+    if is_live() and client is not None:
+        owner_ids = [
+            str(l.get("OwnerId") or l.get("owner_id")).strip()
+            for l in loans
+            if isinstance(l, dict) and (l.get("OwnerId") or l.get("owner_id"))
+        ]
+        query_fn = getattr(client, "query", None)
+        if owner_ids and callable(query_fn):
+            from .salesforce import resolve_user_names
+
+            user_names = resolve_user_names(query_fn, owner_ids)
+
     return {
         "loans": loans,
+        "user_names": user_names,
         "loan_stage_history": stage_history,
         "covenant_compliance": covenant_compliance,
         "checklists": checklists,

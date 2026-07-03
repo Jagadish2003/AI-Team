@@ -682,6 +682,74 @@ class TestSalesforcePersonExtraction:
         assert persons[0]["source_system"] == "salesforce"
 
 
+class TestSalesforceUserNameResolution:
+    """user_names map (resolved at ingest time) → Person display_name is the
+    real name while source_record_id keeps the raw Salesforce User Id."""
+
+    def test_approver_id_resolves_to_display_name(self):
+        org, run = "sf-un-a", "run-sf-un-a"
+        _extract(
+            org_id=org, run_id=run,
+            ingestor_data={"salesforce": {
+                "approval_processes": [
+                    {"process_name": "Discount", "approver_ids": ["005Qy000001AAA"]}
+                ],
+                "user_names": {"005Qy000001AAA": "Sarah Chen"},
+            }},
+        )
+        persons = _db_entities_by_type(org, run, "person")
+        assert len(persons) == 1
+        # display_name is the human name; the stable Id is retained separately.
+        assert persons[0]["display_name"] == "Sarah Chen"
+        assert persons[0]["source_record_id"] == "005Qy000001AAA"
+
+    def test_owner_id_string_resolves_to_display_name(self):
+        org, run = "sf-un-b", "run-sf-un-b"
+        _extract(
+            org_id=org, run_id=run,
+            ingestor_data={"salesforce": {
+                "cases": [
+                    {"Id": "500CASE001", "CaseNumber": "1", "OwnerId": "005Qy000002BBB"}
+                ],
+                "user_names": {"005Qy000002BBB": "Marcus Rivera"},
+            }},
+        )
+        persons = _db_entities_by_type(org, run, "person")
+        marcus = next(p for p in persons if p["source_record_id"] == "005Qy000002BBB")
+        assert marcus["display_name"] == "Marcus Rivera"
+
+    def test_ncino_owner_resolves_via_ncino_user_names(self):
+        org, run = "sf-un-c", "run-sf-un-c"
+        _extract(
+            org_id=org, run_id=run, pack_id="ncino",
+            ingestor_data={"salesforce": {
+                "ncino": {
+                    "loans": [
+                        {"Id": "LOAN001", "Name": "Loan 001", "OwnerId": "005Qy000003CCC"}
+                    ],
+                    "user_names": {"005Qy000003CCC": "Amy Loan Officer"},
+                }
+            }},
+        )
+        persons = _db_entities_by_type(org, run, "person")
+        amy = next(p for p in persons if p["source_record_id"] == "005Qy000003CCC")
+        assert amy["display_name"] == "Amy Loan Officer"
+
+    def test_unmapped_id_falls_back_to_raw_id(self):
+        """An Id absent from user_names keeps the raw-Id display (graceful)."""
+        org, run = "sf-un-d", "run-sf-un-d"
+        _extract(
+            org_id=org, run_id=run,
+            ingestor_data={"salesforce": {
+                "approval_processes": [{"approver_ids": ["005Qy000004DDD"]}],
+                "user_names": {"005Qy000009ZZZ": "Someone Else"},
+            }},
+        )
+        persons = _db_entities_by_type(org, run, "person")
+        assert persons[0]["display_name"] == "005Qy000004DDD"
+        assert persons[0]["source_record_id"] == "005Qy000004DDD"
+
+
 class TestSalesforceOwnerDeduplication:
     """Repeated source records must expose one entity per Salesforce owner."""
 
