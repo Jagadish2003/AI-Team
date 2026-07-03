@@ -214,46 +214,69 @@ function sourceLabel(value: string): string {
   return SOURCE_LABELS[value.toLowerCase()] ?? labelize(value);
 }
 
-const MIN_VISIBLE_ENTITY_RUN_COUNT = 3;
+function isValidRunThreshold(value: number | null | undefined): value is number {
+  return typeof value === "number" && Number.isFinite(value) && value > 0;
+}
 
-function shouldShowEntity(entity: EntitySummary): boolean {
+function runLabel(count: number): string {
+  return `${count} run${count === 1 ? "" : "s"}`;
+}
+
+function shouldShowEntity(
+  entity: EntitySummary,
+  entityMinRunCount: number | null | undefined
+): boolean {
+  if (!isValidRunThreshold(entityMinRunCount)) return true;
   return (
     typeof entity.run_count !== "number" ||
-    entity.run_count >= MIN_VISIBLE_ENTITY_RUN_COUNT
+    entity.run_count >= entityMinRunCount
   );
 }
 
-function isEarlyEntity(entity: EntitySummary): boolean {
+function isEarlyEntity(
+  entity: EntitySummary,
+  entityMinRunCount: number | null | undefined
+): boolean {
+  if (!isValidRunThreshold(entityMinRunCount)) return false;
   return (
     typeof entity.run_count === "number" &&
-    entity.run_count < MIN_VISIBLE_ENTITY_RUN_COUNT
+    entity.run_count < entityMinRunCount
   );
 }
 
 export function EntityTracePanel({
   entities,
   runCount,
+  entityMinRunCount,
   enrichmentLoaded = false,
 }: {
   entities: EntitySummary[] | null | undefined;
   runCount?: number | null;
+  entityMinRunCount?: number | null;
   enrichmentLoaded?: boolean;
 }) {
   if (!enrichmentLoaded && !entities) return null;
 
   const entityList = entities ?? [];
+  const hasRunThreshold = isValidRunThreshold(entityMinRunCount);
   const uniqueEntities = Array.from(
     new Map(
       entityList
-        .filter(shouldShowEntity)
+        .filter((entity) => shouldShowEntity(entity, entityMinRunCount))
         .map((entity) => [entity.entity_id, entity])
     ).values()
   );
   const isWaitingForRunHistory =
-    (typeof runCount === "number" && runCount < MIN_VISIBLE_ENTITY_RUN_COUNT) ||
-    entityList.some(isEarlyEntity) ||
-    uniqueEntities.length === 0;
-  const emptyTitle = "Entities will appear after 3 or more discovery runs.";
+    hasRunThreshold &&
+    uniqueEntities.length === 0 &&
+    (
+      (typeof runCount === "number" && runCount < entityMinRunCount) ||
+      entityList.some((entity) => isEarlyEntity(entity, entityMinRunCount))
+    );
+  const thresholdLabel = hasRunThreshold ? runLabel(entityMinRunCount) : null;
+  const emptyTitle = isWaitingForRunHistory && thresholdLabel
+    ? `Entities will appear after ${entityMinRunCount} or more discovery runs.`
+    : "No entities linked to this opportunity.";
   const emptyDescription = isWaitingForRunHistory
     ? "AgentIQ is already retaining early entity signals for graph completeness. They stay hidden here until enough run history is available, so this section shows stable, repeatable entities."
     : "AgentIQ will show linked people, systems, and process entities here when eligible entity evidence is available.";
@@ -266,7 +289,7 @@ export function EntityTracePanel({
           {uniqueEntities.length > 0
             ? `${uniqueEntities.length} linked`
             : isWaitingForRunHistory
-              ? "Hidden until 3 runs"
+              ? `Hidden until ${thresholdLabel}`
               : "0 linked"}
         </span>
       </div>
@@ -747,6 +770,7 @@ export default function OpportunityDetail({
         <EntityTracePanel
           entities={enrichment?.entities}
           runCount={enrichment?.run_count}
+          entityMinRunCount={enrichment?.entity_min_run_count}
           enrichmentLoaded={Boolean(enrichment)}
         />
 
