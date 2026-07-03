@@ -44,7 +44,7 @@ function ReadinessCounts({
   missing: number;
 }) {
   return (
-    <span className="flex flex-wrap items-center justify-end gap-x-1 gap-y-0.5 text-xs">
+    <span className="flex flex-wrap items-center justify-end gap-x-1 gap-y-0.5 text-[10px]">
       <span className="roadmap-count-ready whitespace-nowrap font-semibold text-emerald-300">{ready} READY</span>
       <span className="opacity-10">&middot;</span>
       <span className="roadmap-count-pending whitespace-nowrap font-semibold text-amber-300">{pending} PENDING</span>
