@@ -52,7 +52,7 @@ def test_resolves_only_authenticated_connectors_with_url(monkeypatch):
     async def fake_get_token(org_id, connector_id):
         # servicenow + slack + teams + github + java_app + dotnet_app not connected
         # in this scenario.
-        if connector_id in ("servicenow", "slack", "teams", "github", "java_app", "dotnet_app"):
+        if connector_id in ("servicenow", "slack", "teams", "github", "java_app", "dotnet_app", "sharepoint"):
             raise ConnectorNotAuthenticatedError(org_id, connector_id)
         return _token(connector_id)
 
@@ -81,7 +81,7 @@ def test_authenticated_but_unresolvable_url_is_skipped(monkeypatch):
     monkeypatch.delenv("JIRA_URL", raising=False)
 
     async def fake_get_token(org_id, connector_id):
-        if connector_id in ("slack", "teams", "github", "java_app", "dotnet_app"):
+        if connector_id in ("slack", "teams", "github", "java_app", "dotnet_app", "sharepoint"):
             raise ConnectorNotAuthenticatedError(org_id, connector_id)
         return _token(connector_id)
 
@@ -277,7 +277,7 @@ def test_unexpected_vault_error_excludes_connector(monkeypatch):
     async def fake_get_token(org_id, connector_id):
         if connector_id == "salesforce":
             raise RuntimeError("vault boom")
-        if connector_id in ("jira", "slack", "teams", "github", "java_app", "dotnet_app"):
+        if connector_id in ("jira", "slack", "teams", "github", "java_app", "dotnet_app", "sharepoint"):
             raise ConnectorNotAuthenticatedError(org_id, connector_id)
         return _token(connector_id)
 
