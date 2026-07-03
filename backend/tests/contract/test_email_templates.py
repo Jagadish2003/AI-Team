@@ -68,9 +68,10 @@ def test_welcome_template_confirms_registration():
     html = _read("welcome.html")
     assert re.search(r"welcome", html, re.IGNORECASE)
     assert "{{ org }}" in html
+    assert "{{ recipient_name }}" in html
     # Onboarding feel: a clear "get started" / next-steps section.
     assert re.search(r"get started|started", html, re.IGNORECASE)
-    assert _jinja_vars(html) <= {"org"}
+    assert _jinja_vars(html) <= {"org", "recipient_name"}
 
 
 # ── reset password ────────────────────────────────────────────────────────────
@@ -110,8 +111,12 @@ def test_templates_render_with_jinja2():
     assert "https://app.example.com/accept-invite?token=ABC123" in invite
     assert "Analyst" in invite  # role|capitalize
 
-    welcome = env.get_template("welcome.html").render(org="Acme Corp")
+    welcome = env.get_template("welcome.html").render(
+        org="Acme Corp",
+        recipient_name="Jenny",
+    )
     assert "Acme Corp" in welcome
+    assert "Welcome Jenny to AgentIQ" in welcome
 
     reset = env.get_template("reset_password.html").render(
         link="https://app.example.com/reset-password?token=XYZ789",

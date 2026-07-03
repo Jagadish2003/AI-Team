@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import smtplib
 from datetime import datetime
 from email.message import EmailMessage
@@ -74,6 +75,21 @@ def _jinja_env():
 def render_template(template_name: str, **context) -> str:
     """Render an HTML email template from app/templates/."""
     return _jinja_env().get_template(template_name).render(**context)
+
+
+def _display_name_from_email(email: str) -> str:
+    """Return a friendly display name from an email local part."""
+    local_part = (email or "").strip().split("@", 1)[0].strip()
+    if not local_part:
+        return "there"
+    words = [word for word in re.split(r"[._+\-\s]+", local_part) if word]
+    if not words:
+        return local_part
+    return " ".join(word[:1].upper() + word[1:].lower() for word in words)
+
+
+def _org_approval_request_subject(org_name: str) -> str:
+    return f"New AgentIQ organisation pending approval: {org_name}"
 
 
 def send_email(to: str, subject: str, html_body: str) -> bool:
@@ -188,11 +204,13 @@ def send_invite_email(to: str, invite_token: str, org_name: str, role: str) -> b
 
 def send_welcome_email(to: str, org_name: str) -> bool:
     """Welcome email sent after successful registration."""
+    recipient_name = _display_name_from_email(to)
     return _render_and_send(
         to,
-        f"Welcome to AgentIQ - {org_name}",
+        f"Welcome {recipient_name} to AgentIQ - {org_name}",
         "welcome.html",
         org=org_name,
+        recipient_name=recipient_name,
     )
 
 
@@ -243,12 +261,14 @@ def send_org_approval_request_email(
         f"?token={approval_token}&org_id={org_id}"
     )
     submitted_at = datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
+    registrant_name = _display_name_from_email(registrant_email)
 
     return _render_and_send(
         admin_email,
-        f"New AgentIQ organisation pending approval: {org_name}",
+        _org_approval_request_subject(org_name),
         "org_approval_request.html",
         org_name=org_name,
+        registrant_name=registrant_name,
         registrant_email=registrant_email,
         submitted_at=submitted_at,
         approve_url=approve_url,

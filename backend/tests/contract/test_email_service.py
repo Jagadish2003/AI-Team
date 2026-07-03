@@ -165,9 +165,12 @@ def test_send_invite_email_builds_link_subject_and_html(monkeypatch):
 
 def test_send_welcome_email_builds_subject_and_html(monkeypatch):
     captured = _capture_send_email(monkeypatch)
-    assert email_service.send_welcome_email("user@example.com", "Acme Corp") is True
-    assert captured["subject"] == "Welcome to AgentIQ - Acme Corp"
+    assert email_service.send_welcome_email("jenny.smith@example.com", "Acme Corp") is True
+    assert captured["subject"] == "Welcome Jenny Smith to AgentIQ - Acme Corp"
+    assert "Welcome Jenny Smith to AgentIQ" in captured["html"]
     assert "Acme Corp" in captured["html"]
+    assert "Account created" in captured["html"]
+    assert "workspace is ready" in captured["html"]
 
 
 def test_send_password_reset_email_strips_trailing_slash_in_base(monkeypatch):
@@ -217,8 +220,16 @@ def test_org_approval_request_email_to_admin_with_distinct_links(monkeypatch):
 
     assert ok is True
     assert captured["to"] == "agentiqadmin@dwpglobal.com"
-    assert "Acme Bank" in captured["subject"]
+    assert captured["subject"] == "New AgentIQ organisation pending approval: Acme Bank"
+    assert not captured["subject"].startswith("Welcome")
+    assert "needs approval" not in captured["subject"]
     html = captured["html"]
+    assert "Organisation approval" in html
+    assert "New organisation pending approval" in html
+    assert "<strong>Owner</strong> has registered" in html
+    assert "Registrant name" in html
+    assert "Registrant email" in html
+    assert "Welcome Owner to AgentIQ" not in html
     assert "Acme Bank" in html
     assert "owner@acme.test" in html
     # Distinct approve and reject endpoints both present.
@@ -291,6 +302,7 @@ def test_all_three_org_templates_render_without_errors():
     request_html = email_service.render_template(
         "org_approval_request.html",
         org_name="A&B Bank",
+        registrant_name="Owner",
         registrant_email="owner@acme.test",
         submitted_at="2026-06-19 10:00 UTC",
         approve_url="https://api.example.com/api/auth/org-approval/approve?token=T&org_id=O",
