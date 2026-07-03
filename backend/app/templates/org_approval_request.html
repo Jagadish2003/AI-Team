@@ -46,8 +46,12 @@
       <div class="body">
         <p class="eyebrow">Organisation approval</p>
         <h1 class="h1">New organisation pending approval</h1>
-        <p>A new organisation has registered and is awaiting approval. Review the
-          details below, then approve or reject the registration.</p>
+        <p><strong>{{ registrant_name }}</strong> has registered
+          <strong>{{ org_name }}</strong> for an AgentIQ workspace and is waiting
+          for approval.</p>
+        <p>Please review the details below. Approving the request lets the
+          registrant sign in and start setting up discovery for their
+          organisation; rejecting it keeps the workspace blocked.</p>
 
         <div class="panel">
           <div class="row">
@@ -55,7 +59,11 @@
             <p class="value">{{ org_name }}</p>
           </div>
           <div class="row">
-            <p class="label">Registrant</p>
+            <p class="label">Registrant name</p>
+            <p class="value">{{ registrant_name }}</p>
+          </div>
+          <div class="row">
+            <p class="label">Registrant email</p>
             <p class="value">{{ registrant_email }}</p>
           </div>
           <div class="row">

@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="x-apple-disable-message-reformatting">
-  <title>Welcome to AgentIQ</title>
+  <title>Welcome {{ recipient_name }} to AgentIQ</title>
   <style>
     body { margin:0; padding:0; background:#e6eef9; }
     .wrap { width:100%; background:#e6eef9; padding:28px 12px; }
@@ -36,7 +36,7 @@
       </div>
       <div class="body">
         <p class="eyebrow">Account created</p>
-        <h1 class="h1">Welcome to AgentIQ</h1>
+        <h1 class="h1">Welcome {{ recipient_name }} to AgentIQ</h1>
         <p>Your <strong>{{ org }}</strong> workspace is ready. Your account has been created successfully.</p>
         <p>To get started, use AgentIQ to connect source systems, run discovery, and review automation opportunities.</p>
         <ul class="steps">
