@@ -21,6 +21,7 @@ fuzzy matching story as intentional data.
 from __future__ import annotations
 
 import logging
+import re
 from datetime import datetime, timezone
 from typing import Any, Optional
 
@@ -31,6 +32,8 @@ from database.models.entities import Entity, ENTITY_NAME_MAX_LEN
 logger = logging.getLogger(__name__)
 
 _STABLE_ENTITY_TYPES = frozenset({"system", "process"})
+_NUMERIC_ID_RE = re.compile(r"^\d{4,}$")
+_COMPACT_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{5,}$")
 
 
 def _now() -> str:
@@ -144,6 +147,31 @@ def _canonicalize(display_name: str) -> str:
     return _truncate(" ".join(display_name.split()).lower())
 
 
+def _looks_like_identifier(value: str) -> bool:
+    """Return True for compact ID-ish labels like Salesforce IDs or case numbers."""
+    text = str(value or "").strip()
+    if not text or any(ch.isspace() for ch in text):
+        return False
+    if _NUMERIC_ID_RE.fullmatch(text):
+        return True
+    if _COMPACT_ID_RE.fullmatch(text) and any(ch.isdigit() for ch in text):
+        return True
+    return False
+
+
+def _should_replace_display_name(existing_display: str, incoming_display: str) -> bool:
+    """Use a new display value only when it improves an ID-looking saved value."""
+    existing = str(existing_display or "").strip()
+    incoming = str(incoming_display or "").strip()
+    if not incoming or incoming == existing:
+        return False
+    existing_is_id = _looks_like_identifier(existing)
+    incoming_is_id = _looks_like_identifier(incoming)
+    if incoming_is_id and not existing_is_id:
+        return False
+    return existing_is_id and not incoming_is_id
+
+
 def _connect() -> Any:
     conn = db.connect()
     return conn
@@ -189,6 +217,32 @@ def get_entities_by_canonical(
         ORDER BY created_at ASC
         """,
         (org_id, entity_type, canonical_name),
+    )
+    rows = cur.fetchall()
+    return [_row_to_entity(r) for r in rows]
+
+
+def get_entities_by_source_record_id(
+    conn: Any,
+    org_id: str,
+    entity_type: str,
+    source_system: str,
+    source_record_id: Optional[str],
+) -> list[Entity]:
+    """Return source-backed entities for the same external record."""
+    if not source_record_id:
+        return []
+    cur = conn.cursor()
+    cur.execute(
+        """
+        SELECT * FROM entities
+        WHERE org_id = %s
+          AND entity_type = %s
+          AND source_system = %s
+          AND source_record_id = %s
+        ORDER BY created_at ASC
+        """,
+        (org_id, entity_type, source_system, source_record_id),
     )
     rows = cur.fetchall()
     return [_row_to_entity(r) for r in rows]
@@ -264,6 +318,84 @@ def update_entity_seen(
     )
 
 
+def update_entity_display_and_seen(
+    conn: Any,
+    entity_id: str,
+    *,
+    run_id: str,
+    display_name: str,
+    canonical_name: str,
+    new_confidence: float,
+    new_source_record_id: Optional[str],
+) -> None:
+    """Refresh an existing source-backed row when a better name arrives later."""
+    cur = conn.cursor()
+    cur.execute(
+        """
+        UPDATE entities
+        SET display_name          = %s,
+            canonical_name        = %s,
+            last_seen_run_id      = %s,
+            run_count             = run_count + CASE WHEN last_seen_run_id <> %s THEN 1 ELSE 0 END,
+            resolution_confidence = GREATEST(resolution_confidence, %s),
+            source_record_id      = COALESCE(source_record_id, %s),
+            updated_at            = %s
+        WHERE id = %s
+        """,
+        (
+            display_name,
+            canonical_name,
+            run_id,
+            run_id,
+            new_confidence,
+            new_source_record_id,
+            _now(),
+            str(entity_id),
+        ),
+    )
+
+
+def _refresh_source_matches(
+    conn: Any,
+    matches: list[Entity],
+    *,
+    run_id: str,
+    display_name: str,
+    canonical_name: str,
+    entity_type: str,
+    source_record_id: Optional[str],
+) -> Optional[Entity]:
+    """Update same-source rows and return the first refreshed resolved entity."""
+    resolved_matches = [m for m in matches if m.resolution_status == "resolved"]
+    if not resolved_matches:
+        return None
+    incoming_confidence = _initial_confidence(entity_type, source_record_id)
+    for match in resolved_matches:
+        if _should_replace_display_name(match.display_name, display_name):
+            update_entity_display_and_seen(
+                conn,
+                str(match.id),
+                run_id=run_id,
+                display_name=display_name,
+                canonical_name=canonical_name,
+                new_confidence=incoming_confidence,
+                new_source_record_id=source_record_id,
+            )
+        else:
+            update_entity_seen(
+                conn,
+                str(match.id),
+                run_id,
+                match.source_system,
+                new_confidence=incoming_confidence,
+                new_source_record_id=source_record_id,
+            )
+    cur = conn.cursor()
+    cur.execute("SELECT * FROM entities WHERE id = %s", (str(resolved_matches[0].id),))
+    row = cur.fetchone()
+    return _row_to_entity(row)
+
+
 def _initial_confidence(
     entity_type: str,
     source_record_id: Optional[str],
@@ -311,6 +443,26 @@ def resolve_or_create_entity(
         candidates = get_entities_by_canonical(conn, org_id, entity_type, canonical)
 
         if len(candidates) == 0:
+            source_matches = get_entities_by_source_record_id(
+                conn,
+                org_id,
+                entity_type,
+                source_system,
+                source_record_id,
+            )
+            source_entity = _refresh_source_matches(
+                conn,
+                source_matches,
+                run_id=run_id,
+                display_name=display_name,
+                canonical_name=canonical,
+                entity_type=entity_type,
+                source_record_id=source_record_id,
+            )
+            if source_entity is not None:
+                conn.commit()
+                return source_entity
+
             # Branch 1 — no match: create new entity
             confidence = _initial_confidence(entity_type, source_record_id)
             entity = Entity(
@@ -366,6 +518,26 @@ def resolve_or_create_entity(
             )
             row = cur.fetchone()
             return _row_to_entity(row)
+
+        source_matches = [
+            candidate
+            for candidate in candidates
+            if source_record_id
+            and candidate.source_system == source_system
+            and candidate.source_record_id == source_record_id
+        ]
+        source_entity = _refresh_source_matches(
+            conn,
+            source_matches,
+            run_id=run_id,
+            display_name=display_name,
+            canonical_name=canonical,
+            entity_type=entity_type,
+            source_record_id=source_record_id,
+        )
+        if source_entity is not None:
+            conn.commit()
+            return source_entity
 
         # Branch 3 — multiple candidates: ambiguous, create new distinct row.
         # Never merge. Mark all existing matches ambiguous.

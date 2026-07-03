@@ -168,6 +168,14 @@ def get_current_org_id_optional() -> str | None:
 # inert — queried/alerted on, never served as a tenant's data.
 UNATTRIBUTED_ORG = "_unattributed"
 
+# Logging-only guard (not functional state): the unresolved-attribution message
+# is always identical, and startup / background emitters fire it many times in a
+# row, drowning real warnings. We keep the FIRST occurrence at WARNING so the
+# data-quality gap stays observable, then log repeats at DEBUG to stop the spam.
+# This flips a log level only — attribution behaviour and the returned sentinel
+# are unchanged.
+_unattributed_warned = False
+
 
 def resolve_event_org_id(explicit_org_id: str | None = None) -> str:
     """Resolve the org an audit or telemetry event should be attributed to.
@@ -194,7 +202,13 @@ def resolve_event_org_id(explicit_org_id: str | None = None) -> str:
         return ctx
     if explicit_org_id:
         return explicit_org_id
-    logger.warning(
+    # Log the first unresolved event at WARNING (stays observable); repeats at
+    # DEBUG so startup / background emitters don't flood the console. Logging
+    # level only — the sentinel below is returned exactly as before.
+    global _unattributed_warned
+    log = logger.warning if not _unattributed_warned else logger.debug
+    _unattributed_warned = True
+    log(
         "event org attribution unresolved (no request context, no explicit "
         "org_id) — attributing to %r",
         UNATTRIBUTED_ORG,

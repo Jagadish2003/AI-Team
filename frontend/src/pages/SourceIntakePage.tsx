@@ -124,8 +124,8 @@ export default function SourceIntakePage() {
               />
 
               <ManagedAgentPanel
-                onDownload={() => push('Agent download available in later sprint.')}
-                onGuide={() => push('Installation guide available in later sprint.')}
+                onDownload={() => push('Coming Soon')}
+                onGuide={() => push('Coming Soon')}
               />
 
               <SampleWorkspacePanel
@@ -134,7 +134,7 @@ export default function SourceIntakePage() {
                   setSampleWorkspaceEnabled(true);
                   push('Sample workspace enabled.');
                 }}
-                onLearnMore={() => push('More details available later sprint.')}
+                onLearnMore={() => push('Coming Soon')}
               />
             </div>
 

@@ -164,7 +164,7 @@ export default function ConnectorDetailPanel({
         </div>
 
         <button
-          onClick={() => push('More details available in later sprint.')}
+          onClick={() => push('Coming Soon')}
           className="inline-flex items-center gap-1 rounded-md border border-accent/20 bg-accent/5 px-2 py-1 text-xs font-medium text-accent transition-colors hover:border-accent/45 hover:bg-accent/10 focus:outline-none focus-visible:ring-1 focus-visible:ring-accent/40"
         >
           Learn More <ExternalLink size={14} />
@@ -172,6 +172,15 @@ export default function ConnectorDetailPanel({
       </div>
 
       <div className="mt-4 border-t border-border" />
+
+      {/* Salesforce product declaration — rendered first in the panel so the
+          workspace declaration is visible at the top of the right panel. */}
+      {connector.id === 'salesforce' && isConnected && (
+        <>
+          <SalesforceProductPicker />
+          <div className="mt-4 border-t border-border" />
+        </>
+      )}
 
       <div className="mt-4">
         <div className="mb-2 text-sm font-medium text-text">Access as:</div>
@@ -194,8 +203,6 @@ export default function ConnectorDetailPanel({
       </div>
 
       <ConnectionHealthSection connector={connector} />
-
-      {connector.id === 'salesforce' && isConnected && <SalesforceProductPicker />}
 
       {/* T2-S11-A Task T9: SQL Server scope declaration */}
       {/* Shown after SQL Server is connected — read scope selector */}

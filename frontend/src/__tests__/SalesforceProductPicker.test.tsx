@@ -20,6 +20,7 @@ import { vi, describe, it, expect, beforeEach, afterEach } from 'vitest';
 
 const mockApiGet = vi.fn();
 const mockApiPatch = vi.fn();
+const mockApiPost = vi.fn();
 
 vi.mock('../lib/apiClient', () => ({
   ApiError: class ApiError extends Error {
@@ -31,6 +32,9 @@ vi.mock('../lib/apiClient', () => ({
   },
   apiGet: (...args: unknown[]) => mockApiGet(...args),
   apiPatch: (...args: unknown[]) => mockApiPatch(...args),
+  // apiPost is unused by the picker but imported by the DB scope pickers that
+  // ConnectorDetailPanel pulls in, so the module mock must export it.
+  apiPost: (...args: unknown[]) => mockApiPost(...args),
 }));
 
 const mockPush = vi.fn();
@@ -39,6 +43,8 @@ vi.mock('../components/common/Toast', () => ({
 }));
 
 import SalesforceProductPicker from '../components/integrations/SalesforceProductPicker';
+import ConnectorDetailPanel from '../components/integrations/ConnectorDetailPanel';
+import { Connector } from '../types/connector';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -116,5 +122,63 @@ describe('SalesforceProductPicker', () => {
       '/api/connectors/salesforce/products',
       { products: ['salesforce_ncino'] },
     );
+  });
+});
+
+// ── Placement inside ConnectorDetailPanel ─────────────────────────────────────
+// The product declaration must be the first content section of the Integration
+// Hub right panel — above "Access as:" and Connection Health — so it is
+// visible without scrolling when Salesforce is selected.
+
+const salesforceConnector: Connector = {
+  id: 'salesforce',
+  name: 'Salesforce',
+  category: 'CRM Platform',
+  tier: 'recommended',
+  status: 'connected',
+  configured: true,
+  metrics: [],
+  lastSynced: '1 hour ago',
+  reads: ['Cases', 'Flows', 'Approvals'],
+  signalStrength: 80,
+};
+
+describe('SalesforceProductPicker placement in ConnectorDetailPanel', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    setupDefaultMocks();
+  });
+
+  afterEach(() => {
+    cleanup();
+    vi.restoreAllMocks();
+  });
+
+  it('renders the Salesforce products section above "Access as:" and Connection Health', async () => {
+    render(<ConnectorDetailPanel connector={salesforceConnector} onConfigure={vi.fn()} />);
+
+    const products = await screen.findByText('Salesforce products in use');
+    const accessAs = screen.getByText('Access as:');
+    const health = screen.getByText('Connection Health');
+
+    // DOCUMENT_POSITION_FOLLOWING: the argument comes after the receiver.
+    expect(
+      products.compareDocumentPosition(accessAs) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(
+      products.compareDocumentPosition(health) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+
+  it('does not render the products section when Salesforce is not connected', async () => {
+    render(
+      <ConnectorDetailPanel
+        connector={{ ...salesforceConnector, status: 'not_connected', configured: false }}
+        onConfigure={vi.fn()}
+      />,
+    );
+
+    expect(screen.queryByText('Salesforce products in use')).not.toBeInTheDocument();
+    expect(screen.getByText('Access as:')).toBeInTheDocument();
   });
 });

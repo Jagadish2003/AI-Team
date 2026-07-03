@@ -117,7 +117,7 @@ export default function RunSummaryPanel({
           className="fixed bottom-6 right-6 z-50 max-w-sm cursor-pointer rounded-md border border-border bg-panel px-3 py-2 text-sm text-text shadow"
           onClick={() => setShowDownloadModal(false)}
         >
-          Download export will be enabled in a later sprint.
+          Coming Soon
         </div>
       )}
     </div>

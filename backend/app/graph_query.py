@@ -38,6 +38,7 @@ building blocks so callers (and Stage 3 analysis) can always reach either set.
 from __future__ import annotations
 
 import logging
+import re
 import time
 from collections import deque
 from typing import Any, Dict, List, Optional
@@ -48,6 +49,8 @@ from app import db
 from app.config import inferred_relationships_enabled
 
 logger = logging.getLogger(__name__)
+_NUMERIC_ID_RE = re.compile(r"^\d{4,}$")
+_COMPACT_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{5,}$")
 
 
 class RelationshipSummary(BaseModel):
@@ -66,6 +69,96 @@ class RelationshipSummary(BaseModel):
     confidence: float
 
 
+def _looks_like_identifier(value: Any) -> bool:
+    text = str(value or "").strip()
+    if not text or any(ch.isspace() for ch in text):
+        return False
+    if _NUMERIC_ID_RE.fullmatch(text):
+        return True
+    if _COMPACT_ID_RE.fullmatch(text) and any(ch.isdigit() for ch in text):
+        return True
+    return False
+
+
+def _better_display_name(current: Any, candidate: Any) -> str:
+    current_text = str(current or "").strip()
+    candidate_text = str(candidate or "").strip()
+    if not candidate_text or candidate_text == current_text:
+        return current_text
+    if not current_text:
+        return candidate_text
+    if _looks_like_identifier(candidate_text) and not _looks_like_identifier(current_text):
+        return current_text
+    if _looks_like_identifier(current_text) and not _looks_like_identifier(candidate_text):
+        return candidate_text
+    return current_text
+
+
+def _apply_better_source_display_names(
+    cur: Any,
+    org_id: str,
+    rows: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Prefer readable names from same source_record_id over ID-only names."""
+    refs: set[tuple[str, str, str]] = set()
+    for row in rows:
+        for prefix in ("from", "to"):
+            entity_type = str(row.get(f"{prefix}_entity_type") or "").strip()
+            source_system = str(row.get(f"{prefix}_source_system") or "").strip()
+            source_record_id = str(row.get(f"{prefix}_source_record_id") or "").strip()
+            if entity_type and source_system and source_record_id:
+                refs.add((entity_type, source_system, source_record_id))
+    if not refs:
+        return rows
+
+    values_sql = ", ".join(["(%s, %s, %s)"] * len(refs))
+    params: list[Any] = []
+    for entity_type, source_system, source_record_id in sorted(refs):
+        params.extend([entity_type, source_system, source_record_id])
+    params.append(org_id)
+
+    cur.execute(
+        f"""
+        WITH requested(entity_type, source_system, source_record_id) AS (
+            VALUES {values_sql}
+        )
+        SELECT e.entity_type, e.source_system, e.source_record_id, e.display_name
+        FROM entities e
+        JOIN requested r
+          ON r.entity_type = e.entity_type
+         AND r.source_system = e.source_system
+         AND r.source_record_id = e.source_record_id
+        WHERE e.org_id = %s
+          AND e.resolution_status = 'resolved'
+        ORDER BY e.updated_at DESC, e.created_at DESC
+        """,
+        tuple(params),
+    )
+    best_by_source: dict[tuple[str, str, str], str] = {}
+    for candidate in cur.fetchall():
+        key = (
+            str(candidate["entity_type"] or "").strip(),
+            str(candidate["source_system"] or "").strip(),
+            str(candidate["source_record_id"] or "").strip(),
+        )
+        current_best = best_by_source.get(key, "")
+        best_by_source[key] = _better_display_name(current_best, candidate["display_name"])
+
+    for row in rows:
+        for prefix in ("from", "to"):
+            key = (
+                str(row.get(f"{prefix}_entity_type") or "").strip(),
+                str(row.get(f"{prefix}_source_system") or "").strip(),
+                str(row.get(f"{prefix}_source_record_id") or "").strip(),
+            )
+            if key in best_by_source:
+                row[f"{prefix}_entity_name"] = _better_display_name(
+                    row.get(f"{prefix}_entity_name"),
+                    best_by_source[key],
+                )
+    return rows
+
+
 # Edge row joined to both endpoint entities for display names/types, and to
 # runs for chronological visibility and run/org ownership. INNER JOIN:
 # an edge whose endpoints or first-seen run are not resolvable cannot produce a
@@ -79,8 +172,12 @@ _SELECT_EDGES = """
         er.confidence        AS confidence,
         ef.display_name      AS from_entity_name,
         ef.entity_type       AS from_entity_type,
+        ef.source_system     AS from_source_system,
+        ef.source_record_id  AS from_source_record_id,
         et.display_name      AS to_entity_name,
-        et.entity_type       AS to_entity_type
+        et.entity_type       AS to_entity_type,
+        et.source_system     AS to_source_system,
+        et.source_record_id  AS to_source_record_id
     FROM entity_relationships er
     JOIN runs queried_run ON queried_run.id = %s
     JOIN runs first_seen_run ON first_seen_run.id = er.first_seen_run_id
@@ -111,7 +208,8 @@ def _query(org_id: str, run_id: str, observed_only: bool) -> List[RelationshipSu
     try:
         cur = conn.cursor()
         cur.execute(sql, (run_id, org_id))
-        rows = cur.fetchall()
+        rows = [dict(row) for row in cur.fetchall()]
+        rows = _apply_better_source_display_names(cur, org_id, rows)
     finally:
         conn.close()
 
@@ -172,9 +270,11 @@ _SELECT_CURRENT_RUN_EDGES = """
         er.confidence        AS confidence,
         ef.display_name      AS from_entity_name,
         ef.entity_type       AS from_entity_type,
+        ef.source_system     AS from_source_system,
         ef.source_record_id  AS from_source_record_id,
         et.display_name      AS to_entity_name,
         et.entity_type       AS to_entity_type,
+        et.source_system     AS to_source_system,
         et.source_record_id  AS to_source_record_id
     FROM entity_relationships er
     JOIN runs queried_run ON queried_run.id = %s
@@ -210,7 +310,8 @@ def select_relationships_for_opportunity(
     try:
         cur = conn.cursor()
         cur.execute(sql, (run_id, org_id, run_id))
-        rows = cur.fetchall()
+        rows = [dict(row) for row in cur.fetchall()]
+        rows = _apply_better_source_display_names(cur, org_id, rows)
     finally:
         conn.close()
 
@@ -263,8 +364,12 @@ _SELECT_ENTITY_EDGES = """
         er.confidence        AS confidence,
         ef.display_name      AS from_entity_name,
         ef.entity_type       AS from_entity_type,
+        ef.source_system     AS from_source_system,
+        ef.source_record_id  AS from_source_record_id,
         et.display_name      AS to_entity_name,
-        et.entity_type       AS to_entity_type
+        et.entity_type       AS to_entity_type,
+        et.source_system     AS to_source_system,
+        et.source_record_id  AS to_source_record_id
     FROM entity_relationships er
     JOIN entities ef ON ef.id = er.from_entity_id AND ef.org_id = er.org_id
     JOIN entities et ON et.id = er.to_entity_id   AND et.org_id = er.org_id
@@ -307,7 +412,8 @@ def get_entity_relationships(
     try:
         cur = conn.cursor()
         cur.execute(sql, (org_id, entity_id, entity_id))
-        rows = cur.fetchall()
+        rows = [dict(row) for row in cur.fetchall()]
+        rows = _apply_better_source_display_names(cur, org_id, rows)
     finally:
         conn.close()
 

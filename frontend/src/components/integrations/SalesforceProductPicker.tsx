@@ -2,7 +2,9 @@
  * SalesforceProductPicker — ENG-IH-3 Sprint 9
  *
  * Rendered inside ConnectorDetailPanel when connector.id === 'salesforce'
- * and connector.status === 'connected'.
+ * and connector.status === 'connected'. Placed at the top of the panel body
+ * (above "Access as:" and Connection Health) so the product declaration is
+ * the first thing visible in the Integration Hub right panel.
  *
  * Replaces the cloud expansion panel that previously lived in
  * Stack Builder Screen 2 (YourSystemsScreen.tsx). This is now a
