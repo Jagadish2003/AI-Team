@@ -297,7 +297,8 @@ CREATE TABLE "public"."orgs" (
     "approval_token_hash" character varying(256),
     "approval_token_expires_at" timestamp with time zone,
     "approved_at" timestamp with time zone,
-    "approved_by_action" character varying(16)
+    "approved_by_action" character varying(16),
+    "domain" character varying(255)
 );
 
 
@@ -333,6 +334,29 @@ CREATE TABLE "public"."org_licenses" (
     "last_status" character varying(32),
     "updated_at" timestamp with time zone DEFAULT now() NOT NULL,
     CONSTRAINT "org_licenses_pkey" PRIMARY KEY ("org_id")
+);
+
+
+--
+-- Name: org_join_requests; Type: TABLE; Schema: public; Owner: -
+--
+-- Synced from the live dev database (org join-request approval flow: a user's
+-- request to join an org, decided by an owner). No migration or model in this
+-- repo owns this table yet — keep this definition in sync with the live schema
+-- until one takes ownership.
+--
+
+CREATE TABLE "public"."org_join_requests" (
+    "id" character varying(36) NOT NULL,
+    "org_id" character varying(36) NOT NULL,
+    "user_id" character varying(36) NOT NULL,
+    "email" character varying(256) NOT NULL,
+    "status" character varying(16) DEFAULT 'pending'::character varying NOT NULL,
+    "role" character varying(16),
+    "requested_at" timestamp without time zone NOT NULL,
+    "decided_at" timestamp without time zone,
+    "decided_by" character varying(36),
+    CONSTRAINT "org_join_requests_pkey" PRIMARY KEY ("id")
 );
 
 
@@ -817,6 +841,20 @@ CREATE INDEX "idx_er_org_type" ON "public"."entity_relationships" USING "btree" 
 
 
 --
+-- Name: idx_join_requests_org_status; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX "idx_join_requests_org_status" ON "public"."org_join_requests" USING "btree" ("org_id", "status");
+
+
+--
+-- Name: idx_join_requests_pending_unique; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX "idx_join_requests_pending_unique" ON "public"."org_join_requests" USING "btree" ("org_id", "user_id") WHERE (("status")::"text" = 'pending'::"text");
+
+
+--
 -- Name: idx_login_attempts_email; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -842,6 +880,13 @@ CREATE INDEX "idx_opp_instances_identity" ON "public"."opportunity_instances" US
 --
 
 CREATE INDEX "idx_opp_instances_org_run" ON "public"."opportunity_instances" USING "btree" ("org_id", "run_id");
+
+
+--
+-- Name: idx_orgs_domain_unique; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX "idx_orgs_domain_unique" ON "public"."orgs" USING "btree" ("domain") WHERE ("domain" IS NOT NULL);
 
 
 --
