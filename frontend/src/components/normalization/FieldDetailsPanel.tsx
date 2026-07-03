@@ -69,7 +69,7 @@ export default function FieldDetailsPanel() {
 
               {/* ✅ Toast added (no style change) */}
               <span
-                onClick={() => push('More details available in later sprint.')}
+                onClick={() => push('Coming Soon')}
                 className="text-xs text-muted underline cursor-pointer"
               >
                 Learn more

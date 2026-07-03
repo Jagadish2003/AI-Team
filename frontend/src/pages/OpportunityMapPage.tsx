@@ -134,7 +134,7 @@ export default function OpportunityMapPage() {
           <div className="flex flex-col gap-4">
             <OpportunityDetails
               selected={selected}
-              onViewAnalysis={() => push('View Analysis will be linked in Screen 8/10 (future).')}
+              onViewAnalysis={() => push('Coming Soon')}
               onGoToReview={() => selected && openReview(selected.id)}
             />
             <OpportunityRankedList

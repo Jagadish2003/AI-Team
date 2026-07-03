@@ -245,9 +245,9 @@ export default function IntegrationHubPage() {
       configureSync(id);
       push('Configuration complete. Data is now synced.');
     } else if (c.status === 'connected') {
-      push('Data preview available in later Sprint.');
+      push('Coming Soon');
     } else if (c.status === 'coming_soon') {
-      push('Connector coming soon.');
+      push('Coming Soon');
     } else {
       connectConnector(id);
       push('Connector connected. Click Configure & Sync to load data.');
