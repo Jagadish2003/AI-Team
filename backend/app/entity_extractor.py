@@ -258,6 +258,46 @@ def _first_record_str(record: Dict[str, Any], keys: tuple[str, ...]) -> Optional
     return None
 
 
+def _salesforce_user_names(sf_data: Dict[str, Any]) -> Dict[str, str]:
+    """Merge the Salesforce and nCino User Id → display-name maps for a run.
+
+    Both ingestors resolve their owner/approver User Ids to display names in one
+    batched query at ingest time (see discovery/ingest/salesforce.py and
+    ncino.py) and attach a ``user_names`` map. Merging them here gives person
+    extraction a single lookup covering CRM owners/approvers and nCino loan
+    owners alike. Empty when neither ran live — extraction then falls back to
+    the raw Id (unchanged behavior).
+    """
+    merged: Dict[str, str] = {}
+    top = sf_data.get("user_names")
+    if isinstance(top, dict):
+        merged.update({str(k): str(v) for k, v in top.items() if k and v})
+    ncino = sf_data.get("ncino")
+    if isinstance(ncino, dict):
+        nested = ncino.get("user_names")
+        if isinstance(nested, dict):
+            merged.update({str(k): str(v) for k, v in nested.items() if k and v})
+    return merged
+
+
+def _resolve_person_name(
+    display_name: Optional[str],
+    source_id: Optional[str],
+    user_names: Dict[str, str],
+) -> Optional[str]:
+    """Return a human display name for a Salesforce person reference.
+
+    When a reference is a bare User Id (``display_name`` equals the source Id,
+    i.e. no name was present in the payload) and that Id resolves in the run's
+    ``user_names`` map, return the real name; otherwise return the input
+    unchanged. This never overrides a name already supplied by the source and
+    leaves ``source_record_id`` (the stable Id) untouched at the call site.
+    """
+    if user_names and display_name and display_name == source_id:
+        return user_names.get(display_name, display_name)
+    return display_name
+
+
 def _ref_name_and_id(value: Any) -> tuple[Optional[str], Optional[str]]:
     """Read a source reference that may be a string or {display,value,id} dict."""
     if isinstance(value, list):
@@ -297,6 +337,11 @@ def _extract_salesforce_entities(
     """Extract Person, Team, Project, and Object entities from Salesforce/nCino output."""
     entities: List[Entity] = []
 
+    # User Id → display-name map resolved once at ingest time (batched SOQL).
+    # Lets Person entities carry the real name while source_record_id keeps the
+    # stable Id. Empty for offline/legacy payloads → raw-Id fallback (unchanged).
+    user_names = _salesforce_user_names(sf_data)
+
     # Person: approver_ids inside approval_processes act as OwnerId equivalents.
     # source_record_id is present → confidence=1.0.
     for proc in sf_data.get("approval_processes", []) or []:
@@ -304,11 +349,12 @@ def _extract_salesforce_entities(
             name = _safe_str(approver_id)
             if not name:
                 continue
+            display_name = _resolve_person_name(name, name, user_names)
             try:
                 e = resolve_or_create_entity(
                     org_id=org_id,
                     entity_type="person",
-                    display_name=name,
+                    display_name=display_name,
                     source_system="salesforce",
                     source_record_id=name,
                     run_id=run_id,
@@ -333,6 +379,7 @@ def _extract_salesforce_entities(
                 display_name, source_id = _ref_name_and_id(record.get(field_name))
                 if not display_name:
                     continue
+                display_name = _resolve_person_name(display_name, source_id, user_names)
                 try:
                     e = resolve_or_create_entity(
                         org_id=org_id,
@@ -503,11 +550,12 @@ def _extract_salesforce_entities(
             )
             owner_id = _safe_str(record.get("OwnerId") or record.get("owner_id"))
             if owner_id:
+                owner_display = _resolve_person_name(owner_id, owner_id, user_names)
                 try:
                     e = resolve_or_create_entity(
                         org_id=org_id,
                         entity_type="person",
-                        display_name=owner_id,
+                        display_name=owner_display,
                         source_system="salesforce",
                         source_record_id=owner_id,
                         run_id=run_id,
