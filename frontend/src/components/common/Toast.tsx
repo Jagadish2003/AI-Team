@@ -34,7 +34,7 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
             <div
               key={t.id}
               className={`
-                flex items-start gap-3 w-fit max-w-xs rounded-xl px-4 py-3
+                flex items-start gap-3 w-fit min-w-[220px] max-w-xs rounded-xl px-4 py-3
                 backdrop-blur-lg border shadow-lg
                 animate-[slideInRight_0.4s_ease-out]
                 ${
