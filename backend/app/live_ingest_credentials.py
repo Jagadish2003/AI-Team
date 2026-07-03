@@ -426,6 +426,13 @@ def resolve_live_systems(org_id: str) -> List[str]:
     # (never from config — AC3) and include it in the live set.
     _resolve_java_app(org_id, connectors, live)
 
+    # .NET application — R17-A4, the .NET counterpart to the Java source above.
+    # Same URL-less, per-deployment-config, vault-credential shape (each target
+    # carries its own diagnostics_url/log_source; only the credential is resolved
+    # here). Published under the ``dotnet_app`` key so the ingestor's
+    # ``resolve_secret`` reads it safely (never from config — AC4).
+    _resolve_dotnet_app(org_id, connectors, live)
+
     # Publish to the per-run context (empty dict clears any prior credentials).
     set_live_connectors(connectors)
     return live
@@ -532,6 +539,46 @@ def _resolve_java_app(
     connectors["java_app"] = {"token": record.access_token}
     live.append("java_app")
     logger.info("Live ingest enabled for connector java_app (org=%s)", org_id)
+
+
+def _resolve_dotnet_app(
+    org_id: str,
+    connectors: Dict[str, Dict[str, str]],
+    live: List[str],
+) -> None:
+    """Add the .NET application source to the live set when a credential exists (R17-A4).
+
+    The .NET counterpart to :func:`_resolve_java_app`. The .NET applications in
+    scope are configured per deployment (their diagnostics URLs + log sources live
+    in ``DOTNET_APP_TARGETS``, never here); this resolver only handles the
+    credential. When a ``dotnet_app`` token is in the vault for the org, its
+    decrypted value is published to the per-run context under the ``dotnet_app``
+    key so the ingestor's ``resolve_secret`` reads it safely (AC4) — the secret
+    never touches config or logs. AgentIQ does NOT scan the network: a deployment
+    with no configured targets simply yields no .NET records.
+
+    Mutates ``connectors`` and ``live`` in place. Never raises — any failure leaves
+    .NET out (degrade, don't crash), matching the other resolvers.
+    """
+    try:
+        record = _run_coro(get_token(org_id, "dotnet_app"))
+    except ConnectorNotAuthenticatedError:
+        logger.info(
+            "Connector dotnet_app not authenticated for org %s — skipping live ingest; "
+            "configure its credential in the vault.",
+            org_id,
+        )
+        return
+    except Exception:
+        logger.exception(
+            "Failed to load vault token for connector dotnet_app (org=%s); skipping live ingest",
+            org_id,
+        )
+        return
+
+    connectors["dotnet_app"] = {"token": record.access_token}
+    live.append("dotnet_app")
+    logger.info("Live ingest enabled for connector dotnet_app (org=%s)", org_id)
 
 
 def _resolve_teams(

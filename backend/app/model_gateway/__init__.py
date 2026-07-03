@@ -41,9 +41,10 @@ Provider resolution  (T2 — R16-D1 §3)
   Unknown values raise ``ValueError`` at startup via
   ``validate_provider_config()`` — before the first model call (T2-AC4).
 
-  1.6 ships the 'hosted' provider (Anthropic API).  1.7 will add
-  'in_boundary' and 'customer_tenant' by registering new implementations
-  via ``register_provider()`` — no calling code changes required (AC7).
+  1.6 ships the 'hosted' provider (Anthropic API).  1.7 adds 'in_boundary'
+  (R17-D1) and 'customer_tenant' (R17-D2) by registering new implementations
+  via ``register_provider()`` — no calling code changes required (AC7).  All
+  three modes are now selectable, independently, for generation and embedding.
 """
 from __future__ import annotations
 
@@ -264,6 +265,30 @@ def validate_provider_config() -> None:
     gen_provider = _resolve_provider(gen_name, _ENV_GENERATION)
     emb_provider = _resolve_provider(emb_name, _ENV_EMBEDDING)
 
+    # R17-D2 T2 — reserved-connector-id collision guard. The customer-tenant model
+    # credential is vaulted in the shared `credentials` table under a reserved
+    # connector_id ("customer_tenant"). If a REAL OAuth connector were ever
+    # registered under that same id, the two would read/write the same credential
+    # row and silently corrupt each other. Fail fast at startup so the collision
+    # is caught in review, never in production. Import lazily and skip if the auth
+    # subsystem is not importable in a minimal context.
+    try:
+        from app.auth.configs import CONNECTOR_AUTH_CONFIGS
+        from app.auth.vault import CUSTOMER_TENANT_CONNECTOR_ID
+    except ImportError:
+        logger.debug(
+            "model_gateway: auth subsystem not importable; skipping reserved "
+            "connector-id collision check", exc_info=True
+        )
+    else:
+        if CUSTOMER_TENANT_CONNECTOR_ID in CONNECTOR_AUTH_CONFIGS:
+            raise ValueError(
+                f"connector_id '{CUSTOMER_TENANT_CONNECTOR_ID}' is reserved for the "
+                "customer-tenant model credential vault, but a real connector is "
+                "registered under the same id in CONNECTOR_AUTH_CONFIGS. This would "
+                "corrupt the shared credentials row — rename the connector."
+            )
+
     # Per-provider completeness check for the SELECTED providers. A provider may
     # be a registered name yet still be misconfigured — e.g. in_boundary selected
     # with no endpoint URL would pass name resolution but then fail every call at
@@ -311,9 +336,11 @@ def validate_provider_config() -> None:
 
 from app.model_gateway.hosted_provider import HostedModelProvider as _HostedModelProvider  # noqa: E402
 from app.model_gateway.in_boundary_provider import InBoundaryModelProvider as _InBoundaryModelProvider  # noqa: E402
+from app.model_gateway.customer_tenant_provider import CustomerTenantModelProvider as _CustomerTenantModelProvider  # noqa: E402
 
 register_provider(_HostedModelProvider())
 register_provider(_InBoundaryModelProvider())
+register_provider(_CustomerTenantModelProvider())
 
 
 __all__ = [

@@ -243,6 +243,32 @@ CORROBORATION_RULES: Dict[str, CorroborationRule] = {
             "Operational signals are observed evidence (R17-A3)."
         ),
     ),
+    "COR-10": CorroborationRule(
+        rule_id="COR-10",
+        primary_signal="Any detector fires",
+        corroborating_signal=(
+            "A .NET application shows operational friction within 30 days "
+            "(rising error rate, latency degradation, resource pressure, or a "
+            "recurring exception cluster) for the same service"
+        ),
+        # R17-A4 §3: the .NET counterpart to COR-09. A .NET application's operational
+        # signal is DIRECTLY MEASURED from its runtime logs/diagnostics, so — exactly
+        # like Java — it is first-class OBSERVED evidence and elevates as a
+        # system-of-record corroborator does (unlike the Slack/Teams conversation-
+        # source ceiling). This is NOT a separate .NET confidence model: it plugs
+        # into the same cross-system corroboration approach. The single-source
+        # ceiling still applies — a run with only ``dotnet_app`` connected has no
+        # finding to corroborate and stays MEDIUM (COR-08); HIGH is reached only when
+        # the .NET signal co-fires with the finding's own (non-.NET) source.
+        elevation_target=CONFIDENCE_HIGH,
+        elevates=True,
+        source_label=".NET application (operational signal)",
+        description=(
+            "Corroborated by .NET application operational signal "
+            "(health/diagnostics + EventCounters + logs). MEDIUM -> HIGH. "
+            "Operational signals are observed evidence (R17-A4)."
+        ),
+    ),
 }
 
 
@@ -267,6 +293,7 @@ RULE_CARD_LABELS: Dict[str, str] = {
     "COR-07": "Corroborated by Jira sprint velocity decline",
     "COR-08": SINGLE_SOURCE_LABEL,
     "COR-09": "Corroborated by Java application operational signal",
+    "COR-10": "Corroborated by .NET application operational signal",
 }
 
 
