@@ -100,9 +100,9 @@ def _append_event(run_id: str, stage: str, message: str, level: str = "INFO") ->
 from .materialize_t2 import (
     _finalise,
     _emit_event,
+    _ingest_summary_from_payload,
     _org_id_for_run,
     _pack_id_for_run,
-    _probe_systems,
     _selected_system_ids_for_report,
     resolve_effective_pack,
 )
@@ -227,9 +227,31 @@ def _run_trackb_and_persist(run_id: str, mode: str, systems: List[str], pack: Op
     errors: Dict[str, str] = {}
 
     try:
+        # Single-ingest: the discovery runner is the SOLE place enterprise systems
+        # are ingested. The removed _probe_systems pre-pass ingested Salesforce/
+        # ServiceNow/Jira a second time (discarding the data) just to build the
+        # per-system status + "any data?" gate. The runner now returns that
+        # summary in its payload and receives ALL connected systems.
         _emit_event(run_id, "INGEST", "Ingesting data from enterprise systems...")
-        per_system, succeeded, probe_errors = _probe_systems(systems, mode)
-        errors.update(probe_errors)
+
+        from discovery.runner import run as trackb_run
+        from discovery.track_a_adapter import export_track_a_seed
+
+        _emit_event(
+            run_id, "EXTRACT", "Extracting entities and identifying patterns..."
+        )
+        # run_org_id resolved above (shared with live-connector resolution). It is
+        # passed to the runner so signal snapshots are written under the same org
+        # the temporal read uses; without it the runner falls back to its own
+        # "demo-org" default, which hides the Baseline Context panel.
+        payload = trackb_run(
+            mode=mode, systems=systems, run_id=run_id, org_id=run_org_id, pack=pack
+        )
+
+        per_system, succeeded, ingest_errors = _ingest_summary_from_payload(
+            payload, systems
+        )
+        errors.update(ingest_errors)
 
         if not succeeded:
             _emit_event(
@@ -255,19 +277,6 @@ def _run_trackb_and_persist(run_id: str, mode: str, systems: List[str], pack: Op
             run_id, "NORMALIZE", f"Successfully ingested from: {', '.join(succeeded)}"
         )
 
-        from discovery.runner import run as trackb_run
-        from discovery.track_a_adapter import export_track_a_seed
-
-        _emit_event(
-            run_id, "EXTRACT", "Extracting entities and identifying patterns..."
-        )
-        # run_org_id resolved above (shared with live-connector resolution). It is
-        # passed to the runner so signal snapshots are written under the same org
-        # the temporal read uses; without it the runner falls back to its own
-        # "demo-org" default, which hides the Baseline Context panel.
-        payload = trackb_run(
-            mode=mode, systems=succeeded, run_id=run_id, org_id=run_org_id, pack=pack
-        )
         seed = export_track_a_seed(payload)
 
         opps = seed.get("opportunities", [])

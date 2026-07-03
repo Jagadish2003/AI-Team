@@ -80,68 +80,23 @@ def _audit_event(action: str, by: str = "System") -> Dict[str, Any]:
     }
 
 
-def _probe_systems(
-    systems: List[str], mode: str
+def _ingest_summary_from_payload(
+    payload: Dict[str, Any], systems: List[str]
 ) -> Tuple[Dict[str, str], List[str], Dict[str, str]]:
-    import os
+    """Single-ingest: derive (per_system, succeeded, errors) from the runner payload.
 
-    os.environ["INGEST_MODE"] = mode
-
-    import logging
-
-    from discovery.ingest import jira as _jira
-    from discovery.ingest import salesforce as _sf
-    from discovery.ingest import servicenow as _sn
-    from discovery.ingest.jira import JiraIngestError
-    from discovery.ingest.salesforce import IngestError as SFError
-    from discovery.ingest.servicenow import ServiceNowIngestError as SNError
-
-    logger = logging.getLogger(__name__)
-
-    _ingest_map = {
-        "salesforce": (_sf.ingest, (SFError,)),
-        "servicenow": (_sn.ingest, (SNError,)),
-        "jira": (_jira.ingest, (JiraIngestError,)),
-    }
-    per_system: Dict[str, str] = {
+    Replaces the removed ``_probe_systems`` pre-pass. The discovery runner
+    (``discovery.runner.run``) is now the SOLE place enterprise systems are
+    ingested; it returns the per-system status in its payload, so materialization
+    no longer ingests Salesforce/ServiceNow/Jira a second time (discarding the
+    data) just to build this summary and the "any data?" gate. Falls back to a
+    conservative all-skipped map if an older/empty payload lacks the keys.
+    """
+    per_system = payload.get("perSystem") or {
         s: "skipped" for s in ["salesforce", "servicenow", "jira"]
     }
-    errors: Dict[str, str] = {}
-    succeeded: List[str] = []
-
-    for system in systems:
-        logger.info(f"SYSTEM: {system}")
-        if system not in _ingest_map:
-            continue
-        ingest_fn, _ = _ingest_map[system]
-        try:
-            logger.info(f"STARTED INGEST SYSTEM: {system}")
-            data = ingest_fn()
-            logger.info(f"ENDED INGEST SYSTEM: {system}")
-            if data:
-                per_system[system] = "ok"
-                succeeded.append(system)
-            else:
-                per_system[system] = "failed"
-                errors[system] = "ingest returned no data"
-        except Exception as e:
-            per_system[system] = "failed"
-            errors[system] = str(e)
-
-    # Slack (R16-A2) and GitHub (T1-S12) are ingested INSIDE the discovery pipeline
-    # (discovery.runner.run), not probed here: Slack, Teams, Confluence and
-    # SharePoint via the shared change runner (which owns their checkpoint
-    # lifecycle and emits ingestion.artifact_changed), GitHub via the
-    # github_engineering pack (reading its token straight from the vault). Pass
-    # them through to `succeeded` so the pipeline receives them in `systems`, the
-    # "no data ingested" gate does not trip a connector-only run, and the NORMALIZE
-    # log lists them as ingested.
-    for _pipeline_ingested in ("slack", "teams", "confluence", "sharepoint", "github"):
-        if _pipeline_ingested in systems:
-            per_system[_pipeline_ingested] = "ok"
-            if _pipeline_ingested not in succeeded:
-                succeeded.append(_pipeline_ingested)
-
+    succeeded = list(payload.get("succeeded") or [])
+    errors = dict(payload.get("ingestErrors") or {})
     return per_system, succeeded, errors
 
 
@@ -261,9 +216,30 @@ def run_trackb_and_persist(
     errors: Dict[str, str] = {}
 
     try:
+        # Single-ingest: the discovery runner is the SOLE place enterprise systems
+        # are ingested. The old _probe_systems pre-pass ingested Salesforce/
+        # ServiceNow/Jira a second time (throwing the data away) purely to build
+        # the per-system status and the "any data?" gate — doubling the most
+        # expensive live ingest. The runner now returns that summary in its
+        # payload, and receives ALL connected systems (not a probe-filtered set).
         _emit_event(run_id, "INGEST", "Ingesting data from enterprise systems...")
-        per_system, succeeded, probe_errors = _probe_systems(systems, mode)
-        errors.update(probe_errors)
+
+        from discovery.runner import run as trackb_run
+        from discovery.track_a_adapter import export_track_a_seed
+
+        _emit_event(
+            run_id, "EXTRACT", "Extracting entities and identifying patterns..."
+        )
+        pack_id = _pack_id_for_run(run)
+        run_org_id = _org_id_for_run(run, "demo-org")
+        payload = trackb_run(
+            mode=mode, systems=systems, run_id=run_id, org_id=run_org_id, pack=pack_id
+        )
+
+        per_system, succeeded, ingest_errors = _ingest_summary_from_payload(
+            payload, systems
+        )
+        errors.update(ingest_errors)
 
         if not succeeded:
             _emit_event(
@@ -289,17 +265,6 @@ def run_trackb_and_persist(
             run_id, "NORMALIZE", f"Successfully ingested from: {', '.join(succeeded)}"
         )
 
-        from discovery.runner import run as trackb_run
-        from discovery.track_a_adapter import export_track_a_seed
-
-        _emit_event(
-            run_id, "EXTRACT", "Extracting entities and identifying patterns..."
-        )
-        pack_id = _pack_id_for_run(run)
-        run_org_id = _org_id_for_run(run, "demo-org")
-        payload = trackb_run(
-            mode=mode, systems=succeeded, run_id=run_id, org_id=run_org_id, pack=pack_id
-        )
         seed = export_track_a_seed(payload)
 
         opps = seed.get("opportunities", [])

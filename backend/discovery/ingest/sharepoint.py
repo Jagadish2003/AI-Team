@@ -485,13 +485,27 @@ class SharePointIngestor(ChangeBasedIngestor):
             return json.load(fh)
 
     def _client(self, org_id: str) -> "SharePointGraphClient":
-        """Build a Microsoft Graph client from the per-run OAuth credentials.
+        """Build (once per org, then reuse) a Microsoft Graph client from the
+        per-run OAuth credentials.
 
         Resolution mirrors the other connectors: the per-run credential context
         (DB-sourced vault token, isolated per org/run) first, then the
         ``SHAREPOINT_GRAPH_TOKEN`` env var as a CLI/standalone fallback. The OAuth
         connect flow that lands the token in the vault is T5.
+
+        The client is memoised per org_id on this (per-run) ingestor instance so a
+        single ingest reuses ONE HTTP session — and its pooled TCP/TLS connection
+        — across the sites → drives → per-library delta calls, instead of opening
+        a fresh session on every read.
         """
+        cache = getattr(self, "_client_cache", None)
+        if cache is None:
+            cache = {}
+            self._client_cache = cache
+        client = cache.get(org_id)
+        if client is not None:
+            return client
+
         cred = get_live_connector("sharepoint")
         token = cred.get("token") if cred else os.getenv("SHAREPOINT_GRAPH_TOKEN")
         if not token:
@@ -500,7 +514,9 @@ class SharePointIngestor(ChangeBasedIngestor):
                 "SharePoint Connect flow (credential vault). Set INGEST_MODE=offline "
                 "to run without credentials."
             )
-        return SharePointGraphClient(token.strip())
+        client = SharePointGraphClient(token.strip())
+        cache[org_id] = client
+        return client
 
 
 class SharePointGraphClient:

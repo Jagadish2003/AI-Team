@@ -130,6 +130,21 @@ _REQUEST_TIMEOUT = 30
 _MAX_THROTTLE_RETRIES = 3
 _MAX_RETRY_WAIT_SECONDS = 30
 
+#: Total wall-clock a single client will spend sleeping on 429 ``Retry-After``
+#: waits across ALL requests in one ingest before giving up. The per-request
+#: retry cap (``_MAX_THROTTLE_RETRIES`` × ``_MAX_RETRY_WAIT_SECONDS`` ≈ 90s) is
+#: otherwise unbounded across a channel-by-channel enumeration, so a heavily
+#: throttled tenant could stall a run for many minutes. Giving up here is
+#: non-blocking — the caller degrades to an empty corroboration block (same path
+#: as the existing "throttling persisted" error). Env-tunable; the default is
+#: generous so a normal run (occasional short waits) never trips it.
+try:
+    _MAX_TOTAL_THROTTLE_WAIT_SECONDS = max(
+        0, int(os.getenv("TEAMS_MAX_THROTTLE_WAIT_SECONDS", "120"))
+    )
+except (TypeError, ValueError):
+    _MAX_TOTAL_THROTTLE_WAIT_SECONDS = 120
+
 #: Channel membership types Microsoft Graph reports. Only ``standard`` channels
 #: are read; ``private`` and ``shared`` channels are excluded at the access
 #: boundary (AC4). Private chats / DMs are not channels at all and are never
@@ -572,6 +587,9 @@ class TeamsGraphClient:
     def __init__(self, token: str):
         self.token = token
         self._session = None
+        # Cumulative seconds slept on 429 Retry-After waits across this client's
+        # lifetime (one ingest). Bounded by _MAX_TOTAL_THROTTLE_WAIT_SECONDS.
+        self._throttle_waited = 0.0
 
     # Reusable as a context manager so callers can guarantee the session closes.
     def __enter__(self) -> "TeamsGraphClient":
@@ -615,6 +633,18 @@ class TeamsGraphClient:
             resp = self._sess().get(url, timeout=_REQUEST_TIMEOUT)
             if resp.status_code == 429 and attempt < _MAX_THROTTLE_RETRIES:
                 wait = _retry_after_seconds(resp)
+                # Bound total throttle sleep across the whole ingest, not just per
+                # request. Once the budget is spent, give up (non-blocking: the
+                # caller degrades to an empty block, same as persistent throttling)
+                # rather than let a throttled tenant stall the run indefinitely.
+                if self._throttle_waited + wait > _MAX_TOTAL_THROTTLE_WAIT_SECONDS:
+                    raise TeamsIngestError(
+                        "Microsoft Graph throttling (HTTP 429) exceeded the Teams "
+                        f"throttle-wait budget ({_MAX_TOTAL_THROTTLE_WAIT_SECONDS}s) "
+                        "for this ingest — re-run the discovery after the "
+                        "Retry-After window."
+                    )
+                self._throttle_waited += wait
                 logger.warning(
                     "Microsoft Graph throttled (429) on %s; retry %d/%d after %ds",
                     url, attempt + 1, _MAX_THROTTLE_RETRIES, wait,

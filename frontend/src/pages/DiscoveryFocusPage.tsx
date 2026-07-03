@@ -143,8 +143,12 @@ export default function DiscoveryFocusPage({ setupState }: Props) {
       return;
     }
 
-    const tmpl = TEMPLATES.find(t => t.id === templateId);
-    setTemplate(templateId, tmpl?.preselectedSystems ?? []);
+    // Dummy template picker: keep the pill highlight + suggested-focus note, but
+    // pass NO preselected systems (empty list) so choosing a template does not
+    // change the user's system selection. template_id is also withheld from the
+    // launch payload (see buildStackBuilderLaunchPayload), so a template has no
+    // effect on the actual discovery run.
+    setTemplate(templateId, []);
   }
 
   function handleContinue() {
@@ -217,8 +221,7 @@ export default function DiscoveryFocusPage({ setupState }: Props) {
             <span className="text-xs text-muted">Optional</span>
           </div>
           <p className="mb-4 text-xs leading-relaxed text-muted">
-            Templates preselect systems for common operating models. Choose one to
-            accelerate setup.
+            Templates suggest a focus for common operating models.
           </p>
           <div
             role="group"

@@ -734,31 +734,62 @@ def get_named_credential_flow_refs(
 ) -> List[Dict[str, Any]]:
     """
     Detects both Direct and Indirect references (Flow -> Apex -> Named Credential).
+
+    Performance controls (live mode only — offline returns the catalog unchanged):
+
+      * ``SF_SCAN_APEX_NC_REFS`` (default ``0`` / off): the indirect
+        Flow→Apex→NC pass needs every Apex class BODY, an unbounded
+        ``SELECT Name, Body FROM ApexClass`` that exceeds the Tooling API
+        5000-row cap on large orgs — raising the "Could not scan Apex Classes …
+        exceeded 5000 records" warning and then contributing nothing. It is OFF
+        by default (no warning, no multi-MB source download); set it to ``1`` to
+        enable indirect detection on orgs small enough to scan.
+      * ``SF_FLOW_SCAN_BUDGET_SECONDS`` (default ``90``): STEP 2 must fetch each
+        active flow's ``Metadata`` one row at a time (the Tooling API forbids
+        selecting the compound ``Metadata`` field for more than one record), so
+        it is O(active_flows) sequential round trips — tens of minutes on a large
+        org. The per-flow scan stops once this wall-clock budget is spent and
+        logs how many flows it covered. ``0`` = unlimited (scan every active
+        flow, the original behaviour). Undercounting a flow reference only
+        matters if it pushes a credential's count below the
+        INTEGRATION_CONCENTRATION threshold; raise the budget if that happens.
     """
     if not is_live():
         return named_credentials
 
-    # --- STEP 1: Scan Apex Classes for Named Credential hardcoding ---
+    def _env_flag(name: str) -> bool:
+        return os.getenv(name, "0").strip().lower() in ("1", "true", "yes", "on")
+
+    def _env_float(name: str, default: float) -> float:
+        try:
+            return float(os.getenv(name, str(default)))
+        except (TypeError, ValueError):
+            return default
+
+    # --- STEP 1: Scan Apex Classes for Named Credential hardcoding (opt-in) ---
     # We map: { "NC_Developer_Name": ["Class_A", "Class_B"] }
     nc_to_apex_classes: Dict[str, List[str]] = {
         nc["credential_developer_name"]: [] for nc in named_credentials
     }
 
-    try:
-        # Note: We query Name and Body. Body is where the code is.
-        all_classes = client.tooling_soql("SELECT Name, Body FROM ApexClass")
+    if _env_flag("SF_SCAN_APEX_NC_REFS"):
+        try:
+            # Note: We query Name and Body. Body is where the code is. This is
+            # unbounded (no WHERE) and downloads every class' source, so it is
+            # gated behind SF_SCAN_APEX_NC_REFS and off by default.
+            all_classes = client.tooling_soql("SELECT Name, Body FROM ApexClass")
 
-        for apex in all_classes:
-            class_name = apex.get("Name")
-            body = apex.get("Body", "")
-            if not body:
-                continue
+            for apex in all_classes:
+                class_name = apex.get("Name")
+                body = apex.get("Body", "")
+                if not body:
+                    continue
 
-            for nc_name in nc_to_apex_classes.keys():
-                if nc_name in body:
-                    nc_to_apex_classes[nc_name].append(class_name)
-    except Exception as e:
-        print(f"   Warning: Could not scan Apex Classes: {e}")
+                for nc_name in nc_to_apex_classes.keys():
+                    if nc_name in body:
+                        nc_to_apex_classes[nc_name].append(class_name)
+        except Exception as e:
+            print(f"   Warning: Could not scan Apex Classes: {e}")
 
     # --- STEP 2: Scan Flows for Direct NC references OR Indirect Apex calls ---
     try:
@@ -773,9 +804,26 @@ def get_named_credential_flow_refs(
         nc["credential_developer_name"]: [] for nc in named_credentials
     }
 
+    budget_s = _env_float("SF_FLOW_SCAN_BUDGET_SECONDS", 90.0)
+    started = time.monotonic()
+    scanned = 0
+    total_flows = len(active_flows)
+
     for flow in active_flows:
+        # Bound the per-flow Metadata N+1: stop once the wall-clock budget is
+        # spent so a large org does not stall the whole run for tens of minutes.
+        if budget_s > 0 and (time.monotonic() - started) >= budget_s:
+            print(
+                f"   Flow NC-reference scan hit its {budget_s:.0f}s budget after "
+                f"{scanned}/{total_flows} active flows; skipping the remaining "
+                f"{total_flows - scanned}. Set SF_FLOW_SCAN_BUDGET_SECONDS=0 to "
+                f"scan all (slower)."
+            )
+            break
+
         flow_id = flow["Id"]
         flow_label = flow.get("MasterLabel", "Unknown")
+        scanned += 1
 
         try:
             meta_recs = client.tooling_soql(

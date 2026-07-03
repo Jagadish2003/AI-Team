@@ -214,7 +214,10 @@ export function buildStackBuilderLaunchPayload(
     org_id: orgId,
     focus_id: state.focusId,
     industry_id: state.industryId,
-    template_id: state.templateId,
+    // Dummy template picker: the UI keeps a template highlight + suggested-focus
+    // note for guidance only, but template selection must not influence the run,
+    // so template_id is never sent to the backend (always null).
+    template_id: null,
     selected_system_ids: state.selectedSystemIds,
     pack_id: packId,
     weightings: state.weightings,

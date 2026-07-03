@@ -432,7 +432,8 @@ class ConfluenceIngestor(ChangeBasedIngestor):
             return json.load(fh)
 
     def _client(self, org_id: str) -> "ConfluenceClient":
-        """Build a Confluence Cloud client from the per-run OAuth credentials.
+        """Build (once per org, then reuse) a Confluence Cloud client from the
+        per-run OAuth credentials.
 
         Resolution mirrors the other connectors: the per-run credential context
         (DB-sourced vault token + captured api.atlassian.com gateway base) first,
@@ -440,7 +441,19 @@ class ConfluenceIngestor(ChangeBasedIngestor):
         CLI/standalone fallback. Like Jira Cloud, live Confluence is reached
         through the ``api.atlassian.com/ex/confluence/{cloudId}`` gateway with the
         OAuth Bearer token.
+
+        The client is memoised per org_id on this (per-run) ingestor instance so a
+        single ingest reuses ONE HTTP session across the list-spaces → per-space
+        content calls, instead of opening a fresh session on every read.
         """
+        cache = getattr(self, "_client_cache", None)
+        if cache is None:
+            cache = {}
+            self._client_cache = cache
+        client = cache.get(org_id)
+        if client is not None:
+            return client
+
         cred = get_live_connector("confluence")
         base_url = cred.get("url") if cred else os.getenv("CONFLUENCE_URL")
         token = cred.get("token") if cred else os.getenv("CONFLUENCE_TOKEN")
@@ -450,7 +463,9 @@ class ConfluenceIngestor(ChangeBasedIngestor):
                 "provided by the Confluence Connect flow (credential vault). Set "
                 "INGEST_MODE=offline to run without credentials."
             )
-        return ConfluenceClient(base_url.rstrip("/"), token.strip())
+        client = ConfluenceClient(base_url.rstrip("/"), token.strip())
+        cache[org_id] = client
+        return client
 
 
 class ConfluenceClient:
