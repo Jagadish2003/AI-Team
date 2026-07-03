@@ -728,6 +728,126 @@ def _flow_references_credential(
 # functions have been removed. We now use the MetadataComponentDependency API.
 
 
+def _build_flow_ref_results(
+    named_credentials: List[Dict[str, Any]],
+    nc_to_flow_ids: Dict[str, Any],
+    match_type: str,
+) -> List[Dict[str, Any]]:
+    """Attach flow_reference_count / referencing_flow_ids to each credential.
+
+    Shared by both the dependency-API path and the per-flow-scan fallback so the
+    output shape (and the D5 INTEGRATION_CONCENTRATION contract) is identical
+    regardless of how the references were resolved.
+    """
+    results: List[Dict[str, Any]] = []
+    for nc in named_credentials:
+        dev_name = nc.get("credential_developer_name", "")
+        referencing_ids = list(nc_to_flow_ids.get(dev_name, []))
+        count = len(referencing_ids)
+        results.append(
+            {
+                **nc,
+                "flow_reference_count": count,
+                "referencing_flow_ids": referencing_ids,
+                "match_type": match_type if count > 0 else "none",
+            }
+        )
+    return results
+
+
+def _flow_refs_via_dependency_api(
+    named_credentials: List[Dict[str, Any]],
+    client: "SalesforceClient",
+) -> Optional[Dict[str, List[str]]]:
+    """Resolve Flow→NamedCredential references from Salesforce's own dependency
+    graph (the ``MetadataComponentDependency`` Tooling object) in ONE query, plus
+    one chunked follow-up for indirect Flow→Apex→NamedCredential edges.
+
+    This is complete and fast — it replaces the per-flow ``SELECT Metadata FROM
+    Flow WHERE Id = …`` N+1 (the Tooling API forbids multi-row Metadata queries),
+    which was O(active_flows) sequential round trips and had to be time-bounded,
+    undercounting D5 on large orgs.
+
+    Returns ``{credential_developer_name: [flow_id, …]}`` on success, or ``None``
+    if the org does not expose the Dependency API — the caller then falls back to
+    the bounded per-flow scan. ``RefMetadataComponentName`` is matched against BOTH
+    the credential DeveloperName and MasterLabel, so the mapping is robust to
+    whichever form Salesforce reports.
+    """
+    # Map every name Salesforce might report (dev name OR label) → canonical dev name.
+    name_to_dev: Dict[str, str] = {}
+    for nc in named_credentials:
+        dev = nc.get("credential_developer_name", "")
+        if not dev:
+            continue
+        name_to_dev[dev] = dev
+        label = nc.get("credential_name", "")
+        if label:
+            name_to_dev.setdefault(label, dev)
+    if not name_to_dev:
+        return {}
+
+    try:
+        deps = client.tooling_soql(
+            "SELECT MetadataComponentId, MetadataComponentType, "
+            "RefMetadataComponentName, RefMetadataComponentType "
+            "FROM MetadataComponentDependency "
+            "WHERE RefMetadataComponentType = 'NamedCredential'"
+        )
+    except Exception as e:  # noqa: BLE001 — API not enabled/queryable → fall back.
+        print(
+            "   MetadataComponentDependency unavailable "
+            f"({type(e).__name__}); falling back to the per-flow flow scan."
+        )
+        return None
+
+    nc_to_flows: Dict[str, set] = {dev: set() for dev in set(name_to_dev.values())}
+    apex_to_ncs: Dict[str, set] = {}
+    for d in deps:
+        dev = name_to_dev.get(d.get("RefMetadataComponentName") or "")
+        if not dev:
+            continue
+        comp_id = d.get("MetadataComponentId")
+        if not comp_id:
+            continue
+        comp_type = d.get("MetadataComponentType")
+        if comp_type == "Flow":
+            nc_to_flows[dev].add(comp_id)
+        elif comp_type == "ApexClass":
+            apex_to_ncs.setdefault(comp_id, set()).add(dev)
+
+    # Indirect: Flow → ApexClass → NamedCredential. Chunk the IN() over apex ids
+    # to stay well within SOQL limits; best-effort (direct refs already captured).
+    apex_ids = list(apex_to_ncs.keys())
+    for i in range(0, len(apex_ids), 200):
+        in_list = ",".join(f"'{a}'" for a in apex_ids[i : i + 200])
+        try:
+            apex_deps = client.tooling_soql(
+                "SELECT MetadataComponentId, MetadataComponentType, "
+                "RefMetadataComponentId, RefMetadataComponentType "
+                "FROM MetadataComponentDependency "
+                "WHERE MetadataComponentType = 'Flow' "
+                "AND RefMetadataComponentType = 'ApexClass' "
+                f"AND RefMetadataComponentId IN ({in_list})"
+            )
+        except Exception:  # noqa: BLE001 — indirect is best-effort.
+            continue
+        for d in apex_deps:
+            flow_id = d.get("MetadataComponentId")
+            apex_id = d.get("RefMetadataComponentId")
+            if flow_id and apex_id in apex_to_ncs:
+                for dev in apex_to_ncs[apex_id]:
+                    nc_to_flows[dev].add(flow_id)
+
+    logger.info(
+        "Named-credential flow refs via MetadataComponentDependency: "
+        "%d reference(s) across %d credential(s)",
+        sum(len(v) for v in nc_to_flows.values()),
+        sum(1 for v in nc_to_flows.values() if v),
+    )
+    return {dev: sorted(ids) for dev, ids in nc_to_flows.items()}
+
+
 def get_named_credential_flow_refs(
     named_credentials: List[Dict[str, Any]],
     client: Optional[SalesforceClient] = None,
@@ -735,7 +855,21 @@ def get_named_credential_flow_refs(
     """
     Detects both Direct and Indirect references (Flow -> Apex -> Named Credential).
 
-    Performance controls (live mode only — offline returns the catalog unchanged):
+    Resolution order (live mode only — offline returns the catalog unchanged):
+
+      1. **MetadataComponentDependency** (preferred) — one Tooling query returns
+         every Flow→NamedCredential reference from Salesforce's own dependency
+         graph (plus a chunked follow-up for indirect Flow→Apex→NC edges). No
+         per-flow N+1, so the result is COMPLETE and fast; the controls below do
+         not apply on this path. Disable with ``SF_DISABLE_DEPENDENCY_API=1`` to
+         force the fallback.
+      2. **Bounded per-flow scan** (fallback) — runs when the Dependency API is
+         not available on the org, is disabled, or reports ZERO references (the
+         Beta graph's coverage is not exhaustive, so an all-zero answer is
+         corroborated by string-matching rather than trusted outright). Governed
+         by the two controls below.
+
+    Performance controls (fallback path only):
 
       * ``SF_SCAN_APEX_NC_REFS`` (default ``0`` / off): the indirect
         Flow→Apex→NC pass needs every Apex class BODY, an unbounded
@@ -765,6 +899,29 @@ def get_named_credential_flow_refs(
             return float(os.getenv(name, str(default)))
         except (TypeError, ValueError):
             return default
+
+    # --- Preferred path: Salesforce's dependency graph in one query ----------
+    # MetadataComponentDependency gives every Flow→NamedCredential reference
+    # directly — complete and fast, with no per-flow Metadata N+1 and no time
+    # budget. Fall through to the bounded scan below if the org does not expose
+    # the Dependency API, if it is explicitly disabled — or if it reports ZERO
+    # references: the Dependency API is a Beta whose graph coverage is not
+    # exhaustive (e.g. NCs referenced via Apex `callout:` strings or External
+    # Credentials may carry no recorded edge), so an all-zero answer is
+    # ambiguous and is corroborated by the string-matching scan rather than
+    # trusted outright. A true zero then costs one bounded scan and still
+    # returns zero; a false zero is caught by whichever references the scan finds.
+    if not _env_flag("SF_DISABLE_DEPENDENCY_API"):
+        dep_map = _flow_refs_via_dependency_api(named_credentials, client)
+        if dep_map is not None:
+            if any(dep_map.values()) or not named_credentials:
+                return _build_flow_ref_results(
+                    named_credentials, dep_map, "dependency_api"
+                )
+            print(
+                "   Dependency graph returned 0 named-credential references — "
+                "corroborating with the bounded per-flow scan."
+            )
 
     # --- STEP 1: Scan Apex Classes for Named Credential hardcoding (opt-in) ---
     # We map: { "NC_Developer_Name": ["Class_A", "Class_B"] }

@@ -120,7 +120,10 @@ export default function PilotRoadmapPage() {
       description="Your prioritised AI agent implementation plan, grounded in discovery findings."
       actions={
         <button
-          className="rounded-lg border border-accent/20 bg-accent/5 px-4 py-2 text-sm font-medium text-accent transition-colors hover:border-accent/45 hover:bg-accent/10 focus:outline-none focus-visible:ring-1 focus-visible:ring-accent/40"
+          disabled
+          aria-disabled="true"
+          title="Export is not available yet"
+          className="cursor-not-allowed rounded-lg border border-border bg-panel px-4 py-2 text-sm font-medium text-muted opacity-50"
           onClick={() => push('Export will be wired in Executive Report.')}
         >
           Export Report

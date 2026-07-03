@@ -45,8 +45,12 @@ function confluenceDisconnected() {
   };
 }
 
-describe("AT-464 — Confluence tile is enabled for the OAuth connect flow", () => {
-  it("renders an enabled Connect button for Confluence and fires onPrimary", () => {
+// UI gate (July 2026): only Salesforce/ServiceNow/Jira are connectable from the
+// Integration Hub for now. Confluence's Atlassian OAuth backend stays wired
+// (AT-462/AT-464) — only the tile's Connect button is disabled until Confluence
+// is re-added to ConnectorTile's ENABLED_CONNECTOR_IDS.
+describe("Confluence tile Connect is UI-disabled (hub allowlist = SF/SNOW/Jira)", () => {
+  it("renders a disabled Connect button for Confluence that never fires onPrimary", () => {
     const onPrimary = vi.fn();
     render(
       <ConnectorTile
@@ -59,10 +63,10 @@ describe("AT-464 — Confluence tile is enabled for the OAuth connect flow", () 
     );
 
     const btn = screen.getByRole("button", { name: "Connect" }) as HTMLButtonElement;
-    expect(btn.disabled).toBe(false);
+    expect(btn.disabled).toBe(true);
 
     fireEvent.click(btn);
-    expect(onPrimary).toHaveBeenCalledTimes(1);
+    expect(onPrimary).not.toHaveBeenCalled();
   });
 });
 

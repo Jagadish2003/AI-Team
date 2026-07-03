@@ -4,24 +4,17 @@ import Badge from '../common/Badge';
 import Button from '../common/Button';
 import { fetchTokenStatus, TokenStatus } from '../../services/staticApi';
 
-// Connectors whose real OAuth backend is wired (CONNECTOR_AUTH_CONFIGS) so the
-// tile's Connect button can drive a live OAuth flow rather than a dead end.
-// R16-A2 / AT-422 (T7): add 'slack' — its OAuth config (AT-420, minimal
-// public-channels-only scopes) and the generic auth-url → callback flow already
-// exist, so enabling it here makes the existing Slack catalog tile connect for real.
-// R17-A1 / AT-436 (T7): add 'teams' — its Microsoft Graph OAuth config (AT-434,
-// least-privilege read-only channel scopes, no private chat/DM access) and the
-// same generic auth-url → callback flow exist, so enabling it here makes the
-// existing Microsoft Teams catalog tile drive the real OAuth connect flow end to
-// end instead of being a dead-end placeholder.
-// R17-A2 / AT-464 (T7): add 'confluence' and 'sharepoint' — their OAuth configs
-// (AT-462: Atlassian read-only scopes for Confluence, minimal Microsoft Graph
-// Sites.Read.All for SharePoint) and the generic auth-url → callback flow already
-// exist, so enabling them here makes the existing Confluence and SharePoint
-// catalog tiles drive the real OAuth connect flow end to end instead of being
-// dead-end placeholders.
+// Connectors whose Connect button is ENABLED on the Integration Hub. This is a
+// UI gate only — the OAuth backends for the other connectors (Slack AT-420,
+// Teams AT-434, Confluence/SharePoint AT-462, GitHub) remain fully wired
+// (CONNECTOR_AUTH_CONFIGS + the generic auth-url → callback flow), so re-enabling
+// one later is just adding its id back to this list.
+//
+// Product decision (July 2026): only the three systems of record are connectable
+// from the hub for now; every other tile renders its action button disabled with
+// the "Connecting new sources is currently unavailable" tooltip.
 const ENABLED_CONNECTOR_IDS = [
-  'salesforce', 'servicenow', 'jira', 'slack', 'github', 'teams', 'confluence', 'sharepoint',
+  'salesforce', 'servicenow', 'jira',
 ];
 
 export default function ConnectorTile({
