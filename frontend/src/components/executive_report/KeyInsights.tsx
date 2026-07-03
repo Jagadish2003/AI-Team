@@ -18,7 +18,7 @@ export const STATIC_SUMMARY =
  *  outstanding permission blockers, readiness) or serve them from the run-scoped
  *  executive-report API so they reflect the actual run instead of fixed copy. */
 export const LEADERSHIP_ACTIONS = [
-  'Approve the top 2 quick wins and confirm success metrics.',
+  'Approve the top quick wins and confirm success metrics.',
   'Grant required permissions for 30-day pilots (read-only first).',
   'Assign an executive sponsor and implementation owner per pilot.',
   'Schedule a 2-week checkpoint with evidence and governance sign-off.',
