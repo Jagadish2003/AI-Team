@@ -110,12 +110,20 @@ def test_upsert_run_no_context_leaves_untagged():
 
 def test_get_run_route_isolates_by_org(client: TestClient, monkeypatch):
     from app import db
+    from app.rbac import seed_owner
 
     # Created with no request context → org_id passes through unchanged.
     db.upsert_run(
         "run_route_iso",
         {"id": "run_route_iso", "org_id": "org_alpha", "status": "done"},
     )
+
+    # GET /api/runs/{run_id} is role-gated (csc rbac fix 60a84c3), so the dev user
+    # needs a role in each org this test drives — otherwise the RBAC gate (403)
+    # fires before the tenancy guard we are actually testing. Seed both orgs as
+    # owner so RBAC passes and we assert the tenancy outcome (200 vs 404).
+    seed_owner("org_alpha", "dev-token-change-me")
+    seed_owner("org_beta", "dev-token-change-me")
 
     # Same org → visible.
     monkeypatch.setenv("DEV_JWT_ORG", "org_alpha")
@@ -128,10 +136,14 @@ def test_get_run_route_isolates_by_org(client: TestClient, monkeypatch):
 
 def test_get_run_route_legacy_untagged_visible_any_org(client: TestClient, monkeypatch):
     from app import db
+    from app.rbac import seed_owner
 
     with patch("app.db._current_request_org", return_value=None):
         db.upsert_run("run_route_legacy", {"id": "run_route_legacy", "status": "done"})
 
+    # Role-gated route (60a84c3): seed the dev user in the querying org so the
+    # RBAC gate passes and we assert the legacy-visibility (tenancy) behaviour.
+    seed_owner("any_org_at_all", "dev-token-change-me")
     monkeypatch.setenv("DEV_JWT_ORG", "any_org_at_all")
     assert client.get("/api/runs/run_route_legacy", headers=AUTH).status_code == 200
 

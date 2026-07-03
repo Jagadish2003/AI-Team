@@ -30,6 +30,7 @@ from urllib.parse import parse_qs as _parse_qs
 from urllib.parse import urlparse as _urlparse
 
 from app.auth.vault import get_token
+from app.rbac import seed_owner
 
 _AUTH_HEADERS = {"Authorization": "Bearer dev-token-change-me"}
 
@@ -197,6 +198,7 @@ def test_confluence_callback_stores_token_in_vault(client):
     org+connector (AC1). Only the network token-exchange is mocked; storage is
     real."""
     org = "confluence-oauth-test-org"
+    seed_owner(org, "dev-token-change-me")  # csc RBAC: role-gated auth-url needs a role; seed owner to test tenancy, not RBAC
     org_headers = {**_AUTH_HEADERS, "X-Org-Id": org}
 
     # Step 1 — initiate: get a real state nonce bound to this org.
@@ -244,6 +246,7 @@ def test_confluence_callback_raw_db_row_is_encrypted(client):
     """The stored Confluence token must never appear in plaintext in the DB (AC1 —
     "stores the token in the vault", i.e. encrypted at rest)."""
     org = "confluence-oauth-enc-org"
+    seed_owner(org, "dev-token-change-me")  # csc RBAC: role-gated auth-url needs a role; seed owner to test tenancy, not RBAC
     org_headers = {**_AUTH_HEADERS, "X-Org-Id": org}
 
     with _patch.dict(_os.environ, _vault_env()):
