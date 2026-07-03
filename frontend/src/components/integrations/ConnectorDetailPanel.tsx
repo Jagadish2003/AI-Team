@@ -173,6 +173,15 @@ export default function ConnectorDetailPanel({
 
       <div className="mt-4 border-t border-border" />
 
+      {/* Salesforce product declaration — rendered first in the panel so the
+          workspace declaration is visible at the top of the right panel. */}
+      {connector.id === 'salesforce' && isConnected && (
+        <>
+          <SalesforceProductPicker />
+          <div className="mt-4 border-t border-border" />
+        </>
+      )}
+
       <div className="mt-4">
         <div className="mb-2 text-sm font-medium text-text">Access as:</div>
 
@@ -194,8 +203,6 @@ export default function ConnectorDetailPanel({
       </div>
 
       <ConnectionHealthSection connector={connector} />
-
-      {connector.id === 'salesforce' && isConnected && <SalesforceProductPicker />}
 
       {/* T2-S11-A Task T9: SQL Server scope declaration */}
       {/* Shown after SQL Server is connected — read scope selector */}
