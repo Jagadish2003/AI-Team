@@ -910,6 +910,96 @@ def get_cross_system_references(
     }
 
 
+def _collect_owner_ids(
+    approval_processes: List[Dict[str, Any]],
+    cases: List[Dict[str, Any]],
+) -> List[str]:
+    """Gather every distinct owner/approver User Id referenced by a run's data.
+
+    Mirrors the fields entity extraction reads: approver Ids on approval
+    processes and OwnerId/AssignedTo on Case records. Only string-shaped values
+    are collected; dict-shaped owner references already carry their own name.
+    """
+    ids: set[str] = set()
+    for proc in approval_processes or []:
+        if not isinstance(proc, dict):
+            continue
+        for approver_id in proc.get("approver_ids") or []:
+            if isinstance(approver_id, str) and approver_id.strip():
+                ids.add(approver_id.strip())
+    for record in cases or []:
+        if not isinstance(record, dict):
+            continue
+        for field_name in ("OwnerId", "owner_id", "AssignedTo", "assigned_to"):
+            val = record.get(field_name)
+            if isinstance(val, str) and val.strip():
+                ids.add(val.strip())
+    return list(ids)
+
+
+def resolve_user_names(
+    query_fn: Any,
+    user_ids: List[str],
+) -> Dict[str, str]:
+    """Resolve Salesforce User Ids to display Names via a batched SOQL query.
+
+    Owner/approver fields on Salesforce records carry the raw User Id
+    (e.g. ``005xx000001AAA1``), not a human name. Entity extraction stores the
+    ``display_name`` from these fields, so without a lookup the knowledge graph
+    surfaces the raw Id to the user. This resolves every distinct Id referenced
+    in a run with batched ``SELECT Id, Name FROM User WHERE Id IN (...)`` queries
+    (chunked to stay within SOQL limits), never one query per owner.
+
+    ``query_fn`` is any callable that runs a SOQL string and returns the record
+    list — ``SalesforceClient.soql`` and ``NcinoClient.query`` both fit, so the
+    Salesforce and nCino ingestors share this logic against their own org client.
+
+    The returned map is keyed by both the 18-char and 15-char forms of each Id
+    so callers can look up either. It is best-effort: empty input or a failed
+    query yields ``{}`` and the caller falls back to the raw Id (current
+    behavior) — the run never breaks.
+    """
+    ids = sorted({uid.strip() for uid in user_ids if isinstance(uid, str) and uid.strip()})
+    if not ids or query_fn is None:
+        return {}
+
+    names: Dict[str, str] = {}
+    CHUNK = 200  # keep the IN (...) clause comfortably within SOQL length limits
+    for start in range(0, len(ids), CHUNK):
+        chunk = ids[start : start + CHUNK]
+        # Ids are Salesforce key-prefixed alphanumerics; quote defensively anyway.
+        in_clause = ", ".join("'" + cid.replace("'", "") + "'" for cid in chunk)
+        try:
+            recs = query_fn(f"SELECT Id, Name FROM User WHERE Id IN ({in_clause})")
+        except Exception as exc:
+            # Graceful degradation: a lookup failure must not break the run.
+            logger.warning("User name resolution failed (non-blocking): %s", exc)
+            continue
+        for r in recs or []:
+            uid = r.get("Id")
+            name = r.get("Name")
+            if uid and name:
+                names[uid] = name
+                # Alias the 15-char case-sensitive form so either width resolves.
+                if len(uid) == 18:
+                    names[uid[:15]] = name
+    return names
+
+
+def get_user_names(
+    client: Optional[SalesforceClient],
+    user_ids: List[str],
+) -> Dict[str, str]:
+    """Live-mode wrapper around :func:`resolve_user_names` for Salesforce.
+
+    Returns ``{}`` in offline mode or when no client is available, so offline
+    runs stay deterministic and the caller falls back to the raw Id.
+    """
+    if not is_live() or client is None:
+        return {}
+    return resolve_user_names(client.soql, user_ids)
+
+
 def get_relationship_records(
     client: Optional[SalesforceClient] = None,
 ) -> List[Dict[str, Any]]:
@@ -925,7 +1015,7 @@ def get_relationship_records(
         return list(fixture.get("cases") or fixture.get("records") or [])
 
     return client.soql(
-        "SELECT Id, CaseNumber, OwnerId, Status, CreatedDate "
+        "SELECT Id, CaseNumber, Subject, OwnerId, Status, CreatedDate "
         "FROM Case WHERE CreatedDate = LAST_N_DAYS:90 "
         "ORDER BY CreatedDate DESC LIMIT 500"
     )
@@ -1007,6 +1097,19 @@ def ingest(sf_client: Optional[SalesforceClient] = None) -> Dict[str, Any]:
             lambda: get_relationship_records(sf_client),
         )
 
+        # Resolve owner/approver User Ids to display names once per run. Owner
+        # and approver fields carry raw User Ids; entity extraction reads this
+        # map so the knowledge graph shows real names instead of raw Ids. The
+        # lookup is batched and best-effort — on failure user_names is empty and
+        # extraction falls back to the raw Id.
+        owner_ids = _collect_owner_ids(approval_processes, cases)
+        user_names = get_user_names(sf_client, owner_ids)
+        if user_names:
+            logger.info(
+                "Resolved %d Salesforce owner/approver Id(s) to display names",
+                len({v for v in user_names.values()}),
+            )
+
         return {
             "case_metrics": case_metrics,
             "flow_inventory": flow_inventory,
@@ -1014,6 +1117,7 @@ def ingest(sf_client: Optional[SalesforceClient] = None) -> Dict[str, Any]:
             "named_credentials": named_credentials,
             "cross_system_references": cross_system_references,
             "cases": cases,
+            "user_names": user_names,
         }
     except IngestError:
         raise
