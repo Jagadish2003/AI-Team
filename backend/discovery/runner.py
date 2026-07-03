@@ -456,6 +456,112 @@ def _ingest_teams_corroboration(org_id: str, run_id: str) -> Dict[str, Any]:
     return build_teams_corroboration_payload(collected)
 
 
+def _ingest_confluence_corroboration(org_id: str, run_id: str) -> Dict[str, Any]:
+    """Drive Confluence change-based ingestion and build its corroboration block.
+
+    R17-A2: Confluence is a connected knowledge SOURCE. When connected, drive it
+    through the shared change runner (R16-A1) so — in one path —
+
+      * the runner advances the per-(org, 'confluence') checkpoint (incremental
+        content-modified delta, not a full re-read) and emits one
+        ``ingestion.artifact_changed`` event per changed page/blog post (AC6),
+        using the ``artifact_id`` + ``change_kind`` every record carries; and
+      * the changed records are aggregated into the ``{activity, cross_references,
+        stale_load_bearing}`` block downstream corroboration reads, wrapped under
+        the ``'confluence'`` key.
+
+    Non-blocking: any failure degrades to an empty block (`{}`) so a Confluence
+    read never aborts the run (the runner swallows ingestion errors and leaves the
+    checkpoint unadvanced for the next run to re-read).
+    """
+    try:
+        from .ingest import change_runner
+        from .ingest.confluence import ConfluenceIngestor
+        from .ingest.confluence_signals import build_confluence_corroboration_payload
+    except Exception as e:  # noqa: BLE001 — Confluence corroboration is optional.
+        logger.warning("Confluence connector import failed (non-blocking): %s", e)
+        return {}
+
+    collected: List[Dict[str, Any]] = []
+    try:
+        result = change_runner.ingest_with_checkpoint(
+            ConfluenceIngestor(),
+            org_id,
+            process_batch=lambda batch: collected.extend(batch.records),
+        )
+    except Exception as e:  # noqa: BLE001 — belt-and-braces; the runner is non-raising.
+        logger.warning(
+            "Confluence ingestion failed (non-blocking) org=%s run=%s: [%s]",
+            org_id, run_id, type(e).__name__,
+        )
+        return {}
+
+    if result.error is not None:
+        logger.warning(
+            "Confluence change ingest reported an error (non-blocking) org=%s run=%s: [%s]",
+            org_id, run_id, type(result.error).__name__,
+        )
+    else:
+        logger.info(
+            "Confluence change ingest: %s — %d batch(es), %d changed record(s), checkpoint_advanced=%s",
+            "first run (streamed full load)" if result.first_run else "incremental",
+            result.batches, result.records, result.checkpoint_advanced,
+        )
+
+    return build_confluence_corroboration_payload(collected)
+
+
+def _ingest_sharepoint_corroboration(org_id: str, run_id: str) -> Dict[str, Any]:
+    """Drive SharePoint change-based ingestion and build its corroboration block.
+
+    R17-A2: SharePoint is a connected document SOURCE. Like Teams it authenticates
+    via Microsoft Graph and is driven through the shared change runner so — in one
+    path — the per-(org, 'sharepoint') Graph delta checkpoint advances
+    (incremental, not a full re-read), one ``ingestion.artifact_changed`` event is
+    emitted per changed driveItem (AC6), and the changed records are aggregated
+    into the ``{activity, cross_references, estates}`` block wrapped under the
+    ``'sharepoint'`` key. Non-blocking: any failure degrades to an empty block so a
+    SharePoint read never aborts the run.
+    """
+    try:
+        from .ingest import change_runner
+        from .ingest.sharepoint import SharePointIngestor
+        from .ingest.sharepoint_signals import build_sharepoint_corroboration_payload
+    except Exception as e:  # noqa: BLE001 — SharePoint corroboration is optional.
+        logger.warning("SharePoint connector import failed (non-blocking): %s", e)
+        return {}
+
+    collected: List[Dict[str, Any]] = []
+    try:
+        result = change_runner.ingest_with_checkpoint(
+            SharePointIngestor(),
+            org_id,
+            process_batch=lambda batch: collected.extend(batch.records),
+        )
+    except Exception as e:  # noqa: BLE001 — belt-and-braces; the runner is non-raising.
+        # Type name only — the exception str may carry a Bearer token from the
+        # Graph client's request reprs.
+        logger.warning(
+            "SharePoint ingestion failed (non-blocking) org=%s run=%s: [%s]",
+            org_id, run_id, type(e).__name__,
+        )
+        return {}
+
+    if result.error is not None:
+        logger.warning(
+            "SharePoint change ingest reported an error (non-blocking) org=%s run=%s: [%s]",
+            org_id, run_id, type(result.error).__name__,
+        )
+    else:
+        logger.info(
+            "SharePoint change ingest: %s — %d batch(es), %d changed record(s), checkpoint_advanced=%s",
+            "first run (streamed full load)" if result.first_run else "incremental",
+            result.batches, result.records, result.checkpoint_advanced,
+        )
+
+    return build_sharepoint_corroboration_payload(collected)
+
+
 _ENTERPRISE_OPS_DEMO_PATH = (
     Path(__file__).parent / "ingest" / "fixtures" / "enterprise_ops_demo.json"
 )
@@ -570,6 +676,49 @@ def _build_db_config(connector_id: str, org_id: str, mode: str):
     raise ValueError(f"Unsupported DB connector for sqlserver_opsignal pack: {connector_id}")
 
 
+# Connected conversation / knowledge / engineering sources. They ingest once
+# inside the runner (via the shared change runner or their pack) and are
+# non-blocking, so — like the removed _probe_systems pre-pass did — they pass
+# through the per-system summary as "ok" whenever connected.
+_PASS_THROUGH_SOURCES = ("slack", "teams", "confluence", "sharepoint", "github")
+
+
+def _build_ingest_summary(
+    systems_set: set,
+    systems_of_record: List[tuple],
+) -> tuple:
+    """Return (per_system, succeeded, errors) for a run — the single source of
+    ingest truth that materialization used to compute with a second _probe_systems
+    ingest pass.
+
+    `systems_of_record` is a list of ``(name, ok, data, err)`` for Salesforce /
+    ServiceNow / Jira. Semantics mirror the old probe: truthy data ⇒ "ok" and
+    counted as succeeded; an exception or empty data ⇒ "failed"; a system not in
+    the connected set ⇒ "skipped".
+    """
+    per_system = {s: "skipped" for s in ("salesforce", "servicenow", "jira")}
+    succeeded: List[str] = []
+    errors: Dict[str, str] = {}
+    for name, ok, data, err in systems_of_record:
+        if name not in systems_set:
+            continue
+        if not ok:
+            per_system[name] = "failed"
+            errors[name] = err or "ingest failed"
+        elif data:
+            per_system[name] = "ok"
+            succeeded.append(name)
+        else:
+            per_system[name] = "failed"
+            errors[name] = "ingest returned no data"
+    for s in _PASS_THROUGH_SOURCES:
+        if s in systems_set:
+            per_system[s] = "ok"
+            if s not in succeeded:
+                succeeded.append(s)
+    return per_system, succeeded, errors
+
+
 def run(
     mode: Optional[str] = None,
     run_id: Optional[str] = None,
@@ -622,11 +771,17 @@ def run(
     from .ingest.jira import JiraIngestError
 
     sf_data, sn_data, jira_data = {}, {}, {}
+    # Single-ingest: capture each system-of-record's ingest error so the runner
+    # can return an accurate per-system summary (materialization no longer runs a
+    # second _probe_systems ingest pass to build it).
+    sf_err = sn_err = jira_err = None
     github_data: Dict[str, Any] = {}
     slack_data: Dict[str, Any] = {}
     java_data: Dict[str, Any] = {}
     dotnet_data: Dict[str, Any] = {}
     teams_data: Dict[str, Any] = {}
+    confluence_data: Dict[str, Any] = {}
+    sharepoint_data: Dict[str, Any] = {}
     logger.info(f"Systems: {sorted(list(_systems))}")
 
     # CS-4 / AT-313: each ingest stage reports success to update_run_step via
@@ -634,38 +789,54 @@ def run(
     # current_step) so the progress UI shows it as failed rather than as a
     # completed green-check stage. A skipped system (not in _systems) is not a
     # failure, so ok stays True.
+    # Progress: mark each source step BEFORE its ingest so the Discovery Progress
+    # UI shows it as in-progress (spinner) while the — potentially slow — live
+    # fetch runs, then advances to the next step's spinner (which renders this one
+    # as completed) when that ingest starts. The post-ingest update_run_step keeps
+    # failure tracking (ok=False → failed_steps) and is a no-op on success.
     sf_ok = True
     try:
         if "salesforce" in _systems:
+            update_run_step(run_id, "sf_crm")
             sf_data = salesforce.ingest()
             logger.info("Salesforce ingestion: OK")
     except SFError as e:
         sf_ok = False
+        sf_err = str(e)
         logger.error(f"Salesforce ingestion FAILED: {e}")
     update_run_step(run_id, "sf_crm", ok=sf_ok)
 
     sn_ok = True
     try:
         if "servicenow" in _systems:
+            update_run_step(run_id, "sn")
             sn_data = servicenow.ingest()
             if sn_data: logger.info("ServiceNow ingestion: OK")
     except SNError as e:
         sn_ok = False
+        sn_err = str(e)
         logger.error(f"ServiceNow ingestion FAILED: {e}")
     update_run_step(run_id, "sn", ok=sn_ok)
 
     jira_ok = True
     try:
         if "jira" in _systems:
+            update_run_step(run_id, "jira")
             jira_data = jira_mod.ingest()
             if jira_data: logger.info("Jira ingestion: OK")
     except JiraIngestError as e:
         jira_ok = False
+        jira_err = str(e)
         logger.error(f"Jira ingestion FAILED: {e}")
     update_run_step(run_id, "jira", ok=jira_ok)
 
-    if not sf_data and "salesforce" in _systems:
-        logger.error("Salesforce data unavailable — cannot run detectors. Aborting.")
+    # Single-ingest: materialization now hands the runner ALL connected systems
+    # (not just the ones a probe pre-pass confirmed had data), so guard against
+    # aborting a run that still has usable data. Abort only when NO system of
+    # record produced anything — the same net outcome the old probe+succeeded
+    # path produced (a Salesforce-empty run still ran ServiceNow/Jira detectors).
+    if "salesforce" in _systems and not sf_data and not sn_data and not jira_data:
+        logger.error("No system-of-record data available — cannot run detectors. Aborting.")
         try:
             _elapsed_ms = int((datetime.now(timezone.utc) - _run_started_dt).total_seconds() * 1000)
         except Exception:
@@ -680,7 +851,17 @@ def run(
             "pack_id": pack_id,
             "system_count": len(_systems),
         })
-        return _empty_run(run_id, org_id, mode, started_at)
+        empty = _empty_run(run_id, org_id, mode, started_at)
+        _ps, _succ, _errs = _build_ingest_summary(
+            _systems,
+            [
+                ("salesforce", sf_ok, sf_data, sf_err),
+                ("servicenow", sn_ok, sn_data, sn_err),
+                ("jira", jira_ok, jira_data, jira_err),
+            ],
+        )
+        empty["perSystem"], empty["succeeded"], empty["ingestErrors"] = _ps, _succ, _errs
+        return empty
 
     # 2-pre. Slack change ingest — R16-A2 / AT-421 (T6) + AT-419 (T4).
     # Slack is a connected SOURCE, so it ingests here — after the systems of
@@ -717,6 +898,25 @@ def run(
             logger.info("Teams corroboration: escalation pattern present for this run")
         else:
             logger.info("Teams corroboration: no escalation pattern this run (supporting signal only)")
+
+    # 2-pre. Confluence & SharePoint change ingest — R17-A2. Both are connected
+    # knowledge/document SOURCES driven through the shared change runner (like
+    # Slack/Teams): changed pages/documents emit ingestion.artifact_changed events
+    # and advance the per-(org, connector) checkpoint, and the changed records are
+    # aggregated into the connector's corroboration block. Gated on the connector
+    # being in the org's connected/live systems.
+    if "confluence" in _systems:
+        confluence_data = _ingest_confluence_corroboration(org_id, run_id) or {}
+        logger.info(
+            "Confluence ingest: %d space activity block(s) this run",
+            len(confluence_data.get("confluence", {}).get("activity", {})),
+        )
+    if "sharepoint" in _systems:
+        sharepoint_data = _ingest_sharepoint_corroboration(org_id, run_id) or {}
+        logger.info(
+            "SharePoint ingest: %d library activity block(s) this run",
+            len(sharepoint_data.get("sharepoint", {}).get("activity", {})),
+        )
     # Emit the Slack stage so a connected Slack source appears in the Discovery
     # Progress checklist alongside the systems of record (ordered before the
     # pack). Slack ingest is non-blocking so the stage is reported ok (failures
@@ -989,13 +1189,15 @@ def run(
     else:
         primary_data = sf_data
 
+    # Mark "detect" before the phase so the Pattern Detection step shows as
+    # in-progress while detectors run (it renders completed once "enrich" starts).
+    update_run_step(run_id, "detect")
     detector_results, all_evaluated = _run_detector_phase(
         all_detectors,
         primary_data,
         sn_data,
         jira_data,
     )
-    update_run_step(run_id, "detect")
 
     _snapshot_detector_evaluations(
         org_id=org_id,
@@ -1379,6 +1581,18 @@ def run(
 
     update_run_step(run_id, "complete")
 
+    # Single-ingest: hand materialization the per-system status it used to build
+    # with a second (discarded) ingest pass. Derived from this run's actual
+    # ingest results.
+    _per_system, _succeeded, _ingest_errors = _build_ingest_summary(
+        _systems,
+        [
+            ("salesforce", sf_ok, sf_data, sf_err),
+            ("servicenow", sn_ok, sn_data, sn_err),
+            ("jira", jira_ok, jira_data, jira_err),
+        ],
+    )
+
     return {
         "runId": run_id, "orgId": org_id, "mode": mode,
         "packId": pack_id,
@@ -1388,11 +1602,15 @@ def run(
         "packVersion": pack_version,
         "startedAt": started_at, "completedAt": datetime.now(timezone.utc).isoformat(),
         "inputs": org_ctx, "opportunities": opportunities,
+        "perSystem": _per_system,
+        "succeeded": _succeeded,
+        "ingestErrors": _ingest_errors,
     }
 
 def _empty_run(run_id: str, org_id: str, mode: str, started_at: str) -> Dict:
     return {"runId": run_id, "orgId": org_id, "mode": mode, "startedAt": started_at,
-            "completedAt": datetime.now(timezone.utc).isoformat(), "inputs": {}, "opportunities": []}
+            "completedAt": datetime.now(timezone.utc).isoformat(), "inputs": {}, "opportunities": [],
+            "perSystem": {}, "succeeded": [], "ingestErrors": {}}
 
 def main():
     parser = argparse.ArgumentParser(description="AgentIQ discovery runner")

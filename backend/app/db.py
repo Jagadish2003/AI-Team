@@ -2,6 +2,8 @@ import json
 import logging
 import os
 import re
+import threading
+import time
 import uuid
 from contextlib import closing
 from datetime import datetime, timezone
@@ -9,6 +11,7 @@ from typing import Any, Dict, List, Optional
 
 import psycopg2
 import psycopg2.extras
+from psycopg2 import pool as _pg_pool
 from dotenv import load_dotenv
 from fastapi import HTTPException
 
@@ -26,21 +29,173 @@ def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+# ---------------------------------------------------------------------------
+# Connection pooling
+# ---------------------------------------------------------------------------
+# Every helper below borrows a connection, runs one or two statements, and
+# releases it via `closing(connect())` / `conn.close()`. Opening a fresh
+# psycopg2 connection per call paid a full TCP + auth + "SET timezone" handshake
+# to the (remote) database on EVERY DB touch — a single discovery run makes
+# hundreds of them (entity/edge upserts, run-event writes, KV reads), so the
+# handshake, not the queries, dominated run time.
+#
+# A process-wide pool pays that handshake a handful of times and hands back warm
+# connections. connect() returns a thin proxy whose .close() returns the
+# connection to the pool (reset to a clean transaction state) instead of
+# physically closing the socket, so every existing call site recycles
+# transparently — no call-site changes required. This mirrors the pooling the
+# contract-test harness already relies on (tests/contract/conftest.py).
+#
+# Sizing is env-tunable: DB_POOL_MIN (default 1), DB_POOL_MAX (default 16).
+_POOL = None
+_POOL_DSN = None
+_POOL_LOCK = threading.Lock()
+
+
+def _pool_bounds() -> tuple:
+    def _int(name: str, default: int) -> int:
+        try:
+            return max(1, int(os.getenv(name, str(default))))
+        except (TypeError, ValueError):
+            return default
+
+    minc = _int("DB_POOL_MIN", 1)
+    maxc = _int("DB_POOL_MAX", 16)
+    return minc, max(minc, maxc)
+
+
+def _get_pool():
+    """Return the process-wide connection pool, creating it lazily.
+
+    Rebuilt if DATABASE_URL changes (tests point the app at a disposable DB) or
+    if the pool was closed. A lock guards creation so concurrent first-callers
+    build exactly one pool. The DSN is read fresh from the environment (not the
+    module-level constant) so a late DATABASE_URL override is honoured.
+    """
+    global _POOL, _POOL_DSN
+    dsn = os.getenv("DATABASE_URL")
+    pool = _POOL
+    if pool is not None and _POOL_DSN == dsn and not getattr(pool, "closed", False):
+        return pool
+    with _POOL_LOCK:
+        if (
+            _POOL is not None
+            and _POOL_DSN == dsn
+            and not getattr(_POOL, "closed", False)
+        ):
+            return _POOL
+        if _POOL is not None:
+            try:
+                _POOL.closeall()
+            except Exception:
+                pass
+        minc, maxc = _pool_bounds()
+        # AT-288 F1-AC2 preserved: DictCursor rows support both row[0] and
+        # row["col"]; options=-c timezone=UTC pins the session to UTC so ISO-8601
+        # timestamps round-trip consistently. Both apply to every pooled conn.
+        _POOL = _pg_pool.ThreadedConnectionPool(
+            minc,
+            maxc,
+            dsn,
+            cursor_factory=psycopg2.extras.DictCursor,
+            options="-c timezone=UTC",
+        )
+        _POOL_DSN = dsn
+        return _POOL
+
+
+class _PooledConnection:
+    """Proxy over a pooled psycopg2 connection.
+
+    Delegates all attribute access (cursor/commit/rollback/…) to the real
+    connection, but overrides close() to return the connection to the pool —
+    rolled back to a clean state first — instead of physically closing it. This
+    preserves the existing open / commit / close semantics at every call site
+    while recycling the underlying socket. __del__ is a safety net so a call
+    site that raises before close() cannot leak a connection out of the pool.
+    """
+
+    def __init__(self, conn, pool):
+        object.__setattr__(self, "_conn", conn)
+        object.__setattr__(self, "_pool", pool)
+        object.__setattr__(self, "_released", False)
+
+    def close(self):
+        if object.__getattribute__(self, "_released"):
+            return
+        object.__setattr__(self, "_released", True)
+        conn = object.__getattribute__(self, "_conn")
+        pool = object.__getattribute__(self, "_pool")
+        try:
+            if not conn.closed:
+                # Clear any uncommitted/aborted transaction so the next borrower
+                # starts clean (read-only helpers never commit).
+                conn.rollback()
+        except Exception:
+            # A broken connection can't be reused — drop it from the pool.
+            try:
+                pool.putconn(conn, close=True)
+            except Exception:
+                pass
+            return
+        try:
+            pool.putconn(conn)
+        except Exception:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+    def __enter__(self):
+        object.__getattribute__(self, "_conn").__enter__()
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return object.__getattribute__(self, "_conn").__exit__(exc_type, exc, tb)
+
+    def __del__(self):
+        try:
+            self.close()
+        except Exception:
+            pass
+
+    def __getattr__(self, name):
+        return getattr(object.__getattribute__(self, "_conn"), name)
+
+    def __setattr__(self, name, value):
+        setattr(object.__getattribute__(self, "_conn"), name, value)
+
+
 def connect():
-    # AT-288 F1-AC2: connect() uses psycopg2.connect(DATABASE_URL).
-    # cursor_factory=DictCursor makes con.cursor() yield rows that support both
-    # positional (row[0]) and column-name (row["col"]) access — the stock
-    # psycopg2 equivalent of sqlite3.Row, no custom translation layer.
-    # options=-c timezone=UTC pins the session to UTC so timestamps round-trip
-    # consistently regardless of the server's local timezone. The app stores and
-    # compares ISO-8601 UTC values everywhere.
-    con = psycopg2.connect(
-        DATABASE_URL,
-        cursor_factory=psycopg2.extras.DictCursor,
-        options="-c timezone=UTC",
-    )
-    con.autocommit = False
-    return con
+    """Borrow a pooled psycopg2 connection.
+
+    The returned object behaves like a psycopg2 connection (DictCursor, UTC
+    session); .close() returns it to the pool rather than closing the socket, so
+    `closing(connect())` and `conn.close()` recycle instead of re-handshaking.
+    On pool exhaustion it waits briefly for a slot before surfacing the error.
+    """
+    pool = _get_pool()
+    delay = 0.02
+    conn = None
+    for _ in range(200):  # bounded wait (~a few seconds) for a free slot
+        try:
+            conn = pool.getconn()
+            break
+        except _pg_pool.PoolError:
+            time.sleep(delay)
+            delay = min(delay * 1.5, 0.25)
+    if conn is None:
+        conn = pool.getconn()  # last try — let a genuine PoolError surface
+    try:
+        conn.rollback()  # discard any residual transaction from a prior borrower
+    except Exception:
+        pass
+    try:
+        if conn.autocommit:
+            conn.autocommit = False
+    except Exception:
+        pass
+    return _PooledConnection(conn, pool)
 
 
 def get_one(table: str, id_: str) -> Optional[Dict[str, Any]]:

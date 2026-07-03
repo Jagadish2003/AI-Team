@@ -715,17 +715,17 @@ def test_ac5_package_exports_no_credential_accessor():
 
 
 def test_ac5_env_example_documents_credential_key():
-    """backend/.env.example documents ANTHROPIC_API_KEY with a placeholder value."""
-    env_example = Path(__file__).resolve().parents[2] / ".env.example"
-    assert env_example.exists(), "backend/.env.example must exist"
+    """backend/.env.template documents ANTHROPIC_API_KEY with a placeholder value."""
+    env_example = Path(__file__).resolve().parents[2] / ".env.template"
+    assert env_example.exists(), "backend/.env.template must exist"
     text = env_example.read_text(encoding="utf-8")
     line = next(
         (ln for ln in text.splitlines() if ln.strip().startswith(f"{CONFIG_KEY_API_KEY}=")),
         None,
     )
-    assert line is not None, f"{CONFIG_KEY_API_KEY} must be documented in .env.example"
+    assert line is not None, f"{CONFIG_KEY_API_KEY} must be documented in .env.template"
     placeholder = line.split("=", 1)[1].strip()
-    assert placeholder, "credential config key must have a placeholder value in .env.example"
+    assert placeholder, "credential config key must have a placeholder value in .env.template"
 
 
 # ===========================================================================

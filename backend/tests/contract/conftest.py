@@ -659,3 +659,96 @@ def client():
     from app.main import app
     with TestClient(app) as c:
         yield c
+
+
+def _reassert_auth_invariants() -> None:
+    """Rebuild the auth-schema invariants the session bootstrap established.
+
+    Recreates the auth tables (all DDL is ``IF NOT EXISTS``) and re-seeds the
+    ``default`` org owner. Only ever repairs — a healthy schema is untouched.
+    """
+    from database.models.credentials import (
+        ALTER_CREDENTIALS_ADD_IS_DELETED,
+        ALTER_CREDENTIALS_ADD_REFRESH_FAILED,
+        CREATE_CREDENTIALS_IDX_CONNECTOR,
+        CREATE_CREDENTIALS_IDX_ORG,
+        CREATE_CREDENTIALS_TABLE,
+    )
+    from database.models.workspace_members import CREATE_WORKSPACE_MEMBERS_TABLE
+
+    con = psycopg2.connect(TEST_DATABASE_URL)
+    try:
+        with con.cursor() as cur:
+            cur.execute(CREATE_WORKSPACE_MEMBERS_TABLE)
+            cur.execute(CREATE_CREDENTIALS_TABLE)
+            cur.execute(CREATE_CREDENTIALS_IDX_ORG)
+            cur.execute(CREATE_CREDENTIALS_IDX_CONNECTOR)
+            cur.execute(ALTER_CREDENTIALS_ADD_REFRESH_FAILED)
+            cur.execute(ALTER_CREDENTIALS_ADD_IS_DELETED)
+            cur.execute(
+                "CREATE TABLE IF NOT EXISTS nonces ("
+                "key TEXT PRIMARY KEY, data TEXT NOT NULL, "
+                "is_deleted BOOLEAN NOT NULL DEFAULT FALSE)"
+            )
+            cur.execute(
+                "CREATE TABLE IF NOT EXISTS oauth_nonces ("
+                "nonce TEXT PRIMARY KEY, connector_id TEXT NOT NULL, "
+                "expires_at TEXT NOT NULL, "
+                "is_deleted BOOLEAN NOT NULL DEFAULT FALSE)"
+            )
+        con.commit()
+    finally:
+        con.close()
+
+    from app.rbac import seed_owner
+
+    seed_owner("default", os.environ.get("DEV_JWT", "dev-token-change-me"))
+
+
+@pytest.fixture(autouse=True)
+def _heal_shared_auth_schema():
+    """Guard the session-shared DB against cross-test auth-schema pollution.
+
+    The contract suite runs against ONE PostgreSQL schema for the whole session
+    (see ``pytest_configure`` and the session-scoped ``client`` fixture) for
+    speed. A few full-suite orderings leave the auth tables degraded — the
+    ``credentials`` table dropped, or the ``default`` org owner seed removed —
+    and because those invariants are set only once at session start, the damage
+    persists and makes unrelated tenancy / RBAC / connector tests fail with a
+    spurious ``403`` ("no role in org …") or ``UndefinedTable``.
+
+    Re-assert the invariants before each test. A single cheap probe skips the
+    (rare) repair path when everything is intact, so the steady-state cost is one
+    ``SELECT``. All repair DDL is ``IF NOT EXISTS`` and the owner seed is an
+    idempotent upsert, so a healthy schema is never modified — this only ever
+    heals pollution left by an earlier test.
+    """
+    healthy = False
+    try:
+        con = psycopg2.connect(TEST_DATABASE_URL)
+        try:
+            con.autocommit = True
+            with con.cursor() as cur:
+                cur.execute(
+                    "SELECT to_regclass('public.credentials'), "
+                    "to_regclass('public.workspace_members'), "
+                    "EXISTS(SELECT 1 FROM workspace_members "
+                    "WHERE org_id='default' AND user_id=%s AND is_deleted=FALSE)",
+                    (os.environ.get("DEV_JWT", "dev-token-change-me"),),
+                )
+                cred, wm, owner_ok = cur.fetchone()
+            healthy = cred is not None and wm is not None and bool(owner_ok)
+        finally:
+            con.close()
+    except Exception:
+        healthy = False
+
+    if not healthy:
+        try:
+            _reassert_auth_invariants()
+        except Exception:
+            # Never fail a test on the repair path itself — if the DB is truly
+            # unusable the test will surface that on its own.
+            pass
+
+    yield

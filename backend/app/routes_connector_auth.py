@@ -38,7 +38,7 @@ from app.auth.oauth_state import decode_state, encode_state
 from app.auth.vault import REFRESH_THRESHOLD_SECONDS, consume_nonce, store_nonce
 from app.middleware.audit import log_event
 from app.middleware.tenancy import get_current_org_id
-from app.rbac import _get_user_id_from_token
+from app.rbac import _get_user_id_from_token, require_role
 from app.security import bearer, require_auth
 from database.models.credentials import (
     ALTER_CREDENTIALS_ADD_REFRESH_FAILED,
@@ -271,6 +271,17 @@ def register_connector_auth_routes(app: FastAPI) -> None:
         decoded = decode_state(state)
         if decoded is None:
             # AC3: HTTP 400 on state mismatch/tamper, generic message, no detail.
+            # Diagnostic (server-side only; the response stays generic): the state
+            # failed HMAC/format verification. Causes: a tampered/forged state, or
+            # the state was signed with a different OAUTH_STATE_SECRET/JWT_SECRET
+            # than this process uses (e.g. the secret was rotated, or differs
+            # between the instance that issued the auth-url and the one handling
+            # the callback). Never log the state value itself.
+            logger.warning(
+                "OAuth callback rejected (400): state failed signature/format "
+                "verification. Ensure OAUTH_STATE_SECRET (or JWT_SECRET) is set and "
+                "identical across the instances issuing and receiving the flow."
+            )
             raise HTTPException(status_code=400, detail="Invalid request")
         state_org_id = decoded["org_id"]
         nonce = decoded["nonce"]
@@ -280,6 +291,22 @@ def register_connector_auth_routes(app: FastAPI) -> None:
         # verifier, and the org bound to the flow at initiation.
         nonce_data = consume_nonce(nonce)
         if nonce_data is None:
+            # Diagnostic (server-side only; response stays generic): the state's
+            # signature was valid but its single-use nonce is gone. Causes, in
+            # order of likelihood: (1) the authorize URL was reused/refreshed or
+            # the browser navigated back — the nonce is single-use and was already
+            # consumed by an earlier callback; (2) the flow took longer than the
+            # 10-minute nonce window (common when the provider requires an admin
+            # CONSENT/approval step, e.g. SharePoint's Sites.Read.All) so the nonce
+            # expired; (3) the nonce was never stored. Start a FRESH Connect
+            # (don't reuse/refresh the consent tab) and complete consent promptly.
+            logger.warning(
+                "OAuth callback rejected (400) for org %s: state signature OK but "
+                "its single-use nonce was not found/expired/already-used. Likely a "
+                "reused or refreshed authorize URL, or the consent/approval step "
+                "exceeded the 10-minute nonce window. Start a fresh Connect.",
+                state_org_id,
+            )
             raise HTTPException(status_code=400, detail="Invalid request")
         connector_id = nonce_data["connector_id"]
         code_verifier = nonce_data.get("code_verifier")
@@ -384,7 +411,7 @@ def register_connector_auth_routes(app: FastAPI) -> None:
 
     @app.get(
         "/api/connectors/{connector_id}/auth-url",
-        dependencies=[Depends(require_auth)],
+        dependencies=[Depends(require_auth), Depends(require_role("analyst"))],
     )
     def get_auth_url(connector_id: str) -> Dict[str, object]:
         """Generate a one-time authorization URL for the given connector.
@@ -442,6 +469,7 @@ def register_connector_auth_routes(app: FastAPI) -> None:
 
     @app.delete(
         "/api/connectors/{connector_id}/token",
+        dependencies=[Depends(require_auth), Depends(require_role("analyst"))],
     )
     async def delete_token(connector_id: str, token: str = Depends(require_auth)) -> Response:
         """Revoke and delete the stored token for the given connector (AC11/AC12/AC13)."""
@@ -465,7 +493,7 @@ def register_connector_auth_routes(app: FastAPI) -> None:
 
     @app.get(
         "/api/connectors/{connector_id}/token-status",
-        dependencies=[Depends(require_auth)],
+        dependencies=[Depends(require_auth), Depends(require_role("viewer"))],
     )
     async def get_token_status(connector_id: str) -> Dict[str, str]:
         """Return token status: connected | needs_refresh | needs_auth | refresh_failed (AC14)."""

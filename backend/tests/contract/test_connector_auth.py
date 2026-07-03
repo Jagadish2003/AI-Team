@@ -1539,18 +1539,20 @@ from app.middleware.tenancy import DEV_DEFAULT_ORG as _AUTH_ORG_ID
 # ---------------------------------------------------------------------------
 # AC16: CONNECTOR_AUTH_CONFIGS entries, correct flows, correct revocation_url values
 # (Originally 8 connectors; R17-A1 / AT-434 adds Teams as the 9th — Microsoft
-# Graph OAuth, authorization_code, no revocation endpoint.)
+# Graph OAuth, authorization_code, no revocation endpoint. R17-A2 / AT-462 adds
+# SharePoint as the 10th — also Microsoft Graph OAuth, authorization_code, no
+# revocation endpoint, reusing the shared Teams Graph app.)
 # ---------------------------------------------------------------------------
 
 
 def test_connector_auth_configs_has_expected_entries():
     """CONNECTOR_AUTH_CONFIGS must contain exactly the expected connectors (AC16;
-    +teams per R17-A1 / AT-434)."""
+    +teams per R17-A1 / AT-434; +sharepoint per R17-A2 / AT-462)."""
     from backend.app.auth.configs import CONNECTOR_AUTH_CONFIGS
 
     expected = {
         "salesforce", "servicenow", "jira", "confluence", "github", "slack",
-        "teams", "sap", "dynamics365",
+        "teams", "sharepoint", "sap", "dynamics365",
     }
     assert set(CONNECTOR_AUTH_CONFIGS) == expected, (
         f"Unexpected connector set: {sorted(CONNECTOR_AUTH_CONFIGS)}"
@@ -1559,12 +1561,12 @@ def test_connector_auth_configs_has_expected_entries():
 
 
 def test_connector_auth_configs_flow_types():
-    """authorization_code connectors: salesforce, servicenow, jira, confluence, github, slack, teams.
+    """authorization_code connectors: salesforce, servicenow, jira, confluence, github, slack, teams, sharepoint.
     client_credentials connectors: sap, dynamics365. (AC16)
     """
     from backend.app.auth.configs import CONNECTOR_AUTH_CONFIGS
 
-    auth_code = {"salesforce", "servicenow", "jira", "confluence", "github", "slack", "teams"}
+    auth_code = {"salesforce", "servicenow", "jira", "confluence", "github", "slack", "teams", "sharepoint"}
     client_creds = {"sap", "dynamics365"}
 
     for cid in auth_code:
@@ -1584,7 +1586,7 @@ def test_connector_auth_configs_revocation_url_values():
     from backend.app.auth.configs import CONNECTOR_AUTH_CONFIGS
 
     has_revocation = {"salesforce", "servicenow", "jira", "confluence"}
-    no_revocation = {"github", "slack", "teams", "sap", "dynamics365"}
+    no_revocation = {"github", "slack", "teams", "sharepoint", "sap", "dynamics365"}
 
     for cid in has_revocation:
         assert CONNECTOR_AUTH_CONFIGS[cid].revocation_url is not None, (
@@ -1833,6 +1835,11 @@ def test_callback_marks_connector_connected_under_initiating_org(client):
     state nonce, so the (unauthenticated) callback persists connection state under
     THAT org — not the hardcoded default. Without this, a user whose JWT org is not
     'default' completes OAuth but the tile stays disconnected (multi-tenant bug)."""
+    from app.rbac import seed_owner
+
+    # Initiating OAuth is an analyst+ "connect" action (RBAC): the dev user must be
+    # a member of the initiating org before /auth-url will issue a flow.
+    seed_owner("acme-test-org", "dev-token-change-me")
     org_headers = {**_AUTH_HEADERS, "X-Org-Id": "acme-test-org"}
     with _patch.dict(_os.environ, _vault_env()):
         r = client.get("/api/connectors/salesforce/auth-url", headers=org_headers)
@@ -1911,7 +1918,11 @@ def test_auth_url_state_carries_initiating_org(client):
     """T2-AC1: the state emitted by auth-url carries — and verifies back to — the
     org that initiated the flow."""
     from app.auth.oauth_state import decode_state
+    from app.rbac import seed_owner
 
+    # Initiating OAuth is an analyst+ "connect" action (RBAC): the dev user must be
+    # a member of the initiating org before /auth-url will issue a flow.
+    seed_owner("acme-test-org", "dev-token-change-me")
     org_headers = {**_AUTH_HEADERS, "X-Org-Id": "acme-test-org"}
     with _patch.dict(_os.environ, _vault_env()):
         r = client.get("/api/connectors/salesforce/auth-url", headers=org_headers)

@@ -21,7 +21,7 @@ Keep this file short and actionable. Prefer reading the relevant code and contra
 
 ## Tech Stack
 
-* Backend: Python 3.11, FastAPI, Pydantic, SQLite JSON payload tables, pytest.
+* Backend: Python 3.11, FastAPI, Pydantic, PostgreSQL (psycopg2) with `{ id, payload }` JSON payload tables, pytest.
 * Frontend: React 18, TypeScript, Vite, React Router, Tailwind, Vitest, Testing Library.
 * Data/pipeline: offline fixtures by default, optional live Salesforce/ServiceNow/Jira/nCino ingestion, pack-aware detectors and LLM enrichment.
 * Auth: bearer token via `DEV_JWT`; default local token is `dev-token-change-me`.
@@ -32,7 +32,7 @@ Keep this file short and actionable. Prefer reading the relevant code and contra
 
 * `backend/app/main.py`: FastAPI app, CORS, core API routes, route registration. Check here first to confirm any route module is actually registered.
 * `backend/app/routes_*.py`: feature route modules. Registered modules include stack builder, stack builder launch, run lifecycle, replay, normalization, enrichment, blueprint, workspace catalog, connector/product APIs, temporal, DB connectors, and connector auth.
-* `backend/app/db.py`: SQLite access, run records, run events, run-scoped KV helpers. Broad table access.
+* `backend/app/db.py`: PostgreSQL (psycopg2) access, run records, run events, run-scoped KV helpers. Broad table access. Connections come from a process-wide pool via `connect()` — the returned object is a `_PooledConnection` proxy whose `.close()` returns the connection to the pool instead of closing the socket, so `closing(connect())` / `conn.close()` recycle. Pool size is tuned by `DB_POOL_MIN` (default 1) / `DB_POOL_MAX` (default 16).
 * `backend/app/run_store.py`: run read/start helpers. Handles start and retrieval of run records only — do not consolidate with `db.py` without checking all callers.
 * `backend/app/materialize_t2.py`: run materialization, status, audit, events, roadmap/report persistence.
 * `backend/app/materialize_t3_hook.py`: T3 hook materialization — a separate step from `materialize_t2.py`; do not conflate.
@@ -94,9 +94,9 @@ Keep this file short and actionable. Prefer reading the relevant code and contra
 
 ### Backend — Database & Connectors
 
-* `backend/database/connection.py`: SQLAlchemy connection setup — separate from `backend/app/db.py` (raw SQLite). Different layers; different models.
+* `backend/database/connection.py`: separate psycopg2 connection/session helpers (`get_db_connection` / `get_db_session`, the latter a thin psycopg2-backed session adapter used by telemetry) — distinct from `backend/app/db.py`. Different layers; do not conflate. Note: despite its docstring wording it is plain psycopg2, not SQLAlchemy, and does NOT use the `db.py` pool.
 * `backend/database/models/`: SQLAlchemy ORM models — `audit_log.py`, `credentials.py`, `signal_snapshots.py`, `telemetry.py`, `workspace_members.py`.
-* `backend/database/seed_loader.py`: creates and seeds `backend/database/dev.db` from `backend/database/seed/` (11 JSON seed files).
+* `backend/database/seed_loader.py`: seeds the PostgreSQL database (`DATABASE_URL`) from `backend/database/seed/` (11 JSON seed files).
 * `backend/connectors/db/`: native DB connector subsystem — Oracle, PostgreSQL, SQL Server drivers with connection pooling.
 * `backend/connectors/db/oracle_ingestor.py`: Oracle operational-signal ingestor. Missing scope does NOT fall back to Oracle's sample `HR` schema — it returns degraded signals instead, so a misconfigured scope surfaces rather than silently querying sample data.
 * `backend/connectors/db/postgresql_ingestor.py`: PostgreSQL operational-signal ingestor. Boolean predicates retry with an integer fallback when PostgreSQL raises a datatype-mismatch `pgcode` (`42804`/`42883`).
@@ -107,7 +107,7 @@ Keep this file short and actionable. Prefer reading the relevant code and contra
 ### Backend — Token Generation & Tests
 
 * The `backend/token_generation/` server-key token-minting tooling has been **removed**. All connectors are now credentialed at runtime: Salesforce/Jira/ServiceNow via the Integration Hub OAuth flow (tokens in the credential vault, URLs captured at connect, sourced from the DB per org — see live ingest below); nCino and STRS run against the connected Salesforce org (the OAuth credentials in the per-run context) with optional `NCINO_*`/`STRS_*` env overrides.
-* `backend/tests/contract/`: contract and API tests. Use a temp SQLite DB via `conftest.py`.
+* `backend/tests/contract/`: contract and API tests. Run against a dedicated, disposable PostgreSQL test database via `conftest.py` (schema dropped and rebuilt from migrations at session start).
 * `backend/tests/contract/fixtures/`: JSON fixtures for audit samples and connector health samples.
 * `backend/tests/unit/`: unit tests for individual backend modules.
 * `backend/discovery/tests/`: 15 discovery/ingest/detector/runner tests.
@@ -180,7 +180,7 @@ source .venv/Scripts/activate
 ./run.sh
 ```
 
-Reference `backend/.env.example` for the full list of env vars needed before first run.
+Reference `backend/.env.template` for the full list of env vars needed before first run.
 
 ## Verification Commands
 
@@ -232,8 +232,8 @@ Smoke scripts are Bash scripts under `scripts/` and `backend/scripts/`; run them
 
 ## Runtime And Env Notes
 
-* Backend `.env` and frontend `.env` are intentionally untracked. Use `backend/.env.example` as the setup reference.
-* Backend database defaults to `backend/database/dev.db`. Override with `DB_PATH` for tests or isolated runs.
+* Backend `.env` and frontend `.env` are intentionally untracked. Use `backend/.env.template` as the setup reference.
+* Backend database is PostgreSQL, configured via `DATABASE_URL`. Contract tests use a dedicated `*_test` database derived from `DATABASE_URL` (or `TEST_DATABASE_URL`); they never touch the dev DB. `DB_POOL_MIN` / `DB_POOL_MAX` tune the `db.py` connection pool.
 * Seed data location defaults to `backend/database/seed`; override with `SEED_DIR`.
 * Local backend CORS defaults allow `localhost:5173` through `localhost:5176`. Override the allowed origins list with `CORS_ORIGINS` (comma-separated) for non-default dev ports or staging.
 * Frontend API base uses `VITE_API_BASE_URL`, defaulting to `http://localhost:8000` in dev.
@@ -262,8 +262,8 @@ Smoke scripts are Bash scripts under `scripts/` and `backend/scripts/`; run them
 ## Architecture Notes
 
 * The API protects most endpoints with `require_auth`; tests usually pass `Authorization: Bearer dev-token-change-me`.
-* SQLite stores most tables as `{ id, payload }` JSON rows, plus `runs`, `run_events`, and run-scoped KV entries. `backend/app/db.py` handles this layer.
-* `backend/database/connection.py` is a separate SQLAlchemy layer used by ORM models. Do not conflate with `db.py`.
+* PostgreSQL stores most tables as `{ id, payload }` JSON rows, plus `runs`, `run_events`, and run-scoped KV entries. `backend/app/db.py` handles this layer, serving every query from a process-wide connection pool (see the `db.py` entry above).
+* `backend/database/connection.py` is a separate psycopg2 layer (telemetry connection/session helpers). Do not conflate with `db.py`; it does not share the `db.py` pool.
 * Run lifecycle starts at `POST /api/runs/start`, then materialization writes status, events, opportunities, evidence, clusters, roadmap, executive report, and enrichment into run-scoped storage.
 * Replay should re-serve persisted artifacts only. It must not call live ingestion or regenerate LLM output.
 * LLM enrichment is advisory post-processing. It must not mutate scoring fields such as impact, effort, tier, decision, or evidence IDs.
@@ -321,7 +321,7 @@ Smoke scripts are Bash scripts under `scripts/` and `backend/scripts/`; run them
 
 * For backend API work, prefer focused contract tests in `backend/tests/contract/`.
 * For discovery logic, test detectors/scorers/ingest in `backend/discovery/tests/` or the relevant `backend/tests/unit/` file.
-* Contract tests seed an isolated temp DB through `backend/tests/contract/conftest.py`; do not make tests depend on local `dev.db`.
+* Contract tests seed an isolated, disposable PostgreSQL test database through `backend/tests/contract/conftest.py` (which installs its own connection pool and patches `db.connect`); do not make tests depend on a local dev database.
 * For frontend API/state changes, mock API boundaries rather than reaching into backend files.
 * For changes affecting the full run pipeline, verify start/status/artifact endpoints together.
 * For native DB connector changes, run `backend/connectors/db/tests/` including the smoke tests for each driver.
@@ -355,7 +355,7 @@ alembic upgrade head
 * `routes_stack_builder.py` and `routes_stack_builder_launch.py` both exist with different responsibilities. Check `main.py` before editing either.
 * `materialize_t3_hook.py` is a separate T3 materialization step, not an extension of `materialize_t2.py`. Do not merge them.
 * `run_store.py` and `db.py` both deal with runs but have different scopes: `run_store.py` handles start/read of run records; `db.py` handles broader KV and table access. Do not consolidate without checking all callers.
-* `backend/database/connection.py` (SQLAlchemy ORM) and `backend/app/db.py` (raw SQLite) are different layers. Mixing them will cause session/connection conflicts.
+* `backend/database/connection.py` (psycopg2 telemetry helpers) and `backend/app/db.py` (pooled psycopg2 access) are different layers with independent connections. Mixing them will cause session/connection conflicts.
 * Two migration directories (`alembic/` and `migrations/`) serve overlapping purposes. Use `migrations/` for all new work — `alembic.ini` already points there.
 * The CORS middleware allows any `localhost` port via regex in addition to the explicit origins list. This is intentional for dev flexibility.
 * `backend/connectors/db/query_guard.py` must be invoked for every native DB query. Skipping it bypasses SQL injection protection silently.

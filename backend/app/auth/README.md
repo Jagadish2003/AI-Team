@@ -50,6 +50,28 @@ Any change that renames or removes a field is a breaking change and requires a n
   endpoint, so revoke removes the vault token).
 - `client_credentials`: used by SAP, Dynamic365; no `refresh_token`, no `redirect_uri`
 
+### Microsoft Graph connectors (Teams, SharePoint) — tenant admin consent
+
+Teams and SharePoint authorise against Microsoft Entra ID (Azure AD) using the tenant in
+`TEAMS_TENANT_ID` / `SHAREPOINT_TENANT_ID` (SharePoint defaults to the Teams tenant). Their
+Graph scopes (`Sites.Read.All`, Teams channel-message read, `offline_access`) are
+**admin-consent–required** application-directory permissions. This has two consequences worth
+knowing before debugging a "connect keeps re-prompting" report:
+
+- **Consent must be pre-granted at the tenant level by a directory admin.** If it has not
+  been, every connect attempt re-shows the admin-approval prompt and a non-admin user can
+  never complete the flow. Grant consent once for the Graph app registration (Azure portal →
+  App registrations → API permissions → *Grant admin consent*), then normal users can connect.
+- **Without granted consent, `offline_access` may not yield a `refresh_token`.** When Microsoft
+  withholds the refresh token, the token-refresher job (`jobs/token_refresher.py`) has nothing
+  to renew, so once the access token expires the connector drops to `needs_auth` and the user
+  must re-run the OAuth flow. A connector that repeatedly lands in `needs_auth` after ~1 hour is
+  the classic symptom of missing tenant admin consent — fix the consent grant, not the code.
+
+A malformed `TEAMS_TENANT_ID` / `SHAREPOINT_TENANT_ID` (neither a directory GUID nor one of
+`common` / `organizations` / `consumers`) is surfaced as a startup WARNING from `configs.py`,
+since the authorize/token URLs are built from it at import time.
+
 ## Two-Phase OAuth Callback Pattern
 
 Real OAuth providers redirect to a registered callback URI after the user authorises. The callback

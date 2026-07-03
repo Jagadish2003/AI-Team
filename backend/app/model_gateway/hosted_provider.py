@@ -30,7 +30,7 @@ Credential & config handling (R16-D2 T4 / AT-408, Section 3)
 - The credential is re-resolved on every call (via ``HostedConfig`` reading the
   live config value) so a key rotation never requires a restart — preserving
   the documented zero-downtime behaviour the resilience tests rely on.
-- ``backend/.env.example`` documents ``ANTHROPIC_API_KEY`` as the required
+- ``backend/.env.template`` documents ``ANTHROPIC_API_KEY`` as the required
   credential config key with a placeholder value (T4-AC4).
 
 Resilience (R16-D2 T2)

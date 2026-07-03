@@ -41,13 +41,25 @@ Checkpoint shape (opaque to the runner)
 ---------------------------------------
 A single ``(org_id, 'teams')`` checkpoint row is persisted by the runner, but a
 Teams workspace has many channels (across teams) each with its own Graph delta
-position. The connector therefore encodes a per-channel delta-token MAP as the
-opaque checkpoint value, keyed by ``"{team_id}/{channel_id}"``. Each token is the
-high-water change marker (the last-modified/created timestamp) of the newest
-message seen in that channel — opaque to the runner, owned by this connector::
+position. The connector therefore encodes a per-channel position MAP as the
+opaque checkpoint value, keyed by ``"{team_id}/{channel_id}"``. The per-channel
+value is opaque to the runner and owned by this connector, and its exact form
+depends on the mode:
 
-    {"v": 1, "channels": {"T-eng/19:ops": "2026-06-11T08:05:00Z",
-                          "T-eng/19:deploys": "2026-06-10T09:30:00Z"}}
+  * **Live** — the value is Microsoft Graph's own ``@odata.deltaLink`` for that
+    channel (returned on the final page of the delta response). On the next run
+    it is replayed as the delta position so Graph returns ONLY what changed since
+    — the connector never re-scans the channel or filters client-side. This is the
+    native Graph delta token the R16-A1 opaque-checkpoint contract was built for.
+  * **Offline (fixtures)** — the value is the ISO-8601 high-water
+    last-modified/created timestamp of the newest message seen; the connector
+    filters the fixture messages by this marker. Fixtures have no Graph deltaLink,
+    so the marker stands in for it.
+
+Both forms are just strings the runner persists verbatim (R16-A1 AC5)::
+
+    live:    {"v": 1, "channels": {"T-eng/19:ops": "https://graph.microsoft.com/v1.0/teams/.../messages/delta?$deltatoken=..."}}
+    offline: {"v": 1, "channels": {"T-eng/19:ops": "2026-06-11T08:05:00Z"}}
 
 The runner never interprets this — it persists and returns the string verbatim
 (R16-A1 AC5). Only this connector, which owns the shape, parses it back. A
@@ -83,9 +95,10 @@ from __future__ import annotations
 import json
 import logging
 import os
+import time
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, Iterator, List, Optional
+from typing import Any, Dict, Iterator, List, Optional, Tuple
 
 from . import get_live_connector, is_live
 from .base import ChangeBasedIngestor, ChangeKind, Checkpoint, DeltaBatch
@@ -110,6 +123,27 @@ _DEFAULT_BATCH_SIZE = 100
 #: Microsoft Graph API base (live mode).
 _GRAPH_API_BASE = "https://graph.microsoft.com/v1.0"
 _REQUEST_TIMEOUT = 30
+
+#: Microsoft Graph throttles delta queries heavily (HTTP 429 + Retry-After).
+#: Retry a throttled GET this many times, honouring Retry-After (capped) between
+#: attempts, before giving up with an actionable error (L2).
+_MAX_THROTTLE_RETRIES = 3
+_MAX_RETRY_WAIT_SECONDS = 30
+
+#: Total wall-clock a single client will spend sleeping on 429 ``Retry-After``
+#: waits across ALL requests in one ingest before giving up. The per-request
+#: retry cap (``_MAX_THROTTLE_RETRIES`` × ``_MAX_RETRY_WAIT_SECONDS`` ≈ 90s) is
+#: otherwise unbounded across a channel-by-channel enumeration, so a heavily
+#: throttled tenant could stall a run for many minutes. Giving up here is
+#: non-blocking — the caller degrades to an empty corroboration block (same path
+#: as the existing "throttling persisted" error). Env-tunable; the default is
+#: generous so a normal run (occasional short waits) never trips it.
+try:
+    _MAX_TOTAL_THROTTLE_WAIT_SECONDS = max(
+        0, int(os.getenv("TEAMS_MAX_THROTTLE_WAIT_SECONDS", "120"))
+    )
+except (TypeError, ValueError):
+    _MAX_TOTAL_THROTTLE_WAIT_SECONDS = 120
 
 #: Channel membership types Microsoft Graph reports. Only ``standard`` channels
 #: are read; ``private`` and ``shared`` channels are excluded at the access
@@ -217,6 +251,24 @@ def _marker_gt(marker: str, token: Optional[str]) -> bool:
     return me > te
 
 
+def _retry_after_seconds(resp: Any) -> int:
+    """Parse a Microsoft Graph ``Retry-After`` header into a bounded sleep (L2).
+
+    Returns the header's seconds value clamped to ``[1, _MAX_RETRY_WAIT_SECONDS]``,
+    defaulting to 1 second when the header is missing or unparseable. (Graph sends
+    Retry-After as an integer number of seconds for 429s.)
+    """
+    try:
+        raw = resp.headers.get("Retry-After", "") or ""
+    except Exception:  # pragma: no cover — defensive on odd header objects
+        raw = ""
+    try:
+        secs = int(float(raw))
+    except (TypeError, ValueError):
+        secs = 1
+    return max(1, min(secs, _MAX_RETRY_WAIT_SECONDS))
+
+
 class TeamsIngestor(ChangeBasedIngestor):
     """Change-based Microsoft Teams ingestor (R17-A1 / AT-430).
 
@@ -243,6 +295,10 @@ class TeamsIngestor(ChangeBasedIngestor):
         if batch_size < 1:
             raise ValueError("batch_size must be >= 1")
         self.batch_size = batch_size
+        # Live Microsoft Graph client, created once per run and reused across
+        # list_teams / list_channels / messages_delta (avoids the N+1 session
+        # churn, M2) then closed at the end of ingest_changes (no leak, H2).
+        self._graph_client: Optional["TeamsGraphClient"] = None
 
     # ── ChangeBasedIngestor contract ────────────────────────────────────────
     def ingest_changes(
@@ -252,69 +308,91 @@ class TeamsIngestor(ChangeBasedIngestor):
 
         First run (``since is None``): full load of every accessible standard
         channel, streamed as checkpointed batches (resumable — AC3). Incremental
-        run: a Graph delta query per channel returns only messages newer than the
-        stored delta token (AC2). An unchanged workspace yields a single empty
-        :class:`DeltaBatch` whose ``next_checkpoint`` echoes the incoming position
-        (AC2).
+        run: a Graph delta query per channel returns only messages changed since
+        the stored delta position (AC2). An unchanged workspace yields a single
+        empty :class:`DeltaBatch` whose ``next_checkpoint`` echoes the incoming
+        position (AC2).
+
+        Live vs offline (see the module "Checkpoint shape" docstring): in live
+        mode the per-channel checkpoint is Microsoft Graph's own ``deltaLink`` and
+        Graph returns only the changed messages, so the connector advances a
+        channel's checkpoint to the new deltaLink only after that channel's LAST
+        batch (a mid-channel failure resumes from the OLD deltaLink, which Graph
+        re-serves losslessly). In offline mode it filters the fixture by an ISO
+        high-water marker and advances per batch (fine-grained resume).
         """
         tokens: Dict[str, str] = _decode_checkpoint(since.value if since else None)
         # Working copy we advance as batches are emitted; each yielded
         # next_checkpoint encodes the cumulative map so any single batch is a
         # valid resume point on the next run.
         running = dict(tokens)
+        live = is_live()
 
-        channels = self._accessible_channels(org_id)
-        logger.info(
-            "teams: org=%s %s — %d accessible standard channel(s)",
-            org_id,
-            "first run (full load)" if since is None else "incremental run",
-            len(channels),
-        )
-
-        # Run each channel's delta query first so we know which batch is the final
-        # one overall and can flag is_complete=True on exactly that batch (the
-        # runner needs one terminal batch to advance).
-        pending: List[tuple] = []  # (channel, [messages]) for channels with changes
-        for channel in channels:
-            key = _channel_key(channel["team_id"], channel["id"])
-            token = tokens.get(key)
-            changed = self._messages_delta(org_id, channel, token)
-            if changed:
-                pending.append((channel, changed))
-
-        if not pending:
-            # Unchanged workspace → empty delta that echoes the incoming
-            # position (no regression). On a first run with no accessible
-            # channels this records an empty delta-token map.
-            yield DeltaBatch(
-                records=[],
-                next_checkpoint=_encode_checkpoint(running),
-                is_complete=True,
+        try:
+            channels = self._accessible_channels(org_id)
+            logger.info(
+                "teams: org=%s %s — %d accessible standard channel(s)",
+                org_id,
+                "first run (full load)" if since is None else "incremental run",
+                len(channels),
             )
-            return
 
-        # Total number of batches across all channels, so the very last one is
-        # marked terminal.
-        total_batches = sum(
-            (len(msgs) + self.batch_size - 1) // self.batch_size
-            for _, msgs in pending
-        )
-        emitted = 0
-        for channel, messages in pending:
-            key = _channel_key(channel["team_id"], channel["id"])
-            for start in range(0, len(messages), self.batch_size):
-                page = messages[start : start + self.batch_size]
-                records = [self._to_record(channel, m) for m in page]
-                # Advance this channel's delta token to the newest change marker in
-                # the page — the high-water last-modified/created timestamp. This is
-                # the opaque position the next run resumes the delta query from.
-                running[key] = _change_marker(page[-1])
-                emitted += 1
+            # Query each channel's delta first so we know which batch is the final
+            # one overall and can flag is_complete=True on exactly that batch (the
+            # runner needs one terminal batch to advance). Each entry carries the
+            # channel's changed messages plus its NEW opaque position token
+            # (the Graph deltaLink in live mode; None offline).
+            pending: List[Tuple[Dict[str, Any], List[Dict[str, Any]], Optional[str]]] = []
+            for channel in channels:
+                key = _channel_key(channel["team_id"], channel["id"])
+                messages, next_token = self._channel_delta(org_id, channel, tokens.get(key))
+                if messages:
+                    pending.append((channel, messages, next_token))
+
+            if not pending:
+                # Unchanged workspace → empty delta that echoes the incoming
+                # position (no regression). On a first run with no accessible
+                # channels this records an empty position map.
                 yield DeltaBatch(
-                    records=records,
+                    records=[],
                     next_checkpoint=_encode_checkpoint(running),
-                    is_complete=(emitted == total_batches),
+                    is_complete=True,
                 )
+                return
+
+            # Total number of batches across all channels, so the very last one is
+            # marked terminal.
+            total_batches = sum(
+                (len(msgs) + self.batch_size - 1) // self.batch_size
+                for _, msgs, _ in pending
+            )
+            emitted = 0
+            for channel, messages, next_token in pending:
+                key = _channel_key(channel["team_id"], channel["id"])
+                n_pages = (len(messages) + self.batch_size - 1) // self.batch_size
+                for page_idx, start in enumerate(range(0, len(messages), self.batch_size)):
+                    page = messages[start : start + self.batch_size]
+                    records = [self._to_record(channel, m) for m in page]
+                    if live:
+                        # Advance to Graph's new deltaLink only after this channel's
+                        # LAST page — a mid-channel failure must resume from the OLD
+                        # deltaLink (Graph re-serves the same delta), never skip.
+                        if page_idx == n_pages - 1 and next_token:
+                            running[key] = next_token
+                    else:
+                        # Offline: advance per batch to the newest ISO marker in the
+                        # page (fine-grained, per-batch resumability).
+                        running[key] = _change_marker(page[-1])
+                    emitted += 1
+                    yield DeltaBatch(
+                        records=records,
+                        next_checkpoint=_encode_checkpoint(running),
+                        is_complete=(emitted == total_batches),
+                    )
+        finally:
+            # Release the live Graph client's HTTP session (H2) regardless of how
+            # the generator ends (exhausted, closed, or raised).
+            self._close_client()
 
     # ── Channel access (AC4) ─────────────────────────────────────────────────
     def _accessible_channels(self, org_id: str) -> List[Dict[str, Any]]:
@@ -343,22 +421,31 @@ class TeamsIngestor(ChangeBasedIngestor):
                 accessible.append({**c, "team_id": team_id, "team_name": team_name})
         return accessible
 
-    def _messages_delta(
+    def _channel_delta(
         self, org_id: str, channel: Dict[str, Any], token: Optional[str]
-    ) -> List[Dict[str, Any]]:
-        """Return this channel's messages changed since ``token``, oldest-first.
+    ) -> Tuple[List[Dict[str, Any]], Optional[str]]:
+        """Return ``(changed_messages, next_token)`` for a channel.
 
-        This is the Graph delta query: ``token`` falsy (channel absent from the
-        checkpoint map) means a full enumeration from the beginning — the
-        first-load / resume-a-new-channel case; otherwise only messages whose
-        change marker is strictly newer than the stored delta token are returned.
-        Sorting oldest-first (by change marker) guarantees the checkpoint advances
-        monotonically as batches are emitted.
+        Live: run the Microsoft Graph delta query, passing the stored
+        ``@odata.deltaLink`` as ``token`` (or None on the first run). Graph returns
+        ONLY the messages changed since that position and a NEW ``@odata.deltaLink``
+        to persist — so the connector never re-scans or filters client-side (H1).
+        Returns ``(records, new_delta_link)``.
+
+        Offline: ``token`` is the ISO high-water marker; filter the fixture's
+        messages to those strictly newer, oldest-first (so the marker advances
+        monotonically). ``next_token`` is None — the offline path advances per batch
+        by the message marker instead.
         """
-        messages = self._raw_messages(org_id, channel)
+        if is_live():
+            return self._client(org_id).messages_delta(
+                channel["team_id"], channel["id"], token
+            )
+        key = _channel_key(channel["team_id"], channel["id"])
+        messages = list(self._fixture().get("messages", {}).get(key, []))
         fresh = [m for m in messages if _marker_gt(_change_marker(m), token)]
         fresh.sort(key=lambda m: _marker_epoch(_change_marker(m)) or float("-inf"))
-        return fresh
+        return fresh, None
 
     def _to_record(self, channel: Dict[str, Any], msg: Dict[str, Any]) -> Dict[str, Any]:
         """Shape one Teams message into a change-delta record.
@@ -449,14 +536,6 @@ class TeamsIngestor(ChangeBasedIngestor):
             return list(self._fixture().get("channels", {}).get(team_id, []))
         return self._client(org_id).list_channels(team_id)
 
-    def _raw_messages(
-        self, org_id: str, channel: Dict[str, Any]
-    ) -> List[Dict[str, Any]]:
-        if not is_live():
-            key = _channel_key(channel["team_id"], channel["id"])
-            return list(self._fixture().get("messages", {}).get(key, []))
-        return self._client(org_id).messages_delta(channel["team_id"], channel["id"])
-
     def _fixture(self) -> Dict[str, Any]:
         if not FIXTURE_PATH.exists():
             raise TeamsIngestError(f"Teams fixture not found: {FIXTURE_PATH}")
@@ -464,22 +543,35 @@ class TeamsIngestor(ChangeBasedIngestor):
             return json.load(fh)
 
     def _client(self, org_id: str) -> "TeamsGraphClient":
-        """Build a Microsoft Graph client from the per-run OAuth credentials.
+        """Return the per-run Microsoft Graph client, creating it once and reusing it.
 
         Resolution mirrors the other connectors: the per-run credential context
         (DB-sourced vault token, isolated per org/run) first, then the
         ``TEAMS_GRAPH_TOKEN`` env var as a CLI/standalone fallback. The OAuth
         connect flow that lands the token in the vault is T5 / AT-434.
+
+        The client (and its single HTTP session) is cached on the ingestor for the
+        duration of one ``ingest_changes`` call — so enumerating N teams' channels
+        reuses ONE connection pool (M2) instead of opening a new session per team —
+        and is closed in ``ingest_changes``'s ``finally`` (H2).
         """
-        cred = get_live_connector("teams")
-        token = cred.get("token") if cred else os.getenv("TEAMS_GRAPH_TOKEN")
-        if not token:
-            raise TeamsIngestError(
-                "Live mode requires a Microsoft Graph OAuth token, provided by the "
-                "Teams Connect flow (credential vault). Set INGEST_MODE=offline to "
-                "run without credentials."
-            )
-        return TeamsGraphClient(token.strip())
+        if self._graph_client is None:
+            cred = get_live_connector("teams")
+            token = cred.get("token") if cred else os.getenv("TEAMS_GRAPH_TOKEN")
+            if not token:
+                raise TeamsIngestError(
+                    "Live mode requires a Microsoft Graph OAuth token, provided by "
+                    "the Teams Connect flow (credential vault). Set "
+                    "INGEST_MODE=offline to run without credentials."
+                )
+            self._graph_client = TeamsGraphClient(token.strip())
+        return self._graph_client
+
+    def _close_client(self) -> None:
+        """Close and drop the cached Graph client's HTTP session, if any (H2)."""
+        if self._graph_client is not None:
+            self._graph_client.close()
+            self._graph_client = None
 
 
 class TeamsGraphClient:
@@ -495,6 +587,25 @@ class TeamsGraphClient:
     def __init__(self, token: str):
         self.token = token
         self._session = None
+        # Cumulative seconds slept on 429 Retry-After waits across this client's
+        # lifetime (one ingest). Bounded by _MAX_TOTAL_THROTTLE_WAIT_SECONDS.
+        self._throttle_waited = 0.0
+
+    # Reusable as a context manager so callers can guarantee the session closes.
+    def __enter__(self) -> "TeamsGraphClient":
+        return self
+
+    def __exit__(self, *exc: Any) -> None:
+        self.close()
+
+    def close(self) -> None:
+        """Close the underlying HTTP session, releasing its pooled connections (H2)."""
+        if self._session is not None:
+            try:
+                self._session.close()
+            except Exception:  # pragma: no cover — close must never raise
+                pass
+            self._session = None
 
     def _sess(self):
         try:
@@ -505,16 +616,54 @@ class TeamsGraphClient:
             )
         if self._session is None:
             self._session = requests.Session()
-            self._session.headers.update({"Authorization": f"Bearer {self.token}"})
+            self._session.headers.update(
+                {"Authorization": f"Bearer {self.token}", "Accept": "application/json"}
+            )
         return self._session
 
     def _get(self, url: str) -> Dict[str, Any]:
-        resp = self._sess().get(url, timeout=_REQUEST_TIMEOUT)
-        if not resp.ok:
-            raise TeamsIngestError(
-                f"Microsoft Graph GET {url} HTTP {resp.status_code}"
-            )
-        return resp.json()
+        """GET a Graph URL, transparently retrying on 429 throttling (L2).
+
+        Microsoft Graph throttles delta queries with HTTP 429 + a ``Retry-After``
+        header. Rather than aborting the whole run on the first 429, wait the
+        indicated interval (capped) and retry up to ``_MAX_THROTTLE_RETRIES`` times;
+        only if throttling persists do we raise, with an actionable message.
+        """
+        for attempt in range(_MAX_THROTTLE_RETRIES + 1):
+            resp = self._sess().get(url, timeout=_REQUEST_TIMEOUT)
+            if resp.status_code == 429 and attempt < _MAX_THROTTLE_RETRIES:
+                wait = _retry_after_seconds(resp)
+                # Bound total throttle sleep across the whole ingest, not just per
+                # request. Once the budget is spent, give up (non-blocking: the
+                # caller degrades to an empty block, same as persistent throttling)
+                # rather than let a throttled tenant stall the run indefinitely.
+                if self._throttle_waited + wait > _MAX_TOTAL_THROTTLE_WAIT_SECONDS:
+                    raise TeamsIngestError(
+                        "Microsoft Graph throttling (HTTP 429) exceeded the Teams "
+                        f"throttle-wait budget ({_MAX_TOTAL_THROTTLE_WAIT_SECONDS}s) "
+                        "for this ingest — re-run the discovery after the "
+                        "Retry-After window."
+                    )
+                self._throttle_waited += wait
+                logger.warning(
+                    "Microsoft Graph throttled (429) on %s; retry %d/%d after %ds",
+                    url, attempt + 1, _MAX_THROTTLE_RETRIES, wait,
+                )
+                time.sleep(wait)
+                continue
+            if not resp.ok:
+                if resp.status_code == 429:
+                    raise TeamsIngestError(
+                        "Microsoft Graph throttling (HTTP 429) persisted after "
+                        f"{_MAX_THROTTLE_RETRIES} retries — re-run the discovery "
+                        "after the Retry-After window."
+                    )
+                raise TeamsIngestError(
+                    f"Microsoft Graph GET {url} HTTP {resp.status_code}"
+                )
+            return resp.json()
+        # Unreachable: the loop returns or raises on the final attempt.
+        raise TeamsIngestError("Microsoft Graph request exhausted retries")  # pragma: no cover
 
     def _get_all(self, url: str) -> List[Dict[str, Any]]:
         """Follow Graph ``@odata.nextLink`` pagination, collecting ``value`` rows."""
@@ -551,15 +700,33 @@ class TeamsGraphClient:
             )
         return channels
 
-    def messages_delta(self, team_id: str, channel_id: str) -> List[Dict[str, Any]]:
-        """Return changed messages for a channel via the Graph delta query.
+    def messages_delta(
+        self, team_id: str, channel_id: str, delta_link: Optional[str] = None
+    ) -> Tuple[List[Dict[str, Any]], Optional[str]]:
+        """Run the Graph message delta query and return ``(records, next_delta_link)``.
 
-        Follows ``@odata.nextLink`` pagination to the final ``@odata.deltaLink``,
-        collecting all changed messages. (The delta token itself is threaded
-        through the opaque checkpoint by the ingestor; this client returns the
-        message rows.)
+        This is the heart of the native change mechanism (H1): when ``delta_link``
+        is provided (the token persisted from the previous run) it is replayed
+        verbatim, so Microsoft Graph returns ONLY the messages changed since that
+        position — the connector never re-scans the channel. On the first run
+        (``delta_link is None``) it starts a fresh delta enumeration. Either way it
+        follows ``@odata.nextLink`` pagination to the terminal page, whose
+        ``@odata.deltaLink`` is captured and returned as the new position to
+        persist for next time.
         """
-        url = (
+        url: Optional[str] = delta_link or (
             f"{_GRAPH_API_BASE}/teams/{team_id}/channels/{channel_id}/messages/delta"
         )
-        return self._get_all(url)
+        items: List[Dict[str, Any]] = []
+        next_delta: Optional[str] = None
+        while url:
+            data = self._get(url)
+            items.extend(data.get("value", []))
+            next_page = data.get("@odata.nextLink")
+            if next_page:
+                url = next_page
+                continue
+            # Terminal page: Graph hands back the deltaLink to replay next run.
+            next_delta = data.get("@odata.deltaLink")
+            url = None
+        return items, next_delta

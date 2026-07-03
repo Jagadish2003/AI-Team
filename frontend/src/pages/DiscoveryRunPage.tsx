@@ -153,27 +153,79 @@ function prettySourceLabel(value: string): string {
     .join(" ");
 }
 
-// True when a known source step's source is among the connected sources.
-// Salesforce is matched by prefix so product-specific ids (e.g. "salesforce_sc")
-// still resolve to the Salesforce passes.
-function isSourceStepConnected(
-  stepId: string,
-  connected: Set<string>
-): boolean {
-  const tokens = STEP_SOURCE_TOKENS[stepId] ?? [];
-  return tokens.some(
-    (t) =>
-      connected.has(t) ||
-      (t === "salesforce" &&
-        [...connected].some((c) => c.startsWith("salesforce")))
+// Reverse map: connector token → the known NON-pack source step it drives, so
+// the progress list can place each connected source at its own position in the
+// connected-source order (see DiscoveryStepList). Salesforce is intentionally
+// excluded here — it drives two passes (sf_crm + the pack second pass), so it is
+// mapped explicitly to sf_crm at its ordered position and the pack pass is
+// appended after every connected source.
+const KNOWN_TOKEN_STEP_ID: Record<string, string> = (() => {
+  const out: Record<string, string> = {};
+  for (const [stepId, tokens] of Object.entries(STEP_SOURCE_TOKENS)) {
+    if (PACK_STEP_IDS.has(stepId)) continue;
+    for (const t of tokens) {
+      if (t === "salesforce") continue; // handled explicitly as sf_crm
+      out[t] = stepId;
+    }
+  }
+  return out;
+})();
+
+// Parse the ordered connector list out of the Discovery Log CONNECT event
+// message ("Using authenticated connectors: a, b, c" for live runs, or
+// "Connected sources: a, b, c" offline). Returns the tokens in log order, or
+// null when no CONNECT event is present yet. This is the authoritative order the
+// Discovery Progress list mirrors so the two views agree exactly.
+export function parseConnectOrder(
+  events: { stage?: string; message?: string }[]
+): string[] | null {
+  const connectEvt = events.find(
+    (e) => (e.stage ?? "").trim().toUpperCase() === "CONNECT"
   );
+  const msg = connectEvt?.message ?? "";
+  const m = msg.match(
+    /(?:authenticated connectors|connected sources)\s*:\s*(.+)$/i
+  );
+  if (!m) return null;
+  const tokens = m[1]
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+  return tokens.length ? tokens : null;
 }
 
-// Every connector id/name token covered by a known source step — used to decide
-// which connected sources need a generic (catch-all) step instead.
-const KNOWN_SOURCE_TOKENS = new Set(
-  Object.values(STEP_SOURCE_TOKENS).flat()
-);
+// Reorder a connected-source list so it follows the Discovery Log CONNECT order.
+// Sources present in the log are sorted by their log position; any source not in
+// the log (e.g. Salesforce/Slack surfaced from the run record but omitted from
+// the live-connector log line) keeps its original relative order and follows the
+// logged sources. Salesforce product variants share the "salesforce" log rank.
+export function orderSourcesByConnectLog(
+  sources: string[],
+  connectOrder: string[] | null
+): string[] {
+  if (!connectOrder || connectOrder.length === 0) return sources;
+  const rank = new Map<string, number>();
+  connectOrder.forEach((tok, i) => {
+    const n = normalizeSource(tok);
+    if (!rank.has(n)) rank.set(n, i);
+  });
+  const rankOf = (s: string): number => {
+    const n = normalizeSource(s);
+    if (rank.has(n)) return rank.get(n)!;
+    if (n.startsWith("salesforce") && rank.has("salesforce")) {
+      return rank.get("salesforce")!;
+    }
+    return Number.MAX_SAFE_INTEGER;
+  };
+  return sources
+    .map((s, i) => ({ s, i }))
+    .sort((a, b) => {
+      const ra = rankOf(a.s);
+      const rb = rankOf(b.s);
+      return ra !== rb ? ra - rb : a.i - b.i; // stable within equal ranks
+    })
+    .map((x) => x.s);
+}
 
 // CS-4: the second Salesforce pass ("sf_ncino" step) reflects the Salesforce
 // product the workspace declared in Integration Hub (SalesforceProductPicker).
@@ -336,63 +388,69 @@ export function DiscoveryStepList({
 
   const canonical = resolveDiscoverySteps(salesforceProduct);
   const connectedProvided = connectedSources !== undefined;
-  const connectedNorm = new Set(
-    (connectedSources ?? []).map(normalizeSource)
+
+  const byId: Record<string, DiscoveryStep> = Object.fromEntries(
+    canonical.map((s) => [s.id, s])
   );
 
-  // 1. Known source stages, in canonical (backend emission) order — filtered to
-  //    the connected sources when a connected-source list is provided. Split the
-  //    pack-specific pass (sf_ncino) out so it can be rendered AFTER every
-  //    connected source ("all connected sources → selected pack").
-  const knownSourceSteps = canonical.filter((s) => {
-    if (!SOURCE_STEP_IDS.has(s.id) || PACK_STEP_IDS.has(s.id)) return false;
-    if (!connectedProvided) return true; // legacy: show all known source stages
-    return isSourceStepConnected(s.id, connectedNorm);
-  });
-  const packSteps = canonical.filter((s) => {
-    if (!PACK_STEP_IDS.has(s.id)) return false;
-    if (!connectedProvided) return true; // legacy: show the pack stage
-    return isSourceStepConnected(s.id, connectedNorm);
-  });
+  // 1. Source stages, in the SAME order as the connected-source list (which the
+  //    caller aligns to the Discovery Log CONNECT order — see DiscoveryRunPage).
+  //    Each connected source becomes one stage at its own position: a known
+  //    stage (ServiceNow / Jira / Slack / Salesforce CRM) when the token maps to
+  //    one, otherwise a generic catch-all stage. Salesforce drives two passes —
+  //    its CRM stage sits at the salesforce position here and the pack-specific
+  //    second pass is appended AFTER every connected source (below).
+  const sourceSteps: DiscoveryStep[] = [];
+  const seenSource = new Set<string>();
+  let salesforceConnected = false;
+  if (connectedProvided) {
+    for (const src of connectedSources ?? []) {
+      const n = normalizeSource(src);
+      if (!n) continue;
+      if (n === "salesforce" || n.startsWith("salesforce")) {
+        // Any Salesforce product variant → a single CRM stage at this position.
+        if (!salesforceConnected) {
+          salesforceConnected = true;
+          sourceSteps.push(byId["sf_crm"]);
+        }
+        continue;
+      }
+      if (seenSource.has(n)) continue; // de-dupe repeated tokens
+      seenSource.add(n);
+      const knownId = KNOWN_TOKEN_STEP_ID[n];
+      if (knownId && byId[knownId]) {
+        sourceSteps.push(byId[knownId]);
+      } else {
+        const label = prettySourceLabel(src);
+        sourceSteps.push({
+          id: `src:${n}`,
+          label,
+          subLabel: `Ingesting ${label} signals`,
+        });
+      }
+    }
+  } else {
+    // Legacy (no connected-source list): show every known non-pack source stage
+    // in canonical backend-emission order.
+    for (const s of canonical) {
+      if (SOURCE_STEP_IDS.has(s.id) && !PACK_STEP_IDS.has(s.id)) {
+        sourceSteps.push(s);
+      }
+    }
+    salesforceConnected = true; // legacy always shows the pack stage
+  }
 
-  // 2. Generic stages for connected sources with no dedicated pipeline step
-  //    (e.g. a newly added connector). These still appear so "every connected
-  //    source shows in progress"; they have no backend current_step, so their
-  //    state is derived from overall pipeline progress (ingested by detection).
-  const seenGeneric = new Set<string>();
-  const genericSourceSteps: DiscoveryStep[] = connectedProvided
-    ? (connectedSources ?? [])
-        .filter((src) => {
-          const n = normalizeSource(src);
-          if (!n) return false;
-          if (KNOWN_SOURCE_TOKENS.has(n) || n.startsWith("salesforce")) {
-            return false; // already covered by a known source stage
-          }
-          if (seenGeneric.has(n)) return false; // de-dupe
-          seenGeneric.add(n);
-          return true;
-        })
-        .map((src) => {
-          const label = prettySourceLabel(src);
-          return {
-            id: `src:${normalizeSource(src)}`,
-            label,
-            subLabel: `Ingesting ${label} signals`,
-          };
-        })
-    : [];
+  // 2. Pack-specific second Salesforce pass — appended AFTER every connected
+  //    source ("all connected sources → selected pack"). Shown only when
+  //    Salesforce is connected (or in the legacy all-stages mode).
+  const packSteps = canonical.filter(
+    (s) => PACK_STEP_IDS.has(s.id) && salesforceConnected
+  );
 
   // 3. Processing stages — always shown, in canonical order.
   const processingSteps = canonical.filter((s) => !SOURCE_STEP_IDS.has(s.id));
 
-  // Display order: every connected source first (systems of record + Slack +
-  // any generic connector), THEN the selected pack, THEN the processing stages.
-  const steps = [
-    ...knownSourceSteps,
-    ...genericSourceSteps,
-    ...packSteps,
-    ...processingSteps,
-  ];
+  const steps = [...sourceSteps, ...packSteps, ...processingSteps];
 
   return (
     <ol className="space-y-3">
@@ -770,6 +828,21 @@ export default function DiscoveryRunPage() {
     return run?.inputs ?? inputs;
   }, [run, runSelectedSystems, inputs, uploadedFiles]);
 
+  // Discovery Progress mirrors the Discovery Log CONNECT order exactly: parse the
+  // ordered connector list out of the CONNECT event and reorder the run's
+  // connected sources to match it, so the progress stages appear in the same
+  // order the log lists the connected systems. Falls back to the summary order
+  // until the CONNECT event has been logged.
+  const connectLogOrder = useMemo(() => parseConnectOrder(events), [events]);
+  const progressConnectedSources = useMemo(
+    () =>
+      orderSourcesByConnectLog(
+        summaryInputs.connectedSources,
+        connectLogOrder
+      ),
+    [summaryInputs.connectedSources, connectLogOrder]
+  );
+
   const hasAtLeastOneSource =
     inputs.connectedSources.length > 0 ||
     inputs.uploadedFiles.length > 0; // T41-8: sampleWorkspaceEnabled removed
@@ -946,7 +1019,7 @@ export default function DiscoveryRunPage() {
               runComplete={!computing}
               salesforceProduct={salesforceProduct}
               failedSteps={failedSteps}
-              connectedSources={summaryInputs.connectedSources}
+              connectedSources={progressConnectedSources}
             />
           </div>
         )}

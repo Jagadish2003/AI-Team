@@ -140,8 +140,13 @@ def test_connector_token_status_is_org_isolated(client: TestClient):
     """A token connected by org A must not show as connected for org B; org B sees
     needs_auth (no token), proving cross-tenant connector access is prevented."""
     from app.auth.vault import store_token
+    from app.rbac import seed_owner
 
     connector = "salesforce"
+    # token-status is role-gated (viewer+, csc rbac fix 60a84c3). Seed both orgs so
+    # the RBAC gate passes and we assert the tenancy isolation, not a 403.
+    seed_owner(ORG_A, _DEV_TOKEN)
+    seed_owner(ORG_B, _DEV_TOKEN)
     with _patch_env(_vault_env()):
         store_token(ORG_A, connector, _token_response("orgA-access-token"))
 

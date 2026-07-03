@@ -59,16 +59,18 @@ for Slack.
 
 from __future__ import annotations
 
+import html as _html
+import re as _re
 from datetime import datetime, timezone
 from typing import Any, Dict, Iterable, List, Optional
 
 from app.provenance import EvidencePointer, utc_now_iso
 
 # Cross-reference marker extraction is source-agnostic structured pattern matching
-# (ServiceNow/Jira/GitHub ids + URLs). Reuse the Slack implementation verbatim so a
-# ticket/PR reference is detected identically across every conversation source,
-# rather than maintaining a second copy of the same regex set.
-from .slack_signals import extract_cross_reference_markers
+# (ServiceNow/Jira/GitHub ids + URLs). Reuse the Slack implementation's core regex
+# set so a ticket/PR reference is detected identically across every conversation
+# source, rather than maintaining a second copy.
+from .slack_signals import extract_cross_reference_markers as _extract_markers_raw
 
 __all__ = [
     "extract_cross_reference_markers",
@@ -81,6 +83,39 @@ __all__ = [
     "ESCALATION_MIN_PARTICIPANTS",
     "ESCALATION_MIN_REPLIES",
 ]
+
+# Teams message bodies arrive as HTML when ``body.contentType == 'html'`` (the
+# common case), e.g. ``<p>See ticket <a href="…">JIRA-123</a></p>``. The shared
+# marker regex was written for Slack's plain text, so a ticket id inside a tag or
+# anchor could be missed or mangled. Strip tags to visible text first (L1), then
+# run the shared extractor over that — so ``INC-4821`` / ``JIRA-123`` are found in
+# HTML bodies too. This is still structured pattern matching over metadata, not
+# content NLP (AC8).
+_HTML_TAG_RE = _re.compile(r"<[^>]+>")
+
+
+def _html_to_text(content: Optional[str]) -> str:
+    """Best-effort HTML→visible-text: drop tags and unescape entities.
+
+    Plain-text (non-HTML) input passes through essentially unchanged. Never
+    raises; a non-string yields an empty string.
+    """
+    if not content or not isinstance(content, str):
+        return ""
+    # Tags → spaces (so "<p>a</p><p>b</p>" doesn't fuse into "ab"), then collapse.
+    text = _HTML_TAG_RE.sub(" ", content)
+    text = _html.unescape(text)
+    return _re.sub(r"\s+", " ", text).strip()
+
+
+def extract_cross_reference_markers(text: Optional[str]) -> List[Dict[str, str]]:
+    """Extract cross-system reference markers from a Teams message body.
+
+    Wraps the shared (Slack) extractor with an HTML→text strip so references
+    inside a Teams HTML body are found (L1). Plain-text input behaves identically
+    to the shared extractor.
+    """
+    return _extract_markers_raw(_html_to_text(text))
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Escalation thresholds (participation / back-and-forth)

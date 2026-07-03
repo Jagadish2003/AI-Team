@@ -30,6 +30,7 @@ from unittest.mock import patch
 
 from discovery.t3_ceiling_clamp import (
     apply_t3_ceiling_clamp,
+    is_conversation_only_corroboration,
     is_slack_only_corroboration,
     SUPPORTING_ONLY_ROLES,
     SLACK_SYSTEM_IDS,
@@ -271,28 +272,44 @@ class TestApplyT3CeilingClampUnit:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# is_slack_only_corroboration() helper
+# is_conversation_only_corroboration() helper (Slack + Teams) — M1
 # ─────────────────────────────────────────────────────────────────────────────
 
-class TestIsSlackOnlyCorroboration:
+class TestIsConversationOnlyCorroboration:
 
     def test_slack_supporting_only_label(self):
-        assert is_slack_only_corroboration(["Slack (supporting only)"]) is True
+        assert is_conversation_only_corroboration(["Slack (supporting only)"]) is True
 
     def test_slack_escalation_pattern_label(self):
-        assert is_slack_only_corroboration(["Slack (escalation pattern)"]) is True
+        assert is_conversation_only_corroboration(["Slack (escalation pattern)"]) is True
+
+    def test_teams_only_label_is_true(self):
+        # M1: a Teams-only finding must be clamped exactly like a Slack-only one.
+        assert is_conversation_only_corroboration(["Teams (escalation pattern)"]) is True
+
+    def test_slack_plus_teams_is_true(self):
+        assert is_conversation_only_corroboration(
+            ["Slack (supporting only)", "Teams (escalation pattern)"]
+        ) is True
 
     def test_slack_plus_servicenow_is_false(self):
-        assert is_slack_only_corroboration(["ServiceNow", "Slack (escalation pattern)"]) is False
+        assert is_conversation_only_corroboration(["ServiceNow", "Slack (escalation pattern)"]) is False
+
+    def test_teams_plus_servicenow_is_false(self):
+        assert is_conversation_only_corroboration(["ServiceNow", "Teams (escalation pattern)"]) is False
 
     def test_servicenow_only_is_false(self):
-        assert is_slack_only_corroboration(["ServiceNow"]) is False
+        assert is_conversation_only_corroboration(["ServiceNow"]) is False
 
     def test_empty_list_is_false(self):
-        assert is_slack_only_corroboration([]) is False
+        assert is_conversation_only_corroboration([]) is False
 
     def test_jira_and_slack_is_false(self):
-        assert is_slack_only_corroboration(["Jira", "Slack (escalation pattern)"]) is False
+        assert is_conversation_only_corroboration(["Jira", "Slack (escalation pattern)"]) is False
+
+    def test_backwards_compatible_alias(self):
+        # The old name remains importable and points at the generalized function.
+        assert is_slack_only_corroboration is is_conversation_only_corroboration
 
 
 # ─────────────────────────────────────────────────────────────────────────────

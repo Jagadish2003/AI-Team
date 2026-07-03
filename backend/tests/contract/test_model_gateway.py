@@ -30,7 +30,7 @@ And every T2 acceptance criterion (AT-363):
           one value and embedding to another works without conflict.
   T2-AC4  An unknown provider value raises a clear ValueError with a helpful
           message (surfaced via validate_provider_config() at startup).
-  T2-AC5  backend/.env.example documents MODEL_GENERATION_PROVIDER and
+  T2-AC5  backend/.env.template documents MODEL_GENERATION_PROVIDER and
           MODEL_EMBEDDING_PROVIDER with valid example values.
 """
 
@@ -704,53 +704,53 @@ def test_t2_ac4_validate_provider_config_passes_when_set_to_hosted(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# T2-AC5 — .env.example documents both config keys with valid example values
+# T2-AC5 — .env.template documents both config keys with valid example values
 # ---------------------------------------------------------------------------
 
 
 def test_t2_ac5_env_example_contains_model_generation_provider():
-    """backend/.env.example must document MODEL_GENERATION_PROVIDER."""
+    """backend/.env.template must document MODEL_GENERATION_PROVIDER."""
     import os
     from pathlib import Path
 
     backend_dir = Path(__file__).resolve().parents[2]
-    env_example = backend_dir / ".env.example"
-    assert env_example.exists(), ".env.example must exist"
+    env_example = backend_dir / ".env.template"
+    assert env_example.exists(), ".env.template must exist"
 
     content = env_example.read_text(encoding="utf-8")
     assert "MODEL_GENERATION_PROVIDER" in content, (
-        "backend/.env.example must document MODEL_GENERATION_PROVIDER"
+        "backend/.env.template must document MODEL_GENERATION_PROVIDER"
     )
 
 
 def test_t2_ac5_env_example_contains_model_embedding_provider():
-    """backend/.env.example must document MODEL_EMBEDDING_PROVIDER."""
+    """backend/.env.template must document MODEL_EMBEDDING_PROVIDER."""
     from pathlib import Path
 
     backend_dir = Path(__file__).resolve().parents[2]
-    env_example = backend_dir / ".env.example"
+    env_example = backend_dir / ".env.template"
     content = env_example.read_text(encoding="utf-8")
     assert "MODEL_EMBEDDING_PROVIDER" in content, (
-        "backend/.env.example must document MODEL_EMBEDDING_PROVIDER"
+        "backend/.env.template must document MODEL_EMBEDDING_PROVIDER"
     )
 
 
 def test_t2_ac5_env_example_values_are_valid(monkeypatch):
-    """The example values in .env.example are actually registered providers."""
+    """The example values in .env.template are actually registered providers."""
     import re
     from pathlib import Path
 
     from app.model_gateway import _PROVIDER_REGISTRY
 
     backend_dir = Path(__file__).resolve().parents[2]
-    content = (backend_dir / ".env.example").read_text(encoding="utf-8")
+    content = (backend_dir / ".env.template").read_text(encoding="utf-8")
 
     for env_var in ("MODEL_GENERATION_PROVIDER", "MODEL_EMBEDDING_PROVIDER"):
         m = re.search(rf"^{env_var}=(.+)$", content, re.MULTILINE)
-        assert m is not None, f"{env_var} must have an example value in .env.example"
+        assert m is not None, f"{env_var} must have an example value in .env.template"
         example_value = m.group(1).strip()
         assert example_value in _PROVIDER_REGISTRY, (
-            f".env.example example value '{example_value}' for {env_var} "
+            f".env.template example value '{example_value}' for {env_var} "
             f"is not a registered provider. Valid: {sorted(_PROVIDER_REGISTRY.keys())}"
         )
 

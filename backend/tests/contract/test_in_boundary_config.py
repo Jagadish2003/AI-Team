@@ -191,8 +191,8 @@ def test_t4_in_boundary_embedding_can_be_selected_independently(monkeypatch):
 
 
 def test_t4_env_example_documents_in_boundary_config_keys():
-    """backend/.env.example documents endpoint/auth/model config for Task 4."""
-    env_example = Path(__file__).resolve().parents[2] / ".env.example"
+    """backend/.env.template documents endpoint/auth/model config for Task 4."""
+    env_example = Path(__file__).resolve().parents[2] / ".env.template"
     text = env_example.read_text(encoding="utf-8")
 
     assert "MODEL_GENERATION_PROVIDER" in text
@@ -200,4 +200,4 @@ def test_t4_env_example_documents_in_boundary_config_keys():
     assert IN_BOUNDARY_PROVIDER_NAME in text
 
     for key in _ALL_IN_BOUNDARY_KEYS:
-        assert f"{key}=" in text, f"{key} missing from backend/.env.example"
+        assert f"{key}=" in text, f"{key} missing from backend/.env.template"

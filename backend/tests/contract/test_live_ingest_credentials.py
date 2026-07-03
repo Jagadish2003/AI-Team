@@ -52,7 +52,7 @@ def test_resolves_only_authenticated_connectors_with_url(monkeypatch):
     async def fake_get_token(org_id, connector_id):
         # servicenow + slack + teams + github + java_app + dotnet_app not connected
         # in this scenario.
-        if connector_id in ("servicenow", "slack", "teams", "github", "java_app", "dotnet_app"):
+        if connector_id in ("servicenow", "slack", "teams", "github", "java_app", "dotnet_app", "sharepoint"):
             raise ConnectorNotAuthenticatedError(org_id, connector_id)
         return _token(connector_id)
 
@@ -81,7 +81,7 @@ def test_authenticated_but_unresolvable_url_is_skipped(monkeypatch):
     monkeypatch.delenv("JIRA_URL", raising=False)
 
     async def fake_get_token(org_id, connector_id):
-        if connector_id in ("slack", "teams", "github", "java_app", "dotnet_app"):
+        if connector_id in ("slack", "teams", "github", "java_app", "dotnet_app", "sharepoint"):
             raise ConnectorNotAuthenticatedError(org_id, connector_id)
         return _token(connector_id)
 
@@ -277,7 +277,7 @@ def test_unexpected_vault_error_excludes_connector(monkeypatch):
     async def fake_get_token(org_id, connector_id):
         if connector_id == "salesforce":
             raise RuntimeError("vault boom")
-        if connector_id in ("jira", "slack", "teams", "github", "java_app", "dotnet_app"):
+        if connector_id in ("jira", "slack", "teams", "github", "java_app", "dotnet_app", "sharepoint"):
             raise ConnectorNotAuthenticatedError(org_id, connector_id)
         return _token(connector_id)
 
@@ -395,6 +395,84 @@ def test_teams_and_salesforce_both_live(monkeypatch):
     assert set(live) == {"salesforce", "teams"}
     assert get_live_connector("teams") == {"token": "teams-access"}
     assert get_live_connector("salesforce")["token"] == "salesforce-access"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SharePoint — URL-less Microsoft Graph connector (R17-A2), mirrors Teams.
+# ─────────────────────────────────────────────────────────────────────────────
+def test_sharepoint_resolved_by_token_without_url(monkeypatch):
+    """SharePoint is URL-less: when authenticated it joins the live set keyed by
+    token alone, published to the per-run context that SharePointIngestor reads."""
+    async def fake_get_token(org_id, connector_id):
+        if connector_id == "sharepoint":
+            return _token(connector_id)
+        raise ConnectorNotAuthenticatedError(org_id, connector_id)
+
+    monkeypatch.setattr(lic, "get_token", fake_get_token)
+
+    live = lic.resolve_live_systems("default")
+
+    assert live == ["sharepoint"]
+    cred = get_live_connector("sharepoint")
+    assert cred == {"token": "sharepoint-access"}
+    assert "url" not in cred  # Microsoft Graph host is global — no per-org URL
+
+
+def test_sharepoint_excluded_when_not_authenticated(monkeypatch):
+    async def fake_get_token(org_id, connector_id):
+        raise ConnectorNotAuthenticatedError(org_id, connector_id)
+
+    monkeypatch.setattr(lic, "get_token", fake_get_token)
+
+    assert lic.resolve_live_systems("default") == []
+    assert get_live_connector("sharepoint") is None
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Confluence — Atlassian gateway connector (R17-A2), mirrors Jira derivation.
+# ─────────────────────────────────────────────────────────────────────────────
+def test_confluence_resolved_via_derived_gateway(monkeypatch):
+    """Confluence ingests live from OAuth alone — the api.atlassian.com gateway is
+    discovered on demand from the token (like Jira), needing no configured URL."""
+    async def fake_get_token(org_id, connector_id):
+        if connector_id == "confluence":
+            return _token(connector_id)
+        raise ConnectorNotAuthenticatedError(org_id, connector_id)
+
+    async def fake_gateway(token, **kw):
+        assert token == "confluence-access"
+        return "https://api.atlassian.com/ex/confluence/abc-123"
+
+    monkeypatch.setattr(lic, "get_token", fake_get_token)
+    monkeypatch.setattr(lic, "get_connector_instance_url", lambda o, c: None)
+    monkeypatch.setattr(lic, "store_connector_instance_url", lambda o, c, u: None)
+    monkeypatch.setattr(lic, "fetch_confluence_gateway_base", fake_gateway)
+
+    live = lic.resolve_live_systems("default")
+
+    assert live == ["confluence"]
+    cred = get_live_connector("confluence")
+    assert cred["url"] == "https://api.atlassian.com/ex/confluence/abc-123"
+    assert cred["token"] == "confluence-access"
+
+
+def test_confluence_excluded_when_gateway_underivable(monkeypatch):
+    """Authenticated Confluence whose gateway can't be derived degrades to skipped
+    rather than being promoted to live (never crashes the run)."""
+    async def fake_get_token(org_id, connector_id):
+        if connector_id == "confluence":
+            return _token(connector_id)
+        raise ConnectorNotAuthenticatedError(org_id, connector_id)
+
+    async def fake_gateway(token, **kw):
+        return None
+
+    monkeypatch.setattr(lic, "get_token", fake_get_token)
+    monkeypatch.setattr(lic, "get_connector_instance_url", lambda o, c: None)
+    monkeypatch.setattr(lic, "fetch_confluence_gateway_base", fake_gateway)
+
+    assert lic.resolve_live_systems("default") == []
+    assert get_live_connector("confluence") is None
 
 
 # ─────────────────────────────────────────────────────────────────────────────

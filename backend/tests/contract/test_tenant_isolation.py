@@ -109,6 +109,12 @@ def _org_context(org_id: str | None):
 def _state_from_auth_url(client: TestClient, org_id: str, connector: str = "salesforce") -> str:
     """Initiate an OAuth flow as ``org_id`` and return the signed ``state`` the
     provider would echo back (carries the initiating org + single-use nonce)."""
+    # auth-url is role-gated (analyst+, csc rbac fix 60a84c3). Seed the initiating
+    # org's dev user as owner so the RBAC gate passes and the flow reaches the
+    # tenancy/state logic these tests actually exercise.
+    from app.rbac import seed_owner
+
+    seed_owner(org_id, _DEV_TOKEN)
     r = client.get(f"/api/connectors/{connector}/auth-url", headers=_auth(org_id))
     assert r.status_code == 200, r.text
     return parse_qs(urlparse(r.json()["auth_url"]).query)["state"][0]
@@ -226,6 +232,13 @@ def test_token_store_and_status_are_org_scoped(client: TestClient):
     org_a, org_b = _org("ac1s_a"), _org("ac1s_b")
     connector = "salesforce"
 
+    # token-status is role-gated (viewer+, csc rbac fix 60a84c3); seed both orgs so
+    # the RBAC gate passes and we assert per-org token isolation, not a 403.
+    from app.rbac import seed_owner
+
+    seed_owner(org_a, _DEV_TOKEN)
+    seed_owner(org_b, _DEV_TOKEN)
+
     with _patch_env(_vault_env()):
         store_token(org_a, connector, _token_response("orgA-token"))
 
@@ -244,6 +257,13 @@ def test_token_revoke_is_org_scoped(client: TestClient):
 
     org_a, org_b = _org("ac1r_a"), _org("ac1r_b")
     connector = "jira"
+
+    # token DELETE (analyst+) and token-status (viewer+) are role-gated (csc rbac
+    # fix 60a84c3); seed both orgs so RBAC passes and we assert per-org revoke.
+    from app.rbac import seed_owner
+
+    seed_owner(org_a, _DEV_TOKEN)
+    seed_owner(org_b, _DEV_TOKEN)
 
     with _patch_env(_vault_env()):
         store_token(org_a, connector, _token_response("orgA-jira"))
@@ -474,6 +494,13 @@ def test_two_orgs_same_connector_type_do_not_collide(client: TestClient):
 
     org_a, org_b = _org("ac4_a"), _org("ac4_b")
     connector = "servicenow"
+
+    # token-status is role-gated (viewer+, csc rbac fix 60a84c3); seed both orgs so
+    # the route-layer check passes and we assert per-org token isolation.
+    from app.rbac import seed_owner
+
+    seed_owner(org_a, _DEV_TOKEN)
+    seed_owner(org_b, _DEV_TOKEN)
 
     with _patch_env(_vault_env()):
         store_token(org_a, connector, _token_response("orgA-secret"))
