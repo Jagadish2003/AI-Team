@@ -164,7 +164,7 @@ export default function ConnectorDetailPanel({
         </div>
 
         <button
-          onClick={() => push('More details available in later sprint.')}
+          onClick={() => push('Coming Soon')}
           className="inline-flex items-center gap-1 rounded-md border border-accent/20 bg-accent/5 px-2 py-1 text-xs font-medium text-accent transition-colors hover:border-accent/45 hover:bg-accent/10 focus:outline-none focus-visible:ring-1 focus-visible:ring-accent/40"
         >
           Learn More <ExternalLink size={14} />
