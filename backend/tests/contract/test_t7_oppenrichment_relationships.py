@@ -52,13 +52,22 @@ def _seed_workspace_member(org_id: str) -> None:
         conn.commit()
 
 
-def _insert_entity(org_id: str, entity_type: str, display_name: str, run_id: str) -> str:
+def _insert_entity(
+    org_id: str,
+    entity_type: str,
+    display_name: str,
+    run_id: str,
+    *,
+    source_record_id: str | None = None,
+    source_system: str = "test",
+) -> str:
     entity = Entity(
         org_id=org_id,
         entity_type=entity_type,
         canonical_name=" ".join(display_name.split()).lower() + "-" + uuid4().hex[:6],
         display_name=display_name,
-        source_system="test",
+        source_system=source_system,
+        source_record_id=source_record_id,
         resolution_confidence=1.0,
         resolution_status="resolved",
         first_seen_run_id=run_id,
@@ -193,6 +202,62 @@ class TestLoadRelationshipSummaries:
         from app.routes_sprint4_t6 import _load_relationship_summaries
         # No tenancy context set — must degrade to [] rather than raise.
         assert _load_relationship_summaries("run-no-org") == []
+
+    def test_relationships_show_better_saved_names_for_same_source_ids(self, monkeypatch):
+        monkeypatch.setenv("INFERRED_RELATIONSHIPS_ENABLED", "false")
+        org = f"org-t7-display-{uuid4().hex[:8]}"
+        run = f"run-t7-display-{uuid4().hex[:6]}"
+        owner_id = "005WG00000ZkgMfYAJ"
+        case_id = "500WG00000Case483"
+        _seed_run(org, run)
+        old_person = _insert_entity(
+            org,
+            "person",
+            owner_id,
+            run,
+            source_record_id=owner_id,
+            source_system="salesforce",
+        )
+        old_case = _insert_entity(
+            org,
+            "object",
+            "00003483",
+            run,
+            source_record_id=case_id,
+            source_system="salesforce",
+        )
+        _insert_entity(
+            org,
+            "person",
+            "Rita Gomez",
+            run,
+            source_record_id=owner_id,
+            source_system="salesforce",
+        )
+        _insert_entity(
+            org,
+            "object",
+            "Customer onboarding blocked",
+            run,
+            source_record_id=case_id,
+            source_system="salesforce",
+        )
+        upsert_relationship(
+            org_id=org,
+            from_entity_id=old_person,
+            to_entity_id=old_case,
+            relationship_type="owns",
+            confidence=OBSERVED_CONFIDENCE,
+            inferred=False,
+            run_id=run,
+            evidence={"field": "OwnerId"},
+        )
+
+        result = self._load_with_org(org, run)
+
+        assert len(result) == 1
+        assert result[0].from_entity_name == "Rita Gomez"
+        assert result[0].to_entity_name == "Customer onboarding blocked"
 
 
 # ---------------------------------------------------------------------------

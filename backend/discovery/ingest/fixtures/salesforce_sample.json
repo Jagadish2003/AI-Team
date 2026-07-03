@@ -7,6 +7,11 @@
     "note": "Case IDs CS-1001 through CS-1300 are referenced by ServiceNow and Jira fixtures for D7 cross-system echo"
   },
 
+  "user_names": {
+    "005xx000001AAA1": "Sarah Chen",
+    "005xx000001AAA2": "Marcus Rivera"
+  },
+
   "case_metrics": {
     "total_cases_90d": 300,
     "closed_cases_90d": 60,
