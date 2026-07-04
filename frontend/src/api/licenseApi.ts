@@ -13,6 +13,7 @@ import { apiGet, apiPost } from "../lib/apiClient";
 import type {
   LicenseBannerResponse,
   LicenseLimitsResponse,
+  LicenseOrgNameResponse,
   LicenseStatusResponse,
   UpdateLicenseKeyRequest,
 } from "../types/license";
@@ -20,6 +21,7 @@ import type {
 export type {
   LicenseBannerResponse,
   LicenseLimitsResponse,
+  LicenseOrgNameResponse,
   LicenseStatusResponse,
   UpdateLicenseKeyRequest,
 };
@@ -46,6 +48,18 @@ export async function fetchLicenseBanner(): Promise<LicenseBannerResponse> {
  */
 export async function fetchLicenseLimits(): Promise<LicenseLimitsResponse> {
   return apiGet<LicenseLimitsResponse>("/api/license/limits");
+}
+
+/**
+ * GET /api/license/org-name — the dynamic organisation display name (T12 / §2).
+ * Readable by any authenticated user, so every surface (header, workspace labels,
+ * reports, License page) can consume this ONE resolved name instead of deriving
+ * its own (§5 "One name, resolved once"). Returns a neutral default before a key
+ * is installed (AC16) and updates immediately when a key with a different
+ * org_name is pasted (AC15).
+ */
+export async function fetchLicenseOrgName(): Promise<LicenseOrgNameResponse> {
+  return apiGet<LicenseOrgNameResponse>("/api/license/org-name");
 }
 
 /**

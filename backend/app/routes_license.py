@@ -32,6 +32,7 @@ from .license_runtime import (
 )
 from .licensing import LicenseStatus, validate_license
 from .middleware.tenancy import get_current_org_id
+from .org_display_name import resolve_org_display_name
 from .rbac import require_role
 from .security import require_auth
 from .telemetry import record_event
@@ -42,6 +43,7 @@ LICENSE_STATUS_PATH = "/api/license"
 LICENSE_UPDATE_PATH = "/api/license/update-key"
 LICENSE_BANNER_PATH = "/api/license/banner"
 LICENSE_LIMITS_PATH = "/api/license/limits"
+LICENSE_ORG_NAME_PATH = "/api/license/org-name"
 
 router = APIRouter(tags=["license"])
 
@@ -107,6 +109,22 @@ class LicenseLimitsResponse(BaseModel):
     canConnectMore: bool
 
 
+class LicenseOrgNameResponse(BaseModel):
+    """R17-D4 Addendum A / T12 (§2 "Dynamic Organisation Name") — the single
+    resolved organisation display name every UI surface consumes.
+
+    ``orgName`` is read from the org's live-validated license payload
+    (``org_name``, falling back to ``customer`` for pre-addendum keys) by the one
+    resolver in ``org_display_name`` — the "one name, resolved once" of §5, so the
+    header, workspace labels, reports, and License page all show the same name
+    without per-surface naming logic. Before a key is installed — or for any
+    non-verifiable state — it is a neutral default, never a stale or placeholder
+    customer name (AC16). A live, side-effect-free read, so pasting a key with a
+    different ``org_name`` updates it immediately with no restart (AC15)."""
+
+    orgName: str
+
+
 class UpdateKeyRequest(BaseModel):
     key: str = Field(..., min_length=1, description="The signed license key string to install.")
 
@@ -166,6 +184,25 @@ def get_license_banner() -> LicenseBannerResponse:
         reason=result.get("reason"),
         grace_days_remaining=grace_days_remaining,
     )
+
+
+@router.get(
+    LICENSE_ORG_NAME_PATH,
+    response_model=LicenseOrgNameResponse,
+    dependencies=[Depends(require_auth)],
+)
+def get_license_org_name() -> LicenseOrgNameResponse:
+    """R17-D4 Addendum A / T12: the dynamic organisation display name (§2).
+
+    Auth-only (any role, like the banner) so the resolved name renders on every
+    page for every surface (header, workspace labels, reports, License page) — the
+    single source every UI surface consumes (§5 "One name, resolved once"), never
+    per-surface naming logic. The org is resolved from the tenancy context; the
+    name is read from that org's live-validated license by the one resolver in
+    ``org_display_name`` — a neutral default before a key is installed (AC16),
+    updating immediately when a new key is pasted (AC15). Side-effect-free.
+    """
+    return LicenseOrgNameResponse(orgName=resolve_org_display_name())
 
 
 @router.get(
