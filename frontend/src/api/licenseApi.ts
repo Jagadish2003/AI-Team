@@ -12,11 +12,17 @@
 import { apiGet, apiPost } from "../lib/apiClient";
 import type {
   LicenseBannerResponse,
+  LicenseLimitsResponse,
   LicenseStatusResponse,
   UpdateLicenseKeyRequest,
 } from "../types/license";
 
-export type { LicenseBannerResponse, LicenseStatusResponse, UpdateLicenseKeyRequest };
+export type {
+  LicenseBannerResponse,
+  LicenseLimitsResponse,
+  LicenseStatusResponse,
+  UpdateLicenseKeyRequest,
+};
 
 /** GET /api/license — full current license status. Owner-only (admin page). */
 export async function fetchLicenseStatus(): Promise<LicenseStatusResponse> {
@@ -30,6 +36,16 @@ export async function fetchLicenseStatus(): Promise<LicenseStatusResponse> {
  */
 export async function fetchLicenseBanner(): Promise<LicenseBannerResponse> {
   return apiGet<LicenseBannerResponse>("/api/license/banner");
+}
+
+/**
+ * GET /api/license/limits — Integration-Hub license-limit state (T10 / AT-505):
+ * systems used vs systems licensed. Readable by any hub viewer (viewer+), so the
+ * hub can show usage against the entitlement (AC14). The counts match what the
+ * connect-time gate enforces.
+ */
+export async function fetchLicenseLimits(): Promise<LicenseLimitsResponse> {
+  return apiGet<LicenseLimitsResponse>("/api/license/limits");
 }
 
 /**

@@ -1,7 +1,21 @@
 # AgentIQ — API_CONTRACT.md (EPIC E0)
-Version: v1.7
-Date: 2026-06-22
+Version: v1.8
+Date: 2026-07-04
 
+> v1.8 — R17-D4 Addendum A / T10 (AT-505): added the Integration-Hub
+> license-limit endpoint `GET /api/license/limits`, returning the
+> `LicenseLimitsResponse` shape: `systemsUsed` (`int` — connected Integration-Hub
+> entities for the org, "one connected entity = one system"), `systemsLicensed`
+> (`int | null` — the licensed `max_systems`; `null` for an unlimited/pre-addendum
+> license), `unlimited` (`bool` — true when no numeric cap applies), and
+> `canConnectMore` (`bool` — aggregate headroom: unlimited, or `systemsUsed <
+> systemsLicensed`). The two counts are computed by the same `license_limits`
+> helpers the connect-time gate (T9) enforces with, so the count the hub shows
+> matches the count that is enforced (Addendum A §1 / AC14). Requires only
+> authentication at viewer+ (matching `GET /api/connectors`) so every role that
+> sees the Integration Hub sees its usage; side-effect-free. Additive — no
+> previously documented shape changed. Mirrors `src/types/license.ts`.
+>
 > v1.7 — LIC-1 (PR review): extended `LicenseBannerResponse`
 > (`GET /api/license/banner`) with the optional `grace_days_remaining`
 > (`int | null`) — days left before a `grace` license crosses into read-only, so

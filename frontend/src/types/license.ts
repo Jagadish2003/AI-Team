@@ -23,6 +23,31 @@ export interface UpdateLicenseKeyRequest {
 }
 
 /**
+ * R17-D4 Addendum A / T10 (AT-505) — Integration-Hub license-limit state
+ * (GET /api/license/limits). Systems used vs systems licensed, so the hub can
+ * show current usage against the entitlement (AC14). Readable by any hub viewer
+ * (viewer+), unlike the Owner-only full status above.
+ *
+ * The counts are the same ones the connect-time gate (T9) enforces, so the shown
+ * count matches the enforced count — the "one connected entity = one system"
+ * pricing definition.
+ */
+export interface LicenseLimitsResponse {
+  /** Connected Integration-Hub entities for the org (one connected entity = one system). */
+  systemsUsed: number;
+  /** Licensed max systems; null for an unlimited/pre-addendum license. */
+  systemsLicensed: number | null;
+  /** True when no numeric cap applies (systemsLicensed is null). */
+  unlimited: boolean;
+  /**
+   * Aggregate "is there headroom for a new system" signal (unlimited, or
+   * used < licensed). Not a per-connector verdict — reconnecting an already
+   * connected system is always allowed (forward-only), decided server-side.
+   */
+  canConnectMore: boolean;
+}
+
+/**
  * Minimal license signal for the global expiry banner (T9 / GET /api/license/banner).
  * Readable by any authenticated user (not just Owner), so the banner shows for
  * every role — including analysts whose discovery runs are blocked (AC4/AC5).
