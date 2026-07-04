@@ -16,7 +16,12 @@ from app import db
 from app.auth import oauth as _oauth
 from app.auth.configs import CONNECTOR_AUTH_CONFIGS
 from app.middleware.audit import log_event
-from app.auth.models import ConnectorAuthConfig, ConnectorNotAuthenticatedError, TokenRecord
+from app.auth.models import (
+    ConnectorAuthConfig,
+    ConnectorNotAuthenticatedError,
+    StaticCredentialRecord,
+    TokenRecord,
+)
 from app.auth.secrets import MissingSecretError
 from database.models.credentials import (
     ALTER_CREDENTIALS_ADD_REFRESH_FAILED,
@@ -410,6 +415,192 @@ def revoke_customer_tenant_credential(
 
 
 # ---------------------------------------------------------------------------
+# Static connector credentials (R17-D3 Addendum A, T10)
+#
+# Second vault record type alongside OAuth token records. Jira API tokens,
+# ServiceNow username/password, and native DB (SQL Server / Oracle /
+# PostgreSQL) connection credentials are STATIC: entered once by an admin, no
+# OAuth dance, no refresh flow, no natural expiry. They get the SAME vault
+# hygiene as token records — Fernet-encrypted at rest under
+# CREDENTIAL_VAULT_KEY, keyed per (org_id, connector_id) in the SAME
+# `credentials` table, decrypted at use only, never logged (AC10).
+#
+# The `kind` column discriminates the two record types on the shared table.
+# The existing UNIQUE(org_id, connector_id) constraint therefore enforces ONE
+# credential per connector per org across both kinds: storing a static
+# credential replaces a previous OAuth token for that connector and vice
+# versa (ServiceNow supports either flow — the org holds one or the other,
+# never both). Static rows keep refresh_token = NULL so the background
+# token-refresher job never touches them, and reuse the far-future
+# _STATIC_CREDENTIAL_EXPIRY_ISO sentinel because expires_at is NOT NULL.
+# ---------------------------------------------------------------------------
+
+#: `kind` column values discriminating the two vault record types.
+OAUTH_CREDENTIAL_KIND = "oauth"
+STATIC_CREDENTIAL_KIND = "static"
+
+
+def _parse_stored_utc(value: str) -> datetime:
+    """Parse a stored ISO datetime string, defaulting naive values to UTC."""
+    dt = datetime.fromisoformat(value)
+    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+
+
+def store_static_credential(
+    org_id: str,
+    connector_id: str,
+    *,
+    username: str,
+    secret: str,
+    base_url: str,
+) -> StaticCredentialRecord:
+    """Fernet-encrypt and upsert a static credential for an org+connector pair.
+
+    username and secret are encrypted before they touch the DB and are never
+    logged; base_url (the Jira/ServiceNow instance URL or DB host) is not a
+    secret and is stored as-is. Calling again ROTATES the credential in place
+    (single row per org+connector), reactivates a previously revoked row, and
+    replaces an existing OAuth token record for the connector (the row's kind
+    flips to 'static' and its token fields are neutralised).
+
+    Raises ValueError for an empty secret and MissingSecretError when
+    CREDENTIAL_VAULT_KEY is absent — operator configuration errors surfaced
+    at store time. username/base_url may be empty where a connector needs
+    only a secret; requiring specific fields per connector is the entry
+    route's concern (T12), not the vault's.
+    """
+    if not secret or not secret.strip():
+        raise ValueError("static credential secret must be a non-empty value")
+
+    _init_credentials_table()
+
+    now_iso = datetime.now(timezone.utc).isoformat()
+    enc_username = _encrypt(username)
+    enc_secret = _encrypt(secret)
+    # access_token is NOT NULL but a static record has no token. Store
+    # encrypted-empty so the column only ever holds valid ciphertext and the
+    # OAuth revocation path decrypts it to '' (falsy → skipped) rather than
+    # erroring on a non-Fernet sentinel.
+    enc_access_sentinel = _encrypt("")
+    record_id = str(uuid.uuid4())
+
+    con = db.connect()
+    try:
+        cur = con.cursor()
+        cur.execute(
+            """
+            INSERT INTO credentials
+                (id, org_id, connector_id, kind, access_token, refresh_token,
+                 expires_at, scopes, enc_username, enc_secret, base_url,
+                 created_at, updated_at, refresh_failed)
+            VALUES (%s, %s, %s, %s, %s, NULL, %s, %s, %s, %s, %s, %s, %s, 0)
+            ON CONFLICT (org_id, connector_id) DO UPDATE SET
+                kind           = EXCLUDED.kind,
+                access_token   = EXCLUDED.access_token,
+                refresh_token  = NULL,
+                expires_at     = EXCLUDED.expires_at,
+                scopes         = EXCLUDED.scopes,
+                enc_username   = EXCLUDED.enc_username,
+                enc_secret     = EXCLUDED.enc_secret,
+                base_url       = EXCLUDED.base_url,
+                updated_at     = EXCLUDED.updated_at,
+                refresh_failed = 0,
+                is_deleted     = FALSE
+            RETURNING created_at, updated_at
+            """,
+            (
+                record_id, org_id, connector_id, STATIC_CREDENTIAL_KIND,
+                enc_access_sentinel, _STATIC_CREDENTIAL_EXPIRY_ISO, "[]",
+                enc_username, enc_secret, base_url, now_iso, now_iso,
+            ),
+        )
+        created_str, updated_str = cur.fetchone()
+        con.commit()
+    finally:
+        con.close()
+
+    return StaticCredentialRecord(
+        org_id=org_id,
+        connector_id=connector_id,
+        username=username,
+        secret=secret,
+        base_url=base_url,
+        created_at=_parse_stored_utc(created_str),
+        updated_at=_parse_stored_utc(updated_str),
+    )
+
+
+def get_static_credential(
+    org_id: str, connector_id: str
+) -> Optional[StaticCredentialRecord]:
+    """Return the decrypted static credential for org+connector, or None.
+
+    None when no active static record exists: never stored, revoked
+    (soft-deleted), or the connector currently holds an OAuth token record
+    instead (kind='oauth' rows are invisible here, exactly as static rows are
+    invisible to get_token). Decryption problems propagate loudly — the same
+    posture as the token read path — so a corrupted value or missing vault
+    key is never silently reported as 'not configured'. Decrypted values are
+    returned to the caller only, never logged.
+    """
+    _init_credentials_table()
+
+    con = db.connect()
+    try:
+        cur = con.cursor()
+        cur.execute(
+            """
+            SELECT enc_username, enc_secret, base_url, created_at, updated_at
+            FROM credentials
+            WHERE org_id = %s AND connector_id = %s
+              AND kind = %s AND is_deleted = FALSE
+            """,
+            (org_id, connector_id, STATIC_CREDENTIAL_KIND),
+        )
+        row = cur.fetchone()
+    finally:
+        con.close()
+
+    if row is None:
+        return None
+
+    enc_username, enc_secret, base_url, created_str, updated_str = row
+    return StaticCredentialRecord(
+        org_id=org_id,
+        connector_id=connector_id,
+        username=_decrypt(enc_username) if enc_username else "",
+        secret=_decrypt(enc_secret) if enc_secret else "",
+        base_url=base_url or "",
+        created_at=_parse_stored_utc(created_str),
+        updated_at=_parse_stored_utc(updated_str),
+    )
+
+
+def revoke_static_credential(org_id: str, connector_id: str) -> None:
+    """Soft-delete the static credential for an org+connector pair.
+
+    Static credentials have no external revocation endpoint, so revocation is
+    purely local, mirroring revoke_customer_tenant_credential: the app DB
+    role has no DELETE, so the row is marked is_deleted = TRUE. Scoped to
+    kind='static' so revoking a static credential can never remove an OAuth
+    token row. Idempotent when nothing is stored; a later store reactivates
+    the row.
+    """
+    _init_credentials_table()
+    con = db.connect()
+    try:
+        cur = con.cursor()
+        cur.execute(
+            "UPDATE credentials SET is_deleted = TRUE "
+            "WHERE org_id = %s AND connector_id = %s AND kind = %s",
+            (org_id, connector_id, STATIC_CREDENTIAL_KIND),
+        )
+        con.commit()
+    finally:
+        con.close()
+
+
+# ---------------------------------------------------------------------------
 # Public vault API
 # ---------------------------------------------------------------------------
 
@@ -456,18 +647,22 @@ def store_token(org_id: str, connector_id: str, token_response: dict) -> TokenRe
         cur.execute(
             """
             INSERT INTO credentials
-                (id, org_id, connector_id, access_token, refresh_token, expires_at, scopes, created_at, updated_at, refresh_failed)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, 0)
+                (id, org_id, connector_id, kind, access_token, refresh_token, expires_at, scopes, created_at, updated_at, refresh_failed)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 0)
             ON CONFLICT (org_id, connector_id) DO UPDATE SET
+                kind           = EXCLUDED.kind,
                 access_token   = EXCLUDED.access_token,
                 refresh_token  = EXCLUDED.refresh_token,
                 expires_at     = EXCLUDED.expires_at,
                 scopes         = EXCLUDED.scopes,
+                enc_username   = NULL,
+                enc_secret     = NULL,
+                base_url       = NULL,
                 updated_at     = EXCLUDED.updated_at,
                 refresh_failed = 0,
                 is_deleted     = FALSE
             """,
-            (record_id, org_id, connector_id, enc_access, enc_refresh, expires_iso, scopes_json, now_iso, now_iso),
+            (record_id, org_id, connector_id, OAUTH_CREDENTIAL_KIND, enc_access, enc_refresh, expires_iso, scopes_json, now_iso, now_iso),
         )
         con.commit()
     finally:
@@ -509,15 +704,20 @@ async def get_token(
             SELECT id, org_id, connector_id, access_token, refresh_token,
                    expires_at, scopes, created_at, updated_at
             FROM credentials
-            WHERE org_id = %s AND connector_id = %s AND is_deleted = FALSE
+            WHERE org_id = %s AND connector_id = %s
+              AND kind = %s AND is_deleted = FALSE
             """,
-            (org_id, connector_id),
+            (org_id, connector_id, OAUTH_CREDENTIAL_KIND),
         )
         row = cur.fetchone()
     finally:
         con.close()
 
     if row is None:
+        # No token record — including when the connector holds a STATIC
+        # credential row instead (kind='static'): a static credential is not
+        # an OAuth token, so token readers see the connector as not
+        # authenticated rather than receiving a bogus TokenRecord.
         raise ConnectorNotAuthenticatedError(org_id, connector_id)
 
     record = _row_to_token_record(row)

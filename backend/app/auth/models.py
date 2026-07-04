@@ -48,6 +48,35 @@ class TokenRecord:
     refresh_token: Optional[str] = None  # None for client_credentials flows
 
 
+@dataclass
+class StaticCredentialRecord:
+    """Persisted static (non-OAuth) credential for one org+connector pair.
+
+    Second vault record type (R17-D3 Addendum A, T10) alongside TokenRecord:
+    Jira API tokens, ServiceNow username/password, and native DB connection
+    credentials are entered once by an admin — no OAuth dance, no refresh, no
+    expiry. Same per-(org_id, connector_id) keying and the same Fernet
+    encryption at rest as token records: username/secret are stored encrypted
+    (enc_username/enc_secret columns) and this record carries the decrypted
+    values at use time only.
+
+    username and secret are excluded from repr so the record can never leak
+    plaintext credentials into logs or error messages (AC10: values are
+    write-only — never readable back through the UI or logs).
+    base_url is the non-secret instance location (e.g. the Jira/ServiceNow
+    URL or a DB host); all datetimes are always UTC.
+    """
+
+    org_id: str
+    connector_id: str
+    username: str = field(repr=False)
+    secret: str = field(repr=False)
+    base_url: str
+    created_at: datetime
+    updated_at: datetime
+    kind: Literal["static"] = "static"
+
+
 class ConnectorNotAuthenticatedError(Exception):
     """Raised by get_token() (T5) when no valid token exists for the given org+connector.
 
