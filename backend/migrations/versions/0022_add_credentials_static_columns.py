@@ -63,10 +63,18 @@ def _guarded(inner_sql: str) -> str:
 
     Guards the alembic-only ordering case (the table is created outside migrations,
     so it may not exist yet at this revision) — the statement no-ops rather than
-    raising UndefinedTable and aborting the upgrade."""
+    raising UndefinedTable and aborting the upgrade.
+
+    The existence check is unqualified (``to_regclass('credentials')``) so it
+    resolves through the SAME ``search_path`` as the guarded ALTER/DROP. A
+    schema-qualified check (``'public.credentials'``) would look in ``public`` while
+    the unqualified statement targets the session's search_path — the two diverge
+    in the isolated-schema chain round-trip tests, where ``public.credentials``
+    exists but the run is scoped to a throwaway schema that has no ``credentials``,
+    making the guard pass and the ALTER raise UndefinedTable."""
     return (
         "DO $mig$\nBEGIN\n"
-        "  IF to_regclass('public.credentials') IS NOT NULL THEN\n"
+        "  IF to_regclass('credentials') IS NOT NULL THEN\n"
         f"    {inner_sql};\n"
         "  END IF;\nEND\n$mig$;"
     )
