@@ -24,8 +24,8 @@ to an EXISTING pre-T10 table, and no-ops when the table is absent (it will later
 created WITH the columns from ``CREATE_CREDENTIALS_TABLE`` / provision.sql). The
 ``ADD COLUMN IF NOT EXISTS`` also makes it a no-op on a table that already has them.
 
-Revision ID: 0020
-Revises: 0019
+Revision ID: 0022
+Revises: 0021
 Create Date: 2026-07-04
 """
 import os
@@ -34,8 +34,8 @@ from typing import Sequence, Union
 
 from alembic import op
 
-revision: str = "0020"
-down_revision: Union[str, None] = "0019"
+revision: str = "0022"
+down_revision: Union[str, None] = "0021"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

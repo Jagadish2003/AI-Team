@@ -568,39 +568,157 @@ def _seconds_until_email_unblocked(email: str) -> int:
 
 
 # ---------------------------------------------------------------------------
+# Org name validation, normalisation & dedup lookup
+# ---------------------------------------------------------------------------
+
+# The org name may contain ONLY ASCII letters — no digits, spaces, punctuation,
+# underscores, or hyphens. Compiled once; ``fullmatch`` requires the WHOLE
+# (already-trimmed) string to be letters.
+_ORG_NAME_LETTERS_RE = re.compile(r"[A-Za-z]+")
+
+
+def validate_org_name(name: str) -> str:
+    """Return the trimmed org name if it is letters-only, else raise RegistrationError.
+
+    Rule: after stripping surrounding whitespace, the name must contain ONLY
+    ASCII letters (a-z, A-Z). Anything else (digit, space, ``&``, ``_``, ``-``,
+    punctuation) is rejected. A rejected name is reported with a did-you-mean
+    suggestion — the input with every non-letter character removed
+    (e.g. ``"Release_Owl"`` -> ``"ReleaseOwl"``, ``"Agent IQ2"`` -> ``"AgentIQ"``,
+    ``"IBM-2024"`` -> ``"IBM"``). Raised as RegistrationError so the route maps it
+    to HTTP 400 with that message as the detail. No org names are hard-coded here.
+    """
+    stripped = (name or "").strip()
+    if not stripped:
+        raise RegistrationError("Organization name is required")
+    if _ORG_NAME_LETTERS_RE.fullmatch(stripped) is None:
+        suggestion = re.sub(r"[^A-Za-z]", "", stripped)
+        raise RegistrationError(
+            "Invalid organisation name. Only letters are allowed. "
+            f"Did you mean '{suggestion}'?"
+        )
+    return stripped
+
+
+def normalise_org_name(name: str) -> str:
+    """Canonical dedup key for an org name: trimmed then lowercased.
+
+    Called ONLY after validate_org_name() has guaranteed a letters-only value, so
+    the result is a non-empty lowercase ``[a-z]`` string. Two display names that
+    differ only by case or surrounding whitespace map to the same key and thus
+    resolve to the same org_id. Examples: ``"ReleaseOwl"`` -> ``"releaseowl"``,
+    ``"IBM"`` -> ``"ibm"``.
+    """
+    return (name or "").strip().lower()
+
+
+def _get_org_id_by_normalised_name(name_normalised: str) -> str | None:
+    """Return the org_id whose name_normalised matches, or None if unclaimed."""
+    con = db.connect()
+    try:
+        cur = con.cursor()
+        cur.execute(
+            "SELECT id FROM orgs WHERE name_normalised = %s LIMIT 1",
+            (name_normalised,),
+        )
+        row = cur.fetchone()
+    finally:
+        con.close()
+    return row[0] if row else None
+
+
+def _pending_approval_ack() -> dict:
+    """The uniform registration acknowledgement.
+
+    Returned for BOTH the new-org and the dedup-join paths so the response never
+    reveals whether an org with the given name already existed (an existence
+    oracle would let a caller probe which companies are registered).
+    """
+    return {
+        "status": "pending_approval",
+        "message": (
+            "Your organisation has been submitted for approval. "
+            "You will be notified once it is reviewed."
+        ),
+    }
+
+
+def _join_existing_org(
+    org_id: str, user_id: str, email: str, password_hash: str, now: str
+) -> dict:
+    """Create the registrant + a membership pointing at an EXISTING org (dedup).
+
+    Used when the normalised org name already maps to an org_id: rather than
+    minting a duplicate workspace, the new user joins the existing one. Runs in a
+    single transaction; a lost race on the global unique email index surfaces as
+    EmailAlreadyExistsError, matching the new-org path.
+    """
+    con = db.connect()
+    try:
+        cur = con.cursor()
+        cur.execute(
+            "INSERT INTO users (id, email, password_hash, is_active, created_at, org_id) "
+            "VALUES (%s, %s, %s, %s, %s, %s)",
+            (user_id, email, password_hash, True, now, org_id),
+        )
+        cur.execute(
+            "INSERT INTO workspace_members (org_id, user_id, role, created_at) "
+            "VALUES (%s, %s, %s, %s) "
+            "ON CONFLICT (org_id, user_id) DO UPDATE SET "
+            "role = EXCLUDED.role, created_at = EXCLUDED.created_at, is_deleted = FALSE",
+            (org_id, user_id, "owner", now),
+        )
+        con.commit()
+    except psycopg2.IntegrityError as exc:
+        con.rollback()
+        raise EmailAlreadyExistsError("Email already registered") from exc
+    except Exception:
+        con.rollback()
+        raise
+    finally:
+        con.close()
+    return _pending_approval_ack()
+
+
+# ---------------------------------------------------------------------------
 # Registration (AC2)
 # ---------------------------------------------------------------------------
 
 
 def register_org_and_owner(org_name: str, email: str, password: str) -> dict:
-    """Register a brand-new workspace and submit it for admin approval (AUTH-2).
+    """Register a workspace and submit it for admin approval (AUTH-2), with dedup.
 
-    Registration ALWAYS creates a fresh org (a new org_id) owned by the
-    registrant. It never joins an existing workspace, even when the org_name
-    collides with one that already exists — org names are not unique and not
-    secret, so they are display labels only, never a membership key. org_id and
-    role always live in workspace_members, never on the users row.
+    Org name rules:
+      * validate_org_name() rejects any name that is not letters-only (400 with a
+        did-you-mean suggestion) BEFORE any DB write.
+      * normalise_org_name() derives the canonical dedup key (trimmed, lowercased).
 
-    SECURITY (issue #5): the previous behaviour joined an existing org as analyst
-    when the name matched, which let any external user who guessed a customer's
-    org name (e.g. "TCU", "City National") self-register into that workspace and
-    read all of its runs/opportunities/evidence. Joining an existing workspace is
-    now EXCLUSIVELY via the invite flow (POST /api/auth/invite), which is the
-    controlled, owner-gated path.
+    Deduplication: if an org with the same NORMALISED name already exists, the
+    registrant JOINS that org (a new user + workspace_member pointing at the
+    existing org_id) rather than minting a duplicate workspace. Otherwise a fresh
+    org is created, storing both the name as typed and its normalised form.
 
-    AUTH-2: The org is created in approval_status='pending_approval'. A signed
-    approval token (stored as its SHA-256 hash) is emailed to AGENTIQ_ADMIN_EMAIL.
-    No JWT is issued — the response is a pending-approval confirmation only. The
-    registrant cannot log in until a CloudFulcrum admin clicks Approve. Raises
-    EmailAlreadyExistsError (409) / RegistrationError (400) on bad input.
+    SECURITY NOTE: name-based joining is an intentional product decision for this
+    branch, but it re-opens the "issue #5" risk that org names are guessable and
+    not secret — someone who guesses a customer's name self-registers into that
+    workspace. The follow-up hardening is to gate joins behind owner approval /
+    a verified email domain (the TENANT-1 design), not raw name matching. Both
+    paths return the SAME pending-approval ack so the response is not an
+    existence oracle for registered company names.
+
+    AUTH-2: a NEW org is created in approval_status='pending_approval' and a
+    signed approval token (stored as its SHA-256 hash) is emailed to
+    AGENTIQ_ADMIN_EMAIL. No JWT is issued — the response is a pending-approval
+    confirmation only. Raises EmailAlreadyExistsError (409) / RegistrationError
+    (400) on bad input.
     """
     from app.email_service import send_org_approval_request_email
 
     ensure_auth_tables()
     email = email.strip().lower()
-    org_name = (org_name or "").strip()
-    if not org_name:
-        raise RegistrationError("Organization name is required")
+    # Letters-only validation + trim, BEFORE any DB operation. Raises
+    # RegistrationError (-> 400) with a did-you-mean suggestion on rejection.
+    org_name = validate_org_name(org_name)
     if not email:
         raise RegistrationError("Email is required")
     if len(password) < PASSWORD_MIN_LENGTH:
@@ -613,9 +731,15 @@ def register_org_and_owner(org_name: str, email: str, password: str) -> dict:
     user_id = str(uuid4())
     password_hash = hash_password(password)
     now = db.now_iso()
+    name_normalised = normalise_org_name(org_name)
+
+    # Dedup: an existing org with this normalised name is JOINED, not duplicated.
+    existing_org_id = _get_org_id_by_normalised_name(name_normalised)
+    if existing_org_id is not None:
+        return _join_existing_org(existing_org_id, user_id, email, password_hash, now)
 
     org_id = str(uuid4())
-    role = "owner"  # registration always creates and owns a NEW workspace (issue #5)
+    role = "owner"  # creator of a brand-new workspace
 
     # AUTH-2: generate single-use approval token; store only its SHA-256 hash.
     approval_token = secrets.token_urlsafe(32)
@@ -625,18 +749,20 @@ def register_org_and_owner(org_name: str, email: str, password: str) -> dict:
     con = db.connect()
     try:
         cur = con.cursor()
-        # Always a fresh org — no name-based join. Single transaction: roll back
-        # every row if any insert fails.
+        # Fresh org — store the name as typed AND its normalised dedup key. Single
+        # transaction: roll back every row if any insert fails.
         cur.execute(
             "INSERT INTO orgs "
-            "(id, name, created_at, approval_status, approval_token_hash, approval_token_expires_at) "
-            "VALUES (%s, %s, %s, %s, %s, %s)",
-            (org_id, org_name, now, "pending_approval", approval_token_hash, approval_expires),
+            "(id, name, name_normalised, created_at, approval_status, "
+            "approval_token_hash, approval_token_expires_at) "
+            "VALUES (%s, %s, %s, %s, %s, %s, %s)",
+            (org_id, org_name, name_normalised, now, "pending_approval",
+             approval_token_hash, approval_expires),
         )
         cur.execute(
-            "INSERT INTO users (id, email, password_hash, is_active, created_at) "
-            "VALUES (%s, %s, %s, %s, %s)",
-            (user_id, email, password_hash, True, now),
+            "INSERT INTO users (id, email, password_hash, is_active, created_at, org_id) "
+            "VALUES (%s, %s, %s, %s, %s, %s)",
+            (user_id, email, password_hash, True, now, org_id),
         )
         cur.execute(
             "INSERT INTO workspace_members (org_id, user_id, role, created_at) "
@@ -646,7 +772,14 @@ def register_org_and_owner(org_name: str, email: str, password: str) -> dict:
         con.commit()
     except psycopg2.IntegrityError as exc:
         con.rollback()
-        # Lost the race on the global unique email index.
+        # Lost a race on a unique index. If another registration created this
+        # normalised name concurrently, JOIN it (dedup still holds under
+        # concurrency); otherwise it was the global unique email index.
+        raced_org_id = _get_org_id_by_normalised_name(name_normalised)
+        if raced_org_id is not None and _get_user_by_email(email) is None:
+            return _join_existing_org(
+                raced_org_id, user_id, email, password_hash, now
+            )
         raise EmailAlreadyExistsError("Email already registered") from exc
     except Exception:
         con.rollback()
@@ -673,13 +806,7 @@ def register_org_and_owner(org_name: str, email: str, password: str) -> dict:
             org_id, org_name, AGENTIQ_ADMIN_EMAIL,
         )
 
-    return {
-        "status": "pending_approval",
-        "message": (
-            "Your organisation has been submitted for approval. "
-            "You will be notified once it is reviewed."
-        ),
-    }
+    return _pending_approval_ack()
 
 
 # ---------------------------------------------------------------------------

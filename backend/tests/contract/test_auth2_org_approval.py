@@ -26,6 +26,7 @@ from fastapi.testclient import TestClient
 
 from app import db
 from app.routes_auth import _get_org_approval_row
+from auth_helpers import rand_org_name
 
 PASSWORD = "Supersecret1!"
 APPROVE_URL = "/api/auth/org-approval/approve"
@@ -79,7 +80,7 @@ def register_org(client: TestClient, monkeypatch):
     monkeypatch.setattr(routes_auth, "send_org_rejected_email", _spy_rejected)
 
     def _do(org_name: str | None = None, email: str | None = None, password: str = PASSWORD):
-        org_name = org_name or f"Org {uuid.uuid4().hex[:8]}"
+        org_name = org_name or rand_org_name()
         email = email or f"owner_{uuid.uuid4().hex[:10]}@example.com"
         before = len(requests)
         response = client.post(
