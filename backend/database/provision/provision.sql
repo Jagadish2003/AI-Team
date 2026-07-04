@@ -148,7 +148,11 @@ CREATE TABLE "public"."credentials" (
     "created_at" "text" NOT NULL,
     "updated_at" "text" NOT NULL,
     "refresh_failed" integer DEFAULT 0 NOT NULL,
-    "is_deleted" boolean DEFAULT false NOT NULL
+    "is_deleted" boolean DEFAULT false NOT NULL,
+    "kind" "text" DEFAULT 'oauth' NOT NULL,
+    "enc_username" "text",
+    "enc_secret" "text",
+    "base_url" "text"
 );
 
 

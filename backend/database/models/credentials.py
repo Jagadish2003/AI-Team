@@ -21,6 +21,10 @@ CREATE TABLE IF NOT EXISTS credentials (
     updated_at      TEXT NOT NULL,
     refresh_failed  INTEGER NOT NULL DEFAULT 0,
     is_deleted      BOOLEAN NOT NULL DEFAULT FALSE,
+    kind            TEXT NOT NULL DEFAULT 'oauth',
+    enc_username    TEXT,
+    enc_secret      TEXT,
+    base_url        TEXT,
     UNIQUE(org_id, connector_id)
 )
 """
@@ -35,6 +39,20 @@ ALTER_CREDENTIALS_ADD_IS_DELETED = (
 # DuplicateColumn error (which would otherwise abort the transaction).
 ALTER_CREDENTIALS_ADD_REFRESH_FAILED = (
     "ALTER TABLE credentials ADD COLUMN IF NOT EXISTS refresh_failed INTEGER NOT NULL DEFAULT 0"
+)
+
+# R17-D3 Addendum A (T10): second vault record type — static (non-OAuth)
+# credentials. `kind` discriminates 'oauth' (existing token rows, backfilled by
+# the DEFAULT) from 'static' (Jira API token, ServiceNow user/password, native
+# DB connection credentials). enc_username/enc_secret are Fernet-encrypted like
+# access_token/refresh_token; base_url is non-secret instance location.
+# Applied for databases that pre-date these columns (idempotent).
+ALTER_CREDENTIALS_ADD_STATIC_CREDENTIAL_COLUMNS = (
+    "ALTER TABLE credentials "
+    "ADD COLUMN IF NOT EXISTS kind TEXT NOT NULL DEFAULT 'oauth', "
+    "ADD COLUMN IF NOT EXISTS enc_username TEXT, "
+    "ADD COLUMN IF NOT EXISTS enc_secret TEXT, "
+    "ADD COLUMN IF NOT EXISTS base_url TEXT"
 )
 
 CREATE_CREDENTIALS_IDX_ORG = (

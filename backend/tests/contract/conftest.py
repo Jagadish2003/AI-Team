@@ -504,6 +504,7 @@ def pytest_configure(config):
         from database.models.credentials import (
             ALTER_CREDENTIALS_ADD_IS_DELETED,
             ALTER_CREDENTIALS_ADD_REFRESH_FAILED,
+            ALTER_CREDENTIALS_ADD_STATIC_CREDENTIAL_COLUMNS,
             CREATE_CREDENTIALS_IDX_CONNECTOR,
             CREATE_CREDENTIALS_IDX_ORG,
             CREATE_CREDENTIALS_TABLE,
@@ -517,6 +518,7 @@ def pytest_configure(config):
                 _cur.execute(CREATE_CREDENTIALS_IDX_CONNECTOR)
                 _cur.execute(ALTER_CREDENTIALS_ADD_REFRESH_FAILED)
                 _cur.execute(ALTER_CREDENTIALS_ADD_IS_DELETED)
+                _cur.execute(ALTER_CREDENTIALS_ADD_STATIC_CREDENTIAL_COLUMNS)
                 _cur.execute(
                     "CREATE TABLE IF NOT EXISTS nonces ("
                     "key TEXT PRIMARY KEY, data TEXT NOT NULL, "
@@ -670,6 +672,7 @@ def _reassert_auth_invariants() -> None:
     from database.models.credentials import (
         ALTER_CREDENTIALS_ADD_IS_DELETED,
         ALTER_CREDENTIALS_ADD_REFRESH_FAILED,
+        ALTER_CREDENTIALS_ADD_STATIC_CREDENTIAL_COLUMNS,
         CREATE_CREDENTIALS_IDX_CONNECTOR,
         CREATE_CREDENTIALS_IDX_ORG,
         CREATE_CREDENTIALS_TABLE,
@@ -685,6 +688,7 @@ def _reassert_auth_invariants() -> None:
             cur.execute(CREATE_CREDENTIALS_IDX_CONNECTOR)
             cur.execute(ALTER_CREDENTIALS_ADD_REFRESH_FAILED)
             cur.execute(ALTER_CREDENTIALS_ADD_IS_DELETED)
+            cur.execute(ALTER_CREDENTIALS_ADD_STATIC_CREDENTIAL_COLUMNS)
             cur.execute(
                 "CREATE TABLE IF NOT EXISTS nonces ("
                 "key TEXT PRIMARY KEY, data TEXT NOT NULL, "

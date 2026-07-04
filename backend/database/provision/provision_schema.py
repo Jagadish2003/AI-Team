@@ -139,6 +139,7 @@ def ensure_lazy_tables() -> None:
     from database.models.credentials import (
         ALTER_CREDENTIALS_ADD_IS_DELETED,
         ALTER_CREDENTIALS_ADD_REFRESH_FAILED,
+        ALTER_CREDENTIALS_ADD_STATIC_CREDENTIAL_COLUMNS,
         CREATE_CREDENTIALS_IDX_CONNECTOR,
         CREATE_CREDENTIALS_IDX_ORG,
         CREATE_CREDENTIALS_TABLE,
@@ -152,6 +153,7 @@ def ensure_lazy_tables() -> None:
         cur.execute(CREATE_CREDENTIALS_IDX_CONNECTOR)
         cur.execute(ALTER_CREDENTIALS_ADD_REFRESH_FAILED)
         cur.execute(ALTER_CREDENTIALS_ADD_IS_DELETED)
+        cur.execute(ALTER_CREDENTIALS_ADD_STATIC_CREDENTIAL_COLUMNS)
         cur.execute(
             "CREATE TABLE IF NOT EXISTS nonces ("
             "key TEXT PRIMARY KEY, data TEXT NOT NULL, "

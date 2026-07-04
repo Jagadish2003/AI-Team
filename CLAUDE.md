@@ -60,9 +60,9 @@ Keep this file short and actionable. Prefer reading the relevant code and contra
 * `backend/app/middleware/tenancy.py`: multi-tenancy middleware, org scoping per request. Default local org is `default`.
 * `backend/app/middleware/audit.py`: audit trail middleware — runs alongside tenancy middleware.
 * `backend/app/auth/oauth.py`: OAuth `authorization_code` and `client_credentials` flows.
-* `backend/app/auth/vault.py`: Fernet-encrypted token vault. Requires `CREDENTIAL_VAULT_KEY` in production.
+* `backend/app/auth/vault.py`: Fernet-encrypted token vault. Requires `CREDENTIAL_VAULT_KEY` in production. Holds two record types on the shared `credentials` table, discriminated by the `kind` column with the same per-(org_id, connector_id) keying and encryption: OAuth token records (`kind='oauth'`, auto-refreshed) and static credentials (`kind='static'` — R17-D3 Addendum A T10: Jira API token, ServiceNow user/password, native DB connection credentials; `store/get/revoke_static_credential`, encrypted `enc_username`/`enc_secret` + non-secret `base_url`, no refresh/expiry). One credential per connector per org across both kinds — storing one kind replaces the other; `get_token()` never returns a static row and `get_static_credential()` never returns an OAuth row.
 * `backend/app/auth/secrets.py`: secret resolution from env vars. Connector secret env vars follow the pattern `{CONNECTOR_NAME}_CLIENT_SECRET` (uppercase). New connectors must follow this convention.
-* `backend/app/auth/models.py`: `ConnectorAuthConfig`, `TokenRecord` data models.
+* `backend/app/auth/models.py`: `ConnectorAuthConfig`, `TokenRecord`, `StaticCredentialRecord` data models. `StaticCredentialRecord` masks `username`/`secret` in `repr` — never log the raw values.
 * `backend/app/auth/README.md`: auth framework documentation — read before adding a new connector.
 * `backend/app/db_connectors/`: DB connector API models and route handlers.
 
