@@ -760,6 +760,44 @@ async def get_token(
     return record
 
 
+def get_credential(org_id: str, connector_id: str) -> Optional[TokenRecord]:
+    """Synchronous, non-refreshing read of a stored credential for org+connector.
+
+    Returns a decrypted ``TokenRecord`` when an active credential exists, or
+    ``None`` when there is none (never stored, or revoked/soft-deleted). This is
+    the low-level read primitive that the single credential-resolution layer
+    (``app/auth/credentials.py``) wraps.
+
+    Unlike :func:`get_token`, this deliberately does NOT auto-refresh and does NOT
+    raise: it returns exactly what the per-org encrypted vault holds, so the
+    resolution layer can decide whether a missing credential is a
+    ``CredentialsNotConfigured`` state. Callers needing a guaranteed-valid token
+    with the OAuth refresh path should still use :func:`get_token`.
+    """
+    _init_credentials_table()
+
+    con = db.connect()
+    try:
+        cur = con.cursor()
+        cur.execute(
+            """
+            SELECT id, org_id, connector_id, access_token, refresh_token,
+                   expires_at, scopes, created_at, updated_at
+            FROM credentials
+            WHERE org_id = %s AND connector_id = %s AND is_deleted = FALSE
+            """,
+            (org_id, connector_id),
+        )
+        row = cur.fetchone()
+    finally:
+        con.close()
+
+    if row is None:
+        return None
+
+    return _row_to_token_record(row)
+
+
 async def revoke_token(
     org_id: str,
     connector_id: str,
