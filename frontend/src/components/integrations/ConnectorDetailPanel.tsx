@@ -9,6 +9,8 @@ import SalesforceProductPicker from './SalesforceProductPicker';
 import SqlServerScopePicker from './SqlServerScopePicker';
 import OracleScopePicker from './OracleScopePicker';
 import PostgreSQLScopePicker from './PostgreSQLScopePicker';
+import StaticCredentialManager from './StaticCredentialManager';
+import { isStaticCredentialConnector } from './staticCredentialConnectors';
 
 // T41-7: Connection Health - configured read scope for this connector.
 // Shows what AgentIQ is configured to read from this source.
@@ -172,6 +174,16 @@ export default function ConnectorDetailPanel({
       </div>
 
       <div className="mt-4 border-t border-border" />
+
+      {/* R17-D3 Addendum A (T12 / AC10): static-credential entry for connectors
+          that authenticate with URL + username + token/password (Jira,
+          ServiceNow, native DBs). Shown near the top because entering the
+          credential is how these connectors get connected. Owner-gated inside. */}
+      {isStaticCredentialConnector(connector.id) && (
+        <div className="mt-4">
+          <StaticCredentialManager connector={connector} />
+        </div>
+      )}
 
       {/* Salesforce product declaration — rendered first in the panel so the
           workspace declaration is visible at the top of the right panel. */}

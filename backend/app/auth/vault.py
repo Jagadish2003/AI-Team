@@ -576,6 +576,51 @@ def get_static_credential(
     )
 
 
+def get_static_credential_metadata(
+    org_id: str, connector_id: str
+) -> Optional[dict]:
+    """Return NON-SECRET metadata for an active static credential, or None.
+
+    Companion to get_static_credential for the credential-status / write-only UI
+    surface (R17-D3 Addendum A, T12): it reports whether a credential exists plus
+    its non-secret base_url and timestamps WITHOUT decrypting enc_username /
+    enc_secret. The status path therefore never touches the plaintext at all, so
+    it cannot leak it and does not even need CREDENTIAL_VAULT_KEY (AC10: values
+    are write-only — never readable back through the UI or logs). ``has_username``
+    reflects presence only, never the value. Scoped to kind='static' and
+    is_deleted=FALSE exactly like get_static_credential, so OAuth and revoked rows
+    are invisible.
+    """
+    _init_credentials_table()
+
+    con = db.connect()
+    try:
+        cur = con.cursor()
+        cur.execute(
+            """
+            SELECT base_url, enc_username, created_at, updated_at
+            FROM credentials
+            WHERE org_id = %s AND connector_id = %s
+              AND kind = %s AND is_deleted = FALSE
+            """,
+            (org_id, connector_id, STATIC_CREDENTIAL_KIND),
+        )
+        row = cur.fetchone()
+    finally:
+        con.close()
+
+    if row is None:
+        return None
+
+    base_url, enc_username, created_str, updated_str = row
+    return {
+        "base_url": base_url or "",
+        "has_username": bool(enc_username),
+        "created_at": _parse_stored_utc(created_str),
+        "updated_at": _parse_stored_utc(updated_str),
+    }
+
+
 def revoke_static_credential(org_id: str, connector_id: str) -> None:
     """Soft-delete the static credential for an org+connector pair.
 
