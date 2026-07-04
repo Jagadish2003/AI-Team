@@ -1,4 +1,4 @@
-import { apiGet, apiPost } from "../lib/apiClient";
+import { apiGet, apiPost, apiDelete } from "../lib/apiClient";
 
 import type { Connector } from "../types/connector";
 import type { UploadedFile } from "../types/upload";
@@ -63,6 +63,59 @@ export async function connectConnectorApi(connectorId: string): Promise<void> {
 
 export function configureSyncApi(connectorId: string): Promise<Connector> {
   return apiPost<Connector>(`/api/connectors/${connectorId}/configure`, {});
+}
+
+/**
+ * R17-D3 Addendum A (T12 / AC10) — static-credential entry for connectors that
+ * authenticate with URL + username + token/password (Jira, ServiceNow, native
+ * DB connectors) rather than OAuth.
+ *
+ * Values are WRITE-ONLY: {@link saveConnectorCredentials} sends them to the
+ * backend, which Fernet-encrypts them into the caller's org vault, and NOTHING
+ * ever reads them back. {@link ConnectorCredentialStatus} carries only non-secret
+ * metadata (whether a credential is configured, its instance base_url, and
+ * whether a username is present) — never the username value or the secret.
+ */
+export interface ConnectorCredentialStatus {
+  connector_id: string;
+  configured: boolean;
+  /** Non-secret instance location (Jira/ServiceNow URL or DB host). null when unset. */
+  base_url: string | null;
+  /** True when a username is stored — presence only, never the value. */
+  has_username: boolean;
+  updated_at: string | null;
+}
+
+export interface StaticCredentialInput {
+  base_url: string;
+  username: string;
+  /** API token / password. Sent once; never returned by any endpoint. */
+  secret: string;
+}
+
+/** GET /api/connectors/{id}/credentials — status only; never returns the secret. */
+export function fetchConnectorCredentialStatus(
+  connectorId: string,
+): Promise<ConnectorCredentialStatus> {
+  return apiGet<ConnectorCredentialStatus>(
+    `/api/connectors/${connectorId}/credentials`,
+  );
+}
+
+/** POST /api/connectors/{id}/credentials — Owner-only; encrypts into the vault. */
+export function saveConnectorCredentials(
+  connectorId: string,
+  input: StaticCredentialInput,
+): Promise<ConnectorCredentialStatus> {
+  return apiPost<ConnectorCredentialStatus>(
+    `/api/connectors/${connectorId}/credentials`,
+    input,
+  );
+}
+
+/** DELETE /api/connectors/{id}/credentials — Owner-only; revokes the credential. */
+export function deleteConnectorCredentials(connectorId: string): Promise<void> {
+  return apiDelete<void>(`/api/connectors/${connectorId}/credentials`);
 }
 
 export function fetchUploads(): Promise<UploadedFile[]> {

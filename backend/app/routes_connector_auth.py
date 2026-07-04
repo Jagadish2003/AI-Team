@@ -1,10 +1,22 @@
 """OAuth connector auth routes — AT-77 (T1-S10-A A5): OAuth callback and state security.
 
-Four routes (all require Bearer auth — spec AC17):
+Four OAuth routes (all require Bearer auth — spec AC17):
   GET  /api/connectors/oauth/callback           — OAuth callback (Bearer + state nonce)
   GET  /api/connectors/{connector_id}/auth-url  — Generate one-time auth URL
   DELETE /api/connectors/{connector_id}/token   — Revoke token
   GET  /api/connectors/{connector_id}/token-status — Token status
+
+Plus the static-credential entry surface for connectors that authenticate with a
+URL + username + token/password rather than OAuth (R17-D3 Addendum A, T12 / AC10 —
+Jira, ServiceNow, native DB connectors):
+  POST   /api/connectors/{connector_id}/credentials — Owner-only: encrypt into the vault
+  GET    /api/connectors/{connector_id}/credentials — status only (never the secret)
+  DELETE /api/connectors/{connector_id}/credentials — Owner-only: revoke
+
+Values are WRITE-ONLY: the POST stores them Fernet-encrypted in the per-org vault
+(via store_static_credential), and neither the GET nor the POST response ever
+returns the username or secret — an Owner can replace a credential but never read
+one back through the UI, and the action is audited without the values (AC10).
 
 State nonce storage: oauth_nonces table (matching the existing raw-SQL pattern in db.py).
 No session/cookie mechanism exists in this codebase; nonces are stored server-side in the DB
@@ -24,6 +36,7 @@ import psycopg2
 from fastapi import Depends, FastAPI, HTTPException, Query, Response
 from fastapi.responses import RedirectResponse
 from fastapi.security import HTTPAuthorizationCredentials
+from pydantic import BaseModel
 
 from app import db
 from app.auth import (
@@ -35,7 +48,15 @@ from app.auth import (
 )
 from app.auth.configs import CONNECTOR_AUTH_CONFIGS
 from app.auth.oauth_state import decode_state, encode_state
-from app.auth.vault import REFRESH_THRESHOLD_SECONDS, consume_nonce, store_nonce
+from app.auth.secrets import MissingSecretError
+from app.auth.vault import (
+    REFRESH_THRESHOLD_SECONDS,
+    consume_nonce,
+    get_static_credential_metadata,
+    revoke_static_credential,
+    store_nonce,
+    store_static_credential,
+)
 from app.middleware.audit import log_event
 from app.middleware.tenancy import get_current_org_id
 from app.rbac import _get_user_id_from_token, require_role
@@ -231,6 +252,53 @@ def _callback_auth(
     if _callback_allows_unauth():
         return None
     raise HTTPException(status_code=401, detail="Unauthorized")
+
+
+# ---------------------------------------------------------------------------
+# Static (non-OAuth) connector credentials — R17-D3 Addendum A, T12 / AC10
+# ---------------------------------------------------------------------------
+
+# Connectors that authenticate with STATIC credentials (URL + username +
+# token/password) entered by an Owner, rather than the OAuth flow above. Jira and
+# ServiceNow ALSO support OAuth (handled by the Connect flow); this static path is
+# the addendum's "credential form" alternative for them and the primary path for
+# the native DB connectors. Keyed to the ids the Integration Hub / connector
+# catalog use ('sql_server'); 'sqlserver' is accepted as an alias so a caller
+# using the DB-driver id resolves too. The vault keys purely on the string passed,
+# so this set is also the guard against pointing the static path at an OAuth-only
+# connector (e.g. salesforce), which is rejected with a 400.
+STATIC_CREDENTIAL_CONNECTORS = frozenset(
+    {"jira", "servicenow", "postgresql", "sql_server", "sqlserver", "oracle_db"}
+)
+
+
+class StaticCredentialRequest(BaseModel):
+    """Body for POST /api/connectors/{id}/credentials.
+
+    All three are entered by an Owner. base_url is the non-secret instance
+    location; username + secret are WRITE-ONLY — encrypted into the vault and
+    never returned. Fields default to empty so the handler can return one clear
+    400 naming the missing field(s) instead of a raw 422.
+    """
+
+    base_url: str = ""
+    username: str = ""
+    secret: str = ""
+
+
+class StaticCredentialStatus(BaseModel):
+    """Response for the credential POST/GET — metadata ONLY (AC10).
+
+    Never carries the username or secret. base_url is non-secret and is echoed so
+    the admin can confirm which instance is wired; has_username reports presence
+    only, so the UI can show "a credential is set" without revealing the value.
+    """
+
+    connector_id: str
+    configured: bool
+    base_url: Optional[str] = None
+    has_username: bool = False
+    updated_at: Optional[str] = None
 
 
 # ---------------------------------------------------------------------------
@@ -548,4 +616,179 @@ def register_connector_auth_routes(app: FastAPI) -> None:
             # No refresh token to fall back on — the user must reconnect.
             return {"status": "needs_auth"}
         return {"status": "connected"}
+
+    # -----------------------------------------------------------------------
+    # Static (non-OAuth) connector credentials — R17-D3 Addendum A, T12 / AC10
+    # -----------------------------------------------------------------------
+
+    @app.post(
+        "/api/connectors/{connector_id}/credentials",
+        response_model=StaticCredentialStatus,
+        dependencies=[Depends(require_auth), Depends(require_role("owner"))],
+    )
+    def set_static_credentials(
+        connector_id: str,
+        body: StaticCredentialRequest,
+        token: str = Depends(require_auth),
+    ) -> StaticCredentialStatus:
+        """Store a static credential for the caller's org, Fernet-encrypted (AC10).
+
+        Owner-only (require_role('owner')). URL + username + token/password are
+        encrypted into the per-org vault via store_static_credential — the same
+        encryption and per-(org_id, connector_id) keying as OAuth tokens. The org
+        is taken from the tenancy context, NEVER the request body, so one org can
+        never write another org's credential. Values are write-only: the response
+        carries only non-secret metadata (never the username or secret), and the
+        audit event records the action and actor without the values.
+        """
+        if connector_id not in STATIC_CREDENTIAL_CONNECTORS:
+            # An OAuth connector (e.g. salesforce) or an unknown id — the static
+            # path does not apply. 400 rather than a silent store under a stray id.
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "Connector does not use static credentials — connect it "
+                    "through the OAuth flow instead."
+                ),
+            )
+
+        base_url = (body.base_url or "").strip()
+        username = (body.username or "").strip()
+        secret = body.secret or ""
+        # All static connectors here need URL + username + secret. Report every
+        # missing field at once as a plain-string detail the UI can show inline.
+        missing = [
+            label
+            for label, value in (
+                ("URL", base_url),
+                ("username", username),
+                ("token/password", secret.strip()),
+            )
+            if not value
+        ]
+        if missing:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Missing required field(s): {', '.join(missing)}.",
+            )
+
+        org_id = get_current_org_id()
+        try:
+            record = store_static_credential(
+                org_id,
+                connector_id,
+                username=username,
+                secret=secret,
+                base_url=base_url,
+            )
+        except ValueError:
+            # Defensive: the vault also rejects an empty/whitespace secret.
+            raise HTTPException(
+                status_code=400, detail="A non-empty token/password is required."
+            )
+        except MissingSecretError:
+            # CREDENTIAL_VAULT_KEY is not configured — an operator/server error,
+            # not a client one. Never echo the key or the attempted values.
+            logger.error(
+                "Cannot store static credential for connector %s: the credential "
+                "vault key (CREDENTIAL_VAULT_KEY) is not configured",
+                connector_id,
+            )
+            raise HTTPException(
+                status_code=500, detail="Credential vault is not configured."
+            )
+
+        # Mirror the OAuth success path: reflect the connection in this org's
+        # connector state so the Integration Hub tile shows the source connected.
+        # Display-state only — the vault write above is the source of truth, so a
+        # failure here must never fail the request.
+        try:
+            rec = db.org_connector_get(org_id, connector_id) or {}
+            rec["status"] = "connected"
+            rec["lastSynced"] = rec.get("lastSynced", "—")
+            db.org_connector_set(org_id, connector_id, rec)
+        except Exception:
+            logger.exception(
+                "Failed to mark connector %s connected after credential entry",
+                connector_id,
+            )
+
+        # Audit the ACTION and actor only — never the URL/username/secret (AC10).
+        log_event(
+            "connector_credentials_set",
+            connector_id=connector_id,
+            user_id=_get_user_id_from_token(token),
+        )
+        return StaticCredentialStatus(
+            connector_id=connector_id,
+            configured=True,
+            base_url=record.base_url or None,
+            has_username=bool(record.username),
+            updated_at=record.updated_at.isoformat(),
+        )
+
+    @app.get(
+        "/api/connectors/{connector_id}/credentials",
+        response_model=StaticCredentialStatus,
+        dependencies=[Depends(require_auth), Depends(require_role("viewer"))],
+    )
+    def get_static_credential_status(connector_id: str) -> StaticCredentialStatus:
+        """Report whether a static credential is configured — metadata only (AC10).
+
+        Reads NON-SECRET metadata via get_static_credential_metadata, which never
+        decrypts enc_username/enc_secret, so the secret cannot leak through this
+        path and it does not even need the vault key. base_url is a non-secret
+        instance location and is returned; the username value and secret never are.
+        """
+        if connector_id not in STATIC_CREDENTIAL_CONNECTORS:
+            raise HTTPException(
+                status_code=400, detail="Connector does not use static credentials."
+            )
+        org_id = get_current_org_id()
+        meta = get_static_credential_metadata(org_id, connector_id)
+        if meta is None:
+            return StaticCredentialStatus(connector_id=connector_id, configured=False)
+        return StaticCredentialStatus(
+            connector_id=connector_id,
+            configured=True,
+            base_url=meta["base_url"] or None,
+            has_username=meta["has_username"],
+            updated_at=meta["updated_at"].isoformat(),
+        )
+
+    @app.delete(
+        "/api/connectors/{connector_id}/credentials",
+        dependencies=[Depends(require_auth), Depends(require_role("owner"))],
+    )
+    def delete_static_credentials(
+        connector_id: str, token: str = Depends(require_auth)
+    ) -> Response:
+        """Revoke (soft-delete) the org's static credential for this connector.
+
+        Owner-only. Scoped to kind='static' in the vault so it can never remove an
+        OAuth token row. Idempotent — a 204 even when nothing was stored.
+        """
+        if connector_id not in STATIC_CREDENTIAL_CONNECTORS:
+            raise HTTPException(
+                status_code=400, detail="Connector does not use static credentials."
+            )
+        org_id = get_current_org_id()
+        revoke_static_credential(org_id, connector_id)
+        # Mirror delete_token: clear this org's connection state after revoke.
+        try:
+            rec = db.org_connector_get(org_id, connector_id)
+            if rec is not None and rec.get("org_id") == org_id:
+                rec["status"] = "disconnected"
+                db.org_connector_set(org_id, connector_id, rec)
+        except Exception:
+            logger.exception(
+                "Failed to clear connector %s connection state after credential revoke",
+                connector_id,
+            )
+        log_event(
+            "connector_credentials_revoked",
+            connector_id=connector_id,
+            user_id=_get_user_id_from_token(token),
+        )
+        return Response(status_code=204)
  

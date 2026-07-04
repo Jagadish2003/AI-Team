@@ -10,6 +10,8 @@ Event type payload schemas (locked — do not change field names):
     connector_queried:     org_id, run_id, connector_id, query_hash, row_count, duration_ms, timestamp
     connector_connected:   org_id, connector_id, user_id, scopes_granted, timestamp
     connector_disconnected: org_id, connector_id, user_id, timestamp
+    connector_credentials_set:     org_id, connector_id, user_id, timestamp
+    connector_credentials_revoked: org_id, connector_id, user_id, timestamp
     scope_declared:        org_id, connector_id, user_id, scope_type, scope_values, timestamp
     user_login:            org_id, user_id, ip_address_hash, timestamp
     setup_state_saved:     org_id, user_id, system_count, pack_id, timestamp
@@ -38,6 +40,12 @@ CONNECTOR_QUERIED = "connector_queried"
 CONNECTOR_CONNECTED = "connector_connected"
 CONNECTOR_DISCONNECTED = "connector_disconnected"
 CONNECTOR_REVOCATION_FAILED = "connector_revocation_failed"
+# R17-D3 Addendum A (T12): an Owner entered/replaced or revoked a connector's
+# STATIC (non-OAuth) credential through the Integration Hub. The payload records
+# the ACTION and actor only — never the URL, username, or secret (AC10: static
+# credential values are write-only, never readable back through the UI or logs).
+CONNECTOR_CREDENTIALS_SET = "connector_credentials_set"
+CONNECTOR_CREDENTIALS_REVOKED = "connector_credentials_revoked"
 SCOPE_DECLARED = "scope_declared"
 USER_LOGIN = "user_login"
 SETUP_STATE_SAVED = "setup_state_saved"
@@ -63,6 +71,8 @@ AUDIT_EVENT_REGISTRY: frozenset[str] = frozenset({
     CONNECTOR_CONNECTED,
     CONNECTOR_DISCONNECTED,
     CONNECTOR_REVOCATION_FAILED,
+    CONNECTOR_CREDENTIALS_SET,
+    CONNECTOR_CREDENTIALS_REVOKED,
     SCOPE_DECLARED,
     USER_LOGIN,
     SETUP_STATE_SAVED,
