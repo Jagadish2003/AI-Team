@@ -70,11 +70,10 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional
 
-from . import get_live_connector, is_live
+from . import get_live_connector, is_live, resolve_vault_connector
 from .base import ChangeBasedIngestor, ChangeKind, Checkpoint, DeltaBatch
 from .slack_signals import (
     build_evidence_pointer,
@@ -357,16 +356,17 @@ class SlackIngestor(ChangeBasedIngestor):
         """Build a Slack Web API client from the per-run OAuth credentials.
 
         Resolution mirrors the other connectors: the per-run credential context
-        (DB-sourced vault token, isolated per org/run) first, then the
-        ``SLACK_BOT_TOKEN`` env var as a CLI/standalone fallback.
+        (DB-sourced vault token, isolated per org/run) first, then the per-org
+        vault via the single credential path — never a process-global env
+        credential (R17-D3 Addendum A, AC8/AC11).
         """
-        cred = get_live_connector("slack")
-        token = cred.get("token") if cred else os.getenv("SLACK_BOT_TOKEN")
+        cred = get_live_connector("slack") or resolve_vault_connector("slack", org_id)
+        token = cred.get("token") if cred else None
         if not token:
             raise SlackIngestError(
-                "Live mode requires a Slack OAuth token, provided by the Slack "
-                "Connect flow (credential vault). Set INGEST_MODE=offline to run "
-                "without credentials."
+                "Live mode requires a Slack OAuth token from the credential vault. "
+                "Connect Slack in the Integration Hub, or set INGEST_MODE=offline "
+                "to run without credentials."
             )
         return SlackClient(token.strip())
 

@@ -20,13 +20,22 @@ import pytest
 from cryptography.fernet import Fernet
 
 from app.auth import vault
-from app.auth.credentials import CredentialsNotConfigured, get_connector_credentials
+from app.auth.credentials import (
+    CredentialsNotConfigured,
+    get_connector_credentials,
+    get_connector_secret,
+    try_get_connector_credentials,
+)
+from app.auth.models import StaticCredentialRecord, TokenRecord
 
 _VAULT_KEY = Fernet.generate_key().decode()
 
 # Fake, non-real tokens used only in tests. Not live secrets.
 _FAKE_TOKEN = "FAKE-ACCESS-TOKEN-0123456789abcdef"
 _FAKE_REFRESH = "FAKE-REFRESH-TOKEN-fedcba9876543210"
+_FAKE_STATIC_SECRET = "FAKE-static-api-token-abcdef0123456789"
+_FAKE_STATIC_USER = "svc-agentiq@example.com"
+_FAKE_STATIC_URL = "https://example.atlassian.net"
 
 
 def _vault_env() -> dict:
@@ -150,3 +159,163 @@ def test_get_credential_does_not_refresh_or_raise_on_expired():
             assert get_connector_credentials(org, connector).access_token == _FAKE_TOKEN
         finally:
             vault.revoke_customer_tenant_credential(org, connector_id=connector)
+
+
+# ---------------------------------------------------------------------------
+# Kind-awareness: a static credential resolves to a StaticCredentialRecord, an
+# OAuth credential to a TokenRecord (never a bogus empty-token TokenRecord).
+# ---------------------------------------------------------------------------
+
+
+def test_resolves_oauth_record_as_token_record():
+    org, connector = "org-kind-oauth", "salesforce"
+    with patch.dict(os.environ, _vault_env()):
+        _store(org, connector)
+        try:
+            record = get_connector_credentials(org, connector)
+            assert isinstance(record, TokenRecord)
+            assert record.access_token == _FAKE_TOKEN
+        finally:
+            vault.revoke_customer_tenant_credential(org, connector_id=connector)
+
+
+def test_resolves_static_record_as_static_credential_record():
+    """A static-credential connector resolves to a StaticCredentialRecord with
+    its secret / username / base_url — not an OAuth TokenRecord (which would
+    carry an empty access token for a static row)."""
+    org, connector = "org-kind-static", "jira"
+    with patch.dict(os.environ, _vault_env()):
+        vault.store_static_credential(
+            org, connector,
+            username=_FAKE_STATIC_USER, secret=_FAKE_STATIC_SECRET, base_url=_FAKE_STATIC_URL,
+        )
+        try:
+            record = get_connector_credentials(org, connector)
+            assert isinstance(record, StaticCredentialRecord)
+            assert record.secret == _FAKE_STATIC_SECRET
+            assert record.username == _FAKE_STATIC_USER
+            assert record.base_url == _FAKE_STATIC_URL
+        finally:
+            vault.revoke_static_credential(org, connector)
+
+
+def test_get_connector_secret_returns_the_bearer_value_for_both_kinds():
+    """get_connector_secret yields the OAuth access token or the static secret."""
+    with patch.dict(os.environ, _vault_env()):
+        oauth_org = "org-secret-oauth"
+        _store(oauth_org, "salesforce")
+        static_org = "org-secret-static"
+        vault.store_static_credential(
+            static_org, "jira",
+            username=_FAKE_STATIC_USER, secret=_FAKE_STATIC_SECRET, base_url=_FAKE_STATIC_URL,
+        )
+        try:
+            assert get_connector_secret(oauth_org, "salesforce") == _FAKE_TOKEN
+            assert get_connector_secret(static_org, "jira") == _FAKE_STATIC_SECRET
+        finally:
+            vault.revoke_customer_tenant_credential(oauth_org, connector_id="salesforce")
+            vault.revoke_static_credential(static_org, "jira")
+
+
+def test_get_connector_secret_raises_when_not_configured():
+    with patch.dict(os.environ, _vault_env()):
+        with pytest.raises(CredentialsNotConfigured):
+            get_connector_secret("org-secret-absent", "jira")
+
+
+# ---------------------------------------------------------------------------
+# try_get_connector_credentials — None instead of raising.
+# ---------------------------------------------------------------------------
+
+
+def test_try_get_returns_none_when_not_configured():
+    with patch.dict(os.environ, _vault_env()):
+        assert try_get_connector_credentials("org-try-absent", "jira") is None
+
+
+def test_try_get_returns_record_when_configured():
+    org, connector = "org-try-present", "salesforce"
+    with patch.dict(os.environ, _vault_env()):
+        _store(org, connector)
+        try:
+            record = try_get_connector_credentials(org, connector)
+            assert record is not None
+            assert record.access_token == _FAKE_TOKEN
+        finally:
+            vault.revoke_customer_tenant_credential(org, connector_id=connector)
+
+
+# ---------------------------------------------------------------------------
+# Ingest bridge: resolve_vault_connector is the env-free per-org credential
+# fallback ingestors use (AC8/AC9). It reads the vault per the run org — never
+# an env credential — and normalises both record kinds.
+# ---------------------------------------------------------------------------
+
+
+def test_ingest_helper_resolves_oauth_token_per_run_org():
+    from discovery.ingest import clear_live_connectors, resolve_vault_connector, set_ingest_org
+
+    org, connector = "org-ingest-oauth", "salesforce"
+    with patch.dict(os.environ, _vault_env()):
+        _store(org, connector)
+        set_ingest_org(org)
+        try:
+            resolved = resolve_vault_connector(connector)
+            assert resolved == {"token": _FAKE_TOKEN}
+        finally:
+            clear_live_connectors()
+            vault.revoke_customer_tenant_credential(org, connector_id=connector)
+
+
+def test_ingest_helper_resolves_static_with_url_and_username():
+    from discovery.ingest import clear_live_connectors, resolve_vault_connector, set_ingest_org
+
+    org, connector = "org-ingest-static", "servicenow"
+    with patch.dict(os.environ, _vault_env()):
+        vault.store_static_credential(
+            org, connector,
+            username=_FAKE_STATIC_USER, secret=_FAKE_STATIC_SECRET, base_url=_FAKE_STATIC_URL,
+        )
+        set_ingest_org(org)
+        try:
+            resolved = resolve_vault_connector(connector)
+            assert resolved["token"] == _FAKE_STATIC_SECRET
+            assert resolved["username"] == _FAKE_STATIC_USER
+            assert resolved["url"] == _FAKE_STATIC_URL
+        finally:
+            clear_live_connectors()
+            vault.revoke_static_credential(org, connector)
+
+
+def test_ingest_helper_is_org_isolated_and_env_free():
+    """AC8/AC9: the ingest fallback resolves per-org from the vault and NEVER a
+    process-global env credential. Org A's credential is invisible to org B even
+    with a credential-shaped env var present."""
+    from discovery.ingest import clear_live_connectors, resolve_vault_connector, set_ingest_org
+
+    org_a, org_b, connector = "org-ingest-iso-a", "org-ingest-iso-b", "salesforce"
+    env = _vault_env()
+    env["SF_ACCESS_TOKEN"] = "ENV-FALLBACK-SHOULD-NEVER-BE-USED"
+    with patch.dict(os.environ, env):
+        _store(org_a, connector)
+        try:
+            set_ingest_org(org_a)
+            assert resolve_vault_connector(connector) == {"token": _FAKE_TOKEN}
+
+            # Org B has no credential — the env var must NOT satisfy resolution.
+            set_ingest_org(org_b)
+            assert resolve_vault_connector(connector) is None
+        finally:
+            clear_live_connectors()
+            vault.revoke_customer_tenant_credential(org_a, connector_id=connector)
+
+
+def test_ingest_helper_never_raises_on_absent():
+    from discovery.ingest import clear_live_connectors, resolve_vault_connector, set_ingest_org
+
+    with patch.dict(os.environ, _vault_env()):
+        set_ingest_org("org-ingest-none")
+        try:
+            assert resolve_vault_connector("jira") is None
+        finally:
+            clear_live_connectors()
