@@ -85,34 +85,44 @@ def _get_client() -> Optional["NcinoClient"]:
     """Build a REST client for nCino's Salesforce org.
 
     nCino runs against a Salesforce org, so credentials are resolved in order:
-      1. explicit NCINO_INSTANCE_URL / NCINO_ACCESS_TOKEN env (override),
+      1. a dedicated nCino credential in the per-org vault (connector 'ncino'),
       2. the per-run Salesforce OAuth context (DB-sourced via the credential
-         vault — see discovery.ingest.get_live_connector),
-      3. SF_INSTANCE_URL / SF_ACCESS_TOKEN env (CLI/standalone fallback).
+         vault — see discovery.ingest.get_live_connector), or the connected
+         Salesforce org's credential from the vault.
 
-    The old server-key token-generation fallback (token_generation/ncino) was
-    removed. A missing token surfaces as a clear NcinoIngestError in live mode.
+    The access token always comes from the per-org vault via the single
+    credential path — never from a process-global env credential (R17-D3
+    Addendum A, AC8/AC11). NCINO_INSTANCE_URL / SF_INSTANCE_URL are instance
+    configuration (not credentials) and keep their env fallbacks. A missing
+    token surfaces as a clear NcinoIngestError in live mode.
     """
-    from . import get_live_connector
+    from . import get_live_connector, resolve_vault_connector
 
     instance_url = os.getenv("NCINO_INSTANCE_URL")
-    access_token = os.getenv("NCINO_ACCESS_TOKEN")
+    access_token = None
 
-    if not instance_url or not access_token:
-        cred = get_live_connector("salesforce")
+    # 1. Dedicated nCino credential in the vault (its own URL, if a static one).
+    ncino_cred = resolve_vault_connector("ncino")
+    if ncino_cred:
+        instance_url = instance_url or ncino_cred.get("url")
+        access_token = ncino_cred.get("token")
+
+    # 2. Otherwise the connected Salesforce org (per-run context, else vault).
+    if not access_token:
+        cred = get_live_connector("salesforce") or resolve_vault_connector("salesforce")
         if cred:
             instance_url = instance_url or cred.get("url")
-            access_token = access_token or cred.get("token")
+            access_token = cred.get("token")
 
-    if not instance_url or not access_token:
-        instance_url = instance_url or os.getenv("SF_INSTANCE_URL")
-        access_token = access_token or os.getenv("SF_ACCESS_TOKEN")
+    # Instance URL is not a credential — env is a valid CLI/standalone fallback.
+    if not instance_url:
+        instance_url = os.getenv("SF_INSTANCE_URL")
 
     if not instance_url or not access_token:
         if is_live():
             raise NcinoIngestError(
-                "Live mode requires NCINO_INSTANCE_URL/NCINO_ACCESS_TOKEN or a "
-                "connected Salesforce org (OAuth Connect). "
+                "Live mode requires an nCino credential in the vault or a "
+                "connected Salesforce org (OAuth Connect), plus an instance URL. "
                 "Set INGEST_MODE=offline to run without credentials."
             )
         return None

@@ -92,14 +92,13 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional
 
 from app.provenance import EvidencePointer, utc_now_iso
 
-from . import get_live_connector, is_live
+from . import get_live_connector, is_live, resolve_vault_connector
 from .base import ChangeBasedIngestor, ChangeKind, Checkpoint, DeltaBatch
 from .sharepoint_signals import build_item_signals
 
@@ -506,13 +505,13 @@ class SharePointIngestor(ChangeBasedIngestor):
         if client is not None:
             return client
 
-        cred = get_live_connector("sharepoint")
-        token = cred.get("token") if cred else os.getenv("SHAREPOINT_GRAPH_TOKEN")
+        cred = get_live_connector("sharepoint") or resolve_vault_connector("sharepoint", org_id)
+        token = cred.get("token") if cred else None
         if not token:
             raise SharePointIngestError(
-                "Live mode requires a Microsoft Graph OAuth token, provided by the "
-                "SharePoint Connect flow (credential vault). Set INGEST_MODE=offline "
-                "to run without credentials."
+                "Live mode requires a Microsoft Graph OAuth token from the "
+                "credential vault. Connect SharePoint in the Integration Hub, or "
+                "set INGEST_MODE=offline to run without credentials."
             )
         client = SharePointGraphClient(token.strip())
         cache[org_id] = client

@@ -326,7 +326,12 @@ def resolve_live_systems(org_id: str) -> List[str]:
     derived (:func:`_resolve_confluence`, like Jira). Never raises — any failure
     for a single connector simply excludes it.
     """
-    from discovery.ingest import set_live_connectors
+    from discovery.ingest import set_ingest_org, set_live_connectors
+
+    # Record the run's org on the per-run ingest context so an ingestor that has
+    # no pre-resolved credential here can still resolve THIS run's credential
+    # per-org from the vault (R17-D3 Addendum A, T11 / AC9) — never from env.
+    set_ingest_org(org_id)
 
     live: List[str] = []
     connectors: Dict[str, Dict[str, str]] = {}

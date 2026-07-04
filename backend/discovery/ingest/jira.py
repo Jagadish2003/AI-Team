@@ -222,18 +222,22 @@ class JiraClient:
 
 
 def _get_client() -> JiraClient:
-    # OAuth-only. Credentials come from the per-run context (DB-sourced: vault
-    # Bearer token + captured api.atlassian.com gateway base, isolated per
-    # org/run); env vars are only a CLI/standalone fallback.
-    from . import get_live_connector
+    # Credentials come from the per-run context (DB-sourced: vault Bearer token +
+    # captured api.atlassian.com gateway base, isolated per org/run). With no
+    # per-run context (CLI/standalone) or for a static API-token credential, the
+    # token resolves per-org from the vault via the single credential path —
+    # never from a process-global env credential (R17-D3 Addendum A, AC8/AC11).
+    # A static credential also supplies its base_url; JIRA_URL is instance config
+    # (not a credential) and remains the env fallback.
+    from . import get_live_connector, resolve_vault_connector
 
-    cred = get_live_connector("jira")
+    cred = get_live_connector("jira") or resolve_vault_connector("jira")
     if cred:
-        jira_url = (cred.get("url") or "").rstrip("/")
+        jira_url = (cred.get("url") or os.getenv("JIRA_URL", "")).rstrip("/")
         token = cred.get("token") or ""
     else:
         jira_url = os.getenv("JIRA_URL", "").rstrip("/")
-        token = os.getenv("JIRA_TOKEN", "")
+        token = ""
 
     if not jira_url:
         raise JiraIngestError(
@@ -242,8 +246,8 @@ def _get_client() -> JiraClient:
         )
     if not token:
         raise JiraIngestError(
-            "Live mode requires a Jira OAuth Bearer token (JIRA_TOKEN), "
-            "provided by the Jira OAuth Connect flow."
+            "Live mode requires a Jira credential (OAuth Bearer token or API "
+            "token) from the credential vault. Connect Jira in the Integration Hub."
         )
     return JiraClient(jira_url, token=token)
 
@@ -660,9 +664,9 @@ def ingest(jira_client: Optional[JiraClient] = None) -> Dict[str, Any]:
     # resolve_live_systems); the JIRA_URL env var is only a CLI/standalone fallback.
     # Gating on the env var alone wrongly skipped Jira even when it was
     # authenticated via the Integration Hub OAuth flow.
-    from . import get_live_connector
+    from . import get_live_connector, resolve_vault_connector
 
-    cred = get_live_connector("jira")
+    cred = get_live_connector("jira") or resolve_vault_connector("jira")
     jira_url = (cred.get("url") if cred else None) or os.getenv("JIRA_URL", "")
     if not jira_url:
         logger.warning(

@@ -72,25 +72,28 @@ def _get_client() -> Optional["SalesforceClient"]:
     detected naturally when the first SOQL call returns HTTP 401.
 
     Credentials are read from the per-run context (DB-sourced: vault token +
-    captured instance URL, isolated per org/run); env vars are only a
-    CLI/standalone fallback.
+    captured instance URL, isolated per org/run). With no per-run context
+    (CLI/standalone) the access token resolves per-org from the vault via the
+    single credential path (``get_connector_credentials``) — never from a
+    process-global env credential (R17-D3 Addendum A, AC8/AC11). SF_INSTANCE_URL
+    is instance configuration, not a credential, so it keeps its env fallback.
     """
-    from . import get_live_connector
+    from . import get_live_connector, resolve_vault_connector
 
-    cred = get_live_connector("salesforce")
+    cred = get_live_connector("salesforce") or resolve_vault_connector("salesforce")
     if cred:
-        instance_url = cred.get("url")
+        instance_url = cred.get("url") or os.getenv("SF_INSTANCE_URL")
         access_token = cred.get("token")
     else:
         instance_url = os.getenv("SF_INSTANCE_URL")
-        access_token = os.getenv("SF_ACCESS_TOKEN")
+        access_token = None
 
     if not instance_url or not access_token:
         if is_live():
             raise IngestError(
-                "Live mode requires SF_INSTANCE_URL and SF_ACCESS_TOKEN, provided "
-                "by the Salesforce OAuth Connect flow (credential vault). "
-                "Set INGEST_MODE=offline to run without credentials."
+                "Live mode requires a Salesforce OAuth token (from the credential "
+                "vault) and SF_INSTANCE_URL. Connect Salesforce in the Integration "
+                "Hub, or set INGEST_MODE=offline to run without credentials."
             )
         return None
 

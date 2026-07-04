@@ -18,15 +18,29 @@ Run:
 """
 from __future__ import annotations
 
+from contextlib import contextmanager
+
 import pytest
 from unittest.mock import patch, MagicMock
 
+from discovery.ingest import clear_live_connectors, set_live_connectors
 from discovery.ingest.connector_health import (
     ConnectorHealth,
     check_servicenow,
     check_jira,
     check_all_connectors,
 )
+
+
+@pytest.fixture(autouse=True)
+def _clear_run_context():
+    """R17-D3 Addendum A (T11): health checks resolve the token from the per-run
+    credential context (vault-sourced), no longer a process-global env var. Clear
+    it around each test so a credential set by one test never leaks into another
+    (especially the 'no credentials → fixture' cases)."""
+    clear_live_connectors()
+    yield
+    clear_live_connectors()
 
 
 # ── Fixtures ──────────────────────────────────────────────────────────────────
@@ -42,17 +56,35 @@ def mock_status(code):
     resp.status_code = code
     return resp
 
+
+@contextmanager
+def _with_connector(connector_id, url, url_env, token):
+    """Publish a connector credential on the per-run context for the test.
+
+    The URL stays instance config (env); the token comes from the per-run
+    credential context (vault-sourced), never a process-global env credential.
+    Merges with any already-set connector and restores it on exit, so the two
+    helpers can be nested (``with patch_sn_env(), patch_jira_env():``)."""
+    from discovery.ingest import _live_connectors
+
+    prev = _live_connectors.get() or {}
+    merged = dict(prev)
+    merged[connector_id] = {"url": url, "token": token}
+    with patch.dict("os.environ", {url_env: url}):
+        set_live_connectors(merged)
+        try:
+            yield
+        finally:
+            set_live_connectors(prev)
+
+
 def patch_sn_env(url="https://test.service-now.com", token="test-token"):
-    return patch.dict("os.environ", {
-        "SERVICENOW_URL": url,
-        "SERVICENOW_TOKEN": token,
-    })
+    return _with_connector("servicenow", url, "SERVICENOW_URL", token)
+
 
 def patch_jira_env(url="https://test.atlassian.net", token="test-token"):
-    return patch.dict("os.environ", {
-        "JIRA_URL": url,
-        "JIRA_TOKEN": token,
-    })
+    return _with_connector("jira", url, "JIRA_URL", token)
+
 
 def clear_sn_env():
     return patch.dict("os.environ", {}, clear=True)

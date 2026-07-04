@@ -115,29 +115,35 @@ class StrsIngestError(Exception):
 def _get_client():
     import os
     import requests
-    from . import get_live_connector
+    from . import get_live_connector, resolve_vault_connector
 
-    # STRS runs against the same Salesforce org as the SF connector. Credentials
-    # are resolved in order: explicit STRS_* env, the per-run Salesforce OAuth
-    # context (DB-sourced via the credential vault), then SF_* env. The old
-    # server-key token-generation path (token_generation/strs) was removed.
+    # STRS runs against the same Salesforce org as the SF connector. The access
+    # token is resolved per-org from the vault via the single credential path —
+    # a dedicated 'strs' credential first, else the connected Salesforce org —
+    # never from a process-global env credential (R17-D3 Addendum A, AC8/AC11).
+    # STRS_INSTANCE_URL / SF_INSTANCE_URL are instance config (not credentials)
+    # and keep their env fallbacks.
     instance_url = os.getenv("STRS_INSTANCE_URL")
-    access_token = os.getenv("STRS_ACCESS_TOKEN")
+    access_token = None
 
-    if not instance_url or not access_token:
-        cred = get_live_connector("salesforce")
+    strs_cred = resolve_vault_connector("strs")
+    if strs_cred:
+        instance_url = instance_url or strs_cred.get("url")
+        access_token = strs_cred.get("token")
+
+    if not access_token:
+        cred = get_live_connector("salesforce") or resolve_vault_connector("salesforce")
         if cred:
             instance_url = instance_url or cred.get("url")
-            access_token = access_token or cred.get("token")
+            access_token = cred.get("token")
 
-    if not instance_url or not access_token:
-        instance_url = instance_url or os.getenv("SF_INSTANCE_URL")
-        access_token = access_token or os.getenv("SF_ACCESS_TOKEN")
+    if not instance_url:
+        instance_url = os.getenv("SF_INSTANCE_URL")
 
     if not instance_url or not access_token:
         raise StrsIngestError(
-            "STRS live ingest requires a connected Salesforce org (OAuth Connect) "
-            "or STRS_INSTANCE_URL/STRS_ACCESS_TOKEN. "
+            "STRS live ingest requires an STRS credential in the vault or a "
+            "connected Salesforce org (OAuth Connect), plus an instance URL. "
             "Set INGEST_MODE=offline to run without credentials."
         )
 
