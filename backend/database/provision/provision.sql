@@ -1,11 +1,11 @@
 --
--- AgentIQ — consolidated provisioning script (schema + seed), head 0022.
+-- AgentIQ — consolidated provisioning script (schema + seed), head 0023.
 --
 -- Single self-contained replacement for the former 01_schema.sql / 02_seed.sql /
 -- 03_lazy_runtime_tables.sql. Creates the agentiq role, all 27 tables (incl.
 -- org_licenses, ingestion_checkpoints, opportunity_instances),
 -- indexes/constraints/rules, seeds the core reference rows, and stamps
--- alembic_version to head 0022.
+-- alembic_version to head 0023.
 --
 -- Run connected to the TARGET database (which must already exist), as a
 -- superuser or the schema owner:
@@ -1050,4 +1050,4 @@ INSERT INTO "public"."permissions" ("id", "payload") VALUES ('p_sn_inc', '{"id":
 
 -- uploads (0 rows)
 
-INSERT INTO "public"."alembic_version" ("version_num") VALUES ('0022') ON CONFLICT DO NOTHING;
+INSERT INTO "public"."alembic_version" ("version_num") VALUES ('0023') ON CONFLICT DO NOTHING;

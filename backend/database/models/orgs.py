@@ -86,6 +86,22 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_orgs_name_normalised_unique
 ON orgs (name_normalised)
 """
 
+# Domain-based org identity (migration 0023). An optional email/company domain per
+# org, with a PARTIAL UNIQUE index (WHERE domain IS NOT NULL) so orgs without a
+# domain never collide on NULL. Added to the model + a migration to close a
+# provisioning gap: `domain` + this index previously lived ONLY in provision.sql
+# (no migration created them), so a database built via `alembic upgrade head`
+# lacked them. Same standalone ADD COLUMN / index SSOT pattern as name_normalised.
+ADD_ORGS_DOMAIN_COLUMN = """
+ALTER TABLE orgs
+ADD COLUMN IF NOT EXISTS domain VARCHAR(255)
+"""
+
+CREATE_ORGS_DOMAIN_UNIQUE_IDX = """
+CREATE UNIQUE INDEX IF NOT EXISTS idx_orgs_domain_unique
+ON orgs (domain) WHERE domain IS NOT NULL
+"""
+
 ALL_ORGS_DDL: tuple[str, ...] = (CREATE_ORGS_TABLE,)
 
 # Ordered DDL the 0020 migration imports — single source of truth, no drift. The
@@ -95,6 +111,12 @@ ALL_ORG_NAME_NORMALISED_DDL: tuple[str, ...] = (
     ADD_ORG_NAME_NORMALISED_COLUMN,
     BACKFILL_ORG_NAME_NORMALISED,
     CREATE_ORGS_NAME_NORMALISED_UNIQUE_IDX,
+)
+
+# Ordered DDL the 0023 migration imports for the orgs.domain gap-fill.
+ALL_ORGS_DOMAIN_DDL: tuple[str, ...] = (
+    ADD_ORGS_DOMAIN_COLUMN,
+    CREATE_ORGS_DOMAIN_UNIQUE_IDX,
 )
 
 ALL_ORG_APPROVAL_DDL: tuple[str, ...] = (
