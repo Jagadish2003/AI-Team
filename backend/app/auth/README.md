@@ -36,11 +36,36 @@ Any change that renames or removes a field is a breaking change and requires a n
 
 | File          | Contents                                          | Ticket |
 |---------------|---------------------------------------------------|--------|
-| `models.py`   | `ConnectorAuthConfig`, `TokenRecord`, `ConnectorNotAuthenticatedError` | T1 (AT-73) |
+| `models.py`   | `ConnectorAuthConfig`, `TokenRecord`, `StaticCredentialRecord`, `ConnectorNotAuthenticatedError` | T1 (AT-73) |
 | `secrets.py`  | `resolve_secret(secret_key)` — reads env var, fails fast if missing | T2 |
 | `oauth.py`    | `authorization_code_flow()`, `client_credentials_flow()`, token refresh | T3/T4 |
-| `vault.py`    | `get_token()`, `store_token()`, `revoke_token()` — Fernet encryption at rest | T5/T6 |
+| `vault.py`    | `get_token()`, `store_token()`, `revoke_token()`, `store/get/revoke_static_credential()` — Fernet encryption at rest | T5/T6 |
 | `configs.py`  | Per-connector `ConnectorAuthConfig` instances for all connectors | T9 |
+
+## Vault Record Types (R17-D3 Addendum A, T10)
+
+The `credentials` table holds TWO record types, discriminated by the `kind` column and
+sharing the same per-`(org_id, connector_id)` keying and Fernet encryption under
+`CREDENTIAL_VAULT_KEY`:
+
+- **`kind='oauth'`** — token records (`TokenRecord`): access/refresh tokens from the OAuth
+  flows, auto-refreshed by `get_token()` and the background token-refresher job.
+- **`kind='static'`** — static credentials (`StaticCredentialRecord`): entered once by an
+  admin, no OAuth dance, no refresh, no expiry. Used by Jira (URL + user + API token),
+  ServiceNow (URL + user + password — the OAuth variant uses the existing flow), and the
+  native DB connectors (SQL Server / Oracle / PostgreSQL connection credentials).
+  `username`/`secret` are Fernet-encrypted at rest (`enc_username`/`enc_secret`); `base_url`
+  is the non-secret instance location. API: `store_static_credential()`,
+  `get_static_credential()`, `revoke_static_credential()`.
+
+The shared `UNIQUE(org_id, connector_id)` constraint means an org holds ONE credential per
+connector across both kinds: storing a static credential replaces an OAuth token for that
+connector (and vice versa), which is the intended either/or for ServiceNow. Static rows are
+invisible to `get_token()` (it raises `ConnectorNotAuthenticatedError`), and OAuth rows are
+invisible to `get_static_credential()` (it returns `None`).
+
+Values are write-only (AC10): an admin can replace a credential but never read one back —
+`StaticCredentialRecord` masks `username`/`secret` in `repr` so they cannot leak into logs.
 
 ## Flows
 
