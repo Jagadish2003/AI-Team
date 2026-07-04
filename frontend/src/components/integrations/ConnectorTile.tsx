@@ -23,7 +23,9 @@ export default function ConnectorTile({
   selected,
   onSelect,
   onPrimary,
-  onReconnect
+  onReconnect,
+  connectBlocked,
+  connectBlockMessage,
 }: {
   connector: Connector;
   icon: React.ReactNode;
@@ -34,6 +36,13 @@ export default function ConnectorTile({
   // "Reconnect". Must trigger the OAuth flow again (CS-2 AC7). Falls back to
   // onPrimary when not supplied so the tile keeps working in isolation.
   onReconnect?: () => void;
+  // R17-D4 Addendum A / T11 (AT-506): when the org is at its licensed system
+  // limit, disable the Connect action for a NEW (not-yet-connected) system and
+  // show connectBlockMessage as its tooltip (AC10). Forward-only — an already
+  // connected system keeps its Configure/View/Reconnect action, since
+  // reconnecting is not a new connection and is never blocked.
+  connectBlocked?: boolean;
+  connectBlockMessage?: string;
 }) {
   const isConnected = connector.status === 'connected';
   const isConfigured = connector.configured;
@@ -69,7 +78,18 @@ export default function ConnectorTile({
     : 'Connect';
 
   const actionVariant = (!isConnected || tokenExpired) ? 'primary' : isConfigured ? 'secondary' : 'tertiary';
-  const actionDisabled = !isEnabled;
+
+  // R17-D4 Addendum A / T11: at the licensed limit, a NEW connection is blocked
+  // (forward-only). Only applies to a not-yet-connected system — the 'connected'
+  // tile actions (Configure & Sync / View data / Reconnect) are never gated, so
+  // existing systems keep working when a lower-limit key lands (AC12).
+  const limitBlocksNew = Boolean(connectBlocked) && !isConnected;
+  const actionDisabled = !isEnabled || limitBlocksNew;
+  const disabledTitle = limitBlocksNew
+    ? (connectBlockMessage || 'Your license limit has been reached. Contact CloudFulcrum to add more.')
+    : !isEnabled
+    ? 'Connecting new sources is currently unavailable'
+    : undefined;
 
   return (
     <div
@@ -124,7 +144,7 @@ export default function ConnectorTile({
         <Button
           variant={actionVariant}
           disabled={actionDisabled}
-          title={actionDisabled ? 'Connecting new sources is currently unavailable' : undefined}
+          title={disabledTitle}
           className={`w-full ${
             actionDisabled
               ? '!bg-slate-500/10 !text-muted !border-border !opacity-100'

@@ -47,10 +47,17 @@ interface Props {
   onPrimary:  (id: string) => void;
   onReconnect?: (id: string) => void;
   onAddSource: (categoryId: string) => void;
+  // R17-D4 Addendum A / T11: when the org is at its licensed system limit, the
+  // Connect action on not-yet-connected tiles is disabled with connectBlockMessage
+  // (AC10). Forward-only — the tile itself keeps already-connected systems
+  // actionable. Optional so the section renders unchanged where unused.
+  connectBlocked?: boolean;
+  connectBlockMessage?: string;
 }
 
 export default function ConnectorGroupSection({
   group, selectedId, onSelect, onPrimary, onReconnect, onAddSource,
+  connectBlocked, connectBlockMessage,
 }: Props) {
   const hasConnectors = group.connectors.length > 0;
   const shouldScrollConnectors = group.connectors.length > 6;
@@ -93,6 +100,8 @@ export default function ConnectorGroupSection({
                 onSelect={() => onSelect(c.id)}
                 onPrimary={() => onPrimary(c.id)}
                 onReconnect={onReconnect ? () => onReconnect(c.id) : undefined}
+                connectBlocked={connectBlocked}
+                connectBlockMessage={connectBlockMessage}
               />
             ))}
           </div>
