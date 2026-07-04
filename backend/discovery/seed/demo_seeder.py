@@ -118,15 +118,28 @@ CROSS_SYSTEM_CLUSTERS = [
 # Salesforce seeder
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _resolve_secret(connector_id: str) -> str:
+    """Resolve a connector's token from the per-run credential context (vault-
+    sourced) first, else the per-org vault via the single credential path
+    (R17-D3 Addendum A, AC8) — never a process-global env credential. Returns ''
+    when the connector is not configured, so the caller logs and skips (its
+    existing behaviour). Connect the demo org via the Integration Hub so its
+    credential is vaulted."""
+    from discovery.ingest import get_live_connector, resolve_vault_connector
+
+    cred = get_live_connector(connector_id) or resolve_vault_connector(connector_id) or {}
+    return cred.get("token") or ""
+
+
 def seed_salesforce(state: SeedState, dry_run: bool = False) -> int:
     """
     Create Cases in Salesforce with cross-system references in Subject/Description.
-    Requires SF_INSTANCE_URL + SF_ACCESS_TOKEN env vars.
+    Requires SF_INSTANCE_URL and a Salesforce credential in the vault.
 
     Returns: count of Cases created.
     """
     instance_url = os.getenv("SF_INSTANCE_URL", "").rstrip("/")
-    access_token = os.getenv("SF_ACCESS_TOKEN", "")
+    access_token = _resolve_secret("salesforce")
 
     if not instance_url or not access_token:
         logger.error(
@@ -196,7 +209,7 @@ def seed_servicenow(state: SeedState, dry_run: bool = False) -> int:
     Returns: count of incidents created.
     """
     sn_url = os.getenv("SERVICENOW_URL", "").rstrip("/")
-    token  = os.getenv("SERVICENOW_TOKEN", "")
+    token  = _resolve_secret("servicenow")
 
     if not sn_url:
         logger.error(
@@ -268,7 +281,7 @@ def seed_jira(state: SeedState, dry_run: bool = False) -> int:
     Returns: count of issues created.
     """
     jira_url     = os.getenv("JIRA_URL", "").rstrip("/")
-    token        = os.getenv("JIRA_TOKEN", "")
+    token        = _resolve_secret("jira")
     project_key  = os.getenv("JIRA_PROJECT_KEY", "CRM")
 
     if not jira_url or not token:
@@ -340,7 +353,7 @@ def rollback(state: SeedState) -> None:
     # Salesforce rollback
     if state.sf_case_ids:
         instance_url = os.getenv("SF_INSTANCE_URL", "").rstrip("/")
-        access_token = os.getenv("SF_ACCESS_TOKEN", "")
+        access_token = _resolve_secret("salesforce")
         if instance_url and access_token:
             try:
                 import requests
@@ -364,7 +377,7 @@ def rollback(state: SeedState) -> None:
     # ServiceNow rollback
     if state.sn_incident_sys_ids:
         sn_url = os.getenv("SERVICENOW_URL", "").rstrip("/")
-        token = os.getenv("SERVICENOW_TOKEN", "")
+        token = _resolve_secret("servicenow")
         if sn_url and token:
             try:
                 import requests
@@ -389,7 +402,7 @@ def rollback(state: SeedState) -> None:
     # Jira rollback
     if state.jira_issue_keys:
         jira_url = os.getenv("JIRA_URL", "").rstrip("/")
-        token = os.getenv("JIRA_TOKEN", "")
+        token = _resolve_secret("jira")
         if jira_url and token:
             try:
                 import requests

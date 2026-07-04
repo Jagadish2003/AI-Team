@@ -99,8 +99,25 @@ class ConnectorHealth:
 
 
 # ---------------------------------------------------------------------------
-# Sprint 5 health check functions (unchanged)
+# Sprint 5 health check functions
 # ---------------------------------------------------------------------------
+
+
+def _resolve_live_credential(connector_id: str) -> dict:
+    """Resolve ``{url, token}`` for a connector's health check.
+
+    The token comes from the per-run credential context (DB-sourced vault token)
+    first, else the per-org vault via the single credential path
+    (``get_connector_credentials``) — never a process-global env credential
+    (R17-D3 Addendum A, AC8/AC13). Returns ``{}`` when the connector is not
+    configured for the org; never raises. Instance URLs are resolved by each
+    caller (record ``base_url`` or the connector's ``*_URL`` env), since a URL is
+    instance configuration, not a credential.
+    """
+    from discovery.ingest import get_live_connector, resolve_vault_connector
+
+    return get_live_connector(connector_id) or resolve_vault_connector(connector_id) or {}
+
 
 def check_servicenow() -> ConnectorHealth:
     """
@@ -113,8 +130,9 @@ def check_servicenow() -> ConnectorHealth:
     Health endpoint: GET /api/now/table/incident?sysparm_limit=1
     Returns ConnectorHealth with status "live", "fixture", or "error".
     """
-    sn_url   = os.getenv("SERVICENOW_URL", "").rstrip("/")
-    sn_token = os.getenv("SERVICENOW_TOKEN", "")
+    cred = _resolve_live_credential("servicenow")
+    sn_url   = (cred.get("url") or os.getenv("SERVICENOW_URL", "")).rstrip("/")
+    sn_token = cred.get("token") or ""
 
     if not sn_url:
         return ConnectorHealth(
@@ -208,8 +226,9 @@ def check_jira() -> ConnectorHealth:
     Health endpoint: GET /rest/api/3/myself
     Returns ConnectorHealth with status "live", "fixture", or "error".
     """
-    jira_url   = os.getenv("JIRA_URL", "").rstrip("/")
-    jira_token = os.getenv("JIRA_TOKEN", "")
+    cred = _resolve_live_credential("jira")
+    jira_url   = (cred.get("url") or os.getenv("JIRA_URL", "")).rstrip("/")
+    jira_token = cred.get("token") or ""
 
     if not jira_url:
         return ConnectorHealth(
@@ -306,8 +325,9 @@ def check_ncino() -> ConnectorHealth:
     Health endpoint: GET /services/data/v59.0/sobjects/LLC_BI__Loan__c/
     Returns ConnectorHealth with status "live", "fixture", or "error".
     """
-    sf_url   = os.getenv("SF_INSTANCE_URL", "").rstrip("/")
-    sf_token = os.getenv("SF_ACCESS_TOKEN", "")
+    cred = _resolve_live_credential("salesforce")
+    sf_url   = (cred.get("url") or os.getenv("SF_INSTANCE_URL", "")).rstrip("/")
+    sf_token = cred.get("token") or ""
 
     if not sf_url:
         return ConnectorHealth(
@@ -438,8 +458,9 @@ def check_strs_benefits() -> ConnectorHealth:
 
     Returns ConnectorHealth with status "live", "fixture", or "error".
     """
-    sf_url   = os.getenv("SF_INSTANCE_URL", "").rstrip("/")
-    sf_token = os.getenv("SF_ACCESS_TOKEN", "")
+    cred = _resolve_live_credential("salesforce")
+    sf_url   = (cred.get("url") or os.getenv("SF_INSTANCE_URL", "")).rstrip("/")
+    sf_token = cred.get("token") or ""
 
     if not sf_url:
         return ConnectorHealth(
