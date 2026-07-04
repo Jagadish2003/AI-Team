@@ -24,6 +24,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
+from . import license_limits
 from .license_runtime import (
     get_current_license_status,
     persist_validated_status,
@@ -40,6 +41,7 @@ logger = logging.getLogger(__name__)
 LICENSE_STATUS_PATH = "/api/license"
 LICENSE_UPDATE_PATH = "/api/license/update-key"
 LICENSE_BANNER_PATH = "/api/license/banner"
+LICENSE_LIMITS_PATH = "/api/license/limits"
 
 router = APIRouter(tags=["license"])
 
@@ -81,6 +83,28 @@ class LicenseBannerResponse(BaseModel):
     expires_at: Optional[str] = None
     reason: Optional[str] = None
     grace_days_remaining: Optional[int] = None
+
+
+class LicenseLimitsResponse(BaseModel):
+    """R17-D4 Addendum A / T10 (AT-505) — Integration-Hub license-limit state.
+
+    Systems used vs systems licensed, so the Integration Hub can display current
+    usage against the entitlement (AC14). Both counts come from the same
+    ``license_limits`` helpers the connect-time gate (T9) enforces with, so the
+    number the customer sees is exactly the number that is enforced — the "one
+    connected entity = one system" pricing definition (Addendum A §1).
+
+    ``systemsLicensed`` is ``null`` for an unlimited license (``max_systems`` null
+    or absent — including pre-addendum keys, and the no-license / invalid states,
+    per AC13), in which case ``unlimited`` is ``true`` and ``canConnectMore`` is
+    always ``true``. ``canConnectMore`` is the aggregate "is there headroom" signal
+    for the hub; a per-connector reconnect of an already-connected system is always
+    allowed regardless (forward-only) and is decided by the connect-time gate."""
+
+    systemsUsed: int
+    systemsLicensed: Optional[int] = None  # null => unlimited license
+    unlimited: bool
+    canConnectMore: bool
 
 
 class UpdateKeyRequest(BaseModel):
@@ -142,6 +166,23 @@ def get_license_banner() -> LicenseBannerResponse:
         reason=result.get("reason"),
         grace_days_remaining=grace_days_remaining,
     )
+
+
+@router.get(
+    LICENSE_LIMITS_PATH,
+    response_model=LicenseLimitsResponse,
+    dependencies=[Depends(require_auth), Depends(require_role("viewer"))],
+)
+def get_license_limits() -> LicenseLimitsResponse:
+    """R17-D4 Addendum A / T10: systems used vs systems licensed for the org.
+
+    Viewer+ (matching ``GET /api/connectors``) so every role that can see the
+    Integration Hub can see its usage against the entitlement — not Owner-gated
+    like the full status route. Side-effect-free. The org is resolved from the
+    tenancy context; the counts are the same ones the connect-time gate enforces,
+    so the shown count matches the enforced count (AC14)."""
+    state = license_limits.get_limit_state(get_current_org_id())
+    return LicenseLimitsResponse(**state)
 
 
 @router.post(

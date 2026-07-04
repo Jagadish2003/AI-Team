@@ -102,6 +102,44 @@ def count_connected_systems(org_id: str) -> int:
     return sum(1 for c in connectors if c.get("status") == CONNECTED_STATUS)
 
 
+def _build_limit_state(used: int, max_systems: Optional[int]) -> dict:
+    """Pure derivation of the Integration-Hub limit state from its two inputs.
+
+    Split out from :func:`get_limit_state` so the used-vs-licensed maths (and the
+    unlimited / at-limit derivation) is unit-testable without a DB or a license.
+
+    ``max_systems`` of ``None`` means unlimited, so ``systemsLicensed`` is ``None``
+    and ``canConnectMore`` is always ``True``. Otherwise ``canConnectMore`` mirrors
+    the aggregate half of ``can_connect_new_system`` (``used < max_systems``) — it
+    is the hub-wide "is there headroom" signal, NOT a per-connector verdict: a
+    reconnect of an already-connected system is always allowed regardless
+    (forward-only), which the connect-time gate handles per connector.
+    """
+    unlimited = max_systems is None
+    return {
+        "systemsUsed": used,
+        "systemsLicensed": max_systems,  # None => unlimited license
+        "unlimited": unlimited,
+        "canConnectMore": unlimited or used < max_systems,
+    }
+
+
+def get_limit_state(org_id: str) -> dict:
+    """The org's Integration-Hub license-limit state — systems used vs licensed.
+
+    R17-D4 Addendum A / T10 (AT-505): exposes current usage against the
+    entitlement so the Integration Hub can show it (AC14). Both numbers come from
+    the SAME helpers the connect-time gate enforces with —
+    :func:`count_connected_systems` and :func:`get_max_systems` — so the count the
+    customer sees is exactly the count that is enforced (Addendum A §1 / AC14).
+
+    Returns ``{systemsUsed, systemsLicensed, unlimited, canConnectMore}`` where
+    ``systemsLicensed``/``unlimited`` reflect ``max_systems`` (``None`` => unlimited,
+    including pre-addendum keys and no-license/invalid states, per AC13).
+    """
+    return _build_limit_state(count_connected_systems(org_id), get_max_systems(org_id))
+
+
 def _is_connected(org_id: str, connector_id: str) -> bool:
     """Whether this specific connector is already connected for the org.
 
