@@ -1,5 +1,13 @@
 # AUTH_SETUP.md — Obtaining Salesforce Credentials for SF-3.1
 
+> **DEPRECATED — do not use for a deployed AgentIQ instance (R17-D3 Addendum A, T13 / AC12).**
+> Per-client connector credentials no longer go into `backend/.env` or the process
+> environment. Connect Salesforce (and every other connector) per org through the
+> **Integration Hub** — OAuth Connect, or the static-credential form — which stores
+> the credential Fernet-encrypted in the per-org vault. `SF_INSTANCE_URL`/
+> `SF_ACCESS_TOKEN` remain readable only as a CLI/standalone fallback for running
+> discovery scripts outside the app; they must never be set on a shared instance.
+
 SF-3.1 live mode requires two environment variables:
 
 ```bash
