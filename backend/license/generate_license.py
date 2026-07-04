@@ -53,15 +53,22 @@ def build_payload(
     term_months: int,
     grace_days: int = 14,
     *,
+    max_systems: int | None = None,
     today: datetime.date | None = None,
 ) -> dict:
     """Assemble the full signed payload.
 
     ``issued_at`` is today and ``expires_at`` is today + term_months*30 days, so
     the term boundary is baked into the signed payload (the customer cannot move
-    it without breaking the signature). ``limits`` are reserved (null) in v1 —
-    present from day one so seat/pack limits can be enforced later without
-    changing the key format.
+    it without breaking the signature).
+
+    ``limits`` were reserved (null) in v1 — present from day one so seat/pack
+    limits could be enforced later without changing the key format. R17-D4
+    Addendum A (Scoped Activation) activates ``limits.max_systems``: the number
+    of systems (connected Integration-Hub entities) the deployment may connect.
+    It stays ``None`` by default so keys issued before the addendum remain valid
+    and unlimited (AC13) — the enforcement is opt-in per key, and no key-format
+    change is involved.
     """
     issued = today or datetime.date.today()
     expires = issued + datetime.timedelta(days=term_months * 30)
@@ -72,7 +79,11 @@ def build_payload(
         "expires_at": expires.isoformat(),
         "term_months": term_months,
         "grace_days": grace_days,
-        "limits": {"max_workspaces": None, "enabled_packs": None},
+        "limits": {
+            "max_systems": max_systems,
+            "max_workspaces": None,
+            "enabled_packs": None,
+        },
     }
 
 
@@ -111,9 +122,12 @@ def generate(
     term_months: int,
     private_key_pem_path: str,
     grace_days: int = 14,
+    max_systems: int | None = None,
 ) -> str:
     """End-to-end: build payload, load the private key, return the signed key."""
-    payload = build_payload(customer, license_id, term_months, grace_days)
+    payload = build_payload(
+        customer, license_id, term_months, grace_days, max_systems=max_systems
+    )
     private_key = load_private_key(private_key_pem_path)
     return sign_payload(payload, private_key)
 
@@ -126,6 +140,15 @@ def main(argv=None) -> int:
     parser.add_argument("--license-id", required=True)
     parser.add_argument("--term-months", type=int, required=True, choices=ALLOWED_TERMS)
     parser.add_argument("--grace-days", type=int, default=14)
+    parser.add_argument(
+        "--max-systems",
+        type=int,
+        default=None,
+        help=(
+            "R17-D4 Addendum A: number of systems (connected Integration-Hub "
+            "entities) the deployment may connect. Omit for an unlimited license."
+        ),
+    )
     parser.add_argument(
         "--private-key",
         default=DEFAULT_PRIVATE_KEY,
@@ -148,6 +171,7 @@ def main(argv=None) -> int:
             args.term_months,
             args.private_key,
             args.grace_days,
+            args.max_systems,
         )
     except (OSError, RuntimeError) as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
