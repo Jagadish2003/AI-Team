@@ -55,6 +55,37 @@ credential can never be per-org — two orgs on one instance would share it.
 `backend/tests/unit/test_env_no_per_client_credentials.py` enforces this for
 the tracked templates.
 
+### Migrating an existing deployment (R17-D3 Addendum A, T15 / AC14)
+
+A pre-Addendum install that already has working per-client credentials in
+`backend/.env` uses a **one-time, explicit** admin command to move them into the
+per-org vault before those vars are removed. It is never run automatically —
+explicit operator action is required so you always know where the credentials
+now live.
+
+```bash
+cd backend
+# 0. Ensure the schema carries the T10 static-credential columns first:
+alembic upgrade head            # or apply database/provision/provision.sql
+# 1. Preview what would migrate (writes nothing):
+python scripts/migrate_env_credentials_to_vault.py --dry-run
+# 2. Migrate the legacy env credentials into the vault for the instance's org:
+python scripts/migrate_env_credentials_to_vault.py --org <org_id>
+```
+
+- Reads whatever legacy vars are set (`SF_*`, `JIRA_*`, `SERVICENOW_*`,
+  `NCINO_*`, `STRS_*`) and stores each as a Fernet-encrypted **static
+  credential** under `--org` (default: the instance's default org). ServiceNow
+  migrates its OAuth bearer token if set, otherwise its user/password.
+- **Exactly once:** a connector already present in the vault is **skipped** —
+  re-running never silently clobbers a credential connected since the first run.
+  Use `--force` only to deliberately overwrite.
+- Requires `CREDENTIAL_VAULT_KEY`; it preflights the vault key and the schema and
+  exits with a clear message if either is missing. It never prints a secret.
+- On success it prints the exact list of env vars to delete from `backend/.env`.
+  Remove them, then reconnect Salesforce via OAuth Connect if you want its token
+  to auto-refresh (the migrated static token works but does not refresh).
+
 ## OAuth Connector Secrets
 
 Each connector's client secret is resolved from the environment at runtime via `secret_key`
