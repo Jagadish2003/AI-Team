@@ -106,6 +106,13 @@ vi.mock('../context/AuthContext', () => ({
   useAuthOptional: () => ({ user: { org_name: 'Acme Bank' } }),
 }));
 
+// R17-D4 Addendum A §2 / T13 — the report carries the license-resolved org name
+// (useOrgName, from T12's org-name endpoint), NOT the ad-hoc auth org_name, so the
+// PDF identifies the correct organisation.
+vi.mock('../context/LicenseContext', () => ({
+  useOrgName: () => 'Teachers Credit Union',
+}));
+
 import ExecutiveReportPage from '../pages/ExecutiveReportPage';
 
 function renderPage() {
@@ -157,7 +164,8 @@ describe('ExecutiveReportPage — download controls', () => {
     expect(data.confidence).toBe('High');
     expect(data.sourcesLabel).toBe('3 Connected');
     expect(data.summary).toMatch(/LLM generated executive summary for the board/i);
-    expect(data.orgName).toBe('Acme Bank');
+    // Org name comes from the license-resolved name (useOrgName), not auth.
+    expect(data.orgName).toBe('Teachers Credit Union');
     expect(data.runId).toBe('run_x');
     expect(data.opportunities).toHaveLength(2);
     expect(data.quickWins.map((o: OpportunityCandidate) => o.title)).toContain('Checklist Bottleneck');

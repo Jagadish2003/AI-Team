@@ -19,7 +19,7 @@ import ErrorPanel from "../components/common/ErrorPanel";
 import Button from "../components/common/Button";
 import { useToast } from "../components/common/Toast";
 import { useAuth } from "../context/AuthContext";
-import { useLicense } from "../context/LicenseContext";
+import { useLicense, useOrgName } from "../context/LicenseContext";
 import { ApiError } from "../lib/apiClient";
 import { fetchLicenseStatus, updateLicenseKey } from "../api/licenseApi";
 import type { LicenseStatusResponse, LicenseStatusValue } from "../types/license";
@@ -69,6 +69,10 @@ export default function LicensePage() {
   // Shared banner status (T9). Refreshed after a successful key update so the
   // global expiry banner clears immediately, without a page reload.
   const { refresh: refreshBanner } = useLicense();
+  // R17-D4 Addendum A §2 / T13 — the dynamic organisation name (T12), resolved
+  // once and shared; refreshed alongside the banner after a key update so the
+  // panel reflects a newly pasted key's org_name immediately (AC15).
+  const orgName = useOrgName();
 
   const [status, setStatus] = useState<LicenseStatusResponse | null>(null);
   const [loading, setLoading] = useState(true);
@@ -145,7 +149,10 @@ export default function LicensePage() {
               <h2 className="text-sm font-semibold text-text">Status</h2>
               <StatusBadge status={status?.status ?? "invalid"} />
             </div>
-            <dl className="grid grid-cols-2 gap-4 sm:grid-cols-4">
+            <dl className="grid grid-cols-2 gap-4 sm:grid-cols-5">
+              {/* Organisation display name resolved from the license (Addendum A
+                  §2 / T12). The neutral default shows before a key is installed. */}
+              <Detail label="Organisation" value={orgName} />
               <Detail label="Issued to" value={status?.customer} />
               <Detail
                 label="Term"
