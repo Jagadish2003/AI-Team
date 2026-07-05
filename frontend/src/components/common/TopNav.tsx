@@ -101,28 +101,40 @@ export default function TopNav() {
 
   return (
     <div className="sticky top-0 z-40 h-[70px] w-full border-b border-border bg-bgheader shadow-[0_2px_8px_rgba(0,0,0,0.15)] backdrop-blur">
-      <div className="flex h-full w-full items-center gap-4 px-5">
-        <div className="flex shrink-0 items-center">
+      <div className="flex h-full w-full items-center gap-2 px-4 2xl:gap-3">
+        {/* Logo + workspace label. This group is flex-1 min-w-0: it absorbs the
+            row's slack (pushing the nav to the right, preserving the original
+            brand-left / nav-right layout) AND, when space is tight, it is the
+            element that shrinks — so a long org name ellipsizes instead of
+            stealing width the nav needs. The logo itself never shrinks. */}
+        <div className="flex min-w-0 flex-1 items-center">
           <img
             src={theme === "dark" ? "/Logo-Dark.svg" : "/Logo-Light.svg"}
             alt="AgentIQ Logo"
-            className="h-[43px] w-auto"
+            className="h-[43px] w-auto shrink-0"
           />
           {/* Workspace label — the organisation name resolved from the license
-              (R17-D4 Addendum A §2 / T13). Hidden on narrow viewports so the nav
-              keeps room. */}
+              (R17-D4 Addendum A §2 / T13). min-w-0 + truncate lets an arbitrarily
+              long org name ellipsize within the flex-1 group (full name on hover
+              via title). No max-w: the group's width bounds it, so on wide
+              viewports the whole name shows and on narrow ones it truncates. */}
           <span
             data-testid="org-name-label"
             title={orgName}
-            className="ml-3 hidden max-w-[16rem] truncate border-l border-border pl-3 text-sm font-semibold text-navtext md:inline-block"
+            className="ml-3 hidden min-w-0 truncate border-l border-border pl-3 text-sm font-semibold text-navtext md:inline-block"
           >
             {orgName}
           </span>
         </div>
 
+        {/* Primary nav. NOT flex-1: it keeps its natural content width so all
+            items are always fully visible — the flex-1 brand group above yields
+            space instead. min-w-0 + overflow-x-auto is a last-resort scroll for
+            viewports too narrow to fit every item (default scroll position keeps
+            the first item, Integration Hub, visible). */}
         <nav
           aria-label="Primary"
-          className="hidden flex-1 items-center justify-end gap-1.5 overflow-x-auto px-2 lg:flex"
+          className="hidden min-w-0 shrink items-center gap-1 overflow-x-auto px-1 lg:flex"
           style={{ scrollbarWidth: "none" }}
         >
           {items.map((i) => {
@@ -134,15 +146,11 @@ export default function TopNav() {
                 key={i.to}
                 to={to}
                 aria-current={isActive ? "page" : undefined}
-                className={`shrink-0 whitespace-nowrap rounded-full px-3 pb-1.5 pt-1 font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-accent/50 ${
+                className={`shrink-0 whitespace-nowrap rounded-full px-1.5 pb-1.5 pt-1 text-[12px] font-medium leading-[16px] transition-colors focus:outline-none focus:ring-2 focus:ring-accent/50 2xl:px-2 2xl:text-[13px] 2xl:leading-[18px] ${
                   isActive
                     ? "border-t-2 border-navborder bg-gradient-to-b from-activenav text-navtext"
                     : "text-navtext/70 hover:bg-navhover hover:text-navtext"
                 }`}
-                style={{
-                  fontSize: "13px",
-                  lineHeight: "18px",
-                }}
               >
                 {i.label}
                 {i.sfOnly && !salesforceConnected && (
@@ -157,7 +165,7 @@ export default function TopNav() {
           })}
         </nav>
 
-        <div className="ml-auto flex shrink-0 items-center gap-3 lg:ml-0">
+        <div className="flex shrink-0 items-center gap-3">
           <button
             type="button"
             title="Menu"
