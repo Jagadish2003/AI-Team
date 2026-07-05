@@ -3,9 +3,13 @@ import { ArrowLeft, ShieldCheck } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import PageShell from "../components/common/PageShell";
 import WorkspaceMembersPanel from "../components/settings/WorkspaceMembersPanel";
+import { useOrgName } from "../context/LicenseContext";
 
 export default function SettingsPage() {
   const navigate = useNavigate();
+  // R17-D4 Addendum A §2 / T13 — organisation display name resolved from the
+  // license (T12), labelling this workspace (neutral default before a key exists).
+  const orgName = useOrgName();
 
   function handleBack() {
     if (window.history.length > 1) {
@@ -35,7 +39,13 @@ export default function SettingsPage() {
           <ShieldCheck size={18} />
         </span>
         <div className="min-w-0">
-          <div className="text-sm font-semibold text-text">Workspace administration</div>
+          <div className="text-sm font-semibold text-text">
+            Workspace administration
+            <span className="ml-2 font-normal text-muted">·</span>{" "}
+            <span data-testid="settings-org-name" className="font-semibold text-accent">
+              {orgName}
+            </span>
+          </div>
           <p className="mt-1 max-w-3xl text-xs leading-relaxed text-muted">
             Owners can invite teammates and remove workspace access. Analysts and viewers keep their existing role-based permissions.
           </p>

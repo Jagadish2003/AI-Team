@@ -46,6 +46,7 @@ from app.auth import (
     revoke_token,
     store_token,
 )
+from app import license_limits
 from app.auth.configs import CONNECTOR_AUTH_CONFIGS
 from app.auth.oauth_state import decode_state, encode_state
 from app.auth.secrets import MissingSecretError
@@ -414,6 +415,25 @@ def register_connector_auth_routes(app: FastAPI) -> None:
                 status_code=302,
             )
 
+        # R17-D4 Addendum A / T9: authoritative connection-time limit check. The
+        # get_auth_url gate stops most over-limit flows up front, but re-check
+        # here (the real connection point) before exchanging/storing a token so a
+        # flow that slipped past — or a limit reached mid-consent — never adds a
+        # system beyond the licensed max_systems. Forward-only: an already
+        # connected connector re-authorising is not a new system and passes.
+        # Redirect (don't raise) — the browser is completing a provider redirect.
+        if not license_limits.can_connect_new_system(org_id, connector_id):
+            logger.warning(
+                "OAuth callback for connector %s blocked: org %s is at its "
+                "licensed max_systems limit — not connecting a new system",
+                connector_id,
+                org_id,
+            )
+            return RedirectResponse(
+                OAUTH_ERROR_REDIRECT.format(error_code="system_limit"),
+                status_code=302,
+            )
+
         try:
             token_response = await exchange_code(config, code, code_verifier=code_verifier)
             store_token(org_id, connector_id, token_response)
@@ -505,6 +525,13 @@ def register_connector_auth_routes(app: FastAPI) -> None:
                 status_code=400,
                 detail="Connector does not use authorization_code flow",
             )
+
+        # R17-D4 Addendum A / T9: block STARTING an OAuth flow for a NEW system
+        # once the org is at its licensed max_systems, so the user is stopped
+        # before the provider consent step rather than after exchanging a token.
+        # Re-authorising an already-connected connector is not a new system and
+        # is never blocked (forward-only). Raises HTTP 402 at the limit.
+        license_limits.enforce_can_connect(get_current_org_id(), connector_id)
 
         nonce = _secrets_mod.token_urlsafe(32)
         # PKCE (RFC 7636): bind a per-request verifier to the state nonce and

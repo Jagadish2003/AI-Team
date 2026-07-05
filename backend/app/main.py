@@ -30,6 +30,7 @@ from .db import (
     org_connector_get,
     org_connector_set,
 )
+from . import license_limits
 from .normalization_enrichment import enrich_ambiguous_mappings
 from .opportunity_display import (
     with_display,
@@ -392,6 +393,12 @@ def connect_connector(connector_id: str, body: Dict[str, Any]) -> Dict[str, Any]
     if not c:
         raise HTTPException(404, "connector not found")
     status = body.get("status", "connected")
+    # R17-D4 Addendum A / T9: enforce limits.max_systems at connection time.
+    # Only a transition TO "connected" adds a system; forward-only, so reconnects
+    # of an already-connected connector and any non-connect status change (e.g.
+    # disconnect) are never blocked. Raises HTTP 402 when at the licensed limit.
+    if status == license_limits.CONNECTED_STATUS:
+        license_limits.enforce_can_connect(org_id, connector_id)
     c["status"] = status
     c["lastSynced"] = c.get("lastSynced", "—")
     # Write to THIS org's namespaced row — never the shared catalog.

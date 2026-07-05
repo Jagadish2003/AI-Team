@@ -19,10 +19,12 @@ import { render, screen, waitFor } from "@testing-library/react";
 import { vi, describe, it, expect, beforeEach } from "vitest";
 import type { LicenseBannerResponse } from "../types/license";
 
-const h = vi.hoisted(() => ({ mockFetch: vi.fn() }));
+const h = vi.hoisted(() => ({ mockFetch: vi.fn(), mockOrgName: vi.fn() }));
 
 vi.mock("../api/licenseApi", () => ({
   fetchLicenseBanner: (...a: unknown[]) => h.mockFetch(...a),
+  // T13: the shared LicenseProvider now also reads the org name on refresh.
+  fetchLicenseOrgName: (...a: unknown[]) => h.mockOrgName(...a),
 }));
 
 import { LicenseProvider } from "../context/LicenseContext";
@@ -43,7 +45,11 @@ const make = (over: Partial<LicenseBannerResponse>): LicenseBannerResponse => ({
 });
 
 describe("LicenseBanner (LIC-1 / T9)", () => {
-  beforeEach(() => h.mockFetch.mockReset());
+  beforeEach(() => {
+    h.mockFetch.mockReset();
+    h.mockOrgName.mockReset();
+    h.mockOrgName.mockResolvedValue({ orgName: "Your Organisation" });
+  });
 
   it("renders the grace message with a runs-blocked countdown", async () => {
     h.mockFetch.mockResolvedValue(

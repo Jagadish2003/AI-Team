@@ -12,11 +12,19 @@
 import { apiGet, apiPost } from "../lib/apiClient";
 import type {
   LicenseBannerResponse,
+  LicenseLimitsResponse,
+  LicenseOrgNameResponse,
   LicenseStatusResponse,
   UpdateLicenseKeyRequest,
 } from "../types/license";
 
-export type { LicenseBannerResponse, LicenseStatusResponse, UpdateLicenseKeyRequest };
+export type {
+  LicenseBannerResponse,
+  LicenseLimitsResponse,
+  LicenseOrgNameResponse,
+  LicenseStatusResponse,
+  UpdateLicenseKeyRequest,
+};
 
 /** GET /api/license — full current license status. Owner-only (admin page). */
 export async function fetchLicenseStatus(): Promise<LicenseStatusResponse> {
@@ -30,6 +38,28 @@ export async function fetchLicenseStatus(): Promise<LicenseStatusResponse> {
  */
 export async function fetchLicenseBanner(): Promise<LicenseBannerResponse> {
   return apiGet<LicenseBannerResponse>("/api/license/banner");
+}
+
+/**
+ * GET /api/license/limits — Integration-Hub license-limit state (T10 / AT-505):
+ * systems used vs systems licensed. Readable by any hub viewer (viewer+), so the
+ * hub can show usage against the entitlement (AC14). The counts match what the
+ * connect-time gate enforces.
+ */
+export async function fetchLicenseLimits(): Promise<LicenseLimitsResponse> {
+  return apiGet<LicenseLimitsResponse>("/api/license/limits");
+}
+
+/**
+ * GET /api/license/org-name — the dynamic organisation display name (T12 / §2).
+ * Readable by any authenticated user, so every surface (header, workspace labels,
+ * reports, License page) can consume this ONE resolved name instead of deriving
+ * its own (§5 "One name, resolved once"). Returns a neutral default before a key
+ * is installed (AC16) and updates immediately when a key with a different
+ * org_name is pasted (AC15).
+ */
+export async function fetchLicenseOrgName(): Promise<LicenseOrgNameResponse> {
+  return apiGet<LicenseOrgNameResponse>("/api/license/org-name");
 }
 
 /**

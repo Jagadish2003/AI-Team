@@ -1,7 +1,39 @@
 # AgentIQ — API_CONTRACT.md (EPIC E0)
-Version: v1.7
-Date: 2026-06-22
+Version: v1.9
+Date: 2026-07-04
 
+> v1.9 — R17-D4 Addendum A / T12 (§2 "Dynamic Organisation Name"): added the
+> organisation display-name endpoint `GET /api/license/org-name`, returning the
+> `LicenseOrgNameResponse` shape: `orgName` (`string`) — the single resolved
+> organisation display name every UI surface consumes (header, workspace labels,
+> reports, License page). It is read from the org's live-validated license
+> payload's `org_name` (added to the LIC-1 payload this task, defaulting to
+> `customer`; the resolver falls back to `customer` for pre-addendum keys that
+> omit it) by one server-side resolver — "one name, resolved once" (§5) — so no
+> surface carries its own naming logic. Before a key is installed, or for any
+> non-verifiable license state, `orgName` is a neutral default, never a stale or
+> placeholder customer name (AC16); because the read is live and side-effect-free,
+> pasting a key with a different `org_name` updates it immediately with no restart
+> (AC15). Requires only authentication (any role, like `GET /api/license/banner`)
+> so the name renders on every page for every role; side-effect-free. Additive —
+> no previously documented shape changed, and the license key format is unchanged
+> (the `org_name` field was carried within the already-reserved payload). Mirrors
+> `src/types/license.ts`.
+>
+> v1.8 — R17-D4 Addendum A / T10 (AT-505): added the Integration-Hub
+> license-limit endpoint `GET /api/license/limits`, returning the
+> `LicenseLimitsResponse` shape: `systemsUsed` (`int` — connected Integration-Hub
+> entities for the org, "one connected entity = one system"), `systemsLicensed`
+> (`int | null` — the licensed `max_systems`; `null` for an unlimited/pre-addendum
+> license), `unlimited` (`bool` — true when no numeric cap applies), and
+> `canConnectMore` (`bool` — aggregate headroom: unlimited, or `systemsUsed <
+> systemsLicensed`). The two counts are computed by the same `license_limits`
+> helpers the connect-time gate (T9) enforces with, so the count the hub shows
+> matches the count that is enforced (Addendum A §1 / AC14). Requires only
+> authentication at viewer+ (matching `GET /api/connectors`) so every role that
+> sees the Integration Hub sees its usage; side-effect-free. Additive — no
+> previously documented shape changed. Mirrors `src/types/license.ts`.
+>
 > v1.7 — LIC-1 (PR review): extended `LicenseBannerResponse`
 > (`GET /api/license/banner`) with the optional `grace_days_remaining`
 > (`int | null`) — days left before a `grace` license crosses into read-only, so

@@ -49,11 +49,14 @@ import LoadingPanel from '../components/common/LoadingPanel';
 import ErrorPanel from '../components/common/ErrorPanel';
 import ConnectorGroupSection, { GroupConfig } from '../components/integrations/ConnectorGroupSection';
 import RightPanel from '../components/integrations/RightPanel';
+import LicenseLimitBanner, { systemLimitMessage } from '../components/integrations/LicenseLimitBanner';
 import { useToast } from '../components/common/Toast';
 import { useConnectorContext } from '../context/ConnectorContext';
 import { isDiscoveryReadyConnector } from '../utils/sourceReadiness';
 import { computeConfidence } from '../utils/confidence';
 import { Connector } from '../types/connector';
+import { fetchLicenseLimits } from '../api/licenseApi';
+import type { LicenseLimitsResponse } from '../types/license';
 
 // ── Category → system ID membership ─────────────────────────────────────────
 // Mirrors SYSTEM_CATEGORY in routes_workspace_catalog.py exactly.
@@ -165,6 +168,31 @@ export default function IntegrationHubPage() {
     [recommended, standard],
   );
 
+  // R17-D4 Addendum A / T11 (AT-506): license-limit state (systems used /
+  // licensed) from T10's GET /api/license/limits. Re-fetched whenever the
+  // connector set changes — i.e. after a connect/disconnect/configure round-trip
+  // — so the count and the connect gate reflect a newly installed key or a fresh
+  // connection with no restart (AC11). Fail-open: a fetch error leaves it null so
+  // the UI never wrongly blocks — the backend gate (T9) remains the source of
+  // truth for enforcement regardless of what the hub shows.
+  const [licenseLimits, setLicenseLimits] = useState<LicenseLimitsResponse | null>(null);
+  useEffect(() => {
+    let alive = true;
+    fetchLicenseLimits()
+      .then(l => { if (alive) setLicenseLimits(l); })
+      .catch(() => { if (alive) setLicenseLimits(null); });
+    return () => { alive = false; };
+  }, [allConnectors]);
+
+  // At/over the licensed cap → block NEW connections (forward-only; reconnecting
+  // an already-connected system is never blocked, handled per-tile via isConnected
+  // and enforced server-side). Unlimited / unknown (null) never blocks.
+  const atSystemLimit = licenseLimits ? !licenseLimits.canConnectMore : false;
+  const systemLimitMsg =
+    licenseLimits && licenseLimits.systemsLicensed != null
+      ? systemLimitMessage(licenseLimits.systemsLicensed)
+      : '';
+
   // OAuth result feedback (CS-2 / AT-327 T5).
   // OAuthCallbackPage navigates here after the provider round-trip with
   // location.state.justConnected (success) or location.state.oauthError
@@ -241,6 +269,14 @@ export default function IntegrationHubPage() {
   function handlePrimary(id: string) {
     const c = allConnectors.find(x => x.id === id);
     if (!c) return;
+    // Forward-only license gate (AC10): block only a NEW connection at the limit.
+    // Connecting an already-connected system (Configure/View/Reconnect) is never
+    // blocked. The tile's Connect button is already disabled in this state; this
+    // guard defends the handler and surfaces the clear message if it is reached.
+    if (atSystemLimit && c.status !== 'connected') {
+      push(systemLimitMsg || 'Your license limit has been reached. Contact CloudFulcrum to add more.', 'error');
+      return;
+    }
     if (c.status === 'connected' && !c.configured) {
       configureSync(id);
       push('Configuration complete. Data is now synced.');
@@ -290,6 +326,9 @@ export default function IntegrationHubPage() {
             {/* Groups column */}
             <div className="flex min-w-0 flex-col gap-4">
 
+              {/* R17-D4 Addendum A / T11: systems used vs licensed (AC14) */}
+              <LicenseLimitBanner limits={licenseLimits} />
+
               {/* Deep-link announcement for screen readers */}
               {highlightedCategory && (
                 <div aria-live="polite" className="sr-only">
@@ -319,6 +358,8 @@ export default function IntegrationHubPage() {
                     onPrimary={handlePrimary}
                     onReconnect={handleReconnect}
                     onAddSource={handleAddSource}
+                    connectBlocked={atSystemLimit}
+                    connectBlockMessage={systemLimitMsg}
                   />
                 </div>
               ))}
@@ -342,6 +383,11 @@ export default function IntegrationHubPage() {
                   if (startBarNext.status === 'connected') {
                     configureSync(startBarNext.id);
                     push('Configuration complete. Data is now synced.');
+                  } else if (atSystemLimit) {
+                    // Forward-only: the next-best source is not yet connected, so
+                    // it is a NEW system — blocked at the limit with the clear
+                    // message, consistent with the disabled tile Connect buttons.
+                    push(systemLimitMsg || 'Your license limit has been reached. Contact CloudFulcrum to add more.', 'error');
                   } else {
                     connectConnector(startBarNext.id);
                     push('Connected next best source.');

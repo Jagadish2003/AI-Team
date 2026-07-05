@@ -21,6 +21,7 @@ import type { LicenseStatusResponse } from "../types/license";
 const h = vi.hoisted(() => ({
   mockFetch: vi.fn(),
   mockBanner: vi.fn(),
+  mockOrgName: vi.fn(),
   mockUpdate: vi.fn(),
   mockPush: vi.fn(),
   role: { current: "owner" as "owner" | "analyst" | "viewer" },
@@ -29,6 +30,7 @@ const h = vi.hoisted(() => ({
 vi.mock("../api/licenseApi", () => ({
   fetchLicenseStatus: (...a: unknown[]) => h.mockFetch(...a),
   fetchLicenseBanner: (...a: unknown[]) => h.mockBanner(...a),
+  fetchLicenseOrgName: (...a: unknown[]) => h.mockOrgName(...a),
   updateLicenseKey: (...a: unknown[]) => h.mockUpdate(...a),
 }));
 
@@ -59,12 +61,16 @@ const VALID: LicenseStatusResponse = {
 };
 
 function renderPage() {
+  // Wrapped in the real LicenseProvider so the page's useOrgName() resolves the
+  // shared, license-derived name (T12's org-name endpoint) — the T13 source.
   return render(
     <MemoryRouter initialEntries={["/license"]}>
-      <Routes>
-        <Route path="/license" element={<LicensePage />} />
-        <Route path="/integration-hub" element={<div>integration hub</div>} />
-      </Routes>
+      <LicenseProvider>
+        <Routes>
+          <Route path="/license" element={<LicensePage />} />
+          <Route path="/integration-hub" element={<div>integration hub</div>} />
+        </Routes>
+      </LicenseProvider>
     </MemoryRouter>,
   );
 }
@@ -74,6 +80,7 @@ beforeEach(() => {
   h.role.current = "owner";
   h.mockFetch.mockResolvedValue(VALID);
   h.mockBanner.mockResolvedValue({ status: "valid", expires_at: "2027-06-18" });
+  h.mockOrgName.mockResolvedValue({ orgName: "Teachers Credit Union" });
   h.mockUpdate.mockResolvedValue(VALID);
 });
 
@@ -108,6 +115,19 @@ describe("status badge", () => {
     expect(screen.getByText("12 months")).toBeInTheDocument();
     expect(screen.getByText("2027-06-18")).toBeInTheDocument();
     expect(screen.getByText("200")).toBeInTheDocument();
+  });
+
+  it("renders the resolved organisation name from the license (Addendum A §2 / AC15)", async () => {
+    renderPage();
+    expect(await screen.findByText("Organisation")).toBeInTheDocument();
+    // Resolved via the shared org-name source (T12), not the issued-to customer.
+    expect(await screen.findByText("Teachers Credit Union")).toBeInTheDocument();
+  });
+
+  it("shows the neutral default org name when the name is unavailable (AC16)", async () => {
+    h.mockOrgName.mockRejectedValue(new Error("network"));
+    renderPage();
+    expect(await screen.findByText("Your Organisation")).toBeInTheDocument();
   });
 });
 

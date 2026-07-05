@@ -23,6 +23,52 @@ export interface UpdateLicenseKeyRequest {
 }
 
 /**
+ * R17-D4 Addendum A / T10 (AT-505) — Integration-Hub license-limit state
+ * (GET /api/license/limits). Systems used vs systems licensed, so the hub can
+ * show current usage against the entitlement (AC14). Readable by any hub viewer
+ * (viewer+), unlike the Owner-only full status above.
+ *
+ * The counts are the same ones the connect-time gate (T9) enforces, so the shown
+ * count matches the enforced count — the "one connected entity = one system"
+ * pricing definition.
+ */
+export interface LicenseLimitsResponse {
+  /** Connected Integration-Hub entities for the org (one connected entity = one system). */
+  systemsUsed: number;
+  /** Licensed max systems; null for an unlimited/pre-addendum license. */
+  systemsLicensed: number | null;
+  /** True when no numeric cap applies (systemsLicensed is null). */
+  unlimited: boolean;
+  /**
+   * Aggregate "is there headroom for a new system" signal (unlimited, or
+   * used < licensed). Not a per-connector verdict — reconnecting an already
+   * connected system is always allowed (forward-only), decided server-side.
+   */
+  canConnectMore: boolean;
+}
+
+/**
+ * R17-D4 Addendum A / T12 — dynamic organisation display name
+ * (GET /api/license/org-name, §2 "Dynamic Organisation Name").
+ *
+ * The single resolved display name shown across every UI surface (header,
+ * workspace labels, reports, License page) once a key is installed — read from
+ * the signed license payload's `org_name` server-side (falling back to
+ * `customer` for pre-addendum keys), so all surfaces consume ONE source instead
+ * of each deriving a name (§5 "One name, resolved once").
+ *
+ * Readable by any authenticated user (like the banner) so it renders on every
+ * page for every role. Before a key is installed — or for any non-verifiable
+ * license state — the backend returns a neutral default (never a stale or
+ * placeholder customer name, AC16); pasting a key with a different `org_name`
+ * updates it immediately with no restart (AC15).
+ */
+export interface LicenseOrgNameResponse {
+  /** Resolved organisation display name; a neutral default before a key is installed. */
+  orgName: string;
+}
+
+/**
  * Minimal license signal for the global expiry banner (T9 / GET /api/license/banner).
  * Readable by any authenticated user (not just Owner), so the banner shows for
  * every role — including analysts whose discovery runs are blocked (AC4/AC5).

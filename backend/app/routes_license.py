@@ -24,6 +24,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
+from . import license_limits
 from .license_runtime import (
     get_current_license_status,
     persist_validated_status,
@@ -31,6 +32,7 @@ from .license_runtime import (
 )
 from .licensing import LicenseStatus, validate_license
 from .middleware.tenancy import get_current_org_id
+from .org_display_name import resolve_org_display_name
 from .rbac import require_role
 from .security import require_auth
 from .telemetry import record_event
@@ -40,6 +42,8 @@ logger = logging.getLogger(__name__)
 LICENSE_STATUS_PATH = "/api/license"
 LICENSE_UPDATE_PATH = "/api/license/update-key"
 LICENSE_BANNER_PATH = "/api/license/banner"
+LICENSE_LIMITS_PATH = "/api/license/limits"
+LICENSE_ORG_NAME_PATH = "/api/license/org-name"
 
 router = APIRouter(tags=["license"])
 
@@ -81,6 +85,44 @@ class LicenseBannerResponse(BaseModel):
     expires_at: Optional[str] = None
     reason: Optional[str] = None
     grace_days_remaining: Optional[int] = None
+
+
+class LicenseLimitsResponse(BaseModel):
+    """R17-D4 Addendum A / T10 (AT-505) — Integration-Hub license-limit state.
+
+    Systems used vs systems licensed, so the Integration Hub can display current
+    usage against the entitlement (AC14). Both counts come from the same
+    ``license_limits`` helpers the connect-time gate (T9) enforces with, so the
+    number the customer sees is exactly the number that is enforced — the "one
+    connected entity = one system" pricing definition (Addendum A §1).
+
+    ``systemsLicensed`` is ``null`` for an unlimited license (``max_systems`` null
+    or absent — including pre-addendum keys, and the no-license / invalid states,
+    per AC13), in which case ``unlimited`` is ``true`` and ``canConnectMore`` is
+    always ``true``. ``canConnectMore`` is the aggregate "is there headroom" signal
+    for the hub; a per-connector reconnect of an already-connected system is always
+    allowed regardless (forward-only) and is decided by the connect-time gate."""
+
+    systemsUsed: int
+    systemsLicensed: Optional[int] = None  # null => unlimited license
+    unlimited: bool
+    canConnectMore: bool
+
+
+class LicenseOrgNameResponse(BaseModel):
+    """R17-D4 Addendum A / T12 (§2 "Dynamic Organisation Name") — the single
+    resolved organisation display name every UI surface consumes.
+
+    ``orgName`` is read from the org's live-validated license payload
+    (``org_name``, falling back to ``customer`` for pre-addendum keys) by the one
+    resolver in ``org_display_name`` — the "one name, resolved once" of §5, so the
+    header, workspace labels, reports, and License page all show the same name
+    without per-surface naming logic. Before a key is installed — or for any
+    non-verifiable state — it is a neutral default, never a stale or placeholder
+    customer name (AC16). A live, side-effect-free read, so pasting a key with a
+    different ``org_name`` updates it immediately with no restart (AC15)."""
+
+    orgName: str
 
 
 class UpdateKeyRequest(BaseModel):
@@ -142,6 +184,42 @@ def get_license_banner() -> LicenseBannerResponse:
         reason=result.get("reason"),
         grace_days_remaining=grace_days_remaining,
     )
+
+
+@router.get(
+    LICENSE_ORG_NAME_PATH,
+    response_model=LicenseOrgNameResponse,
+    dependencies=[Depends(require_auth)],
+)
+def get_license_org_name() -> LicenseOrgNameResponse:
+    """R17-D4 Addendum A / T12: the dynamic organisation display name (§2).
+
+    Auth-only (any role, like the banner) so the resolved name renders on every
+    page for every surface (header, workspace labels, reports, License page) — the
+    single source every UI surface consumes (§5 "One name, resolved once"), never
+    per-surface naming logic. The org is resolved from the tenancy context; the
+    name is read from that org's live-validated license by the one resolver in
+    ``org_display_name`` — a neutral default before a key is installed (AC16),
+    updating immediately when a new key is pasted (AC15). Side-effect-free.
+    """
+    return LicenseOrgNameResponse(orgName=resolve_org_display_name())
+
+
+@router.get(
+    LICENSE_LIMITS_PATH,
+    response_model=LicenseLimitsResponse,
+    dependencies=[Depends(require_auth), Depends(require_role("viewer"))],
+)
+def get_license_limits() -> LicenseLimitsResponse:
+    """R17-D4 Addendum A / T10: systems used vs systems licensed for the org.
+
+    Viewer+ (matching ``GET /api/connectors``) so every role that can see the
+    Integration Hub can see its usage against the entitlement — not Owner-gated
+    like the full status route. Side-effect-free. The org is resolved from the
+    tenancy context; the counts are the same ones the connect-time gate enforces,
+    so the shown count matches the enforced count (AC14)."""
+    state = license_limits.get_limit_state(get_current_org_id())
+    return LicenseLimitsResponse(**state)
 
 
 @router.post(

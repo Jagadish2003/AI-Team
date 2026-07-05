@@ -42,7 +42,64 @@ def test_build_payload_bakes_in_term_boundary():
     assert payload["grace_days"] == 14
     assert payload["issued_at"] == "2026-06-19"
     assert payload["expires_at"] == "2027-06-14"  # today + 12*30 days
-    assert payload["limits"] == {"max_workspaces": None, "enabled_packs": None}
+    # R17-D4 Addendum A: max_systems now reserved in limits, null (unlimited) by default.
+    assert payload["limits"] == {
+        "max_systems": None,
+        "max_workspaces": None,
+        "enabled_packs": None,
+    }
+
+
+def test_build_payload_carries_max_systems():
+    """R17-D4 Addendum A / T9: an explicit max_systems is baked into the payload."""
+    payload = build_payload("Teachers Credit Union", "tcu-2027-001", 12, 14, max_systems=6)
+    assert payload["limits"]["max_systems"] == 6
+
+
+def test_build_payload_defaults_org_name_to_customer():
+    """R17-D4 Addendum A / T12 (§2): org_name is present and defaults to customer.
+
+    The field is purely additive to the payload (structure otherwise unchanged);
+    limits are untouched, so pre-addendum behaviour is preserved.
+    """
+    payload = build_payload("Teachers Credit Union", "tcu-2027-001", 12, 14)
+    assert payload["org_name"] == "Teachers Credit Union"
+    assert payload["customer"] == "Teachers Credit Union"
+    # No key-format change: the limits block is unchanged by adding org_name.
+    assert payload["limits"] == {
+        "max_systems": None,
+        "max_workspaces": None,
+        "enabled_packs": None,
+    }
+
+
+def test_build_payload_carries_explicit_org_name():
+    """R17-D4 Addendum A / T12: an explicit display name distinct from customer."""
+    payload = build_payload(
+        "Teachers Credit Union",
+        "tcu-2027-001",
+        12,
+        14,
+        org_name="Teachers CU",
+    )
+    assert payload["org_name"] == "Teachers CU"
+    assert payload["customer"] == "Teachers Credit Union"
+
+
+def test_org_name_survives_signing_and_verification():
+    """R17-D4 Addendum A / T12: org_name flows through signing into the validated
+    payload, so the display-name resolver can read it (AC15)."""
+    priv = Ed25519PrivateKey.generate()
+    pub = priv.public_key()
+
+    payload = build_payload(
+        "Teachers Credit Union", "tcu-2027-001", 12, 14, org_name="Teachers CU"
+    )
+    key = sign_payload(payload, priv)
+
+    parsed = verify_license_signature(key, public_key=pub)
+    assert parsed is not None
+    assert parsed["org_name"] == "Teachers CU"
 
 
 def test_locally_signed_key_verifies_and_parses():
@@ -57,7 +114,11 @@ def test_locally_signed_key_verifies_and_parses():
     assert parsed["customer"] == "City National Bank"
     assert parsed["term_months"] == 12
     assert parsed["grace_days"] == 14
-    assert parsed["limits"] == {"max_workspaces": None, "enabled_packs": None}
+    assert parsed["limits"] == {
+        "max_systems": None,
+        "max_workspaces": None,
+        "enabled_packs": None,
+    }
 
 
 def test_tampered_payload_is_rejected():
