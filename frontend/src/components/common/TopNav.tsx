@@ -101,20 +101,24 @@ export default function TopNav() {
 
   return (
     <div className="sticky top-0 z-40 h-[70px] w-full border-b border-border bg-bgheader shadow-[0_2px_8px_rgba(0,0,0,0.15)] backdrop-blur">
-      <div className="flex h-full w-full items-center gap-4 px-5">
-        <div className="flex shrink-0 items-center">
+      <div className="flex h-full w-full items-center gap-3 px-4">
+        {/* Logo + workspace label. min-w-0 (not shrink-0) so this group yields
+            space to the nav under pressure — the org name truncates instead of
+            pushing nav items off-screen. The logo itself never shrinks. */}
+        <div className="flex min-w-0 items-center">
           <img
             src={theme === "dark" ? "/Logo-Dark.svg" : "/Logo-Light.svg"}
             alt="AgentIQ Logo"
-            className="h-[43px] w-auto"
+            className="h-[43px] w-auto shrink-0"
           />
           {/* Workspace label — the organisation name resolved from the license
-              (R17-D4 Addendum A §2 / T13). Hidden on narrow viewports so the nav
-              keeps room. */}
+              (R17-D4 Addendum A §2 / T13). min-w-0 + truncate lets an arbitrarily
+              long org name shrink and ellipsize (full name on hover via title)
+              rather than crowding out the nav; wider viewports allow more of it. */}
           <span
             data-testid="org-name-label"
             title={orgName}
-            className="ml-3 hidden max-w-[16rem] truncate border-l border-border pl-3 text-sm font-semibold text-navtext md:inline-block"
+            className="ml-3 hidden min-w-0 max-w-[9rem] truncate border-l border-border pl-3 text-sm font-semibold text-navtext md:inline-block xl:max-w-[13rem] 2xl:max-w-[18rem]"
           >
             {orgName}
           </span>
@@ -122,7 +126,7 @@ export default function TopNav() {
 
         <nav
           aria-label="Primary"
-          className="hidden flex-1 items-center justify-end gap-1.5 overflow-x-auto px-2 lg:flex"
+          className="hidden flex-1 items-center justify-end gap-1 overflow-x-auto px-1 lg:flex"
           style={{ scrollbarWidth: "none" }}
         >
           {items.map((i) => {
@@ -134,7 +138,7 @@ export default function TopNav() {
                 key={i.to}
                 to={to}
                 aria-current={isActive ? "page" : undefined}
-                className={`shrink-0 whitespace-nowrap rounded-full px-3 pb-1.5 pt-1 font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-accent/50 ${
+                className={`shrink-0 whitespace-nowrap rounded-full px-2 pb-1.5 pt-1 font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-accent/50 ${
                   isActive
                     ? "border-t-2 border-navborder bg-gradient-to-b from-activenav text-navtext"
                     : "text-navtext/70 hover:bg-navhover hover:text-navtext"
