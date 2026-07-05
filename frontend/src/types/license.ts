@@ -48,6 +48,27 @@ export interface LicenseLimitsResponse {
 }
 
 /**
+ * R17-D4 Addendum A / T12 — dynamic organisation display name
+ * (GET /api/license/org-name, §2 "Dynamic Organisation Name").
+ *
+ * The single resolved display name shown across every UI surface (header,
+ * workspace labels, reports, License page) once a key is installed — read from
+ * the signed license payload's `org_name` server-side (falling back to
+ * `customer` for pre-addendum keys), so all surfaces consume ONE source instead
+ * of each deriving a name (§5 "One name, resolved once").
+ *
+ * Readable by any authenticated user (like the banner) so it renders on every
+ * page for every role. Before a key is installed — or for any non-verifiable
+ * license state — the backend returns a neutral default (never a stale or
+ * placeholder customer name, AC16); pasting a key with a different `org_name`
+ * updates it immediately with no restart (AC15).
+ */
+export interface LicenseOrgNameResponse {
+  /** Resolved organisation display name; a neutral default before a key is installed. */
+  orgName: string;
+}
+
+/**
  * Minimal license signal for the global expiry banner (T9 / GET /api/license/banner).
  * Readable by any authenticated user (not just Owner), so the banner shows for
  * every role — including analysts whose discovery runs are blocked (AC4/AC5).
