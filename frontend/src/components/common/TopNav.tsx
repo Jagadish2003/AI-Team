@@ -101,7 +101,7 @@ export default function TopNav() {
 
   return (
     <div className="sticky top-0 z-40 h-[70px] w-full border-b border-border bg-bgheader shadow-[0_2px_8px_rgba(0,0,0,0.15)] backdrop-blur">
-      <div className="flex h-full w-full items-center gap-3 px-4">
+      <div className="flex h-full w-full items-center gap-2 px-4 2xl:gap-3">
         {/* Logo + workspace label. This group is flex-1 min-w-0: it absorbs the
             row's slack (pushing the nav to the right, preserving the original
             brand-left / nav-right layout) AND, when space is tight, it is the
@@ -146,15 +146,11 @@ export default function TopNav() {
                 key={i.to}
                 to={to}
                 aria-current={isActive ? "page" : undefined}
-                className={`shrink-0 whitespace-nowrap rounded-full px-2 pb-1.5 pt-1 font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-accent/50 ${
+                className={`shrink-0 whitespace-nowrap rounded-full px-1.5 pb-1.5 pt-1 text-[12px] font-medium leading-[16px] transition-colors focus:outline-none focus:ring-2 focus:ring-accent/50 2xl:px-2 2xl:text-[13px] 2xl:leading-[18px] ${
                   isActive
                     ? "border-t-2 border-navborder bg-gradient-to-b from-activenav text-navtext"
                     : "text-navtext/70 hover:bg-navhover hover:text-navtext"
                 }`}
-                style={{
-                  fontSize: "13px",
-                  lineHeight: "18px",
-                }}
               >
                 {i.label}
                 {i.sfOnly && !salesforceConnected && (
