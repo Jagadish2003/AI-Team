@@ -10,8 +10,10 @@
  * jsdom has no layout engine, so we can't assert pixel widths. Instead we lock
  * the CSS invariants that make the header resilient to any name length:
  *
- *   1. The org label yields space (min-w-0) and ellipsizes (truncate) with a
- *      bounded width — it can never grow unbounded and crowd out the nav.
+ *   1. The org label ellipsizes (truncate + min-w-0) and lives inside the
+ *      flex-1 brand group that absorbs the row's slack — so a long name shrinks
+ *      instead of stealing the width the nav items need. The nav itself is NOT
+ *      flex-1, so it keeps its natural width and every item stays visible.
  *   2. The full name is still available on hover (title attribute).
  *   3. All 8 nav items remain rendered even with a very long org name.
  *
@@ -52,15 +54,20 @@ function renderNav() {
 }
 
 describe("TopNav — org name never crowds out the nav", () => {
-  it("renders the org label with a truncating, bounded-width, shrinkable class set", () => {
+  it("renders the org label as a truncating, shrinkable element inside the flex-1 brand group", () => {
     renderNav();
     const label = screen.getByTestId("org-name-label");
 
-    // Must be able to shrink and ellipsize instead of pushing nav items away.
+    // The label itself must be able to shrink and ellipsize.
     expect(label.className).toContain("min-w-0");
     expect(label.className).toContain("truncate");
-    // Must carry an upper bound on width (any max-w-* utility).
-    expect(label.className).toMatch(/\bmax-w-\[/);
+
+    // The mechanism: the parent brand group is flex-1 + min-w-0, so IT absorbs
+    // the row's slack and truncates the name — the nav is left at natural width.
+    // (Guards against reverting to a flex-1 nav, which clips the first item.)
+    const brandGroup = label.parentElement;
+    expect(brandGroup?.className).toContain("flex-1");
+    expect(brandGroup?.className).toContain("min-w-0");
   });
 
   it("keeps the full org name available on hover via the title attribute", () => {
