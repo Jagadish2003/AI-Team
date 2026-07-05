@@ -86,7 +86,7 @@ from typing import Any, Dict, Iterator, List, Optional
 
 from app.provenance import EvidencePointer, utc_now_iso
 
-from . import get_live_connector, is_live
+from . import get_live_connector, is_live, resolve_vault_connector
 from .base import ChangeBasedIngestor, ChangeKind, Checkpoint, DeltaBatch
 from .confluence_signals import build_page_signals
 
@@ -454,14 +454,16 @@ class ConfluenceIngestor(ChangeBasedIngestor):
         if client is not None:
             return client
 
-        cred = get_live_connector("confluence")
-        base_url = cred.get("url") if cred else os.getenv("CONFLUENCE_URL")
-        token = cred.get("token") if cred else os.getenv("CONFLUENCE_TOKEN")
+        cred = get_live_connector("confluence") or resolve_vault_connector("confluence", org_id)
+        # Token resolves from the per-org vault only (never env — AC8/AC11); the
+        # gateway URL is instance config and keeps its CONFLUENCE_URL env fallback.
+        base_url = (cred.get("url") if cred else None) or os.getenv("CONFLUENCE_URL")
+        token = cred.get("token") if cred else None
         if not base_url or not token:
             raise ConfluenceIngestError(
-                "Live mode requires a Confluence OAuth token and gateway URL, "
-                "provided by the Confluence Connect flow (credential vault). Set "
-                "INGEST_MODE=offline to run without credentials."
+                "Live mode requires a Confluence OAuth token (from the credential "
+                "vault) and gateway URL. Connect Confluence in the Integration Hub, "
+                "or set INGEST_MODE=offline to run without credentials."
             )
         client = ConfluenceClient(base_url.rstrip("/"), token.strip())
         cache[org_id] = client

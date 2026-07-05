@@ -24,6 +24,68 @@ config store is therefore not required for the POC. The `workspace_config`
 single shared multi-tenant deployment is on the table — that work is deferred
 to a post-POC story.
 
+## Instance-Only Environment Policy (R17-D3 Addendum A, T13 / AC12)
+
+`backend/.env` (and the tracked `backend/.env.example` / `backend/.env.template`)
+hold **instance configuration only** — things legitimately per-deployment, never
+per-client. Per-client connector credentials live exclusively in the per-org
+Fernet-encrypted credential vault (the `credentials` table), entered through the
+Integration Hub: OAuth Connect for Salesforce/Jira/ServiceNow/etc., or the
+static-credential form (Owner role, write-only) for Jira API tokens, ServiceNow
+user/password, and native DB connection credentials.
+
+**Retained in env (instance-only):**
+
+| Category | Variables |
+|---|---|
+| Database | `DATABASE_URL` (+ `DEV_/PROD_/TEST_DATABASE_URL` selectors) |
+| Vault key | `CREDENTIAL_VAULT_KEY` — deliberately stays in env: it encrypts the vault's contents, so storing it in the database it protects would be circular. Env or the customer's secrets manager only. |
+| CORS / server | `CORS_ORIGINS`, `DEV_JWT`, `JWT_SECRET`, `OAUTH_STATE_SECRET`, `ENVIRONMENT` |
+| OAuth app registrations | `OAUTH_REDIRECT_URI`, `OAUTH_FRONTEND_BASE_URL`, `{CONNECTOR}_CLIENT_ID` / `{CONNECTOR}_CLIENT_SECRET` (the deployment's OAuth **app**, not any client's token), tenant IDs |
+| Model gateway | `ANTHROPIC_API_KEY`, `MODEL_*_PROVIDER`, `IN_BOUNDARY_*`, `CUSTOMER_TENANT_*` (dev fallback only — production customer-tenant key is vaulted) |
+| Email / licensing / flags | `SMTP_*`, `EMAIL_*`, `LICENSE_*`, feature flags (e.g. `INFERRED_RELATIONSHIPS_ENABLED`) |
+| Native DB connectors (interim) | `ORACLE_*` / `POSTGRESQL_*` / `SQLSERVER_*` service-account vars — still env-resolved by the DB driver layer until its vault wiring lands; single-tenant/standalone use only |
+
+**Removed (per-client — must never return to env):** `SF_ACCESS_TOKEN`,
+`SF_CLIENT_ID`, `SF_USER`, `JIRA_URL`, `JIRA_USER`, `JIRA_TOKEN`,
+`SERVICENOW_URL`, `SERVICENOW_USER`, `SERVICENOW_PASS`, `SERVICENOW_TOKEN`,
+`NCINO_INSTANCE_URL`, `NCINO_ACCESS_TOKEN`, `STRS_INSTANCE_URL`,
+`STRS_ACCESS_TOKEN`. Environment variables are process-global, so an env
+credential can never be per-org — two orgs on one instance would share it.
+`backend/tests/unit/test_env_no_per_client_credentials.py` enforces this for
+the tracked templates.
+
+### Migrating an existing deployment (R17-D3 Addendum A, T15 / AC14)
+
+A pre-Addendum install that already has working per-client credentials in
+`backend/.env` uses a **one-time, explicit** admin command to move them into the
+per-org vault before those vars are removed. It is never run automatically —
+explicit operator action is required so you always know where the credentials
+now live.
+
+```bash
+cd backend
+# 0. Ensure the schema carries the T10 static-credential columns first:
+alembic upgrade head            # or apply database/provision/provision.sql
+# 1. Preview what would migrate (writes nothing):
+python scripts/migrate_env_credentials_to_vault.py --dry-run
+# 2. Migrate the legacy env credentials into the vault for the instance's org:
+python scripts/migrate_env_credentials_to_vault.py --org <org_id>
+```
+
+- Reads whatever legacy vars are set (`SF_*`, `JIRA_*`, `SERVICENOW_*`,
+  `NCINO_*`, `STRS_*`) and stores each as a Fernet-encrypted **static
+  credential** under `--org` (default: the instance's default org). ServiceNow
+  migrates its OAuth bearer token if set, otherwise its user/password.
+- **Exactly once:** a connector already present in the vault is **skipped** —
+  re-running never silently clobbers a credential connected since the first run.
+  Use `--force` only to deliberately overwrite.
+- Requires `CREDENTIAL_VAULT_KEY`; it preflights the vault key and the schema and
+  exits with a clear message if either is missing. It never prints a secret.
+- On success it prints the exact list of env vars to delete from `backend/.env`.
+  Remove them, then reconnect Salesforce via OAuth Connect if you want its token
+  to auto-refresh (the migrated static token works but does not refresh).
+
 ## OAuth Connector Secrets
 
 Each connector's client secret is resolved from the environment at runtime via `secret_key`

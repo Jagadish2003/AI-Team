@@ -5,9 +5,27 @@ All tests run in offline mode. No credentials required.
 from __future__ import annotations
 import json
 import os
+from contextlib import contextmanager
+
 import pytest
 
 os.environ["INGEST_MODE"] = "offline"
+
+
+@contextmanager
+def _vault_tokens(**tokens):
+    """Inject connector tokens via the per-run credential context for the demo
+    seeder tests. Post R17-D3 Addendum A (T11/T14), the seeder resolves tokens
+    from the vault/per-run context — never a process-global env credential — so
+    tests provide the token here instead of setting SF_ACCESS_TOKEN et al. URLs
+    remain plain env (they are instance config, not credentials)."""
+    from discovery.ingest import clear_live_connectors, set_live_connectors
+
+    set_live_connectors({cid: {"token": tok} for cid, tok in tokens.items()})
+    try:
+        yield
+    finally:
+        clear_live_connectors()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -181,28 +199,28 @@ class TestDemoSeeder:
 
     def test_dry_run_sf_returns_count(self, monkeypatch):
         monkeypatch.setenv("SF_INSTANCE_URL", "https://test.salesforce.com")
-        monkeypatch.setenv("SF_ACCESS_TOKEN", "test_token")
         from discovery.seed.demo_seeder import seed_salesforce, SeedState
         state = SeedState()
-        count = seed_salesforce(state, dry_run=True)
+        with _vault_tokens(salesforce="test_token"):
+            count = seed_salesforce(state, dry_run=True)
         assert count == 10   # 10 clusters
         assert len(state.sf_case_ids) == 0  # dry run — nothing stored
 
     def test_dry_run_sn_returns_count(self, monkeypatch):
         monkeypatch.setenv("SERVICENOW_URL", "https://test.service-now.com")
-        monkeypatch.setenv("SERVICENOW_TOKEN", "test_token")
         from discovery.seed.demo_seeder import seed_servicenow, SeedState
         state = SeedState()
-        count = seed_servicenow(state, dry_run=True)
+        with _vault_tokens(servicenow="test_token"):
+            count = seed_servicenow(state, dry_run=True)
         assert count == 10
         assert len(state.sn_incident_sys_ids) == 0
 
     def test_dry_run_jira_returns_count(self, monkeypatch):
         monkeypatch.setenv("JIRA_URL", "https://test.atlassian.net")
-        monkeypatch.setenv("JIRA_TOKEN", "test_token")
         from discovery.seed.demo_seeder import seed_jira, SeedState
         state = SeedState()
-        count = seed_jira(state, dry_run=True)
+        with _vault_tokens(jira="test_token"):
+            count = seed_jira(state, dry_run=True)
         assert count == 10
         assert len(state.jira_issue_keys) == 0
 
@@ -240,13 +258,11 @@ class TestDemoSeeder:
 
     def test_seed_all_dry_run(self, monkeypatch):
         monkeypatch.setenv("SF_INSTANCE_URL", "https://test.salesforce.com")
-        monkeypatch.setenv("SF_ACCESS_TOKEN", "t")
         monkeypatch.setenv("SERVICENOW_URL", "https://test.service-now.com")
-        monkeypatch.setenv("SERVICENOW_TOKEN", "t")
         monkeypatch.setenv("JIRA_URL", "https://test.atlassian.net")
-        monkeypatch.setenv("JIRA_TOKEN", "t")
         from discovery.seed.demo_seeder import seed_all
-        state = seed_all(systems=["all"], dry_run=True)
+        with _vault_tokens(salesforce="t", servicenow="t", jira="t"):
+            state = seed_all(systems=["all"], dry_run=True)
         # Dry run stores nothing
         assert len(state.sf_case_ids) == 0
         assert len(state.sn_incident_sys_ids) == 0

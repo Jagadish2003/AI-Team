@@ -30,7 +30,7 @@ import pytest
 
 from app import db
 from app.auth import user_auth
-from auth_helpers import activate_org_by_email
+from auth_helpers import activate_org_by_email, rand_org_name
 
 
 def _email() -> str:
@@ -96,9 +96,10 @@ def test_password_longer_than_72_bytes_is_capped():
 
 def test_register_creates_org_user_member_and_jwt():
     email = _email()
+    org_name = rand_org_name("Acme")  # letters-only (validation rejects spaces)
     # AUTH-2: register itself returns a pending-approval ack (no JWT); the owner's
     # JWT — carrying org_id + role — is issued on login after the org is approved.
-    result = _register_active_owner("Acme Bank", email, "supersecret1")
+    result = _register_active_owner(org_name, email, "supersecret1")
 
     assert result["user"]["email"] == email
     assert result["user"]["role"] == "owner"
@@ -114,7 +115,7 @@ def test_register_creates_org_user_member_and_jwt():
     # All three rows exist.
     con = db.connect()
     try:
-        assert con.execute("SELECT name FROM orgs WHERE id = %s", (org_id,)).fetchone()[0] == "Acme Bank"
+        assert con.execute("SELECT name FROM orgs WHERE id = %s", (org_id,)).fetchone()[0] == org_name
         assert con.execute("SELECT email FROM users WHERE id = %s", (user_id,)).fetchone()[0] == email
         member = con.execute(
             "SELECT org_id, role FROM workspace_members WHERE user_id = %s", (user_id,)
@@ -140,21 +141,21 @@ def test_register_normalizes_email_case_and_whitespace():
 
 def test_register_duplicate_email_raises():
     email = _email()
-    user_auth.register_org_and_owner("Org One", email, "supersecret1")
+    user_auth.register_org_and_owner("OrgOne", email, "supersecret1")
     with pytest.raises(user_auth.EmailAlreadyExistsError):
-        user_auth.register_org_and_owner("Org Two", email, "supersecret1")
+        user_auth.register_org_and_owner("OrgTwo", email, "supersecret1")
 
 
 def test_register_duplicate_does_not_create_second_org():
     email = _email()
-    user_auth.register_org_and_owner("Org One", email, "supersecret1")
+    user_auth.register_org_and_owner("OrgOne", email, "supersecret1")
     before = db.connect()
     try:
         count_before = before.execute("SELECT COUNT(*) FROM orgs").fetchone()[0]
     finally:
         before.close()
     with pytest.raises(user_auth.EmailAlreadyExistsError):
-        user_auth.register_org_and_owner("Org Two", email, "supersecret1")
+        user_auth.register_org_and_owner("OrgTwo", email, "supersecret1")
     after = db.connect()
     try:
         count_after = after.execute("SELECT COUNT(*) FROM orgs").fetchone()[0]
@@ -194,7 +195,7 @@ def test_register_stores_bcrypt_hash_no_plaintext():
 
 def test_login_success_returns_jwt_with_required_claims():
     email = _email()
-    user_auth.register_org_and_owner("Claim Org", email, "supersecret1")
+    user_auth.register_org_and_owner("ClaimOrg", email, "supersecret1")
     activate_org_by_email(email)  # AUTH-2 admin approval (simulated)
 
     result = user_auth.login(email, "supersecret1", _ip())
@@ -318,8 +319,8 @@ def test_rate_limit_is_scoped_to_email_not_ip():
     ip = _ip()
     blocked = _email()
     other = _email()
-    user_auth.register_org_and_owner("Org Blocked", blocked, "supersecret1")
-    user_auth.register_org_and_owner("Org Other", other, "supersecret2")
+    user_auth.register_org_and_owner("OrgBlocked", blocked, "supersecret1")
+    user_auth.register_org_and_owner("OrgOther", other, "supersecret2")
     activate_org_by_email(blocked)  # AUTH-2 admin approval (simulated)
     activate_org_by_email(other)
 
@@ -421,32 +422,44 @@ def test_logout_expired_token_is_noop():
 
 
 # ---------------------------------------------------------------------------
-# Review #5 — registration always creates a NEW org (no self-join by name)
+# Org-name deduplication + letters-only validation
+# (full coverage lives in test_register_org_join.py; these guard the logic layer)
 # ---------------------------------------------------------------------------
 
 
-def test_register_same_org_name_creates_separate_org_not_a_join():
-    """Two registrations with the SAME org name must NOT share a workspace.
+def test_register_same_org_name_dedupes_to_one_org():
+    """Two registrations with the SAME normalised name share ONE org_id (dedup).
 
-    Org names are not secrets, so name-based joining let any external user who
-    guessed a customer's org name self-register into that workspace as analyst
-    (review #5). Registration now always mints a fresh org_id the registrant
-    owns; joining an existing workspace is invite-only.
+    Registration now deduplicates by normalised (trimmed + lowercased) org name:
+    the second registrant JOINS the existing workspace instead of minting a
+    duplicate org_id. The users remain distinct.
     """
-    name = "Shared Bank Name"
+    name = rand_org_name("SharedBank")
     email_a, email_b = _email(), _email()
     user_auth.register_org_and_owner(name, email_a, "supersecret1")
     user_auth.register_org_and_owner(name, email_b, "supersecret2")
-    # AUTH-2: register returns no user; read each owner's membership directly.
-    org_a, role_a = _member_for_email(email_a)
-    org_b, role_b = _member_for_email(email_b)
+    org_a, _ = _member_for_email(email_a)
+    org_b, _ = _member_for_email(email_b)
 
-    # Distinct workspaces — no cross-org membership leaked by name collision.
-    assert org_a != org_b
-    # Each registrant OWNS their own workspace; neither is silently an analyst
-    # joined to the other's org.
-    assert role_a == "owner"
-    assert role_b == "owner"
+    assert org_a == org_b, "same normalised name → same org_id"
+
+
+def test_register_rejects_non_letter_name_with_suggestion():
+    """A non-letter org name is rejected (RegistrationError) with a suggestion."""
+    with pytest.raises(user_auth.RegistrationError) as exc:
+        user_auth.register_org_and_owner("Bad Name 1", _email(), "supersecret1")
+    msg = str(exc.value)
+    assert "Only letters are allowed" in msg
+    # Suggestion strips the space + digit, leaving the letters intact.
+    assert "Did you mean 'BadName'?" in msg
+
+
+def test_register_case_insensitive_dedupe_logic():
+    base = rand_org_name("Case")
+    ea, eb = _email(), _email()
+    user_auth.register_org_and_owner(base.lower(), ea, "supersecret1")
+    user_auth.register_org_and_owner(base.upper(), eb, "supersecret1")
+    assert _member_for_email(ea)[0] == _member_for_email(eb)[0]
 
 
 # ---------------------------------------------------------------------------
@@ -517,8 +530,8 @@ def test_password_change_revokes_existing_tokens():
 
 
 def test_password_change_marker_does_not_affect_other_users():
-    a = _register_active_owner("Org A", _email(), "supersecret1")
-    b = _register_active_owner("Org B", _email(), "supersecret2")
+    a = _register_active_owner("OrgAlpha", _email(), "supersecret1")
+    b = _register_active_owner("OrgBeta", _email(), "supersecret2")
     user_auth.mark_password_changed(a["user"]["id"])
     # B's token is untouched — the marker is per-user.
     assert user_auth.verify_jwt(b["token"])["sub"] == b["user"]["id"]

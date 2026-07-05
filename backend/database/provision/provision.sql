@@ -1,11 +1,11 @@
 --
--- AgentIQ — consolidated provisioning script (schema + seed), head 0019.
+-- AgentIQ — consolidated provisioning script (schema + seed), head 0023.
 --
 -- Single self-contained replacement for the former 01_schema.sql / 02_seed.sql /
 -- 03_lazy_runtime_tables.sql. Creates the agentiq role, all 27 tables (incl.
 -- org_licenses, ingestion_checkpoints, opportunity_instances),
 -- indexes/constraints/rules, seeds the core reference rows, and stamps
--- alembic_version to head 0019.
+-- alembic_version to head 0023.
 --
 -- Run connected to the TARGET database (which must already exist), as a
 -- superuser or the schema owner:
@@ -148,7 +148,11 @@ CREATE TABLE "public"."credentials" (
     "created_at" "text" NOT NULL,
     "updated_at" "text" NOT NULL,
     "refresh_failed" integer DEFAULT 0 NOT NULL,
-    "is_deleted" boolean DEFAULT false NOT NULL
+    "is_deleted" boolean DEFAULT false NOT NULL,
+    "kind" "text" DEFAULT 'oauth' NOT NULL,
+    "enc_username" "text",
+    "enc_secret" "text",
+    "base_url" "text"
 );
 
 
@@ -298,7 +302,8 @@ CREATE TABLE "public"."orgs" (
     "approval_token_expires_at" timestamp with time zone,
     "approved_at" timestamp with time zone,
     "approved_by_action" character varying(16),
-    "domain" character varying(255)
+    "domain" character varying(255),
+    "name_normalised" character varying(256) DEFAULT ''::character varying NOT NULL
 );
 
 
@@ -516,7 +521,8 @@ CREATE TABLE "public"."users" (
     "created_at" timestamp without time zone NOT NULL,
     "last_login_at" timestamp without time zone,
     "reset_token_hash" character varying(256),
-    "reset_token_expires_at" timestamp without time zone
+    "reset_token_expires_at" timestamp without time zone,
+    "org_id" character varying(36)
 );
 
 
@@ -683,6 +689,15 @@ ALTER TABLE ONLY "public"."opportunities"
 
 ALTER TABLE ONLY "public"."orgs"
     ADD CONSTRAINT "orgs_pkey" PRIMARY KEY ("id");
+
+
+--
+-- Name: users fk_users_org_id; Type: FK CONSTRAINT; Schema: public; Owner: -
+-- Denormalized org pointer (migration 0021). workspace_members stays authoritative.
+--
+
+ALTER TABLE ONLY "public"."users"
+    ADD CONSTRAINT "fk_users_org_id" FOREIGN KEY ("org_id") REFERENCES "public"."orgs" ("id");
 
 
 --
@@ -946,6 +961,14 @@ CREATE UNIQUE INDEX "idx_users_email_unique" ON "public"."users" USING "btree" (
 
 
 --
+-- Name: idx_orgs_name_normalised_unique; Type: INDEX; Schema: public; Owner: -
+-- Org-name deduplication (migration 0020): one org_id per normalised name.
+--
+
+CREATE UNIQUE INDEX "idx_orgs_name_normalised_unique" ON "public"."orgs" USING "btree" ("name_normalised");
+
+
+--
 -- Name: telemetry_events trg_telemetry_no_delete; Type: RULE; Schema: public; Owner: -
 --
 
@@ -1027,4 +1050,4 @@ INSERT INTO "public"."permissions" ("id", "payload") VALUES ('p_sn_inc', '{"id":
 
 -- uploads (0 rows)
 
-INSERT INTO "public"."alembic_version" ("version_num") VALUES ('0019') ON CONFLICT DO NOTHING;
+INSERT INTO "public"."alembic_version" ("version_num") VALUES ('0023') ON CONFLICT DO NOTHING;

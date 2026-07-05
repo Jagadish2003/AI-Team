@@ -30,7 +30,7 @@ import pytest
 import app.routes_auth as routes_auth
 from app import db
 from app.auth.user_auth import hash_password, validate_password_strength
-from auth_helpers import activate_org_by_email
+from auth_helpers import activate_org_by_email, rand_org_name
 
 # A password satisfying every CS-3 rule (>=8, upper, lower, special).
 STRONG = "Password1!"
@@ -51,7 +51,7 @@ def _register(client, *, email=None, password=STRONG):
     email = email or _email()
     resp = client.post(
         "/api/auth/register",
-        json={"org_name": f"Org_{uuid.uuid4().hex[:8]}", "email": email, "password": password},
+        json={"org_name": rand_org_name(), "email": email, "password": password},
     )
     # AUTH-2: a successful registration leaves the org pending_approval. Approve it
     # (simulating the admin click) so the registrant can subsequently log in.

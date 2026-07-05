@@ -2,10 +2,15 @@
 
 users is IDENTITY ONLY. It answers "who you are", nothing about membership.
 
-    org_id and role do NOT live here. They live in workspace_members, which is
-    the single source of truth for which workspace a user belongs to and what
-    they can do (AC1). Never add org_id or role back to this table — the login
-    flow joins workspace_members at JWT-assembly time to source them.
+    role does NOT live here. It lives in workspace_members, which is the single
+    source of truth for which workspace a user belongs to and what they can do
+    (AC1) — the login flow joins workspace_members at JWT-assembly time to source
+    org_id + role. Do NOT add role back to this table.
+
+    EXCEPTION (migration 0021): a nullable org_id FK -> orgs.id was added as a
+    denormalized convenience pointer, set at registration to the org resolved by
+    the case-insensitive dedup logic. It is NOT authoritative: login/RBAC still
+    read org_id from workspace_members. See ALL_USERS_ORG_ID_DDL below.
 
 No ORM — this project uses raw sqlite3 with Alembic raw-SQL migrations. This
 module is the single source of truth for the schema; the migration
@@ -98,4 +103,69 @@ ADD_RESET_TOKEN_EXPIRES_AT_COLUMN = (
 ADD_PASSWORD_RESET_COLUMNS_DDL: tuple[str, ...] = (
     ADD_RESET_TOKEN_HASH_COLUMN,
     ADD_RESET_TOKEN_EXPIRES_AT_COLUMN,
+)
+
+# org_id foreign key (migration 0021) — a denormalized convenience pointer to the
+# user's organization (orgs.id). This is a DELIBERATE, scoped exception to the
+# "identity only" note above: it is set at registration to the org resolved by the
+# case-insensitive dedup logic (reused-or-new). workspace_members REMAINS the
+# source of truth for org_id + role (login still reads it there); this column
+# never drives auth. Nullable so legacy/invited users and the untouched invite
+# flow stay valid; the migration backfills existing rows from workspace_members.
+#
+# Added as standalone ADD COLUMN + FK statements (NOT part of CREATE_USERS_TABLE)
+# because the FK references orgs, which migration 0005 creates AFTER 0004 builds
+# users — a FK in the base CREATE would fail. Same SSOT / late-add pattern as the
+# approval columns (orgs.py) and name_normalised (0020). PostgreSQL only: the FK
+# add is guarded so re-running is a no-op.
+ADD_USERS_ORG_ID_COLUMN = (
+    "ALTER TABLE users ADD COLUMN IF NOT EXISTS org_id VARCHAR(36)"
+)
+
+# Backfill BEFORE adding the FK so no pre-existing row violates it. Link each user
+# to its earliest non-deleted workspace membership — mirroring how
+# user_auth._get_workspace_member() resolves the single POC membership, so the
+# backfilled org_id equals the one login would derive.
+#
+# CRITICAL: only link to an org that actually EXISTS in orgs (the JOIN below). The
+# seeded dev owner has a workspace_members row for the pseudo-org 'default' that
+# has NO orgs row; without the JOIN the backfill would set users.org_id='default'
+# and the subsequent FK add would fail with a foreign-key violation on any
+# populated database. Such users are left NULL (the nullable FK allows it).
+BACKFILL_USERS_ORG_ID = """
+UPDATE users u
+SET org_id = (
+    SELECT wm.org_id FROM workspace_members wm
+    JOIN orgs o ON o.id = wm.org_id
+    WHERE wm.user_id = u.id AND wm.is_deleted = FALSE
+    ORDER BY wm.created_at ASC
+    LIMIT 1
+)
+WHERE u.org_id IS NULL
+  AND EXISTS (
+    SELECT 1 FROM workspace_members wm
+    JOIN orgs o ON o.id = wm.org_id
+    WHERE wm.user_id = u.id AND wm.is_deleted = FALSE
+  )
+"""
+
+# FK add is idempotent (guarded) because ADD CONSTRAINT has no IF NOT EXISTS.
+ADD_USERS_ORG_ID_FK = """
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.table_constraints
+        WHERE constraint_name = 'fk_users_org_id' AND table_name = 'users'
+    ) THEN
+        ALTER TABLE users
+        ADD CONSTRAINT fk_users_org_id FOREIGN KEY (org_id) REFERENCES orgs (id);
+    END IF;
+END $$;
+"""
+
+# Ordered DDL the 0021 migration imports — column, then backfill, then FK.
+ALL_USERS_ORG_ID_DDL: tuple[str, ...] = (
+    ADD_USERS_ORG_ID_COLUMN,
+    BACKFILL_USERS_ORG_ID,
+    ADD_USERS_ORG_ID_FK,
 )

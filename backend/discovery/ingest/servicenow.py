@@ -171,18 +171,22 @@ class ServiceNowClient:
 
 
 def _get_client() -> ServiceNowClient:
-    # OAuth-only. Credentials come from the per-run context (DB-sourced: vault
-    # Bearer token + captured instance URL, isolated per org/run); env vars are
-    # only a CLI/standalone fallback.
-    from . import get_live_connector
+    # Credentials come from the per-run context (DB-sourced: vault Bearer token +
+    # captured instance URL, isolated per org/run). With no per-run context
+    # (CLI/standalone) or for a static user/password credential, the token
+    # resolves per-org from the vault via the single credential path — never from
+    # a process-global env credential (R17-D3 Addendum A, AC8/AC11). A static
+    # credential also supplies its base_url; SERVICENOW_URL is instance config
+    # (not a credential) and remains the env fallback.
+    from . import get_live_connector, resolve_vault_connector
 
-    cred = get_live_connector("servicenow")
+    cred = get_live_connector("servicenow") or resolve_vault_connector("servicenow")
     if cred:
-        sn_url = (cred.get("url") or "").rstrip("/")
+        sn_url = (cred.get("url") or os.getenv("SERVICENOW_URL", "")).rstrip("/")
         token = cred.get("token") or ""
     else:
         sn_url = os.getenv("SERVICENOW_URL", "").rstrip("/")
-        token = os.getenv("SERVICENOW_TOKEN", "")
+        token = ""
 
     if not sn_url:
         raise ServiceNowIngestError(
@@ -191,8 +195,9 @@ def _get_client() -> ServiceNowClient:
         )
     if not token:
         raise ServiceNowIngestError(
-            "Live mode requires a ServiceNow OAuth Bearer token (SERVICENOW_TOKEN), "
-            "provided by the ServiceNow OAuth Connect flow."
+            "Live mode requires a ServiceNow credential (OAuth Bearer token or "
+            "user/password) from the credential vault. Connect ServiceNow in the "
+            "Integration Hub."
         )
     return ServiceNowClient(sn_url, token=token)
 
@@ -646,9 +651,9 @@ def ingest(sn_client: Optional[ServiceNowClient] = None) -> Dict[str, Any]:
     # SERVICENOW_URL env var is only a CLI/standalone fallback. Gating on the env
     # var alone wrongly skipped ServiceNow even when it was authenticated via the
     # Integration Hub OAuth flow.
-    from . import get_live_connector
+    from . import get_live_connector, resolve_vault_connector
 
-    cred = get_live_connector("servicenow")
+    cred = get_live_connector("servicenow") or resolve_vault_connector("servicenow")
     sn_url = (cred.get("url") if cred else None) or os.getenv("SERVICENOW_URL", "")
     if not sn_url:
         logger.warning(

@@ -20,6 +20,8 @@ import pytest
 
 import app.routes_auth as routes_auth
 
+from auth_helpers import rand_org_name
+
 
 # ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -37,7 +39,7 @@ def _register_owner(client, email=None):
     resp = client.post(
         "/api/auth/register",
         json={
-            "org_name": f"Org_{uuid.uuid4().hex[:8]}",
+            "org_name": rand_org_name(),
             "email": email,
             "password": "Ownerpass1!",
         },
@@ -68,7 +70,7 @@ def test_register_sends_welcome_email(client, monkeypatch):
     email = _email()
     resp = client.post(
         "/api/auth/register",
-        json={"org_name": f"Org_{uuid.uuid4().hex[:8]}", "email": email, "password": "Ownerpass1!"},
+        json={"org_name": rand_org_name(), "email": email, "password": "Ownerpass1!"},
     )
 
     assert resp.status_code == 201, resp.text
@@ -87,7 +89,7 @@ def test_register_still_succeeds_when_welcome_email_fails(client, monkeypatch):
 
     resp = client.post(
         "/api/auth/register",
-        json={"org_name": f"Org_{uuid.uuid4().hex[:8]}", "email": _email(), "password": "Ownerpass1!"},
+        json={"org_name": rand_org_name(), "email": _email(), "password": "Ownerpass1!"},
     )
 
     assert resp.status_code == 201, resp.text

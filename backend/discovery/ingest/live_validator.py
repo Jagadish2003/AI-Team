@@ -283,14 +283,22 @@ def run_validation(check_only: bool = False) -> Dict[str, Any]:
     gates: Dict[str, bool] = {}
 
     # ── Dimension A Gate 1: credentials present ───────────────────────────────
-    instance_url = os.getenv("SF_INSTANCE_URL", "")
-    access_token = os.getenv("SF_ACCESS_TOKEN", "")
+    # The Salesforce access token is resolved per-org from the vault via the
+    # single credential path (per-run context first) — never from a
+    # process-global env credential (R17-D3 Addendum A, AC8/AC11). SF_INSTANCE_URL
+    # is instance config (not a credential) and keeps its env fallback.
+    from . import get_live_connector, resolve_vault_connector
+
+    cred = get_live_connector("salesforce") or resolve_vault_connector("salesforce") or {}
+    instance_url = cred.get("url") or os.getenv("SF_INSTANCE_URL", "")
+    access_token = cred.get("token") or ""
     gates["credentials_present"] = bool(instance_url and access_token)
 
     if not gates["credentials_present"]:
         logger.error(
-            "SF_INSTANCE_URL and SF_ACCESS_TOKEN are not set.\n"
-            "See AUTH_SETUP.md for three ways to obtain a Bearer token."
+            "No Salesforce credential is configured for this org (connect it in "
+            "the Integration Hub / credential vault) or SF_INSTANCE_URL is unset.\n"
+            "See AUTH_SETUP.md for details."
         )
         return _build_report(gates, function_results, report_time, False)
 

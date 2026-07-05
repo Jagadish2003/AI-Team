@@ -100,7 +100,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional, Tuple
 
-from . import get_live_connector, is_live
+from . import get_live_connector, is_live, resolve_vault_connector
 from .base import ChangeBasedIngestor, ChangeKind, Checkpoint, DeltaBatch
 from .teams_signals import (
     build_evidence_pointer,
@@ -546,9 +546,10 @@ class TeamsIngestor(ChangeBasedIngestor):
         """Return the per-run Microsoft Graph client, creating it once and reusing it.
 
         Resolution mirrors the other connectors: the per-run credential context
-        (DB-sourced vault token, isolated per org/run) first, then the
-        ``TEAMS_GRAPH_TOKEN`` env var as a CLI/standalone fallback. The OAuth
-        connect flow that lands the token in the vault is T5 / AT-434.
+        (DB-sourced vault token, isolated per org/run) first, then the per-org
+        vault via the single credential path — never a process-global env
+        credential (R17-D3 Addendum A, AC8/AC11). The OAuth connect flow that
+        lands the token in the vault is T5 / AT-434.
 
         The client (and its single HTTP session) is cached on the ingestor for the
         duration of one ``ingest_changes`` call — so enumerating N teams' channels
@@ -556,12 +557,12 @@ class TeamsIngestor(ChangeBasedIngestor):
         and is closed in ``ingest_changes``'s ``finally`` (H2).
         """
         if self._graph_client is None:
-            cred = get_live_connector("teams")
-            token = cred.get("token") if cred else os.getenv("TEAMS_GRAPH_TOKEN")
+            cred = get_live_connector("teams") or resolve_vault_connector("teams", org_id)
+            token = cred.get("token") if cred else None
             if not token:
                 raise TeamsIngestError(
-                    "Live mode requires a Microsoft Graph OAuth token, provided by "
-                    "the Teams Connect flow (credential vault). Set "
+                    "Live mode requires a Microsoft Graph OAuth token from the "
+                    "credential vault. Connect Teams in the Integration Hub, or set "
                     "INGEST_MODE=offline to run without credentials."
                 )
             self._graph_client = TeamsGraphClient(token.strip())

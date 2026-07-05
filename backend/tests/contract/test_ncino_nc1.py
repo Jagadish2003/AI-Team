@@ -7,9 +7,23 @@ Run:
 from __future__ import annotations
 
 import os
+from contextlib import contextmanager
 from unittest.mock import MagicMock, patch
 
 import pytest
+
+from discovery.ingest import clear_live_connectors, set_live_connectors
+
+
+@pytest.fixture(autouse=True)
+def _clear_run_context():
+    """R17-D3 Addendum A (T11): the nCino health check resolves the Salesforce
+    token from the per-run credential context (vault-sourced), not a
+    process-global env var. Clear it around each test so credentials never leak
+    between tests (the 'no credentials → fixture' cases depend on this)."""
+    clear_live_connectors()
+    yield
+    clear_live_connectors()
 
 
 def mock_200_ncino():
@@ -25,14 +39,17 @@ def mock_status(code):
     return resp
 
 
+@contextmanager
 def patch_sf_env(url="https://test.my.salesforce.com", token="test-sf-token"):
-    return patch.dict(
-        "os.environ",
-        {
-            "SF_INSTANCE_URL": url,
-            "SF_ACCESS_TOKEN": token,
-        },
-    )
+    # nCino runs against the connected Salesforce org: the URL stays instance
+    # config (env), the token now comes from the per-run credential context
+    # (vault-sourced) — never a process-global env credential.
+    with patch.dict("os.environ", {"SF_INSTANCE_URL": url}):
+        set_live_connectors({"salesforce": {"url": url, "token": token}})
+        try:
+            yield
+        finally:
+            clear_live_connectors()
 
 
 class TestNcinoHealthCheck:

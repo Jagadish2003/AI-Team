@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import uuid
 
-from auth_helpers import activate_org_by_email
+from auth_helpers import activate_org_by_email, rand_org_name
 
 
 def _email() -> str:
@@ -27,7 +27,7 @@ def _register_owner(client) -> str:
     resp = client.post(
         "/api/auth/register",
         json={
-            "org_name": f"Org {uuid.uuid4().hex[:6]}",
+            "org_name": rand_org_name(),
             "email": email,
             "password": "Ownerpass1!",
         },

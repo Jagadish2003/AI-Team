@@ -36,7 +36,7 @@ import pytest
 
 from app import db
 from app.routes_auth import _INVITE_KV_PREFIX, _token_hash
-from auth_helpers import activate_org_by_email
+from auth_helpers import activate_org_by_email, rand_org_name
 
 WORKSPACE_CATALOG = "/api/integration-hub/workspace-catalog"
 
@@ -65,7 +65,7 @@ def _register(client, *, org=None, email=None, password="Ownerpass1!"):
     below are unchanged. (register==201 and login==200 are asserted here.)
     """
     email = email or _email()
-    org = org or f"Org_{uuid.uuid4().hex[:8]}"
+    org = org or rand_org_name()
     reg = client.post(
         "/api/auth/register",
         json={"org_name": org, "email": email, "password": password},

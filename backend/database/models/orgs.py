@@ -61,7 +61,63 @@ ALTER TABLE orgs
 ADD COLUMN approved_by_action VARCHAR(16) NULL
 """
 
+# Org-name deduplication (migration 0020). A normalised (trimmed + lowercased)
+# copy of the org name plus a UNIQUE index on it, so two registrations of the
+# same company name resolve to ONE org_id instead of fragmenting into duplicate
+# workspaces. name_normalised is written ONLY by register_org_and_owner via
+# user_auth.normalise_org_name() — never from a raw user value.
+#
+# Kept as standalone ADD COLUMN / index statements (NOT part of CREATE_ORGS_TABLE)
+# so the fresh-migration chain stays consistent: 0005 creates the base table,
+# 0013 adds the approval columns, 0020 adds this column. Same SSOT pattern as
+# ALL_ORG_APPROVAL_DDL. provision.sql carries the fully-expanded column + index
+# for the pure-SQL provisioning path.
+ADD_ORG_NAME_NORMALISED_COLUMN = """
+ALTER TABLE orgs
+ADD COLUMN IF NOT EXISTS name_normalised VARCHAR(256) NOT NULL DEFAULT ''
+"""
+
+BACKFILL_ORG_NAME_NORMALISED = """
+UPDATE orgs SET name_normalised = LOWER(name) WHERE name_normalised = ''
+"""
+
+CREATE_ORGS_NAME_NORMALISED_UNIQUE_IDX = """
+CREATE UNIQUE INDEX IF NOT EXISTS idx_orgs_name_normalised_unique
+ON orgs (name_normalised)
+"""
+
+# Domain-based org identity (migration 0023). An optional email/company domain per
+# org, with a PARTIAL UNIQUE index (WHERE domain IS NOT NULL) so orgs without a
+# domain never collide on NULL. Added to the model + a migration to close a
+# provisioning gap: `domain` + this index previously lived ONLY in provision.sql
+# (no migration created them), so a database built via `alembic upgrade head`
+# lacked them. Same standalone ADD COLUMN / index SSOT pattern as name_normalised.
+ADD_ORGS_DOMAIN_COLUMN = """
+ALTER TABLE orgs
+ADD COLUMN IF NOT EXISTS domain VARCHAR(255)
+"""
+
+CREATE_ORGS_DOMAIN_UNIQUE_IDX = """
+CREATE UNIQUE INDEX IF NOT EXISTS idx_orgs_domain_unique
+ON orgs (domain) WHERE domain IS NOT NULL
+"""
+
 ALL_ORGS_DDL: tuple[str, ...] = (CREATE_ORGS_TABLE,)
+
+# Ordered DDL the 0020 migration imports — single source of truth, no drift. The
+# UNIQUE index is created AFTER the backfill so pre-existing rows are normalised
+# before the constraint is enforced.
+ALL_ORG_NAME_NORMALISED_DDL: tuple[str, ...] = (
+    ADD_ORG_NAME_NORMALISED_COLUMN,
+    BACKFILL_ORG_NAME_NORMALISED,
+    CREATE_ORGS_NAME_NORMALISED_UNIQUE_IDX,
+)
+
+# Ordered DDL the 0023 migration imports for the orgs.domain gap-fill.
+ALL_ORGS_DOMAIN_DDL: tuple[str, ...] = (
+    ADD_ORGS_DOMAIN_COLUMN,
+    CREATE_ORGS_DOMAIN_UNIQUE_IDX,
+)
 
 ALL_ORG_APPROVAL_DDL: tuple[str, ...] = (
     ADD_APPROVAL_STATUS_COLUMN,

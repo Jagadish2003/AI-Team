@@ -20,7 +20,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 
 from app import db
-from auth_helpers import activate_org_by_email
+from auth_helpers import activate_org_by_email, rand_org_name
 
 STRONG = "Password1!"
 WEAK = "password"  # 8 chars, lowercase only — missing uppercase + special
@@ -115,7 +115,7 @@ def _make_invite(client) -> str:
     owner_email = _email()
     owner = client.post(
         "/api/auth/register",
-        json={"org_name": f"Org {uuid.uuid4().hex[:6]}", "email": owner_email, "password": STRONG},
+        json={"org_name": rand_org_name(), "email": owner_email, "password": STRONG},
     )
     assert owner.status_code == 201, owner.text
     # AUTH-2: approve + login to get the owner JWT.
@@ -161,7 +161,7 @@ def _register_and_get_reset_token(client) -> tuple[str, str]:
     email = _email()
     reg = client.post(
         "/api/auth/register",
-        json={"org_name": f"Org {uuid.uuid4().hex[:6]}", "email": email, "password": STRONG},
+        json={"org_name": rand_org_name(), "email": email, "password": STRONG},
     )
     assert reg.status_code == 201, reg.text
     activate_org_by_email(email)  # AUTH-2 admin approval (simulated) so post-reset login works

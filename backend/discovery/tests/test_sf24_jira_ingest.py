@@ -210,5 +210,5 @@ class TestErrorHandling:
         import discovery.ingest.jira as jira_mod
         importlib.reload(pkg)
         importlib.reload(jira_mod)
-        with pytest.raises(jira_mod.JiraIngestError, match="JIRA_TOKEN"):
+        with pytest.raises(jira_mod.JiraIngestError, match="credential"):
             jira_mod._get_client()

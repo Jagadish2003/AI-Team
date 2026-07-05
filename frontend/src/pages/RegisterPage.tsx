@@ -55,6 +55,14 @@ function registerErrorMessage(err: unknown): string {
   if (err instanceof ApiError) {
     if (err.status === 409) return "That email address is already registered. Please sign in.";
     if (err.status === 422) return "Please check your inputs and try again.";
+    // 400 (e.g. RegistrationError — an invalid organisation name) carries a
+    // specific, user-facing detail from the backend (incl. a "did you mean …?"
+    // suggestion). Surface it instead of a generic message so the user knows how
+    // to fix the input rather than just seeing "Something went wrong".
+    if (err.status === 400) {
+      const detail = (err.body as { detail?: unknown } | null)?.detail;
+      if (typeof detail === "string" && detail.trim()) return detail;
+    }
   }
   return "Something went wrong. Please try again.";
 }

@@ -30,7 +30,7 @@ from alembic.config import Config as AlembicConfig
 from app import db, security
 from app.auth import user_auth
 from app.middleware import tenancy
-from auth_helpers import activate_org_by_email, member_for_email
+from auth_helpers import activate_org_by_email, member_for_email, rand_org_name
 
 BACKEND_DIR = Path(__file__).resolve().parents[2]
 
@@ -110,7 +110,7 @@ def test_change_password_invalidates_existing_token_end_to_end(client):
     email = _email()
     reg = client.post(
         "/api/auth/register",
-        json={"org_name": f"Org {uuid.uuid4().hex[:6]}", "email": email, "password": "Supersecret1!"},
+        json={"org_name": rand_org_name(), "email": email, "password": "Supersecret1!"},
     )
     assert reg.status_code == 201, reg.text
     # AUTH-2: approve + login to get the JWT (register issues none).
@@ -142,8 +142,8 @@ def test_change_password_invalidates_existing_token_end_to_end(client):
 
 def test_runs_list_is_org_scoped_between_two_orgs(client):
     email_a, email_b = _email(), _email()
-    user_auth.register_org_and_owner(f"A {uuid.uuid4().hex[:6]}", email_a, "Supersecret1!")
-    user_auth.register_org_and_owner(f"B {uuid.uuid4().hex[:6]}", email_b, "supersecret2")
+    user_auth.register_org_and_owner(rand_org_name("Aorg"), email_a, "Supersecret1!")
+    user_auth.register_org_and_owner(rand_org_name("Borg"), email_b, "supersecret2")
     # AUTH-2: register returns no user/token — read org ids from membership and get
     # each owner's JWT by approving + logging in.
     org_a_id, _ = member_for_email(email_a)

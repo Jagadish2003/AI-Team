@@ -23,6 +23,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 
 from app import db
+from auth_helpers import rand_org_name
 
 # A password that satisfies both the registration min-length check and the CS-3
 # reset strength rule (>=8, upper, lower, special).
@@ -40,7 +41,7 @@ def _register(client, *, email=None, password=STRONG):
     email = email or _email()
     resp = client.post(
         "/api/auth/register",
-        json={"org_name": f"Org_{uuid.uuid4().hex[:8]}", "email": email, "password": password},
+        json={"org_name": rand_org_name(), "email": email, "password": password},
     )
     assert resp.status_code == 201, resp.text
     # AUTH-2: approve the org (simulated admin step) so a post-reset login works.
