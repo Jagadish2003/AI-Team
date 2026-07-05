@@ -5,6 +5,7 @@ import { useRunContext } from "../../context/RunContext";
 import { useConnectorContext } from "../../context/ConnectorContext";
 import { useTheme } from "../../context/ThemeContext";
 import { useAuthOptional } from "../../context/AuthContext";
+import { useOrgName } from "../../context/LicenseContext";
 import { profileNameFromEmail } from "../../utils/profileName";
 
 type NavItem = {
@@ -63,6 +64,12 @@ export default function TopNav() {
   const profileName = profileNameFromEmail(auth?.user?.email);
   const profileTitle = profileName ? `${profileName}'s Profile` : "Profile";
 
+  // R17-D4 Addendum A §2 / T13 — organisation display name resolved once from the
+  // license (T12), shown as the workspace label in the header for every role. It
+  // updates on key paste with no restart and shows a neutral default before a key
+  // is installed (AC15/AC16).
+  const orgName = useOrgName();
+
   async function handleLogout() {
     setProfileOpen(false);
     try {
@@ -101,6 +108,16 @@ export default function TopNav() {
             alt="AgentIQ Logo"
             className="h-[43px] w-auto"
           />
+          {/* Workspace label — the organisation name resolved from the license
+              (R17-D4 Addendum A §2 / T13). Hidden on narrow viewports so the nav
+              keeps room. */}
+          <span
+            data-testid="org-name-label"
+            title={orgName}
+            className="ml-3 hidden max-w-[16rem] truncate border-l border-border pl-3 text-sm font-semibold text-navtext md:inline-block"
+          >
+            {orgName}
+          </span>
         </div>
 
         <nav

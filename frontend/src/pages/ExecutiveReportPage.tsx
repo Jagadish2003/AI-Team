@@ -9,6 +9,7 @@ import { useNavigate } from 'react-router-dom';
 import { useRunContext } from '../context/RunContext';
 import { useDiscoveryRunContext } from '../context/DiscoveryRunContext';
 import { useAuthOptional } from '../context/AuthContext';
+import { useOrgName } from '../context/LicenseContext';
 import { RunRequiredEmptyState } from '../components/common/RunRequiredEmptyState';
 import { buildPilotRoadmap } from '../utils/buildRoadmap';
 import { fetchRunExecutiveReport, type ExecutiveReport } from '../api/runScopedS9S10Api';
@@ -29,6 +30,11 @@ export default function ExecutiveReportPage() {
   const { runId } = useRunContext();
   const { run, computing } = useDiscoveryRunContext();
   const auth = useAuthOptional();
+  // R17-D4 Addendum A §2 / T13 — customer-facing reports carry the organisation
+  // name resolved from the license (the same name shown in the header, via T12),
+  // not the ad-hoc auth org_name, so exports carry the correct organisation
+  // identity and stay consistent with the rest of the product.
+  const orgName = useOrgName();
   const runStatus = run?.status?.toLowerCase();
 
   const [report, setReport] = useState<ExecutiveReport | null>(null);
@@ -159,7 +165,7 @@ export default function ExecutiveReportPage() {
           blockerCount,
           overallReadiness: roadmap.overallReadiness,
           opportunities,
-          orgName: auth?.user?.org_name ?? null,
+          orgName,
           userName: profileNameFromEmail(auth?.user?.email),
           generatedAt,
           runId,
@@ -188,6 +194,7 @@ export default function ExecutiveReportPage() {
     blockerCount,
     opportunities,
     auth,
+    orgName,
     runId,
   ]);
 
