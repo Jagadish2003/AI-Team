@@ -72,12 +72,18 @@ export async function login(email: string, password: string): Promise<AuthResult
 export async function register(
   orgName: string,
   email: string,
-  password: string
+  password: string,
+  fullName?: string
 ): Promise<AuthResult> {
   const res = await fetch(`${BASE_URL}/api/auth/register`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ org_name: orgName, email, password }),
+    body: JSON.stringify({
+      org_name: orgName,
+      email,
+      password,
+      full_name: fullName,
+    }),
   });
   const body = await parseBody(res);
   if (!res.ok) throw new ApiError("POST /api/auth/register failed", res.status, body);

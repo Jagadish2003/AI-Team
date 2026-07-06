@@ -322,7 +322,9 @@ def test_ac10_register_sends_welcome_email(client, monkeypatch):
     sent = {}
     monkeypatch.setattr(
         routes_auth, "send_welcome_email",
-        lambda to, org_name: sent.update(to=to, org_name=org_name) or True,
+        lambda to, org_name, full_name=None: sent.update(
+            to=to, org_name=org_name, full_name=full_name
+        ) or True,
     )
     resp, email = _register(client, password=STRONG)
     assert resp.status_code == 201, resp.text

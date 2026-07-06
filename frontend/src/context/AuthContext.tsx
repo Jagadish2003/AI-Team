@@ -46,7 +46,12 @@ interface AuthContextValue {
   /** POST /api/auth/login, store token + user in state. Throws ApiError on failure. */
   login: (email: string, password: string) => Promise<void>;
   /** POST /api/auth/register, then leave the user logged out. Throws ApiError on failure. */
-  register: (orgName: string, email: string, password: string) => Promise<void>;
+  register: (
+    orgName: string,
+    email: string,
+    password: string,
+    fullName?: string
+  ) => Promise<void>;
   /** POST /api/auth/logout (best-effort) and clear all state. */
   logout: () => Promise<void>;
   /** POST /api/auth/accept-invite, store token + user in state. Throws ApiError on failure. */
@@ -159,8 +164,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const register = useCallback(
-    async (orgName: string, email: string, password: string) => {
-      await apiRegister(orgName, email, password);
+    async (
+      orgName: string,
+      email: string,
+      password: string,
+      fullName?: string
+    ) => {
+      await apiRegister(orgName, email, password, fullName);
       writeStoredToken(null);
       setToken(null);
       setUser(null);
