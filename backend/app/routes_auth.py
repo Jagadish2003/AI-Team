@@ -12,7 +12,7 @@ import logging
 import os
 import time
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 from urllib.parse import urlencode
 from uuid import uuid4
 
@@ -95,6 +95,9 @@ class RegisterRequest(BaseModel):
     org_name: str
     email: str
     password: str
+    # Exact name the registrant types at signup. Optional so older clients that
+    # do not send it still register; used only for the welcome email greeting.
+    full_name: Optional[str] = None
 
 
 class LoginRequest(BaseModel):
@@ -271,7 +274,7 @@ def register(body: RegisterRequest) -> Dict[str, Any]:
     # (AC14) — a delivery failure must never break registration, so any error is
     # swallowed and the pending-approval response is still returned.
     try:
-        send_welcome_email(body.email, body.org_name)
+        send_welcome_email(body.email, body.org_name, body.full_name)
     except Exception:  # pragma: no cover - email helper already swallows errors
         logger.exception("welcome email dispatch failed (non-blocking)")
 

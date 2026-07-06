@@ -64,25 +64,31 @@ def test_register_sends_welcome_email(client, monkeypatch):
     calls = []
     monkeypatch.setattr(
         routes_auth, "send_welcome_email",
-        lambda to, org_name: calls.append((to, org_name)) or True,
+        lambda to, org_name, full_name=None: calls.append((to, org_name, full_name)) or True,
     )
 
     email = _email()
     resp = client.post(
         "/api/auth/register",
-        json={"org_name": rand_org_name(), "email": email, "password": "Ownerpass1!"},
+        json={
+            "org_name": rand_org_name(),
+            "email": email,
+            "password": "Ownerpass1!",
+            "full_name": "Sreedhar M",
+        },
     )
 
     assert resp.status_code == 201, resp.text
     assert len(calls) == 1
-    sent_to, org_name = calls[0]
+    sent_to, org_name, full_name = calls[0]
     assert sent_to == email
     assert org_name  # the org's display name is passed through
+    assert full_name == "Sreedhar M"  # the exact registered name is passed through
 
 
 def test_register_still_succeeds_when_welcome_email_fails(client, monkeypatch):
     """AC14: a welcome-email failure must not break registration."""
-    def _boom(to, org_name):
+    def _boom(to, org_name, full_name=None):
         raise RuntimeError("smtp down")
 
     monkeypatch.setattr(routes_auth, "send_welcome_email", _boom)

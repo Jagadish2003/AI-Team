@@ -123,7 +123,7 @@ describe("AC1 — Source Intake absent from TopNav", () => {
       "Source Intelligence",
       "Opportunity Review",
       "Agent Roadmap",
-      "Agent Blueprint",
+      "Agentforce Blueprint",
       "Executive Report",
     ];
     for (const label of expectedItems) {

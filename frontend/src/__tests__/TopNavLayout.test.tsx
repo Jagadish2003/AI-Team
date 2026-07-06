@@ -86,7 +86,7 @@ describe("TopNav — org name never crowds out the nav", () => {
       "Source Intelligence",
       "Opportunity Review",
       "Agent Roadmap",
-      "Agent Blueprint",
+      "Agentforce Blueprint",
       "Executive Report",
     ];
     for (const label of expectedItems) {

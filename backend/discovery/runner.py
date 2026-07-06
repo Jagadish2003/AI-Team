@@ -929,22 +929,19 @@ def run(
         ncino_ok = True
         try:
             from .ingest.ncino import ingest as ncino_ingest
-            # CS-4 / AT-310: ProcessInstance is queried by both salesforce.ingest()
-            # and ncino.ingest(). Forward the Salesforce CRM approval data so the
-            # nCino ingestor reuses it instead of issuing a duplicate
-            # ProcessInstance query, reducing total Salesforce API calls by 1 per
-            # discovery run.
-            #
-            # AT-310-fix: forward the approval data ONLY when Salesforce actually
-            # produced it. A missing OR empty value is passed as None so
-            # ncino.ingest() keeps its own independent ProcessInstance fetch
-            # instead of being handed an empty approval set when the Salesforce
-            # CRM pass failed or returned nothing. Passing [] would suppress that
-            # fallback and silently drop nCino approval signals.
-            preloaded = sf_data.get("approval_processes")
-            ncino_data = ncino_ingest(
-                preloaded_process_instances=preloaded if preloaded else None
-            )
+            # NOTE (reverts the CS-4/AT-310 reuse): sf_data["approval_processes"]
+            # is an AGGREGATED per-process-name summary produced by
+            # salesforce.get_approval_pending() (process_name / pending_count /
+            # approver_count) — NOT raw ProcessInstance rows. nCino's
+            # loan-approval detector needs raw rows (TargetObjectId, CompletedDate,
+            # SubmittedById) from its own CreatedDate-windowed query. The two SOQL
+            # queries select different columns and different filters
+            # (Status='Pending' vs CreatedDate=LAST_N_DAYS:90), so they were never
+            # genuine duplicates. Forwarding the summary silently zeroed nCino's
+            # approval signal (no TargetObjectId to match), so nCino fetches its
+            # own ProcessInstance rows. Costs one extra SOQL query per run;
+            # correctness over the saved call.
+            ncino_data = ncino_ingest()
             # Merge ncino data into sf_data so detectors can find it
             if sf_data is None:
                 sf_data = {}

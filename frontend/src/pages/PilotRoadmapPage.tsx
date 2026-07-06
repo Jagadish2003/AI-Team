@@ -1,7 +1,8 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import PageShell from '../components/common/PageShell';
-import RoadmapSummaryBar from '../components/pilot_roadmap/RoadmapSummaryBar';
+// Roadmap summary bar hidden per request — uncomment with its render below to restore:
+// import RoadmapSummaryBar from '../components/pilot_roadmap/RoadmapSummaryBar';
 import StagesGrid from '../components/pilot_roadmap/StagesGrid';
 import LoadingPanel from '../components/common/LoadingPanel';
 import ErrorPanel from '../components/common/ErrorPanel';
@@ -130,11 +131,13 @@ export default function PilotRoadmapPage() {
         </button>
       }
     >
+        {/* Roadmap summary bar — hidden per request; uncomment to restore:
         <div className="shrink-0">
           <RoadmapSummaryBar model={model} />
         </div>
+        */}
 
-        <div className="mt-2 lg:h-[680px] lg:flex-none">
+        <div className="mt-2">
           <StagesGrid
             stages={model.stages}
             onOpenReview={openReview}

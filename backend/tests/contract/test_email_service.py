@@ -166,11 +166,36 @@ def test_send_invite_email_builds_link_subject_and_html(monkeypatch):
 def test_send_welcome_email_builds_subject_and_html(monkeypatch):
     captured = _capture_send_email(monkeypatch)
     assert email_service.send_welcome_email("jenny.smith@example.com", "Acme Corp") is True
-    assert captured["subject"] == "Welcome Jenny Smith to AgentIQ - Acme Corp"
-    assert "Welcome Jenny Smith to AgentIQ" in captured["html"]
+    assert (
+        captured["subject"]
+        == "Welcome to AgentIQ – Your Organization Has Been Submitted for Approval"
+    )
+    assert "Welcome Jenny Smith" in captured["html"]
     assert "Acme Corp" in captured["html"]
-    assert "Account created" in captured["html"]
-    assert "workspace is ready" in captured["html"]
+    assert "submitted for approval" in captured["html"]
+    assert "created successfully" in captured["html"]
+
+
+def test_send_welcome_email_uses_exact_full_name_when_given(monkeypatch):
+    captured = _capture_send_email(monkeypatch)
+    assert (
+        email_service.send_welcome_email(
+            "jenny.smith@example.com", "Acme Corp", "Sreedhar M"
+        )
+        is True
+    )
+    # The exact registered name is greeted, not the email-derived one.
+    assert "Welcome Sreedhar M" in captured["html"]
+    assert "Jenny Smith" not in captured["html"]
+
+
+def test_send_welcome_email_falls_back_to_email_name_when_full_name_blank(monkeypatch):
+    captured = _capture_send_email(monkeypatch)
+    assert (
+        email_service.send_welcome_email("jenny.smith@example.com", "Acme Corp", "  ")
+        is True
+    )
+    assert "Welcome Jenny Smith" in captured["html"]
 
 
 def test_send_password_reset_email_strips_trailing_slash_in_base(monkeypatch):

@@ -116,7 +116,8 @@ def test_templates_render_with_jinja2():
         recipient_name="Jenny",
     )
     assert "Acme Corp" in welcome
-    assert "Welcome Jenny to AgentIQ" in welcome
+    assert "Welcome Jenny," in welcome
+    assert "Welcome to AgentIQ" in welcome
 
     reset = env.get_template("reset_password.html").render(
         link="https://app.example.com/reset-password?token=XYZ789",

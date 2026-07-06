@@ -202,12 +202,17 @@ def send_invite_email(to: str, invite_token: str, org_name: str, role: str) -> b
     )
 
 
-def send_welcome_email(to: str, org_name: str) -> bool:
-    """Welcome email sent after successful registration."""
-    recipient_name = _display_name_from_email(to)
+def send_welcome_email(to: str, org_name: str, full_name: str | None = None) -> bool:
+    """Welcome email sent after successful registration.
+
+    ``full_name`` is the exact name the user typed at registration. When it is
+    missing (blank or omitted) we fall back to a name derived from the email
+    local part, so older callers and email-only flows still render a name.
+    """
+    recipient_name = (full_name or "").strip() or _display_name_from_email(to)
     return _render_and_send(
         to,
-        f"Welcome {recipient_name} to AgentIQ - {org_name}",
+        "Welcome to AgentIQ – Your Organization Has Been Submitted for Approval",
         "welcome.html",
         org=org_name,
         recipient_name=recipient_name,
