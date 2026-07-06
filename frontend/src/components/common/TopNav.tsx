@@ -39,7 +39,7 @@ const items = [
   { to: "/pilot-roadmap", label: "Agent Roadmap", runScoped: true },
   {
     to: "/agent-force",
-    label: "AgentForce",
+    label: "Agentforce",
     runScoped: true,
     sfOnly: true,
   },

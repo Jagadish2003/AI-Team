@@ -542,7 +542,7 @@ export default function BlueprintPage() {
 
   return (
     <PageShell
-      title="AgentForce"
+      title="Agentforce"
       description="Agent design generated from the selected opportunity and its discovery evidence."
       className="bg-bg"
       actions={
