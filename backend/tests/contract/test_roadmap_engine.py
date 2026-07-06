@@ -13,6 +13,31 @@ def test_stage90_not_empty_when_unreviewed_complex_exists():
     assert len(s90["opportunities"]) >= 1
 
 
+def test_no_stage_caps_all_opportunities_appear_in_their_tier():
+    """Caps removed: every opportunity shows in its tier's stage, even when a
+    tier has more than the old 3 QW / 2 Strategic / 1 Complex limits."""
+    opps = [
+        {"id": "qw1", "tier": "Quick Win", "decision": "UNREVIEWED", "requiredPermissions": []},
+        {"id": "qw2", "tier": "Quick Win", "decision": "UNREVIEWED", "requiredPermissions": []},
+        {"id": "qw3", "tier": "Quick Win", "decision": "UNREVIEWED", "requiredPermissions": []},
+        {"id": "qw4", "tier": "Quick Win", "decision": "UNREVIEWED", "requiredPermissions": []},
+        {"id": "st1", "tier": "Strategic", "decision": "UNREVIEWED", "requiredPermissions": []},
+        {"id": "st2", "tier": "Strategic", "decision": "UNREVIEWED", "requiredPermissions": []},
+        {"id": "st3", "tier": "Strategic", "decision": "UNREVIEWED", "requiredPermissions": []},
+        {"id": "cx1", "tier": "Complex", "decision": "UNREVIEWED", "requiredPermissions": []},
+        {"id": "cx2", "tier": "Complex", "decision": "UNREVIEWED", "requiredPermissions": []},
+    ]
+    rm = build_roadmap(opps)
+    s30 = next(s for s in rm["stages"] if s["id"] == "NEXT_30")
+    s60 = next(s for s in rm["stages"] if s["id"] == "NEXT_60")
+    s90 = next(s for s in rm["stages"] if s["id"] == "NEXT_90")
+
+    assert len(s30["opportunities"]) == 4
+    assert len(s60["opportunities"]) == 3
+    assert len(s90["opportunities"]) == 2
+    assert rm["selectedCount"] == 9
+
+
 def test_permissions_merge_rules_required_or_satisfied_and():
     opps = [
         {"id": "opp1", "tier": "Quick Win", "decision": "UNREVIEWED", "requiredPermissions": [

@@ -1,9 +1,15 @@
-import React, { useState } from 'react';
-import { ChevronRight } from 'lucide-react';
-import { OpportunityCandidate, PermissionItem } from '../../types/analystReview';
-import { Readiness, RoadmapDependency, RoadmapStage } from '../../types/pilotRoadmap';
-import { readinessFromPermission, stageReadiness } from '../../utils/buildRoadmap';
+import React from 'react';
+import { OpportunityCandidate } from '../../types/analystReview';
+import { RoadmapStage } from '../../types/pilotRoadmap';
 import ReadinessPill from './ReadinessPill';
+
+// ─── Commented out with the "Required Data Permissions" / "Dependencies"
+//     sections below (hidden per request). Uncomment together to restore. ───
+// import { useState } from 'react';
+// import { ChevronRight } from 'lucide-react';
+// import { PermissionItem } from '../../types/analystReview';
+// import { Readiness, RoadmapDependency } from '../../types/pilotRoadmap';
+// import { readinessFromPermission, stageReadiness } from '../../utils/buildRoadmap';
 
 interface Props {
   stage: RoadmapStage;
@@ -11,69 +17,76 @@ interface Props {
   renderBlueprintLink?: (oppId: string) => React.ReactNode;
 }
 
-function permRowStyle(p: PermissionItem) {
-  const status = readinessFromPermission(p);
-  const cls =
-    status === 'READY'
-      ? 'roadmap-permission-ready border-emerald-500/30 bg-emerald-500/10 text-emerald-200'
-      : status === 'PENDING'
-        ? 'roadmap-permission-pending border-amber-500/30 bg-amber-500/10 text-amber-200'
-        : 'roadmap-permission-missing border-red-500/30 bg-red-500/10 text-red-200';
-  return { status, cls };
-}
-
-function countsFromStatuses<T extends { status: Readiness }>(items: T[]) {
-  return items.reduce(
-    (acc, item) => {
-      if (item.status === 'READY') acc.ready++;
-      if (item.status === 'PENDING') acc.pending++;
-      if (item.status === 'MISSING') acc.missing++;
-      return acc;
-    },
-    { ready: 0, pending: 0, missing: 0 },
-  );
-}
-
-function ReadinessCounts({
-  ready,
-  pending,
-  missing,
-}: {
-  ready: number;
-  pending: number;
-  missing: number;
-}) {
-  return (
-    <span className="flex flex-wrap items-center justify-end gap-x-1 gap-y-0.5 text-[10px]">
-      <span className="roadmap-count-ready whitespace-nowrap font-semibold text-emerald-300">{ready} READY</span>
-      <span className="opacity-10">&middot;</span>
-      <span className="roadmap-count-pending whitespace-nowrap font-semibold text-amber-300">{pending} PENDING</span>
-      <span className="opacity-10">&middot;</span>
-      <span className="roadmap-count-missing whitespace-nowrap font-semibold text-red-300">{missing} MISSING</span>
-    </span>
-  );
-}
+// ─── Helpers for the hidden "Required Data Permissions" / "Dependencies"
+//     sections. Uncomment together with those sections to restore. ───
+// function permRowStyle(p: PermissionItem) {
+//   const status = readinessFromPermission(p);
+//   const cls =
+//     status === 'READY'
+//       ? 'roadmap-permission-ready border-emerald-500/30 bg-emerald-500/10 text-emerald-200'
+//       : status === 'PENDING'
+//         ? 'roadmap-permission-pending border-amber-500/30 bg-amber-500/10 text-amber-200'
+//         : 'roadmap-permission-missing border-red-500/30 bg-red-500/10 text-red-200';
+//   return { status, cls };
+// }
+//
+// function countsFromStatuses<T extends { status: Readiness }>(items: T[]) {
+//   return items.reduce(
+//     (acc, item) => {
+//       if (item.status === 'READY') acc.ready++;
+//       if (item.status === 'PENDING') acc.pending++;
+//       if (item.status === 'MISSING') acc.missing++;
+//       return acc;
+//     },
+//     { ready: 0, pending: 0, missing: 0 },
+//   );
+// }
+//
+// function ReadinessCounts({
+//   ready,
+//   pending,
+//   missing,
+// }: {
+//   ready: number;
+//   pending: number;
+//   missing: number;
+// }) {
+//   return (
+//     <span className="flex flex-wrap items-center justify-end gap-x-1 gap-y-0.5 text-[10px]">
+//       <span className="roadmap-count-ready whitespace-nowrap font-semibold text-emerald-300">{ready} READY</span>
+//       <span className="opacity-10">&middot;</span>
+//       <span className="roadmap-count-pending whitespace-nowrap font-semibold text-amber-300">{pending} PENDING</span>
+//       <span className="opacity-10">&middot;</span>
+//       <span className="roadmap-count-missing whitespace-nowrap font-semibold text-red-300">{missing} MISSING</span>
+//     </span>
+//   );
+// }
 
 export default function StageCard({ stage, onOpenReview, renderBlueprintLink }: Props) {
-  const [showDependencies, setShowDependencies] = useState(false);
+  // ─── State/derived values for the hidden sections below. Uncomment to restore. ───
+  // const [showDependencies, setShowDependencies] = useState(false);
+  //
+  // const required = stage.requiredPermissions.filter((p) => p.required);
+  // const readyCount = stage.requiredPermissions.filter((p) => readinessFromPermission(p) === 'READY').length;
+  // const pendingCount = stage.requiredPermissions.filter((p) => readinessFromPermission(p) === 'PENDING').length;
+  // const missingCount = required.filter((p) => readinessFromPermission(p) === 'MISSING').length;
+  //
+  // const dependencyCounts = countsFromStatuses(stage.dependencies);
+  //
+  // const hasPermScroll = stage.requiredPermissions.length > 4;
+  // const hasDepsScroll = stage.dependencies.length > 3;
+  //
+  // const permScrollStyle = {
+  //   height: '180px',
+  // };
+  // const depsScrollStyle = {
+  //   height: '148px',
+  // };
 
-  const required = stage.requiredPermissions.filter((p) => p.required);
-  const readyCount = stage.requiredPermissions.filter((p) => readinessFromPermission(p) === 'READY').length;
-  const pendingCount = stage.requiredPermissions.filter((p) => readinessFromPermission(p) === 'PENDING').length;
-  const missingCount = required.filter((p) => readinessFromPermission(p) === 'MISSING').length;
-
-  const gate = stage.opportunities.length === 0 ? 'MISSING' : stageReadiness(stage.requiredPermissions);
-  const dependencyCounts = countsFromStatuses(stage.dependencies);
-
-  const hasPermScroll = stage.requiredPermissions.length > 4;
-  const hasDepsScroll = stage.dependencies.length > 3;
-
-  const permScrollStyle = {
-    height: '180px',
-  };
-  const depsScrollStyle = {
-    height: '148px',
-  };
+  // Simplified gate: READY when the stage has opportunities, otherwise MISSING.
+  // Original permission-driven gate (restore with the commented sections below):
+  // const gate = stage.opportunities.length === 0 ? 'MISSING' : stageReadiness(stage.requiredPermissions);
+  const gate = stage.opportunities.length === 0 ? 'MISSING' : 'READY';
 
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden rounded-xl border border-border bg-panel p-4">
@@ -85,7 +98,7 @@ export default function StageCard({ stage, onOpenReview, renderBlueprintLink }: 
       <div className="opp-scroll mt-4 min-h-0 flex-1 space-y-3 overflow-y-auto pr-1">
         <div className="rounded-lg border border-border bg-bg/20 p-3">
           <div className="text-sm font-semibold text-text">Selected Opportunities</div>
-          <div className="mt-2 h-[190px] space-y-2 overflow-y-auto pr-1">
+          <div className="mt-2 space-y-2">
             {stage.opportunities.length === 0 && (
               <div className="text-sm text-muted">No opportunities assigned to this stage yet.</div>
             )}
@@ -97,8 +110,10 @@ export default function StageCard({ stage, onOpenReview, renderBlueprintLink }: 
                 data-testid={`opp-row-${o.id}`}
               >
                 <div className="text-sm font-semibold text-text">{o.title}</div>
-                <div className="mt-1 text-xs text-muted">
-                  {o.category} &middot; Tier {o.tier} &middot; Confidence {o.confidence}
+                <div className="mt-1 flex flex-col gap-0.5 text-xs text-muted">
+                  <span>{o.category}</span>
+                  <span>Tier {o.tier}</span>
+                  <span>Confidence {o.confidence}</span>
                 </div>
                 {renderBlueprintLink?.(o.id)}
               </button>
@@ -106,6 +121,8 @@ export default function StageCard({ stage, onOpenReview, renderBlueprintLink }: 
           </div>
         </div>
 
+        {/* ─── "Required Data Permissions" section — hidden per request.
+             Uncomment (with the imports/helpers/derived values above) to restore:
         <div className="rounded-lg border border-border bg-bg/20 p-3">
           <div className="flex flex-wrap items-start justify-between gap-2">
             <div className="text-sm font-semibold text-text">Required Data Permissions</div>
@@ -131,7 +148,10 @@ export default function StageCard({ stage, onOpenReview, renderBlueprintLink }: 
             Required permissions drive gate readiness. Recommended permissions influence quality and confidence.
           </div>
         </div>
+        ─── */}
 
+        {/* ─── "Dependencies" section — hidden per request.
+             Uncomment (with the imports/helpers/derived values above) to restore:
         <div className="rounded-lg border border-border bg-bg/20 p-3">
           <button
             className="flex w-full flex-wrap items-start justify-between gap-3 text-left"
@@ -167,6 +187,7 @@ export default function StageCard({ stage, onOpenReview, renderBlueprintLink }: 
             </div>
           )}
         </div>
+        ─── */}
       </div>
     </div>
   );

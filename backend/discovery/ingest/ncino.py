@@ -661,8 +661,15 @@ def _build_approval_metrics(
 ) -> Dict[str, Any]:
     """
     Approval bottleneck from ProcessInstance (standard Salesforce).
-    Filters to loan-related approvals by checking TargetObjectId prefix.
+    Filters to loan-related approvals by matching the LLC_BI__Loan__c key prefix.
     Pending = Status not in (Approved, Rejected, Recalled).
+
+    A pending approval usually sits on a loan that is NOT being actively edited,
+    so that loan's LastModifiedDate often falls outside the LAST_N_DAYS:90 window
+    used to build ``loan_ids``. Matching on the loan object's 3-char key prefix
+    (unique per object per org) instead of exact membership in ``loan_ids``
+    decouples approval detection from the loan-modification window, so genuinely
+    stalled approvals are not silently dropped.
     """
     today = _today()
     TERMINAL = {"Approved", "Rejected", "Recalled", "Removed"}
@@ -672,10 +679,21 @@ def _build_approval_metrics(
     # -------------------------------------------------------------
     CYCLE_DAY_CAP = 365
 
-    # Filter to loan-related instances
+    # Filter to loan-related instances by the LLC_BI__Loan__c key prefix
+    # (first 3 chars of any loan Id). This matches the object, not a specific
+    # modified-in-90-days loan set — see the note above.
+    loan_prefix = next(iter(loan_ids))[:3] if loan_ids else None
     loan_instances = [
-        p for p in process_instances if p.get("TargetObjectId", "") in loan_ids
+        p
+        for p in process_instances
+        if loan_prefix and str(p.get("TargetObjectId", ""))[:3] == loan_prefix
     ]
+    logger.info(
+        "approval instances: %d total, %d matched loan prefix %r",
+        len(process_instances),
+        len(loan_instances),
+        loan_prefix,
+    )
 
     pending = []
     cycle_days_list = []

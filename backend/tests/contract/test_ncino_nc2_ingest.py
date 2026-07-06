@@ -145,6 +145,66 @@ def test_approval_metrics_filter_to_loan_ids() -> None:
     assert metrics["pending_count"] == 1
 
 
+def test_approval_metrics_count_pending_on_loan_outside_modified_window() -> None:
+    """Regression: a pending approval sits on a loan that has NOT been edited
+    recently, so that loan is absent from ``loan_ids`` (built from
+    LastModifiedDate = LAST_N_DAYS:90). The approval must still fire because it
+    targets the LLC_BI__Loan__c object (matched by key prefix), not a specific
+    modified-in-90-days loan. Previously the exact-membership filter dropped it,
+    silently reporting zero pending approvals despite live data.
+    """
+    from discovery.ingest.ncino import _build_approval_metrics
+
+    # Only one loan modified in the window; the approval targets a DIFFERENT
+    # loan Id (same 'aCy' object prefix) that fell outside the window.
+    loan_ids = {"aCy000000000001AAA"}
+    metrics = _build_approval_metrics(
+        [
+            {
+                "Id": "pi_stale",
+                "TargetObjectId": "aCy000000000999AAA",  # a loan, not in loan_ids
+                "Status": "Pending",
+                "CreatedDate": "2026-01-01",
+                "CompletedDate": None,
+            },
+            {
+                "Id": "pi_case",
+                "TargetObjectId": "500000000000123AAA",  # a Case, not a loan
+                "Status": "Pending",
+                "CreatedDate": "2026-01-01",
+                "CompletedDate": None,
+            },
+        ],
+        loan_ids,
+    )
+
+    # The stale-loan approval is counted; the non-loan (Case) approval is not.
+    assert metrics["total_instances"] == 1
+    assert metrics["pending_count"] == 1
+
+
+def test_approval_metrics_empty_when_no_loans_fetched() -> None:
+    """With no loans in the window there is no prefix to match against, so no
+    approval is attributed to loans (avoids matching arbitrary objects)."""
+    from discovery.ingest.ncino import _build_approval_metrics
+
+    metrics = _build_approval_metrics(
+        [
+            {
+                "Id": "pi_001",
+                "TargetObjectId": "aCy000000000999AAA",
+                "Status": "Pending",
+                "CreatedDate": "2026-01-01",
+                "CompletedDate": None,
+            }
+        ],
+        set(),
+    )
+
+    assert metrics["total_instances"] == 0
+    assert metrics["pending_count"] == 0
+
+
 class _RecordingClient:
     """Fake nCino REST client that records every SOQL query it receives."""
 
