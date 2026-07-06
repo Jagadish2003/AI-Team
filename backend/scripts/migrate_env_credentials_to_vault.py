@@ -93,6 +93,11 @@ _CONNECTOR_ENV_SPECS: List[_ConnectorEnvSpec] = [
     ),
     _ConnectorEnvSpec("ncino", "NCINO_INSTANCE_URL", None, ["NCINO_ACCESS_TOKEN"]),
     _ConnectorEnvSpec("strs", "STRS_INSTANCE_URL", None, ["STRS_ACCESS_TOKEN"]),
+    # Native DB connectors (R17-D3 Addendum A §2). The host/port/database are
+    # non-secret instance config and stay in env; only the service-account
+    # username + password migrate into the vault as a static credential.
+    _ConnectorEnvSpec("oracle_db", None, "ORACLE_DB_USERNAME", ["ORACLE_DB_PASSWORD"]),
+    _ConnectorEnvSpec("postgresql", None, "POSTGRESQL_USERNAME", ["POSTGRESQL_PASSWORD"]),
 ]
 
 

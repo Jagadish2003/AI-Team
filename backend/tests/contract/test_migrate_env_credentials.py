@@ -50,7 +50,7 @@ def _legacy_env() -> dict:
 
 
 def _cleanup(org: str) -> None:
-    for cid in ("salesforce", "jira", "servicenow", "ncino", "strs"):
+    for cid in ("salesforce", "jira", "servicenow", "ncino", "strs", "oracle_db", "postgresql"):
         try:
             vault.revoke_static_credential(org, cid)
         except Exception:
@@ -80,7 +80,34 @@ def test_migrates_legacy_env_into_the_vault_as_static_credentials():
 
             # Connectors with no legacy env are skipped, not migrated.
             skipped = {c.connector_id for c in report.connectors if c.action == "skipped_no_env"}
-            assert skipped == {"ncino", "strs"}
+            assert skipped == {"ncino", "strs", "oracle_db", "postgresql"}
+        finally:
+            _cleanup(org)
+
+
+def test_migrates_legacy_db_credentials_into_the_vault():
+    """R17-D3 Addendum A §2 — native DB service-account credentials migrate into
+    the per-org vault as static credentials (host/port stay instance config)."""
+    org = "org-migrate-db"
+    legacy = {
+        "ORACLE_DB_USERNAME": "oracle_svc",
+        "ORACLE_DB_PASSWORD": "oracle-secret",
+        "POSTGRESQL_USERNAME": "pg_svc",
+        "POSTGRESQL_PASSWORD": "pg-secret",
+    }
+    with patch.dict(os.environ, _vault_env()):
+        try:
+            report = migrate_env_credentials_to_vault(org, env=legacy)
+            migrated = {c.connector_id for c in report.migrated}
+            assert {"oracle_db", "postgresql"}.issubset(migrated)
+
+            oracle = vault.get_static_credential(org, "oracle_db")
+            assert oracle.username == "oracle_svc"
+            assert oracle.secret == "oracle-secret"
+
+            pg = vault.get_static_credential(org, "postgresql")
+            assert pg.username == "pg_svc"
+            assert pg.secret == "pg-secret"
         finally:
             _cleanup(org)
 

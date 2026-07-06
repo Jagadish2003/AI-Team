@@ -9,9 +9,12 @@ Design invariants:
     on pool objects, config objects, or at module scope.
   - _IsolatedPool._config holds only env-var key *names* (username_key,
     password_key), never the resolved values.
-  - resolve_secret() is the only credential-resolution path.  T1-S10-A will
-    replace the env-var bootstrap stub with the real vault implementation;
-    the call-site signature is identical.
+  - resolve_db_credentials() is the single credential-resolution path.  It
+    resolves per-org from the encrypted vault (R17-D3 Addendum A, T11/AC8) via
+    app.auth.credentials.get_connector_credentials, keyed by
+    (config.org_id, config.connector_id) — the same one path every SaaS
+    ingestor uses.  resolve_secret() remains only as the CLI/standalone env
+    fallback used when the org has no vaulted credential.
 """
 
 from __future__ import annotations
@@ -37,15 +40,17 @@ QUERY_TIMEOUT_S: int = 30
 MAX_ROWS_PER_QUERY: int = 10_000
 
 # ---------------------------------------------------------------------------
-# Credential resolution — bootstrap stub  (T1-S10-A owns the real vault)
+# Credential resolution
 # ---------------------------------------------------------------------------
 
 def resolve_secret(env_key: str) -> str:
     """Return the secret stored under *env_key* in the process environment.
 
     Raises KeyError when the variable is absent so callers receive an explicit
-    failure rather than a silent None.  T1-S10-A will swap this stub for the
-    per-workspace credential vault without changing the call signature.
+    failure rather than a silent None.  This is the CLI/standalone fallback used
+    by resolve_db_credentials() when the org has no vaulted credential — never
+    the primary path on a shared multi-tenant instance (per-client DB secrets
+    are purged from .env by R17-D3 Addendum A, T13).
     """
     value = os.environ.get(env_key)
     if value is None:
@@ -54,6 +59,53 @@ def resolve_secret(env_key: str) -> str:
             "Configure it before creating a connection pool."
         )
     return value
+
+
+def resolve_db_credentials(config: DBConnectorConfig) -> tuple[str, str]:
+    """Return (username, password) for a DB connector, resolved per org.
+
+    R17-D3 Addendum A (T11 / AC8): DB connector credentials resolve through the
+    ONE per-org vault path — ``app.auth.credentials.get_connector_credentials``
+    — keyed by ``(config.org_id, config.connector_id)``, exactly like the SaaS
+    ingestors.  A static credential entered per org through the Integration Hub
+    form (T12) and stored Fernet-encrypted in the vault (T10) is the primary
+    source; the DB host/port/database remain instance configuration.
+
+    Only when the org has NO vaulted credential does this fall back to the
+    documented CLI/standalone env vars (``config.username_key`` /
+    ``config.password_key``) — a single-tenant convenience, never a per-client
+    secret on a shared instance.  The vault lookup is defensive: any
+    infrastructure failure (no DB reachable, no vault key) degrades to the env
+    fallback rather than crashing pool creation.  A missing credential in BOTH
+    the vault and env surfaces as ``DBConnectionError(error_code='missing_secret')``
+    at the call site — a clear 'not configured' state, never a silent success
+    (AC11).  Resolved values are returned to the caller only, never logged.
+    """
+    record = None
+    static_record_type = None
+    try:
+        try:
+            # Prefer the top-level ``app`` path: it is the one the running app and
+            # the contract-test DB patching use, so the vault read hits the same
+            # (patched) connection the rest of the credential layer does.
+            from app.auth.credentials import try_get_connector_credentials
+            from app.auth.models import StaticCredentialRecord as _SCR
+        except ModuleNotFoundError:  # Imported as backend.app.* in some contexts.
+            from backend.app.auth.credentials import try_get_connector_credentials
+            from backend.app.auth.models import StaticCredentialRecord as _SCR
+        static_record_type = _SCR
+        record = try_get_connector_credentials(config.org_id, config.connector_id)
+    except Exception:
+        # Vault/DB unavailable (no DB, no vault key, table absent). Degrade to the
+        # env fallback rather than crash — matches the project's degrade-not-crash
+        # rule and keeps CLI/standalone use working. Never surfaces the credential.
+        record = None
+
+    if static_record_type is not None and isinstance(record, static_record_type):
+        return record.username, record.secret
+
+    # CLI/standalone fallback — dynamic env read, per-deployment only.
+    return resolve_secret(config.username_key), resolve_secret(config.password_key)
 
 
 # ---------------------------------------------------------------------------
@@ -194,8 +246,7 @@ class _IsolatedPool:
         username: str = ""
         password: str = ""
         try:
-            username = resolve_secret(self._config.username_key)
-            password = resolve_secret(self._config.password_key)
+            username, password = resolve_db_credentials(self._config)
             conn = driver_fn(self._config, username, password)
         except DBConnectionError:
             raise

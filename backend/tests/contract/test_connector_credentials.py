@@ -319,3 +319,84 @@ def test_ingest_helper_never_raises_on_absent():
             assert resolve_vault_connector("jira") is None
         finally:
             clear_live_connectors()
+
+
+# ---------------------------------------------------------------------------
+# Native DB connectors (R17-D3 Addendum A, T11 / AC8-AC9). The DB pool resolves
+# its service-account username/password through the SAME single per-org vault
+# path — connection_pool.resolve_db_credentials — keyed by (org_id,
+# connector_id). Host/port/database stay instance config; the credential does
+# not come from process-global env on a shared multi-tenant instance.
+# ---------------------------------------------------------------------------
+
+
+def _db_config(org_id: str, connector_id: str = "postgresql"):
+    from connectors.db import DBConnectorConfig
+
+    return DBConnectorConfig(
+        connector_id=connector_id,
+        org_id=org_id,
+        host="db.internal",
+        port=5432,
+        database="analytics",
+        driver="psycopg2",
+        username_key="POSTGRESQL_USERNAME",
+        password_key="POSTGRESQL_PASSWORD",
+    )
+
+
+def test_db_credentials_resolve_from_vault_not_env():
+    """AC8: a vaulted static credential wins and no env credential is read."""
+    from connectors.db.connection_pool import resolve_db_credentials
+
+    org = "org-db-vault"
+    env = _vault_env()
+    # A credential-shaped env var that must be ignored in favour of the vault.
+    env["POSTGRESQL_PASSWORD"] = "ENV-PASSWORD-SHOULD-NEVER-BE-USED"
+    with patch.dict(os.environ, env):
+        vault.store_static_credential(
+            org, "postgresql",
+            username="svc_agentiq", secret=_FAKE_STATIC_SECRET, base_url="db.internal:5432",
+        )
+        try:
+            username, password = resolve_db_credentials(_db_config(org))
+            assert username == "svc_agentiq"
+            assert password == _FAKE_STATIC_SECRET  # vault, never the env value
+        finally:
+            vault.revoke_static_credential(org, "postgresql")
+
+
+def test_db_credentials_are_org_isolated():
+    """AC9: two orgs on one instance hold independent DB credentials."""
+    from connectors.db.connection_pool import resolve_db_credentials
+
+    org_a, org_b = "org-db-a", "org-db-b"
+    with patch.dict(os.environ, _vault_env()):
+        vault.store_static_credential(
+            org_a, "postgresql", username="user_a", secret="secret-a", base_url="",
+        )
+        vault.store_static_credential(
+            org_b, "postgresql", username="user_b", secret="secret-b", base_url="",
+        )
+        try:
+            assert resolve_db_credentials(_db_config(org_a)) == ("user_a", "secret-a")
+            assert resolve_db_credentials(_db_config(org_b)) == ("user_b", "secret-b")
+        finally:
+            vault.revoke_static_credential(org_a, "postgresql")
+            vault.revoke_static_credential(org_b, "postgresql")
+
+
+def test_db_credentials_fall_back_to_env_only_for_standalone():
+    """With NO vaulted credential, the documented CLI/standalone env vars are the
+    fallback — a single-tenant convenience, not a per-client shared secret."""
+    from connectors.db.connection_pool import resolve_db_credentials
+
+    env = _vault_env()
+    env["POSTGRESQL_USERNAME"] = "cli_user"
+    env["POSTGRESQL_PASSWORD"] = "cli_pass"
+    with patch.dict(os.environ, env):
+        # Org with no vault credential → env fallback.
+        assert resolve_db_credentials(_db_config("org-db-standalone")) == (
+            "cli_user",
+            "cli_pass",
+        )

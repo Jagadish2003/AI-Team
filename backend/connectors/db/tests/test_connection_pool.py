@@ -226,17 +226,21 @@ class TestThreadSafety:
 
         def _create():
             try:
-                with patch.dict("os.environ", ENV):
-                    p = get_or_create_pool(_config("acme", "sqlserver"))
+                p = get_or_create_pool(_config("acme", "sqlserver"))
                 results.append(p)
             except Exception as exc:
                 errors.append(exc)
 
-        threads = [threading.Thread(target=_create) for _ in range(8)]
-        for t in threads:
-            t.start()
-        for t in threads:
-            t.join()
+        # Patch the environment ONCE around all threads. Per-thread patch.dict is
+        # not thread-safe — concurrent save/restore of os.environ races and can
+        # leak the credential env vars into the real environment, corrupting later
+        # tests. Patching in the main thread before the workers start avoids that.
+        with patch.dict("os.environ", ENV):
+            threads = [threading.Thread(target=_create) for _ in range(8)]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join()
 
         assert not errors
         # All threads must have received the same pool object

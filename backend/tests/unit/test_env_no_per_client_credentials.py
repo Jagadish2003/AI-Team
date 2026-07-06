@@ -45,6 +45,13 @@ FORBIDDEN_PER_CLIENT_VARS = [
     "NCINO_ACCESS_TOKEN",
     "STRS_INSTANCE_URL",
     "STRS_ACCESS_TOKEN",
+    # Native DB connector service-account credentials (R17-D3 Addendum A §2 —
+    # databases). Host/port/database are instance config and are NOT listed here;
+    # only the username/password secrets belong solely in the per-org vault.
+    "ORACLE_DB_USERNAME",
+    "ORACLE_DB_PASSWORD",
+    "POSTGRESQL_USERNAME",
+    "POSTGRESQL_PASSWORD",
 ]
 
 # The addendum's "Keeps" list — instance configuration that must survive the
