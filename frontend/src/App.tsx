@@ -150,14 +150,16 @@ export default function App() {
                                 element={<PilotRoadmapPage />}
                               />
                               <Route
-                                path="/agent-force"
+                                path="/agentforce-blueprint"
                                 element={<BlueprintPage />}
                               />
                               <Route
                                 path="/agent-blueprint"
-                                // Agent Blueprint renamed to AgentForce.
+                                // Agent Blueprint renamed to Agentforce Blueprint.
                                 // Redirect preserved for backward compatibility.
-                                element={<Navigate to="/agent-force" replace />}
+                                element={
+                                  <Navigate to="/agentforce-blueprint" replace />
+                                }
                               />
                               <Route
                                 path="/executive-report"
