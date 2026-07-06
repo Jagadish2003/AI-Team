@@ -59,9 +59,9 @@ def test_jwt_role_rejects_forged_signature_token():
     assert security._jwt_role(forged) is None
 
 
-def test_jwt_role_maps_owner_to_admin_for_valid_token():
+def test_jwt_role_maps_owner_to_owner_for_valid_token():
     good = user_auth.issue_jwt("u1", "org1", "owner", "owner@example.com")
-    assert security._jwt_role(good) == "admin"
+    assert security._jwt_role(good) == "owner"
     analyst = user_auth.issue_jwt("u2", "org1", "analyst", "a@example.com")
     assert security._jwt_role(analyst) == "analyst"
 
@@ -71,6 +71,44 @@ def test_jwt_role_rejects_revoked_token():
     token = user_auth.issue_jwt("u3", "org1", "owner", "o@example.com")
     user_auth.logout_token(token)
     assert security._jwt_role(token) is None
+
+
+# ---------------------------------------------------------------------------
+# Fix 3 — rbac._get_user_id_from_token verifies the signature before trusting sub
+# ---------------------------------------------------------------------------
+
+
+def test_get_user_id_rejects_forged_sub_claim():
+    """A forged token's `sub` is never trusted for identity/authz attribution.
+
+    Before the fix _get_user_id_from_token decoded with verify_signature=False,
+    so a token signed with the wrong secret still yielded its attacker-chosen
+    `sub`. It must now fail closed and fall back to the raw token string (which
+    has no workspace_members row → clean 403 downstream), not the forged sub.
+    """
+    from app.rbac import _get_user_id_from_token
+
+    forged = jwt.encode(
+        {"sub": "victim-user-id", "exp": int(time.time()) + 600},
+        "not-the-real-secret",
+        algorithm="HS256",
+    )
+    assert _get_user_id_from_token(forged) == forged
+
+
+def test_get_user_id_returns_sub_for_valid_token():
+    """A genuinely signed token's `sub` claim is returned as the user_id."""
+    from app.rbac import _get_user_id_from_token
+
+    good = user_auth.issue_jwt("real-user-id", "org1", "owner", "o@example.com")
+    assert _get_user_id_from_token(good) == "real-user-id"
+
+
+def test_get_user_id_returns_static_token_verbatim():
+    """A non-JWT static dev/test token is returned unchanged (unchanged dev behaviour)."""
+    from app.rbac import _get_user_id_from_token
+
+    assert _get_user_id_from_token("dev-token-change-me") == "dev-token-change-me"
 
 
 # ---------------------------------------------------------------------------

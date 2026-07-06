@@ -228,6 +228,47 @@ def test_discovery_findings_are_org_isolated(client: TestClient):
     assert run_id not in [r.get("id") for r in listed.json()]
 
 
+def test_latest_run_is_org_isolated(client: TestClient):
+    """GET /api/runs/latest is strictly org-scoped (Fix 6).
+
+    Even when org A owns the globally-newest run, org B's /latest must return
+    only org B's own run — never A's — and an org with no runs gets 404, not
+    another org's run. Guards the cross-tenant exposure that a load-all-then-
+    filter implementation risked.
+    """
+    from app import db
+    from app.rbac import seed_owner
+
+    org_a = "latest_iso_A_" + uuid.uuid4().hex[:8]
+    org_b = "latest_iso_B_" + uuid.uuid4().hex[:8]
+    seed_owner(org_a, _DEV_TOKEN)
+    seed_owner(org_b, _DEV_TOKEN)
+
+    # Org A owns the NEWER run; org B owns an older one.
+    run_a = "run_latest_A_" + uuid.uuid4().hex[:8]
+    run_b = "run_latest_B_" + uuid.uuid4().hex[:8]
+    db.upsert_run(
+        run_a,
+        {"id": run_a, "org_id": org_a, "status": "done",
+         "startedAt": "2999-01-02T00:00:00+00:00", "updatedAt": "2999-01-02T00:00:00+00:00"},
+    )
+    db.upsert_run(
+        run_b,
+        {"id": run_b, "org_id": org_b, "status": "done",
+         "startedAt": "2999-01-01T00:00:00+00:00", "updatedAt": "2999-01-01T00:00:00+00:00"},
+    )
+
+    # Org B sees its own run, NOT org A's newer one.
+    latest_b = client.get("/api/runs/latest", headers=_auth(org_b))
+    assert latest_b.status_code == 200
+    assert latest_b.json()["id"] == run_b, "org B's /latest must not return org A's newer run"
+
+    # An org with no runs of its own gets 404 — never a fallback to another org's run.
+    org_c = "latest_iso_C_" + uuid.uuid4().hex[:8]
+    seed_owner(org_c, _DEV_TOKEN)
+    assert client.get("/api/runs/latest", headers=_auth(org_c)).status_code == 404
+
+
 # ---------------------------------------------------------------------------
 # T4-AC3 — ingestion checkpoints remain isolated (keyed by org_id, connector_id)
 # ---------------------------------------------------------------------------

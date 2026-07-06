@@ -513,23 +513,20 @@ def _run_order_key(run: Dict[str, Any]) -> tuple[str, str]:
 
 
 # NOTE: must be declared before "/api/runs/{run_id}" so "latest" is not captured
-# as a run_id path param. Org-scoped: a run is visible when it belongs to the
-# caller's org (org_id/orgId claim) or is an untagged legacy run.
+# as a run_id path param. Strictly org-scoped: a run is visible only when it
+# belongs to the caller's org. Isolation goes through the shared tenancy_get_runs
+# filter (same helper as GET /api/runs) instead of an ad-hoc Python filter, so
+# there is no path — including untagged legacy runs — by which another org's run
+# can surface here (cross-tenant exposure guard).
 @app.get("/api/runs/latest", dependencies=[Depends(require_auth), Depends(require_role("viewer"))])
 def get_latest_run() -> Dict[str, Any]:
     db.init_tables()
     org_id = get_current_org_id()
-    runs = get_all("runs")
-    visible_runs = []
-    for run in runs:
-        run_org = run.get("org_id") or run.get("orgId")
-        if run_org is None or run_org == org_id:
-            visible_runs.append(run)
-
-    if not visible_runs:
+    runs = tenancy_get_runs(org_id)
+    if not runs:
         raise HTTPException(404, "run not found")
 
-    return max(visible_runs, key=_run_order_key)
+    return max(runs, key=_run_order_key)
 
 
 @app.get("/api/runs/{run_id}", dependencies=[Depends(require_auth), Depends(require_role("viewer"))])

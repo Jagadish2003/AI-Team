@@ -566,3 +566,59 @@ def test_all_routes_have_auth_or_are_explicitly_public() -> None:
         "Routes missing require_auth (add to _PUBLIC_ROUTES if intentional):\n"
         + "\n".join(f"  {v}" for v in sorted(violations))
     )
+
+
+# ── Fix 4 regression: run read + decision/override endpoints carry role gates ──
+#
+# Six endpoints previously had require_auth only, so any authenticated user
+# (including a viewer) could read run data or approve/reject opportunities. The
+# read endpoints must require viewer+, the mutating decision/override endpoints
+# must require analyst+. A fake run_id is fine: the role dependency runs before
+# the handler body, so an under-privileged caller gets 403 before any run lookup.
+
+_FIX4_READ_ENDPOINTS = [
+    "/api/runs/run_fake_fix4",
+    "/api/runs/run_fake_fix4/events",
+    "/api/runs/run_fake_fix4/mappings",
+]
+
+_FIX4_DECISION_ENDPOINTS = [
+    "/api/runs/run_fake_fix4/evidence/ev_fake/decision",
+    "/api/runs/run_fake_fix4/opportunities/opp_fake/decision",
+    "/api/runs/run_fake_fix4/opportunities/opp_fake/override",
+]
+
+
+@pytest.mark.parametrize("path", _FIX4_READ_ENDPOINTS)
+def test_fix4_read_endpoints_allow_viewer(client: TestClient, path: str) -> None:
+    """Read endpoints require viewer+: a viewer is not blocked by RBAC (not 403)."""
+    resp = client.get(path, headers=_set_role("viewer"))
+    assert resp.status_code != 403
+
+
+@pytest.mark.parametrize("path", _FIX4_READ_ENDPOINTS)
+def test_fix4_read_endpoints_reject_unauthenticated(client: TestClient, path: str) -> None:
+    """Read endpoints reject an unauthenticated caller with 401."""
+    resp = client.get(path, headers=_no_auth())
+    assert resp.status_code == 401
+
+
+@pytest.mark.parametrize("path", _FIX4_DECISION_ENDPOINTS)
+def test_fix4_decision_endpoints_reject_viewer(client: TestClient, path: str) -> None:
+    """Decision/override endpoints require analyst+: a viewer gets 403."""
+    resp = client.post(path, headers=_set_role("viewer"), json={"decision": "APPROVED"})
+    assert resp.status_code == 403
+
+
+@pytest.mark.parametrize("path", _FIX4_DECISION_ENDPOINTS)
+def test_fix4_decision_endpoints_allow_analyst(client: TestClient, path: str) -> None:
+    """Decision/override endpoints do not block an analyst on RBAC (not 403)."""
+    resp = client.post(path, headers=_set_role("analyst"), json={"decision": "APPROVED"})
+    assert resp.status_code != 403
+
+
+@pytest.mark.parametrize("path", _FIX4_DECISION_ENDPOINTS)
+def test_fix4_decision_endpoints_reject_unauthenticated(client: TestClient, path: str) -> None:
+    """Decision/override endpoints reject an unauthenticated caller with 401."""
+    resp = client.post(path, headers=_no_auth(), json={"decision": "APPROVED"})
+    assert resp.status_code == 401

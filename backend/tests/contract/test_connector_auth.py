@@ -1622,6 +1622,75 @@ def test_token_status_unauthenticated_returns_401(client):
 
 
 # ---------------------------------------------------------------------------
+# Fix 5: connector auth endpoints are role-gated
+#   GET  auth-url      → analyst+  (initiates an OAuth flow)
+#   DELETE token       → analyst+  (revokes stored credentials)
+#   GET  token-status  → viewer+   (read-only)
+# A viewer must be blocked (403) from the two mutating flows; the role check
+# runs before the handler body, so no vault/network setup is needed.
+# ---------------------------------------------------------------------------
+
+
+def _set_role(role: str) -> dict:
+    """Seed the dev token as `role` in a fresh org; return headers with X-Org-Id.
+
+    Mirrors the helper in test_rbac_enforcement.py so these tests exercise the
+    real require_role dependency rather than the owner-seeded default org.
+    """
+    import uuid as _uuid
+    from datetime import datetime as _dt, timezone as _tz
+
+    from app import db as _db
+    from app.rbac import _ensure_members_table
+
+    _ensure_members_table()
+    org_id = f"conn_auth_rbac_{_uuid.uuid4().hex[:8]}"
+    con = _db.connect()
+    try:
+        con.execute(
+            "INSERT INTO workspace_members (org_id, user_id, role, created_at) "
+            "VALUES (%s, %s, %s, %s) "
+            "ON CONFLICT (org_id, user_id) DO UPDATE SET role=EXCLUDED.role, created_at=EXCLUDED.created_at",
+            (org_id, "dev-token-change-me", role, _dt.now(_tz.utc).isoformat()),
+        )
+        con.commit()
+    finally:
+        con.close()
+    return {**_AUTH_HEADERS, "X-Org-Id": org_id}
+
+
+def test_auth_url_forbidden_for_viewer(client):
+    """GET auth-url requires analyst+: a viewer is rejected with 403 (Fix 5)."""
+    resp = client.get("/api/connectors/salesforce/auth-url", headers=_set_role("viewer"))
+    assert resp.status_code == 403
+
+
+def test_auth_url_allowed_for_analyst(client):
+    """GET auth-url is not blocked by RBAC for an analyst (not 403) (Fix 5)."""
+    with _patch.dict(_os.environ, _vault_env()):
+        resp = client.get("/api/connectors/salesforce/auth-url", headers=_set_role("analyst"))
+    assert resp.status_code != 403
+
+
+def test_delete_token_forbidden_for_viewer(client):
+    """DELETE token requires analyst+: a viewer is rejected with 403 (Fix 5)."""
+    resp = client.delete("/api/connectors/salesforce/token", headers=_set_role("viewer"))
+    assert resp.status_code == 403
+
+
+def test_delete_token_allowed_for_analyst(client):
+    """DELETE token is not blocked by RBAC for an analyst (not 403) (Fix 5)."""
+    resp = client.delete("/api/connectors/salesforce/token", headers=_set_role("analyst"))
+    assert resp.status_code != 403
+
+
+def test_token_status_allowed_for_viewer(client):
+    """GET token-status requires only viewer+: a viewer is not blocked (not 403) (Fix 5)."""
+    resp = client.get("/api/connectors/salesforce/token-status", headers=_set_role("viewer"))
+    assert resp.status_code != 403
+
+
+# ---------------------------------------------------------------------------
 # AC1: auth-url returns valid URL with correct params; state is non-empty and opaque
 # ---------------------------------------------------------------------------
 

@@ -27,8 +27,24 @@ _MEMBERS_INITIALISED = False
 
 
 def _ensure_members_table() -> None:
-    """No-op. The workspace_members table is provisioned by database/provision/provision.sh."""
-    return None
+    """Create the workspace_members table if it does not exist (idempotent).
+
+    Fail-soft: a failure here (e.g. a concurrent creator winning the race, or a
+    read-only replica) is rolled back and swallowed so require_role still reaches
+    its own query and returns a clean 403 rather than surfacing a 500.
+    """
+    con = db.connect()
+    try:
+        cur = con.cursor()
+        cur.execute(CREATE_WORKSPACE_MEMBERS_TABLE)
+        con.commit()
+    except Exception:
+        try:
+            con.rollback()
+        except Exception:
+            pass
+    finally:
+        con.close()
 
 
 def seed_owner(org_id: str, user_id: str) -> None:
