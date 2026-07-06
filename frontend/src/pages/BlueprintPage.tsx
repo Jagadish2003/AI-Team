@@ -115,7 +115,7 @@ function LoadingState() {
   return (
     <LoadingPanel
       title="Loading blueprint"
-      subtitle="Fetching the Agent Blueprint for the selected opportunity."
+      subtitle="Fetching AgentForce for the selected opportunity."
     />
   );
 }
@@ -478,7 +478,7 @@ export default function BlueprintPage() {
       return (
         <EmptyPanel
           title="Connect Salesforce"
-          message="Agent Blueprint is available when Salesforce is connected."
+          message="AgentForce is available when Salesforce is connected."
           actionLabel="Go to Integration Hub"
           onAction={() => nav('/integration-hub')}
           tone="warning"
@@ -490,7 +490,7 @@ export default function BlueprintPage() {
       return (
         <EmptyPanel
           title="No discovery run selected"
-          message="Run a discovery first to generate Agent Blueprints."
+          message="Run a discovery first to generate AgentForce."
           actionLabel="Go to Discovery Run"
           onAction={() => nav('/discovery-run')}
         />
@@ -501,7 +501,7 @@ export default function BlueprintPage() {
       return (
         <EmptyPanel
           title="Select an opportunity"
-          message="Choose an opportunity in Opportunity Review to view its Agent Blueprint."
+          message="Choose an opportunity in Opportunity Review to view its AgentForce."
           actionLabel="Go to Opportunity Review"
           onAction={() => nav(runId ? `/opportunity-review?runId=${runId}` : '/opportunity-review')}
         />
@@ -542,7 +542,7 @@ export default function BlueprintPage() {
 
   return (
     <PageShell
-      title="Agent Blueprint"
+      title="AgentForce"
       description="Agent design generated from the selected opportunity and its discovery evidence."
       className="bg-bg"
       actions={

@@ -38,8 +38,8 @@ const items = [
   },
   { to: "/pilot-roadmap", label: "Agent Roadmap", runScoped: true },
   {
-    to: "/agent-blueprint",
-    label: "Agent Blueprint",
+    to: "/agent-force",
+    label: "AgentForce",
     runScoped: true,
     sfOnly: true,
   },

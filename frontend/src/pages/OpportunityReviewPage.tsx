@@ -119,23 +119,23 @@ export default function OpportunityReviewPage() {
           onClick={() => {
             select(selected.id);
             nav(
-              `/agent-blueprint?oppId=${encodeURIComponent(selected.id)}`,
+              `/agent-force?oppId=${encodeURIComponent(selected.id)}`,
             );
           }}
           className="inline-flex items-center justify-center gap-2 rounded-lg border border-accent/30 bg-accent/10 px-4 py-2.5 text-sm font-semibold text-accent transition-colors hover:border-accent/50 hover:bg-accent/15 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/30"
         >
           <Zap size={15} />
-          View Agent Blueprint
+          View AgentForce
         </button>
       ) : (
         <button
           data-testid="blueprint-button-disabled"
           disabled
           className="inline-flex cursor-not-allowed items-center justify-center gap-2 rounded-lg border border-border bg-bg/30 px-4 py-2.5 text-sm font-medium text-muted opacity-60"
-          title="Connect Salesforce on Integration Hub to enable Agent Blueprint"
+          title="Connect Salesforce on Integration Hub to enable AgentForce"
         >
           <Zap size={15} />
-          Agent Blueprint (connect Salesforce)
+          AgentForce (connect Salesforce)
         </button>
       )}
     </div>
