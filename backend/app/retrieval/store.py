@@ -240,7 +240,10 @@ def search(
         "       (1 - (embedding <=> %s::vector)) AS similarity "
         "FROM retrieval_chunks "
         f"WHERE {' AND '.join(where)} "
-        "ORDER BY embedding <=> %s::vector "
+        # Rank by ascending cosine distance (= descending similarity). chunk_id is a
+        # deterministic tie-break so two chunks at the same distance always order
+        # identically across calls — retrieval ranking must be reproducible (T4).
+        "ORDER BY embedding <=> %s::vector ASC, chunk_id ASC "
         "LIMIT %s"
     )
     # Vector params bind in statement order: SELECT similarity, [min_score filter],

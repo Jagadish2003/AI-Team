@@ -135,6 +135,42 @@ class EvidencePointer:
         )
 
     @classmethod
+    def retrieved(
+        cls,
+        *,
+        source_system: str,
+        source_artifact: str,
+        chunk_id: str,
+        retrieval_result_id: str,
+        source_timestamp: Optional[str] = None,
+        confidence: Optional[float] = None,
+        source_artifact_type: Optional[str] = None,
+    ) -> "EvidencePointer":
+        """Build an OBSERVED pointer for a retrieved chunk (R18-B1 T4 / AC5).
+
+        Retrieved content was seen directly in a source, so ``origin`` is
+        ``'observed'`` and no ``extraction_job_id`` is required — the retrieval
+        substrate PROPOSES observed evidence; it never authors inferred fact.
+
+        This is the builder that finally FILLS the two extensible-detail fields the
+        1.6 spine shipped present-but-null for exactly this moment: ``chunk_id``
+        (the stored chunk's id) and ``retrieval_result_id`` (the per-query hit id
+        minted by ``retrieve()``). No schema change is involved — the fields have
+        existed since 1.6 (AC5). ``confidence`` typically carries the retrieval
+        similarity score so downstream consumers can weight the evidence.
+        """
+        return cls(
+            source_system=source_system,
+            source_artifact=source_artifact,
+            source_timestamp=source_timestamp or utc_now_iso(),
+            origin=OBSERVED,
+            chunk_id=chunk_id,
+            retrieval_result_id=retrieval_result_id,
+            confidence=confidence,
+            source_artifact_type=source_artifact_type,
+        )
+
+    @classmethod
     def inferred(
         cls,
         *,
