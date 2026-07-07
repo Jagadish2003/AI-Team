@@ -7,11 +7,12 @@ Release 1.8: every deep-content story consumes this.
 
 Package layout (Section 1):
 
-    chunking.py   - per-content-type chunk policies (+ content hash / provenance)
-    embedder.py   - batch embedding via the model gateway ONLY
-    store.py      - pgvector index, org-partitioned
-    api.py        - retrieve() entry point + RetrievedChunk
-    ingest.py     - ingest_content() producer contract (T5)
+    chunking.py         - per-content-type chunk policies (+ content hash / provenance)
+    embedder.py         - batch embedding via the model gateway ONLY
+    store.py            - pgvector index, org-partitioned
+    api.py              - retrieve() entry point + RetrievedChunk
+    ingest.py           - ingest_content() producer contract (T5)
+    evidence_source.py  - retrieval-backed evidence source for assemble_context (T6)
 
 Two load-bearing invariants hold across the package:
 
@@ -21,7 +22,10 @@ Two load-bearing invariants hold across the package:
     one org's indexed content is never retrievable by another.
 
 Retrieval PROPOSES candidates; the context assembler DECIDES what enters context.
-The substrate never feeds enrichment directly.
+The substrate never feeds enrichment directly — the one path into opportunity
+context is ``assemble_context(evidence_source=retrieval_evidence_source(org_id))``
+(T6), where the assembler's confidence floor, observed-first ordering, hard caps,
+and selection log all apply to retrieved chunks.
 
 Content enters through ONE producer contract: ``ingest.ingest_content(org_id,
 artifacts)``. Producers hand extracted text + provenance; the substrate owns
