@@ -3,6 +3,8 @@ import { Connector } from '../../types/connector';
 import Badge from '../common/Badge';
 import Button from '../common/Button';
 import { fetchTokenStatus, TokenStatus } from '../../services/staticApi';
+import { useAuthOptional } from '../../context/AuthContext';
+import { isViewerRole } from '../../utils/roles';
 
 // Connectors whose Connect button is ENABLED on the Integration Hub. This is a
 // UI gate only — the OAuth backends for the other connectors (Slack AT-420,
@@ -48,6 +50,13 @@ export default function ConnectorTile({
   const isConfigured = connector.configured;
   const isEnabled = ENABLED_CONNECTOR_IDS.includes(connector.id);
 
+  // Connecting / configuring / reconnecting are analyst+ writes (the connector
+  // auth-url and token routes are analyst+). Viewers get a read-only hub: their
+  // action button is disabled, EXCEPT the read-only "View data" action on an
+  // already-connected system, which they keep.
+  const auth = useAuthOptional();
+  const isViewer = isViewerRole(auth?.user?.role);
+
   const [tokenStatus, setTokenStatus] = useState<TokenStatus | null>(null);
 
   useEffect(() => {
@@ -84,11 +93,16 @@ export default function ConnectorTile({
   // tile actions (Configure & Sync / View data / Reconnect) are never gated, so
   // existing systems keep working when a lower-limit key lands (AC12).
   const limitBlocksNew = Boolean(connectBlocked) && !isConnected;
-  const actionDisabled = !isEnabled || limitBlocksNew;
+  // Viewers can only use the read-only "View data" action; every write action
+  // (Connect / Configure & Sync / Reconnect) is disabled for them.
+  const viewerBlocks = isViewer && actionLabel !== 'View data';
+  const actionDisabled = !isEnabled || limitBlocksNew || viewerBlocks;
   const disabledTitle = limitBlocksNew
     ? (connectBlockMessage || 'Your license limit has been reached. Contact CloudFulcrum to add more.')
     : !isEnabled
     ? 'Connecting new sources is currently unavailable'
+    : viewerBlocks
+    ? 'Connecting systems requires an analyst or owner role.'
     : undefined;
 
   return (

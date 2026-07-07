@@ -17,7 +17,10 @@ def register_sprint4_t2_routes(app):
     @app.post(
         "/api/runs/start",
         response_model=StartRunResponse,
-        dependencies=[Depends(require_auth), Depends(require_role("analyst"))],
+        # require_role already depends on require_auth, and the handler resolves
+        # the token via Depends(require_auth) below — listing it here too is
+        # redundant, so it is omitted (auth still runs, exactly once).
+        dependencies=[Depends(require_role("analyst"))],
     )
     async def start_run(
         body: StartRunRequest,
