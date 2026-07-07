@@ -268,3 +268,57 @@ def count_chunks(org_id: str, embedded_only: bool = False) -> int:
         cur.execute(sql, (org_id,))
         row = cur.fetchone()
     return int(row[0]) if row else 0
+
+
+# ---------------------------------------------------------------------------
+# Async embedding pipeline support  (T3) — reads are ALWAYS org-scoped
+# ---------------------------------------------------------------------------
+
+
+def fetch_unembedded(org_id: str, limit: int = 128) -> list[dict[str, Any]]:
+    """Return up to ``limit`` of this org's not-yet-embedded chunks (oldest first).
+
+    Feeds the async batch embedding pipeline (``embedder.embed_pending_for_org``):
+    it selects the rows written by producers with ``embedding IS NULL`` — content
+    is indexed first and embedded asynchronously (AC7) — and returns just the
+    ``chunk_id`` + ``content`` the pipeline needs to embed and then stamp via
+    ``set_embedding``.
+
+    HARD org partition: the ``WHERE`` leads with ``org_id = %s`` so the pipeline
+    only ever embeds a caller org's own content (AC3). Ordered by ``created_at``
+    so the backlog drains oldest-first and repeated calls make forward progress.
+    """
+    with closing(db.connect()) as con:
+        cur = con.cursor()
+        cur.execute(
+            "SELECT chunk_id, content "
+            "FROM retrieval_chunks "
+            "WHERE org_id = %s AND embedding IS NULL "
+            "ORDER BY created_at ASC, chunk_id ASC "
+            "LIMIT %s",
+            (org_id, int(limit)),
+        )
+        rows = cur.fetchall()
+    return [dict(r) for r in rows]
+
+
+def orgs_with_unembedded(limit: int = 100) -> list[str]:
+    """Return distinct org_ids that currently have un-embedded chunks.
+
+    Lets the background embedding worker enumerate which tenants have a backlog
+    and then drain each with the org-scoped ``fetch_unembedded`` — so the worker
+    covers every org while every content-returning read stays partitioned by
+    ``org_id`` (AC3). Returns only org identifiers here, never chunk content.
+    """
+    with closing(db.connect()) as con:
+        cur = con.cursor()
+        cur.execute(
+            "SELECT DISTINCT org_id "
+            "FROM retrieval_chunks "
+            "WHERE embedding IS NULL "
+            "ORDER BY org_id "
+            "LIMIT %s",
+            (int(limit),),
+        )
+        rows = cur.fetchall()
+    return [row[0] for row in rows]

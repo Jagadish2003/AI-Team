@@ -84,3 +84,23 @@ class ModelProvider(ABC):
         The default is a no-op for providers with nothing to validate.
         """
         return None
+
+    def embedding_identity(self) -> "tuple[str, str]":
+        """Return ``(model_identity, model_version)`` stamped on every vector this
+        provider produces (R18-B1 T3 / AC8).
+
+        The retrieval substrate records this pair PER VECTOR so vectors produced
+        by different embedding models are never compared against each other — a
+        model change invalidates compatibility. ``model_identity`` must therefore
+        change whenever the underlying embedding model changes, so it includes the
+        concrete model / deployment name, not just the provider name.
+
+        Resolved live (like the endpoint/credential accessors) so a config repin
+        takes effect without a restart. The default returns ``(self.name, "")`` —
+        adequate for providers that do not embed; providers that embed via a
+        named, versioned model override this.
+
+        Must never raise — a stamping-identity lookup is on the embedding pipeline
+        path, which must never block a run.
+        """
+        return (self.name, "")

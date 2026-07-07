@@ -79,16 +79,19 @@ def retrieve(
         return []
     query_vector = vectors[0]
 
-    # AC8: restrict to the active embedding model's vectors. Full model+version
-    # enforcement is finalised alongside T3's per-vector stamping; T1 scopes by
-    # model identity.
+    # AC8: restrict to the active embedding model's vectors. T3 stamps every stored
+    # vector with the same (identity, version) pair resolved here, so filtering on
+    # BOTH ensures a query never compares against vectors from a different model or
+    # model version. Resolved once so the provider is not looked up twice.
+    model_identity, model_version = embedder.active_embedding_model()
     rows = store.search(
         org_id=org_id,
         query_vector=query_vector,
         k=k,
         source_filter=source_filter,
         min_score=min_score,
-        embedding_model=embedder.embedding_model_identity(),
+        embedding_model=model_identity or None,
+        embedding_model_version=model_version or None,
     )
 
     results: List[RetrievedChunk] = []
