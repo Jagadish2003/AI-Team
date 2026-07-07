@@ -11,6 +11,7 @@ Package layout (Section 1):
     embedder.py   - batch embedding via the model gateway ONLY
     store.py      - pgvector index, org-partitioned
     api.py        - retrieve() entry point + RetrievedChunk
+    ingest.py     - ingest_content() producer contract (T5)
 
 Two load-bearing invariants hold across the package:
 
@@ -21,6 +22,11 @@ Two load-bearing invariants hold across the package:
 
 Retrieval PROPOSES candidates; the context assembler DECIDES what enters context.
 The substrate never feeds enrichment directly.
+
+Content enters through ONE producer contract: ``ingest.ingest_content(org_id,
+artifacts)``. Producers hand extracted text + provenance; the substrate owns
+chunking, hashing, embedding, indexing, and metadata storage. Producers never
+write vectors directly.
 """
 from __future__ import annotations
 
@@ -28,4 +34,4 @@ from __future__ import annotations
 # gateway, so importing the package must not force those in. Callers import the
 # submodule they need, e.g. ``from app.retrieval.api import retrieve``.
 
-__all__ = ["chunking", "embedder", "store", "api"]
+__all__ = ["chunking", "embedder", "store", "api", "ingest"]
