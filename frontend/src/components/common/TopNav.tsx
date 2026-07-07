@@ -13,6 +13,9 @@ type NavItem = {
   label: string;
   runScoped: boolean;
   sfOnly?: boolean;
+  /** Hidden from viewers — the destination is an analyst+ write workflow, so a
+   * viewer has nothing actionable there. Filtered out in the nav render below. */
+  analystOnly?: boolean;
 };
 
 const items = [
@@ -20,7 +23,7 @@ const items = [
   // T41-8: Source Intake removed from nav. Route /source-intake redirects to
   // /integration-hub for backward compatibility. Configuration merged into
   // Integration Hub right panel.
-  { to: "/stack-builder", label: "Stack Builder", runScoped: false },
+  { to: "/stack-builder", label: "Stack Builder", runScoped: false, analystOnly: true },
   // Run-scoped screens
   { to: "/discovery-run", label: "Discovery Run", runScoped: true },
   // { to: "/partial-results", label: "Evidence Collection", runScoped: true }, // Hidden - Sprint 5.1
@@ -83,6 +86,13 @@ export default function TopNav() {
     (c) => c.id === "salesforce" && c.status === "connected",
   );
 
+  // Viewers get a read-only experience: analyst-only destinations (e.g. Stack
+  // Builder) are removed from the nav entirely. Only an explicit "viewer" role
+  // hides them — analyst/owner (and the claim-less dev token) keep the full nav,
+  // and the backend still enforces the boundary regardless of what the nav shows.
+  const isViewer = auth?.user?.role === "viewer";
+  const visibleItems = items.filter((i) => !(i.analystOnly && isViewer));
+
   useEffect(() => {
     setMenuOpen(false);
     setProfileOpen(false);
@@ -137,7 +147,7 @@ export default function TopNav() {
           className="hidden min-w-0 shrink items-center gap-1 overflow-x-auto px-1 lg:flex"
           style={{ scrollbarWidth: "none" }}
         >
-          {items.map((i) => {
+          {visibleItems.map((i) => {
             const isActive = loc.pathname === i.to;
             const to = i.runScoped && runId ? `${i.to}?runId=${runId}` : i.to;
 
@@ -304,7 +314,7 @@ export default function TopNav() {
           className="absolute left-0 right-0 top-[70px] border-b border-border bg-bgheader/95 px-4 py-3 shadow-lg backdrop-blur lg:hidden"
         >
           <div className="grid gap-1">
-            {items.map((i) => {
+            {visibleItems.map((i) => {
               const isActive = loc.pathname === i.to;
               const to = i.runScoped && runId ? `${i.to}?runId=${runId}` : i.to;
 

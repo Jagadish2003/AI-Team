@@ -503,6 +503,29 @@ export default function StackBuilderPage({
 
   }, [state, catalog, orgId, apiBase, clearSession, navigate, setRunId, token]);
 
+  // Viewers cannot configure or launch discovery (analyst+ only). The nav hides
+  // this destination for them, but a viewer can still reach it via a direct URL
+  // or a stale link — so render a read-only notice instead of the interactive
+  // builder. No selectable control is mounted, so nothing can be changed, and the
+  // backend (setup-state/launch are analyst+) enforces the same boundary anyway.
+  if (auth?.user?.role === "viewer") {
+    return (
+      <PageShell
+        title="Stack Builder"
+        description="Discovery configuration is managed by owners and analysts."
+      >
+        <div className="rounded-xl border border-border bg-panel p-6 text-sm text-muted">
+          <p className="font-medium text-text">Read-only access</p>
+          <p className="mt-1">
+            You have viewer access to this workspace. Configuring systems and
+            launching a discovery run requires an analyst or owner role. Ask a
+            workspace owner if you need to run discovery.
+          </p>
+        </div>
+      </PageShell>
+    );
+  }
+
   return (
     <PageShell
       title={copy.title}

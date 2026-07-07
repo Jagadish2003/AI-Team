@@ -8,6 +8,7 @@ import { useDiscoveryRunContext } from "../context/DiscoveryRunContext";
 import { useConnectorContext } from "../context/ConnectorContext";
 import { useSourceIntakeContext } from "../context/SourceIntakeContext";
 import { useRunContext } from "../context/RunContext";
+import { useAuthOptional } from "../context/AuthContext";
 import {
   DISCOVERY_SOURCE_REQUIREMENT_MESSAGE,
   isDiscoveryReadyConnector,
@@ -637,6 +638,10 @@ export default function DiscoveryRunPage() {
   const { runId } = useRunContext();
   const { connectors } = useConnectorContext();
   const { uploadedFiles } = useSourceIntakeContext(); // T41-8: sampleWorkspaceEnabled removed
+  // Replay re-triggers compute (POST /api/runs/{run_id}/replay is analyst+), so
+  // viewers get a disabled Replay button — read-only access.
+  const auth = useAuthOptional();
+  const isViewer = auth?.user?.role === "viewer";
 
   const {
     run,
@@ -961,11 +966,13 @@ export default function DiscoveryRunPage() {
           <button
             className="rounded-md border border-accent/20 bg-accent/5 px-3 py-2 text-sm font-medium text-accent transition-colors hover:border-accent/45 hover:bg-accent/10 focus:outline-none focus-visible:ring-1 focus-visible:ring-accent/40 disabled:cursor-not-allowed disabled:opacity-50"
             onClick={() => void restartRun()}
-            disabled={!started || !isMaterialized || computing || loading}
+            disabled={!started || !isMaterialized || computing || loading || isViewer}
             title={
-              !isMaterialized
-                ? "Replay is available after this run finishes."
-                : undefined
+              isViewer
+                ? "Replay requires an analyst or owner role."
+                : !isMaterialized
+                  ? "Replay is available after this run finishes."
+                  : undefined
             }
           >
             Replay Run

@@ -36,6 +36,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { useToast } from '../common/Toast';
 import { ApiError, apiGet, apiPatch } from '../../lib/apiClient';
+import { useAuthOptional } from '../../context/AuthContext';
 
 // ── Product definitions ───────────────────────────────────────────────────────
 
@@ -84,6 +85,11 @@ function getSaveErrorMessage(error: unknown): string {
 
 export default function SalesforceProductPicker({ onSaved }: Props) {
   const { push }  = useToast();
+  // Declaring products is an analyst+ write (PATCH /api/connectors/salesforce/
+  // products is gated at analyst+). Viewers get a read-only picker: the product
+  // toggles and the Save button are disabled so nothing can be changed.
+  const auth = useAuthOptional();
+  const isViewer = auth?.user?.role === 'viewer';
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [loading,  setLoading]  = useState(true);
   const [saving,   setSaving]   = useState(false);
@@ -177,10 +183,12 @@ export default function SalesforceProductPicker({ onSaved }: Props) {
               role="radio"
               aria-checked={isSelected}
               onClick={() => selectProduct(product.id)}
+              disabled={isViewer}
               className={[
                 'w-full flex items-start gap-3 rounded-lg border px-3 py-2.5',
-                'text-left transition-[border-color,background-color,box-shadow] cursor-pointer',
+                'text-left transition-[border-color,background-color,box-shadow]',
                 'focus:outline-none focus-visible:ring-1 focus-visible:ring-accent/35',
+                isViewer ? 'cursor-not-allowed opacity-60' : 'cursor-pointer',
                 isSelected
                   ? 'border-accent bg-accent/10'
                   : 'border-border bg-panel hover:border-accent/40',
@@ -217,12 +225,12 @@ export default function SalesforceProductPicker({ onSaved }: Props) {
       <button
         type="button"
         onClick={handleSave}
-        disabled={saving}
+        disabled={saving || isViewer}
         className={[
           'mt-3 w-full rounded-lg px-4 py-2 text-sm font-medium',
           'border border-accent/20 bg-accent/5 text-accent transition-colors hover:border-accent/45 hover:bg-accent/10',
           'focus:outline-none focus-visible:ring-1 focus-visible:ring-accent/40',
-          saving ? 'opacity-60 cursor-not-allowed' : 'cursor-pointer',
+          saving || isViewer ? 'opacity-60 cursor-not-allowed' : 'cursor-pointer',
         ].join(' ')}
       >
         {saving ? 'Saving…' : 'Save product declaration'}
