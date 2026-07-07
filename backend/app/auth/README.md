@@ -67,6 +67,39 @@ invisible to `get_static_credential()` (it returns `None`).
 Values are write-only (AC10): an admin can replace a credential but never read one back —
 `StaticCredentialRecord` masks `username`/`secret` in `repr` so they cannot leak into logs.
 
+## Auth Modes (R18-A3 T1 / AT-554)
+
+Connector authentication has a **mode** concept broader than any single OAuth grant.
+Four modes are recognised (`AuthMode` in `models.py`):
+
+| Mode | Meaning | Inbound callback? |
+|------|---------|-------------------|
+| `authorization_code` | User-delegated OAuth (browser redirect + callback) | **Yes** |
+| `client_credentials` | Service-to-service OAuth | No (outbound-only) |
+| `jwt_bearer` | Signed-assertion OAuth (cert in vault) | No (outbound-only) |
+| `static` | Vault-stored static credential (API token / user+password / DB creds) | No (outbound-only) |
+
+`app/auth/auth_modes.py` owns the abstraction:
+
+- **Each connector registers its supported modes.** OAuth connectors declare them on
+  `ConnectorAuthConfig.supported_auth_modes` (most-preferred first; the first entry is
+  the default). Static-only connectors (native DB) are declared in
+  `_STATIC_ONLY_SUPPORTED_MODES`. `get_supported_auth_modes()` / `get_default_auth_mode()`
+  / `connector_supports_mode()` read this single source of truth. A connector's set
+  reflects what actually has a flow behind it today — a mode is added only when its flow
+  is built (AT-555 `jwt_bearer`, AT-556/AT-557 `client_credentials`).
+- **A per-org configuration selects one.** `set_auth_mode(org_id, connector_id, mode)`
+  validates against the supported set and persists the choice on the org's connector
+  record; `resolve_auth_mode(org_id, connector_id)` reads it back, falling back to the
+  connector default when nothing valid is selected.
+- **Every mode terminates in the same vault record shape (AC3).** Downstream ingestion is
+  mode-agnostic: it resolves credentials through the unchanged
+  `get_connector_credentials(org_id, connector_id)` (`app/auth/credentials.py`) and never
+  branches on auth mode. The mode concept lives entirely at the connect/setup edge.
+- `OUTBOUND_ONLY_MODES` lists the modes that complete with no inbound HTTPS callback — the
+  ones usable in a no-public-inbound deployment (the `NETWORK_PROFILE` UI that consumes
+  this is a separate follow-up task).
+
 ## Flows
 
 - `authorization_code`: used by Salesforce, ServiceNow, Jira, Confluence, GitHub, Slack, Teams.

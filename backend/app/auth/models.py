@@ -4,6 +4,27 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Dict, List, Literal, Optional
 
+# ---------------------------------------------------------------------------
+# Connector auth mode (R18-A3 T1 / AT-554)
+#
+# A connector's authentication has a MODE — a concept broader than any single
+# OAuth grant. Four modes are recognised:
+#
+#   authorization_code  — user-delegated OAuth (browser redirect + inbound callback)
+#   client_credentials  — service-to-service OAuth (outbound-only; no callback)
+#   jwt_bearer          — signed-assertion OAuth (cert in vault; outbound-only)
+#   static              — vault-stored static credential (API token / user+password /
+#                         native DB connection credentials); no OAuth dance
+#
+# CRITICAL invariant (AC3): every mode terminates in the SAME vault record shape,
+# so downstream ingestion is mode-agnostic — it resolves credentials through the
+# unchanged get_connector_credentials(org_id, connector_id) and never branches on
+# auth mode. The mode concept lives entirely at the auth EDGE (connect / setup);
+# it never leaks into ingestion. See app/auth/auth_modes.py for the per-connector
+# supported-modes registry and the per-org selection resolver.
+# ---------------------------------------------------------------------------
+AuthMode = Literal["authorization_code", "client_credentials", "jwt_bearer", "static"]
+
 
 @dataclass
 class ConnectorAuthConfig:
@@ -28,6 +49,17 @@ class ConnectorAuthConfig:
     # Salesforce needs ``prompt=consent`` to (re-)issue a refresh token. Ignored
     # for client_credentials flows (no browser redirect / no refresh token).
     authorize_params: Dict[str, str] = field(default_factory=dict)
+    # R18-A3 T1 (AT-554): the auth MODES this connector supports, most-preferred
+    # first. The first entry is the connector's default mode (the one used when an
+    # org has selected nothing). ``flow`` remains the OAuth grant used by the
+    # authorization-code / client-credentials machinery in oauth.py; this field is
+    # the broader mode concept a per-org configuration selects from (it may include
+    # ``static`` / ``jwt_bearer`` that ``flow`` cannot express). Left empty by
+    # default so the interface stays additive; app/auth/auth_modes.py falls back to
+    # deriving the default from ``flow`` when it is empty. Blocked follow-ups
+    # (AT-555 jwt_bearer, AT-556/AT-557 client_credentials) extend a connector's
+    # list here as each mode's flow is built.
+    supported_auth_modes: List[AuthMode] = field(default_factory=list)
 
 
 @dataclass
