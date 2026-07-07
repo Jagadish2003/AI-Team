@@ -1,0 +1,31 @@
+"""AgentIQ retrieval substrate (R18-B1 — Release 1.8, Track B).
+
+The layer that finds the few most relevant pieces of evidence on demand —
+chunking, embedding, indexing, and source-aware retrieval — so the system can
+reason over large unstructured content without being overwhelmed. Keystone of
+Release 1.8: every deep-content story consumes this.
+
+Package layout (Section 1):
+
+    chunking.py   - per-content-type chunk policies (+ content hash / provenance)
+    embedder.py   - batch embedding via the model gateway ONLY
+    store.py      - pgvector index, org-partitioned
+    api.py        - retrieve() entry point + RetrievedChunk
+
+Two load-bearing invariants hold across the package:
+
+  * Embeddings are model calls — produced ONLY through the model gateway
+    (R16-D1 no-bypass). No direct embedding-API call lives here.
+  * Every store access is hard-partitioned by org_id at the SQL layer (R17-D3):
+    one org's indexed content is never retrievable by another.
+
+Retrieval PROPOSES candidates; the context assembler DECIDES what enters context.
+The substrate never feeds enrichment directly.
+"""
+from __future__ import annotations
+
+# Kept import-light on purpose: submodules (store/api) pull in the DB and model
+# gateway, so importing the package must not force those in. Callers import the
+# submodule they need, e.g. ``from app.retrieval.api import retrieve``.
+
+__all__ = ["chunking", "embedder", "store", "api"]
