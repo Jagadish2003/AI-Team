@@ -7,6 +7,7 @@ import { useTheme } from "../../context/ThemeContext";
 import { useAuthOptional } from "../../context/AuthContext";
 import { useOrgName } from "../../context/LicenseContext";
 import { profileNameFromEmail } from "../../utils/profileName";
+import { isViewerRole } from "../../utils/roles";
 
 type NavItem = {
   to: string;
@@ -90,7 +91,7 @@ export default function TopNav() {
   // Builder) are removed from the nav entirely. Only an explicit "viewer" role
   // hides them — analyst/owner (and the claim-less dev token) keep the full nav,
   // and the backend still enforces the boundary regardless of what the nav shows.
-  const isViewer = auth?.user?.role === "viewer";
+  const isViewer = isViewerRole(auth?.user?.role);
   const visibleItems = items.filter((i) => !(i.analystOnly && isViewer));
 
   useEffect(() => {

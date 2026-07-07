@@ -9,6 +9,7 @@ import { useConnectorContext } from "../context/ConnectorContext";
 import { useSourceIntakeContext } from "../context/SourceIntakeContext";
 import { useRunContext } from "../context/RunContext";
 import { useAuthOptional } from "../context/AuthContext";
+import { isViewerRole } from "../utils/roles";
 import {
   DISCOVERY_SOURCE_REQUIREMENT_MESSAGE,
   isDiscoveryReadyConnector,
@@ -641,7 +642,7 @@ export default function DiscoveryRunPage() {
   // Replay re-triggers compute (POST /api/runs/{run_id}/replay is analyst+), so
   // viewers get a disabled Replay button — read-only access.
   const auth = useAuthOptional();
-  const isViewer = auth?.user?.role === "viewer";
+  const isViewer = isViewerRole(auth?.user?.role);
 
   const {
     run,

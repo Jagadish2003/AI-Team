@@ -37,6 +37,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { useToast } from '../common/Toast';
 import { ApiError, apiGet, apiPatch } from '../../lib/apiClient';
 import { useAuthOptional } from '../../context/AuthContext';
+import { isViewerRole } from '../../utils/roles';
 
 // ── Product definitions ───────────────────────────────────────────────────────
 
@@ -89,7 +90,7 @@ export default function SalesforceProductPicker({ onSaved }: Props) {
   // products is gated at analyst+). Viewers get a read-only picker: the product
   // toggles and the Save button are disabled so nothing can be changed.
   const auth = useAuthOptional();
-  const isViewer = auth?.user?.role === 'viewer';
+  const isViewer = isViewerRole(auth?.user?.role);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [loading,  setLoading]  = useState(true);
   const [saving,   setSaving]   = useState(false);

@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { OpportunityCandidate, ReviewAuditEvent } from '../../types/analystReview';
 import type { Decision } from '../../types/common';
 import { useAuthOptional } from '../../context/AuthContext';
+import { isViewerRole } from '../../utils/roles';
  
 export default function ReasoningOverride({
   opp,
@@ -32,7 +33,7 @@ export default function ReasoningOverride({
   // analyst+), so every write control here is disabled for them. "View
   // Evidence" is a read action and stays enabled.
   const auth = useAuthOptional();
-  const isViewer = auth?.user?.role === 'viewer';
+  const isViewer = isViewerRole(auth?.user?.role);
 
   const isDecisionFinalized = !!opp && opp.decision !== 'UNREVIEWED';
   const relevantAuditCount = opp ? audit.filter((a) => !a.opportunityId || a.opportunityId === opp.id).length : 0;

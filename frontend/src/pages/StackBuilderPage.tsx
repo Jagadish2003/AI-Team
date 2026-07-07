@@ -10,6 +10,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useRunContext } from '../context/RunContext';
 import { useAuthOptional } from '../context/AuthContext';
+import { isViewerRole } from '../utils/roles';
 
 // Import components and types
 import { CheckCircle2, Database, Layers3, Loader2, Target } from 'lucide-react';
@@ -508,7 +509,7 @@ export default function StackBuilderPage({
   // or a stale link — so render a read-only notice instead of the interactive
   // builder. No selectable control is mounted, so nothing can be changed, and the
   // backend (setup-state/launch are analyst+) enforces the same boundary anyway.
-  if (auth?.user?.role === "viewer") {
+  if (isViewerRole(auth?.user?.role)) {
     return (
       <PageShell
         title="Stack Builder"
