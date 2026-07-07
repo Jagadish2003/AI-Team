@@ -164,6 +164,12 @@ async def lifespan(app: FastAPI):
     _validate_org_approval_config()
     # Seed the dev user as owner of the default org so existing routes pass RBAC.
     seed_owner(_DEV_ORG, _DEV_USER)
+    # Seed the configured static role tokens (VIEWER_JWT / ANALYST_JWT /
+    # ADMIN_JWT) as members of the default org so they resolve their role on
+    # role-gated routes. DEV_JWT is skipped (already seeded as owner above), and
+    # seeding is default-org-only so org-scoping still denies them elsewhere.
+    from .rbac import seed_static_token_members
+    seed_static_token_members(_DEV_ORG)
     # R16-D1 T2: validate model provider config at startup so an unknown
     # MODEL_GENERATION_PROVIDER or MODEL_EMBEDDING_PROVIDER value raises a
     # clear ValueError before the first model call (T2-AC4).
