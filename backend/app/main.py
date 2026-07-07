@@ -168,8 +168,11 @@ async def lifespan(app: FastAPI):
     # ADMIN_JWT) as members of the default org so they resolve their role on
     # role-gated routes. DEV_JWT is skipped (already seeded as owner above), and
     # seeding is default-org-only so org-scoping still denies them elsewhere.
-    from .rbac import seed_static_token_members
-    seed_static_token_members(_DEV_ORG)
+    # Gated to dev/test only: production (REQUIRE_CONNECTOR_SECRETS=1) never seeds
+    # static role tokens, so they cannot resolve a role on any gated route there.
+    if os.getenv("REQUIRE_CONNECTOR_SECRETS") != "1":
+        from .rbac import seed_static_token_members
+        seed_static_token_members(_DEV_ORG)
     # R16-D1 T2: validate model provider config at startup so an unknown
     # MODEL_GENERATION_PROVIDER or MODEL_EMBEDDING_PROVIDER value raises a
     # clear ValueError before the first model call (T2-AC4).
