@@ -155,7 +155,12 @@ describe("AuthContext — login / register", () => {
     await user.click(screen.getByText("register"));
 
     await waitFor(() =>
-      expect(mockRegister).toHaveBeenCalledWith("Acme", "owner@example.com", "supersecret1")
+      expect(mockRegister).toHaveBeenCalledWith(
+        "Acme",
+        "owner@example.com",
+        "supersecret1",
+        undefined
+      )
     );
     expect(screen.getByTestId("status").textContent).toBe("anonymous");
     expect(screen.getByTestId("token").textContent).toBe("none");

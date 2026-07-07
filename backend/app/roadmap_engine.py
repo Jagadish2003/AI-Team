@@ -155,11 +155,12 @@ def build_roadmap(opps: List[OpportunityCandidate]) -> PilotRoadmapModel:
     unreviewed_strat = [o for o in unreviewed if o.get("tier") == "Strategic"]
     unreviewed_complex = [o for o in unreviewed if o.get("tier") == "Complex"]
 
-    # Stage caps (match UI expectations): 30d=3 QW, 60d=2 Strategic, 90d=1 Complex
-    # Approved items are never capped; they take priority and then we fill remaining slots.
-    stage30_opps = approved_qw + unreviewed_qw[: max(0, 3 - len(approved_qw))]
-    stage60_opps = approved_strat + unreviewed_strat[: max(0, 2 - len(approved_strat))]
-    stage90_opps = approved_complex + unreviewed_complex[: max(0, 1 - len(approved_complex))]
+    # No stage caps: every opportunity appears in its tier's stage
+    # (Quick Win -> Phase 1, Strategic -> Phase 2, Complex -> Phase 3).
+    # Approved items still take priority ordering ahead of unreviewed ones.
+    stage30_opps = approved_qw + unreviewed_qw
+    stage60_opps = approved_strat + unreviewed_strat
+    stage90_opps = approved_complex + unreviewed_complex
 
     # If any APPROVED items are missing a tier, do NOT drop them silently.
     # For now, place them in the earliest stage so they remain visible to users.

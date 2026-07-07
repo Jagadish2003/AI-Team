@@ -57,14 +57,14 @@ function BlueprintLink({ oppId }: { oppId: string }) {
         // does not also fire when the Blueprint link is clicked.
         e.stopPropagation();
         select(oppId);
-        nav(`/agent-blueprint?oppId=${encodeURIComponent(oppId)}`);
+        nav(`/agentforce-blueprint?oppId=${encodeURIComponent(oppId)}`);
       }}
       className="flex items-center gap-1 text-[10px] text-accent hover:underline mt-1.5"
       data-testid={`blueprint-link-${oppId}`}
-      aria-label={`View Agent Blueprint for this opportunity`}
+      aria-label={`View Agentforce Blueprint for this opportunity`}
     >
       <Zap size={9} />
-      View Agent Blueprint →
+      View Agentforce Blueprint →
     </button>
   );
 }
@@ -86,13 +86,13 @@ export default function StagesGrid({ stages, onOpenReview }: Props) {
   );
 
   return (
-    <div className="grid grid-cols-1 gap-4 lg:h-full lg:grid-cols-3">
+    <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
       {stages.map((s) => {
         const { phase, description } = phaseLabel(s.id);
         const subtitle = phaseSubtitle(s);
 
         return (
-          <div key={s.id} className="flex h-[680px] min-h-0 flex-col lg:h-full">
+          <div key={s.id} className="flex flex-col">
             {/* Phase heading replacing 30/60/90 */}
             <div className="shrink-0 pb-2 text-center" data-testid={`phase-heading-${s.id}`}>
               <div className="text-sm font-bold uppercase tracking-wide text-muted">

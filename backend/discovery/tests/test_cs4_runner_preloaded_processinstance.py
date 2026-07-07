@@ -1,19 +1,30 @@
 """
-CS-4 / AT-310: runner.py forwards Salesforce CRM approval data to the nCino
-ingestor so the duplicate ProcessInstance query is eliminated.
+nCino ProcessInstance sourcing (reverts CS-4 / AT-310 reuse).
+
+Original CS-4/AT-310 forwarded sf_data["approval_processes"] into
+ncino.ingest(preloaded_process_instances=...) to avoid a "duplicate"
+ProcessInstance query. That reuse was invalid: approval_processes is an
+AGGREGATED per-process-name summary (process_name / pending_count /
+approver_count), not raw ProcessInstance rows, so nCino's loan-approval
+detector had no TargetObjectId to match and APPROVAL_BOTTLENECK silently
+never fired even with live pending approvals. The runner now lets nCino run
+its own ProcessInstance fetch.
 """
 import os
 
 os.environ["INGEST_MODE"] = "offline"
 
 
-def test_runner_passes_approval_processes_to_ncino(monkeypatch):
-    """runner.run() calls ncino.ingest(preloaded_process_instances=sf_data['approval_processes'])."""
+def test_runner_does_not_forward_aggregated_approvals_to_ncino(monkeypatch):
+    """runner.run() must NOT hand nCino the aggregated approval_processes summary.
+
+    nCino must run its own ProcessInstance fetch, so the preloaded argument is
+    None (the summary shape cannot satisfy the loan-approval detector).
+    """
     from discovery import runner
-    from discovery.ingest import ncino, salesforce
+    from discovery.ingest import ncino
 
     captured = {}
-
     real_ncino_ingest = ncino.ingest
 
     def spy_ingest(preloaded_process_instances=None):
@@ -29,36 +40,31 @@ def test_runner_passes_approval_processes_to_ncino(monkeypatch):
 
     assert isinstance(result, dict)
     assert captured.get("called") is True
-
-    # The preloaded payload must be exactly the Salesforce CRM approval data.
-    expected = salesforce.ingest().get("approval_processes", [])
-    assert captured["preloaded"] == expected
+    # nCino sources ProcessInstance itself — the runner forwards nothing.
+    assert captured["preloaded"] is None
 
 
-def test_runner_forwards_none_when_no_approval_processes(monkeypatch):
-    """When sf_data has no approval_processes, runner forwards None — not [].
-
-    CS-4 / AT-310-fix (review issue #2): forwarding an empty list when the
-    Salesforce CRM pass produced no approval data would suppress the nCino
-    ingestor's own independent ProcessInstance fetch, silently dropping nCino
-    approval signals. Passing None instead preserves that fallback (ncino.ingest
-    only reuses preloaded data when it is genuinely provided).
-    """
+def test_ncino_builds_approval_metrics_from_its_own_process_instances(monkeypatch):
+    """End-to-end: offline nCino ingest populates approval_metrics from its own
+    ProcessInstance rows (raw, with TargetObjectId), independent of the
+    Salesforce CRM approval rollup."""
     from discovery import runner
-    from discovery.ingest import ncino, salesforce
+    from discovery.ingest import ncino
 
     captured = {}
-
-    # Salesforce ingest returns a payload WITHOUT approval_processes.
-    monkeypatch.setattr(salesforce, "ingest", lambda: {"cases": [], "flows": []})
+    real_ncino_ingest = ncino.ingest
 
     def spy_ingest(preloaded_process_instances=None):
-        captured["preloaded"] = preloaded_process_instances
-        return {"process_instances": preloaded_process_instances or []}
+        data = real_ncino_ingest(
+            preloaded_process_instances=preloaded_process_instances
+        )
+        captured["approval_metrics"] = data.get("approval_metrics")
+        return data
 
     monkeypatch.setattr(ncino, "ingest", spy_ingest)
 
     runner.run("offline", pack="ncino", systems=["salesforce"])
 
-    # None (not []) => ncino.ingest() keeps its independent ProcessInstance fetch.
-    assert captured["preloaded"] is None
+    # approval_metrics is built from nCino's own ProcessInstance rows.
+    assert captured["approval_metrics"] is not None
+    assert "pending_count" in captured["approval_metrics"]

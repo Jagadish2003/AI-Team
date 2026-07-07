@@ -60,7 +60,7 @@ PACK_REGISTRY: Dict[str, Dict[str, Any]] = {
 
     "ncino": {
         "packId":        "ncino",
-        "packVersion":   "1.0.0",
+        "packVersion":   "1.0.1",
         "packName":      "nCino Lending",
         "domain":        "ncino",
         "pack_domain":   "ncino",
