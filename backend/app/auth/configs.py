@@ -113,9 +113,10 @@ CONNECTOR_AUTH_CONFIGS: Dict[str, ConnectorAuthConfig] = {
     "salesforce": ConnectorAuthConfig(
         connector_id="salesforce",
         flow="authorization_code",
-        # R18-A3 T1: authorization_code today; jwt_bearer is added here by AT-555
-        # (Salesforce's outbound-only headless path) once its flow is built.
-        supported_auth_modes=["authorization_code"],
+        # R18-A3: authorization_code (default) + jwt_bearer (AT-555) — Salesforce's
+        # outbound-only, no-callback headless path (signed assertion → access
+        # token; refresh by re-assertion). The cert private key lives in the vault.
+        supported_auth_modes=["authorization_code", "jwt_bearer"],
         client_id=os.getenv("SALESFORCE_CLIENT_ID", "salesforce-dev-client-id"),
         secret_key="SALESFORCE_CLIENT_SECRET",
         token_url=f"https://{SALESFORCE_INSTANCE}/services/oauth2/token",

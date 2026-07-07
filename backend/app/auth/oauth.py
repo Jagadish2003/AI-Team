@@ -5,10 +5,12 @@ import hashlib
 import logging
 import os
 import secrets
+from datetime import datetime, timedelta, timezone
 from typing import Optional
-from urllib.parse import parse_qsl, urlencode
+from urllib.parse import parse_qsl, urlencode, urlsplit
 
 import httpx
+import jwt
 
 from app.auth.models import ConnectorAuthConfig
 from app.auth.secrets import resolve_secret
@@ -16,6 +18,17 @@ from app.auth.secrets import resolve_secret
 logger = logging.getLogger(__name__)
 
 OAUTH_HTTP_TIMEOUT = int(os.environ.get("OAUTH_HTTP_TIMEOUT_SECONDS", "30"))
+
+# RFC 7523 grant type for the JWT bearer flow (Salesforce connected-app
+# server-to-server integration — R18-A3 T2 / AT-555). Outbound-only: a signed
+# assertion is POSTed for an access token, so NO redirect URI / inbound callback
+# is ever involved (AC1).
+JWT_BEARER_GRANT_TYPE = "urn:ietf:params:oauth:grant-type:jwt-bearer"
+
+# Assertion lifetime. Salesforce rejects a JWT whose ``exp`` is more than 5
+# minutes out; 3 minutes leaves comfortable clock-skew headroom. The assertion is
+# minted fresh on every token request, so it need only outlive the round-trip.
+_JWT_ASSERTION_TTL_SECONDS = 180
 
 # Ask the token endpoint for a JSON response. GitHub's token endpoint
 # (https://github.com/login/oauth/access_token) returns
@@ -238,6 +251,103 @@ async def get_client_credentials_token(
                     "client_secret": resolve_secret(config.secret_key),
                     "scope": " ".join(config.scopes),
                 },
+                headers=_JSON_ACCEPT,
+            )
+        except httpx.TimeoutException:
+            raise OAuthError(config.connector_id, "timeout")
+    if response.status_code != 200:
+        _raise_for_token_error(config, response)
+    return _parse_token_response(response)
+
+
+def _authorization_base(url: str) -> str:
+    """Return the ``scheme://host`` origin of a token URL.
+
+    Used as the JWT ``aud`` (audience) and to derive the token endpoint when the
+    caller passes only a login host. e.g.
+    ``https://login.salesforce.com/services/oauth2/token`` → ``https://login.salesforce.com``.
+    """
+    parts = urlsplit(url)
+    return f"{parts.scheme}://{parts.netloc}" if parts.scheme and parts.netloc else url.rstrip("/")
+
+
+def build_jwt_bearer_assertion(
+    *,
+    issuer: str,
+    subject: str,
+    audience: str,
+    private_key: str,
+    ttl_seconds: int = _JWT_ASSERTION_TTL_SECONDS,
+) -> str:
+    """Build and RS256-sign the JWT assertion for the JWT bearer flow (RFC 7523).
+
+    ``issuer`` is the connected-app consumer key (``iss``), ``subject`` the
+    Salesforce username to run as (``sub``), ``audience`` the login/token host
+    (``aud``, e.g. ``https://login.salesforce.com``), and ``private_key`` the PEM
+    private key whose public cert is uploaded to the connected app. The assertion
+    is short-lived (``ttl_seconds``) and minted fresh per token request.
+
+    The private key is passed to the signer only and is NEVER logged. A signing
+    failure (malformed/unusable key) raises :class:`OAuthError` with a generic
+    reason so the key material cannot leak into a traceback or log line.
+    """
+    now = datetime.now(timezone.utc)
+    payload = {
+        "iss": issuer,
+        "sub": subject,
+        "aud": audience,
+        "iat": int(now.timestamp()),
+        "exp": int((now + timedelta(seconds=ttl_seconds)).timestamp()),
+    }
+    try:
+        return jwt.encode(payload, private_key, algorithm="RS256")
+    except Exception as exc:  # noqa: BLE001 — never surface the key; generic reason only.
+        logger.warning(
+            "JWT bearer assertion signing failed (issuer=%s): %s",
+            issuer,
+            type(exc).__name__,
+        )
+        raise OAuthError(issuer, "jwt_signing_failed", detail="invalid private key")
+
+
+async def get_jwt_bearer_token(
+    config: ConnectorAuthConfig,
+    *,
+    private_key: str,
+    subject: str,
+    issuer: Optional[str] = None,
+    audience: Optional[str] = None,
+    token_url: Optional[str] = None,
+    _transport: Optional[httpx.AsyncBaseTransport] = None,
+) -> dict:
+    """Exchange a signed JWT assertion for an access token (RFC 7523, outbound-only).
+
+    Salesforce's connected-app JWT bearer flow (AT-555): a signed assertion is
+    POSTed to the token endpoint and exchanged for an access token — there is NO
+    client secret (the assertion signature is the credential), NO redirect URI and
+    NO inbound callback (AC1). ``instance_url`` rides in the Salesforce response
+    exactly as it does for the authorization-code flow.
+
+    ``issuer`` defaults to ``config.client_id`` (the connected-app consumer key —
+    a non-secret client id, per the secret_key convention). ``audience`` and
+    ``token_url`` default to the connector's configured host so a caller need only
+    supply the per-org ``private_key`` and ``subject``; passing a per-org
+    ``audience``/``token_url`` (derived from the stored login host) targets that
+    org's Salesforce instance. ``_transport`` is injected only in tests.
+    """
+    turl = token_url or config.token_url
+    aud = audience or _authorization_base(turl)
+    iss = issuer or config.client_id
+
+    assertion = build_jwt_bearer_assertion(
+        issuer=iss, subject=subject, audience=aud, private_key=private_key
+    )
+
+    async with httpx.AsyncClient(timeout=OAUTH_HTTP_TIMEOUT, transport=_transport) as client:
+        try:
+            response = await client.post(
+                turl,
+                data={"grant_type": JWT_BEARER_GRANT_TYPE, "assertion": assertion},
                 headers=_JSON_ACCEPT,
             )
         except httpx.TimeoutException:

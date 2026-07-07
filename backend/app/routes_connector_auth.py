@@ -50,11 +50,15 @@ from app import license_limits
 from app.auth.configs import CONNECTOR_AUTH_CONFIGS
 from app.auth.oauth_state import decode_state, encode_state
 from app.auth.secrets import MissingSecretError
+from app.auth.auth_modes import connector_supports_mode, set_auth_mode
 from app.auth.vault import (
     REFRESH_THRESHOLD_SECONDS,
     consume_nonce,
+    get_jwt_bearer_credential_metadata,
     get_static_credential_metadata,
+    revoke_jwt_bearer_credential,
     revoke_static_credential,
+    store_jwt_bearer_credential,
     store_nonce,
     store_static_credential,
 )
@@ -300,6 +304,24 @@ class StaticCredentialStatus(BaseModel):
     base_url: Optional[str] = None
     has_username: bool = False
     updated_at: Optional[str] = None
+
+
+class JwtBearerCredentialRequest(BaseModel):
+    """Body for POST /api/connectors/{id}/jwt-credentials (R18-A3 T2 / AT-555).
+
+    The Salesforce connected-app JWT bearer material an Owner enters once:
+      login_url    — the login/instance host (e.g. https://login.salesforce.com),
+                     used as the assertion audience + token endpoint (non-secret).
+      username     — the Salesforce username the assertion runs as (the `sub`).
+      private_key  — the PEM cert private key (WRITE-ONLY: encrypted into the
+                     vault, never returned, never logged).
+    Fields default to empty so the handler returns one clear 400 naming the
+    missing field(s) rather than a raw 422.
+    """
+
+    login_url: str = ""
+    username: str = ""
+    private_key: str = ""
 
 
 # ---------------------------------------------------------------------------
@@ -818,4 +840,177 @@ def register_connector_auth_routes(app: FastAPI) -> None:
             user_id=_get_user_id_from_token(token),
         )
         return Response(status_code=204)
- 
+
+    # -----------------------------------------------------------------------
+    # JWT bearer credential entry — R18-A3 T2 / AT-555 (AC1/AC5)
+    #
+    # Outbound-only Salesforce connect: an Owner enters the connected-app cert
+    # private key once. It is vaulted (encrypted, write-only, never logged — AC5);
+    # the access token is minted outbound from it on first ingest and re-minted by
+    # re-assertion on expiry (get_token), so no inbound callback is ever needed.
+    # -----------------------------------------------------------------------
+
+    @app.post(
+        "/api/connectors/{connector_id}/jwt-credentials",
+        response_model=StaticCredentialStatus,
+        dependencies=[Depends(require_auth), Depends(require_role("owner"))],
+    )
+    def set_jwt_bearer_credentials(
+        connector_id: str,
+        body: JwtBearerCredentialRequest,
+        token: str = Depends(require_auth),
+    ) -> StaticCredentialStatus:
+        """Store the JWT bearer signing material for the caller's org (AC5).
+
+        Owner-only. The PEM private key + Salesforce username + login host are
+        encrypted into the per-org vault via store_jwt_bearer_credential (same
+        keying/encryption as any credential). The org is taken from the tenancy
+        context, never the body. Values are write-only: the response is non-secret
+        metadata only, and the audit event records the action/actor without them.
+        Selecting a connector that has no jwt_bearer mode is a 400.
+        """
+        if not connector_supports_mode(connector_id, "jwt_bearer"):
+            raise HTTPException(
+                status_code=400,
+                detail="Connector does not support the JWT bearer auth mode.",
+            )
+
+        login_url = (body.login_url or "").strip()
+        username = (body.username or "").strip()
+        private_key = body.private_key or ""
+        missing = [
+            label
+            for label, value in (
+                ("login URL", login_url),
+                ("username", username),
+                ("private key", private_key.strip()),
+            )
+            if not value
+        ]
+        if missing:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Missing required field(s): {', '.join(missing)}.",
+            )
+
+        org_id = get_current_org_id()
+        try:
+            record = store_jwt_bearer_credential(
+                org_id,
+                connector_id,
+                private_key=private_key,
+                subject=username,
+                base_url=login_url,
+            )
+        except ValueError:
+            raise HTTPException(
+                status_code=400, detail="A non-empty private key is required."
+            )
+        except MissingSecretError:
+            logger.error(
+                "Cannot store JWT bearer credential for connector %s: the credential "
+                "vault key (CREDENTIAL_VAULT_KEY) is not configured",
+                connector_id,
+            )
+            raise HTTPException(
+                status_code=500, detail="Credential vault is not configured."
+            )
+
+        # Record the per-org auth-mode selection so resolve_auth_mode reflects
+        # reality, and reflect the connection in this org's connector state (the
+        # access token mints on first ingest). Display state only — the vault write
+        # above is the source of truth, so a failure here must not fail the request.
+        try:
+            set_auth_mode(org_id, connector_id, "jwt_bearer")
+        except Exception:
+            logger.exception(
+                "Failed to record jwt_bearer auth mode for connector %s", connector_id
+            )
+        try:
+            rec = db.org_connector_get(org_id, connector_id) or {}
+            rec["status"] = "connected"
+            rec["lastSynced"] = rec.get("lastSynced", "—")
+            db.org_connector_set(org_id, connector_id, rec)
+        except Exception:
+            logger.exception(
+                "Failed to mark connector %s connected after JWT credential entry",
+                connector_id,
+            )
+
+        log_event(
+            "connector_credentials_set",
+            connector_id=connector_id,
+            user_id=_get_user_id_from_token(token),
+        )
+        return StaticCredentialStatus(
+            connector_id=connector_id,
+            configured=True,
+            base_url=record.base_url or None,
+            has_username=bool(record.username),
+            updated_at=record.updated_at.isoformat(),
+        )
+
+    @app.get(
+        "/api/connectors/{connector_id}/jwt-credentials",
+        response_model=StaticCredentialStatus,
+        dependencies=[Depends(require_auth), Depends(require_role("viewer"))],
+    )
+    def get_jwt_bearer_credential_status(connector_id: str) -> StaticCredentialStatus:
+        """Report whether JWT bearer material is configured — metadata only (AC5).
+
+        Reads NON-SECRET metadata (never decrypts the private key), so the key
+        cannot leak through this path and it does not even need the vault key.
+        """
+        if not connector_supports_mode(connector_id, "jwt_bearer"):
+            raise HTTPException(
+                status_code=400,
+                detail="Connector does not support the JWT bearer auth mode.",
+            )
+        org_id = get_current_org_id()
+        meta = get_jwt_bearer_credential_metadata(org_id, connector_id)
+        if meta is None:
+            return StaticCredentialStatus(connector_id=connector_id, configured=False)
+        return StaticCredentialStatus(
+            connector_id=connector_id,
+            configured=True,
+            base_url=meta["base_url"] or None,
+            has_username=meta["has_username"],
+            updated_at=meta["updated_at"].isoformat(),
+        )
+
+    @app.delete(
+        "/api/connectors/{connector_id}/jwt-credentials",
+        dependencies=[Depends(require_auth), Depends(require_role("owner"))],
+    )
+    def delete_jwt_bearer_credentials(
+        connector_id: str, token: str = Depends(require_auth)
+    ) -> Response:
+        """Revoke (soft-delete) the org's JWT bearer signing material.
+
+        Owner-only. Scoped to the reserved ``{connector_id}:jwt`` static row, so it
+        never touches the connector's cached OAuth token row. Idempotent.
+        """
+        if not connector_supports_mode(connector_id, "jwt_bearer"):
+            raise HTTPException(
+                status_code=400,
+                detail="Connector does not support the JWT bearer auth mode.",
+            )
+        org_id = get_current_org_id()
+        revoke_jwt_bearer_credential(org_id, connector_id)
+        try:
+            rec = db.org_connector_get(org_id, connector_id)
+            if rec is not None and rec.get("org_id") == org_id:
+                rec["status"] = "disconnected"
+                db.org_connector_set(org_id, connector_id, rec)
+        except Exception:
+            logger.exception(
+                "Failed to clear connector %s connection state after JWT credential revoke",
+                connector_id,
+            )
+        log_event(
+            "connector_credentials_revoked",
+            connector_id=connector_id,
+            user_id=_get_user_id_from_token(token),
+        )
+        return Response(status_code=204)
+

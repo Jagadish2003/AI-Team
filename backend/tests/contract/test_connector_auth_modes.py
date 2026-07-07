@@ -133,9 +133,8 @@ def test_connector_supports_mode():
     assert connector_supports_mode("jira", AUTH_MODE_AUTHORIZATION_CODE) is True
     # jwt_bearer is not wired for Jira (and never will be) — not supported.
     assert connector_supports_mode("jira", AUTH_MODE_JWT_BEARER) is False
-    # Salesforce jwt_bearer is a build target (AT-555) but not yet wired, so the
-    # connector does not advertise it today.
-    assert connector_supports_mode("salesforce", AUTH_MODE_JWT_BEARER) is False
+    # Salesforce advertises jwt_bearer once its flow is wired (AT-555).
+    assert connector_supports_mode("salesforce", AUTH_MODE_JWT_BEARER) is True
 
 
 def test_empty_supported_modes_falls_back_to_flow(monkeypatch):

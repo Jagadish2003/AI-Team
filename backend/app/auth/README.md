@@ -100,6 +100,30 @@ Four modes are recognised (`AuthMode` in `models.py`):
   ones usable in a no-public-inbound deployment (the `NETWORK_PROFILE` UI that consumes
   this is a separate follow-up task).
 
+### Salesforce JWT bearer flow (R18-A3 T2 / AT-555)
+
+`jwt_bearer` is Salesforce's outbound-only headless path (RFC 7523): a signed assertion is
+exchanged for an access token — **no client secret, no redirect URI, no inbound callback**.
+
+- **Signing material** (the durable secret) is the connected-app cert **private key**, plus
+  the Salesforce username the assertion runs as (`sub`) and the login host (`aud`). It is
+  vaulted as a **static** record under the reserved id `{connector_id}:jwt`
+  (`store_jwt_bearer_credential` / `get_jwt_bearer_credential` / `revoke_jwt_bearer_credential`),
+  so it gets the full credential hygiene — Fernet-encrypted at rest, masked in `repr`,
+  write-only through the entry route, never logged (AC5). The consumer key (`iss`) is the
+  connected app's non-secret `client_id` from `configs.py`.
+- **The minted access token** is cached as the connector's normal OAuth `TokenRecord` (the
+  `{connector_id}` row), so downstream resolution via `get_connector_credentials()` is
+  identical to any other mode (AC3) and the private key is never resolved as a credential.
+- **`get_token()` mints and re-mints.** On first use (no cached token) it signs an assertion
+  and exchanges it outbound; on expiry — a JWT bearer token has no OAuth `refresh_token` — it
+  re-asserts rather than failing. This is "refresh handled by re-assertion." `instance_url`
+  from the response is captured for live-ingest URL resolution, exactly as authorization_code
+  does.
+- **Entry surface** (owner-only, write-only): `POST/GET/DELETE
+  /api/connectors/{connector_id}/jwt-credentials` (`login_url`, `username`, `private_key`).
+  Building blocks: `oauth.build_jwt_bearer_assertion()` and `oauth.get_jwt_bearer_token()`.
+
 ## Flows
 
 - `authorization_code`: used by Salesforce, ServiceNow, Jira, Confluence, GitHub, Slack, Teams.
