@@ -89,7 +89,16 @@ def compute_content_hash(content: str) -> str:
 # component"). The extension must exist before a ``vector`` column can be created.
 # ``IF NOT EXISTS`` makes this idempotent for both the migration and the runtime
 # ensure helper.
-CREATE_VECTOR_EXTENSION = "CREATE EXTENSION IF NOT EXISTS vector"
+#
+# ``WITH SCHEMA public`` pins the extension (and therefore the ``vector`` type) to
+# the public schema. The type is then referenced fully-qualified as
+# ``public.vector`` below so the table DDL resolves the type even when it runs
+# under a restricted ``search_path`` that excludes public — which is exactly what
+# the isolated-schema migration tests do (they set ``search_path=<throwaway
+# schema>`` via PGOPTIONS). Without this, ``CREATE TABLE ... embedding vector``
+# raises ``type "vector" does not exist`` in those tests. The application's normal
+# search_path includes public, so runtime queries are unaffected.
+CREATE_VECTOR_EXTENSION = "CREATE EXTENSION IF NOT EXISTS vector WITH SCHEMA public"
 
 # The embedding column is declared as an unqualified ``vector`` (no fixed
 # dimension) on purpose: the embedding model — and therefore the vector
@@ -110,7 +119,7 @@ CREATE_RETRIEVAL_CHUNKS_TABLE = f"""
         source_artifact         VARCHAR({SOURCE_ARTIFACT_MAX_LEN}) NOT NULL,
         source_timestamp        TIMESTAMP,
         chunk_position          INTEGER        NOT NULL DEFAULT 0,
-        embedding               vector,
+        embedding               public.vector,
         embedding_model         VARCHAR(128),
         embedding_model_version VARCHAR(64),
         embedded_at             TIMESTAMP,
