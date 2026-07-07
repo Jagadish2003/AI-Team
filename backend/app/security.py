@@ -10,7 +10,7 @@ VIEWER_JWT = os.getenv("VIEWER_JWT", "viewer-token")
 ROLE_LEVELS = {
     "viewer": 0,
     "analyst": 1,
-    "admin": 2,
+    "owner": 2,
 }
 
 
@@ -34,7 +34,7 @@ def _token_roles() -> dict[str, str]:
 
     admin_jwt = os.getenv("ADMIN_JWT")
     if admin_jwt:
-        roles[admin_jwt] = "admin"
+        roles[admin_jwt] = "owner"
 
     return roles
 
@@ -48,7 +48,9 @@ def _jwt_role(token: str) -> str | None:
     with an inflated role claim, yields None here, so a caller that uses this
     role for an authorization decision cannot be tricked into trusting an
     unverified claim (privilege-escalation guard). AUTH-1's 'owner' maps to the
-    highest security level ('admin'); 'analyst' and 'viewer' pass through.
+    highest security level ('owner'); 'analyst' and 'viewer' pass through.
+    Both the legacy 'admin' claim and the new 'owner' claim normalise to 'owner'
+    so the returned role always matches the unified ROLE_LEVELS / rbac vocabulary.
     Returns None for non-JWT static tokens and for any token that fails
     verification.
     """
@@ -59,8 +61,8 @@ def _jwt_role(token: str) -> str | None:
     except Exception:
         return None
     role = (payload.get("role") or "").strip().lower()
-    if role == "owner":
-        return "admin"
+    if role in ("admin", "owner"):
+        return "owner"
     return role or None
 
 

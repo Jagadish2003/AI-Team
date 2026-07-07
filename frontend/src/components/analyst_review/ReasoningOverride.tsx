@@ -1,6 +1,8 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { OpportunityCandidate, ReviewAuditEvent } from '../../types/analystReview';
 import type { Decision } from '../../types/common';
+import { useAuthOptional } from '../../context/AuthContext';
+import { isViewerRole } from '../../utils/roles';
  
 export default function ReasoningOverride({
   opp,
@@ -26,6 +28,13 @@ export default function ReasoningOverride({
     setIsLocked(opp?.override.isLocked ?? false);
   }, [opp?.id]);
  
+  // Viewers have read-only access: approving/rejecting and overriding are
+  // analyst+ writes (the backend gates the decision/override routes at
+  // analyst+), so every write control here is disabled for them. "View
+  // Evidence" is a read action and stays enabled.
+  const auth = useAuthOptional();
+  const isViewer = isViewerRole(auth?.user?.role);
+
   const isDecisionFinalized = !!opp && opp.decision !== 'UNREVIEWED';
   const relevantAuditCount = opp ? audit.filter((a) => !a.opportunityId || a.opportunityId === opp.id).length : 0;
  
@@ -46,7 +55,7 @@ export default function ReasoningOverride({
             <button
               type="button"
               onClick={() => onDecision('APPROVED')}
-              disabled={isDecisionFinalized}
+              disabled={isDecisionFinalized || isViewer}
               className={`flex w-full items-center justify-center gap-1.5 rounded-md border px-3 py-2.5 text-sm font-medium transition disabled:cursor-not-allowed disabled:opacity-50 ${
                 opp.decision === 'APPROVED'
                   ? 'border-emerald-500 bg-emerald-500 text-white'
@@ -59,7 +68,7 @@ export default function ReasoningOverride({
             <button
               type="button"
               onClick={() => onDecision('REJECTED')}
-              disabled={isDecisionFinalized}
+              disabled={isDecisionFinalized || isViewer}
               className={`flex w-full items-center justify-center gap-1.5 rounded-md border px-3 py-2.5 text-sm font-medium transition disabled:cursor-not-allowed disabled:opacity-50 ${
                 opp.decision === 'REJECTED'
                   ? 'border-red-500 bg-red-500 text-white'
@@ -84,7 +93,7 @@ export default function ReasoningOverride({
               placeholder="Rewrite rationale in enterprise language..."
               value={rationaleOverride}
               onChange={(e) => setRationaleOverride(e.target.value)}
-              disabled={isLocked}
+              disabled={isLocked || isViewer}
             />
           </div>
  
@@ -96,7 +105,7 @@ export default function ReasoningOverride({
               placeholder="Why are we overriding the AI rationale?"
               value={overrideReason}
               onChange={(e) => setOverrideReason(e.target.value)}
-              disabled={isLocked}
+              disabled={isLocked || isViewer}
             />
           </div>
  
@@ -104,7 +113,7 @@ export default function ReasoningOverride({
             <button
               type="button"
               onClick={() => onSave(rationaleOverride, overrideReason, isLocked)}
-              disabled={isLocked}
+              disabled={isLocked || isViewer}
               className="rounded-md border border-border bg-bg/40 px-3 py-2.5 text-sm font-medium text-text transition hover:bg-panel2 hover:border-accent/50 disabled:cursor-not-allowed disabled:opacity-50"
             >
               Save Override
@@ -122,7 +131,8 @@ export default function ReasoningOverride({
           <button
             type="button"
             onClick={() => setIsLocked((locked) => !locked)}
-            className={`w-full rounded-md border px-3 py-2.5 text-xs font-medium transition ${
+            disabled={isViewer}
+            className={`w-full rounded-md border px-3 py-2.5 text-xs font-medium transition disabled:cursor-not-allowed disabled:opacity-50 ${
               isLocked
                 ? 'border-amber-500/30 bg-amber-500/10 text-amber-300'
                 : 'border-border bg-bg/30 text-muted hover:bg-panel2 hover:text-text'
