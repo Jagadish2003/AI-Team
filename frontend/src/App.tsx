@@ -1,5 +1,6 @@
 import { Routes, Route, Navigate } from "react-router-dom";
 import { ConnectorProvider } from "./context/ConnectorContext";
+import { NetworkProfileProvider } from "./context/NetworkProfileContext";
 import { SourceIntakeProvider } from "./context/SourceIntakeContext";
 import { RunProvider } from "./context/RunContext";
 import { DiscoveryRunProvider } from "./context/DiscoveryRunContext";
@@ -40,6 +41,7 @@ export default function App() {
          * and public auth pages can access the shared AuthContext.
          */}
         <AuthProvider>
+          <NetworkProfileProvider>
           <ConnectorProvider>
             <RunProvider>
               <SourceIntakeProvider>
@@ -182,6 +184,7 @@ export default function App() {
               </SourceIntakeProvider>
             </RunProvider>
           </ConnectorProvider>
+          </NetworkProfileProvider>
         </AuthProvider>
       </ToastProvider>
     </ThemeProvider>

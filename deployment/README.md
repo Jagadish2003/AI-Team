@@ -172,6 +172,28 @@ pull-based, and most connectors authenticate with an **outbound-only auth mode**
 to redirect back into the network. See `backend/app/auth/README.md` for the auth-mode
 abstraction and `OUTBOUND_ONLY_MODES`.
 
+### `NETWORK_PROFILE` deployment flag (R18-A3 T5 / AT-558)
+
+A deployment declares its inbound-network posture with one env var:
+
+| Value | Meaning |
+|---|---|
+| `standard` (default) | The deployment can accept inbound HTTPS; the browser authorization-code OAuth flow (provider redirect → callback) completes normally. Nothing changes. |
+| `no_public_inbound` | The deployment exposes **no public inbound HTTPS**. The Integration Hub then **hides the authorization-code Connect button** for every connector that has an outbound-only mode configured, and shows the **outbound setup path** instead (JWT-bearer key entry for Salesforce, client-credentials connect for Microsoft Graph / ServiceNow, or the static-credential form). The customer can never start a flow that cannot complete (AC4). |
+
+Anything unset or unrecognised falls back to `standard` — an unknown value must never
+silently hide connect flows.
+
+The backend exposes the flag plus a per-connector auth-capability map at
+`GET /api/network-profile` (viewer+), which the frontend pairs with each connector's
+`has_outbound_only_mode` to decide, per tile, whether to offer the browser flow or the
+outbound setup path. The flag lives at the connect/setup edge only — it never touches
+ingestion (which stays mode-agnostic via `get_connector_credentials()`).
+
+Connectors whose **only** grant is `authorization_code` (**GitHub**, **Slack** — and
+Teams / SharePoint before their client-credentials mode shipped) have no outbound-only
+mode, so their Connect button is **not** hidden. Those fall back to the two options below.
+
 The one exception is a connector whose **only** OAuth grant is `authorization_code`
 (currently **GitHub** and **Slack**, plus **Teams / SharePoint** until their client-credentials
 mode ships). That grant finishes with a browser redirect to a callback URL, which needs an

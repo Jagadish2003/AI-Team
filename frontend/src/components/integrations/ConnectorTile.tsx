@@ -4,6 +4,7 @@ import Badge from '../common/Badge';
 import Button from '../common/Button';
 import { fetchTokenStatus, TokenStatus } from '../../services/staticApi';
 import { useAuthOptional } from '../../context/AuthContext';
+import { useNetworkProfileOptional } from '../../context/NetworkProfileContext';
 import { isViewerRole } from '../../utils/roles';
 
 // Connectors whose Connect button is ENABLED on the Integration Hub. This is a
@@ -77,8 +78,30 @@ export default function ConnectorTile({
   // Reconnect prompt. Values mirror the backend token-status contract (AC14).
   const tokenExpired = tokenStatus === 'needs_auth' || tokenStatus === 'refresh_failed';
 
+  // R18-A3 T5 (AT-558): in a no-public-inbound deployment the browser
+  // authorization-code flow can never complete (the provider redirect can't
+  // reach the network). For a connector that has an outbound-only mode, we must
+  // NOT offer the authorization-code Connect/Reconnect button — the customer is
+  // routed to the outbound setup path (the connector detail panel) instead, so
+  // they can never start a flow that cannot complete (AC4). Connectors with no
+  // outbound-only mode (GitHub, Slack) keep their button and fall back to the
+  // scoped-inbound package (R18-A3 T6).
+  const { hidesAuthorizationCodeConnect } = useNetworkProfileOptional();
+  const hideAuthCode = hidesAuthorizationCodeConnect(connector.id);
+  // The only actions that START an authorization-code flow are Connect (new) and
+  // Reconnect (expired token). Gating applies to those; connected-tile actions
+  // (Configure & Sync / View data) never start an inbound-callback flow.
+  // Only relabel a tile that is actually connectable (isEnabled) — a
+  // not-yet-connectable connector (e.g. Dynamics 365 / SAP, gated out of the hub
+  // by ENABLED_CONNECTOR_IDS) keeps its normal disabled "Connect" state rather
+  // than showing a misleading, disabled "Set up outbound access" button.
+  const wouldStartAuthCodeFlow = !isConnected || tokenExpired;
+  const outboundSetupGate = hideAuthCode && wouldStartAuthCodeFlow && isEnabled;
+
   // When the token is expired/missing, override the button to "Reconnect"
-  const actionLabel = tokenExpired
+  const actionLabel = outboundSetupGate
+    ? 'Set up outbound access'
+    : tokenExpired
     ? 'Reconnect'
     : isConnected && !isConfigured
     ? 'Configure & Sync'
@@ -103,6 +126,12 @@ export default function ConnectorTile({
     ? 'Connecting new sources is currently unavailable'
     : viewerBlocks
     ? 'Connecting systems requires an analyst or owner role.'
+    : undefined;
+
+  // Tooltip guiding the customer to the outbound setup path when the browser flow
+  // is unavailable in this deployment (only when the button is otherwise enabled).
+  const enabledTitle = !actionDisabled && outboundSetupGate
+    ? 'This deployment has no public inbound — set up outbound-only access for this connector.'
     : undefined;
 
   return (
@@ -158,7 +187,7 @@ export default function ConnectorTile({
         <Button
           variant={actionVariant}
           disabled={actionDisabled}
-          title={disabledTitle}
+          title={disabledTitle ?? enabledTitle}
           className={`w-full ${
             actionDisabled
               ? '!bg-slate-500/10 !text-muted !border-border !opacity-100'
@@ -168,6 +197,14 @@ export default function ConnectorTile({
           }`}
           onClick={(e: React.MouseEvent<HTMLButtonElement>) => {
             e.stopPropagation();
+            // R18-A3 T5 (AT-558): in a no-public-inbound deployment, never start
+            // the authorization-code flow for a connector with an outbound-only
+            // mode — open the detail panel (outbound setup path) instead so the
+            // customer can never begin a flow that cannot complete (AC4).
+            if (outboundSetupGate) {
+              onSelect();
+              return;
+            }
             // When the token needs a fresh OAuth round-trip, "Reconnect" must
             // start the OAuth flow — not fall through to the connected-tile
             // "View data" path on the page (CS-2 AC7).

@@ -118,6 +118,74 @@ export function deleteConnectorCredentials(connectorId: string): Promise<void> {
   return apiDelete<void>(`/api/connectors/${connectorId}/credentials`);
 }
 
+/**
+ * R18-A3 T5 (AT-558) — outbound-only auth setup paths for connectors offered in a
+ * NETWORK_PROFILE=no_public_inbound deployment, where the browser
+ * authorization-code flow cannot complete.
+ *
+ * Two shapes:
+ *   - JWT bearer (Salesforce): an Owner enters the connected-app cert private key
+ *     + username + login URL once (WRITE-ONLY; never returned) — the access token
+ *     mints outbound from it (R18-A3 T2 / AT-555).
+ *   - client-credentials (Microsoft Graph Teams/SharePoint, ServiceNow): a single
+ *     Owner action acquires a service-identity token outbound; no body, since the
+ *     credential is the deployment's app secret, not a per-user entry
+ *     (R18-A3 T3/T4 / AT-556/AT-557).
+ */
+
+/** Input for the Salesforce JWT-bearer setup form. `privateKey` is write-only. */
+export interface JwtBearerCredentialInput {
+  login_url: string;
+  username: string;
+  /** PEM private key. Sent once; never returned by any endpoint. */
+  private_key: string;
+}
+
+/** GET /api/connectors/{id}/jwt-credentials — status only; never returns the key. */
+export function fetchJwtBearerCredentialStatus(
+  connectorId: string,
+): Promise<ConnectorCredentialStatus> {
+  return apiGet<ConnectorCredentialStatus>(
+    `/api/connectors/${connectorId}/jwt-credentials`,
+  );
+}
+
+/** POST /api/connectors/{id}/jwt-credentials — Owner-only; encrypts into the vault. */
+export function saveJwtBearerCredentials(
+  connectorId: string,
+  input: JwtBearerCredentialInput,
+): Promise<ConnectorCredentialStatus> {
+  return apiPost<ConnectorCredentialStatus>(
+    `/api/connectors/${connectorId}/jwt-credentials`,
+    input,
+  );
+}
+
+/** DELETE /api/connectors/{id}/jwt-credentials — Owner-only; revokes the key. */
+export function deleteJwtBearerCredentials(connectorId: string): Promise<void> {
+  return apiDelete<void>(`/api/connectors/${connectorId}/jwt-credentials`);
+}
+
+/** Response for the outbound client-credentials connect. */
+export interface ClientCredentialsConnectStatus {
+  connector_id: string;
+  connected: boolean;
+  auth_mode: string;
+}
+
+/**
+ * POST /api/connectors/{id}/client-credentials — Owner-only; acquires a
+ * service-identity token outbound (no callback). Takes no body.
+ */
+export function connectClientCredentials(
+  connectorId: string,
+): Promise<ClientCredentialsConnectStatus> {
+  return apiPost<ClientCredentialsConnectStatus>(
+    `/api/connectors/${connectorId}/client-credentials`,
+    {},
+  );
+}
+
 export function fetchUploads(): Promise<UploadedFile[]> {
   return apiGet<UploadedFile[]>("/api/uploads");
 }
