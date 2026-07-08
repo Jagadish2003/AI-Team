@@ -221,9 +221,18 @@ CONNECTOR_AUTH_CONFIGS: Dict[str, ConnectorAuthConfig] = {
     "teams": ConnectorAuthConfig(
         connector_id="teams",
         flow="authorization_code",
-        # R18-A3 T1: authorization_code today; client_credentials (Graph
-        # application permissions, outbound-only) is added here by AT-556.
-        supported_auth_modes=["authorization_code"],
+        # R18-A3: authorization_code (default) + client_credentials (AT-556 —
+        # Microsoft Graph application permissions, outbound-only, no callback). An
+        # org in a no-public-inbound deployment selects client_credentials so Teams
+        # authenticates under a service identity without a browser redirect.
+        supported_auth_modes=["authorization_code", "client_credentials"],
+        # Graph client-credentials (application-permission) tokens are requested with
+        # the single resource scope .default — the actual permissions come from the
+        # admin-consented app registration, NOT from granular scopes in the request
+        # (Microsoft rejects delegated scopes in this grant). The delegated ``scopes``
+        # below still drive the authorization_code flow. See docs/INTEGRATE_GRAPH_CLIENT_CREDENTIALS.md
+        # for the admin-consent setup (application permissions + tenant-wide consent).
+        client_credentials_scopes=["https://graph.microsoft.com/.default"],
         client_id=os.getenv("TEAMS_CLIENT_ID") or "teams-dev-client-id",
         secret_key="TEAMS_CLIENT_SECRET",
         # Microsoft identity platform (v2.0) endpoints. The tenant segment is
@@ -271,9 +280,18 @@ CONNECTOR_AUTH_CONFIGS: Dict[str, ConnectorAuthConfig] = {
     "sharepoint": ConnectorAuthConfig(
         connector_id="sharepoint",
         flow="authorization_code",
-        # R18-A3 T1: authorization_code today; client_credentials (Graph
-        # application permissions, outbound-only) is added here by AT-556.
-        supported_auth_modes=["authorization_code"],
+        # R18-A3: authorization_code (default) + client_credentials (AT-556 —
+        # Microsoft Graph application permissions, outbound-only, no callback).
+        # SharePoint reuses the same Graph app registration as Teams, so it gains the
+        # client-credentials mode identically; an org in a no-public-inbound deployment
+        # selects it to authenticate under a service identity with no browser redirect.
+        supported_auth_modes=["authorization_code", "client_credentials"],
+        # Graph client-credentials tokens use the single resource scope .default (the
+        # granted app permissions — e.g. Sites.Read.All as an APPLICATION permission —
+        # are resolved from the admin-consented app registration, not sent in the
+        # request). The delegated ``scopes`` below still drive the authorization_code
+        # flow. See docs/INTEGRATE_GRAPH_CLIENT_CREDENTIALS.md for the admin-consent setup.
+        client_credentials_scopes=["https://graph.microsoft.com/.default"],
         # SharePoint reuses the Microsoft Graph app registration set up for Teams
         # (R17-A2 §6 / AT-462): the client id defaults to TEAMS_CLIENT_ID so a
         # single Graph app can serve both connectors, while SHAREPOINT_CLIENT_ID

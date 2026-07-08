@@ -40,9 +40,11 @@ from pydantic import BaseModel
 
 from app import db
 from app.auth import (
+    OAuthError,
     build_auth_url,
     exchange_code,
     generate_pkce_pair,
+    get_client_credentials_token,
     revoke_token,
     store_token,
 )
@@ -50,7 +52,7 @@ from app import license_limits
 from app.auth.configs import CONNECTOR_AUTH_CONFIGS
 from app.auth.oauth_state import decode_state, encode_state
 from app.auth.secrets import MissingSecretError
-from app.auth.auth_modes import connector_supports_mode, set_auth_mode
+from app.auth.auth_modes import connector_supports_mode, resolve_auth_mode, set_auth_mode
 from app.auth.vault import (
     REFRESH_THRESHOLD_SECONDS,
     consume_nonce,
@@ -322,6 +324,21 @@ class JwtBearerCredentialRequest(BaseModel):
     login_url: str = ""
     username: str = ""
     private_key: str = ""
+
+
+class ClientCredentialsConnectStatus(BaseModel):
+    """Response for POST /api/connectors/{id}/client-credentials (R18-A3 T3 / AT-556).
+
+    The client-credentials connect takes NO body — the credential is the
+    deployment's app client secret (the ``{CONNECTOR}_CLIENT_SECRET`` env var), not
+    a per-user entry — so the response just confirms the outbound connect landed:
+    the connector is authenticated, and its per-org auth mode is now
+    ``client_credentials``. Carries no token or secret (AC5).
+    """
+
+    connector_id: str
+    connected: bool
+    auth_mode: str
 
 
 # ---------------------------------------------------------------------------
@@ -1013,4 +1030,114 @@ def register_connector_auth_routes(app: FastAPI) -> None:
             user_id=_get_user_id_from_token(token),
         )
         return Response(status_code=204)
+
+    # -----------------------------------------------------------------------
+    # Client-credentials connect — R18-A3 T3 / AT-556 (AC2/AC5)
+    #
+    # Outbound-only Microsoft Graph (Teams / SharePoint) connect: no browser
+    # redirect, no inbound callback. The credential is the deployment's app client
+    # secret (the {CONNECTOR}_CLIENT_SECRET env var against an admin-consented app
+    # registration — see docs/INTEGRATE_GRAPH_CLIENT_CREDENTIALS.md), so this takes
+    # NO body. It exchanges the app credentials outbound for an access token, vaults
+    # it (encrypted, never logged — AC5), records the per-org client_credentials mode
+    # selection, and marks the connector connected. The token re-mints automatically
+    # on expiry via get_token (client-credentials issues no refresh token), so
+    # ingestion continues without any further user action (AC2).
+    # -----------------------------------------------------------------------
+
+    @app.post(
+        "/api/connectors/{connector_id}/client-credentials",
+        response_model=ClientCredentialsConnectStatus,
+        dependencies=[Depends(require_auth), Depends(require_role("owner"))],
+    )
+    async def connect_client_credentials(
+        connector_id: str, token: str = Depends(require_auth)
+    ) -> ClientCredentialsConnectStatus:
+        """Connect a connector via the outbound-only client-credentials grant (AC2).
+
+        Owner-only. Selecting a connector that has no client_credentials mode is a
+        400. Acquires an access token outbound (no callback), stores it per-org in
+        the encrypted vault (AC5), sets the org's auth mode to client_credentials,
+        and reflects the connection in the org's connector state. A missing app
+        secret is a 500 (operator config); an upstream token failure is a 502.
+        """
+        if not connector_supports_mode(connector_id, "client_credentials"):
+            raise HTTPException(
+                status_code=400,
+                detail="Connector does not support the client-credentials auth mode.",
+            )
+        config = CONNECTOR_AUTH_CONFIGS.get(connector_id)
+        if config is None:
+            raise HTTPException(status_code=404, detail="Unknown connector")
+
+        org_id = get_current_org_id()
+
+        # Block connecting a NEW system once the org is at its licensed max_systems;
+        # re-connecting an already-connected connector is not a new system (R17-D4
+        # Addendum A / T9). Raises HTTP 402 at the limit.
+        license_limits.enforce_can_connect(org_id, connector_id)
+
+        # Outbound token acquisition — the client secret is resolved inside
+        # get_client_credentials_token and never logged (AC5).
+        try:
+            token_response = await get_client_credentials_token(config)
+        except MissingSecretError:
+            logger.error(
+                "Cannot connect connector %s via client-credentials: the connector "
+                "client secret (%s) is not configured",
+                connector_id,
+                config.secret_key,
+            )
+            raise HTTPException(
+                status_code=500,
+                detail="Connector client secret is not configured.",
+            )
+        except OAuthError as exc:
+            # Provider rejected the credentials / unreachable. exc carries only the
+            # provider's OAuth error code (never the secret), safe to surface.
+            logger.warning(
+                "client-credentials connect failed for connector %s: %s",
+                connector_id,
+                exc.reason,
+            )
+            raise HTTPException(
+                status_code=502,
+                detail="Could not acquire a token from the provider.",
+            )
+
+        store_token(org_id, connector_id, token_response)
+
+        # Record the per-org auth-mode selection so resolve_auth_mode reflects
+        # reality and get_token re-mints in client_credentials mode on expiry.
+        # Display/selection state — the vault write above is the source of truth,
+        # so a failure here must not fail the request.
+        try:
+            set_auth_mode(org_id, connector_id, "client_credentials")
+        except Exception:
+            logger.exception(
+                "Failed to record client_credentials auth mode for connector %s",
+                connector_id,
+            )
+        try:
+            rec = db.org_connector_get(org_id, connector_id) or {}
+            rec["status"] = "connected"
+            rec["lastSynced"] = rec.get("lastSynced", "—")
+            db.org_connector_set(org_id, connector_id, rec)
+        except Exception:
+            logger.exception(
+                "Failed to mark connector %s connected after client-credentials connect",
+                connector_id,
+            )
+
+        log_event(
+            "connector_connected",
+            connector_id=connector_id,
+            user_id=_get_user_id_from_token(token),
+            scopes_granted=config.client_credentials_scopes or config.scopes,
+        )
+        return ClientCredentialsConnectStatus(
+            connector_id=connector_id,
+            connected=True,
+            auth_mode=resolve_auth_mode(org_id, connector_id),
+        )
 

@@ -236,11 +236,26 @@ async def get_client_credentials_token(
     *,
     _transport: Optional[httpx.AsyncBaseTransport] = None,
 ) -> dict:
-    """Fetch a token using the client_credentials flow (SAP, D365).
+    """Fetch a token using the client_credentials flow (SAP, D365, Graph, ServiceNow).
+
+    Outbound-only (AC2): the app's own ``client_id`` + ``client_secret`` are POSTed
+    for an access token — there is NO redirect URI and NO inbound callback, so it
+    works in a no-public-inbound deployment.
+
+    Scope selection (R18-A3 T3 / AT-556): the request uses
+    ``config.client_credentials_scopes`` when set, falling back to ``config.scopes``.
+    Microsoft Graph application-permission tokens MUST be requested with the single
+    resource scope ``https://graph.microsoft.com/.default`` (the granted app
+    permissions are resolved by Entra from the admin-consented app registration);
+    the granular delegated scopes used by the authorization-code flow are invalid
+    in this grant. Connectors whose client-credentials scopes match their delegated
+    scopes (SAP, D365, ServiceNow) leave ``client_credentials_scopes`` unset.
 
     _transport is injected only in tests; callers omit it.
-    Secret is resolved inline and discarded when the async-with block exits.
+    Secret is resolved inline and discarded when the async-with block exits — it is
+    never logged (a failed request logs only the provider error code, not the body).
     """
+    scopes = config.client_credentials_scopes or config.scopes
     async with httpx.AsyncClient(timeout=OAUTH_HTTP_TIMEOUT, transport=_transport) as client:
         try:
             response = await client.post(
@@ -249,7 +264,7 @@ async def get_client_credentials_token(
                     "grant_type": "client_credentials",
                     "client_id": config.client_id,
                     "client_secret": resolve_secret(config.secret_key),
-                    "scope": " ".join(config.scopes),
+                    "scope": " ".join(scopes),
                 },
                 headers=_JSON_ACCEPT,
             )

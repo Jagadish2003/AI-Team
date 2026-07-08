@@ -14,6 +14,11 @@ from cryptography.fernet import Fernet
 
 from app import db
 from app.auth import oauth as _oauth
+from app.auth.auth_modes import (
+    AUTH_MODE_CLIENT_CREDENTIALS,
+    connector_supports_mode,
+    resolve_auth_mode,
+)
 from app.auth.configs import CONNECTOR_AUTH_CONFIGS
 from app.middleware.audit import log_event
 from app.auth.models import (
@@ -788,6 +793,88 @@ async def _mint_jwt_bearer_token(
 
 
 # ---------------------------------------------------------------------------
+# Client-credentials minting (R18-A3 T3 / AT-556)
+#
+# Microsoft Graph (Teams / SharePoint) — and any client_credentials connector —
+# authenticates outbound under a SERVICE identity: the app's own client_id +
+# client_secret are exchanged for an access token with no browser redirect and no
+# inbound callback (AC2). The grant issues NO refresh token, so — exactly like JWT
+# bearer's re-assertion — get_token re-mints from the deployment credential when
+# the cached token is missing or expired. The minted token lands in the SAME OAuth
+# token row as any other mode, so ingestion resolves it identically (AC3).
+# ---------------------------------------------------------------------------
+
+
+async def _mint_client_credentials_token(
+    org_id: str, connector_id: str
+) -> Optional[TokenRecord]:
+    """Mint (or re-mint) an access token via the client-credentials grant.
+
+    Returns a freshly-minted, cached :class:`TokenRecord` when the connector is
+    configured for ``client_credentials`` mode for this org, or ``None`` otherwise
+    (so :func:`get_token` falls back to its normal not-authenticated handling). The
+    outbound exchange never touches an inbound callback (AC2), and the result is
+    stored as the connector's OAuth token row so downstream resolution is identical
+    to any other mode (AC3).
+
+    Gated on the org's RESOLVED mode being ``client_credentials`` (its own default
+    for SAP/D365; a per-org selection for Teams/SharePoint), so an authorization_code
+    connector — whose expired token requires a user reconnect — is never silently
+    re-minted here.
+
+    Never raises — a mint failure (unreachable host, rejected credentials, or an
+    unconfigured client secret) resolves to ``None`` so get_token surfaces it as
+    not-authenticated rather than crashing the run.
+    """
+    config = CONNECTOR_AUTH_CONFIGS.get(connector_id)
+    if config is None:
+        return None
+    if not connector_supports_mode(connector_id, AUTH_MODE_CLIENT_CREDENTIALS):
+        return None
+    if resolve_auth_mode(org_id, connector_id) != AUTH_MODE_CLIENT_CREDENTIALS:
+        return None
+
+    try:
+        token_response = await _oauth.get_client_credentials_token(config)
+    except _oauth.OAuthError as exc:
+        logger.warning(
+            "client_credentials token mint failed for %s/%s: %s",
+            org_id,
+            connector_id,
+            exc.reason,
+        )
+        return None
+    except MissingSecretError:
+        # The deployment's connector client secret is not configured. Surface as
+        # not-authenticated (never log the missing value); the operator sets the
+        # {CONNECTOR}_CLIENT_SECRET env var to enable the mode.
+        logger.warning(
+            "client_credentials token mint skipped for %s/%s: connector secret not configured",
+            org_id,
+            connector_id,
+        )
+        return None
+
+    return store_token(org_id, connector_id, token_response)
+
+
+async def _mint_outbound_token(
+    org_id: str, connector_id: str
+) -> Optional[TokenRecord]:
+    """Try each outbound-only mint path in turn: JWT bearer, then client-credentials.
+
+    Returns the first minted :class:`TokenRecord`, or ``None`` when the connector
+    holds no outbound-only material/mode for this org. Each inner mint is gated on
+    its own mode/material, so at most one applies — the order is just a cheap probe
+    (the JWT-bearer probe returns immediately when no signing material is vaulted).
+    """
+    minted = await _mint_jwt_bearer_token(org_id, connector_id)
+    if minted is not None:
+        return minted
+    return await _mint_client_credentials_token(org_id, connector_id)
+
+
+# ---------------------------------------------------------------------------
 # Public vault API
 # ---------------------------------------------------------------------------
 
@@ -901,12 +988,12 @@ async def get_token(
         con.close()
 
     if row is None:
-        # No cached OAuth token. A connector in JWT bearer mode has no token to
-        # start with — mint one outbound from its vaulted signing material (this
-        # is the JWT bearer "connect", AC1). Falls through to not-authenticated
-        # when no JWT material exists (e.g. a static-credential connector, or a
-        # connector that was simply never authenticated).
-        minted = await _mint_jwt_bearer_token(org_id, connector_id)
+        # No cached OAuth token. An outbound-only connector has no token to start
+        # with — mint one outbound (JWT bearer re-assertion, or a client-credentials
+        # exchange for a service identity — AC1/AC2). This is the outbound "connect".
+        # Falls through to not-authenticated when no outbound material/mode applies
+        # (e.g. a static-credential connector, or one that was never authenticated).
+        minted = await _mint_outbound_token(org_id, connector_id)
         if minted is not None:
             return minted
         raise ConnectorNotAuthenticatedError(org_id, connector_id)
@@ -918,11 +1005,12 @@ async def get_token(
 
     if seconds_left <= min_validity_seconds:
         if record.refresh_token is None:
-            # No refresh token. For a JWT bearer connector this is expected —
-            # "refresh" is a fresh signed assertion, not an OAuth refresh grant —
-            # so re-mint from the vaulted key rather than failing (AC1). Any other
-            # connector with no refresh token stays not-authenticated.
-            minted = await _mint_jwt_bearer_token(org_id, connector_id)
+            # No refresh token. For an outbound-only connector this is expected —
+            # "refresh" is a fresh signed assertion (JWT bearer) or a fresh
+            # client-credentials exchange, not an OAuth refresh grant — so re-mint
+            # outbound rather than failing (AC1/AC2). Any other connector with no
+            # refresh token stays not-authenticated.
+            minted = await _mint_outbound_token(org_id, connector_id)
             if minted is not None:
                 return minted
             raise ConnectorNotAuthenticatedError(org_id, connector_id)

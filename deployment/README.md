@@ -106,8 +106,8 @@ See `backend/.env.template` for the full list including non-secret client IDs.
 | Slack         | `SLACK_CLIENT_SECRET`        | authorization_code    |
 | SAP           | `SAP_CLIENT_SECRET`          | client_credentials    |
 | Dynamics 365  | `DYNAMICS365_CLIENT_SECRET`  | client_credentials    |
-| Microsoft Teams | `TEAMS_CLIENT_SECRET`      | authorization_code    |
-| SharePoint      | `SHAREPOINT_CLIENT_SECRET`   | authorization_code    |
+| Microsoft Teams | `TEAMS_CLIENT_SECRET`      | authorization_code / client_credentials |
+| SharePoint      | `SHAREPOINT_CLIENT_SECRET`   | authorization_code / client_credentials |
 
 Set each to `your_secret_here` as a placeholder; replace with the real value from the
 provider's OAuth app registration before going to production.
@@ -144,6 +144,15 @@ provider's OAuth app registration before going to production.
   (framework convention) — set it to the shared Teams app's secret when reusing that app.
   SharePoint requests minimal read-only Graph scopes (`Sites.Read.All`, `offline_access`).
 - SAP and Dynamics 365 use client_credentials flow — no OAuth redirect URI is needed.
+- **Microsoft Teams / SharePoint outbound-only (R18-A3 T3 / AT-556):** in addition to the
+  browser authorization_code flow, both connectors support a **client_credentials** mode
+  that authenticates the Graph app registration under a *service identity* — outbound-only,
+  with **no callback**, for `NETWORK_PROFILE=no_public_inbound` deployments (e.g. TCU). It
+  reuses the same `TEAMS_CLIENT_SECRET` / `SHAREPOINT_CLIENT_SECRET` app secret; the app
+  registration must be granted **application** (not delegated) Graph permissions with
+  tenant-wide **admin consent**, and the token is requested with the `https://graph.microsoft.com/.default`
+  scope. An Owner connects with `POST /api/connectors/{teams|sharepoint}/client-credentials`
+  (no body). **Full admin-consent setup: [`docs/INTEGRATE_GRAPH_CLIENT_CREDENTIALS.md`](../docs/INTEGRATE_GRAPH_CLIENT_CREDENTIALS.md).**
 - Slack revocation uses the `auth.revoke` Web API (not RFC 7009). No extra config required.
 - **Deploy note (R17-D3):** connector tokens are now stored under the authenticated
   org instead of a hardcoded `default` org. Any connector tokens stored under `default`
