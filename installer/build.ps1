@@ -29,7 +29,7 @@ $BinDir       = "$InstallerDir\bin"
 $FrontendDir  = "$RepoRoot\frontend"
 $BackendDir   = "$RepoRoot\backend"
 
-$Version      = "1.6.0"
+$Version      = "1.7.0"
 $OutMSI       = "$BinDir\AgentIQ-Setup-$Version.msi"
 
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
@@ -165,7 +165,8 @@ $bundle = @(
     @{ Src="$BackendDir\wheels";           Dst="backend\wheels"     }
     @{ Src="$BackendDir\alembic.ini";      Dst="backend\alembic.ini" }
     @{ Src="$BackendDir\requirements.txt"; Dst="backend\requirements.txt" }
-    @{ Src="$RepoRoot\docker\postgres\init.sql"; Dst="postgres\init.sql" }
+    # v1.7: docker\postgres\init.sql removed with the uuid-ossp dependency;
+    # Install.ps1 treats postgres\init.sql as optional.
 )
 
 if (Test-Path $AppZip) { Remove-Item $AppZip -Force }

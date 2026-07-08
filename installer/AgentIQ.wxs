@@ -10,7 +10,7 @@
 
   <Package Name="AgentIQ"
            Language="1033"
-           Version="1.6.0.0"
+           Version="1.7.0.0"
            Manufacturer="CloudFulcrum"
            UpgradeCode="5A7B2C1D-3E4F-5A6B-7C8D-9E0F1A2B3C4D"
            Compressed="yes"
@@ -104,7 +104,7 @@
       <RegistryValue Root="HKLM" Key="SOFTWARE\AgentIQ"
                      Name="InstallPath" Value="[INSTALLFOLDER]" Type="string" KeyPath="yes" />
       <RegistryValue Root="HKLM" Key="SOFTWARE\AgentIQ"
-                     Name="Version"     Value="1.6.0"            Type="string" />
+                     Name="Version"     Value="1.7.0"            Type="string" />
     </Component>
 
     <!-- Start Menu shortcuts -->
