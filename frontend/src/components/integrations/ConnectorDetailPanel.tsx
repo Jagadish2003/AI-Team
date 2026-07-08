@@ -12,6 +12,7 @@ import SqlServerScopePicker from './SqlServerScopePicker';
 import OracleScopePicker from './OracleScopePicker';
 import PostgreSQLScopePicker from './PostgreSQLScopePicker';
 import StaticCredentialManager from './StaticCredentialManager';
+import OutboundAuthSetup from './OutboundAuthSetup';
 import { isStaticCredentialConnector } from './staticCredentialConnectors';
 
 // T41-7: Connection Health - configured read scope for this connector.
@@ -190,6 +191,13 @@ export default function ConnectorDetailPanel({
           <StaticCredentialManager connector={connector} />
         </div>
       )}
+
+      {/* R18-A3 T5 (AT-558): outbound setup path — shown in a no-public-inbound
+          deployment for connectors whose outbound-only mode is jwt_bearer or
+          client_credentials (Salesforce, Teams/SharePoint, ServiceNow). This is
+          where the customer is routed after the authorization-code Connect button
+          is hidden on the tile (AC4). Renders null outside no_public_inbound. */}
+      <OutboundAuthSetup connector={connector} />
 
       {/* Salesforce product declaration — rendered first in the panel so the
           workspace declaration is visible at the top of the right panel. */}

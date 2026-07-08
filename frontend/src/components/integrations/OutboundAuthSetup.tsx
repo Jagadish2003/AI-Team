@@ -1,0 +1,233 @@
+/**
+ * R18-A3 T5 (AT-558) — outbound setup path for the connector detail panel.
+ *
+ * In a NETWORK_PROFILE=no_public_inbound deployment the browser
+ * authorization-code Connect button is hidden (ConnectorTile). This component is
+ * the OUTBOUND path the customer is routed to instead — it renders the
+ * outbound-only setup for whichever mode the connector supports:
+ *
+ *   jwt_bearer          → Salesforce cert private-key form (JwtBearerCredentialModal)
+ *   client_credentials  → single Owner action, acquires a service-identity token
+ *                         outbound (no callback)
+ *   static              → handled separately by StaticCredentialManager (Jira/
+ *                         ServiceNow/DBs), so it is NOT duplicated here.
+ *
+ * Only shown when the deployment is no_public_inbound AND the connector has an
+ * outbound-only mode other than plain `static`. Owner-gated for the write
+ * actions, mirroring StaticCredentialManager.
+ */
+import React, { useCallback, useEffect, useState } from 'react';
+import { CheckCircle2, KeyRound, Lock, ShieldCheck, Trash2 } from 'lucide-react';
+import { Connector } from '../../types/connector';
+import {
+  ConnectorCredentialStatus,
+  connectClientCredentials,
+  deleteJwtBearerCredentials,
+  fetchJwtBearerCredentialStatus,
+} from '../../services/staticApi';
+import { ApiError } from '../../lib/apiClient';
+import { useAuthOptional } from '../../context/AuthContext';
+import { useNetworkProfileOptional } from '../../context/NetworkProfileContext';
+import { useToast } from '../common/Toast';
+import JwtBearerCredentialModal from './JwtBearerCredentialModal';
+
+function formatUpdated(iso: string | null): string | null {
+  if (!iso) return null;
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return null;
+  return d.toLocaleDateString(undefined, {
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+  });
+}
+
+export default function OutboundAuthSetup({ connector }: { connector: Connector }) {
+  const auth = useAuthOptional();
+  const isOwner = auth?.user?.role === 'owner';
+  const toast = useToast();
+  const { noPublicInbound, capabilityFor } = useNetworkProfileOptional();
+  const capability = capabilityFor(connector.id);
+
+  const outboundModes = capability?.outbound_only_modes ?? [];
+  const supportsJwt = outboundModes.includes('jwt_bearer');
+  const supportsClientCreds = outboundModes.includes('client_credentials');
+
+  const [jwtStatus, setJwtStatus] = useState<ConnectorCredentialStatus | null>(null);
+  const [modalOpen, setModalOpen] = useState(false);
+  const [confirmRemove, setConfirmRemove] = useState(false);
+  const [busy, setBusy] = useState(false);
+
+  const loadJwtStatus = useCallback(() => {
+    if (!supportsJwt) return () => {};
+    let alive = true;
+    fetchJwtBearerCredentialStatus(connector.id)
+      .then((s) => {
+        if (alive) setJwtStatus(s);
+      })
+      .catch(() => {
+        if (alive) setJwtStatus(null);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [connector.id, supportsJwt]);
+
+  useEffect(() => {
+    setConfirmRemove(false);
+    return loadJwtStatus();
+  }, [loadJwtStatus]);
+
+  // Only relevant in no-public-inbound; and only for outbound modes that need a
+  // dedicated setup UI here (static is handled by StaticCredentialManager).
+  if (!noPublicInbound) return null;
+  if (!supportsJwt && !supportsClientCreds) return null;
+
+  async function handleClientCredsConnect() {
+    setBusy(true);
+    try {
+      await connectClientCredentials(connector.id);
+      toast.push(`${connector.name} connected via client-credentials.`, 'success');
+    } catch (err) {
+      const detail =
+        err instanceof ApiError && typeof (err.body as any)?.detail === 'string'
+          ? (err.body as any).detail
+          : 'Could not connect via client-credentials.';
+      toast.push(detail, 'error');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleRemoveJwt() {
+    if (!confirmRemove) {
+      setConfirmRemove(true);
+      return;
+    }
+    setBusy(true);
+    try {
+      await deleteJwtBearerCredentials(connector.id);
+      toast.push(`${connector.name} outbound key removed.`, 'success');
+      setConfirmRemove(false);
+      loadJwtStatus();
+    } catch (err) {
+      const detail =
+        err instanceof ApiError && typeof (err.body as any)?.detail === 'string'
+          ? (err.body as any).detail
+          : 'Could not remove the key.';
+      toast.push(detail, 'error');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const jwtConfigured = jwtStatus?.configured ?? false;
+  const jwtUpdated = formatUpdated(jwtStatus?.updated_at ?? null);
+
+  return (
+    <div className="mt-4 rounded-lg border border-accent/25 bg-accent/5 p-3">
+      <div className="mb-2 flex items-center justify-between gap-2">
+        <div className="flex items-center gap-2 text-sm font-medium text-text">
+          <ShieldCheck size={14} className="shrink-0 text-accent" />
+          Outbound-only access
+        </div>
+        <div className="text-[10px] font-medium uppercase tracking-wide text-muted">
+          No public inbound
+        </div>
+      </div>
+      <p className="mb-3 text-[11px] leading-relaxed text-muted">
+        This deployment exposes no public inbound HTTPS, so the browser sign-in
+        flow cannot complete. Connect {connector.name} with an outbound-only
+        method instead.
+      </p>
+
+      {/* JWT bearer (Salesforce) */}
+      {supportsJwt && (
+        <div className="mb-3">
+          <div className="flex items-center gap-2 rounded-md border border-border bg-bg/20 px-3 py-2 text-xs">
+            {jwtConfigured ? (
+              <>
+                <CheckCircle2 size={14} className="shrink-0 text-emerald-400" />
+                <span className="min-w-0 flex-1 break-words text-text">
+                  JWT bearer configured
+                  {jwtUpdated ? ` · updated ${jwtUpdated}` : ''}
+                  {jwtStatus?.base_url ? (
+                    <span className="block truncate text-muted">{jwtStatus.base_url}</span>
+                  ) : null}
+                </span>
+              </>
+            ) : (
+              <>
+                <Lock size={14} className="shrink-0 text-muted" />
+                <span className="min-w-0 flex-1 text-muted">JWT bearer not configured yet</span>
+              </>
+            )}
+          </div>
+          {isOwner ? (
+            <div className="mt-2 flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setModalOpen(true)}
+                className="inline-flex items-center gap-1.5 rounded-md border border-accent/30 bg-accent/10 px-3 py-1.5 text-xs font-semibold text-accent transition-colors hover:bg-accent/15 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/30"
+              >
+                <KeyRound size={13} />
+                {jwtConfigured ? 'Update outbound key' : 'Set up outbound key'}
+              </button>
+              {jwtConfigured && (
+                <button
+                  type="button"
+                  onClick={handleRemoveJwt}
+                  disabled={busy}
+                  className="inline-flex items-center gap-1.5 rounded-md border border-border px-3 py-1.5 text-xs font-medium text-muted transition-colors hover:border-red-500/40 hover:text-red-300 disabled:cursor-not-allowed disabled:opacity-60 focus:outline-none focus-visible:ring-2 focus-visible:ring-red-500/30"
+                >
+                  <Trash2 size={13} />
+                  {confirmRemove ? 'Click to confirm' : 'Remove'}
+                </button>
+              )}
+            </div>
+          ) : (
+            <p className="mt-2 text-[11px] leading-relaxed text-muted">
+              Only workspace Owners can set up outbound access.
+            </p>
+          )}
+        </div>
+      )}
+
+      {/* client-credentials (Microsoft Graph, ServiceNow) */}
+      {supportsClientCreds && (
+        <div>
+          <p className="mb-2 text-[11px] leading-relaxed text-muted">
+            Service-identity (client-credentials) — connects under the deployment's
+            admin-consented app registration, outbound-only.
+          </p>
+          {isOwner ? (
+            <button
+              type="button"
+              onClick={handleClientCredsConnect}
+              disabled={busy}
+              className="inline-flex items-center gap-1.5 rounded-md border border-accent/30 bg-accent/10 px-3 py-1.5 text-xs font-semibold text-accent transition-colors hover:bg-accent/15 disabled:cursor-not-allowed disabled:opacity-60 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/30"
+            >
+              <ShieldCheck size={13} />
+              {busy ? 'Connecting…' : 'Connect with client-credentials'}
+            </button>
+          ) : (
+            <p className="text-[11px] leading-relaxed text-muted">
+              Only workspace Owners can set up outbound access.
+            </p>
+          )}
+        </div>
+      )}
+
+      {supportsJwt && (
+        <JwtBearerCredentialModal
+          open={modalOpen}
+          connector={connector}
+          configured={jwtConfigured}
+          existingBaseUrl={jwtStatus?.base_url ?? null}
+          onClose={() => setModalOpen(false)}
+          onSuccess={loadJwtStatus}
+        />
+      )}
+    </div>
+  );
+}

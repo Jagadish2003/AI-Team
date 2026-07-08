@@ -41,7 +41,7 @@ an org can never select a mode that has no flow behind it.
 """
 from __future__ import annotations
 
-from typing import Tuple
+from typing import Dict, List, Tuple
 
 from app import db
 from app.auth.configs import CONNECTOR_AUTH_CONFIGS
@@ -186,6 +186,55 @@ def resolve_auth_mode(org_id: str, connector_id: str) -> AuthMode:
     if selected in supported:
         return selected  # type: ignore[return-value]
     return supported[0]
+
+
+def all_known_connector_ids() -> Tuple[str, ...]:
+    """Return every connector id that has registered auth modes.
+
+    The OAuth-configured connectors (``CONNECTOR_AUTH_CONFIGS``) plus the
+    static-only native DB connectors declared locally. Used to build the
+    per-connector auth-capability map the UI pairs with the NETWORK_PROFILE flag
+    (R18-A3 T5). Deduplicated, order not significant.
+    """
+    ids = set(CONNECTOR_AUTH_CONFIGS.keys()) | set(_STATIC_ONLY_SUPPORTED_MODES.keys())
+    return tuple(sorted(ids))
+
+
+def get_outbound_only_modes(connector_id: str) -> Tuple[AuthMode, ...]:
+    """Return the connector's supported modes that need NO inbound callback.
+
+    The intersection of the connector's supported modes with
+    :data:`OUTBOUND_ONLY_MODES`, preserving the connector's preference order.
+    Empty for a connector whose only grant is ``authorization_code`` (GitHub,
+    Slack) — those have no outbound-only path and fall back to the scoped-inbound
+    package (R18-A3 T6) in a no-public-inbound deployment.
+    """
+    return tuple(
+        mode for mode in get_supported_auth_modes(connector_id)
+        if mode in OUTBOUND_ONLY_MODES
+    )
+
+
+def get_connector_auth_capability(connector_id: str) -> Dict[str, object]:
+    """Describe a connector's auth capability for the UI (R18-A3 T5 / AT-558).
+
+    Returns the supported modes, the outbound-only subset, whether any
+    outbound-only mode exists, and the default mode. The frontend pairs this with
+    the NETWORK_PROFILE flag to decide, per tile, whether to offer the
+    authorization-code connect flow or route the customer to the outbound setup
+    path (AC4). Returns an empty capability (``supported_auth_modes == []``) for
+    an unknown connector rather than raising, so building the whole map never
+    fails on a stray id.
+    """
+    supported: List[AuthMode] = list(get_supported_auth_modes(connector_id))
+    outbound_only: List[AuthMode] = list(get_outbound_only_modes(connector_id))
+    return {
+        "connector_id": connector_id,
+        "supported_auth_modes": supported,
+        "outbound_only_modes": outbound_only,
+        "has_outbound_only_mode": bool(outbound_only),
+        "default_auth_mode": supported[0] if supported else None,
+    }
 
 
 def set_auth_mode(org_id: str, connector_id: str, mode: str) -> AuthMode:

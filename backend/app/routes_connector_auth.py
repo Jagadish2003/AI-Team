@@ -52,7 +52,14 @@ from app import license_limits
 from app.auth.configs import CONNECTOR_AUTH_CONFIGS
 from app.auth.oauth_state import decode_state, encode_state
 from app.auth.secrets import MissingSecretError
-from app.auth.auth_modes import connector_supports_mode, resolve_auth_mode, set_auth_mode
+from app.auth.auth_modes import (
+    all_known_connector_ids,
+    connector_supports_mode,
+    get_connector_auth_capability,
+    resolve_auth_mode,
+    set_auth_mode,
+)
+from app import network_profile
 from app.auth.vault import (
     REFRESH_THRESHOLD_SECONDS,
     consume_nonce,
@@ -341,12 +348,69 @@ class ClientCredentialsConnectStatus(BaseModel):
     auth_mode: str
 
 
+class ConnectorAuthCapability(BaseModel):
+    """Per-connector auth capability for the Integration Hub (R18-A3 T5 / AT-558).
+
+    Pairs with the deployment ``network_profile`` so the UI can decide, per tile,
+    whether to offer the authorization-code connect flow or route the customer to
+    the outbound setup path. ``has_outbound_only_mode`` is the load-bearing flag:
+    in ``no_public_inbound`` the UI hides the authorization-code Connect button
+    exactly for connectors where this is true (AC4).
+    """
+
+    connector_id: str
+    supported_auth_modes: list[str]
+    outbound_only_modes: list[str]
+    has_outbound_only_mode: bool
+    default_auth_mode: Optional[str] = None
+
+
+class NetworkProfileResponse(BaseModel):
+    """Response for GET /api/network-profile (R18-A3 T5 / AT-558).
+
+    Carries the deployment's inbound-network posture and the per-connector auth
+    capability map the UI uses to gate connect flows. No secrets — capability and
+    profile only.
+    """
+
+    network_profile: str
+    no_public_inbound: bool
+    connectors: Dict[str, ConnectorAuthCapability]
+
+
 # ---------------------------------------------------------------------------
 # Route registration
 # ---------------------------------------------------------------------------
 
 
 def register_connector_auth_routes(app: FastAPI) -> None:
+
+    @app.get(
+        "/api/network-profile",
+        response_model=NetworkProfileResponse,
+        dependencies=[Depends(require_auth), Depends(require_role("viewer"))],
+    )
+    def get_network_profile_info() -> NetworkProfileResponse:
+        """Return the deployment network profile + per-connector auth capability.
+
+        R18-A3 T5 (AT-558). The frontend pairs ``network_profile`` with each
+        connector's ``has_outbound_only_mode`` to decide whether to offer the
+        authorization-code connect flow or the outbound setup path — in a
+        ``no_public_inbound`` deployment the authorization-code Connect button is
+        hidden wherever an outbound-only mode exists, so the customer can never
+        start a flow that cannot complete (AC4). Read-only; carries no secrets.
+        """
+        profile = network_profile.get_network_profile()
+        capabilities = {
+            connector_id: ConnectorAuthCapability(**get_connector_auth_capability(connector_id))
+            for connector_id in all_known_connector_ids()
+        }
+        return NetworkProfileResponse(
+            network_profile=profile,
+            no_public_inbound=network_profile.is_no_public_inbound(),
+            connectors=capabilities,
+        )
+
     # Register /oauth/callback BEFORE /{connector_id}/... so the literal
     # path segment "oauth" is not captured by the path parameter.
 
