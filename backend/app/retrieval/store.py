@@ -242,7 +242,7 @@ def mark_stale(org_id: str, source_system: str, source_artifact: str) -> int:
 def remove_chunks(org_id: str, source_system: str, source_artifact: str) -> int:
     """Immediately remove one artifact's chunks from retrieval. Returns rows removed.
 
-    The freshness subscriber (T1) calls this on a ``deleted``
+    The freshness subscriber calls this on a ``deleted``
     ``ingestion.artifact_changed`` event. Deletion is honoured BEFORE the re-embed
     queue, never after (Section 1 / AC2): the moment a source artifact is known to
     be gone, its evidence must stop being retrievable — there is no window where
@@ -250,8 +250,65 @@ def remove_chunks(org_id: str, source_system: str, source_artifact: str) -> int:
     identical in effect to :func:`delete_by_artifact`; the distinct name keeps the
     freshness contract's vocabulary (``store.remove_chunks``) explicit at the call
     site. Org-scoped by construction.
+
+    Removes only the chunk rows. The deletion path (R18-B2 T2) instead uses
+    :func:`purge_artifact`, which also drops the artifact's pending refresh-queue
+    row in the SAME transaction so deletion never leaves an orphaned refresh
+    scheduled against content that is already gone.
     """
     return delete_by_artifact(org_id, source_system, source_artifact)
+
+
+def purge_artifact(
+    org_id: str, source_system: str, source_artifact: str
+) -> tuple[int, int]:
+    """Atomically remove a deleted artifact from the retrieval index (R18-B2 T2).
+
+    Deletion is the strongest freshness case: the moment a source artifact is known
+    gone, it must stop being retrievable AND must stop being scheduled for refresh —
+    there is no valid content left to re-embed. This is a DIRECT index-cleanup
+    operation, not a refresh: it does the whole cleanup in ONE transaction so the
+    two facts (chunks gone, no pending refresh) commit together and are never
+    observed apart.
+
+    In a single transaction it:
+
+      1. deletes every ``retrieval_chunks`` row for ``(org_id, source_system,
+         source_artifact)`` — the artifact stops being retrievable immediately, with
+         no window where deleted content is still served as current (AC2); and
+      2. deletes the artifact's ``retrieval_refresh_queue`` row (if any) — a delete
+         supersedes any pending refresh, so a delayed refresh worker (T3) never
+         wakes to re-embed an artifact that no longer exists.
+
+    Doing both in one transaction is what keeps the system correct even if the
+    refresh worker is delayed or the process dies mid-cleanup: the substrate never
+    ends up with a queue row pointing at chunks that are already gone (the two
+    separate statements can never partially commit). Returns
+    ``(chunks_removed, queue_rows_removed)``.
+
+    This is the one place the store touches ``retrieval_refresh_queue`` (owned by
+    ``refresh_queue.py``): the atomicity AC2 demands can only be met by committing
+    both deletes together, and the pending-refresh row is index bookkeeping for the
+    very chunks being purged. Org-scoped by construction — every predicate binds
+    ``org_id`` first, so one org's delete can never remove another's rows even when
+    the artifact id collides.
+    """
+    with closing(db.connect()) as con:
+        cur = con.cursor()
+        cur.execute(
+            "DELETE FROM retrieval_chunks "
+            "WHERE org_id = %s AND source_system = %s AND source_artifact = %s",
+            (org_id, source_system, source_artifact),
+        )
+        chunks_removed = cur.rowcount
+        cur.execute(
+            "DELETE FROM retrieval_refresh_queue "
+            "WHERE org_id = %s AND source_system = %s AND source_artifact = %s",
+            (org_id, source_system, source_artifact),
+        )
+        queue_removed = cur.rowcount
+        con.commit()
+    return chunks_removed, queue_removed
 
 
 def count_stale(org_id: str) -> int:
