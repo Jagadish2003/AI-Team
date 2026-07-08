@@ -149,3 +149,47 @@ def test_emission_failure_never_breaks_the_run(monkeypatch):
     assert result.ok                    # ingestion succeeded despite telemetry failure
     assert result.checkpoint_advanced
     assert result.records == 1
+
+
+# --------------------------------------------------------------------------
+# R18-B2 T1 — subscriber wiring: driving the runner invokes the retrieval
+# freshness subscriber off the SAME change stream, with the ingestion fields
+# mapped to retrieval fields (connector_id -> source_system, artifact_id ->
+# source_artifact) and the change_kind carried through.
+# --------------------------------------------------------------------------
+def test_runner_invokes_freshness_subscriber(monkeypatch, captured):
+    seen: list = []
+    monkeypatch.setattr(
+        "app.retrieval.freshness.on_artifact_changed",
+        lambda event: seen.append(event),
+    )
+
+    recs = [
+        {"artifact_id": "c", "change_kind": "created"},
+        {"artifact_id": "u", "change_kind": "updated"},
+        {"artifact_id": "d", "change_kind": "deleted"},
+    ]
+    _drive(_Connector([(recs, "cp1", True)]))
+
+    # One subscriber call per changed artifact, carrying the mapped fields.
+    by_artifact = {e["artifact_id"]: e for e in seen}
+    assert set(by_artifact) == {"c", "u", "d"}
+    assert all(e["connector_id"] == "slack" for e in seen)  # -> source_system
+    assert by_artifact["c"]["change_kind"] == "created"
+    assert by_artifact["d"]["change_kind"] == "deleted"
+
+
+def test_freshness_subscriber_failure_never_breaks_the_run(monkeypatch, captured):
+    def _boom(event):
+        raise RuntimeError("freshness down")
+
+    monkeypatch.setattr("app.retrieval.freshness.on_artifact_changed", _boom)
+
+    result = _drive(
+        _Connector([([{"artifact_id": "A1", "change_kind": "updated"}], "cp1", True)])
+    )
+    # A subscriber failure is swallowed by the runner's guard — ingestion still
+    # completes and the checkpoint advances.
+    assert result.ok
+    assert result.checkpoint_advanced
+    assert result.records == 1

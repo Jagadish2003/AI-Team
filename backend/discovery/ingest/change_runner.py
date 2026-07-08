@@ -133,17 +133,15 @@ def _emit_artifact_changed(org_id: str, connector_id: str, records: list) -> Non
         # change_kind passes through verbatim (created/updated/deleted, §5/AT-382);
         # a record in a delta with no kind is treated as an update.
         change_kind = rec.get("change_kind", ChangeKind.UPDATED)
+        event = {
+            "org_id": org_id,
+            "connector_id": connector_id,
+            "artifact_id": "" if artifact_id is None else str(artifact_id),
+            "change_kind": change_kind,
+            "observed_at": observed_at,
+        }
         try:
-            record_event(
-                "ingestion.artifact_changed",
-                {
-                    "org_id": org_id,
-                    "connector_id": connector_id,
-                    "artifact_id": "" if artifact_id is None else str(artifact_id),
-                    "change_kind": change_kind,
-                    "observed_at": observed_at,
-                },
-            )
+            record_event("ingestion.artifact_changed", event)
         except Exception:  # pragma: no cover — one bad event must not stop the run
             logger.warning(
                 "change-ingest: failed to emit artifact_changed (connector=%s "
@@ -151,6 +149,29 @@ def _emit_artifact_changed(org_id: str, connector_id: str, records: list) -> Non
                 connector_id,
                 artifact_id,
             )
+        # R18-B2 T1: notify the retrieval-freshness subscriber off the SAME change
+        # stream. Fully guarded and lazily imported (like record_event above) so a
+        # freshness or import failure can NEVER break ingestion — the subscriber is
+        # itself fire-and-forget, this guard is the belt-and-braces boundary.
+        _notify_freshness(event)
+
+
+def _notify_freshness(event: dict) -> None:
+    """Hand one artifact_changed event to the retrieval-freshness subscriber.
+
+    Lazily imported to avoid an app-package import cycle at module load, and fully
+    guarded: a freshness failure must never break the ingestion run. R18-B2 T1.
+    """
+    try:
+        from app.retrieval.freshness import on_artifact_changed
+
+        on_artifact_changed(event)
+    except Exception:  # pragma: no cover — freshness must not break ingestion
+        logger.warning(
+            "change-ingest: freshness subscriber failed (connector=%s artifact_id=%s)",
+            event.get("connector_id"),
+            event.get("artifact_id"),
+        )
 
 
 @dataclass
