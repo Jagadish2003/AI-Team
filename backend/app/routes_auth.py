@@ -53,6 +53,8 @@ from app.auth.user_auth import (
     logout_token,
     mark_password_changed,
     register_org_and_owner,
+    validate_org_matches_email_domain,
+    validate_org_name,
     validate_password_strength,
     verify_jwt,
     verify_password,
@@ -259,6 +261,17 @@ def register(body: RegisterRequest) -> Dict[str, Any]:
     """
     ensure_auth_tables()
     _enforce_password_strength(body.password)
+    # BUG 1: the org name must correspond to the company email domain. Enforced
+    # here at the API boundary (the backend source of truth), mirroring how
+    # _enforce_password_strength gates the other registration input policy. A
+    # mismatch is rejected before any org/user is created. Run the letters-only
+    # name check FIRST so an invalid name still returns its "did you mean …?"
+    # suggestion rather than the domain-mismatch message.
+    try:
+        validate_org_name(body.org_name)
+        validate_org_matches_email_domain(body.org_name, body.email)
+    except RegistrationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
     try:
         result = register_org_and_owner(
             org_name=body.org_name,
@@ -697,23 +710,41 @@ def _approval_token_state(token: str, org_id: str) -> "tuple[dict | None, str]":
     """Resolve an approval token against an org WITHOUT leaking org state.
 
     Returns (org_row, state) where state is one of:
-      "ok"      — org is pending, the token matches, and the link is unexpired.
-      "expired" — the token matches a pending org but the link is past expiry.
-      "invalid" — everything else: unknown org, already processed, token already
-                  consumed (hash cleared), or a wrong token. These are collapsed
-                  into ONE state so a caller WITHOUT the real token cannot tell a
-                  pending org apart from an already-processed/nonexistent one
-                  (security review #5 — org approval state must not be probeable
-                  via differing responses on a mismatched token+org_id).
+      "ok"              — org is pending, the token matches, link unexpired.
+      "expired"         — token matches a pending org but the link is past expiry.
+      "already_active"  — token matches but the org is ALREADY approved.
+      "already_rejected"— token matches but the org was ALREADY rejected.
+      "invalid"         — unknown org, no/consumed token, or a WRONG token.
+
+    The token match is checked FIRST, before the org's approval_status. A caller
+    WITHOUT the real token can only ever reach "invalid", so a mismatched
+    token+org_id still cannot distinguish a pending org from a processed or
+    nonexistent one (security review #5 — anti-probing preserved). The
+    already_active / already_rejected states are reachable ONLY by a caller who
+    holds the valid token (the legitimate approver), so revealing the settled
+    state to them leaks nothing.
+
+    Why this matters (the subsequent-registration bug): org-name dedup means a
+    later registrant JOINS an existing org and gets a fresh approval email whose
+    token is stored on the SAME org. If that org was already approved, the old
+    "status must be pending" gate collapsed the (valid) link to "invalid". Ranking
+    the token match ahead of the status lets the approve endpoint treat that link
+    as an idempotent success instead.
     """
     org = _get_org_approval_row(org_id)
     if (
         org is None
-        or org["approval_status"] != "pending_approval"
         or not org["approval_token_hash"]
         or _token_hash(token) != org["approval_token_hash"]
     ):
         return org, "invalid"
+    # The caller holds the real token from here on.
+    status = org["approval_status"]
+    if status == "active":
+        return org, "already_active"
+    if status == "rejected":
+        return org, "already_rejected"
+    # pending_approval
     if _approval_link_expired(org["approval_token_expires_at"]):
         return org, "expired"
     return org, "ok"
@@ -781,10 +812,25 @@ def _confirmation_page(action: str, org_name: str, token: str, org_id: str) -> H
 def _process_decision(token, org_id, *, status, action, email_sender) -> HTMLResponse:
     """Shared POST handler: validate the token then mutate + notify."""
     org, state = _approval_token_state(token, org_id)
-    if state == "invalid":
-        return _invalid_link_page()
     if state == "expired":
         return _expired_link_page()
+
+    # Idempotent success: a VALID approval link whose org is ALREADY approved (a
+    # subsequent registration joined an already-approved org). The org is approved
+    # already, so report success WITHOUT re-mutating the settled state or
+    # re-notifying. Only for approve→active; a settled org is never flipped by a
+    # reject link (reject on a non-pending org falls through to invalid below).
+    if status == "active" and state == "already_active":
+        safe_org = html.escape(org["name"] or "")
+        return _html_page(
+            "Organisation Approved",
+            "Organisation approved",
+            f"<strong>{safe_org}</strong> is already approved. "
+            "The registrant can log in.",
+        )
+
+    if state != "ok":
+        return _invalid_link_page()
 
     _update_org_approval(org_id, status=status, action=action, now_iso=db.now_iso())
 
@@ -819,10 +865,13 @@ def approve_org_confirm(token: str, org_id: str) -> HTMLResponse:
     clicking the confirmation button (security review #1, HIGH).
     """
     org, state = _approval_token_state(token, org_id)
-    if state == "invalid":
-        return _invalid_link_page()
     if state == "expired":
         return _expired_link_page()
+    # "ok" (pending) and "already_active" (a subsequent registration under an
+    # already-approved org) both render the confirmation page; the POST then
+    # approves (pending) or reports the idempotent already-approved success.
+    if state not in ("ok", "already_active"):
+        return _invalid_link_page()
     return _confirmation_page("approve", org["name"], token, org_id)
 
 
@@ -839,10 +888,13 @@ def approve_org(token: str, org_id: str) -> HTMLResponse:
 def reject_org_confirm(token: str, org_id: str) -> HTMLResponse:
     """GET renders a confirmation page only — it never mutates state (see approve)."""
     org, state = _approval_token_state(token, org_id)
-    if state == "invalid":
-        return _invalid_link_page()
     if state == "expired":
         return _expired_link_page()
+    # Reject is actionable ONLY while the org is still pending — a settled
+    # (already_active / already_rejected) org must never be flipped by a stray
+    # reject link, so anything but "ok" is treated as an invalid link.
+    if state != "ok":
+        return _invalid_link_page()
     return _confirmation_page("reject", org["name"], token, org_id)
 
 

@@ -48,10 +48,14 @@ def _auth(token: str) -> dict:
 
 
 def _register(client, *, email=None, password=STRONG):
-    email = email or _email()
+    from auth_helpers import email_for_org
+
+    # BUG 1: org name must match the email domain — derive a matching pair.
+    org = rand_org_name()
+    email = email or email_for_org(org)
     resp = client.post(
         "/api/auth/register",
-        json={"org_name": rand_org_name(), "email": email, "password": password},
+        json={"org_name": org, "email": email, "password": password},
     )
     # AUTH-2: a successful registration leaves the org pending_approval. Approve it
     # (simulating the admin click) so the registrant can subsequently log in.

@@ -107,10 +107,12 @@ def test_tenancy_trusts_signed_org_claim():
 
 
 def test_change_password_invalidates_existing_token_end_to_end(client):
-    email = _email()
+    from auth_helpers import email_for_org
+    org = rand_org_name()
+    email = email_for_org(org)  # BUG 1: org name must match the email domain
     reg = client.post(
         "/api/auth/register",
-        json={"org_name": rand_org_name(), "email": email, "password": "Supersecret1!"},
+        json={"org_name": org, "email": email, "password": "Supersecret1!"},
     )
     assert reg.status_code == 201, reg.text
     # AUTH-2: approve + login to get the JWT (register issues none).

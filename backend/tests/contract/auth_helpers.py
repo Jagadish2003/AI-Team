@@ -30,6 +30,19 @@ def rand_org_name(prefix: str = "Org") -> str:
     return prefix + uuid.uuid4().hex[:12].translate(_HEX_TO_ALPHA)
 
 
+def email_for_org(org_name: str, local: str | None = None) -> str:
+    """Return an email whose domain matches ``org_name`` (BUG 1 rule).
+
+    Registration now requires the org name to correspond to the company email
+    domain (user_auth.org_name_matches_email_domain). Tests build a matching pair
+    by using the normalised org name as the domain's company label, so each unique
+    org name still gets its own unique domain (dedup isolation is preserved) while
+    the pair passes domain validation. e.g. ``OrgAbc`` -> ``user_x@orgabc.com``.
+    """
+    local = local or f"user_{uuid.uuid4().hex[:10]}"
+    return f"{local}@{org_name.strip().lower()}.com"
+
+
 def member_for_email(email: str) -> tuple[str, str]:
     """Return (org_id, role) for the workspace member registered under ``email``.
 
