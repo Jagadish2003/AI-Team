@@ -139,7 +139,8 @@ Keep this file short and actionable. Prefer reading the relevant code and contra
 * `docs/SMOKE_DEMO_*.md` (5 files): smoke test walkthroughs.
 * `docs/INTEGRATE_*.md`: integration guides per connector — includes `docs/INTEGRATE_JAVA_APP.md` (R17-A3 Java application ingestion) and `docs/INTEGRATE_DOTNET_APP.md` (R17-A4 .NET application ingestion — setup + the shared-extraction / design-review reference).
 * `docs/R17-A3_JAVA_APP_SCOPE.md` / `docs/R17-A4_DOTNET_APP_SCOPE.md`: R17-A3 (Java) and R17-A4 (.NET) application ingestion phase-one scope & boundaries (operational surfaces only — no source code (1.8) and no external APM), with the engineering/QA/product finding-evaluation rubric. The R17-A4 doc also records the shared-extraction contract (AC3).
-* `deployment/README.md`: production env var guide covering OAuth secrets, vault, and `CREDENTIAL_VAULT_KEY`.
+* `deployment/README.md`: production env var guide covering OAuth secrets, vault, and `CREDENTIAL_VAULT_KEY`. Also documents the no-public-inbound deployment posture (R18-A3) and links the scoped-inbound package below.
+* `deployment/SCOPED_INBOUND_CALLBACK.md`: R18-A3 T6 / AC7 — customer-facing security-team package for Approach B (scoped-inbound OAuth callback). Reverse-proxy patterns (nginx/Apache/cloud WAF), callback-path-only exposure, source-IP allowlist, and the security-review checklist. Documentation only; applies to connectors with no outbound-only auth mode (GitHub, Slack, and Teams/SharePoint until AT-556). Vendor-hosted relay (Approach C) is rejected.
 * `scripts/`: shell smoke tests and contract helper. Bash — run from Git Bash or WSL.
 
 ## Setup Commands

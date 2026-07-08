@@ -163,6 +163,40 @@ provider's OAuth app registration before going to production.
 
 ---
 
+## No-Public-Inbound Deployments (R18-A3)
+
+Security-conscious deployments (e.g. banks) often expose **no public inbound HTTPS** at all.
+AgentIQ is designed to run outbound-only in that posture: connector ingestion is entirely
+pull-based, and most connectors authenticate with an **outbound-only auth mode**
+(client-credentials, JWT bearer, or a static vault credential) that never needs a provider
+to redirect back into the network. See `backend/app/auth/README.md` for the auth-mode
+abstraction and `OUTBOUND_ONLY_MODES`.
+
+The one exception is a connector whose **only** OAuth grant is `authorization_code`
+(currently **GitHub** and **Slack**, plus **Teams / SharePoint** until their client-credentials
+mode ships). That grant finishes with a browser redirect to a callback URL, which needs an
+inbound-reachable path. Two options, in order of preference:
+
+1. **Internal-only completion (zero inbound).** Because the callback is browser-delivered, an
+   admin **inside** the network completes the flow against the internal deployment URL with no
+   public inbound at all — the same property AUTH-2 approval links rely on. Set
+   `OAUTH_REDIRECT_URI` to the internal URL.
+2. **Scoped-inbound fallback (Approach B).** When internal-only completion cannot be
+   guaranteed, expose **only** `GET /api/connectors/oauth/callback` through a
+   customer-controlled reverse proxy, restricted to allowlisted source ranges. This is the
+   package a customer's security team reviews and negotiates:
+
+   **→ See [`deployment/SCOPED_INBOUND_CALLBACK.md`](SCOPED_INBOUND_CALLBACK.md)** for the
+   full reverse-proxy patterns (nginx / Apache / cloud WAF), the source-IP allowlist
+   guidance, the exact exposed surface, the application-layer defences already enforced on
+   the callback, and a security-team review checklist.
+
+> A vendor-hosted callback relay (Approach C) is **rejected** for boundary-sensitive
+> deployments — it would route an auth artifact through vendor infrastructure. The fallback
+> is always a path the **customer** controls. Details in the linked package.
+
+---
+
 ## Login Rate Limiting (AUTH-1)
 
 AUTH-1 adds a `login_attempts` table (created by Alembic migration `0004`) that backs
