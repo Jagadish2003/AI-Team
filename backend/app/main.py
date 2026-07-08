@@ -228,6 +228,14 @@ async def lifespan(app: FastAPI):
         scheduler as embedding_worker_scheduler,
         start_scheduler as start_embedding_worker_scheduler,
     )
+    # R18-B2 T3: async retrieval refresh worker. When a source artifact changes its
+    # chunks are marked stale and queued; this job drains the queue off the run path
+    # — re-extract, hash-compare, re-embed only what changed, atomic swap, clear
+    # stale — so re-embedding never blocks a discovery run.
+    from .jobs.refresh_worker import (
+        scheduler as refresh_worker_scheduler,
+        start_scheduler as start_refresh_worker_scheduler,
+    )
     # LIC-1 / T4 (AT-345): periodic license re-check (gated background job).
     from .license_runtime import start_license_scheduler, stop_license_scheduler
 
@@ -237,6 +245,7 @@ async def lifespan(app: FastAPI):
         start_baseline_scheduler()
         start_token_refresh_scheduler()
         start_embedding_worker_scheduler()
+        start_refresh_worker_scheduler()
         start_license_scheduler()
     yield
     # AT-90: shut down scheduler on SIGTERM / graceful shutdown (wait=False).
@@ -248,6 +257,8 @@ async def lifespan(app: FastAPI):
             token_refresh_scheduler.shutdown(wait=False)
         if embedding_worker_scheduler.running:
             embedding_worker_scheduler.shutdown(wait=False)
+        if refresh_worker_scheduler.running:
+            refresh_worker_scheduler.shutdown(wait=False)
         stop_license_scheduler()
 
 

@@ -102,9 +102,62 @@ def _to_vector_literal(vector: Sequence[float]) -> str:
     return "[" + ",".join(repr(float(x)) for x in vector) + "]"
 
 
+def _parse_vector_literal(text: Optional[str]) -> Optional[list[float]]:
+    """Parse a pgvector text literal (``[1,2,3]``) back into a float list.
+
+    The inverse of :func:`_to_vector_literal`, used by the freshness refresh path
+    (T3) to read a stored vector out so it can be carried forward onto a chunk whose
+    content did not change — re-embedding it would be wasted model spend (AC3).
+    Returns ``None`` for a NULL/blank/malformed literal so an un-embedded or
+    unreadable row is simply treated as "needs embedding", never an error.
+    """
+    if text is None:
+        return None
+    body = str(text).strip()
+    if not body or body in ("[]", "[ ]"):
+        return None
+    body = body.strip("[]")
+    if not body.strip():
+        return None
+    try:
+        return [float(part) for part in body.split(",")]
+    except ValueError:
+        return None
+
+
 # ---------------------------------------------------------------------------
 # Writes  (producers -> substrate; embedding pipeline stamps vectors)
 # ---------------------------------------------------------------------------
+
+
+def _insert_chunk_row(cur: Any, rec: RetrievalChunkRecord) -> None:
+    """Write one chunk record on an open cursor (INSERT ... ON CONFLICT DO UPDATE).
+
+    Shared by :func:`upsert_chunks` and :func:`swap_artifact_chunks` so the exact
+    column set, the ``embedding`` -> pgvector-literal handling, and the conflict
+    upsert are defined in ONE place. Does not commit — the caller owns the
+    transaction boundary (that is what lets the freshness refresh swap delete + all
+    inserts atomically). Rows are inserted with ``is_stale`` left to its column
+    default (FALSE): a freshly written chunk is current, never stale.
+    """
+    row = rec.to_db_row()
+    embedding = row.pop("embedding")
+    columns = list(row.keys()) + ["embedding"]
+    placeholders = ["%s"] * len(row) + (
+        ["%s::vector"] if embedding is not None else ["NULL"]
+    )
+    values: list[Any] = list(row.values())
+    if embedding is not None:
+        values.append(_to_vector_literal(embedding))
+    set_clause = ", ".join(
+        f"{col}=EXCLUDED.{col}" for col in columns if col != "chunk_id"
+    )
+    cur.execute(
+        f"INSERT INTO retrieval_chunks ({', '.join(columns)}) "
+        f"VALUES ({', '.join(placeholders)}) "
+        f"ON CONFLICT (chunk_id) DO UPDATE SET {set_clause}",
+        values,
+    )
 
 
 def upsert_chunks(records: Sequence[RetrievalChunkRecord]) -> int:
@@ -122,24 +175,7 @@ def upsert_chunks(records: Sequence[RetrievalChunkRecord]) -> int:
     with closing(db.connect()) as con:
         cur = con.cursor()
         for rec in records:
-            row = rec.to_db_row()
-            embedding = row.pop("embedding")
-            columns = list(row.keys()) + ["embedding"]
-            placeholders = ["%s"] * len(row) + (
-                ["%s::vector"] if embedding is not None else ["NULL"]
-            )
-            values: list[Any] = list(row.values())
-            if embedding is not None:
-                values.append(_to_vector_literal(embedding))
-            set_clause = ", ".join(
-                f"{col}=EXCLUDED.{col}" for col in columns if col != "chunk_id"
-            )
-            cur.execute(
-                f"INSERT INTO retrieval_chunks ({', '.join(columns)}) "
-                f"VALUES ({', '.join(placeholders)}) "
-                f"ON CONFLICT (chunk_id) DO UPDATE SET {set_clause}",
-                values,
-            )
+            _insert_chunk_row(cur, rec)
             written += 1
         con.commit()
     return written
@@ -325,6 +361,87 @@ def count_stale(org_id: str) -> int:
         )
         row = cur.fetchone()
     return int(row[0]) if row else 0
+
+
+# ---------------------------------------------------------------------------
+# Freshness refresh  (R18-B2 T3) — hash-compare inputs + atomic chunk swap
+# ---------------------------------------------------------------------------
+
+
+def get_chunks_for_artifact(
+    org_id: str, source_system: str, source_artifact: str
+) -> list[dict[str, Any]]:
+    """Return one artifact's stored chunks with hash + vector (refresh input, T3).
+
+    The refresh worker (``app.retrieval.refresh``) reads the CURRENTLY-indexed
+    chunks so it can hash-compare them against the freshly re-extracted content and
+    decide, per chunk, whether anything actually changed. For an UNCHANGED chunk
+    (same ``content_hash``) the stored ``embedding`` is carried straight over to the
+    replacement row, so unchanged content is never re-embedded (AC3) — that is why
+    the vector is read back here (as a pgvector text literal, parsed to a float
+    list) alongside its model identity/version.
+
+    Ordered by ``chunk_position`` for readable diffs. Org-scoped: the ``WHERE``
+    leads with ``org_id = %s`` so a caller only ever sees its own partition (AC3).
+    """
+    with closing(db.connect()) as con:
+        cur = con.cursor()
+        cur.execute(
+            "SELECT chunk_id, content_hash, content_type, chunk_position, "
+            "       is_stale, embedding::text AS embedding_text, "
+            "       embedding_model, embedding_model_version, embedded_at "
+            "FROM retrieval_chunks "
+            "WHERE org_id = %s AND source_system = %s AND source_artifact = %s "
+            "ORDER BY chunk_position ASC, chunk_id ASC",
+            (org_id, source_system, source_artifact),
+        )
+        rows = cur.fetchall()
+    out: list[dict[str, Any]] = []
+    for r in rows:
+        d = dict(r)
+        d["embedding"] = _parse_vector_literal(d.pop("embedding_text", None))
+        out.append(d)
+    return out
+
+
+def swap_artifact_chunks(
+    org_id: str,
+    source_system: str,
+    source_artifact: str,
+    records: Sequence[RetrievalChunkRecord],
+) -> tuple[int, int]:
+    """Atomically replace one artifact's chunks with ``records`` (T3 / AC4).
+
+    The refresh worker rebuilds the full chunk set for an artifact (reusing carried-
+    over vectors for unchanged chunks, freshly-embedded vectors for changed ones)
+    and hands it here to be swapped in. In a SINGLE transaction this:
+
+      1. deletes every existing ``retrieval_chunks`` row for ``(org_id,
+         source_system, source_artifact)``; then
+      2. inserts every record in ``records``.
+
+    Because both happen in one transaction, retrieval NEVER sees a mix of old and
+    new chunks for the artifact — a concurrent reader observes either the complete
+    old set or the complete new set, never a half-and-half blend (AC4). The
+    inserted rows take the ``is_stale`` column default (FALSE), so the artifact's
+    stale flag is cleared as an inseparable part of the same commit that installs
+    the new content — never before the replacement is durable. Returns
+    ``(chunks_removed, chunks_written)``. Org-scoped by construction.
+    """
+    with closing(db.connect()) as con:
+        cur = con.cursor()
+        cur.execute(
+            "DELETE FROM retrieval_chunks "
+            "WHERE org_id = %s AND source_system = %s AND source_artifact = %s",
+            (org_id, source_system, source_artifact),
+        )
+        removed = cur.rowcount
+        written = 0
+        for rec in records:
+            _insert_chunk_row(cur, rec)
+            written += 1
+        con.commit()
+    return removed, written
 
 
 # ---------------------------------------------------------------------------
