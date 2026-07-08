@@ -1,0 +1,424 @@
+INFO:     Started server process [34856]
+INFO:     Waiting for application startup.
+connector health check: no workspaces found — skipping
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://127.0.0.1:8000 (Press CTRL+C to quit)
+JWT_SECRET is a known weak/default value — it MUST be changed before any shared (staging/production) deployment. Tokens signed with it are forgeable.
+connector health check: no workspaces found — skipping
+INFO  AgentIQ discovery runner — mode=offline run_id=run_033520f2 pack=ncino
+INFO  [telemetry] {'event_type': 'run.started', 'ts': 1781324286.3866036, 'org_id': 'd63afdd7-c729-473b-92ed-91bcff64996b', 'run_id': 'run_033520f2', 'source': 'run_pipeline'}
+INFO  Systems: ['jira', 'salesforce', 'servicenow']
+INFO  Salesforce ingestion: offline mode (fixture)
+INFO  Salesforce ingestion: OK
+INFO  ServiceNow ingestion: offline mode (fixture)
+INFO  SN lending correlation: 5 incidents matched
+INFO  ServiceNow ingestion: OK
+INFO  Jira ingestion: offline mode (fixture)
+INFO  Jira lending correlation: 5 issues matched
+INFO  Jira ingestion: OK
+INFO  nCino ingestion: OK — 13 lending metrics
+INFO  Pack: ncino — 5 lending detectors active
+INFO    loan_origination_routing_friction: FIRED (1)
+INFO    covenant_tracking_gap: FIRED (1)
+INFO    checklist_bottleneck: FIRED (1)
+INFO    spreading_bottleneck: FIRED (1)
+INFO    approval_bottleneck: FIRED (1)
+INFO  Temporal detector evaluations captured: 5/5
+INFO  [telemetry] {'event_type': 'run.signal_snapshot', 'ts': 1781324286.4543695, 'org_id': 'd63afdd7-c729-473b-92ed-91bcff64996b', 'run_id': 'run_033520f2', 'pack_id': 'ncino', 'signal_count': 28, 'detector_count': 5, 'fired_count': 5, 'below_threshold': 0}
+INFO  Entity extraction — Salesforce: 15 entities
+INFO  Entity extraction — Jira: 19 entities
+INFO  Entity extraction — ServiceNow: 8 entities
+INFO  Entity extraction — detector entities: 6
+INFO  Entity extraction complete — run=run_033520f2 total=48 ambiguous=0 failures=0
+INFO  [telemetry] {'event_type': 'entity.extraction_completed', 'ts': 1781324286.8535202, 'run_id': 'run_033520f2', 'org_id': 'd63afdd7-c729-473b-92ed-91bcff64996b', 'pack_id': 'ncino', 'source': 'entity_extractor', 'entity_count': 48, 'ambiguous_count': 0, 'failure_count': 0, 'filtered_service_account_count': 0}
+INFO  map_directly_observed — run=run_033520f2 org=d63afdd7-c729-473b-92ed-91bcff64996b edges_written=1
+INFO  map_inferred_from_detectors — run=run_033520f2 org=d63afdd7-c729-473b-92ed-91bcff64996b inferred_edges_written=2
+INFO  [telemetry] {'event_type': 'relationship.mapping_completed', 'ts': 1781324286.9392557, 'org_id': 'd63afdd7-c729-473b-92ed-91bcff64996b', 'run_id': 'run_033520f2', 'observed_count': 1, 'inferred_count': 2, 'skipped_ambiguous_count': 0, 'mapping_duration_ms': 31.0}
+INFO  map_relationships — run=run_033520f2 org=d63afdd7-c729-473b-92ed-91bcff64996b observed=1 inferred=2 skipped_ambiguous=0 duration_ms=31.0
+INFO    LOAN_ORIGINATION_ROUTING_FRICTION: +4 corroborating evidence items (Jira/SN)
+INFO    COVENANT_TRACKING_GAP: +3 corroborating evidence items (Jira/SN)
+INFO    CHECKLIST_BOTTLENECK: +1 corroborating evidence items (Jira/SN)
+INFO    SPREADING_BOTTLENECK: +1 corroborating evidence items (Jira/SN)
+INFO    APPROVAL_BOTTLENECK: +1 corroborating evidence items (Jira/SN)
+INFO  [telemetry] {'event_type': 'run.completed', 'ts': 1781324286.9695165, 'org_id': 'd63afdd7-c729-473b-92ed-91bcff64996b', 'run_id': 'run_033520f2', 'source': 'run_pipeline', 'duration_ms': 582, 'success': True, 'count': 5, 'pack_id': 'ncino', 'system_count': 3}
+INFO  T6 enrichment starting for run run_033520f2 — 5 opportunities
+INFO  T6 enrichment run run_033520f2: grounded=True entities=3 shown=3 truncated=False
+INFO  [telemetry] {'event_type': 'hallucination_guard.rewritten', 'ts': 1781324298.4079826, 'org_id': 'd63afdd7-c729-473b-92ed-91bcff64996b', 'run_id': 'run_033520f2', 'method': 'rule_rewrite', 'hallucinated_count': 2, 'source': 'hallucination_guard'}
+INFO  [telemetry] {'event_type': 'hallucination_guard.rewritten', 'ts': 1781324298.4200463, 'org_id': 'd63afdd7-c729-473b-92ed-91bcff64996b', 'run_id': 'run_033520f2', 'method': 'rule_rewrite', 'hallucinated_count': 2, 'source': 'hallucination_guard'}
+INFO  [telemetry] {'event_type': 'hallucination_guard.rewritten', 'ts': 1781324298.432207, 'org_id': 'd63afdd7-c729-473b-92ed-91bcff64996b', 'run_id': 'run_033520f2', 'method': 'rule_rewrite', 'hallucinated_count': 1, 'source': 'hallucination_guard'}
+INFO  [telemetry] {'event_type': 'hallucination_guard.rewritten', 'ts': 1781324298.443387, 'org_id': 'd63afdd7-c729-473b-92ed-91bcff64996b', 'run_id': 'run_033520f2', 'method': 'rule_rewrite', 'hallucinated_count': 1, 'source': 'hallucination_guard'}
+INFO  [telemetry] {'event_type': 'llm.enrichment_grounded', 'ts': 1781324298.4538977, 'org_id': 'd63afdd7-c729-473b-92ed-91bcff64996b', 'run_id': 'run_033520f2', 'opp_id': 'opp_001', 'graph_entity_count': 3, 'graph_entity_count_shown': 3, 'graph_truncated': False, 'source': 'llm_enrichment'}
+INFO  parse_causal_output: cause_chain absent for opp=opp_001
+INFO  [telemetry] {'event_type': 'causal.hypothesis_rejected', 'ts': 1781324298.4639049, 'reason': 'no_falsifiability', 'org_id': 'd63afdd7-c729-473b-92ed-91bcff64996b', 'run_id': 'run_033520f2', 'opportunity_id': 'opp_001'}
+INFO  [telemetry] {'event_type': 'hallucination_guard.rewritten', 'ts': 1781324312.152563, 'org_id': 'd63afdd7-c729-473b-92ed-91bcff64996b', 'run_id': 'run_033520f2', 'method': 'rule_rewrite', 'hallucinated_count': 1, 'source': 'hallucination_guard'}
+INFO  [telemetry] {'event_type': 'hallucination_guard.rewritten', 'ts': 1781324312.1724997, 'org_id': 'd63afdd7-c729-473b-92ed-91bcff64996b', 'run_id': 'run_033520f2', 'method': 'rule_rewrite', 'hallucinated_count': 2, 'source': 'hallucination_guard'}
+INFO  [telemetry] {'event_type': 'hallucination_guard.rewritten', 'ts': 1781324312.184307, 'org_id': 'd63afdd7-c729-473b-92ed-91bcff64996b', 'run_id': 'run_033520f2', 'method': 'rule_rewrite', 'hallucinated_count': 1, 'source': 'hallucination_guard'}
+INFO  [telemetry] {'event_type': 'llm.enrichment_grounded', 'ts': 1781324312.184307, 'org_id': 'd63afdd7-c729-473b-92ed-91bcff64996b', 'run_id': 'run_033520f2', 'opp_id': 'opp_003', 'graph_entity_count': 3, 'graph_entity_count_shown': 3, 'graph_truncated': False, 'source': 'llm_enrichment'}
+INFO  parse_causal_output: cause_chain absent for opp=opp_003
+INFO  [telemetry] {'event_type': 'causal.hypothesis_rejected', 'ts': 1781324312.2020724, 'reason': 'no_falsifiability', 'org_id': 'd63afdd7-c729-473b-92ed-91bcff64996b', 'run_id': 'run_033520f2', 'opportunity_id': 'opp_003'}
+INFO  [telemetry] {'event_type': 'hallucination_guard.rewritten', 'ts': 1781324325.6504714, 'org_id': 'd63afdd7-c729-473b-92ed-91bcff64996b', 'run_id': 'run_033520f2', 'method': 'rule_rewrite', 'hallucinated_count': 2, 'source': 'hallucination_guard'}
+INFO  [telemetry] {'event_type': 'hallucination_guard.rewritten', 'ts': 1781324325.665258, 'org_id': 'd63afdd7-c729-473b-92ed-91bcff64996b', 'run_id': 'run_033520f2', 'method': 'rule_rewrite', 'hallucinated_count': 2, 'source': 'hallucination_guard'}
+INFO  [telemetry] {'event_type': 'hallucination_guard.rewritten', 'ts': 1781324325.6758826, 'org_id': 'd63afdd7-c729-473b-92ed-91bcff64996b', 'run_id': 'run_033520f2', 'method': 'rule_rewrite', 'hallucinated_count': 1, 'source': 'hallucination_guard'}
+INFO  [telemetry] {'event_type': 'hallucination_guard.rewritten', 'ts': 1781324325.6838295, 'org_id': 'd63afdd7-c729-473b-92ed-91bcff64996b', 'run_id': 'run_033520f2', 'method': 'rule_rewrite', 'hallucinated_count': 1, 'source': 'hallucination_guard'}
+INFO  [telemetry] {'event_type': 'llm.enrichment_grounded', 'ts': 1781324325.693158, 'org_id': 'd63afdd7-c729-473b-92ed-91bcff64996b', 'run_id': 'run_033520f2', 'opp_id': 'opp_002', 'graph_entity_count': 3, 'graph_entity_count_shown': 3, 'graph_truncated': False, 'source': 'llm_enrichment'}
+INFO  parse_causal_output: cause_chain absent for opp=opp_002
+INFO  [telemetry] {'event_type': 'causal.hypothesis_rejected', 'ts': 1781324325.7011616, 'reason': 'no_falsifiability', 'org_id': 'd63afdd7-c729-473b-92ed-91bcff64996b', 'run_id': 'run_033520f2', 'opportunity_id': 'opp_002'}
+INFO  [telemetry] {'event_type': 'hallucination_guard.rewritten', 'ts': 1781324339.761077, 'org_id': 'd63afdd7-c729-473b-92ed-91bcff64996b', 'run_id': 'run_033520f2', 'method': 'rule_rewrite', 'hallucinated_count': 1, 'source': 'hallucination_guard'}
+INFO  [telemetry] {'event_type': 'hallucination_guard.rewritten', 'ts': 1781324339.7682004, 'org_id': 'd63afdd7-c729-473b-92ed-91bcff64996b', 'run_id': 'run_033520f2', 'method': 'rule_rewrite', 'hallucinated_count': 2, 'source': 'hallucination_guard'}
+INFO  [telemetry] {'event_type': 'hallucination_guard.rewritten', 'ts': 1781324339.7830026, 'org_id': 'd63afdd7-c729-473b-92ed-91bcff64996b', 'run_id': 'run_033520f2', 'method': 'rule_rewrite', 'hallucinated_count': 1, 'source': 'hallucination_guard'}
+INFO  [telemetry] {'event_type': 'llm.enrichment_grounded', 'ts': 1781324339.7994397, 'org_id': 'd63afdd7-c729-473b-92ed-91bcff64996b', 'run_id': 'run_033520f2', 'opp_id': 'opp_005', 'graph_entity_count': 3, 'graph_entity_count_shown': 3, 'graph_truncated': False, 'source': 'llm_enrichment'}
+INFO  parse_causal_output: cause_chain absent for opp=opp_005
+INFO  [telemetry] {'event_type': 'causal.hypothesis_rejected', 'ts': 1781324339.8035119, 'reason': 'no_falsifiability', 'org_id': 'd63afdd7-c729-473b-92ed-91bcff64996b', 'run_id': 'run_033520f2', 'opportunity_id': 'opp_005'}
+INFO  [telemetry] {'event_type': 'hallucination_guard.rewritten', 'ts': 1781324352.584003, 'org_id': 'd63afdd7-c729-473b-92ed-91bcff64996b', 'run_id': 'run_033520f2', 'method': 'rule_rewrite', 'hallucinated_count': 2, 'source': 'hallucination_guard'}
+INFO  [telemetry] {'event_type': 'hallucination_guard.rewritten', 'ts': 1781324352.6017356, 'org_id': 'd63afdd7-c729-473b-92ed-91bcff64996b', 'run_id': 'run_033520f2', 'method': 'rule_rewrite', 'hallucinated_count': 2, 'source': 'hallucination_guard'}
+INFO  [telemetry] {'event_type': 'hallucination_guard.rewritten', 'ts': 1781324352.610945, 'org_id': 'd63afdd7-c729-473b-92ed-91bcff64996b', 'run_id': 'run_033520f2', 'method': 'rule_rewrite', 'hallucinated_count': 1, 'source': 'hallucination_guard'}
+INFO  [telemetry] {'event_type': 'llm.enrichment_grounded', 'ts': 1781324352.6154547, 'org_id': 'd63afdd7-c729-473b-92ed-91bcff64996b', 'run_id': 'run_033520f2', 'opp_id': 'opp_004', 'graph_entity_count': 3, 'graph_entity_count_shown': 3, 'graph_truncated': False, 'source': 'llm_enrichment'}
+INFO  parse_causal_output: cause_chain absent for opp=opp_004
+INFO  [telemetry] {'event_type': 'causal.hypothesis_rejected', 'ts': 1781324352.6343167, 'reason': 'no_falsifiability', 'org_id': 'd63afdd7-c729-473b-92ed-91bcff64996b', 'run_id': 'run_033520f2', 'opportunity_id': 'opp_004'}
+INFO  T6 enrichment done: 5 enriched, 0 fallback, 71.5s
+INFO  [telemetry] {'event_type': 'temporal.enrichment_completed', 'ts': 1781324358.8867483, 'run_id': 'run_033520f2'}
+INFO  Running job "run_connector_health_checks (trigger: interval[0:15:00], next run at: 2026-06-13 10:16:52 IST)" (scheduled at 2026-06-13 10:01:52.862890+05:30)
+INFO  connector health check starting — 2026-06-13T04:31:52.873999+00:00
+WARNING  connector health check: no workspaces found — skipping
+INFO  Job "run_connector_health_checks (trigger: interval[0:15:00], next run at: 2026-06-13 10:16:52 IST)" executed successfully
+INFO  Running job "run_connector_health_checks (trigger: interval[0:15:00], next run at: 2026-06-13 10:31:52 IST)" (scheduled at 2026-06-13 10:16:52.862890+05:30)
+INFO  connector health check starting — 2026-06-13T04:46:52.877511+00:00
+WARNING  connector health check: no workspaces found — skipping
+INFO  Job "run_connector_health_checks (trigger: interval[0:15:00], next run at: 2026-06-13 10:31:52 IST)" executed successfully
+INFO  Running job "run_connector_health_checks (trigger: interval[0:15:00], next run at: 2026-06-13 10:46:52 IST)" (scheduled at 2026-06-13 10:31:52.862890+05:30)
+INFO  connector health check starting — 2026-06-13T05:01:52.874825+00:00
+WARNING  connector health check: no workspaces found — skipping
+INFO  Job "run_connector_health_checks (trigger: interval[0:15:00], next run at: 2026-06-13 10:46:52 IST)" executed successfully
+INFO  Running job "run_connector_health_checks (trigger: interval[0:15:00], next run at: 2026-06-13 11:01:52 IST)" (scheduled at 2026-06-13 10:46:52.862890+05:30)
+INFO  connector health check starting — 2026-06-13T05:16:52.869044+00:00
+WARNING  connector health check: no workspaces found — skipping
+INFO  Job "run_connector_health_checks (trigger: interval[0:15:00], next run at: 2026-06-13 11:01:52 IST)" executed successfully
+WARNING  Run time of job "run_connector_health_checks (trigger: interval[0:15:00], next run at: 2026-06-13 11:16:52 IST)" was missed by 0:14:20.129288
+INFO  Running job "run_connector_health_checks (trigger: interval[0:15:00], next run at: 2026-06-13 11:31:52 IST)" (scheduled at 2026-06-13 11:16:52.862890+05:30)
+INFO  connector health check starting — 2026-06-13T05:46:52.869571+00:00
+WARNING  connector health check: no workspaces found — skipping
+INFO  Job "run_connector_health_checks (trigger: interval[0:15:00], next run at: 2026-06-13 11:31:52 IST)" executed successfully
+WARNING  Run time of job "run_connector_health_checks (trigger: interval[0:15:00], next run at: 2026-06-13 12:31:52 IST)" was missed by 0:05:38.495423
+WARNING  Run time of job "run_connector_health_checks (trigger: interval[0:15:00], next run at: 2026-06-13 13:31:52 IST)" was missed by 0:01:45.301750
+INFO  SN-CONNECT-1: ServiceNow live — 3047ms
+INFO  Starting trackb materialization for run run_2c20da60 in mode: live
+INFO  SYSTEM: salesforce
+INFO  STARTED INGEST SYSTEM: salesforce
+INFO  Salesforce ingestion: live mode
+INFO  INFO[get_case_metrics]    rows=410    ms=4823   status=OK
+INFO  INFO[get_flow_inventory]    rows=4      ms=3670   status=OK
+INFO  INFO[get_approval_pending]    rows=2      ms=696    status=OK
+INFO  INFO[get_named_credentials]    rows=4      ms=329    status=OK
+INFO  INFO[get_named_credential_flow_refs]    rows=4      ms=5270   status=OK
+INFO  INFO[get_cross_system_references]    rows=410    ms=897    status=OK
+INFO  INFO[get_relationship_records]    rows=410    ms=299    status=OK
+INFO  ENDED INGEST SYSTEM: salesforce
+INFO  SYSTEM: jira
+INFO  STARTED INGEST SYSTEM: jira
+INFO  Jira ingestion: live mode
+INFO  Sprint AIC Sprint 2: no story points found — using issue count (0) as velocity proxy
+INFO  Sprint AIC Sprint 1: no story points found — using issue count (0) as velocity proxy
+INFO  Jira lending correlation: 33 issues matched
+INFO  ENDED INGEST SYSTEM: jira
+INFO  SYSTEM: servicenow
+INFO  STARTED INGEST SYSTEM: servicenow
+INFO  ServiceNow ingestion: live mode
+INFO  SN lending correlation: 132 incidents matched
+INFO  ENDED INGEST SYSTEM: servicenow
+INFO  AgentIQ discovery runner — mode=live run_id=run_2c20da60 pack=service_cloud
+INFO  [telemetry] {'event_type': 'run.started', 'ts': 1781337577.6998577, 'org_id': 'd81532f7-85a7-4245-bc0b-b0aa6017b0e2', 'run_id': 'run_2c20da60', 'source': 'run_pipeline'}
+INFO  Systems: ['jira', 'salesforce', 'servicenow']
+INFO  Salesforce ingestion: live mode
+INFO  INFO[get_case_metrics]    rows=410    ms=3975   status=OK
+INFO  INFO[get_flow_inventory]    rows=4      ms=4219   status=OK
+INFO  INFO[get_approval_pending]    rows=2      ms=727    status=OK
+INFO  INFO[get_named_credentials]    rows=4      ms=289    status=OK
+INFO  INFO[get_named_credential_flow_refs]    rows=4      ms=4986   status=OK
+INFO  INFO[get_cross_system_references]    rows=410    ms=1523   status=OK
+INFO  INFO[get_relationship_records]    rows=410    ms=332    status=OK
+INFO  Salesforce ingestion: OK
+INFO  ServiceNow ingestion: live mode
+INFO  SN lending correlation: 132 incidents matched
+INFO  ServiceNow ingestion: OK
+INFO  Jira ingestion: live mode
+INFO  Sprint AIC Sprint 2: no story points found — using issue count (0) as velocity proxy
+INFO  Sprint AIC Sprint 1: no story points found — using issue count (0) as velocity proxy
+INFO  Jira lending correlation: 33 issues matched
+INFO  Jira ingestion: OK
+INFO  Pack: service_cloud — 7 SC detectors active
+INFO    repetition: FIRED (1)
+INFO    handoff_friction: not fired
+INFO    approval_delay: FIRED (2)
+INFO    knowledge_gap: FIRED (1)
+INFO    integration_concentration: not fired
+INFO    permission_bottleneck: FIRED (1)
+INFO    cross_system_echo: FIRED (1)
+INFO  Temporal detector evaluations captured: 7/7
+INFO  [telemetry] {'event_type': 'run.signal_snapshot', 'ts': 1781337674.2847357, 'org_id': 'd81532f7-85a7-4245-bc0b-b0aa6017b0e2', 'run_id': 'run_2c20da60', 'pack_id': 'service_cloud', 'signal_count': 38, 'detector_count': 7, 'fired_count': 5, 'below_threshold': 2}
+INFO  Entity extraction — Salesforce: 823 entities
+INFO  Entity extraction — Jira: 180 entities
+INFO  Entity extraction — ServiceNow: 1441 entities
+INFO  Entity extraction — detector entities: 7
+INFO  Entity extraction complete — run=run_2c20da60 total=2451 ambiguous=0 failures=0
+INFO  [telemetry] {'event_type': 'entity.extraction_completed', 'ts': 1781337710.4708786, 'run_id': 'run_2c20da60', 'org_id': 'd81532f7-85a7-4245-bc0b-b0aa6017b0e2', 'pack_id': 'service_cloud', 'source': 'entity_extractor', 'entity_count': 2451, 'ambiguous_count': 0, 'failure_count': 0, 'filtered_service_account_count': 0}
+INFO  Running job "run_connector_health_checks (trigger: interval[0:15:00], next run at: 2026-06-13 13:46:52 IST)" (scheduled at 2026-06-13 13:31:52.862890+05:30)
+INFO  connector health check starting — 2026-06-13T08:01:52.869074+00:00
+WARNING  connector health check: no workspaces found — skipping
+INFO  Job "run_connector_health_checks (trigger: interval[0:15:00], next run at: 2026-06-13 13:46:52 IST)" executed successfully
+INFO  map_directly_observed — run=run_2c20da60 org=d81532f7-85a7-4245-bc0b-b0aa6017b0e2 edges_written=486
+INFO  map_inferred_from_detectors — run=run_2c20da60 org=d81532f7-85a7-4245-bc0b-b0aa6017b0e2 inferred_edges_written=1
+INFO  [telemetry] {'event_type': 'relationship.mapping_completed', 'ts': 1781337718.037549, 'org_id': 'd81532f7-85a7-4245-bc0b-b0aa6017b0e2', 'run_id': 'run_2c20da60', 'observed_count': 486, 'inferred_count': 1, 'skipped_ambiguous_count': 0, 'mapping_duration_ms': 7516.0}
+INFO  map_relationships — run=run_2c20da60 org=d81532f7-85a7-4245-bc0b-b0aa6017b0e2 observed=486 inferred=1 skipped_ambiguous=0 duration_ms=7516.0
+INFO  [telemetry] {'event_type': 'run.completed', 'ts': 1781337718.0523036, 'org_id': 'd81532f7-85a7-4245-bc0b-b0aa6017b0e2', 'run_id': 'run_2c20da60', 'source': 'run_pipeline', 'duration_ms': 140353, 'success': True, 'count': 6, 'pack_id': 'service_cloud', 'system_count': 3}
+INFO  T6 enrichment starting for run run_2c20da60 — 6 opportunities
+INFO  T6 enrichment run run_2c20da60: grounded=True entities=1424 shown=15 truncated=True
+INFO  [telemetry] {'event_type': 'hallucination_guard.rewritten', 'ts': 1781337743.6528907, 'org_id': 'd81532f7-85a7-4245-bc0b-b0aa6017b0e2', 'run_id': 'run_2c20da60', 'method': 'rule_rewrite', 'hallucinated_count': 1, 'source': 'hallucination_guard'}
+INFO  [telemetry] {'event_type': 'hallucination_guard.rewritten', 'ts': 1781337743.6656013, 'org_id': 'd81532f7-85a7-4245-bc0b-b0aa6017b0e2', 'run_id': 'run_2c20da60', 'method': 'rule_rewrite', 'hallucinated_count': 1, 'source': 'hallucination_guard'}
+INFO  [telemetry] {'event_type': 'hallucination_guard.rewritten', 'ts': 1781337743.6797886, 'org_id': 'd81532f7-85a7-4245-bc0b-b0aa6017b0e2', 'run_id': 'run_2c20da60', 'method': 'rule_rewrite', 'hallucinated_count': 3, 'source': 'hallucination_guard'}
+INFO  [telemetry] {'event_type': 'hallucination_guard.rewritten', 'ts': 1781337743.695527, 'org_id': 'd81532f7-85a7-4245-bc0b-b0aa6017b0e2', 'run_id': 'run_2c20da60', 'method': 'rule_rewrite', 'hallucinated_count': 2, 'source': 'hallucination_guard'}
+INFO  [telemetry] {'event_type': 'llm.enrichment_grounded', 'ts': 1781337743.7102518, 'org_id': 'd81532f7-85a7-4245-bc0b-b0aa6017b0e2', 'run_id': 'run_2c20da60', 'opp_id': 'opp_001', 'graph_entity_count': 1424, 'graph_entity_count_shown': 15, 'graph_truncated': True, 'source': 'llm_enrichment'}
+INFO  [telemetry] {'event_type': 'causal.hypothesis_generated', 'ts': 1781337743.7644563, 'org_id': 'd81532f7-85a7-4245-bc0b-b0aa6017b0e2', 'run_id': 'run_2c20da60', 'opportunity_id': 'opp_001', 'preliminary': True, 'confidence': 0.7417, 'gate_run_count': 1, 'inferred': False}
+INFO  [telemetry] {'event_type': 'hallucination_guard.rewritten', 'ts': 1781337768.1220958, 'org_id': 'd81532f7-85a7-4245-bc0b-b0aa6017b0e2', 'run_id': 'run_2c20da60', 'method': 'rule_rewrite', 'hallucinated_count': 1, 'source': 'hallucination_guard'}
+INFO  [telemetry] {'event_type': 'hallucination_guard.rewritten', 'ts': 1781337768.1464167, 'org_id': 'd81532f7-85a7-4245-bc0b-b0aa6017b0e2', 'run_id': 'run_2c20da60', 'method': 'rule_rewrite', 'hallucinated_count': 1, 'source': 'hallucination_guard'}
+INFO  [telemetry] {'event_type': 'hallucination_guard.rewritten', 'ts': 1781337768.160907, 'org_id': 'd81532f7-85a7-4245-bc0b-b0aa6017b0e2', 'run_id': 'run_2c20da60', 'method': 'rule_rewrite', 'hallucinated_count': 3, 'source': 'hallucination_guard'}
+INFO  [telemetry] {'event_type': 'hallucination_guard.rewritten', 'ts': 1781337768.1765878, 'org_id': 'd81532f7-85a7-4245-bc0b-b0aa6017b0e2', 'run_id': 'run_2c20da60', 'method': 'rule_rewrite', 'hallucinated_count': 2, 'source': 'hallucination_guard'}
+INFO  [telemetry] {'event_type': 'llm.enrichment_grounded', 'ts': 1781337768.1923041, 'org_id': 'd81532f7-85a7-4245-bc0b-b0aa6017b0e2', 'run_id': 'run_2c20da60', 'opp_id': 'opp_004', 'graph_entity_count': 1424, 'graph_entity_count_shown': 15, 'graph_truncated': True, 'source': 'llm_enrichment'}
+INFO  [telemetry] {'event_type': 'causal.hypothesis_generated', 'ts': 1781337768.2768397, 'org_id': 'd81532f7-85a7-4245-bc0b-b0aa6017b0e2', 'run_id': 'run_2c20da60', 'opportunity_id': 'opp_004', 'preliminary': True, 'confidence': 0.7417, 'gate_run_count': 1, 'inferred': False}
+INFO  [telemetry] {'event_type': 'hallucination_guard.rewritten', 'ts': 1781337788.561778, 'org_id': 'd81532f7-85a7-4245-bc0b-b0aa6017b0e2', 'run_id': 'run_2c20da60', 'method': 'rule_rewrite', 'hallucinated_count': 1, 'source': 'hallucination_guard'}
+INFO  [telemetry] {'event_type': 'hallucination_guard.rewritten', 'ts': 1781337788.5829103, 'org_id': 'd81532f7-85a7-4245-bc0b-b0aa6017b0e2', 'run_id': 'run_2c20da60', 'method': 'rule_rewrite', 'hallucinated_count': 1, 'source': 'hallucination_guard'}
+INFO  [telemetry] {'event_type': 'hallucination_guard.rewritten', 'ts': 1781337788.6011782, 'org_id': 'd81532f7-85a7-4245-bc0b-b0aa6017b0e2', 'run_id': 'run_2c20da60', 'method': 'rule_rewrite', 'hallucinated_count': 1, 'source': 'hallucination_guard'}
+INFO  [telemetry] {'event_type': 'hallucination_guard.rewritten', 'ts': 1781337788.6198819, 'org_id': 'd81532f7-85a7-4245-bc0b-b0aa6017b0e2', 'run_id': 'run_2c20da60', 'method': 'rule_rewrite', 'hallucinated_count': 5, 'source': 'hallucination_guard'}
+INFO  [telemetry] {'event_type': 'llm.enrichment_grounded', 'ts': 1781337788.6388216, 'org_id': 'd81532f7-85a7-4245-bc0b-b0aa6017b0e2', 'run_id': 'run_2c20da60', 'opp_id': 'opp_006', 'graph_entity_count': 1424, 'graph_entity_count_shown': 15, 'graph_truncated': True, 'source': 'llm_enrichment'}
+INFO  parse_causal_output: cause_chain absent for opp=opp_006
+INFO  [telemetry] {'event_type': 'causal.hypothesis_rejected', 'ts': 1781337788.660658, 'reason': 'no_falsifiability', 'org_id': 'd81532f7-85a7-4245-bc0b-b0aa6017b0e2', 'run_id': 'run_2c20da60', 'opportunity_id': 'opp_006'}
+INFO  [telemetry] {'event_type': 'hallucination_guard.rewritten', 'ts': 1781337815.3857825, 'org_id': 'd81532f7-85a7-4245-bc0b-b0aa6017b0e2', 'run_id': 'run_2c20da60', 'method': 'rule_rewrite', 'hallucinated_count': 1, 'source': 'hallucination_guard'}
+INFO  [telemetry] {'event_type': 'hallucination_guard.rewritten', 'ts': 1781337815.4046159, 'org_id': 'd81532f7-85a7-4245-bc0b-b0aa6017b0e2', 'run_id': 'run_2c20da60', 'method': 'rule_rewrite', 'hallucinated_count': 1, 'source': 'hallucination_guard'}
+INFO  [telemetry] {'event_type': 'hallucination_guard.rewritten', 'ts': 1781337815.4227657, 'org_id': 'd81532f7-85a7-4245-bc0b-b0aa6017b0e2', 'run_id': 'run_2c20da60', 'method': 'rule_rewrite', 'hallucinated_count': 1, 'source': 'hallucination_guard'}
+INFO  [telemetry] {'event_type': 'llm.enrichment_grounded', 'ts': 1781337815.4390473, 'org_id': 'd81532f7-85a7-4245-bc0b-b0aa6017b0e2', 'run_id': 'run_2c20da60', 'opp_id': 'opp_002', 'graph_entity_count': 1424, 'graph_entity_count_shown': 15, 'graph_truncated': True, 'source': 'llm_enrichment'}
+INFO  [telemetry] {'event_type': 'causal.hypothesis_generated', 'ts': 1781337815.5089996, 'org_id': 'd81532f7-85a7-4245-bc0b-b0aa6017b0e2', 'run_id': 'run_2c20da60', 'opportunity_id': 'opp_002', 'preliminary': True, 'confidence': 0.7417, 'gate_run_count': 1, 'inferred': False}
+INFO  [telemetry] {'event_type': 'hallucination_guard.rewritten', 'ts': 1781337836.954632, 'org_id': 'd81532f7-85a7-4245-bc0b-b0aa6017b0e2', 'run_id': 'run_2c20da60', 'method': 'rule_rewrite', 'hallucinated_count': 1, 'source': 'hallucination_guard'}
+INFO  [telemetry] {'event_type': 'hallucination_guard.rewritten', 'ts': 1781337836.9711063, 'org_id': 'd81532f7-85a7-4245-bc0b-b0aa6017b0e2', 'run_id': 'run_2c20da60', 'method': 'rule_rewrite', 'hallucinated_count': 1, 'source': 'hallucination_guard'}
+INFO  [telemetry] {'event_type': 'hallucination_guard.rewritten', 'ts': 1781337836.9857526, 'org_id': 'd81532f7-85a7-4245-bc0b-b0aa6017b0e2', 'run_id': 'run_2c20da60', 'method': 'rule_rewrite', 'hallucinated_count': 1, 'source': 'hallucination_guard'}
+INFO  [telemetry] {'event_type': 'hallucination_guard.rewritten', 'ts': 1781337837.0013046, 'org_id': 'd81532f7-85a7-4245-bc0b-b0aa6017b0e2', 'run_id': 'run_2c20da60', 'method': 'rule_rewrite', 'hallucinated_count': 3, 'source': 'hallucination_guard'}
+INFO  [telemetry] {'event_type': 'llm.enrichment_grounded', 'ts': 1781337837.0146134, 'org_id': 'd81532f7-85a7-4245-bc0b-b0aa6017b0e2', 'run_id': 'run_2c20da60', 'opp_id': 'opp_005', 'graph_entity_count': 1424, 'graph_entity_count_shown': 15, 'graph_truncated': True, 'source': 'llm_enrichment'}
+INFO  parse_causal_output: cause_chain absent for opp=opp_005
+INFO  [telemetry] {'event_type': 'causal.hypothesis_rejected', 'ts': 1781337837.0420215, 'reason': 'no_falsifiability', 'org_id': 'd81532f7-85a7-4245-bc0b-b0aa6017b0e2', 'run_id': 'run_2c20da60', 'opportunity_id': 'opp_005'}
+INFO  [telemetry] {'event_type': 'hallucination_guard.rewritten', 'ts': 1781337860.811283, 'org_id': 'd81532f7-85a7-4245-bc0b-b0aa6017b0e2', 'run_id': 'run_2c20da60', 'method': 'rule_rewrite', 'hallucinated_count': 1, 'source': 'hallucination_guard'}
+INFO  [telemetry] {'event_type': 'hallucination_guard.rewritten', 'ts': 1781337860.8266482, 'org_id': 'd81532f7-85a7-4245-bc0b-b0aa6017b0e2', 'run_id': 'run_2c20da60', 'method': 'rule_rewrite', 'hallucinated_count': 1, 'source': 'hallucination_guard'}
+INFO  [telemetry] {'event_type': 'hallucination_guard.rewritten', 'ts': 1781337860.8412645, 'org_id': 'd81532f7-85a7-4245-bc0b-b0aa6017b0e2', 'run_id': 'run_2c20da60', 'method': 'rule_rewrite', 'hallucinated_count': 1, 'source': 'hallucination_guard'}
+INFO  [telemetry] {'event_type': 'llm.enrichment_grounded', 'ts': 1781337860.8554037, 'org_id': 'd81532f7-85a7-4245-bc0b-b0aa6017b0e2', 'run_id': 'run_2c20da60', 'opp_id': 'opp_003', 'graph_entity_count': 1424, 'graph_entity_count_shown': 15, 'graph_truncated': True, 'source': 'llm_enrichment'}
+INFO  parse_causal_output: cause_chain absent for opp=opp_003
+INFO  [telemetry] {'event_type': 'causal.hypothesis_rejected', 'ts': 1781337860.8709958, 'reason': 'no_falsifiability', 'org_id': 'd81532f7-85a7-4245-bc0b-b0aa6017b0e2', 'run_id': 'run_2c20da60', 'opportunity_id': 'opp_003'}
+INFO  T6 enrichment done: 6 enriched, 0 fallback, 147.1s
+INFO  [telemetry] {'event_type': 'temporal.enrichment_completed', 'ts': 1781337865.9728453, 'run_id': 'run_2c20da60'}
+INFO  Running job "run_connector_health_checks (trigger: interval[0:15:00], next run at: 2026-06-13 14:01:52 IST)" (scheduled at 2026-06-13 13:46:52.862890+05:30)
+INFO  connector health check starting — 2026-06-13T08:16:52.880027+00:00
+WARNING  connector health check: no workspaces found — skipping
+INFO  Job "run_connector_health_checks (trigger: interval[0:15:00], next run at: 2026-06-13 14:01:52 IST)" executed successfully
+INFO  Running job "run_connector_health_checks (trigger: interval[0:15:00], next run at: 2026-06-13 14:16:52 IST)" (scheduled at 2026-06-13 14:01:52.862890+05:30)
+INFO  connector health check starting — 2026-06-13T08:31:52.868969+00:00
+WARNING  connector health check: no workspaces found — skipping
+INFO  Job "run_connector_health_checks (trigger: interval[0:15:00], next run at: 2026-06-13 14:16:52 IST)" executed successfully
+INFO  Running job "run_connector_health_checks (trigger: interval[0:15:00], next run at: 2026-06-13 14:31:52 IST)" (scheduled at 2026-06-13 14:16:52.862890+05:30)
+INFO  connector health check starting — 2026-06-13T08:46:52.867149+00:00
+WARNING  connector health check: no workspaces found — skipping
+INFO  Job "run_connector_health_checks (trigger: interval[0:15:00], next run at: 2026-06-13 14:31:52 IST)" executed successfully
+INFO  Running job "run_connector_health_checks (trigger: interval[0:15:00], next run at: 2026-06-13 14:46:52 IST)" (scheduled at 2026-06-13 14:31:52.862890+05:30)
+INFO  connector health check starting — 2026-06-13T09:01:52.875259+00:00
+WARNING  connector health check: no workspaces found — skipping
+INFO  Job "run_connector_health_checks (trigger: interval[0:15:00], next run at: 2026-06-13 14:46:52 IST)" executed successfully
+INFO  Running job "run_connector_health_checks (trigger: interval[0:15:00], next run at: 2026-06-13 15:01:52 IST)" (scheduled at 2026-06-13 14:46:52.862890+05:30)
+INFO  connector health check starting — 2026-06-13T09:16:52.878080+00:00
+WARNING  connector health check: no workspaces found — skipping
+INFO  Job "run_connector_health_checks (trigger: interval[0:15:00], next run at: 2026-06-13 15:01:52 IST)" executed successfully
+INFO  Running job "run_connector_health_checks (trigger: interval[0:15:00], next run at: 2026-06-13 15:16:52 IST)" (scheduled at 2026-06-13 15:01:52.862890+05:30)
+INFO  connector health check starting — 2026-06-13T09:31:52.870843+00:00
+WARNING  connector health check: no workspaces found — skipping
+INFO  Job "run_connector_health_checks (trigger: interval[0:15:00], next run at: 2026-06-13 15:16:52 IST)" executed successfully
+INFO  Running job "run_connector_health_checks (trigger: interval[0:15:00], next run at: 2026-06-13 15:31:52 IST)" (scheduled at 2026-06-13 15:16:52.862890+05:30)
+INFO  connector health check starting — 2026-06-13T09:46:52.872696+00:00
+WARNING  connector health check: no workspaces found — skipping
+INFO  Job "run_connector_health_checks (trigger: interval[0:15:00], next run at: 2026-06-13 15:31:52 IST)" executed successfully
+INFO  Running job "run_connector_health_checks (trigger: interval[0:15:00], next run at: 2026-06-13 15:46:52 IST)" (scheduled at 2026-06-13 15:31:52.862890+05:30)
+INFO  connector health check starting — 2026-06-13T10:01:52.871506+00:00
+WARNING  connector health check: no workspaces found — skipping
+INFO  Job "run_connector_health_checks (trigger: interval[0:15:00], next run at: 2026-06-13 15:46:52 IST)" executed successfully
+INFO  Running job "run_connector_health_checks (trigger: interval[0:15:00], next run at: 2026-06-13 16:01:52 IST)" (scheduled at 2026-06-13 15:46:52.862890+05:30)
+INFO  connector health check starting — 2026-06-13T10:16:52.868442+00:00
+WARNING  connector health check: no workspaces found — skipping
+INFO  Job "run_connector_health_checks (trigger: interval[0:15:00], next run at: 2026-06-13 16:01:52 IST)" executed successfully
+INFO  Running job "run_connector_health_checks (trigger: interval[0:15:00], next run at: 2026-06-13 16:16:52 IST)" (scheduled at 2026-06-13 16:01:52.862890+05:30)
+INFO  connector health check starting — 2026-06-13T10:31:52.870180+00:00
+WARNING  connector health check: no workspaces found — skipping
+INFO  Job "run_connector_health_checks (trigger: interval[0:15:00], next run at: 2026-06-13 16:16:52 IST)" executed successfully
+INFO  Running job "run_connector_health_checks (trigger: interval[0:15:00], next run at: 2026-06-13 16:31:52 IST)" (scheduled at 2026-06-13 16:16:52.862890+05:30)
+INFO  connector health check starting — 2026-06-13T10:46:52.879157+00:00
+WARNING  connector health check: no workspaces found — skipping
+INFO  Job "run_connector_health_checks (trigger: interval[0:15:00], next run at: 2026-06-13 16:31:52 IST)" executed successfully
+INFO  Running job "run_connector_health_checks (trigger: interval[0:15:00], next run at: 2026-06-13 16:46:52 IST)" (scheduled at 2026-06-13 16:31:52.862890+05:30)
+INFO  connector health check starting — 2026-06-13T11:01:52.870390+00:00
+WARNING  connector health check: no workspaces found — skipping
+INFO  Job "run_connector_health_checks (trigger: interval[0:15:00], next run at: 2026-06-13 16:46:52 IST)" executed successfully
+INFO  Running job "run_connector_health_checks (trigger: interval[0:15:00], next run at: 2026-06-13 17:01:52 IST)" (scheduled at 2026-06-13 16:46:52.862890+05:30)
+INFO  connector health check starting — 2026-06-13T11:16:52.867578+00:00
+WARNING  connector health check: no workspaces found — skipping
+INFO  Job "run_connector_health_checks (trigger: interval[0:15:00], next run at: 2026-06-13 17:01:52 IST)" executed successfully
+WARNING  Run time of job "run_connector_health_checks (trigger: interval[0:15:00], next run at: 2026-06-15 10:16:52 IST)" was missed by 0:11:36.332396
+WARNING  Run time of job "run_connector_health_checks (trigger: interval[0:15:00], next run at: 2026-06-15 11:16:52 IST)" was missed by 0:05:34.753185
+INFO  Running job "run_connector_health_checks (trigger: interval[0:15:00], next run at: 2026-06-15 11:31:52 IST)" (scheduled at 2026-06-15 11:16:52.862890+05:30)
+INFO  connector health check starting — 2026-06-15T05:46:52.875643+00:00
+WARNING  connector health check: no workspaces found — skipping
+INFO  Job "run_connector_health_checks (trigger: interval[0:15:00], next run at: 2026-06-15 11:31:52 IST)" executed successfully
+WARNING  Run time of job "run_baseline_job (trigger: interval[6:00:00], next run at: 2026-06-15 15:31:52 IST)" was missed by 4:34:46.256755
+WARNING  Run time of job "run_connector_health_checks (trigger: interval[0:15:00], next run at: 2026-06-15 22:31:52 IST)" was missed by 0:06:26.368886
+WARNING  Run time of job "run_connector_health_checks (trigger: interval[0:15:00], next run at: 2026-06-16 07:31:52 IST)" was missed by 0:14:31.393094
+INFO  Running job "run_connector_health_checks (trigger: interval[0:15:00], next run at: 2026-06-16 07:46:52 IST)" (scheduled at 2026-06-16 07:31:52.862890+05:30)
+INFO  connector health check starting — 2026-06-16T02:01:52.872020+00:00
+WARNING  connector health check: no workspaces found — skipping
+INFO  Job "run_connector_health_checks (trigger: interval[0:15:00], next run at: 2026-06-16 07:46:52 IST)" executed successfully
+INFO  Running job "run_connector_health_checks (trigger: interval[0:15:00], next run at: 2026-06-16 08:01:52 IST)" (scheduled at 2026-06-16 07:46:52.862890+05:30)
+INFO  connector health check starting — 2026-06-16T02:16:52.883083+00:00
+WARNING  connector health check: no workspaces found — skipping
+INFO  Job "run_connector_health_checks (trigger: interval[0:15:00], next run at: 2026-06-16 08:01:52 IST)" executed successfully
+INFO  Running job "run_connector_health_checks (trigger: interval[0:15:00], next run at: 2026-06-16 08:16:52 IST)" (scheduled at 2026-06-16 08:01:52.862890+05:30)
+INFO  connector health check starting — 2026-06-16T02:31:52.865772+00:00
+WARNING  connector health check: no workspaces found — skipping
+INFO  Job "run_connector_health_checks (trigger: interval[0:15:00], next run at: 2026-06-16 08:16:52 IST)" executed successfully
+WARNING  Run time of job "run_connector_health_checks (trigger: interval[0:15:00], next run at: 2026-06-16 10:16:52 IST)" was missed by 0:08:22.157536
+INFO  Running job "run_connector_health_checks (trigger: interval[0:15:00], next run at: 2026-06-16 10:31:52 IST)" (scheduled at 2026-06-16 10:16:52.862890+05:30)
+INFO  connector health check starting — 2026-06-16T04:46:52.871409+00:00
+WARNING  connector health check: no workspaces found — skipping
+INFO  Job "run_connector_health_checks (trigger: interval[0:15:00], next run at: 2026-06-16 10:31:52 IST)" executed successfully
+WARNING  Run time of job "run_connector_health_checks (trigger: interval[0:15:00], next run at: 2026-06-16 23:31:52 IST)" was missed by 0:13:00.828549
+WARNING  Run time of job "run_connector_health_checks (trigger: interval[0:15:00], next run at: 2026-06-17 11:01:52 IST)" was missed by 0:13:56.266262
+INFO  Running job "run_connector_health_checks (trigger: interval[0:15:00], next run at: 2026-06-17 11:16:52 IST)" (scheduled at 2026-06-17 11:01:52.862890+05:30)
+INFO  connector health check starting — 2026-06-17T05:31:52.871945+00:00
+WARNING  connector health check: no workspaces found — skipping
+INFO  Job "run_connector_health_checks (trigger: interval[0:15:00], next run at: 2026-06-17 11:16:52 IST)" executed successfully
+WARNING  Run time of job "run_baseline_job (trigger: interval[6:00:00], next run at: 2026-06-17 15:31:52 IST)" was missed by 1:30:25.678941
+WARNING  Run time of job "run_connector_health_checks (trigger: interval[0:15:00], next run at: 2026-06-17 11:31:52 IST)" was missed by 0:03:36.165033
+WARNING  Run time of job "run_connector_health_checks (trigger: interval[0:15:00], next run at: 2026-06-17 11:46:52 IST)" was missed by 0:09:59.025706
+INFO  Running job "run_connector_health_checks (trigger: interval[0:15:00], next run at: 2026-06-17 12:01:52 IST)" (scheduled at 2026-06-17 11:46:52.862890+05:30)
+INFO  connector health check starting — 2026-06-17T06:16:52.881499+00:00
+WARNING  connector health check: no workspaces found — skipping
+INFO  Job "run_connector_health_checks (trigger: interval[0:15:00], next run at: 2026-06-17 12:01:52 IST)" executed successfully
+INFO  Running job "run_connector_health_checks (trigger: interval[0:15:00], next run at: 2026-06-17 12:16:52 IST)" (scheduled at 2026-06-17 12:01:52.862890+05:30)
+INFO  connector health check starting — 2026-06-17T06:31:52.883196+00:00
+WARNING  connector health check: no workspaces found — skipping
+INFO  Job "run_connector_health_checks (trigger: interval[0:15:00], next run at: 2026-06-17 12:16:52 IST)" executed successfully
+INFO  Running job "run_connector_health_checks (trigger: interval[0:15:00], next run at: 2026-06-17 12:31:52 IST)" (scheduled at 2026-06-17 12:16:52.862890+05:30)
+INFO  connector health check starting — 2026-06-17T06:46:52.877013+00:00
+WARNING  connector health check: no workspaces found — skipping
+INFO  Job "run_connector_health_checks (trigger: interval[0:15:00], next run at: 2026-06-17 12:31:52 IST)" executed successfully
+INFO  Running job "run_connector_health_checks (trigger: interval[0:15:00], next run at: 2026-06-17 12:46:52 IST)" (scheduled at 2026-06-17 12:31:52.862890+05:30)
+INFO  connector health check starting — 2026-06-17T07:01:52.880581+00:00
+WARNING  connector health check: no workspaces found — skipping
+INFO  Job "run_connector_health_checks (trigger: interval[0:15:00], next run at: 2026-06-17 12:46:52 IST)" executed successfully
+INFO  Running job "run_connector_health_checks (trigger: interval[0:15:00], next run at: 2026-06-17 13:01:52 IST)" (scheduled at 2026-06-17 12:46:52.862890+05:30)
+INFO  connector health check starting — 2026-06-17T07:16:52.875684+00:00
+WARNING  connector health check: no workspaces found — skipping
+INFO  Job "run_connector_health_checks (trigger: interval[0:15:00], next run at: 2026-06-17 13:01:52 IST)" executed successfully
+INFO  Running job "run_connector_health_checks (trigger: interval[0:15:00], next run at: 2026-06-17 13:16:52 IST)" (scheduled at 2026-06-17 13:01:52.862890+05:30)
+INFO  connector health check starting — 2026-06-17T07:31:52.878868+00:00
+WARNING  connector health check: no workspaces found — skipping
+INFO  Job "run_connector_health_checks (trigger: interval[0:15:00], next run at: 2026-06-17 13:16:52 IST)" executed successfully
+WARNING  Run time of job "run_connector_health_checks (trigger: interval[0:15:00], next run at: 2026-06-21 19:16:52 IST)" was missed by 0:11:04.943867
+INFO  Running job "run_connector_health_checks (trigger: interval[0:15:00], next run at: 2026-06-21 19:31:52 IST)" (scheduled at 2026-06-21 19:16:52.862890+05:30)
+INFO  connector health check starting — 2026-06-21T13:46:52.882037+00:00
+WARNING  connector health check: no workspaces found — skipping
+INFO  Job "run_connector_health_checks (trigger: interval[0:15:00], next run at: 2026-06-21 19:31:52 IST)" executed successfully
+WARNING  Run time of job "run_connector_health_checks (trigger: interval[0:15:00], next run at: 2026-06-22 11:01:52 IST)" was missed by 0:02:42.187169
+WARNING  Run time of job "run_connector_health_checks (trigger: interval[0:15:00], next run at: 2026-06-22 11:16:52 IST)" was missed by 0:07:00.181416
+INFO  Running job "run_connector_health_checks (trigger: interval[0:15:00], next run at: 2026-06-22 11:31:52 IST)" (scheduled at 2026-06-22 11:16:52.862890+05:30)
+INFO  connector health check starting — 2026-06-22T05:46:52.878576+00:00
+WARNING  connector health check: no workspaces found — skipping
+INFO  Job "run_connector_health_checks (trigger: interval[0:15:00], next run at: 2026-06-22 11:31:52 IST)" executed successfully
+INFO  Running job "run_connector_health_checks (trigger: interval[0:15:00], next run at: 2026-06-22 11:46:52 IST)" (scheduled at 2026-06-22 11:31:52.862890+05:30)
+INFO  connector health check starting — 2026-06-22T06:01:52.863742+00:00
+WARNING  connector health check: no workspaces found — skipping
+INFO  Job "run_connector_health_checks (trigger: interval[0:15:00], next run at: 2026-06-22 11:46:52 IST)" executed successfully
+WARNING  Run time of job "run_connector_health_checks (trigger: interval[0:15:00], next run at: 2026-06-22 12:01:52 IST)" was missed by 0:02:29.792149
+INFO  Running job "run_connector_health_checks (trigger: interval[0:15:00], next run at: 2026-06-22 12:16:52 IST)" (scheduled at 2026-06-22 12:01:52.862890+05:30)
+INFO  connector health check starting — 2026-06-22T06:31:52.874432+00:00
+WARNING  connector health check: no workspaces found — skipping
+INFO  Job "run_connector_health_checks (trigger: interval[0:15:00], next run at: 2026-06-22 12:16:52 IST)" executed successfully
+WARNING  Run time of job "run_connector_health_checks (trigger: interval[0:15:00], next run at: 2026-06-22 12:46:52 IST)" was missed by 0:04:41.831981
+INFO  Running job "run_connector_health_checks (trigger: interval[0:15:00], next run at: 2026-06-22 13:01:52 IST)" (scheduled at 2026-06-22 12:46:52.862890+05:30)
+INFO  connector health check starting — 2026-06-22T07:16:52.872314+00:00
+WARNING  connector health check: no workspaces found — skipping
+INFO  Job "run_connector_health_checks (trigger: interval[0:15:00], next run at: 2026-06-22 13:01:52 IST)" executed successfully
+INFO  Running job "run_connector_health_checks (trigger: interval[0:15:00], next run at: 2026-06-22 13:16:52 IST)" (scheduled at 2026-06-22 13:01:52.862890+05:30)
+INFO  connector health check starting — 2026-06-22T07:31:52.869391+00:00
+WARNING  connector health check: no workspaces found — skipping
+INFO  Job "run_connector_health_checks (trigger: interval[0:15:00], next run at: 2026-06-22 13:16:52 IST)" executed successfully
+INFO  Running job "run_connector_health_checks (trigger: interval[0:15:00], next run at: 2026-06-22 13:31:52 IST)" (scheduled at 2026-06-22 13:16:52.862890+05:30)
+INFO  connector health check starting — 2026-06-22T07:46:52.873329+00:00
+WARNING  connector health check: no workspaces found — skipping
+INFO  Job "run_connector_health_checks (trigger: interval[0:15:00], next run at: 2026-06-22 13:31:52 IST)" executed successfully
+WARNING  Run time of job "run_baseline_job (trigger: interval[6:00:00], next run at: 2026-06-22 15:31:52 IST)" was missed by 4:08:27.993258
+WARNING  Run time of job "run_connector_health_checks (trigger: interval[0:15:00], next run at: 2026-06-22 14:16:52 IST)" was missed by 0:06:46.135844
+WARNING  Run time of job "run_connector_health_checks (trigger: interval[0:15:00], next run at: 2026-06-22 15:01:52 IST)" was missed by 0:09:41.618868
+INFO  Running job "run_connector_health_checks (trigger: interval[0:15:00], next run at: 2026-06-22 15:16:52 IST)" (scheduled at 2026-06-22 15:01:52.862890+05:30)
+INFO  connector health check starting — 2026-06-22T09:31:52.874287+00:00
+WARNING  connector health check: no workspaces found — skipping
+INFO  Job "run_connector_health_checks (trigger: interval[0:15:00], next run at: 2026-06-22 15:16:52 IST)" executed successfully
+WARNING  Run time of job "run_connector_health_checks (trigger: interval[0:15:00], next run at: 2026-06-22 15:31:52 IST)" was missed by 0:01:26.580315
+WARNING  Run time of job "run_connector_health_checks (trigger: interval[0:15:00], next run at: 2026-06-23 11:46:52 IST)" was missed by 0:14:58.833411
+INFO  Running job "run_connector_health_checks (trigger: interval[0:15:00], next run at: 2026-06-23 12:01:52 IST)" (scheduled at 2026-06-23 11:46:52.862890+05:30)
+INFO  connector health check starting — 2026-06-23T06:16:52.864596+00:00
+WARNING  connector health check: no workspaces found — skipping
+INFO  Job "run_connector_health_checks (trigger: interval[0:15:00], next run at: 2026-06-23 12:01:52 IST)" executed successfully
+WARNING  Run time of job "run_connector_health_checks (trigger: interval[0:15:00], next run at: 2026-06-23 20:01:52 IST)" was missed by 0:09:56.414071
+INFO  Running job "run_connector_health_checks (trigger: interval[0:15:00], next run at: 2026-06-23 20:16:52 IST)" (scheduled at 2026-06-23 20:01:52.862890+05:30)
+INFO  connector health check starting — 2026-06-23T14:31:52.879427+00:00
+WARNING  connector health check: no workspaces found — skipping
+INFO  Job "run_connector_health_checks (trigger: interval[0:15:00], next run at: 2026-06-23 20:16:52 IST)" executed successfully
+INFO  Running job "run_connector_health_checks (trigger: interval[0:15:00], next run at: 2026-06-23 20:31:52 IST)" (scheduled at 2026-06-23 20:16:52.862890+05:30)
+INFO  connector health check starting — 2026-06-23T14:46:52.870352+00:00
+WARNING  connector health check: no workspaces found — skipping
+INFO  Job "run_connector_health_checks (trigger: interval[0:15:00], next run at: 2026-06-23 20:31:52 IST)" executed successfully
+WARNING  Run time of job "run_connector_health_checks (trigger: interval[0:15:00], next run at: 2026-06-23 21:31:52 IST)" was missed by 0:08:39.840766
+INFO  Running job "run_connector_health_checks (trigger: interval[0:15:00], next run at: 2026-06-23 21:46:52 IST)" (scheduled at 2026-06-23 21:31:52.862890+05:30)
+INFO  connector health check starting — 2026-06-23T16:01:52.877080+00:00
+WARNING  connector health check: no workspaces found — skipping
+INFO  Job "run_connector_health_checks (trigger: interval[0:15:00], next run at: 2026-06-23 21:46:52 IST)" executed successfully
+WARNING  Run time of job "run_baseline_job (trigger: interval[6:00:00], next run at: 2026-06-24 03:31:52 IST)" was missed by 0:09:35.320981
+INFO  Running job "run_connector_health_checks (trigger: interval[0:15:00], next run at: 2026-06-23 22:01:52 IST)" (scheduled at 2026-06-23 21:46:52.862890+05:30)
+INFO  connector health check starting — 2026-06-23T16:16:52.877837+00:00
+WARNING  connector health check: no workspaces found — skipping
+INFO  Job "run_connector_health_checks (trigger: interval[0:15:00], next run at: 2026-06-23 22:01:52 IST)" executed successfully
+WARNING  Run time of job "run_connector_health_checks (trigger: interval[0:15:00], next run at: 2026-06-23 22:16:52 IST)" was missed by 0:03:29.446315
+INFO  Running job "run_connector_health_checks (trigger: interval[0:15:00], next run at: 2026-06-23 22:31:52 IST)" (scheduled at 2026-06-23 22:16:52.862890+05:30)
+INFO  connector health check starting — 2026-06-23T16:46:52.879610+00:00
+WARNING  connector health check: no workspaces found — skipping
+INFO  Job "run_connector_health_checks (trigger: interval[0:15:00], next run at: 2026-06-23 22:31:52 IST)" executed successfully
+WARNING  Run time of job "run_connector_health_checks (trigger: interval[0:15:00], next run at: 2026-06-24 09:01:52 IST)" was missed by 0:04:21.554701
+INFO  Running job "run_connector_health_checks (trigger: interval[0:15:00], next run at: 2026-06-24 09:16:52 IST)" (scheduled at 2026-06-24 09:01:52.862890+05:30)
+INFO  connector health check starting — 2026-06-24T03:31:52.872409+00:00
+WARNING  connector health check: no workspaces found — skipping
+INFO  Job "run_connector_health_checks (trigger: interval[0:15:00], next run at: 2026-06-24 09:16:52 IST)" executed successfully
+INFO  Running job "run_connector_health_checks (trigger: interval[0:15:00], next run at: 2026-06-24 09:31:52 IST)" (scheduled at 2026-06-24 09:16:52.862890+05:30)
+INFO  connector health check starting — 2026-06-24T03:46:52.873653+00:00
+WARNING  connector health check: no workspaces found — skipping
+INFO  Job "run_connector_health_checks (trigger: interval[0:15:00], next run at: 2026-06-24 09:31:52 IST)" executed successfully
+WARNING  Run time of job "run_connector_health_checks (trigger: interval[0:15:00], next run at: 2026-06-24 11:16:52 IST)" was missed by 0:11:43.721152
+INFO  Running job "run_connector_health_checks (trigger: interval[0:15:00], next run at: 2026-06-24 11:31:52 IST)" (scheduled at 2026-06-24 11:16:52.862890+05:30)
+INFO  connector health check starting — 2026-06-24T05:46:52.867281+00:00
+WARNING  connector health check: no workspaces found — skipping
+INFO  Job "run_connector_health_checks (trigger: interval[0:15:00], next run at: 2026-06-24 11:31:52 IST)" executed successfully
+WARNING  Run time of job "run_connector_health_checks (trigger: interval[0:15:00], next run at: 2026-06-24 11:46:52 IST)" was missed by 0:13:05.471946
+INFO  Running job "run_connector_health_checks (trigger: interval[0:15:00], next run at: 2026-06-24 12:01:52 IST)" (scheduled at 2026-06-24 11:46:52.862890+05:30)
+INFO  connector health check starting — 2026-06-24T06:16:52.868751+00:00
+WARNING  connector health check: no workspaces found — skipping
+INFO  Job "run_connector_health_checks (trigger: interval[0:15:00], next run at: 2026-06-24 12:01:52 IST)" executed successfully
+INFO  Running job "run_connector_health_checks (trigger: interval[0:15:00], next run at: 2026-06-24 13:46:52 IST)" (scheduled at 2026-06-24 13:31:52.862890+05:30)
+INFO  connector health check starting — 2026-06-24T08:01:54.392191+00:00
+WARNING  connector health check: no workspaces found — skipping
+INFO  Job "run_connector_health_checks (trigger: interval[0:15:00], next run at: 2026-06-24 13:46:52 IST)" executed successfully
+WARNING  Run time of job "run_connector_health_checks (trigger: interval[0:15:00], next run at: 2026-06-24 15:16:52 IST)" was missed by 0:06:12.860472
+WARNING  Run time of job "run_connector_health_checks (trigger: interval[0:15:00], next run at: 2026-06-24 16:46:52 IST)" was missed by 0:05:03.668914
+WARNING  Run time of job "run_connector_health_checks (trigger: interval[0:15:00], next run at: 2026-06-24 17:01:52 IST)" was missed by 0:10:56.532336
+INFO  Running job "run_connector_health_checks (trigger: interval[0:15:00], next run at: 2026-06-24 17:16:52 IST)" (scheduled at 2026-06-24 17:01:52.862890+05:30)
+INFO  connector health check starting — 2026-06-24T11:32:06.114957+00:00
+WARNING  connector health check: no workspaces found — skipping
+INFO  Job "run_connector_health_checks (trigger: interval[0:15:00], next run at: 2026-06-24 17:16:52 IST)" executed successfully

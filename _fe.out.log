@@ -1,0 +1,53 @@
+
+> agentiq@v11.0 dev
+> vite --port 5173 --strictPort
+
+[2m9:31:50 am[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m Re-optimizing dependencies because vite config has changed
+
+  [32m[1mVITE[22m v8.0.10[39m  [2mready in [0m[1m6339[22m[2m[0m ms[22m
+
+  [32m➜[39m  [1mLocal[22m:   [36mhttp://localhost:[1m5173[22m/[39m
+[2m  [32m➜[39m  [1mNetwork[22m[2m: use [22m[1m--host[22m[2m to expose[22m
+[2m9:31:57 am[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [optimizer] bundling dependencies...
+[2m8:55:54 am[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/App.tsx, /src/styles.css[22m
+[2m8:55:54 am[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/styles.css[22m
+[2m8:55:54 am[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/styles.css, /src/context/AuthContext.tsx, /src/pages/AcceptInvitePage.tsx[22m
+[2m8:55:54 am[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/components/auth/AuthGuard.tsx, /src/styles.css[22m
+[2m8:55:54 am[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/styles.css, /src/components/analyst_review/OpportunityDetail.tsx[22m
+[2m8:55:54 am[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/styles.css, /src/components/executive_report/KeyInsights.tsx[22m
+[2m8:55:54 am[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/styles.css, /src/components/integrations/ConnectorGroupSection.tsx[22m
+[2m8:55:54 am[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/styles.css, /src/components/pilot_roadmap/StageCard.tsx[22m
+[2m8:55:54 am[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/context/AuthContext.tsx, /src/styles.css[22m
+[2m8:55:54 am[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/styles.css, /src/context/NormalizationContext.tsx, /src/context/AuthContext.tsx, /src/context/RunContext.tsx, /src/pages/LoginPage.tsx, /src/pages/AcceptInvitePage.tsx, /src/pages/RegisterPage.tsx, /src/context/SourceIntakeContext.tsx, /src/context/ConnectorContext.tsx, /src/context/EvidenceContext.tsx, /src/context/PartialResultsContext.tsx, /src/context/DiscoveryRunContext.tsx, /src/pages/BlueprintPage.tsx, /src/context/AnalystReviewContext.tsx, /src/pages/PilotRoadmapPage.tsx and 7 more[22m
+[2m8:55:54 am[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/pages/AcceptInvitePage.tsx, /src/styles.css[22m
+[2m8:55:54 am[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/styles.css, /src/context/SourceIntakeContext.tsx, /src/context/ConnectorContext.tsx, /src/context/NormalizationContext.tsx[22m
+[2m8:55:54 am[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/App.tsx, /src/styles.css[22m
+[2m8:55:54 am[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/styles.css[22m
+[2m8:55:54 am[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/styles.css[22m
+[2m8:55:54 am[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/styles.css[22m
+[2m8:55:54 am[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/styles.css[22m
+[2m8:55:54 am[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/styles.css[22m
+[2m8:55:54 am[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/styles.css[22m
+[2m8:55:54 am[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/styles.css[22m
+[2m8:55:54 am[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/styles.css[22m
+[2m8:55:54 am[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/styles.css, /src/context/AuthContext.tsx, /src/pages/AcceptInvitePage.tsx[22m
+[2m8:55:54 am[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/styles.css, /src/components/analyst_review/OpportunityDetail.tsx[22m
+[2m8:55:54 am[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/components/common/Toast.tsx, /src/styles.css[22m
+[2m8:55:54 am[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/styles.css, /src/components/common/TopNav.tsx[22m
+[2m8:55:54 am[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/styles.css, /src/components/integrations/ConnectorTile.tsx[22m
+[2m8:55:54 am[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/styles.css, /src/components/integrations/SalesforceProductPicker.tsx[22m
+[2m8:55:54 am[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/styles.css, /src/components/pilot_roadmap/StageCard.tsx[22m
+[2m8:55:54 am[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/context/ConnectorContext.tsx, /src/styles.css[22m
+[2m8:55:54 am[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/styles.css, /src/components/executive_report/SnapshotMatrix.tsx[22m
+[2m8:55:54 am[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/context/AuthContext.tsx, /src/styles.css[22m
+[2m8:55:54 am[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/pages/AcceptInvitePage.tsx, /src/styles.css[22m
+[2m8:55:54 am[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/pages/DiscoveryRunPage.tsx, /src/styles.css[22m
+[2m8:55:54 am[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/styles.css, /src/context/NormalizationContext.tsx, /src/context/AuthContext.tsx, /src/context/RunContext.tsx, /src/pages/LoginPage.tsx, /src/pages/AcceptInvitePage.tsx, /src/pages/RegisterPage.tsx, /src/context/SourceIntakeContext.tsx, /src/context/ConnectorContext.tsx, /src/context/EvidenceContext.tsx, /src/context/PartialResultsContext.tsx, /src/context/DiscoveryRunContext.tsx, /src/pages/BlueprintPage.tsx, /src/context/AnalystReviewContext.tsx, /src/pages/PilotRoadmapPage.tsx and 7 more[22m
+[2m8:55:54 am[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/pages/ExecutiveReportPage.tsx, /src/styles.css[22m
+[2m8:55:54 am[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/pages/IntegrationHubPage.tsx, /src/styles.css[22m
+[2m8:55:54 am[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/pages/LoginPage.tsx, /src/styles.css[22m
+[2m8:55:54 am[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/pages/RegisterPage.tsx, /src/styles.css[22m
+[2m8:55:54 am[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/pages/SourceIntelligencePage.tsx, /src/styles.css[22m
+[2m8:55:54 am[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/pages/PilotRoadmapPage.tsx, /src/styles.css[22m
+[2m8:55:54 am[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/pages/StackBuilderPage.tsx, /src/styles.css[22m
+[2m8:55:54 am[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mhmr update [39m[2m/src/styles.css, /src/context/SourceIntakeContext.tsx, /src/context/ConnectorContext.tsx, /src/context/NormalizationContext.tsx[22m
