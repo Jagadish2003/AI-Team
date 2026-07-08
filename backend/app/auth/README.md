@@ -124,13 +124,40 @@ exchanged for an access token — **no client secret, no redirect URI, no inboun
   /api/connectors/{connector_id}/jwt-credentials` (`login_url`, `username`, `private_key`).
   Building blocks: `oauth.build_jwt_bearer_assertion()` and `oauth.get_jwt_bearer_token()`.
 
+### Microsoft Graph client-credentials (R18-A3 T3 / AT-556)
+
+`client_credentials` is the Microsoft Graph (Teams / SharePoint) outbound-only path: the app
+registration's own `client_id` + `client_secret` are exchanged for a service-identity access
+token — **no browser redirect, no inbound callback** (AC2). It is the no-public-inbound
+alternative to the delegated authorization_code flow; an org selects it per connector.
+
+- **Credential** is the deployment's app secret (`TEAMS_CLIENT_SECRET` /
+  `SHAREPOINT_CLIENT_SECRET`), resolved live per call and never logged — there is no per-user
+  entry. The minted access token is vaulted per-org as the connector's normal OAuth
+  `TokenRecord` (encrypted at rest, never logged — AC5), so `get_connector_credentials()`
+  resolves it identically to any other mode (AC3).
+- **Scope.** The request uses `ConnectorAuthConfig.client_credentials_scopes`
+  (`https://graph.microsoft.com/.default` for Graph) rather than the delegated `scopes` —
+  the granted **application** permissions are resolved by Entra from the admin-consented app
+  registration, not sent in the request. `oauth.get_client_credentials_token()` falls back to
+  `scopes` when `client_credentials_scopes` is unset (SAP, D365, ServiceNow).
+- **`get_token()` mints and re-mints.** client_credentials issues no `refresh_token`, so — like
+  JWT bearer re-assertion — `get_token()` re-mints outbound on expiry (`_mint_client_credentials_token`),
+  gated on the org's resolved mode being `client_credentials`. This is what keeps live ingestion
+  running under a service identity with no user action (AC2).
+- **Connect surface** (owner-only, no body): `POST /api/connectors/{connector_id}/client-credentials`.
+  Token status / revoke reuse the standard OAuth `GET .../token-status` and `DELETE .../token`.
+- **Setup:** application-permission app registration + tenant-wide admin consent — see
+  `docs/INTEGRATE_GRAPH_CLIENT_CREDENTIALS.md`.
+
 ## Flows
 
 - `authorization_code`: used by Salesforce, ServiceNow, Jira, Confluence, GitHub, Slack, Teams.
   Salesforce/ServiceNow/Jira/Confluence have a revocation endpoint; GitHub, Slack and Teams
   do not (Slack revokes via the `auth.revoke` Web API; Teams/Microsoft has no revocation
   endpoint, so revoke removes the vault token).
-- `client_credentials`: used by SAP, Dynamic365; no `refresh_token`, no `redirect_uri`
+- `client_credentials`: used by SAP, Dynamic365, and — as an outbound-only alternative to
+  authorization_code — Microsoft Teams / SharePoint (Graph); no `refresh_token`, no `redirect_uri`.
 
 ### Microsoft Graph connectors (Teams, SharePoint) — tenant admin consent
 
