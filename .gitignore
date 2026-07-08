@@ -35,3 +35,10 @@ backend/license/test_keys/
 .codex-doc-review/
 frontend-smoke.png
 download-server/data/
+
+# MSI installer build artifacts (large binaries - never commit)
+installer/bin/
+installer/obj/
+installer/staging/
+installer/downloads/
+backend/wheels/
