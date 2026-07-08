@@ -51,11 +51,15 @@ if ($SkipFrontend -and (Test-Path "$FrontendDir\dist\index.html")) {
     npm ci --silent
     if ($LASTEXITCODE -ne 0) { Pop-Location; throw "npm ci failed" }
     Log "npm run build (VITE_API_BASE_URL='') ..."
-    $env:VITE_API_BASE_URL = ""
+    # Define VITE_API_BASE_URL as an EMPTY STRING via .env.production —
+    # PowerShell deletes an env var assigned "", and the v1.7 apiClient throws
+    # at runtime (blank page) when the variable is undefined.
+    Set-Content "$FrontendDir\.env.production" -Value "VITE_API_BASE_URL=" -Encoding ASCII
     $savedEAP = $ErrorActionPreference; $ErrorActionPreference = "Continue"
     npm run build
     $buildExit = $LASTEXITCODE
     $ErrorActionPreference = $savedEAP
+    Remove-Item "$FrontendDir\.env.production" -Force -ErrorAction SilentlyContinue
     Pop-Location
     if ($buildExit -ne 0) { throw "npm run build failed (exit $buildExit)" }
     OK "Frontend built -> frontend\dist\"

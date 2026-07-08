@@ -98,9 +98,17 @@ if ($SkipFrontend -and (Test-Path "$FrontendDir\dist\index.html")) {
     Push-Location $FrontendDir
     Log "npm ci..."
     npm ci --silent
-    Log "npm run build (VITE_API_BASE_URL empty → relative /api/ calls)..."
-    $env:VITE_API_BASE_URL = ""
-    npm run build
+    Log "npm run build (VITE_API_BASE_URL empty string → relative /api/ calls)..."
+    # VITE_API_BASE_URL must be DEFINED as an empty string: the v1.7 apiClient
+    # throws at runtime when it is nullish (blank page). PowerShell deletes an
+    # env var assigned "", so define it via Vite's .env.production instead.
+    $enviroFile = "$FrontendDir\.env.production"
+    Set-Content $enviroFile -Value "VITE_API_BASE_URL=" -Encoding ASCII
+    try {
+        npm run build
+    } finally {
+        Remove-Item $enviroFile -Force -ErrorAction SilentlyContinue
+    }
     Pop-Location
     OK "Frontend built → frontend\dist\"
 }
