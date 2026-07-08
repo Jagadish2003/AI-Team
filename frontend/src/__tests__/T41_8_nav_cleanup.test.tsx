@@ -110,7 +110,7 @@ describe("AC1 — Source Intake absent from TopNav", () => {
     expect(screen.getByText("Integration Hub")).toBeDefined();
   });
 
-  it("renders exactly 8 nav items (Sprint 4.1 exit criterion #12)", () => {
+  it("renders exactly 7 nav items after merging Agent Roadmap into Agentforce Blueprint", () => {
     render(
       <MemoryRouter initialEntries={["/integration-hub"]}>
         <TopNav />
@@ -122,13 +122,13 @@ describe("AC1 — Source Intake absent from TopNav", () => {
       "Discovery Run",
       "Source Intelligence",
       "Opportunity Review",
-      "Agent Roadmap",
       "Agentforce Blueprint",
       "Executive Report",
     ];
     for (const label of expectedItems) {
       expect(screen.getByText(label)).toBeDefined();
     }
+    expect(screen.queryByText("Agent Roadmap")).toBeNull();
     // Source Intake must not be present
     expect(screen.queryByText("Source Intake")).toBeNull();
   });
