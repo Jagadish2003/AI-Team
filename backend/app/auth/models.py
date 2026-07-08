@@ -49,6 +49,16 @@ class ConnectorAuthConfig:
     # Salesforce needs ``prompt=consent`` to (re-)issue a refresh token. Ignored
     # for client_credentials flows (no browser redirect / no refresh token).
     authorize_params: Dict[str, str] = field(default_factory=dict)
+    # R18-A3 T3 (AT-556): scopes to request in the CLIENT-CREDENTIALS grant, when
+    # they differ from the authorization-code ``scopes`` above. Microsoft Graph is
+    # the motivating case: an application-permission (client-credentials) token is
+    # requested with the single resource scope ``https://graph.microsoft.com/.default``
+    # — the granular delegated scopes (``Channel.ReadBasic.All`` etc.) are NOT valid
+    # in the client-credentials grant and Microsoft rejects them (AADSTS). Left
+    # ``None`` for connectors whose client-credentials scopes are the same as their
+    # ``scopes`` (SAP, Dynamics 365, ServiceNow); ``get_client_credentials_token``
+    # falls back to ``scopes`` when this is unset, so the field is purely additive.
+    client_credentials_scopes: Optional[List[str]] = None
     # R18-A3 T1 (AT-554): the auth MODES this connector supports, most-preferred
     # first. The first entry is the connector's default mode (the one used when an
     # org has selected nothing). ``flow`` remains the OAuth grant used by the

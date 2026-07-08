@@ -116,6 +116,26 @@ def test_servicenow_also_supports_client_credentials():
     assert get_default_auth_mode("servicenow") == AUTH_MODE_AUTHORIZATION_CODE
 
 
+def test_teams_sharepoint_also_support_client_credentials():
+    # R18-A3 T3 (AT-556): Teams and SharePoint gain the Microsoft Graph
+    # client_credentials mode (outbound-only, no callback) alongside the default
+    # authorization_code flow, so a no-public-inbound org can authenticate them
+    # under a service identity.
+    for connector_id in ("teams", "sharepoint"):
+        modes = get_supported_auth_modes(connector_id)
+        assert AUTH_MODE_AUTHORIZATION_CODE in modes, connector_id
+        assert AUTH_MODE_CLIENT_CREDENTIALS in modes, connector_id
+        # Default stays authorization_code (first in the list) — selecting nothing
+        # preserves the existing browser flow.
+        assert get_default_auth_mode(connector_id) == AUTH_MODE_AUTHORIZATION_CODE
+        # The Graph client-credentials grant requests the .default resource scope,
+        # NOT the delegated scopes (Microsoft rejects those in this grant).
+        config = CONNECTOR_AUTH_CONFIGS[connector_id]
+        assert config.client_credentials_scopes == [
+            "https://graph.microsoft.com/.default"
+        ], connector_id
+
+
 # ---------------------------------------------------------------------------
 # Registry helpers
 # ---------------------------------------------------------------------------
