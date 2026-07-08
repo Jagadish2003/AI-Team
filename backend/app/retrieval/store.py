@@ -26,6 +26,7 @@ from typing import Any, Optional, Sequence
 
 from app import db
 from database.models.retrieval import ALL_RETRIEVAL_DDL, RetrievalChunkRecord
+from database.models.retrieval_freshness import ALL_FRESHNESS_DDL
 
 logger = logging.getLogger(__name__)
 
@@ -65,6 +66,23 @@ def ensure_retrieval_store() -> None:
                     )
                     continue
                 raise
+        con.commit()
+
+
+def ensure_freshness_schema() -> None:
+    """Create the R18-B2 freshness schema if absent (idempotent).
+
+    Runs the identical ``ALL_FRESHNESS_DDL`` the migration
+    (``0025_add_retrieval_freshness.py``) applies — the ``is_stale`` / ``stale_at``
+    columns on ``retrieval_chunks`` and the ``retrieval_refresh_queue`` table — so
+    the runtime-created schema and the migration-applied schema can never drift.
+    Every statement is idempotent (``IF NOT EXISTS``). Local/dev/test convenience;
+    the migration is the authoritative provisioning path in production.
+    """
+    with closing(db.connect()) as con:
+        cur = con.cursor()
+        for ddl in ALL_FRESHNESS_DDL:
+            cur.execute(ddl)
         con.commit()
 
 
@@ -180,6 +198,76 @@ def delete_by_artifact(org_id: str, source_system: str, source_artifact: str) ->
         deleted = cur.rowcount
         con.commit()
     return deleted
+
+
+# ---------------------------------------------------------------------------
+# Freshness invalidation  (R18-B2 T1) — always org-scoped
+# ---------------------------------------------------------------------------
+
+
+def mark_stale(org_id: str, source_system: str, source_artifact: str) -> int:
+    """Mark all of one artifact's chunks stale within an org. Returns rows marked.
+
+    The freshness subscriber (T1) calls this on a ``created``/``updated``
+    ``ingestion.artifact_changed`` event: the artifact's indexed chunks may no
+    longer reflect the source, so they are flagged second-class until the async
+    refresh worker (T3) replaces them. T4 excludes ``is_stale`` chunks from default
+    retrieval; ``stale_at`` records WHEN they went stale so freshness lag is
+    measurable (T6).
+
+    Idempotent: re-marking an already-stale artifact is a harmless no-op update
+    (``stale_at`` is only stamped on rows that were not already stale, so the
+    original staleness time is preserved). Org-scoped by construction.
+    """
+    with closing(db.connect()) as con:
+        cur = con.cursor()
+        cur.execute(
+            "UPDATE retrieval_chunks "
+            "SET is_stale = TRUE, stale_at = %s, updated_at = %s "
+            "WHERE org_id = %s AND source_system = %s AND source_artifact = %s "
+            "  AND is_stale = FALSE",
+            (
+                datetime.now(timezone.utc),
+                datetime.now(timezone.utc),
+                org_id,
+                source_system,
+                source_artifact,
+            ),
+        )
+        marked = cur.rowcount
+        con.commit()
+    return marked
+
+
+def remove_chunks(org_id: str, source_system: str, source_artifact: str) -> int:
+    """Immediately remove one artifact's chunks from retrieval. Returns rows removed.
+
+    The freshness subscriber (T1) calls this on a ``deleted``
+    ``ingestion.artifact_changed`` event. Deletion is honoured BEFORE the re-embed
+    queue, never after (Section 1 / AC2): the moment a source artifact is known to
+    be gone, its evidence must stop being retrievable — there is no window where
+    deleted content is still served as current. This is a hard delete of the rows,
+    identical in effect to :func:`delete_by_artifact`; the distinct name keeps the
+    freshness contract's vocabulary (``store.remove_chunks``) explicit at the call
+    site. Org-scoped by construction.
+    """
+    return delete_by_artifact(org_id, source_system, source_artifact)
+
+
+def count_stale(org_id: str) -> int:
+    """Return the number of stale chunks for an org (freshness metrics, T6 seed).
+
+    Org-scoped like every read. Exposed now so T1's tests can assert the
+    invalidation actually flipped the flag; T6 builds the run-health metric on it.
+    """
+    with closing(db.connect()) as con:
+        cur = con.cursor()
+        cur.execute(
+            "SELECT COUNT(*) FROM retrieval_chunks WHERE org_id = %s AND is_stale = TRUE",
+            (org_id,),
+        )
+        row = cur.fetchone()
+    return int(row[0]) if row else 0
 
 
 # ---------------------------------------------------------------------------

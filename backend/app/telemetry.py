@@ -548,6 +548,37 @@ class RetrievalQueryCompletedPayload(TypedDict, total=False):
     query_embedded: NotRequired[bool]
 
 
+class RetrievalArtifactInvalidatedPayload(TypedDict, total=False):
+    """retrieval.artifact_invalidated — R18-B2 T1, emitted once per handled change.
+
+    Makes the freshness contract observable: when a source artifact changes, the
+    freshness subscriber records what it did — marked chunks stale + queued a
+    refresh (created/updated), or removed chunks immediately (deleted). This is the
+    'staleness is allowed to exist; it is never allowed to be invisible' rule
+    (Section 1) at the invalidation moment; T6 aggregates the standing metrics.
+
+    PII GUARD: identifiers, the change kind, and counts only — NEVER artifact
+    content. ``source_system`` / ``source_artifact`` are non-sensitive system
+    identifiers, same as the emitted ingestion.artifact_changed event.
+
+    org_id:          The org the artifact belongs to (hard-scoped).
+    source_system:   The connector/source system that reported the change.
+    source_artifact: Stable id of the changed artifact (connector-defined).
+    change_kind:     'created' | 'updated' | 'deleted'.
+    action:          What the subscriber did — 'marked_stale' | 'removed'.
+    chunks_affected: How many chunks were marked stale or removed.
+    queued:          True when the artifact was queued for async refresh
+                     (created/updated); absent/False for a deletion.
+    """
+    org_id: NotRequired[str]
+    source_system: NotRequired[str]
+    source_artifact: NotRequired[str]
+    change_kind: NotRequired[str]
+    action: NotRequired[str]
+    chunks_affected: NotRequired[int]
+    queued: NotRequired[bool]
+
+
 # ---------------------------------------------------------------------------
 # Registry helpers
 # ---------------------------------------------------------------------------
@@ -641,6 +672,11 @@ register_event_type("model.embedding_completed", ModelEmbeddingCompletedPayload)
 # app.retrieval.api can emit it; record_event() raises ValueError for an
 # unregistered type, so registration must precede the first emission.
 register_event_type("retrieval.query_completed", RetrievalQueryCompletedPayload)
+# R18-B2 T1 — retrieval freshness. retrieval.artifact_invalidated is emitted once
+# per handled ingestion.artifact_changed event so invalidation is observable.
+# Registered here so app.retrieval.freshness can emit it; record_event() raises
+# ValueError for an unregistered type, so registration must precede emission.
+register_event_type("retrieval.artifact_invalidated", RetrievalArtifactInvalidatedPayload)
 
 
 # ---------------------------------------------------------------------------
