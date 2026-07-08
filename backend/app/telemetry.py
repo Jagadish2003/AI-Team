@@ -520,6 +520,34 @@ class ModelEmbeddingCompletedPayload(TypedDict, total=False):
     source: NotRequired[str]
 
 
+class RetrievalQueryCompletedPayload(TypedDict, total=False):
+    """retrieval.query_completed — R18-B1 T4, emitted once per retrieve() call.
+
+    Makes source-aware semantic retrieval observable: how many chunks a query
+    returned, whether it was source-scoped, and whether a min-score floor applied.
+
+    PII GUARD: identifiers, counts, and filter SHAPE only — NEVER the query text,
+    the chunk content, or the vectors. ``source_filter`` records the NAMES of the
+    scoped source systems ('confluence', 'slack', …), which are non-sensitive
+    system identifiers, so a caller can see how a scope affected recall.
+
+    org_id:            The org whose partition was searched (hard-scoped).
+    k:                 The requested result cap.
+    result_count:      How many ranked chunks were returned (<= k).
+    source_filter:     The normalised source systems the query was scoped to, or
+                       absent when unscoped.
+    min_score:         The similarity floor applied, or absent when none.
+    query_embedded:    False when the query could not be embedded (gateway
+                       degraded) — a retrieval miss, never a crash.
+    """
+    org_id: NotRequired[str]
+    k: NotRequired[int]
+    result_count: NotRequired[int]
+    source_filter: NotRequired[list]
+    min_score: NotRequired[float]
+    query_embedded: NotRequired[bool]
+
+
 # ---------------------------------------------------------------------------
 # Registry helpers
 # ---------------------------------------------------------------------------
@@ -608,6 +636,11 @@ register_event_type("ingestion.artifact_changed", IngestionArtifactChangedPayloa
 # emission call-site (T5-AC5).
 register_event_type("model.generation_completed", ModelGenerationCompletedPayload)
 register_event_type("model.embedding_completed", ModelEmbeddingCompletedPayload)
+# R18-B1 T4 — source-aware retrieval API. retrieval.query_completed is emitted
+# once per retrieve() call so semantic retrieval is observable. Registered here so
+# app.retrieval.api can emit it; record_event() raises ValueError for an
+# unregistered type, so registration must precede the first emission.
+register_event_type("retrieval.query_completed", RetrievalQueryCompletedPayload)
 
 
 # ---------------------------------------------------------------------------
@@ -784,6 +817,7 @@ __all__ = [
     "IngestionArtifactChangedPayload",      # R16-A1 / AT-381 (T5)
     "ModelGenerationCompletedPayload",      # R16-D1 / AT-366 (T5)
     "ModelEmbeddingCompletedPayload",       # R16-D1 / AT-366 (T5)
+    "RetrievalQueryCompletedPayload",       # R18-B1 T4
     "EVENT_PAYLOAD_TYPES",          # AT-211 alias: event_type → TypedDict schema
     "EVENT_REGISTRY",
     "EVENT_TYPE_REGISTRY",          # alias for T1-S10-C unit tests

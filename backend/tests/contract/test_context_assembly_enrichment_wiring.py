@@ -75,8 +75,10 @@ class TestAC8RoutesThroughAssembly:
         assert calls, "build_graph_context must call assemble_context()"
         assert calls["graph"]["entities"] == ents
         assert calls["graph"]["relationships"] == rels
-        # evidence_source stays None in 1.6 (no retrieval yet).
-        assert calls["evidence_source"] is None
+        # R18-B1 T6: the hook the 1.6 spine left None-capable now carries the
+        # retrieval-backed evidence SOURCE (a callable — proposals only; the
+        # assembler still decides). Never pre-fetched chunks.
+        assert callable(calls["evidence_source"])
 
     def test_assembly_policy_governs_selection_under_truncation(self):
         """Proof the policy moved: when the graph is truncated, the entity kept is

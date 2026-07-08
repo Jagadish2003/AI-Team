@@ -221,6 +221,13 @@ async def lifespan(app: FastAPI):
         scheduler as token_refresh_scheduler,
         start_scheduler as start_token_refresh_scheduler,
     )
+    # R18-B1 T3: async retrieval embedding worker. Content is indexed before it is
+    # embedded; this job drains the pending backlog off the run path so embedding
+    # lag never blocks a discovery run (AC7).
+    from .jobs.embedding_worker import (
+        scheduler as embedding_worker_scheduler,
+        start_scheduler as start_embedding_worker_scheduler,
+    )
     # LIC-1 / T4 (AT-345): periodic license re-check (gated background job).
     from .license_runtime import start_license_scheduler, stop_license_scheduler
 
@@ -229,6 +236,7 @@ async def lifespan(app: FastAPI):
         start_health_check_job()
         start_baseline_scheduler()
         start_token_refresh_scheduler()
+        start_embedding_worker_scheduler()
         start_license_scheduler()
     yield
     # AT-90: shut down scheduler on SIGTERM / graceful shutdown (wait=False).
@@ -238,6 +246,8 @@ async def lifespan(app: FastAPI):
             baseline_scheduler.shutdown(wait=False)
         if token_refresh_scheduler.running:
             token_refresh_scheduler.shutdown(wait=False)
+        if embedding_worker_scheduler.running:
+            embedding_worker_scheduler.shutdown(wait=False)
         stop_license_scheduler()
 
 
