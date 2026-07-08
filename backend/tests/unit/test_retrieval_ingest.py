@@ -59,6 +59,21 @@ class _FakeStore:
             self.rows[rec.chunk_id] = rec
         return len(records)
 
+    def replace_artifact_chunks(self, org_id, source_system, source_artifact, records):
+        """Atomic DELETE + INSERT, mirroring the real store's transaction.
+
+        A failure while inserting rolls back so the deleted chunks are restored —
+        exactly the invariant Finding 1's fix guarantees.
+        """
+        snapshot = dict(self.rows)
+        try:
+            deleted = self.delete_by_artifact(org_id, source_system, source_artifact)
+            written = self.upsert_chunks(records)
+            return deleted, written
+        except Exception:
+            self.rows = snapshot  # rollback
+            raise
+
     def for_artifact(self, org_id, source_artifact):
         return sorted(
             (
@@ -334,15 +349,15 @@ def test_one_bad_artifact_never_sinks_the_batch(fake_store):
 
 def test_store_error_is_isolated_per_artifact(fake_store, monkeypatch):
     calls = {"n": 0}
-    real_upsert = fake_store.upsert_chunks
+    real_replace = fake_store.replace_artifact_chunks
 
-    def flaky_upsert(records):
+    def flaky_replace(org_id, source_system, source_artifact, records):
         calls["n"] += 1
         if calls["n"] == 1:
             raise RuntimeError("db unavailable")
-        return real_upsert(records)
+        return real_replace(org_id, source_system, source_artifact, records)
 
-    monkeypatch.setattr(fake_store, "upsert_chunks", flaky_upsert)
+    monkeypatch.setattr(fake_store, "replace_artifact_chunks", flaky_replace)
     result = ingest_content(
         "org_a",
         [_artifact(source_artifact="page/1"), _artifact(source_artifact="page/2")],
@@ -351,6 +366,28 @@ def test_store_error_is_isolated_per_artifact(fake_store, monkeypatch):
     assert result.artifacts_indexed == 1
     assert not fake_store.for_artifact("org_a", "page/1")
     assert fake_store.for_artifact("org_a", "page/2")
+
+
+def test_store_write_failure_on_reingest_preserves_previous_chunks(fake_store, monkeypatch):
+    """Finding 1: a store WRITE failure during re-ingest must NOT destroy the
+    artifact's already-indexed chunks. The delete + insert are one transaction,
+    so a failed insert rolls back the delete."""
+    ingest_content("org_a", [_artifact(content="Original indexed body text.")])
+    before = dict(fake_store.rows)
+    assert before  # something was indexed
+
+    real_replace = fake_store.replace_artifact_chunks
+
+    def failing_replace(org_id, source_system, source_artifact, records):
+        # Simulate a write failure AFTER the delete would have run: the atomic
+        # fake restores the snapshot, so previously indexed chunks survive.
+        raise RuntimeError("db unavailable mid-write")
+
+    monkeypatch.setattr(fake_store, "replace_artifact_chunks", failing_replace)
+    result = ingest_content("org_a", [_artifact(content="A revised body.")])
+
+    assert result.artifacts_failed == 1
+    assert fake_store.rows == before  # old chunks fully intact, not destroyed
 
 
 def test_duplicate_artifact_in_one_call_last_wins(fake_store):

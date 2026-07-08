@@ -28,11 +28,13 @@ without a reachable embedding provider, and embedding lag never blocks anything
 (AC7). This module therefore imports neither the model gateway nor the embedder.
 
 Re-ingest semantics: handing over an artifact REPLACES that artifact's previous
-chunks (``store.delete_by_artifact`` then write) — producers re-send changed
-content and the substrate keeps the index consistent. Validation and chunking run
-BEFORE the delete, so a rejected artifact never destroys its previously indexed
-content. Hash-based change detection / re-embed avoidance is the freshness
-story's concern (R18-B2), built on the content hash stamped here.
+chunks (``store.replace_artifact_chunks``, a single DELETE + INSERT transaction)
+— producers re-send changed content and the substrate keeps the index consistent.
+Validation and chunking run BEFORE the store is touched, so a rejected artifact
+never destroys its previously indexed content; and because the delete + insert
+are atomic, a store WRITE failure rolls back too, so previously indexed content
+survives either way. Hash-based change detection / re-embed avoidance is the
+freshness story's concern (R18-B2), built on the content hash stamped here.
 
 Failure isolation matches the substrate's operational posture: one bad artifact
 in a batch is recorded as failed in the returned :class:`IngestResult` and never
@@ -267,8 +269,13 @@ def _ingest_one(
     """Ingest a single artifact, isolating every failure to this artifact.
 
     Ordering is load-bearing: validation, chunking, and record construction all
-    complete BEFORE the artifact's previous chunks are deleted, so a rejected or
-    unchunkable handover leaves previously indexed content fully intact.
+    complete BEFORE the store is touched, so a rejected or unchunkable handover
+    leaves previously indexed content fully intact.
+
+    The delete + insert of the replace path run as ONE transaction
+    (``store.replace_artifact_chunks``), so a store write failure rolls back and
+    also leaves the previously indexed chunks intact — the artifact is never left
+    with its old chunks deleted and no new ones written.
     """
     # Best-effort identifiers for the failure record, before validation.
     src_system = _peek(item, "source_system")
@@ -280,9 +287,11 @@ def _ingest_one(
         records = _to_records(org_id, artifact)
 
         # Replace semantics (re-ingest path): only reached once this handover is
-        # fully validated and built.
-        replaced = store.delete_by_artifact(
-            org_id, artifact.source_system, artifact.source_artifact
+        # fully validated and built. DELETE + INSERT are atomic — on any write
+        # failure the whole operation rolls back, so previously indexed chunks
+        # survive. An empty record set still atomically clears the old chunks.
+        replaced, written = store.replace_artifact_chunks(
+            org_id, artifact.source_system, artifact.source_artifact, records
         )
         if not records:
             return ArtifactIngestResult(
@@ -291,7 +300,6 @@ def _ingest_one(
                 status="empty",
                 chunks_replaced=replaced,
             )
-        written = store.upsert_chunks(records)
         return ArtifactIngestResult(
             source_system=src_system,
             source_artifact=src_artifact,

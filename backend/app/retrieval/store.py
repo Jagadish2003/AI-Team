@@ -89,6 +89,33 @@ def _to_vector_literal(vector: Sequence[float]) -> str:
 # ---------------------------------------------------------------------------
 
 
+def _insert_chunk(cur: Any, rec: RetrievalChunkRecord) -> None:
+    """Execute one INSERT ... ON CONFLICT for a chunk on an open cursor.
+
+    The single place the write SQL lives, so ``upsert_chunks`` and
+    ``replace_artifact_chunks`` share identical insert semantics. The caller owns
+    the connection and the transaction boundary (commit/rollback).
+    """
+    row = rec.to_db_row()
+    embedding = row.pop("embedding")
+    columns = list(row.keys()) + ["embedding"]
+    placeholders = ["%s"] * len(row) + (
+        ["%s::vector"] if embedding is not None else ["NULL"]
+    )
+    values: list[Any] = list(row.values())
+    if embedding is not None:
+        values.append(_to_vector_literal(embedding))
+    set_clause = ", ".join(
+        f"{col}=EXCLUDED.{col}" for col in columns if col != "chunk_id"
+    )
+    cur.execute(
+        f"INSERT INTO retrieval_chunks ({', '.join(columns)}) "
+        f"VALUES ({', '.join(placeholders)}) "
+        f"ON CONFLICT (chunk_id) DO UPDATE SET {set_clause}",
+        values,
+    )
+
+
 def upsert_chunks(records: Sequence[RetrievalChunkRecord]) -> int:
     """Insert or replace chunk records by ``chunk_id``. Returns rows written.
 
@@ -104,27 +131,48 @@ def upsert_chunks(records: Sequence[RetrievalChunkRecord]) -> int:
     with closing(db.connect()) as con:
         cur = con.cursor()
         for rec in records:
-            row = rec.to_db_row()
-            embedding = row.pop("embedding")
-            columns = list(row.keys()) + ["embedding"]
-            placeholders = ["%s"] * len(row) + (
-                ["%s::vector"] if embedding is not None else ["NULL"]
-            )
-            values: list[Any] = list(row.values())
-            if embedding is not None:
-                values.append(_to_vector_literal(embedding))
-            set_clause = ", ".join(
-                f"{col}=EXCLUDED.{col}" for col in columns if col != "chunk_id"
-            )
-            cur.execute(
-                f"INSERT INTO retrieval_chunks ({', '.join(columns)}) "
-                f"VALUES ({', '.join(placeholders)}) "
-                f"ON CONFLICT (chunk_id) DO UPDATE SET {set_clause}",
-                values,
-            )
+            _insert_chunk(cur, rec)
             written += 1
         con.commit()
     return written
+
+
+def replace_artifact_chunks(
+    org_id: str,
+    source_system: str,
+    source_artifact: str,
+    records: Sequence[RetrievalChunkRecord],
+) -> tuple[int, int]:
+    """Atomically replace one artifact's chunks: DELETE + INSERT in one transaction.
+
+    The re-ingest path (T5): a producer re-hands a changed artifact and its
+    previous chunks must be swapped for the new set. Doing the delete and the
+    inserts as ONE transaction on ONE connection closes the atomicity gap of
+    calling ``delete_by_artifact`` and ``upsert_chunks`` separately — if any
+    insert fails, the whole operation rolls back and the previously indexed
+    chunks are left fully intact (never silently destroyed).
+
+    Returns ``(deleted, written)``. Org-scoped: the DELETE binds ``org_id`` and
+    every inserted row carries it.
+    """
+    with closing(db.connect()) as con:
+        cur = con.cursor()
+        try:
+            cur.execute(
+                "DELETE FROM retrieval_chunks "
+                "WHERE org_id = %s AND source_system = %s AND source_artifact = %s",
+                (org_id, source_system, source_artifact),
+            )
+            deleted = cur.rowcount
+            written = 0
+            for rec in records:
+                _insert_chunk(cur, rec)
+                written += 1
+            con.commit()
+        except Exception:
+            con.rollback()
+            raise
+    return deleted, written
 
 
 def set_embedding(
