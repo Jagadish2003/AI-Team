@@ -1,13 +1,17 @@
-"""Contract tests — retrieval freshness over the real store (R18-B2 T1).
+"""Contract tests — retrieval freshness over the real store (R18-B2 T1 + T2).
 
 End-to-end verification of the ingestion.artifact_changed subscriber against the
 ACTUAL pgvector-backed ``retrieval_chunks`` store + ``retrieval_refresh_queue``
-(the pure-logic suite fakes them). Proves the T1 slice of Section 1:
+(the pure-logic suite fakes them). Proves Section 1:
 
 * AC1 (T1 side) — an updated artifact's chunks are marked ``is_stale = TRUE`` on
   the change event, and the artifact is queued for refresh.
 * AC2 — a deleted artifact's chunks are removed from the store IMMEDIATELY on the
   deletion event; no row survives, so deleted content is no longer retrievable.
+* AC2 (T2) — deletion is a single ATOMIC index-cleanup: ``store.purge_artifact``
+  removes the chunks AND drops any pending refresh-queue row together, so a delayed
+  refresh worker never sees an artifact that is already gone; and the cleanup is
+  directly invocable via ``remove_artifact`` without a change event.
 * Enqueue idempotency — repeated change events for one artifact collapse into a
   single pending queue row (cost proportional to change, not event volume).
 * Deletion supersedes a pending refresh — a delete drops the queue row.
@@ -26,7 +30,7 @@ import pytest
 
 from app import db
 from app.retrieval import refresh_queue, store
-from app.retrieval.freshness import on_artifact_changed
+from app.retrieval.freshness import on_artifact_changed, remove_artifact
 from database.models.retrieval import RetrievalChunkRecord
 
 
@@ -190,6 +194,65 @@ def test_deletion_drops_a_pending_refresh_row(org):
     on_artifact_changed(_event("deleted", org, "confluence", "page/x"))
     assert refresh_queue.pending_count(org) == 0
     assert _stale_flags(org, "page/x") == []
+
+
+# ---------------------------------------------------------------------------
+# AC2 (T2) — deletion is an ATOMIC, direct index-cleanup op (chunks + queue row
+# removed together), and is callable directly, not only via a change event.
+# ---------------------------------------------------------------------------
+
+
+def test_ac2_purge_removes_chunks_and_queue_row_in_one_call(org):
+    # Artifact indexed AND queued for refresh (the state after an 'updated' event).
+    _seed_chunks(org, "confluence", "page/purge", n=4)
+    on_artifact_changed(_event("updated", org, "confluence", "page/purge"))
+    assert store.count_chunks(org) == 4
+    assert refresh_queue.pending_count(org) == 1
+
+    # The atomic purge drops the chunks AND the pending refresh row together, so the
+    # substrate is never left with a refresh scheduled against content that is gone.
+    chunks_removed, queue_removed = store.purge_artifact(
+        org, "confluence", "page/purge"
+    )
+    assert (chunks_removed, queue_removed) == (4, 1)
+    assert store.count_chunks(org) == 0
+    assert refresh_queue.pending_count(org) == 0
+    assert _stale_flags(org, "page/purge") == []
+
+
+def test_remove_artifact_purges_directly_without_an_event(org):
+    # Deletion cleanup is first-class and directly invocable (e.g. compliance purge)
+    # — no ingestion.artifact_changed event required.
+    _seed_chunks(org, "git", "repo/secret.py", n=3)
+    assert store.count_chunks(org) == 3
+
+    removed = remove_artifact(org, "git", "repo/secret.py")
+
+    assert removed == 3
+    assert store.count_chunks(org) == 0
+    assert _stale_flags(org, "repo/secret.py") == []
+
+
+def test_purge_absent_artifact_is_a_noop(org):
+    # Nothing indexed and nothing queued → a harmless (0, 0), never an error.
+    assert store.purge_artifact(org, "slack", "thread/never") == (0, 0)
+
+
+def test_purge_is_org_scoped(org):
+    other = org + "_other"
+    _cleanup(other)
+    try:
+        _seed_chunks(org, "confluence", "page/shared-id", n=2)
+        _seed_chunks(other, "confluence", "page/shared-id", n=2)
+
+        # Deleting the artifact in one org must not touch the identically-keyed
+        # artifact in another org.
+        store.purge_artifact(org, "confluence", "page/shared-id")
+
+        assert store.count_chunks(org) == 0
+        assert store.count_chunks(other) == 2
+    finally:
+        _cleanup(other)
 
 
 # ---------------------------------------------------------------------------

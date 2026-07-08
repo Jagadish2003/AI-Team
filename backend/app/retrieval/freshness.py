@@ -12,11 +12,15 @@ signal has been flowing for two releases.
 What T1 does, per Section 1 (The Freshness Contract):
 
   * ``deleted``            → remove the artifact's chunks from retrieval
-                             IMMEDIATELY, before touching the refresh queue. The
-                             moment a source artifact is known gone, its evidence
-                             must stop being retrievable (Section 1 / AC2). A
-                             pending refresh for it is dropped — there is nothing
-                             left to refresh.
+                             IMMEDIATELY, before touching the refresh queue, via the
+                             direct index-cleanup entry point :func:`remove_artifact`
+                             (R18-B2 T2). The moment a source artifact is known gone,
+                             its evidence must stop being retrievable (Section 1 /
+                             AC2). Chunk removal and dropping any pending refresh for
+                             the artifact happen in ONE atomic transaction
+                             (``store.purge_artifact``) — deletion is a direct index
+                             cleanup, never a refresh, so the system stays correct
+                             even if the async refresh worker is delayed.
   * ``created`` | ``updated`` → mark the artifact's existing chunks STALE (so they
                              are no longer treated as fully-current evidence) and
                              QUEUE the artifact for asynchronous refresh. The heavy
@@ -38,10 +42,14 @@ itself observable — one ``retrieval.artifact_invalidated`` telemetry event per
 handled change — so 'staleness is never invisible' (Section 1) holds at the moment
 of change, not just in the standing metrics (T6).
 
-Scope note (T1): this delivers the subscriber wiring and the invalidation actions
-(mark stale + enqueue; immediate remove on delete). The async refresh worker is
+Scope note: T1 delivered the subscriber wiring and the invalidation actions (mark
+stale + enqueue; remove on delete). T2 makes the deletion case first-class — a
+public :func:`remove_artifact` entry point backed by the atomic
+``store.purge_artifact`` — so deleted content leaves the index (and can no longer
+influence recommendations, summaries, or LLM enrichment) with no window and no
+orphaned refresh, independently of the async worker. The async refresh worker is
 T3, the stale-exclusion policy in ``retrieve()`` is T4, and the standing freshness
-metrics are T6. Each is its own task; this one is the foundation they build on.
+metrics are T6. Each is its own task; these are the foundation they build on.
 """
 from __future__ import annotations
 
@@ -166,38 +174,72 @@ def on_artifact_changed(
 
 
 def _handle_deleted(event: ArtifactChangedEvent) -> None:
-    """Deletion path: remove chunks immediately, BEFORE the queue (Section 1/AC2).
+    """Deletion path: hand off to the direct index-cleanup entry point (T2).
 
-    Deletion is honoured before the re-embed queue, not after — the moment a source
-    artifact is known gone, its evidence must stop being retrievable, with no
-    window where deleted content is still served as current. Any pending refresh
-    for the artifact is dropped: there is nothing left to refresh.
+    The subscriber does no work of its own for a deletion beyond delegating to
+    :func:`remove_artifact`, which performs the immediate, atomic cleanup. Keeping
+    the actual removal in a public function means deletion can also be driven
+    directly (e.g. a compliance-mandated purge) on exactly the same code path the
+    change event uses.
     """
-    removed = store.remove_chunks(
-        event.org_id, event.source_system, event.source_artifact
-    )
-    # Drop a stale pending refresh for the now-deleted artifact (best-effort).
-    try:
-        refresh_queue.remove(
-            event.org_id, event.source_system, event.source_artifact
-        )
-    except Exception:  # noqa: BLE001 — queue cleanup is best-effort
-        logger.debug(
-            "freshness: could not drop queue row for deleted artifact "
-            "(org=%s artifact=%s)",
-            event.org_id,
-            event.source_artifact,
-            exc_info=True,
-        )
-    logger.info(
-        "freshness: removed %d chunk(s) for deleted artifact (org=%s "
-        "source_system=%s source_artifact=%s)",
-        removed,
+    remove_artifact(
         event.org_id,
         event.source_system,
         event.source_artifact,
+        change_kind=event.change_kind,
     )
-    _emit_invalidated(event, action="removed", chunks_affected=removed, queued=False)
+
+
+def remove_artifact(
+    org_id: str,
+    source_system: str,
+    source_artifact: str,
+    *,
+    change_kind: str = _DELETED,
+) -> int:
+    """Immediately purge one artifact from the retrieval index (R18-B2 T2).
+
+    This is the strongest freshness case handled as a DIRECT index-cleanup
+    operation, NOT a refresh: unlike an update, a deletion never waits for the async
+    refresh queue. Deleted content must stop appearing in retrieval — and stop
+    being able to influence recommendations, summaries, or LLM enrichment — as soon
+    as the deletion is known, because it may no longer be valid, visible, or allowed
+    to be cited as current evidence (a deleted Confluence page, document, Git file,
+    or message).
+
+    Deletion is honoured BEFORE the re-embed queue, not after (Section 1 / AC2). One
+    call to :func:`store.purge_artifact` removes the artifact's chunks and drops any
+    pending refresh-queue row in a SINGLE transaction, so:
+
+      * there is no window where the deleted artifact is still retrievable as
+        current; and
+      * the refresh worker (T3) never wakes to re-embed an artifact that is gone —
+        the system stays correct even if that worker is delayed.
+
+    Returns the number of chunks removed. Callable both by the ``deleted`` change
+    handler and directly (compliance / manual purge). Org-scoped by construction.
+    Any store failure propagates to :func:`on_artifact_changed`'s guard when driven
+    by an event; a direct caller is expected to handle its own errors.
+    """
+    chunks_removed, queue_removed = store.purge_artifact(
+        org_id, source_system, source_artifact
+    )
+    logger.info(
+        "freshness: purged deleted artifact (org=%s source_system=%s "
+        "source_artifact=%s chunks_removed=%d queue_rows_dropped=%d)",
+        org_id,
+        source_system,
+        source_artifact,
+        chunks_removed,
+        queue_removed,
+    )
+    _emit_invalidated(
+        ArtifactChangedEvent(org_id, source_system, source_artifact, change_kind),
+        action="removed",
+        chunks_affected=chunks_removed,
+        queued=False,
+    )
+    return chunks_removed
 
 
 def _handle_upserted(event: ArtifactChangedEvent) -> None:

@@ -1,15 +1,18 @@
-"""Unit tests for the ingestion.artifact_changed subscriber (R18-B2 T1).
+"""Unit tests for the ingestion.artifact_changed subscriber (R18-B2 T1 + T2).
 
 Pure-logic coverage of ``app.retrieval.freshness`` with the store and refresh
 queue faked, so this runs in the unit suite with no PostgreSQL dependency (the
 DB-backed end-to-end coverage lives in
 ``tests/contract/test_retrieval_freshness_contract.py``).
 
-Covers the T1 surface (Section 1 — The Freshness Contract):
+Covers the freshness subscriber surface (Section 1 — The Freshness Contract):
 
-* an updated/created event marks the artifact's chunks stale AND queues a refresh;
-* a deleted event removes the chunks IMMEDIATELY and does so BEFORE any queue
-  interaction (deletion is honoured before the re-embed queue — AC2);
+* an updated/created event marks the artifact's chunks stale AND queues a refresh
+  (T1);
+* a deleted event purges the artifact IMMEDIATELY via a single atomic
+  ``store.purge_artifact`` call, before any queue interaction — deletion is a
+  direct index cleanup, not a refresh (T2 / AC2), and ``remove_artifact`` is
+  directly invocable;
 * the ingestion->retrieval field mapping (connector_id->source_system,
   artifact_id->source_artifact) is applied;
 * malformed events are ignored, and a store failure never propagates (the
@@ -33,6 +36,8 @@ class _FakeStore:
         self.calls = []  # ordered (op, org, source_system, source_artifact)
         self.mark_stale_return = 3
         self.remove_return = 2
+        # (chunks_removed, queue_rows_removed) returned by the atomic purge (T2).
+        self.purge_return = (2, 1)
 
     def mark_stale(self, org_id, source_system, source_artifact):
         self.calls.append(("mark_stale", org_id, source_system, source_artifact))
@@ -41,6 +46,10 @@ class _FakeStore:
     def remove_chunks(self, org_id, source_system, source_artifact):
         self.calls.append(("remove_chunks", org_id, source_system, source_artifact))
         return self.remove_return
+
+    def purge_artifact(self, org_id, source_system, source_artifact):
+        self.calls.append(("purge_artifact", org_id, source_system, source_artifact))
+        return self.purge_return
 
 
 class _FakeQueue:
@@ -157,27 +166,50 @@ def test_stale_is_marked_before_the_refresh_is_queued(fakes):
 
 
 # ---------------------------------------------------------------------------
-# AC2 — deleted removes chunks IMMEDIATELY, before any queue
+# AC2 (T2) — deleted purges the artifact IMMEDIATELY, before any queue, atomically
 # ---------------------------------------------------------------------------
 
 
-def test_deleted_event_removes_chunks_and_never_marks_stale_or_enqueues(fakes):
+def test_deleted_event_purges_and_never_marks_stale_or_enqueues(fakes):
     store, queue = fakes
     on_artifact_changed(_event("deleted"))
-    assert ("remove_chunks", "org_a", "confluence", "page/1") in store.calls
+    assert ("purge_artifact", "org_a", "confluence", "page/1") in store.calls
     assert not any(c[0] == "mark_stale" for c in store.calls)
     assert not any(c[0] == "enqueue" for c in queue.calls)
 
 
-def test_deletion_removes_chunks_before_touching_the_queue(fakes):
+def test_deletion_is_a_single_atomic_purge_not_a_refresh(fakes):
     """AC2 / Section 1: deletion is honoured BEFORE the re-embed queue, not after —
-    no window where deleted content is still retrievable as current."""
+    no window where deleted content is still retrievable as current. T2 removes the
+    chunks AND drops any pending refresh row in ONE atomic ``purge_artifact`` call,
+    so the subscriber makes exactly one store call and never touches the queue on
+    the freshness (enqueue/remove) surface for a delete."""
     store, queue = fakes
     on_artifact_changed(_event("deleted"))
-    # The chunk removal is the first thing that happens.
-    assert store.calls[0] == ("remove_chunks", "org_a", "confluence", "page/1")
-    # The only queue interaction for a delete is dropping a stale pending row.
-    assert all(c[0] == "remove" for c in queue.calls)
+    # A delete is a single, direct index-cleanup op — not stale-mark + enqueue.
+    assert store.calls == [("purge_artifact", "org_a", "confluence", "page/1")]
+    # The atomic purge owns the queue-row drop inside the store transaction, so the
+    # subscriber issues no separate refresh_queue call for a delete.
+    assert queue.calls == []
+
+
+def test_remove_artifact_is_callable_directly(fakes):
+    """The deletion cleanup is a first-class, directly-invocable operation (T2) —
+    e.g. a compliance-mandated purge — on the same path the change event uses."""
+    store, queue = fakes
+    store.purge_return = (5, 0)
+    removed = freshness.remove_artifact("org_z", "git", "repo/secret.py")
+    assert removed == 5
+    assert store.calls == [("purge_artifact", "org_z", "git", "repo/secret.py")]
+    assert queue.calls == []
+
+
+def test_remove_artifact_returns_zero_when_nothing_indexed(fakes):
+    """Idempotent: purging an artifact with no indexed chunks (already gone, or
+    never indexed) is a harmless no-op that reports zero removed."""
+    store, queue = fakes
+    store.purge_return = (0, 0)
+    assert freshness.remove_artifact("org_z", "slack", "thread/none") == 0
 
 
 # ---------------------------------------------------------------------------
@@ -201,3 +233,15 @@ def test_store_failure_is_swallowed(monkeypatch, fakes):
     monkeypatch.setattr(store, "mark_stale", boom)
     # Must not raise — the subscriber runs off a telemetry event.
     on_artifact_changed(_event("updated"))
+
+
+def test_purge_failure_on_delete_is_swallowed_by_the_event_guard(monkeypatch, fakes):
+    store, queue = fakes
+
+    def boom(*a, **k):
+        raise RuntimeError("db down")
+
+    monkeypatch.setattr(store, "purge_artifact", boom)
+    # A deletion event whose purge fails must not break ingestion — the subscriber's
+    # guard swallows it (a direct remove_artifact caller would handle its own error).
+    on_artifact_changed(_event("deleted"))
