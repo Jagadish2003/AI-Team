@@ -132,9 +132,9 @@ CONNECTOR_AUTH_CONFIGS: Dict[str, ConnectorAuthConfig] = {
     "servicenow": ConnectorAuthConfig(
         connector_id="servicenow",
         flow="authorization_code",
-        # R18-A3 T1: authorization_code (default) + static (R17-D3 Addendum A
-        # user/password vault path). client_credentials is added here by AT-557.
-        supported_auth_modes=["authorization_code", "static"],
+        # R18-A3: authorization_code (default) + client_credentials (AT-557 — outbound-only,
+        # no callback) + static (R17-D3 Addendum A — user/password vault path).
+        supported_auth_modes=["authorization_code", "client_credentials", "static"],
         client_id=os.getenv("SERVICENOW_CLIENT_ID", "servicenow-dev-client-id"),
         secret_key="SERVICENOW_CLIENT_SECRET",
         token_url=f"https://{SERVICENOW_INSTANCE}.service-now.com/oauth_token.do",

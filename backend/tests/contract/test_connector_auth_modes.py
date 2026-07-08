@@ -105,6 +105,17 @@ def test_servicenow_jira_confluence_also_support_static():
         assert AUTH_MODE_STATIC in modes
 
 
+def test_servicenow_also_supports_client_credentials():
+    # ServiceNow supports three modes: authorization_code (default), client_credentials
+    # (AT-557 — outbound-only, no callback), and static (R17-D3 Addendum A).
+    modes = get_supported_auth_modes("servicenow")
+    assert AUTH_MODE_AUTHORIZATION_CODE in modes
+    assert AUTH_MODE_CLIENT_CREDENTIALS in modes
+    assert AUTH_MODE_STATIC in modes
+    # Confirm default is authorization_code (first in the list)
+    assert get_default_auth_mode("servicenow") == AUTH_MODE_AUTHORIZATION_CODE
+
+
 # ---------------------------------------------------------------------------
 # Registry helpers
 # ---------------------------------------------------------------------------
