@@ -195,6 +195,46 @@ inbound-reachable path. Two options, in order of preference:
 > deployments — it would route an auth artifact through vendor infrastructure. The fallback
 > is always a path the **customer** controls. Details in the linked package.
 
+### AUTH-2 org-approval email links in no-inbound environments (R18-A3 T7)
+
+AUTH-2 sends the CloudFulcrum/deployment admin an email with **Approve** and **Reject**
+links when a new organisation registers. These links work in a no-public-inbound
+deployment **without any inbound exposure**, because — unlike an OAuth provider callback,
+which the *provider* initiates inbound from the internet — an approval link is clicked by an
+**internal admin whose browser is already inside the deployment network**. The request is
+outbound *from the admin's browser to the internal deployment*, never inbound from the
+public internet.
+
+Two properties make this hold, and both are already built in — nothing hits a dead flow:
+
+- The **email links are built from `AGENTIQ_BACKEND_URL`** (`app/email_service.py`
+  `send_org_approval_request_email`). Set it to the **internal deployment URL** (e.g.
+  `https://agentiq.internal.bank.local`) and every approve/reject link resolves against the
+  internal host.
+- The GET link renders a **confirmation page whose form POSTs to a relative,
+  same-host path** (`/api/auth/org-approval/{approve,reject}` — see `routes_auth.py`
+  `_confirmation_page`). The state-changing POST therefore lands on whatever internal host
+  served the page; the commit step never depends on an absolute or public URL. (The GET is
+  deliberately non-mutating so email security scanners can't pre-approve an org.)
+
+The follow-on **“organisation approved”** email link (`login_url`) is built from
+**`PUBLIC_HOSTNAME`**; set that to the internal deployment URL too so the newly approved
+registrant lands on the internal login page.
+
+**Configuration for no-inbound deployments — set both to the internal deployment URL:**
+
+| Variable | Used for | No-inbound value |
+|---|---|---|
+| `AGENTIQ_BACKEND_URL` | AUTH-2 approve/reject links (backend action links) | Internal deployment URL (e.g. `https://agentiq.internal.bank.local`) |
+| `PUBLIC_HOSTNAME` | login / reset-password / invite / approved-email links | Internal deployment URL |
+
+**Limitation to communicate to the customer:** approving or rejecting an organisation
+requires an admin **with network access to the deployment** (VPN or on-network) — this is by
+design, and it is the *only* AUTH-2 constraint added by the no-inbound posture. If
+`AGENTIQ_BACKEND_URL` / `PUBLIC_HOSTNAME` are left at their `localhost` defaults, or pointed
+at a public host the internal admin cannot reach, the links will not resolve; point them at
+the internal deployment URL. No inbound firewall rule is required.
+
 ---
 
 ## Login Rate Limiting (AUTH-1)
