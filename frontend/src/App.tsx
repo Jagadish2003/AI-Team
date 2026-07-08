@@ -1,4 +1,4 @@
-import { Routes, Route, Navigate } from "react-router-dom";
+import { Routes, Route, Navigate, useLocation } from "react-router-dom";
 import { ConnectorProvider } from "./context/ConnectorContext";
 import { SourceIntakeProvider } from "./context/SourceIntakeContext";
 import { RunProvider } from "./context/RunContext";
@@ -24,12 +24,16 @@ import IntegrationHubPage from "./pages/IntegrationHubPage";
 import DiscoveryRunPage from "./pages/DiscoveryRunPage";
 import OpportunityReviewPage from "./pages/OpportunityReviewPage";
 import SourceIntelligencePage from "./pages/SourceIntelligencePage";
-import PilotRoadmapPage from "./pages/PilotRoadmapPage";
 import BlueprintPage from "./pages/BlueprintPage";
 import ExecutiveReportPage from "./pages/ExecutiveReportPage";
 import StackBuilderPage from "./pages/StackBuilderPage";
 import SettingsPage from "./pages/SettingsPage";
 import LicensePage from "./pages/LicensePage";
+
+function PilotRoadmapRedirect() {
+  const location = useLocation();
+  return <Navigate to={`/agentforce-blueprint${location.search}${location.hash}`} replace />;
+}
 
 export default function App() {
   return (
@@ -147,7 +151,10 @@ export default function App() {
                               />
                               <Route
                                 path="/pilot-roadmap"
-                                element={<PilotRoadmapPage />}
+                                // Agent Roadmap now lives at the top of
+                                // Agentforce Blueprint. Redirect preserved for
+                                // old links and Executive Report deep links.
+                                element={<PilotRoadmapRedirect />}
                               />
                               <Route
                                 path="/agentforce-blueprint"

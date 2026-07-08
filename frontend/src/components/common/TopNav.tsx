@@ -40,7 +40,6 @@ const items = [
     runScoped: true,
     sfOnly: false,
   },
-  { to: "/pilot-roadmap", label: "Agent Roadmap", runScoped: true },
   {
     to: "/agentforce-blueprint",
     label: "Agentforce Blueprint",
@@ -145,7 +144,7 @@ export default function TopNav() {
             the first item, Integration Hub, visible). */}
         <nav
           aria-label="Primary"
-          className="hidden min-w-0 shrink items-center gap-1 overflow-x-auto px-1 lg:flex"
+          className="hidden min-w-0 shrink items-center gap-0.5 overflow-x-auto px-1 lg:flex xl:gap-1"
           style={{ scrollbarWidth: "none" }}
         >
           {visibleItems.map((i) => {
@@ -157,16 +156,16 @@ export default function TopNav() {
                 key={i.to}
                 to={to}
                 aria-current={isActive ? "page" : undefined}
-                className={`shrink-0 whitespace-nowrap rounded-full px-1.5 pb-1.5 pt-1 text-[12px] font-medium leading-[16px] transition-colors focus:outline-none focus:ring-2 focus:ring-accent/50 2xl:px-2 2xl:text-[13px] 2xl:leading-[18px] ${
+                className={`shrink-0 whitespace-nowrap rounded-full border-t-2 px-2.5 py-1.5 text-[13px] font-medium leading-[18px] transition-colors focus:outline-none focus:ring-2 focus:ring-accent/50 xl:px-3 2xl:text-[14px] ${
                   isActive
-                    ? "border-t-2 border-navborder bg-gradient-to-b from-activenav text-navtext"
-                    : "text-navtext/70 hover:bg-navhover hover:text-navtext"
+                    ? "border-navborder bg-gradient-to-b from-activenav text-navtext"
+                    : "border-transparent text-navtext/70 hover:bg-navhover hover:text-navtext"
                 }`}
               >
                 {i.label}
                 {i.sfOnly && !salesforceConnected && (
                   <Zap
-                    size={12}
+                    size={13}
                     className="ml-1 inline-block shrink-0 text-amber-400"
                     aria-label="Requires Salesforce"
                   />

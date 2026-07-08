@@ -49,7 +49,6 @@ vi.mock('../components/pilot_roadmap/ReadinessPill', () => ({ default: ({ status
 
 import StageCard from '../components/pilot_roadmap/StageCard';
 import StagesGrid from '../components/pilot_roadmap/StagesGrid';
-import PilotRoadmapHeader from '../components/pilot_roadmap/PilotRoadmapHeader';
 import TopNav from '../components/common/TopNav';
 
 // ── Fixtures ──────────────────────────────────────────────────────────────────
@@ -156,21 +155,16 @@ describe('StagesGrid — T41-5 v1.1', () => {
 
   beforeEach(() => { vi.clearAllMocks(); mockSFConnected = false; });
 
-  it('AR1: header says Agent Roadmap and not Pilot Roadmap', () => {
-    render(<PilotRoadmapHeader onExport={vi.fn()} />);
-    expect(screen.getByText('Agent Roadmap')).toBeTruthy();
-    expect(screen.queryByText('Pilot Roadmap')).toBeNull();
-  });
-
-  it('AR1: nav label is Agent Roadmap while route path remains /pilot-roadmap', () => {
+  it('AR1: Agent Roadmap is merged into the Agentforce Blueprint nav destination', () => {
     render(
       <MemoryRouter>
         <TopNav />
       </MemoryRouter>,
     );
-    const link = screen.getByRole('link', { name: 'Agent Roadmap' });
+    const link = screen.getByRole('link', { name: /Agentforce Blueprint/ });
     expect(link).toBeTruthy();
-    expect(link.getAttribute('href')).toContain('/pilot-roadmap');
+    expect(link.getAttribute('href')).toContain('/agentforce-blueprint');
+    expect(screen.queryByRole('link', { name: 'Agent Roadmap' })).toBeNull();
     expect(screen.queryByText('Pilot Roadmap')).toBeNull();
   });
 

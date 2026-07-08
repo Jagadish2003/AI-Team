@@ -57,7 +57,7 @@ function BlueprintLink({ oppId }: { oppId: string }) {
         // does not also fire when the Blueprint link is clicked.
         e.stopPropagation();
         select(oppId);
-        nav(`/agentforce-blueprint?oppId=${encodeURIComponent(oppId)}`);
+        nav(`/agentforce-blueprint?oppId=${encodeURIComponent(oppId)}#blueprint-details`);
       }}
       className="flex items-center gap-1 text-[10px] text-accent hover:underline mt-1.5"
       data-testid={`blueprint-link-${oppId}`}

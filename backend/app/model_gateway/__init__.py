@@ -217,15 +217,16 @@ def generate(req: GenerationRequest) -> GenerationResult:
     return result
 
 
-def embed(texts: List[str]) -> List[List[float]]:
-    """Run an embedding call through the active provider and record telemetry.
+def _embed_with_provider(
+    provider: ModelProvider, texts: List[str]
+) -> List[List[float]]:
+    """Embed ``texts`` on an already-resolved provider and record telemetry.
 
-    Resolves the embedding provider, performs exactly one ``embed()`` call, and
-    emits exactly one ``model.embedding_completed`` telemetry event naming the
-    provider that served it (T5-AC2/AC3). Returns the provider's vectors
-    unchanged (an empty list on graceful failure).
+    The shared body of :func:`embed` and :func:`embed_with_identity`. The caller
+    owns provider resolution, so a caller that needs BOTH the vectors and the
+    provider's model identity can resolve the provider ONCE and get a consistent
+    pair (no provider-swap race between the two reads).
     """
-    provider = get_embedding_provider()
     vectors = provider.embed(texts)
     # ok = the provider returned a vector for every input (empty input is a
     # successful no-op). AC2: telemetry carries the provider name.
@@ -241,6 +242,43 @@ def embed(texts: List[str]) -> List[List[float]]:
             },
         )
     return vectors
+
+
+def embed(texts: List[str]) -> List[List[float]]:
+    """Run an embedding call through the active provider and record telemetry.
+
+    Resolves the embedding provider, performs exactly one ``embed()`` call, and
+    emits exactly one ``model.embedding_completed`` telemetry event naming the
+    provider that served it (T5-AC2/AC3). Returns the provider's vectors
+    unchanged (an empty list on graceful failure).
+    """
+    return _embed_with_provider(get_embedding_provider(), texts)
+
+
+def embed_with_identity(
+    texts: List[str],
+) -> "tuple[List[List[float]], tuple[str, str]]":
+    """Embed ``texts`` AND return the serving provider's model identity together.
+
+    Resolves the embedding provider EXACTLY ONCE and reads both the vectors and
+    the provider's ``embedding_identity()`` from that same object. This closes the
+    TOCTOU where separate ``embed()`` and ``get_embedding_provider().embedding_identity()``
+    calls could resolve two different providers across a reconfiguration/failover
+    and end up comparing a model-A query vector against a model-B identity filter
+    (R18-B1 AC8). Returns ``(vectors, (identity, version))``; identity degrades to
+    ``("", "")`` if the provider cannot report it, mirroring the embedder's
+    never-raise posture.
+    """
+    provider = get_embedding_provider()
+    vectors = _embed_with_provider(provider, texts)
+    try:
+        identity = provider.embedding_identity()
+    except Exception:  # noqa: BLE001 — identity lookup must never break the call
+        logger.warning(
+            "model_gateway: could not resolve embedding model identity", exc_info=True
+        )
+        identity = ("", "")
+    return vectors, identity
 
 
 # ---------------------------------------------------------------------------
