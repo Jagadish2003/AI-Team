@@ -15,6 +15,8 @@ Package layout (Section 1):
     evidence_source.py  - retrieval-backed evidence source for assemble_context (T6)
     freshness.py        - ingestion.artifact_changed subscriber (R18-B2 T1)
     refresh_queue.py    - durable refresh work list for the async worker (R18-B2)
+    refresh.py          - async refresh worker: re-extract, hash-compare, re-embed
+                          only what changed, atomic swap, clear stale (R18-B2 T3)
 
 Two load-bearing invariants hold across the package:
 
@@ -48,4 +50,5 @@ __all__ = [
     "ingest",
     "freshness",
     "refresh_queue",
+    "refresh",
 ]

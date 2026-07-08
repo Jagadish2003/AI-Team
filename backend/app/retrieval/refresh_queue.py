@@ -131,3 +131,80 @@ def remove(org_id: str, source_system: str, source_artifact: str) -> int:
         removed = cur.rowcount
         con.commit()
     return removed
+
+
+def orgs_with_pending(limit: int = 100) -> list[str]:
+    """Return distinct org_ids that currently have pending refresh rows (T3).
+
+    Lets the background refresh worker enumerate which tenants have queued refresh
+    work and then drain each with the org-scoped :func:`fetch_pending` — so the
+    worker covers every org while every read stays partitioned by ``org_id``. Mirror
+    of ``store.orgs_with_unembedded`` for the embedding worker. Returns only org
+    identifiers, never artifact content.
+    """
+    with closing(db.connect()) as con:
+        cur = con.cursor()
+        cur.execute(
+            "SELECT DISTINCT org_id "
+            "FROM retrieval_refresh_queue "
+            "WHERE status = 'pending' "
+            "ORDER BY org_id "
+            "LIMIT %s",
+            (int(limit),),
+        )
+        rows = cur.fetchall()
+    return [row[0] for row in rows]
+
+
+def mark_done(org_id: str, queue_id: str) -> int:
+    """Remove a queue row once its refresh has completed. Returns rows removed.
+
+    Called by the refresh worker (T3) after the artifact's chunks have been swapped
+    in atomically and its stale flag cleared. Removing the row (rather than leaving
+    a ``done`` tombstone) keeps ``pending_count`` an honest measure of outstanding
+    freshness lag: a fully-refreshed org has zero pending rows. Org-scoped — both
+    ``org_id`` and the row ``id`` bind, so one org can never clear another's work.
+    """
+    with closing(db.connect()) as con:
+        cur = con.cursor()
+        cur.execute(
+            "DELETE FROM retrieval_refresh_queue WHERE org_id = %s AND id = %s",
+            (org_id, queue_id),
+        )
+        removed = cur.rowcount
+        con.commit()
+    return removed
+
+
+def mark_failed(
+    org_id: str,
+    queue_id: str,
+    error: str,
+    max_attempts: int = 5,
+) -> str:
+    """Record a failed refresh attempt; return the row's resulting status.
+
+    Increments ``attempts`` and stores ``last_error``. A transient failure (gateway
+    blip, source unreachable) is left ``pending`` so the next worker tick retries
+    it — freshness is eventually-consistent, and a delayed refresh must not lose the
+    work. Once ``attempts`` reaches ``max_attempts`` the row is parked as ``failed``
+    so a genuinely poisonous artifact stops being retried forever while staying
+    visible for investigation (its chunks remain stale meanwhile, so nothing
+    poisoned is ever served as current — the safe direction). Org-scoped.
+    """
+    now = datetime.now(timezone.utc)
+    with closing(db.connect()) as con:
+        cur = con.cursor()
+        cur.execute(
+            "UPDATE retrieval_refresh_queue "
+            "SET attempts = attempts + 1, "
+            "    last_error = %s, "
+            "    status = CASE WHEN attempts + 1 >= %s THEN 'failed' ELSE 'pending' END, "
+            "    updated_at = %s "
+            "WHERE org_id = %s AND id = %s "
+            "RETURNING status",
+            (str(error)[:2000], int(max_attempts), now, org_id, queue_id),
+        )
+        row = cur.fetchone()
+        con.commit()
+    return row[0] if row else "unknown"
