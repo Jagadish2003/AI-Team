@@ -266,6 +266,24 @@ def test_get_link_renders_confirmation_and_does_not_mutate(register_org, client)
     assert _get_org_approval_row(r["org_id"])["approval_status"] == "active"
 
 
+def test_confirmation_form_posts_to_relative_same_host_path(register_org, client):
+    """R18-A3 T7 / AC6: the confirmation page's form action is a RELATIVE, same-host
+    path (no scheme/host), so the state-changing POST lands on whatever internal host
+    served the page. In a no-public-inbound deployment the whole flow — GET link and
+    the commit POST — stays on the internal deployment URL with no inbound exposure."""
+    r = register_org()
+    page = _approve_page(client, r["approval_token"], r["org_id"])
+    assert page.status_code == 200, page.text
+    text = page.text
+
+    # The form posts to a root-relative path, never an absolute URL.
+    assert 'action="/api/auth/org-approval/approve' in text
+    # No absolute scheme in the form action — it inherits the serving host.
+    assert 'action="http://' not in text
+    assert 'action="https://' not in text
+    assert "localhost" not in text.lower()
+
+
 # ---------------------------------------------------------------------------
 # T8-AC6 — an expired token is rejected (400) and the org state is unchanged
 # ---------------------------------------------------------------------------
