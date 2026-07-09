@@ -165,14 +165,24 @@ def retrieve(
     # BOTH ensures a query never compares against vectors from a different model or
     # model version. Resolved once so the provider is not looked up twice.
     model_identity, model_version = embedder.active_embedding_model()
+    if not model_identity or not model_version:
+        # Without a concrete active model pair, no stored vector can be proven
+        # compatible with the query vector. Returning no candidates is safer than
+        # dropping the model filter and accidentally comparing generations.
+        logger.debug("retrieve: active embedding model unavailable; returning no candidates")
+        _emit_query_telemetry(
+            org_id, k, 0, sources, min_score, query_embedded=False,
+            include_stale=include_stale, stale_count=0,
+        )
+        return []
     rows = store.search(
         org_id=org_id,
         query_vector=query_vector,
         k=k,
         source_filter=sources,
         min_score=min_score,
-        embedding_model=model_identity or None,
-        embedding_model_version=model_version or None,
+        embedding_model=model_identity,
+        embedding_model_version=model_version,
         include_stale=include_stale,
     )
 

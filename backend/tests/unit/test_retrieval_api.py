@@ -246,6 +246,19 @@ def test_gateway_embedding_miss_returns_empty(monkeypatch):
     assert payload["query_embedded"] is False
 
 
+def test_active_model_identity_miss_returns_empty_without_search(monkeypatch):
+    rec = _Recorder().install(monkeypatch, rows=[_row("c1", 0.9)])
+    monkeypatch.setattr(api.embedder, "active_embedding_model", lambda: ("", ""))
+
+    out = api.retrieve("org_x", "q")
+
+    assert out == []
+    assert rec.search_calls == []  # never widen to cross-generation search
+    et, payload = rec.telemetry[-1]
+    assert et == "retrieval.query_completed"
+    assert payload["query_embedded"] is False
+
+
 # ---------------------------------------------------------------------------
 # Observability (telemetry) — counts and shape only, no query text/content
 # ---------------------------------------------------------------------------

@@ -69,6 +69,7 @@ from .auth.configs import CONNECTOR_AUTH_CONFIGS
 from .auth.secrets import validate_all_secrets
 from .middleware.tenancy import get_current_org_id, register_tenancy
 from .middleware.license_gate import register_license_gate
+from .retrieval.default_resolvers import register_default_content_resolvers
 from .rbac import require_role, seed_owner
 
 _DEV_USER = os.getenv("DEV_JWT", "dev-token-change-me")
@@ -241,6 +242,9 @@ async def lifespan(app: FastAPI):
     from .license_runtime import start_license_scheduler, stop_license_scheduler
 
     background_jobs_disabled = os.getenv("AGENTIQ_DISABLE_BACKGROUND_JOBS") == "1"
+    # R18-B2 T3: teach the refresh worker how to re-extract changed artifacts from
+    # the production connectors before the worker starts draining its queue.
+    register_default_content_resolvers()
     if not background_jobs_disabled:
         start_health_check_job()
         start_baseline_scheduler()

@@ -17,6 +17,7 @@ Package layout (Section 1):
     refresh_queue.py    - durable refresh work list for the async worker (R18-B2)
     refresh.py          - async refresh worker: re-extract, hash-compare, re-embed
                           only what changed, atomic swap, clear stale (R18-B2 T3)
+    default_resolvers.py - production connector resolver registration for refresh
     metrics.py          - freshness-lag metrics per org: pending events, stale
                           chunks, backfill progress (R18-B2 T6, served by
                           routes_retrieval.py)
@@ -54,5 +55,6 @@ __all__ = [
     "freshness",
     "refresh_queue",
     "refresh",
+    "default_resolvers",
     "metrics",
 ]
