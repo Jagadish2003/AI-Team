@@ -60,6 +60,7 @@ from .routes_temporal import register_temporal_routes
 from .routes_entities import register_entities_routes
 from .routes_causal import register_causal_routes
 from .routes_graph import register_graph_routes
+from .routes_retrieval import register_retrieval_routes
 from .routes_auth import register_auth_routes
 from .routes_license import register_license_routes
 from .routes_ingestion import register_ingestion_routes
@@ -299,6 +300,8 @@ register_workspace_routes(app)
 register_entities_routes(app)
 register_causal_routes(app)
 register_graph_routes(app)
+# R18-B2 T6: retrieval freshness metrics for the run-health dashboard (AC7).
+register_retrieval_routes(app)
 register_auth_routes(app)
 # LIC-1 / T6 (AT-347): Owner-only license status + update-key admin routes.
 register_license_routes(app)
