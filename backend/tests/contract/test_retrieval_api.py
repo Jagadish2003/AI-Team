@@ -208,3 +208,62 @@ def test_ranked_results_capped_at_k(org):
     # Best-first: the "alpha" chunk (nearest the query) ranks top.
     assert hits[0].source_artifact == "a/1"
     assert hits[0].similarity >= hits[1].similarity  # descending similarity
+
+
+# ---------------------------------------------------------------------------
+# R18-B2 T4 / AC1 — stale chunks excluded by default, included on the flag
+# ---------------------------------------------------------------------------
+
+
+def _freshness_schema_available() -> bool:
+    try:
+        con = db.connect()
+        try:
+            cur = con.cursor()
+            cur.execute(
+                "SELECT column_name FROM information_schema.columns "
+                "WHERE table_name = 'retrieval_chunks' AND column_name = 'is_stale'"
+            )
+            return cur.fetchone() is not None
+        finally:
+            con.close()
+    except Exception:
+        return False
+
+
+_freshness = pytest.mark.skipif(
+    not _freshness_schema_available(),
+    reason="retrieval freshness schema (0025) not present in this environment",
+)
+
+
+@_freshness
+def test_ac1_stale_chunk_excluded_by_default_and_included_on_flag(org):
+    from app.retrieval import store as store_mod
+
+    _index(org, "alpha content", source_system="confluence", source_artifact="page/1")
+    embedder.embed_pending_for_org(org)
+
+    # Fresh: retrievable by default.
+    assert retrieve(org, "alpha", k=10)
+
+    # The artifact changes upstream → its chunks are marked stale.
+    marked = store_mod.mark_stale(org, "confluence", "page/1")
+    assert marked == 1
+
+    # Default retrieval now excludes it — a finding is never based on stale evidence.
+    assert retrieve(org, "alpha", k=10) == []
+
+    # The explicit policy flag includes it, and the result is flagged stale so the
+    # caller can tell fresh from stale.
+    with_stale = retrieve(org, "alpha", k=10, include_stale=True)
+    assert len(with_stale) == 1
+    assert with_stale[0].is_stale is True
+
+
+@_freshness
+def test_fresh_results_report_not_stale(org):
+    _index(org, "beta content", source_artifact="b/1")
+    embedder.embed_pending_for_org(org)
+    hits = retrieve(org, "beta", k=5)
+    assert hits and all(h.is_stale is False for h in hits)

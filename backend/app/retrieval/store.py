@@ -457,6 +457,7 @@ def search(
     min_score: Optional[float] = None,
     embedding_model: Optional[str] = None,
     embedding_model_version: Optional[str] = None,
+    include_stale: bool = False,
 ) -> list[dict[str, Any]]:
     """Return this org's most-similar chunks to ``query_vector`` (cosine similarity).
 
@@ -471,16 +472,31 @@ def search(
                        vectors produced by a specific model, so vectors from
                        different models are never compared (AC8). ``retrieve()``
                        (T4) passes the active model here.
+    ``include_stale``  when ``False`` (default) stale chunks are excluded at the
+                       SQL layer (``is_stale = FALSE``) so a source artifact that
+                       changed is not served as current evidence until refreshed
+                       (R18-B2 T4 / AC1). Set ``True`` to include stale rows for a
+                       caller that explicitly wants them (or that surfaces the
+                       staleness itself, as the context-assembly evidence source
+                       does so the exclusion stays visible on the selection log —
+                       AC6). The served-first-class-only-when-fresh index
+                       ``idx_retrieval_chunks_org_stale`` covers this predicate.
 
     Only embedded rows participate (``embedding IS NOT NULL``): un-embedded
     content is absent from retrieval, never an error (AC7). Returns raw row dicts
-    each carrying a ``similarity`` score; ``api.retrieve()`` maps these to
-    ``RetrievedChunk`` and mints the per-result ``retrieval_result_id``.
+    each carrying a ``similarity`` score and its ``is_stale`` flag; ``api.retrieve()``
+    maps these to ``RetrievedChunk`` and mints the per-result
+    ``retrieval_result_id``.
     """
     literal = _to_vector_literal(query_vector)
 
     where = ["org_id = %s", "embedding IS NOT NULL"]
     params: list[Any] = [org_id]
+    if not include_stale:
+        # Freshness contract (R18-B2 / AC1): stale chunks are second-class and
+        # excluded from default retrieval until the async refresh worker replaces
+        # them. A no-parameter literal, so it never shifts the vector param order.
+        where.append("is_stale = FALSE")
     if source_filter:
         where.append("source_system = ANY(%s)")
         params.append(list(source_filter))
@@ -498,7 +514,7 @@ def search(
     sql = (
         "SELECT chunk_id, org_id, content, content_hash, content_type, "
         "       source_system, source_artifact, source_timestamp, chunk_position, "
-        "       embedding_model, embedding_model_version, "
+        "       embedding_model, embedding_model_version, is_stale, "
         "       (1 - (embedding <=> %s::vector)) AS similarity "
         "FROM retrieval_chunks "
         f"WHERE {' AND '.join(where)} "

@@ -15,6 +15,11 @@ The policy is applied as a FIXED SEQUENCE of rules (document Section 2). The
 order itself is part of the contract — changing it changes results — so it is
 explicit and tested here, not incidental:
 
+  0. Exclude STALE candidates (a source artifact changed and its chunks are not
+     yet refreshed) unless the policy opts in via ``include_stale``. Stale is
+     the strongest exclusion — outdated evidence must never be served as current,
+     regardless of its confidence — so it runs before the floor. Every stale
+     exclusion is logged as ``excluded: stale`` (R18-B2 T4).              [AC6]
   1. Exclude anything below ``confidence_floor`` (weak context must never
      displace stronger context, even when budget remains).               [AC2]
   2. Partition each kind into ``observed`` and ``inferred`` candidates.
@@ -86,6 +91,10 @@ DECISION_EXCLUDED = "excluded"
 REASON_BELOW_FLOOR = "below_confidence_floor"
 REASON_BUDGET_EXHAUSTED = "budget_exhausted"
 REASON_RANKED_OUT = "ranked_out"
+# R18-B2 T4: a candidate excluded because its source artifact changed and its
+# chunks are stale (not yet re-embedded). Surfaced on the selection log as
+# 'excluded: stale' so freshness exclusions are visible, never silent (AC6).
+REASON_STALE = "stale"
 
 
 def _reason_included(position: int) -> str:
@@ -106,6 +115,7 @@ __all__ = [
     "REASON_BELOW_FLOOR",
     "REASON_BUDGET_EXHAUSTED",
     "REASON_RANKED_OUT",
+    "REASON_STALE",
 ]
 
 
@@ -129,6 +139,7 @@ class AssemblyPolicy:
     confidence_floor: float = 0.0          # exclude context below this confidence
     observed_first: bool = True            # observed strictly before inferred
     freshness_halflife_days: float = 30.0  # older context weighed down
+    include_stale: bool = False            # R18-B2 T4: admit stale candidates?
 
 
 @dataclass(frozen=True)
@@ -150,6 +161,7 @@ class Candidate:
     source_timestamp: Optional[str] = None  # ISO-8601; None => unknown freshness
     payload: Any = None
     freshness_days: Optional[float] = None  # precomputed age in days, if known
+    is_stale: bool = False                  # R18-B2 T4: source changed, not refreshed
 
 
 @dataclass
@@ -314,11 +326,25 @@ def select_candidates(
         reference = _reference_timestamp(candidates)
     halflife = policy.freshness_halflife_days
 
-    # Rule 1 — exclude anything below the confidence floor. Done first so weak
+    # Rule 0 — exclude STALE candidates unless the policy opts in. A stale chunk's
+    # source artifact changed and its content is not yet refreshed; serving it as
+    # current is the failure mode the freshness contract exists to prevent, so it
+    # is excluded ahead of the confidence floor and regardless of confidence
+    # (R18-B2 T4 / AC1). The exclusion is recorded as 'excluded: stale' below so
+    # the decision is visible on the selection log, not a silent filter (AC6).
+    stale: List[Candidate] = []
+    fresh: List[Candidate] = []
+    for candidate in candidates:
+        if candidate.is_stale and not policy.include_stale:
+            stale.append(candidate)
+        else:
+            fresh.append(candidate)
+
+    # Rule 1 — exclude anything below the confidence floor. Done next so weak
     # context can never occupy budget ahead of stronger context (AC2).
     below_floor: List[Candidate] = []
     eligible: List[Candidate] = []
-    for candidate in candidates:
+    for candidate in fresh:
         if _confidence(candidate) < policy.confidence_floor:
             below_floor.append(candidate)
         else:
@@ -348,9 +374,12 @@ def select_candidates(
     excluded = ordered[cap:]
 
     # Rule 6 — record every decision. The log is fully deterministic regardless
-    # of input order (AC1): below-floor entries sorted by id, then included items
-    # by rank position, then ranked/budget exclusions in ranked order.
+    # of input order (AC1): stale exclusions sorted by id, then below-floor entries
+    # sorted by id, then included items by rank position, then ranked/budget
+    # exclusions in ranked order.
     log: List[dict] = []
+    for candidate in sorted(stale, key=lambda c: c.candidate_id):
+        log.append(_log_entry(candidate, DECISION_EXCLUDED, REASON_STALE, reference))
     for candidate in sorted(below_floor, key=lambda c: c.candidate_id):
         log.append(_log_entry(candidate, DECISION_EXCLUDED, REASON_BELOW_FLOOR, reference))
     for position, candidate in enumerate(selected, start=1):
@@ -541,6 +570,7 @@ def _evidence_to_candidates(
                 confidence=float(_get(chunk, "confidence", 0.0) or 0.0),
                 source_timestamp=_get(chunk, "source_timestamp"),
                 freshness_days=_coerce_float(_get(chunk, "freshness_days")),
+                is_stale=bool(_get(chunk, "is_stale", False)),
                 payload=chunk,
             )
         )

@@ -27,7 +27,8 @@ from app.retrieval import api
 # ---------------------------------------------------------------------------
 
 
-def _row(chunk_id, similarity, source_system="confluence", source_artifact="page/1"):
+def _row(chunk_id, similarity, source_system="confluence", source_artifact="page/1",
+         is_stale=False):
     return {
         "chunk_id": chunk_id,
         "org_id": "org_x",
@@ -40,6 +41,7 @@ def _row(chunk_id, similarity, source_system="confluence", source_artifact="page
         "chunk_position": 0,
         "embedding_model": "fake:m",
         "embedding_model_version": "1",
+        "is_stale": is_stale,
         "similarity": similarity,
     }
 
@@ -132,6 +134,65 @@ def test_min_score_passed_through(monkeypatch):
     rec = _Recorder().install(monkeypatch, rows=[])
     api.retrieve("org_x", "q", min_score=0.6)
     assert rec.search_calls[0]["min_score"] == 0.6
+
+
+# ---------------------------------------------------------------------------
+# Stale handling (R18-B2 T4 / AC1) — excluded by default, policy-flagged
+# ---------------------------------------------------------------------------
+
+
+def test_include_stale_defaults_false_and_is_passed_to_store(monkeypatch):
+    rec = _Recorder().install(monkeypatch, rows=[])
+    api.retrieve("org_x", "q")
+    # Default excludes stale: the store is told not to include stale rows.
+    assert rec.search_calls[0]["include_stale"] is False
+
+
+def test_include_stale_true_is_passed_to_store(monkeypatch):
+    rec = _Recorder().install(monkeypatch, rows=[])
+    api.retrieve("org_x", "q", include_stale=True)
+    assert rec.search_calls[0]["include_stale"] is True
+
+
+def test_is_stale_flag_mapped_onto_results(monkeypatch):
+    _Recorder().install(
+        monkeypatch,
+        rows=[_row("fresh", 0.9, is_stale=False), _row("stale", 0.8, is_stale=True)],
+    )
+    out = api.retrieve("org_x", "q", include_stale=True)
+    by_id = {c.chunk_id: c for c in out}
+    assert by_id["fresh"].is_stale is False
+    assert by_id["stale"].is_stale is True
+
+
+def test_stale_flag_defaults_false_when_row_omits_it(monkeypatch):
+    # A row without an is_stale key (e.g. an older projection) maps to not-stale,
+    # never raises.
+    row = _row("c1", 0.9)
+    row.pop("is_stale")
+    _Recorder().install(monkeypatch, rows=[row])
+    out = api.retrieve("org_x", "q")
+    assert out[0].is_stale is False
+
+
+def test_telemetry_records_include_stale_flag(monkeypatch):
+    rec = _Recorder().install(monkeypatch, rows=[])
+    api.retrieve("org_x", "q")
+    payload = [e for e in rec.telemetry if e[0] == "retrieval.query_completed"][0][1]
+    assert payload["include_stale"] is False
+    # stale_count is only carried when stale chunks are being included.
+    assert "stale_count" not in payload
+
+
+def test_telemetry_records_stale_count_when_including_stale(monkeypatch):
+    rec = _Recorder().install(
+        monkeypatch,
+        rows=[_row("a", 0.9, is_stale=True), _row("b", 0.8, is_stale=False)],
+    )
+    api.retrieve("org_x", "q", include_stale=True)
+    payload = [e for e in rec.telemetry if e[0] == "retrieval.query_completed"][0][1]
+    assert payload["include_stale"] is True
+    assert payload["stale_count"] == 1
 
 
 # ---------------------------------------------------------------------------
