@@ -31,12 +31,25 @@ foundation the deletion-propagation / freshness-removal work (AT-533) builds on.
 The remaining R18-A2 subtasks slot into the clearly-marked seams here without
 re-plumbing this mechanism:
 
-  * per-repo include/exclude path configuration — AT-530 (``_select_paths``);
+  * per-repo include/exclude path configuration — AT-530 (IMPLEMENTED:
+    ``_select_paths`` / :class:`PathFilter` / :data:`DEFAULT_EXCLUDE_GLOBS`);
   * secret-pattern scan + redaction before the substrate — AT-531
     (``_secret_scan``, currently a pass-through);
   * commit-message corpus ingestion — AT-532;
   * deletion propagation into retrieval freshness — AT-533;
   * structural (tree/inventory) metadata — AT-534.
+
+Include/exclude path filtering (R18-A2 §1 / AT-530)
+---------------------------------------------------
+Content is source and text files, not third-party code or machine-generated
+noise, so vendored dependencies, generated/build output and dependency lockfiles
+are excluded by default (:data:`DEFAULT_EXCLUDE_GLOBS`). The defaults are
+editable per org (fixture ``path_defaults`` / ``GIT_CONTENT_PATH_DEFAULTS``) and
+per repo (each repo's ``include`` allow-list, ``exclude`` globs, and
+``use_default_excludes`` toggle). The filter (:class:`PathFilter`) is applied to
+BOTH the first-load tree and the incremental diff, so an excluded path is never
+ingested however it was surfaced (AC4). Binary files are additionally skipped-
+with-reason and never indexed as garbage text (AC7).
 
 Content handover (R18-A2 §1, and the R18-B1 producer contract)
 --------------------------------------------------------------
@@ -87,6 +100,7 @@ import logging
 import os
 import subprocess
 from dataclasses import dataclass, field
+from fnmatch import fnmatchcase
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple
 
@@ -119,7 +133,62 @@ _DEFAULT_BATCH_SIZE = 100
 #: Env var (live mode) holding a JSON array of repo configs for the deployment.
 _REPOS_ENV = "GIT_CONTENT_REPOS"
 
+#: Env var (live mode) holding an org-level path-filter defaults object
+#: (``{"include": [...], "exclude": [...], "use_default_excludes": bool}``) applied
+#: to every repo unless the repo overrides it — the "editable per org" surface.
+_PATH_DEFAULTS_ENV = "GIT_CONTENT_PATH_DEFAULTS"
+
 _GIT_TIMEOUT = 120
+
+#: Sensible built-in exclude globs (R18-A2 §1 / AT-530): vendored dependencies,
+#: generated/build output, and dependency lockfiles are excluded by default so a
+#: content run indexes source, not third-party code or machine-generated noise. A
+#: pattern with no ``/`` matches that name as any path segment at any depth
+#: (gitignore-style); a pattern with a ``/`` matches the whole path or a subtree.
+#: An org opts out with ``use_default_excludes: false`` or re-includes a specific
+#: path with an ``include`` allow-list — see :class:`PathFilter`.
+DEFAULT_EXCLUDE_GLOBS: Tuple[str, ...] = (
+    # ── vendored dependencies ──
+    "node_modules",
+    "bower_components",
+    "vendor",
+    "third_party",
+    "third-party",
+    ".venv",
+    "venv",
+    "site-packages",
+    "Pods",
+    # ── generated / build output ──
+    "dist",
+    "build",
+    "out",
+    "target",
+    "bin",
+    "obj",
+    "__pycache__",
+    ".next",
+    ".nuxt",
+    "coverage",
+    "generated",
+    "*.min.js",
+    "*.min.css",
+    "*.map",
+    "*_pb2.py",
+    "*.pb.go",
+    "*.generated.*",
+    # ── dependency lockfiles ──
+    "package-lock.json",
+    "npm-shrinkwrap.json",
+    "yarn.lock",
+    "pnpm-lock.yaml",
+    "poetry.lock",
+    "Pipfile.lock",
+    "Gemfile.lock",
+    "composer.lock",
+    "Cargo.lock",
+    "go.sum",
+    "packages.lock.json",
+)
 
 # git diff --name-status status letters -> our ChangeKind.
 _STATUS_TO_KIND = {
@@ -222,6 +291,79 @@ def _build_evidence_pointer(
 
 
 # ---------------------------------------------------------------------------
+# Include/exclude path filtering (AT-530)
+# ---------------------------------------------------------------------------
+
+
+def _as_str_tuple(value: Any) -> Tuple[str, ...]:
+    """Coerce a config value to a tuple of non-empty glob strings.
+
+    Tolerant of the shapes a hand-edited config produces: a list of patterns, a
+    single string pattern, or nothing. Blank entries are dropped so an empty
+    string never becomes a match-everything glob.
+    """
+    if value is None:
+        return ()
+    if isinstance(value, str):
+        value = [value]
+    if not isinstance(value, (list, tuple)):
+        return ()
+    return tuple(str(v).strip() for v in value if v is not None and str(v).strip())
+
+
+def _match_path(path: str, pattern: str) -> bool:
+    """True when ``path`` matches a single include/exclude glob ``pattern``.
+
+    gitignore-flavoured, deterministic and case-sensitive (git paths are):
+
+      * a pattern with NO ``/`` matches that name as ANY path segment at any depth
+        — ``node_modules`` excludes ``frontend/node_modules/x.js``; ``*.min.js``
+        matches the basename anywhere; ``yarn.lock`` matches it in any directory;
+      * a pattern WITH a ``/`` is matched against the whole path, and a directory
+        prefix (``src/generated``) also matches everything beneath it.
+    """
+    pattern = pattern.strip().strip("/")
+    if not pattern:
+        return False
+    path = path.strip().lstrip("/")
+    if "/" not in pattern:
+        return any(fnmatchcase(seg, pattern) for seg in path.split("/"))
+    if fnmatchcase(path, pattern):
+        return True
+    return path == pattern or path.startswith(pattern + "/")
+
+
+@dataclass(frozen=True)
+class PathFilter:
+    """Resolves whether a repo path is in scope for content ingestion (AT-530).
+
+    Two ordered rules, so behaviour is predictable and re-includable:
+
+      1. ``include`` is an allow-list: when non-empty, a path must match at least
+         one include glob to be a candidate (empty ``include`` admits everything);
+      2. ``exclude`` then removes any candidate that matches an exclude glob.
+
+    The effective ``exclude`` is the built-in :data:`DEFAULT_EXCLUDE_GLOBS`
+    (vendored/generated/lockfiles) unioned with the repo/org excludes — unless the
+    built-ins are disabled. Reusable by a future GitLab/Bitbucket content source
+    (R18-A2 §4, "General mechanism first").
+    """
+
+    include: Tuple[str, ...] = ()
+    exclude: Tuple[str, ...] = ()
+
+    def allows(self, path: str) -> bool:
+        p = (path or "").strip().lstrip("/")
+        if not p:
+            return False
+        if self.include and not any(_match_path(p, pat) for pat in self.include):
+            return False
+        if any(_match_path(p, pat) for pat in self.exclude):
+            return False
+        return True
+
+
+# ---------------------------------------------------------------------------
 # Repo configuration + the file/diff model
 # ---------------------------------------------------------------------------
 
@@ -233,12 +375,21 @@ class GitRepoConfig:
     Content is opt-in per repository (R18-A2 §4), so an org explicitly declares
     each repo. Offline the config comes from the fixture; live from
     ``GIT_CONTENT_REPOS``. ``path`` is the local clone directory (live only).
+
+    Per-repo path filtering (AT-530): ``include`` / ``exclude`` are glob lists and
+    ``use_default_excludes`` toggles the built-in vendored/generated/lockfile
+    defaults. These carry the values already merged with the org-level defaults
+    (repo settings win); the built-in defaults are applied when the filter is
+    built (:meth:`GitContentIngestor._filter_for`).
     """
 
     repo_id: str
     branch: str = "HEAD"
     path: Optional[str] = None
     metadata: Dict[str, Any] = field(default_factory=dict)
+    include: Tuple[str, ...] = ()
+    exclude: Tuple[str, ...] = ()
+    use_default_excludes: bool = True
 
 
 @dataclass
@@ -303,6 +454,9 @@ class GitContentIngestor(ChangeBasedIngestor):
         # lazy-imported so this discovery module carries no import-time dependency
         # on the app.retrieval package). Tests pass a fake to avoid the store/DB.
         self._ingest_fn = ingest_fn
+        # Per-repo PathFilter memo (AT-530): built once per repo per run, since the
+        # configured include/exclude rules are stable for the life of the ingestor.
+        self._filter_cache: Dict[str, PathFilter] = {}
 
     # ── ChangeBasedIngestor contract ────────────────────────────────────────
     def ingest_changes(
@@ -544,6 +698,11 @@ class GitContentIngestor(ChangeBasedIngestor):
         JSON array configured per deployment. Either source is explicit
         configuration — no repository is auto-discovered.
         """
+        defaults = self._path_defaults()
+        default_include = _as_str_tuple(defaults.get("include"))
+        default_exclude = _as_str_tuple(defaults.get("exclude"))
+        default_use_defaults = bool(defaults.get("use_default_excludes", True))
+
         repos: List[GitRepoConfig] = []
         seen: set[str] = set()
         for entry in self._raw_repo_entries():
@@ -558,15 +717,56 @@ class GitContentIngestor(ChangeBasedIngestor):
                 continue
             seen.add(repo_id)
             meta = entry.get("metadata") if isinstance(entry.get("metadata"), dict) else {}
+
+            # Path-filter config (AT-530): a repo's own include allow-list overrides
+            # the org default; excludes UNION the org defaults with the repo's; and
+            # use_default_excludes falls back org -> built-in True. The built-in
+            # DEFAULT_EXCLUDE_GLOBS are layered in when the filter is built.
+            repo_include = entry.get("include")
+            include = (
+                _as_str_tuple(repo_include) if repo_include is not None else default_include
+            )
+            exclude = default_exclude + _as_str_tuple(entry.get("exclude"))
+            use_default_excludes = (
+                bool(entry["use_default_excludes"])
+                if "use_default_excludes" in entry
+                else default_use_defaults
+            )
+
             repos.append(
                 GitRepoConfig(
                     repo_id=repo_id,
                     branch=str(entry.get("branch") or "HEAD"),
                     path=entry.get("path"),
                     metadata=meta or {},
+                    include=include,
+                    exclude=exclude,
+                    use_default_excludes=use_default_excludes,
                 )
             )
         return repos
+
+    def _path_defaults(self) -> Dict[str, Any]:
+        """Org-level path-filter defaults applied to every repo (AT-530).
+
+        The "editable per org" surface: offline it is the fixture's top-level
+        ``path_defaults`` object; live it is the ``GIT_CONTENT_PATH_DEFAULTS`` env
+        JSON object. A repo's own settings override these; these override the
+        built-in defaults. Absent/malformed → an empty object (built-ins only).
+        """
+        if not is_live():
+            data = self._fixture().get("path_defaults")
+            return data if isinstance(data, dict) else {}
+        raw = os.getenv(_PATH_DEFAULTS_ENV, "").strip()
+        if not raw:
+            return {}
+        try:
+            parsed = json.loads(raw)
+        except (TypeError, ValueError) as exc:
+            raise GitContentError(
+                f"{_PATH_DEFAULTS_ENV} is not valid JSON: {type(exc).__name__}"
+            ) from exc
+        return parsed if isinstance(parsed, dict) else {}
 
     def _raw_repo_entries(self) -> List[Dict[str, Any]]:
         if not is_live():
@@ -660,13 +860,28 @@ class GitContentIngestor(ChangeBasedIngestor):
         return items
 
     def _select_paths(self, repo: GitRepoConfig, path: str) -> bool:
-        """Per-repo include/exclude path filter.
+        """True when ``path`` is in scope for content ingestion in ``repo`` (AC4).
 
-        Seam for AT-530 (vendored/generated/lockfile exclusion, per-org editable).
-        AT-529 admits every path; AT-530 replaces this body with the configured
-        include/exclude rules.
+        Delegates to the repo's memoised :class:`PathFilter`: vendored/generated/
+        lockfile paths are excluded by the built-in defaults (unless the repo
+        opted out), plus any per-repo/org include allow-list and excludes. Applied
+        to BOTH the first-load tree and the incremental diff, so an excluded path
+        is never ingested regardless of how it was surfaced.
         """
-        return True
+        return self._filter_for(repo).allows(path)
+
+    def _filter_for(self, repo: GitRepoConfig) -> PathFilter:
+        """Build (once per repo) the effective PathFilter, layering the built-in
+        DEFAULT_EXCLUDE_GLOBS under the repo/org excludes unless disabled."""
+        cached = self._filter_cache.get(repo.repo_id)
+        if cached is not None:
+            return cached
+        exclude: Tuple[str, ...] = repo.exclude
+        if repo.use_default_excludes:
+            exclude = DEFAULT_EXCLUDE_GLOBS + exclude
+        path_filter = PathFilter(include=repo.include, exclude=exclude)
+        self._filter_cache[repo.repo_id] = path_filter
+        return path_filter
 
     def _reader(self, org_id: str, repo: GitRepoConfig) -> "_RepoReader":
         if not is_live():
