@@ -32,14 +32,14 @@
       "text": "All production credentials must be stored in the vault. Never commit secrets to source control.\n"
     },
     {
-      "artifact_id": "reports/q2-review.pdf",
-      "filename": "q2-review.pdf",
-      "location": "reports",
-      "content_type": "application/pdf",
-      "signature": "sig-q2review-1",
+      "artifact_id": "diagrams/architecture.vsdx",
+      "filename": "architecture.vsdx",
+      "location": "diagrams",
+      "content_type": "application/vnd.ms-visio.drawing",
+      "signature": "sig-arch-1",
       "source_timestamp": "2026-06-11T09:00:00Z",
-      "provenance": {"author": "Leadership"},
-      "content_b64": "JVBERi0xLjQKJcODqg=="
+      "provenance": {"author": "Architecture"},
+      "text": "not a supported document format"
     },
     {
       "artifact_id": "reports/corrupt.txt",

@@ -64,11 +64,17 @@ def test_extract_media_is_non_text_skip():
     assert out.reason == extraction.NON_TEXT_MEDIA
 
 
-def test_extract_recognised_binary_without_handler_is_no_handler_skip():
-    # PDF is a recognised format but has no handler until T2 registers one.
-    out = extract(b"%PDF-1.4", filename="report.pdf")
-    assert isinstance(out, ExtractionSkipped)
-    assert out.reason == extraction.NO_HANDLER
+def test_extract_recognised_format_without_handler_is_no_handler_skip():
+    # A recognised format with no registered handler → loud NO_HANDLER skip. All
+    # phase-one formats now have handlers, so simulate a recognised-but-unhandled
+    # one by mapping an extension without registering a handler for it.
+    extraction._EXT_FORMAT[".fake"] = "fakefmt"
+    try:
+        out = extract(b"anything", filename="doc.fake")
+        assert isinstance(out, ExtractionSkipped)
+        assert out.reason == extraction.NO_HANDLER
+    finally:
+        extraction._EXT_FORMAT.pop(".fake", None)
 
 
 def test_extract_undecodable_text_raises_extraction_error():
