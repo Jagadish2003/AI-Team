@@ -264,10 +264,11 @@ function RoadmapSection({
         </div>
 
         {model && (
-          <div className="grid min-w-[min(100%,520px)] grid-cols-2 gap-2 sm:grid-cols-4">
+          // R18-C0 P6: the Roadmap presents phases only — the permission/
+          // dependency readiness tiles are removed to keep the customer-facing
+          // roadmap focused on selected opportunities and rollout progression.
+          <div className="grid min-w-[min(100%,320px)] grid-cols-2 gap-2">
             <MetricTile label="Selected" value={model.selectedOpportunityCount} />
-            <MetricTile label="Permissions" value={model.requiredPermissionsCount} />
-            <MetricTile label="Dependencies" value={model.dependencyCount} />
             <MetricTile label="Readiness" value={model.overallReadiness} />
           </div>
         )}
