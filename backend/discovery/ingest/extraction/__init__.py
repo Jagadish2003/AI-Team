@@ -206,36 +206,6 @@ def register_handler(fmt: str, handler: Handler) -> None:
     _HANDLERS[fmt] = handler
 
 
-def _extract_text(raw: bytes, fmt: str) -> ExtractedText:
-    """Built-in handler for the plain-text family (text / markdown / CSV).
-
-    Decodes UTF-8 (accepting a BOM); a byte stream that is not valid UTF-8 text is
-    a corrupt/mislabelled file and raises :class:`ExtractionError` so the ingestor
-    isolates it per-file (AC5) rather than indexing mojibake. Empty content is
-    passed through as a truthful empty extraction, never a skip.
-    """
-    if isinstance(raw, str):
-        text = raw
-    else:
-        for encoding in ("utf-8", "utf-8-sig"):
-            try:
-                text = raw.decode(encoding)
-                break
-            except UnicodeDecodeError:
-                text = None
-        if text is None:
-            raise ExtractionError(f"{fmt} content is not valid UTF-8 text")
-    return ExtractedText(
-        content=text,
-        chunk_content_type="prose",
-        structure_hints={"format": fmt, "chars": len(text)},
-    )
-
-
-for _fmt in _TEXT_FORMATS:
-    register_handler(_fmt, _extract_text)
-
-
 def extract(
     raw: bytes,
     *,
@@ -274,3 +244,18 @@ def extract(
             f"no extraction handler installed for {resolved!r} yet (R18-A1 T2)",
         )
     return handler(raw, resolved)
+
+
+# ---------------------------------------------------------------------------
+# Handler registration (R18-A1 T2)
+# ---------------------------------------------------------------------------
+# Importing the format-handler modules is what registers them: each calls
+# register_handler() at import time. They live in their own modules (text.py,
+# pdf.py, docx.py, xlsx.py, pptx.py) so a new format is a new file — the additive
+# plug point. Imported LAST so register_handler / the result types are already
+# defined when each submodule imports them back from this package.
+from . import text as _text  # noqa: E402,F401
+from . import pdf as _pdf  # noqa: E402,F401
+from . import docx as _docx  # noqa: E402,F401
+from . import xlsx as _xlsx  # noqa: E402,F401
+from . import pptx as _pptx  # noqa: E402,F401

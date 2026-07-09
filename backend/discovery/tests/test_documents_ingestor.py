@@ -47,17 +47,17 @@ ORG = "org1"
 _ONBOARDING = "handbook/onboarding.md"
 _EXPENSES = "handbook/expenses.csv"
 _SECURITY = "policies/security.txt"
-_PDF = "reports/q2-review.pdf"
+_UNSUPPORTED = "diagrams/architecture.vsdx"
 _CORRUPT = "reports/corrupt.txt"
 
 _TEXT_IDS = {_ONBOARDING, _EXPENSES, _SECURITY}
-_ALL_IDS = _TEXT_IDS | {_PDF, _CORRUPT}
+_ALL_IDS = _TEXT_IDS | {_UNSUPPORTED, _CORRUPT}
 
 _CURRENT_SIGS = {
     _ONBOARDING: "sig-onboarding-1",
     _EXPENSES: "sig-expenses-1",
     _SECURITY: "sig-security-1",
-    _PDF: "sig-q2review-1",
+    _UNSUPPORTED: "sig-arch-1",
     _CORRUPT: "sig-corrupt-1",
 }
 
@@ -171,7 +171,7 @@ def test_ac2_first_run_extracts_all_current_files():
     # Checkpoint is an opaque signature map of every successfully handled file
     # (extracted text + the deliberately-skipped PDF); the errored file is absent.
     files = _decode_checkpoint(store.read(ORG, "documents").value)
-    assert set(files) == {_ONBOARDING, _EXPENSES, _SECURITY, _PDF}
+    assert set(files) == {_ONBOARDING, _EXPENSES, _SECURITY, _UNSUPPORTED}
     assert _CORRUPT not in files
 
 
@@ -276,17 +276,17 @@ def test_ac5_extractor_exception_is_isolated_per_file():
 # ─────────────────────────────────────────────────────────────────────────────
 # Loud skips (never silent emptiness)
 # ─────────────────────────────────────────────────────────────────────────────
-def test_unhandled_format_is_a_loud_skip_and_advances():
-    """A format with no handler yet (PDF, before T2) is a recorded skip — never
-    empty text — and DOES advance (re-reading won't help)."""
+def test_unsupported_format_is_a_loud_skip_and_advances():
+    """An unsupported format is a recorded skip — never empty text — and DOES
+    advance the checkpoint (re-reading an unsupported file will never help)."""
     store = Store()
     _drive(DocumentIngestor(), store)
-    pdf = _fetch_record(_PDF)
-    assert pdf["extraction"]["status"] == "skipped"
-    assert pdf["extraction"]["reason"] == extraction.NO_HANDLER
-    assert "content" not in pdf  # nothing was fabricated
+    rec = _fetch_record(_UNSUPPORTED)
+    assert rec["extraction"]["status"] == "skipped"
+    assert rec["extraction"]["reason"] == extraction.UNSUPPORTED_FORMAT
+    assert "content" not in rec  # nothing was fabricated
     files = _decode_checkpoint(store.read(ORG, "documents").value)
-    assert _PDF in files  # deliberate skip advances the checkpoint
+    assert _UNSUPPORTED in files  # deliberate skip advances the checkpoint
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -337,7 +337,7 @@ def test_first_load_streams_checkpointed_batches():
     assert res.complete is True
     # The corrupt file never entered the map, so the final position excludes it.
     files = _decode_checkpoint(store.read(ORG, "documents").value)
-    assert set(files) == {_ONBOARDING, _EXPENSES, _SECURITY, _PDF}
+    assert set(files) == {_ONBOARDING, _EXPENSES, _SECURITY, _UNSUPPORTED}
 
 
 # ─────────────────────────────────────────────────────────────────────────────

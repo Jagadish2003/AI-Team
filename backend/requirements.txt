@@ -41,6 +41,15 @@ uvicorn==0.30.6
 watchfiles==1.1.1
 websockets==16.0
 
+# R18-A1 document text-extraction format handlers (extraction/*.py).
+# Pure-python parsers for the phase-one document formats; each handler imports
+# its parser lazily and degrades to a loud ExtractionSkipped if it is absent,
+# so a missing parser never breaks a run.
+pypdf==6.14.2            # text-based PDF extraction + encryption/scanned detection.
+python-docx==1.2.0       # Word (.docx) paragraph/table text.
+openpyxl==3.1.5          # Excel (.xlsx) sheet/cell text.
+python-pptx==1.0.2       # PowerPoint (.pptx) slide text.
+
 # T2-S10-A database connector packages.
 # System-level prerequisites for each driver are installed in the Dockerfile.
 # See deployment/README.md for full installation rationale.
