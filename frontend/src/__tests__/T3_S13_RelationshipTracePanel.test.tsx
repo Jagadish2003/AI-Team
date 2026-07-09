@@ -46,6 +46,28 @@ describe("T3-S13-A RelationshipTracePanel", () => {
     expect(screen.getByTestId("relationship-inferred-1")).toHaveTextContent("inferred");
   });
 
+  // R18-C0 P2 / AC2: relationships must read as names, never raw record IDs.
+  // When an endpoint has only an opaque source ID, the UI shows the entity's
+  // type label instead of leaking the identifier.
+  it("renders readable type labels instead of raw record IDs", () => {
+    const rawIdRelationships: RelationshipSummary[] = [
+      {
+        from_entity_name: "005WG00000ZkgMfYAJ",
+        from_entity_type: "account",
+        relationship_type: "owns",
+        to_entity_name: "00003515",
+        to_entity_type: "case",
+        inferred: false,
+        confidence: 0.8,
+      },
+    ];
+    render(<RelationshipTracePanel relationships={rawIdRelationships} />);
+
+    expect(screen.getByText("Account owns Case")).toBeInTheDocument();
+    expect(screen.queryByText(/005WG00000ZkgMfYAJ/)).toBeNull();
+    expect(screen.queryByText(/00003515/)).toBeNull();
+  });
+
   it("keeps relationship rows inside a thin inner scroll area", () => {
     render(<RelationshipTracePanel relationships={RELATIONSHIPS} />);
 
