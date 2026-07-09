@@ -64,15 +64,30 @@ def member_for_email(email: str) -> tuple[str, str]:
 
 
 def activate_org_by_email(email: str) -> None:
-    """Approve (activate) the org owned by ``email`` so its members can log in."""
+    """Approve (activate) the org owned by ``email`` so its members can log in.
+
+    Mirrors the real admin-approval POST: it activates the org AND settles any
+    PENDING join requests for that org to 'approved' (TENANT-1). A user who
+    registered under an existing org name JOINS it as a pending request, and
+    production approval settles that request — so this simulation must too, or a
+    joined user would stay login-blocked after a simulated approval.
+    """
     con = db.connect()
     con.autocommit = True
     try:
-        con.cursor().execute(
+        cur = con.cursor()
+        cur.execute(
             "UPDATE orgs SET approval_status = 'active' WHERE id IN ("
             "  SELECT wm.org_id FROM workspace_members wm "
             "  JOIN users u ON u.id = wm.user_id WHERE u.email = %s)",
             (email.strip().lower(),),
+        )
+        cur.execute(
+            "UPDATE org_join_requests SET status = 'approved', decided_at = %s "
+            "WHERE status = 'pending' AND org_id IN ("
+            "  SELECT wm.org_id FROM workspace_members wm "
+            "  JOIN users u ON u.id = wm.user_id WHERE u.email = %s)",
+            (db.now_iso(), email.strip().lower()),
         )
     finally:
         con.close()

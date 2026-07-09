@@ -47,12 +47,14 @@ from app.auth.user_auth import (
     RegistrationError,
     ensure_auth_tables,
     get_org_name,
+    has_pending_join_requests,
     hash_password,
     issue_jwt,
     login,
     logout_token,
     mark_password_changed,
     register_org_and_owner,
+    settle_join_requests,
     validate_org_matches_email_domain,
     validate_org_name,
     validate_password_strength,
@@ -815,19 +817,35 @@ def _process_decision(token, org_id, *, status, action, email_sender) -> HTMLRes
     if state == "expired":
         return _expired_link_page()
 
-    # Idempotent success: a VALID approval link whose org is ALREADY approved (a
-    # subsequent registration joined an already-approved org). The org is approved
-    # already, so report success WITHOUT re-mutating the settled state or
-    # re-notifying. Only for approve→active; a settled org is never flipped by a
-    # reject link (reject on a non-pending org falls through to invalid below).
+    # Approve on an ALREADY-approved org (a subsequent registration joined it): the
+    # org is active already, so do NOT re-mutate or re-notify — but DO approve any
+    # PENDING join requests tied to it (TENANT-1), which is what this link is for
+    # when the org is already active. Those joiners can then log in.
     if status == "active" and state == "already_active":
+        settle_join_requests(org_id, "approved")
         safe_org = html.escape(org["name"] or "")
         return _html_page(
             "Organisation Approved",
             "Organisation approved",
-            f"<strong>{safe_org}</strong> is already approved. "
-            "The registrant can log in.",
+            f"<strong>{safe_org}</strong> is already approved. Any pending join "
+            "requests have been approved; those users can now log in.",
         )
+
+    # Reject on an ALREADY-approved org: NEVER flip the org (anti-flip). If a
+    # subsequent registration is waiting as a PENDING join request, this reject
+    # link rejects that join — the org stays active, the joiner stays blocked. With
+    # nothing pending it is a stray/settled link → invalid.
+    if status == "rejected" and state == "already_active":
+        if has_pending_join_requests(org_id):
+            settle_join_requests(org_id, "rejected")
+            safe_org = html.escape(org["name"] or "")
+            return _html_page(
+                "Join Request Rejected",
+                "Join request rejected",
+                f"The pending join request for <strong>{safe_org}</strong> has "
+                "been rejected. The organisation itself remains active.",
+            )
+        return _invalid_link_page()
 
     if state != "ok":
         return _invalid_link_page()
@@ -837,6 +855,10 @@ def _process_decision(token, org_id, *, status, action, email_sender) -> HTMLRes
     registrant_email = _get_org_owner_email(org_id)
     if registrant_email:
         email_sender(registrant_email=registrant_email, org_name=org["name"])
+
+    # Settle any join requests that arrived while the org was still pending so they
+    # follow the org's decision (approve → approved, reject → rejected).
+    settle_join_requests(org_id, "approved" if status == "active" else "rejected")
 
     safe_org = html.escape(org["name"] or "")
     if status == "active":
@@ -890,12 +912,16 @@ def reject_org_confirm(token: str, org_id: str) -> HTMLResponse:
     org, state = _approval_token_state(token, org_id)
     if state == "expired":
         return _expired_link_page()
-    # Reject is actionable ONLY while the org is still pending — a settled
-    # (already_active / already_rejected) org must never be flipped by a stray
-    # reject link, so anything but "ok" is treated as an invalid link.
-    if state != "ok":
-        return _invalid_link_page()
-    return _confirmation_page("reject", org["name"], token, org_id)
+    # Render the confirmation form when the reject link is actionable:
+    #   * "ok"            — the org is still pending → rejecting the ORG.
+    #   * "already_active" WITH a pending join request → rejecting that JOIN (the
+    #     org stays active; TENANT-1). Without a pending join, a settled/active
+    #     org's reject link must never flip it → invalid.
+    if state == "ok" or (
+        state == "already_active" and has_pending_join_requests(org_id)
+    ):
+        return _confirmation_page("reject", org["name"], token, org_id)
+    return _invalid_link_page()
 
 
 @router.post("/org-approval/reject", response_class=HTMLResponse)

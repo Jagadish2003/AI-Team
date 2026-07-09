@@ -716,6 +716,18 @@ def _join_existing_org(
             "role = EXCLUDED.role, created_at = EXCLUDED.created_at, is_deleted = FALSE",
             (org_id, user_id, "owner", now),
         )
+        # TENANT-1: a dedup JOIN into an existing org is not auto-trusted. Record a
+        # PENDING join request in the SAME transaction as the membership, so the
+        # login gate can block this new member until an admin approves the join via
+        # the approval email (the org's own approval_status is left untouched, so
+        # existing members and the org's settled state are unaffected). The user is
+        # brand-new (fresh user_id), so there is never a pre-existing pending row.
+        cur.execute(
+            "INSERT INTO org_join_requests "
+            "(id, org_id, user_id, email, status, role, requested_at) "
+            "VALUES (%s, %s, %s, %s, 'pending', %s, %s)",
+            (str(uuid4()), org_id, user_id, email, "owner", now),
+        )
         con.commit()
     except psycopg2.IntegrityError as exc:
         con.rollback()
@@ -726,6 +738,82 @@ def _join_existing_org(
     finally:
         con.close()
     return _pending_approval_ack()
+
+
+# ---------------------------------------------------------------------------
+# TENANT-1 — per-join approval gate (reuses the org_join_requests table).
+#
+# A dedup JOIN into an existing org creates a PENDING join request (above). Until
+# it is settled, login is blocked for THAT user only (the org and its existing
+# members are untouched). The org's approve/reject email settles the pending
+# requests: Approve -> approved (the user can log in); Reject -> rejected (the
+# user stays blocked). Settlement never changes the org's approval_status, so an
+# already-approved org is never flipped.
+# ---------------------------------------------------------------------------
+
+
+def _get_join_request_status(user_id: str, org_id: str) -> str | None:
+    """Return the user's most recent join-request status for an org, or None.
+
+    None means the user never went through the join path (e.g. the org's original
+    owner) and so is not join-gated — only the org-level approval gate applies.
+    """
+    con = db.connect()
+    try:
+        cur = con.cursor()
+        cur.execute(
+            "SELECT status FROM org_join_requests "
+            "WHERE user_id = %s AND org_id = %s "
+            "ORDER BY requested_at DESC LIMIT 1",
+            (user_id, org_id),
+        )
+        row = cur.fetchone()
+    except Exception:
+        # Table absent (pre-0023 DB): no join gate — behave as before.
+        return None
+    finally:
+        con.close()
+    return row[0] if row else None
+
+
+def has_pending_join_requests(org_id: str) -> bool:
+    """True if the org has at least one PENDING join request awaiting a decision."""
+    con = db.connect()
+    try:
+        cur = con.cursor()
+        cur.execute(
+            "SELECT 1 FROM org_join_requests "
+            "WHERE org_id = %s AND status = 'pending' LIMIT 1",
+            (org_id,),
+        )
+        row = cur.fetchone()
+    except Exception:
+        return False
+    finally:
+        con.close()
+    return row is not None
+
+
+def settle_join_requests(org_id: str, new_status: str) -> int:
+    """Settle every PENDING join request for an org to ``new_status``.
+
+    Returns the number of requests updated. Used by the org approve/reject POST
+    handlers to decide the joins tied to that org WITHOUT touching the org's own
+    approval_status. Idempotent: a no-op when nothing is pending.
+    """
+    con = db.connect()
+    try:
+        cur = con.cursor()
+        cur.execute(
+            "UPDATE org_join_requests SET status = %s, decided_at = %s "
+            "WHERE org_id = %s AND status = 'pending'",
+            (new_status, db.now_iso(), org_id),
+        )
+        settled = cur.rowcount
+        con.commit()
+    finally:
+        con.close()
+    return settled
 
 
 def _submit_org_for_approval(org_id: str, org_name: str, registrant_email: str) -> None:
@@ -968,6 +1056,22 @@ def login(email: str, password: str, ip_address: str) -> dict:
             "You will receive an email once it is reviewed."
         )
     if approval_status == "rejected":
+        raise OrgRejectedError(
+            "This organisation registration was not approved. "
+            "Contact your CloudFulcrum representative."
+        )
+
+    # TENANT-1 per-join gate: the org is approved, but a user who JOINED an
+    # existing org (dedup) must not log in until that join is itself approved.
+    # The org's original owner has no join request (None) and is unaffected. Same
+    # error types/messages as the org-level gate so the response is unchanged.
+    join_status = _get_join_request_status(user["id"], membership["org_id"])
+    if join_status == "pending":
+        raise OrgPendingApprovalError(
+            "Your organisation is awaiting approval. "
+            "You will receive an email once it is reviewed."
+        )
+    if join_status == "rejected":
         raise OrgRejectedError(
             "This organisation registration was not approved. "
             "Contact your CloudFulcrum representative."
