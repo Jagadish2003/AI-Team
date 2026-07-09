@@ -38,6 +38,53 @@ def test_register_default_content_resolvers_wires_known_sources(monkeypatch):
     assert all(callable(fn) for fn in registered.values())
 
 
+def test_registration_skips_resolver_whose_module_fails_to_import(monkeypatch, caplog):
+    """A backing module that cannot import is a deployment problem and must surface
+    ONCE, loudly, at registration — not as a silent per-artifact resolver failure on
+    every refresh tick. The broken source is skipped (its artifacts stay queued as
+    ``no_resolver``); every healthy resolver still registers."""
+    registered = {}
+    monkeypatch.setattr(
+        resolvers.refresh,
+        "register_content_resolver",
+        lambda source, resolver: registered.setdefault(source, resolver),
+    )
+
+    real_import = resolvers._import_module
+
+    def broken_import(name):
+        if name == "discovery.ingest.teams":
+            raise ImportError("simulated missing dependency")
+        return real_import(name)
+
+    monkeypatch.setattr(resolvers, "_import_module", broken_import)
+
+    with caplog.at_level("WARNING"):
+        resolvers.register_default_content_resolvers()  # must not raise
+
+    assert "teams" not in registered
+    # One bad module never blocks the healthy resolvers.
+    assert {
+        "slack",
+        "confluence",
+        "sharepoint",
+        "java_app",
+        "dotnet_app",
+    } <= set(registered)
+    # The misconfiguration is visible at startup.
+    assert any(
+        "NOT registering content resolver" in rec.message and "teams" in rec.message
+        for rec in caplog.records
+    )
+
+
+def test_every_default_resolver_has_a_backing_module_declared():
+    """The registration-time import check only protects sources listed in
+    ``_RESOLVER_MODULES`` — a resolver added without its module mapping would crash
+    registration with a KeyError. Keep the two maps in lockstep."""
+    assert set(resolvers._DEFAULT_RESOLVERS) == set(resolvers._RESOLVER_MODULES)
+
+
 def test_slack_resolver_returns_current_message_artifact(monkeypatch):
     class FakeSlackIngestor:
         def _raw_messages(self, org_id, channel):

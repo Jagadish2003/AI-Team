@@ -23,6 +23,7 @@ import logging
 from contextlib import closing
 from datetime import datetime, timezone
 from typing import Any, Optional, Sequence
+from uuid import uuid4
 
 from app import db
 from database.models.retrieval import ALL_RETRIEVAL_DDL, RetrievalChunkRecord
@@ -314,6 +315,64 @@ def mark_stale(org_id: str, source_system: str, source_artifact: str) -> int:
     return marked
 
 
+def mark_stale_and_enqueue(
+    org_id: str,
+    source_system: str,
+    source_artifact: str,
+    change_kind: str = "updated",
+) -> tuple[int, str]:
+    """Atomically mark an artifact's chunks stale AND queue its refresh (T1).
+
+    The created/updated invalidation is two facts that must never be observed
+    apart: "these chunks are second-class" (``retrieval_chunks.is_stale``) and
+    "a refresh is owed" (a ``pending`` ``retrieval_refresh_queue`` row). Committing
+    them in separate transactions leaves a failure mode with no recovery path: if
+    the stale-mark commits but the enqueue then fails, the chunks are excluded from
+    default retrieval (T4) with no pending work item — and since the change event
+    fires only on artifact change, nothing ever re-queues them. The artifact stays
+    dark indefinitely.
+
+    So this does both in ONE transaction — the same atomicity stance
+    :func:`purge_artifact` takes for the deletion path. Either the chunks are stale
+    AND the refresh is queued, or neither happened and the subscriber's guard logs
+    the event as failed (a re-emitted/next change event can retry cleanly).
+
+    The stale-mark half matches :func:`mark_stale` (only not-yet-stale rows are
+    stamped, preserving the original ``stale_at``); the enqueue half matches
+    ``refresh_queue.enqueue`` (idempotent upsert on the unique
+    ``(org_id, source_system, source_artifact)`` index, resetting the row to
+    ``pending``). Returns ``(chunks_marked, queue_row_id)``. Org-scoped by
+    construction.
+    """
+    now = datetime.now(timezone.utc)
+    new_id = str(uuid4())
+    with closing(db.connect()) as con:
+        cur = con.cursor()
+        cur.execute(
+            "UPDATE retrieval_chunks "
+            "SET is_stale = TRUE, stale_at = %s, updated_at = %s "
+            "WHERE org_id = %s AND source_system = %s AND source_artifact = %s "
+            "  AND is_stale = FALSE",
+            (now, now, org_id, source_system, source_artifact),
+        )
+        marked = cur.rowcount
+        cur.execute(
+            "INSERT INTO retrieval_refresh_queue "
+            "  (id, org_id, source_system, source_artifact, change_kind, "
+            "   status, attempts, enqueued_at, updated_at) "
+            "VALUES (%s, %s, %s, %s, %s, 'pending', 0, %s, %s) "
+            "ON CONFLICT (org_id, source_system, source_artifact) DO UPDATE SET "
+            "   change_kind = EXCLUDED.change_kind, "
+            "   status = 'pending', "
+            "   updated_at = EXCLUDED.updated_at "
+            "RETURNING id",
+            (new_id, org_id, source_system, source_artifact, change_kind, now, now),
+        )
+        row = cur.fetchone()
+        con.commit()
+    return marked, (row[0] if row else new_id)
+
+
 def remove_chunks(org_id: str, source_system: str, source_artifact: str) -> int:
     """Immediately remove one artifact's chunks from retrieval. Returns rows removed.
 
@@ -361,10 +420,12 @@ def purge_artifact(
     separate statements can never partially commit). Returns
     ``(chunks_removed, queue_rows_removed)``.
 
-    This is the one place the store touches ``retrieval_refresh_queue`` (owned by
-    ``refresh_queue.py``): the atomicity AC2 demands can only be met by committing
-    both deletes together, and the pending-refresh row is index bookkeeping for the
-    very chunks being purged. Org-scoped by construction — every predicate binds
+    The store touches ``retrieval_refresh_queue`` (owned by ``refresh_queue.py``)
+    only where the freshness contract demands chunk-state and queue-state commit
+    together — here and :func:`mark_stale_and_enqueue`: the atomicity AC2 demands
+    can only be met by committing both statements together, and the queue row is
+    index bookkeeping for the very chunks being changed. Org-scoped by
+    construction — every predicate binds
     ``org_id`` first, so one org's delete can never remove another's rows even when
     the artifact id collides.
     """

@@ -57,7 +57,7 @@ import logging
 from dataclasses import dataclass
 from typing import Any, Mapping, Optional, Union
 
-from app.retrieval import refresh_queue, store
+from app.retrieval import store
 
 logger = logging.getLogger(__name__)
 
@@ -139,9 +139,10 @@ def on_artifact_changed(
 
     Turns a source-change event into a retrieval-freshness action per Section 1:
 
-        deleted            -> store.remove_chunks(...)          # immediate
-        created | updated  -> store.mark_stale(...)             # second-class
-                              refresh_queue.enqueue(...)        # async refresh
+        deleted            -> store.purge_artifact(...)           # immediate, atomic
+        created | updated  -> store.mark_stale_and_enqueue(...)   # second-class +
+                                                                  # async refresh,
+                                                                  # one transaction
 
     Never raises: it runs off a telemetry event and must not break ingestion. A
     malformed event is ignored; any store/queue failure is logged and swallowed.
@@ -243,18 +244,22 @@ def remove_artifact(
 
 
 def _handle_upserted(event: ArtifactChangedEvent) -> None:
-    """Created/updated path: mark chunks stale, then queue an async refresh.
+    """Created/updated path: mark chunks stale AND queue an async refresh, atomically.
 
     Marking stale makes the existing chunks second-class immediately (T4 excludes
     them from default retrieval); enqueuing hands the heavy re-chunk/re-embed to the
     async worker (T3) so a discovery run is never blocked on it. An artifact with no
     indexed chunks yet (first-seen ``created``) still queues, so the refresh worker
     will index it.
+
+    The two writes commit in ONE transaction (``store.mark_stale_and_enqueue``,
+    mirroring the deletion path's atomic ``purge_artifact``): a chunk marked stale
+    with no pending queue row would be excluded from retrieval with nothing ever
+    scheduled to refresh it — and since the change event fires only on artifact
+    change, there is no later signal to recover from that split. Atomicity here is
+    what guarantees stale always implies queued.
     """
-    marked = store.mark_stale(
-        event.org_id, event.source_system, event.source_artifact
-    )
-    refresh_queue.enqueue(
+    marked, _queue_id = store.mark_stale_and_enqueue(
         event.org_id,
         event.source_system,
         event.source_artifact,

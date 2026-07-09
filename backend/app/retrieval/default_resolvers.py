@@ -3,9 +3,15 @@
 The freshness worker can only turn a queued ``artifact_changed`` event back into
 fresh chunks when it knows how to re-extract the current artifact. This module
 registers the resolvers for the source systems whose change events are emitted by
-the ingestion foundation in this repo. Each resolver is lazy: startup only binds a
-callable; connector modules, credentials, and source reads are touched only when a
-specific artifact is refreshed.
+the ingestion foundation in this repo.
+
+Registration verifies each resolver's backing connector module IMPORTS at startup
+and skips (with a loud warning) any resolver whose module is unavailable — a
+misconfigured deployment surfaces once, at startup, instead of as an endless
+stream of per-artifact resolver errors at refresh time. Everything else stays
+lazy: credentials and source reads are touched only when a specific artifact is
+refreshed. An unregistered source's artifacts are left queued (``no_resolver``)
+with their chunks stale — never served as current — until the module is fixed.
 """
 from __future__ import annotations
 
@@ -25,13 +31,39 @@ Resolver = Callable[[str, str], Optional[ContentArtifact]]
 def register_default_content_resolvers() -> None:
     """Register the built-in source resolvers used by the refresh worker.
 
+    Each resolver's backing connector module is imported ONCE here, before the
+    resolver is registered. A module that fails to import is a deployment
+    problem, and it must surface as one clear startup warning — not as a silent
+    per-artifact failure loop at refresh time (a broken import inside the resolver
+    body would be caught per call by the worker, burning a retry attempt per
+    queued artifact per tick with no visible signal beyond debug noise). A skipped
+    source's artifacts stay queued as ``no_resolver`` (chunks stale, never served
+    as current) and start refreshing on the next startup after the module is fixed.
+
     Idempotent: ``refresh.register_content_resolver`` replaces a previous resolver
     for the same source system, so calling this from every app startup is safe.
     """
+    registered = 0
     for source_system, resolver in _DEFAULT_RESOLVERS.items():
+        module_name = _RESOLVER_MODULES[source_system]
+        try:
+            _import_module(module_name)
+        except Exception:  # noqa: BLE001 — a module-level failure of any kind
+            logger.warning(
+                "retrieval freshness: NOT registering content resolver for %r — "
+                "backing module %r failed to import. Its queued artifacts will "
+                "stay pending (no_resolver) with chunks stale until the module "
+                "imports cleanly.",
+                source_system,
+                module_name,
+                exc_info=True,
+            )
+            continue
         refresh.register_content_resolver(source_system, resolver)
+        registered += 1
     logger.info(
-        "retrieval freshness: registered %d default content resolver(s)",
+        "retrieval freshness: registered %d of %d default content resolver(s)",
+        registered,
         len(_DEFAULT_RESOLVERS),
     )
 
@@ -319,6 +351,18 @@ _DEFAULT_RESOLVERS: Dict[str, Resolver] = {
     "sharepoint": _resolve_sharepoint,
     "java_app": _resolve_java_app,
     "dotnet_app": _resolve_dotnet_app,
+}
+
+# The connector module each resolver re-extracts through. Imported once at
+# registration time so a missing/broken module disqualifies its resolver with one
+# startup warning instead of failing silently on every refresh attempt.
+_RESOLVER_MODULES: Dict[str, str] = {
+    "slack": "discovery.ingest.slack",
+    "teams": "discovery.ingest.teams",
+    "confluence": "discovery.ingest.confluence",
+    "sharepoint": "discovery.ingest.sharepoint",
+    "java_app": "discovery.ingest.java_app",
+    "dotnet_app": "discovery.ingest.dotnet_app",
 }
 
 
