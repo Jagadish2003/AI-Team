@@ -127,6 +127,40 @@ class _FakeStore:
         r["version"] = embedding_model_version
         return True
 
+    # --- model-version backfill (T5) — same signatures as app.retrieval.store --
+
+    def _is_stale_model(self, r, model, version):
+        return r["embedding"] is not None and (
+            r["model"] != model or r["version"] != version
+        )
+
+    def fetch_stale_model_embedded(self, org_id, embedding_model,
+                                   embedding_model_version, limit=128):
+        stale = [
+            {"chunk_id": cid, "content": r["content"]}
+            for cid, r in sorted(self.rows.items(), key=lambda kv: kv[1]["seq"])
+            if r["org_id"] == org_id
+            and self._is_stale_model(r, embedding_model, embedding_model_version)
+        ]
+        return stale[:limit]
+
+    def orgs_with_stale_model(self, embedding_model, embedding_model_version, limit=100):
+        seen = []
+        for r in sorted(self.rows.values(), key=lambda x: x["seq"]):
+            if (
+                self._is_stale_model(r, embedding_model, embedding_model_version)
+                and r["org_id"] not in seen
+            ):
+                seen.append(r["org_id"])
+        return seen[:limit]
+
+    def count_stale_model(self, org_id, embedding_model, embedding_model_version):
+        return sum(
+            1 for r in self.rows.values()
+            if r["org_id"] == org_id
+            and self._is_stale_model(r, embedding_model, embedding_model_version)
+        )
+
     # --- test helpers ---------------------------------------------------------
 
     def embedded_count(self, org_id):
@@ -146,6 +180,13 @@ def store(monkeypatch):
     monkeypatch.setattr(embedder.store, "fetch_unembedded", fake.fetch_unembedded)
     monkeypatch.setattr(embedder.store, "orgs_with_unembedded", fake.orgs_with_unembedded)
     monkeypatch.setattr(embedder.store, "set_embedding", fake.set_embedding)
+    monkeypatch.setattr(
+        embedder.store, "fetch_stale_model_embedded", fake.fetch_stale_model_embedded
+    )
+    monkeypatch.setattr(
+        embedder.store, "orgs_with_stale_model", fake.orgs_with_stale_model
+    )
+    monkeypatch.setattr(embedder.store, "count_stale_model", fake.count_stale_model)
     return fake
 
 
@@ -372,3 +413,140 @@ def test_all_orgs_enumeration_error_does_not_raise(store, monkeypatch):
 
     monkeypatch.setattr(embedder.store, "orgs_with_unembedded", _boom)
     assert embedder.embed_pending_all_orgs() == []  # never raises
+
+
+# ---------------------------------------------------------------------------
+# AC5 — model-version invalidation + managed backfill
+# ---------------------------------------------------------------------------
+
+
+def test_backfill_reembeds_old_model_vectors_onto_active_model(store, monkeypatch):
+    org = "org_backfill"
+    # Embed two chunks under model A.
+    store.add(org, "one")
+    store.add(org, "two")
+    monkeypatch.setenv("MODEL_EMBEDDING_PROVIDER", _GOOD.name)
+    embedder.embed_pending_for_org(org)
+    assert store.count_stale_model(org, "fake:model-b", "2.0") == 2  # stale vs B
+
+    # Provider repins to model B → the old-model vectors are now incompatible.
+    monkeypatch.setenv("MODEL_EMBEDDING_PROVIDER", _MODEL_B.name)
+    result = embedder.backfill_stale_model_for_org(org)
+
+    assert result.reembedded == 2
+    assert result.model_identity == "fake:model-b"
+    assert result.model_version == "2.0"
+    # Every vector now carries the active model B stamp — nothing left incompatible.
+    stamps = {(r["model"], r["version"]) for r in store.rows.values()}
+    assert stamps == {("fake:model-b", "2.0")}
+    assert store.count_stale_model(org, "fake:model-b", "2.0") == 0
+
+
+def test_backfill_does_not_reembed_active_model_vectors(store, use_good_provider):
+    org = "org_no_backfill"
+    store.add(org, "already current")
+    embedder.embed_pending_for_org(org)  # embedded under active model A
+    use_good_provider.calls.clear()
+
+    # No repin: everything already carries the active stamp, so backfill is a no-op
+    # and the gateway is never called again — a repin costs only what changed.
+    result = embedder.backfill_stale_model_for_org(org)
+    assert result.incompatible_seen == 0
+    assert result.reembedded == 0
+    assert use_good_provider.calls == []
+
+
+def test_backfill_all_orgs_drains_every_org_with_old_vectors(store, monkeypatch):
+    monkeypatch.setenv("MODEL_EMBEDDING_PROVIDER", _GOOD.name)
+    for org in ("org_x", "org_y"):
+        store.add(org, "content")
+    embedder.embed_pending_all_orgs()  # embedded under A
+
+    monkeypatch.setenv("MODEL_EMBEDDING_PROVIDER", _MODEL_B.name)
+    results = embedder.backfill_stale_model_all_orgs()
+
+    by_org = {r.org_id: r for r in results}
+    assert set(by_org) == {"org_x", "org_y"}
+    assert all(r.reembedded == 1 for r in results)
+    assert store.count_stale_model("org_x", "fake:model-b", "2.0") == 0
+    assert store.count_stale_model("org_y", "fake:model-b", "2.0") == 0
+
+
+def test_backfill_max_chunks_caps_the_pass(store, monkeypatch):
+    org = "org_backfill_cap"
+    for i in range(5):
+        store.add(org, f"c{i}")
+    monkeypatch.setenv("MODEL_EMBEDDING_PROVIDER", _GOOD.name)
+    embedder.embed_pending_for_org(org)
+
+    monkeypatch.setenv("MODEL_EMBEDDING_PROVIDER", _MODEL_B.name)
+    result = embedder.backfill_stale_model_for_org(org, batch_size=2, max_chunks=3)
+    assert result.reembedded == 3
+    assert store.count_stale_model(org, "fake:model-b", "2.0") == 2  # rest deferred
+
+
+def test_backfill_no_model_available_defers(store, monkeypatch):
+    org = "org_backfill_nomodel"
+    store.add(org, "x")
+    monkeypatch.setenv("MODEL_EMBEDDING_PROVIDER", _GOOD.name)
+    embedder.embed_pending_for_org(org)
+
+    monkeypatch.setattr(embedder, "active_embedding_model", lambda: ("", ""))
+    result = embedder.backfill_stale_model_for_org(org)
+    assert result.reembedded == 0
+    # The old-model vector is untouched (still invalidated, retried next pass).
+    assert store.rows[list(store.rows)[0]]["model"] == "fake:model-a"
+
+
+def test_backfill_gateway_outage_leaves_old_stamp_never_raises(store, monkeypatch):
+    org = "org_backfill_outage"
+    store.add(org, "a")
+    monkeypatch.setenv("MODEL_EMBEDDING_PROVIDER", _GOOD.name)
+    embedder.embed_pending_for_org(org)
+
+    # Repin to a provider with a DIFFERENT identity that also fails to embed → the
+    # vector is stale (vs model B) AND cannot be re-embedded; it must stay under the
+    # old stamp and never raise.
+    fail_b = _FakeEmbeddingProvider("fake_embed_fail_b", ("fake:model-b", "2.0"), mode="fail")
+    register_provider(fail_b)
+    monkeypatch.setenv("MODEL_EMBEDDING_PROVIDER", fail_b.name)
+
+    result = embedder.backfill_stale_model_for_org(org)  # must not raise
+    assert result.reembedded == 0
+    assert result.incompatible_seen == 1
+    assert store.rows[list(store.rows)[0]]["model"] == "fake:model-a"  # unchanged
+
+
+def test_backfill_all_orgs_no_active_model_returns_empty(store, monkeypatch):
+    monkeypatch.setattr(embedder, "active_embedding_model", lambda: ("", ""))
+    assert embedder.backfill_stale_model_all_orgs() == []
+
+
+def test_backfill_emits_model_backfill_telemetry(store, monkeypatch):
+    import app.telemetry as telemetry
+
+    org = "org_backfill_telemetry"
+    store.add(org, "one")
+    monkeypatch.setenv("MODEL_EMBEDDING_PROVIDER", _GOOD.name)
+    embedder.embed_pending_for_org(org)
+
+    events = []
+    monkeypatch.setattr(
+        telemetry, "record_event", lambda et, payload=None: events.append((et, payload))
+    )
+    monkeypatch.setenv("MODEL_EMBEDDING_PROVIDER", _MODEL_B.name)
+    embedder.backfill_stale_model_for_org(org)
+
+    backfill_events = [e for e in events if e[0] == "retrieval.model_backfill"]
+    assert len(backfill_events) == 1
+    payload = backfill_events[0][1]
+    assert payload["org_id"] == org
+    assert payload["embedding_model"] == "fake:model-b"
+    assert payload["embedding_model_version"] == "2.0"
+    assert payload["reembedded"] == 1
+
+
+def test_model_backfill_event_type_registered():
+    import app.telemetry as telemetry
+
+    assert "retrieval.model_backfill" in telemetry.REGISTERED_EVENT_TYPES

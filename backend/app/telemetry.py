@@ -539,6 +539,10 @@ class RetrievalQueryCompletedPayload(TypedDict, total=False):
     min_score:         The similarity floor applied, or absent when none.
     query_embedded:    False when the query could not be embedded (gateway
                        degraded) — a retrieval miss, never a crash.
+    include_stale:     Whether stale chunks were included this query (R18-B2 T4);
+                       default retrieval excludes them.
+    stale_count:       How many returned chunks were stale — present only when
+                       stale chunks were being included.
     """
     org_id: NotRequired[str]
     k: NotRequired[int]
@@ -546,6 +550,8 @@ class RetrievalQueryCompletedPayload(TypedDict, total=False):
     source_filter: NotRequired[list]
     min_score: NotRequired[float]
     query_embedded: NotRequired[bool]
+    include_stale: NotRequired[bool]
+    stale_count: NotRequired[int]
 
 
 class RetrievalArtifactInvalidatedPayload(TypedDict, total=False):
@@ -577,6 +583,35 @@ class RetrievalArtifactInvalidatedPayload(TypedDict, total=False):
     action: NotRequired[str]
     chunks_affected: NotRequired[int]
     queued: NotRequired[bool]
+
+
+class RetrievalModelBackfillPayload(TypedDict, total=False):
+    """retrieval.model_backfill — R18-B2 T5, emitted per org pass that re-embedded.
+
+    Makes an embedding-model-version migration observable: when the provider/version
+    repins, old-model vectors are invalidated (excluded from retrieval immediately)
+    and re-embedded onto the active model by a managed background backfill. This
+    event records each pass that actually re-embedded, so a migration's progress is
+    never invisible.
+
+    PII GUARD: identifiers, the ACTIVE model stamp, and counts only — NEVER chunk
+    content or vectors. ``embedding_model`` / ``embedding_model_version`` are the
+    non-sensitive active-model identifiers everything is being converged onto.
+
+    org_id:                  The org whose old-model vectors were backfilled.
+    embedding_model:         Active model identity now stamped on the re-embedded
+                             vectors.
+    embedding_model_version: Active model version now stamped.
+    reembedded:              How many old-model vectors were re-embedded this pass.
+    incompatible_seen:       How many old-model vectors this pass attempted.
+    batches:                 Gateway embedding calls made this pass.
+    """
+    org_id: NotRequired[str]
+    embedding_model: NotRequired[str]
+    embedding_model_version: NotRequired[str]
+    reembedded: NotRequired[int]
+    incompatible_seen: NotRequired[int]
+    batches: NotRequired[int]
 
 
 # ---------------------------------------------------------------------------
@@ -677,6 +712,12 @@ register_event_type("retrieval.query_completed", RetrievalQueryCompletedPayload)
 # Registered here so app.retrieval.freshness can emit it; record_event() raises
 # ValueError for an unregistered type, so registration must precede emission.
 register_event_type("retrieval.artifact_invalidated", RetrievalArtifactInvalidatedPayload)
+# R18-B2 T5 — embedding-model-version invalidation + managed backfill.
+# retrieval.model_backfill is emitted per org pass that re-embedded old-model
+# vectors onto the active model, so a model migration is observable. Registered
+# here so app.retrieval.embedder can emit it; record_event() raises ValueError for
+# an unregistered type, so registration must precede emission.
+register_event_type("retrieval.model_backfill", RetrievalModelBackfillPayload)
 
 
 # ---------------------------------------------------------------------------
