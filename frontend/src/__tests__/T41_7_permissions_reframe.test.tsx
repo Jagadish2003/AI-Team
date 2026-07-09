@@ -108,6 +108,7 @@ const CONNECTED_SALESFORCE_CONNECTOR: Connector = {
   lastSynced: '2 hours ago',
   metrics: [],
   signalStrength: 90,
+  products: ['salesforce_sc'],
 };
 
 const CONNECTED_NCINO_SALESFORCE_CONNECTOR: Connector = {
@@ -121,6 +122,23 @@ const CONNECTED_NCINO_SALESFORCE_CONNECTOR: Connector = {
   lastSynced: 'Just now',
   metrics: [],
   signalStrength: 94,
+  products: ['salesforce_ncino'],
+};
+
+// Category mentions nCino, but the org only declared Service Cloud — used to
+// prove the read scope follows the DECLARED PRODUCTS, not the catalog category.
+const CONNECTED_SALESFORCE_NO_NCINO_PRODUCT: Connector = {
+  id: 'salesforce',
+  name: 'Salesforce',
+  status: 'connected',
+  configured: true,
+  category: 'CRM · Salesforce / nCino',
+  tier: 'recommended',
+  reads: ['Accounts', 'Opportunities', 'Cases'],
+  lastSynced: 'Just now',
+  metrics: [],
+  signalStrength: 90,
+  products: ['salesforce_sc'],
 };
 
 const CONNECTED_JIRA_CONNECTOR: Connector = {
@@ -356,10 +374,10 @@ describe('AC3 — Connection Health section in ConnectorDetailPanel', () => {
     expect(screen.getByText('Read Approval history')).toBeDefined();
   });
 
-  it('shows generic nCino banking scope for a Salesforce/nCino connector and no POC benefits object names', () => {
-    // R18-C0 P1 (AC1): the de-POC'd Salesforce/nCino connector shows banking-
-    // relevant object scope; the old 'PSS Benefits Administration' object names
-    // must not appear anywhere in the connector presentation.
+  it('shows nCino banking scope when the org declared the nCino product, and no POC benefits object names', () => {
+    // R18-C0 P1 (AC1): with the nCino product declared, the connector shows
+    // banking-relevant object scope; the old 'PSS Benefits Administration'
+    // object names never appear in the connector presentation.
     renderWithRouter(
       <ConnectorDetailPanel
         connector={CONNECTED_NCINO_SALESFORCE_CONNECTOR}
@@ -371,6 +389,24 @@ describe('AC3 — Connection Health section in ConnectorDetailPanel', () => {
     expect(screen.queryByText('Read IndividualApplication records')).toBeNull();
     expect(screen.queryByText('Read BenefitAssignment records')).toBeNull();
     expect(screen.queryByText('Read Case records (Disability)')).toBeNull();
+  });
+
+  it('derives read scope from declared products, not the catalog category', () => {
+    // R18-C0 P1: the connector card must reflect the connected org's ACTUAL
+    // selected products. A Salesforce org that declared only Service Cloud must
+    // NOT show nCino scope even though the base catalog category names nCino.
+    renderWithRouter(
+      <ConnectorDetailPanel
+        connector={CONNECTED_SALESFORCE_NO_NCINO_PRODUCT}
+        onConfigure={vi.fn()}
+      />
+    );
+    // Standard base objects + the declared Service Cloud scope are shown.
+    expect(screen.getByText('Read Account records')).toBeDefined();
+    expect(screen.getByText('Read Flow metadata')).toBeDefined();
+    // nCino objects must NOT appear — the category string mentioning nCino is
+    // no longer what drives the read scope.
+    expect(screen.queryByText('Read LLC_BI__Loan__c records')).toBeNull();
   });
 
   it('uses generic operational-signal language for Jira and Confluence (no POC benefits wording)', () => {

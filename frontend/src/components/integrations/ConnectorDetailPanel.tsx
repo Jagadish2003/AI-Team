@@ -21,20 +21,6 @@ import { isStaticCredentialConnector } from './staticCredentialConnectors';
 // Sprint 6 will wire this to real sync telemetry (Connection Health v2).
 
 const CONNECTION_HEALTH_LABELS: Record<string, string[]> = {
-  salesforce: [
-    'Read Case records',
-    'Read Flow metadata',
-    'Read Approval history',
-    'Read User records',
-    'Read OpportunityLineItem records',
-  ],
-  salesforce_ncino: [
-    'Read LLC_BI__Loan__c records',
-    'Read LLC_BI__Covenant2__c records',
-    'Read LLC_BI__Checklist__c records',
-    'Read LLC_BI__Spread_Statement_Period__c records',
-    'Read ProcessInstance records',
-  ],
   servicenow: [
     'Read Incident records',
     'Read operational signals',
@@ -62,6 +48,50 @@ const CONNECTION_HEALTH_LABELS: Record<string, string[]> = {
   ],
 };
 
+// R18-C0 P1: the Salesforce read scope reflects the connected org's ACTUAL
+// declared cloud products (GET/PATCH /api/connectors/salesforce/products →
+// connector.products), never a hardcoded catalog category. Standard objects are
+// always readable; each declared product AgentIQ ingests adds its own objects.
+// Products AgentIQ does not specifically ingest (FSC / Revenue / Health / PSS)
+// simply read the standard base scope — no invented or POC object names.
+const SALESFORCE_BASE_READ_SCOPE = [
+  'Read Account records',
+  'Read Contact records',
+  'Read Opportunity records',
+  'Read Case records',
+];
+
+const SALESFORCE_PRODUCT_READ_SCOPE: Record<string, string[]> = {
+  // Service Cloud
+  salesforce_sc: [
+    'Read Flow metadata',
+    'Read Approval history',
+    'Read OpportunityLineItem records',
+  ],
+  // nCino commercial lending (managed package objects)
+  salesforce_ncino: [
+    'Read LLC_BI__Loan__c records',
+    'Read LLC_BI__Covenant2__c records',
+    'Read LLC_BI__Checklist__c records',
+    'Read LLC_BI__Spread_Statement_Period__c records',
+    'Read ProcessInstance records',
+  ],
+};
+
+// Build the Salesforce connection read scope from the org's declared products.
+// With no declaration we show only the standard base objects — never nCino
+// scope by default. Deterministic order: base first, then products in the order
+// declared, de-duplicated.
+function salesforceReadScope(products: string[] | undefined): string[] {
+  const scope = [...SALESFORCE_BASE_READ_SCOPE];
+  for (const product of products ?? []) {
+    for (const label of SALESFORCE_PRODUCT_READ_SCOPE[product] ?? []) {
+      if (!scope.includes(label)) scope.push(label);
+    }
+  }
+  return scope;
+}
+
 function isViewerOnlyScopeUser(): boolean {
   const role = (import.meta.env.VITE_DEV_JWT_ROLE as string | undefined)
     ?.trim()
@@ -80,14 +110,11 @@ function isViewerOnlyScopeUser(): boolean {
 function ConnectionHealthSection({ connector }: { connector: Connector }) {
   if (connector.status !== 'connected') return null;
 
-  const healthKey =
-    connector.id === 'salesforce' && connector.category?.includes('nCino')
-      ? 'salesforce_ncino'
-      : connector.id;
-
   const items =
-    CONNECTION_HEALTH_LABELS[healthKey] ??
-    connector.reads.map((readScope) => `Read ${readScope} records`);
+    connector.id === 'salesforce'
+      ? salesforceReadScope(connector.products)
+      : CONNECTION_HEALTH_LABELS[connector.id] ??
+        connector.reads.map((readScope) => `Read ${readScope} records`);
 
   return (
     <div className="mt-4">
