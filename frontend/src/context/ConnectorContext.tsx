@@ -3,7 +3,7 @@ import { Connector, ConnectorStatus, ConnectorTier, Metric } from '../types/conn
 import { computeConfidence, Confidence } from '../utils/confidence';
 import { getNextBestRecommended } from '../utils/nextBest';
 import { isDiscoveryReadyConnector } from '../utils/sourceReadiness';
-import { connectConnectorApi, configureSyncApi } from '../services/staticApi';
+import { connectConnectorApi, configureSyncApi, disconnectConnectorApi } from '../services/staticApi';
 import { authHeaderForToken } from '../lib/apiClient';
 import { useAuthOptional } from './AuthContext';
 
@@ -25,6 +25,10 @@ type ConnectorContextValue = {
   selectConnector: (id: string) => void;
   connectConnector: (id: string) => void;
   configureSync: (id: string) => void;
+  // R18-C0 P4 / AT-566: disconnect a connector (clears the org vault credential
+  // and returns the tile to its unconnected state). Rejects on failure so the
+  // caller can surface an error toast.
+  disconnectConnector: (id: string) => Promise<void>;
 };
 
 const Ctx = createContext<ConnectorContextValue | null>(null);
@@ -190,6 +194,17 @@ export function ConnectorProvider({ children }: { children: React.ReactNode }) {
     }
   }, [refetch]);
 
+  const disconnectConnector = useCallback(async (id: string) => {
+    // Let the caller handle success/error toasts, but always refetch so the tile
+    // reflects the cleared credential. Re-throw so the confirm dialog can keep the
+    // user informed if the disconnect failed.
+    try {
+      await disconnectConnectorApi(id);
+    } finally {
+      refetch();
+    }
+  }, [refetch]);
+
   const value: ConnectorContextValue = useMemo(() => ({
     all,                    
     connectors: all,        
@@ -204,11 +219,12 @@ export function ConnectorProvider({ children }: { children: React.ReactNode }) {
     nextBestRecommendedId,
     selectConnector,
     connectConnector,
-    configureSync
+    configureSync,
+    disconnectConnector
   }),[
     all, recommended, standard, selectedConnectorId,
     loading, error, recommendedConnectedCount, confidence, nextBestRecommendedId,
-    selectConnector, connectConnector, configureSync, refetch
+    selectConnector, connectConnector, configureSync, disconnectConnector, refetch
   ]);
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
