@@ -1,0 +1,51 @@
+{
+  "_comment": "R18-A2 / AT-529 — deterministic offline fixture for the Git content change-based ingestor (GitContentIngestor). The commit graph IS the change feed: 'head_sha' is the current position, 'head_tree' is the file content at HEAD (streamed as the resumable first load — AC1), and 'diffs' maps a since-SHA to the exact file set the commits between it and HEAD touched (the diff-driven incremental — AC2). Each diff records 'commit_count' so a test can verify commit-count vs files-processed (AC2). A file marked \"binary\": true is skipped-with-reason and never indexed (AC7, foundational). Content is short but real text so the substrate's code chunk policy has something to chunk. No secrets and no credentials live here — the connector never stores credentials in config.",
+  "repos": [
+    {
+      "repo_id": "web-app",
+      "branch": "main",
+      "head_sha": "c3c3c3c3",
+      "head_ts": "2026-06-20T14:00:00+00:00",
+      "head_tree": [
+        {"path": "README.md", "content": "# web-app\n\nCustomer-facing web application. Built with FastAPI.\n"},
+        {"path": "assets/logo.png", "binary": true, "content": ""},
+        {"path": "src/api.py", "content": "def list_orders(request):\n    return db.query('SELECT * FROM orders')\n\ndef create_order(request):\n    return db.insert('orders', request.json)\n"},
+        {"path": "src/main.py", "content": "from fastapi import FastAPI\n\napp = FastAPI()\n\ndef start():\n    return app\n"},
+        {"path": "src/new_feature.py", "content": "def compute_discount(total):\n    return total * 0.1\n"},
+        {"path": "src/utils.py", "content": "def slugify(text):\n    return text.lower().replace(' ', '-')\n"}
+      ],
+      "diffs": {
+        "c1c1c1c1": {
+          "head_sha": "c3c3c3c3",
+          "commit_count": 2,
+          "changes": [
+            {"path": "src/main.py", "change": "M", "content": "from fastapi import FastAPI\n\napp = FastAPI()\n\ndef start():\n    return app\n"},
+            {"path": "src/new_feature.py", "change": "A", "content": "def compute_discount(total):\n    return total * 0.1\n"},
+            {"path": "src/legacy.py", "change": "D"}
+          ]
+        },
+        "c3c3c3c3": {"head_sha": "c3c3c3c3", "commit_count": 0, "changes": []}
+      }
+    },
+    {
+      "repo_id": "data-pipeline",
+      "branch": "main",
+      "head_sha": "d2d2d2d2",
+      "head_ts": "2026-06-19T09:00:00+00:00",
+      "head_tree": [
+        {"path": "etl/extract.py", "content": "def extract(source):\n    return source.read_all()\n"},
+        {"path": "etl/load.sql", "content": "INSERT INTO warehouse.fact_sales SELECT * FROM staging.sales;\n"}
+      ],
+      "diffs": {
+        "d1d1d1d1": {
+          "head_sha": "d2d2d2d2",
+          "commit_count": 1,
+          "changes": [
+            {"path": "etl/load.sql", "change": "M", "content": "INSERT INTO warehouse.fact_sales SELECT * FROM staging.sales;\n"}
+          ]
+        },
+        "d2d2d2d2": {"head_sha": "d2d2d2d2", "commit_count": 0, "changes": []}
+      }
+    }
+  ]
+}
