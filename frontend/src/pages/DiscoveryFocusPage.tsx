@@ -83,7 +83,7 @@ export const FOCUS_CARDS: FocusCardType[] = [
   },
 ];
 
-const INDUSTRIES: Industry[] = [
+export const INDUSTRIES: Industry[] = [
   { id: 'financial_services', label: 'Financial services' },
   { id: 'public_sector', label: 'Public sector' },
   { id: 'logistics_supply_chain', label: 'Logistics & supply chain' },
@@ -94,18 +94,12 @@ const INDUSTRIES: Industry[] = [
   { id: 'technology', label: 'Technology' },
 ];
 
-const TEMPLATES: StackTemplate[] = [
+export const TEMPLATES: StackTemplate[] = [
   {
     id: 'commercial_lending',
     label: 'Commercial lending',
     suggestedFocus: 'approvals_compliance',
     preselectedSystems: ['salesforce_ncino', 'jira', 'servicenow', 'confluence'],
-  },
-  {
-    id: 'public_retirement',
-    label: 'Public retirement',
-    suggestedFocus: 'approvals_compliance',
-    preselectedSystems: ['salesforce_pss', 'jira', 'servicenow', 'confluence'],
   },
   {
     id: 'service_operations',

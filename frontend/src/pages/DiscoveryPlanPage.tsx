@@ -78,7 +78,6 @@ const INDUSTRY_LABELS: Record<string, string> = {
 
 const TEMPLATE_LABELS: Record<string, string> = {
   commercial_lending: 'Commercial lending',
-  public_retirement: 'Public retirement',
   service_operations: 'Service operations',
   revenue_operations: 'Revenue operations',
 };
