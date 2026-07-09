@@ -35,27 +35,20 @@ const CONNECTION_HEALTH_LABELS: Record<string, string[]> = {
     'Read LLC_BI__Spread_Statement_Period__c records',
     'Read ProcessInstance records',
   ],
-  salesforce_strs: [
-    'Read IndividualApplication records',
-    'Read BenefitAssignment records',
-    'Read Case records (Disability)',
-    'Read Program records',
-    'Read Contact records',
-  ],
   servicenow: [
     'Read Incident records',
-    'Read benefit operations signals',
+    'Read operational signals',
     'Read SLA definitions',
   ],
   jira_confluence: [
     'Read Issue records',
-    'Read benefit operations signals',
+    'Read operational signals',
     'Read Project configuration',
     'Read Space content',
   ],
   jira: [
     'Read Issue records',
-    'Read benefit operations signals',
+    'Read operational signals',
     'Read Sprint data',
   ],
   confluence: [
@@ -90,10 +83,7 @@ function ConnectionHealthSection({ connector }: { connector: Connector }) {
   const healthKey =
     connector.id === 'salesforce' && connector.category?.includes('nCino')
       ? 'salesforce_ncino'
-      : connector.id === 'salesforce' &&
-          (connector.category?.includes('PSS') || connector.category?.includes('Benefits'))
-        ? 'salesforce_strs'
-        : connector.id;
+      : connector.id;
 
   const items =
     CONNECTION_HEALTH_LABELS[healthKey] ??
