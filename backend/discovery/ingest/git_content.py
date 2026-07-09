@@ -806,6 +806,96 @@ class GitContentIngestor(ChangeBasedIngestor):
             from app.retrieval.ingest import remove_content as fn  # type: ignore
         fn(org_id, removals)
 
+    # ── Commit-message corpus (AT-532 / AC6) ─────────────────────────────────
+    def _commit_items(
+        self,
+        reader: "_RepoReader",
+        repo: GitRepoConfig,
+        since_sha: Optional[str],
+        head_sha: str,
+    ) -> List[Dict[str, Any]]:
+        """The commit messages to ingest for one repo this run (AT-532).
+
+        ``since_sha=None`` returns the full corpus reachable at HEAD (a first
+        load); a ``since_sha`` returns only the commits ``since..HEAD`` introduced
+        (the incremental delta). A commit-log read failure degrades to an empty
+        corpus with a warning rather than sinking the run — the file content is
+        the primary signal and must still ingest.
+        """
+        try:
+            commits = reader.commits(since_sha, head_sha)
+        except GitContentError as exc:
+            logger.warning(
+                "git_content: repo '%s' commit-log read failed; skipping the commit "
+                "corpus this run: %s",
+                repo.repo_id,
+                exc,
+            )
+            return []
+        logger.info(
+            "git_content: repo=%s — %d commit message(s) for the corpus (%s)",
+            repo.repo_id,
+            len(commits),
+            "full corpus" if since_sha is None else f"since {since_sha}",
+        )
+        return commits
+
+    def _commit_artifacts(
+        self, repo_id: str, commits: List[Dict[str, Any]]
+    ) -> List[Any]:
+        """Build one ``conversation``-typed ContentArtifact per commit message.
+
+        Each artifact carries author/date provenance and an OBSERVED evidence
+        pointer (AC6). A commit with no SHA or an empty message carries no
+        retrievable 'why', so it is skipped rather than indexed as an empty
+        conversation. Imported lazily to keep this discovery module free of an
+        import-time dependency on the app.retrieval package.
+        """
+        from app.retrieval.ingest import ContentArtifact
+
+        artifacts: List[Any] = []
+        for commit in commits:
+            sha = str(commit.get("sha") or "").strip()
+            message = commit.get("message")
+            if not sha or not (message or "").strip():
+                continue
+            author = commit.get("author") or None
+            author_email = commit.get("author_email") or commit.get("email") or None
+            date = commit.get("date") or None
+            artifacts.append(
+                ContentArtifact(
+                    source_system=SOURCE_SYSTEM,
+                    source_artifact=_commit_artifact_id(repo_id, sha),
+                    content=message,
+                    content_type=COMMIT_CONTENT_TYPE,
+                    source_timestamp=date,
+                    provenance={
+                        "repo": repo_id,
+                        "commit_sha": sha,
+                        "author": author,
+                        "author_email": author_email,
+                        "date": date,
+                        "origin": "observed",
+                        "evidence_pointer": _build_commit_evidence_pointer(
+                            repo_id, sha, date
+                        ),
+                    },
+                )
+            )
+        return artifacts
+
+    def _ingest_commits(self, org_id: str, plan: _RepoPlan) -> None:
+        """Hand this repo's commit-message corpus to the retrieval substrate.
+
+        Routes through the SAME ``_secret_scan`` seam as file content (AT-531):
+        commit messages just as commonly leak credentials, and "redact before
+        index, always" (R18-A2 §1) applies to every path into the substrate.
+        """
+        if not plan.commits:
+            return
+        artifacts = self._commit_artifacts(plan.repo_id, plan.commits)
+        self._ingest_content(org_id, self._secret_scan(artifacts))
+
     # ── Source access: offline fixture vs live git clone ─────────────────────
     def _configured_repos(self, org_id: str) -> List[GitRepoConfig]:
         """Return the repositories configured for content ingestion (opt-in).
