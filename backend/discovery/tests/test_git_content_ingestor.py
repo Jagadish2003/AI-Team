@@ -575,3 +575,105 @@ def test_ac6_commit_message_is_retrievable_through_the_real_chunker():
         assert chunk.source_timestamp == "2026-06-20T14:00:00+00:00"
         # … and a content hash is stamped (freshness / retrieval key off it).
         assert chunk.content_hash
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# AC5 — secrets redacted BEFORE hand-off; redaction recorded (AT-531)
+# ─────────────────────────────────────────────────────────────────────────────
+def _artifact(source_artifact, content, content_type="code", repo="web-app"):
+    from app.retrieval.ingest import ContentArtifact
+
+    return ContentArtifact(
+        source_system="git",
+        source_artifact=source_artifact,
+        content=content,
+        content_type=content_type,
+        source_timestamp="2026-06-20T14:00:00+00:00",
+        provenance={"repo": repo, "origin": "observed"},
+    )
+
+
+def _capture_events(monkeypatch):
+    events: list = []
+    monkeypatch.setattr(
+        "app.telemetry.record_event", lambda et, p=None: events.append((et, p))
+    )
+    return events
+
+
+def test_ac5_secret_scan_redacts_copy_and_records_event(monkeypatch):
+    events = _capture_events(monkeypatch)
+    ing = GitContentIngestor()
+    secret = 'API_KEY = "sk-live-0123456789abcdef"'
+    dirty = _artifact("web-app:src/config.py", "x = 1\n" + secret)
+    clean = _artifact("web-app:src/ok.py", "def f():\n    return 1\n")
+
+    out = ing._secret_scan("org1", [dirty, clean])
+
+    # Dirty artifact is returned as a REDACTED COPY; the original is not mutated.
+    assert "sk-live-0123456789abcdef" not in out[0].content
+    assert "[REDACTED:secret_assignment]" in out[0].content
+    assert "sk-live-0123456789abcdef" in dirty.content
+    assert out[0] is not dirty
+    # Clean artifact passes through untouched (same object).
+    assert out[1] is clean
+
+    red = [p for et, p in events if et == "ingestion.secret_redacted"]
+    assert len(red) == 1
+    ev = red[0]
+    assert ev["org_id"] == "org1"
+    assert ev["connector_id"] == "git_content"
+    assert ev["source_artifact"] == "web-app:src/config.py"
+    assert ev["redaction_count"] == 1
+    assert ev["pattern_types"] == ["secret_assignment"]
+    # The event NEVER carries the secret value.
+    assert "sk-live-0123456789abcdef" not in json.dumps(ev)
+
+
+def test_ac5_clean_content_is_not_recorded(monkeypatch):
+    events = _capture_events(monkeypatch)
+    ing = GitContentIngestor()
+    out = ing._secret_scan("org1", [_artifact("web-app:src/ok.py", "print('hi')\n")])
+    assert [et for et, _ in events if et == "ingestion.secret_redacted"] == []
+    assert out[0].content == "print('hi')\n"
+
+
+def test_ac5_first_run_redacts_seeded_secrets_before_handoff(monkeypatch):
+    events = _capture_events(monkeypatch)
+    ing, fake = _ingestor()
+    list(ing.ingest_changes("org1", None))
+
+    by_id = {a.source_artifact: a for a in fake.artifacts}
+    # Seeded FILE secret (code stream) redacted before the substrate sees it.
+    utils = by_id["web-app:src/utils.py"]
+    assert "sk-live-0123456789abcdef" not in utils.content
+    assert "[REDACTED:secret_assignment]" in utils.content
+    # Seeded COMMIT-MESSAGE secret (conversation stream) redacted before hand-off.
+    d1 = by_id["data-pipeline@d1d1d1d1"]
+    assert "AKIAIOSFODNN7EXAMPLE" not in d1.content
+    assert "[REDACTED:aws_access_key_id]" in d1.content
+
+    # No artifact handed to the substrate anywhere contains either seeded secret.
+    for a in fake.artifacts:
+        assert "sk-live-0123456789abcdef" not in (a.content or "")
+        assert "AKIAIOSFODNN7EXAMPLE" not in (a.content or "")
+
+    # Both redactions recorded for run health — pattern types, never the value.
+    red = {p["source_artifact"]: p for et, p in events if et == "ingestion.secret_redacted"}
+    assert red["web-app:src/utils.py"]["pattern_types"] == ["secret_assignment"]
+    assert red["data-pipeline@d1d1d1d1"]["pattern_types"] == ["aws_access_key_id"]
+    for p in red.values():
+        assert "sk-live-0123456789abcdef" not in json.dumps(p)
+        assert "AKIAIOSFODNN7EXAMPLE" not in json.dumps(p)
+
+
+def test_ac5_scan_runs_for_both_content_streams():
+    """Structural guard: the unconditional seam is invoked on BOTH the file batch
+    and the commit corpus paths (dep T2 + T4)."""
+    import inspect
+
+    src = inspect.getsource(GitContentIngestor.ingest_changes)
+    src += inspect.getsource(GitContentIngestor._ingest_commits)
+    # Every hand-off to the substrate is wrapped in the secret scan.
+    assert src.count("_secret_scan(org_id") == 2
+    assert "_ingest_content(org_id, self._secret_scan(org_id" in src
