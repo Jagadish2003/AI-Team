@@ -34,9 +34,28 @@ re-plumbing this mechanism:
   * per-repo include/exclude path configuration — AT-530 (``_select_paths``);
   * secret-pattern scan + redaction before the substrate — AT-531
     (``_secret_scan``, currently a pass-through);
-  * commit-message corpus ingestion — AT-532;
+  * commit-message corpus ingestion — AT-532 (LANDED — see below);
   * deletion propagation into retrieval freshness — AT-533;
   * structural (tree/inventory) metadata — AT-534.
+
+Commit-message corpus (AT-532 — AC6)
+------------------------------------
+The commit-message corpus is often the richest 'why' record in an engineering
+estate (R18-A2 §1), so it is ingested alongside file content — using the SAME
+SHA-diff/commit-walk mechanism as the file layer. Each commit message is handed
+to the retrieval substrate as its OWN ``conversation``-typed
+:class:`ContentArtifact` (``source_artifact = "{repo_id}@{sha}"``), carrying
+author/date provenance and an ``origin='observed'`` evidence pointer (AC6), so
+every message is individually retrievable and traceable to its commit. A first
+run hands over the corpus reachable at HEAD; an incremental run hands over only
+the commits ``since..HEAD`` introduced (the same delta the file diff reads off).
+
+Commit messages are CONTENT ONLY — they are NOT file-change delta ``records``, so
+they never inflate the commit-count-vs-files-processed check (AC2). The corpus is
+handed over BEFORE any file batch advances a repo's checkpoint to HEAD, so a
+repo's head SHA is never persisted with its commit corpus still un-ingested. The
+handover is idempotent (re-handing an artifact replaces its chunks), so a resumed
+first load skips a corpus it already delivered.
 
 Content handover (R18-A2 §1, and the R18-B1 producer contract)
 --------------------------------------------------------------
@@ -107,6 +126,18 @@ SOURCE_SYSTEM = "git"
 #: Git source/text files chunk under the substrate's *code* policy (file/function
 #: boundaries) — R18-A2 §1.
 CONTENT_TYPE = "code"
+
+#: Commit messages are ingested "as conversation-like content" (R18-A2 §1 /
+#: AT-532), so they chunk under the substrate's *conversation* policy — distinct
+#: from the *code* policy the file bodies use.
+COMMIT_CONTENT_TYPE = "conversation"
+
+#: Separator between a repo id and a commit SHA in a commit message's
+#: ``source_artifact``. Deliberately different from the ``':'`` used for file
+#: paths (``"{repo_id}:{path}"``) so a commit-message artifact can never collide
+#: with a file artifact in the substrate's ``(source_system, source_artifact)``
+#: identity.
+_COMMIT_ARTIFACT_SEP = "@"
 
 #: Opaque-checkpoint schema version, so a future shape change can be detected.
 _CHECKPOINT_VERSION = 1
@@ -221,6 +252,35 @@ def _build_evidence_pointer(
     ).to_dict()
 
 
+def _commit_artifact_id(repo_id: str, sha: str) -> str:
+    """Stable substrate identity for one commit message (AT-532).
+
+    ``"{repo_id}@{sha}"`` — a namespace deliberately disjoint from file artifacts
+    (``"{repo_id}:{path}"``) so a commit message and a file can never share a
+    ``(source_system, source_artifact)`` key in the store.
+    """
+    return f"{repo_id}{_COMMIT_ARTIFACT_SEP}{sha}"
+
+
+def _build_commit_evidence_pointer(
+    repo_id: str, sha: str, timestamp: Optional[str]
+) -> Dict[str, Any]:
+    """Build the R16-B1 OBSERVED EvidencePointer for one commit message (AT-532).
+
+    Mirrors the file pointer: the commit message was read directly from the
+    repository (``origin='observed'``), its ``source_artifact`` is the stable
+    ``"{repo_id}@{sha}"`` commit identity (``source_artifact_type='record_id'``),
+    and ``source_timestamp`` is the commit's authored date — falling back to now
+    only when the date is missing so the mandatory spine is always populated.
+    """
+    return EvidencePointer.observed(
+        source_system=SOURCE_SYSTEM,
+        source_artifact=_commit_artifact_id(repo_id, sha),
+        source_timestamp=timestamp or utc_now_iso(),
+        source_artifact_type="record_id",
+    ).to_dict()
+
+
 # ---------------------------------------------------------------------------
 # Repo configuration + the file/diff model
 # ---------------------------------------------------------------------------
@@ -255,13 +315,19 @@ class _FileWork:
 @dataclass
 class _RepoPlan:
     """The planned work for one repo this run — a slice of files plus the mode
-    and the target HEAD sha the repo advances to on completion."""
+    and the target HEAD sha the repo advances to on completion.
+
+    ``commits`` is the commit-message corpus to hand over this run (AT-532): the
+    full corpus at HEAD on a first load, or only the ``since..HEAD`` commits on an
+    incremental run. It is content-only (handed to the substrate, never a file-
+    change delta record), so a plan can be commit-only (``items`` empty)."""
 
     repo_id: str
     head_sha: str
     mode: str  # "full" (tree load) | "diff" (incremental)
     items: List[_FileWork]
     base_offset: int  # files of the HEAD tree already loaded before this run (full mode)
+    commits: List[Dict[str, Any]] = field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -340,12 +406,24 @@ class GitContentIngestor(ChangeBasedIngestor):
             if plan is not None:
                 pending.append(plan)
 
+        # Hand the commit-message corpus to the substrate BEFORE any file batch
+        # advances a repo's checkpoint (AT-532 / AC6). Commit messages are
+        # content-only — never file-change delta records — so they never inflate
+        # the commit-count-vs-files check (AC2). A repo whose only work is its
+        # commit corpus (no in-scope file changes) has no file batch to carry its
+        # checkpoint advance, so it is advanced here directly.
+        for plan in pending:
+            self._ingest_commits(org_id, plan)
+            if not plan.items:
+                running[plan.repo_id] = {"sha": plan.head_sha, "offset": None}
+
         total_batches = sum(
             (len(p.items) + self.batch_size - 1) // self.batch_size for p in pending
         )
         if total_batches == 0:
-            # Unchanged source (or repos that only advanced to HEAD with no files):
-            # a single empty delta echoing the (possibly advanced) position.
+            # Unchanged source, or repos that only advanced to HEAD with no file
+            # changes (possibly after a commit-only corpus handover above): a
+            # single empty delta echoing the (possibly advanced) position.
             yield DeltaBatch(
                 records=[],
                 next_checkpoint=_encode_checkpoint(running),
@@ -355,6 +433,8 @@ class GitContentIngestor(ChangeBasedIngestor):
 
         emitted = 0
         for plan in pending:
+            if not plan.items:
+                continue  # commit-only repo: handed over and advanced above.
             repo_batches = (len(plan.items) + self.batch_size - 1) // self.batch_size
             for bi, start in enumerate(range(0, len(plan.items), self.batch_size)):
                 page = plan.items[start : start + self.batch_size]
@@ -415,20 +495,33 @@ class GitContentIngestor(ChangeBasedIngestor):
                 )
             all_items = self._tree_items(reader, repo)
             items = all_items[resume_offset:]
-            if not items:
+            # Full commit corpus at HEAD on a genuine first load (or a restart
+            # after HEAD moved — resume_offset reset to 0). A resume that has
+            # already loaded some of the tree (resume_offset > 0) also already
+            # delivered the corpus, so it is not re-handed (AT-532).
+            commits = (
+                self._commit_items(reader, repo, None, head_sha)
+                if resume_offset == 0
+                else []
+            )
+            if not items and not commits:
                 running[repo.repo_id] = {"sha": head_sha, "offset": None}
                 return None
-            return _RepoPlan(repo.repo_id, head_sha, "full", items, resume_offset)
+            return _RepoPlan(repo.repo_id, head_sha, "full", items, resume_offset, commits)
 
         # Steady state: repo fully synced at cursor["sha"].
         if cursor.get("sha") == head_sha:
             return None  # unchanged
         items = self._diff_items(reader, repo, cursor["sha"], head_sha)
-        if not items:
-            # Commits that touched no in-scope file: still advance to HEAD.
+        # Only the commit messages the new commits (since..HEAD) introduced (AC6),
+        # the same delta window the file diff reads off (AC2).
+        commits = self._commit_items(reader, repo, cursor["sha"], head_sha)
+        if not items and not commits:
+            # Commits that touched no in-scope file AND carried no message: still
+            # advance to HEAD.
             running[repo.repo_id] = {"sha": head_sha, "offset": None}
             return None
-        return _RepoPlan(repo.repo_id, head_sha, "diff", items, 0)
+        return _RepoPlan(repo.repo_id, head_sha, "diff", items, 0, commits)
 
     def _advance(
         self,
@@ -535,6 +628,96 @@ class GitContentIngestor(ChangeBasedIngestor):
         if fn is None:
             from app.retrieval.ingest import ingest_content as fn  # type: ignore
         fn(org_id, artifacts)
+
+    # ── Commit-message corpus (AT-532 / AC6) ─────────────────────────────────
+    def _commit_items(
+        self,
+        reader: "_RepoReader",
+        repo: GitRepoConfig,
+        since_sha: Optional[str],
+        head_sha: str,
+    ) -> List[Dict[str, Any]]:
+        """The commit messages to ingest for one repo this run (AT-532).
+
+        ``since_sha=None`` returns the full corpus reachable at HEAD (a first
+        load); a ``since_sha`` returns only the commits ``since..HEAD`` introduced
+        (the incremental delta). A commit-log read failure degrades to an empty
+        corpus with a warning rather than sinking the run — the file content is
+        the primary signal and must still ingest.
+        """
+        try:
+            commits = reader.commits(since_sha, head_sha)
+        except GitContentError as exc:
+            logger.warning(
+                "git_content: repo '%s' commit-log read failed; skipping the commit "
+                "corpus this run: %s",
+                repo.repo_id,
+                exc,
+            )
+            return []
+        logger.info(
+            "git_content: repo=%s — %d commit message(s) for the corpus (%s)",
+            repo.repo_id,
+            len(commits),
+            "full corpus" if since_sha is None else f"since {since_sha}",
+        )
+        return commits
+
+    def _commit_artifacts(
+        self, repo_id: str, commits: List[Dict[str, Any]]
+    ) -> List[Any]:
+        """Build one ``conversation``-typed ContentArtifact per commit message.
+
+        Each artifact carries author/date provenance and an OBSERVED evidence
+        pointer (AC6). A commit with no SHA or an empty message carries no
+        retrievable 'why', so it is skipped rather than indexed as an empty
+        conversation. Imported lazily to keep this discovery module free of an
+        import-time dependency on the app.retrieval package.
+        """
+        from app.retrieval.ingest import ContentArtifact
+
+        artifacts: List[Any] = []
+        for commit in commits:
+            sha = str(commit.get("sha") or "").strip()
+            message = commit.get("message")
+            if not sha or not (message or "").strip():
+                continue
+            author = commit.get("author") or None
+            author_email = commit.get("author_email") or commit.get("email") or None
+            date = commit.get("date") or None
+            artifacts.append(
+                ContentArtifact(
+                    source_system=SOURCE_SYSTEM,
+                    source_artifact=_commit_artifact_id(repo_id, sha),
+                    content=message,
+                    content_type=COMMIT_CONTENT_TYPE,
+                    source_timestamp=date,
+                    provenance={
+                        "repo": repo_id,
+                        "commit_sha": sha,
+                        "author": author,
+                        "author_email": author_email,
+                        "date": date,
+                        "origin": "observed",
+                        "evidence_pointer": _build_commit_evidence_pointer(
+                            repo_id, sha, date
+                        ),
+                    },
+                )
+            )
+        return artifacts
+
+    def _ingest_commits(self, org_id: str, plan: _RepoPlan) -> None:
+        """Hand this repo's commit-message corpus to the retrieval substrate.
+
+        Routes through the SAME ``_secret_scan`` seam as file content (AT-531):
+        commit messages just as commonly leak credentials, and "redact before
+        index, always" (R18-A2 §1) applies to every path into the substrate.
+        """
+        if not plan.commits:
+            return
+        artifacts = self._commit_artifacts(plan.repo_id, plan.commits)
+        self._ingest_content(org_id, self._secret_scan(artifacts))
 
     # ── Source access: offline fixture vs live git clone ─────────────────────
     def _configured_repos(self, org_id: str) -> List[GitRepoConfig]:
@@ -708,6 +891,17 @@ class _RepoReader:
     def diff(self, since_sha: str, head_sha: str) -> Tuple[List[Dict[str, Any]], int]:
         raise NotImplementedError
 
+    def commits(
+        self, since_sha: Optional[str], head_sha: str
+    ) -> List[Dict[str, Any]]:
+        """Commit messages with author/date provenance (AT-532).
+
+        ``since_sha=None`` -> the full corpus reachable at HEAD (first load);
+        otherwise the commits ``since_sha..head_sha`` introduced (incremental).
+        Each entry is ``{sha, message, author, author_email, date}``.
+        """
+        raise NotImplementedError
+
 
 class _FixtureRepoReader(_RepoReader):
     """Deterministic offline reader over one repo entry from the fixture."""
@@ -753,6 +947,33 @@ class _FixtureRepoReader(_RepoReader):
             for c in entry.get("changes", [])
         ]
         return changes, int(entry.get("commit_count", 0) or 0)
+
+    def commits(
+        self, since_sha: Optional[str], head_sha: str
+    ) -> List[Dict[str, Any]]:
+        """The repo's commit list (newest-first) from the fixture.
+
+        The full corpus when ``since_sha`` is None; otherwise the newest commits
+        down to — but not including — ``since_sha`` (the commits the incremental
+        window introduced). An unknown ``since_sha`` (history rewrite) falls back
+        to the full corpus, matching :meth:`diff`'s tolerant re-read.
+        """
+        all_commits = [c for c in self._repo.get("commits", []) if isinstance(c, dict)]
+        if since_sha is None:
+            return list(all_commits)
+        if not any(str(c.get("sha")) == since_sha for c in all_commits):
+            logger.warning(
+                "git_content: since-SHA %r not found in fixture commits; using the "
+                "full corpus",
+                since_sha,
+            )
+            return list(all_commits)
+        out: List[Dict[str, Any]] = []
+        for commit in all_commits:
+            if str(commit.get("sha")) == since_sha:
+                break
+            out.append(commit)
+        return out
 
 
 class _GitCommandRepoReader(_RepoReader):
@@ -845,6 +1066,41 @@ class _GitCommandRepoReader(_RepoReader):
             else:
                 changes.append(self._file_at(path, head_sha, kind))
         return changes, commit_count
+
+    def commits(
+        self, since_sha: Optional[str], head_sha: str
+    ) -> List[Dict[str, Any]]:
+        """Walk ``git log`` for the commit-message corpus (AT-532).
+
+        The commit graph IS the change feed, so nothing polls: a first load reads
+        every commit reachable at HEAD; an incremental run reads only
+        ``since_sha..head_sha``. A field-separator (US, ``0x1f``) / record-
+        separator (RS, ``0x1e``) format keeps multi-line commit bodies intact —
+        newlines inside ``%B`` are not confused with row boundaries. ``%aI`` is the
+        strict-ISO author date; ``%B`` is the raw subject+body.
+        """
+        rng = head_sha if not since_sha else f"{since_sha}..{head_sha}"
+        fmt = "%H%x1f%an%x1f%ae%x1f%aI%x1f%B%x1e"
+        out_text = self._git("log", f"--format={fmt}", rng)
+        commits: List[Dict[str, Any]] = []
+        for record in out_text.split("\x1e"):
+            record = record.strip("\n")
+            if not record.strip():
+                continue
+            parts = record.split("\x1f")
+            if len(parts) < 5:
+                continue
+            sha, author, email, date, message = parts[0], parts[1], parts[2], parts[3], parts[4]
+            commits.append(
+                {
+                    "sha": sha.strip(),
+                    "author": author.strip() or None,
+                    "author_email": email.strip() or None,
+                    "date": date.strip() or None,
+                    "message": message.strip("\n"),
+                }
+            )
+        return commits
 
     def _added(self, path: str, head_sha: str) -> Dict[str, Any]:
         return self._file_at(path, head_sha, ChangeKind.CREATED)
