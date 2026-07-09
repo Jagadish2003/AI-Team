@@ -276,7 +276,27 @@ def default_source(org_id: str) -> DocumentSource:
     """Return the document source for the current mode.
 
     Offline (default): the deterministic fixture. Live: the configured-location
-    scan. Attachment sources from the SharePoint/Confluence connectors are wired in
-    separately (T5) and are not the default here.
+    scan COMPOSED with the SharePoint document-library and Confluence attachment
+    sources (R18-A1 / T5), so files surfaced by the 1.7 connectors flow through the
+    same DocumentIngestor. A connector that is not connected (no vault token)
+    simply contributes nothing — the composite isolates each source (degrade, don't
+    crash), so live document ingestion still runs against whatever IS reachable.
     """
-    return ConfiguredLocationSource() if is_live() else FixtureDocumentSource()
+    if not is_live():
+        return FixtureDocumentSource()
+
+    # Lazy import avoids a module cycle (documents_attachments imports this module)
+    # and keeps the SharePoint/Confluence connectors out of the offline path.
+    from .documents_attachments import (
+        CompositeDocumentSource,
+        ConfluenceDocumentSource,
+        SharePointDocumentSource,
+    )
+
+    return CompositeDocumentSource(
+        [
+            ConfiguredLocationSource(),
+            SharePointDocumentSource(),
+            ConfluenceDocumentSource(),
+        ]
+    )
