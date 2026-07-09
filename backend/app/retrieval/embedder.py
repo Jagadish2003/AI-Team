@@ -25,6 +25,15 @@ What T3 delivers on top of the T1 skeleton:
   model's ``(identity, version)`` is resolved ONCE per batch run from the gateway
   and stamped onto every vector it writes, so retrieval can refuse to compare
   vectors produced by different models.
+
+R18-B2 T5 adds the other half of that stamp's purpose — **model-version
+invalidation + managed backfill (AC5)**. The per-vector stamp is the compatibility
+marker: when the provider/version repins, ``api.retrieve()`` immediately stops
+comparing old-model vectors against the active space (they are invalidated, never
+mixed), and :func:`backfill_stale_model_for_org` re-embeds them onto the active
+model in bounded batches through the SAME gateway path — a controlled background
+convergence, never a sudden blocking re-embed, that never re-embeds
+already-compatible vectors.
 """
 from __future__ import annotations
 
@@ -271,3 +280,169 @@ def embed_pending_all_orgs(
             )
         )
     return results
+
+
+# ---------------------------------------------------------------------------
+# Embedding-model-version invalidation + managed backfill  (R18-B2 T5 / AC5)
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class ModelBackfillResult:
+    """Outcome of one managed model-backfill pass — for logging and tests.
+
+    ``incompatible_seen`` counts old-model vectors this pass tried to backfill;
+    ``reembedded`` counts vectors successfully re-stamped onto the active model;
+    ``batches`` counts gateway calls made. ``model_identity`` / ``model_version``
+    are the ACTIVE stamp everything is being converged onto this pass.
+    """
+
+    org_id: str
+    incompatible_seen: int = 0
+    reembedded: int = 0
+    batches: int = 0
+    model_identity: str = ""
+    model_version: str = ""
+
+
+def backfill_stale_model_for_org(
+    org_id: str,
+    *,
+    batch_size: Optional[int] = None,
+    max_chunks: Optional[int] = None,
+) -> ModelBackfillResult:
+    """Re-embed this org's old-model vectors onto the ACTIVE model (R18-B2 T5 / AC5).
+
+    When the embedding provider/version changes, every vector stamped by the old
+    model is invalidated: ``api.retrieve()`` already refuses to compare it against
+    the active vector space (AC8), so it is effectively removed from retrieval the
+    instant the repin takes effect — retrieval NEVER mixes model generations. This
+    is the MANAGED BACKFILL that then makes those chunks retrievable again: it
+    selects embedded rows whose ``(embedding_model, embedding_model_version)`` stamp
+    differs from the active pair (``store.fetch_stale_model_embedded``), re-embeds
+    them in bounded batches through the gateway, and re-stamps each with the active
+    model's identity + version (``store.set_embedding``) — the SAME batch path the
+    pending pipeline uses, so the boundary rule (gateway-only) and per-vector
+    stamping hold identically.
+
+    Controlled, not a sudden blocking operation (ticket): work is bounded by
+    ``max_chunks`` per pass and driven off the discovery-run path by the background
+    worker. Compatible (active-model) vectors are never re-embedded, so a repin
+    costs only what actually changed.
+
+    Never raises (AC7 posture): a gateway outage, partial batch, or per-row DB error
+    leaves the affected vectors under the old stamp — still excluded from retrieval,
+    retried next pass — rather than breaking anything. Returns a
+    :class:`ModelBackfillResult`.
+
+    ``batch_size``  overrides the configured gateway batch size for this pass.
+    ``max_chunks``  caps how many vectors this pass re-embeds (the worker uses it to
+                    bound one tick); ``None`` drains the whole old-model backlog.
+    """
+    result = ModelBackfillResult(org_id=org_id)
+    try:
+        size = batch_size if batch_size and batch_size > 0 else _batch_size()
+        identity, version = active_embedding_model()
+        result.model_identity, result.model_version = identity, version
+        if not identity:
+            # No usable embedding model — a vector could not be safely re-stamped,
+            # so leave old-model vectors as they are and retry next pass (AC8).
+            logger.info(
+                "embedder: no embedding model identity available; deferring "
+                "model backfill for org %s", org_id,
+            )
+            return result
+
+        remaining = max_chunks
+        while remaining is None or remaining > 0:
+            fetch_n = size if remaining is None else min(size, remaining)
+            stale = store.fetch_stale_model_embedded(
+                org_id, identity, version, limit=fetch_n
+            )
+            if not stale:
+                break
+            result.incompatible_seen += len(stale)
+            stamped = _embed_and_stamp_batch(org_id, stale, identity, version)
+            result.reembedded += stamped
+            result.batches += 1
+            if remaining is not None:
+                remaining -= len(stale)
+            # Same stop rule as the pending pass: a short page means the old-model
+            # backlog is drained; a page that was NOT fully re-stamped (gateway
+            # outage/partial/per-row error) has left those rows under the old stamp,
+            # and the next fetch would return the SAME rows — so stop this pass and
+            # let the next worker tick retry rather than spin on them.
+            if stamped < len(stale) or len(stale) < fetch_n:
+                break
+
+        if result.reembedded:
+            _emit_backfill_telemetry(result)
+    except Exception:  # noqa: BLE001 — backfill must never block a run (AC7)
+        logger.warning(
+            "embedder: model backfill for org %s failed; old-model vectors stay "
+            "invalidated and will be retried", org_id, exc_info=True,
+        )
+    return result
+
+
+def backfill_stale_model_all_orgs(
+    *,
+    batch_size: Optional[int] = None,
+    max_chunks_per_org: Optional[int] = None,
+    max_orgs: int = 100,
+) -> List[ModelBackfillResult]:
+    """Backfill old-model vectors for every org that still has any (background worker).
+
+    Resolves the active model once, enumerates the orgs still holding non-active
+    vectors (``store.orgs_with_stale_model``), and runs
+    :func:`backfill_stale_model_for_org` for each — every content read stays
+    org-scoped (AC3). Per-org failures are isolated (the per-org call never raises),
+    so one tenant's backfill can never stall another's. Returns one
+    :class:`ModelBackfillResult` per org processed; an empty list when there is no
+    active model or nothing to backfill.
+    """
+    results: List[ModelBackfillResult] = []
+    identity, version = active_embedding_model()
+    if not identity:
+        return results
+    try:
+        orgs = store.orgs_with_stale_model(identity, version, limit=max_orgs)
+    except Exception:  # noqa: BLE001 — a scan error must not crash the worker
+        logger.warning(
+            "embedder: could not enumerate orgs with old-model vectors", exc_info=True
+        )
+        return results
+
+    for org_id in orgs:
+        results.append(
+            backfill_stale_model_for_org(
+                org_id, batch_size=batch_size, max_chunks=max_chunks_per_org
+            )
+        )
+    return results
+
+
+def _emit_backfill_telemetry(result: ModelBackfillResult) -> None:
+    """Emit one ``retrieval.model_backfill`` event per org pass that re-embedded.
+
+    Makes the model-version migration observable ('staleness is never invisible'):
+    identifiers, the active model stamp, and counts only — never chunk content or
+    vectors. Imported lazily and fully guarded so a telemetry problem can never
+    break the backfill (which must never block a run).
+    """
+    try:
+        from app.telemetry import record_event
+
+        record_event(
+            "retrieval.model_backfill",
+            {
+                "org_id": result.org_id,
+                "embedding_model": result.model_identity,
+                "embedding_model_version": result.model_version,
+                "reembedded": result.reembedded,
+                "incompatible_seen": result.incompatible_seen,
+                "batches": result.batches,
+            },
+        )
+    except Exception:  # pragma: no cover — telemetry is best-effort
+        logger.debug("embedder: backfill telemetry emit failed", exc_info=True)

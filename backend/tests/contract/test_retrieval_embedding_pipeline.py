@@ -276,3 +276,86 @@ def test_batching_embeds_full_backlog(org):
     assert result.embedded == 5
     assert result.batches == 3
     assert store.count_chunks(org, embedded_only=True) == 5
+
+
+# ---------------------------------------------------------------------------
+# AC5 — model-version invalidation + managed backfill, end-to-end over the store
+# ---------------------------------------------------------------------------
+
+
+def test_ac5_provider_switch_invalidates_then_backfill_restores_retrieval(org, monkeypatch):
+    # Embed one chunk under model A and confirm it is retrievable under A.
+    _index_unembedded(org, "alpha content", source_artifact="doc/a")
+    monkeypatch.setenv("MODEL_EMBEDDING_PROVIDER", _CT_A.name)
+    embedder.embed_pending_for_org(org)
+    assert retrieve(org, "alpha", k=10)
+
+    # Provider/version repins to model B. The old-model vector is INVALIDATED:
+    # retrieval under B never compares against it, so it drops out immediately —
+    # retrieval never mixes model generations.
+    monkeypatch.setenv("MODEL_EMBEDDING_PROVIDER", _CT_B.name)
+    assert retrieve(org, "alpha", k=10) == []
+    assert store.count_stale_model(org, "ct:model-b", "2") == 1
+
+    # The managed backfill re-embeds the old-model vector onto model B...
+    result = embedder.backfill_stale_model_for_org(org)
+    assert result.reembedded == 1
+    assert result.model_identity == "ct:model-b"
+    assert result.model_version == "2"
+
+    # ...and it becomes retrievable again, now under the active model.
+    assert store.count_stale_model(org, "ct:model-b", "2") == 0
+    hits = retrieve(org, "alpha", k=10)
+    assert len(hits) == 1 and hits[0].source_artifact == "doc/a"
+
+    # The stored vector now carries the new model stamp.
+    con = db.connect()
+    try:
+        cur = con.cursor()
+        cur.execute(
+            "SELECT embedding_model, embedding_model_version FROM retrieval_chunks "
+            "WHERE org_id = %s AND source_artifact = %s",
+            (org, "doc/a"),
+        )
+        row = cur.fetchone()
+        assert (row[0], row[1]) == ("ct:model-b", "2")
+    finally:
+        con.close()
+
+
+def test_ac5_backfill_does_not_touch_active_model_vectors(org, monkeypatch):
+    # Content embedded under the active model is never re-embedded by the backfill.
+    _index_unembedded(org, "gamma content", source_artifact="doc/g")
+    monkeypatch.setenv("MODEL_EMBEDDING_PROVIDER", _CT_A.name)
+    embedder.embed_pending_for_org(org)
+    assert store.count_stale_model(org, "ct:model-a", "1") == 0
+
+    result = embedder.backfill_stale_model_for_org(org)  # no repin → nothing to do
+    assert result.incompatible_seen == 0
+    assert result.reembedded == 0
+
+
+def test_ac5_backfill_all_orgs_is_org_partitioned(monkeypatch):
+    monkeypatch.setenv("MODEL_EMBEDDING_PROVIDER", _CT_A.name)
+    org_a, org_b = "ct_t5_part_a", "ct_t5_part_b"
+    _cleanup(org_a)
+    _cleanup(org_b)
+    try:
+        _index_unembedded(org_a, "alpha content", source_artifact="a/1")
+        _index_unembedded(org_b, "alpha content", source_artifact="b/1")
+        embedder.embed_pending_all_orgs()  # both under model A
+
+        # Repin to B; both orgs now hold an old-model vector.
+        monkeypatch.setenv("MODEL_EMBEDDING_PROVIDER", _CT_B.name)
+        results = embedder.backfill_stale_model_all_orgs()
+
+        by_org = {r.org_id: r for r in results}
+        assert {org_a, org_b} <= set(by_org)
+        assert by_org[org_a].reembedded == 1
+        assert by_org[org_b].reembedded == 1
+        # Both converged onto model B, each within its own partition.
+        assert store.count_stale_model(org_a, "ct:model-b", "2") == 0
+        assert store.count_stale_model(org_b, "ct:model-b", "2") == 0
+    finally:
+        _cleanup(org_a)
+        _cleanup(org_b)

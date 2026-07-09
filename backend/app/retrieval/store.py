@@ -603,3 +603,110 @@ def orgs_with_unembedded(limit: int = 100) -> list[str]:
         )
         rows = cur.fetchall()
     return [row[0] for row in rows]
+
+
+# ---------------------------------------------------------------------------
+# Embedding-model-version invalidation + managed backfill  (R18-B2 T5) — AC5.
+# The per-vector (embedding_model, embedding_model_version) stamp IS the
+# compatibility marker: a vector stamped with anything other than the ACTIVE
+# model is incompatible with the active vector space. ``search()`` already refuses
+# to compare across model generations by filtering on the active pair (AC8), so an
+# old-model vector is invalidated the instant the provider/version repins — it can
+# no longer be returned. These reads let the backfill converge every embedded
+# vector back onto the active model without re-embedding compatible ones. Reads are
+# ALWAYS org-scoped.
+# ---------------------------------------------------------------------------
+
+
+# A row's stamp is incompatible with the active model when EITHER the identity or
+# the version differs — ``IS DISTINCT FROM`` so a NULL stamp (never safely
+# comparable) also counts as incompatible. Applied only to embedded rows, so it
+# never overlaps the ``embedding IS NULL`` pending set the normal pipeline drains.
+_STALE_MODEL_PREDICATE = (
+    "embedding IS NOT NULL "
+    "AND (embedding_model IS DISTINCT FROM %s "
+    "     OR embedding_model_version IS DISTINCT FROM %s)"
+)
+
+
+def fetch_stale_model_embedded(
+    org_id: str,
+    embedding_model: str,
+    embedding_model_version: str,
+    limit: int = 128,
+) -> list[dict[str, Any]]:
+    """Return up to ``limit`` of this org's vectors stamped by a NON-active model.
+
+    Feeds the managed backfill (``embedder.backfill_stale_model_for_org``): it
+    selects EMBEDDED rows whose ``(embedding_model, embedding_model_version)`` stamp
+    differs from the active pair — i.e. vectors that a provider/version switch has
+    invalidated (AC5) — and returns just the ``chunk_id`` + ``content`` the backfill
+    needs to re-embed and re-stamp via :func:`set_embedding`.
+
+    HARD org partition: the ``WHERE`` leads with ``org_id = %s`` so the backfill
+    only ever touches a caller org's own content (AC3). Ordered by ``embedded_at``
+    (oldest stamp first) so a repin drains the most-stale vectors first and repeated
+    calls make forward progress.
+    """
+    with closing(db.connect()) as con:
+        cur = con.cursor()
+        cur.execute(
+            "SELECT chunk_id, content "
+            "FROM retrieval_chunks "
+            f"WHERE org_id = %s AND {_STALE_MODEL_PREDICATE} "
+            "ORDER BY embedded_at ASC NULLS FIRST, chunk_id ASC "
+            "LIMIT %s",
+            (org_id, embedding_model, embedding_model_version, int(limit)),
+        )
+        rows = cur.fetchall()
+    return [dict(r) for r in rows]
+
+
+def orgs_with_stale_model(
+    embedding_model: str,
+    embedding_model_version: str,
+    limit: int = 100,
+) -> list[str]:
+    """Return distinct org_ids holding vectors stamped by a NON-active model.
+
+    Lets the background worker enumerate which tenants still have old-model vectors
+    after a provider/version repin and drain each with the org-scoped
+    :func:`fetch_stale_model_embedded` — covering every org while every
+    content-returning read stays partitioned by ``org_id`` (AC3). Returns only org
+    identifiers, never chunk content.
+    """
+    with closing(db.connect()) as con:
+        cur = con.cursor()
+        cur.execute(
+            "SELECT DISTINCT org_id "
+            "FROM retrieval_chunks "
+            f"WHERE {_STALE_MODEL_PREDICATE} "
+            "ORDER BY org_id "
+            "LIMIT %s",
+            (embedding_model, embedding_model_version, int(limit)),
+        )
+        rows = cur.fetchall()
+    return [row[0] for row in rows]
+
+
+def count_stale_model(
+    org_id: str,
+    embedding_model: str,
+    embedding_model_version: str,
+) -> int:
+    """Return how many of this org's vectors are stamped by a NON-active model.
+
+    The backfill-progress signal for the active model (R18-B2 T5): it is the count
+    of old-model vectors still awaiting re-embedding, so it falls to 0 when a repin
+    has fully backfilled. Org-scoped like every read; T6 builds the standing
+    backfill-progress metric on it.
+    """
+    with closing(db.connect()) as con:
+        cur = con.cursor()
+        cur.execute(
+            "SELECT COUNT(*) FROM retrieval_chunks "
+            f"WHERE org_id = %s AND {_STALE_MODEL_PREDICATE}",
+            (org_id, embedding_model, embedding_model_version),
+        )
+        row = cur.fetchone()
+    return int(row[0]) if row else 0
