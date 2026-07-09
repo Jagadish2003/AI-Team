@@ -92,6 +92,24 @@ def pending_count(org_id: str) -> int:
     return int(row[0]) if row else 0
 
 
+def failed_count(org_id: str) -> int:
+    """Return the number of refresh rows parked as ``failed`` for an org (T6).
+
+    A row goes ``failed`` when :func:`mark_failed` exhausts its retry budget —
+    the artifact's chunks stay stale until someone intervenes, so the freshness
+    metrics must surface these rows, not just the pending ones. Org-scoped.
+    """
+    with closing(db.connect()) as con:
+        cur = con.cursor()
+        cur.execute(
+            "SELECT COUNT(*) FROM retrieval_refresh_queue "
+            "WHERE org_id = %s AND status = 'failed'",
+            (org_id,),
+        )
+        row = cur.fetchone()
+    return int(row[0]) if row else 0
+
+
 def fetch_pending(org_id: str, limit: int = 64) -> list[dict[str, Any]]:
     """Return up to ``limit`` of an org's pending refresh rows, oldest first.
 
