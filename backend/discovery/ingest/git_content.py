@@ -33,9 +33,11 @@ re-plumbing this mechanism:
 
   * per-repo include/exclude path configuration — AT-530 (IMPLEMENTED:
     ``_select_paths`` / :class:`PathFilter` / :data:`DEFAULT_EXCLUDE_GLOBS`);
-  * secret-pattern scan + redaction before the substrate — AT-531
-    (``_secret_scan``, currently a pass-through);
-  * commit-message corpus ingestion — AT-532;
+  * secret-pattern scan + redaction before the substrate — AT-531 (IMPLEMENTED:
+    ``_secret_scan`` redacts key/token/password signatures via
+    :mod:`discovery.ingest.secret_redaction` and records an
+    ``ingestion.secret_redacted`` event before any hand-off);
+  * commit-message corpus ingestion — AT-532 (IMPLEMENTED — see below);
   * deletion propagation into retrieval freshness — AT-533 (IMPLEMENTED:
     deleted diff files route to ``retrieval.ingest.remove_content`` so their
     chunks leave retrieval — see ``_remove_content`` / the class docstring);
@@ -97,6 +99,7 @@ secret-free repo configs); ``git rev-parse`` / ``git ls-tree`` / ``git diff`` /
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import logging
 import os
@@ -110,6 +113,7 @@ from app.provenance import EvidencePointer, utc_now_iso
 
 from . import is_live
 from .base import ChangeBasedIngestor, ChangeKind, Checkpoint, DeltaBatch
+from .secret_redaction import scan_and_redact
 
 logger = logging.getLogger(__name__)
 
@@ -591,7 +595,7 @@ class GitContentIngestor(ChangeBasedIngestor):
                 # Hand file content to the substrate BEFORE yielding — the secret
                 # scan (AT-531) sits here, between extraction and the substrate.
                 artifacts = self._to_artifacts(plan.repo_id, plan.head_sha, page)
-                self._ingest_content(org_id, self._secret_scan(artifacts))
+                self._ingest_content(org_id, self._secret_scan(org_id, artifacts))
 
                 # AT-533 (AC3): files deleted in this diff have their chunks removed
                 # from retrieval, so a deleted file stops being retrievable. Done in
@@ -754,16 +758,75 @@ class GitContentIngestor(ChangeBasedIngestor):
             )
         return artifacts
 
-    def _secret_scan(self, artifacts: List[Any]) -> List[Any]:
-        """Redact committed secrets before content reaches the substrate.
+    def _secret_scan(self, org_id: str, artifacts: List[Any]) -> List[Any]:
+        """Redact committed secrets before content reaches the substrate (AT-531).
 
-        Seam for AT-531 (secret-pattern scan + redaction). The scan MUST sit here,
-        between extraction and the substrate, so a leaked credential is never
-        indexed into a retrievable store (R18-A2 §1, "Redact before index,
-        always"). AT-529 wires the seam in unconditionally; it is a pass-through
-        until AT-531 lands the redaction logic.
+        The scan sits here UNCONDITIONALLY, between extraction and the hand-off to
+        ``ingest_content`` — never after indexing — so a leaked credential is never
+        written into a retrievable store (R18-A2 §1, "Redact before index,
+        always"). Both content streams pass through it: path-filtered file bodies
+        (dep T2) and the commit-message corpus (dep T4).
+
+        Each artifact's content is scanned; any key/token/password signature is
+        replaced with a typed placeholder and the redaction is recorded as an
+        ``ingestion.secret_redacted`` event + a WARNING (visible in run health) —
+        carrying pattern types and counts, NEVER the secret value. Artifacts with
+        no secret pass through untouched; a redacted artifact is returned as a copy
+        with its content replaced (the original is never mutated). Recording is
+        fire-and-forget: an observability failure never blocks the redaction.
         """
-        return artifacts
+        if not artifacts:
+            return artifacts
+        scanned: List[Any] = []
+        for art in artifacts:
+            outcome = scan_and_redact(getattr(art, "content", None) or "")
+            if not outcome.redacted:
+                scanned.append(art)
+                continue
+            self._record_redaction(org_id, art, outcome)
+            scanned.append(dataclasses.replace(art, content=outcome.text))
+        return scanned
+
+    def _record_redaction(self, org_id: str, art: Any, outcome: Any) -> None:
+        """Record one artifact's secret redaction for run-health visibility (AC5).
+
+        Emits an ``ingestion.secret_redacted`` telemetry event and a WARNING log —
+        identifiers, pattern types and counts only, NEVER the secret value.
+        Fire-and-forget by contract: a telemetry import/write failure must never
+        break ingestion, so the whole path is guarded.
+        """
+        pattern_types = sorted(set(outcome.pattern_types))
+        prov = getattr(art, "provenance", None) or {}
+        try:
+            from app.telemetry import record_event
+
+            record_event(
+                "ingestion.secret_redacted",
+                {
+                    "org_id": org_id,
+                    "connector_id": self.connector_id,
+                    "source_system": getattr(art, "source_system", SOURCE_SYSTEM),
+                    "source_artifact": getattr(art, "source_artifact", ""),
+                    "content_type": getattr(art, "content_type", ""),
+                    "redaction_count": outcome.count,
+                    "pattern_types": pattern_types,
+                    "repo": prov.get("repo"),
+                    "observed_at": utc_now_iso(),
+                },
+            )
+        except Exception:  # pragma: no cover — observability must not break ingestion
+            logger.warning(
+                "git_content: failed to record secret-redaction event for %s",
+                getattr(art, "source_artifact", "?"),
+            )
+        # Run-health-visible WARNING; the secret value is deliberately absent.
+        logger.warning(
+            "git_content: redacted %d secret(s) [%s] from %s before indexing (org=%s)",
+            outcome.count,
+            ",".join(pattern_types),
+            getattr(art, "source_artifact", "?"),
+            org_id,
+        )
 
     def _ingest_content(self, org_id: str, artifacts: List[Any]) -> None:
         """Hand file content to the retrieval substrate via the producer contract.
@@ -894,7 +957,7 @@ class GitContentIngestor(ChangeBasedIngestor):
         if not plan.commits:
             return
         artifacts = self._commit_artifacts(plan.repo_id, plan.commits)
-        self._ingest_content(org_id, self._secret_scan(artifacts))
+        self._ingest_content(org_id, self._secret_scan(org_id, artifacts))
 
     # ── Source access: offline fixture vs live git clone ─────────────────────
     def _configured_repos(self, org_id: str) -> List[GitRepoConfig]:
