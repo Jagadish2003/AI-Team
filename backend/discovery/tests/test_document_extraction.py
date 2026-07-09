@@ -1,0 +1,90 @@
+"""
+R18-A1 / T1 — unit tests for the document extraction plug point (the format
+boundary). Covers format detection, the built-in text/markdown/CSV handler, the
+loud-skip outcomes, and per-file corrupt-content signalling.
+"""
+from __future__ import annotations
+
+import pytest
+
+from discovery.ingest import extraction
+from discovery.ingest.extraction import (
+    ExtractedText,
+    ExtractionError,
+    ExtractionSkipped,
+    detect_format,
+    extract,
+    register_handler,
+)
+
+
+@pytest.mark.parametrize(
+    "filename,mime,expected",
+    [
+        ("a.pdf", None, "pdf"),
+        ("a.docx", None, "docx"),
+        ("a.xlsx", None, "xlsx"),
+        ("a.pptx", None, "pptx"),
+        ("a.txt", None, "text"),
+        ("a.md", None, "markdown"),
+        ("a.csv", None, "csv"),
+        ("noext", "application/pdf", "pdf"),
+        ("noext", "text/markdown", "markdown"),
+        ("clip.unknown", "video/mp4", "media"),
+        ("mystery", None, "unknown"),
+    ],
+)
+def test_detect_format(filename, mime, expected):
+    assert detect_format(filename, mime) == expected
+
+
+def test_extract_text_markdown_csv_yield_prose():
+    for name in ("notes.txt", "readme.md", "data.csv"):
+        out = extract(b"hello, world", filename=name)
+        assert isinstance(out, ExtractedText)
+        assert out.content == "hello, world"
+        assert out.chunk_content_type == "prose"
+
+
+def test_extract_empty_text_is_truthful_empty_not_a_skip():
+    out = extract(b"", filename="empty.txt")
+    assert isinstance(out, ExtractedText)
+    assert out.content == ""
+
+
+def test_extract_unknown_format_is_unsupported_skip():
+    out = extract(b"...", filename="thing.xyz")
+    assert isinstance(out, ExtractionSkipped)
+    assert out.reason == extraction.UNSUPPORTED_FORMAT
+
+
+def test_extract_media_is_non_text_skip():
+    out = extract(b"...", filename="clip", content_type="audio/mpeg")
+    assert isinstance(out, ExtractionSkipped)
+    assert out.reason == extraction.NON_TEXT_MEDIA
+
+
+def test_extract_recognised_binary_without_handler_is_no_handler_skip():
+    # PDF is a recognised format but has no handler until T2 registers one.
+    out = extract(b"%PDF-1.4", filename="report.pdf")
+    assert isinstance(out, ExtractionSkipped)
+    assert out.reason == extraction.NO_HANDLER
+
+
+def test_extract_undecodable_text_raises_extraction_error():
+    with pytest.raises(ExtractionError):
+        extract(b"\xff\xfe\x00\x01\x02corrupt", filename="broken.txt")
+
+
+def test_register_handler_is_additive_plug_point():
+    """A new format handler slots in without touching the ingestor (T2 pattern)."""
+    sentinel = "xyz"
+    extraction._EXT_FORMAT[".xyz"] = sentinel  # pretend the format is recognised
+    try:
+        register_handler(sentinel, lambda raw, fmt: ExtractedText(content="parsed!"))
+        out = extract(b"anything", filename="thing.xyz")
+        assert isinstance(out, ExtractedText)
+        assert out.content == "parsed!"
+    finally:
+        extraction._EXT_FORMAT.pop(".xyz", None)
+        extraction._HANDLERS.pop(sentinel, None)
