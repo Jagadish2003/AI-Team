@@ -110,14 +110,14 @@ const CONNECTED_SALESFORCE_CONNECTOR: Connector = {
   signalStrength: 90,
 };
 
-const CONNECTED_STRS_SALESFORCE_CONNECTOR: Connector = {
+const CONNECTED_NCINO_SALESFORCE_CONNECTOR: Connector = {
   id: 'salesforce',
   name: 'Salesforce',
   status: 'connected',
   configured: true,
-  category: 'CRM - PSS Benefits Administration',
+  category: 'CRM · Salesforce / nCino',
   tier: 'recommended',
-  reads: ['IndividualApplication', 'BenefitAssignment', 'Case (Disability)'],
+  reads: ['Accounts', 'Opportunities', 'Cases'],
   lastSynced: 'Just now',
   metrics: [],
   signalStrength: 94,
@@ -130,7 +130,7 @@ const CONNECTED_JIRA_CONNECTOR: Connector = {
   configured: true,
   category: 'Delivery - Knowledge',
   tier: 'recommended',
-  reads: ['Issues', 'Benefit Operations', 'Runbooks / Pages'],
+  reads: ['Issues', 'Boards', 'Runbooks / Pages'],
   lastSynced: 'Just now',
   metrics: [],
   signalStrength: 85,
@@ -356,29 +356,32 @@ describe('AC3 — Connection Health section in ConnectorDetailPanel', () => {
     expect(screen.getByText('Read Approval history')).toBeDefined();
   });
 
-  it('shows STRS PSS read labels for a benefits Salesforce connector', () => {
+  it('shows generic nCino banking scope for a Salesforce/nCino connector and no POC benefits object names', () => {
+    // R18-C0 P1 (AC1): the de-POC'd Salesforce/nCino connector shows banking-
+    // relevant object scope; the old 'PSS Benefits Administration' object names
+    // must not appear anywhere in the connector presentation.
     renderWithRouter(
       <ConnectorDetailPanel
-        connector={CONNECTED_STRS_SALESFORCE_CONNECTOR}
+        connector={CONNECTED_NCINO_SALESFORCE_CONNECTOR}
         onConfigure={vi.fn()}
       />
     );
-    expect(screen.getByText('Read IndividualApplication records')).toBeDefined();
-    expect(screen.getByText('Read BenefitAssignment records')).toBeDefined();
-    expect(screen.getByText('Read Case records (Disability)')).toBeDefined();
-    expect(screen.getByText('Read Program records')).toBeDefined();
-    expect(screen.getByText('Read Contact records')).toBeDefined();
+    expect(screen.getByText('Read LLC_BI__Loan__c records')).toBeDefined();
+    expect(screen.getByText('Read LLC_BI__Covenant2__c records')).toBeDefined();
+    expect(screen.queryByText('Read IndividualApplication records')).toBeNull();
+    expect(screen.queryByText('Read BenefitAssignment records')).toBeNull();
+    expect(screen.queryByText('Read Case records (Disability)')).toBeNull();
   });
 
-  it('uses benefit operations signal language for Jira and Confluence', () => {
+  it('uses generic operational-signal language for Jira and Confluence (no POC benefits wording)', () => {
     renderWithRouter(
       <ConnectorDetailPanel
         connector={CONNECTED_JIRA_CONNECTOR}
         onConfigure={vi.fn()}
       />
     );
-    expect(screen.getByText('Read benefit operations signals')).toBeDefined();
-    expect(screen.queryByText('Read lending corroboration signals')).toBeNull();
+    expect(screen.getByText('Read operational signals')).toBeDefined();
+    expect(screen.queryByText('Read benefit operations signals')).toBeNull();
   });
 
   it('does NOT render the section when connector is not_connected', () => {
