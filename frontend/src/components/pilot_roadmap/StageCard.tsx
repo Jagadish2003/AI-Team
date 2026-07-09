@@ -91,7 +91,7 @@ export default function StageCard({ stage, onOpenReview, renderBlueprintLink }: 
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden rounded-xl border border-border bg-panel p-4">
       <div className="flex shrink-0 items-center justify-between">
-        <div className="text-xl font-semibold text-text">Stage Readiness</div>
+        <div className="text-base font-semibold text-text">Stage Readiness</div>
         <ReadinessPill status={gate} />
       </div>
 

@@ -60,6 +60,14 @@ class _Recorder:
         monkeypatch.setattr(
             api.embedder, "active_embedding_model", lambda: ("fake:m", "1")
         )
+        # retrieve() resolves the vector and model identity in ONE call
+        # (embed_texts_with_model) to close the provider-swap TOCTOU (AC8). Mock it
+        # to mirror the pair the two mocks above would have produced.
+        monkeypatch.setattr(
+            api.embedder,
+            "embed_texts_with_model",
+            lambda texts: (([[0.1, 0.2, 0.3]], ("fake:m", "1")) if embed else ([], ("", ""))),
+        )
 
         def _search(**kwargs):
             self.search_calls.append(kwargs)
@@ -123,6 +131,10 @@ def test_source_filter_naming_nothing_valid_returns_empty_without_search(monkeyp
     assert rec.search_calls == []  # scoped to nothing → never widens to all sources
     # Still observable.
     assert rec.telemetry and rec.telemetry[-1][0] == "retrieval.query_completed"
+    # The query is NOT embedded on this early-return path, so the telemetry flag
+    # must report False — monitors tracking embedding success must not see a
+    # phantom embed here (Finding 3).
+    assert rec.telemetry[-1][1]["query_embedded"] is False
 
 
 # ---------------------------------------------------------------------------
@@ -196,6 +208,40 @@ def test_telemetry_records_stale_count_when_including_stale(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
+# AC8 — the query is embedded and the model filter resolved from ONE provider
+# ---------------------------------------------------------------------------
+
+
+def test_search_filters_by_model_identity_from_same_resolution(monkeypatch):
+    rec = _Recorder().install(monkeypatch, rows=[])
+    api.retrieve("org_x", "q")
+    # The identity the store filters by is the one returned WITH the vector.
+    assert rec.search_calls[0]["embedding_model"] == "fake:m"
+    assert rec.search_calls[0]["embedding_model_version"] == "1"
+
+
+def test_retrieve_resolves_vector_and_model_in_a_single_call(monkeypatch):
+    """Finding 2 (TOCTOU): retrieve() must read the query vector and the model
+    identity from ONE provider resolution, not two independent gateway lookups
+    that could straddle a provider swap. If it split them, a provider change
+    between the two would filter a model-A vector by a model-B identity."""
+    rec = _Recorder().install(monkeypatch, rows=[])
+
+    def _split_call_forbidden():
+        raise AssertionError(
+            "retrieve() must not resolve the model identity separately from the "
+            "query embedding — use embed_texts_with_model (Finding 2)"
+        )
+
+    # If retrieve() still called active_embedding_model() as a second, independent
+    # resolution, this would fire.
+    monkeypatch.setattr(api.embedder, "active_embedding_model", _split_call_forbidden)
+    out = api.retrieve("org_x", "q")
+    assert out == []  # no rows, but it completed without the forbidden split call
+    assert rec.search_calls[0]["embedding_model"] == "fake:m"
+
+
+# ---------------------------------------------------------------------------
 # EvidencePointer fields (AC5)
 # ---------------------------------------------------------------------------
 
@@ -241,19 +287,6 @@ def test_gateway_embedding_miss_returns_empty(monkeypatch):
     out = api.retrieve("org_x", "q")
     assert out == []
     assert rec.search_calls == []  # no vector → no search
-    et, payload = rec.telemetry[-1]
-    assert et == "retrieval.query_completed"
-    assert payload["query_embedded"] is False
-
-
-def test_active_model_identity_miss_returns_empty_without_search(monkeypatch):
-    rec = _Recorder().install(monkeypatch, rows=[_row("c1", 0.9)])
-    monkeypatch.setattr(api.embedder, "active_embedding_model", lambda: ("", ""))
-
-    out = api.retrieve("org_x", "q")
-
-    assert out == []
-    assert rec.search_calls == []  # never widen to cross-generation search
     et, payload = rec.telemetry[-1]
     assert et == "retrieval.query_completed"
     assert payload["query_embedded"] is False

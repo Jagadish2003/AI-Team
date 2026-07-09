@@ -43,6 +43,7 @@ from dataclasses import dataclass
 from typing import List, Optional, Tuple
 
 from app.model_gateway import embed as _gateway_embed
+from app.model_gateway import embed_with_identity as _gateway_embed_with_identity
 from app.model_gateway import get_embedding_provider
 from app.retrieval import store
 
@@ -116,6 +117,24 @@ def embed_texts(texts: List[str]) -> List[List[float]]:
     if not texts:
         return []
     return _gateway_embed(texts)
+
+
+def embed_texts_with_model(
+    texts: List[str],
+) -> Tuple[List[List[float]], Tuple[str, str]]:
+    """Embed ``texts`` and return the SAME provider's model identity alongside.
+
+    Like :func:`embed_texts`, but resolves the embedding provider exactly once and
+    reads the vectors and the active ``(identity, version)`` from that one provider
+    (``model_gateway.embed_with_identity``). ``api.retrieve()`` uses this so the
+    model that embedded the query is guaranteed to be the model whose vectors the
+    search filters on — the AC8 "never compare across models" guarantee becomes
+    structural rather than racing two independent gateway lookups. Returns
+    ``([], ("", ""))`` on a gateway miss, consistent with the never-raise posture.
+    """
+    if not texts:
+        return [], ("", "")
+    return _gateway_embed_with_identity(texts)
 
 
 # ---------------------------------------------------------------------------

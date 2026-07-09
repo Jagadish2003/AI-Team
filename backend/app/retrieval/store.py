@@ -133,12 +133,13 @@ def _parse_vector_literal(text: Optional[str]) -> Optional[list[float]]:
 def _insert_chunk_row(cur: Any, rec: RetrievalChunkRecord) -> None:
     """Write one chunk record on an open cursor (INSERT ... ON CONFLICT DO UPDATE).
 
-    Shared by :func:`upsert_chunks` and :func:`swap_artifact_chunks` so the exact
-    column set, the ``embedding`` -> pgvector-literal handling, and the conflict
-    upsert are defined in ONE place. Does not commit — the caller owns the
-    transaction boundary (that is what lets the freshness refresh swap delete + all
-    inserts atomically). Rows are inserted with ``is_stale`` left to its column
-    default (FALSE): a freshly written chunk is current, never stale.
+    Shared by :func:`upsert_chunks`, :func:`replace_artifact_chunks`, and
+    :func:`swap_artifact_chunks` so the exact column set, the ``embedding`` ->
+    pgvector-literal handling, and the conflict upsert are defined in ONE place.
+    Does not commit — the caller owns the transaction boundary (that is what lets
+    the re-ingest and freshness-refresh swaps delete + all inserts atomically).
+    Rows are inserted with ``is_stale`` left to its column default (FALSE): a
+    freshly written chunk is current, never stale.
     """
     row = rec.to_db_row()
     embedding = row.pop("embedding")
@@ -179,6 +180,44 @@ def upsert_chunks(records: Sequence[RetrievalChunkRecord]) -> int:
             written += 1
         con.commit()
     return written
+
+
+def replace_artifact_chunks(
+    org_id: str,
+    source_system: str,
+    source_artifact: str,
+    records: Sequence[RetrievalChunkRecord],
+) -> tuple[int, int]:
+    """Atomically replace one artifact's chunks: DELETE + INSERT in one transaction.
+
+    The re-ingest path (T5): a producer re-hands a changed artifact and its
+    previous chunks must be swapped for the new set. Doing the delete and the
+    inserts as ONE transaction on ONE connection closes the atomicity gap of
+    calling ``delete_by_artifact`` and ``upsert_chunks`` separately — if any
+    insert fails, the whole operation rolls back and the previously indexed
+    chunks are left fully intact (never silently destroyed).
+
+    Returns ``(deleted, written)``. Org-scoped: the DELETE binds ``org_id`` and
+    every inserted row carries it.
+    """
+    with closing(db.connect()) as con:
+        cur = con.cursor()
+        try:
+            cur.execute(
+                "DELETE FROM retrieval_chunks "
+                "WHERE org_id = %s AND source_system = %s AND source_artifact = %s",
+                (org_id, source_system, source_artifact),
+            )
+            deleted = cur.rowcount
+            written = 0
+            for rec in records:
+                _insert_chunk_row(cur, rec)
+                written += 1
+            con.commit()
+        except Exception:
+            con.rollback()
+            raise
+    return deleted, written
 
 
 def set_embedding(

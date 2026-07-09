@@ -142,14 +142,22 @@ def retrieve(
 
     sources = _normalize_source_filter(source_filter)
     if sources is not None and not sources:
-        # Caller explicitly scoped to source systems but named none valid.
+        # Caller explicitly scoped to source systems but named none valid. The
+        # query was NOT embedded on this path (we return before embedding), so the
+        # telemetry flag must be False — otherwise monitors that track gateway
+        # embedding success rates count a phantom embed.
         _emit_query_telemetry(
-            org_id, k, 0, sources, min_score, query_embedded=True,
+            org_id, k, 0, sources, min_score, query_embedded=False,
             include_stale=include_stale, stale_count=0,
         )
         return []
 
-    vectors = embedder.embed_texts([query_text])
+    # AC8: embed the query AND read the active model identity from the SAME
+    # provider in one resolution. Doing this in a single call closes the TOCTOU
+    # where a provider swap (reconfig/failover) between embedding and identity
+    # lookup would filter a model-A query vector by a model-B identity — comparing
+    # vectors across models, which AC8 forbids, and yielding zero matches.
+    vectors, (model_identity, model_version) = embedder.embed_texts_with_model([query_text])
     if not vectors:
         # Gateway degraded (no provider / failure). No candidates — never raise.
         logger.debug("retrieve: query embedding unavailable; returning no candidates")
@@ -160,21 +168,6 @@ def retrieve(
         return []
     query_vector = vectors[0]
 
-    # AC8: restrict to the active embedding model's vectors. T3 stamps every stored
-    # vector with the same (identity, version) pair resolved here, so filtering on
-    # BOTH ensures a query never compares against vectors from a different model or
-    # model version. Resolved once so the provider is not looked up twice.
-    model_identity, model_version = embedder.active_embedding_model()
-    if not model_identity or not model_version:
-        # Without a concrete active model pair, no stored vector can be proven
-        # compatible with the query vector. Returning no candidates is safer than
-        # dropping the model filter and accidentally comparing generations.
-        logger.debug("retrieve: active embedding model unavailable; returning no candidates")
-        _emit_query_telemetry(
-            org_id, k, 0, sources, min_score, query_embedded=False,
-            include_stale=include_stale, stale_count=0,
-        )
-        return []
     rows = store.search(
         org_id=org_id,
         query_vector=query_vector,
