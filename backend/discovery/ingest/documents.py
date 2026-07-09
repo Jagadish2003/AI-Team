@@ -58,6 +58,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple
 
 from app.provenance import EvidencePointer, utc_now_iso
@@ -65,7 +66,13 @@ from app.provenance import EvidencePointer, utc_now_iso
 from .base import ChangeBasedIngestor, ChangeKind, Checkpoint, DeltaBatch, tombstone
 from .documents_source import DocumentRef, DocumentSource, default_source
 from . import extraction
-from .extraction import ExtractedText, ExtractionSkipped, ExtractionOutcome
+from .extraction import (
+    BUDGET_EXCEEDED,
+    SIZE_CAPPED,
+    ExtractedText,
+    ExtractionSkipped,
+    ExtractionOutcome,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -76,6 +83,34 @@ _CHECKPOINT_VERSION = 1
 #: initial load streams as many small, individually-checkpointed batches
 #: (resumability) rather than one monolithic read.
 _DEFAULT_BATCH_SIZE = 100
+
+#: Default per-file size cap (bytes) — a single file larger than this is skipped
+#: with reason rather than read/parsed (R18-A1 T4 / AC4). Overridable per-deployment
+#: via ``DOCUMENT_MAX_FILE_BYTES``; 0 disables the cap.
+_DEFAULT_MAX_FILE_BYTES = 25 * 1024 * 1024  # 25 MiB
+
+#: Default per-run extraction budget (bytes) — once this much file content has been
+#: read in one run, remaining changed files are skipped-with-reason (and retried
+#: next run) so one bulk-upload event cannot starve a run. Overridable via
+#: ``DOCUMENT_EXTRACTION_BUDGET_BYTES``; 0 disables the budget.
+_DEFAULT_EXTRACTION_BUDGET_BYTES = 256 * 1024 * 1024  # 256 MiB
+
+
+def _env_int(name: str, default: int) -> int:
+    """Read a non-negative int env var, falling back to ``default`` if unset/invalid.
+
+    A negative or unparseable value degrades to the default rather than raising —
+    a misconfigured cap must not break ingestion.
+    """
+    raw = os.getenv(name, "").strip()
+    if not raw:
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        logger.warning("documents: %s=%r is not an integer; using default %d", name, raw, default)
+        return default
+    return value if value >= 0 else default
 
 #: The extractor callable signature the ingestor depends on. Defaults to
 #: :func:`extraction.extract`; injectable so tests (and future variants) can plug a
@@ -159,6 +194,17 @@ class DocumentIngestor(ChangeBasedIngestor):
     full-inventory (scan) source lets a file removed from the location be emitted
     as a tombstone; a partial/changed-set source declares False and no deletions
     are inferred.
+
+    Size cap & extraction budget (R18-A1 T4 / AC4): a per-file ``max_file_bytes``
+    cap skips (with reason ``size_capped``) any single file too large to read, and a
+    per-run ``extraction_budget_bytes`` bound skips remaining files (reason
+    ``budget_exceeded``) once a run has read that much content — so one enormous
+    archive or bulk upload cannot starve a run. Both are configurable (constructor
+    args override the ``DOCUMENT_MAX_FILE_BYTES`` / ``DOCUMENT_EXTRACTION_BUDGET_BYTES``
+    env defaults; ``0`` disables a limit). A ``size_capped`` skip advances the
+    checkpoint (deterministic for that file's current signature); a
+    ``budget_exceeded`` skip does NOT (it is transient, so the file is retried next
+    run when budget is available).
     """
 
     connector_id = "documents"
@@ -170,12 +216,25 @@ class DocumentIngestor(ChangeBasedIngestor):
         source: Optional[DocumentSource] = None,
         extractor: Optional[Extractor] = None,
         batch_size: int = _DEFAULT_BATCH_SIZE,
+        max_file_bytes: Optional[int] = None,
+        extraction_budget_bytes: Optional[int] = None,
     ):
         if batch_size < 1:
             raise ValueError("batch_size must be >= 1")
         self.batch_size = batch_size
         self._source = source
         self._extractor = extractor or extraction.extract
+        # Limits: explicit arg wins; otherwise the env default (0 = unlimited).
+        self.max_file_bytes = (
+            _env_int("DOCUMENT_MAX_FILE_BYTES", _DEFAULT_MAX_FILE_BYTES)
+            if max_file_bytes is None
+            else max(0, int(max_file_bytes))
+        )
+        self.extraction_budget_bytes = (
+            _env_int("DOCUMENT_EXTRACTION_BUDGET_BYTES", _DEFAULT_EXTRACTION_BUDGET_BYTES)
+            if extraction_budget_bytes is None
+            else max(0, int(extraction_budget_bytes))
+        )
         # reports_deletes reflects whether the source lists a full inventory.
         if source is not None:
             self.reports_deletes = bool(getattr(source, "reports_deletes", True))
@@ -246,6 +305,8 @@ class DocumentIngestor(ChangeBasedIngestor):
 
         total_batches = (len(work) + self.batch_size - 1) // self.batch_size
         emitted = 0
+        budget_used = 0  # bytes of file content read this run (AC4 budget)
+        skipped_size = skipped_budget = 0
         for start in range(0, len(work), self.batch_size):
             page = work[start : start + self.batch_size]
             records: List[Dict[str, Any]] = []
@@ -257,7 +318,36 @@ class DocumentIngestor(ChangeBasedIngestor):
                     running.pop(item, None)
                     continue
                 ref: DocumentRef = item
-                record, advanced = self._extract_record(org_id, source, ref, previous)
+
+                # Per-file size cap, applied BEFORE the read when the source knows
+                # the size — an enormous file is never downloaded (AC4).
+                if self._exceeds_cap(ref.size_bytes):
+                    records.append(self._skip_record(
+                        ref, previous, SIZE_CAPPED,
+                        f"file is {ref.size_bytes} bytes (cap {self.max_file_bytes})",
+                        size_bytes=ref.size_bytes,
+                    ))
+                    running[ref.artifact_id] = ref.signature  # deterministic → advance
+                    skipped_size += 1
+                    continue
+
+                # Per-run extraction budget: once exhausted, skip the rest of this
+                # run's changed files (retried next run — transient, no advance).
+                if self.extraction_budget_bytes and budget_used >= self.extraction_budget_bytes:
+                    records.append(self._skip_record(
+                        ref, previous, BUDGET_EXCEEDED,
+                        f"per-run extraction budget {self.extraction_budget_bytes} bytes "
+                        "exhausted; retried next run",
+                    ))
+                    skipped_budget += 1
+                    continue
+
+                record, advanced, bytes_read = self._extract_record(
+                    org_id, source, ref, previous
+                )
+                budget_used += bytes_read
+                if record["extraction"].get("reason") == SIZE_CAPPED:
+                    skipped_size += 1
                 records.append(record)
                 if advanced:
                     running[ref.artifact_id] = ref.signature
@@ -270,16 +360,60 @@ class DocumentIngestor(ChangeBasedIngestor):
                 is_complete=(emitted == total_batches),
             )
 
+        if skipped_size or skipped_budget:
+            # Surfaced in run health: how much coverage the caps/budget cost (AC4).
+            logger.warning(
+                "documents: org=%s — %d file(s) skipped over size cap, %d over the "
+                "per-run extraction budget (%d bytes read).",
+                org_id, skipped_size, skipped_budget, budget_used,
+            )
+
+    # ── Size-cap / budget helpers (R18-A1 T4 / AC4) ──────────────────────────
+    def _exceeds_cap(self, size_bytes: Optional[int]) -> bool:
+        """True when a KNOWN file size exceeds the configured per-file cap.
+
+        Returns False when the cap is disabled (0) or the size is unknown — the
+        unknown case is re-checked against the actual byte length after the read.
+        """
+        return bool(self.max_file_bytes) and size_bytes is not None and size_bytes > self.max_file_bytes
+
+    def _skip_record(
+        self,
+        ref: DocumentRef,
+        previous: Dict[str, str],
+        reason: str,
+        detail: str,
+        *,
+        size_bytes: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        """Build a skipped-with-reason record (loud, never silent emptiness — AC4)."""
+        change_kind = (
+            ChangeKind.CREATED if ref.artifact_id not in previous else ChangeKind.UPDATED
+        )
+        document_format = extraction.detect_format(ref.filename, ref.content_type)
+        record = self._base_record(ref, change_kind, document_format)
+        block: Dict[str, Any] = {"status": "skipped", "reason": reason, "detail": detail}
+        if size_bytes is not None:
+            block["size_bytes"] = size_bytes
+        record["extraction"] = block
+        logger.warning(
+            "documents: artifact %s skipped (%s)", ref.artifact_id, reason
+        )
+        return record
+
     # ── Per-file extraction (isolated) ───────────────────────────────────────
     def _extract_record(
         self, org_id: str, source: DocumentSource, ref: DocumentRef, previous: Dict[str, str]
-    ) -> Tuple[Dict[str, Any], bool]:
+    ) -> Tuple[Dict[str, Any], bool, int]:
         """Read + extract one file into a record, isolating any failure to it (AC5).
 
-        Returns ``(record, advanced)``: ``advanced`` is True when the checkpoint
-        signature should move forward for this file (a successful extraction or a
-        DELIBERATE skip) and False when it must not (an unexpected extraction error,
-        so the file is retried next run). No document content is ever logged.
+        Returns ``(record, advanced, bytes_read)``. ``advanced`` is True when the
+        checkpoint signature should move forward for this file (a successful
+        extraction or a DELIBERATE skip — including a post-read size cap) and False
+        when it must not (an unexpected extraction error, so the file is retried
+        next run). ``bytes_read`` is the file's byte length that counts against the
+        per-run extraction budget (0 when the read itself failed). No document
+        content is ever logged.
         """
         change_kind = (
             ChangeKind.CREATED if ref.artifact_id not in previous else ChangeKind.UPDATED
@@ -288,16 +422,10 @@ class DocumentIngestor(ChangeBasedIngestor):
 
         try:
             raw = source.read(org_id, ref)
-            outcome: ExtractionOutcome = self._extractor(
-                raw, filename=ref.filename, content_type=ref.content_type
-            )
-        except Exception as exc:  # noqa: BLE001 — one bad file never sinks the run
+        except Exception as exc:  # noqa: BLE001 — one unreadable file never sinks the run
             logger.warning(
-                "documents: extraction FAILED (org=%s artifact=%s format=%s): %s",
-                org_id,
-                ref.artifact_id,
-                document_format,
-                type(exc).__name__,
+                "documents: read FAILED (org=%s artifact=%s): %s",
+                org_id, ref.artifact_id, type(exc).__name__,
             )
             record = self._base_record(ref, change_kind, document_format)
             record["extraction"] = {
@@ -305,7 +433,39 @@ class DocumentIngestor(ChangeBasedIngestor):
                 "reason": type(exc).__name__,
                 "detail": str(exc),
             }
-            return record, False
+            return record, False, 0
+
+        size = len(raw)
+        # Post-read size cap: the source did not know the size up front, so it is
+        # enforced now against the actual bytes (AC4). The read cost still counts
+        # against the budget.
+        if self._exceeds_cap(size):
+            return (
+                self._skip_record(
+                    ref, previous, SIZE_CAPPED,
+                    f"file is {size} bytes (cap {self.max_file_bytes})",
+                    size_bytes=size,
+                ),
+                True,
+                size,
+            )
+
+        try:
+            outcome: ExtractionOutcome = self._extractor(
+                raw, filename=ref.filename, content_type=ref.content_type
+            )
+        except Exception as exc:  # noqa: BLE001 — one bad file never sinks the run
+            logger.warning(
+                "documents: extraction FAILED (org=%s artifact=%s format=%s): %s",
+                org_id, ref.artifact_id, document_format, type(exc).__name__,
+            )
+            record = self._base_record(ref, change_kind, document_format)
+            record["extraction"] = {
+                "status": "error",
+                "reason": type(exc).__name__,
+                "detail": str(exc),
+            }
+            return record, False, size
 
         record = self._base_record(ref, change_kind, document_format)
         if isinstance(outcome, ExtractionSkipped):
@@ -318,7 +478,7 @@ class DocumentIngestor(ChangeBasedIngestor):
             logger.info(
                 "documents: artifact %s skipped (%s)", ref.artifact_id, outcome.reason
             )
-            return record, True
+            return record, True, size
 
         # Successful extraction — carry the text + policy for the T3 hand-off.
         extracted: ExtractedText = outcome
@@ -330,7 +490,7 @@ class DocumentIngestor(ChangeBasedIngestor):
             merged = dict(record.get("provenance") or {})
             merged.update(extracted.provenance)
             record["provenance"] = merged
-        return record, True
+        return record, True, size
 
     def _base_record(
         self, ref: DocumentRef, change_kind: str, document_format: str

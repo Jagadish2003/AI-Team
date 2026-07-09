@@ -118,6 +118,12 @@ UNSUPPORTED_FORMAT = "unsupported_format"
 NO_HANDLER = "no_handler"
 #: Audio / video / other binary that carries no document text.
 NON_TEXT_MEDIA = "non_text_media"
+#: The file exceeds the configured per-file size cap (R18-A1 T4 / AC4). Recorded
+#: by the ingestor, not a format handler — the file is never read/parsed.
+SIZE_CAPPED = "size_capped"
+#: The per-run extraction budget was exhausted before this file (R18-A1 T4 / AC4).
+#: A TRANSIENT, run-level skip: the file is retried on the next run.
+BUDGET_EXCEEDED = "budget_exceeded"
 
 
 # ---------------------------------------------------------------------------

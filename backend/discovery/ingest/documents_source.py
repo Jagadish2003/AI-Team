@@ -80,6 +80,11 @@ class DocumentRef:
                          stream oldest-first and to stamp the evidence pointer.
     ``content_type``     optional MIME hint from the source, assisting format
                          detection when the extension is ambiguous/absent.
+    ``size_bytes``       the file's size in bytes when the source knows it up front
+                         (a scan stat, a SharePoint/Confluence size field). Lets the
+                         ingestor apply the per-file size cap WITHOUT downloading an
+                         enormous file (R18-A1 T4 / AC4). ``None`` when unknown — the
+                         cap is then applied after the read.
     ``provenance``       optional extra non-secret provenance (author, url, …)
                          carried onto every record.
     """
@@ -90,6 +95,7 @@ class DocumentRef:
     signature: str
     source_timestamp: Optional[str] = None
     content_type: Optional[str] = None
+    size_bytes: Optional[int] = None
     provenance: Dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
@@ -168,9 +174,15 @@ class FixtureDocumentSource(DocumentSource):
             artifact_id = str(entry.get("artifact_id", "")).strip()
             if not artifact_id:
                 continue
+            raw_bytes = _content_bytes(entry)
             signature = str(entry.get("signature") or "").strip()
             if not signature:
-                signature = hashlib.sha256(_content_bytes(entry)).hexdigest()
+                signature = hashlib.sha256(raw_bytes).hexdigest()
+            # Explicit size_bytes wins (lets a fixture declare an oversized file
+            # without carrying huge bytes); otherwise use the inline content length.
+            size_bytes = entry.get("size_bytes")
+            if size_bytes is None:
+                size_bytes = len(raw_bytes)
             refs.append(
                 DocumentRef(
                     artifact_id=artifact_id,
@@ -179,6 +191,7 @@ class FixtureDocumentSource(DocumentSource):
                     signature=signature,
                     source_timestamp=entry.get("source_timestamp"),
                     content_type=entry.get("content_type"),
+                    size_bytes=int(size_bytes),
                     provenance=dict(entry.get("provenance") or {}),
                 )
             )
@@ -237,6 +250,7 @@ class ConfiguredLocationSource(DocumentSource):
                             location=name,
                             signature=f"{stat.st_mtime_ns}:{stat.st_size}",
                             source_timestamp=ts,
+                            size_bytes=stat.st_size,
                             provenance={"path": str(path)},
                         )
                     )
