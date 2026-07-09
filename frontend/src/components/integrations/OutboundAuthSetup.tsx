@@ -42,7 +42,19 @@ function formatUpdated(iso: string | null): string | null {
   });
 }
 
-export default function OutboundAuthSetup({ connector }: { connector: Connector }) {
+export default function OutboundAuthSetup({
+  connector,
+  autoOpen = false,
+  onAutoOpenHandled,
+}: {
+  connector: Connector;
+  // R18-A3 T5 (AT-558): when true (the tile's "Set up outbound access" was
+  // clicked for this connector), auto-open the outbound setup — the JWT-bearer
+  // modal for a jwt connector. onAutoOpenHandled clears the one-shot intent so it
+  // fires only on the click, never on a later re-render or plain selection.
+  autoOpen?: boolean;
+  onAutoOpenHandled?: () => void;
+}) {
   const auth = useAuthOptional();
   const isOwner = auth?.user?.role === 'owner';
   const toast = useToast();
@@ -77,6 +89,19 @@ export default function OutboundAuthSetup({ connector }: { connector: Connector 
     setConfirmRemove(false);
     return loadJwtStatus();
   }, [loadJwtStatus]);
+
+  // R18-A3 T5 (AT-558): the tile's "Set up outbound access" raised an intent for
+  // this connector — open its outbound setup. For a jwt_bearer connector
+  // (Salesforce) that means opening the key modal; for a client-credentials-only
+  // connector the panel section is already visible via selection. Either way the
+  // one-shot intent is consumed so it never re-fires.
+  useEffect(() => {
+    if (!autoOpen) return;
+    if (supportsJwt) {
+      setModalOpen(true);
+    }
+    onAutoOpenHandled?.();
+  }, [autoOpen, supportsJwt, onAutoOpenHandled]);
 
   // Only relevant in no-public-inbound; and only for outbound modes that need a
   // dedicated setup UI here (static is handled by StaticCredentialManager).

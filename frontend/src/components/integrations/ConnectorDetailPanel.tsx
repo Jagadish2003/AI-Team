@@ -129,9 +129,15 @@ function ConnectionHealthSection({ connector }: { connector: Connector }) {
 export default function ConnectorDetailPanel({
   connector,
   onConfigure,
+  outboundIntentId,
+  onOutboundIntentHandled,
 }: {
   connector: Connector | null;
   onConfigure: () => void;
+  // R18-A3 T5 (AT-558): when this equals the shown connector's id, auto-open its
+  // outbound setup (the JWT-bearer modal); onOutboundIntentHandled clears it.
+  outboundIntentId?: string | null;
+  onOutboundIntentHandled?: () => void;
 }) {
   const { push } = useToast();
   // Configure & Sync / Re-sync triggers a write (analyst+). Viewers get a
@@ -197,7 +203,11 @@ export default function ConnectorDetailPanel({
           client_credentials (Salesforce, Teams/SharePoint, ServiceNow). This is
           where the customer is routed after the authorization-code Connect button
           is hidden on the tile (AC4). Renders null outside no_public_inbound. */}
-      <OutboundAuthSetup connector={connector} />
+      <OutboundAuthSetup
+        connector={connector}
+        autoOpen={outboundIntentId === connector.id}
+        onAutoOpenHandled={onOutboundIntentHandled}
+      />
 
       {/* Salesforce product declaration — rendered first in the panel so the
           workspace declaration is visible at the top of the right panel. */}

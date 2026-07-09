@@ -50,9 +50,14 @@ function disconnectedSalesforce() {
   };
 }
 
-function renderTile(handlers: { onSelect?: () => void; onPrimary?: () => void }) {
+function renderTile(handlers: {
+  onSelect?: () => void;
+  onPrimary?: () => void;
+  onOutboundSetup?: () => void;
+}) {
   const onSelect = handlers.onSelect ?? vi.fn();
   const onPrimary = handlers.onPrimary ?? vi.fn();
+  const onOutboundSetup = handlers.onOutboundSetup;
   render(
     <ConnectorTile
       connector={disconnectedSalesforce() as any}
@@ -61,9 +66,10 @@ function renderTile(handlers: { onSelect?: () => void; onPrimary?: () => void })
       onSelect={onSelect}
       onPrimary={onPrimary}
       onReconnect={vi.fn()}
+      onOutboundSetup={onOutboundSetup}
     />,
   );
-  return { onSelect, onPrimary };
+  return { onSelect, onPrimary, onOutboundSetup };
 }
 
 beforeEach(() => {
@@ -90,7 +96,7 @@ describe('ConnectorTile — NETWORK_PROFILE gating (AT-558)', () => {
     ).toBeInTheDocument();
   });
 
-  it('no_public_inbound: the outbound button opens the panel, never starts OAuth', () => {
+  it('no_public_inbound: falls back to onSelect when no outbound handler is wired', () => {
     np.hide = true;
     const { onSelect, onPrimary } = renderTile({});
     fireEvent.click(
@@ -98,5 +104,19 @@ describe('ConnectorTile — NETWORK_PROFILE gating (AT-558)', () => {
     );
     expect(onSelect).toHaveBeenCalledTimes(1);
     expect(onPrimary).not.toHaveBeenCalled();
+  });
+
+  it('no_public_inbound: invokes onOutboundSetup (opens the setup), never OAuth', () => {
+    np.hide = true;
+    const onOutboundSetup = vi.fn();
+    const { onSelect, onPrimary } = renderTile({ onOutboundSetup });
+    fireEvent.click(
+      screen.getByRole('button', { name: /set up outbound access/i }),
+    );
+    // The button routes to the outbound setup handler, not OAuth and not a bare
+    // re-select — this is what makes the button actually do something.
+    expect(onOutboundSetup).toHaveBeenCalledTimes(1);
+    expect(onPrimary).not.toHaveBeenCalled();
+    expect(onSelect).not.toHaveBeenCalled();
   });
 });

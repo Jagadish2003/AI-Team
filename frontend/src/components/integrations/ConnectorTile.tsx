@@ -27,6 +27,7 @@ export default function ConnectorTile({
   onSelect,
   onPrimary,
   onReconnect,
+  onOutboundSetup,
   connectBlocked,
   connectBlockMessage,
 }: {
@@ -39,6 +40,11 @@ export default function ConnectorTile({
   // "Reconnect". Must trigger the OAuth flow again (CS-2 AC7). Falls back to
   // onPrimary when not supplied so the tile keeps working in isolation.
   onReconnect?: () => void;
+  // R18-A3 T5 (AT-558): fired when the "Set up outbound access" button is clicked
+  // (no-public-inbound deployments). Selects the connector AND opens its outbound
+  // setup in the detail panel (the JWT-bearer modal). Falls back to onSelect when
+  // not supplied so the tile still works in isolation.
+  onOutboundSetup?: () => void;
   // R17-D4 Addendum A / T11 (AT-506): when the org is at its licensed system
   // limit, disable the Connect action for a NEW (not-yet-connected) system and
   // show connectBlockMessage as its tooltip (AC10). Forward-only — an already
@@ -199,10 +205,16 @@ export default function ConnectorTile({
             e.stopPropagation();
             // R18-A3 T5 (AT-558): in a no-public-inbound deployment, never start
             // the authorization-code flow for a connector with an outbound-only
-            // mode — open the detail panel (outbound setup path) instead so the
-            // customer can never begin a flow that cannot complete (AC4).
+            // mode — route the customer to the outbound setup instead (AC4). This
+            // selects the connector AND opens its outbound setup (the JWT-bearer
+            // modal) in the detail panel; fall back to onSelect when no handler
+            // is wired so the tile still works in isolation.
             if (outboundSetupGate) {
-              onSelect();
+              if (onOutboundSetup) {
+                onOutboundSetup();
+              } else {
+                onSelect();
+              }
               return;
             }
             // When the token needs a fresh OAuth round-trip, "Reconnect" must

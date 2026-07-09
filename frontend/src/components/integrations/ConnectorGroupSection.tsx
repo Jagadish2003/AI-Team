@@ -46,6 +46,8 @@ interface Props {
   onSelect:   (id: string) => void;
   onPrimary:  (id: string) => void;
   onReconnect?: (id: string) => void;
+  // R18-A3 T5 (AT-558): open a connector's outbound setup (no-public-inbound).
+  onOutboundSetup?: (id: string) => void;
   onAddSource: (categoryId: string) => void;
   // R17-D4 Addendum A / T11: when the org is at its licensed system limit, the
   // Connect action on not-yet-connected tiles is disabled with connectBlockMessage
@@ -56,7 +58,7 @@ interface Props {
 }
 
 export default function ConnectorGroupSection({
-  group, selectedId, onSelect, onPrimary, onReconnect, onAddSource,
+  group, selectedId, onSelect, onPrimary, onReconnect, onOutboundSetup, onAddSource,
   connectBlocked, connectBlockMessage,
 }: Props) {
   const hasConnectors = group.connectors.length > 0;
@@ -100,6 +102,7 @@ export default function ConnectorGroupSection({
                 onSelect={() => onSelect(c.id)}
                 onPrimary={() => onPrimary(c.id)}
                 onReconnect={onReconnect ? () => onReconnect(c.id) : undefined}
+                onOutboundSetup={onOutboundSetup ? () => onOutboundSetup(c.id) : undefined}
                 connectBlocked={connectBlocked}
                 connectBlockMessage={connectBlockMessage}
               />

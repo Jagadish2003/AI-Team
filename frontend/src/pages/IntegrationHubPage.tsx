@@ -143,6 +143,11 @@ export default function IntegrationHubPage() {
   const groupRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const [highlightedCategory, setHighlightedCategory] = useState<string | null>(null);
 
+  // R18-A3 T5 (AT-558): the connector whose outbound setup should auto-open (set
+  // when its tile "Set up outbound access" button is clicked; cleared once the
+  // detail panel has opened the setup). Null when no intent is pending.
+  const [outboundIntentId, setOutboundIntentId] = useState<string | null>(null);
+
   // Scroll to and highlight the deep-linked category on mount
   useEffect(() => {
     if (!deepLinkCategory || loading) return;
@@ -298,6 +303,16 @@ export default function IntegrationHubPage() {
     connectConnector(id);
   }
 
+  // R18-A3 T5 (AT-558): "Set up outbound access" on a tile (no-public-inbound).
+  // Select the connector so its detail panel is shown AND raise an outbound-setup
+  // intent for it, which auto-opens the outbound setup (the JWT-bearer modal) in
+  // OutboundAuthSetup. The intent is cleared once handled so it fires only on the
+  // click, never on a plain card selection.
+  function handleOutboundSetup(id: string) {
+    selectConnector(id);
+    setOutboundIntentId(id);
+  }
+
   // "Add a source" CTA — navigate to /integration-hub?category={id}
   // When this is the current page (user clicked another group's CTA),
   // scroll to that group instead of navigating away.
@@ -357,6 +372,7 @@ export default function IntegrationHubPage() {
                     }}
                     onPrimary={handlePrimary}
                     onReconnect={handleReconnect}
+                    onOutboundSetup={handleOutboundSetup}
                     onAddSource={handleAddSource}
                     connectBlocked={atSystemLimit}
                     connectBlockMessage={systemLimitMsg}
@@ -369,6 +385,8 @@ export default function IntegrationHubPage() {
             <div className="min-w-0">
               <RightPanel
                 selected={selected}
+                outboundIntentId={outboundIntentId}
+                onOutboundIntentHandled={() => setOutboundIntentId(null)}
                 onConfigure={() => {
                   if (!selected) return;
                   configureSync(selected.id);
