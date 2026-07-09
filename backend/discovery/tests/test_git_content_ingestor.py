@@ -134,8 +134,11 @@ def test_ac1_first_run_loads_full_head_tree_skipping_binary():
     assert "web-app:assets/logo.png" not in seen
 
     # Every non-binary file was handed to the substrate as observed code content.
-    assert len(fake.artifacts) == len(_ALL_TREE)
-    art = next(a for a in fake.artifacts if a.source_artifact == "web-app:src/main.py")
+    # (Commit-message artifacts — content_type 'conversation' — are handed over on
+    # the same run but counted separately; AT-532 covers them.)
+    file_arts = [a for a in fake.artifacts if a.content_type == "code"]
+    assert len(file_arts) == len(_ALL_TREE)
+    art = next(a for a in file_arts if a.source_artifact == "web-app:src/main.py")
     assert art.source_system == "git"
     assert art.content_type == "code"
     assert art.content  # real file text
@@ -247,7 +250,9 @@ def test_ac2_incremental_processes_only_touched_files():
     assert by_id["web-app:src/legacy.py"]["change_kind"] == "deleted"
 
     # A deletion carries no content and is not indexed; only the 2 live files are.
-    handed = {a.source_artifact for a in fake.artifacts}
+    # (Scoped to file content — commit messages, content_type 'conversation', are
+    # a separate stream asserted in the AT-532 tests below.)
+    handed = {a.source_artifact for a in fake.artifacts if a.content_type == "code"}
     assert handed == {"web-app:src/main.py", "web-app:src/new_feature.py"}
 
 
@@ -338,3 +343,235 @@ def test_round_trip_through_runner_then_back_yields_empty_delta():
     again = list(ing2.ingest_changes("org1", cp))
     assert all(b.is_empty for b in again)
     assert fake.artifacts == []
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# AC6 — commit-message corpus is retrievable with author/date provenance (AT-532)
+# ─────────────────────────────────────────────────────────────────────────────
+def _commits(fake) -> list:
+    """Commit-message artifacts handed to the substrate (content_type conversation)."""
+    return [a for a in fake.artifacts if a.content_type == "conversation"]
+
+
+def test_ac6_first_run_ingests_full_commit_corpus_with_provenance():
+    ing, fake = _ingestor()
+    list(ing.ingest_changes("org1", None))
+
+    commits = _commits(fake)
+    by_id = {a.source_artifact: a for a in commits}
+    # Full corpus at HEAD for both repos: 3 (web-app) + 2 (data-pipeline).
+    assert set(by_id) == {
+        "web-app@c3c3c3c3",
+        "web-app@c2c2c2c2",
+        "web-app@c1c1c1c1",
+        "data-pipeline@d2d2d2d2",
+        "data-pipeline@d1d1d1d1",
+    }
+
+    art = by_id["web-app@c3c3c3c3"]
+    # Conversation-like content, observed, retrievable text is the commit message.
+    assert art.source_system == "git"
+    assert art.content_type == "conversation"
+    assert "compute_discount" in art.content
+    # Author + date provenance attached to EACH message (AC6).
+    prov = art.provenance
+    assert prov["repo"] == "web-app"
+    assert prov["commit_sha"] == "c3c3c3c3"
+    assert prov["author"] == "Alice Ng"
+    assert prov["author_email"] == "alice@example.com"
+    assert prov["date"] == "2026-06-20T14:00:00+00:00"
+    assert prov["origin"] == "observed"
+    # OBSERVED evidence pointer back to the exact commit.
+    ev = prov["evidence_pointer"]
+    assert ev["source_system"] == "git"
+    assert ev["origin"] == "observed"
+    assert ev["source_artifact"] == "web-app@c3c3c3c3"
+    assert ev["source_timestamp"] == "2026-06-20T14:00:00+00:00"
+    # Timestamp is the commit's authored date, carried to the substrate.
+    assert art.source_timestamp == "2026-06-20T14:00:00+00:00"
+
+
+def test_ac6_commit_artifact_id_namespace_is_disjoint_from_files():
+    ing, fake = _ingestor()
+    list(ing.ingest_changes("org1", None))
+    file_ids = {a.source_artifact for a in fake.artifacts if a.content_type == "code"}
+    commit_ids = {a.source_artifact for a in _commits(fake)}
+    # A commit message and a file can never collide on (source_system, artifact).
+    assert not (file_ids & commit_ids)
+    assert all("@" in cid for cid in commit_ids)
+    assert all(":" in fid for fid in file_ids)
+
+
+def test_ac6_commit_messages_are_not_delta_records():
+    """Commit messages are CONTENT ONLY — they must not appear as file-change
+    delta records, so they never inflate the commit-count-vs-files check (AC2)."""
+    ing, _ = _ingestor()
+    batches = list(ing.ingest_changes("org1", None))
+    records = [r for b in batches for r in b.records]
+    # Every delta record is a file (content_type 'code'); no commit slipped in.
+    assert records
+    assert all(r["content_type"] == "code" for r in records)
+    assert all("@" not in r["artifact_id"] for r in records)
+
+
+def test_ac6_incremental_ingests_only_new_commits():
+    ing, fake = _ingestor()
+    list(ing.ingest_changes("org1", _incremental_since()))
+    commit_ids = {a.source_artifact for a in _commits(fake)}
+    # web-app synced at c1 → only the 2 commits c1..c3 introduced (matches the
+    # fixture diff's commit_count=2). data-pipeline already at HEAD → no commits.
+    assert commit_ids == {"web-app@c3c3c3c3", "web-app@c2c2c2c2"}
+
+
+def test_ac6_incremental_commit_count_matches_fixture_commit_count():
+    """The other half of commit-count vs corpus-size: the number of new commit
+    messages equals the matching diff's recorded commit_count."""
+    with open(FIXTURE_PATH, encoding="utf-8") as fh:
+        fixture = json.load(fh)
+    web = next(r for r in fixture["repos"] if r["repo_id"] == "web-app")
+    expected = web["diffs"]["c1c1c1c1"]["commit_count"]
+
+    ing, fake = _ingestor()
+    list(ing.ingest_changes("org1", _incremental_since()))
+    web_commits = [a for a in _commits(fake) if a.provenance["repo"] == "web-app"]
+    assert len(web_commits) == expected == 2
+
+
+def test_ac6_unchanged_source_ingests_no_commits():
+    since = Checkpoint.create(
+        "git_content",
+        "org1",
+        _encode_checkpoint(
+            {"web-app": _complete("c3c3c3c3"), "data-pipeline": _complete("d2d2d2d2")}
+        ),
+    )
+    ing, fake = _ingestor()
+    list(ing.ingest_changes("org1", since))
+    assert _commits(fake) == []
+
+
+def test_ac6_commit_only_repo_ingests_messages_and_advances_checkpoint():
+    """A commit that touched no in-scope file still contributes its message and
+    still advances the repo to HEAD (commit-only plan)."""
+    store = Store()
+    # web-app synced at c2 (only c3 is new, and its fixture diff touches no file);
+    # data-pipeline already at HEAD.
+    store.save(
+        Checkpoint.create(
+            "git_content",
+            "org1",
+            _encode_checkpoint(
+                {"web-app": _complete("c2c2c2c2"), "data-pipeline": _complete("d2d2d2d2")}
+            ),
+        )
+    )
+    ing, fake = _ingestor()
+    seen: list = []
+    res = _drive(
+        ing,
+        "org1",
+        store,
+        process_batch=lambda b: seen.extend(r["artifact_id"] for r in b.records),
+    )
+    assert res.ok and res.checkpoint_advanced
+    # No file records (the one new commit touched nothing in scope) …
+    assert seen == []
+    # … but the commit message WAS ingested …
+    assert {a.source_artifact for a in _commits(fake)} == {"web-app@c3c3c3c3"}
+    # … and the repo advanced to HEAD so the message is not re-ingested next run.
+    assert _decode_checkpoint(store.read("org1", "git_content").value) == {
+        "web-app": _complete("c3c3c3c3"),
+        "data-pipeline": _complete("d2d2d2d2"),
+    }
+
+
+def test_ac6_resumed_first_load_does_not_reingest_the_commit_corpus():
+    """The corpus is delivered up front on a first load; a resume that has already
+    checkpointed part of a repo's tree (offset > 0) must not re-hand its corpus.
+
+    Repos load alphabetically (data-pipeline, then web-app) at batch_size=1. We
+    fail on the 4th batch so web-app has ONE checkpointed batch (offset=1) before
+    the interruption — a genuine mid-flight resume for web-app on the next run.
+    """
+    store = Store()
+    processed: list = []
+
+    def fail_on_fourth(batch: DeltaBatch):
+        processed.extend(r["artifact_id"] for r in batch.records)
+        if len(processed) == 4:
+            raise RuntimeError("network dropped mid initial load")
+
+    ing1, fake1 = _ingestor(batch_size=1)
+    res1 = _drive(ing1, "org1", store, process_batch=fail_on_fourth)
+    assert res1.ok is False
+    # The interrupted first attempt delivered the whole corpus up front (before any
+    # file batch), so both repos' commit messages were already handed over.
+    assert {a.provenance["repo"] for a in _commits(fake1)} == {"web-app", "data-pipeline"}
+    # web-app is mid-flight: its cursor carries an offset, not a plain SHA.
+    web_cursor = _decode_checkpoint(store.read("org1", "git_content").value)["web-app"]
+    assert web_cursor["offset"] is not None
+
+    ing2, fake2 = _ingestor(batch_size=1)
+    _drive(ing2, "org1", store, process_batch=lambda b: None)
+    # web-app's tree load resumes from its offset → its corpus is NOT re-handed.
+    assert [a for a in _commits(fake2) if a.provenance["repo"] == "web-app"] == []
+
+
+def test_ac6_commit_with_empty_message_is_skipped():
+    ing = GitContentIngestor()
+    arts = ing._commit_artifacts(
+        "web-app",
+        [
+            {"sha": "aaaa", "message": "   ", "author": "X", "date": "2026-01-01T00:00:00+00:00"},
+            {"sha": "", "message": "orphan message", "author": "Y"},
+            {"sha": "bbbb", "message": "real change", "author": "Z"},
+        ],
+    )
+    # Empty-message and SHA-less commits carry no retrievable 'why' → skipped.
+    assert [a.source_artifact for a in arts] == ["web-app@bbbb"]
+
+
+def test_ac6_commit_message_is_retrievable_through_the_real_chunker():
+    """The "retrievable" half of AC6, end to end through the SUBSTRATE chunker:
+    a commit artifact's content chunks under the conversation policy and every
+    chunk carries the author/date provenance plus a content hash (what retrieval
+    and freshness key off). Proven DB-free at the chunk boundary — the store/embed
+    stages are the R18-B1 substrate's own tested contract."""
+    from app.retrieval import chunking
+
+    ing, _ = _ingestor()
+    # Build the real artifact the ingestor would hand over for a HEAD commit.
+    art = ing._commit_artifacts(
+        "web-app",
+        [
+            {
+                "sha": "c3c3c3c3",
+                "message": "Add checkout discount computation\n\nIntroduces "
+                "compute_discount() for the checkout flow.",
+                "author": "Alice Ng",
+                "author_email": "alice@example.com",
+                "date": "2026-06-20T14:00:00+00:00",
+            }
+        ],
+    )[0]
+
+    chunks = chunking.chunk_content(
+        org_id="org1",
+        content=art.content,
+        content_type=art.content_type,  # 'conversation'
+        source_system=art.source_system,
+        source_artifact=art.source_artifact,
+        source_timestamp=art.source_timestamp,
+        provenance=art.provenance,
+    )
+    assert chunks, "a commit message must produce at least one retrievable chunk"
+    for chunk in chunks:
+        assert chunk.content_type == "conversation"
+        assert chunk.source_system == "git"
+        assert chunk.source_artifact == "web-app@c3c3c3c3"
+        # author/date provenance travels with every retrievable chunk (AC6) …
+        assert chunk.provenance["author"] == "Alice Ng"
+        assert chunk.provenance["date"] == "2026-06-20T14:00:00+00:00"
+        assert chunk.source_timestamp == "2026-06-20T14:00:00+00:00"
+        # … and a content hash is stamped (freshness / retrieval key off it).
+        assert chunk.content_hash

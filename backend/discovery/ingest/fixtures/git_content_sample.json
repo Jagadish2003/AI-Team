@@ -1,5 +1,5 @@
 {
-  "_comment": "R18-A2 / AT-529 — deterministic offline fixture for the Git content change-based ingestor (GitContentIngestor). The commit graph IS the change feed: 'head_sha' is the current position, 'head_tree' is the file content at HEAD (streamed as the resumable first load — AC1), and 'diffs' maps a since-SHA to the exact file set the commits between it and HEAD touched (the diff-driven incremental — AC2). Each diff records 'commit_count' so a test can verify commit-count vs files-processed (AC2). A file marked \"binary\": true is skipped-with-reason and never indexed (AC7, foundational). Content is short but real text so the substrate's code chunk policy has something to chunk. No secrets and no credentials live here — the connector never stores credentials in config.",
+  "_comment": "R18-A2 / AT-529 + AT-532 — deterministic offline fixture for the Git content change-based ingestor (GitContentIngestor). The commit graph IS the change feed: 'head_sha' is the current position, 'head_tree' is the file content at HEAD (streamed as the resumable first load — AC1), and 'diffs' maps a since-SHA to the exact file set the commits between it and HEAD touched (the diff-driven incremental — AC2). Each diff records 'commit_count' so a test can verify commit-count vs files-processed (AC2). 'commits' is the commit-message corpus (newest-first) reachable at HEAD, each with author/date provenance (AT-532 / AC6): a first run ingests the whole list, an incremental run ingests only the commits newer than the since-SHA (so the count aligns with the matching diff's 'commit_count'). A file marked \"binary\": true is skipped-with-reason and never indexed (AC7, foundational). Content is short but real text so the substrate's chunk policies have something to chunk. No secrets and no credentials live here — the connector never stores credentials in config.",
   "repos": [
     {
       "repo_id": "web-app",
@@ -28,8 +28,14 @@
             {"path": "src/legacy.py", "change": "D"}
           ]
         },
+        "c2c2c2c2": {"head_sha": "c3c3c3c3", "commit_count": 1, "changes": []},
         "c3c3c3c3": {"head_sha": "c3c3c3c3", "commit_count": 0, "changes": []}
-      }
+      },
+      "commits": [
+        {"sha": "c3c3c3c3", "message": "Add checkout discount computation\n\nIntroduces compute_discount() so the checkout flow can apply the standard 10% promotion. Follows up on the pricing spike.", "author": "Alice Ng", "author_email": "alice@example.com", "date": "2026-06-20T14:00:00+00:00"},
+        {"sha": "c2c2c2c2", "message": "Remove legacy order module\n\nThe legacy.py order path was superseded by src/api.py; deleting it to cut dead code.", "author": "Bob Lee", "author_email": "bob@example.com", "date": "2026-06-18T11:30:00+00:00"},
+        {"sha": "c1c1c1c1", "message": "Initial import of web-app skeleton", "author": "Alice Ng", "author_email": "alice@example.com", "date": "2026-06-10T08:00:00+00:00"}
+      ]
     },
     {
       "repo_id": "data-pipeline",
@@ -49,7 +55,11 @@
           ]
         },
         "d2d2d2d2": {"head_sha": "d2d2d2d2", "commit_count": 0, "changes": []}
-      }
+      },
+      "commits": [
+        {"sha": "d2d2d2d2", "message": "Load fact_sales from staging\n\nAdds the warehouse load step to etl/load.sql for the nightly pipeline.", "author": "Carol Diaz", "author_email": "carol@example.com", "date": "2026-06-19T09:00:00+00:00"},
+        {"sha": "d1d1d1d1", "message": "Bootstrap the data pipeline ETL", "author": "Carol Diaz", "author_email": "carol@example.com", "date": "2026-06-12T13:15:00+00:00"}
+      ]
     }
   ]
 }
