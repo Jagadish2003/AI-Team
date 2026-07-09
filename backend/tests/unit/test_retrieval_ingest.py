@@ -28,7 +28,13 @@ import pytest
 
 from app.retrieval import ingest
 from app.retrieval.chunking import MAX_CHUNK_CHARS
-from app.retrieval.ingest import ContentArtifact, IngestResult, ingest_content
+from app.retrieval.ingest import (
+    ContentArtifact,
+    IngestResult,
+    RemoveResult,
+    ingest_content,
+    remove_content,
+)
 from database.models.retrieval import RetrievalChunkRecord, compute_content_hash
 
 
@@ -398,3 +404,100 @@ def test_duplicate_artifact_in_one_call_last_wins(fake_store):
     assert result.artifacts_indexed == 2
     recs = fake_store.for_artifact("org_a", "page/123")
     assert [r.content for r in recs] == ["version two text."]
+
+
+# ---------------------------------------------------------------------------
+# remove_content — freshness removal (R18-A2 / AT-533, AC3)
+# ---------------------------------------------------------------------------
+
+
+def test_remove_content_deletes_an_indexed_artifacts_chunks(fake_store):
+    ingest_content("org_a", [_artifact(source_artifact="page/gone")])
+    assert fake_store.for_artifact("org_a", "page/gone")  # indexed first
+
+    result = remove_content("org_a", [("confluence", "page/gone")])
+    assert isinstance(result, RemoveResult)
+    assert result.artifacts_removed == 1
+    assert result.chunks_removed >= 1
+    assert result.artifacts[0].status == "removed"
+    # The chunks have left the store — no longer retrievable.
+    assert fake_store.for_artifact("org_a", "page/gone") == []
+
+
+def test_remove_content_accepts_dicts_and_content_artifacts(fake_store):
+    ingest_content("org_a", [_artifact(source_artifact="page/d1")])
+    ingest_content("org_a", [_artifact(source_artifact="page/d2")])
+
+    result = remove_content(
+        "org_a",
+        [
+            {"source_system": "confluence", "source_artifact": "page/d1"},
+            ContentArtifact(
+                source_system="confluence",
+                source_artifact="page/d2",
+                content="",
+                content_type="prose",
+            ),
+        ],
+    )
+    assert result.artifacts_removed == 2
+    assert fake_store.for_artifact("org_a", "page/d1") == []
+    assert fake_store.for_artifact("org_a", "page/d2") == []
+
+
+def test_remove_content_absent_artifact_is_a_noop(fake_store):
+    result = remove_content("org_a", [("git", "repo:never/indexed.py")])
+    assert result.artifacts_removed == 0
+    assert result.artifacts_absent == 1
+    assert result.artifacts[0].status == "absent"
+    assert result.chunks_removed == 0
+
+
+def test_remove_content_is_org_scoped(fake_store):
+    ingest_content("org_a", [_artifact(source_artifact="page/shared")])
+    ingest_content("org_b", [_artifact(source_artifact="page/shared")])
+
+    remove_content("org_a", [("confluence", "page/shared")])
+    # Only org_a's copy is gone; org_b's identical-id artifact is untouched.
+    assert fake_store.for_artifact("org_a", "page/shared") == []
+    assert fake_store.for_artifact("org_b", "page/shared")
+
+
+def test_remove_content_missing_ids_fail_that_item_only(fake_store):
+    ingest_content("org_a", [_artifact(source_artifact="page/keep")])
+    result = remove_content(
+        "org_a",
+        [
+            {"source_system": "confluence"},  # missing source_artifact
+            ("confluence", "page/keep"),
+        ],
+    )
+    assert result.artifacts_failed == 1
+    assert result.artifacts_removed == 1
+    assert fake_store.for_artifact("org_a", "page/keep") == []
+
+
+def test_remove_content_isolates_store_failure(fake_store, monkeypatch):
+    ingest_content("org_a", [_artifact(source_artifact="page/x")])
+
+    def boom(org_id, source_system, source_artifact):
+        raise RuntimeError("db unavailable")
+
+    monkeypatch.setattr(fake_store, "delete_by_artifact", boom)
+    result = remove_content("org_a", [("confluence", "page/x")])
+    assert result.artifacts_failed == 1
+    assert result.artifacts[0].error
+
+
+@pytest.mark.parametrize("bad_org", [None, "", "   "])
+def test_remove_content_blank_org_rejected(fake_store, bad_org):
+    with pytest.raises(ValueError, match="org_id"):
+        remove_content(bad_org, [("git", "r:a.py")])
+
+
+@pytest.mark.parametrize("bad", ["string", {"source_system": "git"}, ("git", "a")])
+def test_remove_content_non_sequence_call_rejected(fake_store, bad):
+    # A bare tuple/dict/str is a single spec, not a sequence of specs — a malformed
+    # call, rejected loudly rather than silently treated as one removal.
+    with pytest.raises(ValueError, match="removals"):
+        remove_content("org_a", bad)

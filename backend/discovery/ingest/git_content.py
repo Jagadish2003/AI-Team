@@ -36,7 +36,9 @@ re-plumbing this mechanism:
   * secret-pattern scan + redaction before the substrate — AT-531
     (``_secret_scan``, currently a pass-through);
   * commit-message corpus ingestion — AT-532;
-  * deletion propagation into retrieval freshness — AT-533;
+  * deletion propagation into retrieval freshness — AT-533 (IMPLEMENTED:
+    deleted diff files route to ``retrieval.ingest.remove_content`` so their
+    chunks leave retrieval — see ``_remove_content`` / the class docstring);
   * structural (tree/inventory) metadata — AT-534.
 
 Include/exclude path filtering (R18-A2 §1 / AT-530)
@@ -430,12 +432,16 @@ class GitContentIngestor(ChangeBasedIngestor):
     ``ingest_content``; the yielded :class:`DeltaBatch` records drive the shared
     runner's ``ingestion.artifact_changed`` events and the checkpoint lifecycle.
 
-    Deletes / tombstones (R16-A1 §5)
-    --------------------------------
+    Deletes / tombstones (R16-A1 §5) + freshness removal (AT-533, AC3)
+    ------------------------------------------------------------------
     ``reports_deletes = True``: a git diff natively reports deletions, so a file
     removed by a commit is yielded as a ``change_kind='deleted'`` record (no
-    content). The runner emits it as a deleted event; wiring that into retrieval
-    freshness (chunk removal, AC3) is the deletion-propagation subtask (AT-533).
+    content) — the shared runner emits it as a ``deleted`` event. AT-533 completes
+    the loop: the same deleted files are handed to the substrate's freshness
+    removal (``retrieval.ingest.remove_content``) IN the batch, so their chunks
+    leave retrieval and stop being returned as evidence (AC3). Removal hooks
+    directly into the diff mechanism — no separate event-bus consumer — and is
+    idempotent, so a re-run of the same delete is a harmless no-op.
     """
 
     connector_id = "git_content"
@@ -446,6 +452,7 @@ class GitContentIngestor(ChangeBasedIngestor):
         batch_size: int = _DEFAULT_BATCH_SIZE,
         *,
         ingest_fn: Optional[Callable[[str, List[Any]], Any]] = None,
+        remove_fn: Optional[Callable[[str, List[Any]], Any]] = None,
     ):
         if batch_size < 1:
             raise ValueError("batch_size must be >= 1")
@@ -454,6 +461,10 @@ class GitContentIngestor(ChangeBasedIngestor):
         # lazy-imported so this discovery module carries no import-time dependency
         # on the app.retrieval package). Tests pass a fake to avoid the store/DB.
         self._ingest_fn = ingest_fn
+        # Injectable substrate freshness-removal (AT-533): defaults to
+        # ``retrieval.ingest.remove_content``. Deletions surfaced by the diff are
+        # routed here so their chunks leave retrieval (AC3).
+        self._remove_fn = remove_fn
         # Per-repo PathFilter memo (AT-530): built once per repo per run, since the
         # configured include/exclude rules are stable for the life of the ingestor.
         self._filter_cache: Dict[str, PathFilter] = {}
@@ -520,6 +531,11 @@ class GitContentIngestor(ChangeBasedIngestor):
                 # scan (AT-531) sits here, between extraction and the substrate.
                 artifacts = self._to_artifacts(plan.repo_id, plan.head_sha, page)
                 self._ingest_content(org_id, self._secret_scan(artifacts))
+
+                # AT-533 (AC3): files deleted in this diff have their chunks removed
+                # from retrieval, so a deleted file stops being retrievable. Done in
+                # the same batch as the deleted event the runner emits below.
+                self._remove_content(org_id, self._to_removals(plan.repo_id, page))
 
                 is_last_repo_batch = bi == repo_batches - 1
                 self._advance(running, plan, start + len(page), is_last_repo_batch)
@@ -689,6 +705,32 @@ class GitContentIngestor(ChangeBasedIngestor):
         if fn is None:
             from app.retrieval.ingest import ingest_content as fn  # type: ignore
         fn(org_id, artifacts)
+
+    def _to_removals(self, repo_id: str, page: List[_FileWork]) -> List[tuple]:
+        """The ``(source_system, source_artifact)`` ids of the deleted files in a
+        batch — the freshness-removal counterpart of :meth:`_to_artifacts` (AT-533).
+        """
+        return [
+            (SOURCE_SYSTEM, f"{repo_id}:{fw.path}")
+            for fw in page
+            if fw.change_kind == ChangeKind.DELETED
+        ]
+
+    def _remove_content(self, org_id: str, removals: List[tuple]) -> None:
+        """Remove deleted files' chunks from the substrate (AC3, freshness).
+
+        Uses the injected ``remove_fn`` when provided (tests), else the real
+        ``app.retrieval.ingest.remove_content`` (lazy-imported). Removal is
+        idempotent and failure-isolated inside ``remove_content`` — a delete that
+        fails or hits an already-absent artifact never sinks the batch or the
+        checkpoint. A file that was excluded/never indexed simply removes nothing.
+        """
+        if not removals:
+            return
+        fn = self._remove_fn
+        if fn is None:
+            from app.retrieval.ingest import remove_content as fn  # type: ignore
+        fn(org_id, removals)
 
     # ── Source access: offline fixture vs live git clone ─────────────────────
     def _configured_repos(self, org_id: str) -> List[GitRepoConfig]:
