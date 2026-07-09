@@ -73,6 +73,9 @@ function normalizeConnector(raw: ConnectorPayload): Connector | null {
       ? raw.reads.filter((read): read is string => typeof read === 'string')
       : [],
     signalStrength: typeof raw.signalStrength === 'number' ? raw.signalStrength : 0,
+    products: Array.isArray(raw.products)
+      ? raw.products.filter((product): product is string => typeof product === 'string')
+      : [],
   };
 }
 

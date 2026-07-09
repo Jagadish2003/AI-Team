@@ -23,4 +23,7 @@ export interface Connector {
   lastSynced: string;
   reads: string[];
   signalStrength: number;
+  // Declared Salesforce cloud products for this org (e.g. 'salesforce_ncino',
+  // 'salesforce_sc'). Drives the connector's actual read-scope display.
+  products?: string[];
 }
