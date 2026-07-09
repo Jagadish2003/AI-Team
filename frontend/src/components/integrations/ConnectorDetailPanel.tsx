@@ -136,7 +136,7 @@ function ConnectionHealthSection({ connector }: { connector: Connector }) {
         ))}
       </div>
       <p className="mt-2 text-[10px] leading-relaxed text-muted">
-        Configured read scope for this connector. Actual sync results available in Sprint 6.
+        Configured read scope for this connector. Actual sync results coming soon.
       </p>
     </div>
   );
