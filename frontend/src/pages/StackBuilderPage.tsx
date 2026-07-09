@@ -31,9 +31,9 @@ import DiscoveryPlanPage from './DiscoveryPlanPage';
 
 // ── Static Definitions ───────────────────────────────────────────────────────
 
-const INDUSTRY_PACK_HINTS: Record<string, string[]> = {
+export const INDUSTRY_PACK_HINTS: Record<string, string[]> = {
   financial_services: ['ncino', 'service_cloud'],
-  public_sector: ['strs_benefits', 'service_cloud'],
+  public_sector: ['service_cloud'],
   logistics_supply_chain: ['service_cloud'],
   retail_commerce: ['service_cloud'],
   healthcare: ['service_cloud'],
