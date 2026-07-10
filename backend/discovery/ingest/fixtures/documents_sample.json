@@ -1,0 +1,55 @@
+{
+  "_comment": "R18-A1 / T1 deterministic offline document fixture. Each entry is one in-scope file: identity + change signature + provenance + inline bytes (text or content_b64). 'raise_on_read' simulates a corrupt/unreadable file for per-file failure isolation (AC5).",
+  "documents": [
+    {
+      "artifact_id": "handbook/onboarding.md",
+      "filename": "onboarding.md",
+      "location": "handbook",
+      "content_type": "text/markdown",
+      "signature": "sig-onboarding-1",
+      "source_timestamp": "2026-06-10T09:00:00Z",
+      "provenance": {"author": "People Ops", "title": "New hire onboarding"},
+      "text": "# Onboarding\n\nWelcome to the team. Request access to the deployment console on day one, then complete the security training within the first week.\n"
+    },
+    {
+      "artifact_id": "handbook/expenses.csv",
+      "filename": "expenses.csv",
+      "location": "handbook",
+      "content_type": "text/csv",
+      "signature": "sig-expenses-1",
+      "source_timestamp": "2026-06-10T10:00:00Z",
+      "provenance": {"author": "Finance"},
+      "text": "category,limit_usd,approval\nmeals,75,manager\ntravel,2000,director\nsoftware,500,manager\n"
+    },
+    {
+      "artifact_id": "policies/security.txt",
+      "filename": "security.txt",
+      "location": "policies",
+      "content_type": "text/plain",
+      "signature": "sig-security-1",
+      "source_timestamp": "2026-06-11T08:00:00Z",
+      "provenance": {"author": "Security"},
+      "text": "All production credentials must be stored in the vault. Never commit secrets to source control.\n"
+    },
+    {
+      "artifact_id": "diagrams/architecture.vsdx",
+      "filename": "architecture.vsdx",
+      "location": "diagrams",
+      "content_type": "application/vnd.ms-visio.drawing",
+      "signature": "sig-arch-1",
+      "source_timestamp": "2026-06-11T09:00:00Z",
+      "provenance": {"author": "Architecture"},
+      "text": "not a supported document format"
+    },
+    {
+      "artifact_id": "reports/corrupt.txt",
+      "filename": "corrupt.txt",
+      "location": "reports",
+      "content_type": "text/plain",
+      "signature": "sig-corrupt-1",
+      "source_timestamp": "2026-06-11T09:30:00Z",
+      "raise_on_read": true,
+      "text": "unreadable"
+    }
+  ]
+}
