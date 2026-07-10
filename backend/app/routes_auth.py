@@ -876,6 +876,27 @@ def _process_decision(token, org_id, *, status, action, email_sender) -> HTMLRes
     )
 
 
+def _confirmation_link_actionable(state: str, org_id: str) -> bool:
+    """Whether an approve/reject confirmation page may still be shown.
+
+    SINGLE source of truth shared by BOTH GET handlers so approve and reject
+    validate identically (perfectly symmetric). A link is actionable only while
+    its request is still OPEN:
+      * "ok"            — the org itself is pending → deciding the ORG; or
+      * "already_active" WITH a pending join request — a subsequent registration
+        is waiting to be decided (TENANT-1).
+    Every other state ("expired" is handled separately by the caller, plus
+    already-approved / already-rejected / consumed / invalid, and an active org
+    with NO pending join) is a DECIDED or dead request: the confirmation page is
+    never shown again and the caller renders the invalid-link page.
+    """
+    if state == "ok":
+        return True
+    if state == "already_active":
+        return has_pending_join_requests(org_id)
+    return False
+
+
 @router.get("/org-approval/approve", response_class=HTMLResponse)
 def approve_org_confirm(token: str, org_id: str) -> HTMLResponse:
     """GET renders a confirmation page only — it never mutates state.
@@ -889,10 +910,7 @@ def approve_org_confirm(token: str, org_id: str) -> HTMLResponse:
     org, state = _approval_token_state(token, org_id)
     if state == "expired":
         return _expired_link_page()
-    # "ok" (pending) and "already_active" (a subsequent registration under an
-    # already-approved org) both render the confirmation page; the POST then
-    # approves (pending) or reports the idempotent already-approved success.
-    if state not in ("ok", "already_active"):
+    if not _confirmation_link_actionable(state, org_id):
         return _invalid_link_page()
     return _confirmation_page("approve", org["name"], token, org_id)
 
@@ -912,16 +930,9 @@ def reject_org_confirm(token: str, org_id: str) -> HTMLResponse:
     org, state = _approval_token_state(token, org_id)
     if state == "expired":
         return _expired_link_page()
-    # Render the confirmation form when the reject link is actionable:
-    #   * "ok"            — the org is still pending → rejecting the ORG.
-    #   * "already_active" WITH a pending join request → rejecting that JOIN (the
-    #     org stays active; TENANT-1). Without a pending join, a settled/active
-    #     org's reject link must never flip it → invalid.
-    if state == "ok" or (
-        state == "already_active" and has_pending_join_requests(org_id)
-    ):
-        return _confirmation_page("reject", org["name"], token, org_id)
-    return _invalid_link_page()
+    if not _confirmation_link_actionable(state, org_id):
+        return _invalid_link_page()
+    return _confirmation_page("reject", org["name"], token, org_id)
 
 
 @router.post("/org-approval/reject", response_class=HTMLResponse)
