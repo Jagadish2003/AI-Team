@@ -582,6 +582,7 @@ export default function BlueprintPage() {
     (Boolean(run) && !runHasMaterializedResults) ||
     /still being prepared/i.test(roadmapError ?? '');
   const requestedOppId = new URLSearchParams(location.search).get('oppId');
+  const appliedOppIdRef = useRef<string | null>(null);
 
   const refetchRoadmap = useCallback(() => setRoadmapFetchCount((count) => count + 1), []);
   const scrollToBlueprint = useCallback(() => {
@@ -598,8 +599,18 @@ export default function BlueprintPage() {
     [select, scrollToBlueprint],
   );
 
+  // Apply the URL's ?oppId only when it actually changes — NOT on every
+  // selectedId change. Re-asserting on selectedId caused a stale URL param to
+  // revert an in-page roadmap row selection (which selects without changing the
+  // URL) straight back to the URL's opportunity.
   useEffect(() => {
-    if (!requestedOppId || !opportunities.some((opp) => opp.id === requestedOppId)) return;
+    if (!requestedOppId) {
+      appliedOppIdRef.current = null;
+      return;
+    }
+    if (appliedOppIdRef.current === requestedOppId) return;
+    if (!opportunities.some((opp) => opp.id === requestedOppId)) return;
+    appliedOppIdRef.current = requestedOppId;
     if (selectedId !== requestedOppId) select(requestedOppId);
   }, [opportunities, requestedOppId, select, selectedId]);
 
