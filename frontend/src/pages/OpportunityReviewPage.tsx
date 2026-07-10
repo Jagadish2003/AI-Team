@@ -19,6 +19,10 @@ import { useAnalystReviewContext } from "../context/AnalystReviewContext";
 import { useConnectorContext } from "../context/ConnectorContext";
 import { useRunContext } from "../context/RunContext";
 import { useToast } from "../components/common/Toast";
+import {
+  getBlueprintLabel,
+  isSalesforceConnected,
+} from "../utils/blueprintNaming";
 
 export default function OpportunityReviewPage() {
   const {
@@ -48,9 +52,8 @@ export default function OpportunityReviewPage() {
   const pageDescription =
     "Prioritize, approve, and understand automation opportunities from one review workspace.";
 
-  const salesforceConnected = connectors.some(
-    (c) => c.id === "salesforce" && c.status === "connected",
-  );
+  const salesforceConnected = isSalesforceConnected(connectors);
+  const blueprintLabel = getBlueprintLabel(salesforceConnected);
 
   const filtered = useMemo(() => {
     const query = q.trim().toLowerCase();
@@ -125,17 +128,17 @@ export default function OpportunityReviewPage() {
           className="inline-flex items-center justify-center gap-2 rounded-lg border border-accent/30 bg-accent/10 px-4 py-2.5 text-sm font-semibold text-accent transition-colors hover:border-accent/50 hover:bg-accent/15 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/30"
         >
           <Zap size={15} />
-          View Agentforce Blueprint
+          View {blueprintLabel}
         </button>
       ) : (
         <button
           data-testid="blueprint-button-disabled"
           disabled
           className="inline-flex cursor-not-allowed items-center justify-center gap-2 rounded-lg border border-border bg-bg/30 px-4 py-2.5 text-sm font-medium text-muted opacity-60"
-          title="Connect Salesforce on Integration Hub to enable Agentforce Blueprint"
+          title="Connect Salesforce on Integration Hub to enable the Agent Blueprint"
         >
           <Zap size={15} />
-          Agentforce Blueprint (connect Salesforce)
+          {blueprintLabel} (connect Salesforce)
         </button>
       )}
     </div>
