@@ -16,7 +16,7 @@ import { isViewerRole } from '../../utils/roles';
 // from the hub for now; every other tile renders its action button disabled with
 // the "Connecting new sources is currently unavailable" tooltip.
 const ENABLED_CONNECTOR_IDS = [
-  'salesforce', 'servicenow', 'jira',
+  'salesforce', 'servicenow', 'jira', 'github',
 ];
 
 export default function ConnectorTile({
