@@ -41,7 +41,12 @@ re-plumbing this mechanism:
   * deletion propagation into retrieval freshness — AT-533 (IMPLEMENTED:
     deleted diff files route to ``retrieval.ingest.remove_content`` so their
     chunks leave retrieval — see ``_remove_content`` / the class docstring);
-  * structural (tree/inventory) metadata — AT-534.
+  * structural (tree/inventory) metadata — AT-534 (IMPLEMENTED:
+    ``_capture_structure_full`` / ``_capture_structure_diff`` build a
+    :class:`~discovery.ingest.repo_structure.RepoStructure` from the SAME tree
+    walk / diff and persist it as GRAPH-FACING metadata via
+    ``app.repo_structure_store`` — NOT through ``ingest_content``, so the repo's
+    shape is never embedded — for the Sprint-2 application-structure work).
 
 Include/exclude path filtering (R18-A2 §1 / AT-530)
 ---------------------------------------------------
@@ -113,6 +118,11 @@ from app.provenance import EvidencePointer, utc_now_iso
 
 from . import is_live
 from .base import ChangeBasedIngestor, ChangeKind, Checkpoint, DeltaBatch
+from .repo_structure import (
+    apply_inventory_delta,
+    build_repo_structure,
+    inventory_from_structure_dict,
+)
 from .secret_redaction import scan_and_redact
 
 logger = logging.getLogger(__name__)
@@ -504,6 +514,8 @@ class GitContentIngestor(ChangeBasedIngestor):
         *,
         ingest_fn: Optional[Callable[[str, List[Any]], Any]] = None,
         remove_fn: Optional[Callable[[str, List[Any]], Any]] = None,
+        structure_fn: Optional[Callable[[str, Dict[str, Any]], Any]] = None,
+        load_structure_fn: Optional[Callable[[str, str], Optional[Dict[str, Any]]]] = None,
     ):
         if batch_size < 1:
             raise ValueError("batch_size must be >= 1")
@@ -516,6 +528,14 @@ class GitContentIngestor(ChangeBasedIngestor):
         # ``retrieval.ingest.remove_content``. Deletions surfaced by the diff are
         # routed here so their chunks leave retrieval (AC3).
         self._remove_fn = remove_fn
+        # Injectable GRAPH-FACING structural-metadata persistence (AT-534): the
+        # tree/inventory snapshot is written HERE, never through ``ingest_content``,
+        # so the repo's shape is graph metadata and never embedded. Defaults (lazy-
+        # imported) to ``app.repo_structure_store.persist_repo_structure`` /
+        # ``load_repo_structure``; the load path seeds an incremental snapshot from
+        # the last stored one. Tests inject fakes to avoid the store/DB.
+        self._structure_fn = structure_fn
+        self._load_structure_fn = load_structure_fn
         # Per-repo PathFilter memo (AT-530): built once per repo per run, since the
         # configured include/exclude rules are stable for the life of the ingestor.
         self._filter_cache: Dict[str, PathFilter] = {}
@@ -648,7 +668,13 @@ class GitContentIngestor(ChangeBasedIngestor):
                     cursor.get("sha"),
                     head_sha,
                 )
-            all_items = self._tree_items(reader, repo)
+            # ONE tree walk feeds both content and structure (AT-534 dep note:
+            # "captured from the same tree walk"): the HEAD tree is read once, then
+            # shaped into content items (bodies for the substrate) and captured as
+            # the full structural snapshot (tree/inventory graph metadata).
+            tree_entries = list(reader.tree())
+            all_items = self._content_items_from_tree(repo, reader.head_ts(), tree_entries)
+            self._capture_structure_full(org_id, repo, head_sha, tree_entries)
             items = all_items[resume_offset:]
             # Full commit corpus at HEAD on a genuine first load (or a restart
             # after HEAD moved — resume_offset reset to 0). A resume that has
@@ -666,8 +692,16 @@ class GitContentIngestor(ChangeBasedIngestor):
 
         # Steady state: repo fully synced at cursor["sha"].
         if cursor.get("sha") == head_sha:
-            return None  # unchanged
-        items = self._diff_items(reader, repo, cursor["sha"], head_sha)
+            return None  # unchanged — structure is already at HEAD, nothing to do
+        # ONE diff read feeds both content and structure: the changed-file set
+        # shapes the content items AND drives the incremental structural update
+        # (created/updated → inventory upserts, deleted → inventory removals), so
+        # the snapshot advances to HEAD without re-walking the whole tree (AT-534).
+        changes, commit_count = reader.diff(cursor["sha"], head_sha)
+        items = self._content_items_from_diff(
+            repo, reader.head_ts(), changes, commit_count, cursor["sha"], head_sha
+        )
+        self._capture_structure_diff(org_id, repo, head_sha, changes, reader)
         # Only the commit messages the new commits (since..HEAD) introduced (AC6),
         # the same delta window the file diff reads off (AC2).
         commits = self._commit_items(reader, repo, cursor["sha"], head_sha)
@@ -1054,14 +1088,27 @@ class GitContentIngestor(ChangeBasedIngestor):
         return [e for e in parsed if isinstance(e, dict)]
 
     def _tree_items(self, reader: "_RepoReader", repo: GitRepoConfig) -> List[_FileWork]:
-        """The HEAD tree as created-file work, deterministically ordered by path.
+        """The HEAD tree as created-file work (walks the tree, then shapes it).
+
+        A thin wrapper over :meth:`_content_items_from_tree`; ``_plan_repo`` shares
+        a single tree walk with the structural capture instead of calling this.
+        """
+        return self._content_items_from_tree(repo, reader.head_ts(), reader.tree())
+
+    def _content_items_from_tree(
+        self,
+        repo: GitRepoConfig,
+        head_ts: Optional[str],
+        entries: List[Dict[str, Any]],
+    ) -> List[_FileWork]:
+        """Shape already-walked HEAD tree entries into created-file work.
 
         Binary files are skipped-with-reason (never indexed as garbage text); the
         include/exclude path filter (AT-530) is applied via ``_select_paths``.
+        Deterministically ordered by path.
         """
-        head_ts = reader.head_ts()
         items: List[_FileWork] = []
-        for entry in sorted(reader.tree(), key=lambda e: e["path"]):
+        for entry in sorted(entries, key=lambda e: e["path"]):
             path = entry["path"]
             if not self._select_paths(repo, path):
                 continue
@@ -1087,12 +1134,29 @@ class GitContentIngestor(ChangeBasedIngestor):
     ) -> List[_FileWork]:
         """The files ``since_sha..head_sha`` touched, as change work (AC2).
 
+        A thin wrapper over :meth:`_content_items_from_diff`; ``_plan_repo`` shares
+        a single diff read with the structural capture instead of calling this.
+        """
+        changes, commit_count = reader.diff(since_sha, head_sha)
+        return self._content_items_from_diff(
+            repo, reader.head_ts(), changes, commit_count, since_sha, head_sha
+        )
+
+    def _content_items_from_diff(
+        self,
+        repo: GitRepoConfig,
+        head_ts: Optional[str],
+        changes: List[Dict[str, Any]],
+        commit_count: int,
+        since_sha: str,
+        head_sha: str,
+    ) -> List[_FileWork]:
+        """Shape an already-read commit diff into change work.
+
         Created/updated files carry their HEAD content; deletions are emitted as
         content-less ``deleted`` records. Binary non-deletions are skipped-
         with-reason. Ordered by path for determinism.
         """
-        head_ts = reader.head_ts()
-        changes, commit_count = reader.diff(since_sha, head_sha)
         items: List[_FileWork] = []
         for change in sorted(changes, key=lambda c: c["path"]):
             path = change["path"]
@@ -1127,6 +1191,201 @@ class GitContentIngestor(ChangeBasedIngestor):
             len(items),
         )
         return items
+
+    # ── Structural metadata (tree/inventory) — graph-facing, AT-534 ──────────
+    def _capture_structure_full(
+        self,
+        org_id: str,
+        repo: GitRepoConfig,
+        head_sha: str,
+        tree_entries: List[Dict[str, Any]],
+    ) -> None:
+        """Capture the FULL structural snapshot from a HEAD tree walk (AT-534).
+
+        The whole in-scope inventory is known from the tree, so the snapshot is
+        built directly — no prior state needed. Binary files ARE inventoried (a
+        binary asset is a structural fact); only their *content* is skipped by the
+        content path above.
+        """
+        inventory = self._inventory_from_tree_entries(repo, tree_entries)
+        self._persist_structure(org_id, repo, head_sha, inventory, mode="full")
+
+    def _capture_structure_diff(
+        self,
+        org_id: str,
+        repo: GitRepoConfig,
+        head_sha: str,
+        changes: List[Dict[str, Any]],
+        reader: "_RepoReader",
+    ) -> None:
+        """Maintain the structural snapshot incrementally from a commit diff (AT-534).
+
+        The commit graph is the change feed, so the snapshot advances without a
+        full re-walk: the last stored inventory is loaded and the diff applied
+        (created/updated → upsert, deleted → remove). If no snapshot exists yet
+        (T6 arrived after this repo's content had already synced, or the checkpoint
+        predates structure capture), the diff alone cannot describe the whole tree,
+        so the snapshot is seeded once from a full HEAD tree walk.
+        """
+        prior = self._load_structure(org_id, repo.repo_id)
+        if prior is None:
+            logger.info(
+                "git_content: repo=%s has no prior structure snapshot; seeding from "
+                "a full HEAD tree walk",
+                repo.repo_id,
+            )
+            inventory = self._inventory_from_tree_entries(repo, list(reader.tree()))
+        else:
+            upserts, deletes = self._structural_delta_from_changes(repo, changes)
+            inventory = apply_inventory_delta(
+                inventory_from_structure_dict(prior), upserts, deletes
+            )
+        self._persist_structure(org_id, repo, head_sha, inventory, mode="incremental")
+
+    def _inventory_from_tree_entries(
+        self, repo: GitRepoConfig, entries: List[Dict[str, Any]]
+    ) -> List[Tuple[str, bool]]:
+        """The in-scope ``(path, is_binary)`` inventory from HEAD tree entries.
+
+        The SAME include/exclude path filter as content (AT-530) so structure
+        reflects the app's own tree, not vendored/generated noise — but binaries
+        are kept (their existence is structural).
+        """
+        return [
+            (entry["path"], bool(entry.get("binary")))
+            for entry in entries
+            if entry.get("path") and self._select_paths(repo, entry["path"])
+        ]
+
+    def _structural_delta_from_changes(
+        self, repo: GitRepoConfig, changes: List[Dict[str, Any]]
+    ) -> Tuple[List[Tuple[str, bool]], List[str]]:
+        """Split an in-scope commit diff into inventory ``(upserts, deletes)``.
+
+        Created/updated in-scope files (binaries included) upsert the inventory;
+        deleted in-scope files remove it. Excluded paths are dropped by the same
+        filter used for content, so an excluded file never enters the structure.
+        """
+        upserts: List[Tuple[str, bool]] = []
+        deletes: List[str] = []
+        for change in changes:
+            path = change.get("path")
+            if not path or not self._select_paths(repo, path):
+                continue
+            if change.get("change_kind") == ChangeKind.DELETED:
+                deletes.append(path)
+            else:
+                upserts.append((path, bool(change.get("binary"))))
+        return upserts, deletes
+
+    def _persist_structure(
+        self,
+        org_id: str,
+        repo: GitRepoConfig,
+        head_sha: str,
+        inventory: List[Tuple[str, bool]],
+        mode: str,
+    ) -> None:
+        """Build and persist the graph-facing structural snapshot (AT-534).
+
+        Failure-isolated by contract: the repo shape is advisory metadata that
+        feeds the Sprint-2 application-structure work — a build or persistence
+        failure (e.g. the store is briefly unavailable) is logged and swallowed so
+        it never sinks content ingestion or the checkpoint lifecycle, matching the
+        telemetry / freshness-removal posture elsewhere in this connector.
+        """
+        try:
+            structure = build_repo_structure(
+                repo.repo_id, head_sha, inventory, captured_at=utc_now_iso()
+            )
+            self._structure_dispatch(org_id, structure.to_dict())
+            logger.info(
+                "git_content: captured %s structure for repo=%s sha=%s — %d file(s) "
+                "across %d dir(s), %d binary",
+                mode,
+                repo.repo_id,
+                head_sha,
+                structure.file_count,
+                structure.directory_count,
+                structure.binary_file_count,
+            )
+            self._record_structure_event(org_id, repo, structure, mode)
+        except Exception:  # noqa: BLE001 — metadata capture must not break ingestion
+            logger.warning(
+                "git_content: failed to capture/persist structure for repo=%s "
+                "(org=%s); content ingestion continues",
+                repo.repo_id,
+                org_id,
+            )
+
+    def _structure_dispatch(self, org_id: str, structure_dict: Dict[str, Any]) -> None:
+        """Hand the structural snapshot to its persistence sink.
+
+        Uses the injected ``structure_fn`` when provided (tests), else the real
+        ``app.repo_structure_store.persist_repo_structure`` (lazy-imported so this
+        discovery module carries no import-time dependency on the app package).
+        """
+        fn = self._structure_fn
+        if fn is None:
+            from app.repo_structure_store import persist_repo_structure as fn  # type: ignore
+        fn(org_id, structure_dict)
+
+    def _load_structure(
+        self, org_id: str, repo_id: str
+    ) -> Optional[Dict[str, Any]]:
+        """Load the last stored structural snapshot to seed an incremental update.
+
+        Uses the injected ``load_structure_fn`` when provided (tests), else the
+        real ``app.repo_structure_store.load_repo_structure`` (lazy-imported). A
+        load failure degrades to ``None`` (rebuild from a full walk) rather than
+        raising — a missing/broken snapshot must never sink the run.
+        """
+        try:
+            fn = self._load_structure_fn
+            if fn is None:
+                from app.repo_structure_store import load_repo_structure as fn  # type: ignore
+            return fn(org_id, repo_id)
+        except Exception:  # noqa: BLE001 — a missing snapshot is not fatal
+            logger.warning(
+                "git_content: could not load prior structure for repo=%s (org=%s); "
+                "rebuilding from a full walk",
+                repo_id,
+                org_id,
+            )
+            return None
+
+    def _record_structure_event(
+        self, org_id: str, repo: GitRepoConfig, structure: Any, mode: str
+    ) -> None:
+        """Record a structure-captured event for run-health visibility (AT-534).
+
+        Counts and identifiers ONLY — never file contents. Fire-and-forget: a
+        telemetry import/write failure must never break ingestion, so the whole
+        path is guarded (mirrors ``_record_redaction``).
+        """
+        try:
+            from app.telemetry import record_event
+
+            record_event(
+                "ingestion.structure_captured",
+                {
+                    "org_id": org_id,
+                    "connector_id": self.connector_id,
+                    "source_system": SOURCE_SYSTEM,
+                    "repo": repo.repo_id,
+                    "commit_sha": structure.commit_sha,
+                    "mode": mode,
+                    "file_count": structure.file_count,
+                    "directory_count": structure.directory_count,
+                    "binary_file_count": structure.binary_file_count,
+                    "observed_at": utc_now_iso(),
+                },
+            )
+        except Exception:  # pragma: no cover — observability must not break ingestion
+            logger.debug(
+                "git_content: failed to record structure-captured event for repo=%s",
+                repo.repo_id,
+            )
 
     def _select_paths(self, repo: GitRepoConfig, path: str) -> bool:
         """True when ``path`` is in scope for content ingestion in ``repo`` (AC4).

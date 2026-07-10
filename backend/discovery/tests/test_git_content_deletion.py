@@ -80,6 +80,11 @@ class FakeReader:
     def diff(self, since_sha, head_sha):
         return self._diff
 
+    def commits(self, since_sha, head_sha):
+        # Complete the _RepoReader contract: ingest_changes reads the commit
+        # corpus (AT-532). These deletion cases seed no commits.
+        return []
+
 
 def _ingestor():
     ing = GitContentIngestor()
