@@ -10,7 +10,6 @@ import pytest
 from discovery.ingest import extraction
 from discovery.ingest.extraction import (
     ExtractedText,
-    ExtractionError,
     ExtractionSkipped,
     detect_format,
     extract,
@@ -77,9 +76,22 @@ def test_extract_recognised_format_without_handler_is_no_handler_skip():
         extraction._EXT_FORMAT.pop(".fake", None)
 
 
-def test_extract_undecodable_text_raises_extraction_error():
-    with pytest.raises(ExtractionError):
-        extract(b"\xff\xfe\x00\x01\x02corrupt", filename="broken.txt")
+def test_extract_legacy_encoded_text_decodes_via_fallback():
+    """Non-UTF-8 text (legacy Windows-1252 / Latin-1) decodes via the fallback chain
+    instead of raising — so a legacy-encoded enterprise file is read once, not
+    retried on every run forever. The fallback encoding is recorded for run health.
+    """
+    # Windows-1252: 0x93/0x94 are smart quotes, 0xe9 is 'é' — invalid UTF-8, valid cp1252.
+    out = extract(b"caf\xe9 \x93quoted\x94", filename="legacy.txt")
+    assert isinstance(out, ExtractedText)
+    assert out.structure_hints["encoding"] == "cp1252"
+    assert "café" in out.content
+
+    # 0x81 is undefined in cp1252 but valid in Latin-1, which decodes ANY byte — the
+    # guaranteed terminal fallback, so no text-family file is ever un-decodable.
+    out = extract(b"raw \x81 byte", filename="broken.txt")
+    assert isinstance(out, ExtractedText)
+    assert out.structure_hints["encoding"] == "latin-1"
 
 
 def test_register_handler_is_additive_plug_point():

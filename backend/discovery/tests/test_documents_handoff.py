@@ -257,6 +257,23 @@ def test_substrate_failure_does_not_advance_checkpoint_then_rehands():
     assert result2.checkpoint_advanced is True
 
 
+def test_substrate_failure_is_logged_loudly(caplog):
+    """Issue #5: even though ingest_documents never raises, a hand-off failure must
+    be logged at ERROR so a total substrate outage can't look like a clean run in the
+    logs when a caller ignores the returned summary."""
+    import logging
+
+    store = Store()
+    failing = FakeSubstrate(fail={"policies/security.txt"})
+    with caplog.at_level(logging.ERROR, logger="discovery.ingest.documents_handoff"):
+        result = _run(store, failing)
+    assert not result.ok
+    assert any(
+        rec.levelno == logging.ERROR and "did NOT complete" in rec.getMessage()
+        for rec in caplog.records
+    )
+
+
 def test_changed_file_is_rehanded_next_run():
     store, first = Store(), FakeSubstrate()
     _run(store, first)
