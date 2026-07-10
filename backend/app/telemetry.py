@@ -599,6 +599,10 @@ class RetrievalQueryCompletedPayload(TypedDict, total=False):
     min_score:         The similarity floor applied, or absent when none.
     query_embedded:    False when the query could not be embedded (gateway
                        degraded) — a retrieval miss, never a crash.
+    include_stale:     Whether stale chunks were included this query (R18-B2 T4);
+                       default retrieval excludes them.
+    stale_count:       How many returned chunks were stale — present only when
+                       stale chunks were being included.
     """
     org_id: NotRequired[str]
     k: NotRequired[int]
@@ -606,6 +610,68 @@ class RetrievalQueryCompletedPayload(TypedDict, total=False):
     source_filter: NotRequired[list]
     min_score: NotRequired[float]
     query_embedded: NotRequired[bool]
+    include_stale: NotRequired[bool]
+    stale_count: NotRequired[int]
+
+
+class RetrievalArtifactInvalidatedPayload(TypedDict, total=False):
+    """retrieval.artifact_invalidated — R18-B2 T1, emitted once per handled change.
+
+    Makes the freshness contract observable: when a source artifact changes, the
+    freshness subscriber records what it did — marked chunks stale + queued a
+    refresh (created/updated), or removed chunks immediately (deleted). This is the
+    'staleness is allowed to exist; it is never allowed to be invisible' rule
+    (Section 1) at the invalidation moment; T6 aggregates the standing metrics.
+
+    PII GUARD: identifiers, the change kind, and counts only — NEVER artifact
+    content. ``source_system`` / ``source_artifact`` are non-sensitive system
+    identifiers, same as the emitted ingestion.artifact_changed event.
+
+    org_id:          The org the artifact belongs to (hard-scoped).
+    source_system:   The connector/source system that reported the change.
+    source_artifact: Stable id of the changed artifact (connector-defined).
+    change_kind:     'created' | 'updated' | 'deleted'.
+    action:          What the subscriber did — 'marked_stale' | 'removed'.
+    chunks_affected: How many chunks were marked stale or removed.
+    queued:          True when the artifact was queued for async refresh
+                     (created/updated); absent/False for a deletion.
+    """
+    org_id: NotRequired[str]
+    source_system: NotRequired[str]
+    source_artifact: NotRequired[str]
+    change_kind: NotRequired[str]
+    action: NotRequired[str]
+    chunks_affected: NotRequired[int]
+    queued: NotRequired[bool]
+
+
+class RetrievalModelBackfillPayload(TypedDict, total=False):
+    """retrieval.model_backfill — R18-B2 T5, emitted per org pass that re-embedded.
+
+    Makes an embedding-model-version migration observable: when the provider/version
+    repins, old-model vectors are invalidated (excluded from retrieval immediately)
+    and re-embedded onto the active model by a managed background backfill. This
+    event records each pass that actually re-embedded, so a migration's progress is
+    never invisible.
+
+    PII GUARD: identifiers, the ACTIVE model stamp, and counts only — NEVER chunk
+    content or vectors. ``embedding_model`` / ``embedding_model_version`` are the
+    non-sensitive active-model identifiers everything is being converged onto.
+
+    org_id:                  The org whose old-model vectors were backfilled.
+    embedding_model:         Active model identity now stamped on the re-embedded
+                             vectors.
+    embedding_model_version: Active model version now stamped.
+    reembedded:              How many old-model vectors were re-embedded this pass.
+    incompatible_seen:       How many old-model vectors this pass attempted.
+    batches:                 Gateway embedding calls made this pass.
+    """
+    org_id: NotRequired[str]
+    embedding_model: NotRequired[str]
+    embedding_model_version: NotRequired[str]
+    reembedded: NotRequired[int]
+    incompatible_seen: NotRequired[int]
+    batches: NotRequired[int]
 
 
 # ---------------------------------------------------------------------------
@@ -711,6 +777,17 @@ register_event_type("model.embedding_completed", ModelEmbeddingCompletedPayload)
 # app.retrieval.api can emit it; record_event() raises ValueError for an
 # unregistered type, so registration must precede the first emission.
 register_event_type("retrieval.query_completed", RetrievalQueryCompletedPayload)
+# R18-B2 T1 — retrieval freshness. retrieval.artifact_invalidated is emitted once
+# per handled ingestion.artifact_changed event so invalidation is observable.
+# Registered here so app.retrieval.freshness can emit it; record_event() raises
+# ValueError for an unregistered type, so registration must precede emission.
+register_event_type("retrieval.artifact_invalidated", RetrievalArtifactInvalidatedPayload)
+# R18-B2 T5 — embedding-model-version invalidation + managed backfill.
+# retrieval.model_backfill is emitted per org pass that re-embedded old-model
+# vectors onto the active model, so a model migration is observable. Registered
+# here so app.retrieval.embedder can emit it; record_event() raises ValueError for
+# an unregistered type, so registration must precede emission.
+register_event_type("retrieval.model_backfill", RetrievalModelBackfillPayload)
 
 
 # ---------------------------------------------------------------------------

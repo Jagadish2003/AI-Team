@@ -30,6 +30,19 @@ def rand_org_name(prefix: str = "Org") -> str:
     return prefix + uuid.uuid4().hex[:12].translate(_HEX_TO_ALPHA)
 
 
+def email_for_org(org_name: str, local: str | None = None) -> str:
+    """Return an email whose domain matches ``org_name`` (BUG 1 rule).
+
+    Registration now requires the org name to correspond to the company email
+    domain (user_auth.org_name_matches_email_domain). Tests build a matching pair
+    by using the normalised org name as the domain's company label, so each unique
+    org name still gets its own unique domain (dedup isolation is preserved) while
+    the pair passes domain validation. e.g. ``OrgAbc`` -> ``user_x@orgabc.com``.
+    """
+    local = local or f"user_{uuid.uuid4().hex[:10]}"
+    return f"{local}@{org_name.strip().lower()}.com"
+
+
 def member_for_email(email: str) -> tuple[str, str]:
     """Return (org_id, role) for the workspace member registered under ``email``.
 
@@ -51,15 +64,30 @@ def member_for_email(email: str) -> tuple[str, str]:
 
 
 def activate_org_by_email(email: str) -> None:
-    """Approve (activate) the org owned by ``email`` so its members can log in."""
+    """Approve (activate) the org owned by ``email`` so its members can log in.
+
+    Mirrors the real admin-approval POST: it activates the org AND settles any
+    PENDING join requests for that org to 'approved' (TENANT-1). A user who
+    registered under an existing org name JOINS it as a pending request, and
+    production approval settles that request — so this simulation must too, or a
+    joined user would stay login-blocked after a simulated approval.
+    """
     con = db.connect()
     con.autocommit = True
     try:
-        con.cursor().execute(
+        cur = con.cursor()
+        cur.execute(
             "UPDATE orgs SET approval_status = 'active' WHERE id IN ("
             "  SELECT wm.org_id FROM workspace_members wm "
             "  JOIN users u ON u.id = wm.user_id WHERE u.email = %s)",
             (email.strip().lower(),),
+        )
+        cur.execute(
+            "UPDATE org_join_requests SET status = 'approved', decided_at = %s "
+            "WHERE status = 'pending' AND org_id IN ("
+            "  SELECT wm.org_id FROM workspace_members wm "
+            "  JOIN users u ON u.id = wm.user_id WHERE u.email = %s)",
+            (db.now_iso(), email.strip().lower()),
         )
     finally:
         con.close()

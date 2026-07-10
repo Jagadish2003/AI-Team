@@ -604,3 +604,21 @@ class SharePointGraphClient:
         """
         url = f"{_GRAPH_API_BASE}/drives/{drive_id}/root/delta"
         return self._get_all(url)
+
+    def download_item_content(self, drive_id: str, item_id: str) -> bytes:
+        """Download one driveItem's raw bytes (R18-A1 / T5 — the document path).
+
+        The ``/drives/{id}/items/{id}/content`` endpoint the reach-phase connector
+        deliberately never called (content was the 1.8 deep-content story). Graph
+        answers with a 302 to a short-lived download URL; ``requests`` follows it by
+        default. Returns the file bytes for the DocumentIngestor to extract — this
+        is the ONLY place SharePoint file BYTES are fetched, and only for a file the
+        ingestor has already determined is new/changed.
+        """
+        url = f"{_GRAPH_API_BASE}/drives/{drive_id}/items/{item_id}/content"
+        resp = self._sess().get(url, timeout=_REQUEST_TIMEOUT)
+        if not resp.ok:
+            raise SharePointIngestError(
+                f"Microsoft Graph GET {url} HTTP {resp.status_code}"
+            )
+        return resp.content

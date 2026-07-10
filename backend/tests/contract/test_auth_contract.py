@@ -64,8 +64,11 @@ def _register(client, *, org=None, email=None, password="Ownerpass1!"):
     same shape the AUTH-1 register response used to return — so the assertions
     below are unchanged. (register==201 and login==200 are asserted here.)
     """
-    email = email or _email()
+    from auth_helpers import email_for_org
+
     org = org or rand_org_name()
+    # BUG 1: the email domain must match the org name — derive a matching pair.
+    email = email or email_for_org(org)
     reg = client.post(
         "/api/auth/register",
         json={"org_name": org, "email": email, "password": password},
@@ -126,10 +129,15 @@ def test_ac16_password_hash_is_bcrypt_and_no_plaintext(client):
 
 
 def test_ac3_duplicate_email_returns_409(client):
-    _, email = _register(client, email=_email())
+    # Re-register the SAME email. BUG 1 requires the org to match the email domain,
+    # so the dupe attempt reuses the same org (a different org would 400 on the
+    # domain rule before reaching the duplicate-email check). The 409 (email
+    # already registered) is what AC3 asserts and is org-independent.
+    org = rand_org_name()
+    _, email = _register(client, org=org)
     dupe = client.post(
         "/api/auth/register",
-        json={"org_name": "Other", "email": email, "password": "Anotherpass1!"},
+        json={"org_name": org, "email": email, "password": "Anotherpass1!"},
     )
     assert dupe.status_code == 409, dupe.text
 
@@ -138,7 +146,7 @@ def test_ac3_duplicate_email_returns_409(client):
 
 
 def test_ac4_login_jwt_has_required_claims(client):
-    _, email = _register(client, email=_email(), password="Loginpass1!")
+    _, email = _register(client, password="Loginpass1!")
     resp = client.post(
         "/api/auth/login", json={"email": email, "password": "Loginpass1!"}
     )
@@ -150,7 +158,7 @@ def test_ac4_login_jwt_has_required_claims(client):
 
 
 def test_ac5_wrong_password_and_unknown_email_identical_401(client):
-    _, email = _register(client, email=_email(), password="Rightpass1!")
+    _, email = _register(client, password="Rightpass1!")
 
     wrong = client.post(
         "/api/auth/login", json={"email": email, "password": "wrongpass1"}
@@ -167,7 +175,7 @@ def test_ac5_wrong_password_and_unknown_email_identical_401(client):
 
 
 def test_ac6_sixth_failed_attempt_returns_429_with_retry_after(client):
-    _, email = _register(client, email=_email(), password="Correctpass1!")
+    _, email = _register(client, password="Correctpass1!")
 
     for _ in range(5):
         bad = client.post(
@@ -189,8 +197,8 @@ def test_ac6_sixth_failed_attempt_returns_429_with_retry_after(client):
 def test_ac7_rate_limit_is_email_scoped_not_ip(client):
     """A throttled account does not lock out another user on the same client/IP
     (deliberate deviation from per-IP AC7)."""
-    _, blocked = _register(client, org="Blocked", email=_email(), password="Blockedpass1!")
-    _, other = _register(client, org="Other", email=_email(), password="Otherpass1!")
+    _, blocked = _register(client, org="Blocked", password="Blockedpass1!")
+    _, other = _register(client, org="Other", password="Otherpass1!")
 
     for _ in range(5):
         client.post("/api/auth/login", json={"email": blocked, "password": "wrong1"})
@@ -205,7 +213,7 @@ def test_ac7_rate_limit_is_email_scoped_not_ip(client):
 
 
 def test_ac8_successful_login_clears_failed_attempts(client):
-    _, email = _register(client, email=_email(), password="Recoverpass1!")
+    _, email = _register(client, password="Recoverpass1!")
 
     # 4 failures — under the threshold of 5.
     for _ in range(4):
@@ -229,7 +237,7 @@ def test_ac8_successful_login_clears_failed_attempts(client):
 
 
 def test_ac9_logout_revokes_token_on_protected_route(client):
-    resp, _ = _register(client, email=_email())
+    resp, _ = _register(client)
     token = resp.json()["token"]
 
     # Token works on a protected existing route before logout.
@@ -246,7 +254,7 @@ def test_ac9_logout_revokes_token_on_protected_route(client):
 
 
 def test_ac10_invite_returns_token_in_non_production(client):
-    resp, _ = _register(client, email=_email())
+    resp, _ = _register(client)
     owner_token = resp.json()["token"]
     invite = client.post(
         "/api/auth/invite",
@@ -264,7 +272,7 @@ def test_ac10_invite_hides_token_in_production(client, monkeypatch):
     # but email_sent is still reported.
     # A signing secret is required once ENVIRONMENT=production.
     monkeypatch.setenv("JWT_SECRET", "x" * 40)
-    resp, _ = _register(client, email=_email())
+    resp, _ = _register(client)
     owner_token = resp.json()["token"]
 
     monkeypatch.setenv("ENVIRONMENT", "production")
@@ -283,7 +291,7 @@ def test_ac10_invite_hides_token_in_production(client, monkeypatch):
 
 
 def test_ac11_accept_invite_single_use(client):
-    resp, _ = _register(client, email=_email())
+    resp, _ = _register(client)
     owner_token = resp.json()["token"]
     invite_token = client.post(
         "/api/auth/invite",
@@ -304,7 +312,7 @@ def test_ac11_accept_invite_single_use(client):
 
 
 def test_ac12_accept_invite_expired_returns_400(client):
-    resp, _ = _register(client, email=_email())
+    resp, _ = _register(client)
     owner_token = resp.json()["token"]
     invite_token = client.post(
         "/api/auth/invite",
@@ -329,14 +337,14 @@ def test_ac12_accept_invite_expired_returns_400(client):
 
 
 def test_ac15_register_jwt_passes_require_auth_and_role(client):
-    resp, _ = _register(client, email=_email())
+    resp, _ = _register(client)
     token = resp.json()["token"]
     catalog = client.get(WORKSPACE_CATALOG, headers=_auth(token))
     assert catalog.status_code == 200, catalog.text
 
 
 def test_ac15_login_jwt_passes_require_auth_and_role(client):
-    _, email = _register(client, email=_email(), password="E2epass1!")
+    _, email = _register(client, password="E2epass1!")
     token = client.post(
         "/api/auth/login", json={"email": email, "password": "E2epass1!"}
     ).json()["token"]

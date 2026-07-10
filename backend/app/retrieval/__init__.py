@@ -13,6 +13,14 @@ Package layout (Section 1):
     api.py              - retrieve() entry point + RetrievedChunk
     ingest.py           - ingest_content() producer contract (T5)
     evidence_source.py  - retrieval-backed evidence source for assemble_context (T6)
+    freshness.py        - ingestion.artifact_changed subscriber (R18-B2 T1)
+    refresh_queue.py    - durable refresh work list for the async worker (R18-B2)
+    refresh.py          - async refresh worker: re-extract, hash-compare, re-embed
+                          only what changed, atomic swap, clear stale (R18-B2 T3)
+    default_resolvers.py - production connector resolver registration for refresh
+    metrics.py          - freshness-lag metrics per org: pending events, stale
+                          chunks, backfill progress (R18-B2 T6, served by
+                          routes_retrieval.py)
 
 Two load-bearing invariants hold across the package:
 
@@ -38,4 +46,15 @@ from __future__ import annotations
 # gateway, so importing the package must not force those in. Callers import the
 # submodule they need, e.g. ``from app.retrieval.api import retrieve``.
 
-__all__ = ["chunking", "embedder", "store", "api", "ingest"]
+__all__ = [
+    "chunking",
+    "embedder",
+    "store",
+    "api",
+    "ingest",
+    "freshness",
+    "refresh_queue",
+    "refresh",
+    "default_resolvers",
+    "metrics",
+]

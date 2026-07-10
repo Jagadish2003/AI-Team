@@ -17,7 +17,7 @@ import uuid
 
 from fastapi.testclient import TestClient
 
-from auth_helpers import member_for_email, register_approve_login
+from auth_helpers import email_for_org, member_for_email, register_approve_login
 
 
 def _bearer(token: str) -> dict:
@@ -34,7 +34,8 @@ def test_invited_analyst_sees_org_run_and_products(client: TestClient):
     from app import db
 
     # 1. Owner registers org "DWP".
-    owner_email = _uniq("owner_dwp")
+    # BUG 1: the owner's email domain must match the org name.
+    owner_email = email_for_org("DWP", local="owner_dwp")
     analyst_email = _uniq("analyst_dwp")
     # AUTH-2: register → approve → login to get the owner's JWT.
     owner = register_approve_login(
@@ -104,7 +105,7 @@ def test_invited_analyst_sees_connectors_via_real_endpoints(client: TestClient):
     """
     from app import db
 
-    owner_email = _uniq("owner_dwp3")
+    owner_email = email_for_org("DWPthree", local="owner_dwp3")  # BUG 1: match domain
     analyst_email = _uniq("analyst_dwp3")
     owner = register_approve_login(
         client, email=owner_email, password="Password123!", org_name="DWPthree"
@@ -170,7 +171,7 @@ def test_invited_analyst_sees_connectors_via_real_endpoints(client: TestClient):
 def test_outsider_in_another_org_does_not_see_the_run(client: TestClient):
     from app import db
 
-    dwp2_email = _uniq("owner_dwp2")
+    dwp2_email = email_for_org("DWPtwo", local="owner_dwp2")  # BUG 1: match domain
     reg = client.post(
         "/api/auth/register",
         json={"org_name": "DWPtwo", "email": dwp2_email, "password": "Password123!"},
@@ -185,7 +186,7 @@ def test_outsider_in_another_org_does_not_see_the_run(client: TestClient):
 
     # A separate owner / separate org (mirrors "registered a new account to invite").
     other = register_approve_login(
-        client, email=_uniq("owner_cf"), password="Password123!", org_name="CF"
+        client, email=email_for_org("CF", local="owner_cf"), password="Password123!", org_name="CF"  # BUG 1: match domain
     )
     other_token = other["token"]
 

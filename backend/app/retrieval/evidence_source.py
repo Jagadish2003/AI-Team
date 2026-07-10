@@ -22,6 +22,13 @@ candidates; the assembler DECIDES what enters context**:
   silently disappearing at the retrieval layer. Explainability beats a marginally
   smaller candidate list. (A caller-supplied ``min_score`` still passes through
   to ``retrieve()`` for callers that want a hard retrieval-side floor.)
+* For the same reason it proposes STALE chunks too (``retrieve(include_stale=
+  True)``): a stale chunk (source artifact changed, not yet refreshed) is excluded
+  BY THE ASSEMBLER and recorded as 'excluded: stale' on the selection log (R18-B2
+  T4 / AC6), never silently dropped here. The direct ``retrieve()`` default still
+  excludes stale for callers that are not going through the assembler; whether a
+  proposed stale chunk is ultimately admitted is the assembler's
+  ``AssemblyPolicy.include_stale`` decision.
 * It proposes MORE candidates than the evidence budget
   (:data:`PROPOSAL_FACTOR` × ``max_evidence_chunks``) so the assembler's floor
   and ranking have real work to do — proposing exactly the budget would make the
@@ -139,6 +146,9 @@ def retrieved_chunk_to_evidence(chunk: RetrievedChunk) -> dict:
                                confidence floor and ranking act on retrieval
                                quality
     * ``source_timestamp``  -> feeds the assembler's freshness scoring
+    * ``is_stale``          -> lets the assembler EXCLUDE a stale chunk and log
+                               'excluded: stale' (R18-B2 T4 / AC6) instead of the
+                               exclusion vanishing silently at the retrieval layer
 
     The rest is provenance payload carried verbatim into the
     ``ContextPackage`` when the chunk is selected: content, source system and
@@ -150,6 +160,10 @@ def retrieved_chunk_to_evidence(chunk: RetrievedChunk) -> dict:
         "origin": OBSERVED,
         "confidence": chunk.similarity,
         "source_timestamp": chunk.source_timestamp or None,
+        # R18-B2 T4: carry the staleness flag through so the assembler can EXCLUDE
+        # a stale chunk and record 'excluded: stale' on the selection log (AC6),
+        # rather than the exclusion happening silently at the retrieval layer.
+        "is_stale": chunk.is_stale,
         "content": chunk.content,
         "similarity": chunk.similarity,
         "source_system": chunk.source_system,
@@ -210,6 +224,13 @@ def retrieval_evidence_source(
                 k=propose_k,
                 source_filter=source_filter,
                 min_score=min_score,
+                # Propose stale chunks too (R18-B2 T4): the assembler EXCLUDES them
+                # and records 'excluded: stale' on the selection log (AC6). Same
+                # stance as the confidence floor — retrieval PROPOSES, the assembler
+                # DECIDES and logs, so a freshness exclusion is visible rather than a
+                # silent hole. Whether stale chunks are ultimately admitted is the
+                # assembler's AssemblyPolicy.include_stale decision, not this source's.
+                include_stale=True,
             )
             return [retrieved_chunk_to_evidence(c) for c in chunks]
         except Exception:  # noqa: BLE001 — evidence is advisory; never break assembly

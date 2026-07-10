@@ -561,3 +561,45 @@ class ConfluenceClient:
                 break
             start += 100
         return items
+
+    def list_attachments(self, page_id: str) -> List[Dict[str, Any]]:
+        """Return a page's attachments with version metadata (R18-A1 / T5).
+
+        The ``content/{id}/child/attachment`` endpoint the reach-phase connector
+        never called — attachments (files) are the document-path surface (content
+        was the 1.8 story). ``expand=version`` carries the change marker the
+        DocumentIngestor uses so an unchanged attachment is not re-downloaded (AC2).
+        No attachment BYTES are fetched here (that is :meth:`download_attachment`).
+        """
+        attachments: List[Dict[str, Any]] = []
+        start = 0
+        while True:
+            data = self._get(
+                f"content/{page_id}/child/attachment",
+                {"expand": "version", "limit": 100, "start": start},
+            )
+            results = data.get("results", [])
+            attachments.extend(results)
+            if len(results) < 100:
+                break
+            start += 100
+        return attachments
+
+    def download_attachment(self, download_path: str) -> bytes:
+        """Download one attachment's raw bytes (R18-A1 / T5 — the document path).
+
+        Confluence gives each attachment a relative ``_links.download`` path under
+        the wiki root (e.g. ``/download/attachments/{page}/{name}?version=…``); this
+        fetches it with the authenticated session and returns the file bytes for the
+        DocumentIngestor to extract. Only called for an attachment already
+        determined new/changed. This is the ONLY place attachment BYTES are read.
+        """
+        if not download_path:
+            raise ConfluenceIngestError("attachment has no download link")
+        url = f"{self.base_url}/wiki{download_path}"
+        resp = self._sess().get(url, timeout=_REQUEST_TIMEOUT)
+        if not resp.ok:
+            raise ConfluenceIngestError(
+                f"Confluence GET attachment HTTP {resp.status_code}"
+            )
+        return resp.content

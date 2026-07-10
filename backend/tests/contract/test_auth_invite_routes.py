@@ -23,11 +23,13 @@ def _register_owner(client) -> str:
     """Register a fresh org + owner, approve it (AUTH-2 admin step, simulated), and
     return the owner's JWT — issued on login after approval (register itself no
     longer returns a JWT under AUTH-2)."""
-    email = _email()
+    from auth_helpers import email_for_org
+    org = rand_org_name()
+    email = email_for_org(org)  # BUG 1: org name must match the email domain
     resp = client.post(
         "/api/auth/register",
         json={
-            "org_name": rand_org_name(),
+            "org_name": org,
             "email": email,
             "password": "Ownerpass1!",
         },

@@ -377,7 +377,7 @@ def _ingest_one(
     try:
         artifact = _normalise(item)
         src_system, src_artifact = artifact.source_system, artifact.source_artifact
-        records = _to_records(org_id, artifact)
+        records = build_records(org_id, artifact)
 
         # Replace semantics (re-ingest path): only reached once this handover is
         # fully validated and built. DELETE + INSERT are atomic — on any write
@@ -479,13 +479,19 @@ def _normalise(item: Union[ContentArtifact, dict]) -> ContentArtifact:
     )
 
 
-def _to_records(org_id: str, artifact: ContentArtifact) -> list[RetrievalChunkRecord]:
+def build_records(org_id: str, artifact: ContentArtifact) -> list[RetrievalChunkRecord]:
     """Chunk one artifact per its content-type policy and build store records.
 
     The substrate-owned part of AC1: T2 chunking decides the units (and stamps
     position + provenance), the record derives the content hash, and every
     record is built WITHOUT an embedding — the async pipeline (T3) stamps
     vectors later. No caller input reaches the hash or the chunk boundaries.
+
+    Public because the freshness refresh worker (R18-B2 T3) MUST re-chunk changed
+    content through this exact path: hash-comparing re-extracted chunks against the
+    stored ones only works if both go through the identical chunking + hashing
+    logic. Sharing this one builder is what keeps ingest-time and refresh-time
+    chunk boundaries (and therefore content hashes) in lock-step.
     """
     ts_text = _timestamp_text(artifact.source_timestamp)
     chunks = chunking.chunk_content(
