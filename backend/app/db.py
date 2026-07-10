@@ -687,8 +687,20 @@ def tenancy_get_connectors(org_id: str) -> List[Dict[str, Any]]:
 
 
 def tenancy_get_runs(org_id: str) -> List[Dict[str, Any]]:
-    """Returns runs for org_id only. Never cross-org."""
-    return _tenancy_filter("runs", org_id)
+    """Returns runs for org_id only. Never cross-org.
+
+    Runs carry their owning org under either 'orgId' (camelCase — the key
+    POST /api/runs/start writes) or 'org_id' (snake_case, used by some other
+    paths), so unlike the generic _tenancy_filter this matches on whichever key
+    is present. Strict equality: a run tagged with a different org is excluded,
+    and an untagged legacy run (neither key) is visible to no org — there is no
+    None-is-visible-to-everyone path that could leak another org's run.
+    """
+    return [
+        r
+        for r in get_all("runs")
+        if (r.get("org_id") or r.get("orgId")) == org_id
+    ]
 
 
 # ---------------------------------------------------------------------------

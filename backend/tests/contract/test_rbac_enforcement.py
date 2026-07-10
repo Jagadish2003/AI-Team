@@ -566,3 +566,140 @@ def test_all_routes_have_auth_or_are_explicitly_public() -> None:
         "Routes missing require_auth (add to _PUBLIC_ROUTES if intentional):\n"
         + "\n".join(f"  {v}" for v in sorted(violations))
     )
+
+
+# ── Fix 4 regression: run read + decision/override endpoints carry role gates ──
+#
+# Six endpoints previously had require_auth only, so any authenticated user
+# (including a viewer) could read run data or approve/reject opportunities. The
+# read endpoints must require viewer+, the mutating decision/override endpoints
+# must require analyst+. A fake run_id is fine: the role dependency runs before
+# the handler body, so an under-privileged caller gets 403 before any run lookup.
+
+_FIX4_READ_ENDPOINTS = [
+    "/api/runs/run_fake_fix4",
+    "/api/runs/run_fake_fix4/events",
+    "/api/runs/run_fake_fix4/mappings",
+]
+
+_FIX4_DECISION_ENDPOINTS = [
+    "/api/runs/run_fake_fix4/evidence/ev_fake/decision",
+    "/api/runs/run_fake_fix4/opportunities/opp_fake/decision",
+    "/api/runs/run_fake_fix4/opportunities/opp_fake/override",
+]
+
+
+@pytest.mark.parametrize("path", _FIX4_READ_ENDPOINTS)
+def test_fix4_read_endpoints_allow_viewer(client: TestClient, path: str) -> None:
+    """Read endpoints require viewer+: a viewer is not blocked by RBAC (not 403)."""
+    resp = client.get(path, headers=_set_role("viewer"))
+    assert resp.status_code != 403
+
+
+@pytest.mark.parametrize("path", _FIX4_READ_ENDPOINTS)
+def test_fix4_read_endpoints_reject_unauthenticated(client: TestClient, path: str) -> None:
+    """Read endpoints reject an unauthenticated caller with 401."""
+    resp = client.get(path, headers=_no_auth())
+    assert resp.status_code == 401
+
+
+@pytest.mark.parametrize("path", _FIX4_DECISION_ENDPOINTS)
+def test_fix4_decision_endpoints_reject_viewer(client: TestClient, path: str) -> None:
+    """Decision/override endpoints require analyst+: a viewer gets 403."""
+    resp = client.post(path, headers=_set_role("viewer"), json={"decision": "APPROVED"})
+    assert resp.status_code == 403
+
+
+@pytest.mark.parametrize("path", _FIX4_DECISION_ENDPOINTS)
+def test_fix4_decision_endpoints_allow_analyst(client: TestClient, path: str) -> None:
+    """Decision/override endpoints do not block an analyst on RBAC (not 403)."""
+    resp = client.post(path, headers=_set_role("analyst"), json={"decision": "APPROVED"})
+    assert resp.status_code != 403
+
+
+@pytest.mark.parametrize("path", _FIX4_DECISION_ENDPOINTS)
+def test_fix4_decision_endpoints_reject_unauthenticated(client: TestClient, path: str) -> None:
+    """Decision/override endpoints reject an unauthenticated caller with 401."""
+    resp = client.post(path, headers=_no_auth(), json={"decision": "APPROVED"})
+    assert resp.status_code == 401
+
+
+# ── Static role tokens resolve their role on role-gated routes ────────────────
+#
+# DEV_JWT / VIEWER_JWT / ANALYST_JWT / ADMIN_JWT are static (non-JWT) tokens with
+# no workspace_members row. require_auth accepts them and security._token_roles()
+# assigns them a role, so seed_static_token_members() (run at startup) seeds them
+# as members of the DEFAULT org — otherwise require_role's DB lookup would 403
+# every such token. Seeding is default-org-only, so org-scoping still denies them
+# elsewhere, and a forged/non-member token (no map entry) is never granted a role.
+
+_VIEWER_TOKEN = os.getenv("VIEWER_JWT", "viewer-token")
+
+
+def _static(token: str) -> Dict[str, str]:
+    return {"Authorization": f"Bearer {token}"}
+
+
+def test_static_viewer_token_reads_opportunities(client: TestClient) -> None:
+    """VIEWER_JWT (seeded at startup) resolves to 'viewer' on a viewer+ route (not 403 / not 401)."""
+    resp = client.get("/api/runs/run_fake_static/opportunities", headers=_static(_VIEWER_TOKEN))
+    assert resp.status_code != 403
+    assert resp.status_code != 401
+
+
+def test_static_viewer_token_blocked_from_owner_route(client: TestClient) -> None:
+    """VIEWER_JWT resolves to 'viewer' → 403 on an owner-only route (rank check still applies)."""
+    resp = client.get("/api/workspace/members", headers=_static(_VIEWER_TOKEN))
+    assert resp.status_code == 403
+
+
+def test_seed_static_token_members_resolves_configured_roles(monkeypatch) -> None:
+    """seed_static_token_members seeds each configured static token with its role.
+
+    Verifies the mechanism directly (env set before the seed call), independent of
+    the app-startup seeding: an env-configured ANALYST_JWT becomes an 'analyst'
+    member of the target org, and DEV_JWT is skipped (kept as owner elsewhere)."""
+    from app import rbac
+
+    monkeypatch.setenv("ANALYST_JWT", "analyst-static-xyz")
+    org = "static_seed_" + uuid.uuid4().hex[:8]
+    rbac.seed_static_token_members(org)
+
+    assert rbac.get_user_role(org, "analyst-static-xyz") == "analyst"
+    assert rbac.get_user_role(org, _VIEWER_TOKEN) == "viewer"
+    # DEV_JWT is intentionally NOT seeded here (owner is seeded via seed_owner).
+    assert rbac.get_user_role(org, os.getenv("DEV_JWT", "dev-token-change-me")) is None
+
+
+def test_static_token_is_org_scoped(client: TestClient) -> None:
+    """A static token seeded in the default org has no role in another org → 403.
+    Proves seeding does not bypass org-scoping (regression guard for AC14)."""
+    resp = client.get(
+        "/api/runs/run_fake_static/opportunities",
+        headers={**_static(_VIEWER_TOKEN), "X-Org-Id": "org_other_static_" + uuid.uuid4().hex[:8]},
+    )
+    assert resp.status_code == 403
+
+
+def test_forged_token_still_denied_on_gated_route(client: TestClient) -> None:
+    """A random non-JWT token is not in the static map → require_auth 401 (no role granted)."""
+    resp = client.get(
+        "/api/runs/run_fake_static/opportunities",
+        headers=_static("not-a-real-token-" + uuid.uuid4().hex),
+    )
+    assert resp.status_code == 401
+
+
+# ── Fix 7 regression: /api/runs/start rejects an unauthenticated caller ───────
+
+
+def test_runs_start_unauthenticated_returns_401(client: TestClient) -> None:
+    """Removing the redundant require_auth from the dependency list must not
+    regress the 401-on-missing-token behaviour (require_role still implies auth)."""
+    resp = client.post(
+        "/api/runs/start",
+        headers=_no_auth(),
+        json={"connectedSources": [], "uploadedFiles": [], "sampleWorkspaceEnabled": False,
+              "mode": "offline", "systems": ["salesforce"]},
+    )
+    assert resp.status_code == 401

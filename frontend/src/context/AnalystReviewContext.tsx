@@ -91,7 +91,14 @@ export function AnalystReviewProvider({ children }: { children: React.ReactNode 
       setLoading(true);
       setError(null);
       try {
-        const [opps, aud] = await Promise.all([fetchOpportunities(runId), fetchAudit(runId)]);
+        // Opportunities are the critical Viewer+ resource. The audit trail is an
+        // owner-only endpoint (RBAC: analysts/viewers get 403), so it is fetched
+        // tolerantly — a 403 or any audit failure degrades to an empty trail and
+        // must never break the opportunity view for a non-owner (AC2).
+        const [opps, aud] = await Promise.all([
+          fetchOpportunities(runId),
+          fetchAudit(runId).catch(() => [] as ReviewAuditEvent[]),
+        ]);
         if (cancelled) return;
         setOpportunities(opps);
         setAudit(aud);

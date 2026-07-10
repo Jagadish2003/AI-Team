@@ -27,8 +27,24 @@ _MEMBERS_INITIALISED = False
 
 
 def _ensure_members_table() -> None:
-    """No-op. The workspace_members table is provisioned by database/provision/provision.sh."""
-    return None
+    """Create the workspace_members table if it does not exist (idempotent).
+
+    Fail-soft: a failure here (e.g. a concurrent creator winning the race, or a
+    read-only replica) is rolled back and swallowed so require_role still reaches
+    its own query and returns a clean 403 rather than surfacing a 500.
+    """
+    con = db.connect()
+    try:
+        cur = con.cursor()
+        cur.execute(CREATE_WORKSPACE_MEMBERS_TABLE)
+        con.commit()
+    except Exception:
+        try:
+            con.rollback()
+        except Exception:
+            pass
+    finally:
+        con.close()
 
 
 def seed_owner(org_id: str, user_id: str) -> None:
@@ -53,6 +69,45 @@ def seed_owner(org_id: str, user_id: str) -> None:
         con.commit()
     finally:
         con.close()
+
+
+def _seed_member(org_id: str, user_id: str, role: str) -> None:
+    """Upsert a workspace member with an explicit role (idempotent)."""
+    _ensure_members_table()
+    con = db.connect()
+    try:
+        cur = con.cursor()
+        cur.execute(
+            """
+            INSERT INTO workspace_members (org_id, user_id, role, created_at)
+            VALUES (%s, %s, %s, %s)
+            ON CONFLICT (org_id, user_id)
+            DO UPDATE SET role = EXCLUDED.role, is_deleted = FALSE
+            """,
+            (org_id, user_id, role, datetime.now(timezone.utc).isoformat()),
+        )
+        con.commit()
+    finally:
+        con.close()
+
+
+def seed_static_token_members(org_id: str) -> None:
+    """Seed the configured static dev/test tokens as members of org_id.
+
+    DEV_JWT / VIEWER_JWT / ANALYST_JWT / ADMIN_JWT are static (non-JWT) tokens
+    that require_auth accepts and security._token_roles() assigns a role, but
+    they have no workspace_members row — so require_role's DB lookup would 403
+    them on every gated route. Seeding them here (in the default org only) makes
+    them usable there while preserving org-scoping: outside org_id they still
+    have no row and are denied. DEV_JWT is seeded separately as owner
+    (seed_owner) and is skipped so its owner role is not downgraded.
+    """
+    from app.security import DEV_JWT, _token_roles
+
+    for token, role in _token_roles().items():
+        if token == DEV_JWT or role not in _ROLE_RANK:
+            continue
+        _seed_member(org_id, token, role)
 
 
 def get_user_role(org_id: str, user_id: str) -> str | None:

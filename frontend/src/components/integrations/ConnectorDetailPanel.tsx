@@ -4,6 +4,8 @@ import Badge from '../common/Badge';
 import Button from '../common/Button';
 import { accessIcons } from './AccessIcons';
 import { useToast } from '../common/Toast';
+import { useAuthOptional } from '../../context/AuthContext';
+import { isViewerRole } from '../../utils/roles';
 import { ExternalLink, CheckCircle2 } from 'lucide-react';
 import SalesforceProductPicker from './SalesforceProductPicker';
 import SqlServerScopePicker from './SqlServerScopePicker';
@@ -131,6 +133,10 @@ export default function ConnectorDetailPanel({
   onConfigure: () => void;
 }) {
   const { push } = useToast();
+  // Configure & Sync / Re-sync triggers a write (analyst+). Viewers get a
+  // read-only panel — this action is disabled for them.
+  const auth = useAuthOptional();
+  const isViewer = isViewerRole(auth?.user?.role);
 
   if (!connector) {
     return (
@@ -243,8 +249,14 @@ export default function ConnectorDetailPanel({
           variant="tertiary"
           className="w-full whitespace-nowrap"
           onClick={onConfigure}
-          disabled={!isConnected || connector.status === 'coming_soon'}
-          title={!isConnected ? 'Connect this source first' : undefined}
+          disabled={!isConnected || connector.status === 'coming_soon' || isViewer}
+          title={
+            isViewer
+              ? 'Configuring a source requires an analyst or owner role.'
+              : !isConnected
+              ? 'Connect this source first'
+              : undefined
+          }
         >
           {isConfigured ? 'Re-sync' : 'Configure & Sync'}
         </Button>

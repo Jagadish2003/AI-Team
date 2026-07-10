@@ -59,9 +59,9 @@ export default function PilotRoadmapHighlights({
       </ul>
       <button
         className="mt-3 w-full rounded-md border border-border bg-bg/20 px-3 py-2 text-sm hover:bg-panel2"
-        onClick={() => nav(runId ? `/pilot-roadmap?runId=${runId}` : '/pilot-roadmap')}
+        onClick={() => nav(runId ? `/agentforce-blueprint?runId=${runId}` : '/agentforce-blueprint')}
       >
-        Open Agent Roadmap
+        Open Agentforce Blueprint
       </button>
     </div>
   );

@@ -164,6 +164,15 @@ async def lifespan(app: FastAPI):
     _validate_org_approval_config()
     # Seed the dev user as owner of the default org so existing routes pass RBAC.
     seed_owner(_DEV_ORG, _DEV_USER)
+    # Seed the configured static role tokens (VIEWER_JWT / ANALYST_JWT /
+    # ADMIN_JWT) as members of the default org so they resolve their role on
+    # role-gated routes. DEV_JWT is skipped (already seeded as owner above), and
+    # seeding is default-org-only so org-scoping still denies them elsewhere.
+    # Gated to dev/test only: production (REQUIRE_CONNECTOR_SECRETS=1) never seeds
+    # static role tokens, so they cannot resolve a role on any gated route there.
+    if os.getenv("REQUIRE_CONNECTOR_SECRETS") != "1":
+        from .rbac import seed_static_token_members
+        seed_static_token_members(_DEV_ORG)
     # R16-D1 T2: validate model provider config at startup so an unknown
     # MODEL_GENERATION_PROVIDER or MODEL_EMBEDDING_PROVIDER value raises a
     # clear ValueError before the first model call (T2-AC4).
@@ -212,6 +221,13 @@ async def lifespan(app: FastAPI):
         scheduler as token_refresh_scheduler,
         start_scheduler as start_token_refresh_scheduler,
     )
+    # R18-B1 T3: async retrieval embedding worker. Content is indexed before it is
+    # embedded; this job drains the pending backlog off the run path so embedding
+    # lag never blocks a discovery run (AC7).
+    from .jobs.embedding_worker import (
+        scheduler as embedding_worker_scheduler,
+        start_scheduler as start_embedding_worker_scheduler,
+    )
     # LIC-1 / T4 (AT-345): periodic license re-check (gated background job).
     from .license_runtime import start_license_scheduler, stop_license_scheduler
 
@@ -220,6 +236,7 @@ async def lifespan(app: FastAPI):
         start_health_check_job()
         start_baseline_scheduler()
         start_token_refresh_scheduler()
+        start_embedding_worker_scheduler()
         start_license_scheduler()
     yield
     # AT-90: shut down scheduler on SIGTERM / graceful shutdown (wait=False).
@@ -229,6 +246,8 @@ async def lifespan(app: FastAPI):
             baseline_scheduler.shutdown(wait=False)
         if token_refresh_scheduler.running:
             token_refresh_scheduler.shutdown(wait=False)
+        if embedding_worker_scheduler.running:
+            embedding_worker_scheduler.shutdown(wait=False)
         stop_license_scheduler()
 
 
@@ -513,23 +532,20 @@ def _run_order_key(run: Dict[str, Any]) -> tuple[str, str]:
 
 
 # NOTE: must be declared before "/api/runs/{run_id}" so "latest" is not captured
-# as a run_id path param. Org-scoped: a run is visible when it belongs to the
-# caller's org (org_id/orgId claim) or is an untagged legacy run.
+# as a run_id path param. Strictly org-scoped: a run is visible only when it
+# belongs to the caller's org. Isolation goes through the shared tenancy_get_runs
+# filter (same helper as GET /api/runs) instead of an ad-hoc Python filter, so
+# there is no path — including untagged legacy runs — by which another org's run
+# can surface here (cross-tenant exposure guard).
 @app.get("/api/runs/latest", dependencies=[Depends(require_auth), Depends(require_role("viewer"))])
 def get_latest_run() -> Dict[str, Any]:
     db.init_tables()
     org_id = get_current_org_id()
-    runs = get_all("runs")
-    visible_runs = []
-    for run in runs:
-        run_org = run.get("org_id") or run.get("orgId")
-        if run_org is None or run_org == org_id:
-            visible_runs.append(run)
-
-    if not visible_runs:
+    runs = tenancy_get_runs(org_id)
+    if not runs:
         raise HTTPException(404, "run not found")
 
-    return max(visible_runs, key=_run_order_key)
+    return max(runs, key=_run_order_key)
 
 
 @app.get("/api/runs/{run_id}", dependencies=[Depends(require_auth), Depends(require_role("viewer"))])

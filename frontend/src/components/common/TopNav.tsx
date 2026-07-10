@@ -7,12 +7,16 @@ import { useTheme } from "../../context/ThemeContext";
 import { useAuthOptional } from "../../context/AuthContext";
 import { useOrgName } from "../../context/LicenseContext";
 import { profileNameFromEmail } from "../../utils/profileName";
+import { isViewerRole } from "../../utils/roles";
 
 type NavItem = {
   to: string;
   label: string;
   runScoped: boolean;
   sfOnly?: boolean;
+  /** Hidden from viewers — the destination is an analyst+ write workflow, so a
+   * viewer has nothing actionable there. Filtered out in the nav render below. */
+  analystOnly?: boolean;
 };
 
 const items = [
@@ -20,7 +24,7 @@ const items = [
   // T41-8: Source Intake removed from nav. Route /source-intake redirects to
   // /integration-hub for backward compatibility. Configuration merged into
   // Integration Hub right panel.
-  { to: "/stack-builder", label: "Stack Builder", runScoped: false },
+  { to: "/stack-builder", label: "Stack Builder", runScoped: false, analystOnly: true },
   // Run-scoped screens
   { to: "/discovery-run", label: "Discovery Run", runScoped: true },
   // { to: "/partial-results", label: "Evidence Collection", runScoped: true }, // Hidden - Sprint 5.1
@@ -36,7 +40,6 @@ const items = [
     runScoped: true,
     sfOnly: false,
   },
-  { to: "/pilot-roadmap", label: "Agent Roadmap", runScoped: true },
   {
     to: "/agentforce-blueprint",
     label: "Agentforce Blueprint",
@@ -82,6 +85,13 @@ export default function TopNav() {
   const salesforceConnected = connectors.some(
     (c) => c.id === "salesforce" && c.status === "connected",
   );
+
+  // Viewers get a read-only experience: analyst-only destinations (e.g. Stack
+  // Builder) are removed from the nav entirely. Only an explicit "viewer" role
+  // hides them — analyst/owner (and the claim-less dev token) keep the full nav,
+  // and the backend still enforces the boundary regardless of what the nav shows.
+  const isViewer = isViewerRole(auth?.user?.role);
+  const visibleItems = items.filter((i) => !(i.analystOnly && isViewer));
 
   useEffect(() => {
     setMenuOpen(false);
@@ -134,10 +144,10 @@ export default function TopNav() {
             the first item, Integration Hub, visible). */}
         <nav
           aria-label="Primary"
-          className="hidden min-w-0 shrink items-center gap-1 overflow-x-auto px-1 lg:flex"
+          className="hidden min-w-0 shrink items-center gap-0.5 overflow-x-auto px-1 lg:flex xl:gap-1"
           style={{ scrollbarWidth: "none" }}
         >
-          {items.map((i) => {
+          {visibleItems.map((i) => {
             const isActive = loc.pathname === i.to;
             const to = i.runScoped && runId ? `${i.to}?runId=${runId}` : i.to;
 
@@ -146,16 +156,16 @@ export default function TopNav() {
                 key={i.to}
                 to={to}
                 aria-current={isActive ? "page" : undefined}
-                className={`shrink-0 whitespace-nowrap rounded-full px-1.5 pb-1.5 pt-1 text-[12px] font-medium leading-[16px] transition-colors focus:outline-none focus:ring-2 focus:ring-accent/50 2xl:px-2 2xl:text-[13px] 2xl:leading-[18px] ${
+                className={`shrink-0 whitespace-nowrap rounded-full border-t-2 px-2.5 py-1.5 text-[13px] font-medium leading-[18px] transition-colors focus:outline-none focus:ring-2 focus:ring-accent/50 xl:px-3 2xl:text-[14px] ${
                   isActive
-                    ? "border-t-2 border-navborder bg-gradient-to-b from-activenav text-navtext"
-                    : "text-navtext/70 hover:bg-navhover hover:text-navtext"
+                    ? "border-navborder bg-gradient-to-b from-activenav text-navtext"
+                    : "border-transparent text-navtext/70 hover:bg-navhover hover:text-navtext"
                 }`}
               >
                 {i.label}
                 {i.sfOnly && !salesforceConnected && (
                   <Zap
-                    size={12}
+                    size={13}
                     className="ml-1 inline-block shrink-0 text-amber-400"
                     aria-label="Requires Salesforce"
                   />
@@ -304,7 +314,7 @@ export default function TopNav() {
           className="absolute left-0 right-0 top-[70px] border-b border-border bg-bgheader/95 px-4 py-3 shadow-lg backdrop-blur lg:hidden"
         >
           <div className="grid gap-1">
-            {items.map((i) => {
+            {visibleItems.map((i) => {
               const isActive = loc.pathname === i.to;
               const to = i.runScoped && runId ? `${i.to}?runId=${runId}` : i.to;
 
