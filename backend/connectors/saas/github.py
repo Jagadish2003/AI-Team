@@ -150,9 +150,9 @@ def _paginate(
         SIGNAL, because it means data we expected may be missing.
 
     ``quiet_statuses`` lists non-2xx codes that are EXPECTED for this call rather
-    than genuine errors — e.g. a 404 on the org-repos probe (the org id is an
-    internal tenant UUID, never a GitHub org, so the /user/repos fallback is the
-    real path) or a 409 on a repository whose default branch is empty/unborn.
+    than genuine errors — e.g. a 409 on a repository whose default branch is
+    empty/unborn ("Git Repository is empty."), which just means "no commits on the
+    default branch here", not a failure.
     A quiet status degrades (``degraded=True``) but is NOT transient
     (``transient=False``): it means "no data here", not "something failed", so a
     caller treats it as an empty result rather than a degraded signal. It is also
@@ -507,21 +507,19 @@ def _resolve_repos(session, org_id: str) -> List[Tuple[str, str]]:
         return scope
 
     try:
-        import requests
+        import requests  # noqa: F401 — availability guard; _paginate makes the calls.
     except ImportError:
         return []
 
-    # Try org repos first. NOTE: org_id here is AgentIQ's internal tenant UUID,
-    # not a GitHub organization login, so this probe normally 404s — that is the
-    # EXPECTED signal to fall back to the authenticated token's repos below, not an
-    # error (quiet_statuses=(404,) keeps it out of the WARNING stream).
-    url = f"{GITHUB_API_BASE}/orgs/{org_id}/repos"
-    repos, _, _ = _paginate(session, url, {"type": "all"}, quiet_statuses=(404,))
-
-    if not repos:
-        # Fall back to authenticated user's repos (the normal path).
-        url = f"{GITHUB_API_BASE}/user/repos"
-        repos, _, _ = _paginate(session, url, {"affiliation": "owner,organization_member"})
+    # Auto-discover the repositories the authenticated token can access. We do NOT
+    # probe /orgs/{org_id}/repos first: org_id is AgentIQ's internal tenant UUID,
+    # never a GitHub organization login, so that probe is guaranteed to 404 on every
+    # run — a wasted API call and a noisy "404 (expected)" log line. /user/repos is
+    # the real (and only) discovery path. To read an EXACT set of repos instead of
+    # everything the token can see (e.g. to skip empty or unrelated repos), set
+    # GITHUB_REPOS — see _configured_repo_scope above, which short-circuits here.
+    url = f"{GITHUB_API_BASE}/user/repos"
+    repos, _, _ = _paginate(session, url, {"affiliation": "owner,organization_member"})
 
     result: List[Tuple[str, str]] = []
     for repo in repos:

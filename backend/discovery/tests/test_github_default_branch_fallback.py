@@ -205,3 +205,24 @@ def test_resolve_repos_uses_scope_without_discovery(monkeypatch):
     assert github._resolve_repos(_BoomSession(), "org-uuid") == [
         ("Kusumareddy0896", "AgentIQ")
     ]
+
+
+def test_resolve_repos_autodiscovery_skips_org_probe(monkeypatch):
+    """Auto-discovery (no GITHUB_REPOS) goes straight to /user/repos and NEVER
+    probes /orgs/{org_id}/repos — org_id is AgentIQ's internal tenant UUID, not a
+    GitHub org login, so that probe is a guaranteed 404 (the noisy "404 (expected)"
+    log line). This asserts the wasted probe is gone."""
+    monkeypatch.delenv("GITHUB_REPOS", raising=False)
+
+    def router(url, params):
+        if url.endswith("/user/repos"):
+            return _Resp(200, [{"name": "AgentIQ", "owner": {"login": "Kusumareddy0896"}}])
+        return _Resp(404, {"message": "Not Found"})
+
+    session = _FakeSession(router)
+    result = github._resolve_repos(session, "1463258a-b6a7-4998-91f5-855c3f9faba2")
+
+    assert result == [("Kusumareddy0896", "AgentIQ")]
+    # The guaranteed-404 org probe was never attempted; /user/repos is the only path.
+    assert all("/orgs/" not in url for url, _ in session.calls)
+    assert any(url.endswith("/user/repos") for url, _ in session.calls)
