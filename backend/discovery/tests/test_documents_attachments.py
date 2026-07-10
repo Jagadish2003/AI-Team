@@ -23,6 +23,8 @@ from __future__ import annotations
 
 from typing import Dict, List
 
+import pytest
+
 from discovery.ingest import change_runner
 from discovery.ingest.base import Checkpoint
 from discovery.ingest.documents import DocumentIngestor
@@ -31,8 +33,22 @@ from discovery.ingest.documents_attachments import (
     ConfluenceDocumentSource,
     SharePointDocumentSource,
 )
+from discovery.ingest.documents_source import DocumentSourceError
 
 ORG = "org_t5"
+
+
+@pytest.fixture(autouse=True)
+def _force_offline(monkeypatch):
+    """Pin document ingestion to offline for these tests.
+
+    ``backend/.env`` sets ``INGEST_MODE=live`` for local dev, and any module that
+    calls ``load_dotenv`` can leak that into the test session — which would send the
+    SharePoint/Confluence adapters down their live client paths against the offline
+    fakes. Forcing offline here keeps every test deterministic regardless of ambient
+    env; the one live-path test overrides this with its own ``setenv``.
+    """
+    monkeypatch.setenv("INGEST_MODE", "offline")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -255,3 +271,58 @@ def test_composite_isolates_a_failing_source():
     composite = CompositeDocumentSource([Boom(ingestor=FakeSharePointIngestor([])), ok])
     records = _drive(composite, Store())
     assert _extracted_ids(records) == {"confluence:ENG:att1"}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Review finding #1 — a live attachment with no download link fails cleanly
+# ─────────────────────────────────────────────────────────────────────────────
+class _FakeConfluenceClient:
+    def __init__(self, attachments_by_page):
+        self._by_page = attachments_by_page
+
+    def list_attachments(self, page_id):
+        return list(self._by_page.get(page_id, []))
+
+    def download_attachment(self, download_path):  # pragma: no cover - not reached here
+        return b"bytes"
+
+
+class FakeConfluenceIngestorLive:
+    """Live-capable fake: supports the connector's live listing + client access."""
+
+    def __init__(self, pages, attachments_by_page):
+        self._space = {"key": "ENG", "name": "Engineering", "is_accessible": True}
+        self._pages = pages
+        self._client_obj = _FakeConfluenceClient(attachments_by_page)
+
+    def _accessible_spaces(self, org_id):
+        return [self._space]
+
+    def _raw_content(self, org_id, space):
+        return self._pages
+
+    def _client(self, org_id):
+        return self._client_obj
+
+
+def test_confluence_read_without_download_link_raises_clean_error(monkeypatch):
+    """Issue #1: a live attachment whose _links has no 'download' must raise a clean
+    DocumentSourceError (isolated per-file by the ingestor), never pass None to the
+    HTTP client and crash opaquely."""
+    monkeypatch.setenv("INGEST_MODE", "live")
+    ing = FakeConfluenceIngestorLive(
+        pages=[{"type": "page", "id": "100"}],
+        attachments_by_page={
+            "100": [
+                {  # no _links.download
+                    "id": "att1",
+                    "title": "spec.pdf",
+                    "version": {"number": 1, "when": "2026-06-10T09:00:00Z"},
+                }
+            ]
+        },
+    )
+    src = ConfluenceDocumentSource(ingestor=ing)
+    ref = next(r for r in src.list_documents(ORG) if r.artifact_id == "confluence:ENG:att1")
+    with pytest.raises(DocumentSourceError):
+        src.read(ORG, ref)

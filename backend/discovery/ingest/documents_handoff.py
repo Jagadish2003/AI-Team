@@ -273,4 +273,20 @@ def ingest_documents(
     summary.checkpoint_advanced = run.checkpoint_advanced
     summary.first_run = run.first_run
     summary.error = run.error
+
+    # Surface a hand-off failure LOUDLY even if the caller ignores the returned
+    # summary: like the change runner, this function never raises for a runtime
+    # failure (the batch hand-off error is captured on ``summary.error`` and the
+    # checkpoint is left for a retry), but a total substrate outage must not look
+    # like a clean run in the logs. A pipeline caller should still check
+    # ``summary.ok`` / ``summary.error`` and raise it as a run warning, but this
+    # error-level line guarantees the failure is visible regardless.
+    if summary.error is not None:
+        logger.error(
+            "documents: retrieval hand-off did NOT complete for org=%s "
+            "(%d artifact(s) failed, checkpoint not advanced, will retry): %s",
+            org_id,
+            summary.artifacts_failed,
+            type(summary.error).__name__,
+        )
     return summary

@@ -264,6 +264,13 @@ class ConfluenceDocumentSource(DocumentSource):
         if not is_live():
             return _inline_bytes(att)
         download_path = (att.get("_links") or {}).get("download")
+        if not download_path:
+            # Some Confluence versions / attachment types omit the download link.
+            # Fail with a clear, per-file DocumentSourceError (the ingestor isolates
+            # it, AC5) instead of passing None into the HTTP client and crashing.
+            raise DocumentSourceError(
+                f"Confluence attachment {ref.artifact_id!r} has no download link"
+            )
         return self._ing._client(org_id).download_attachment(download_path)
 
 

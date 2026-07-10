@@ -34,7 +34,7 @@ Usage (run from the backend/ directory, with the venv active):
 
     # DESTRUCTIVE: drop every table first, then recreate from scratch
     python database/provision/provision_schema.py --reset          # asks for confirmation
-    python database/provision/provision_schema.py --reset --yes    # non-interactive
+    python database/provision/provision_schema.py --reset --yes    # non-interactive (LOCAL db only)
 
 By DEFAULT this script does NOT drop anything — unlike `seed_loader.py` run on its
 own, which resets the public schema by default. It only creates-if-missing and
@@ -43,8 +43,14 @@ upserts, so an existing database is upgraded in place.
 The opt-in `--reset` flag makes it DESTRUCTIVE: it drops the entire `public`
 schema (every table, incl. alembic_version) and recreates it before provisioning,
 so the database is rebuilt from scratch. `--reset` is IRREVERSIBLE and requires
-typing the target database name to confirm (or `--yes` to skip the prompt). It is
-never implied — a plain `provision.sh` run can never drop data by accident.
+typing the target database name to confirm. It is never implied — a plain
+`provision.sh` run can never drop data by accident.
+
+`--yes` skips the interactive confirmation, but ONLY for a LOCAL database
+(localhost / 127.0.0.1 / unix socket). Against a remote host `--reset --yes` is
+refused outright, so a CI/CD pipeline or runbook carrying a production
+`DATABASE_URL` can never silently drop a production schema — a deliberate remote
+reset must be run interactively and confirmed by typing the database name.
 """
 from __future__ import annotations
 
@@ -52,6 +58,7 @@ import os
 import subprocess
 import sys
 from pathlib import Path
+from urllib.parse import urlparse
 
 _THIS_DIR = Path(__file__).resolve().parent
 _BACKEND_DIR = _THIS_DIR.parents[1]  # provision -> database -> backend
@@ -84,6 +91,28 @@ def _db_name(url: str) -> str:
     return tail.split("?", 1)[0]
 
 
+#: Hosts treated as a local database — loopback, or a unix socket (no host).
+_LOCAL_DB_HOSTS = frozenset({"localhost", "127.0.0.1", "::1", ""})
+
+
+def _db_host(url: str) -> str:
+    """Return the lowercased host of a connection URL ('' for a unix socket)."""
+    try:
+        return (urlparse(url).hostname or "").lower()
+    except Exception:
+        return ""
+
+
+def _is_local_db(url: str) -> bool:
+    """True when the URL points at a local database (loopback / unix socket).
+
+    The guard for non-interactive ``--reset --yes``: a remote host (anything not in
+    :data:`_LOCAL_DB_HOSTS`) is treated as potentially production and refused for the
+    unattended destructive path.
+    """
+    return _db_host(url) in _LOCAL_DB_HOSTS
+
+
 def confirm_reset() -> None:
     """Require explicit confirmation before the DESTRUCTIVE schema drop.
 
@@ -99,7 +128,20 @@ def confirm_reset() -> None:
     print(f"    database : {name}")
     print("    This is IRREVERSIBLE. Make sure you have a backup.")
     if "--yes" in sys.argv:
-        print("    (--yes supplied; skipping interactive confirmation)")
+        # Production guard: the non-interactive path is allowed ONLY against a local
+        # database. A remote host is treated as potentially production, so
+        # `--reset --yes` is refused there — a CI/CD pipeline or runbook that carries
+        # a production DATABASE_URL can never silently DROP the schema. A deliberate
+        # remote reset is still possible, but only interactively (typing the name).
+        if not _is_local_db(DATABASE_URL):
+            raise SystemExit(
+                "Refusing '--reset --yes' against a non-local database (host "
+                f"'{_db_host(DATABASE_URL) or 'unknown'}'). Non-interactive reset is "
+                "permitted only for a local database (localhost / 127.0.0.1 / unix "
+                "socket) so an automated run can never destroy a remote or production "
+                "schema. Re-run WITHOUT --yes and type the database name to confirm."
+            )
+        print("    (--yes supplied; local database; skipping interactive confirmation)")
         return
     try:
         entered = input(f'Type the database name "{name}" to proceed (or anything else to abort): ').strip()
