@@ -186,6 +186,35 @@ class IngestResult:
     artifacts: List[ArtifactIngestResult] = field(default_factory=list)
 
 
+@dataclass
+class ArtifactRemovalResult:
+    """Outcome for one artifact handed to :func:`remove_content`.
+
+    ``status`` is ``'removed'`` (chunks existed and were deleted), ``'absent'``
+    (no chunks for the artifact — a harmless no-op, e.g. it was excluded or never
+    indexed), or ``'failed'`` (the store errored for this artifact).
+    """
+
+    source_system: str
+    source_artifact: str
+    status: str
+    chunks_removed: int = 0
+    error: Optional[str] = None
+
+
+@dataclass
+class RemoveResult:
+    """Aggregate outcome of one :func:`remove_content` call (freshness removal)."""
+
+    org_id: str
+    artifacts_received: int = 0
+    artifacts_removed: int = 0
+    artifacts_absent: int = 0
+    artifacts_failed: int = 0
+    chunks_removed: int = 0
+    artifacts: List[ArtifactRemovalResult] = field(default_factory=list)
+
+
 # ---------------------------------------------------------------------------
 # The entry point
 # ---------------------------------------------------------------------------
@@ -258,6 +287,70 @@ def ingest_content(
     return result
 
 
+def remove_content(
+    org_id: str,
+    removals: Iterable[Union[ContentArtifact, dict, tuple]],
+) -> RemoveResult:
+    """Remove an artifact's chunks from the substrate — the deletion counterpart
+    of :func:`ingest_content` (R18-A2 / AT-533, freshness removal).
+
+    When a source reports that an artifact was DELETED (a file removed in a git
+    commit, a trashed page, …), its chunks must leave retrieval so they stop being
+    returned as evidence (AC3). Producers call this instead of reaching into the
+    store directly, so the discovery layer talks only to the substrate's
+    producer-facing contract — symmetric with ``ingest_content``.
+
+    ``removals`` is a sequence identifying the artifacts to purge; each item may be
+    a :class:`ContentArtifact` (its ids are used), a dict with ``source_system`` /
+    ``source_artifact`` keys, or a ``(source_system, source_artifact)`` tuple. Each
+    removal deletes every chunk for ``(org_id, source_system, source_artifact)``
+    within THIS org's partition and no other (AC3, R17-D3).
+
+    Idempotent and failure-isolated, matching ``ingest_content``'s posture:
+    removing an already-absent artifact is a harmless ``'absent'`` no-op, and one
+    bad removal is recorded on the result rather than sinking the batch. Raises
+    ``ValueError`` only for a malformed call. Never logs artifact content (there is
+    none) — only source identifiers and counts.
+    """
+    if org_id is None or not str(org_id).strip():
+        raise ValueError("org_id is required")
+    if removals is None or isinstance(removals, (str, bytes, dict, ContentArtifact, tuple)):
+        raise ValueError(
+            "removals must be a sequence of (source_system, source_artifact) "
+            "identifiers (ContentArtifact, dict, or tuple)"
+        )
+    try:
+        items = list(removals)
+    except TypeError as exc:
+        raise ValueError(
+            "removals must be a sequence of artifact identifiers"
+        ) from exc
+
+    result = RemoveResult(org_id=org_id, artifacts_received=len(items))
+    for item in items:
+        outcome = _remove_one(org_id, item)
+        result.artifacts.append(outcome)
+        result.chunks_removed += outcome.chunks_removed
+        if outcome.status == "removed":
+            result.artifacts_removed += 1
+        elif outcome.status == "absent":
+            result.artifacts_absent += 1
+        else:
+            result.artifacts_failed += 1
+
+    logger.info(
+        "remove_content: org=%s artifacts=%d removed=%d absent=%d failed=%d "
+        "chunks_removed=%d",
+        org_id,
+        result.artifacts_received,
+        result.artifacts_removed,
+        result.artifacts_absent,
+        result.artifacts_failed,
+        result.chunks_removed,
+    )
+    return result
+
+
 # ---------------------------------------------------------------------------
 # Per-artifact flow: validate -> chunk -> (replace) -> index. Never embeds.
 # ---------------------------------------------------------------------------
@@ -322,6 +415,57 @@ def _ingest_one(
             status="failed",
             error=str(exc),
         )
+
+
+def _remove_one(
+    org_id: str, item: Union[ContentArtifact, dict, tuple]
+) -> ArtifactRemovalResult:
+    """Remove one artifact's chunks, isolating any failure to this artifact.
+
+    Resolves the ``(source_system, source_artifact)`` identity from a
+    ContentArtifact / dict / tuple, then deletes every chunk for it within the
+    org. A missing id is a contract error for this item ('failed'); an artifact
+    with no chunks is a harmless 'absent' no-op.
+    """
+    src_system, src_artifact = _peek_ids(item)
+    try:
+        if not src_system or not src_artifact:
+            raise ValueError(
+                "removal requires both source_system and source_artifact"
+            )
+        removed = store.delete_by_artifact(org_id, src_system, src_artifact)
+        return ArtifactRemovalResult(
+            source_system=src_system,
+            source_artifact=src_artifact,
+            status="removed" if removed > 0 else "absent",
+            chunks_removed=removed,
+        )
+    except Exception as exc:  # noqa: BLE001 — one bad removal never sinks a batch
+        logger.warning(
+            "remove_content: removal failed (org=%s source_system=%r "
+            "source_artifact=%r): %s",
+            org_id,
+            src_system,
+            src_artifact,
+            exc,
+        )
+        return ArtifactRemovalResult(
+            source_system=src_system or "",
+            source_artifact=src_artifact or "",
+            status="failed",
+            error=str(exc),
+        )
+
+
+def _peek_ids(item: Any) -> tuple[str, str]:
+    """Best-effort ``(source_system, source_artifact)`` from a removal spec."""
+    if isinstance(item, ContentArtifact):
+        return str(item.source_system or ""), str(item.source_artifact or "")
+    if isinstance(item, dict):
+        return _peek(item, "source_system"), _peek(item, "source_artifact")
+    if isinstance(item, (tuple, list)) and len(item) == 2:
+        return str(item[0] or ""), str(item[1] or "")
+    return "", ""
 
 
 def _normalise(item: Union[ContentArtifact, dict]) -> ContentArtifact:

@@ -110,7 +110,7 @@ describe("AC1 — Source Intake absent from TopNav", () => {
     expect(screen.getByText("Integration Hub")).toBeDefined();
   });
 
-  it("renders exactly 7 nav items after merging Agent Roadmap into Agentforce Blueprint", () => {
+  it("renders exactly 7 nav items after merging Agent Roadmap into Agent Blueprint", () => {
     render(
       <MemoryRouter initialEntries={["/integration-hub"]}>
         <TopNav />
@@ -122,7 +122,7 @@ describe("AC1 — Source Intake absent from TopNav", () => {
       "Discovery Run",
       "Source Intelligence",
       "Opportunity Review",
-      "Agentforce Blueprint",
+      "Agent Blueprint",
       "Executive Report",
     ];
     for (const label of expectedItems) {

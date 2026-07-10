@@ -22,7 +22,7 @@ import traceback
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, MutableMapping, Optional, Type
+from typing import Any, List, MutableMapping, Optional, Type
 
 from typing_extensions import NotRequired, TypedDict
 
@@ -484,6 +484,66 @@ class IngestionArtifactChangedPayload(TypedDict):
     observed_at: str
 
 
+class IngestionSecretRedactedPayload(TypedDict, total=False):
+    """ingestion.secret_redacted — R18-A2 / AT-531 (§1, AC5).
+
+    Emitted once per content artifact from which a committed secret was redacted
+    BEFORE the content reached the retrieval substrate, so the redaction is
+    observable in run health. Identifiers + pattern types + counts ONLY — the
+    matched secret value is NEVER carried on the event (recording the secret would
+    re-leak exactly what redaction removed).
+
+    org_id:          The org the content belongs to.
+    connector_id:    The source connector that redacted (e.g. 'git_content').
+    source_system:   The producing system (e.g. 'git').
+    source_artifact: The artifact the secret was redacted from (file path / commit).
+    content_type:    Which content stream ('code' | 'conversation' | 'prose').
+    redaction_count: How many secrets were redacted from this artifact.
+    pattern_types:   Distinct signature names that fired (e.g. ['aws_access_key_id']).
+    repo:            The repository id, when the producer supplies it.
+    observed_at:     When the redaction happened during the run (UTC ISO).
+    """
+    org_id: str
+    connector_id: str
+    source_system: NotRequired[str]
+    source_artifact: NotRequired[str]
+    content_type: NotRequired[str]
+    redaction_count: int
+    pattern_types: NotRequired[List[str]]
+    repo: NotRequired[Optional[str]]
+    observed_at: NotRequired[str]
+
+
+class IngestionStructureCapturedPayload(TypedDict, total=False):
+    """ingestion.structure_captured — R18-A2 / AT-534 (§1, "Structure").
+
+    Emitted once per repository whose directory-tree + file-inventory structural
+    metadata was captured (graph-facing, NOT embedded) so the capture is visible
+    in run health. Counts + identifiers ONLY — never file paths' contents.
+
+    org_id:             The org the repository belongs to.
+    connector_id:       The source connector (e.g. 'git_content').
+    source_system:      The producing system (e.g. 'git').
+    repo:               The repository id the snapshot describes.
+    commit_sha:         The HEAD commit the captured shape reflects.
+    mode:               'full' (from a tree walk) or 'incremental' (diff-applied).
+    file_count:         In-scope files in the inventory.
+    directory_count:    Directory nodes in the derived tree (incl. the root).
+    binary_file_count:  Inventoried files whose body was skipped as binary.
+    observed_at:        When the capture happened during the run (UTC ISO).
+    """
+    org_id: str
+    connector_id: str
+    source_system: NotRequired[str]
+    repo: NotRequired[str]
+    commit_sha: NotRequired[str]
+    mode: NotRequired[str]
+    file_count: NotRequired[int]
+    directory_count: NotRequired[int]
+    binary_file_count: NotRequired[int]
+    observed_at: NotRequired[str]
+
+
 # R16-D1 / AT-366 (T5) — model provider gateway telemetry.
 # Emitted once per gateway generate()/embed() call so model usage is observable
 # across hosted, in-boundary, and future customer-tenant modes. The provider
@@ -696,6 +756,16 @@ register_event_type("license.clock_anomaly", LicenseClockAnomalyPayload)
 register_event_type("ingestion.checkpoint_reset", IngestionCheckpointResetPayload)
 # R16-A1 / AT-381 (T5): per-changed-artifact event (emitted by the change runner).
 register_event_type("ingestion.artifact_changed", IngestionArtifactChangedPayload)
+# R18-A2 / AT-531 (T3): per-artifact secret-redaction event (emitted by the git
+# content ingestor's secret scan before hand-off to the substrate). Registered
+# here so the ingestor can emit it; record_event() raises ValueError for an
+# unregistered type, so registration must precede the first emission.
+register_event_type("ingestion.secret_redacted", IngestionSecretRedactedPayload)
+# R18-A2 / AT-534 (T6): per-repo structural-metadata capture event (emitted by the
+# git content ingestor when it persists a repo's tree/inventory as graph-facing
+# metadata). Registered here so the ingestor can emit it; record_event() raises
+# ValueError for an unregistered type, so registration must precede first emission.
+register_event_type("ingestion.structure_captured", IngestionStructureCapturedPayload)
 # R16-D1 / AT-366 (T5) — model provider gateway telemetry. Registered here so
 # the gateway's generate()/embed() paths can emit them; record_event() raises
 # ValueError for an unregistered type, so registration must land before any
@@ -892,6 +962,7 @@ __all__ = [
     "LicenseClockAnomalyPayload",           # LIC-1 / AT-348 (T7)
     "IngestionCheckpointResetPayload",      # R16-A1 / AT-383 (T7)
     "IngestionArtifactChangedPayload",      # R16-A1 / AT-381 (T5)
+    "IngestionSecretRedactedPayload",       # R18-A2 / AT-531 (T3)
     "ModelGenerationCompletedPayload",      # R16-D1 / AT-366 (T5)
     "ModelEmbeddingCompletedPayload",       # R16-D1 / AT-366 (T5)
     "RetrievalQueryCompletedPayload",       # R18-B1 T4

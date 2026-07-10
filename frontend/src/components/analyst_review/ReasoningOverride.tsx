@@ -35,7 +35,11 @@ export default function ReasoningOverride({
   const auth = useAuthOptional();
   const isViewer = isViewerRole(auth?.user?.role);
 
-  const isDecisionFinalized = !!opp && opp.decision !== 'UNREVIEWED';
+  // R18-C0 P8: Approve/Reject stay editable after a decision. A reviewer can
+  // correct a prior choice (e.g. Reject → Approve); each change appends a new
+  // audit/feedback event on the backend, preserving the prior one — never an
+  // overwrite. Only the viewer RBAC gate disables the controls; the current
+  // decision is still shown via the button label + fill state below.
   const relevantAuditCount = opp ? audit.filter((a) => !a.opportunityId || a.opportunityId === opp.id).length : 0;
  
   return (
@@ -55,7 +59,7 @@ export default function ReasoningOverride({
             <button
               type="button"
               onClick={() => onDecision('APPROVED')}
-              disabled={isDecisionFinalized || isViewer}
+              disabled={isViewer}
               className={`flex w-full items-center justify-center gap-1.5 rounded-md border px-3 py-2.5 text-sm font-medium transition disabled:cursor-not-allowed disabled:opacity-50 ${
                 opp.decision === 'APPROVED'
                   ? 'border-emerald-500 bg-emerald-500 text-white'
@@ -68,7 +72,7 @@ export default function ReasoningOverride({
             <button
               type="button"
               onClick={() => onDecision('REJECTED')}
-              disabled={isDecisionFinalized || isViewer}
+              disabled={isViewer}
               className={`flex w-full items-center justify-center gap-1.5 rounded-md border px-3 py-2.5 text-sm font-medium transition disabled:cursor-not-allowed disabled:opacity-50 ${
                 opp.decision === 'REJECTED'
                   ? 'border-red-500 bg-red-500 text-white'

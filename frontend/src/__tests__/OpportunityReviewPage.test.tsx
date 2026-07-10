@@ -252,6 +252,7 @@ describe('OpportunityReviewPage v1.2 — T41-2 acceptance criteria', () => {
     const btn = screen.queryByTestId('blueprint-button-active');
     expect(btn).toBeTruthy();
     expect(btn?.hasAttribute('disabled')).toBeFalsy();
+    expect(btn).toHaveTextContent('View Agentforce Blueprint');
   });
 
   it('AC9: Blueprint button disabled when Salesforce not connected', async () => {
@@ -261,6 +262,8 @@ describe('OpportunityReviewPage v1.2 — T41-2 acceptance criteria', () => {
     const btn = screen.queryByTestId('blueprint-button-disabled');
     expect(btn).toBeTruthy();
     expect(btn?.hasAttribute('disabled')).toBeTruthy();
+    expect(btn).toHaveTextContent('Agent Blueprint (connect Salesforce)');
+    expect(btn).not.toHaveTextContent('Agentforce Blueprint');
   });
 
   it('AC10: Blueprint button click navigates with oppId query param', async () => {

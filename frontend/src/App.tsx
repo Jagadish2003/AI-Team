@@ -151,8 +151,8 @@ export default function App() {
                               />
                               <Route
                                 path="/pilot-roadmap"
-                                // Agent Roadmap now lives at the top of
-                                // Agentforce Blueprint. Redirect preserved for
+                                // Agent Roadmap now lives at the top of the
+                                // connector-aware Blueprint page. Redirect preserved for
                                 // old links and Executive Report deep links.
                                 element={<PilotRoadmapRedirect />}
                               />
@@ -162,8 +162,8 @@ export default function App() {
                               />
                               <Route
                                 path="/agent-blueprint"
-                                // Agent Blueprint renamed to Agentforce Blueprint.
-                                // Redirect preserved for backward compatibility.
+                                // Legacy Blueprint route; the customer-facing name is
+                                // resolved from the connected source system.
                                 element={
                                   <Navigate to="/agentforce-blueprint" replace />
                                 }

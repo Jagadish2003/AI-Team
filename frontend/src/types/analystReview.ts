@@ -48,7 +48,11 @@ export interface OpportunityCandidate {
 export interface ReviewAuditEvent {
   id: string;
   tsLabel: string;
+  tsEpoch?: number;
   action: string;
+  // P8: the prior decision this event replaced, present on decision-change
+  // events so each Approve/Reject transition is explicit in the history.
+  previousDecision?: Decision;
   by: string;
   opportunityId?: string;
 }

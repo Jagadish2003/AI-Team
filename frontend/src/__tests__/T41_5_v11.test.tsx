@@ -155,13 +155,13 @@ describe('StagesGrid — T41-5 v1.1', () => {
 
   beforeEach(() => { vi.clearAllMocks(); mockSFConnected = false; });
 
-  it('AR1: Agent Roadmap is merged into the Agentforce Blueprint nav destination', () => {
+  it('AR1: Agent Roadmap is merged into the connector-aware Blueprint nav destination', () => {
     render(
       <MemoryRouter>
         <TopNav />
       </MemoryRouter>,
     );
-    const link = screen.getByRole('link', { name: /Agentforce Blueprint/ });
+    const link = screen.getByRole('link', { name: /Agent Blueprint/ });
     expect(link).toBeTruthy();
     expect(link.getAttribute('href')).toContain('/agentforce-blueprint');
     expect(screen.queryByRole('link', { name: 'Agent Roadmap' })).toBeNull();

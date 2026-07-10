@@ -1,6 +1,17 @@
 # AgentIQ — API_CONTRACT.md (EPIC E0)
-Version: v1.9
-Date: 2026-07-04
+Version: v1.10
+Date: 2026-07-09
+
+> v1.10 — R18-C0 P8 (Re-editable review decisions, AC8): extended
+> `ReviewAuditEvent` with the optional `tsEpoch` (`number`, the newest-first sort
+> key already emitted by the backend) and `previousDecision` (`Decision`, the
+> prior decision a change replaced) fields on `GET /api/runs/{runId}/audit`.
+> `POST /api/runs/{runId}/opportunities/{id}/decision` now APPENDS a new audit
+> event on every decision change — never an overwrite — so a reviewer flipping
+> Approve↔Reject preserves the prior event (actor + timestamp) and the full
+> decision history stays queryable for audit and the 2.0 feedback-learning loop.
+> A no-op re-submit of the current decision appends nothing. Additive/optional —
+> existing consumers are unaffected.
 
 > v1.9 — R17-D4 Addendum A / T12 (§2 "Dynamic Organisation Name"): added the
 > organisation display-name endpoint `GET /api/license/org-name`, returning the
@@ -216,11 +227,19 @@ Response shape (must match TS type):
   {
     "id": "ae_001",
     "tsLabel": "2026-03-18T10:12:00Z",
-    "action": "OVERRIDE_SAVED",
-    "by": "Architect Name"
+    "tsEpoch": 1773828720,
+    "action": "APPROVED",
+    "previousDecision": "REJECTED",
+    "by": "Architect Name",
+    "opportunityId": "opp_001"
   }
 ]
 ```
+`tsEpoch`, `previousDecision`, and `opportunityId` are optional. `tsEpoch`
+carries the sort key (newest-first). `previousDecision` is present on
+decision-change events (R18-C0 P8): an Approve/Reject change appends a NEW event
+preserving the prior one — decisions are never overwritten — so the full
+decision history stays queryable for audit and outcome tracking.
 
 #### POST /api/runs/{runId}/opportunities/{id}/override
 Purpose: save reasoning override for a specific run.  
