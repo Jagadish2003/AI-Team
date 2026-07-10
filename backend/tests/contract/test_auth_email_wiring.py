@@ -33,13 +33,15 @@ def _email() -> str:
 def _register_owner(client, email=None):
     """Register, approve (AUTH-2 admin step, simulated), and login. Returns
     (owner_jwt, email) — the JWT is issued on login after approval."""
-    from auth_helpers import activate_org_by_email
+    from auth_helpers import activate_org_by_email, email_for_org
 
-    email = email or _email()
+    # BUG 1: org name must match the email domain — derive a matching pair.
+    org = rand_org_name()
+    email = email or email_for_org(org)
     resp = client.post(
         "/api/auth/register",
         json={
-            "org_name": rand_org_name(),
+            "org_name": org,
             "email": email,
             "password": "Ownerpass1!",
         },
@@ -67,11 +69,13 @@ def test_register_sends_welcome_email(client, monkeypatch):
         lambda to, org_name, full_name=None: calls.append((to, org_name, full_name)) or True,
     )
 
-    email = _email()
+    from auth_helpers import email_for_org
+    org = rand_org_name()
+    email = email_for_org(org)  # BUG 1: org name must match the email domain
     resp = client.post(
         "/api/auth/register",
         json={
-            "org_name": rand_org_name(),
+            "org_name": org,
             "email": email,
             "password": "Ownerpass1!",
             "full_name": "Sreedhar M",
@@ -93,9 +97,11 @@ def test_register_still_succeeds_when_welcome_email_fails(client, monkeypatch):
 
     monkeypatch.setattr(routes_auth, "send_welcome_email", _boom)
 
+    from auth_helpers import email_for_org
+    org = rand_org_name()
     resp = client.post(
         "/api/auth/register",
-        json={"org_name": rand_org_name(), "email": _email(), "password": "Ownerpass1!"},
+        json={"org_name": org, "email": email_for_org(org), "password": "Ownerpass1!"},
     )
 
     assert resp.status_code == 201, resp.text

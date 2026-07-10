@@ -59,6 +59,7 @@ class RetrievedChunk:
     chunk_id: str               # -> EvidencePointer.chunk_id
     retrieval_result_id: str    # -> EvidencePointer.retrieval_result_id
     source_timestamp: str
+    is_stale: bool = False      # R18-B2 T4: source artifact changed, not yet refreshed
 
     def to_evidence_pointer(self) -> EvidencePointer:
         """Build the R16-B1 provenance pointer for this retrieved chunk (AC5).
@@ -102,19 +103,31 @@ def retrieve(
     k: int = 10,
     source_filter: Optional[List[str]] = None,
     min_score: Optional[float] = None,
+    include_stale: bool = False,
 ) -> List[RetrievedChunk]:
     """Org-scoped, source-aware semantic retrieval — the platform retrieval API.
 
     Embeds the query via the gateway, searches ONLY ``org_id``'s partition, and
     returns up to ``k`` ranked chunks (best similarity first), each carrying:
     content, similarity, source_system, source_artifact, chunk_id,
-    retrieval_result_id, source_timestamp.
+    retrieval_result_id, source_timestamp, is_stale.
 
     ``source_filter``  scopes to named source systems ('only Confluence', 'only
                        this repo'); normalised and de-duplicated. An explicit
                        filter naming nothing valid returns ``[]`` (AC4).
     ``min_score``      excludes matches below this cosine-similarity floor so weak
                        evidence never reaches the reasoning flow (AC4).
+    ``include_stale``  when ``False`` (default) chunks whose source artifact has
+                       changed but not yet been refreshed are EXCLUDED, so a
+                       finding is never quietly based on stale evidence (R18-B2 T4
+                       / AC1). Set ``True`` to include stale chunks for a caller
+                       that explicitly wants outdated-but-authoritative content, or
+                       that surfaces the staleness itself — the context-assembly
+                       evidence source passes ``True`` so each stale exclusion is
+                       recorded on the assembly selection log ('excluded: stale')
+                       rather than silently vanishing here (AC6). Each returned
+                       chunk carries its ``is_stale`` flag so an including caller
+                       can tell fresh from stale.
 
     The search is confined to the active embedding model's vectors so vectors from
     different models are never compared (AC8). Never raises: an empty/blank query,
@@ -133,7 +146,10 @@ def retrieve(
         # query was NOT embedded on this path (we return before embedding), so the
         # telemetry flag must be False — otherwise monitors that track gateway
         # embedding success rates count a phantom embed.
-        _emit_query_telemetry(org_id, k, 0, sources, min_score, query_embedded=False)
+        _emit_query_telemetry(
+            org_id, k, 0, sources, min_score, query_embedded=False,
+            include_stale=include_stale, stale_count=0,
+        )
         return []
 
     # AC8: embed the query AND read the active model identity from the SAME
@@ -145,7 +161,10 @@ def retrieve(
     if not vectors:
         # Gateway degraded (no provider / failure). No candidates — never raise.
         logger.debug("retrieve: query embedding unavailable; returning no candidates")
-        _emit_query_telemetry(org_id, k, 0, sources, min_score, query_embedded=False)
+        _emit_query_telemetry(
+            org_id, k, 0, sources, min_score, query_embedded=False,
+            include_stale=include_stale, stale_count=0,
+        )
         return []
     query_vector = vectors[0]
 
@@ -155,13 +174,18 @@ def retrieve(
         k=k,
         source_filter=sources,
         min_score=min_score,
-        embedding_model=model_identity or None,
-        embedding_model_version=model_version or None,
+        embedding_model=model_identity,
+        embedding_model_version=model_version,
+        include_stale=include_stale,
     )
 
     results: List[RetrievedChunk] = []
+    stale_count = 0
     for row in rows:
         ts = row.get("source_timestamp")
+        is_stale = bool(row.get("is_stale", False))
+        if is_stale:
+            stale_count += 1
         results.append(
             RetrievedChunk(
                 content=row["content"],
@@ -173,10 +197,14 @@ def retrieve(
                 # 1.6 spine left null (AC5). Minted per call, never stored.
                 retrieval_result_id=str(uuid4()),
                 source_timestamp=ts.isoformat() if hasattr(ts, "isoformat") else (ts or ""),
+                is_stale=is_stale,
             )
         )
 
-    _emit_query_telemetry(org_id, k, len(results), sources, min_score, query_embedded=True)
+    _emit_query_telemetry(
+        org_id, k, len(results), sources, min_score, query_embedded=True,
+        include_stale=include_stale, stale_count=stale_count,
+    )
     return results
 
 
@@ -188,12 +216,16 @@ def _emit_query_telemetry(
     min_score: Optional[float],
     *,
     query_embedded: bool,
+    include_stale: bool = False,
+    stale_count: int = 0,
 ) -> None:
     """Emit one ``retrieval.query_completed`` event. Never raises.
 
     Counts and filter shape only — never the query text, the chunk content, or the
-    vectors (PII guard). Imported lazily and fully guarded so a telemetry problem
-    can never break a retrieval call.
+    vectors (PII guard). ``include_stale`` records the freshness policy in force and
+    ``stale_count`` how many returned chunks were stale, so freshness lag stays
+    visible in observability (Section 1: "staleness is never invisible"). Imported
+    lazily and fully guarded so a telemetry problem can never break a retrieval call.
     """
     try:
         from app.telemetry import record_event
@@ -203,7 +235,10 @@ def _emit_query_telemetry(
             "k": k,
             "result_count": result_count,
             "query_embedded": query_embedded,
+            "include_stale": include_stale,
         }
+        if include_stale:
+            payload["stale_count"] = stale_count
         if sources is not None:
             payload["source_filter"] = sources
         if min_score is not None:

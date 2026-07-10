@@ -612,6 +612,54 @@ def normalise_org_name(name: str) -> str:
     return (name or "").strip().lower()
 
 
+def _email_domain(email: str) -> str:
+    """Return the lowercased domain part of an email, or '' if malformed."""
+    _, sep, domain = (email or "").strip().lower().partition("@")
+    if not sep:
+        return ""
+    return domain.strip()
+
+
+def org_name_matches_email_domain(org_name: str, email: str) -> bool:
+    """True when the org name corresponds to the company email domain (BUG 1).
+
+    Case-insensitive. The normalised org name (letters-only, lowercased — the same
+    key used for dedup) must equal one of the email domain's labels EXCEPT the
+    final TLD label, so an exact domain, a common sub-domain, and a country-code
+    second-level domain all resolve correctly:
+
+        Google -> user@google.com        ✓
+        Google -> user@mail.google.com   ✓  (sub-domain)
+        Google -> user@google.co.uk      ✓  (cc-TLD)
+        IBM    -> user@ibm.com           ✓
+        Google -> user@microsoft.com     ✗
+        IBM    -> user@oracle.com        ✗
+
+    Modular and data-driven — no company names are hard-coded. Returns False for a
+    malformed/empty domain so the caller rejects it.
+    """
+    domain = _email_domain(email)
+    labels = [lbl for lbl in domain.split(".") if lbl]
+    if len(labels) < 2:  # need at least one company label + a TLD label
+        return False
+    company_labels = labels[:-1]  # everything except the final TLD label
+    return normalise_org_name(org_name) in company_labels
+
+
+def validate_org_matches_email_domain(org_name: str, email: str) -> None:
+    """Raise RegistrationError when the org name does not match the email domain.
+
+    Backend source of truth for BUG 1; a no-op when they correspond. Kept separate
+    from validate_org_name() (letters-only) so the two input rules stay modular and
+    independently testable.
+    """
+    if not org_name_matches_email_domain(org_name, email):
+        raise RegistrationError(
+            "Organization name must match your company email domain "
+            "(for example, 'Google' with an @google.com email address)."
+        )
+
+
 def _get_org_id_by_normalised_name(name_normalised: str) -> str | None:
     """Return the org_id whose name_normalised matches, or None if unclaimed."""
     con = db.connect()
@@ -668,6 +716,18 @@ def _join_existing_org(
             "role = EXCLUDED.role, created_at = EXCLUDED.created_at, is_deleted = FALSE",
             (org_id, user_id, "owner", now),
         )
+        # TENANT-1: a dedup JOIN into an existing org is not auto-trusted. Record a
+        # PENDING join request in the SAME transaction as the membership, so the
+        # login gate can block this new member until an admin approves the join via
+        # the approval email (the org's own approval_status is left untouched, so
+        # existing members and the org's settled state are unaffected). The user is
+        # brand-new (fresh user_id), so there is never a pre-existing pending row.
+        cur.execute(
+            "INSERT INTO org_join_requests "
+            "(id, org_id, user_id, email, status, role, requested_at) "
+            "VALUES (%s, %s, %s, %s, 'pending', %s, %s)",
+            (str(uuid4()), org_id, user_id, email, "owner", now),
+        )
         con.commit()
     except psycopg2.IntegrityError as exc:
         con.rollback()
@@ -678,6 +738,146 @@ def _join_existing_org(
     finally:
         con.close()
     return _pending_approval_ack()
+
+
+# ---------------------------------------------------------------------------
+# TENANT-1 — per-join approval gate (reuses the org_join_requests table).
+#
+# A dedup JOIN into an existing org creates a PENDING join request (above). Until
+# it is settled, login is blocked for THAT user only (the org and its existing
+# members are untouched). The org's approve/reject email settles the pending
+# requests: Approve -> approved (the user can log in); Reject -> rejected (the
+# user stays blocked). Settlement never changes the org's approval_status, so an
+# already-approved org is never flipped.
+# ---------------------------------------------------------------------------
+
+
+def _get_join_request_status(user_id: str, org_id: str) -> str | None:
+    """Return the user's most recent join-request status for an org, or None.
+
+    None means the user never went through the join path (e.g. the org's original
+    owner) and so is not join-gated — only the org-level approval gate applies.
+    """
+    con = db.connect()
+    try:
+        cur = con.cursor()
+        cur.execute(
+            "SELECT status FROM org_join_requests "
+            "WHERE user_id = %s AND org_id = %s "
+            "ORDER BY requested_at DESC LIMIT 1",
+            (user_id, org_id),
+        )
+        row = cur.fetchone()
+    except Exception:
+        # Table absent (pre-0023 DB): no join gate — behave as before.
+        return None
+    finally:
+        con.close()
+    return row[0] if row else None
+
+
+def has_pending_join_requests(org_id: str) -> bool:
+    """True if the org has at least one PENDING join request awaiting a decision."""
+    con = db.connect()
+    try:
+        cur = con.cursor()
+        cur.execute(
+            "SELECT 1 FROM org_join_requests "
+            "WHERE org_id = %s AND status = 'pending' LIMIT 1",
+            (org_id,),
+        )
+        row = cur.fetchone()
+    except Exception:
+        return False
+    finally:
+        con.close()
+    return row is not None
+
+
+def settle_join_requests(org_id: str, new_status: str) -> int:
+    """Settle every PENDING join request for an org to ``new_status``.
+
+    Returns the number of requests updated. Used by the org approve/reject POST
+    handlers to decide the joins tied to that org WITHOUT touching the org's own
+    approval_status. Idempotent: a no-op when nothing is pending.
+    """
+    con = db.connect()
+    try:
+        cur = con.cursor()
+        cur.execute(
+            "UPDATE org_join_requests SET status = %s, decided_at = %s "
+            "WHERE org_id = %s AND status = 'pending'",
+            (new_status, db.now_iso(), org_id),
+        )
+        settled = cur.rowcount
+        con.commit()
+    finally:
+        con.close()
+    return settled
+
+
+def _submit_org_for_approval(org_id: str, org_name: str, registrant_email: str) -> None:
+    """Mint a single-use approval token, store its hash on the org, and email the
+    approve/reject links to the admin.
+
+    This is the ONE place the approval-email logic lives; BOTH registration paths
+    (a brand-new org and a dedup-JOIN into an existing org) call it, so EVERY
+    successful registration triggers the approval/reject email — the first
+    registrant of a new org and every subsequent registrant of an existing one.
+
+    The approval token is stored only as a SHA-256 hash (a working approve/reject
+    link cannot be rebuilt from an existing hash), so each call mints a fresh token
+    and persists its hash + expiry. It does NOT touch ``approval_status``: an
+    already-settled org keeps its state (the approve/reject POST handler still
+    guards on ``pending_approval``), so the per-ORG approval model, the login gate,
+    and tenant isolation are all unaffected.
+
+    Non-blocking by contract: the registration is already committed by the caller,
+    so a DB or email failure here is logged and swallowed — it must never roll back
+    a successful registration.
+    """
+    from app.email_service import send_org_approval_request_email
+
+    approval_token = secrets.token_urlsafe(32)
+    approval_token_hash = hashlib.sha256(approval_token.encode()).hexdigest()
+    approval_expires = datetime.now(timezone.utc) + timedelta(days=APPROVAL_TOKEN_EXPIRY_DAYS)
+
+    # Persist the token hash so the emailed link resolves. Own connection/commit,
+    # outside the registration transaction; never raises to the caller.
+    try:
+        con = db.connect()
+        try:
+            cur = con.cursor()
+            cur.execute(
+                "UPDATE orgs SET approval_token_hash = %s, approval_token_expires_at = %s "
+                "WHERE id = %s",
+                (approval_token_hash, approval_expires, org_id),
+            )
+            con.commit()
+        finally:
+            con.close()
+    except Exception:
+        logger.exception(
+            "Failed to persist approval token for org %s (%s); admin email not sent. "
+            "The registration is committed; notify %s manually.",
+            org_id, org_name, AGENTIQ_ADMIN_EMAIL,
+        )
+        return
+
+    try:
+        send_org_approval_request_email(
+            admin_email=AGENTIQ_ADMIN_EMAIL,
+            org_name=org_name,
+            registrant_email=registrant_email,
+            approval_token=approval_token,
+            org_id=org_id,
+        )
+    except Exception:
+        logger.exception(
+            "Failed to send org approval request email for org %s (%s). "
+            "The org is persisted; notify %s manually.",
+            org_id, org_name, AGENTIQ_ADMIN_EMAIL,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -706,14 +906,13 @@ def register_org_and_owner(org_name: str, email: str, password: str) -> dict:
     paths return the SAME pending-approval ack so the response is not an
     existence oracle for registered company names.
 
-    AUTH-2: a NEW org is created in approval_status='pending_approval' and a
-    signed approval token (stored as its SHA-256 hash) is emailed to
-    AGENTIQ_ADMIN_EMAIL. No JWT is issued — the response is a pending-approval
-    confirmation only. Raises EmailAlreadyExistsError (409) / RegistrationError
-    (400) on bad input.
+    AUTH-2: a NEW org is created in approval_status='pending_approval'. EVERY
+    successful registration — the new-org path AND the dedup-join path — then goes
+    through the shared _submit_org_for_approval() helper, which mints the signed
+    approval token (stored as its SHA-256 hash) and emails AGENTIQ_ADMIN_EMAIL. No
+    JWT is issued — the response is a pending-approval confirmation only. Raises
+    EmailAlreadyExistsError (409) / RegistrationError (400) on bad input.
     """
-    from app.email_service import send_org_approval_request_email
-
     ensure_auth_tables()
     email = email.strip().lower()
     # Letters-only validation + trim, BEFORE any DB operation. Raises
@@ -736,28 +935,30 @@ def register_org_and_owner(org_name: str, email: str, password: str) -> dict:
     # Dedup: an existing org with this normalised name is JOINED, not duplicated.
     existing_org_id = _get_org_id_by_normalised_name(name_normalised)
     if existing_org_id is not None:
-        return _join_existing_org(existing_org_id, user_id, email, password_hash, now)
+        ack = _join_existing_org(existing_org_id, user_id, email, password_hash, now)
+        # Every successful registration triggers the approval email — the join path
+        # goes through the SAME shared helper as the new-org path below. Use the
+        # existing org's canonical stored name for the email display.
+        _submit_org_for_approval(
+            existing_org_id, get_org_name(existing_org_id) or org_name, email
+        )
+        return ack
 
     org_id = str(uuid4())
     role = "owner"  # creator of a brand-new workspace
 
-    # AUTH-2: generate single-use approval token; store only its SHA-256 hash.
-    approval_token = secrets.token_urlsafe(32)
-    approval_token_hash = hashlib.sha256(approval_token.encode()).hexdigest()
-    approval_expires = datetime.now(timezone.utc) + timedelta(days=APPROVAL_TOKEN_EXPIRY_DAYS)
-
     con = db.connect()
     try:
         cur = con.cursor()
-        # Fresh org — store the name as typed AND its normalised dedup key. Single
-        # transaction: roll back every row if any insert fails.
+        # Fresh org — store the name as typed AND its normalised dedup key. The
+        # approval token is set afterwards by the shared _submit_org_for_approval
+        # helper (nullable columns), so both registration paths mint/store it
+        # identically. Single transaction: roll back every row if any insert fails.
         cur.execute(
             "INSERT INTO orgs "
-            "(id, name, name_normalised, created_at, approval_status, "
-            "approval_token_hash, approval_token_expires_at) "
-            "VALUES (%s, %s, %s, %s, %s, %s, %s)",
-            (org_id, org_name, name_normalised, now, "pending_approval",
-             approval_token_hash, approval_expires),
+            "(id, name, name_normalised, created_at, approval_status) "
+            "VALUES (%s, %s, %s, %s, %s)",
+            (org_id, org_name, name_normalised, now, "pending_approval"),
         )
         cur.execute(
             "INSERT INTO users (id, email, password_hash, is_active, created_at, org_id) "
@@ -777,9 +978,14 @@ def register_org_and_owner(org_name: str, email: str, password: str) -> dict:
         # concurrency); otherwise it was the global unique email index.
         raced_org_id = _get_org_id_by_normalised_name(name_normalised)
         if raced_org_id is not None and _get_user_by_email(email) is None:
-            return _join_existing_org(
+            ack = _join_existing_org(
                 raced_org_id, user_id, email, password_hash, now
             )
+            # Same shared approval-email dispatch for the concurrent-race join.
+            _submit_org_for_approval(
+                raced_org_id, get_org_name(raced_org_id) or org_name, email
+            )
+            return ack
         raise EmailAlreadyExistsError("Email already registered") from exc
     except Exception:
         con.rollback()
@@ -787,24 +993,11 @@ def register_org_and_owner(org_name: str, email: str, password: str) -> dict:
     finally:
         con.close()
 
-    # Notify the admin — outside the DB transaction so a transient email failure
-    # does not roll back the registration. The org is persisted; the admin can be
-    # re-notified manually if the email bounces.
-    try:
-        send_org_approval_request_email(
-            admin_email=AGENTIQ_ADMIN_EMAIL,
-            org_name=org_name,
-            registrant_email=email,
-            approval_token=approval_token,
-            org_id=org_id,
-        )
-    except Exception:
-        logger.exception(
-            "Failed to send org approval request email for org %s (%s). "
-            "The org was created in pending_approval state. "
-            "Notify %s manually.",
-            org_id, org_name, AGENTIQ_ADMIN_EMAIL,
-        )
+    # Every successful registration submits the org for approval via the SAME
+    # shared helper (mints + stores the token, emails the admin). Outside the DB
+    # transaction and non-blocking, so an email failure never rolls back the
+    # committed registration.
+    _submit_org_for_approval(org_id, org_name, email)
 
     return _pending_approval_ack()
 
@@ -863,6 +1056,22 @@ def login(email: str, password: str, ip_address: str) -> dict:
             "You will receive an email once it is reviewed."
         )
     if approval_status == "rejected":
+        raise OrgRejectedError(
+            "This organisation registration was not approved. "
+            "Contact your CloudFulcrum representative."
+        )
+
+    # TENANT-1 per-join gate: the org is approved, but a user who JOINED an
+    # existing org (dedup) must not log in until that join is itself approved.
+    # The org's original owner has no join request (None) and is unaffected. Same
+    # error types/messages as the org-level gate so the response is unchanged.
+    join_status = _get_join_request_status(user["id"], membership["org_id"])
+    if join_status == "pending":
+        raise OrgPendingApprovalError(
+            "Your organisation is awaiting approval. "
+            "You will receive an email once it is reviewed."
+        )
+    if join_status == "rejected":
         raise OrgRejectedError(
             "This organisation registration was not approved. "
             "Contact your CloudFulcrum representative."

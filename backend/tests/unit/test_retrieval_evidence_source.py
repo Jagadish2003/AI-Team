@@ -35,6 +35,7 @@ from app import llm_enrichment
 from app.context_assembly import (
     DEFAULT_MAX_EVIDENCE_CHUNKS,
     REASON_BELOW_FLOOR,
+    REASON_STALE,
     AssemblyPolicy,
     assemble_context,
 )
@@ -52,7 +53,8 @@ from app.retrieval.evidence_source import (
 
 def _chunk(cid: str, similarity: float, *, content: str = "chunk text",
            source_system: str = "confluence", source_artifact: str = "page/1",
-           ts: str = "2026-07-01T00:00:00+00:00") -> RetrievedChunk:
+           ts: str = "2026-07-01T00:00:00+00:00",
+           is_stale: bool = False) -> RetrievedChunk:
     return RetrievedChunk(
         content=content,
         similarity=similarity,
@@ -61,6 +63,7 @@ def _chunk(cid: str, similarity: float, *, content: str = "chunk text",
         chunk_id=cid,
         retrieval_result_id=f"rr-{cid}",
         source_timestamp=ts,
+        is_stale=is_stale,
     )
 
 
@@ -74,10 +77,12 @@ def spy_retrieve(monkeypatch):
             self.result: list[RetrievedChunk] = []
             self.raises: Exception | None = None
 
-        def __call__(self, org_id, query_text, k=10, source_filter=None, min_score=None):
+        def __call__(self, org_id, query_text, k=10, source_filter=None,
+                     min_score=None, include_stale=False):
             self.calls.append(
                 dict(org_id=org_id, query_text=query_text, k=k,
-                     source_filter=source_filter, min_score=min_score)
+                     source_filter=source_filter, min_score=min_score,
+                     include_stale=include_stale)
             )
             if self.raises is not None:
                 raise self.raises
@@ -174,6 +179,21 @@ def test_policy_floor_is_not_forwarded_as_min_score(spy_retrieve):
     assert spy_retrieve.calls[0]["min_score"] is None
 
 
+def test_source_proposes_stale_so_the_assembler_can_log_the_exclusion(spy_retrieve):
+    # R18-B2 T4 / AC6: the source PROPOSES stale chunks (include_stale=True). The
+    # assembler is the one that excludes them and records 'excluded: stale' — same
+    # stance as the confidence floor. If the source pre-filtered stale, the
+    # exclusion would vanish from the selection log.
+    retrieval_evidence_source("org_a")(_OPP, AssemblyPolicy())
+    assert spy_retrieve.calls[0]["include_stale"] is True
+
+
+def test_chunk_mapping_carries_is_stale(spy_retrieve):
+    spy_retrieve.result = [_chunk("s1", 0.9, is_stale=True)]
+    out = retrieval_evidence_source("org_a")(_OPP, AssemblyPolicy())
+    assert out[0]["is_stale"] is True
+
+
 def test_chunk_mapping_shape_and_pointer_fields(spy_retrieve):
     spy_retrieve.result = [_chunk("c1", 0.91)]
     out = retrieval_evidence_source("org_a")(_OPP, AssemblyPolicy())
@@ -264,6 +284,46 @@ def test_ac6_confidence_floor_excludes_weak_chunks_on_the_record(spy_retrieve):
     assert len(weak_entries) == 1
     assert weak_entries[0]["decision"] == "excluded"
     assert weak_entries[0]["reason"] == REASON_BELOW_FLOOR
+
+
+def test_ac6_stale_evidence_excluded_on_the_record(spy_retrieve):
+    # R18-B2 T4 / AC6: a stale chunk is proposed, EXCLUDED by the assembler, and
+    # the exclusion is recorded as 'excluded: stale' — not silently dropped.
+    spy_retrieve.result = [_chunk("fresh", 0.7), _chunk("stale", 0.95, is_stale=True)]
+
+    package = assemble_context(
+        _OPP, _EMPTY_GRAPH, AssemblyPolicy(),
+        evidence_source=retrieval_evidence_source("org_a"),
+    )
+
+    # Only the fresh chunk enters context, despite the stale one scoring higher.
+    assert [e["chunk_id"] for e in package.evidence] == ["fresh"]
+    stale_entry = [
+        entry for entry in package.selection_log
+        if entry["candidate_id"] == "stale" and entry["kind"] == "evidence"
+    ]
+    assert len(stale_entry) == 1
+    assert stale_entry[0]["decision"] == "excluded"
+    assert stale_entry[0]["reason"] == REASON_STALE
+
+
+def test_ac6_policy_include_stale_admits_stale_evidence(spy_retrieve):
+    # The policy flag for a caller that explicitly wants stale content: with
+    # include_stale=True the stale chunk competes and is admitted normally.
+    spy_retrieve.result = [_chunk("fresh", 0.7), _chunk("stale", 0.95, is_stale=True)]
+
+    package = assemble_context(
+        _OPP, _EMPTY_GRAPH, AssemblyPolicy(include_stale=True),
+        evidence_source=retrieval_evidence_source("org_a"),
+    )
+
+    # Both enter; the higher-scoring (stale) chunk ranks first.
+    assert [e["chunk_id"] for e in package.evidence] == ["stale", "fresh"]
+    reasons = {
+        entry["candidate_id"]: entry["reason"]
+        for entry in package.selection_log if entry["kind"] == "evidence"
+    }
+    assert reasons["stale"].startswith("included@position_")
 
 
 def test_ac6_retrieved_evidence_enters_as_observed(spy_retrieve):
