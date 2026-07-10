@@ -8,6 +8,7 @@ import { useAuthOptional } from '../../context/AuthContext';
 import { isViewerRole } from '../../utils/roles';
 import { ExternalLink, CheckCircle2 } from 'lucide-react';
 import SalesforceProductPicker from './SalesforceProductPicker';
+import SlackChannelPicker from './SlackChannelPicker';
 import SqlServerScopePicker from './SqlServerScopePicker';
 import OracleScopePicker from './OracleScopePicker';
 import PostgreSQLScopePicker from './PostgreSQLScopePicker';
@@ -21,41 +22,20 @@ import { isStaticCredentialConnector } from './staticCredentialConnectors';
 // Sprint 6 will wire this to real sync telemetry (Connection Health v2).
 
 const CONNECTION_HEALTH_LABELS: Record<string, string[]> = {
-  salesforce: [
-    'Read Case records',
-    'Read Flow metadata',
-    'Read Approval history',
-    'Read User records',
-    'Read OpportunityLineItem records',
-  ],
-  salesforce_ncino: [
-    'Read LLC_BI__Loan__c records',
-    'Read LLC_BI__Covenant2__c records',
-    'Read LLC_BI__Checklist__c records',
-    'Read LLC_BI__Spread_Statement_Period__c records',
-    'Read ProcessInstance records',
-  ],
-  salesforce_strs: [
-    'Read IndividualApplication records',
-    'Read BenefitAssignment records',
-    'Read Case records (Disability)',
-    'Read Program records',
-    'Read Contact records',
-  ],
   servicenow: [
     'Read Incident records',
-    'Read benefit operations signals',
+    'Read operational signals',
     'Read SLA definitions',
   ],
   jira_confluence: [
     'Read Issue records',
-    'Read benefit operations signals',
+    'Read operational signals',
     'Read Project configuration',
     'Read Space content',
   ],
   jira: [
     'Read Issue records',
-    'Read benefit operations signals',
+    'Read operational signals',
     'Read Sprint data',
   ],
   confluence: [
@@ -68,6 +48,50 @@ const CONNECTION_HEALTH_LABELS: Record<string, string[]> = {
     'Read LLC_BI__Spread_Statement_Period__c records',
   ],
 };
+
+// R18-C0 P1: the Salesforce read scope reflects the connected org's ACTUAL
+// declared cloud products (GET/PATCH /api/connectors/salesforce/products →
+// connector.products), never a hardcoded catalog category. Standard objects are
+// always readable; each declared product AgentIQ ingests adds its own objects.
+// Products AgentIQ does not specifically ingest (FSC / Revenue / Health / PSS)
+// simply read the standard base scope — no invented or POC object names.
+const SALESFORCE_BASE_READ_SCOPE = [
+  'Read Account records',
+  'Read Contact records',
+  'Read Opportunity records',
+  'Read Case records',
+];
+
+const SALESFORCE_PRODUCT_READ_SCOPE: Record<string, string[]> = {
+  // Service Cloud
+  salesforce_sc: [
+    'Read Flow metadata',
+    'Read Approval history',
+    'Read OpportunityLineItem records',
+  ],
+  // nCino commercial lending (managed package objects)
+  salesforce_ncino: [
+    'Read LLC_BI__Loan__c records',
+    'Read LLC_BI__Covenant2__c records',
+    'Read LLC_BI__Checklist__c records',
+    'Read LLC_BI__Spread_Statement_Period__c records',
+    'Read ProcessInstance records',
+  ],
+};
+
+// Build the Salesforce connection read scope from the org's declared products.
+// With no declaration we show only the standard base objects — never nCino
+// scope by default. Deterministic order: base first, then products in the order
+// declared, de-duplicated.
+function salesforceReadScope(products: string[] | undefined): string[] {
+  const scope = [...SALESFORCE_BASE_READ_SCOPE];
+  for (const product of products ?? []) {
+    for (const label of SALESFORCE_PRODUCT_READ_SCOPE[product] ?? []) {
+      if (!scope.includes(label)) scope.push(label);
+    }
+  }
+  return scope;
+}
 
 function isViewerOnlyScopeUser(): boolean {
   const role = (import.meta.env.VITE_DEV_JWT_ROLE as string | undefined)
@@ -87,17 +111,11 @@ function isViewerOnlyScopeUser(): boolean {
 function ConnectionHealthSection({ connector }: { connector: Connector }) {
   if (connector.status !== 'connected') return null;
 
-  const healthKey =
-    connector.id === 'salesforce' && connector.category?.includes('nCino')
-      ? 'salesforce_ncino'
-      : connector.id === 'salesforce' &&
-          (connector.category?.includes('PSS') || connector.category?.includes('Benefits'))
-        ? 'salesforce_strs'
-        : connector.id;
-
   const items =
-    CONNECTION_HEALTH_LABELS[healthKey] ??
-    connector.reads.map((readScope) => `Read ${readScope} records`);
+    connector.id === 'salesforce'
+      ? salesforceReadScope(connector.products)
+      : CONNECTION_HEALTH_LABELS[connector.id] ??
+        connector.reads.map((readScope) => `Read ${readScope} records`);
 
   return (
     <div className="mt-4">
@@ -119,7 +137,7 @@ function ConnectionHealthSection({ connector }: { connector: Connector }) {
         ))}
       </div>
       <p className="mt-2 text-[10px] leading-relaxed text-muted">
-        Configured read scope for this connector. Actual sync results available in Sprint 6.
+        Configured read scope for this connector. Actual sync results coming soon.
       </p>
     </div>
   );
@@ -196,6 +214,14 @@ export default function ConnectorDetailPanel({
       {connector.id === 'salesforce' && isConnected && (
         <>
           <SalesforceProductPicker />
+          <div className="mt-4 border-t border-border" />
+        </>
+      )}
+
+      {/* R18-C0 P5: Slack channel selection — pick which channels AgentIQ reads. */}
+      {connector.id === 'slack' && isConnected && (
+        <>
+          <SlackChannelPicker />
           <div className="mt-4 border-t border-border" />
         </>
       )}

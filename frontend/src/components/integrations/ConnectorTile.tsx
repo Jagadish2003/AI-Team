@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import { Unplug } from 'lucide-react';
 import { Connector } from '../../types/connector';
 import Badge from '../common/Badge';
 import Button from '../common/Button';
@@ -26,6 +27,7 @@ export default function ConnectorTile({
   onSelect,
   onPrimary,
   onReconnect,
+  onDisconnect,
   connectBlocked,
   connectBlockMessage,
 }: {
@@ -38,6 +40,10 @@ export default function ConnectorTile({
   // "Reconnect". Must trigger the OAuth flow again (CS-2 AC7). Falls back to
   // onPrimary when not supplied so the tile keeps working in isolation.
   onReconnect?: () => void;
+  // R18-C0 P4 / AT-566: called when the user clicks the tile's Disconnect action
+  // (shown only on a connected tile). The parent owns the confirmation step and
+  // the disconnect request; omitting it hides the action (e.g. read-only views).
+  onDisconnect?: () => void;
   // R17-D4 Addendum A / T11 (AT-506): when the org is at its licensed system
   // limit, disable the Connect action for a NEW (not-yet-connected) system and
   // show connectBlockMessage as its tooltip (AC10). Forward-only — an already
@@ -97,6 +103,11 @@ export default function ConnectorTile({
   // (Connect / Configure & Sync / Reconnect) is disabled for them.
   const viewerBlocks = isViewer && actionLabel !== 'View data';
   const actionDisabled = !isEnabled || limitBlocksNew || viewerBlocks;
+
+  // R18-C0 P4 / AT-566: a connected tile offers Disconnect. Disconnecting is a
+  // connector write (analyst+), so viewers never see it; it is independent of the
+  // new-connection license gate (removing a connection is always allowed).
+  const canDisconnect = isConnected && !isViewer && Boolean(onDisconnect);
   const disabledTitle = limitBlocksNew
     ? (connectBlockMessage || 'Your license limit has been reached. Contact CloudFulcrum to add more.')
     : !isEnabled
@@ -154,12 +165,12 @@ export default function ConnectorTile({
       </div>
 
       {/* Button */}
-      <div className="mt-auto pb-1 pt-4">
+      <div className="mt-auto flex items-center gap-2 pb-1 pt-4">
         <Button
           variant={actionVariant}
           disabled={actionDisabled}
           title={disabledTitle}
-          className={`w-full ${
+          className={`min-w-0 flex-1 ${
             actionDisabled
               ? '!bg-slate-500/10 !text-muted !border-border !opacity-100'
               : isConnected && isConfigured && !tokenExpired
@@ -180,6 +191,21 @@ export default function ConnectorTile({
         >
           {actionLabel}
         </Button>
+
+        {canDisconnect && (
+          <button
+            type="button"
+            title="Disconnect"
+            aria-label={`Disconnect ${connector.name}`}
+            onClick={(e: React.MouseEvent<HTMLButtonElement>) => {
+              e.stopPropagation();
+              onDisconnect?.();
+            }}
+            className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md border border-border text-muted transition-colors hover:border-red-500/40 hover:bg-red-500/10 hover:text-red-300 focus:outline-none focus-visible:ring-2 focus-visible:ring-red-500/30"
+          >
+            <Unplug size={15} />
+          </button>
+        )}
       </div>
     </div>
   );

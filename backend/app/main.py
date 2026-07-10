@@ -46,6 +46,7 @@ from .routes_connector_auth import register_connector_auth_routes
 from .routes_stack_builder import register_stack_builder_routes
 from .routes_stack_builder_launch import register_stack_builder_launch_routes
 from .routes_salesforce_products import register_salesforce_products_routes
+from .routes_slack_channels import register_slack_channels_routes
 from .routes_sprint4_t1 import register_sprint4_t1_routes
 from .routes_sprint4_t2 import register_sprint4_t2_routes
 from .routes_sprint4_t3 import register_sprint4_t3_routes
@@ -284,6 +285,7 @@ register_stack_builder_routes(app)
 register_stack_builder_launch_routes(app)
 register_workspace_catalog_routes(app)
 register_salesforce_products_routes(app)
+register_slack_channels_routes(app)
 # Sprint 4 routes are registered in dependency order T1 → T2 → T3 → T4 → T6.
 # FastAPI resolves routes in registration order, so a module registered earlier
 # wins any shared path prefix. T6 (LLM enrichment / evidence-trace) MUST be
@@ -683,6 +685,7 @@ def set_opp_decision(run_id: str, opp_id: str, body: Dict[str, Any]) -> Dict[str
         idx = next((i for i, o in enumerate(run_opps) if o["id"] == opp_id), None)
         if idx is None:
             raise HTTPException(404, "opportunity not found")
+        previous_decision = run_opps[idx].get("decision", "UNREVIEWED")
         run_opps[idx] = {**run_opps[idx], "decision": decision}
         run_kv_set("opps", run_id, run_opps)
         o = run_opps[idx]
@@ -690,18 +693,28 @@ def set_opp_decision(run_id: str, opp_id: str, body: Dict[str, Any]) -> Dict[str
         o = get_one("opportunities", opp_id)
         if not o:
             raise HTTPException(404, "opportunity not found")
+        previous_decision = o.get("decision", "UNREVIEWED")
         o["decision"] = decision
         upsert("opportunities", opp_id, o)
-    event = {
-        "id": f"audit_{uuid4().hex[:8]}",
-        "tsLabel": now_iso(),
-        "tsEpoch": int(time.time()),
-        "action": decision,
-        "by": "Architect",
-        "opportunityId": opp_id,
-    }
-    audit = run_kv_get("audit", run_id, default_audit())
-    run_kv_set("audit", run_id, [event, *audit])
+    # R18-C0 P8: a decision change is recorded as a NEW audit/feedback event —
+    # never an overwrite. Each event captures the actor, timestamp, the new
+    # decision, and the prior decision it replaced, so the full decision history
+    # (and each transition) stays queryable for audit and the 2.0
+    # feedback-learning loop. The opportunity's `decision` field holds only the
+    # current value; the append-only audit list is the history of record. A
+    # genuine no-op re-click (same decision) does not append a spurious event.
+    if decision != previous_decision:
+        event = {
+            "id": f"audit_{uuid4().hex[:8]}",
+            "tsLabel": now_iso(),
+            "tsEpoch": int(time.time()),
+            "action": decision,
+            "previousDecision": previous_decision,
+            "by": "Architect",
+            "opportunityId": opp_id,
+        }
+        audit = run_kv_get("audit", run_id, default_audit())
+        run_kv_set("audit", run_id, [event, *audit])
     # with_display (not just title) so impact/effort carry the same stable matrix
     # offset as the list endpoint — otherwise the bubble jumps when its decision
     # response replaces the listed opportunity in the UI.

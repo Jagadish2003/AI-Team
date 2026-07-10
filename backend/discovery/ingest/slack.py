@@ -251,13 +251,15 @@ class SlackIngestor(ChangeBasedIngestor):
                     is_complete=(emitted == total_batches),
                 )
 
-    # ── Channel access (AC4) ─────────────────────────────────────────────────
-    def _accessible_channels(self, org_id: str) -> List[Dict[str, Any]]:
-        """Return only public channels AgentIQ is a member of and that are live.
+    # ── Channel access (AC4 + R18-C0 P5 selection) ───────────────────────────
+    def _public_member_channels(self, org_id: str) -> List[Dict[str, Any]]:
+        """Public channels AgentIQ is a member of and that are live.
 
         Private channels (``is_private``), DMs, channels AgentIQ was never
         invited to (``is_member == False``), and archived channels are excluded.
         This is the privacy guarantee in AC4 enforced at the source of the read.
+        These are the channels a customer may CHOOSE from — the per-org selection
+        (below) narrows this further.
         """
         channels = self._raw_channels(org_id)
         return [
@@ -267,6 +269,45 @@ class SlackIngestor(ChangeBasedIngestor):
             and c.get("is_member", False)
             and not c.get("is_archived", False)
         ]
+
+    def _selected_channel_ids(self, org_id: str) -> Optional[set]:
+        """The org's saved Slack channel selection (R18-C0 P5), or None if unset.
+
+        Stored on the Slack connector record by
+        ``PATCH /api/connectors/slack/channels`` under the ``channels`` key.
+        ``None`` means "no selection configured" → read every accessible channel
+        (backwards-compatible default). A saved list (possibly empty) means read
+        ONLY those channels. Any lookup failure degrades to ``None`` so a run is
+        never blocked by the selection store being unavailable (e.g. offline
+        tests with no DB).
+        """
+        try:
+            from app.db import org_connector_get
+
+            record = org_connector_get(org_id, "slack")
+        except Exception:  # pragma: no cover - defensive: never block a run
+            return None
+        if not record:
+            return None
+        channels = record.get("channels")
+        if not isinstance(channels, list):
+            return None
+        return {str(c) for c in channels}
+
+    def _accessible_channels(self, org_id: str) -> List[Dict[str, Any]]:
+        """Channels this ingestor actually reads: public+member+live, narrowed to
+        the org's saved selection (R18-C0 P5 / AC5).
+
+        With no selection configured, every accessible public channel is read
+        (unchanged default). With a selection saved, only the selected channels
+        are read — a channel the customer did not select is never ingested, even
+        when the token has access to it.
+        """
+        channels = self._public_member_channels(org_id)
+        selected = self._selected_channel_ids(org_id)
+        if selected is None:
+            return channels
+        return [c for c in channels if str(c.get("id")) in selected]
 
     def _messages_since(
         self, org_id: str, channel: Dict[str, Any], cursor: Optional[str]
@@ -369,6 +410,21 @@ class SlackIngestor(ChangeBasedIngestor):
                 "to run without credentials."
             )
         return SlackClient(token.strip())
+
+
+def list_selectable_channels(org_id: str) -> List[Dict[str, str]]:
+    """Public channels AgentIQ can read for ``org_id`` (member, not archived).
+
+    The set of channels a customer chooses from in the Integration Hub (R18-C0
+    P5). Selection filtering is deliberately NOT applied here — this is the full
+    option list. Returned as lightweight ``{id, name}`` dicts. Resolves offline
+    (fixture) or live (Slack Web API) exactly like a discovery run would see.
+    """
+    ingestor = SlackIngestor()
+    return [
+        {"id": str(c.get("id", "")), "name": str(c.get("name", ""))}
+        for c in ingestor._public_member_channels(org_id)
+    ]
 
 
 class SlackClient:

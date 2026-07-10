@@ -7,7 +7,7 @@
  * Displays:
  *   - Clarifying copy: "Templates preselect systems and suggest a default focus.
  *     Your selected discovery focus still takes priority."
- *   - Suggested focus line: "✦ Public retirement suggests: Approvals / compliance"
+ *   - Suggested focus line: "✦ Commercial lending suggests: Approvals / compliance"
  *
  * Visual:
  *   Left border: border-emerald-500/40 (teal)
@@ -51,7 +51,6 @@ import { TemplateId, FocusId } from '../../types/stack_builder';
 
 const TEMPLATE_LABELS: Record<TemplateId, string> = {
   commercial_lending: 'Commercial lending',
-  public_retirement:  'Public retirement',
   service_operations: 'Service operations',
   revenue_operations: 'Revenue operations',
 };

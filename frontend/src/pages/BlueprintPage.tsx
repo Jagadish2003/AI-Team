@@ -28,6 +28,10 @@ import type { OpportunityCandidate } from '../types/analystReview';
 import type { PilotRoadmapModel } from '../types/pilotRoadmap';
 import type { EvidenceReview } from '../types/partialResults';
 import { runScopedErrorMessage } from '../utils/apiErrors';
+import {
+  getBlueprintLabel,
+  isSalesforceConnected,
+} from '../utils/blueprintNaming';
 
 function TierBadge({ tier }: { tier?: string }) {
   const t = tier ?? 'Unknown';
@@ -130,12 +134,12 @@ function WorkspaceNotice({
   );
 }
 
-function LoadingState() {
+function LoadingState({ blueprintLabel }: { blueprintLabel: string }) {
   return (
     <WorkspaceNotice
       icon={<Loader2 size={24} className="animate-spin" />}
       title="Loading blueprint"
-      message="Fetching the Agentforce Blueprint for the selected opportunity."
+      message={`Fetching the ${blueprintLabel} for the selected opportunity.`}
     />
   );
 }
@@ -238,6 +242,7 @@ function RoadmapSection({
   error,
   onRetry,
   onOpenBlueprint,
+  blueprintLabel,
 }: {
   model: PilotRoadmapModel | null;
   loading: boolean;
@@ -245,6 +250,7 @@ function RoadmapSection({
   error: string | null;
   onRetry: () => void;
   onOpenBlueprint: (id: string) => void;
+  blueprintLabel: string;
 }) {
   const showLoading = loading || preparing;
 
@@ -258,16 +264,17 @@ function RoadmapSection({
           <div className="min-w-0">
             <h2 className="text-xl font-semibold text-text">Agent Roadmap</h2>
             <p className="mt-1 max-w-3xl text-sm leading-relaxed text-muted">
-              Start with the phased agent rollout plan, then choose an opportunity below to inspect its Agentforce Blueprint.
+              Start with the phased agent rollout plan, then choose an opportunity below to inspect its {blueprintLabel}.
             </p>
           </div>
         </div>
 
         {model && (
-          <div className="grid min-w-[min(100%,520px)] grid-cols-2 gap-2 sm:grid-cols-4">
+          // R18-C0 P6: the Roadmap presents phases only — the permission/
+          // dependency readiness tiles are removed to keep the customer-facing
+          // roadmap focused on selected opportunities and rollout progression.
+          <div className="grid min-w-[min(100%,320px)] grid-cols-2 gap-2">
             <MetricTile label="Selected" value={model.selectedOpportunityCount} />
-            <MetricTile label="Permissions" value={model.requiredPermissionsCount} />
-            <MetricTile label="Dependencies" value={model.dependencyCount} />
             <MetricTile label="Readiness" value={model.overallReadiness} />
           </div>
         )}
@@ -563,9 +570,8 @@ export default function BlueprintPage() {
   const [roadmapError, setRoadmapError] = useState<string | null>(null);
   const [roadmapFetchCount, setRoadmapFetchCount] = useState(0);
 
-  const salesforceConnected = connectors.some(
-    (connector) => connector.id === 'salesforce' && connector.status === 'connected',
-  );
+  const salesforceConnected = isSalesforceConnected(connectors);
+  const blueprintLabel = getBlueprintLabel(salesforceConnected);
   const selectedOpp = opportunities.find((opp) => opp.id === selectedId) ?? null;
   const selectedIdx = opportunities.findIndex((opp) => opp.id === selectedId);
   const runStatus = run?.status?.toLowerCase();
@@ -670,7 +676,7 @@ export default function BlueprintPage() {
         <WorkspaceNotice
           icon={<Map size={24} />}
           title="No discovery run selected"
-          message="Run a discovery first to generate the Agent Roadmap and Agentforce Blueprints."
+          message={`Run a discovery first to generate the Agent Roadmap and ${blueprintLabel}s.`}
           actionLabel="Go to Discovery Run"
           onAction={() => nav('/discovery-run')}
         />
@@ -682,7 +688,7 @@ export default function BlueprintPage() {
         <WorkspaceNotice
           icon={<Zap size={24} />}
           title="Connect Salesforce"
-          message="Agentforce Blueprint is available when Salesforce is connected."
+          message="Agent Blueprint is available when Salesforce is connected."
           actionLabel="Go to Integration Hub"
           onAction={() => nav('/integration-hub')}
           tone="warning"
@@ -695,14 +701,14 @@ export default function BlueprintPage() {
         <WorkspaceNotice
           icon={<ChevronRight size={24} />}
           title="Select an opportunity"
-          message="Choose an opportunity from the Agent Roadmap above or from Opportunity Review to view its Agentforce Blueprint."
+          message={`Choose an opportunity from the Agent Roadmap above or from Opportunity Review to view its ${blueprintLabel}.`}
           actionLabel="Go to Opportunity Review"
           onAction={() => nav(runId ? `/opportunity-review?runId=${runId}` : '/opportunity-review')}
         />
       );
     }
 
-    if (loading) return <LoadingState />;
+    if (loading) return <LoadingState blueprintLabel={blueprintLabel} />;
 
     if (error) {
       return (
@@ -715,7 +721,7 @@ export default function BlueprintPage() {
       );
     }
 
-    if (!blueprint) return <LoadingState />;
+    if (!blueprint) return <LoadingState blueprintLabel={blueprintLabel} />;
 
     return (
       <div
@@ -736,8 +742,8 @@ export default function BlueprintPage() {
 
   return (
     <PageShell
-      title="Agentforce Blueprint"
-      description="Review the Agent Roadmap first, then inspect the Agentforce Blueprint for the selected opportunity."
+      title={blueprintLabel}
+      description={`Review the Agent Roadmap first, then inspect the ${blueprintLabel} for the selected opportunity.`}
       className="bg-bg"
       actions={
         <>
@@ -755,6 +761,7 @@ export default function BlueprintPage() {
               error={roadmapError}
               onRetry={refetchRoadmap}
               onOpenBlueprint={handleRoadmapBlueprintSelect}
+              blueprintLabel={blueprintLabel}
             />
           ) : null}
 

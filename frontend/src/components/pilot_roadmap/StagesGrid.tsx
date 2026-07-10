@@ -20,6 +20,7 @@ import { RoadmapStage } from '../../types/pilotRoadmap';
 import StageCard from './StageCard';
 import { useConnectorContext } from '../../context/ConnectorContext';
 import { useAnalystReviewContext } from '../../context/AnalystReviewContext';
+import { isSalesforceConnected } from '../../utils/blueprintNaming';
 
 // ── Phase label mapping ───────────────────────────────────────────────────────
 
@@ -81,9 +82,7 @@ export default function StagesGrid({ stages, onOpenReview }: Props) {
 
   // Issue 2 (documentation): 'salesforce' must match sourceKeys.ts SOURCE_KEY_MAP
   // connector ID — stable string defined in the codebase.
-  const salesforceConnected = connectors.some(
-    (c) => c.id === 'salesforce' && c.status === 'connected',
-  );
+  const salesforceConnected = isSalesforceConnected(connectors);
 
   return (
     <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">

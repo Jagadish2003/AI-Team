@@ -87,7 +87,6 @@ INDUSTRY_REGISTRY: Dict[str, IndustryConfig] = {
         pack_hints=["ncino", "service_cloud"],
         system_defaults={
             "salesforce":     SystemDefaultConfig("system_of_record",          "primary",   ["intake_requests", "approvals", "compliance_risk"]),
-            "salesforce_pss": SystemDefaultConfig("system_of_record",          "primary",   ["intake_requests", "approvals", "compliance_risk"]),
             "salesforce_sc":  SystemDefaultConfig("system_of_record",          "primary",   ["service_casework", "intake_requests", "compliance_risk"]),
             "salesforce_ncino":SystemDefaultConfig("system_of_record",         "primary",   ["approvals", "compliance_risk", "handoffs_routing"]),
             "salesforce_fsc": SystemDefaultConfig("system_of_record",          "primary",   ["intake_requests", "approvals", "compliance_risk"]),
@@ -109,7 +108,7 @@ INDUSTRY_REGISTRY: Dict[str, IndustryConfig] = {
     "public_sector": IndustryConfig(
         industry_id="public_sector",
         label="Public sector",
-        pack_hints=["strs_benefits", "service_cloud"],
+        pack_hints=["service_cloud"],
         system_defaults={
             "salesforce":     SystemDefaultConfig("system_of_record",          "primary",   ["intake_requests", "approvals", "compliance_risk"]),
             "salesforce_pss": SystemDefaultConfig("system_of_record",          "primary",   ["intake_requests", "compliance_risk", "approvals"]),
@@ -126,8 +125,7 @@ INDUSTRY_REGISTRY: Dict[str, IndustryConfig] = {
             "Public sector context. Regulatory deadline compliance, fiduciary "
             "obligations, and audit-trail completeness are highest-weight signals. "
             "Member/beneficiary outcomes are the primary measure of friction cost. "
-            "Reference applicable state statutes (e.g. Ohio Revised Code 3307 for "
-            "STRS) where relevant. Never suggest automated benefit decisions."
+            "Never suggest automated benefit decisions."
         ),
     ),
 

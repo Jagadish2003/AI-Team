@@ -72,7 +72,7 @@ class TestIndustryRegistry:
         config = get_industry("public_sector")
         assert config is not None
         assert config.label == "Public sector"
-        assert "strs_benefits" in config.pack_hints
+        assert "service_cloud" in config.pack_hints
 
     def test_get_industry_unknown_returns_none(self):
         config = get_industry("nonexistent_industry")
@@ -116,13 +116,27 @@ class TestIndustryRegistry:
         assert recs == []
 
     def test_get_pack_hints_public_sector(self):
+        # R18-C0 P10 — de-POC: public_sector no longer hints a customer-specific
+        # pack. It should suggest only the generic service_cloud pack.
         hints = get_pack_hints("public_sector")
-        assert "strs_benefits" in hints
-        assert "service_cloud" in hints
+        assert hints == ["service_cloud"]
+        assert "strs_benefits" not in hints
 
     def test_get_pack_hints_financial_services(self):
         hints = get_pack_hints("financial_services")
         assert "ncino" in hints
+
+    def test_get_pack_hints_financial_services_no_public_sector_defaults(self):
+        # R18-C0 P10 / AC11 — financial_services must not suggest a
+        # public-sector Salesforce setup.
+        hints = get_pack_hints("financial_services")
+        assert "strs_benefits" not in hints
+
+    def test_get_system_defaults_financial_services_no_salesforce_pss(self):
+        # R18-C0 P10 / AC11 — salesforce_pss must not appear in
+        # financial_services defaults.
+        defaults = get_system_defaults("financial_services", "salesforce_pss")
+        assert defaults is None
 
     def test_get_pack_hints_unknown_industry(self):
         hints = get_pack_hints("unknown_industry")
@@ -133,6 +147,14 @@ class TestIndustryRegistry:
         assert "fiduciary" in suffix
         assert "Never suggest automated benefit decisions" in suffix
 
+    def test_llm_context_suffix_public_sector_has_no_customer_specific_wording(self):
+        # R18-C0 P10 / AC10 — no STRS-specific or statute-specific references
+        # in the generic public_sector profile.
+        suffix = get_llm_context_suffix("public_sector")
+        assert "strs" not in suffix.lower()
+        assert "ohio revised code" not in suffix.lower()
+        assert "3307" not in suffix
+
     def test_llm_context_suffix_financial_services(self):
         suffix = get_llm_context_suffix("financial_services")
         assert "Never suggest automated credit" in suffix
@@ -140,6 +162,16 @@ class TestIndustryRegistry:
     def test_llm_context_suffix_unknown_industry(self):
         suffix = get_llm_context_suffix("unknown_industry")
         assert suffix == ""
+
+    def test_registry_has_no_customer_specific_pack_hints(self):
+        # R18-C0 P10 / AC10 — a text sweep for STRS across every industry's
+        # pack_hints must return nothing.
+        for ind_id, config in INDUSTRY_REGISTRY.items():
+            for hint in config.pack_hints:
+                assert "strs" not in hint.lower(), (
+                    f"Customer-specific pack hint '{hint}' found for "
+                    f"industry='{ind_id}'"
+                )
 
     def test_all_workflow_focus_values_valid(self):
         """All workflow_focus values must be valid WorkflowFocusTag literals."""
