@@ -46,6 +46,7 @@ from .routes_connector_auth import register_connector_auth_routes
 from .routes_stack_builder import register_stack_builder_routes
 from .routes_stack_builder_launch import register_stack_builder_launch_routes
 from .routes_salesforce_products import register_salesforce_products_routes
+from .routes_slack_channels import register_slack_channels_routes
 from .routes_sprint4_t1 import register_sprint4_t1_routes
 from .routes_sprint4_t2 import register_sprint4_t2_routes
 from .routes_sprint4_t3 import register_sprint4_t3_routes
@@ -268,6 +269,7 @@ register_stack_builder_routes(app)
 register_stack_builder_launch_routes(app)
 register_workspace_catalog_routes(app)
 register_salesforce_products_routes(app)
+register_slack_channels_routes(app)
 # Sprint 4 routes are registered in dependency order T1 → T2 → T3 → T4 → T6.
 # FastAPI resolves routes in registration order, so a module registered earlier
 # wins any shared path prefix. T6 (LLM enrichment / evidence-trace) MUST be

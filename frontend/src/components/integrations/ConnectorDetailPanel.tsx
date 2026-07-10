@@ -8,6 +8,7 @@ import { useAuthOptional } from '../../context/AuthContext';
 import { isViewerRole } from '../../utils/roles';
 import { ExternalLink, CheckCircle2 } from 'lucide-react';
 import SalesforceProductPicker from './SalesforceProductPicker';
+import SlackChannelPicker from './SlackChannelPicker';
 import SqlServerScopePicker from './SqlServerScopePicker';
 import OracleScopePicker from './OracleScopePicker';
 import PostgreSQLScopePicker from './PostgreSQLScopePicker';
@@ -213,6 +214,14 @@ export default function ConnectorDetailPanel({
       {connector.id === 'salesforce' && isConnected && (
         <>
           <SalesforceProductPicker />
+          <div className="mt-4 border-t border-border" />
+        </>
+      )}
+
+      {/* R18-C0 P5: Slack channel selection — pick which channels AgentIQ reads. */}
+      {connector.id === 'slack' && isConnected && (
+        <>
+          <SlackChannelPicker />
           <div className="mt-4 border-t border-border" />
         </>
       )}
