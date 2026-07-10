@@ -76,6 +76,9 @@ def check_servicenow() -> ConnectorHealth:
     cred = _resolve_live_credential("servicenow")
     sn_url = (cred.get("url") or os.getenv("SERVICENOW_URL", "")).rstrip("/")
     sn_token = cred.get("token") or ""
+    # Present on a static credential only — check with Basic (user/password)
+    # instead of an OAuth Bearer header (R18-A3 outbound-only path).
+    sn_username = cred.get("username") or ""
 
     if not sn_url:
         return ConnectorHealth(
@@ -103,11 +106,14 @@ def check_servicenow() -> ConnectorHealth:
     url = f"{sn_url}/api/now/table/incident"
     params = {"sysparm_limit": "1", "sysparm_fields": "sys_id"}
 
-    headers = {"Authorization": f"Bearer {sn_token}", "Accept": "application/json"}
+    headers = {"Accept": "application/json"}
+    basic_auth = (sn_username, sn_token) if sn_username else None
+    if basic_auth is None:
+        headers["Authorization"] = f"Bearer {sn_token}"
 
     try:
         t0 = time.monotonic()
-        resp = requests.get(url, headers=headers, params=params, timeout=10)
+        resp = requests.get(url, headers=headers, params=params, auth=basic_auth, timeout=10)
         latency_ms = int((time.monotonic() - t0) * 1000)
 
         if resp.status_code == 200:
@@ -172,6 +178,9 @@ def check_jira() -> ConnectorHealth:
     cred = _resolve_live_credential("jira")
     jira_url = (cred.get("url") or os.getenv("JIRA_URL", "")).rstrip("/")
     jira_token = cred.get("token") or ""
+    # Present on a static credential only — check with Basic (email + API token)
+    # instead of an OAuth Bearer header (R18-A3 outbound-only path).
+    jira_username = cred.get("username") or ""
 
     if not jira_url:
         return ConnectorHealth(
@@ -197,14 +206,14 @@ def check_jira() -> ConnectorHealth:
         )
 
     url = f"{jira_url}/rest/api/3/myself"
-    headers = {
-        "Authorization": f"Bearer {jira_token}",
-        "Accept": "application/json",
-    }
+    headers = {"Accept": "application/json"}
+    basic_auth = (jira_username, jira_token) if jira_username else None
+    if basic_auth is None:
+        headers["Authorization"] = f"Bearer {jira_token}"
 
     try:
         t0 = time.monotonic()
-        resp = requests.get(url, headers=headers, timeout=10)
+        resp = requests.get(url, headers=headers, auth=basic_auth, timeout=10)
         latency_ms = int((time.monotonic() - t0) * 1000)
 
         if resp.status_code == 200:
