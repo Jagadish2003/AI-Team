@@ -231,6 +231,18 @@ class GitContentError(Exception):
     """Raised when live git content ingestion fails with an actionable message."""
 
 
+class GitContentHandoffError(RuntimeError):
+    """Raised when the retrieval substrate rejects one or more artifacts in a batch.
+
+    Propagated out of ``ingest_changes`` so the change runner does NOT persist the
+    batch's checkpoint — the at-least-once guarantee (R16-A1): content the
+    substrate did not accept must be re-read and re-handed on the next run, never
+    silently checkpointed past and dropped. Mirrors ``DocumentHandoffError`` in
+    ``documents_handoff.py`` (AT-531 review). Re-handing is idempotent
+    (``ingest_content`` replaces an artifact's chunks by identity).
+    """
+
+
 # ---------------------------------------------------------------------------
 # Opaque per-repo checkpoint encoding (owned here; opaque to the runner)
 # ---------------------------------------------------------------------------
@@ -377,7 +389,9 @@ def _match_path(path: str, pattern: str) -> bool:
         — ``node_modules`` excludes ``frontend/node_modules/x.js``; ``*.min.js``
         matches the basename anywhere; ``yarn.lock`` matches it in any directory;
       * a pattern WITH a ``/`` is matched against the whole path, and a directory
-        prefix (``src/generated``) also matches everything beneath it.
+        prefix (``src/generated``) also matches everything beneath it;
+      * a ``**/`` segment matches ZERO or more intermediate directories, so
+        ``src/**/*.py`` matches both ``src/a/b/foo.py`` AND ``src/foo.py``.
     """
     pattern = pattern.strip().strip("/")
     if not pattern:
@@ -386,6 +400,12 @@ def _match_path(path: str, pattern: str) -> bool:
     if "/" not in pattern:
         return any(fnmatchcase(seg, pattern) for seg in path.split("/"))
     if fnmatchcase(path, pattern):
+        return True
+    # ``fnmatchcase`` requires a real segment where ``**/`` sits, so the >=1-dir
+    # case ('src/a/foo.py') matches above but the ZERO-dir case ('src/foo.py')
+    # would silently escape a 'src/**/*.py' exclude. Retry with each ``**/``
+    # collapsed away so zero intermediate directories also match (AT-531 review).
+    if "**/" in pattern and fnmatchcase(path, pattern.replace("**/", "")):
         return True
     return path == pattern or path.startswith(pattern + "/")
 
@@ -829,7 +849,9 @@ class GitContentIngestor(ChangeBasedIngestor):
         Fire-and-forget by contract: a telemetry import/write failure must never
         break ingestion, so the whole path is guarded.
         """
-        pattern_types = sorted(set(outcome.pattern_types))
+        # RedactionOutcome.pattern_types is already the sorted, DISTINCT set of
+        # signature names (AT-531 review) — no local dedup needed.
+        pattern_types = outcome.pattern_types
         prov = getattr(art, "provenance", None) or {}
         try:
             from app.telemetry import record_event
@@ -862,20 +884,35 @@ class GitContentIngestor(ChangeBasedIngestor):
             org_id,
         )
 
-    def _ingest_content(self, org_id: str, artifacts: List[Any]) -> None:
+    def _ingest_content(self, org_id: str, artifacts: List[Any]) -> Any:
         """Hand file content to the retrieval substrate via the producer contract.
 
         Uses the injected ``ingest_fn`` when provided (tests), else the real
-        ``app.retrieval.ingest.ingest_content`` (lazy-imported). Per-artifact
-        failures are already isolated inside ``ingest_content`` and never raised,
-        so a bad file never sinks the batch or the checkpoint.
+        ``app.retrieval.ingest.ingest_content`` (lazy-imported).
+
+        ``ingest_content`` isolates per-artifact failures internally and returns
+        normally with an ``artifacts_failed`` count rather than raising. Returning
+        normally is NOT success: if any artifact was rejected (embedding-worker
+        prerequisite failure, malformed field, substrate down) we RAISE
+        :class:`GitContentHandoffError` so the caller does not advance the batch
+        checkpoint past content the substrate did not accept — otherwise that file
+        is checkpointed past, never reappears in a future diff, and is silently
+        dropped (breaking at-least-once). Mirrors the documents-ingestor contract
+        (AT-531 review). Re-handing on the next run is idempotent.
         """
         if not artifacts:
-            return
+            return None
         fn = self._ingest_fn
         if fn is None:
             from app.retrieval.ingest import ingest_content as fn  # type: ignore
-        fn(org_id, artifacts)
+        result = fn(org_id, artifacts)
+        failed = getattr(result, "artifacts_failed", 0) or 0
+        if failed:
+            raise GitContentHandoffError(
+                f"{failed} artifact(s) failed retrieval hand-off for org {org_id}; "
+                f"checkpoint not advanced (will retry next run)"
+            )
+        return result
 
     def _to_removals(self, repo_id: str, page: List[_FileWork]) -> List[tuple]:
         """The ``(source_system, source_artifact)`` ids of the deleted files in a

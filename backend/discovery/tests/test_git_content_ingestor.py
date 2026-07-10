@@ -677,3 +677,86 @@ def test_ac5_scan_runs_for_both_content_streams():
     # Every hand-off to the substrate is wrapped in the secret scan.
     assert src.count("_secret_scan(org_id") == 2
     assert "_ingest_content(org_id, self._secret_scan(org_id" in src
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# AT-531 review — substrate hand-off failure must NOT advance the checkpoint (#1)
+# ─────────────────────────────────────────────────────────────────────────────
+def test_review1_substrate_failure_does_not_advance_checkpoint_and_retries():
+    """A batch the substrate rejects (artifacts_failed > 0) must not be
+    checkpointed past — at-least-once. The next run re-reads and, once the
+    substrate accepts it, advances. Mirrors the documents-ingestor contract."""
+    from types import SimpleNamespace
+
+    from discovery.ingest.git_content import GitContentHandoffError
+
+    store = Store()
+
+    # Fails the file (code) stream, accepts the commit (conversation) corpus — so
+    # the failure is exercised on the first-load file batch specifically.
+    def failing_on_code(org_id, artifacts):
+        arts = list(artifacts)
+        failed = sum(1 for a in arts if getattr(a, "content_type", None) == "code")
+        return SimpleNamespace(artifacts_failed=failed, artifacts_indexed=0)
+
+    ing1 = GitContentIngestor(batch_size=1, ingest_fn=failing_on_code)
+    res1 = _drive(ing1, "org1", store)
+    assert res1.ok is False
+    assert isinstance(res1.error, GitContentHandoffError)
+    # The failing file batch was never checkpointed → nothing persisted (the run
+    # raised before the first file batch could be yielded/advanced).
+    assert store.read("org1", "git_content") is None
+
+    # Run 2 with a healthy substrate: the previously-dropped content is re-read
+    # (never silently skipped) and now fully indexed, and the checkpoint advances.
+    ing2, fake2 = _ingestor(batch_size=1)
+    res2 = _drive(ing2, "org1", store)
+    assert res2.ok and res2.checkpoint_advanced
+    handed = {a.source_artifact for a in fake2.artifacts}
+    assert set(_ALL_TREE).issubset(handed)  # every file recovered on retry
+    assert _decode_checkpoint(store.read("org1", "git_content").value) == {
+        "web-app": _complete("c3c3c3c3"),
+        "data-pipeline": _complete("d2d2d2d2"),
+    }
+
+
+def test_review1_partial_batch_failure_still_blocks_advance():
+    """Even one failed artifact in an otherwise-successful batch blocks the
+    checkpoint (consistent with the documents contract)."""
+    from types import SimpleNamespace
+
+    from discovery.ingest.git_content import GitContentHandoffError
+
+    store = Store()
+    ing = GitContentIngestor(
+        batch_size=100,
+        ingest_fn=lambda org, arts: SimpleNamespace(artifacts_failed=1, artifacts_indexed=5),
+    )
+    res = _drive(ing, "org1", store)
+    assert res.ok is False
+    assert isinstance(res.error, GitContentHandoffError)
+    assert store.read("org1", "git_content") is None
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# AT-531 review — _match_path: ** matches zero intermediate directories (#4)
+# ─────────────────────────────────────────────────────────────────────────────
+def test_review4_double_star_matches_zero_intermediate_directories():
+    from discovery.ingest.git_content import _match_path
+
+    # The bug: a file directly under the prefix escaped a '**/' exclude.
+    assert _match_path("src/foo.py", "src/**/*.py") is True       # zero dirs (fixed)
+    assert _match_path("src/a/b/foo.py", "src/**/*.py") is True   # >=1 dir (already)
+    assert _match_path("foo.py", "**/*.py") is True               # leading **/
+    # Still correctly scoped — a different top-level dir is not matched.
+    assert _match_path("other/foo.py", "src/**/*.py") is False
+
+
+def test_review4_double_star_exclude_drops_file_directly_under_prefix():
+    """End-to-end: a per-repo 'src/**/*.py' exclude now drops src/foo.py too."""
+    from discovery.ingest.git_content import GitRepoConfig, PathFilter
+
+    f = PathFilter(exclude=("src/**/*.py",))
+    assert f.allows("src/foo.py") is False       # the previously-escaping case
+    assert f.allows("src/pkg/bar.py") is False
+    assert f.allows("docs/readme.md") is True

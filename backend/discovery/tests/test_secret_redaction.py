@@ -118,10 +118,13 @@ def test_empty_and_none_are_safe():
 
 
 def test_multiple_secrets_counted_and_typed_in_order():
+    # The password value is credential-shaped (mixed letter+digit+symbol) so the
+    # generic assignment rule fires — an all-lowercase word would be treated as a
+    # benign identifier (see test_credential_named_assignment_of_benign_value_*).
     text = (
         f"aws=AKIAIOSFODNN7EXAMPLE\n"
         f"gh={_FAKE_GH_TOKEN}\n"
-        'password="topsecretvalue"'
+        'password="t0psecret-value"'
     )
     outcome = scan_and_redact(text)
     assert outcome.count == 3
@@ -130,7 +133,7 @@ def test_multiple_secrets_counted_and_typed_in_order():
         "github_token",
         "secret_assignment",
     }
-    for secret in ("AKIAIOSFODNN7EXAMPLE", _FAKE_GH_TOKEN, "topsecretvalue"):
+    for secret in ("AKIAIOSFODNN7EXAMPLE", _FAKE_GH_TOKEN, "t0psecret-value"):
         assert secret not in outcome.text
 
 
@@ -155,3 +158,82 @@ def test_hashes_and_uuids_are_not_flagged():
     # 'sha256 = ...' is not a secret-named key, so it is left alone.
     assert outcome.pattern_types == []
     assert outcome.text == text
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# AT-531 review — false-positive fix: credential-named key + benign value (#2)
+# ─────────────────────────────────────────────────────────────────────────────
+_BENIGN_ASSIGNMENTS = [
+    'token = next_item',
+    'password = get_input()',
+    'secret = compute_value()',
+    'self.token = response.json',
+    'access_token = handler.default',
+    'retries = 5',
+    'password_changed_at = 2026-06-20',
+    'last_updated_by = current_user',
+    'api_key = None',
+    'is_secret = True',
+    'token: active',
+    'client_secret = settings.CLIENT_SECRET',
+]
+
+
+@pytest.mark.parametrize("line", _BENIGN_ASSIGNMENTS)
+def test_credential_named_assignment_of_benign_value_is_not_redacted(line):
+    # A variable NAMED like a credential but assigned ordinary code/values must
+    # not be redacted — that would silently corrupt source before indexing.
+    outcome = scan_and_redact(line)
+    assert outcome.redacted is False, f"false-positive redaction of: {line!r}"
+    assert outcome.text == line
+
+
+_CREDENTIAL_ASSIGNMENTS = [
+    'password = "s3cr3t-p@ssw0rd"',
+    'api_key = "sk-live-0123456789abcdef"',
+    'client_secret=abcdef123456ZZ',
+    'auth_token = "aBcD1234efGH5678"',
+    'password: "hunter2xyz"',
+]
+
+
+@pytest.mark.parametrize("line", _CREDENTIAL_ASSIGNMENTS)
+def test_credential_named_assignment_of_secret_value_is_redacted(line):
+    outcome = scan_and_redact(line)
+    assert outcome.pattern_types == ["secret_assignment"]
+    assert "[REDACTED:secret_assignment]" in outcome.text
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# AT-531 review — JWT minimum segment length (#3)
+# ─────────────────────────────────────────────────────────────────────────────
+def test_short_dotted_identifier_starting_with_eyj_is_not_a_jwt():
+    # 'eyJa.b.c' and dotted version strings must not be mistaken for a JWT.
+    for line in ("value = eyJa.b.c", "tag eyJ1.2.3 released", "eyJx.y.z"):
+        outcome = scan_and_redact(line)
+        assert "jwt" not in outcome.pattern_types, line
+        assert outcome.text == line
+
+
+def test_realistic_jwt_is_redacted():
+    jwt = (
+        "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9"
+        ".eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIn0"
+        ".SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c"
+    )
+    outcome = scan_and_redact(f"Authorization: Bearer {jwt}")
+    assert outcome.pattern_types == ["jwt"]
+    assert jwt not in outcome.text
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# AT-531 review — RedactionOutcome API: count vs distinct types (#5)
+# ─────────────────────────────────────────────────────────────────────────────
+def test_pattern_types_is_deduplicated_while_count_is_per_match():
+    outcome = scan_and_redact(
+        "a=AKIAIOSFODNN7EXAMPLE b=AKIAIOSFODNN7EXAMPLE c=AKIAIOSFODNN7EXAMPLE"
+    )
+    # Three matches of ONE type: count reflects matches, pattern_types is distinct.
+    assert outcome.count == 3
+    assert outcome.pattern_types == ["aws_access_key_id"]
+    assert outcome.counts_by_type == {"aws_access_key_id": 3}
