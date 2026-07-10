@@ -169,6 +169,42 @@ def test_ac4_budget_skip_does_not_advance_and_is_retried_next_run():
     assert "b" in files
 
 
+def test_discarded_oversized_file_does_not_consume_budget():
+    """Regression (review finding): a post-read oversized file (source omitted its
+    size) is read then DISCARDED by the size cap, so it must charge 0 to the budget
+    — exactly like the pre-read cap. A legitimate file after it then still extracts
+    within the same run instead of being starved by BUDGET_EXCEEDED."""
+    docs = [
+        # Unknown size, 200 bytes → post-read size cap discards it (charges 0).
+        {"id": "big", "size_bytes": None, "content": b"y" * 200, "ts": "2026-01-01T00:00:00Z"},
+        # 40 bytes → must still extract; the budget (100) was NOT eaten by "big".
+        {"id": "small", "content": b"z" * 40, "ts": "2026-01-02T00:00:00Z"},
+    ]
+    recs = _by_id(
+        DocumentIngestor(
+            source=MemSource(docs), max_file_bytes=50, extraction_budget_bytes=100
+        ).ingest_changes(ORG, None)
+    )
+    assert recs["big"]["extraction"]["reason"] == extraction.SIZE_CAPPED
+    # Would be BUDGET_EXCEEDED under the old (charge-read-bytes) behaviour.
+    assert recs["small"]["extraction"]["status"] == "extracted"
+
+
+def test_read_but_skipped_file_does_not_consume_budget():
+    """A file that is read but deliberately skipped (e.g. unsupported/scanned) also
+    charges 0 — only successfully-extracted content counts against the budget."""
+    docs = [
+        # A recognised-but-unsupported type → ExtractionSkipped after the read.
+        {"id": "diagram", "filename": "arch.vsdx", "content": b"x" * 90, "ts": "2026-01-01T00:00:00Z"},
+        {"id": "note", "filename": "note.txt", "content": b"z" * 40, "ts": "2026-01-02T00:00:00Z"},
+    ]
+    recs = _by_id(
+        DocumentIngestor(source=MemSource(docs), extraction_budget_bytes=100).ingest_changes(ORG, None)
+    )
+    assert recs["diagram"]["extraction"]["status"] == "skipped"
+    assert recs["note"]["extraction"]["status"] == "extracted"  # budget intact
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Disabling the limits
 # ─────────────────────────────────────────────────────────────────────────────

@@ -198,13 +198,20 @@ class DocumentIngestor(ChangeBasedIngestor):
     Size cap & extraction budget (R18-A1 T4 / AC4): a per-file ``max_file_bytes``
     cap skips (with reason ``size_capped``) any single file too large to read, and a
     per-run ``extraction_budget_bytes`` bound skips remaining files (reason
-    ``budget_exceeded``) once a run has read that much content — so one enormous
+    ``budget_exceeded``) once a run has EXTRACTED that much content — so one enormous
     archive or bulk upload cannot starve a run. Both are configurable (constructor
     args override the ``DOCUMENT_MAX_FILE_BYTES`` / ``DOCUMENT_EXTRACTION_BUDGET_BYTES``
     env defaults; ``0`` disables a limit). A ``size_capped`` skip advances the
     checkpoint (deterministic for that file's current signature); a
     ``budget_exceeded`` skip does NOT (it is transient, so the file is retried next
     run when budget is available).
+
+    The budget counts only SUCCESSFULLY-EXTRACTED bytes — a file that is read but
+    then discarded (over the post-read size cap, an extraction error, or a
+    deliberate skip) charges 0, exactly like the pre-read size cap. Discarded
+    content therefore never consumes the budget and can never starve legitimate
+    files later in the same run (e.g. an attachment of unknown size that turns out
+    oversized does not eat into what remains for the files after it).
     """
 
     connector_id = "documents"
@@ -305,7 +312,7 @@ class DocumentIngestor(ChangeBasedIngestor):
 
         total_batches = (len(work) + self.batch_size - 1) // self.batch_size
         emitted = 0
-        budget_used = 0  # bytes of file content read this run (AC4 budget)
+        budget_used = 0  # bytes of file content successfully extracted this run (AC4 budget)
         skipped_size = skipped_budget = 0
         for start in range(0, len(work), self.batch_size):
             page = work[start : start + self.batch_size]
@@ -342,10 +349,10 @@ class DocumentIngestor(ChangeBasedIngestor):
                     skipped_budget += 1
                     continue
 
-                record, advanced, bytes_read = self._extract_record(
+                record, advanced, budget_bytes = self._extract_record(
                     org_id, source, ref, previous
                 )
-                budget_used += bytes_read
+                budget_used += budget_bytes
                 if record["extraction"].get("reason") == SIZE_CAPPED:
                     skipped_size += 1
                 records.append(record)
@@ -364,7 +371,7 @@ class DocumentIngestor(ChangeBasedIngestor):
             # Surfaced in run health: how much coverage the caps/budget cost (AC4).
             logger.warning(
                 "documents: org=%s — %d file(s) skipped over size cap, %d over the "
-                "per-run extraction budget (%d bytes read).",
+                "per-run extraction budget (%d bytes extracted).",
                 org_id, skipped_size, skipped_budget, budget_used,
             )
 
@@ -407,13 +414,15 @@ class DocumentIngestor(ChangeBasedIngestor):
     ) -> Tuple[Dict[str, Any], bool, int]:
         """Read + extract one file into a record, isolating any failure to it (AC5).
 
-        Returns ``(record, advanced, bytes_read)``. ``advanced`` is True when the
+        Returns ``(record, advanced, budget_bytes)``. ``advanced`` is True when the
         checkpoint signature should move forward for this file (a successful
         extraction or a DELIBERATE skip — including a post-read size cap) and False
         when it must not (an unexpected extraction error, so the file is retried
-        next run). ``bytes_read`` is the file's byte length that counts against the
-        per-run extraction budget (0 when the read itself failed). No document
-        content is ever logged.
+        next run). ``budget_bytes`` is what this file charges against the per-run
+        extraction budget: the file's size ONLY when its content was successfully
+        extracted, and 0 otherwise (read failure, post-read size cap, extraction
+        error, or deliberate skip) — read-but-discarded content never consumes the
+        budget, matching the pre-read size cap. No document content is ever logged.
         """
         change_kind = (
             ChangeKind.CREATED if ref.artifact_id not in previous else ChangeKind.UPDATED
@@ -437,8 +446,9 @@ class DocumentIngestor(ChangeBasedIngestor):
 
         size = len(raw)
         # Post-read size cap: the source did not know the size up front, so it is
-        # enforced now against the actual bytes (AC4). The read cost still counts
-        # against the budget.
+        # enforced now against the actual bytes (AC4). The file is discarded (never
+        # indexed), so it charges 0 to the budget — identical to the pre-read cap,
+        # so an unknown-size oversized file cannot starve legitimate files.
         if self._exceeds_cap(size):
             return (
                 self._skip_record(
@@ -447,7 +457,7 @@ class DocumentIngestor(ChangeBasedIngestor):
                     size_bytes=size,
                 ),
                 True,
-                size,
+                0,
             )
 
         try:
@@ -465,7 +475,8 @@ class DocumentIngestor(ChangeBasedIngestor):
                 "reason": type(exc).__name__,
                 "detail": str(exc),
             }
-            return record, False, size
+            # Nothing was indexed — charge 0 (the file is retried next run anyway).
+            return record, False, 0
 
         record = self._base_record(ref, change_kind, document_format)
         if isinstance(outcome, ExtractionSkipped):
@@ -478,7 +489,8 @@ class DocumentIngestor(ChangeBasedIngestor):
             logger.info(
                 "documents: artifact %s skipped (%s)", ref.artifact_id, outcome.reason
             )
-            return record, True, size
+            # Nothing was indexed (deliberate skip) — charge 0 to the budget.
+            return record, True, 0
 
         # Successful extraction — carry the text + policy for the T3 hand-off.
         extracted: ExtractedText = outcome
@@ -490,6 +502,8 @@ class DocumentIngestor(ChangeBasedIngestor):
             merged = dict(record.get("provenance") or {})
             merged.update(extracted.provenance)
             record["provenance"] = merged
+        # Content was extracted and will be indexed — this is the only path that
+        # charges the per-run extraction budget.
         return record, True, size
 
     def _base_record(
