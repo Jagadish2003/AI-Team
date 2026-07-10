@@ -36,12 +36,14 @@ def _email() -> str:
 
 
 def _register(client, *, email=None, password=STRONG):
-    from auth_helpers import activate_org_by_email
+    from auth_helpers import activate_org_by_email, email_for_org
 
-    email = email or _email()
+    # BUG 1: org name must match the email domain — derive a matching pair.
+    org = rand_org_name()
+    email = email or email_for_org(org)
     resp = client.post(
         "/api/auth/register",
-        json={"org_name": rand_org_name(), "email": email, "password": password},
+        json={"org_name": org, "email": email, "password": password},
     )
     assert resp.status_code == 201, resp.text
     # AUTH-2: approve the org (simulated admin step) so a post-reset login works.

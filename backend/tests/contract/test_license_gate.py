@@ -79,11 +79,13 @@ def test_read_runs_list_allowed_in_readonly(client, monkeypatch):
 def test_login_allowed_in_readonly(client, monkeypatch):
     _force_status(monkeypatch, LicenseStatus.READONLY)
 
-    email = f"gate-{uuid.uuid4().hex[:10]}@example.com"
+    from auth_helpers import email_for_org
+    org = rand_org_name()
+    email = email_for_org(org, local=f"gate-{uuid.uuid4().hex[:10]}")  # BUG 1: match domain
     password = "Str0ng!Passw0rd123"
     reg = client.post(
         "/api/auth/register",
-        json={"org_name": rand_org_name(), "email": email, "password": password},
+        json={"org_name": org, "email": email, "password": password},
     )
     assert reg.status_code == 201, reg.text
 

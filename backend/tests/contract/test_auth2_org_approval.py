@@ -26,7 +26,7 @@ from fastapi.testclient import TestClient
 
 from app import db
 from app.routes_auth import _get_org_approval_row
-from auth_helpers import rand_org_name
+from auth_helpers import email_for_org, rand_org_name
 
 PASSWORD = "Supersecret1!"
 APPROVE_URL = "/api/auth/org-approval/approve"
@@ -80,8 +80,11 @@ def register_org(client: TestClient, monkeypatch):
     monkeypatch.setattr(routes_auth, "send_org_rejected_email", _spy_rejected)
 
     def _do(org_name: str | None = None, email: str | None = None, password: str = PASSWORD):
+        from auth_helpers import email_for_org
+
         org_name = org_name or rand_org_name()
-        email = email or f"owner_{uuid.uuid4().hex[:10]}@example.com"
+        # BUG 1: org name must match the email domain — derive a matching pair.
+        email = email or email_for_org(org_name)
         before = len(requests)
         response = client.post(
             "/api/auth/register",
@@ -306,6 +309,34 @@ def test_second_approve_is_already_processed_and_no_state_change(register_org, c
     assert second.status_code == 400
     assert "already" in second.text.lower()
     assert _get_org_approval_row(r["org_id"])["approval_status"] == "active"
+
+
+def test_subsequent_registration_approval_link_succeeds(register_org, client):
+    """The reported bug: a subsequent registrant JOINS an already-approved org and
+    gets a fresh approval email; clicking Approve on THAT link must succeed
+    (idempotently), not return 'invalid'. Preserves dedup + shared org_id."""
+    org = rand_org_name("Reapprove")
+
+    # User 1 — new org, then approve → active.
+    u1 = register_org(org_name=org, email=email_for_org(org))
+    assert u1["response"].status_code == 201, u1["response"].text
+    assert _approve(client, u1["approval_token"], u1["org_id"]).status_code == 200
+    assert _get_org_approval_row(u1["org_id"])["approval_status"] == "active"
+
+    # User 2 — subsequent registration under the SAME org (dedup join, shared
+    # org_id) → a fresh approval token stored on the (now active) org.
+    u2 = register_org(org_name=org, email=email_for_org(org))
+    assert u2["response"].status_code == 201, u2["response"].text
+    assert u2["org_id"] == u1["org_id"], "dedup must reuse the same org_id"
+    assert u2["approval_token"] and u2["approval_token"] != u1["approval_token"]
+
+    # The GET confirm page renders (does not error) and the POST approve succeeds.
+    assert _approve_page(client, u2["approval_token"], u2["org_id"]).status_code == 200
+    resp = _approve(client, u2["approval_token"], u2["org_id"])
+    assert resp.status_code == 200, resp.text
+    assert "approved" in resp.text.lower()
+    # State stays active — the idempotent success never flips or re-mutates it.
+    assert _get_org_approval_row(u2["org_id"])["approval_status"] == "active"
 
 
 def test_reject_after_approve_cannot_flip_state(register_org, client):

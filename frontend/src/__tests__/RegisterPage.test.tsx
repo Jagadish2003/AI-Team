@@ -41,8 +41,10 @@ function renderPage() {
 // CS-3: the default password now satisfies the full strength rule (length +
 // uppercase + lowercase + special) so submit is enabled. Tests that need a
 // weak password pass one explicitly.
+// BUG 1: org name must match the email domain, so the default pair is
+// "Example" + user@example.com (org == domain company label).
 function fillForm(
-  orgName = "Acme Corp",
+  orgName = "Example",
   email = "user@example.com",
   password = "Password1!",
   confirmPassword?: string
@@ -103,7 +105,7 @@ describe("RegisterPage", () => {
 
   it("accepts a dotted-local-part email such as abc.m@xy.org", () => {
     renderPage();
-    fillForm("Acme Corp", "abc.m@xy.org");
+    fillForm("xy", "abc.m@xy.org"); // org matches the xy.org domain (BUG 1)
     expect(screen.queryByText(/valid email address/i)).toBeNull();
     const btn = screen.getByRole("button", { name: /create account/i }) as HTMLButtonElement;
     expect(btn.disabled).toBe(false);
@@ -208,16 +210,44 @@ describe("RegisterPage", () => {
   it("calls register() with orgName, lowercase email, and password", async () => {
     mockRegister.mockResolvedValue(undefined);
     renderPage();
-    fillForm("Acme Corp", "  USER@Example.COM  ", "Password1!");
+    fillForm("Example", "  USER@Example.COM  ", "Password1!");
     fireEvent.click(screen.getByRole("button", { name: /create account/i }));
 
     await waitFor(() => {
       expect(mockRegister).toHaveBeenCalledWith(
-        "Acme Corp",
+        "Example",
         "user@example.com",
         "Password1!"
       );
     });
+  });
+
+  // ── BUG 1: org name vs email domain ──────────────────────────────────────────
+
+  it("disables submit and shows a message when org name does not match the email domain", () => {
+    renderPage();
+    fillForm("Google", "abc@microsoft.com", "Password1!");
+    expect(
+      screen.getByText(/must match your company email domain/i)
+    ).toBeTruthy();
+    const btn = screen.getByRole("button", { name: /create account/i }) as HTMLButtonElement;
+    expect(btn.disabled).toBe(true);
+  });
+
+  it("allows submit when org name matches the email domain", () => {
+    renderPage();
+    fillForm("Google", "user@google.com", "Password1!");
+    expect(screen.queryByText(/must match your company email domain/i)).toBeNull();
+    const btn = screen.getByRole("button", { name: /create account/i }) as HTMLButtonElement;
+    expect(btn.disabled).toBe(false);
+  });
+
+  it("matches a company sub-domain (e.g. mail.google.com)", () => {
+    renderPage();
+    fillForm("Google", "user@mail.google.com", "Password1!");
+    expect(screen.queryByText(/must match your company email domain/i)).toBeNull();
+    const btn = screen.getByRole("button", { name: /create account/i }) as HTMLButtonElement;
+    expect(btn.disabled).toBe(false);
   });
 
   it("reloads into /pending-approval on success (AUTH-2 T6)", async () => {
