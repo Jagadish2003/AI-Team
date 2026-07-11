@@ -86,31 +86,28 @@ export default function ConnectorTile({
     return () => { alive = false; };
   }, [connector.id, isConnected, isEnabled]);
 
-  // The token needs a fresh OAuth round-trip when there is no usable token
-  // (needs_auth = missing/already-expired) or auto-refresh has given up
-  // (refresh_failed). `connected` and `needs_refresh` are still usable, so no
-  // Reconnect prompt. Values mirror the backend token-status contract (AC14).
-  const tokenExpired = tokenStatus === 'needs_auth' || tokenStatus === 'refresh_failed';
-
   // R18-A3 T5 (AT-558): in a no-public-inbound deployment the browser
   // authorization-code flow can never complete (the provider redirect can't
-  // reach the network). For a connector that has an outbound-only mode, we must
-  // NOT offer the authorization-code Connect/Reconnect button — the customer is
-  // routed to the outbound setup path (the connector detail panel) instead, so
-  // they can never start a flow that cannot complete (AC4). Connectors with no
-  // outbound-only mode (GitHub, Slack) keep their button and fall back to the
-  // scoped-inbound package (R18-A3 T6).
+  // reach the network). For a connector that has an outbound-only mode, we route
+  // the customer to the outbound setup path (the modal, opened from this tile)
+  // instead, so they can never start a flow that cannot complete (AC4).
+  // Connectors with no outbound-only mode (GitHub, Slack) keep their button.
   const { hidesAuthorizationCodeConnect } = useNetworkProfileOptional();
   const hideAuthCode = hidesAuthorizationCodeConnect(connector.id);
-  // The only actions that START an authorization-code flow are Connect (new) and
-  // Reconnect (expired token). Gating applies to those; connected-tile actions
-  // (Configure & Sync / View data) never start an inbound-callback flow.
-  // Only relabel a tile that is actually connectable (isEnabled) — a
-  // not-yet-connectable connector (e.g. Dynamics 365 / SAP, gated out of the hub
-  // by ENABLED_CONNECTOR_IDS) keeps its normal disabled "Connect" state rather
-  // than showing a misleading, disabled "Set up outbound access" button.
-  const wouldStartAuthCodeFlow = !isConnected || tokenExpired;
-  const outboundSetupGate = hideAuthCode && wouldStartAuthCodeFlow && isEnabled;
+
+  // "Token expired" is an authorization-code concept: a stored OAuth token that
+  // lapsed and needs a browser reconnect. It is MEANINGLESS for an outbound-only
+  // connector (JWT bearer / client-credentials), whose access token is minted on
+  // demand — so token-status "needs_auth" there just means "not minted yet", not
+  // "expired". Only surface the expiry badge / Reconnect for the auth-code posture.
+  const tokenExpired =
+    !hideAuthCode && (tokenStatus === 'needs_auth' || tokenStatus === 'refresh_failed');
+
+  // Outbound connectors always route to the outbound setup path — the modal owns
+  // enter / update / delete — whether or not they are already connected. Only for
+  // a tile that is actually connectable (isEnabled); a gated-out connector (e.g.
+  // Dynamics 365 / SAP) keeps its normal disabled "Connect" state.
+  const outboundSetupGate = hideAuthCode && isEnabled;
 
   // When the token is expired/missing, override the button to "Reconnect"
   const actionLabel = outboundSetupGate
@@ -123,7 +120,12 @@ export default function ConnectorTile({
     ? 'View data'
     : 'Connect';
 
-  const actionVariant = (!isConnected || tokenExpired) ? 'primary' : isConfigured ? 'secondary' : 'tertiary';
+  const actionVariant =
+    outboundSetupGate || !isConnected || tokenExpired
+      ? 'primary'
+      : isConfigured
+      ? 'secondary'
+      : 'tertiary';
 
   // R17-D4 Addendum A / T11: at the licensed limit, a NEW connection is blocked
   // (forward-only). Only applies to a not-yet-connected system — the 'connected'

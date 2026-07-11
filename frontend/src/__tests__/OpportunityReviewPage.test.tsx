@@ -31,6 +31,7 @@
 import React from 'react';
 import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
 import { MemoryRouter, Routes, Route, Navigate } from 'react-router-dom';
+import { DataCacheProvider } from '../lib/dataCache';
 import { vi, describe, it, expect, beforeEach } from 'vitest';
 import type { Decision } from '../types/common';
 import type { OpportunityCandidate } from '../types/analystReview';
@@ -140,11 +141,13 @@ import OpportunityReviewPage from '../pages/OpportunityReviewPage';
 function renderPage(initialPath = '/opportunity-review') {
   return render(
     <MemoryRouter initialEntries={[initialPath]}>
+    <DataCacheProvider>
     <Routes>
     <Route path="/opportunity-review" element={<OpportunityReviewPage />} />
     <Route path="/analyst-review"  element={<Navigate to="/opportunity-review" replace />} />
     <Route path="/opportunity-map" element={<Navigate to="/opportunity-review" replace />} />
     </Routes>
+    </DataCacheProvider>
     </MemoryRouter>,
   );
 }

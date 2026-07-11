@@ -38,6 +38,8 @@ import { useToast } from '../common/Toast';
 import { ApiError, apiGet, apiPatch } from '../../lib/apiClient';
 import { useAuthOptional } from '../../context/AuthContext';
 import { isViewerRole } from '../../utils/roles';
+import { useDataCache } from '../../lib/dataCache';
+import { cacheKeys } from '../../lib/cacheKeys';
 
 // ── Product definitions ───────────────────────────────────────────────────────
 
@@ -91,6 +93,7 @@ export default function SalesforceProductPicker({ onSaved }: Props) {
   // toggles and the Save button are disabled so nothing can be changed.
   const auth = useAuthOptional();
   const isViewer = isViewerRole(auth?.user?.role);
+  const cache = useDataCache();
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [loading,  setLoading]  = useState(true);
   const [saving,   setSaving]   = useState(false);
@@ -124,6 +127,14 @@ export default function SalesforceProductPicker({ onSaved }: Props) {
         { products: [...selected] },
       );
       setSelected(new Set(data.products));
+      // Cross-page reactivity: the pack Stack Builder resolves is driven by this
+      // declaration (read there via the workspace catalog), so invalidate the
+      // declaration, the catalog, and the connector list. Any mounted consumer
+      // refetches instantly; an unmounted Stack Builder refetches fresh on its
+      // next mount — so the pack is never stale (the nCino-vs-Service-Cloud bug).
+      cache.invalidate(cacheKeys.connectorProducts);
+      cache.invalidate(cacheKeys.workspaceCatalog);
+      cache.invalidate(cacheKeys.connectors);
       push(
         data.products.length > 0
           ? `Saved ${data.products.length} Salesforce product${data.products.length > 1 ? 's' : ''}.`
@@ -141,7 +152,7 @@ export default function SalesforceProductPicker({ onSaved }: Props) {
     } finally {
       setSaving(false);
     }
-  }, [selected, push, onSaved]);
+  }, [selected, push, onSaved, cache]);
 
   if (loading) {
     return (

@@ -32,6 +32,8 @@ import {
   getBlueprintLabel,
   isSalesforceConnected,
 } from '../utils/blueprintNaming';
+import { useResource } from '../lib/dataCache';
+import { cacheKeys } from '../lib/cacheKeys';
 
 function TierBadge({ tier }: { tier?: string }) {
   const t = tier ?? 'Unknown';
@@ -565,10 +567,24 @@ export default function BlueprintPage() {
   const [blueprint, setBlueprint] = useState<BlueprintResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [roadmap, setRoadmap] = useState<PilotRoadmapModel | null>(null);
-  const [roadmapLoading, setRoadmapLoading] = useState(false);
-  const [roadmapError, setRoadmapError] = useState<string | null>(null);
-  const [roadmapFetchCount, setRoadmapFetchCount] = useState(0);
+
+  // Roadmap via the shared cache: an opportunity decision/override in Opportunity
+  // Review invalidates the run scope (AnalystReviewContext), so the roadmap here
+  // refreshes instantly — no manual reload. Key is null (disabled) until a run
+  // exists. refetch drives the "still preparing" poll below.
+  const {
+    data: roadmapData,
+    loading: roadmapLoading,
+    error: roadmapErrObj,
+    refetch: refetchRoadmap,
+  } = useResource<PilotRoadmapModel>(
+    runId ? cacheKeys.runRoadmap(runId) : null,
+    () => fetchRunRoadmap(runId as string),
+  );
+  const roadmap = roadmapData ?? null;
+  const roadmapError = roadmapErrObj
+    ? runScopedErrorMessage(roadmapErrObj, 'Failed to load roadmap')
+    : null;
 
   const salesforceConnected = isSalesforceConnected(connectors);
   const blueprintLabel = getBlueprintLabel(salesforceConnected);
@@ -584,7 +600,6 @@ export default function BlueprintPage() {
   const requestedOppId = new URLSearchParams(location.search).get('oppId');
   const appliedOppIdRef = useRef<string | null>(null);
 
-  const refetchRoadmap = useCallback(() => setRoadmapFetchCount((count) => count + 1), []);
   const scrollToBlueprint = useCallback(() => {
     window.setTimeout(() => {
       blueprintSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -617,35 +632,6 @@ export default function BlueprintPage() {
   useEffect(() => {
     if (location.hash === '#blueprint-details') scrollToBlueprint();
   }, [location.hash, scrollToBlueprint]);
-
-  useEffect(() => {
-    if (!runId) {
-      setRoadmap(null);
-      setRoadmapLoading(false);
-      setRoadmapError(null);
-      return;
-    }
-    let cancelled = false;
-
-    (async () => {
-      setRoadmapLoading(true);
-      setRoadmapError(null);
-      try {
-        const data = await fetchRunRoadmap(runId);
-        if (!cancelled) setRoadmap(data);
-      } catch (err: any) {
-        if (cancelled) return;
-        setRoadmap(null);
-        setRoadmapError(runScopedErrorMessage(err, 'Failed to load roadmap'));
-      } finally {
-        if (!cancelled) setRoadmapLoading(false);
-      }
-    })();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [runId, roadmapFetchCount]);
 
   useEffect(() => {
     if (!runId || !roadmapPreparing || roadmapLoading) return;

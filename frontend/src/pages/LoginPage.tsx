@@ -22,13 +22,12 @@
  * both are satisfied.
  */
 import React, { useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { Ban, Clock } from "lucide-react";
 
 import PasswordInput from "../components/auth/PasswordInput";
 import { useAuth } from "../context/AuthContext";
 import { useTheme } from "../context/ThemeContext";
-import { hardRedirect } from "../utils/navigation";
 import { ApiError } from "../lib/apiClient";
 
 // ── Validation ────────────────────────────────────────────────────────────────
@@ -186,6 +185,7 @@ function LoginNoticeBanner({ notice }: { notice: LoginNotice }) {
 export default function LoginPage() {
   const { login } = useAuth();
   const { theme } = useTheme();
+  const navigate = useNavigate();
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -209,9 +209,11 @@ export default function LoginPage() {
     setSubmitting(true);
     try {
       await login(email.trim().toLowerCase(), password);
-      // Full reload (not SPA navigate) so all in-session context is rebuilt for
-      // this user — otherwise the previous user's connector/run state leaks.
-      hardRedirect("/integration-hub");
+      // SPA navigate — no document reload. App.tsx's SessionBoundary is keyed on
+      // the auth token, so setting the new token remounts the data-provider
+      // subtree once with a clean per-user slate (the isolation the old
+      // hardRedirect() full reload used to provide), in a single load.
+      navigate("/integration-hub", { replace: true });
     } catch (err) {
       setNotice(resolveLoginNotice(err));
     } finally {

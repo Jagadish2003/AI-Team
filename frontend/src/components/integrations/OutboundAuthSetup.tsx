@@ -17,12 +17,11 @@
  * actions, mirroring StaticCredentialManager.
  */
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { CheckCircle2, KeyRound, Lock, ShieldCheck, Trash2 } from 'lucide-react';
+import { CheckCircle2, Lock, ShieldCheck } from 'lucide-react';
 import { Connector, OutboundSetupRequest } from '../../types/connector';
 import {
   ConnectorCredentialStatus,
   connectClientCredentials,
-  deleteJwtBearerCredentials,
   fetchJwtBearerCredentialStatus,
 } from '../../services/staticApi';
 import { ApiError } from '../../lib/apiClient';
@@ -30,6 +29,8 @@ import { useAuthOptional } from '../../context/AuthContext';
 import { useNetworkProfileOptional } from '../../context/NetworkProfileContext';
 import { useToast } from '../common/Toast';
 import JwtBearerCredentialModal from './JwtBearerCredentialModal';
+import { useDataCache } from '../../lib/dataCache';
+import { cacheKeys } from '../../lib/cacheKeys';
 
 function formatUpdated(iso: string | null): string | null {
   if (!iso) return null;
@@ -52,6 +53,7 @@ export default function OutboundAuthSetup({
   const auth = useAuthOptional();
   const isOwner = auth?.user?.role === 'owner';
   const toast = useToast();
+  const cache = useDataCache();
   const { noPublicInbound, capabilityFor } = useNetworkProfileOptional();
   const capability = capabilityFor(connector.id);
 
@@ -61,8 +63,6 @@ export default function OutboundAuthSetup({
 
   const [jwtStatus, setJwtStatus] = useState<ConnectorCredentialStatus | null>(null);
   const [modalOpen, setModalOpen] = useState(false);
-  const [confirmRemove, setConfirmRemove] = useState(false);
-  const [busy, setBusy] = useState(false);
 
   const loadJwtStatus = useCallback(() => {
     if (!supportsJwt) return () => {};
@@ -80,24 +80,34 @@ export default function OutboundAuthSetup({
   }, [connector.id, supportsJwt]);
 
   useEffect(() => {
-    setConfirmRemove(false);
     return loadJwtStatus();
   }, [loadJwtStatus]);
 
-  // R18-A3 follow-up: pop the JWT form when the tile's "Set up outbound access"
-  // button is clicked (the parent bumps outboundSetupRequest.nonce). Guarded by
-  // connectorId + a consumed-nonce ref so it fires exactly once per click and
-  // never on an unrelated connector's mount. Only jwt_bearer has a form here;
-  // client_credentials is a single button, so it is intentionally not auto-opened.
+  // The tile's "Set up outbound access" button is the single write entry point
+  // (the parent bumps outboundSetupRequest.nonce). Owner-gated + guarded by a
+  // consumed-nonce ref so it fires once per click and never on an unrelated
+  // connector's mount. jwt_bearer opens the credential form (modal);
+  // client_credentials is a formless outbound connect, triggered directly.
   const consumedNonce = useRef(0);
   useEffect(() => {
     if (!outboundSetupRequest) return;
     if (outboundSetupRequest.nonce === consumedNonce.current) return;
     consumedNonce.current = outboundSetupRequest.nonce;
-    if (outboundSetupRequest.connectorId === connector.id && supportsJwt) {
-      setModalOpen(true);
-    }
-  }, [outboundSetupRequest, connector.id, supportsJwt]);
+    if (outboundSetupRequest.connectorId !== connector.id || !isOwner) return;
+    if (supportsJwt) setModalOpen(true);
+    else if (supportsClientCreds) void handleClientCredsConnect();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [outboundSetupRequest, connector.id, isOwner, supportsJwt, supportsClientCreds]);
+
+  // After an outbound credential change (key save/remove, or a client-credentials
+  // connect), refresh this card's own status AND invalidate the connector list +
+  // network profile so the tile state and auth-capability gating (now
+  // cache-backed) reflect the change everywhere, with no page reload.
+  function onOutboundChanged() {
+    loadJwtStatus();
+    cache.invalidate(cacheKeys.connectors);
+    cache.invalidate(cacheKeys.networkProfile);
+  }
 
   // Only relevant in no-public-inbound; and only for outbound modes that need a
   // dedicated setup UI here (static is handled by StaticCredentialManager).
@@ -105,40 +115,16 @@ export default function OutboundAuthSetup({
   if (!supportsJwt && !supportsClientCreds) return null;
 
   async function handleClientCredsConnect() {
-    setBusy(true);
     try {
       await connectClientCredentials(connector.id);
       toast.push(`${connector.name} connected via client-credentials.`, 'success');
+      onOutboundChanged();
     } catch (err) {
       const detail =
         err instanceof ApiError && typeof (err.body as any)?.detail === 'string'
           ? (err.body as any).detail
           : 'Could not connect via client-credentials.';
       toast.push(detail, 'error');
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function handleRemoveJwt() {
-    if (!confirmRemove) {
-      setConfirmRemove(true);
-      return;
-    }
-    setBusy(true);
-    try {
-      await deleteJwtBearerCredentials(connector.id);
-      toast.push(`${connector.name} outbound key removed.`, 'success');
-      setConfirmRemove(false);
-      loadJwtStatus();
-    } catch (err) {
-      const detail =
-        err instanceof ApiError && typeof (err.body as any)?.detail === 'string'
-          ? (err.body as any).detail
-          : 'Could not remove the key.';
-      toast.push(detail, 'error');
-    } finally {
-      setBusy(false);
     }
   }
 
@@ -184,58 +170,27 @@ export default function OutboundAuthSetup({
               </>
             )}
           </div>
-          {isOwner ? (
-            <div className="mt-2 flex items-center gap-2">
-              <button
-                type="button"
-                onClick={() => setModalOpen(true)}
-                className="inline-flex items-center gap-1.5 rounded-md border border-accent/30 bg-accent/10 px-3 py-1.5 text-xs font-semibold text-accent transition-colors hover:bg-accent/15 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/30"
-              >
-                <KeyRound size={13} />
-                {jwtConfigured ? 'Update outbound key' : 'Set up outbound key'}
-              </button>
-              {jwtConfigured && (
-                <button
-                  type="button"
-                  onClick={handleRemoveJwt}
-                  disabled={busy}
-                  className="inline-flex items-center gap-1.5 rounded-md border border-border px-3 py-1.5 text-xs font-medium text-muted transition-colors hover:border-red-500/40 hover:text-red-300 disabled:cursor-not-allowed disabled:opacity-60 focus:outline-none focus-visible:ring-2 focus-visible:ring-red-500/30"
-                >
-                  <Trash2 size={13} />
-                  {confirmRemove ? 'Click to confirm' : 'Remove'}
-                </button>
-              )}
-            </div>
-          ) : (
-            <p className="mt-2 text-[11px] leading-relaxed text-muted">
-              Only workspace Owners can set up outbound access.
-            </p>
-          )}
+          {/* Read-only: writes happen in the modal opened from the tile's
+              "Set up outbound access" button. */}
+          <p className="mt-2 text-[11px] leading-relaxed text-muted">
+            {isOwner
+              ? 'Use "Set up outbound access" on the connector card to set up, update, or remove the key.'
+              : 'Only workspace Owners can set up outbound access.'}
+          </p>
         </div>
       )}
 
-      {/* client-credentials (Microsoft Graph, ServiceNow) */}
+      {/* client-credentials (Microsoft Graph, ServiceNow) — formless connect
+          triggered from the tile's "Set up outbound access" button. */}
       {supportsClientCreds && (
         <div>
-          <p className="mb-2 text-[11px] leading-relaxed text-muted">
+          <p className="text-[11px] leading-relaxed text-muted">
             Service-identity (client-credentials) — connects under the deployment's
             admin-consented app registration, outbound-only.
+            {isOwner
+              ? ' Use "Set up outbound access" on the connector card to connect.'
+              : ' Only workspace Owners can set up outbound access.'}
           </p>
-          {isOwner ? (
-            <button
-              type="button"
-              onClick={handleClientCredsConnect}
-              disabled={busy}
-              className="inline-flex items-center gap-1.5 rounded-md border border-accent/30 bg-accent/10 px-3 py-1.5 text-xs font-semibold text-accent transition-colors hover:bg-accent/15 disabled:cursor-not-allowed disabled:opacity-60 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/30"
-            >
-              <ShieldCheck size={13} />
-              {busy ? 'Connecting…' : 'Connect with client-credentials'}
-            </button>
-          ) : (
-            <p className="text-[11px] leading-relaxed text-muted">
-              Only workspace Owners can set up outbound access.
-            </p>
-          )}
         </div>
       )}
 
@@ -246,7 +201,7 @@ export default function OutboundAuthSetup({
           configured={jwtConfigured}
           existingBaseUrl={jwtStatus?.base_url ?? null}
           onClose={() => setModalOpen(false)}
-          onSuccess={loadJwtStatus}
+          onSuccess={onOutboundChanged}
         />
       )}
     </div>

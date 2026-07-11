@@ -10,6 +10,8 @@ import type { OpportunityCandidate, ReviewAuditEvent } from "../types/analystRev
 import type { Decision } from "../types/common";
 import { runScopedErrorMessage } from "../utils/apiErrors";
 import { useDiscoveryRunContext } from "./DiscoveryRunContext";
+import { useDataCache } from "../lib/dataCache";
+import { cacheKeys } from "../lib/cacheKeys";
 
 type AnalystReviewContextValue = {
   loading: boolean;
@@ -56,6 +58,7 @@ export function AnalystReviewProvider({ children }: { children: React.ReactNode 
   const { runId } = useRunContext();
   const { run } = useDiscoveryRunContext();
   const runStatus = run?.status?.toLowerCase();
+  const cache = useDataCache();
 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -149,6 +152,10 @@ export function AnalystReviewProvider({ children }: { children: React.ReactNode 
       try {
         const updated = await postOpportunityDecision(runId, oppId, decision);
         setOpportunities((prev) => prev.map((o) => (o.id === oppId ? updated : o)));
+        // A decision changes run-scoped derived views server-side (roadmap phase
+        // assignment, etc.). Invalidate the run scope so the Blueprint roadmap and
+        // any other run-scoped consumer refresh instantly — no manual reload.
+        cache.invalidate(cacheKeys.runScope(runId));
         return { ok: true };
       } catch (e: any) {
         setOpportunities(before);
@@ -158,7 +165,7 @@ export function AnalystReviewProvider({ children }: { children: React.ReactNode 
         return { ok: false, error: e?.message ?? "Failed to save decision" };
       }
     },
-    [runId, opportunities]
+    [runId, opportunities, cache]
   );
 
   const saveOverride = useCallback(
@@ -185,13 +192,14 @@ export function AnalystReviewProvider({ children }: { children: React.ReactNode 
       try {
         const updated = await postOpportunityOverride(runId, oppId, { rationaleOverride, overrideReason, isLocked });
         setOpportunities((prev) => prev.map((o) => (o.id === oppId ? updated : o)));
+        cache.invalidate(cacheKeys.runScope(runId));
         return { ok: true };
       } catch (e: any) {
         setOpportunities(before);
         return { ok: false, error: e?.message ?? "Failed to save override" };
       }
     },
-    [runId, opportunities]
+    [runId, opportunities, cache]
   );
 
   const value = useMemo(

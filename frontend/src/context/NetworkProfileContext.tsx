@@ -11,10 +11,9 @@
  */
 import React, {
   createContext,
+  useCallback,
   useContext,
-  useEffect,
   useMemo,
-  useState,
 } from 'react';
 import { authHeaderForToken } from '../lib/apiClient';
 import type {
@@ -22,6 +21,8 @@ import type {
   NetworkProfileResponse,
 } from '../types/networkProfile';
 import { useAuthOptional } from './AuthContext';
+import { useResource } from '../lib/dataCache';
+import { cacheKeys } from '../lib/cacheKeys';
 
 interface NetworkProfileContextValue {
   /** True when the deployment exposes no public inbound HTTPS. */
@@ -47,36 +48,33 @@ export function NetworkProfileProvider({ children }: { children: React.ReactNode
   const auth = useAuthOptional();
   const token = auth?.token ?? null;
 
-  const [data, setData] = useState<NetworkProfileResponse | null>(null);
-  const [loading, setLoading] = useState<boolean>(true);
-
-  useEffect(() => {
-    let alive = true;
-    setLoading(true);
-    // Raw fetch (not apiGet) with the in-session token passed explicitly — same
-    // pattern as ConnectorContext. This avoids the shared apiClient's global 401
-    // handler firing from this always-mounted provider before login (the profile
-    // is non-essential chrome; a 401/here just fails open to the standard
-    // profile). It also dodges the first-mount race before setAuthToken syncs.
+  // Backed by the shared cache so connector mutations that invalidate
+  // cacheKeys.networkProfile (connect/disconnect can change auth-capability
+  // gating) refresh this live. Fail-open: a fetch failure resolves to null →
+  // standard profile, no gating. Raw fetch (not apiGet) with the token passed
+  // explicitly — same rationale as ConnectorContext (dodges the global 401
+  // handler firing from this always-mounted chrome pre-login, and the
+  // first-mount token race).
+  const fetchProfile = useCallback(async (): Promise<NetworkProfileResponse | null> => {
     const base =
       (import.meta.env.VITE_API_BASE_URL as string | undefined) ??
       'http://localhost:8000';
-    fetch(`${base}/api/network-profile`, { headers: authHeaderForToken(token) })
-      .then((res) => (res.ok ? (res.json() as Promise<NetworkProfileResponse>) : null))
-      .then((r) => {
-        if (alive) setData(r);
-      })
-      .catch(() => {
-        // Fail-open: leave data null → standard profile, no gating.
-        if (alive) setData(null);
-      })
-      .finally(() => {
-        if (alive) setLoading(false);
-      });
-    return () => {
-      alive = false;
-    };
+    const res = await fetch(`${base}/api/network-profile`, {
+      headers: authHeaderForToken(token),
+    });
+    return res.ok ? ((await res.json()) as NetworkProfileResponse) : null;
   }, [token]);
+
+  const resource = useResource<NetworkProfileResponse | null>(
+    cacheKeys.networkProfile,
+    fetchProfile,
+  );
+  // Fail-open: a rejected fetch (resource.error) resolves to null → standard.
+  const data = resource.error ? null : resource.data ?? null;
+  // True only before the first load — background refetches (from a connector
+  // mutation invalidating 'network-profile') keep the current data and must not
+  // flip loading, so consumers never flash/remount on a refresh.
+  const loading = resource.data === undefined && resource.error === null;
 
   const value = useMemo<NetworkProfileContextValue>(() => {
     const capabilities = data?.connectors ?? {};

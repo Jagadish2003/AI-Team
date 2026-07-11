@@ -22,6 +22,8 @@ import PilotRoadmapHighlights from '../components/executive_report/PilotRoadmapH
 import { downloadExecutiveReportPdf } from '../utils/exportPdf';
 import { profileNameFromEmail } from '../utils/profileName';
 import { runScopedErrorMessage } from '../utils/apiErrors';
+import { useResource, useDataCache } from '../lib/dataCache';
+import { cacheKeys } from '../lib/cacheKeys';
 
 export default function ExecutiveReportPage() {
   const { push } = useToast();
@@ -36,63 +38,43 @@ export default function ExecutiveReportPage() {
   // identity and stay consistent with the rest of the product.
   const orgName = useOrgName();
   const runStatus = run?.status?.toLowerCase();
+  const cache = useDataCache();
 
-  const [report, setReport] = useState<ExecutiveReport | null>(null);
-  const [enrichment, setEnrichment] = useState<RunEnrichment | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [fetchCount, setFetchCount] = useState(0);
   const [pdfBusy, setPdfBusy] = useState(false);
 
-  const refetch = useCallback(() => setFetchCount(c => c + 1), []);
+  // Report + enrichment via the shared cache. Both sit under the run scope, so a
+  // decision/override in Opportunity Review (which invalidates 'runs/{runId}')
+  // refreshes this report live. Enrichment on cacheKeys.runEnrichment is shared
+  // with the Key Insights card — one fetch, not two.
+  const {
+    data: reportData,
+    loading: reportLoading,
+    error: reportErrObj,
+    refetch,
+  } = useResource<ExecutiveReport>(
+    runId ? cacheKeys.runExecutiveReport(runId) : null,
+    () => fetchRunExecutiveReport(runId as string),
+  );
+  const report = reportData ?? null;
+  const error = reportErrObj
+    ? runScopedErrorMessage(reportErrObj, 'Failed to load executive report')
+    : null;
+  // Gate "loading" on not-yet-loaded so the first render doesn't flash content.
+  const loading = reportLoading || (reportData === undefined && reportErrObj === null);
+
+  // Non-blocking: a failed enrichment fetch leaves the static fallback in place.
+  const { data: enrichmentData } = useResource<RunEnrichment>(
+    runId ? cacheKeys.runEnrichment(runId) : null,
+    () => fetchRunEnrichment(runId as string),
+  );
+  const enrichment = enrichmentData ?? null;
+
   const runHasMaterializedResults =
     runStatus === 'complete' || runStatus === 'completed' || runStatus === 'partial';
   const resultsPreparing =
     computing ||
     (Boolean(run) && !runHasMaterializedResults) ||
     /still being prepared/i.test(error ?? '');
-
-  useEffect(() => {
-    if (!runId) {
-      setReport(null);
-      setLoading(false);
-      setError(null);
-      return;
-    }
-    let cancelled = false;
-
-    (async () => {
-      setLoading(true);
-      setError(null);
-      try {
-        const data = await fetchRunExecutiveReport(runId);
-        if (!cancelled) setReport(data);
-      } catch (e: any) {
-        if (cancelled) return;
-        setReport(null);
-        setError(runScopedErrorMessage(e, 'Failed to load executive report'));
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    })();
-
-    return () => { cancelled = true; };
-  }, [runId, fetchCount]);
-
-  // Executive summary for the PDF mirrors the on-screen Key Insights card: the
-  // LLM enrichment summary when available, otherwise the static fallback. Fetch
-  // is non-blocking — failures simply leave the static fallback in place.
-  useEffect(() => {
-    if (!runId) {
-      setEnrichment(null);
-      return;
-    }
-    let cancelled = false;
-    fetchRunEnrichment(runId)
-      .then((data) => { if (!cancelled) setEnrichment(data); })
-      .catch(() => { if (!cancelled) setEnrichment(null); });
-    return () => { cancelled = true; };
-  }, [runId, fetchCount]);
 
   useEffect(() => {
     if (!runId || !resultsPreparing || loading) return;
@@ -148,7 +130,9 @@ export default function ExecutiveReportPage() {
       if (!enrichmentForPdf && runId) {
         try {
           enrichmentForPdf = await fetchRunEnrichment(runId);
-          setEnrichment(enrichmentForPdf);
+          // Populate the shared cache so the on-screen Key Insights card reflects
+          // it too (same runEnrichment key).
+          cache.setData(cacheKeys.runEnrichment(runId), enrichmentForPdf);
         } catch {
           enrichmentForPdf = null; // genuinely unavailable → static fallback
         }
@@ -196,6 +180,7 @@ export default function ExecutiveReportPage() {
     auth,
     orgName,
     runId,
+    cache,
   ]);
 
   const pageHeader = (

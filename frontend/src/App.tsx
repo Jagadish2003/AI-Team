@@ -1,3 +1,4 @@
+import { Fragment } from "react";
 import { Routes, Route, Navigate, useLocation } from "react-router-dom";
 import { ConnectorProvider } from "./context/ConnectorContext";
 import { NetworkProfileProvider } from "./context/NetworkProfileContext";
@@ -10,7 +11,8 @@ import { ToastProvider } from "./components/common/Toast";
 import { AnalystReviewProvider } from "./context/AnalystReviewContext";
 import { EvidenceProvider } from "./context/EvidenceContext";
 import { ThemeProvider } from "./context/ThemeContext";
-import { AuthProvider } from "./context/AuthContext";
+import { AuthProvider, useAuth } from "./context/AuthContext";
+import { DataCacheProvider } from "./lib/dataCache";
 import AuthGuard from "./components/auth/AuthGuard";
 
 import LoginPage from "./pages/LoginPage";
@@ -36,6 +38,24 @@ function PilotRoadmapRedirect() {
   return <Navigate to={`/agentforce-blueprint${location.search}${location.hash}`} replace />;
 }
 
+/**
+ * Remounts the entire data-provider subtree whenever the authenticated identity
+ * changes (login / logout / accept-invite), keyed on the in-session JWT. This
+ * gives a clean per-user slate WITHOUT a full document reload: every provider —
+ * including the mount-only ones (SourceIntake, Normalization, AnalystReview,
+ * PartialResults, Evidence, DiscoveryRun) that do not react to the token —
+ * unmounts and refetches under the new user's token, so no previous org's data
+ * survives. The key is "anonymous" while logged out. Replaces the post-login
+ * hardRedirect() full reload that used to force this remount (see LoginPage /
+ * AcceptInvitePage). Must render INSIDE AuthProvider (reads useAuth) and AROUND
+ * the data providers; the Router lives above <App/> in main.tsx, so useNavigate
+ * and history survive the remount.
+ */
+function SessionBoundary({ children }: { children: React.ReactNode }) {
+  const { token } = useAuth();
+  return <Fragment key={token ?? "anonymous"}>{children}</Fragment>;
+}
+
 export default function App() {
   return (
     <ThemeProvider>
@@ -45,6 +65,11 @@ export default function App() {
          * and public auth pages can access the shared AuthContext.
          */}
         <AuthProvider>
+          <SessionBoundary>
+          {/* Shared data cache at the top of the per-user keyed subtree: its Map
+              is discarded on user change (SessionBoundary remount), and it backs
+              cross-page reactivity (useResource / invalidate). */}
+          <DataCacheProvider>
           <NetworkProfileProvider>
           <ConnectorProvider>
             <RunProvider>
@@ -192,6 +217,8 @@ export default function App() {
             </RunProvider>
           </ConnectorProvider>
           </NetworkProfileProvider>
+          </DataCacheProvider>
+          </SessionBoundary>
         </AuthProvider>
       </ToastProvider>
     </ThemeProvider>

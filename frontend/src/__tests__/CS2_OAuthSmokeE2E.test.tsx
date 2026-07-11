@@ -26,14 +26,19 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import IntegrationHubPage from "../pages/IntegrationHubPage";
 import OAuthCallbackPage from "../pages/OAuthCallbackPage";
 import { ConnectorProvider } from "../context/ConnectorContext";
+import { DataCacheProvider } from "../lib/dataCache";
 import { ToastProvider } from "../components/common/Toast";
 import {
-  fetchConnectors,
   connectConnectorApi,
   configureSyncApi,
   fetchTokenStatus,
 } from "../services/staticApi";
 
+// The service layer (network boundary) is mocked for the connect/token-status
+// calls the tile makes. NOTE: ConnectorContext loads the connector LIST via a
+// raw fetch('/api/connectors') (not staticApi.fetchConnectors), so that is
+// stubbed on global.fetch in beforeEach — the list must load for the tile to
+// render and for the !loading-gated success toast to fire.
 vi.mock("../services/staticApi", () => ({
   fetchConnectors: vi.fn(),
   connectConnectorApi: vi.fn(),
@@ -58,9 +63,18 @@ vi.mock("../components/common/PageShell", () => ({
 // focused on the connector tiles, toast, and callback wiring.
 vi.mock("../components/integrations/RightPanel", () => ({ default: () => <div /> }));
 
-const mockFetchConnectors = vi.mocked(fetchConnectors);
 const mockConnectApi = vi.mocked(connectConnectorApi);
 const mockTokenStatus = vi.mocked(fetchTokenStatus);
+
+// The connector list ConnectorContext's raw fetch('/api/connectors') returns.
+// Each test sets it; the global.fetch stub serves it. `fetchSpy` lets us assert
+// the list was (re)fetched (provider mount + OAuthCallbackPage refetch).
+let connectorsResult: unknown[] = [];
+let fetchSpy: ReturnType<typeof vi.fn>;
+
+function connectorsFetchCount(): number {
+  return fetchSpy.mock.calls.filter((c) => String(c[0]).includes("/api/connectors")).length;
+}
 
 function salesforce(status: "disconnected" | "connected") {
   return {
@@ -82,12 +96,14 @@ function renderApp(initialEntry: string) {
   return render(
     <MemoryRouter initialEntries={[initialEntry]}>
       <ToastProvider>
-        <ConnectorProvider>
-          <Routes>
-            <Route path="/integration-hub" element={<IntegrationHubPage />} />
-            <Route path="/oauth/callback" element={<OAuthCallbackPage />} />
-          </Routes>
-        </ConnectorProvider>
+        <DataCacheProvider>
+          <ConnectorProvider>
+            <Routes>
+              <Route path="/integration-hub" element={<IntegrationHubPage />} />
+              <Route path="/oauth/callback" element={<OAuthCallbackPage />} />
+            </Routes>
+          </ConnectorProvider>
+        </DataCacheProvider>
       </ToastProvider>
     </MemoryRouter>
   );
@@ -95,16 +111,31 @@ function renderApp(initialEntry: string) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  connectorsResult = [salesforce("disconnected")];
   mockConnectApi.mockResolvedValue(undefined as any);
   (configureSyncApi as any).mockResolvedValue(undefined);
   mockTokenStatus.mockResolvedValue({ status: "connected" } as any);
+
+  // ConnectorContext loads the list via raw fetch('/api/connectors'); other
+  // incidental calls (license limits, etc.) get a benign empty-OK response.
+  fetchSpy = vi.fn((input: unknown) => {
+    const url = typeof input === "string" ? input : (input as { url?: string })?.url ?? "";
+    if (url.includes("/api/connectors")) {
+      return Promise.resolve({ ok: true, status: 200, json: async () => connectorsResult });
+    }
+    return Promise.resolve({ ok: true, status: 200, json: async () => ({}) });
+  });
+  vi.stubGlobal("fetch", fetchSpy);
 });
 
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+});
 
 describe("CS-2 OAuth Connect — end-to-end smoke (AT-329 T7)", () => {
   it("Connect on the Salesforce tile initiates the OAuth flow (T7-AC1)", async () => {
-    mockFetchConnectors.mockResolvedValue([salesforce("disconnected")] as any);
+    connectorsResult = [salesforce("disconnected")];
 
     renderApp("/integration-hub");
 
@@ -121,7 +152,7 @@ describe("CS-2 OAuth Connect — end-to-end smoke (AT-329 T7)", () => {
   it("provider return → refetch → Integration Hub → success toast → Connected tile (T7-AC2..AC6)", async () => {
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     // Token is now stored, so the connector list reports connected (T7-AC3/AC5).
-    mockFetchConnectors.mockResolvedValue([salesforce("connected")] as any);
+    connectorsResult = [salesforce("connected")];
 
     // T7-AC2: the browser lands on /oauth/callback after the provider round-trip.
     renderApp("/oauth/callback?status=success&connected=salesforce");
@@ -134,7 +165,7 @@ describe("CS-2 OAuth Connect — end-to-end smoke (AT-329 T7)", () => {
     // T7-AC3: landed back on Integration Hub and connector data was refreshed
     // (provider mount fetch + OAuthCallbackPage refetch ⇒ ≥2 calls).
     expect(await screen.findByText("Integration Hub")).toBeInTheDocument();
-    expect(mockFetchConnectors.mock.calls.length).toBeGreaterThanOrEqual(2);
+    await waitFor(() => expect(connectorsFetchCount()).toBeGreaterThanOrEqual(2));
 
     // T7-AC5: the Salesforce tile shows the Connected badge. ("Salesforce" also
     // appears in the group's connected-tools summary, so pick the tile card.)
@@ -148,7 +179,7 @@ describe("CS-2 OAuth Connect — end-to-end smoke (AT-329 T7)", () => {
   });
 
   it("provider failure → error toast with the OAuth error code (T7-AC4 error path)", async () => {
-    mockFetchConnectors.mockResolvedValue([salesforce("disconnected")] as any);
+    connectorsResult = [salesforce("disconnected")];
 
     renderApp("/oauth/callback?status=error&code=access_denied");
 

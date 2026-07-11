@@ -15,6 +15,8 @@ import { isViewerRole } from '../utils/roles';
 // Import components and types
 import { CheckCircle2, Database, Layers3, Loader2, Target } from 'lucide-react';
 import type { WorkspaceCatalogResponse } from '../types/workspace_catalog';
+import { useResource } from '../lib/dataCache';
+import { cacheKeys } from '../lib/cacheKeys';
 import type { SetupState, SystemWeighting } from '../types/stack_builder';
 import PageShell from '../components/common/PageShell';
 import {
@@ -390,67 +392,64 @@ export default function StackBuilderPage({
   const orgId = auth?.user?.org_id ?? ORG_ID_HEADER ?? 'default';
 
   const setupState = useSetupState();
-  const [catalog, setCatalog] = useState<WorkspaceCatalogResponse | null>(null);
-  const [catalogLoading, setCatalogLoading] = useState(true);
-  const [catalogError, setCatalogError] = useState<string | null>(null);
   const { state, steps } = setupState;
   const { clearSession } = useStackBuilderPersistence(orgId, setupState, apiBase, token);
   const copy = STEP_COPY[state.currentStep] ?? STEP_COPY[1];
 
-  const fetchCatalog = useCallback(() => {
-    setCatalogLoading(true);
+  // Workspace catalog via the shared data cache: the SalesforceProductPicker
+  // invalidates cacheKeys.workspaceCatalog on save, so the pack Stack Builder
+  // resolves (from the declared Salesforce product) is never stale — no manual
+  // refresh needed. The fetcher is pure (no side effects); catalog-derived setup
+  // state is applied in the effect below.
+  const catalogFetcher = useCallback(async (): Promise<WorkspaceCatalogResponse | null> => {
     const headers = buildAuthHeaders(token);
-
-    fetch(`${apiBase}/api/integration-hub/workspace-catalog`, {
+    const r = await fetch(`${apiBase}/api/integration-hub/workspace-catalog`, {
       credentials: 'omit',
       headers,
-    })
-      .then(r => {
-        if (!r.ok) throw new Error(`Catalog fetch failed: ${r.status}`);
-        return r.json();
-      })
-      .then((fetchedCatalog: WorkspaceCatalogResponse | null) => {
-        setCatalog(fetchedCatalog);
-        setCatalogError(null);
-        setupState.setSalesforceClouds(getCatalogSalesforceProducts(fetchedCatalog));
-      })
-      .catch((err) => {
-        console.error('[StackBuilderPage] Catalog fetch failed:', err);
-        setCatalogError('Could not load your connected systems. Please retry.');
-        setCatalog(null);
-        setupState.setSalesforceClouds([]);
-      })
-      .finally(() => setCatalogLoading(false));
-  }, [apiBase, token, setupState.setSalesforceClouds]);
+    });
+    if (!r.ok) throw new Error(`Catalog fetch failed: ${r.status}`);
+    return r.json();
+  }, [apiBase, token]);
 
+  const {
+    data: catalogData,
+    loading: catalogLoading,
+    error: catalogErrObj,
+    refetch: refetchCatalog,
+  } = useResource<WorkspaceCatalogResponse | null>(cacheKeys.workspaceCatalog, catalogFetcher);
+  const catalog = catalogData ?? null;
+  const catalogError = catalogErrObj
+    ? 'Could not load your connected systems. Please retry.'
+    : null;
+
+  // Apply catalog-derived setup state whenever the catalog changes (or errors).
   useEffect(() => {
-    fetchCatalog();
-  }, [fetchCatalog]);
+    if (catalogErrObj) {
+      setupState.setSalesforceClouds([]);
+      return;
+    }
+    if (catalog) {
+      setupState.setSalesforceClouds(getCatalogSalesforceProducts(catalog));
+      setupState.initFromCatalog?.(catalog);
+    }
+    // setupState methods are the effect's other inputs; catalog identity changes
+    // per fetch so this mirrors the previous per-fetch application.
+  }, [catalog, catalogErrObj, setupState.setSalesforceClouds, setupState.initFromCatalog]);
 
+  // Refresh on tab focus/visibility. Retained until Phase 2 wires connector
+  // mutations to invalidate the catalog; harmless alongside cache invalidation.
   useEffect(() => {
     const handleVisibilityChange = () => {
-      if (!document.hidden) {
-        fetchCatalog();
-      }
+      if (!document.hidden) refetchCatalog();
     };
-
-    const handleFocus = () => {
-      fetchCatalog();
-    };
-
+    const handleFocus = () => refetchCatalog();
     document.addEventListener('visibilitychange', handleVisibilityChange);
     window.addEventListener('focus', handleFocus);
     return () => {
       document.removeEventListener('visibilitychange', handleVisibilityChange);
       window.removeEventListener('focus', handleFocus);
     };
-  }, [fetchCatalog]);
-
-  useEffect(() => {
-    if (catalog && setupState.initFromCatalog) {
-      setupState.initFromCatalog(catalog);
-    }
-  }, [catalog, setupState.initFromCatalog]);
+  }, [refetchCatalog]);
 
   const handleLaunch = useCallback(async () => {
     const packId = resolvePackId(state, catalog);
