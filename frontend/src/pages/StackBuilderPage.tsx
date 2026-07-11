@@ -134,38 +134,33 @@ function getCatalogSalesforceProducts(catalog: WorkspaceCatalogResponse | null):
   return Array.isArray(salesforce?.products) ? salesforce.products : [];
 }
 
-function resolvePackId(
+// The Salesforce pack is driven SOLELY by the workspace product declaration
+// (Integration Hub → "Salesforce products in use"), persisted on the connector
+// record and surfaced here via the workspace catalog. Stack Builder system
+// pre-selection (selectedSystemIds / selectedSalesforceClouds) no longer
+// influences the pack: a default preselect of `salesforce_ncino` was silently
+// forcing the nCino pack on orgs that had declared nothing, so runs picked
+// detectors the org's data could never fire. With no declaration we fall to the
+// industry hint, then a safe service_cloud default — never a preselected cloud.
+// Exported for direct unit testing.
+export function resolvePackId(
   state: ReturnType<typeof useSetupState>['state'],
   catalog: WorkspaceCatalogResponse | null,
 ): string {
-  const selectedCloudFromCatalog = getCatalogSalesforceProducts(catalog)
+  const declaredCloud = getCatalogSalesforceProducts(catalog)
     .find(productId => CLOUD_PACK_REGISTRY[productId]);
 
-  if (selectedCloudFromCatalog) {
-    return CLOUD_PACK_REGISTRY[selectedCloudFromCatalog];
+  if (declaredCloud) {
+    return CLOUD_PACK_REGISTRY[declaredCloud];
   }
 
-  const selectedCloudFromSystems = state.selectedSystemIds
-    .find(systemId => SALESFORCE_CLOUD_IDS.has(systemId) && CLOUD_PACK_REGISTRY[systemId]);
-
-  if (selectedCloudFromSystems) {
-    return CLOUD_PACK_REGISTRY[selectedCloudFromSystems];
-  }
-
-  const selectedCloudFromState = state.selectedSalesforceClouds
-    .find(productId => CLOUD_PACK_REGISTRY[productId]);
-
-  if (selectedCloudFromState) {
-    return CLOUD_PACK_REGISTRY[selectedCloudFromState];
-  }
-
-  // Priority 2: Use industry hints if set
+  // Fallback 1: industry hint, when an industry is selected.
   if (state.industryId) {
     const hints = INDUSTRY_PACK_HINTS[state.industryId];
     if (hints && hints.length > 0) return hints[0];
   }
 
-  // Priority 3: Default to service_cloud
+  // Fallback 2: safe default — never a Stack Builder pre-selection.
   return 'service_cloud';
 }
 
