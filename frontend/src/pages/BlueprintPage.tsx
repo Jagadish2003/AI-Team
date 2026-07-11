@@ -1,5 +1,5 @@
-import React, { useEffect, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { useLocation, useNavigate } from 'react-router-dom';
 import {
   AlertCircle,
   BarChart2,
@@ -7,21 +7,31 @@ import {
   ChevronRight,
   FileText,
   Link2,
+  ListChecks,
+  Loader2,
+  Map,
   Settings,
   Shield,
   Zap,
 } from 'lucide-react';
-import { InfoPanel } from '../components/common/InfoPanel';
-import LoadingPanel from '../components/common/LoadingPanel';
 import PageShell from '../components/common/PageShell';
+import StagesGrid from '../components/pilot_roadmap/StagesGrid';
 import { useConnectorContext } from '../context/ConnectorContext';
 import { useAnalystReviewContext } from '../context/AnalystReviewContext';
+import { useDiscoveryRunContext } from '../context/DiscoveryRunContext';
 import { useRunContext } from '../context/RunContext';
 import { fetchBlueprint } from '../api/blueprintApi';
 import { fetchEvidence } from '../api/runApi';
+import { fetchRunRoadmap } from '../api/runScopedS9S10Api';
 import type { BlueprintResponse } from '../utils/blueprintTypes';
 import type { OpportunityCandidate } from '../types/analystReview';
+import type { PilotRoadmapModel } from '../types/pilotRoadmap';
 import type { EvidenceReview } from '../types/partialResults';
+import { runScopedErrorMessage } from '../utils/apiErrors';
+import {
+  getBlueprintLabel,
+  isSalesforceConnected,
+} from '../utils/blueprintNaming';
 
 function TierBadge({ tier }: { tier?: string }) {
   const t = tier ?? 'Unknown';
@@ -77,7 +87,7 @@ function StatusPill({ connected }: { connected: boolean }) {
   );
 }
 
-function EmptyPanel({
+function WorkspaceNotice({
   icon,
   title,
   message,
@@ -100,22 +110,36 @@ function EmptyPanel({
         : 'border-accent/20 bg-accent/10 text-accent';
 
   return (
-    <InfoPanel
-      icon={icon}
-      iconClassName={iconCls}
-      title={title}
-      message={message}
-      actionLabel={actionLabel}
-      onAction={onAction}
-    />
+    <div className="flex min-h-[280px] items-center justify-center rounded-xl border border-border bg-panel px-4 py-8 text-center">
+      <div className="max-w-2xl">
+        {icon && (
+          <div className="mb-4 flex justify-center">
+            <div className={`flex h-12 w-12 items-center justify-center rounded-full border ${iconCls}`}>
+              {icon}
+            </div>
+          </div>
+        )}
+        <h2 className="text-xl font-semibold text-text">{title}</h2>
+        <p className="mx-auto mt-3 max-w-xl text-sm leading-relaxed text-muted">{message}</p>
+        {actionLabel && onAction && (
+          <button
+            onClick={onAction}
+            className="mt-5 rounded-lg border border-accent/20 bg-accent/5 px-5 py-2 text-sm font-medium text-accent transition-colors hover:border-accent/45 hover:bg-accent/10 focus:outline-none focus-visible:ring-1 focus-visible:ring-accent/40"
+          >
+            {actionLabel}
+          </button>
+        )}
+      </div>
+    </div>
   );
 }
 
-function LoadingState() {
+function LoadingState({ blueprintLabel }: { blueprintLabel: string }) {
   return (
-    <LoadingPanel
+    <WorkspaceNotice
+      icon={<Loader2 size={24} className="animate-spin" />}
       title="Loading blueprint"
-      subtitle="Fetching the Agentforce Blueprint for the selected opportunity."
+      message={`Fetching the ${blueprintLabel} for the selected opportunity.`}
     />
   );
 }
@@ -131,9 +155,14 @@ function OpportunitySelectorPanel({
 }) {
   return (
     <div className="flex h-full flex-col overflow-hidden rounded-xl border border-border bg-panel">
-      <div className="flex items-center justify-between border-b border-border px-4 py-3">
-        <div className="text-lg font-semibold text-text">Opportunities</div>
-        <div className="text-xs text-muted">{opportunities.length} found</div>
+      <div className="flex items-center justify-between border-b border-border px-4 py-3.5">
+        <div className="flex items-center gap-2">
+          <ListChecks size={15} className="text-accent" />
+          <div className="text-[13px] font-semibold uppercase tracking-wide text-text">Opportunities</div>
+        </div>
+        <div className="rounded-full border border-border bg-bg/30 px-2 py-0.5 text-[11px] font-medium text-muted">
+          {opportunities.length}
+        </div>
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto">
@@ -185,12 +214,102 @@ function SectionBlock({
     <section className="rounded-lg border border-border bg-bg/20 p-4">
       <div className="mb-3 flex items-center justify-between gap-2">
         <div className="flex items-center gap-2">
-          <span className="text-accent">{icon}</span>
-          <span className="text-sm font-semibold text-text">{title}</span>
+          <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-accent/10 text-accent">
+            {icon}
+          </span>
+          <span className="text-[13px] font-semibold uppercase tracking-wide text-text">{title}</span>
         </div>
         {headerRight}
       </div>
       {children}
+    </section>
+  );
+}
+
+function MetricTile({ label, value }: { label: string; value: React.ReactNode }) {
+  return (
+    <div className="rounded-lg border border-border bg-panel px-3 py-2.5">
+      <div className="text-[10px] font-semibold uppercase tracking-wider text-muted">{label}</div>
+      <div className="mt-1 text-base font-semibold leading-tight text-text">{value}</div>
+    </div>
+  );
+}
+
+function RoadmapSection({
+  model,
+  loading,
+  preparing,
+  error,
+  onRetry,
+  onOpenBlueprint,
+  blueprintLabel,
+}: {
+  model: PilotRoadmapModel | null;
+  loading: boolean;
+  preparing: boolean;
+  error: string | null;
+  onRetry: () => void;
+  onOpenBlueprint: (id: string) => void;
+  blueprintLabel: string;
+}) {
+  const showLoading = loading || preparing;
+
+  return (
+    <section className="space-y-4">
+      <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+        <div className="flex min-w-0 items-start gap-3">
+          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-accent/20 bg-accent/10 text-accent">
+            <Map size={20} />
+          </div>
+          <div className="min-w-0">
+            <h2 className="text-xl font-semibold text-text">Agent Roadmap</h2>
+            <p className="mt-1 max-w-3xl text-sm leading-relaxed text-muted">
+              Start with the phased agent rollout plan, then choose an opportunity below to inspect its {blueprintLabel}.
+            </p>
+          </div>
+        </div>
+
+        {model && (
+          // R18-C0 P6: the Roadmap presents phases only — the permission/
+          // dependency readiness tiles are removed to keep the customer-facing
+          // roadmap focused on selected opportunities and rollout progression.
+          <div className="grid min-w-[min(100%,320px)] grid-cols-2 gap-2">
+            <MetricTile label="Selected" value={model.selectedOpportunityCount} />
+            <MetricTile label="Readiness" value={model.overallReadiness} />
+          </div>
+        )}
+      </div>
+
+      <div>
+        {showLoading ? (
+          <div className="flex min-h-48 items-center justify-center rounded-lg border border-border bg-bg/20 px-4 py-8 text-sm text-muted">
+            <Loader2 className="mr-2 h-4 w-4 animate-spin text-accent" />
+            Loading Agent Roadmap for this discovery run.
+          </div>
+        ) : error ? (
+          <div className="rounded-lg border border-red-400/20 bg-red-500/10 px-4 py-4">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <div className="text-sm font-semibold text-red-200">Roadmap unavailable</div>
+                <div className="mt-1 text-sm leading-relaxed text-red-100/80">{error}</div>
+              </div>
+              <button
+                type="button"
+                onClick={onRetry}
+                className="shrink-0 rounded-md border border-red-300/30 bg-red-500/10 px-4 py-2 text-sm font-medium text-red-100 hover:bg-red-500/20"
+              >
+                Retry
+              </button>
+            </div>
+          </div>
+        ) : model ? (
+          <StagesGrid stages={model.stages} onOpenReview={onOpenBlueprint} />
+        ) : (
+          <div className="rounded-lg border border-border bg-bg/20 px-4 py-6 text-sm text-muted">
+            Agent Roadmap data is not available for this discovery run yet.
+          </div>
+        )}
+      </div>
     </section>
   );
 }
@@ -210,9 +329,9 @@ export function BlueprintContent({ blueprint }: { blueprint: BlueprintResponse }
   return (
     <div className="flex h-full flex-col overflow-hidden rounded-xl border border-border bg-panel">
       <div className="border-b border-border px-5 py-4">
-        <div className="text-xs font-semibold uppercase text-muted">Agent</div>
-        <div className="mt-1 text-2xl font-semibold text-text">{blueprint.agentName ?? 'Custom Agent'}</div>
-        <div className="mt-1 font-mono text-xs text-muted">{blueprint.detectorId ?? 'UNKNOWN'}</div>
+        <div className="text-[11px] font-semibold uppercase tracking-wide text-muted">Agent</div>
+        <div className="mt-1 text-xl font-semibold leading-tight text-text">{blueprint.agentName ?? 'Custom Agent'}</div>
+        <div className="mt-1.5 font-mono text-xs text-muted">{blueprint.detectorId ?? 'UNKNOWN'}</div>
       </div>
 
       <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-4">
@@ -350,12 +469,17 @@ function EvidencePanel({
 
   return (
     <div className="flex h-full flex-col overflow-hidden rounded-xl border border-border bg-panel">
-      <div className="border-b border-border px-4 py-3">
-        <div className="flex items-center gap-2">
-          <FileText size={16} className="text-accent" />
-          <div className="text-lg font-semibold text-text">Grounding Evidence</div>
+      <div className="border-b border-border px-4 py-3.5">
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2">
+            <FileText size={15} className="text-accent" />
+            <div className="text-[13px] font-semibold uppercase tracking-wide text-text">Grounding Evidence</div>
+          </div>
+          <div className="rounded-full border border-border bg-bg/30 px-2 py-0.5 text-[11px] font-medium text-muted">
+            {evidenceIds.length}
+          </div>
         </div>
-        <div className="mt-1 text-xs text-muted">{evidenceIds.length} linked evidence item(s)</div>
+        <div className="mt-1.5 text-xs text-muted">Linked evidence for this opportunity</div>
       </div>
 
       <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-4">
@@ -432,18 +556,102 @@ function EvidencePanel({
 export default function BlueprintPage() {
   const { all: connectors } = useConnectorContext();
   const { opportunities, selectedId, select } = useAnalystReviewContext();
+  const { run, computing } = useDiscoveryRunContext();
   const { runId } = useRunContext();
+  const location = useLocation();
   const nav = useNavigate();
+  const blueprintSectionRef = useRef<HTMLElement | null>(null);
 
   const [blueprint, setBlueprint] = useState<BlueprintResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [roadmap, setRoadmap] = useState<PilotRoadmapModel | null>(null);
+  const [roadmapLoading, setRoadmapLoading] = useState(false);
+  const [roadmapError, setRoadmapError] = useState<string | null>(null);
+  const [roadmapFetchCount, setRoadmapFetchCount] = useState(0);
 
-  const salesforceConnected = connectors.some(
-    (connector) => connector.id === 'salesforce' && connector.status === 'connected',
-  );
+  const salesforceConnected = isSalesforceConnected(connectors);
+  const blueprintLabel = getBlueprintLabel(salesforceConnected);
   const selectedOpp = opportunities.find((opp) => opp.id === selectedId) ?? null;
   const selectedIdx = opportunities.findIndex((opp) => opp.id === selectedId);
+  const runStatus = run?.status?.toLowerCase();
+  const runHasMaterializedResults =
+    runStatus === 'complete' || runStatus === 'completed' || runStatus === 'partial';
+  const roadmapPreparing =
+    computing ||
+    (Boolean(run) && !runHasMaterializedResults) ||
+    /still being prepared/i.test(roadmapError ?? '');
+  const requestedOppId = new URLSearchParams(location.search).get('oppId');
+  const appliedOppIdRef = useRef<string | null>(null);
+
+  const refetchRoadmap = useCallback(() => setRoadmapFetchCount((count) => count + 1), []);
+  const scrollToBlueprint = useCallback(() => {
+    window.setTimeout(() => {
+      blueprintSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }, 0);
+  }, []);
+
+  const handleRoadmapBlueprintSelect = useCallback(
+    (id: string) => {
+      select(id);
+      scrollToBlueprint();
+    },
+    [select, scrollToBlueprint],
+  );
+
+  // Apply the URL's ?oppId only when it actually changes — NOT on every
+  // selectedId change. Re-asserting on selectedId caused a stale URL param to
+  // revert an in-page roadmap row selection (which selects without changing the
+  // URL) straight back to the URL's opportunity.
+  useEffect(() => {
+    if (!requestedOppId) {
+      appliedOppIdRef.current = null;
+      return;
+    }
+    if (appliedOppIdRef.current === requestedOppId) return;
+    if (!opportunities.some((opp) => opp.id === requestedOppId)) return;
+    appliedOppIdRef.current = requestedOppId;
+    if (selectedId !== requestedOppId) select(requestedOppId);
+  }, [opportunities, requestedOppId, select, selectedId]);
+
+  useEffect(() => {
+    if (location.hash === '#blueprint-details') scrollToBlueprint();
+  }, [location.hash, scrollToBlueprint]);
+
+  useEffect(() => {
+    if (!runId) {
+      setRoadmap(null);
+      setRoadmapLoading(false);
+      setRoadmapError(null);
+      return;
+    }
+    let cancelled = false;
+
+    (async () => {
+      setRoadmapLoading(true);
+      setRoadmapError(null);
+      try {
+        const data = await fetchRunRoadmap(runId);
+        if (!cancelled) setRoadmap(data);
+      } catch (err: any) {
+        if (cancelled) return;
+        setRoadmap(null);
+        setRoadmapError(runScopedErrorMessage(err, 'Failed to load roadmap'));
+      } finally {
+        if (!cancelled) setRoadmapLoading(false);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [runId, roadmapFetchCount]);
+
+  useEffect(() => {
+    if (!runId || !roadmapPreparing || roadmapLoading) return;
+    const timer = window.setTimeout(() => refetchRoadmap(), 1500);
+    return () => window.clearTimeout(timer);
+  }, [runId, roadmapPreparing, roadmapLoading, refetchRoadmap]);
 
   useEffect(() => {
     if (!runId || !selectedId || !salesforceConnected) {
@@ -473,12 +681,25 @@ export default function BlueprintPage() {
     };
   }, [runId, selectedId, salesforceConnected]);
 
-  const renderContent = () => {
+  const renderBlueprintContent = () => {
+    if (!runId) {
+      return (
+        <WorkspaceNotice
+          icon={<Map size={24} />}
+          title="No discovery run selected"
+          message={`Run a discovery first to generate the Agent Roadmap and ${blueprintLabel}s.`}
+          actionLabel="Go to Discovery Run"
+          onAction={() => nav('/discovery-run')}
+        />
+      );
+    }
+
     if (!salesforceConnected) {
       return (
-        <EmptyPanel
+        <WorkspaceNotice
+          icon={<Zap size={24} />}
           title="Connect Salesforce"
-          message="Agentforce Blueprint is available when Salesforce is connected."
+          message="Agent Blueprint is available when Salesforce is connected."
           actionLabel="Go to Integration Hub"
           onAction={() => nav('/integration-hub')}
           tone="warning"
@@ -486,33 +707,23 @@ export default function BlueprintPage() {
       );
     }
 
-    if (!runId) {
-      return (
-        <EmptyPanel
-          title="No discovery run selected"
-          message="Run a discovery first to generate Agentforce Blueprints."
-          actionLabel="Go to Discovery Run"
-          onAction={() => nav('/discovery-run')}
-        />
-      );
-    }
-
     if (!selectedOpp) {
       return (
-        <EmptyPanel
+        <WorkspaceNotice
+          icon={<ChevronRight size={24} />}
           title="Select an opportunity"
-          message="Choose an opportunity in Opportunity Review to view its Agentforce Blueprint."
+          message={`Choose an opportunity from the Agent Roadmap above or from Opportunity Review to view its ${blueprintLabel}.`}
           actionLabel="Go to Opportunity Review"
           onAction={() => nav(runId ? `/opportunity-review?runId=${runId}` : '/opportunity-review')}
         />
       );
     }
 
-    if (loading) return <LoadingState />;
+    if (loading) return <LoadingState blueprintLabel={blueprintLabel} />;
 
     if (error) {
       return (
-        <EmptyPanel
+        <WorkspaceNotice
           icon={<AlertCircle size={26} />}
           title="Failed to load blueprint"
           message={error}
@@ -521,11 +732,11 @@ export default function BlueprintPage() {
       );
     }
 
-    if (!blueprint) return <LoadingState />;
+    if (!blueprint) return <LoadingState blueprintLabel={blueprintLabel} />;
 
     return (
       <div
-        className="grid gap-4 lg:h-[calc(100vh-190px)] lg:min-h-[640px] lg:grid-cols-[minmax(250px,0.8fr)_minmax(360px,1.2fr)_minmax(250px,0.8fr)] xl:gap-6"
+        className="grid gap-4 lg:h-[min(720px,calc(100vh-150px))] lg:min-h-[620px] lg:grid-cols-[minmax(250px,0.8fr)_minmax(360px,1.2fr)_minmax(250px,0.8fr)] xl:gap-6"
       >
         <OpportunitySelectorPanel opportunities={opportunities} selectedId={selectedId} onSelect={select} />
         <BlueprintContent blueprint={blueprint} />
@@ -542,8 +753,8 @@ export default function BlueprintPage() {
 
   return (
     <PageShell
-      title="Agentforce Blueprint"
-      description="Agent design generated from the selected opportunity and its discovery evidence."
+      title={blueprintLabel}
+      description={`Review the Agent Roadmap first, then inspect the ${blueprintLabel} for the selected opportunity.`}
       className="bg-bg"
       actions={
         <>
@@ -552,7 +763,41 @@ export default function BlueprintPage() {
         </>
       }
     >
-        {renderContent()}
+        <div className="space-y-8">
+          {runId ? (
+            <RoadmapSection
+              model={roadmap}
+              loading={roadmapLoading}
+              preparing={roadmapPreparing}
+              error={roadmapError}
+              onRetry={refetchRoadmap}
+              onOpenBlueprint={handleRoadmapBlueprintSelect}
+              blueprintLabel={blueprintLabel}
+            />
+          ) : null}
+
+          <section ref={blueprintSectionRef} id="blueprint-details" className="scroll-mt-24">
+            <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+              <div className="flex min-w-0 items-start gap-3">
+                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-accent/20 bg-accent/10 text-accent">
+                  <FileText size={20} />
+                </div>
+                <div className="min-w-0">
+                  <h2 className="text-xl font-semibold text-text">Blueprint Details</h2>
+                  <p className="mt-1 max-w-3xl text-sm leading-relaxed text-muted">
+                    Selected opportunity design, guardrails, permissions, and evidence.
+                  </p>
+                </div>
+              </div>
+              {selectedOpp && (
+                <div className="shrink-0 rounded-lg border border-border bg-panel px-3 py-2 text-sm text-muted">
+                  Selected: <span className="font-medium text-text">{selectedOpp.title}</span>
+                </div>
+              )}
+            </div>
+            {renderBlueprintContent()}
+          </section>
+        </div>
     </PageShell>
   );
 }

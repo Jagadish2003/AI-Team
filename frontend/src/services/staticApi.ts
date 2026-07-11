@@ -66,6 +66,20 @@ export function configureSyncApi(connectorId: string): Promise<Connector> {
 }
 
 /**
+ * R18-C0 P4 / AT-566: Disconnect a connector for the caller's org.
+ *
+ * The single call behind each connected Integration Hub tile's Disconnect action.
+ * DELETE /api/connectors/{id} (analyst+) clears WHICHEVER credential kind the org
+ * holds for the connector — an OAuth token (revoked + soft-deleted) or a static
+ * credential (soft-deleted) — and flips the org's connection state back to
+ * disconnected, so re-fetching /api/connectors returns the tile unconnected. The
+ * backend is idempotent (a never-/already-disconnected connector still 204s).
+ */
+export function disconnectConnectorApi(connectorId: string): Promise<void> {
+  return apiDelete<void>(`/api/connectors/${connectorId}`);
+}
+
+/**
  * R17-D3 Addendum A (T12 / AC10) — static-credential entry for connectors that
  * authenticate with URL + username + token/password (Jira, ServiceNow, native
  * DB connectors) rather than OAuth.

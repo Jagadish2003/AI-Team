@@ -304,6 +304,23 @@ class CustomerTenantModelProvider(ModelProvider):
         )
         return vectors
 
+    def embedding_identity(self) -> "tuple[str, str]":
+        """Stamp identity/version for customer-tenant vectors (R18-B1 T3 / AC8).
+
+        Identity qualifies the provider name with the configured embedding
+        deployment so repinning ``CUSTOMER_TENANT_EMBEDDING_DEPLOYMENT`` yields a
+        distinct identity — the retrieval substrate then never compares vectors
+        across deployments. The managed service exposes an explicit API version
+        (``CUSTOMER_TENANT_API_VERSION``), which is a genuine version signal, so it
+        is stamped as the version component. Read live from a fresh config, like
+        ``_run_embed``; an unconfigured deployment falls back to ``(name, "")``.
+        """
+        cfg = CustomerTenantConfig()
+        deployment = cfg.embedding_deployment()
+        if not deployment:
+            return (self.name, "")
+        return (f"{self.name}:{deployment}", cfg.api_version())
+
     def _run_embed(self, texts: List[str]) -> List[List[float]]:
         """Resilient embedding call. Telemetry is emitted once by embed().
 

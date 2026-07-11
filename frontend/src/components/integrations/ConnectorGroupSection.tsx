@@ -46,6 +46,11 @@ interface Props {
   onSelect:   (id: string) => void;
   onPrimary:  (id: string) => void;
   onReconnect?: (id: string) => void;
+  // R18-C0 P4 / AT-566: forwarded to each connected tile's Disconnect action.
+  onDisconnect?: (id: string) => void;
+  // R18-A3 follow-up: forwarded to each tile's "Set up outbound access" action
+  // so the parent can pop the outbound/credential setup modal for that connector.
+  onSetupOutbound?: (id: string) => void;
   onAddSource: (categoryId: string) => void;
   // R17-D4 Addendum A / T11: when the org is at its licensed system limit, the
   // Connect action on not-yet-connected tiles is disabled with connectBlockMessage
@@ -56,7 +61,7 @@ interface Props {
 }
 
 export default function ConnectorGroupSection({
-  group, selectedId, onSelect, onPrimary, onReconnect, onAddSource,
+  group, selectedId, onSelect, onPrimary, onReconnect, onDisconnect, onSetupOutbound, onAddSource,
   connectBlocked, connectBlockMessage,
 }: Props) {
   const hasConnectors = group.connectors.length > 0;
@@ -100,6 +105,8 @@ export default function ConnectorGroupSection({
                 onSelect={() => onSelect(c.id)}
                 onPrimary={() => onPrimary(c.id)}
                 onReconnect={onReconnect ? () => onReconnect(c.id) : undefined}
+                onDisconnect={onDisconnect ? () => onDisconnect(c.id) : undefined}
+                onSetupOutbound={onSetupOutbound ? () => onSetupOutbound(c.id) : undefined}
                 connectBlocked={connectBlocked}
                 connectBlockMessage={connectBlockMessage}
               />

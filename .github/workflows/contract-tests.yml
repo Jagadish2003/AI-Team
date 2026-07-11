@@ -22,7 +22,11 @@ jobs:
     # repository secrets being present before the service container can start.
     services:
       postgres:
-        image: postgres:14-alpine
+        # pgvector/pgvector:pg14 is the official PostgreSQL 14 image with the
+        # pgvector extension binaries preinstalled, so migration 0024's
+        # `CREATE EXTENSION vector` (R18-B1 retrieval substrate) succeeds. Plain
+        # postgres:14-alpine lacks vector.control and fails that migration.
+        image: pgvector/pgvector:pg14
         env:
           POSTGRES_DB: agentiq_test
           POSTGRES_USER: agentiq

@@ -2,26 +2,26 @@
   {
     "id": "salesforce",
     "name": "Salesforce",
-    "category": "CRM \u00b7 PSS Benefits Administration",
+    "category": "CRM \u00b7 Salesforce / nCino",
     "tier": "recommended",
     "recommendedRank": 1,
     "status": "disconnected",
     "configured": false,
     "metrics": [
       {
-        "label": "Applications",
-        "value": "3"
+        "label": "Accounts",
+        "value": "\u2014"
       },
       {
-        "label": "Benefit Assignments",
-        "value": "2"
+        "label": "Opportunities",
+        "value": "\u2014"
       }
     ],
     "lastSynced": "\u2014",
     "reads": [
-      "IndividualApplication",
-      "BenefitAssignment",
-      "Case (Disability)"
+      "Accounts",
+      "Opportunities",
+      "Cases"
     ],
     "signalStrength": 94,
     "products": []
@@ -40,14 +40,14 @@
         "value": "5"
       },
       {
-        "label": "Benefit signals",
+        "label": "Change requests",
         "value": "5"
       }
     ],
     "lastSynced": "\u2014",
     "reads": [
       "Incident Tickets",
-      "Benefit Operations",
+      "Change Requests",
       "SLA Definitions"
     ],
     "signalStrength": 88

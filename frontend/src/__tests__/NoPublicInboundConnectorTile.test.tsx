@@ -50,9 +50,14 @@ function disconnectedSalesforce() {
   };
 }
 
-function renderTile(handlers: { onSelect?: () => void; onPrimary?: () => void }) {
+function renderTile(handlers: {
+  onSelect?: () => void;
+  onPrimary?: () => void;
+  onSetupOutbound?: () => void;
+}) {
   const onSelect = handlers.onSelect ?? vi.fn();
   const onPrimary = handlers.onPrimary ?? vi.fn();
+  const onSetupOutbound = handlers.onSetupOutbound;
   render(
     <ConnectorTile
       connector={disconnectedSalesforce() as any}
@@ -61,9 +66,10 @@ function renderTile(handlers: { onSelect?: () => void; onPrimary?: () => void })
       onSelect={onSelect}
       onPrimary={onPrimary}
       onReconnect={vi.fn()}
+      onSetupOutbound={onSetupOutbound}
     />,
   );
-  return { onSelect, onPrimary };
+  return { onSelect, onPrimary, onSetupOutbound };
 }
 
 beforeEach(() => {
@@ -90,13 +96,27 @@ describe('ConnectorTile — NETWORK_PROFILE gating (AT-558)', () => {
     ).toBeInTheDocument();
   });
 
-  it('no_public_inbound: the outbound button opens the panel, never starts OAuth', () => {
+  it('no_public_inbound: without a setup handler, the outbound button selects the tile (fallback)', () => {
     np.hide = true;
     const { onSelect, onPrimary } = renderTile({});
     fireEvent.click(
       screen.getByRole('button', { name: /set up outbound access/i }),
     );
     expect(onSelect).toHaveBeenCalledTimes(1);
+    expect(onPrimary).not.toHaveBeenCalled();
+  });
+
+  it('no_public_inbound: the outbound button pops the setup modal (onSetupOutbound), not select/OAuth', () => {
+    np.hide = true;
+    const onSetupOutbound = vi.fn();
+    const { onSelect, onPrimary } = renderTile({ onSetupOutbound });
+    fireEvent.click(
+      screen.getByRole('button', { name: /set up outbound access/i }),
+    );
+    expect(onSetupOutbound).toHaveBeenCalledTimes(1);
+    // When a setup handler is wired, the click must NOT fall back to select and
+    // must never start the authorization-code flow.
+    expect(onSelect).not.toHaveBeenCalled();
     expect(onPrimary).not.toHaveBeenCalled();
   });
 });

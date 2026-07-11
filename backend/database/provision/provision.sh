@@ -14,6 +14,12 @@
 #   ./provision.sh                                                   # uses backend/.env
 #   DATABASE_URL=postgresql://agentiq:secret@db-host:5432/agentiq ./provision.sh
 #   ./provision.sh --no-seed
+#   ./provision.sh --reset          # DESTRUCTIVE: drop every table, then rebuild
+#   ./provision.sh --reset --yes    # same, non-interactive (skips the typed confirm)
+#
+# By default this is idempotent and drops NOTHING. --reset drops the whole public
+# schema first (IRREVERSIBLE) and requires typing the target database name to
+# confirm — it is never implied, so a plain run can never wipe data by accident.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

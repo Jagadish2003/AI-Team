@@ -22,7 +22,7 @@ import traceback
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, MutableMapping, Optional, Type
+from typing import Any, List, MutableMapping, Optional, Type
 
 from typing_extensions import NotRequired, TypedDict
 
@@ -484,6 +484,66 @@ class IngestionArtifactChangedPayload(TypedDict):
     observed_at: str
 
 
+class IngestionSecretRedactedPayload(TypedDict, total=False):
+    """ingestion.secret_redacted — R18-A2 / AT-531 (§1, AC5).
+
+    Emitted once per content artifact from which a committed secret was redacted
+    BEFORE the content reached the retrieval substrate, so the redaction is
+    observable in run health. Identifiers + pattern types + counts ONLY — the
+    matched secret value is NEVER carried on the event (recording the secret would
+    re-leak exactly what redaction removed).
+
+    org_id:          The org the content belongs to.
+    connector_id:    The source connector that redacted (e.g. 'git_content').
+    source_system:   The producing system (e.g. 'git').
+    source_artifact: The artifact the secret was redacted from (file path / commit).
+    content_type:    Which content stream ('code' | 'conversation' | 'prose').
+    redaction_count: How many secrets were redacted from this artifact.
+    pattern_types:   Distinct signature names that fired (e.g. ['aws_access_key_id']).
+    repo:            The repository id, when the producer supplies it.
+    observed_at:     When the redaction happened during the run (UTC ISO).
+    """
+    org_id: str
+    connector_id: str
+    source_system: NotRequired[str]
+    source_artifact: NotRequired[str]
+    content_type: NotRequired[str]
+    redaction_count: int
+    pattern_types: NotRequired[List[str]]
+    repo: NotRequired[Optional[str]]
+    observed_at: NotRequired[str]
+
+
+class IngestionStructureCapturedPayload(TypedDict, total=False):
+    """ingestion.structure_captured — R18-A2 / AT-534 (§1, "Structure").
+
+    Emitted once per repository whose directory-tree + file-inventory structural
+    metadata was captured (graph-facing, NOT embedded) so the capture is visible
+    in run health. Counts + identifiers ONLY — never file paths' contents.
+
+    org_id:             The org the repository belongs to.
+    connector_id:       The source connector (e.g. 'git_content').
+    source_system:      The producing system (e.g. 'git').
+    repo:               The repository id the snapshot describes.
+    commit_sha:         The HEAD commit the captured shape reflects.
+    mode:               'full' (from a tree walk) or 'incremental' (diff-applied).
+    file_count:         In-scope files in the inventory.
+    directory_count:    Directory nodes in the derived tree (incl. the root).
+    binary_file_count:  Inventoried files whose body was skipped as binary.
+    observed_at:        When the capture happened during the run (UTC ISO).
+    """
+    org_id: str
+    connector_id: str
+    source_system: NotRequired[str]
+    repo: NotRequired[str]
+    commit_sha: NotRequired[str]
+    mode: NotRequired[str]
+    file_count: NotRequired[int]
+    directory_count: NotRequired[int]
+    binary_file_count: NotRequired[int]
+    observed_at: NotRequired[str]
+
+
 # R16-D1 / AT-366 (T5) — model provider gateway telemetry.
 # Emitted once per gateway generate()/embed() call so model usage is observable
 # across hosted, in-boundary, and future customer-tenant modes. The provider
@@ -518,6 +578,100 @@ class ModelEmbeddingCompletedPayload(TypedDict, total=False):
     org_id: NotRequired[str]
     run_id: NotRequired[str]
     source: NotRequired[str]
+
+
+class RetrievalQueryCompletedPayload(TypedDict, total=False):
+    """retrieval.query_completed — R18-B1 T4, emitted once per retrieve() call.
+
+    Makes source-aware semantic retrieval observable: how many chunks a query
+    returned, whether it was source-scoped, and whether a min-score floor applied.
+
+    PII GUARD: identifiers, counts, and filter SHAPE only — NEVER the query text,
+    the chunk content, or the vectors. ``source_filter`` records the NAMES of the
+    scoped source systems ('confluence', 'slack', …), which are non-sensitive
+    system identifiers, so a caller can see how a scope affected recall.
+
+    org_id:            The org whose partition was searched (hard-scoped).
+    k:                 The requested result cap.
+    result_count:      How many ranked chunks were returned (<= k).
+    source_filter:     The normalised source systems the query was scoped to, or
+                       absent when unscoped.
+    min_score:         The similarity floor applied, or absent when none.
+    query_embedded:    False when the query could not be embedded (gateway
+                       degraded) — a retrieval miss, never a crash.
+    include_stale:     Whether stale chunks were included this query (R18-B2 T4);
+                       default retrieval excludes them.
+    stale_count:       How many returned chunks were stale — present only when
+                       stale chunks were being included.
+    """
+    org_id: NotRequired[str]
+    k: NotRequired[int]
+    result_count: NotRequired[int]
+    source_filter: NotRequired[list]
+    min_score: NotRequired[float]
+    query_embedded: NotRequired[bool]
+    include_stale: NotRequired[bool]
+    stale_count: NotRequired[int]
+
+
+class RetrievalArtifactInvalidatedPayload(TypedDict, total=False):
+    """retrieval.artifact_invalidated — R18-B2 T1, emitted once per handled change.
+
+    Makes the freshness contract observable: when a source artifact changes, the
+    freshness subscriber records what it did — marked chunks stale + queued a
+    refresh (created/updated), or removed chunks immediately (deleted). This is the
+    'staleness is allowed to exist; it is never allowed to be invisible' rule
+    (Section 1) at the invalidation moment; T6 aggregates the standing metrics.
+
+    PII GUARD: identifiers, the change kind, and counts only — NEVER artifact
+    content. ``source_system`` / ``source_artifact`` are non-sensitive system
+    identifiers, same as the emitted ingestion.artifact_changed event.
+
+    org_id:          The org the artifact belongs to (hard-scoped).
+    source_system:   The connector/source system that reported the change.
+    source_artifact: Stable id of the changed artifact (connector-defined).
+    change_kind:     'created' | 'updated' | 'deleted'.
+    action:          What the subscriber did — 'marked_stale' | 'removed'.
+    chunks_affected: How many chunks were marked stale or removed.
+    queued:          True when the artifact was queued for async refresh
+                     (created/updated); absent/False for a deletion.
+    """
+    org_id: NotRequired[str]
+    source_system: NotRequired[str]
+    source_artifact: NotRequired[str]
+    change_kind: NotRequired[str]
+    action: NotRequired[str]
+    chunks_affected: NotRequired[int]
+    queued: NotRequired[bool]
+
+
+class RetrievalModelBackfillPayload(TypedDict, total=False):
+    """retrieval.model_backfill — R18-B2 T5, emitted per org pass that re-embedded.
+
+    Makes an embedding-model-version migration observable: when the provider/version
+    repins, old-model vectors are invalidated (excluded from retrieval immediately)
+    and re-embedded onto the active model by a managed background backfill. This
+    event records each pass that actually re-embedded, so a migration's progress is
+    never invisible.
+
+    PII GUARD: identifiers, the ACTIVE model stamp, and counts only — NEVER chunk
+    content or vectors. ``embedding_model`` / ``embedding_model_version`` are the
+    non-sensitive active-model identifiers everything is being converged onto.
+
+    org_id:                  The org whose old-model vectors were backfilled.
+    embedding_model:         Active model identity now stamped on the re-embedded
+                             vectors.
+    embedding_model_version: Active model version now stamped.
+    reembedded:              How many old-model vectors were re-embedded this pass.
+    incompatible_seen:       How many old-model vectors this pass attempted.
+    batches:                 Gateway embedding calls made this pass.
+    """
+    org_id: NotRequired[str]
+    embedding_model: NotRequired[str]
+    embedding_model_version: NotRequired[str]
+    reembedded: NotRequired[int]
+    incompatible_seen: NotRequired[int]
+    batches: NotRequired[int]
 
 
 # ---------------------------------------------------------------------------
@@ -602,12 +756,38 @@ register_event_type("license.clock_anomaly", LicenseClockAnomalyPayload)
 register_event_type("ingestion.checkpoint_reset", IngestionCheckpointResetPayload)
 # R16-A1 / AT-381 (T5): per-changed-artifact event (emitted by the change runner).
 register_event_type("ingestion.artifact_changed", IngestionArtifactChangedPayload)
+# R18-A2 / AT-531 (T3): per-artifact secret-redaction event (emitted by the git
+# content ingestor's secret scan before hand-off to the substrate). Registered
+# here so the ingestor can emit it; record_event() raises ValueError for an
+# unregistered type, so registration must precede the first emission.
+register_event_type("ingestion.secret_redacted", IngestionSecretRedactedPayload)
+# R18-A2 / AT-534 (T6): per-repo structural-metadata capture event (emitted by the
+# git content ingestor when it persists a repo's tree/inventory as graph-facing
+# metadata). Registered here so the ingestor can emit it; record_event() raises
+# ValueError for an unregistered type, so registration must precede first emission.
+register_event_type("ingestion.structure_captured", IngestionStructureCapturedPayload)
 # R16-D1 / AT-366 (T5) — model provider gateway telemetry. Registered here so
 # the gateway's generate()/embed() paths can emit them; record_event() raises
 # ValueError for an unregistered type, so registration must land before any
 # emission call-site (T5-AC5).
 register_event_type("model.generation_completed", ModelGenerationCompletedPayload)
 register_event_type("model.embedding_completed", ModelEmbeddingCompletedPayload)
+# R18-B1 T4 — source-aware retrieval API. retrieval.query_completed is emitted
+# once per retrieve() call so semantic retrieval is observable. Registered here so
+# app.retrieval.api can emit it; record_event() raises ValueError for an
+# unregistered type, so registration must precede the first emission.
+register_event_type("retrieval.query_completed", RetrievalQueryCompletedPayload)
+# R18-B2 T1 — retrieval freshness. retrieval.artifact_invalidated is emitted once
+# per handled ingestion.artifact_changed event so invalidation is observable.
+# Registered here so app.retrieval.freshness can emit it; record_event() raises
+# ValueError for an unregistered type, so registration must precede emission.
+register_event_type("retrieval.artifact_invalidated", RetrievalArtifactInvalidatedPayload)
+# R18-B2 T5 — embedding-model-version invalidation + managed backfill.
+# retrieval.model_backfill is emitted per org pass that re-embedded old-model
+# vectors onto the active model, so a model migration is observable. Registered
+# here so app.retrieval.embedder can emit it; record_event() raises ValueError for
+# an unregistered type, so registration must precede emission.
+register_event_type("retrieval.model_backfill", RetrievalModelBackfillPayload)
 
 
 # ---------------------------------------------------------------------------
@@ -782,8 +962,10 @@ __all__ = [
     "LicenseClockAnomalyPayload",           # LIC-1 / AT-348 (T7)
     "IngestionCheckpointResetPayload",      # R16-A1 / AT-383 (T7)
     "IngestionArtifactChangedPayload",      # R16-A1 / AT-381 (T5)
+    "IngestionSecretRedactedPayload",       # R18-A2 / AT-531 (T3)
     "ModelGenerationCompletedPayload",      # R16-D1 / AT-366 (T5)
     "ModelEmbeddingCompletedPayload",       # R16-D1 / AT-366 (T5)
+    "RetrievalQueryCompletedPayload",       # R18-B1 T4
     "EVENT_PAYLOAD_TYPES",          # AT-211 alias: event_type → TypedDict schema
     "EVENT_REGISTRY",
     "EVENT_TYPE_REGISTRY",          # alias for T1-S10-C unit tests

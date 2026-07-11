@@ -12,7 +12,12 @@ Pure / DB-free: the service is deterministic policy over in-memory candidates.
 """
 from __future__ import annotations
 
-from app.context_assembly import AssemblyPolicy, ContextPackage, assemble_context
+from app.context_assembly import (
+    REASON_STALE,
+    AssemblyPolicy,
+    ContextPackage,
+    assemble_context,
+)
 
 REQUIRED_FIELDS = {
     "candidate_id", "kind", "origin", "decision", "reason",
@@ -34,8 +39,9 @@ def rel(frm, to, rtype, conf, inferred=False):
             "confidence": conf, "inferred": inferred}
 
 
-def chunk(cid, conf, origin="observed"):
-    return {"chunk_id": cid, "confidence": conf, "origin": origin}
+def chunk(cid, conf, origin="observed", is_stale=False):
+    return {"chunk_id": cid, "confidence": conf, "origin": origin,
+            "is_stale": is_stale}
 
 
 def graph(entities=None, relationships=None):
@@ -160,6 +166,67 @@ def test_excluded_candidates_across_all_kinds_show_why():
     # ...and the kept ones are recorded as included.
     assert log["o->o2:x"]["decision"] == "included"
     assert log["c_hi"]["decision"] == "included"
+
+
+# --------------------------------------------------------------------------- #
+# stale exclusion (R18-B2 T4 / AC6) — 'excluded: stale' is visible, not silent
+# --------------------------------------------------------------------------- #
+
+def test_reason_stale_excludes_stale_evidence_by_default():
+    def src(opp, policy):
+        return [chunk("fresh", 0.6), chunk("stale", 0.95, is_stale=True)]
+
+    pkg = assemble_context({}, graph(), AssemblyPolicy(), evidence_source=src)
+    log = by_id(pkg)
+    # The stale chunk is excluded despite its higher confidence...
+    assert log["stale"]["decision"] == "excluded"
+    assert log["stale"]["reason"] == REASON_STALE
+    # ...and does not enter the package, while the fresh one does.
+    assert [e["chunk_id"] for e in pkg.evidence] == ["fresh"]
+
+
+def test_stale_takes_precedence_over_below_floor():
+    # A chunk that is BOTH stale and below the floor is reported as stale — the
+    # freshness contract's exclusion runs first (Rule 0 before Rule 1).
+    def src(opp, policy):
+        return [chunk("bad", 0.1, is_stale=True)]
+
+    pkg = assemble_context(
+        {}, graph(), AssemblyPolicy(confidence_floor=0.5), evidence_source=src
+    )
+    assert by_id(pkg)["bad"]["reason"] == REASON_STALE
+
+
+def test_policy_include_stale_admits_stale_and_does_not_log_stale_exclusion():
+    def src(opp, policy):
+        return [chunk("stale", 0.9, is_stale=True)]
+
+    pkg = assemble_context(
+        {}, graph(), AssemblyPolicy(include_stale=True), evidence_source=src
+    )
+    entry = by_id(pkg)["stale"]
+    assert entry["decision"] == "included"
+    assert entry["reason"] != REASON_STALE
+    assert [e["chunk_id"] for e in pkg.evidence] == ["stale"]
+
+
+def test_stale_exclusion_is_deterministic_and_input_order_independent():
+    def src_factory(chunks):
+        def src(opp, policy):
+            return chunks
+        return src
+
+    chunks = [chunk("c3", 0.5, is_stale=True), chunk("c1", 0.9, is_stale=True),
+              chunk("c2", 0.9, is_stale=True)]
+    policy = AssemblyPolicy()
+    fwd = assemble_context({}, graph(), policy, evidence_source=src_factory(chunks)).selection_log
+    rev = assemble_context(
+        {}, graph(), policy, evidence_source=src_factory(list(reversed(chunks)))
+    ).selection_log
+    assert fwd == rev
+    # All three recorded as excluded: stale, ordered deterministically by id.
+    stale_ids = [l["candidate_id"] for l in fwd if l["reason"] == REASON_STALE]
+    assert stale_ids == ["c1", "c2", "c3"]
 
 
 # --------------------------------------------------------------------------- #

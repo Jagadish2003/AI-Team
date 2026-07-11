@@ -2,6 +2,11 @@ import React from 'react';
 import { useNavigate } from 'react-router-dom';
 import { ArrowRight, Map } from 'lucide-react';
 import { useRunContext } from '../../context/RunContext';
+import { useConnectorContext } from '../../context/ConnectorContext';
+import {
+  getBlueprintLabel,
+  isSalesforceConnected,
+} from '../../utils/blueprintNaming';
  
 interface Stage {
   opportunities: unknown[];
@@ -21,6 +26,8 @@ export default function PilotRoadmapHighlights({
 }: PilotRoadmapHighlightsProps) {
   const nav = useNavigate();
   const { runId } = useRunContext();
+  const { all: connectors } = useConnectorContext();
+  const blueprintLabel = getBlueprintLabel(isSalesforceConnected(connectors));
  
   return (
     <div className="rounded-xl border border-border bg-panel p-4">
@@ -59,9 +66,9 @@ export default function PilotRoadmapHighlights({
       </ul>
       <button
         className="mt-3 w-full rounded-md border border-border bg-bg/20 px-3 py-2 text-sm hover:bg-panel2"
-        onClick={() => nav(runId ? `/pilot-roadmap?runId=${runId}` : '/pilot-roadmap')}
+        onClick={() => nav(runId ? `/agentforce-blueprint?runId=${runId}` : '/agentforce-blueprint')}
       >
-        Open Agent Roadmap
+        Open {blueprintLabel}
       </button>
     </div>
   );

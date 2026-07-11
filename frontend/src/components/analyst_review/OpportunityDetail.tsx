@@ -214,6 +214,31 @@ function sourceLabel(value: string): string {
   return SOURCE_LABELS[value.toLowerCase()] ?? labelize(value);
 }
 
+// P2 (R18-C0): Opportunity Review must read as names, never raw record IDs like
+// '005WG00000ZkgMfYAJ owns 00003515'. The backend resolves a human display_name
+// whenever the entity-resolution layer holds one, so a readable name is used as
+// soon as it exists. This guards only the remaining case — an entity whose sole
+// known label is an opaque source ID — degrading to the entity's type label
+// instead of leaking the identifier. Mirrors the identifier heuristic in
+// backend app/graph_query.py so both layers agree on what counts as an ID.
+function looksLikeRawId(value: string): boolean {
+  const text = (value ?? "").trim();
+  if (!text || /\s/.test(text)) return false; // any whitespace => a readable phrase
+  if (/^\d{4,}$/.test(text)) return true; // long numeric id (e.g. 00003515)
+  // compact, space-free alphanumeric token with a digit (e.g. Salesforce IDs)
+  return /^[A-Za-z0-9][A-Za-z0-9_-]{5,}$/.test(text) && /\d/.test(text);
+}
+
+// Prefer the resolved, human-readable entity name; when only a raw ID is
+// available, fall back to the entity's type label ('Account', 'Case', 'Person')
+// so the user never sees a bare record identifier.
+function readableEntityName(name: string, entityType: string): string {
+  const trimmed = (name ?? "").trim();
+  if (trimmed && !looksLikeRawId(trimmed)) return trimmed;
+  const typeLabel = labelize(entityType ?? "").trim();
+  return typeLabel || "Unknown";
+}
+
 function isValidRunThreshold(value: number | null | undefined): value is number {
   return typeof value === "number" && Number.isFinite(value) && value > 0;
 }
@@ -324,7 +349,7 @@ export function EntityTracePanel({
                     <div className="flex min-w-0 items-start justify-between gap-3">
                       <div className="min-w-0">
                         <div className="truncate text-xs font-semibold leading-snug">
-                          {entity.display_name}
+                          {readableEntityName(entity.display_name, entity.entity_type)}
                         </div>
                         <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] leading-tight text-muted">
                           <span>{labelize(entity.entity_type)}</span>
@@ -355,8 +380,8 @@ export function EntityTracePanel({
 // T3-S13-A relationship trace panel
 
 function relationshipText(rel: RelationshipSummary): string {
-  const from = rel.from_entity_name;
-  const to = rel.to_entity_name;
+  const from = readableEntityName(rel.from_entity_name, rel.from_entity_type);
+  const to = readableEntityName(rel.to_entity_name, rel.to_entity_type);
   switch (rel.relationship_type) {
     case "owns":
       return `${from} owns ${to}`;

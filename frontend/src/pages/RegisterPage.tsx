@@ -32,6 +32,23 @@ import { hardRedirect } from "../utils/navigation";
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const MIN_PASSWORD_LENGTH = 8;
 
+// BUG 1: the organisation name must correspond to the company email domain.
+// Mirrors the backend rule (user_auth.org_name_matches_email_domain) for
+// immediate feedback — the backend stays the source of truth. Case-insensitive;
+// the normalised org name must equal one of the domain labels except the final
+// TLD label, so exact domains, common sub-domains, and cc-TLDs all match:
+//   Google + user@google.com / @mail.google.com / @google.co.uk  ✓
+//   Google + user@microsoft.com                                   ✗
+function orgMatchesEmailDomain(orgName: string, email: string): boolean {
+  const domain = (email.trim().toLowerCase().split("@")[1] ?? "").trim();
+  const labels = domain.split(".").filter(Boolean);
+  if (labels.length < 2) return false; // need a company label + a TLD label
+  const companyLabels = labels.slice(0, -1); // drop the final TLD label
+  const org = orgName.trim().toLowerCase();
+  if (!org) return false;
+  return companyLabels.includes(org);
+}
+
 // ── Shared styling constants ──────────────────────────────────────────────────
 
 const INPUT_CLS =
@@ -89,10 +106,16 @@ export default function RegisterPage() {
   const passwordValid = getPasswordRequirements(password).every((r) => r.met);
   const passwordMismatch =
     confirmPassword.length > 0 && password !== confirmPassword;
+  // BUG 1: only surface the domain mismatch once both fields have usable input.
+  const domainMismatch =
+    orgName.trim().length > 0 &&
+    EMAIL_RE.test(email.trim()) &&
+    !orgMatchesEmailDomain(orgName, email);
 
   const canSubmit =
     orgName.trim().length > 0 &&
     EMAIL_RE.test(email.trim()) &&
+    !domainMismatch &&
     passwordValid &&
     password === confirmPassword &&
     !submitting;
@@ -151,8 +174,11 @@ export default function RegisterPage() {
                 placeholder="Acme Corp"
                 disabled={submitting}
               />
-              {/* Reserved slot keeps the field rhythm even (no hint for this field). */}
-              <div className={HINT_SLOT_CLS} aria-hidden="true" />
+              {/* BUG 1: inline feedback when the org name does not match the email
+                  domain. Reuses the fixed-height slot so the card never jumps. */}
+              <div className={`${HINT_SLOT_CLS} text-red-400`}>
+                {domainMismatch && "Organisation name must match your company email domain."}
+              </div>
             </div>
 
             {/* Email */}

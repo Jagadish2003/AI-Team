@@ -227,11 +227,31 @@ def build_graph_context(
     # decides the selection itself. Routing the enrichment grounding context
     # through assemble_context() means enrichment, retrieval (1.8) and future
     # causal reasoning all share the same rules, so the chosen context is
-    # explainable and reproducible everywhere. evidence_source is None in 1.6.
+    # explainable and reproducible everywhere.
+    #
+    # R18-B1 (T6): the evidence_source hook now carries the REAL retrieval
+    # substrate — the org-scoped source built on retrieve(). Retrieval PROPOSES
+    # candidate chunks; the assembler DECIDES what enters context under the same
+    # floor/ordering/cap/log rules as the graph (AC6) — retrieval never feeds
+    # enrichment directly. The run-level opportunity passed here carries no query
+    # text yet, so the source proposes nothing today; opportunity-level callers
+    # (Sprint-2 deep-content stories) get retrieved evidence through this same
+    # hook with no further wiring. Import is guarded: a broken/unavailable
+    # retrieval substrate degrades to the 1.6 behaviour (no evidence source),
+    # never a failed graph context.
+    evidence_source = None
+    if org_id:
+        try:
+            from app.retrieval.evidence_source import retrieval_evidence_source
+
+            evidence_source = retrieval_evidence_source(org_id)
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.debug("graph_context: retrieval evidence source unavailable: %s", exc)
     package = assemble_context(
         opportunity={"run_id": run_id},
         graph={"entities": safe_entities, "relationships": safe_relationships},
         policy=AssemblyPolicy(),
+        evidence_source=evidence_source,
     )
     shown_entities = package.entities          # selected, ordered, <= 15
     shown_relationships = package.relationships  # selected, ordered, <= 20

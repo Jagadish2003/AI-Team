@@ -12,9 +12,9 @@
  * dev shim the scope pickers use): only `user.role === "owner"` may manage
  * credentials, matching "entered per org through the Integration Hub by an Owner".
  */
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import { CheckCircle2, KeyRound, Lock, Trash2 } from "lucide-react";
-import { Connector } from "../../types/connector";
+import { Connector, OutboundSetupRequest } from "../../types/connector";
 import {
   ConnectorCredentialStatus,
   deleteConnectorCredentials,
@@ -39,8 +39,10 @@ function formatUpdated(iso: string | null): string | null {
 
 export default function StaticCredentialManager({
   connector,
+  outboundSetupRequest = null,
 }: {
   connector: Connector;
+  outboundSetupRequest?: OutboundSetupRequest | null;
 }) {
   const auth = useAuthOptional();
   const isOwner = auth?.user?.role === "owner";
@@ -71,6 +73,20 @@ export default function StaticCredentialManager({
     setConfirmRemove(false);
     return loadStatus();
   }, [loadStatus]);
+
+  // R18-A3 follow-up: pop the credential form when the tile's outbound/credential
+  // setup button is clicked (the parent bumps outboundSetupRequest.nonce). Guarded
+  // by connectorId + a consumed-nonce ref so it fires once per click and never on
+  // an unrelated connector's mount.
+  const consumedNonce = useRef(0);
+  useEffect(() => {
+    if (!outboundSetupRequest) return;
+    if (outboundSetupRequest.nonce === consumedNonce.current) return;
+    consumedNonce.current = outboundSetupRequest.nonce;
+    if (outboundSetupRequest.connectorId === connector.id && fields) {
+      setModalOpen(true);
+    }
+  }, [outboundSetupRequest, connector.id, fields]);
 
   if (!fields) return null;
 

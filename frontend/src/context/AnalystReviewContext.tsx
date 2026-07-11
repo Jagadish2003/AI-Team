@@ -122,11 +122,29 @@ export function AnalystReviewProvider({ children }: { children: React.ReactNode 
       if (!runId) return { ok: false, error: "No run selected" };
 
       const before = opportunities;
+      // P8: decisions stay editable. A change appends a NEW audit event
+      // (preserving prior events); a no-op re-click of the same decision does
+      // not. The optimistic event mirrors the backend shape (previousDecision +
+      // the audit id lets us roll back precisely on failure).
+      const previousDecision = opportunities.find((o) => o.id === oppId)?.decision ?? "UNREVIEWED";
+      const changed = previousDecision !== decision;
+      const optimisticAuditId = uid("aud");
+
       setOpportunities((prev) => prev.map((o) => (o.id === oppId ? { ...o, decision } : o)));
-      setAudit((prev) => [
-        { id: uid("aud"), tsLabel: nowLabel(), action: decision, by: "Architect", opportunityId: oppId },
-        ...prev,
-      ]);
+      if (changed) {
+        setAudit((prev) => [
+          {
+            id: optimisticAuditId,
+            tsLabel: nowLabel(),
+            tsEpoch: Math.floor(Date.now() / 1000),
+            action: decision,
+            previousDecision,
+            by: "Architect",
+            opportunityId: oppId,
+          },
+          ...prev,
+        ]);
+      }
 
       try {
         const updated = await postOpportunityDecision(runId, oppId, decision);
@@ -134,7 +152,9 @@ export function AnalystReviewProvider({ children }: { children: React.ReactNode 
         return { ok: true };
       } catch (e: any) {
         setOpportunities(before);
-        setAudit((prev) => prev.filter((a) => !(a.opportunityId === oppId && a.action === decision && a.by === "Architect")));
+        if (changed) {
+          setAudit((prev) => prev.filter((a) => a.id !== optimisticAuditId));
+        }
         return { ok: false, error: e?.message ?? "Failed to save decision" };
       }
     },

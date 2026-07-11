@@ -32,9 +32,25 @@ Usage (run from the backend/ directory, with the venv active):
     # schema only, no seed rows
     python database/provision/provision_schema.py --no-seed
 
-This script does NOT drop anything — unlike `seed_loader.py` run on its own,
-which resets the public schema by default. It only creates-if-missing and
+    # DESTRUCTIVE: drop every table first, then recreate from scratch
+    python database/provision/provision_schema.py --reset          # asks for confirmation
+    python database/provision/provision_schema.py --reset --yes    # non-interactive (LOCAL db only)
+
+By DEFAULT this script does NOT drop anything — unlike `seed_loader.py` run on its
+own, which resets the public schema by default. It only creates-if-missing and
 upserts, so an existing database is upgraded in place.
+
+The opt-in `--reset` flag makes it DESTRUCTIVE: it drops the entire `public`
+schema (every table, incl. alembic_version) and recreates it before provisioning,
+so the database is rebuilt from scratch. `--reset` is IRREVERSIBLE and requires
+typing the target database name to confirm. It is never implied — a plain
+`provision.sh` run can never drop data by accident.
+
+`--yes` skips the interactive confirmation, but ONLY for a LOCAL database
+(localhost / 127.0.0.1 / unix socket). Against a remote host `--reset --yes` is
+refused outright, so a CI/CD pipeline or runbook carrying a production
+`DATABASE_URL` can never silently drop a production schema — a deliberate remote
+reset must be run interactively and confirmed by typing the database name.
 """
 from __future__ import annotations
 
@@ -42,6 +58,7 @@ import os
 import subprocess
 import sys
 from pathlib import Path
+from urllib.parse import urlparse
 
 _THIS_DIR = Path(__file__).resolve().parent
 _BACKEND_DIR = _THIS_DIR.parents[1]  # provision -> database -> backend
@@ -66,6 +83,99 @@ def _redacted(url: str) -> str:
         user = creds.split(":", 1)[0]
         return f"{scheme}://{user}:***@{host}"
     return url
+
+
+def _db_name(url: str) -> str:
+    """Extract the database name from a connection URL (for the confirm prompt)."""
+    tail = url.rsplit("/", 1)[-1]
+    return tail.split("?", 1)[0]
+
+
+#: Hosts treated as a local database — loopback, or a unix socket (no host).
+_LOCAL_DB_HOSTS = frozenset({"localhost", "127.0.0.1", "::1", ""})
+
+
+def _db_host(url: str) -> str:
+    """Return the lowercased host of a connection URL ('' for a unix socket)."""
+    try:
+        return (urlparse(url).hostname or "").lower()
+    except Exception:
+        return ""
+
+
+def _is_local_db(url: str) -> bool:
+    """True when the URL points at a local database (loopback / unix socket).
+
+    The guard for non-interactive ``--reset --yes``: a remote host (anything not in
+    :data:`_LOCAL_DB_HOSTS`) is treated as potentially production and refused for the
+    unattended destructive path.
+    """
+    return _db_host(url) in _LOCAL_DB_HOSTS
+
+
+def confirm_reset() -> None:
+    """Require explicit confirmation before the DESTRUCTIVE schema drop.
+
+    Prints the (redacted) target and the database name, then requires the operator
+    to type that exact name — unless ``--yes`` is passed for non-interactive use.
+    This is the single guard that stops ``--reset`` wiping the wrong database (e.g.
+    a production URL left in the environment).
+    """
+    name = _db_name(DATABASE_URL)
+    print("")
+    print("*** WARNING: --reset will DROP ALL TABLES in this database ***")
+    print(f"    target   : {_redacted(DATABASE_URL)}")
+    print(f"    database : {name}")
+    print("    This is IRREVERSIBLE. Make sure you have a backup.")
+    if "--yes" in sys.argv:
+        # Production guard: the non-interactive path is allowed ONLY against a local
+        # database. A remote host is treated as potentially production, so
+        # `--reset --yes` is refused there — a CI/CD pipeline or runbook that carries
+        # a production DATABASE_URL can never silently DROP the schema. A deliberate
+        # remote reset is still possible, but only interactively (typing the name).
+        if not _is_local_db(DATABASE_URL):
+            raise SystemExit(
+                "Refusing '--reset --yes' against a non-local database (host "
+                f"'{_db_host(DATABASE_URL) or 'unknown'}'). Non-interactive reset is "
+                "permitted only for a local database (localhost / 127.0.0.1 / unix "
+                "socket) so an automated run can never destroy a remote or production "
+                "schema. Re-run WITHOUT --yes and type the database name to confirm."
+            )
+        print("    (--yes supplied; local database; skipping interactive confirmation)")
+        return
+    try:
+        entered = input(f'Type the database name "{name}" to proceed (or anything else to abort): ').strip()
+    except EOFError:
+        entered = ""
+    if entered != name:
+        raise SystemExit("reset aborted — confirmation did not match the database name.")
+
+
+def reset_schema() -> None:
+    """DROP and recreate the ``public`` schema — every table, from scratch.
+
+    Drops the whole schema (CASCADE takes tables, indexes, the alembic_version
+    stamp, and the pgvector extension with it), then recreates an empty ``public``
+    and restores baseline grants so the connecting role and PUBLIC can use it. The
+    subsequent migration run rebuilds everything (incl. re-creating the vector
+    extension). Requires a role that owns / can drop the public schema (superuser,
+    or the schema owner).
+    """
+    import psycopg2
+
+    print("[0/3] reset: DROP SCHEMA public CASCADE; CREATE SCHEMA public ...")
+    con = psycopg2.connect(DATABASE_URL)
+    try:
+        con.autocommit = True
+        cur = con.cursor()
+        cur.execute("DROP SCHEMA IF EXISTS public CASCADE")
+        cur.execute("CREATE SCHEMA public")
+        # Restore the baseline grants a fresh database ships with, so the app role
+        # (and other roles) can use the recreated schema.
+        cur.execute("GRANT ALL ON SCHEMA public TO CURRENT_USER")
+        cur.execute("GRANT ALL ON SCHEMA public TO public")
+    finally:
+        con.close()
 
 
 def run_migrations() -> None:
@@ -205,7 +315,11 @@ def main() -> None:
         )
     seed = "--no-seed" not in sys.argv
     verbose = "--verbose" in sys.argv or "-v" in sys.argv
+    reset = "--reset" in sys.argv
     print(f"Provisioning schema -> {_redacted(DATABASE_URL)}")
+    if reset:
+        confirm_reset()
+        reset_schema()
     run_migrations()
     run_seed_loader(seed)
     ensure_lazy_tables()

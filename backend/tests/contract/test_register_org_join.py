@@ -112,9 +112,15 @@ def test_two_users_same_name_share_org_but_distinct_users(client: TestClient):
 
 
 def _register(client: TestClient, org_name: str):
+    from auth_helpers import email_for_org
+
+    # BUG 1: a valid (letters-only) org name needs a matching-domain email. For an
+    # INVALID name the letters-only check fires first (400), so the email domain is
+    # irrelevant there — deriving it from the name is safe for both cases.
+    email = email_for_org(org_name) if org_name.strip().isalpha() else _email()
     return client.post(
         "/api/auth/register",
-        json={"org_name": org_name, "email": _email(), "password": "Supersecret1!"},
+        json={"org_name": org_name, "email": email, "password": "Supersecret1!"},
     )
 
 

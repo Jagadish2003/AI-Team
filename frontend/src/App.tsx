@@ -1,4 +1,4 @@
-import { Routes, Route, Navigate } from "react-router-dom";
+import { Routes, Route, Navigate, useLocation } from "react-router-dom";
 import { ConnectorProvider } from "./context/ConnectorContext";
 import { NetworkProfileProvider } from "./context/NetworkProfileContext";
 import { SourceIntakeProvider } from "./context/SourceIntakeContext";
@@ -25,12 +25,16 @@ import IntegrationHubPage from "./pages/IntegrationHubPage";
 import DiscoveryRunPage from "./pages/DiscoveryRunPage";
 import OpportunityReviewPage from "./pages/OpportunityReviewPage";
 import SourceIntelligencePage from "./pages/SourceIntelligencePage";
-import PilotRoadmapPage from "./pages/PilotRoadmapPage";
 import BlueprintPage from "./pages/BlueprintPage";
 import ExecutiveReportPage from "./pages/ExecutiveReportPage";
 import StackBuilderPage from "./pages/StackBuilderPage";
 import SettingsPage from "./pages/SettingsPage";
 import LicensePage from "./pages/LicensePage";
+
+function PilotRoadmapRedirect() {
+  const location = useLocation();
+  return <Navigate to={`/agentforce-blueprint${location.search}${location.hash}`} replace />;
+}
 
 export default function App() {
   return (
@@ -149,7 +153,10 @@ export default function App() {
                               />
                               <Route
                                 path="/pilot-roadmap"
-                                element={<PilotRoadmapPage />}
+                                // Agent Roadmap now lives at the top of the
+                                // connector-aware Blueprint page. Redirect preserved for
+                                // old links and Executive Report deep links.
+                                element={<PilotRoadmapRedirect />}
                               />
                               <Route
                                 path="/agentforce-blueprint"
@@ -157,8 +164,8 @@ export default function App() {
                               />
                               <Route
                                 path="/agent-blueprint"
-                                // Agent Blueprint renamed to Agentforce Blueprint.
-                                // Redirect preserved for backward compatibility.
+                                // Legacy Blueprint route; the customer-facing name is
+                                // resolved from the connected source system.
                                 element={
                                   <Navigate to="/agentforce-blueprint" replace />
                                 }

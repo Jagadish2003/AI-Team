@@ -6,6 +6,12 @@ Four OAuth routes (all require Bearer auth — spec AC17):
   DELETE /api/connectors/{connector_id}/token   — Revoke token
   GET  /api/connectors/{connector_id}/token-status — Token status
 
+Plus the unified per-tile disconnect used by the Integration Hub (R18-C0 P4 / AT-566):
+  DELETE /api/connectors/{connector_id}         — analyst+: revoke WHICHEVER credential
+                                                  kind the org holds (OAuth token and/or
+                                                  static credential) and mark the tile
+                                                  disconnected. Idempotent.
+
 Plus the static-credential entry surface for connectors that authenticate with a
 URL + username + token/password rather than OAuth (R17-D3 Addendum A, T12 / AC10 —
 Jira, ServiceNow, native DB connectors):
@@ -682,6 +688,64 @@ def register_connector_auth_routes(app: FastAPI) -> None:
                 db.org_connector_set(org_id, connector_id, record)
         except Exception:
             logger.exception("Failed to clear connector %s connection state", connector_id)
+        log_event(
+            "connector_disconnected",
+            connector_id=connector_id,
+            user_id=_get_user_id_from_token(token),
+        )
+        return Response(status_code=204)
+
+    @app.delete(
+        "/api/connectors/{connector_id}",
+        dependencies=[Depends(require_auth), Depends(require_role("analyst"))],
+    )
+    async def disconnect_connector(
+        connector_id: str, token: str = Depends(require_auth)
+    ) -> Response:
+        """Disconnect a connector for the caller's org (R18-C0 P4 / AT-566).
+
+        The single action behind each connected Integration Hub tile's Disconnect
+        control. It clears WHICHEVER credential kind the org holds for this
+        connector and returns the tile to its unconnected state, so the frontend
+        needs one call regardless of how the connector was authenticated:
+
+          * OAuth connectors — ``revoke_token`` does best-effort external
+            revocation (RFC 7009 / Slack ``auth.revoke``) and soft-deletes the
+            vault row (its local delete is not kind-scoped, so it clears the row
+            whatever its kind).
+          * Static-credential connectors (Jira/ServiceNow token, native DBs) —
+            ``revoke_static_credential`` soft-deletes the static vault row too, so
+            the static path is cleared explicitly and stays correct even if
+            ``revoke_token``'s local delete is ever narrowed to ``kind='oauth'``.
+
+        Both revokes are org+connector scoped (org from the tenancy context, never
+        the request — one org can never disconnect another's connector) and
+        idempotent, so disconnecting a connector that was never connected or is
+        already disconnected still returns 204 with no error. analyst+, matching
+        the connect (auth-url) and revoke (token) routes.
+        """
+        org_id = get_current_org_id()
+
+        await revoke_token(org_id, connector_id)
+        revoke_static_credential(org_id, connector_id)
+
+        # Mirror delete_token / delete_static_credentials: flip this org's
+        # connection state to disconnected so GET /api/connectors reports the tile
+        # unconnected. Display-state only — the vault revoke above is the source of
+        # truth, so a failure here must not fail the disconnect. The org_id guard
+        # (as in delete_token) avoids writing a spurious override for a connector
+        # this org never connected.
+        try:
+            record = db.org_connector_get(org_id, connector_id)
+            if record is not None and record.get("org_id") == org_id:
+                record["status"] = "disconnected"
+                db.org_connector_set(org_id, connector_id, record)
+        except Exception:
+            logger.exception(
+                "Failed to clear connector %s connection state on disconnect",
+                connector_id,
+            )
+
         log_event(
             "connector_disconnected",
             connector_id=connector_id,

@@ -278,6 +278,22 @@ class InBoundaryModelProvider(ModelProvider):
         )
         return vectors
 
+    def embedding_identity(self) -> "tuple[str, str]":
+        """Stamp identity/version for in-boundary vectors (R18-B1 T3 / AC8).
+
+        Identity qualifies the provider name with the configured embedding model
+        so repinning ``IN_BOUNDARY_EMBEDDING_MODEL`` to a different model yields a
+        distinct identity — retrieval then never compares the old model's vectors
+        against the new one's. Read live from a fresh config, like ``_run_embed``.
+        The in-boundary OpenAI-compatible endpoint carries no separate model
+        version, so the version component is the model name itself (an empty model
+        name falls back to the base ``(name, "")``).
+        """
+        model = InBoundaryConfig().embedding_model()
+        if not model:
+            return (self.name, "")
+        return (f"{self.name}:{model}", model)
+
     def _run_embed(self, texts: List[str]) -> List[List[float]]:
         """Resilient embedding call. Telemetry is emitted once by embed().
 

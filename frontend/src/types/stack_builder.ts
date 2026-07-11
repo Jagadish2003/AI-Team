@@ -65,7 +65,6 @@ export interface Industry {
 
 export type TemplateId =
   | 'commercial_lending'
-  | 'public_retirement'
   | 'service_operations'
   | 'revenue_operations';
 

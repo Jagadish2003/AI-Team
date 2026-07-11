@@ -18,6 +18,7 @@ import { vi, describe, it, expect, beforeEach } from 'vitest';
 import type { OpportunityCandidate } from '../types/analystReview';
 import type { ExecutiveReport } from '../api/runScopedS9S10Api';
 import type { RunEnrichment } from '../api/enrichmentApi';
+import { LEADERSHIP_ACTIONS } from '../components/executive_report/KeyInsights';
 
 // Fixtures + mock fns live in vi.hoisted so the (hoisted) vi.mock factories
 // below can reference them.
@@ -94,6 +95,10 @@ vi.mock('../context/RunContext', () => ({
   useRunContext: () => ({ runId: 'run_x' }),
 }));
 
+vi.mock('../context/ConnectorContext', () => ({
+  useConnectorContext: () => ({ all: [] }),
+}));
+
 vi.mock('../context/DiscoveryRunContext', () => ({
   useDiscoveryRunContext: () => ({ run: { status: 'complete' }, computing: false }),
 }));
@@ -143,6 +148,18 @@ describe('ExecutiveReportPage — download controls', () => {
     await findDownloadPdfButton();
     expect(screen.getByRole('button', { name: /download pptx/i })).toBeDisabled();
     expect(screen.getByRole('button', { name: /download xlsx/i })).toBeDisabled();
+  });
+
+  it('uses flexible quick-win approval wording on screen and in the shared PDF actions', async () => {
+    renderPage();
+    await findDownloadPdfButton();
+
+    const expected = 'Approve top quick wins and confirm success metrics.';
+    expect(screen.getByText(expected)).toBeInTheDocument();
+    expect(LEADERSHIP_ACTIONS[0]).toBe(expected);
+    expect(expected).toContain('Approve top quick wins');
+    expect(expected).not.toMatch(/Approve top \d+ quick wins/i);
+    expect(document.body).not.toHaveTextContent('Approve top 2 quick wins');
   });
 
   it('invokes the PDF export with report data and a dated filename when clicked', async () => {

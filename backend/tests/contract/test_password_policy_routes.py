@@ -20,7 +20,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 
 from app import db
-from auth_helpers import activate_org_by_email, rand_org_name
+from auth_helpers import activate_org_by_email, email_for_org, rand_org_name
 
 STRONG = "Password1!"
 WEAK = "password"  # 8 chars, lowercase only — missing uppercase + special
@@ -65,10 +65,11 @@ def test_ac4_register_weak_password_creates_no_user(client):
 
 
 def test_ac5_register_strong_password_returns_201(client):
-    email = _email()
+    org = rand_org_name("Acme")
+    email = email_for_org(org)  # BUG 1: org name must match the email domain
     resp = client.post(
         "/api/auth/register",
-        json={"org_name": "Acme", "email": email, "password": STRONG},
+        json={"org_name": org, "email": email, "password": STRONG},
     )
     assert resp.status_code == 201, resp.text
     # AUTH-2: the JWT is issued on login after approval, not at register.
@@ -112,10 +113,11 @@ def test_ac6_login_does_not_enforce_strength_for_existing_weak_password(client):
 
 
 def _make_invite(client) -> str:
-    owner_email = _email()
+    org = rand_org_name()
+    owner_email = email_for_org(org)  # BUG 1: org name must match the email domain
     owner = client.post(
         "/api/auth/register",
-        json={"org_name": rand_org_name(), "email": owner_email, "password": STRONG},
+        json={"org_name": org, "email": owner_email, "password": STRONG},
     )
     assert owner.status_code == 201, owner.text
     # AUTH-2: approve + login to get the owner JWT.
@@ -158,10 +160,11 @@ def test_ac7_accept_invite_strong_password_activates_and_returns_jwt(client):
 
 
 def _register_and_get_reset_token(client) -> tuple[str, str]:
-    email = _email()
+    org = rand_org_name()
+    email = email_for_org(org)  # BUG 1: org name must match the email domain
     reg = client.post(
         "/api/auth/register",
-        json={"org_name": rand_org_name(), "email": email, "password": STRONG},
+        json={"org_name": org, "email": email, "password": STRONG},
     )
     assert reg.status_code == 201, reg.text
     activate_org_by_email(email)  # AUTH-2 admin approval (simulated) so post-reset login works

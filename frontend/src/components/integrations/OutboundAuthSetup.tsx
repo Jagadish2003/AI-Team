@@ -16,9 +16,9 @@
  * outbound-only mode other than plain `static`. Owner-gated for the write
  * actions, mirroring StaticCredentialManager.
  */
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { CheckCircle2, KeyRound, Lock, ShieldCheck, Trash2 } from 'lucide-react';
-import { Connector } from '../../types/connector';
+import { Connector, OutboundSetupRequest } from '../../types/connector';
 import {
   ConnectorCredentialStatus,
   connectClientCredentials,
@@ -42,7 +42,13 @@ function formatUpdated(iso: string | null): string | null {
   });
 }
 
-export default function OutboundAuthSetup({ connector }: { connector: Connector }) {
+export default function OutboundAuthSetup({
+  connector,
+  outboundSetupRequest = null,
+}: {
+  connector: Connector;
+  outboundSetupRequest?: OutboundSetupRequest | null;
+}) {
   const auth = useAuthOptional();
   const isOwner = auth?.user?.role === 'owner';
   const toast = useToast();
@@ -77,6 +83,21 @@ export default function OutboundAuthSetup({ connector }: { connector: Connector 
     setConfirmRemove(false);
     return loadJwtStatus();
   }, [loadJwtStatus]);
+
+  // R18-A3 follow-up: pop the JWT form when the tile's "Set up outbound access"
+  // button is clicked (the parent bumps outboundSetupRequest.nonce). Guarded by
+  // connectorId + a consumed-nonce ref so it fires exactly once per click and
+  // never on an unrelated connector's mount. Only jwt_bearer has a form here;
+  // client_credentials is a single button, so it is intentionally not auto-opened.
+  const consumedNonce = useRef(0);
+  useEffect(() => {
+    if (!outboundSetupRequest) return;
+    if (outboundSetupRequest.nonce === consumedNonce.current) return;
+    consumedNonce.current = outboundSetupRequest.nonce;
+    if (outboundSetupRequest.connectorId === connector.id && supportsJwt) {
+      setModalOpen(true);
+    }
+  }, [outboundSetupRequest, connector.id, supportsJwt]);
 
   // Only relevant in no-public-inbound; and only for outbound modes that need a
   // dedicated setup UI here (static is handled by StaticCredentialManager).

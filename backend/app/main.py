@@ -46,6 +46,7 @@ from .routes_connector_auth import register_connector_auth_routes
 from .routes_stack_builder import register_stack_builder_routes
 from .routes_stack_builder_launch import register_stack_builder_launch_routes
 from .routes_salesforce_products import register_salesforce_products_routes
+from .routes_slack_channels import register_slack_channels_routes
 from .routes_sprint4_t1 import register_sprint4_t1_routes
 from .routes_sprint4_t2 import register_sprint4_t2_routes
 from .routes_sprint4_t3 import register_sprint4_t3_routes
@@ -60,6 +61,7 @@ from .routes_temporal import register_temporal_routes
 from .routes_entities import register_entities_routes
 from .routes_causal import register_causal_routes
 from .routes_graph import register_graph_routes
+from .routes_retrieval import register_retrieval_routes
 from .routes_auth import register_auth_routes
 from .routes_license import register_license_routes
 from .routes_ingestion import register_ingestion_routes
@@ -68,6 +70,7 @@ from .auth.configs import CONNECTOR_AUTH_CONFIGS
 from .auth.secrets import validate_all_secrets
 from .middleware.tenancy import get_current_org_id, register_tenancy
 from .middleware.license_gate import register_license_gate
+from .retrieval.default_resolvers import register_default_content_resolvers
 from .rbac import require_role, seed_owner
 
 _DEV_USER = os.getenv("DEV_JWT", "dev-token-change-me")
@@ -221,14 +224,34 @@ async def lifespan(app: FastAPI):
         scheduler as token_refresh_scheduler,
         start_scheduler as start_token_refresh_scheduler,
     )
+    # R18-B1 T3: async retrieval embedding worker. Content is indexed before it is
+    # embedded; this job drains the pending backlog off the run path so embedding
+    # lag never blocks a discovery run (AC7).
+    from .jobs.embedding_worker import (
+        scheduler as embedding_worker_scheduler,
+        start_scheduler as start_embedding_worker_scheduler,
+    )
+    # R18-B2 T3: async retrieval refresh worker. When a source artifact changes its
+    # chunks are marked stale and queued; this job drains the queue off the run path
+    # — re-extract, hash-compare, re-embed only what changed, atomic swap, clear
+    # stale — so re-embedding never blocks a discovery run.
+    from .jobs.refresh_worker import (
+        scheduler as refresh_worker_scheduler,
+        start_scheduler as start_refresh_worker_scheduler,
+    )
     # LIC-1 / T4 (AT-345): periodic license re-check (gated background job).
     from .license_runtime import start_license_scheduler, stop_license_scheduler
 
     background_jobs_disabled = os.getenv("AGENTIQ_DISABLE_BACKGROUND_JOBS") == "1"
+    # R18-B2 T3: teach the refresh worker how to re-extract changed artifacts from
+    # the production connectors before the worker starts draining its queue.
+    register_default_content_resolvers()
     if not background_jobs_disabled:
         start_health_check_job()
         start_baseline_scheduler()
         start_token_refresh_scheduler()
+        start_embedding_worker_scheduler()
+        start_refresh_worker_scheduler()
         start_license_scheduler()
     yield
     # AT-90: shut down scheduler on SIGTERM / graceful shutdown (wait=False).
@@ -238,6 +261,10 @@ async def lifespan(app: FastAPI):
             baseline_scheduler.shutdown(wait=False)
         if token_refresh_scheduler.running:
             token_refresh_scheduler.shutdown(wait=False)
+        if embedding_worker_scheduler.running:
+            embedding_worker_scheduler.shutdown(wait=False)
+        if refresh_worker_scheduler.running:
+            refresh_worker_scheduler.shutdown(wait=False)
         stop_license_scheduler()
 
 
@@ -258,6 +285,7 @@ register_stack_builder_routes(app)
 register_stack_builder_launch_routes(app)
 register_workspace_catalog_routes(app)
 register_salesforce_products_routes(app)
+register_slack_channels_routes(app)
 # Sprint 4 routes are registered in dependency order T1 → T2 → T3 → T4 → T6.
 # FastAPI resolves routes in registration order, so a module registered earlier
 # wins any shared path prefix. T6 (LLM enrichment / evidence-trace) MUST be
@@ -278,6 +306,8 @@ register_workspace_routes(app)
 register_entities_routes(app)
 register_causal_routes(app)
 register_graph_routes(app)
+# R18-B2 T6: retrieval freshness metrics for the run-health dashboard (AC7).
+register_retrieval_routes(app)
 register_auth_routes(app)
 # LIC-1 / T6 (AT-347): Owner-only license status + update-key admin routes.
 register_license_routes(app)
@@ -655,6 +685,7 @@ def set_opp_decision(run_id: str, opp_id: str, body: Dict[str, Any]) -> Dict[str
         idx = next((i for i, o in enumerate(run_opps) if o["id"] == opp_id), None)
         if idx is None:
             raise HTTPException(404, "opportunity not found")
+        previous_decision = run_opps[idx].get("decision", "UNREVIEWED")
         run_opps[idx] = {**run_opps[idx], "decision": decision}
         run_kv_set("opps", run_id, run_opps)
         o = run_opps[idx]
@@ -662,18 +693,28 @@ def set_opp_decision(run_id: str, opp_id: str, body: Dict[str, Any]) -> Dict[str
         o = get_one("opportunities", opp_id)
         if not o:
             raise HTTPException(404, "opportunity not found")
+        previous_decision = o.get("decision", "UNREVIEWED")
         o["decision"] = decision
         upsert("opportunities", opp_id, o)
-    event = {
-        "id": f"audit_{uuid4().hex[:8]}",
-        "tsLabel": now_iso(),
-        "tsEpoch": int(time.time()),
-        "action": decision,
-        "by": "Architect",
-        "opportunityId": opp_id,
-    }
-    audit = run_kv_get("audit", run_id, default_audit())
-    run_kv_set("audit", run_id, [event, *audit])
+    # R18-C0 P8: a decision change is recorded as a NEW audit/feedback event —
+    # never an overwrite. Each event captures the actor, timestamp, the new
+    # decision, and the prior decision it replaced, so the full decision history
+    # (and each transition) stays queryable for audit and the 2.0
+    # feedback-learning loop. The opportunity's `decision` field holds only the
+    # current value; the append-only audit list is the history of record. A
+    # genuine no-op re-click (same decision) does not append a spurious event.
+    if decision != previous_decision:
+        event = {
+            "id": f"audit_{uuid4().hex[:8]}",
+            "tsLabel": now_iso(),
+            "tsEpoch": int(time.time()),
+            "action": decision,
+            "previousDecision": previous_decision,
+            "by": "Architect",
+            "opportunityId": opp_id,
+        }
+        audit = run_kv_get("audit", run_id, default_audit())
+        run_kv_set("audit", run_id, [event, *audit])
     # with_display (not just title) so impact/effort carry the same stable matrix
     # offset as the list endpoint — otherwise the bubble jumps when its decision
     # response replaces the listed opportunity in the UI.

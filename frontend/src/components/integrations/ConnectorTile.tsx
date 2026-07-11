@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import { Unplug } from 'lucide-react';
 import { Connector } from '../../types/connector';
 import Badge from '../common/Badge';
 import Button from '../common/Button';
@@ -17,7 +18,7 @@ import { isViewerRole } from '../../utils/roles';
 // from the hub for now; every other tile renders its action button disabled with
 // the "Connecting new sources is currently unavailable" tooltip.
 const ENABLED_CONNECTOR_IDS = [
-  'salesforce', 'servicenow', 'jira',
+  'salesforce', 'servicenow', 'jira', 'github',
 ];
 
 export default function ConnectorTile({
@@ -27,6 +28,8 @@ export default function ConnectorTile({
   onSelect,
   onPrimary,
   onReconnect,
+  onDisconnect,
+  onSetupOutbound,
   connectBlocked,
   connectBlockMessage,
 }: {
@@ -35,10 +38,21 @@ export default function ConnectorTile({
   selected: boolean;
   onSelect: () => void;
   onPrimary: () => void;
+  // R18-A3 follow-up: in a no-public-inbound deployment the outbound-only
+  // connectors show a "Set up outbound access" button instead of Connect.
+  // Clicking it should POP the credential/JWT setup modal directly (like the
+  // right-panel "Enter credentials" flow), not just re-select the tile. The
+  // parent selects the connector and bumps the auto-open request. Falls back to
+  // onSelect when not supplied so the tile still works in isolation.
+  onSetupOutbound?: () => void;
   // Called when the token is expired/refresh-failed and the user clicks
   // "Reconnect". Must trigger the OAuth flow again (CS-2 AC7). Falls back to
   // onPrimary when not supplied so the tile keeps working in isolation.
   onReconnect?: () => void;
+  // R18-C0 P4 / AT-566: called when the user clicks the tile's Disconnect action
+  // (shown only on a connected tile). The parent owns the confirmation step and
+  // the disconnect request; omitting it hides the action (e.g. read-only views).
+  onDisconnect?: () => void;
   // R17-D4 Addendum A / T11 (AT-506): when the org is at its licensed system
   // limit, disable the Connect action for a NEW (not-yet-connected) system and
   // show connectBlockMessage as its tooltip (AC10). Forward-only — an already
@@ -120,6 +134,11 @@ export default function ConnectorTile({
   // (Connect / Configure & Sync / Reconnect) is disabled for them.
   const viewerBlocks = isViewer && actionLabel !== 'View data';
   const actionDisabled = !isEnabled || limitBlocksNew || viewerBlocks;
+
+  // R18-C0 P4 / AT-566: a connected tile offers Disconnect. Disconnecting is a
+  // connector write (analyst+), so viewers never see it; it is independent of the
+  // new-connection license gate (removing a connection is always allowed).
+  const canDisconnect = isConnected && !isViewer && Boolean(onDisconnect);
   const disabledTitle = limitBlocksNew
     ? (connectBlockMessage || 'Your license limit has been reached. Contact CloudFulcrum to add more.')
     : !isEnabled
@@ -183,12 +202,12 @@ export default function ConnectorTile({
       </div>
 
       {/* Button */}
-      <div className="mt-auto pb-1 pt-4">
+      <div className="mt-auto flex items-center gap-2 pb-1 pt-4">
         <Button
           variant={actionVariant}
           disabled={actionDisabled}
-          title={disabledTitle ?? enabledTitle}
-          className={`w-full ${
+          title={disabledTitle}
+          className={`min-w-0 flex-1 ${
             actionDisabled
               ? '!bg-slate-500/10 !text-muted !border-border !opacity-100'
               : isConnected && isConfigured && !tokenExpired
@@ -202,7 +221,12 @@ export default function ConnectorTile({
             // mode — open the detail panel (outbound setup path) instead so the
             // customer can never begin a flow that cannot complete (AC4).
             if (outboundSetupGate) {
-              onSelect();
+              // Pop the outbound/credential setup modal directly rather than
+              // only re-selecting the tile (which looked like "nothing happens"
+              // when the panel was already open). Fall back to selection when no
+              // handler is wired.
+              if (onSetupOutbound) onSetupOutbound();
+              else onSelect();
               return;
             }
             // When the token needs a fresh OAuth round-trip, "Reconnect" must
@@ -217,6 +241,21 @@ export default function ConnectorTile({
         >
           {actionLabel}
         </Button>
+
+        {canDisconnect && (
+          <button
+            type="button"
+            title="Disconnect"
+            aria-label={`Disconnect ${connector.name}`}
+            onClick={(e: React.MouseEvent<HTMLButtonElement>) => {
+              e.stopPropagation();
+              onDisconnect?.();
+            }}
+            className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md border border-border text-muted transition-colors hover:border-red-500/40 hover:bg-red-500/10 hover:text-red-300 focus:outline-none focus-visible:ring-2 focus-visible:ring-red-500/30"
+          >
+            <Unplug size={15} />
+          </button>
+        )}
       </div>
     </div>
   );
