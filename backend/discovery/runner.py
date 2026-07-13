@@ -442,6 +442,18 @@ def _ingest_teams_corroboration(org_id: str, run_id: str) -> Dict[str, Any]:
         activity, cross_references}`` block the corroboration engine reads, wrapped
         under the ``'teams'`` key (T4 / AT-433).
 
+    R18-A4 / AT-595 (T2) — deep content BESIDE the signal path: the SAME
+    fully-processed batch is also handed to
+    :meth:`TeamsIngestor.ingest_deep_content`, which assembles the Graph messages
+    into threads, scope-checks them against the granted channels, and hands the
+    conversation TEXT to the retrieval substrate (``ingest_content``) — via the
+    SAME shared conversation model Slack uses (T1). One change-runner pass drives
+    BOTH the reach signal AND the depth content off the single ``(org, 'teams')``
+    checkpoint — no new connector, no new checkpointing, reach signal untouched.
+    The deep hand-off is non-blocking here (reach + depth share the checkpoint, so a
+    substrate failure is logged, not fatal — idempotent replace re-indexes on next
+    change).
+
     The Teams MEDIUM ceiling — Teams-only stays MEDIUM, never standalone HIGH; it
     elevates only WITH a primary system-of-record corroborator (COR-06) — is
     enforced by the engine's conversation-source COR-05/COR-06 rules and the T3
@@ -457,12 +469,30 @@ def _ingest_teams_corroboration(org_id: str, run_id: str) -> Dict[str, Any]:
         logger.warning("Teams connector import failed (non-blocking): %s", e)
         return {}
 
+    ingestor = TeamsIngestor()
     collected: List[Dict[str, Any]] = []
+
+    def _process_batch(batch) -> None:
+        # Reach: collect the batch's records for the corroboration block.
+        collected.extend(batch.records)
+        # Depth (T2): hand this batch's conversation content to the retrieval
+        # substrate beside the signal path. Guarded and non-blocking: reach and
+        # depth share ONE checkpoint, so a content hand-off failure must not freeze
+        # it or abort corroboration — logged (type name only, never the exception
+        # str, which may carry a Bearer token) and the run continues.
+        try:
+            ingestor.ingest_deep_content(org_id, batch.records)
+        except Exception as e:  # noqa: BLE001 — depth must not break reach/checkpoint
+            logger.warning(
+                "Teams deep-content hand-off failed (non-blocking) org=%s run=%s: [%s]",
+                org_id, run_id, type(e).__name__,
+            )
+
     try:
         result = change_runner.ingest_with_checkpoint(
-            TeamsIngestor(),
+            ingestor,
             org_id,
-            process_batch=lambda batch: collected.extend(batch.records),
+            process_batch=_process_batch,
         )
     except Exception as e:  # noqa: BLE001 — belt-and-braces; the runner is non-raising.
         # Type name only — the exception str may carry a Bearer token from the

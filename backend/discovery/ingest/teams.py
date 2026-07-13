@@ -98,10 +98,19 @@ import os
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, Iterator, List, Optional, Tuple
+from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple
 
 from . import get_live_connector, is_live, resolve_vault_connector
 from .base import ChangeBasedIngestor, ChangeKind, Checkpoint, DeltaBatch
+from .conversation_content import (
+    ConversationDeepContentError,
+    ConversationDeepContentResult,
+    ConversationMessage,
+    ConversationThread,
+    assemble_threads,
+    ingest_conversation_content,
+    thread_to_artifact,
+)
 from .teams_signals import (
     build_evidence_pointer,
     extract_cross_reference_markers,
@@ -111,6 +120,23 @@ from .teams_signals import (
 logger = logging.getLogger(__name__)
 
 FIXTURE_PATH = Path(__file__).parent / "fixtures" / "teams_sample.json"
+
+#: The retrieval substrate's canonical source-system tag for Teams conversation
+#: content (R18-B1 ``KNOWN_SOURCE_SYSTEMS``). Reporting content under this exact
+#: name keeps the conversation MEDIUM ceiling applicable to a retrieval hit (AC6),
+#: so it must never be relabelled.
+RETRIEVAL_SOURCE_SYSTEM = "teams"
+
+#: Messages with no thread structure are grouped into a time-bounded window so the
+#: conversational unit is never a lone, context-free message (R18-A4 §1 / §4).
+#: Same policy as Slack — thread semantics are the SHARED conversation model.
+THREAD_WINDOW_SECONDS = 3600
+
+#: R18-A4 deep-content types are shared with Slack (AT-594) — the two platforms
+#: diverge only at the collection edge (:meth:`TeamsIngestor._to_conversation_message`).
+#: Re-exported under Teams names for symmetry with the Slack API.
+TeamsDeepContentError = ConversationDeepContentError
+TeamsDeepContentResult = ConversationDeepContentResult
 
 #: Opaque-checkpoint schema version, so a future shape change can be detected.
 _CHECKPOINT_VERSION = 1
@@ -421,6 +447,133 @@ class TeamsIngestor(ChangeBasedIngestor):
                 accessible.append({**c, "team_id": team_id, "team_name": team_name})
         return accessible
 
+    # ── Deep-content path (R18-A4 / AT-595 — T2) ─────────────────────────────
+    # Thread assembly, rendering, provenance, and the substrate hand-off are the
+    # SHARED conversation model (:mod:`discovery.ingest.conversation_content`),
+    # identical to Slack (AT-594). Only the collection edge below — turning a
+    # Microsoft Graph delta record into a neutral ``ConversationMessage`` and
+    # resolving the granted-channel scope — is Teams-specific.
+    def _granted_scope_container_ids(self, org_id: str) -> set:
+        """Container ids (``"{team_id}/{channel_id}"``) the depth path may read.
+
+        The SAME boundary the reach path applies in :meth:`_accessible_channels`,
+        expressed as a container-id set: only standard channels AgentIQ is granted
+        and that are live (private/ungranted/archived channels excluded; private
+        chats / DMs are never enumerated at all). This is the AC2 boundary —
+        conversation text from any channel outside this set is never assembled or
+        handed off.
+        """
+        return {
+            _channel_key(c["team_id"], c["id"]) for c in self._accessible_channels(org_id)
+        }
+
+    def _in_granted_scope(self, org_id: str, container_id: Optional[str]) -> bool:
+        """True when ``container_id`` (``"{team_id}/{channel_id}"``) is granted (AC2)."""
+        if not container_id:
+            return False
+        return str(container_id) in self._granted_scope_container_ids(org_id)
+
+    @staticmethod
+    def _thread_key(record: Dict[str, Any]) -> Optional[str]:
+        """The Teams thread anchor for a record, or None when it has no thread.
+
+        A reply carries ``reply_to_id`` = the root message's id → it keys to that
+        parent. A root message WITH replies (``reply_count > 0``) keys to its own
+        ``message_id`` so it and any replies group together. Everything else is a
+        standalone message (windowed, not threaded). Mirrors the Slack thread key
+        (``thread_ts`` / ``ts`` / ``reply_count``) exactly.
+        """
+        reply_to_id = record.get("reply_to_id")
+        if reply_to_id:
+            return str(reply_to_id)
+        try:
+            reply_count = int(record.get("reply_count", 0) or 0)
+        except (TypeError, ValueError):
+            reply_count = 0
+        if reply_count > 0:
+            return str(record.get("message_id", ""))
+        return None
+
+    def _to_conversation_message(self, record: Dict[str, Any]) -> ConversationMessage:
+        """The Teams collection edge: one delta record → a neutral message.
+
+        This is the ONLY Teams-specific part of the depth path — everything after
+        (thread assembly, rendering, provenance, hand-off) is the shared model. The
+        change marker (``last_modified_at`` else ``created_at``) drives ordering and
+        recency, exactly as the reach checkpoint does.
+        """
+        team_id = str(record.get("team_id", ""))
+        channel_id = str(record.get("channel_id", ""))
+        container_id = _channel_key(team_id, channel_id)
+        marker = record.get("last_modified_at") or record.get("created_at")
+        return ConversationMessage(
+            container_id=container_id,
+            container_name=str(record.get("channel_name", "") or ""),
+            msg_id=str(record.get("message_id", "")),
+            thread_key=self._thread_key(record),
+            sort_key=_marker_epoch(marker) if _marker_epoch(marker) is not None else float("-inf"),
+            iso_ts=marker or None,
+            # Human-readable author for the rendered thread; the stable user id is
+            # kept in provenance for the entity layer (T4).
+            author=str(record.get("user_display_name") or record.get("user") or ""),
+            text=str(record.get("text") or ""),
+            extra={
+                "team_id": team_id,
+                "team_name": record.get("team_name", ""),
+                "channel_id": channel_id,
+                "user_id": record.get("user"),
+            },
+        )
+
+    def assemble_threads(self, records: List[Dict[str, Any]]) -> List[ConversationThread]:
+        """Assemble Teams delta records into conversational units (threads/windows).
+
+        Adapts each record to a neutral :class:`ConversationMessage` then delegates
+        to the shared :func:`conversation_content.assemble_threads` so Teams and
+        Slack share identical thread semantics.
+        """
+        messages = [self._to_conversation_message(r) for r in records]
+        return assemble_threads(
+            RETRIEVAL_SOURCE_SYSTEM, messages, window_seconds=THREAD_WINDOW_SECONDS
+        )
+
+    def _thread_to_artifact(self, thread: ConversationThread) -> Any:
+        """Map one assembled thread to a substrate ``ContentArtifact`` (shared)."""
+        return thread_to_artifact(thread)
+
+    def ingest_deep_content(
+        self,
+        org_id: str,
+        records: List[Dict[str, Any]],
+        *,
+        ingest_fn: Optional[Callable[[str, List[Any]], Any]] = None,
+    ) -> TeamsDeepContentResult:
+        """Hand a batch's Teams conversation content to the retrieval substrate (T2).
+
+        The depth path that rides beside the unchanged reach signal path: it adapts
+        the batch's Graph records to neutral messages, scope-checks them against the
+        granted channels (AC2), assembles the in-scope messages into threads/windows,
+        and hands each as a ``conversation`` ``ContentArtifact`` to
+        ``retrieval.ingest_content`` (AC1) — all via the shared conversation model.
+        The substrate owns chunking/embedding/indexing — this method never writes
+        vectors.
+
+        Called per fully-processed delta batch (so it is naturally incremental and
+        rides the existing ``(org, 'teams')`` Graph-delta checkpoint — no new
+        checkpointing). ``ingest_fn`` is injectable for tests; it defaults to the
+        real ``ingest_content``. Raises :class:`TeamsDeepContentError` when the
+        substrate reports any failed artifact (at-least-once; idempotent replace).
+        """
+        messages = [self._to_conversation_message(r) for r in records]
+        return ingest_conversation_content(
+            org_id,
+            RETRIEVAL_SOURCE_SYSTEM,
+            messages,
+            scope_container_ids=self._granted_scope_container_ids(org_id),
+            window_seconds=THREAD_WINDOW_SECONDS,
+            ingest_fn=ingest_fn,
+        )
+
     def _channel_delta(
         self, org_id: str, channel: Dict[str, Any], token: Optional[str]
     ) -> Tuple[List[Dict[str, Any]], Optional[str]]:
@@ -497,6 +650,10 @@ class TeamsIngestor(ChangeBasedIngestor):
             "channel_id": channel_id,
             "channel_name": channel.get("displayName", ""),
             "message_id": message_id,
+            # Graph stamps a reply with its parent root message id; a root message
+            # has none. Carried so the deep-content path (R18-A4 / AT-595) can group
+            # a reply with its thread parent. Pure metadata — no content inspection.
+            "reply_to_id": msg.get("replyToId"),
             "created_at": created,
             "last_modified_at": last_modified,
             "user": sender.get("id"),

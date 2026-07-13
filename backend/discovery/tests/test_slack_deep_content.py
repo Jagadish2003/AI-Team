@@ -150,7 +150,7 @@ def test_replies_group_with_their_parent_into_one_thread():
     assert t.is_window is False
     assert t.key == "1000.0001"
     # Oldest-first, all three messages present.
-    assert [m["ts"] for m in t.messages] == ["1000.0001", "1001.0001", "1002.0001"]
+    assert [m.msg_id for m in t.messages] == ["1000.0001", "1001.0001", "1002.0001"]
     assert t.source_artifact() == "C001:1000.0001"
 
 
@@ -205,7 +205,7 @@ def test_artifact_carries_thread_level_observed_provenance():
     assert prov["channel_id"] == "C001"
     assert prov["channel_name"] == "ops"
     assert prov["unit"] == "thread"
-    assert prov["thread_ts"] == "1718000000.000100"
+    assert prov["thread_id"] == "1718000000.000100"
     assert prov["message_count"] == 2
     assert prov["participants"] == ["U1", "U2"]
 
@@ -223,7 +223,7 @@ def test_window_provenance_marks_unit_window_with_null_thread_ts():
     lone = _msg("C001", "1718000000.000100", "U1", "solo message")
     art = ing._thread_to_artifact(ing.assemble_threads([lone])[0])
     assert art.provenance["unit"] == "window"
-    assert art.provenance["thread_ts"] is None
+    assert art.provenance["thread_id"] is None
 
 
 # ─────────────────────────────────────────────────────────────────────────────
