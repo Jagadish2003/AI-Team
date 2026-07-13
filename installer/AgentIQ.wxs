@@ -26,8 +26,11 @@
     <Property Id="WIXUI_INSTALLDIR" Value="INSTALLFOLDER" />
     <WixVariable Id="WixUILicenseRtf" Value="License.rtf" />
 
-    <!-- Finish-dialog checkbox: open browser after install -->
-    <Property Id="WIXUI_EXITDIALOGOPTIONALCHECKBOXTEXT" Value="Open AgentIQ in your browser" />
+    <!-- Finish dialog: explain that installation continues in the background,
+         and offer a live progress window that confirms actual completion. -->
+    <Property Id="WIXUI_EXITDIALOGOPTIONALTEXT"
+              Value="The wizard has copied the setup files. AgentIQ now installs its components (PostgreSQL, Python, IIS, services) in the background - this takes 10 to 25 minutes. Keep the checkbox below ticked to watch the progress and be told when AgentIQ is ready." />
+    <Property Id="WIXUI_EXITDIALOGOPTIONALCHECKBOXTEXT" Value="Show installation progress and open AgentIQ when ready" />
     <Property Id="WIXUI_EXITDIALOGOPTIONALCHECKBOX"     Value="1" />
 
     <!-- ── Directory structure ────────────────────────────────────────────── -->
@@ -70,6 +73,12 @@
       </Component>
       <Component Guid="E4F5A6B7-C8D9-0123-EF01-456789012345">
         <File Id="ConfigScript"    Source="scripts\Configure.ps1" KeyPath="yes" />
+      </Component>
+      <Component Guid="0F1E2D3C-4B5A-6978-8796-A5B4C3D2E1F0">
+        <File Id="WatchScript"     Source="scripts\Watch-Install.ps1" KeyPath="yes" />
+      </Component>
+      <Component Guid="1A2B3C4D-5E6F-7081-92A3-B4C5D6E7F809">
+        <File Id="HttpsScript"     Source="scripts\Enable-Https.ps1" KeyPath="yes" />
       </Component>
     </ComponentGroup>
 
@@ -182,12 +191,14 @@
                   Return="ignore"
                   ExeCommand="[System64Folder]WindowsPowerShell\v1.0\powershell.exe -ExecutionPolicy Bypass -NonInteractive -File [INSTALLFOLDER]scripts\Uninstall.ps1 -InstallDir [INSTALLFOLDER]" />
 
-    <!-- Open browser (async, no wait — fires only if checkbox is ticked) -->
+    <!-- Progress window (async, no wait — fires only if checkbox is ticked).
+         Shows the background installation live, confirms completion, then
+         opens the browser. Runs interactively as the installing user. -->
     <CustomAction Id="CA_OpenBrowser"
                   Directory="TARGETDIR"
                   Execute="immediate"
                   Return="asyncNoWait"
-                  ExeCommand="[System64Folder]cmd.exe /c start http://localhost" />
+                  ExeCommand="[System64Folder]cmd.exe /c start &quot;AgentIQ Setup&quot; [System64Folder]WindowsPowerShell\v1.0\powershell.exe -ExecutionPolicy Bypass -NoProfile -File [INSTALLFOLDER]scripts\Watch-Install.ps1" />
 
     <!-- ── Sequences ───────────────────────────────────────────────────────── -->
     <InstallExecuteSequence>
@@ -195,8 +206,10 @@
       <Custom Action="CA_RunInstall"   Before="InstallFinalize" Condition="NOT Installed AND NOT REMOVE" />
       <!-- Run uninstall script before files are removed -->
       <Custom Action="CA_RunUninstall" Before="RemoveFiles" Condition="Installed AND REMOVE~=&quot;ALL&quot;" />
-      <!-- Open browser on successful install if checkbox ticked -->
-      <Custom Action="CA_OpenBrowser"  OnExit="success" Condition="WIXUI_EXITDIALOGOPTIONALCHECKBOX = 1 AND NOT Installed AND NOT REMOVE" />
+      <!-- Launch the progress window on successful install when the checkbox
+           is ticked. UILevel > 4 keeps it out of silent (/qn) installs, where
+           admins poll logs\install-complete.txt instead. -->
+      <Custom Action="CA_OpenBrowser"  OnExit="success" Condition="WIXUI_EXITDIALOGOPTIONALCHECKBOX = 1 AND NOT Installed AND NOT REMOVE AND UILevel &gt; 4" />
     </InstallExecuteSequence>
 
   </Package>
