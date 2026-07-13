@@ -24,9 +24,9 @@ Values are WRITE-ONLY: the POST stores them Fernet-encrypted in the per-org vaul
 returns the username or secret — an Owner can replace a credential but never read
 one back through the UI, and the action is audited without the values (AC10).
 
-State nonce storage: oauth_nonces table (matching the existing raw-SQL pattern in db.py).
-No session/cookie mechanism exists in this codebase; nonces are stored server-side in the DB
-with a 10-minute TTL and are deleted on first use (single-use guarantee).
+State nonce storage is owned by app.auth.vault and its provisioned ``nonces``
+table. No session/cookie mechanism exists in this codebase; nonces are stored
+server-side with a 10-minute TTL and are soft-deleted on first use.
 """
 from __future__ import annotations
 
@@ -34,10 +34,8 @@ import hmac
 import logging
 import os
 import secrets as _secrets_mod
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import Dict, Optional
-
-import psycopg2
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Response
 from fastapi.responses import RedirectResponse
@@ -102,103 +100,6 @@ OAUTH_SUCCESS_REDIRECT = (
 OAUTH_ERROR_REDIRECT = (
     _FRONTEND_BASE_URL + _FRONTEND_CALLBACK_PATH + "?status=error&code={error_code}"
 )
-
-_NONCE_TTL_SECONDS = 600  # 10-minute window for state nonce validity
-
-_CREATE_NONCES_TABLE = """
-CREATE TABLE IF NOT EXISTS oauth_nonces (
-    nonce        TEXT PRIMARY KEY,
-    connector_id TEXT NOT NULL,
-    expires_at   TEXT NOT NULL
-)
-"""
-
-
-# ---------------------------------------------------------------------------
-# Table initialisation (called lazily on first use)
-# ---------------------------------------------------------------------------
-
-
-def _ensure_tables() -> None:
-    """No-op. The credentials and oauth_nonces tables are provisioned externally.
-
-    Created by database/provision/provision.sh; the application no longer
-    creates these tables at runtime.
-    """
-    return None
-
-
-# ---------------------------------------------------------------------------
-# Nonce store (server-side, single-use, TTL-bounded)
-# ---------------------------------------------------------------------------
-
-
-def _store_nonce(nonce: str, connector_id: str) -> None:
-    _ensure_tables()
-    expires_at = (
-        datetime.now(timezone.utc) + timedelta(seconds=_NONCE_TTL_SECONDS)
-    ).isoformat()
-    con = db.connect()
-    try:
-        cur = con.cursor()
-        cur.execute(
-            "INSERT INTO oauth_nonces (nonce, connector_id, expires_at) VALUES (%s, %s, %s) "
-            "ON CONFLICT (nonce) DO UPDATE SET "
-            "connector_id = EXCLUDED.connector_id, expires_at = EXCLUDED.expires_at, "
-            "is_deleted = FALSE",
-            (nonce, connector_id, expires_at),
-        )
-        con.commit()
-    finally:
-        con.close()
-
-
-def _consume_nonce(state: str) -> Optional[str]:
-    """Delete and validate a nonce in one step. Returns connector_id or None.
-
-    The nonce is deleted immediately on lookup — whether or not the comparison
-    succeeds — so replay of any state value (valid or invalid) always returns None
-    on the second attempt.
-    """
-    _ensure_tables()
-
-    con = db.connect()
-    try:
-        cur = con.cursor()
-        cur.execute(
-            "SELECT nonce, connector_id, expires_at FROM oauth_nonces "
-            "WHERE nonce = %s AND is_deleted = FALSE",
-            (state,),
-        )
-        row = cur.fetchone()
-        if row is not None:
-            # Soft delete (app role has no DELETE): the filtered read above makes a
-            # replay of the same state return None on the second attempt.
-            cur.execute(
-                "UPDATE oauth_nonces SET is_deleted = TRUE WHERE nonce = %s", (state,)
-            )
-            con.commit()
-    finally:
-        con.close()
-
-    if row is None:
-        return None
-
-    stored_nonce, connector_id, expires_at_str = row
-
-    # Reject expired nonces (already deleted above)
-    expires_at = datetime.fromisoformat(expires_at_str)
-    if expires_at.tzinfo is None:
-        expires_at = expires_at.replace(tzinfo=timezone.utc)
-    if datetime.now(timezone.utc) > expires_at:
-        return None
-
-    # Timing-safe comparison (spec requirement: use hmac.compare_digest, not ==)
-    if not hmac.compare_digest(stored_nonce, state):
-        raise HTTPException(status_code=400, detail='Invalid state')
-
-    return connector_id
-
 
 # ---------------------------------------------------------------------------
 # Callback auth (dev-gated)
@@ -656,8 +557,6 @@ def register_connector_auth_routes(app: FastAPI) -> None:
     )
     async def get_token_status(connector_id: str) -> Dict[str, str]:
         """Return token status: connected | needs_refresh | needs_auth | refresh_failed (AC14)."""
-        _ensure_tables()
-
         # Scope to the caller's org — the OAuth callback stores the credential under
         # the org carried in the state nonce (the authenticated org), and disconnect
         # reads with get_current_org_id() too. Using a hardcoded "default" here looked

@@ -47,15 +47,13 @@
  */
 
 import React from 'react';
-import { TemplateId, FocusId } from '../../types/stack_builder';
 
-const TEMPLATE_LABELS: Record<TemplateId, string> = {
-  commercial_lending: 'Commercial lending',
-  service_operations: 'Service operations',
-  revenue_operations: 'Revenue operations',
-};
-
-const FOCUS_LABELS: Record<FocusId, string> = {
+// R18-C1 T3: labels are registry-driven now — the template label comes from the
+// backend template model (passed in by the caller) rather than a hardcoded
+// TemplateId→label map, so a relabelled or newly-added template shows correct
+// copy with no frontend change. The focus label map stays because the focus
+// tiles are NOT registry-driven in T3; an unknown focus id falls back to itself.
+const FOCUS_LABELS: Record<string, string> = {
   member_customer_service:  'Member / customer service',
   core_operations:          'Core operations',
   approvals_compliance:     'Approvals / compliance',
@@ -66,22 +64,24 @@ const FOCUS_LABELS: Record<FocusId, string> = {
 };
 
 interface Props {
-  templateId: TemplateId;
-  suggestedFocus: FocusId;
+  templateLabel: string;
+  suggestedFocus: string;
 }
 
-export default function TemplateNoteBlock({ templateId, suggestedFocus }: Props) {
+export default function TemplateNoteBlock({ templateLabel, suggestedFocus }: Props) {
   return (
     <div className="mt-3 rounded-r-lg border-l-2 border-accent/60 bg-accent/10 px-3 py-2.5">
       <p className="text-xs text-muted leading-relaxed mb-1.5">
-        Templates preselect systems and suggest a default focus.{' '}
+        Templates preselect systems, roles, and a focus as a starting point.{' '}
         <span className="text-text">
-          Your selected discovery focus still takes priority.
+          Everything stays editable before you launch.
         </span>
       </p>
       <p className="text-xs text-blue-100 font-medium">
-        ✦ {TEMPLATE_LABELS[templateId]} suggests:{' '}
-        <span className="font-semibold">{FOCUS_LABELS[suggestedFocus]}</span>
+        ✦ {templateLabel} suggests:{' '}
+        <span className="font-semibold">
+          {FOCUS_LABELS[suggestedFocus] ?? suggestedFocus}
+        </span>
       </p>
     </div>
   );

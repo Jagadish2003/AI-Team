@@ -124,3 +124,105 @@ class TestLaunchEndpoint:
             headers=_auth(), json=body)
         assert resp.status_code == 200
         assert resp.json()["packId"] == "service_cloud"
+
+
+# ── R18-C1 T2 — Commercial Lending template instance ──────────────────────────
+
+class TestCommercialLendingTemplateLaunch:
+    """
+    AC1: selecting the template pre-populates systems/roles/focus/pack, editable.
+    AC2: an UNTOUCHED template launch applies the lending pack + focus, and the
+         template settings are visible in the run record.
+    AC5: template selection + which user edits were made are recorded on the run.
+    """
+
+    # An "untouched" lending launch: the caller selects the template and sends
+    # nothing else (no pack/focus/systems). The template supplies the defaults.
+    UNTOUCHED_LENDING = {
+        "org_id": "test_org_lending",
+        "template_id": "commercial_lending",
+    }
+
+    def test_untouched_template_launch_returns_200(self, client):
+        resp = client.post(
+            "/api/stack-builder/launch", headers=_auth(), json=self.UNTOUCHED_LENDING
+        )
+        assert resp.status_code == 200
+
+    def test_untouched_template_applies_lending_pack_and_focus(self, client):
+        """AC2: the untouched lending template drives the ncino pack + focus."""
+        resp = client.post(
+            "/api/stack-builder/launch", headers=_auth(), json=self.UNTOUCHED_LENDING
+        )
+        data = resp.json()
+        assert data["packId"] == "ncino"
+        assert data["focusId"] == "approvals_compliance"
+        assert data["systemCount"] == 6  # the template's suggested systems
+
+    def test_untouched_template_settings_visible_in_run_record(self, client):
+        """AC2: the run record shows the template and its resolved settings."""
+        resp = client.post(
+            "/api/stack-builder/launch", headers=_auth(), json=self.UNTOUCHED_LENDING
+        )
+        run_id = resp.json()["runId"]
+        run = client.get(f"/api/runs/{run_id}", headers=_auth()).json()
+
+        assert run["templateId"] == "commercial_lending"
+        assert run["packId"] == "ncino"
+        assert run["focusId"] == "approvals_compliance"
+        assert "salesforce_ncino" in run["selectedSystemIds"]
+
+        prov = run["templateProvenance"]
+        assert prov["applied"] is True
+        assert prov["template_id"] == "commercial_lending"
+        # Untouched: no user edits recorded.
+        assert prov["untouched"] is True
+        assert prov["edited_fields"] == []
+        # The template defaults snapshot is preserved for provenance, including
+        # the lending detector emphasis.
+        defaults = prov["template_defaults"]
+        assert defaults["pack_id"] == "ncino"
+        assert "COVENANT_TRACKING_GAP" in defaults["detector_emphasis"]
+        assert "APPROVAL_BOTTLENECK" in defaults["detector_emphasis"]
+
+    def test_template_edits_are_recorded_as_provenance(self, client):
+        """AC5: user edits vs. the template defaults are recorded on the run."""
+        edited = {
+            "org_id": "test_org_lending",
+            "template_id": "commercial_lending",
+            # Edit the pack away from the lending default and change a role.
+            "pack_id": "service_cloud",
+            "focus_id": "approvals_compliance",  # unchanged (matches default)
+            "selected_system_ids": [
+                "salesforce_ncino", "jira", "servicenow", "slack", "teams", "confluence"
+            ],
+            "weightings": {
+                "jira": {"systemId": "jira", "role": "documentation_system", "confirmed": True},
+            },
+        }
+        resp = client.post("/api/stack-builder/launch", headers=_auth(), json=edited)
+        assert resp.status_code == 200
+        run_id = resp.json()["runId"]
+        run = client.get(f"/api/runs/{run_id}", headers=_auth()).json()
+
+        # The user's edits win (editable defaults, AC1).
+        assert run["packId"] == "service_cloud"
+
+        prov = run["templateProvenance"]
+        assert prov["template_id"] == "commercial_lending"
+        assert prov["untouched"] is False
+        # Exactly the changed fields are recorded; the unchanged focus is not.
+        assert set(prov["edited_fields"]) == {"pack_id", "roles"}
+
+    def test_template_can_launch_without_explicit_pack(self, client):
+        """A known template supplies the pack, so pack_id is not required (AC2)."""
+        body = {"org_id": "test_org_lending", "template_id": "commercial_lending"}
+        resp = client.post("/api/stack-builder/launch", headers=_auth(), json=body)
+        assert resp.status_code == 200
+        assert resp.json()["packId"] == "ncino"
+
+    def test_no_template_and_no_pack_still_422(self, client):
+        """Backward compatible: no template and no pack is still invalid."""
+        body = {"org_id": "test_org", "selected_system_ids": ["salesforce_sc"]}
+        resp = client.post("/api/stack-builder/launch", headers=_auth(), json=body)
+        assert resp.status_code == 422

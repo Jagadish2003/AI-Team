@@ -1,11 +1,11 @@
 import React from 'react';
-import { Info, MoveRight } from 'lucide-react';
+import { Info, Loader2, MoveRight } from 'lucide-react';
 import Button from '../components/common/Button';
 import {
   FocusCard as FocusCardType,
-  Industry,
-  TemplateId,
-  StackTemplate,
+  IndustryListItem,
+  TemplateListItem,
+  SystemDefaultItem,
 } from '../types/stack_builder';
 import {
   FocusCard,
@@ -23,6 +23,12 @@ import { useSetupState } from '../components/stack_builder';
 // describes real, differentiated behaviour rather than overlapping marketing.
 // Keep these crisp and scannable — they are selection cards, not docs.
 // Exported so the AC6 differentiation can be asserted in tests.
+//
+// NOTE (R18-C1 T3): focus tiles are NOT registry-driven — the focus lens is a
+// fixed AgentIQ concept wired to focus_affinity.py, not a customer template.
+// Industries and templates, by contrast, now come from the backend registry
+// (see StackBuilderPage → GET /api/stack-builder/industries · /templates); the
+// hardcoded INDUSTRIES / TEMPLATES arrays that used to live here are gone.
 export const FOCUS_CARDS: FocusCardType[] = [
   {
     id: 'member_customer_service',
@@ -83,66 +89,89 @@ export const FOCUS_CARDS: FocusCardType[] = [
   },
 ];
 
-export const INDUSTRIES: Industry[] = [
-  { id: 'financial_services', label: 'Financial services' },
-  { id: 'public_sector', label: 'Public sector' },
-  { id: 'logistics_supply_chain', label: 'Logistics & supply chain' },
-  { id: 'retail_commerce', label: 'Retail & commerce' },
-  { id: 'healthcare', label: 'Healthcare' },
-  { id: 'energy_utilities', label: 'Energy & utilities' },
-  { id: 'manufacturing', label: 'Manufacturing' },
-  { id: 'technology', label: 'Technology' },
-];
-
-export const TEMPLATES: StackTemplate[] = [
-  {
-    id: 'commercial_lending',
-    label: 'Commercial lending',
-    suggestedFocus: 'approvals_compliance',
-    preselectedSystems: ['salesforce_ncino', 'jira', 'servicenow', 'confluence'],
-  },
-  {
-    id: 'service_operations',
-    label: 'Service operations',
-    suggestedFocus: 'member_customer_service',
-    preselectedSystems: ['salesforce_sc', 'servicenow', 'confluence'],
-  },
-  {
-    id: 'revenue_operations',
-    label: 'Revenue operations',
-    suggestedFocus: 'core_operations',
-    preselectedSystems: ['salesforce_rc', 'jira', 'confluence'],
-  },
-];
-
 interface Props {
   setupState: ReturnType<typeof useSetupState>;
+  // Registry data (R18-C1 T3) — supplied by StackBuilderPage from the backend
+  // registry / template model. The picker renders exactly what the backend
+  // returns; there is no local INDUSTRIES / TEMPLATES fallback (AC7/AC8/AC10).
+  industries: IndustryListItem[];
+  templates: TemplateListItem[];
+  registryLoading: boolean;
+  registryError: string | null;
+  onRetryRegistry: () => void;
+  fetchSystemDefaults: (industryId: string) => Promise<SystemDefaultItem[]>;
 }
 
-export default function DiscoveryFocusPage({ setupState }: Props) {
+// Compact inline "load failed → retry" block for the industry / template
+// pickers. On failure we render THIS, never a stale hardcoded list — showing old
+// local data would falsely imply the user is seeing current backend config
+// (R18-C1 T3 / AC10).
+function RegistryRetry({ message, onRetry }: { message: string; onRetry: () => void }) {
+  return (
+    <div className="rounded-lg border border-red-400/30 bg-red-500/10 px-3 py-3 text-xs text-red-200">
+      <p className="mb-2 leading-relaxed">{message}</p>
+      <Button variant="tertiary" onClick={onRetry} className="px-3 py-1 text-xs">
+        Retry
+      </Button>
+    </div>
+  );
+}
+
+function RegistryLoading({ label }: { label: string }) {
+  return (
+    <div className="flex items-center gap-2 text-xs text-muted">
+      <Loader2 size={14} className="animate-spin" aria-hidden="true" />
+      {label}
+    </div>
+  );
+}
+
+export default function DiscoveryFocusPage({
+  setupState,
+  industries,
+  templates,
+  registryLoading,
+  registryError,
+  onRetryRegistry,
+  fetchSystemDefaults,
+}: Props) {
   const {
     state,
     setFocus,
     setIndustry,
-    setTemplate,
+    applyTemplate,
+    applyIndustryDefaults,
     goTo,
     canProceedFromStep1,
   } = setupState;
 
-  const selectedTemplate = TEMPLATES.find(t => t.id === state.templateId) ?? null;
+  const selectedTemplate =
+    templates.find(t => t.template_id === state.templateId) ?? null;
 
-  function handleTemplateSelect(templateId: TemplateId) {
-    if (state.templateId === templateId) {
-      setTemplate(null, []);
+  async function handleIndustrySelect(industryId: string) {
+    const next = state.industryId === industryId ? null : industryId;
+    setIndustry(next);
+    if (!next) return;
+
+    // AC9: choosing an industry applies its registry-calibrated system defaults
+    // through the API path (editable, never confirmed here). Failure to fetch
+    // them is non-blocking — the industry stays selected.
+    try {
+      const defaults = await fetchSystemDefaults(next);
+      applyIndustryDefaults(defaults);
+    } catch {
+      // Industry defaults are an accelerator, not a gate.
+    }
+  }
+
+  function handleTemplateSelect(template: TemplateListItem) {
+    // Toggle off when re-selecting the active template; otherwise apply the
+    // template's editable defaults (systems, roles, focus) — AC1.
+    if (state.templateId === template.template_id) {
+      applyTemplate(null);
       return;
     }
-
-    // Dummy template picker: keep the pill highlight + suggested-focus note, but
-    // pass NO preselected systems (empty list) so choosing a template does not
-    // change the user's system selection. template_id is also withheld from the
-    // launch payload (see buildStackBuilderLaunchPayload), so a template has no
-    // effect on the actual discovery run.
-    setTemplate(templateId, []);
+    applyTemplate(template);
   }
 
   function handleContinue() {
@@ -191,22 +220,26 @@ export default function DiscoveryFocusPage({ setupState }: Props) {
             Helps AgentIQ surface relevant systems and adapt signal language to your
             operating context.
           </p>
-          <div
-            role="group"
-            aria-label="Industry"
-            className="flex flex-wrap gap-2"
-          >
-            {INDUSTRIES.map(ind => (
-              <PillTag
-                key={ind.id}
-                label={ind.label}
-                selected={state.industryId === ind.id}
-                onToggle={() =>
-                  setIndustry(state.industryId === ind.id ? null : ind.id)
-                }
-              />
-            ))}
-          </div>
+          {registryLoading ? (
+            <RegistryLoading label="Loading industries…" />
+          ) : registryError ? (
+            <RegistryRetry message={registryError} onRetry={onRetryRegistry} />
+          ) : (
+            <div
+              role="group"
+              aria-label="Industry"
+              className="flex flex-wrap gap-2"
+            >
+              {industries.map(ind => (
+                <PillTag
+                  key={ind.industry_id}
+                  label={ind.label}
+                  selected={state.industryId === ind.industry_id}
+                  onToggle={() => handleIndustrySelect(ind.industry_id)}
+                />
+              ))}
+            </div>
+          )}
         </section>
 
         <section className="rounded-xl border border-border bg-panel p-5 shadow-sm">
@@ -215,28 +248,37 @@ export default function DiscoveryFocusPage({ setupState }: Props) {
             <span className="text-xs text-muted">Optional</span>
           </div>
           <p className="mb-4 text-xs leading-relaxed text-muted">
-            Templates suggest a focus for common operating models.
+            Templates pre-populate systems, roles, and a focus for common operating
+            models. Everything stays editable.
           </p>
-          <div
-            role="group"
-            aria-label="Start from a template"
-            className="flex flex-wrap gap-2"
-          >
-            {TEMPLATES.map(tmpl => (
-              <PillTag
-                key={tmpl.id}
-                label={tmpl.label}
-                selected={state.templateId === tmpl.id}
-                onToggle={() => handleTemplateSelect(tmpl.id)}
-              />
-            ))}
-          </div>
+          {registryLoading ? (
+            <RegistryLoading label="Loading templates…" />
+          ) : registryError ? (
+            <RegistryRetry message={registryError} onRetry={onRetryRegistry} />
+          ) : (
+            <>
+              <div
+                role="group"
+                aria-label="Start from a template"
+                className="flex flex-wrap gap-2"
+              >
+                {templates.map(tmpl => (
+                  <PillTag
+                    key={tmpl.template_id}
+                    label={tmpl.label}
+                    selected={state.templateId === tmpl.template_id}
+                    onToggle={() => handleTemplateSelect(tmpl)}
+                  />
+                ))}
+              </div>
 
-          {selectedTemplate && (
-            <TemplateNoteBlock
-              templateId={selectedTemplate.id}
-              suggestedFocus={selectedTemplate.suggestedFocus}
-            />
+              {selectedTemplate && (
+                <TemplateNoteBlock
+                  templateLabel={selectedTemplate.label}
+                  suggestedFocus={selectedTemplate.focus_defaults.focus_id}
+                />
+              )}
+            </>
           )}
         </section>
       </div>

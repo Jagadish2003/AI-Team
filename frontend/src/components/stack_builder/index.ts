@@ -14,4 +14,6 @@ export { default as SystemWeightingCard } from './SystemWeightingCard';
 export { default as DiscoveryConfidenceBar } from './DiscoveryConfidenceBar';
 export { default as ConnectionStatusLegend } from './ConnectionStatusLegend';
 export { default as TemplateNoteBlock } from './TemplateNoteBlock';
+export { default as LendingFirstRunGuide } from './LendingFirstRunGuide';
+export type { LendingGuideLaunchState } from './LendingFirstRunGuide';
 export { useSetupState } from './useSetupState';
