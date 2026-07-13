@@ -15,6 +15,7 @@ import React from 'react';
 import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { vi, describe, it, expect, beforeEach } from 'vitest';
+import { DataCacheProvider } from '../lib/dataCache';
 import type { OpportunityCandidate } from '../types/analystReview';
 import type { ExecutiveReport } from '../api/runScopedS9S10Api';
 import type { RunEnrichment } from '../api/enrichmentApi';
@@ -123,7 +124,9 @@ import ExecutiveReportPage from '../pages/ExecutiveReportPage';
 function renderPage() {
   return render(
     <MemoryRouter initialEntries={['/executive-report?runId=run_x']}>
-      <ExecutiveReportPage />
+      <DataCacheProvider>
+        <ExecutiveReportPage />
+      </DataCacheProvider>
     </MemoryRouter>,
   );
 }

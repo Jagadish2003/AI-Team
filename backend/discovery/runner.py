@@ -965,11 +965,16 @@ def run(
         except Exception as e:
             logger.warning("STRS Benefits ingestion failed (non-blocking): %s", e)
 
-    # 2c. GitHub Engineering ingest — if github_engineering pack (T1-S12).
-    # GitHub is the first engineering signal source and does not depend on
-    # Salesforce. Jira is still ingested above when in _systems so the pack's
+    # 2c. GitHub ingest — when the github_engineering pack is active OR GitHub is
+    # a connected system for this run (T1-S12). GitHub is a connected SOURCE like
+    # Slack/Teams (see _PASS_THROUGH_SOURCES), so — consistent with every other
+    # source, which ingests on membership in _systems — it is ingested whenever it
+    # is connected, not only for the engineering pack. Its signals feed the
+    # github_engineering detectors when that pack is active and otherwise flow into
+    # source payloads / corroboration. Non-blocking: ingest failure never aborts
+    # the run. Jira is still ingested above when in _systems so the pack's
     # confidence-elevation corroboration can run.
-    if is_github_engineering_pack(pack_id):
+    if is_github_engineering_pack(pack_id) or "github" in _systems:
         github_data = _ingest_github(org_id, run_id) or {}
         if github_data:
             # Log degraded state per sub-signal so a pagination failure in one

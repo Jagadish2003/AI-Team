@@ -5,6 +5,7 @@ import Badge from '../common/Badge';
 import Button from '../common/Button';
 import { fetchTokenStatus, TokenStatus } from '../../services/staticApi';
 import { useAuthOptional } from '../../context/AuthContext';
+import { useNetworkProfileOptional } from '../../context/NetworkProfileContext';
 import { isViewerRole } from '../../utils/roles';
 
 // Connectors whose Connect button is ENABLED on the Integration Hub. This is a
@@ -28,6 +29,7 @@ export default function ConnectorTile({
   onPrimary,
   onReconnect,
   onDisconnect,
+  onSetupOutbound,
   connectBlocked,
   connectBlockMessage,
 }: {
@@ -36,6 +38,13 @@ export default function ConnectorTile({
   selected: boolean;
   onSelect: () => void;
   onPrimary: () => void;
+  // R18-A3 follow-up: in a no-public-inbound deployment the outbound-only
+  // connectors show a "Set up outbound access" button instead of Connect.
+  // Clicking it should POP the credential/JWT setup modal directly (like the
+  // right-panel "Enter credentials" flow), not just re-select the tile. The
+  // parent selects the connector and bumps the auto-open request. Falls back to
+  // onSelect when not supplied so the tile still works in isolation.
+  onSetupOutbound?: () => void;
   // Called when the token is expired/refresh-failed and the user clicks
   // "Reconnect". Must trigger the OAuth flow again (CS-2 AC7). Falls back to
   // onPrimary when not supplied so the tile keeps working in isolation.
@@ -77,14 +86,33 @@ export default function ConnectorTile({
     return () => { alive = false; };
   }, [connector.id, isConnected, isEnabled]);
 
-  // The token needs a fresh OAuth round-trip when there is no usable token
-  // (needs_auth = missing/already-expired) or auto-refresh has given up
-  // (refresh_failed). `connected` and `needs_refresh` are still usable, so no
-  // Reconnect prompt. Values mirror the backend token-status contract (AC14).
-  const tokenExpired = tokenStatus === 'needs_auth' || tokenStatus === 'refresh_failed';
+  // R18-A3 T5 (AT-558): in a no-public-inbound deployment the browser
+  // authorization-code flow can never complete (the provider redirect can't
+  // reach the network). For a connector that has an outbound-only mode, we route
+  // the customer to the outbound setup path (the modal, opened from this tile)
+  // instead, so they can never start a flow that cannot complete (AC4).
+  // Connectors with no outbound-only mode (GitHub, Slack) keep their button.
+  const { hidesAuthorizationCodeConnect } = useNetworkProfileOptional();
+  const hideAuthCode = hidesAuthorizationCodeConnect(connector.id);
+
+  // "Token expired" is an authorization-code concept: a stored OAuth token that
+  // lapsed and needs a browser reconnect. It is MEANINGLESS for an outbound-only
+  // connector (JWT bearer / client-credentials), whose access token is minted on
+  // demand — so token-status "needs_auth" there just means "not minted yet", not
+  // "expired". Only surface the expiry badge / Reconnect for the auth-code posture.
+  const tokenExpired =
+    !hideAuthCode && (tokenStatus === 'needs_auth' || tokenStatus === 'refresh_failed');
+
+  // Outbound connectors always route to the outbound setup path — the modal owns
+  // enter / update / delete — whether or not they are already connected. Only for
+  // a tile that is actually connectable (isEnabled); a gated-out connector (e.g.
+  // Dynamics 365 / SAP) keeps its normal disabled "Connect" state.
+  const outboundSetupGate = hideAuthCode && isEnabled;
 
   // When the token is expired/missing, override the button to "Reconnect"
-  const actionLabel = tokenExpired
+  const actionLabel = outboundSetupGate
+    ? 'Set up outbound access'
+    : tokenExpired
     ? 'Reconnect'
     : isConnected && !isConfigured
     ? 'Configure & Sync'
@@ -92,7 +120,12 @@ export default function ConnectorTile({
     ? 'View data'
     : 'Connect';
 
-  const actionVariant = (!isConnected || tokenExpired) ? 'primary' : isConfigured ? 'secondary' : 'tertiary';
+  const actionVariant =
+    outboundSetupGate || !isConnected || tokenExpired
+      ? 'primary'
+      : isConfigured
+      ? 'secondary'
+      : 'tertiary';
 
   // R17-D4 Addendum A / T11: at the licensed limit, a NEW connection is blocked
   // (forward-only). Only applies to a not-yet-connected system — the 'connected'
@@ -114,6 +147,12 @@ export default function ConnectorTile({
     ? 'Connecting new sources is currently unavailable'
     : viewerBlocks
     ? 'Connecting systems requires an analyst or owner role.'
+    : undefined;
+
+  // Tooltip guiding the customer to the outbound setup path when the browser flow
+  // is unavailable in this deployment (only when the button is otherwise enabled).
+  const enabledTitle = !actionDisabled && outboundSetupGate
+    ? 'This deployment has no public inbound — set up outbound-only access for this connector.'
     : undefined;
 
   return (
@@ -179,6 +218,19 @@ export default function ConnectorTile({
           }`}
           onClick={(e: React.MouseEvent<HTMLButtonElement>) => {
             e.stopPropagation();
+            // R18-A3 T5 (AT-558): in a no-public-inbound deployment, never start
+            // the authorization-code flow for a connector with an outbound-only
+            // mode — open the detail panel (outbound setup path) instead so the
+            // customer can never begin a flow that cannot complete (AC4).
+            if (outboundSetupGate) {
+              // Pop the outbound/credential setup modal directly rather than
+              // only re-selecting the tile (which looked like "nothing happens"
+              // when the panel was already open). Fall back to selection when no
+              // handler is wired.
+              if (onSetupOutbound) onSetupOutbound();
+              else onSelect();
+              return;
+            }
             // When the token needs a fresh OAuth round-trip, "Reconnect" must
             // start the OAuth flow — not fall through to the connected-tile
             // "View data" path on the page (CS-2 AC7).

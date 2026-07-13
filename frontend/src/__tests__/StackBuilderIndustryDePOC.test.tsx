@@ -48,13 +48,16 @@ describe('Stack Builder registry-owned pack hints', () => {
     );
   });
 
-  it('keeps explicit system routing independent of industry suggestions', () => {
+  it('ignores Stack Builder system pre-selection — declaration/industry drive the pack', () => {
+    // Reconciled with R18-A3 (f2026ee): a selected system must NOT force a pack
+    // (the silent nCino footgun). With nothing declared in the catalog, the
+    // industry hint wins and the salesforce_pss pre-selection is ignored.
     const state = {
       ...baseState,
       industryId: 'public_sector',
       selectedSystemIds: ['salesforce_pss'],
     };
-    expect(resolvePackId(state, null, industries, [])).toBe('strs_benefits');
+    expect(resolvePackId(state, null, industries, [])).toBe('service_cloud');
   });
 
   it('lets the user override a template pack before launch', () => {

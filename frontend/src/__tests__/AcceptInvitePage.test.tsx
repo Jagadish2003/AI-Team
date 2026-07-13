@@ -1,7 +1,9 @@
 /**
  * AT-239 — AcceptInvitePage unit tests.
  *
- * Mocks: useAuth(), useTheme(), utils/navigation/hardRedirect(), and
+ * Mocks: useAuth(), useTheme(), react-router-dom useNavigate() (the post-
+ * activation SPA redirect; the data-provider subtree is remounted by App.tsx's
+ * token-keyed SessionBoundary, so no full document reload is needed anymore), and
  * getInviteInfo() (the mount-time token resolver). A token now gates the form
  * behind a GET /api/auth/invite-info call, so valid-token tests resolve that
  * mock and await the form before interacting.
@@ -16,7 +18,7 @@ import { ApiError } from "../lib/apiClient";
 // ── Mocks ─────────────────────────────────────────────────────────────────────
 
 const mockAcceptInvite = vi.fn();
-const mockHardRedirect = vi.fn();
+const mockNavigate = vi.fn();
 const mockGetInviteInfo = vi.fn();
 
 vi.mock("../context/AuthContext", () => ({
@@ -31,9 +33,12 @@ vi.mock("../api/authApi", () => ({
   getInviteInfo: (token: string) => mockGetInviteInfo(token),
 }));
 
-vi.mock("../utils/navigation", () => ({
-  hardRedirect: (path: string) => mockHardRedirect(path),
-}));
+// Partial-mock so MemoryRouter/useSearchParams keep working; only useNavigate is
+// stubbed (the post-activation SPA redirect target we assert on).
+vi.mock("react-router-dom", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("react-router-dom")>();
+  return { ...actual, useNavigate: () => mockNavigate };
+});
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
@@ -69,7 +74,7 @@ function requirementRow(label: RegExp | string): HTMLElement | null {
 describe("AcceptInvitePage", () => {
   beforeEach(() => {
     mockAcceptInvite.mockReset();
-    mockHardRedirect.mockReset();
+    mockNavigate.mockReset();
     mockGetInviteInfo.mockReset();
     // Default: a valid token resolving to an org name.
     mockGetInviteInfo.mockResolvedValue({
@@ -208,7 +213,7 @@ describe("AcceptInvitePage", () => {
     });
   });
 
-  it("reloads into /integration-hub on success", async () => {
+  it("navigates into /integration-hub on success", async () => {
     mockAcceptInvite.mockResolvedValue(undefined);
     await renderActiveForm();
 
@@ -218,7 +223,7 @@ describe("AcceptInvitePage", () => {
     fireEvent.click(screen.getByRole("button", { name: /activate account/i }));
 
     await waitFor(() => {
-      expect(mockHardRedirect).toHaveBeenCalledWith("/integration-hub");
+      expect(mockNavigate).toHaveBeenCalledWith("/integration-hub", { replace: true });
     });
   });
 
@@ -284,7 +289,7 @@ describe("AcceptInvitePage", () => {
     await waitFor(() => {
       expect(screen.getByTestId("accept-invite-error")).toBeTruthy();
     });
-    expect(mockHardRedirect).not.toHaveBeenCalled();
+    expect(mockNavigate).not.toHaveBeenCalled();
   });
 
   // ── Password mismatch feedback ──────────────────────────────────────────────

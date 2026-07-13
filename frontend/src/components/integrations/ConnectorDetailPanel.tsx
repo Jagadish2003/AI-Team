@@ -1,5 +1,5 @@
 import React from 'react';
-import { Connector } from '../../types/connector';
+import { Connector, OutboundSetupRequest } from '../../types/connector';
 import Badge from '../common/Badge';
 import Button from '../common/Button';
 import { accessIcons } from './AccessIcons';
@@ -13,6 +13,7 @@ import SqlServerScopePicker from './SqlServerScopePicker';
 import OracleScopePicker from './OracleScopePicker';
 import PostgreSQLScopePicker from './PostgreSQLScopePicker';
 import StaticCredentialManager from './StaticCredentialManager';
+import OutboundAuthSetup from './OutboundAuthSetup';
 import { isStaticCredentialConnector } from './staticCredentialConnectors';
 
 // T41-7: Connection Health - configured read scope for this connector.
@@ -146,9 +147,14 @@ function ConnectionHealthSection({ connector }: { connector: Connector }) {
 export default function ConnectorDetailPanel({
   connector,
   onConfigure,
+  outboundSetupRequest = null,
 }: {
   connector: Connector | null;
   onConfigure: () => void;
+  // R18-A3 follow-up: a one-shot request (from the tile's "Set up outbound
+  // access" button) to auto-open this connector's setup modal. Forwarded to the
+  // static / outbound setup managers, which open their own modal when it matches.
+  outboundSetupRequest?: OutboundSetupRequest | null;
 }) {
   const { push } = useToast();
   // Configure & Sync / Re-sync triggers a write (analyst+). Viewers get a
@@ -205,9 +211,16 @@ export default function ConnectorDetailPanel({
           credential is how these connectors get connected. Owner-gated inside. */}
       {isStaticCredentialConnector(connector.id) && (
         <div className="mt-4">
-          <StaticCredentialManager connector={connector} />
+          <StaticCredentialManager connector={connector} outboundSetupRequest={outboundSetupRequest} />
         </div>
       )}
+
+      {/* R18-A3 T5 (AT-558): outbound setup path — shown in a no-public-inbound
+          deployment for connectors whose outbound-only mode is jwt_bearer or
+          client_credentials (Salesforce, Teams/SharePoint, ServiceNow). This is
+          where the customer is routed after the authorization-code Connect button
+          is hidden on the tile (AC4). Renders null outside no_public_inbound. */}
+      <OutboundAuthSetup connector={connector} outboundSetupRequest={outboundSetupRequest} />
 
       {/* Salesforce product declaration — rendered first in the panel so the
           workspace declaration is visible at the top of the right panel. */}

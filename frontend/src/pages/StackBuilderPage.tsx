@@ -15,6 +15,8 @@ import { isViewerRole } from '../utils/roles';
 // Import components and types
 import { CheckCircle2, Database, Layers3, Loader2, Target } from 'lucide-react';
 import type { WorkspaceCatalogResponse } from '../types/workspace_catalog';
+import { useResource } from '../lib/dataCache';
+import { cacheKeys } from '../lib/cacheKeys';
 import type {
   SetupState,
   SystemWeighting,
@@ -118,6 +120,15 @@ function getCatalogSalesforceProducts(catalog: WorkspaceCatalogResponse | null):
   return Array.isArray(salesforce?.products) ? salesforce.products : [];
 }
 
+// The Salesforce pack is driven SOLELY by the workspace product declaration
+// (Integration Hub → "Salesforce products in use"), persisted on the connector
+// record and surfaced here via the workspace catalog. Stack Builder system
+// pre-selection (selectedSystemIds / selectedSalesforceClouds) no longer
+// influences the pack: a default preselect of `salesforce_ncino` was silently
+// forcing the nCino pack on orgs that had declared nothing, so runs picked
+// detectors the org's data could never fire. With no declaration we fall to the
+// industry hint, then a safe service_cloud default — never a preselected cloud.
+// Exported for direct unit testing.
 export function resolvePackId(
   state: ReturnType<typeof useSetupState>['state'],
   catalog: WorkspaceCatalogResponse | null,
@@ -135,29 +146,19 @@ export function resolvePackId(
     return selectedTemplate.pack_id;
   }
 
-  const selectedCloudFromSystems = state.selectedSystemIds
-    .find(systemId => SALESFORCE_CLOUD_IDS.has(systemId) && CLOUD_PACK_REGISTRY[systemId]);
-
-  if (selectedCloudFromSystems) {
-    return CLOUD_PACK_REGISTRY[selectedCloudFromSystems];
-  }
-
-  const selectedCloudFromCatalog = getCatalogSalesforceProducts(catalog)
+  // The Salesforce pack is then driven SOLELY by the workspace product
+  // declaration (the declared cloud from the catalog) — never a Stack Builder
+  // pre-selection, which was silently forcing the nCino pack (f2026ee). See the
+  // header comment above.
+  const declaredCloud = getCatalogSalesforceProducts(catalog)
     .find(productId => CLOUD_PACK_REGISTRY[productId]);
 
-  if (selectedCloudFromCatalog) {
-    return CLOUD_PACK_REGISTRY[selectedCloudFromCatalog];
+  if (declaredCloud) {
+    return CLOUD_PACK_REGISTRY[declaredCloud];
   }
 
-  const selectedCloudFromState = state.selectedSalesforceClouds
-    .find(productId => CLOUD_PACK_REGISTRY[productId]);
-
-  if (selectedCloudFromState) {
-    return CLOUD_PACK_REGISTRY[selectedCloudFromState];
-  }
-
-  // Industry pack hints come from the registry response. There is deliberately
-  // no frontend mirror: relabeling/adding an industry requires no UI code edit.
+  // Fallback 1: industry hint, when an industry is selected. Industry pack hints
+  // come from the registry response — there is deliberately no frontend mirror.
   if (state.industryId) {
     const hints = industries.find(
       industry => industry.industry_id === state.industryId,
@@ -165,7 +166,7 @@ export function resolvePackId(
     if (hints && hints.length > 0) return hints[0];
   }
 
-  // Priority 3: Default to service_cloud
+  // Fallback 2: safe default — never a Stack Builder pre-selection.
   return 'service_cloud';
 }
 
@@ -413,13 +414,11 @@ export default function StackBuilderPage({
   const orgId = auth?.user?.org_id ?? ORG_ID_HEADER ?? 'default';
 
   const setupState = useSetupState();
-  const [catalog, setCatalog] = useState<WorkspaceCatalogResponse | null>(null);
-  const [catalogLoading, setCatalogLoading] = useState(true);
-  const [catalogError, setCatalogError] = useState<string | null>(null);
 
   // R18-C1 T3: industries + templates come from the backend registry, not
   // hardcoded frontend arrays. On failure we keep the lists EMPTY and surface a
   // retry (see DiscoveryFocusPage) — never a stale local fallback (AC7/AC8/AC10).
+  // (Catalog state is provided below via the shared data cache — useResource.)
   const [industries, setIndustries] = useState<IndustryListItem[]>([]);
   const [templates, setTemplates] = useState<TemplateListItem[]>([]);
   const [registryLoading, setRegistryLoading] = useState(true);
@@ -430,35 +429,45 @@ export default function StackBuilderPage({
   const { clearSession } = useStackBuilderPersistence(orgId, setupState, apiBase, token);
   const copy = STEP_COPY[state.currentStep] ?? STEP_COPY[1];
 
-  const fetchCatalog = useCallback(() => {
-    setCatalogLoading(true);
+  // Workspace catalog via the shared data cache: the SalesforceProductPicker
+  // invalidates cacheKeys.workspaceCatalog on save, so the pack Stack Builder
+  // resolves (from the declared Salesforce product) is never stale — no manual
+  // refresh needed. The fetcher is pure (no side effects); catalog-derived setup
+  // state is applied in the effect below.
+  const catalogFetcher = useCallback(async (): Promise<WorkspaceCatalogResponse | null> => {
     const headers = buildAuthHeaders(token);
-
-    fetch(`${apiBase}/api/integration-hub/workspace-catalog`, {
+    const r = await fetch(`${apiBase}/api/integration-hub/workspace-catalog`, {
       credentials: 'omit',
       headers,
-    })
-      .then(r => {
-        if (!r.ok) throw new Error(`Catalog fetch failed: ${r.status}`);
-        return r.json();
-      })
-      .then((fetchedCatalog: WorkspaceCatalogResponse | null) => {
-        setCatalog(fetchedCatalog);
-        setCatalogError(null);
-        setupState.setSalesforceClouds(getCatalogSalesforceProducts(fetchedCatalog));
-      })
-      .catch((err) => {
-        console.error('[StackBuilderPage] Catalog fetch failed:', err);
-        setCatalogError('Could not load your connected systems. Please retry.');
-        setCatalog(null);
-        setupState.setSalesforceClouds([]);
-      })
-      .finally(() => setCatalogLoading(false));
-  }, [apiBase, token, setupState.setSalesforceClouds]);
+    });
+    if (!r.ok) throw new Error(`Catalog fetch failed: ${r.status}`);
+    return r.json();
+  }, [apiBase, token]);
 
+  const {
+    data: catalogData,
+    loading: catalogLoading,
+    error: catalogErrObj,
+    refetch: refetchCatalog,
+  } = useResource<WorkspaceCatalogResponse | null>(cacheKeys.workspaceCatalog, catalogFetcher);
+  const catalog = catalogData ?? null;
+  const catalogError = catalogErrObj
+    ? 'Could not load your connected systems. Please retry.'
+    : null;
+
+  // Apply catalog-derived setup state whenever the catalog changes (or errors).
   useEffect(() => {
-    fetchCatalog();
-  }, [fetchCatalog]);
+    if (catalogErrObj) {
+      setupState.setSalesforceClouds([]);
+      return;
+    }
+    if (catalog) {
+      setupState.setSalesforceClouds(getCatalogSalesforceProducts(catalog));
+      setupState.initFromCatalog?.(catalog);
+    }
+    // setupState methods are the effect's other inputs; catalog identity changes
+    // per fetch so this mirrors the previous per-fetch application.
+  }, [catalog, catalogErrObj, setupState.setSalesforceClouds, setupState.initFromCatalog]);
 
   // R18-C1 T3: load the industry + template registries. Both come from the same
   // backend source of truth, so one loader drives both pickers and one Retry
@@ -495,30 +504,20 @@ export default function StackBuilderPage({
     [apiBase, token],
   );
 
+  // Refresh on tab focus/visibility. Retained until Phase 2 wires connector
+  // mutations to invalidate the catalog; harmless alongside cache invalidation.
   useEffect(() => {
     const handleVisibilityChange = () => {
-      if (!document.hidden) {
-        fetchCatalog();
-      }
+      if (!document.hidden) refetchCatalog();
     };
-
-    const handleFocus = () => {
-      fetchCatalog();
-    };
-
+    const handleFocus = () => refetchCatalog();
     document.addEventListener('visibilitychange', handleVisibilityChange);
     window.addEventListener('focus', handleFocus);
     return () => {
       document.removeEventListener('visibilitychange', handleVisibilityChange);
       window.removeEventListener('focus', handleFocus);
     };
-  }, [fetchCatalog]);
-
-  useEffect(() => {
-    if (catalog && setupState.initFromCatalog) {
-      setupState.initFromCatalog(catalog);
-    }
-  }, [catalog, setupState.initFromCatalog]);
+  }, [refetchCatalog]);
 
   const handleLaunch = useCallback(async () => {
     if (launchState === 'launching') return;

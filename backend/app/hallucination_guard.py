@@ -314,8 +314,16 @@ def llm_rewrite_bullet(
     result: dict = {}
     timeout_s = timeout_ms / 1000.0
 
+    # Bind the semaphore instance ONCE and have the worker release the SAME one it
+    # acquired — never re-read the module global in the worker. An abandoned
+    # (timed-out) worker can outlive the call by seconds; if it re-read the global
+    # it could release a *different* semaphore than it acquired (e.g. one swapped
+    # in later), corrupting that semaphore's count. Binding locally keeps
+    # acquire/release paired to a single instance regardless of later reassignment.
+    semaphore = _rewrite_semaphore
+
     # Fail-fast if the rewrite pool is saturated — drop rather than pile on.
-    if not _rewrite_semaphore.acquire(timeout=timeout_s):
+    if not semaphore.acquire(timeout=timeout_s):
         raise TimeoutError(
             f"llm_rewrite_bullet: no rewrite slot free within {timeout_ms}ms "
             f"(>= {REWRITE_MAX_CONCURRENCY} in flight)"
@@ -327,8 +335,9 @@ def llm_rewrite_bullet(
         except Exception as exc:  # pragma: no cover - defensive
             result["error"] = exc
         finally:
-            # Always release, even if this thread was abandoned by the caller.
-            _rewrite_semaphore.release()
+            # Always release the slot on the SAME instance we acquired above,
+            # even if this thread was abandoned by the caller.
+            semaphore.release()
 
     thread = threading.Thread(
         target=_worker, name="hallucination-rewrite", daemon=True

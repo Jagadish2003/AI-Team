@@ -1,8 +1,10 @@
 
-import React, { useEffect, useState } from 'react';
+import React from 'react';
 import { ArrowRight, Lightbulb } from 'lucide-react';
 import { fetchRunEnrichment, RunEnrichment } from '../../api/enrichmentApi';
 import { useRunContext } from '../../context/RunContext';
+import { useResource } from '../../lib/dataCache';
+import { cacheKeys } from '../../lib/cacheKeys';
 
 export const STATIC_SUMMARY =
   'AgentIQ identified high-ROI "agentic moments" from operational signals ' +
@@ -34,21 +36,14 @@ export function resolveExecutiveSummary(enrichment: RunEnrichment | null): strin
 
 export default function KeyInsights() {
   const { runId } = useRunContext();
-  const [enrichment, setEnrichment] = useState<RunEnrichment | null>(null);
-
-  useEffect(() => {
-    if (!runId) return;
-    let cancelled = false;
-    fetchRunEnrichment(runId)
-      .then(data => { if (!cancelled) setEnrichment(data); })
-      .catch((err) => {
-        if (!cancelled) setEnrichment(null);
-        console.warn('[T7] KeyInsights enrichment fetch failed:', err);
-      });
-    return () => { cancelled = true; };
-  }, [runId]);
-
-  const summary = resolveExecutiveSummary(enrichment);
+  // Shared with ExecutiveReportPage on cacheKeys.runEnrichment → one fetch, not
+  // two. Fail-open: an undefined result (not loaded / errored) uses the static
+  // fallback via resolveExecutiveSummary.
+  const { data } = useResource<RunEnrichment>(
+    runId ? cacheKeys.runEnrichment(runId) : null,
+    () => fetchRunEnrichment(runId as string),
+  );
+  const summary = resolveExecutiveSummary(data ?? null);
 
   return (
     <div className="rounded-xl border border-border bg-panel p-4">

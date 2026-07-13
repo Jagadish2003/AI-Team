@@ -14,6 +14,11 @@ from cryptography.fernet import Fernet
 
 from app import db
 from app.auth import oauth as _oauth
+from app.auth.auth_modes import (
+    AUTH_MODE_CLIENT_CREDENTIALS,
+    connector_supports_mode,
+    resolve_auth_mode,
+)
 from app.auth.configs import CONNECTOR_AUTH_CONFIGS
 from app.middleware.audit import log_event
 from app.auth.models import (
@@ -646,6 +651,230 @@ def revoke_static_credential(org_id: str, connector_id: str) -> None:
 
 
 # ---------------------------------------------------------------------------
+# JWT bearer signing material (R18-A3 T2 / AT-555)
+#
+# The Salesforce connected-app JWT bearer flow authenticates with a signed
+# assertion rather than a stored access token: the durable secret is the cert
+# PRIVATE KEY (plus the Salesforce username the assertion runs as, and the login
+# host). That material is STATIC — no OAuth dance, no refresh — so it reuses the
+# static-credential record type and all its hygiene (Fernet-encrypted at rest,
+# masked in repr, write-only, never logged — AC5):
+#
+#     secret   → the PEM private key
+#     username → the Salesforce username (the assertion `sub`)
+#     base_url → the login/instance host (the assertion `aud` + token endpoint)
+#
+# It is keyed under a RESERVED connector id (``{connector_id}:jwt``) so it lives
+# in its OWN row, distinct from the ``{connector_id}`` OAuth row where the MINTED
+# access token is cached. This sidesteps the shared UNIQUE(org_id, connector_id)
+# constraint (one row would otherwise hold either the key or the token, not both)
+# and keeps get_credential(connector_id) returning the token, never the key — so
+# ingestion stays mode-agnostic (the private key is never mis-resolved as a
+# credential). get_token() mints/re-mints the access token from this material.
+# ---------------------------------------------------------------------------
+
+#: Suffix marking the reserved connector id that holds a connector's JWT bearer
+#: signing material (kept separate from the minted-token row).
+_JWT_MATERIAL_SUFFIX = ":jwt"
+
+
+def jwt_material_connector_id(connector_id: str) -> str:
+    """Return the reserved vault id holding ``connector_id``'s JWT signing material."""
+    return f"{connector_id}{_JWT_MATERIAL_SUFFIX}"
+
+
+def store_jwt_bearer_credential(
+    org_id: str,
+    connector_id: str,
+    *,
+    private_key: str,
+    subject: str,
+    base_url: str,
+) -> StaticCredentialRecord:
+    """Vault the JWT bearer signing material for an org+connector (AC5).
+
+    ``private_key`` (PEM) is the secret, ``subject`` the Salesforce username the
+    assertion runs as, ``base_url`` the login/instance host. Encrypted at rest and
+    write-only exactly like any static credential; rotating in place replaces the
+    prior key. Stored under the reserved ``{connector_id}:jwt`` id so it never
+    collides with the minted-token row.
+    """
+    return store_static_credential(
+        org_id,
+        jwt_material_connector_id(connector_id),
+        username=subject,
+        secret=private_key,
+        base_url=base_url,
+    )
+
+
+def get_jwt_bearer_credential(
+    org_id: str, connector_id: str
+) -> Optional[StaticCredentialRecord]:
+    """Return the decrypted JWT bearer signing material, or None if not configured."""
+    return get_static_credential(org_id, jwt_material_connector_id(connector_id))
+
+
+def get_jwt_bearer_credential_metadata(
+    org_id: str, connector_id: str
+) -> Optional[dict]:
+    """Return NON-SECRET metadata for the JWT material (never decrypts the key)."""
+    return get_static_credential_metadata(org_id, jwt_material_connector_id(connector_id))
+
+
+def revoke_jwt_bearer_credential(org_id: str, connector_id: str) -> None:
+    """Soft-delete the JWT bearer signing material for an org+connector."""
+    revoke_static_credential(org_id, jwt_material_connector_id(connector_id))
+
+
+async def _mint_jwt_bearer_token(
+    org_id: str, connector_id: str
+) -> Optional[TokenRecord]:
+    """Mint (or re-mint) an access token from vaulted JWT bearer material.
+
+    Returns a freshly-minted, cached :class:`TokenRecord` when the connector holds
+    JWT bearer material for this org, or ``None`` when it does not (so the caller
+    falls back to its normal not-authenticated handling). This is the whole of
+    "refresh handled by re-assertion": a new signed assertion is exchanged
+    outbound for a new access token, which is then stored as the connector's OAuth
+    token row so downstream resolution is identical to any other mode (AC3).
+
+    Never raises — a mint failure (unreachable host, rejected assertion) resolves
+    to ``None`` so get_token() surfaces it as not-authenticated rather than
+    crashing the run.
+    """
+    material = get_jwt_bearer_credential(org_id, connector_id)
+    if material is None:
+        return None
+
+    config = CONNECTOR_AUTH_CONFIGS.get(connector_id)
+    if config is None:
+        return None
+
+    base_url = (material.base_url or "").rstrip("/")
+    token_url = f"{base_url}/services/oauth2/token" if base_url else None
+
+    try:
+        token_response = await _oauth.get_jwt_bearer_token(
+            config,
+            private_key=material.secret,
+            subject=material.username,
+            audience=base_url or None,
+            token_url=token_url,
+        )
+    except _oauth.OAuthError as exc:
+        logger.warning(
+            "JWT bearer token mint failed for %s/%s: %s",
+            org_id,
+            connector_id,
+            exc.reason,
+        )
+        return None
+
+    record = store_token(org_id, connector_id, token_response)
+
+    # Salesforce returns instance_url in the JWT bearer response, exactly as it
+    # does for authorization_code. Persist it so live ingest resolves the URL
+    # without any SF_INSTANCE_URL env config (mirrors the OAuth connect capture).
+    instance_url = token_response.get("instance_url")
+    if instance_url:
+        try:
+            from app.live_ingest_credentials import store_connector_instance_url
+
+            store_connector_instance_url(org_id, connector_id, instance_url.rstrip("/"))
+        except Exception:
+            logger.exception(
+                "Failed to persist instance URL from JWT bearer for %s/%s",
+                org_id,
+                connector_id,
+            )
+
+    return record
+
+
+# ---------------------------------------------------------------------------
+# Client-credentials minting (R18-A3 T3 / AT-556)
+#
+# Microsoft Graph (Teams / SharePoint) — and any client_credentials connector —
+# authenticates outbound under a SERVICE identity: the app's own client_id +
+# client_secret are exchanged for an access token with no browser redirect and no
+# inbound callback (AC2). The grant issues NO refresh token, so — exactly like JWT
+# bearer's re-assertion — get_token re-mints from the deployment credential when
+# the cached token is missing or expired. The minted token lands in the SAME OAuth
+# token row as any other mode, so ingestion resolves it identically (AC3).
+# ---------------------------------------------------------------------------
+
+
+async def _mint_client_credentials_token(
+    org_id: str, connector_id: str
+) -> Optional[TokenRecord]:
+    """Mint (or re-mint) an access token via the client-credentials grant.
+
+    Returns a freshly-minted, cached :class:`TokenRecord` when the connector is
+    configured for ``client_credentials`` mode for this org, or ``None`` otherwise
+    (so :func:`get_token` falls back to its normal not-authenticated handling). The
+    outbound exchange never touches an inbound callback (AC2), and the result is
+    stored as the connector's OAuth token row so downstream resolution is identical
+    to any other mode (AC3).
+
+    Gated on the org's RESOLVED mode being ``client_credentials`` (its own default
+    for SAP/D365; a per-org selection for Teams/SharePoint), so an authorization_code
+    connector — whose expired token requires a user reconnect — is never silently
+    re-minted here.
+
+    Never raises — a mint failure (unreachable host, rejected credentials, or an
+    unconfigured client secret) resolves to ``None`` so get_token surfaces it as
+    not-authenticated rather than crashing the run.
+    """
+    config = CONNECTOR_AUTH_CONFIGS.get(connector_id)
+    if config is None:
+        return None
+    if not connector_supports_mode(connector_id, AUTH_MODE_CLIENT_CREDENTIALS):
+        return None
+    if resolve_auth_mode(org_id, connector_id) != AUTH_MODE_CLIENT_CREDENTIALS:
+        return None
+
+    try:
+        token_response = await _oauth.get_client_credentials_token(config)
+    except _oauth.OAuthError as exc:
+        logger.warning(
+            "client_credentials token mint failed for %s/%s: %s",
+            org_id,
+            connector_id,
+            exc.reason,
+        )
+        return None
+    except MissingSecretError:
+        # The deployment's connector client secret is not configured. Surface as
+        # not-authenticated (never log the missing value); the operator sets the
+        # {CONNECTOR}_CLIENT_SECRET env var to enable the mode.
+        logger.warning(
+            "client_credentials token mint skipped for %s/%s: connector secret not configured",
+            org_id,
+            connector_id,
+        )
+        return None
+
+    return store_token(org_id, connector_id, token_response)
+
+
+async def _mint_outbound_token(
+    org_id: str, connector_id: str
+) -> Optional[TokenRecord]:
+    """Try each outbound-only mint path in turn: JWT bearer, then client-credentials.
+
+    Returns the first minted :class:`TokenRecord`, or ``None`` when the connector
+    holds no outbound-only material/mode for this org. Each inner mint is gated on
+    its own mode/material, so at most one applies — the order is just a cheap probe
+    (the JWT-bearer probe returns immediately when no signing material is vaulted).
+    """
+    minted = await _mint_jwt_bearer_token(org_id, connector_id)
+    if minted is not None:
+        return minted
+    return await _mint_client_credentials_token(org_id, connector_id)
+
+
+# ---------------------------------------------------------------------------
 # Public vault API
 # ---------------------------------------------------------------------------
 
@@ -759,10 +988,14 @@ async def get_token(
         con.close()
 
     if row is None:
-        # No token record — including when the connector holds a STATIC
-        # credential row instead (kind='static'): a static credential is not
-        # an OAuth token, so token readers see the connector as not
-        # authenticated rather than receiving a bogus TokenRecord.
+        # No cached OAuth token. An outbound-only connector has no token to start
+        # with — mint one outbound (JWT bearer re-assertion, or a client-credentials
+        # exchange for a service identity — AC1/AC2). This is the outbound "connect".
+        # Falls through to not-authenticated when no outbound material/mode applies
+        # (e.g. a static-credential connector, or one that was never authenticated).
+        minted = await _mint_outbound_token(org_id, connector_id)
+        if minted is not None:
+            return minted
         raise ConnectorNotAuthenticatedError(org_id, connector_id)
 
     record = _row_to_token_record(row)
@@ -772,6 +1005,14 @@ async def get_token(
 
     if seconds_left <= min_validity_seconds:
         if record.refresh_token is None:
+            # No refresh token. For an outbound-only connector this is expected —
+            # "refresh" is a fresh signed assertion (JWT bearer) or a fresh
+            # client-credentials exchange, not an OAuth refresh grant — so re-mint
+            # outbound rather than failing (AC1/AC2). Any other connector with no
+            # refresh token stays not-authenticated.
+            minted = await _mint_outbound_token(org_id, connector_id)
+            if minted is not None:
+                return minted
             raise ConnectorNotAuthenticatedError(org_id, connector_id)
 
         config = CONNECTOR_AUTH_CONFIGS.get(connector_id)

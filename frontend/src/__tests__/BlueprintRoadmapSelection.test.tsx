@@ -109,6 +109,7 @@ vi.mock('../components/common/PageShell', () => ({
 }));
 
 import BlueprintPage from '../pages/BlueprintPage';
+import { DataCacheProvider } from '../lib/dataCache';
 
 beforeEach(() => {
   state.selectedId = null;
@@ -127,7 +128,9 @@ describe('Agent Roadmap → Blueprint selection', () => {
     // Review bubble). The URL effect applies it once.
     render(
       <MemoryRouter initialEntries={['/agentforce-blueprint?runId=run_sel&oppId=opp_a']}>
-        <BlueprintPage />
+        <DataCacheProvider>
+          <BlueprintPage />
+        </DataCacheProvider>
       </MemoryRouter>,
     );
 

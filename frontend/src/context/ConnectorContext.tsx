@@ -6,6 +6,8 @@ import { isDiscoveryReadyConnector } from '../utils/sourceReadiness';
 import { connectConnectorApi, configureSyncApi, disconnectConnectorApi } from '../services/staticApi';
 import { authHeaderForToken } from '../lib/apiClient';
 import { useAuthOptional } from './AuthContext';
+import { useResource, useDataCache } from '../lib/dataCache';
+import { cacheKeys } from '../lib/cacheKeys';
 
 type ConnectorContextValue = {
   all: Connector[];                
@@ -84,66 +86,60 @@ function normalizeConnector(raw: ConnectorPayload): Connector | null {
 }
 
 export function ConnectorProvider({ children }: { children: React.ReactNode }) {
-  const [all, setAll] = useState<Connector[]>([]);
-  const[selectedConnectorId, setSelectedConnectorId] = useState<string | null>(null);
-
-  const[loading, setLoading] = useState<boolean>(true);
-  const [error, setError] = useState<string | null>(null);
-  const [fetchCount, setFetchCount] = useState<number>(0);
+  const [selectedConnectorId, setSelectedConnectorId] = useState<string | null>(null);
+  // Errors from mutations (connect/configure) are surfaced separately from the
+  // resource's own fetch error, so a failed connect still shows a message.
+  const [mutationError, setMutationError] = useState<string | null>(null);
 
   // Use the in-session token directly from AuthContext to avoid the race where
-  // ConnectorProvider's effect fires before AuthProvider's effect syncs the
-  // module-level _authToken. This mirrors the same pattern used in RunContext.
+  // this fires before AuthProvider syncs the module-level _authToken. The
+  // fetcher is a closure so the shared cache signs each (re)fetch with the
+  // current token; the token itself changes only across a SessionBoundary
+  // remount (App.tsx), which starts a fresh cache anyway.
   const auth = useAuthOptional();
   const token = auth?.token ?? null;
+  const cache = useDataCache();
 
-  const refetch = useCallback(() => setFetchCount((c) => c + 1),[]);
+  const fetchConnectors = useCallback(async (): Promise<Connector[]> => {
+    const res = await fetch(
+      `${(import.meta.env.VITE_API_BASE_URL as string | undefined) ?? 'http://localhost:8000'}/api/connectors`,
+      { headers: authHeaderForToken(token) },
+    );
+    if (!res.ok) throw new Error(`Failed to load connectors (${res.status})`);
+    const data = (await res.json()) as unknown;
+    if (!Array.isArray(data)) throw new Error('Invalid connectors response');
+    return data
+      .map((connector) => normalizeConnector(connector as ConnectorPayload))
+      .filter((connector): connector is Connector => Boolean(connector));
+  }, [token]);
 
+  // Shared, deduped, invalidatable resource. A mutation anywhere that calls
+  // cache.invalidate(cacheKeys.connectors) — connect/configure/disconnect here,
+  // or a credential/product save elsewhere — refetches this instantly.
+  const resource = useResource<Connector[]>(cacheKeys.connectors, fetchConnectors);
+  const all = useMemo(() => resource.data ?? [], [resource.data]);
+  // Loading is true ONLY before the first load resolves — NOT during background
+  // refetches. A mutation elsewhere invalidates 'connectors' and the resource
+  // refetches while keeping its current data; if `loading` flipped true on every
+  // refetch, IntegrationHubPage (which renders the hub only when !loading) would
+  // unmount and remount the whole hub on each invalidate — a visible "page
+  // refresh" that also remounts open modals. Keeping data-present refetches
+  // non-blocking makes them the quiet background updates a cache should be.
+  const loading = resource.data === undefined && resource.error === null;
+  const error = resource.error?.message ?? mutationError;
+  const refetch = useCallback(() => cache.invalidate(cacheKeys.connectors), [cache]);
+
+  // Pick a sensible default selection once connectors load (rank 1 first).
   useEffect(() => {
-    let alive = true;
-    setLoading(true);
-    // Pass the in-session token explicitly so the request is signed with the
-    // right JWT even on the first mount (before setAuthToken effect has run).
-    fetch(`${(import.meta.env.VITE_API_BASE_URL as string | undefined) ?? 'http://localhost:8000'}/api/connectors`, {
-      headers: authHeaderForToken(token),
-    })
-      .then(async (res) => {
-        if (!res.ok) throw new Error(`Failed to load connectors (${res.status})`);
-        return res.json() as Promise<unknown>;
-      })
-      .then((data) => {
-        if (!alive) return;
-        if (!Array.isArray(data)) {
-          throw new Error('Invalid connectors response');
-        }
-
-        const normalized = data
-          .map((connector) => normalizeConnector(connector as ConnectorPayload))
-          .filter((connector): connector is Connector => Boolean(connector));
-
-        setAll(normalized);
-        
-        // FIX: Sort the data by recommendedRank before picking the default
-        // This ensures rank 1 (ServiceNow) is always selected first
-        setSelectedConnectorId((prev) => {
-          if (prev) return prev;
-          
-          const topRecommended = [...normalized]
-            .filter((d) => d.tier === 'recommended')
-            .sort((a, b) => (a.recommendedRank ?? 999) - (b.recommendedRank ?? 999));
-             
-          return topRecommended.length > 0 ? topRecommended[0].id : (normalized[0]?.id ?? null);
-        });
-
-        setError(null);
-      })
-      .catch((e: any) => {
-        if (!alive) return;
-        setError(e?.message ?? 'Failed to load connectors');
-      })
-      .finally(() => alive && setLoading(false));
-    return () => { alive = false; };
-  }, [fetchCount, token]);
+    if (all.length === 0) return;
+    setSelectedConnectorId((prev) => {
+      if (prev) return prev;
+      const topRecommended = [...all]
+        .filter((d) => d.tier === 'recommended')
+        .sort((a, b) => (a.recommendedRank ?? 999) - (b.recommendedRank ?? 999));
+      return topRecommended.length > 0 ? topRecommended[0].id : (all[0]?.id ?? null);
+    });
+  }, [all]);
 
   const recommended = useMemo(
     () =>
@@ -176,34 +172,44 @@ export function ConnectorProvider({ children }: { children: React.ReactNode }) {
     setSelectedConnectorId(id);
   },[]);
 
+  // Connecting/configuring/disconnecting a connector can change its tile state
+  // AND the network-profile auth-capability gating, so both keys are invalidated
+  // → tiles, the detail panel, and gating all refresh live (no reload).
+  const invalidateConnectorState = useCallback(() => {
+    cache.invalidate(cacheKeys.connectors);
+    cache.invalidate(cacheKeys.networkProfile);
+  }, [cache]);
+
   const connectConnector = useCallback(async (id: string) => {
+    setMutationError(null);
     try {
       await connectConnectorApi(id);
-      refetch();
+      invalidateConnectorState();
     } catch (e: any) {
-      setError(e?.message ?? 'Failed to connect');
+      setMutationError(e?.message ?? 'Failed to connect');
     }
-  },[refetch]);
+  }, [invalidateConnectorState]);
 
   const configureSync = useCallback(async (id: string) => {
+    setMutationError(null);
     try {
       await configureSyncApi(id);
-      refetch();
+      invalidateConnectorState();
     } catch (e: any) {
-      setError(e?.message ?? 'Failed to configure sync');
+      setMutationError(e?.message ?? 'Failed to configure sync');
     }
-  }, [refetch]);
+  }, [invalidateConnectorState]);
 
   const disconnectConnector = useCallback(async (id: string) => {
-    // Let the caller handle success/error toasts, but always refetch so the tile
-    // reflects the cleared credential. Re-throw so the confirm dialog can keep the
-    // user informed if the disconnect failed.
+    // Let the caller handle success/error toasts, but always invalidate so the
+    // tile reflects the cleared credential. Re-throw so the confirm dialog can
+    // keep the user informed if the disconnect failed.
     try {
       await disconnectConnectorApi(id);
     } finally {
-      refetch();
+      invalidateConnectorState();
     }
-  }, [refetch]);
+  }, [invalidateConnectorState]);
 
   const value: ConnectorContextValue = useMemo(() => ({
     all,                    
