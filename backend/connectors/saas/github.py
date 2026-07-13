@@ -49,6 +49,14 @@ PR_MERGE_WINDOW_DAYS = 30
 _PAGE_SIZE = 100
 _REQUEST_TIMEOUT = 30
 
+#: Optional explicit repository scope. When set, the connector reads EXACTLY these
+#: ``owner/repo`` repositories instead of auto-discovering every repo the token can
+#: access — so a run targets only the repositories you care about (e.g. just
+#: ``Kusumareddy0896/AgentIQ``) rather than every empty/unrelated repo in the
+#: account. Accepts a comma-separated list or a JSON array of ``owner/repo``
+#: strings. Unset → auto-discovery (backward compatible).
+_REPOS_ENV = "GITHUB_REPOS"
+
 # Offline fixture — parity with the Salesforce/ServiceNow/Jira connectors.
 # Used when GitHub is not connected (no stored token) or when not in live mode.
 _FIXTURE_PATH = Path(__file__).parent / "fixtures" / "github_sample.json"
@@ -108,17 +116,52 @@ def _make_session(access_token: str):
     return session
 
 
-def _paginate(session, url: str, params: Optional[Dict] = None) -> Tuple[List[Dict], bool]:
+def _github_message(resp) -> str:
+    """Best-effort extraction of GitHub's error ``message`` from a response body.
+
+    GitHub returns a JSON ``{"message": "..."}`` on errors (e.g. a 409 carries
+    ``"Git Repository is empty."``). Surfacing it turns an opaque status code into
+    an actionable log line. Never raises — a non-JSON/emtpy body yields ""."""
+    try:
+        body = resp.json()
+    except Exception:
+        return ""
+    if isinstance(body, dict):
+        return str(body.get("message") or "")
+    return ""
+
+
+def _paginate(
+    session,
+    url: str,
+    params: Optional[Dict] = None,
+    quiet_statuses: Tuple[int, ...] = (),
+) -> Tuple[List[Dict], bool, bool]:
     """
     Fetch all pages from a GitHub REST endpoint.
 
-    Returns (items, degraded) where degraded=True when a 429 or timeout
-    occurs mid-pagination; already-fetched items are still returned.
+    Returns ``(items, degraded, transient)``:
+
+      * ``degraded`` — the fetch could not be completed cleanly (any non-2xx,
+        timeout, or unexpected shape); already-fetched items are still returned.
+      * ``transient`` — the degradation is a retry-worthy / genuine PROBLEM (429
+        rate limit, timeout, request error, unexpected shape, or a non-2xx NOT in
+        ``quiet_statuses``). This is the flag a caller should map to a degraded
+        SIGNAL, because it means data we expected may be missing.
+
+    ``quiet_statuses`` lists non-2xx codes that are EXPECTED for this call rather
+    than genuine errors — e.g. a 409 on a repository whose default branch is
+    empty/unborn ("Git Repository is empty."), which just means "no commits on the
+    default branch here", not a failure.
+    A quiet status degrades (``degraded=True``) but is NOT transient
+    (``transient=False``): it means "no data here", not "something failed", so a
+    caller treats it as an empty result rather than a degraded signal. It is also
+    logged at INFO (with GitHub's own message) instead of WARNING.
     """
     try:
         import requests
     except ImportError:
-        return [], True
+        return [], True, True
 
     all_items: List[Dict] = []
     page = 1
@@ -131,24 +174,36 @@ def _paginate(session, url: str, params: Optional[Dict] = None) -> Tuple[List[Di
             resp = session.get(url, params=req_params, timeout=_REQUEST_TIMEOUT)
         except requests.Timeout:
             logger.warning("GitHub API timeout: %s (page %d) — degraded signal", url, page)
-            return all_items, True
+            return all_items, True, True
         except Exception as exc:
             logger.warning("GitHub API request error: %s — %s", url, _safe_exc(exc))
-            return all_items, True
+            return all_items, True, True
 
         if resp.status_code == 429:
             logger.warning("GitHub API rate limit (429): %s (page %d) — degraded signal", url, page)
-            return all_items, True
+            return all_items, True, True
 
         if not resp.ok:
-            logger.warning("GitHub API error %s: %s", resp.status_code, url)
-            return all_items, True
+            detail = _github_message(resp) or "no detail"
+            if resp.status_code in quiet_statuses:
+                # Expected condition for this call (empty repo / non-org id) — NOT
+                # a real error and NOT transient. Log at INFO with GitHub's reason;
+                # the caller treats this as "no data", not a degraded signal.
+                logger.info(
+                    "GitHub API %s (expected): %s — %s",
+                    resp.status_code, url, detail,
+                )
+                return all_items, True, False
+            logger.warning(
+                "GitHub API error %s: %s — %s", resp.status_code, url, detail
+            )
+            return all_items, True, True
 
         page_data = resp.json()
         if not isinstance(page_data, list):
-            # Unexpected shape — treat as degraded
+            # Unexpected shape — treat as a genuine (transient) degradation.
             logger.warning("GitHub API unexpected response shape for %s", url)
-            return all_items, True
+            return all_items, True, True
 
         all_items.extend(page_data)
 
@@ -157,7 +212,7 @@ def _paginate(session, url: str, params: Optional[Dict] = None) -> Tuple[List[Di
 
         page += 1
 
-    return all_items, False
+    return all_items, False, False
 
 
 # ---------------------------------------------------------------------------
@@ -169,9 +224,12 @@ def _fetch_pr_review(session, owner: str, repo: str) -> Dict[str, Any]:
     """Fetch open PRs and compute PR review velocity metrics."""
     now = datetime.now(timezone.utc)
     url = f"{GITHUB_API_BASE}/repos/{owner}/{repo}/pulls"
-    prs, degraded = _paginate(session, url, {"state": "open"})
+    prs, degraded, transient = _paginate(session, url, {"state": "open"}, quiet_statuses=(409,))
 
-    if degraded:
+    if transient:
+        # Genuine failure (429 / timeout / unexpected) — hold the signal so the
+        # detector does not draw a conclusion from partial data. An empty repo is
+        # NOT transient and falls through to a clean zero result below.
         return {
             "open_pr_count": len(prs),
             "avg_days_open": 0.0,
@@ -205,13 +263,57 @@ def _fetch_pr_review(session, owner: str, repo: str) -> Dict[str, Any]:
     }
 
 
+def _first_nonempty_branch(session, owner: str, repo: str) -> Optional[str]:
+    """Return the name of a branch that actually has commits, or None.
+
+    Used to recover commit history when the repository's DEFAULT branch HEAD is
+    empty/unborn — GitHub then 409s the default ``/commits`` listing even though
+    commits live on another branch (e.g. the repo's default is still the unborn
+    ``main`` while the work is on ``master``). A branch only appears in the
+    ``/branches`` listing if it points at a commit, so any returned branch is
+    non-empty. Prefers the conventional trunk names, else the first branch.
+    """
+    url = f"{GITHUB_API_BASE}/repos/{owner}/{repo}/branches"
+    branches, _, _ = _paginate(session, url, {}, quiet_statuses=(409,))
+    names = [b.get("name") for b in branches if isinstance(b, dict) and b.get("name")]
+    if not names:
+        return None
+    for preferred in ("main", "master", "develop", "trunk"):
+        if preferred in names:
+            return preferred
+    return names[0]
+
+
 def _fetch_commit_concentration(session, owner: str, repo: str) -> Dict[str, Any]:
     """Fetch commits from last 90 days and compute author concentration."""
     since = (datetime.now(timezone.utc) - timedelta(days=COMMIT_WINDOW_DAYS)).isoformat()
     url = f"{GITHUB_API_BASE}/repos/{owner}/{repo}/commits"
-    commits, degraded = _paginate(session, url, {"since": since})
+    # A 409 here means GitHub considers the repo's DEFAULT branch empty/unborn
+    # ("Git Repository is empty.") — GitHub's /commits reads the default-branch
+    # HEAD, not "any commits anywhere". Expected for a truly new/empty repo, but it
+    # ALSO fires when the repo's default_branch (e.g. an unborn 'main') differs from
+    # the branch that holds the commits (e.g. 'master'). So on an empty default
+    # listing, recover by retrying against a branch that actually has commits — the
+    # repo is not really empty, its HEAD just points at an unborn ref.
+    commits, degraded, transient = _paginate(
+        session, url, {"since": since}, quiet_statuses=(409,)
+    )
+    if degraded and not transient and not commits:
+        branch = _first_nonempty_branch(session, owner, repo)
+        if branch:
+            logger.info(
+                "GitHub: default-branch commit listing unavailable for %s/%s "
+                "(empty/unborn HEAD) — retrying against branch '%s'",
+                owner, repo, branch,
+            )
+            commits, degraded, transient = _paginate(
+                session, url, {"since": since, "sha": branch}, quiet_statuses=(409,)
+            )
 
-    if degraded:
+    if transient:
+        # Genuine failure — degrade the signal. An empty repo (degraded but not
+        # transient) is NOT a failure: it falls through and returns a clean zero
+        # result, so it does not poison the cross-repo aggregate (any-degraded).
         return {
             "top_author_pct": 0.0,
             "top_author_name": "",
@@ -243,6 +345,16 @@ def _fetch_commit_concentration(session, owner: str, repo: str) -> Dict[str, Any
     top_author, top_count = author_counts.most_common(1)[0]
     top_author_pct = round(top_count / total_commits, 4)
 
+    # Per-repo visibility: show the commit signal actually derived from this repo,
+    # so a repo with commits (e.g. AgentIQ) is confirmed read — not just the empty
+    # repos that log a 409. Only reached when the repo has commits.
+    logger.info(
+        "GitHub: %s/%s commit concentration — %d commit(s) in last %dd, "
+        "%d contributor(s), top author %r (%.0f%%)",
+        owner, repo, total_commits, COMMIT_WINDOW_DAYS,
+        total_contributors, top_author, round(top_author_pct * 100),
+    )
+
     return {
         "top_author_pct": top_author_pct,
         "top_author_name": top_author,
@@ -256,9 +368,12 @@ def _fetch_stale_branches(session, owner: str, repo: str) -> Dict[str, Any]:
     now = datetime.now(timezone.utc)
     stale_cutoff = now - timedelta(days=STALE_BRANCH_DAYS)
     url = f"{GITHUB_API_BASE}/repos/{owner}/{repo}/branches"
-    branches, degraded = _paginate(session, url, {})
+    # 409 = empty repository (no branches). Expected, not transient — an empty
+    # repo simply has no branches to age, so it returns a clean zero result below
+    # rather than degrading the aggregate signal.
+    branches, degraded, transient = _paginate(session, url, {}, quiet_statuses=(409,))
 
-    if degraded:
+    if transient:
         return {
             "stale_count": 0,
             "total_branches": len(branches),
@@ -315,8 +430,8 @@ def _fetch_closed_prs(session, owner: str, repo: str) -> None:
     """
     since = (datetime.now(timezone.utc) - timedelta(days=PR_MERGE_WINDOW_DAYS)).isoformat()
     url = f"{GITHUB_API_BASE}/repos/{owner}/{repo}/pulls"
-    prs, degraded = _paginate(session, url, {"state": "closed"})
-    if degraded:
+    prs, degraded, transient = _paginate(session, url, {"state": "closed"}, quiet_statuses=(409,))
+    if transient:
         logger.warning("GitHub closed PRs: degraded signal (rate limit or timeout)")
     else:
         merged = sum(1 for p in prs if p.get("merged_at"))
@@ -331,27 +446,80 @@ def _fetch_closed_prs(session, owner: str, repo: str) -> None:
 # ---------------------------------------------------------------------------
 
 
+def _configured_repo_scope() -> List[Tuple[str, str]]:
+    """Explicit ``owner/repo`` scope from the ``GITHUB_REPOS`` env var, or [].
+
+    When set, the connector reads EXACTLY these repositories instead of auto-
+    discovering everything the token can access. Accepts a comma-separated list or
+    a JSON array of ``owner/repo`` strings, e.g.
+    ``GITHUB_REPOS="Kusumareddy0896/AgentIQ"`` or
+    ``GITHUB_REPOS='["Kusumareddy0896/AgentIQ","org/other"]'``. Entries not in
+    ``owner/repo`` form are skipped with a warning; duplicates are collapsed.
+    """
+    raw = os.environ.get(_REPOS_ENV, "").strip()
+    if not raw:
+        return []
+
+    if raw.startswith("["):
+        try:
+            parsed = json.loads(raw)
+        except (TypeError, ValueError):
+            logger.warning("%s is not valid JSON — ignoring repo scope", _REPOS_ENV)
+            return []
+        entries = [str(e) for e in parsed] if isinstance(parsed, list) else []
+    else:
+        entries = raw.split(",")
+
+    result: List[Tuple[str, str]] = []
+    seen: set = set()
+    for entry in entries:
+        spec = str(entry).strip().strip("/")
+        if not spec:
+            continue
+        parts = spec.split("/")
+        if len(parts) != 2 or not parts[0].strip() or not parts[1].strip():
+            logger.warning(
+                "%s entry %r is not in 'owner/repo' form — skipping", _REPOS_ENV, entry
+            )
+            continue
+        pair = (parts[0].strip(), parts[1].strip())
+        if pair not in seen:
+            seen.add(pair)
+            result.append(pair)
+    return result
+
+
 def _resolve_repos(session, org_id: str) -> List[Tuple[str, str]]:
     """
-    Resolve (owner, repo) pairs accessible to the authenticated app.
+    Resolve (owner, repo) pairs to read signals from.
 
-    Sprint 12 scope: reads from all accessible repositories.
-    Returns list of (owner, repo) tuples.
-    Falls back to org_id as the owner if org endpoint fails.
+    If ``GITHUB_REPOS`` is configured, use EXACTLY those repositories (no
+    discovery). Otherwise auto-discover all repositories accessible to the
+    authenticated token. Returns a list of (owner, repo) tuples.
     """
+    # Explicit scope wins — target only the configured repositories.
+    scope = _configured_repo_scope()
+    if scope:
+        logger.info(
+            "GitHub: reading configured repo scope from %s — %d repo(s): %s",
+            _REPOS_ENV, len(scope), ", ".join(f"{o}/{r}" for o, r in scope),
+        )
+        return scope
+
     try:
-        import requests
+        import requests  # noqa: F401 — availability guard; _paginate makes the calls.
     except ImportError:
         return []
 
-    # Try org repos first
-    url = f"{GITHUB_API_BASE}/orgs/{org_id}/repos"
-    repos, _ = _paginate(session, url, {"type": "all"})
-
-    if not repos:
-        # Fall back to authenticated user's repos
-        url = f"{GITHUB_API_BASE}/user/repos"
-        repos, _ = _paginate(session, url, {"affiliation": "owner,organization_member"})
+    # Auto-discover the repositories the authenticated token can access. We do NOT
+    # probe /orgs/{org_id}/repos first: org_id is AgentIQ's internal tenant UUID,
+    # never a GitHub organization login, so that probe is guaranteed to 404 on every
+    # run — a wasted API call and a noisy "404 (expected)" log line. /user/repos is
+    # the real (and only) discovery path. To read an EXACT set of repos instead of
+    # everything the token can see (e.g. to skip empty or unrelated repos), set
+    # GITHUB_REPOS — see _configured_repo_scope above, which short-circuits here.
+    url = f"{GITHUB_API_BASE}/user/repos"
+    repos, _, _ = _paginate(session, url, {"affiliation": "owner,organization_member"})
 
     result: List[Tuple[str, str]] = []
     for repo in repos:
@@ -529,6 +697,15 @@ async def ingest(org_id: str, run_id: Optional[str] = None) -> Dict[str, Any]:
             "org_id": org_id,
             "run_id": run_id,
         }
+
+    # Surface exactly which repositories are being scanned (all repos the token
+    # can access). This makes it obvious when an expected repo is missing from the
+    # token's access, or when empty repos (409) are simply other repos in the
+    # account — not the one that holds the commits.
+    logger.info(
+        "GitHub ingest: scanning %d accessible repo(s) for org=%s: %s",
+        len(repos), org_id, ", ".join(f"{o}/{r}" for o, r in repos),
+    )
 
     pr_review_signals: List[Dict[str, Any]] = []
     commit_signals: List[Dict[str, Any]] = []

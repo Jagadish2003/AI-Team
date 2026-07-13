@@ -29,6 +29,7 @@ from .rbac import require_role
 from . import db
 from .llm_enrichment import KV_LLM_ENRICHMENT
 from .opportunity_display import with_display_title
+from .terminology import apply_terminology, resolve_run_terminology
 
 
 # ── Detector metadata keyed by detector_id ───────────────────────────────────
@@ -497,5 +498,13 @@ def register_blueprint_routes(app) -> None:
 
         enrichment = db.run_kv_get(KV_LLM_ENRICHMENT, run_id, None)
         blueprint = _build_blueprint(with_display_title(opp), enrichment)
+
+        # R18-C1 T4: adapt the agent-recommendation wording (agent name/topic,
+        # suggested-action prose, guardrails) to the run's active template so the
+        # blueprint reads in the same domain language as the finding and report.
+        # Salesforce object API names (suggestedActions[].object), detectorId,
+        # tier, and permission labels are outside the terminology allowlist and
+        # stay verbatim. No-op when no template is active.
+        blueprint = apply_terminology(blueprint, resolve_run_terminology(run_id))
 
         return BlueprintResponse(**blueprint)

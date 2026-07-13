@@ -15,10 +15,13 @@
  * opened for Owners.
  */
 import React, { useEffect, useState } from "react";
-import { X, KeyRound } from "lucide-react";
+import { X, KeyRound, Trash2 } from "lucide-react";
 import { Connector } from "../../types/connector";
 import { ApiError } from "../../lib/apiClient";
-import { saveConnectorCredentials } from "../../services/staticApi";
+import {
+  deleteConnectorCredentials,
+  saveConnectorCredentials,
+} from "../../services/staticApi";
 import { useToast } from "../common/Toast";
 import PasswordInput from "../auth/PasswordInput";
 import { staticCredentialFields } from "./staticCredentialConnectors";
@@ -56,6 +59,8 @@ export default function StaticCredentialModal({
   const [secret, setSecret] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [confirmRemove, setConfirmRemove] = useState(false);
+  const [removing, setRemoving] = useState(false);
 
   // Reset on open/close. The secret is ALWAYS blank — it is never read back
   // (AC10). base_url (non-secret) is seeded from status only as a convenience.
@@ -66,10 +71,35 @@ export default function StaticCredentialModal({
       setSecret("");
       setError(null);
       setSubmitting(false);
+      setConfirmRemove(false);
+      setRemoving(false);
     }
   }, [open, existingBaseUrl]);
 
   if (!open || !fields) return null;
+
+  async function handleRemove() {
+    if (!confirmRemove) {
+      setConfirmRemove(true);
+      return;
+    }
+    setError(null);
+    setRemoving(true);
+    try {
+      await deleteConnectorCredentials(connector.id);
+      toast.push(`${connector.name} credentials removed.`, "success");
+      onSuccess();
+      onClose();
+    } catch (err) {
+      const detail =
+        err instanceof ApiError && typeof (err.body as { detail?: unknown })?.detail === "string"
+          ? ((err.body as { detail?: string }).detail as string)
+          : "Could not remove credentials.";
+      setError(detail);
+    } finally {
+      setRemoving(false);
+    }
+  }
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -206,21 +236,38 @@ export default function StaticCredentialModal({
               </p>
             )}
 
-            <div className="flex justify-end gap-3 pt-1">
-              <button
-                type="button"
-                onClick={onClose}
-                className="rounded-lg border border-border bg-panel px-4 py-2 text-sm font-medium text-muted transition-colors hover:bg-panel2 hover:text-text focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/30"
-              >
-                Cancel
-              </button>
-              <button
-                type="submit"
-                disabled={submitting}
-                className="inline-flex items-center justify-center gap-2 rounded-lg border border-accent/30 bg-accent px-5 py-2 text-sm font-semibold text-white transition-colors hover:bg-accent/90 disabled:cursor-not-allowed disabled:opacity-60 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/30"
-              >
-                {submitting ? "Saving..." : configured ? "Replace credential" : "Save credential"}
-              </button>
+            <div className="flex items-center justify-between gap-3 pt-1">
+              {/* Delete lives here (with Enter/Update) so the tile's setup flow
+                  owns all writes; the right panel is read-only status. */}
+              {configured ? (
+                <button
+                  type="button"
+                  onClick={handleRemove}
+                  disabled={submitting || removing}
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-2 text-sm font-medium text-muted transition-colors hover:border-red-500/40 hover:text-red-300 disabled:cursor-not-allowed disabled:opacity-60 focus:outline-none focus-visible:ring-2 focus-visible:ring-red-500/30"
+                >
+                  <Trash2 size={14} />
+                  {confirmRemove ? "Click to confirm" : "Remove"}
+                </button>
+              ) : (
+                <span />
+              )}
+              <div className="flex gap-3">
+                <button
+                  type="button"
+                  onClick={onClose}
+                  className="rounded-lg border border-border bg-panel px-4 py-2 text-sm font-medium text-muted transition-colors hover:bg-panel2 hover:text-text focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/30"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={submitting || removing}
+                  className="inline-flex items-center justify-center gap-2 rounded-lg border border-accent/30 bg-accent px-5 py-2 text-sm font-semibold text-white transition-colors hover:bg-accent/90 disabled:cursor-not-allowed disabled:opacity-60 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/30"
+                >
+                  {submitting ? "Saving..." : configured ? "Replace credential" : "Save credential"}
+                </button>
+              </div>
             </div>
           </form>
         </div>

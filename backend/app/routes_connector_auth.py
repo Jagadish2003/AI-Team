@@ -24,9 +24,9 @@ Values are WRITE-ONLY: the POST stores them Fernet-encrypted in the per-org vaul
 returns the username or secret — an Owner can replace a credential but never read
 one back through the UI, and the action is audited without the values (AC10).
 
-State nonce storage: oauth_nonces table (matching the existing raw-SQL pattern in db.py).
-No session/cookie mechanism exists in this codebase; nonces are stored server-side in the DB
-with a 10-minute TTL and are deleted on first use (single-use guarantee).
+State nonce storage is owned by app.auth.vault and its provisioned ``nonces``
+table. No session/cookie mechanism exists in this codebase; nonces are stored
+server-side with a 10-minute TTL and are soft-deleted on first use.
 """
 from __future__ import annotations
 
@@ -34,10 +34,8 @@ import hmac
 import logging
 import os
 import secrets as _secrets_mod
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import Dict, Optional
-
-import psycopg2
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Response
 from fastapi.responses import RedirectResponse
@@ -46,9 +44,11 @@ from pydantic import BaseModel
 
 from app import db
 from app.auth import (
+    OAuthError,
     build_auth_url,
     exchange_code,
     generate_pkce_pair,
+    get_client_credentials_token,
     revoke_token,
     store_token,
 )
@@ -56,11 +56,22 @@ from app import license_limits
 from app.auth.configs import CONNECTOR_AUTH_CONFIGS
 from app.auth.oauth_state import decode_state, encode_state
 from app.auth.secrets import MissingSecretError
+from app.auth.auth_modes import (
+    all_known_connector_ids,
+    connector_supports_mode,
+    get_connector_auth_capability,
+    resolve_auth_mode,
+    set_auth_mode,
+)
+from app import network_profile
 from app.auth.vault import (
     REFRESH_THRESHOLD_SECONDS,
     consume_nonce,
+    get_jwt_bearer_credential_metadata,
     get_static_credential_metadata,
+    revoke_jwt_bearer_credential,
     revoke_static_credential,
+    store_jwt_bearer_credential,
     store_nonce,
     store_static_credential,
 )
@@ -102,103 +113,6 @@ OAUTH_SUCCESS_REDIRECT = (
 OAUTH_ERROR_REDIRECT = (
     _FRONTEND_BASE_URL + _FRONTEND_CALLBACK_PATH + "?status=error&code={error_code}"
 )
-
-_NONCE_TTL_SECONDS = 600  # 10-minute window for state nonce validity
-
-_CREATE_NONCES_TABLE = """
-CREATE TABLE IF NOT EXISTS oauth_nonces (
-    nonce        TEXT PRIMARY KEY,
-    connector_id TEXT NOT NULL,
-    expires_at   TEXT NOT NULL
-)
-"""
-
-
-# ---------------------------------------------------------------------------
-# Table initialisation (called lazily on first use)
-# ---------------------------------------------------------------------------
-
-
-def _ensure_tables() -> None:
-    """No-op. The credentials and oauth_nonces tables are provisioned externally.
-
-    Created by database/provision/provision.sh; the application no longer
-    creates these tables at runtime.
-    """
-    return None
-
-
-# ---------------------------------------------------------------------------
-# Nonce store (server-side, single-use, TTL-bounded)
-# ---------------------------------------------------------------------------
-
-
-def _store_nonce(nonce: str, connector_id: str) -> None:
-    _ensure_tables()
-    expires_at = (
-        datetime.now(timezone.utc) + timedelta(seconds=_NONCE_TTL_SECONDS)
-    ).isoformat()
-    con = db.connect()
-    try:
-        cur = con.cursor()
-        cur.execute(
-            "INSERT INTO oauth_nonces (nonce, connector_id, expires_at) VALUES (%s, %s, %s) "
-            "ON CONFLICT (nonce) DO UPDATE SET "
-            "connector_id = EXCLUDED.connector_id, expires_at = EXCLUDED.expires_at, "
-            "is_deleted = FALSE",
-            (nonce, connector_id, expires_at),
-        )
-        con.commit()
-    finally:
-        con.close()
-
-
-def _consume_nonce(state: str) -> Optional[str]:
-    """Delete and validate a nonce in one step. Returns connector_id or None.
-
-    The nonce is deleted immediately on lookup — whether or not the comparison
-    succeeds — so replay of any state value (valid or invalid) always returns None
-    on the second attempt.
-    """
-    _ensure_tables()
-
-    con = db.connect()
-    try:
-        cur = con.cursor()
-        cur.execute(
-            "SELECT nonce, connector_id, expires_at FROM oauth_nonces "
-            "WHERE nonce = %s AND is_deleted = FALSE",
-            (state,),
-        )
-        row = cur.fetchone()
-        if row is not None:
-            # Soft delete (app role has no DELETE): the filtered read above makes a
-            # replay of the same state return None on the second attempt.
-            cur.execute(
-                "UPDATE oauth_nonces SET is_deleted = TRUE WHERE nonce = %s", (state,)
-            )
-            con.commit()
-    finally:
-        con.close()
-
-    if row is None:
-        return None
-
-    stored_nonce, connector_id, expires_at_str = row
-
-    # Reject expired nonces (already deleted above)
-    expires_at = datetime.fromisoformat(expires_at_str)
-    if expires_at.tzinfo is None:
-        expires_at = expires_at.replace(tzinfo=timezone.utc)
-    if datetime.now(timezone.utc) > expires_at:
-        return None
-
-    # Timing-safe comparison (spec requirement: use hmac.compare_digest, not ==)
-    if not hmac.compare_digest(stored_nonce, state):
-        raise HTTPException(status_code=400, detail='Invalid state')
-
-    return connector_id
-
 
 # ---------------------------------------------------------------------------
 # Callback auth (dev-gated)
@@ -308,12 +222,102 @@ class StaticCredentialStatus(BaseModel):
     updated_at: Optional[str] = None
 
 
+class JwtBearerCredentialRequest(BaseModel):
+    """Body for POST /api/connectors/{id}/jwt-credentials (R18-A3 T2 / AT-555).
+
+    The Salesforce connected-app JWT bearer material an Owner enters once:
+      login_url    — the login/instance host (e.g. https://login.salesforce.com),
+                     used as the assertion audience + token endpoint (non-secret).
+      username     — the Salesforce username the assertion runs as (the `sub`).
+      private_key  — the PEM cert private key (WRITE-ONLY: encrypted into the
+                     vault, never returned, never logged).
+    Fields default to empty so the handler returns one clear 400 naming the
+    missing field(s) rather than a raw 422.
+    """
+
+    login_url: str = ""
+    username: str = ""
+    private_key: str = ""
+
+
+class ClientCredentialsConnectStatus(BaseModel):
+    """Response for POST /api/connectors/{id}/client-credentials (R18-A3 T3 / AT-556).
+
+    The client-credentials connect takes NO body — the credential is the
+    deployment's app client secret (the ``{CONNECTOR}_CLIENT_SECRET`` env var), not
+    a per-user entry — so the response just confirms the outbound connect landed:
+    the connector is authenticated, and its per-org auth mode is now
+    ``client_credentials``. Carries no token or secret (AC5).
+    """
+
+    connector_id: str
+    connected: bool
+    auth_mode: str
+
+
+class ConnectorAuthCapability(BaseModel):
+    """Per-connector auth capability for the Integration Hub (R18-A3 T5 / AT-558).
+
+    Pairs with the deployment ``network_profile`` so the UI can decide, per tile,
+    whether to offer the authorization-code connect flow or route the customer to
+    the outbound setup path. ``has_outbound_only_mode`` is the load-bearing flag:
+    in ``no_public_inbound`` the UI hides the authorization-code Connect button
+    exactly for connectors where this is true (AC4).
+    """
+
+    connector_id: str
+    supported_auth_modes: list[str]
+    outbound_only_modes: list[str]
+    has_outbound_only_mode: bool
+    default_auth_mode: Optional[str] = None
+
+
+class NetworkProfileResponse(BaseModel):
+    """Response for GET /api/network-profile (R18-A3 T5 / AT-558).
+
+    Carries the deployment's inbound-network posture and the per-connector auth
+    capability map the UI uses to gate connect flows. No secrets — capability and
+    profile only.
+    """
+
+    network_profile: str
+    no_public_inbound: bool
+    connectors: Dict[str, ConnectorAuthCapability]
+
+
 # ---------------------------------------------------------------------------
 # Route registration
 # ---------------------------------------------------------------------------
 
 
 def register_connector_auth_routes(app: FastAPI) -> None:
+
+    @app.get(
+        "/api/network-profile",
+        response_model=NetworkProfileResponse,
+        dependencies=[Depends(require_auth), Depends(require_role("viewer"))],
+    )
+    def get_network_profile_info() -> NetworkProfileResponse:
+        """Return the deployment network profile + per-connector auth capability.
+
+        R18-A3 T5 (AT-558). The frontend pairs ``network_profile`` with each
+        connector's ``has_outbound_only_mode`` to decide whether to offer the
+        authorization-code connect flow or the outbound setup path — in a
+        ``no_public_inbound`` deployment the authorization-code Connect button is
+        hidden wherever an outbound-only mode exists, so the customer can never
+        start a flow that cannot complete (AC4). Read-only; carries no secrets.
+        """
+        profile = network_profile.get_network_profile()
+        capabilities = {
+            connector_id: ConnectorAuthCapability(**get_connector_auth_capability(connector_id))
+            for connector_id in all_known_connector_ids()
+        }
+        return NetworkProfileResponse(
+            network_profile=profile,
+            no_public_inbound=network_profile.is_no_public_inbound(),
+            connectors=capabilities,
+        )
+
     # Register /oauth/callback BEFORE /{connector_id}/... so the literal
     # path segment "oauth" is not captured by the path parameter.
 
@@ -656,8 +660,6 @@ def register_connector_auth_routes(app: FastAPI) -> None:
     )
     async def get_token_status(connector_id: str) -> Dict[str, str]:
         """Return token status: connected | needs_refresh | needs_auth | refresh_failed (AC14)."""
-        _ensure_tables()
-
         # Scope to the caller's org — the OAuth callback stores the credential under
         # the org carried in the state nonce (the authenticated org), and disconnect
         # reads with get_current_org_id() too. Using a hardcoded "default" here looked
@@ -882,4 +884,287 @@ def register_connector_auth_routes(app: FastAPI) -> None:
             user_id=_get_user_id_from_token(token),
         )
         return Response(status_code=204)
- 
+
+    # -----------------------------------------------------------------------
+    # JWT bearer credential entry — R18-A3 T2 / AT-555 (AC1/AC5)
+    #
+    # Outbound-only Salesforce connect: an Owner enters the connected-app cert
+    # private key once. It is vaulted (encrypted, write-only, never logged — AC5);
+    # the access token is minted outbound from it on first ingest and re-minted by
+    # re-assertion on expiry (get_token), so no inbound callback is ever needed.
+    # -----------------------------------------------------------------------
+
+    @app.post(
+        "/api/connectors/{connector_id}/jwt-credentials",
+        response_model=StaticCredentialStatus,
+        dependencies=[Depends(require_auth), Depends(require_role("owner"))],
+    )
+    def set_jwt_bearer_credentials(
+        connector_id: str,
+        body: JwtBearerCredentialRequest,
+        token: str = Depends(require_auth),
+    ) -> StaticCredentialStatus:
+        """Store the JWT bearer signing material for the caller's org (AC5).
+
+        Owner-only. The PEM private key + Salesforce username + login host are
+        encrypted into the per-org vault via store_jwt_bearer_credential (same
+        keying/encryption as any credential). The org is taken from the tenancy
+        context, never the body. Values are write-only: the response is non-secret
+        metadata only, and the audit event records the action/actor without them.
+        Selecting a connector that has no jwt_bearer mode is a 400.
+        """
+        if not connector_supports_mode(connector_id, "jwt_bearer"):
+            raise HTTPException(
+                status_code=400,
+                detail="Connector does not support the JWT bearer auth mode.",
+            )
+
+        login_url = (body.login_url or "").strip()
+        username = (body.username or "").strip()
+        private_key = body.private_key or ""
+        missing = [
+            label
+            for label, value in (
+                ("login URL", login_url),
+                ("username", username),
+                ("private key", private_key.strip()),
+            )
+            if not value
+        ]
+        if missing:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Missing required field(s): {', '.join(missing)}.",
+            )
+
+        org_id = get_current_org_id()
+        try:
+            record = store_jwt_bearer_credential(
+                org_id,
+                connector_id,
+                private_key=private_key,
+                subject=username,
+                base_url=login_url,
+            )
+        except ValueError:
+            raise HTTPException(
+                status_code=400, detail="A non-empty private key is required."
+            )
+        except MissingSecretError:
+            logger.error(
+                "Cannot store JWT bearer credential for connector %s: the credential "
+                "vault key (CREDENTIAL_VAULT_KEY) is not configured",
+                connector_id,
+            )
+            raise HTTPException(
+                status_code=500, detail="Credential vault is not configured."
+            )
+
+        # Record the per-org auth-mode selection so resolve_auth_mode reflects
+        # reality, and reflect the connection in this org's connector state (the
+        # access token mints on first ingest). Display state only — the vault write
+        # above is the source of truth, so a failure here must not fail the request.
+        try:
+            set_auth_mode(org_id, connector_id, "jwt_bearer")
+        except Exception:
+            logger.exception(
+                "Failed to record jwt_bearer auth mode for connector %s", connector_id
+            )
+        try:
+            rec = db.org_connector_get(org_id, connector_id) or {}
+            rec["status"] = "connected"
+            rec["lastSynced"] = rec.get("lastSynced", "—")
+            db.org_connector_set(org_id, connector_id, rec)
+        except Exception:
+            logger.exception(
+                "Failed to mark connector %s connected after JWT credential entry",
+                connector_id,
+            )
+
+        log_event(
+            "connector_credentials_set",
+            connector_id=connector_id,
+            user_id=_get_user_id_from_token(token),
+        )
+        return StaticCredentialStatus(
+            connector_id=connector_id,
+            configured=True,
+            base_url=record.base_url or None,
+            has_username=bool(record.username),
+            updated_at=record.updated_at.isoformat(),
+        )
+
+    @app.get(
+        "/api/connectors/{connector_id}/jwt-credentials",
+        response_model=StaticCredentialStatus,
+        dependencies=[Depends(require_auth), Depends(require_role("viewer"))],
+    )
+    def get_jwt_bearer_credential_status(connector_id: str) -> StaticCredentialStatus:
+        """Report whether JWT bearer material is configured — metadata only (AC5).
+
+        Reads NON-SECRET metadata (never decrypts the private key), so the key
+        cannot leak through this path and it does not even need the vault key.
+        """
+        if not connector_supports_mode(connector_id, "jwt_bearer"):
+            raise HTTPException(
+                status_code=400,
+                detail="Connector does not support the JWT bearer auth mode.",
+            )
+        org_id = get_current_org_id()
+        meta = get_jwt_bearer_credential_metadata(org_id, connector_id)
+        if meta is None:
+            return StaticCredentialStatus(connector_id=connector_id, configured=False)
+        return StaticCredentialStatus(
+            connector_id=connector_id,
+            configured=True,
+            base_url=meta["base_url"] or None,
+            has_username=meta["has_username"],
+            updated_at=meta["updated_at"].isoformat(),
+        )
+
+    @app.delete(
+        "/api/connectors/{connector_id}/jwt-credentials",
+        dependencies=[Depends(require_auth), Depends(require_role("owner"))],
+    )
+    def delete_jwt_bearer_credentials(
+        connector_id: str, token: str = Depends(require_auth)
+    ) -> Response:
+        """Revoke (soft-delete) the org's JWT bearer signing material.
+
+        Owner-only. Scoped to the reserved ``{connector_id}:jwt`` static row, so it
+        never touches the connector's cached OAuth token row. Idempotent.
+        """
+        if not connector_supports_mode(connector_id, "jwt_bearer"):
+            raise HTTPException(
+                status_code=400,
+                detail="Connector does not support the JWT bearer auth mode.",
+            )
+        org_id = get_current_org_id()
+        revoke_jwt_bearer_credential(org_id, connector_id)
+        try:
+            rec = db.org_connector_get(org_id, connector_id)
+            if rec is not None and rec.get("org_id") == org_id:
+                rec["status"] = "disconnected"
+                db.org_connector_set(org_id, connector_id, rec)
+        except Exception:
+            logger.exception(
+                "Failed to clear connector %s connection state after JWT credential revoke",
+                connector_id,
+            )
+        log_event(
+            "connector_credentials_revoked",
+            connector_id=connector_id,
+            user_id=_get_user_id_from_token(token),
+        )
+        return Response(status_code=204)
+
+    # -----------------------------------------------------------------------
+    # Client-credentials connect — R18-A3 T3 / AT-556 (AC2/AC5)
+    #
+    # Outbound-only Microsoft Graph (Teams / SharePoint) connect: no browser
+    # redirect, no inbound callback. The credential is the deployment's app client
+    # secret (the {CONNECTOR}_CLIENT_SECRET env var against an admin-consented app
+    # registration — see docs/INTEGRATE_GRAPH_CLIENT_CREDENTIALS.md), so this takes
+    # NO body. It exchanges the app credentials outbound for an access token, vaults
+    # it (encrypted, never logged — AC5), records the per-org client_credentials mode
+    # selection, and marks the connector connected. The token re-mints automatically
+    # on expiry via get_token (client-credentials issues no refresh token), so
+    # ingestion continues without any further user action (AC2).
+    # -----------------------------------------------------------------------
+
+    @app.post(
+        "/api/connectors/{connector_id}/client-credentials",
+        response_model=ClientCredentialsConnectStatus,
+        dependencies=[Depends(require_auth), Depends(require_role("owner"))],
+    )
+    async def connect_client_credentials(
+        connector_id: str, token: str = Depends(require_auth)
+    ) -> ClientCredentialsConnectStatus:
+        """Connect a connector via the outbound-only client-credentials grant (AC2).
+
+        Owner-only. Selecting a connector that has no client_credentials mode is a
+        400. Acquires an access token outbound (no callback), stores it per-org in
+        the encrypted vault (AC5), sets the org's auth mode to client_credentials,
+        and reflects the connection in the org's connector state. A missing app
+        secret is a 500 (operator config); an upstream token failure is a 502.
+        """
+        if not connector_supports_mode(connector_id, "client_credentials"):
+            raise HTTPException(
+                status_code=400,
+                detail="Connector does not support the client-credentials auth mode.",
+            )
+        config = CONNECTOR_AUTH_CONFIGS.get(connector_id)
+        if config is None:
+            raise HTTPException(status_code=404, detail="Unknown connector")
+
+        org_id = get_current_org_id()
+
+        # Block connecting a NEW system once the org is at its licensed max_systems;
+        # re-connecting an already-connected connector is not a new system (R17-D4
+        # Addendum A / T9). Raises HTTP 402 at the limit.
+        license_limits.enforce_can_connect(org_id, connector_id)
+
+        # Outbound token acquisition — the client secret is resolved inside
+        # get_client_credentials_token and never logged (AC5).
+        try:
+            token_response = await get_client_credentials_token(config)
+        except MissingSecretError:
+            logger.error(
+                "Cannot connect connector %s via client-credentials: the connector "
+                "client secret (%s) is not configured",
+                connector_id,
+                config.secret_key,
+            )
+            raise HTTPException(
+                status_code=500,
+                detail="Connector client secret is not configured.",
+            )
+        except OAuthError as exc:
+            # Provider rejected the credentials / unreachable. exc carries only the
+            # provider's OAuth error code (never the secret), safe to surface.
+            logger.warning(
+                "client-credentials connect failed for connector %s: %s",
+                connector_id,
+                exc.reason,
+            )
+            raise HTTPException(
+                status_code=502,
+                detail="Could not acquire a token from the provider.",
+            )
+
+        store_token(org_id, connector_id, token_response)
+
+        # Record the per-org auth-mode selection so resolve_auth_mode reflects
+        # reality and get_token re-mints in client_credentials mode on expiry.
+        # Display/selection state — the vault write above is the source of truth,
+        # so a failure here must not fail the request.
+        try:
+            set_auth_mode(org_id, connector_id, "client_credentials")
+        except Exception:
+            logger.exception(
+                "Failed to record client_credentials auth mode for connector %s",
+                connector_id,
+            )
+        try:
+            rec = db.org_connector_get(org_id, connector_id) or {}
+            rec["status"] = "connected"
+            rec["lastSynced"] = rec.get("lastSynced", "—")
+            db.org_connector_set(org_id, connector_id, rec)
+        except Exception:
+            logger.exception(
+                "Failed to mark connector %s connected after client-credentials connect",
+                connector_id,
+            )
+
+        log_event(
+            "connector_connected",
+            connector_id=connector_id,
+            user_id=_get_user_id_from_token(token),
+            scopes_granted=config.client_credentials_scopes or config.scopes,
+        )
+        return ClientCredentialsConnectStatus(
+            connector_id=connector_id,
+            connected=True,
+            auth_mode=resolve_auth_mode(org_id, connector_id),
+        )
+

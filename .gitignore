@@ -40,3 +40,12 @@ backend/token_generation/
 # Local review/smoke artifacts
 .codex-doc-review/
 frontend-smoke.png
+
+# Local dev server logs / pids and DB backups — never commit (R18-A3 cleanup)
+*.log
+*.pid
+*.db.bak
+_be.*
+_fe.*
+backend/_edge.pid
+backend/database/*.db.bak

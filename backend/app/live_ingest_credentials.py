@@ -19,9 +19,11 @@ that gap.
 What it does
 ------------
 ``resolve_live_systems(org_id)`` inspects the vault for each of the three
-OAuth connectors. For every connector that
+systems-of-record connectors. For every connector that
 
-  1. has a valid (auto-refreshed) token in the vault for ``org_id``, AND
+  1. has a valid (auto-refreshed) OAuth token in the vault for ``org_id`` —
+     or, for Jira/ServiceNow, a static vault credential (API token /
+     user+password; the R18-A3 outbound-only path) — AND
   2. has a resolvable instance/site URL,
 
 it publishes the decrypted access token + URL to the per-run ingest context and
@@ -59,7 +61,7 @@ import httpx
 
 from app import db
 from app.auth.models import ConnectorNotAuthenticatedError
-from app.auth.vault import get_token
+from app.auth.vault import get_static_credential, get_token
 
 logger = logging.getLogger(__name__)
 
@@ -79,6 +81,14 @@ _LIVE_CONNECTORS: Dict[str, str] = {
     "servicenow": "SERVICENOW_URL",
     "jira": "JIRA_URL",
 }
+
+# Systems of record that ALSO support a static vault credential (R17-D3
+# Addendum A: Jira API token, ServiceNow user/password). In a no-public-inbound
+# deployment (R18-A3) these are the outbound-only connect paths for connectors
+# with no client-credentials/JWT grant, so a static credential must promote the
+# connector to live exactly as an OAuth token does (AC3: no ingestion branch on
+# auth mode — the record is normalised to the same per-run context shape).
+_STATIC_LIVE_CONNECTORS = frozenset({"jira", "servicenow"})
 
 
 # ---------------------------------------------------------------------------
@@ -307,6 +317,74 @@ def _derive_oauth_instance_url(connector_id: str, access_token: str) -> Optional
     return None
 
 
+def _resolve_static_connector(
+    org_id: str,
+    connector_id: str,
+    url_env: str,
+    connectors: Dict[str, Dict[str, str]],
+    live: List[str],
+) -> bool:
+    """Promote a static-credential connector to live ingest (R18-A3 / AC3).
+
+    Called when ``get_token`` found no OAuth row. For the systems of record that
+    support a static vault credential (``_STATIC_LIVE_CONNECTORS``: Jira API
+    token, ServiceNow user/password), resolve it and publish the same per-run
+    context shape the OAuth path uses, plus ``username`` — the marker the ingest
+    clients use to authenticate Basic instead of Bearer. The instance URL comes
+    from the credential's own ``base_url`` (entered by the Owner at setup) first,
+    then the captured KV, then the ``*_URL`` env fallback — never OAuth
+    derivation, which needs a bearer token.
+
+    Returns True when the connector was promoted. Never raises — any failure
+    (including a vault decrypt error) degrades to "not promoted" so the caller
+    falls through to the existing not-authenticated skip.
+    """
+    if connector_id not in _STATIC_LIVE_CONNECTORS:
+        return False
+
+    try:
+        record = get_static_credential(org_id, connector_id)
+    except Exception:
+        # Decrypt/vault-key problems propagate loudly from the vault; here they
+        # degrade this one connector to skipped rather than failing the run.
+        logger.exception(
+            "Failed to load static vault credential for connector %s (org=%s); "
+            "skipping live ingest",
+            connector_id,
+            org_id,
+        )
+        return False
+
+    if record is None or not record.secret:
+        return False
+
+    url = (
+        record.base_url
+        or get_connector_instance_url(org_id, connector_id)
+        or os.getenv(url_env)
+    )
+    if not url:
+        logger.warning(
+            "Connector %s has a static credential but no instance URL "
+            "(credential base_url, captured, or %s); skipping live ingest for it.",
+            connector_id,
+            url_env,
+        )
+        return False
+
+    creds: Dict[str, str] = {"url": url.rstrip("/"), "token": record.secret}
+    if record.username:
+        creds["username"] = record.username
+    connectors[connector_id] = creds
+    live.append(connector_id)
+    logger.info(
+        "Live ingest enabled for connector %s via static credential (org=%s)",
+        connector_id,
+        org_id,
+    )
+    return True
+
+
 def resolve_live_systems(org_id: str) -> List[str]:
     """Return the connectors that should ingest live for ``org_id``.
 
@@ -318,8 +396,9 @@ def resolve_live_systems(org_id: str) -> List[str]:
     credentials. Nothing is written to process-global ``os.environ``.
 
     The returned list is the subset of {salesforce, servicenow, jira} that is
-    both authenticated in the vault and has an instance URL (captured, or env as
-    a CLI fallback); plus ``slack``, ``teams``, ``sharepoint`` and ``github`` when
+    both authenticated in the vault (an OAuth token — or, for jira/servicenow, a
+    static credential per :func:`_resolve_static_connector`) and has an instance
+    URL (captured, or env as a CLI fallback); plus ``slack``, ``teams``, ``sharepoint`` and ``github`` when
     authenticated (URL-less, resolved by token alone — see :func:`_resolve_slack`
     / :func:`_resolve_teams` / :func:`_resolve_sharepoint` / :func:`_resolve_github`);
     plus ``confluence`` when authenticated and its api.atlassian.com gateway can be
@@ -340,6 +419,13 @@ def resolve_live_systems(org_id: str) -> List[str]:
         try:
             record = _run_coro(get_token(org_id, connector_id))
         except ConnectorNotAuthenticatedError:
+            # No OAuth token. A static vault credential (Jira API token,
+            # ServiceNow user/password — the outbound-only path in a
+            # no-public-inbound deployment, R18-A3) still promotes the connector
+            # to live: static rows are invisible to get_token by design, so they
+            # are resolved here explicitly.
+            if _resolve_static_connector(org_id, connector_id, url_env, connectors, live):
+                continue
             # Not connected (or token expired and could not be refreshed) for this
             # org — leave it out. Logged (not silent) so a run that drops a
             # connector explains why: reconnect it in the Integration Hub.

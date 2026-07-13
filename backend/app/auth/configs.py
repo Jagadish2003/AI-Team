@@ -113,6 +113,10 @@ CONNECTOR_AUTH_CONFIGS: Dict[str, ConnectorAuthConfig] = {
     "salesforce": ConnectorAuthConfig(
         connector_id="salesforce",
         flow="authorization_code",
+        # R18-A3: authorization_code (default) + jwt_bearer (AT-555) — Salesforce's
+        # outbound-only, no-callback headless path (signed assertion → access
+        # token; refresh by re-assertion). The cert private key lives in the vault.
+        supported_auth_modes=["authorization_code", "jwt_bearer"],
         client_id=os.getenv("SALESFORCE_CLIENT_ID", "salesforce-dev-client-id"),
         secret_key="SALESFORCE_CLIENT_SECRET",
         token_url=f"https://{SALESFORCE_INSTANCE}/services/oauth2/token",
@@ -128,6 +132,9 @@ CONNECTOR_AUTH_CONFIGS: Dict[str, ConnectorAuthConfig] = {
     "servicenow": ConnectorAuthConfig(
         connector_id="servicenow",
         flow="authorization_code",
+        # R18-A3: authorization_code (default) + client_credentials (AT-557 — outbound-only,
+        # no callback) + static (R17-D3 Addendum A — user/password vault path).
+        supported_auth_modes=["authorization_code", "client_credentials", "static"],
         client_id=os.getenv("SERVICENOW_CLIENT_ID", "servicenow-dev-client-id"),
         secret_key="SERVICENOW_CLIENT_SECRET",
         token_url=f"https://{SERVICENOW_INSTANCE}.service-now.com/oauth_token.do",
@@ -139,6 +146,9 @@ CONNECTOR_AUTH_CONFIGS: Dict[str, ConnectorAuthConfig] = {
     "jira": ConnectorAuthConfig(
         connector_id="jira",
         flow="authorization_code",
+        # R18-A3 T1: authorization_code (default) + static (API-token vault path,
+        # the pragmatic outbound-only option for Atlassian Cloud — matrix §1).
+        supported_auth_modes=["authorization_code", "static"],
         client_id=os.getenv("JIRA_CLIENT_ID", "jira-dev-client-id"),
         secret_key="JIRA_CLIENT_SECRET",
         token_url="https://auth.atlassian.com/oauth/token",
@@ -158,6 +168,8 @@ CONNECTOR_AUTH_CONFIGS: Dict[str, ConnectorAuthConfig] = {
     "confluence": ConnectorAuthConfig(
         connector_id="confluence",
         flow="authorization_code",
+        # R18-A3 T1: authorization_code (default) + static (Atlassian API token).
+        supported_auth_modes=["authorization_code", "static"],
         client_id=os.getenv("CONFLUENCE_CLIENT_ID", "confluence-dev-client-id"),
         secret_key="CONFLUENCE_CLIENT_SECRET",
         token_url="https://auth.atlassian.com/oauth/token",
@@ -176,6 +188,7 @@ CONNECTOR_AUTH_CONFIGS: Dict[str, ConnectorAuthConfig] = {
     "github": ConnectorAuthConfig(
         connector_id="github",
         flow="authorization_code",
+        supported_auth_modes=["authorization_code"],
         client_id=os.getenv("GITHUB_CLIENT_ID", "github-dev-client-id"),
         secret_key="GITHUB_CLIENT_SECRET",
         token_url="https://github.com/login/oauth/access_token",
@@ -187,6 +200,7 @@ CONNECTOR_AUTH_CONFIGS: Dict[str, ConnectorAuthConfig] = {
     "slack": ConnectorAuthConfig(
         connector_id="slack",
         flow="authorization_code",
+        supported_auth_modes=["authorization_code"],
         client_id=os.getenv("SLACK_CLIENT_ID", "slack-dev-client-id"),
         secret_key="SLACK_CLIENT_SECRET",
         token_url="https://slack.com/api/oauth.v2.access",
@@ -207,6 +221,18 @@ CONNECTOR_AUTH_CONFIGS: Dict[str, ConnectorAuthConfig] = {
     "teams": ConnectorAuthConfig(
         connector_id="teams",
         flow="authorization_code",
+        # R18-A3: authorization_code (default) + client_credentials (AT-556 —
+        # Microsoft Graph application permissions, outbound-only, no callback). An
+        # org in a no-public-inbound deployment selects client_credentials so Teams
+        # authenticates under a service identity without a browser redirect.
+        supported_auth_modes=["authorization_code", "client_credentials"],
+        # Graph client-credentials (application-permission) tokens are requested with
+        # the single resource scope .default — the actual permissions come from the
+        # admin-consented app registration, NOT from granular scopes in the request
+        # (Microsoft rejects delegated scopes in this grant). The delegated ``scopes``
+        # below still drive the authorization_code flow. See docs/INTEGRATE_GRAPH_CLIENT_CREDENTIALS.md
+        # for the admin-consent setup (application permissions + tenant-wide consent).
+        client_credentials_scopes=["https://graph.microsoft.com/.default"],
         client_id=os.getenv("TEAMS_CLIENT_ID") or "teams-dev-client-id",
         secret_key="TEAMS_CLIENT_SECRET",
         # Microsoft identity platform (v2.0) endpoints. The tenant segment is
@@ -254,6 +280,18 @@ CONNECTOR_AUTH_CONFIGS: Dict[str, ConnectorAuthConfig] = {
     "sharepoint": ConnectorAuthConfig(
         connector_id="sharepoint",
         flow="authorization_code",
+        # R18-A3: authorization_code (default) + client_credentials (AT-556 —
+        # Microsoft Graph application permissions, outbound-only, no callback).
+        # SharePoint reuses the same Graph app registration as Teams, so it gains the
+        # client-credentials mode identically; an org in a no-public-inbound deployment
+        # selects it to authenticate under a service identity with no browser redirect.
+        supported_auth_modes=["authorization_code", "client_credentials"],
+        # Graph client-credentials tokens use the single resource scope .default (the
+        # granted app permissions — e.g. Sites.Read.All as an APPLICATION permission —
+        # are resolved from the admin-consented app registration, not sent in the
+        # request). The delegated ``scopes`` below still drive the authorization_code
+        # flow. See docs/INTEGRATE_GRAPH_CLIENT_CREDENTIALS.md for the admin-consent setup.
+        client_credentials_scopes=["https://graph.microsoft.com/.default"],
         # SharePoint reuses the Microsoft Graph app registration set up for Teams
         # (R17-A2 §6 / AT-462): the client id defaults to TEAMS_CLIENT_ID so a
         # single Graph app can serve both connectors, while SHAREPOINT_CLIENT_ID
@@ -304,6 +342,7 @@ CONNECTOR_AUTH_CONFIGS: Dict[str, ConnectorAuthConfig] = {
     "sap": ConnectorAuthConfig(
         connector_id="sap",
         flow="client_credentials",
+        supported_auth_modes=["client_credentials"],
         client_id=os.getenv("SAP_CLIENT_ID", "sap-dev-client-id"),
         secret_key="SAP_CLIENT_SECRET",
         token_url=f"https://{SAP_SUBDOMAIN}.authentication.{SAP_REGION}.hana.ondemand.com/oauth/token",
@@ -315,6 +354,7 @@ CONNECTOR_AUTH_CONFIGS: Dict[str, ConnectorAuthConfig] = {
     "dynamics365": ConnectorAuthConfig(
         connector_id="dynamics365",
         flow="client_credentials",
+        supported_auth_modes=["client_credentials"],
         client_id=os.getenv("DYNAMICS365_CLIENT_ID", "dynamics365-dev-client-id"),
         secret_key="DYNAMICS365_CLIENT_SECRET",
         token_url=f"https://login.microsoftonline.com/{DYNAMICS365_TENANT_ID}/oauth2/v2.0/token",

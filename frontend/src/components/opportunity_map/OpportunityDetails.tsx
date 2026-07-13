@@ -1,8 +1,10 @@
 
-import React, { useEffect, useState } from 'react';
+import React from 'react';
 import { OpportunityCandidate, OpportunityTier } from '../../types/analystReview';
 import { fetchOppEnrichment, OppEnrichment } from '../../api/enrichmentApi';
 import { useRunContext } from '../../context/RunContext';
+import { useResource } from '../../lib/dataCache';
+import { cacheKeys } from '../../lib/cacheKeys';
 
 function tierBadge(tier: OpportunityTier) {
   const cls =
@@ -38,23 +40,14 @@ export default function OpportunityDetails({
   onGoToReview: () => void;
 }) {
   const { runId } = useRunContext();
-  const [enrichment, setEnrichment] = useState<OppEnrichment | null>(null);
-
-  useEffect(() => {
-    if (!runId || !selected?.id) {
-      setEnrichment(null);
-      return;
-    }
-    let cancelled = false;
-    fetchOppEnrichment(runId, selected.id)
-      .then(data => { if (!cancelled) setEnrichment(data); })
-      .catch((err) => {
-        if (!cancelled) setEnrichment(null);
-        // Fix 5: visible in DevTools during integration — no user-facing UI change
-        console.warn('[T7] OpportunityDetails enrichment fetch failed:', err);
-      });
-    return () => { cancelled = true; };
-  }, [runId, selected?.id]);
+  // Per-opportunity enrichment via the shared cache (deduped across any view of
+  // the same opp; refreshed when the run scope is invalidated). Disabled until a
+  // run + selection exist; an undefined result falls through the fallback chain.
+  const { data: enrichmentData } = useResource<OppEnrichment>(
+    runId && selected?.id ? cacheKeys.runOppEnrichment(runId, selected.id) : null,
+    () => fetchOppEnrichment(runId as string, selected!.id),
+  );
+  const enrichment = enrichmentData ?? null;
 
   // Fix 6: extended fallback chain so panel never silently disappears
   // aiSummary (LLM) → aiRationale (template) → title (last resort) → null (hide panel)
