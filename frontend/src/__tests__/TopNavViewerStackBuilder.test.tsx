@@ -46,6 +46,7 @@ describe("TopNav — Stack Builder visibility by role", () => {
     h.role = "viewer";
     renderNav();
     expect(screen.queryByRole("link", { name: /stack builder/i })).toBeNull();
+    expect(screen.queryByRole("link", { name: /run health/i })).toBeNull();
     // A shared read-only surface (Integration Hub) is still present.
     expect(
       screen.getAllByRole("link", { name: /integration hub/i }).length,
@@ -58,6 +59,7 @@ describe("TopNav — Stack Builder visibility by role", () => {
     expect(
       screen.getAllByRole("link", { name: /stack builder/i }).length,
     ).toBeGreaterThan(0);
+    expect(screen.getAllByRole("link", { name: /run health/i }).length).toBeGreaterThan(0);
   });
 
   it("shows the Stack Builder nav entry for an owner", () => {
@@ -66,5 +68,6 @@ describe("TopNav — Stack Builder visibility by role", () => {
     expect(
       screen.getAllByRole("link", { name: /stack builder/i }).length,
     ).toBeGreaterThan(0);
+    expect(screen.getAllByRole("link", { name: /run health/i }).length).toBeGreaterThan(0);
   });
 });

@@ -250,6 +250,8 @@ def test_packs_from_latest_run(client):
     assert pack["pack_id"] == "ncino"
     assert isinstance(pack["pack_version"], str) and pack["pack_version"]
     assert pack["detector_count"] > 0
+    assert len(pack["detectors"]) == pack["detector_count"]
+    assert all(isinstance(detector, str) and detector for detector in pack["detectors"])
 
 
 def test_packs_empty_without_runs(client):
