@@ -360,6 +360,13 @@ class DocumentIngestor(ChangeBasedIngestor):
                     running[ref.artifact_id] = ref.signature
                 # On a NON-advance (extraction error) the file keeps its prior
                 # signature (or stays absent), so the next run re-reads it.
+            # R18-C2 T2: emit a skipped-with-reason telemetry event at the origin
+            # for each artifact this batch skipped, so the run-health dashboard's
+            # content panel can report it as an explicit org-scoped fact. Emitted
+            # here (not per skip site) so every reason — size_capped,
+            # budget_exceeded, and the read-time extraction skips — is covered from
+            # one place with org_id in scope. Fire-and-forget: never breaks ingest.
+            self._emit_skip_telemetry(org_id, records)
             emitted += 1
             yield DeltaBatch(
                 records=records,
@@ -407,6 +414,42 @@ class DocumentIngestor(ChangeBasedIngestor):
             "documents: artifact %s skipped (%s)", ref.artifact_id, reason
         )
         return record
+
+    # ── Skipped-with-reason telemetry (R18-C2 T2, emit-at-origin) ────────────
+    def _emit_skip_telemetry(self, org_id: str, records: List[Dict[str, Any]]) -> None:
+        """Emit an ``ingestion.artifact_skipped`` event per skipped artifact.
+
+        This is the T2 gap-fill: skips were previously visible only on the
+        in-flight record and a WARNING log, so the run-health dashboard could not
+        report skipped-with-reason volume. We now emit the fact at its origin (the
+        ingestor). Every skip reason is covered because this reads the built
+        records rather than each skip site. Fire-and-forget by contract — a
+        telemetry import/write failure must NEVER break ingestion (R18-C2 T2:
+        "emission must preserve the platform's non-blocking behavior")."""
+        for rec in records:
+            extraction_block = rec.get("extraction") or {}
+            if extraction_block.get("status") != "skipped":
+                continue
+            try:
+                from app.telemetry import record_event
+
+                record_event(
+                    "ingestion.artifact_skipped",
+                    {
+                        "org_id": org_id,
+                        "connector_id": self.connector_id,
+                        "source_system": rec.get("source_system") or self.connector_id,
+                        "artifact_id": rec.get("artifact_id"),
+                        "reason": extraction_block.get("reason") or "unknown",
+                        "count": 1,
+                    },
+                )
+            except Exception:  # pragma: no cover — observability must not break ingest
+                logger.debug(
+                    "documents: failed to emit skip telemetry for %s",
+                    rec.get("artifact_id"),
+                    exc_info=True,
+                )
 
     # ── Per-file extraction (isolated) ───────────────────────────────────────
     def _extract_record(
