@@ -2138,20 +2138,6 @@ def test_callback_400_message_reveals_no_detail(client):
     assert "digest" not in body_text
 
 
-def test_hmac_compare_digest_used_for_state_comparison():
-    """_consume_nonce uses hmac.compare_digest (not ==) for state validation (AC3)."""
-    from app.routes_connector_auth import _store_nonce, _consume_nonce
-
-    nonce = "test-hmac-check-nonce-" + _secrets_mod.token_hex(4)
-    _store_nonce(nonce, "salesforce")
-
-    with _patch("app.routes_connector_auth.hmac.compare_digest", wraps=_hmac_mod.compare_digest) as mock_cd:
-        result = _consume_nonce(nonce)
-
-    assert mock_cd.called, "hmac.compare_digest must be called during nonce validation"
-    assert result == "salesforce"
-
-
 def test_callback_redirect_to_in_state_does_not_change_target(client):
     """redirect_to embedded in state param does not affect the redirect target (AC3/AC4)."""
     crafted_state = "redirect_to=https://evil.example.com"
@@ -2509,6 +2495,17 @@ def test_timing_safe_state_comparison(client):
         "hmac.compare_digest() must be called on the live consume_nonce path (AC9)"
     )
     assert data is not None and data["connector_id"] == "salesforce"
+
+
+def test_routes_use_the_vault_as_the_only_nonce_store():
+    """The route module must not reintroduce a second nonce table/TTL path."""
+    from app import routes_connector_auth as routes
+
+    assert routes.store_nonce.__module__ == "app.auth.vault"
+    assert routes.consume_nonce.__module__ == "app.auth.vault"
+    assert not hasattr(routes, "_store_nonce")
+    assert not hasattr(routes, "_consume_nonce")
+    assert not hasattr(routes, "_NONCE_TTL_SECONDS")
 
 
 # ---------------------------------------------------------------------------

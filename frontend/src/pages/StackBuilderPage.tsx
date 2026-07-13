@@ -17,13 +17,26 @@ import { CheckCircle2, Database, Layers3, Loader2, Target } from 'lucide-react';
 import type { WorkspaceCatalogResponse } from '../types/workspace_catalog';
 import { useResource } from '../lib/dataCache';
 import { cacheKeys } from '../lib/cacheKeys';
-import type { SetupState, SystemWeighting } from '../types/stack_builder';
+import type {
+  SetupState,
+  SystemWeighting,
+  IndustryListItem,
+  TemplateListItem,
+  SystemDefaultItem,
+} from '../types/stack_builder';
 import PageShell from '../components/common/PageShell';
 import {
   DiscoveryConfidenceBar,
+  LendingFirstRunGuide,
   StackBuilderProgressBar,
   useSetupState,
 } from '../components/stack_builder';
+import type { LendingGuideLaunchState } from '../components/stack_builder';
+import {
+  fetchIndustries,
+  fetchTemplates,
+  fetchIndustrySystemDefaults,
+} from '../api/stackBuilderApi';
 
 // Import the 4 inner screens
 import DiscoveryFocusPage from './DiscoveryFocusPage';
@@ -32,17 +45,6 @@ import SourceWeightingPage from './SourceWeightingPage';
 import DiscoveryPlanPage from './DiscoveryPlanPage';
 
 // ── Static Definitions ───────────────────────────────────────────────────────
-
-export const INDUSTRY_PACK_HINTS: Record<string, string[]> = {
-  financial_services: ['ncino', 'service_cloud'],
-  public_sector: ['service_cloud'],
-  logistics_supply_chain: ['service_cloud'],
-  retail_commerce: ['service_cloud'],
-  healthcare: ['service_cloud'],
-  energy_utilities: ['service_cloud'],
-  manufacturing: ['service_cloud'],
-  technology: ['service_cloud'],
-};
 
 // R16-C1 T5 — Truthfulness check.
 // Step 3's "weight evidence correctly" promise is intentionally retained:
@@ -79,23 +81,6 @@ const FOCUS_LABELS: Record<string, string> = {
   back_office_productivity: 'Back-office productivity',
   engineering_change: 'Engineering / change',
   enterprise_wide: 'Enterprise-wide discovery',
-};
-
-const INDUSTRY_LABELS: Record<string, string> = {
-  financial_services: 'Financial services',
-  public_sector: 'Public sector',
-  logistics_supply_chain: 'Logistics & supply chain',
-  retail_commerce: 'Retail & commerce',
-  healthcare: 'Healthcare',
-  energy_utilities: 'Energy & utilities',
-  manufacturing: 'Manufacturing',
-  technology: 'Technology',
-};
-
-const TEMPLATE_LABELS: Record<string, string> = {
-  commercial_lending: 'Commercial lending',
-  service_operations: 'Service operations',
-  revenue_operations: 'Revenue operations',
 };
 
 const SALESFORCE_CLOUD_IDS = new Set([
@@ -147,7 +132,24 @@ function getCatalogSalesforceProducts(catalog: WorkspaceCatalogResponse | null):
 export function resolvePackId(
   state: ReturnType<typeof useSetupState>['state'],
   catalog: WorkspaceCatalogResponse | null,
+  industries: IndustryListItem[],
+  templates: TemplateListItem[],
 ): string {
+  // An explicit Step 4 choice is authoritative and is what makes template and
+  // industry pack defaults editable before launch.
+  if (state.packId) return state.packId;
+
+  const selectedTemplate = templates.find(
+    template => template.template_id === state.templateId,
+  );
+  if (selectedTemplate?.pack_id) {
+    return selectedTemplate.pack_id;
+  }
+
+  // The Salesforce pack is then driven SOLELY by the workspace product
+  // declaration (the declared cloud from the catalog) — never a Stack Builder
+  // pre-selection, which was silently forcing the nCino pack (f2026ee). See the
+  // header comment above.
   const declaredCloud = getCatalogSalesforceProducts(catalog)
     .find(productId => CLOUD_PACK_REGISTRY[productId]);
 
@@ -155,9 +157,12 @@ export function resolvePackId(
     return CLOUD_PACK_REGISTRY[declaredCloud];
   }
 
-  // Fallback 1: industry hint, when an industry is selected.
+  // Fallback 1: industry hint, when an industry is selected. Industry pack hints
+  // come from the registry response — there is deliberately no frontend mirror.
   if (state.industryId) {
-    const hints = INDUSTRY_PACK_HINTS[state.industryId];
+    const hints = industries.find(
+      industry => industry.industry_id === state.industryId,
+    )?.pack_hints;
     if (hints && hints.length > 0) return hints[0];
   }
 
@@ -211,10 +216,12 @@ export function buildStackBuilderLaunchPayload(
     org_id: orgId,
     focus_id: state.focusId,
     industry_id: state.industryId,
-    // Dummy template picker: the UI keeps a template highlight + suggested-focus
-    // note for guidance only, but template selection must not influence the run,
-    // so template_id is never sent to the backend (always null).
-    template_id: null,
+    // R18-C1 T3 (AC5): the selected template is now registry-backed and
+    // pre-populates the (editable) setup, so its id is sent to the backend. The
+    // launch endpoint records template provenance on the run — which template
+    // was chosen and which fields the user edited — and resolves the template's
+    // pack/focus for an untouched launch. null when no template is selected.
+    template_id: state.templateId,
     selected_system_ids: state.selectedSystemIds,
     pack_id: packId,
     weightings: state.weightings,
@@ -321,12 +328,27 @@ function SummaryRow({
 
 function StackBuilderSidePanel({
   setupState,
+  industries,
+  templates,
 }: {
   setupState: ReturnType<typeof useSetupState>;
+  industries: IndustryListItem[];
+  templates: TemplateListItem[];
 }) {
   const { state, confidence } = setupState;
   const confirmedCount = state.selectedSystemIds.filter(id => state.weightings[id]?.confirmed).length;
   const activeStep = setupState.steps.find(step => step.number === state.currentStep);
+
+  // Registry-driven labels: a relabelled industry/template reads correctly on
+  // every summary surface with no frontend code change.
+  const industryLabel = state.industryId
+    ? industries.find(i => i.industry_id === state.industryId)?.label
+        ?? state.industryId
+    : 'Optional';
+  const templateLabel = state.templateId
+    ? templates.find(t => t.template_id === state.templateId)?.label
+        ?? state.templateId
+    : 'Optional';
 
   return (
     <div className="sticky top-[76px] flex flex-col gap-3">
@@ -345,8 +367,8 @@ function StackBuilderSidePanel({
         </div>
         <SummaryRow label="Current step" value={activeStep?.label ?? `Step ${state.currentStep}`} />
         <SummaryRow label="Focus" value={state.focusId ? FOCUS_LABELS[state.focusId] : 'Not selected'} />
-        <SummaryRow label="Industry" value={state.industryId ? INDUSTRY_LABELS[state.industryId] : 'Optional'} />
-        <SummaryRow label="Template" value={state.templateId ? TEMPLATE_LABELS[state.templateId] : 'Optional'} />
+        <SummaryRow label="Industry" value={industryLabel} />
+        <SummaryRow label="Template" value={templateLabel} />
       </section>
 
       <section className="rounded-xl border border-border bg-panel p-4 shadow-sm">
@@ -392,6 +414,17 @@ export default function StackBuilderPage({
   const orgId = auth?.user?.org_id ?? ORG_ID_HEADER ?? 'default';
 
   const setupState = useSetupState();
+
+  // R18-C1 T3: industries + templates come from the backend registry, not
+  // hardcoded frontend arrays. On failure we keep the lists EMPTY and surface a
+  // retry (see DiscoveryFocusPage) — never a stale local fallback (AC7/AC8/AC10).
+  // (Catalog state is provided below via the shared data cache — useResource.)
+  const [industries, setIndustries] = useState<IndustryListItem[]>([]);
+  const [templates, setTemplates] = useState<TemplateListItem[]>([]);
+  const [registryLoading, setRegistryLoading] = useState(true);
+  const [registryError, setRegistryError] = useState<string | null>(null);
+  const [launchState, setLaunchState] = useState<LendingGuideLaunchState>('setup');
+
   const { state, steps } = setupState;
   const { clearSession } = useStackBuilderPersistence(orgId, setupState, apiBase, token);
   const copy = STEP_COPY[state.currentStep] ?? STEP_COPY[1];
@@ -436,6 +469,41 @@ export default function StackBuilderPage({
     // per fetch so this mirrors the previous per-fetch application.
   }, [catalog, catalogErrObj, setupState.setSalesforceClouds, setupState.initFromCatalog]);
 
+  // R18-C1 T3: load the industry + template registries. Both come from the same
+  // backend source of truth, so one loader drives both pickers and one Retry
+  // reloads both. On error the lists are cleared (no stale local fallback).
+  const fetchRegistry = useCallback(() => {
+    setRegistryLoading(true);
+    Promise.all([
+      fetchIndustries(apiBase, token),
+      fetchTemplates(apiBase, token),
+    ])
+      .then(([fetchedIndustries, fetchedTemplates]) => {
+        setIndustries(fetchedIndustries);
+        setTemplates(fetchedTemplates);
+        setRegistryError(null);
+      })
+      .catch((err) => {
+        console.error('[StackBuilderPage] Registry fetch failed:', err);
+        setRegistryError(
+          'Could not load industries and templates from the registry. Please retry.',
+        );
+        setIndustries([]);
+        setTemplates([]);
+      })
+      .finally(() => setRegistryLoading(false));
+  }, [apiBase, token]);
+
+  useEffect(() => {
+    fetchRegistry();
+  }, [fetchRegistry]);
+
+  const loadIndustrySystemDefaults = useCallback(
+    (industryId: string): Promise<SystemDefaultItem[]> =>
+      fetchIndustrySystemDefaults(apiBase, token, industryId),
+    [apiBase, token],
+  );
+
   // Refresh on tab focus/visibility. Retained until Phase 2 wires connector
   // mutations to invalidate the catalog; harmless alongside cache invalidation.
   useEffect(() => {
@@ -452,7 +520,9 @@ export default function StackBuilderPage({
   }, [refetchCatalog]);
 
   const handleLaunch = useCallback(async () => {
-    const packId = resolvePackId(state, catalog);
+    if (launchState === 'launching') return;
+    setLaunchState('launching');
+    const packId = resolvePackId(state, catalog, industries, templates);
     console.log(`packId:`, packId);
     const systems = normaliseSystems(state.selectedSystemIds);
     const headers = buildAuthHeaders(token);
@@ -472,6 +542,7 @@ export default function StackBuilderPage({
       runId = launchData.runId;
     } catch (err) {
       console.error('[StackBuilderPage] Launch failed:', err);
+      setLaunchState('launch_error');
       return;
     }
 
@@ -495,7 +566,7 @@ export default function StackBuilderPage({
     setRunId(runId);
     navigate(`/discovery-run?runId=${runId}`);
 
-  }, [state, catalog, orgId, apiBase, clearSession, navigate, setRunId, token]);
+  }, [state, catalog, industries, templates, orgId, apiBase, clearSession, navigate, setRunId, token, launchState]);
 
   // Viewers cannot configure or launch discovery (analyst+ only). The nav hides
   // this destination for them, but a viewer can still reach it via a direct URL
@@ -537,8 +608,35 @@ export default function StackBuilderPage({
             <StackBuilderProgressBar steps={steps} />
           </section>
 
+          {state.templateId === 'commercial_lending' && (() => {
+            const selectedTemplate = templates.find(
+              template => template.template_id === state.templateId,
+            );
+            if (!selectedTemplate) return null;
+            return (
+              <LendingFirstRunGuide
+                template={selectedTemplate}
+                state={state}
+                packId={resolvePackId(state, catalog, industries, templates)}
+                launchState={
+                  launchState === 'setup' && state.currentStep === 4
+                    ? 'ready'
+                    : launchState
+                }
+              />
+            );
+          })()}
+
           {state.currentStep === 1 && (
-            <DiscoveryFocusPage setupState={setupState} />
+            <DiscoveryFocusPage
+              setupState={setupState}
+              industries={industries}
+              templates={templates}
+              registryLoading={registryLoading}
+              registryError={registryError}
+              onRetryRegistry={fetchRegistry}
+              fetchSystemDefaults={loadIndustrySystemDefaults}
+            />
           )}
           {state.currentStep === 2 && catalogLoading && (
             <div className="flex flex-col items-center justify-center gap-3 py-16 text-muted">
@@ -567,13 +665,21 @@ export default function StackBuilderPage({
           {state.currentStep === 4 && (
             <DiscoveryPlanPage
               setupState={setupState}
+              industries={industries}
+              templates={templates}
+              activePackId={resolvePackId(state, catalog, industries, templates)}
               onLaunch={handleLaunch}
+              launchState={launchState}
             />
           )}
         </div>
 
         <aside className="min-w-0">
-          <StackBuilderSidePanel setupState={setupState} />
+          <StackBuilderSidePanel
+            setupState={setupState}
+            industries={industries}
+            templates={templates}
+          />
         </aside>
       </div>
     </PageShell>

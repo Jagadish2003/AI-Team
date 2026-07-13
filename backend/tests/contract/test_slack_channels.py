@@ -54,6 +54,15 @@ def _set_slack_status(status: str):
 
 
 class TestGetSlackChannels:
+    def test_routes_are_registered_on_the_application(self):
+        paths = {
+            (route.path, method)
+            for route in app.routes
+            for method in getattr(route, "methods", set())
+        }
+        assert ("/api/connectors/slack/channels", "GET") in paths
+        assert ("/api/connectors/slack/channels", "PATCH") in paths
+
     def test_get_lists_accessible_channels(self):
         _set_slack_status("connected")
         resp = client.get("/api/connectors/slack/channels", headers=auth())
@@ -109,6 +118,31 @@ class TestPatchSlackChannels:
         assert resp.status_code == 200
         assert resp.json()["selected"] == []
         assert resp.json()["configured"] is True
+
+    def test_upstream_failure_preserves_saved_selection(self, monkeypatch):
+        _set_slack_status("connected")
+        connector = db.org_connector_get("default", "slack")
+        connector["channels"] = ["C001"]
+        db.org_connector_set("default", "slack", connector)
+
+        def unavailable(_org_id):
+            raise RuntimeError("temporary Slack API outage")
+
+        monkeypatch.setattr(
+            "discovery.ingest.slack.list_selectable_channels",
+            unavailable,
+        )
+
+        resp = client.patch(
+            "/api/connectors/slack/channels",
+            headers=auth(),
+            json={"channels": ["C002"]},
+        )
+
+        assert resp.status_code == 503
+        assert "not changed" in resp.json()["detail"]
+        persisted = db.org_connector_get("default", "slack")
+        assert persisted["channels"] == ["C001"]
 
     def test_patch_400_when_not_connected(self):
         _set_slack_status("disconnected")

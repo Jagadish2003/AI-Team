@@ -74,15 +74,23 @@ def _selectable_channels(org_id: str) -> List[Dict[str, str]]:
     customer chooses from. Selection filtering is deliberately NOT applied here.
 
     Sourced from the Slack ingestor so offline (fixture) and live (Slack Web API)
-    resolve identically to what a discovery run would see. Any failure (e.g. no
-    live token yet) degrades to an empty option list rather than erroring the UI.
+    resolve identically to what a discovery run would see. A failure must be
+    surfaced to the caller: treating an upstream outage as an empty channel list
+    would make PATCH validate every submitted id away and silently overwrite a
+    previously-good selection with ``[]``.
     """
     try:
         from discovery.ingest.slack import list_selectable_channels
         return list_selectable_channels(org_id)
-    except Exception as exc:  # pragma: no cover - defensive, never breaks the panel
+    except Exception as exc:
         logger.warning("slack channels: could not list selectable channels: %s", exc)
-        return []
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Slack channels are temporarily unavailable. "
+                "Your saved channel selection was not changed."
+            ),
+        ) from exc
 
 
 def _saved_selection(connector: Dict[str, Any]) -> tuple[List[str], bool]:

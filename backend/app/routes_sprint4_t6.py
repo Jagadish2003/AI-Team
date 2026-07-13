@@ -38,6 +38,7 @@ from .security import require_auth
 from .rbac import require_role
 from . import db
 from .llm_enrichment import KV_LLM_ENRICHMENT
+from .terminology import apply_terminology, resolve_run_terminology
 from .temporal import get_baseline, get_signal_history
 from .graph_query import RelationshipSummary, select_relationships_for_opportunity
 from database.models.entities import ENTITY_MIN_RUN_COUNT
@@ -653,10 +654,17 @@ def register_sprint4_t6_routes(app) -> None:
 
         enrichment = db.run_kv_get(KV_LLM_ENRICHMENT, run_id, None)
 
+        # R18-C1 T4: resolve the run's active-template terminology once and adapt
+        # the finding-detail wording (aiSummary/why/risks/next-steps, the
+        # aiRationale fallback, corroboration label) to the domain language.
+        # No-op when no template is active — technical fields are untouched.
+        terminology = resolve_run_terminology(run_id)
+
         # ENT-2: corroboration fields live on the stored opportunity record.
         # Load the opps list once so both branches can read them.
         stored_opps = db.run_kv_get("opps", run_id, []) or []
         stored_opp = next((o for o in stored_opps if o.get("id") == opp_id), None)
+        stored_opp = apply_terminology(stored_opp, terminology)
         corroboration = _corroboration_fields(stored_opp)
 
         relationship_summaries = _load_relationship_summaries(run_id, stored_opp)
@@ -694,6 +702,11 @@ def register_sprint4_t6_routes(app) -> None:
                 status_code=404,
                 detail=f"Opportunity '{opp_id}' not found in enrichment for run '{run_id}'"
             )
+
+        # R18-C1 T4: adapt the LLM narrative fields to the active template's
+        # domain language before serving. Numeric/graph/temporal fields on
+        # opp_data are outside the terminology allowlist and stay verbatim.
+        opp_data = apply_terminology(opp_data, terminology)
 
         temporal = _temporal_payload(run, run_id, opp_id, opp_data)
 
@@ -757,9 +770,16 @@ def register_sprint4_t6_routes(app) -> None:
         if enrichment is None:
             return RunEnrichment(runId=run_id, available=False)
 
+        # R18-C1 T4: adapt the run-level executive summary to the active
+        # template's domain language (this is the executive-reporting surface).
+        executive_summary = apply_terminology(
+            {"executiveSummary": enrichment.get("executiveSummary", "")},
+            resolve_run_terminology(run_id),
+        )["executiveSummary"]
+
         return RunEnrichment(
             runId=run_id,
-            executiveSummary=enrichment.get("executiveSummary", ""),
+            executiveSummary=executive_summary,
             opportunitiesEnriched=enrichment.get("opportunitiesEnriched", 0),
             opportunitiesFailed=enrichment.get("opportunitiesFailed", 0),
             generatedAt=enrichment.get("generatedAt"),

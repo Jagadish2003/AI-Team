@@ -1,40 +1,75 @@
-/**
- * StackBuilderIndustryDePOC.test.tsx — R18-C0 P10 (Addendum A)
- *
- * Locks the genericisation of the Stack Builder industry pack-hint defaults.
- *
- * The frontend's INDUSTRY_PACK_HINTS map is a local mirror of the backend
- * industry registry's pack_hints (see backend/discovery/packs/
- * industry_registry.py — the source of truth, covered by
- * backend/tests/contract/test_stack_builder_api.py). Public sector's default
- * pack hint used to point at the customer-specific `strs_benefits` pack;
- * it must now default to the generic `service_cloud` pack. Financial
- * services must never default toward a public-sector pack either.
- *
- * This does not remove the real salesforce_pss -> strs_benefits system
- * wiring in CLOUD_PACK_REGISTRY — that is legitimate, industry-agnostic
- * technical routing for a system the user explicitly selected, not a
- * generic industry default.
- */
+/** R18-C0 P10 / R18-C1 AC7-AC10 - registry-owned pack-hint routing. */
+import { describe, expect, it } from 'vitest';
 
-import { describe, it, expect } from 'vitest';
-import { INDUSTRY_PACK_HINTS } from '../pages/StackBuilderPage';
+import { resolvePackId } from '../pages/StackBuilderPage';
+import type {
+  IndustryListItem,
+  SetupState,
+  TemplateListItem,
+} from '../types/stack_builder';
 
-describe('R18-C0 P10 — Stack Builder industry pack-hint de-POC', () => {
-  it('defaults Public sector to the generic service_cloud pack only', () => {
-    expect(INDUSTRY_PACK_HINTS.public_sector).toEqual(['service_cloud']);
+const industries: IndustryListItem[] = [
+  {
+    industry_id: 'public_sector',
+    label: 'Public sector',
+    pack_hints: ['service_cloud'],
+    recommended_systems: [],
+  },
+  {
+    industry_id: 'insurance_fixture',
+    label: 'Insurance fixture',
+    pack_hints: ['insurance_pack_from_registry'],
+    recommended_systems: [],
+  },
+];
+
+const baseState: SetupState = {
+  focusId: 'core_operations',
+  industryId: null,
+  templateId: null,
+  packId: null,
+  templatePreselectedIds: [],
+  selectedSystemIds: [],
+  selectedSalesforceClouds: [],
+  weightings: {},
+  currentStep: 1,
+};
+
+describe('Stack Builder registry-owned pack hints', () => {
+  it('uses the backend response for the Public sector default', () => {
+    const state = { ...baseState, industryId: 'public_sector' };
+    expect(resolvePackId(state, null, industries, [])).toBe('service_cloud');
   });
 
-  it('never suggests a customer-specific pack for any industry default', () => {
-    for (const [industryId, hints] of Object.entries(INDUSTRY_PACK_HINTS)) {
-      for (const hint of hints) {
-        expect(hint.toLowerCase()).not.toContain('strs');
-      }
-      expect(industryId).toBeTruthy();
-    }
+  it('supports an arbitrary industry pack by configuration only', () => {
+    const state = { ...baseState, industryId: 'insurance_fixture' };
+    expect(resolvePackId(state, null, industries, [])).toBe(
+      'insurance_pack_from_registry',
+    );
   });
 
-  it('keeps Financial services suggesting financial-services systems only', () => {
-    expect(INDUSTRY_PACK_HINTS.financial_services).toEqual(['ncino', 'service_cloud']);
+  it('ignores Stack Builder system pre-selection — declaration/industry drive the pack', () => {
+    // Reconciled with R18-A3 (f2026ee): a selected system must NOT force a pack
+    // (the silent nCino footgun). With nothing declared in the catalog, the
+    // industry hint wins and the salesforce_pss pre-selection is ignored.
+    const state = {
+      ...baseState,
+      industryId: 'public_sector',
+      selectedSystemIds: ['salesforce_pss'],
+    };
+    expect(resolvePackId(state, null, industries, [])).toBe('service_cloud');
+  });
+
+  it('lets the user override a template pack before launch', () => {
+    const template = {
+      template_id: 'commercial_lending',
+      pack_id: 'ncino',
+    } as TemplateListItem;
+    const state = {
+      ...baseState,
+      templateId: 'commercial_lending',
+      packId: 'service_cloud',
+    };
+    expect(resolvePackId(state, null, industries, [template])).toBe('service_cloud');
   });
 });

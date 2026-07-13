@@ -61,6 +61,10 @@ from discovery.packs.industry_registry import (
     get_industry,
     get_recommended_systems,
 )
+from discovery.packs.template_registry import (
+    list_templates,
+    get_template,
+)
 
 
 # ── KV key helpers ────────────────────────────────────────────────────────────
@@ -101,6 +105,46 @@ class SystemDefaultItem(BaseModel):
 
 class RecommendationItem(BaseModel):
     system_id: str
+
+
+class TemplateFocusDefaults(BaseModel):
+    focus_id: str
+    emphasis: List[str]
+
+
+class TemplateListItem(BaseModel):
+    """
+    A Stack Builder template as seen by the frontend template picker (R18-C1 T1).
+    Every field is a starting default the user can edit before launch.
+    """
+    template_id: str
+    label: str
+    description: str
+    suggested_systems: List[str]
+    suggested_roles: Dict[str, str]
+    focus_defaults: TemplateFocusDefaults
+    pack_id: str
+    detector_emphasis: List[str]
+    terminology: Dict[str, str]
+    metadata: Dict[str, Any]
+
+
+def _to_template_item(defn) -> "TemplateListItem":
+    return TemplateListItem(
+        template_id=defn.template_id,
+        label=defn.label,
+        description=defn.description,
+        suggested_systems=defn.suggested_systems,
+        suggested_roles=defn.suggested_roles,
+        focus_defaults=TemplateFocusDefaults(
+            focus_id=defn.focus_defaults.focus_id,
+            emphasis=defn.focus_defaults.emphasis,
+        ),
+        pack_id=defn.pack_id,
+        detector_emphasis=defn.detector_emphasis,
+        terminology=defn.terminology,
+        metadata=defn.metadata,
+    )
 
 
 # ── Route registration ────────────────────────────────────────────────────────
@@ -218,6 +262,50 @@ def register_stack_builder_routes(app: FastAPI) -> None:
             RecommendationItem(system_id=s)
             for s in recs
         ]
+
+    # ── Template model (R18-C1 T1) ────────────────────────────────────────────
+    # The frontend asks the backend "what templates are available?" and renders
+    # the answer, instead of owning a hardcoded TEMPLATES array. The registry is
+    # the single source of truth; a new template is a config entry only (AC4/AC8).
+
+    @app.get(
+        "/api/stack-builder/templates",
+        response_model=List[TemplateListItem],
+        dependencies=[Depends(require_auth), Depends(require_role("viewer"))],
+        summary="List all Stack Builder templates from backend configuration",
+        tags=["Stack Builder"],
+    )
+    def list_stack_builder_templates() -> List[TemplateListItem]:
+        """
+        Returns every configured template as a bundle of editable defaults:
+        suggested systems, roles, focus defaults, pack selection, terminology,
+        and metadata. Renders the template picker without any frontend hardcoding.
+        """
+
+        return [_to_template_item(defn) for defn in list_templates()]
+
+    @app.get(
+        "/api/stack-builder/templates/{template_id}",
+        response_model=TemplateListItem,
+        dependencies=[Depends(require_auth), Depends(require_role("viewer"))],
+        summary="Get a single Stack Builder template's default configuration",
+        tags=["Stack Builder"],
+    )
+    def get_stack_builder_template(template_id: str) -> TemplateListItem:
+        """
+        Returns one template's full default configuration, so choosing it can
+        pre-populate the setup experience. 404 if the template is not registered.
+        """
+
+        defn = get_template(template_id)
+
+        if not defn:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Template '{template_id}' not found in registry",
+            )
+
+        return _to_template_item(defn)
 
     # ── Setup state persistence ───────────────────────────────────────────────
 

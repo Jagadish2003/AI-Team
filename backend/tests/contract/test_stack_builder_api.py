@@ -26,6 +26,7 @@ Tests:
 from __future__ import annotations
 
 import json
+import inspect
 import pytest
 from fastapi.testclient import TestClient
 from typing import Dict
@@ -41,6 +42,8 @@ from discovery.packs.industry_registry import (
     list_industries,
     INDUSTRY_REGISTRY,
 )
+from discovery.packs.pack_config import get_pack
+from discovery import runner
 
 # ── Test client ───────────────────────────────────────────────────────────────
 
@@ -121,6 +124,28 @@ class TestIndustryRegistry:
         hints = get_pack_hints("public_sector")
         assert hints == ["service_cloud"]
         assert "strs_benefits" not in hints
+
+    def test_removed_hint_cannot_disable_explicit_strs_pack_execution(self):
+        """Pack hints suggest UI defaults; the runner activates an explicit pack.
+
+        Removing the customer-specific public-sector hint must not remove the
+        registered STRS pack or make detector execution depend on industry UI
+        configuration.
+        """
+        assert get_pack_hints("public_sector") == ["service_cloud"]
+
+        strs_pack = get_pack("strs_benefits")
+        assert strs_pack["packId"] == "strs_benefits"
+        assert strs_pack["detectors"] == [
+            "discovery.detectors.application_stall",
+            "discovery.detectors.benefit_election_deadline",
+            "discovery.detectors.disbursement_overdue",
+            "discovery.detectors.disability_review_bottleneck",
+        ]
+
+        run_source = inspect.getsource(runner.run)
+        assert "get_pack_hints" not in run_source
+        assert 'is_strs(pack_id)' in run_source
 
     def test_get_pack_hints_financial_services(self):
         hints = get_pack_hints("financial_services")

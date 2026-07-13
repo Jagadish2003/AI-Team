@@ -23,7 +23,27 @@ import {
   SetupState, FocusId, IndustryId, TemplateId,
   SystemWeighting, SystemRole, SystemPriority, WorkflowFocusTag,
   ProgressStep, StepStatus, ConfidenceState, ConfidenceLevel,
+  TemplateListItem, SystemDefaultItem,
 } from '../../types/stack_builder';
+
+// Known FocusId values — used to validate a template's registry-supplied focus
+// before it is applied as the selected discovery focus (R18-C1 T3). The focus
+// tiles are NOT registry-driven in T3, so a template may only pre-select one of
+// these; anything else is ignored (focus is left unchanged) rather than setting
+// an unrenderable focus id.
+const KNOWN_FOCUS_IDS: ReadonlySet<string> = new Set<FocusId>([
+  'member_customer_service',
+  'core_operations',
+  'approvals_compliance',
+  'cross_system_handoffs',
+  'back_office_productivity',
+  'engineering_change',
+  'enterprise_wide',
+]);
+
+function isFocusId(value: string | null | undefined): value is FocusId {
+  return !!value && KNOWN_FOCUS_IDS.has(value);
+}
 
 // ── Default weighting assumptions per system ID ───────────────────────────────
 //
@@ -196,6 +216,7 @@ const INITIAL: SetupState = {
   focusId: null,
   industryId: null,
   templateId: null,
+  packId: null,
   selectedSystemIds: [],
   selectedSalesforceClouds: [],
   weightings: {},
@@ -212,6 +233,10 @@ export function useSetupState(catalog?: WorkspaceCatalogResponse | null) {
 
   const setIndustry = useCallback((id: IndustryId | null) => {
     setState(s => ({ ...s, industryId: id }));
+  }, []);
+
+  const setPack = useCallback((packId: string | null) => {
+    setState(s => ({ ...s, packId }));
   }, []);
 
   const setTemplate = useCallback((id: TemplateId | null, preselected: string[] = []) => {
@@ -237,6 +262,96 @@ export function useSetupState(catalog?: WorkspaceCatalogResponse | null) {
         templatePreselectedIds: preselected,
         weightings: newWeightings
       };
+    });
+  }, []);
+
+  // ── R18-C1 T3: registry-driven template application ─────────────────────────
+  //
+  // Selecting a backend template pre-populates the setup with the template's
+  // suggested systems, per-system roles, and focus default — every one of them
+  // an EDITABLE starting point the user can still change before launch (AC1):
+  //   * systems  → merged into selectedSystemIds (user can toggle any off);
+  //   * roles    → written into each system's weighting.role (user can re-weight
+  //                on Step 3 — priority/workflowFocus keep their per-system
+  //                defaults, and `confirmed` stays false so Step 3 still asks);
+  //   * focus    → the discovery focus is set from focus_defaults.focus_id when
+  //                it is a known focus tile (user can pick another tile).
+  //   * pack     → selected from template.pack_id and editable on Step 4.
+  //
+  // Passing `null` clears the template and removes only the systems this template
+  // added (systems the user selected by hand are untouched).
+  const applyTemplate = useCallback((template: TemplateListItem | null) => {
+    setState(s => {
+      // Drop the previously template-added systems and any weighting that was
+      // only there because of them.
+      const keptSystemIds = s.selectedSystemIds.filter(
+        sid => !s.templatePreselectedIds.includes(sid),
+      );
+      const weightings: Record<string, SystemWeighting> = {};
+      Object.entries(s.weightings).forEach(([sid, w]) => {
+        if (keptSystemIds.includes(sid)) weightings[sid] = w;
+      });
+
+      if (!template) {
+        return {
+          ...s,
+          templateId: null,
+          packId: null,
+          templatePreselectedIds: [],
+          selectedSystemIds: keptSystemIds,
+          weightings,
+        };
+      }
+
+      const preselected = Array.from(new Set(template.suggested_systems ?? []));
+      const selectedSystemIds = Array.from(new Set([...keptSystemIds, ...preselected]));
+
+      preselected.forEach(sid => {
+        const base = s.weightings[sid] ?? defaultWeighting(sid);
+        const role = template.suggested_roles?.[sid];
+        weightings[sid] = role ? { ...base, role: role as SystemRole } : base;
+      });
+
+      const suggestedFocus = template.focus_defaults?.focus_id;
+
+      return {
+        ...s,
+        templateId: template.template_id,
+        packId: template.pack_id,
+        focusId: isFocusId(suggestedFocus) ? suggestedFocus : s.focusId,
+        templatePreselectedIds: preselected,
+        selectedSystemIds,
+        weightings,
+      };
+    });
+  }, []);
+
+  // ── R18-C1 T3 (AC9): registry-driven industry defaults ──────────────────────
+  //
+  // Choosing an industry applies its registry-calibrated system defaults
+  // (role / priority / workflow focus, fetched from the API) to the currently
+  // selected systems. Defaults are a starting point only: a weighting the user
+  // has already CONFIRMED on Step 3 is left alone, and nothing is confirmed here,
+  // so every applied default remains editable before launch. Systems not in the
+  // industry's defaults keep their existing weighting.
+  const applyIndustryDefaults = useCallback((defaults: SystemDefaultItem[]) => {
+    setState(s => {
+      if (!defaults || defaults.length === 0) return s;
+      const bySystem = new Map(defaults.map(d => [d.system_id, d]));
+      const weightings = { ...s.weightings };
+      s.selectedSystemIds.forEach(sid => {
+        const d = bySystem.get(sid);
+        if (!d) return;
+        const existing = weightings[sid] ?? defaultWeighting(sid);
+        if (existing.confirmed) return; // never clobber a confirmed weighting
+        weightings[sid] = {
+          ...existing,
+          role: d.role as SystemRole,
+          priority: d.priority as SystemPriority,
+          workflowFocus: (d.workflow_focus as WorkflowFocusTag[]) ?? existing.workflowFocus,
+        };
+      });
+      return { ...s, weightings };
     });
   }, []);
 
@@ -378,7 +493,10 @@ export function useSetupState(catalog?: WorkspaceCatalogResponse | null) {
     state,
     setFocus,
     setIndustry,
+    setPack,
     setTemplate,
+    applyTemplate,
+    applyIndustryDefaults,
     toggleSystem,
     toggleSalesforceCloud,
     setSalesforceClouds,
