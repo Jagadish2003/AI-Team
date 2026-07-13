@@ -501,8 +501,10 @@ def packs_view(org_id: str) -> Dict[str, Any]:
     # fall back to the registry version for the pack id.
     pack_version = latest.get("packVersion") or get_pack_version(pack_id)
     try:
-        detector_count = len(get_detector_modules(pack_id))
+        detector_modules = list(get_detector_modules(pack_id))
+        detector_count = len(detector_modules)
     except Exception:
+        detector_modules = []
         detector_count = 0
     try:
         pack_name = get_pack(pack_id).get("packName")
@@ -517,6 +519,7 @@ def packs_view(org_id: str) -> Dict[str, Any]:
                 "pack_name": pack_name,
                 "pack_version": pack_version,
                 "detector_count": detector_count,
+                "detectors": detector_modules,
             }
         ],
     }
