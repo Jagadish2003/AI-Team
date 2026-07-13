@@ -4,6 +4,7 @@ import { useLocation, useNavigate } from "react-router-dom";
 import { InfoPanel } from "../components/common/InfoPanel";
 import LoadingPanel from "../components/common/LoadingPanel";
 import PageShell from "../components/common/PageShell";
+import TemplateRunNotice from "../components/discovery_run/TemplateRunNotice";
 import { useDiscoveryRunContext } from "../context/DiscoveryRunContext";
 import { useConnectorContext } from "../context/ConnectorContext";
 import { useSourceIntakeContext } from "../context/SourceIntakeContext";
@@ -821,7 +822,7 @@ export default function DiscoveryRunPage() {
   // as the display source list so Discovery Run shows the actual systems
   // used — not Integration Hub connector status (which shows None when
   // systems are not yet authorized in Integration Hub).
-  const runSelectedSystems: string[] = (run as any)?.selectedSystemIds ?? [];
+  const runSelectedSystems: string[] = run?.selectedSystemIds ?? [];
   const summaryInputs = useMemo(() => {
     if (runSelectedSystems.length > 0) {
       return {
@@ -990,6 +991,8 @@ export default function DiscoveryRunPage() {
         </>
       }
     >
+        {run && <TemplateRunNotice run={run} computing={computing} />}
+
         <div className="mb-5 rounded-xl border border-border bg-panel px-4 py-3">
             <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-muted">
               <span>

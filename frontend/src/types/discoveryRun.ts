@@ -39,6 +39,18 @@ export interface DiscoveryRun {
   progress: RunProgress;
   steps: RunStep[];
   summary: RunSummary;
+  packId?: string;
+  focusId?: string | null;
+  industryId?: string | null;
+  templateId?: string | null;
+  selectedSystemIds?: string[];
+  templateProvenance?: {
+    template_id?: string | null;
+    applied: boolean;
+    untouched: boolean;
+    edited_fields: string[];
+    template_defaults?: Record<string, unknown> | null;
+  };
 }
 
 export type LogLevel = "INFO" | "WARNING" | "ERROR";

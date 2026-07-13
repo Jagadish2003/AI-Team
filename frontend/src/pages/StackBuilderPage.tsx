@@ -25,9 +25,11 @@ import type {
 import PageShell from '../components/common/PageShell';
 import {
   DiscoveryConfidenceBar,
+  LendingFirstRunGuide,
   StackBuilderProgressBar,
   useSetupState,
 } from '../components/stack_builder';
+import type { LendingGuideLaunchState } from '../components/stack_builder';
 import {
   fetchIndustries,
   fetchTemplates,
@@ -437,6 +439,7 @@ export default function StackBuilderPage({
   const [templates, setTemplates] = useState<TemplateListItem[]>([]);
   const [registryLoading, setRegistryLoading] = useState(true);
   const [registryError, setRegistryError] = useState<string | null>(null);
+  const [launchState, setLaunchState] = useState<LendingGuideLaunchState>('setup');
 
   const { state, steps } = setupState;
   const { clearSession } = useStackBuilderPersistence(orgId, setupState, apiBase, token);
@@ -533,6 +536,8 @@ export default function StackBuilderPage({
   }, [catalog, setupState.initFromCatalog]);
 
   const handleLaunch = useCallback(async () => {
+    if (launchState === 'launching') return;
+    setLaunchState('launching');
     const packId = resolvePackId(state, catalog);
     console.log(`packId:`, packId);
     const systems = normaliseSystems(state.selectedSystemIds);
@@ -553,6 +558,7 @@ export default function StackBuilderPage({
       runId = launchData.runId;
     } catch (err) {
       console.error('[StackBuilderPage] Launch failed:', err);
+      setLaunchState('launch_error');
       return;
     }
 
@@ -576,7 +582,7 @@ export default function StackBuilderPage({
     setRunId(runId);
     navigate(`/discovery-run?runId=${runId}`);
 
-  }, [state, catalog, orgId, apiBase, clearSession, navigate, setRunId, token]);
+  }, [state, catalog, orgId, apiBase, clearSession, navigate, setRunId, token, launchState]);
 
   // Viewers cannot configure or launch discovery (analyst+ only). The nav hides
   // this destination for them, but a viewer can still reach it via a direct URL
@@ -618,6 +624,25 @@ export default function StackBuilderPage({
             <StackBuilderProgressBar steps={steps} />
           </section>
 
+          {state.templateId === 'commercial_lending' && (() => {
+            const selectedTemplate = templates.find(
+              template => template.template_id === state.templateId,
+            );
+            if (!selectedTemplate) return null;
+            return (
+              <LendingFirstRunGuide
+                template={selectedTemplate}
+                state={state}
+                packId={resolvePackId(state, catalog)}
+                launchState={
+                  launchState === 'setup' && state.currentStep === 4
+                    ? 'ready'
+                    : launchState
+                }
+              />
+            );
+          })()}
+
           {state.currentStep === 1 && (
             <DiscoveryFocusPage
               setupState={setupState}
@@ -657,6 +682,7 @@ export default function StackBuilderPage({
             <DiscoveryPlanPage
               setupState={setupState}
               onLaunch={handleLaunch}
+              launchState={launchState}
             />
           )}
         </div>
