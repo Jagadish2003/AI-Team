@@ -9,6 +9,7 @@ they assemble, through the real HTTP routes:
 * ``GET /api/run-health/content``    — indexed volume per source, backlog, stale,
                                        skipped, redaction (AC3).
 * ``GET /api/run-health/packs``      — latest run's packs + versions + detectors.
+* ``GET /api/run-health/attention``  — deterministic actionable conditions (AC4).
 
 Plus the boundary rules: org-scoping (AC5 — no cross-tenant visibility) and RBAC
 (AC6 — Analyst read-only, Viewer forbidden, unauthenticated 401).
@@ -74,6 +75,22 @@ def _seed_checkpoint(org_id: str, connector_id: str, value: str, captured_at: st
             captured_at=captured_at,
         )
     )
+
+
+def _seed_expired_token(org_id: str, connector_id: str = "salesforce") -> str:
+    from app.auth.vault import store_token
+
+    expires_at = _now_iso(-3600)
+    store_token(
+        org_id,
+        connector_id,
+        {
+            "access_token": f"expired-{uuid4().hex}",
+            "expires_at": expires_at,
+            "scope": "read",
+        },
+    )
+    return expires_at
 
 
 def _seed_run(org_id: str, *, status: str, pack_id: str = "ncino", errors=None,
@@ -274,6 +291,125 @@ def test_content_indexed_by_source_and_shape(client):
         _cleanup_chunks(org)
 
 
+# ── AC4: attention strip ─────────────────────────────────────────────────────
+
+def test_attention_surfaces_expired_auth_before_stalled_checkpoint(client):
+    org = _owner_org("rh_attention")
+    expired_at = _seed_expired_token(org, "salesforce")
+    checkpoint_at = _now_iso(-(2 * 24 * 60 * 60))
+    _seed_checkpoint(org, "servicenow", "stalled-cursor", checkpoint_at)
+
+    resp = client.get("/api/run-health/attention", headers=_auth(org))
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["org_id"] == org
+    assert body["severity_order"] == ["critical", "high", "medium", "low"]
+
+    items = body["items"]
+    assert [item["condition"] for item in items] == [
+        "expired_authentication",
+        "stalled_checkpoint",
+    ]
+    assert [item["severity"] for item in items] == ["critical", "high"]
+
+    auth_item, checkpoint_item = items
+    assert auth_item["id"] == "auth:salesforce"
+    assert auth_item["connector_id"] == "salesforce"
+    assert auth_item["timestamp"] == expired_at
+    assert auth_item["panel"] == "connectors"
+    assert auth_item["href"] == "/run-health?panel=connectors&connector=salesforce"
+
+    assert checkpoint_item["id"] == "checkpoint:servicenow"
+    assert checkpoint_item["connector_id"] == "servicenow"
+    assert checkpoint_item["panel"] == "connectors"
+    assert checkpoint_item["href"].endswith("connector=servicenow")
+    assert checkpoint_item["details"]["checkpoint_age_seconds"] >= 2 * 24 * 60 * 60
+
+    required = {
+        "id", "condition", "severity", "title", "explanation", "connector_id",
+        "run_id", "timestamp", "panel", "href", "details",
+    }
+    assert all(required <= set(item) for item in items)
+
+
+def test_attention_equal_severity_uses_time_then_identifier_tie_breaker(client):
+    org = _owner_org("rh_attention_order")
+    captured = _now_iso(-(2 * 24 * 60 * 60))
+    _seed_checkpoint(org, "servicenow", "sn-cursor", captured)
+    _seed_checkpoint(org, "jira", "jira-cursor", captured)
+
+    first = client.get("/api/run-health/attention", headers=_auth(org)).json()["items"]
+    second = client.get("/api/run-health/attention", headers=_auth(org)).json()["items"]
+    expected = ["checkpoint:jira", "checkpoint:servicenow"]
+    assert [item["id"] for item in first] == expected
+    assert [item["id"] for item in second] == expected
+
+
+def test_refreshable_expired_access_token_is_not_actionable(client):
+    from app.auth.vault import store_token
+
+    org = _owner_org("rh_attention_refreshable")
+    store_token(
+        org,
+        "salesforce",
+        {
+            "access_token": "expired-but-refreshable",
+            "refresh_token": "refresh-me",
+            "expires_at": _now_iso(-3600),
+            "scope": "read",
+        },
+    )
+    items = client.get("/api/run-health/attention", headers=_auth(org)).json()["items"]
+    assert not any(item["id"] == "auth:salesforce" for item in items)
+
+
+def test_growing_embedding_backlog_links_to_content_panel(client, monkeypatch):
+    from app.retrieval import store
+
+    org = _owner_org("rh_attention_backlog")
+    monkeypatch.setattr(
+        store,
+        "pending_embedding_backlog",
+        lambda scoped_org: {
+            "count": 75,
+            "oldest_created_at": _now_iso(-3600),
+            "newest_created_at": _now_iso(-1800),
+        } if scoped_org == org else {"count": 0},
+    )
+
+    items = client.get("/api/run-health/attention", headers=_auth(org)).json()["items"]
+    backlog = next(item for item in items if item["condition"] == "growing_embedding_backlog")
+    assert backlog["severity"] == "medium"
+    assert backlog["panel"] == "content"
+    assert backlog["href"] == "/run-health?panel=content"
+    assert backlog["details"]["pending_embeddings"] == 75
+
+
+def test_repeated_stage_failures_promote_to_attention(client):
+    org = _owner_org("rh_attention_stage")
+    _seed_run(org, status="complete", errors={"roadmap": "first failure"})
+    latest_run = _seed_run(org, status="complete", errors={"roadmap": "second failure"})
+
+    items = client.get("/api/run-health/attention", headers=_auth(org)).json()["items"]
+    repeated = next(item for item in items if item["condition"] == "repeated_stage_failure")
+    assert repeated["id"] == "stage:roadmap"
+    assert repeated["severity"] == "medium"
+    assert repeated["run_id"] == latest_run
+    assert repeated["panel"] == "runs"
+    assert f"run={latest_run}" in repeated["href"]
+    assert repeated["details"]["failure_count"] == 2
+
+
+def test_single_stage_failure_stays_degraded_without_attention_promotion(client):
+    org = _owner_org("rh_attention_transient")
+    _seed_run(org, status="complete", errors={"roadmap": "transient failure"})
+
+    runs = client.get("/api/run-health/runs", headers=_auth(org)).json()["runs"]
+    items = client.get("/api/run-health/attention", headers=_auth(org)).json()["items"]
+    assert runs[0]["health_status"] == "degraded"
+    assert not any(item["condition"] == "repeated_stage_failure" for item in items)
+
+
 # ── AC5: org-scoping — no cross-tenant visibility ───────────────────────────────
 
 def test_no_cross_tenant_visibility(client):
@@ -283,6 +419,7 @@ def test_no_cross_tenant_visibility(client):
     # Seed run-health data under org A only.
     _seed_checkpoint(org_a, "servicenow", "a-cursor", _now_iso(-60))
     _seed_run(org_a, status="complete", pack_id="ncino", opps=2)
+    _seed_expired_token(org_a, "salesforce")
 
     # Org B sees NONE of it.
     conns_b = client.get("/api/run-health/connectors", headers=_auth(org_b)).json()
@@ -294,9 +431,14 @@ def test_no_cross_tenant_visibility(client):
     packs_b = client.get("/api/run-health/packs", headers=_auth(org_b)).json()
     assert packs_b == {"run_id": None, "packs": []}
 
+    attention_b = client.get("/api/run-health/attention", headers=_auth(org_b)).json()
+    assert attention_b["items"] == []
+
     # Org A still sees its own.
     runs_a = client.get("/api/run-health/runs", headers=_auth(org_a)).json()
     assert len(runs_a["runs"]) == 1
+    attention_a = client.get("/api/run-health/attention", headers=_auth(org_a)).json()
+    assert any(item["id"] == "auth:salesforce" for item in attention_a["items"])
 
 
 # ── AC6: RBAC — Analyst read-only, Viewer forbidden, unauth 401 ─────────────────
@@ -305,6 +447,7 @@ _ENDPOINTS = [
     "/api/run-health/connectors",
     "/api/run-health/runs",
     "/api/run-health/packs",
+    "/api/run-health/attention",
 ]
 
 

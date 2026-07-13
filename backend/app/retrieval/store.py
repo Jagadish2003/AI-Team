@@ -680,6 +680,40 @@ def count_chunks_by_source(org_id: str) -> list[dict[str, Any]]:
     ]
 
 
+def pending_embedding_backlog(org_id: str) -> dict[str, Any]:
+    """Return the current unembedded backlog and its observed time span.
+
+    The run-health attention rules use this org-scoped record summary to
+    distinguish a transient batch from work that is accumulating: a backlog is
+    only considered growing when enough pending rows span a meaningful period.
+    ``oldest_created_at`` and ``newest_created_at`` are timestamps from the
+    existing chunk records, not dashboard observation timestamps, so repeated
+    reads over unchanged data remain deterministic.
+    """
+    with closing(db.connect()) as con:
+        cur = con.cursor()
+        cur.execute(
+            "SELECT COUNT(*), MIN(created_at), MAX(created_at) "
+            "FROM retrieval_chunks "
+            "WHERE org_id = %s AND embedding IS NULL",
+            (org_id,),
+        )
+        row = cur.fetchone()
+
+    count = int(row[0]) if row else 0
+    oldest = row[1] if row and row[1] is not None else None
+    newest = row[2] if row and row[2] is not None else None
+    return {
+        "count": count,
+        "oldest_created_at": (
+            oldest.isoformat() if hasattr(oldest, "isoformat") else oldest
+        ),
+        "newest_created_at": (
+            newest.isoformat() if hasattr(newest, "isoformat") else newest
+        ),
+    }
+
+
 # ---------------------------------------------------------------------------
 # Async embedding pipeline support  (T3) — reads are ALWAYS org-scoped
 # ---------------------------------------------------------------------------

@@ -1,7 +1,8 @@
 """R18-C2 T1 — Run-Health Dashboard aggregation endpoints.
 
-Four READ-ONLY, org-scoped API endpoints that assemble the operational state the
-Run-Health Dashboard renders — connectors, runs, content/freshness, and packs.
+Five READ-ONLY, org-scoped API endpoints that assemble the operational state the
+Run-Health Dashboard renders — connectors, runs, content/freshness, packs, and
+the attention strip.
 They read existing records/events only (see ``health_aggregation.py``); they
 never write and never invent instrumentation.
 
@@ -16,6 +17,8 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, FastAPI, Query
 
 from .health_aggregation import (
+    ATTENTION_SEVERITY_RANK,
+    attention_view,
     connectors_view,
     content_freshness_view,
     packs_view,
@@ -65,6 +68,28 @@ def get_pack_health() -> dict:
     R16-B1 stamp), and detector counts — read from run/pack data, not recreated."""
     org_id = get_current_org_id()
     return packs_view(org_id)
+
+
+@router.get("/attention")
+def get_attention_items() -> dict:
+    """Actionable tenant-health conditions (AC4), derived from existing records.
+
+    Items are ordered by severity (critical to low), then condition timestamp
+    (newest first), then stable identifier. Each carries a dashboard panel and
+    href suitable for direct frontend navigation.
+    """
+    org_id = get_current_org_id()
+    return {
+        "org_id": org_id,
+        "severity_order": list(
+            sorted(
+                ATTENTION_SEVERITY_RANK,
+                key=lambda severity: ATTENTION_SEVERITY_RANK[severity],
+                reverse=True,
+            )
+        ),
+        "items": attention_view(org_id),
+    }
 
 
 def register_run_health_routes(app: FastAPI) -> None:
