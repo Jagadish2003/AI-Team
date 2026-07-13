@@ -9,7 +9,7 @@ records and run events, the R18-B2 freshness metrics, and the R16-B1 pack
 version stamps. This module is a READER, never a second source of truth: it
 performs no writes and never computes a state speculatively.
 
-Four panel builders, each taking an ``org_id`` that the route resolves from the
+Five view builders, each taking an ``org_id`` that the route resolves from the
 tenancy context (never from a request body/query — cross-tenant reads are
 impossible):
 
@@ -26,6 +26,9 @@ impossible):
                               skipped-with-reason items.
 * ``packs_view``            — packs executed on the latest run, their versions
                               (R16-B1 stamp) and detector counts.
+* ``attention_view``        — deterministic actionable conditions derived from
+                              those same records, severity ordered and linked to
+                              the supporting dashboard panel.
 
 Resilience: connector/run assembly is defensive per item — one malformed record
 never blanks the whole panel. The ONE deliberate exception is the freshness read
@@ -40,11 +43,25 @@ reason. An org with no skips simply yields an empty breakdown.
 """
 from __future__ import annotations
 
+import json
+import re
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
+from urllib.parse import quote
 
 from . import db
 from .telemetry import get_telemetry_range
+
+
+# Attention-rule thresholds are deliberately explicit and version-controlled.
+# They are product rules, not inferred heuristics, so identical health records
+# always produce the same conditions and severity.
+ATTENTION_SEVERITY_RANK = {"critical": 4, "high": 3, "medium": 2, "low": 1}
+STALLED_CHECKPOINT_SECONDS = 24 * 60 * 60
+GROWING_BACKLOG_MIN_CHUNKS = 50
+GROWING_BACKLOG_MIN_SPAN_SECONDS = 15 * 60
+REPEATED_STAGE_RUN_WINDOW = 5
+REPEATED_STAGE_MIN_RUNS = 2
 
 # Freshness + store are imported lazily inside content_freshness_view so this
 # module (and the connectors/runs/packs panels) still import cleanly in an
@@ -503,3 +520,341 @@ def packs_view(org_id: str) -> Dict[str, Any]:
             }
         ],
     }
+
+
+# ── Attention strip ──────────────────────────────────────────────────────────
+
+_AUTH_ACTION_STATES = {"needs_auth", "refresh_failed", "error"}
+_EPOCH_ISO = "1970-01-01T00:00:00+00:00"
+
+
+def _event_payload(event: Any) -> Dict[str, Any]:
+    payload = getattr(event, "payload", {}) or {}
+    if isinstance(payload, dict):
+        return payload
+    if isinstance(payload, str):
+        try:
+            parsed = json.loads(payload)
+        except (TypeError, ValueError):
+            return {}
+        return parsed if isinstance(parsed, dict) else {}
+    return {}
+
+
+def _credential_metadata(org_id: str, connector_id: str) -> Optional[Dict[str, Any]]:
+    """Read only the OAuth health metadata needed by the attention rule.
+
+    No secret is returned or decrypted. The query is bound to both org and
+    connector, preserving the vault's tenant boundary.
+    """
+    con = db.connect()
+    try:
+        cur = con.cursor()
+        cur.execute(
+            "SELECT kind, expires_at, refresh_failed, refresh_token, updated_at "
+            "FROM credentials "
+            "WHERE org_id = %s AND connector_id = %s "
+            "AND is_deleted = FALSE",
+            (org_id, connector_id),
+        )
+        row = cur.fetchone()
+    finally:
+        con.close()
+
+    if row is None:
+        return None
+    return {
+        "kind": row[0],
+        "expires_at": _to_iso(row[1]),
+        "refresh_failed": bool(row[2]),
+        "has_refresh_token": row[3] is not None and str(row[3]) != "",
+        "updated_at": _to_iso(row[4]),
+    }
+
+
+def _make_attention_item(
+    *,
+    item_id: str,
+    condition: str,
+    severity: str,
+    title: str,
+    explanation: str,
+    timestamp: str,
+    panel: str,
+    href: str,
+    connector_id: Optional[str] = None,
+    run_id: Optional[str] = None,
+    details: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Build the stable frontend contract for one actionable condition."""
+    return {
+        "id": item_id,
+        "condition": condition,
+        "severity": severity,
+        "title": title,
+        "explanation": explanation,
+        "connector_id": connector_id,
+        "run_id": run_id,
+        "timestamp": timestamp,
+        "panel": panel,
+        "href": href,
+        "details": details or {},
+    }
+
+
+def _auth_attention_items(
+    org_id: str,
+    connectors: List[Dict[str, Any]],
+    health_events: List[Any],
+    now: datetime,
+) -> List[Dict[str, Any]]:
+    items: List[Dict[str, Any]] = []
+    for connector in connectors:
+        connector_id = str(connector.get("connector_id") or "")
+        if not connector_id:
+            continue
+
+        latest_health = _latest_by(
+            health_events,
+            lambda event: getattr(event, "connector_id", None) == connector_id,
+        )
+        health_status = (
+            str(_event_payload(latest_health).get("status") or "").lower()
+            if latest_health is not None
+            else ""
+        )
+        metadata = _credential_metadata(org_id, connector_id)
+        condition: Optional[str] = None
+        condition_time: Optional[str] = None
+        auth_status: Optional[str] = None
+
+        if metadata and metadata.get("kind") == "oauth":
+            expiry = _parse_iso(metadata.get("expires_at"))
+            if metadata.get("refresh_failed"):
+                condition = "unusable_authentication"
+                auth_status = "refresh_failed"
+                condition_time = metadata.get("updated_at") or metadata.get("expires_at")
+            elif (
+                expiry is not None
+                and expiry <= now
+                and not metadata.get("has_refresh_token")
+            ):
+                condition = "expired_authentication"
+                auth_status = "needs_auth"
+                condition_time = metadata.get("expires_at")
+
+        # A health-check event is authoritative even when the credential row is
+        # absent (for example, a provider has revoked it remotely).
+        if health_status in _AUTH_ACTION_STATES:
+            condition = (
+                "unusable_authentication"
+                if health_status in {"refresh_failed", "error"}
+                else "expired_authentication"
+            )
+            auth_status = health_status
+            condition_time = _to_iso(getattr(latest_health, "timestamp", None))
+
+        if condition is None or condition_time is None:
+            continue
+
+        name = str(connector.get("name") or connector_id)
+        explanation = (
+            f"{name} authentication cannot be used ({auth_status}). "
+            "Reconnect the connector before its data can flow again."
+        )
+        items.append(
+            _make_attention_item(
+                item_id=f"auth:{connector_id}",
+                condition=condition,
+                severity="critical",
+                title=f"Reconnect {name}",
+                explanation=explanation,
+                connector_id=connector_id,
+                timestamp=condition_time,
+                panel="connectors",
+                href=(
+                    "/run-health?panel=connectors&connector="
+                    f"{quote(connector_id, safe='')}"
+                ),
+                details={"auth_status": auth_status},
+            )
+        )
+    return items
+
+
+def _checkpoint_attention_items(
+    connectors: List[Dict[str, Any]], now: datetime
+) -> List[Dict[str, Any]]:
+    items: List[Dict[str, Any]] = []
+    for connector in connectors:
+        connector_id = str(connector.get("connector_id") or "")
+        captured_at = _parse_iso(connector.get("checkpoint_captured_at"))
+        if not connector_id or captured_at is None:
+            continue
+        age_seconds = max(0, int((now - captured_at).total_seconds()))
+        if age_seconds < STALLED_CHECKPOINT_SECONDS:
+            continue
+
+        hours = age_seconds // 3600
+        name = str(connector.get("name") or connector_id)
+        items.append(
+            _make_attention_item(
+                item_id=f"checkpoint:{connector_id}",
+                condition="stalled_checkpoint",
+                severity="high",
+                title=f"{name} checkpoint is stalled",
+                explanation=(
+                    f"The {name} ingestion checkpoint has not advanced for "
+                    f"{hours} hours. Review connector ingestion details."
+                ),
+                connector_id=connector_id,
+                timestamp=captured_at.isoformat(),
+                panel="connectors",
+                href=(
+                    "/run-health?panel=connectors&connector="
+                    f"{quote(connector_id, safe='')}"
+                ),
+                details={
+                    "checkpoint_age_seconds": age_seconds,
+                    "checkpoint_captured_at": captured_at.isoformat(),
+                },
+            )
+        )
+    return items
+
+
+def _backlog_attention_items(org_id: str, now: datetime) -> List[Dict[str, Any]]:
+    try:
+        from .retrieval import store
+    except ModuleNotFoundError:  # pragma: no cover - repo-root import style
+        from backend.app.retrieval import store  # type: ignore
+
+    backlog = store.pending_embedding_backlog(org_id)
+    count = int(backlog.get("count", 0) or 0)
+    oldest = _parse_iso(backlog.get("oldest_created_at"))
+    newest = _parse_iso(backlog.get("newest_created_at"))
+    if oldest is None or newest is None:
+        return []
+
+    span_seconds = max(0, int((newest - oldest).total_seconds()))
+    if (
+        count < GROWING_BACKLOG_MIN_CHUNKS
+        or span_seconds < GROWING_BACKLOG_MIN_SPAN_SECONDS
+    ):
+        return []
+
+    oldest_age = max(0, int((now - oldest).total_seconds()))
+    severity = "high" if count >= 500 or oldest_age >= 24 * 60 * 60 else "medium"
+    return [
+        _make_attention_item(
+            item_id="content:embedding_backlog",
+            condition="growing_embedding_backlog",
+            severity=severity,
+            title="Embedding backlog is growing",
+            explanation=(
+                f"{count} content chunks are waiting for embeddings, with pending "
+                f"work spanning {span_seconds // 60} minutes."
+            ),
+            timestamp=oldest.isoformat(),
+            panel="content",
+            href="/run-health?panel=content",
+            details={
+                "pending_embeddings": count,
+                "oldest_pending_at": oldest.isoformat(),
+                "newest_pending_at": newest.isoformat(),
+                "backlog_span_seconds": span_seconds,
+            },
+        )
+    ]
+
+
+def _stage_failure_attention_items(org_id: str) -> List[Dict[str, Any]]:
+    recent_runs = runs_view(org_id, limit=REPEATED_STAGE_RUN_WINDOW)
+    by_stage: Dict[str, List[Dict[str, Any]]] = {}
+    for run in recent_runs:
+        seen_in_run: set[str] = set()
+        for failure in run.get("degraded_stages") or []:
+            stage = str(failure.get("stage") or "").strip()
+            stage_key = stage.casefold()
+            if not stage or stage_key in seen_in_run:
+                continue
+            seen_in_run.add(stage_key)
+            by_stage.setdefault(stage_key, []).append(
+                {
+                    "stage": stage,
+                    "reason": str(failure.get("reason") or "Stage failed"),
+                    "run_id": run.get("run_id"),
+                    "timestamp": run.get("updated_at") or run.get("started_at"),
+                }
+            )
+
+    items: List[Dict[str, Any]] = []
+    for stage_key, failures in by_stage.items():
+        if len(failures) < REPEATED_STAGE_MIN_RUNS:
+            continue
+        latest = max(
+            failures,
+            key=lambda failure: (
+                _parse_iso(failure.get("timestamp"))
+                or datetime.fromisoformat(_EPOCH_ISO)
+            ),
+        )
+        timestamp = _to_iso(latest.get("timestamp"))
+        run_id = latest.get("run_id")
+        if timestamp is None or not run_id:
+            continue
+
+        stage = str(latest["stage"])
+        slug = re.sub(r"[^a-z0-9]+", "-", stage_key).strip("-") or "unknown"
+        severity = "high" if len(failures) >= 3 else "medium"
+        items.append(
+            _make_attention_item(
+                item_id=f"stage:{slug}",
+                condition="repeated_stage_failure",
+                severity=severity,
+                title=f"{stage.replace('_', ' ').title()} is failing repeatedly",
+                explanation=(
+                    f"The {stage} stage failed in {len(failures)} of the last "
+                    f"{len(recent_runs)} runs. Latest reason: {latest['reason']}"
+                ),
+                run_id=str(run_id),
+                timestamp=timestamp,
+                panel="runs",
+                href=(
+                    "/run-health?panel=runs&run="
+                    f"{quote(str(run_id), safe='')}&stage={quote(stage, safe='')}"
+                ),
+                details={
+                    "stage": stage,
+                    "failure_count": len(failures),
+                    "run_window": len(recent_runs),
+                },
+            )
+        )
+    return items
+
+
+def _attention_sort_key(item: Dict[str, Any]) -> tuple[Any, ...]:
+    """Critical first; then newest condition time; then stable identifier."""
+    severity = ATTENTION_SEVERITY_RANK.get(str(item.get("severity")), 0)
+    timestamp = _parse_iso(item.get("timestamp"))
+    epoch = timestamp.timestamp() if timestamp is not None else 0.0
+    return (-severity, -epoch, str(item.get("id") or ""))
+
+
+def attention_view(org_id: str) -> List[Dict[str, Any]]:
+    """Return org-scoped actionable health conditions in deterministic order.
+
+    A single degraded stage remains visible in ``runs_view`` but is not promoted
+    here until the same stage appears in at least two of the five latest runs.
+    """
+    now = _now()
+    connectors = connectors_view(org_id)
+    health_events = _safe_range(org_id, "connector.health_check")
+    items = [
+        *_auth_attention_items(org_id, connectors, health_events, now),
+        *_checkpoint_attention_items(connectors, now),
+        *_backlog_attention_items(org_id, now),
+        *_stage_failure_attention_items(org_id),
+    ]
+    return sorted(items, key=_attention_sort_key)
