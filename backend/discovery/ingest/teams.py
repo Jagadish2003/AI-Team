@@ -37,6 +37,20 @@ counts, the raw body text for cross-reference marker scanning) through to the
 records and extracts only counts/timing/pattern-matched markers. It does NOT do
 deep conversation-content NLP; that is the separate 1.8 deep-content story.
 
+Edit/delete propagation (R18-A4 / AT-595/AT-596 — depth + T3)
+------------------------------------------------------------
+Beside the reach signal path, the depth path reads the conversation TEXT into the
+retrieval substrate (:meth:`TeamsIngestor.ingest_deep_content`) and wires edits and
+deletions into R18-B2 freshness at the THREAD level. Microsoft Graph's delta query
+natively re-surfaces an edited message (its ``lastModifiedDateTime`` moves forward,
+so it re-enters the delta) and reports a deleted message as an ``@removed``
+annotation — so BOTH the edit and delete cases are driven incrementally off the
+existing ``(org, 'teams')`` Graph-delta checkpoint, with no full-history re-read
+(AC4). An edit emits a thread-level ``updated`` freshness event (re-chunk the whole
+thread via :func:`resolve_thread_content`); an ``@removed`` message emits a
+thread-level ``deleted`` (standalone → purge immediately) or ``updated`` (inside a
+larger thread → re-read drops it) event (AC3).
+
 Checkpoint shape (opaque to the runner)
 ---------------------------------------
 A single ``(org_id, 'teams')`` checkpoint row is persisted by the runner, but a
@@ -103,12 +117,15 @@ from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple
 from . import get_live_connector, is_live, resolve_vault_connector
 from .base import ChangeBasedIngestor, ChangeKind, Checkpoint, DeltaBatch
 from .conversation_content import (
+    ConversationChange,
     ConversationDeepContentError,
     ConversationDeepContentResult,
     ConversationMessage,
     ConversationThread,
     assemble_threads,
-    ingest_conversation_content,
+    ingest_conversation_changes,
+    normalise_change_kind,
+    resolve_conversation_thread,
     thread_to_artifact,
 )
 from .teams_signals import (
@@ -277,6 +294,17 @@ def _marker_gt(marker: str, token: Optional[str]) -> bool:
     return me > te
 
 
+def _is_removed_message(msg: Dict[str, Any]) -> bool:
+    """True when a Graph delta message is a deletion (``@removed`` annotation).
+
+    Microsoft Graph reports a removed channel message as an item carrying an
+    ``@removed`` object (with a ``reason``) instead of a body — the native delete
+    signal the deep-content path (R18-A4 / AT-596, T3) routes into R18-B2 freshness.
+    """
+    removed = msg.get("@removed")
+    return removed is not None or bool(msg.get("deleted"))
+
+
 def _retry_after_seconds(resp: Any) -> int:
     """Parse a Microsoft Graph ``Retry-After`` header into a bounded sleep (L2).
 
@@ -316,6 +344,10 @@ class TeamsIngestor(ChangeBasedIngestor):
 
     connector_id = "teams"
     reports_deletes = False
+    # Deep content is indexed per THREAD; freshness is driven at the thread level by
+    # the deep-content path (R18-A4 / AT-596 T3), so the runner must NOT also fire
+    # per-message freshness for Teams.
+    manages_retrieval_freshness = True
 
     def __init__(self, batch_size: int = _DEFAULT_BATCH_SIZE):
         if batch_size < 1:
@@ -541,37 +573,88 @@ class TeamsIngestor(ChangeBasedIngestor):
         """Map one assembled thread to a substrate ``ContentArtifact`` (shared)."""
         return thread_to_artifact(thread)
 
+    def _resolve_channel(
+        self, org_id: str, team_id: str, channel_id: str
+    ) -> Dict[str, Any]:
+        """Find a granted channel's full dict (for names) or a minimal fallback."""
+        for c in self._accessible_channels(org_id):
+            if str(c.get("team_id")) == str(team_id) and str(c.get("id")) == str(channel_id):
+                return c
+        return {"team_id": team_id, "id": channel_id, "displayName": "", "team_name": ""}
+
+    def _read_container_messages(
+        self, org_id: str, container_id: str
+    ) -> List[ConversationMessage]:
+        """Read a channel's CURRENT messages as neutral messages (T3 resolver input).
+
+        Re-extraction for the freshness refresh worker: run a fresh Graph delta (no
+        token) / read the fixture for the ``"{team_id}/{channel_id}"`` container and
+        adapt each message to the neutral :class:`ConversationMessage` shape via the
+        SAME ``_to_record`` → ``_to_conversation_message`` path used at ingest, so a
+        re-chunk reuses unchanged vectors. ``@removed`` messages are skipped, so a
+        thread re-read after a deletion naturally excludes the removed message.
+        """
+        team_id, _slash, channel_id = container_id.partition("/")
+        if not team_id or not channel_id:
+            return []
+        try:
+            channel = self._resolve_channel(org_id, team_id, channel_id)
+            raw, _next = self._channel_delta(org_id, channel, None)
+            messages: List[ConversationMessage] = []
+            for msg in raw:
+                if _is_removed_message(msg):
+                    continue
+                messages.append(self._to_conversation_message(self._to_record(channel, msg)))
+            return messages
+        finally:
+            # A live delta may have created a Graph client — release its session (H2).
+            self._close_client()
+
     def ingest_deep_content(
         self,
         org_id: str,
         records: List[Dict[str, Any]],
         *,
         ingest_fn: Optional[Callable[[str, List[Any]], Any]] = None,
+        freshness_fn: Optional[Callable[[dict], Any]] = None,
     ) -> TeamsDeepContentResult:
-        """Hand a batch's Teams conversation content to the retrieval substrate (T2).
+        """Hand a batch's Teams conversation content to the substrate + freshness (T2/T3).
 
         The depth path that rides beside the unchanged reach signal path: it adapts
-        the batch's Graph records to neutral messages, scope-checks them against the
-        granted channels (AC2), assembles the in-scope messages into threads/windows,
-        and hands each as a ``conversation`` ``ContentArtifact`` to
-        ``retrieval.ingest_content`` (AC1) — all via the shared conversation model.
-        The substrate owns chunking/embedding/indexing — this method never writes
-        vectors.
+        the batch's Graph records to neutral messages (carrying each record's
+        ``change_kind``), scope-checks them against the granted channels (AC2), and
+        routes them via the shared conversation model:
 
-        Called per fully-processed delta batch (so it is naturally incremental and
-        rides the existing ``(org, 'teams')`` Graph-delta checkpoint — no new
-        checkpointing). ``ingest_fn`` is injectable for tests; it defaults to the
-        real ``ingest_content``. Raises :class:`TeamsDeepContentError` when the
-        substrate reports any failed artifact (at-least-once; idempotent replace).
+          * newly-created threads present in the batch are handed directly to
+            ``retrieval.ingest_content`` as ``conversation`` artifacts (AC1); and
+          * edited messages / ``@removed`` deletions / replies to pre-existing
+            threads are wired into R18-B2 freshness at the THREAD level — an edit
+            re-chunks the whole thread, a deletion removes its content (R18-A4 /
+            AT-596, T3, AC3).
+
+        The substrate owns chunking/embedding/indexing and the async refresh — this
+        method never writes vectors. Called per fully-processed delta batch, so it is
+        naturally incremental and rides the existing ``(org, 'teams')`` Graph-delta
+        checkpoint — no new checkpointing (AC4). ``ingest_fn`` / ``freshness_fn`` are
+        injectable for tests (defaulting to ``ingest_content`` / ``on_artifact_changed``).
+        Raises :class:`TeamsDeepContentError` when the create hand-off reports a
+        failed artifact (at-least-once; idempotent replace).
         """
-        messages = [self._to_conversation_message(r) for r in records]
-        return ingest_conversation_content(
+        changes = [
+            ConversationChange(
+                self._to_conversation_message(r),
+                normalise_change_kind(r.get("change_kind")),
+            )
+            for r in records
+        ]
+        return ingest_conversation_changes(
             org_id,
             RETRIEVAL_SOURCE_SYSTEM,
-            messages,
+            changes,
             scope_container_ids=self._granted_scope_container_ids(org_id),
             window_seconds=THREAD_WINDOW_SECONDS,
             ingest_fn=ingest_fn,
+            freshness_fn=freshness_fn,
         )
 
     def _channel_delta(
@@ -624,16 +707,20 @@ class TeamsIngestor(ChangeBasedIngestor):
         team_id = channel["team_id"]
         channel_id = channel["id"]
         message_id = msg.get("id", "")
-        # A message whose last edit differs from its creation is an update to an
-        # artifact we may already have seen; everything else newly appearing is a
-        # creation. (Pure metadata — no content inspection.)
+        # Deletion first (R18-A4 / AT-596, T3): the Graph delta reports a removed
+        # message as an ``@removed`` annotation — surface it as a delete so the
+        # thread's content leaves retrieval. A message whose last edit differs from
+        # its creation is an update to an artifact we may already have seen;
+        # everything else newly appearing is a creation. (Pure metadata — no content
+        # inspection.)
         last_modified = msg.get("lastModifiedDateTime")
         created = msg.get("createdDateTime")
-        change_kind = (
-            ChangeKind.UPDATED
-            if last_modified and created and last_modified != created
-            else ChangeKind.CREATED
-        )
+        if _is_removed_message(msg):
+            change_kind = ChangeKind.DELETED
+        elif last_modified and created and last_modified != created:
+            change_kind = ChangeKind.UPDATED
+        else:
+            change_kind = ChangeKind.CREATED
         body = msg.get("body") or {}
         text = body.get("content", "") if isinstance(body, dict) else ""
         sender = (msg.get("from") or {}).get("user") or {}
@@ -730,6 +817,28 @@ class TeamsIngestor(ChangeBasedIngestor):
         if self._graph_client is not None:
             self._graph_client.close()
             self._graph_client = None
+
+
+def resolve_thread_content(org_id: str, source_artifact: str) -> Any:
+    """Re-extract one Teams thread's CURRENT content for the refresh worker (T3).
+
+    The content-resolver the R18-B2 refresh worker calls for a stale/queued Teams
+    thread (``source_artifact = "{team_id}/{channel_id}:{thread_key}"``): re-read the
+    channel via a fresh Graph delta / fixture and re-assemble the WHOLE thread via the
+    shared conversation model. Returns the thread's ``ContentArtifact`` (empty content
+    — chunks removed — when the thread no longer exists), or ``None`` when the channel
+    cannot be read right now (the artifact stays queued for retry). Registered under
+    ``'teams'`` by
+    :func:`app.retrieval.default_resolvers.register_default_content_resolvers`.
+    """
+    ingestor = TeamsIngestor()
+    return resolve_conversation_thread(
+        org_id,
+        source_artifact,
+        RETRIEVAL_SOURCE_SYSTEM,
+        ingestor._read_container_messages,
+        window_seconds=THREAD_WINDOW_SECONDS,
+    )
 
 
 class TeamsGraphClient:

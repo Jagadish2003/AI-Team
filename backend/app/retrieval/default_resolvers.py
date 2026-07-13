@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import importlib
 import logging
-from datetime import datetime, timezone
 from typing import Any, Callable, Dict, Optional
 
 from app.retrieval import refresh
@@ -106,78 +105,30 @@ def _text_lines(*pairs: tuple[str, Any]) -> str:
     return "\n".join(lines)
 
 
-def _slack_ts_to_iso(value: Optional[str]) -> Optional[str]:
-    if not value:
-        return None
-    try:
-        return datetime.fromtimestamp(float(value), timezone.utc).isoformat()
-    except (TypeError, ValueError, OSError):
-        return str(value)
-
-
 def _resolve_slack(org_id: str, source_artifact: str) -> Optional[ContentArtifact]:
-    channel_id, sep, ts = source_artifact.partition(":")
-    if not sep or not channel_id or not ts:
-        return None
+    """Re-extract a Slack THREAD's current content (R18-A4 / AT-596, T3).
+
+    Slack conversation content is indexed per THREAD (``source_artifact =
+    "{channel}:{thread_key}"``), so a refresh must re-read and re-chunk the WHOLE
+    thread — not a single message. Delegates to the connector's
+    ``resolve_thread_content``, which re-reads the channel and re-assembles the thread
+    via the shared conversation model (empty content when the thread no longer exists,
+    so its chunks are removed).
+    """
     mod = _import_module("discovery.ingest.slack")
-    ingestor = mod.SlackIngestor()
-    for msg in ingestor._raw_messages(org_id, {"id": channel_id}):
-        if str(msg.get("ts", "")) != ts:
-            continue
-        edited = msg.get("edited") or {}
-        timestamp = _slack_ts_to_iso(edited.get("ts") or msg.get("ts"))
-        return _artifact(
-            "slack",
-            source_artifact,
-            str(msg.get("text", "") or ""),
-            "conversation",
-            source_timestamp=timestamp,
-            provenance={
-                "channel_id": channel_id,
-                "thread_ts": msg.get("thread_ts"),
-                "user": msg.get("user"),
-                "reply_count": msg.get("reply_count", 0),
-                "reactions": msg.get("reactions", []),
-            },
-        )
-    return None
+    return mod.resolve_thread_content(org_id, source_artifact)
 
 
 def _resolve_teams(org_id: str, source_artifact: str) -> Optional[ContentArtifact]:
-    container, sep, message_id = source_artifact.partition(":")
-    team_id, slash, channel_id = container.partition("/")
-    if not sep or not slash or not team_id or not channel_id or not message_id:
-        return None
+    """Re-extract a Teams THREAD's current content (R18-A4 / AT-596, T3).
+
+    Teams conversation content is indexed per THREAD (``source_artifact =
+    "{team_id}/{channel_id}:{thread_key}"``); delegates to the connector's
+    ``resolve_thread_content``, which re-runs the Graph delta / reads the fixture and
+    re-assembles the whole thread via the shared conversation model.
+    """
     mod = _import_module("discovery.ingest.teams")
-    ingestor = mod.TeamsIngestor()
-    messages, _next_token = ingestor._channel_delta(
-        org_id, {"team_id": team_id, "id": channel_id}, None
-    )
-    for msg in messages:
-        if str(msg.get("id", "")) != message_id:
-            continue
-        body = msg.get("body") or {}
-        text = body.get("content", "") if isinstance(body, dict) else ""
-        timestamp = msg.get("lastModifiedDateTime") or msg.get("createdDateTime")
-        sender = (msg.get("from") or {}).get("user") or {}
-        return _artifact(
-            "teams",
-            source_artifact,
-            str(text or ""),
-            "conversation",
-            source_timestamp=timestamp,
-            provenance={
-                "team_id": team_id,
-                "channel_id": channel_id,
-                "message_id": message_id,
-                "user": sender.get("id"),
-                "user_display_name": sender.get("displayName"),
-                "reply_count": msg.get("reply_count", 0),
-                "mentions": msg.get("mentions", []),
-                "reactions": msg.get("reactions", []),
-            },
-        )
-    return None
+    return mod.resolve_thread_content(org_id, source_artifact)
 
 
 def _resolve_confluence(org_id: str, source_artifact: str) -> Optional[ContentArtifact]:

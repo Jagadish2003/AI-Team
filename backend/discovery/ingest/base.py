@@ -188,6 +188,18 @@ class ChangeBasedIngestor(abc.ABC):
     #: explicit rather than silently unhandled.
     reports_deletes: bool = False
 
+    #: R18-A4 / AT-596 (T3) — does this connector drive retrieval freshness ITSELF?
+    #: DEFAULT False: the change runner notifies the retrieval-freshness subscriber
+    #: for each changed record, whose ``artifact_id`` maps 1:1 to a retrieval
+    #: ``source_artifact`` (documents, git, Confluence, SharePoint). A conversation
+    #: connector (Slack/Teams) indexes at the THREAD level while its change records
+    #: are per-MESSAGE, so message-level freshness would be the wrong granularity —
+    #: it sets this True and drives thread-level freshness from its deep-content path
+    #: instead, and the runner then skips the generic per-record freshness
+    #: notification for it (the ``ingestion.artifact_changed`` telemetry event is
+    #: still emitted). See ``discovery.ingest.conversation_content``.
+    manages_retrieval_freshness: bool = False
+
     @abc.abstractmethod
     def ingest_changes(
         self, org_id: str, since: Optional[Checkpoint]

@@ -42,6 +42,46 @@ CONTENT_TYPE = "conversation"
 #: one window "thread".
 DEFAULT_WINDOW_SECONDS = 3600
 
+#: Change kinds a delta record can carry (R18-A4 / AT-596 — T3). Mirrored as plain
+#: strings (like :mod:`app.retrieval.freshness` does) so this shared model stays
+#: decoupled from the connector base module and from the app.retrieval package.
+#: A record with no recognised kind is treated as ``created`` (it is content that
+#: newly appeared in a delta, so the default is "index it", not "invalidate it").
+CHANGE_CREATED = "created"
+CHANGE_UPDATED = "updated"
+CHANGE_DELETED = "deleted"
+_KNOWN_CHANGE_KINDS = frozenset({CHANGE_CREATED, CHANGE_UPDATED, CHANGE_DELETED})
+
+
+def normalise_change_kind(value: Any) -> str:
+    """Coerce a record's ``change_kind`` to a known kind, defaulting to created."""
+    kind = str(value or "").strip().lower()
+    return kind if kind in _KNOWN_CHANGE_KINDS else CHANGE_CREATED
+
+
+def thread_artifact_id(container_id: str, key: str) -> str:
+    """The substrate identity for a thread/window: ``"{container_id}:{key}"``.
+
+    Single source of truth for the thread-level ``source_artifact`` shape so the
+    ingest path, the freshness/refresh path (T3), and the content resolver all agree
+    on the key every chunk is stored under (a mismatch would silently orphan chunks).
+    """
+    return f"{container_id}:{key}"
+
+
+def split_thread_artifact_id(source_artifact: str) -> tuple:
+    """Split a thread-level ``source_artifact`` back into ``(container_id, key)``.
+
+    Splits on the LAST ``:`` so a container id that itself contains a colon (a Teams
+    ``"{team_id}/{channel_id}"`` where the channel id is e.g. ``"19:ops"``) is
+    preserved intact and only the trailing thread key is separated. Returns
+    ``(None, None)`` for an id with no separator so callers can bail safely.
+    """
+    container_id, sep, key = str(source_artifact or "").rpartition(":")
+    if not sep or not container_id or not key:
+        return None, None
+    return container_id, key
+
 
 class ConversationDeepContentError(RuntimeError):
     """Raised by the deep-content hand-off when the substrate reports failures.
@@ -54,7 +94,7 @@ class ConversationDeepContentError(RuntimeError):
 
 @dataclass
 class ConversationDeepContentResult:
-    """Accounting for one :func:`ingest_conversation_content` call."""
+    """Accounting for one deep-content hand-off (create path + T3 freshness)."""
 
     org_id: str
     source_system: str
@@ -65,6 +105,23 @@ class ConversationDeepContentResult:
     artifacts_empty: int = 0
     artifacts_failed: int = 0
     chunks_indexed: int = 0
+    # R18-A4 / AT-596 (T3) — edit/delete propagation into R18-B2 freshness.
+    threads_refreshed: int = 0  # threads marked stale + queued for async re-chunk
+    threads_removed: int = 0    # standalone/window threads purged immediately (delete)
+    freshness_events: int = 0   # total thread-level artifact_changed events emitted
+
+
+@dataclass
+class ConversationChange:
+    """A neutral message paired with the kind of change it represents (T3).
+
+    The deep-content path builds one of these per delta record so the shared
+    orchestrator can route creates to a direct substrate hand-off and edits/deletes
+    into R18-B2 freshness at the thread level.
+    """
+
+    message: "ConversationMessage"
+    change_kind: str = CHANGE_CREATED
 
 
 @dataclass
@@ -146,7 +203,7 @@ class ConversationThread:
         Every chunk the substrate derives for this thread shares this id, so a
         retrieval hit points at the exact thread.
         """
-        return f"{self.container_id}:{self.key}"
+        return thread_artifact_id(self.container_id, self.key)
 
 
 # ---------------------------------------------------------------------------
@@ -337,12 +394,15 @@ def ingest_conversation_content(
 ) -> ConversationDeepContentResult:
     """Assemble in-scope messages into threads and hand them to the substrate.
 
-    The one shared depth path both chat platforms drive (Slack — AT-594; Teams —
-    AT-595). Messages are first scope-filtered against ``scope_container_ids`` — the
-    explicitly selected/granted channels (AC2) — then assembled into threads/windows
-    and handed to ``retrieval.ingest_content(org_id, artifacts)`` as
-    ``conversation``-typed artifacts with thread-level observed provenance (AC1).
-    Never writes vectors — the substrate owns chunking/embedding/indexing.
+    The create-path convenience wrapper: every message is treated as newly-created
+    content (no edit/delete propagation). Kept for callers that only index fresh
+    content; :func:`ingest_conversation_changes` is the full T3 entry point that also
+    wires edits/deletions into freshness.
+
+    Messages are scope-filtered against ``scope_container_ids`` — the explicitly
+    selected/granted channels (AC2) — then assembled into threads/windows and handed
+    to ``retrieval.ingest_content(org_id, artifacts)`` as ``conversation``-typed
+    artifacts with thread-level observed provenance (AC1). Never writes vectors.
 
     ``ingest_fn`` is injectable for tests; it defaults to the real
     ``ingest_content``. Raises :class:`ConversationDeepContentError` when the
@@ -350,19 +410,141 @@ def ingest_conversation_content(
     leave it un-advanced and re-hand the batch next run (at-least-once; idempotent
     replace by ``(source_system, source_artifact)``).
     """
+    changes = [ConversationChange(m, CHANGE_CREATED) for m in messages]
+    return ingest_conversation_changes(
+        org_id,
+        source_system,
+        changes,
+        scope_container_ids=scope_container_ids,
+        window_seconds=window_seconds,
+        ingest_fn=ingest_fn,
+    )
+
+
+def ingest_conversation_changes(
+    org_id: str,
+    source_system: str,
+    changes: List[ConversationChange],
+    *,
+    scope_container_ids: set,
+    window_seconds: int = DEFAULT_WINDOW_SECONDS,
+    ingest_fn: Optional[Callable[[str, List[Any]], Any]] = None,
+    freshness_fn: Optional[Callable[[dict], Any]] = None,
+) -> ConversationDeepContentResult:
+    """Route a batch's conversation changes to the substrate + R18-B2 freshness (T3).
+
+    The one shared depth path both chat platforms drive (Slack — AT-594; Teams —
+    AT-595; edit/delete propagation — AT-596). Changes are first scope-filtered
+    against ``scope_container_ids`` — the explicitly selected/granted channels (AC2)
+    — then routed by change kind:
+
+      * **created** content whose thread is fully present in this batch is handed
+        DIRECTLY to ``retrieval.ingest_content`` as a ``conversation`` artifact
+        (AC1) — the create path, unchanged from T1/T2.
+      * **updated** (an edited message) → a thread-level ``updated`` freshness event
+        so R18-B2 marks the thread's chunks stale and queues an async re-chunk of the
+        WHOLE thread (AC3 edit). A ``created`` reply to a thread whose root is NOT in
+        this batch is treated the same way — the whole thread is re-read rather than
+        the partial batch clobbering it.
+      * **deleted** → for a standalone/window message (the artifact IS that one
+        message) a thread-level ``deleted`` event purges it from retrieval
+        IMMEDIATELY (R18-B2's delete rule, AC3 delete); for a message inside a larger
+        thread an ``updated`` event marks the thread stale at once (excluded from
+        retrieval immediately) and queues a re-read that drops the deleted message.
+
+    Edits/deletes ride the reach connectors' existing checkpoints — only new/changed
+    messages since the checkpoint reach this function (AC4). The substrate owns
+    chunking/embedding/indexing and the async refresh; this path never writes
+    vectors. Both callbacks are injectable for tests: ``ingest_fn`` defaults to
+    ``retrieval.ingest_content`` and ``freshness_fn`` to
+    ``retrieval.freshness.on_artifact_changed`` (fire-and-forget; never raises).
+    Raises :class:`ConversationDeepContentError` only when the create hand-off
+    reports a failed artifact (at-least-once for freshly-created content).
+    """
     result = ConversationDeepContentResult(org_id=org_id, source_system=source_system)
-    if not messages:
+    if not changes:
         return result
 
-    in_scope = [m for m in messages if m.container_id in scope_container_ids]
+    in_scope = [c for c in changes if c.message.container_id in scope_container_ids]
     if not in_scope:
         return result
 
-    threads = assemble_threads(source_system, in_scope, window_seconds=window_seconds)
+    handoff_msgs, refresh_ids, delete_ids = _classify_changes(in_scope)
+
+    if handoff_msgs:
+        _handoff_created_threads(
+            result, org_id, source_system, handoff_msgs, window_seconds, ingest_fn
+        )
+
+    if refresh_ids or delete_ids:
+        _emit_freshness(
+            result, org_id, source_system, refresh_ids, delete_ids, freshness_fn
+        )
+
+    return result
+
+
+def _classify_changes(in_scope: List[ConversationChange]) -> tuple:
+    """Partition in-scope changes into (create hand-off msgs, refresh ids, delete ids).
+
+    A thread routed to freshness (refresh or delete) is never ALSO partially handed
+    off: any created message whose thread is being refreshed/deleted is dropped from
+    the direct hand-off so the whole-thread re-read is the single source of truth.
+    """
+    present = {(c.message.container_id, c.message.msg_id) for c in in_scope}
+    refresh_ids: set = set()
+    delete_ids: set = set()
+    candidates: List[ConversationMessage] = []
+
+    def art_of(m: ConversationMessage) -> str:
+        return thread_artifact_id(m.container_id, m.thread_key or m.msg_id)
+
+    for c in in_scope:
+        m = c.message
+        if c.change_kind == CHANGE_DELETED:
+            if m.thread_key is None:
+                # Standalone/window message: the artifact IS this one message →
+                # purge it outright (immediate, B2's delete rule).
+                delete_ids.add(art_of(m))
+            else:
+                # One message inside a larger thread → re-read drops it; mark the
+                # thread stale immediately so the deleted text stops being served.
+                refresh_ids.add(art_of(m))
+        elif c.change_kind == CHANGE_UPDATED:
+            refresh_ids.add(art_of(m))
+        else:  # created
+            root_in_batch = (
+                m.thread_key is None
+                or (m.container_id, m.thread_key) in present
+            )
+            if root_in_batch:
+                candidates.append(m)
+            else:
+                # A reply to a pre-existing thread — re-read the whole thread rather
+                # than let the partial batch clobber the stored thread's chunks.
+                refresh_ids.add(art_of(m))
+
+    handoff_msgs = [
+        m for m in candidates
+        if art_of(m) not in refresh_ids and art_of(m) not in delete_ids
+    ]
+    return handoff_msgs, refresh_ids, delete_ids
+
+
+def _handoff_created_threads(
+    result: ConversationDeepContentResult,
+    org_id: str,
+    source_system: str,
+    messages: List[ConversationMessage],
+    window_seconds: int,
+    ingest_fn: Optional[Callable[[str, List[Any]], Any]],
+) -> None:
+    """Assemble fully-present created threads and hand them to the substrate (AC1)."""
+    threads = assemble_threads(source_system, messages, window_seconds=window_seconds)
     result.threads = len(threads)
     result.windows = sum(1 for t in threads if t.is_window)
     if not threads:
-        return result
+        return
 
     artifacts = [thread_to_artifact(t) for t in threads]
     result.artifacts_handed_off = len(artifacts)
@@ -396,4 +578,109 @@ def ingest_conversation_content(
             f"{result.artifacts_failed} {source_system} thread(s) failed retrieval "
             f"hand-off for org {org_id}; checkpoint not advanced (will retry)"
         )
-    return result
+
+
+def _emit_freshness(
+    result: ConversationDeepContentResult,
+    org_id: str,
+    source_system: str,
+    refresh_ids: set,
+    delete_ids: set,
+    freshness_fn: Optional[Callable[[dict], Any]],
+) -> None:
+    """Emit thread-level ``artifact_changed`` events into R18-B2 freshness (T3).
+
+    Reuses the SAME subscriber the ingestion foundation feeds since 1.6
+    (``on_artifact_changed``): an ``updated`` event marks the thread stale + queues
+    a re-chunk; a ``deleted`` event purges it immediately. Fire-and-forget — the
+    subscriber never raises, and a resolution failure only ever delays freshness.
+    """
+    fn = freshness_fn
+    if fn is None:
+        from app.retrieval.freshness import on_artifact_changed as fn  # type: ignore
+
+    for art_id in sorted(refresh_ids):
+        fn(_freshness_event(org_id, source_system, art_id, CHANGE_UPDATED))
+        result.threads_refreshed += 1
+    for art_id in sorted(delete_ids):
+        fn(_freshness_event(org_id, source_system, art_id, CHANGE_DELETED))
+        result.threads_removed += 1
+    result.freshness_events = result.threads_refreshed + result.threads_removed
+
+    logger.info(
+        "%s deep content freshness: org=%s threads_refreshed=%d threads_removed=%d",
+        source_system, org_id, result.threads_refreshed, result.threads_removed,
+    )
+
+
+def _freshness_event(
+    org_id: str, source_system: str, source_artifact: str, change_kind: str
+) -> dict:
+    """Build an ``ingestion.artifact_changed`` payload keyed at the THREAD level.
+
+    Speaks the ingestion vocabulary the freshness subscriber expects
+    (``connector_id`` / ``artifact_id``) so the thread's chunks — not a single
+    message's — are the unit invalidated/refreshed.
+    """
+    return {
+        "org_id": org_id,
+        "connector_id": source_system,
+        "artifact_id": source_artifact,
+        "change_kind": change_kind,
+    }
+
+
+def resolve_conversation_thread(
+    org_id: str,
+    source_artifact: str,
+    source_system: str,
+    read_container_messages: Callable[[str, str], List[ConversationMessage]],
+    *,
+    window_seconds: int = DEFAULT_WINDOW_SECONDS,
+) -> Optional[Any]:
+    """Re-extract one thread's CURRENT content for the freshness refresh worker (T3).
+
+    The content-resolver seam (R18-B2 T3) for conversation sources: given a
+    thread-level ``source_artifact`` (``"{container}:{key}"``), re-read the whole
+    container from the source, re-assemble threads/windows via the SHARED model, and
+    return the matching thread as a ``conversation`` :class:`ContentArtifact` — so
+    the refresh re-chunks the WHOLE thread through the identical path used at ingest
+    (identical chunk boundaries → hash-compare can reuse unchanged vectors).
+
+    Returns:
+      * the thread's artifact when the thread still exists;
+      * an EMPTY-content artifact when the thread/window no longer exists (every
+        message deleted, or the window re-formed under a different key) — the swap
+        then removes its chunks, so the resolver is self-cleaning;
+      * ``None`` when the container cannot be read right now (transient source
+        outage) so the refresh worker leaves the artifact queued for retry.
+
+    ``read_container_messages(org_id, container_id)`` is the ONLY platform-specific
+    input — it returns the container's current messages as neutral
+    :class:`ConversationMessage`s, exactly what the collection edge produces.
+    """
+    from app.retrieval.ingest import ContentArtifact
+
+    container_id, key = split_thread_artifact_id(source_artifact)
+    if container_id is None:
+        return None
+    try:
+        messages = read_container_messages(org_id, container_id)
+    except Exception:  # noqa: BLE001 — a transient read failure → stay queued
+        logger.warning(
+            "%s thread resolver: could not read container %r for org %s (will retry)",
+            source_system, container_id, org_id, exc_info=True,
+        )
+        return None
+
+    for thread in assemble_threads(source_system, messages, window_seconds=window_seconds):
+        if thread.source_artifact() == source_artifact:
+            return thread_to_artifact(thread)
+
+    # The thread/window is gone — return empty content so the swap removes its chunks.
+    return ContentArtifact(
+        source_system=source_system,
+        source_artifact=source_artifact,
+        content="",
+        content_type=CONTENT_TYPE,
+    )

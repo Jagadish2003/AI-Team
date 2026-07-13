@@ -47,6 +47,24 @@ The reach-phase signal extraction is untouched and continues to feed scoring; th
 depth path rides the SAME per-``(org, 'slack')`` checkpoint — no new connector, no
 new checkpointing. See :meth:`SlackIngestor.ingest_deep_content`.
 
+Edit/delete propagation (R18-A4 / AT-596 — T3)
+----------------------------------------------
+Edits and deletions are wired into R18-B2 freshness at the THREAD level (chunks are
+stored per thread, so freshness must act per thread, not per message). Within one
+change-runner pass, a message the delta marks ``updated`` (an edit) — or a
+``created`` reply to a thread whose root is not in the batch — emits a thread-level
+``updated`` event so R18-B2 marks the thread's chunks stale and queues an async
+re-chunk of the WHOLE thread (via the registered content resolver
+:func:`resolve_thread_content`); a ``deleted`` standalone message emits a
+thread-level ``deleted`` event that purges it from retrieval immediately (B2's
+delete rule). Only new/changed messages since the checkpoint are processed, so this
+never re-reads full channel history (AC4). Slack history polling cannot itself
+surface an edit whose ``ts`` is unchanged nor a deletion (``reports_deletes =
+False``) — the propagation honours a delete/tombstone record whenever one is
+produced (e.g. a future Events-API tombstone), and Teams (AT-595), whose Graph
+delta natively re-surfaces edits and ``@removed`` deletions, exercises the full
+incremental edit/delete path.
+
 Checkpoint shape (opaque to the runner)
 ---------------------------------------
 A single ``(org_id, 'slack')`` checkpoint row is persisted by the runner, but a
@@ -92,12 +110,15 @@ from . import get_live_connector, is_live, resolve_vault_connector
 from .base import ChangeBasedIngestor, ChangeKind, Checkpoint, DeltaBatch
 from .conversation_content import (
     CONTENT_TYPE,
+    ConversationChange,
     ConversationDeepContentError,
     ConversationDeepContentResult,
     ConversationMessage,
     ConversationThread,
     assemble_threads,
-    ingest_conversation_content,
+    ingest_conversation_changes,
+    normalise_change_kind,
+    resolve_conversation_thread,
     thread_to_artifact,
 )
 from .slack_signals import (
@@ -213,6 +234,22 @@ def _ts_float(ts: Any) -> float:
         return float("-inf")
 
 
+#: Slack message subtypes that denote a removed message (R18-A4 / AT-596 T3).
+_DELETED_SUBTYPES = {"message_deleted", "tombstone"}
+
+
+def _is_deleted_message(msg: Dict[str, Any]) -> bool:
+    """True when a Slack message represents a deletion (subtype/flag based).
+
+    History polling does not reliably surface deletions, so this is only ever true
+    for a delete/tombstone record produced out-of-band; the deep-content path routes
+    it into R18-B2 freshness so the removed message's content leaves retrieval.
+    """
+    if msg.get("deleted") is True:
+        return True
+    return str(msg.get("subtype") or "") in _DELETED_SUBTYPES
+
+
 def _ts_to_iso(ts: Any) -> Optional[str]:
     """Convert a Slack ``epoch.micro`` ts string to a UTC ISO-8601 string.
 
@@ -246,6 +283,10 @@ class SlackIngestor(ChangeBasedIngestor):
 
     connector_id = "slack"
     reports_deletes = False
+    # Deep content is indexed per THREAD; freshness is driven at the thread level by
+    # the deep-content path (R18-A4 / AT-596 T3), so the runner must NOT also fire
+    # per-message freshness for Slack.
+    manages_retrieval_freshness = True
 
     def __init__(self, batch_size: int = _DEFAULT_BATCH_SIZE):
         if batch_size < 1:
@@ -468,37 +509,89 @@ class SlackIngestor(ChangeBasedIngestor):
         """Map one assembled thread to a substrate ``ContentArtifact`` (shared)."""
         return thread_to_artifact(thread)
 
+    def _read_container_messages(
+        self, org_id: str, channel_id: str
+    ) -> List[ConversationMessage]:
+        """Read a channel's CURRENT messages as neutral messages (T3 resolver input).
+
+        The re-extraction the freshness refresh worker needs: read the channel's live
+        messages (offline fixture or live Web API) and adapt each to the neutral
+        :class:`ConversationMessage` shape, so :func:`resolve_conversation_thread` can
+        re-assemble and re-render the WHOLE thread through the same shared path used at
+        ingest. A deleted message is simply absent from this read, so a thread re-read
+        after a deletion naturally excludes it.
+        """
+        channel = {"id": channel_id, "name": self._channel_name(org_id, channel_id)}
+        messages: List[ConversationMessage] = []
+        for msg in self._raw_messages(org_id, channel):
+            if _is_deleted_message(msg):
+                continue
+            record = {
+                "channel_id": channel_id,
+                "channel_name": channel["name"],
+                "ts": msg.get("ts", ""),
+                "thread_ts": msg.get("thread_ts"),
+                "reply_count": msg.get("reply_count", 0),
+                "user": msg.get("user"),
+                "text": msg.get("text", ""),
+            }
+            messages.append(self._to_conversation_message(record))
+        return messages
+
+    def _channel_name(self, org_id: str, channel_id: str) -> str:
+        """Best-effort human channel name for provenance (never blocks a refresh)."""
+        try:
+            for c in self._raw_channels(org_id):
+                if str(c.get("id")) == str(channel_id):
+                    return str(c.get("name", "") or "")
+        except Exception:  # noqa: BLE001 — a name lookup must never fail a refresh
+            return ""
+        return ""
+
     def ingest_deep_content(
         self,
         org_id: str,
         records: List[Dict[str, Any]],
         *,
         ingest_fn: Optional[Callable[[str, List[Any]], Any]] = None,
+        freshness_fn: Optional[Callable[[dict], Any]] = None,
     ) -> SlackDeepContentResult:
-        """Hand a batch's conversation content to the retrieval substrate (T1).
+        """Hand a batch's conversation content to the substrate + freshness (T1/T3).
 
-        The depth path that rides beside the unchanged reach signal path: it
-        adapts the batch's records to neutral messages, scope-checks them against
-        the P5 channel selection (AC2), assembles the in-scope messages into
-        threads/windows, and hands each as a ``conversation`` ``ContentArtifact`` to
-        ``retrieval.ingest_content`` (AC1) — all via the shared conversation model.
-        The substrate owns chunking/embedding/indexing — this method never writes
-        vectors.
+        The depth path that rides beside the unchanged reach signal path: it adapts
+        the batch's records to neutral messages (carrying each record's
+        ``change_kind``), scope-checks them against the P5 channel selection (AC2),
+        and routes them via the shared conversation model:
 
-        Called per fully-processed delta batch (so it is naturally incremental and
-        rides the existing ``(org, 'slack')`` checkpoint — no new checkpointing).
-        ``ingest_fn`` is injectable for tests; it defaults to the real
-        ``ingest_content``. Raises :class:`SlackDeepContentError` when the substrate
-        reports any failed artifact (at-least-once; idempotent replace by artifact id).
+          * newly-created threads present in the batch are handed directly to
+            ``retrieval.ingest_content`` as ``conversation`` artifacts (AC1); and
+          * edited messages / deletions / replies to pre-existing threads are wired
+            into R18-B2 freshness at the THREAD level — an edit re-chunks the whole
+            thread, a deletion removes its content (R18-A4 / AT-596, T3, AC3).
+
+        The substrate owns chunking/embedding/indexing and the async refresh — this
+        method never writes vectors. Called per fully-processed delta batch, so it is
+        naturally incremental and rides the existing ``(org, 'slack')`` checkpoint —
+        no new checkpointing (AC4). ``ingest_fn`` / ``freshness_fn`` are injectable
+        for tests (defaulting to ``ingest_content`` / ``on_artifact_changed``). Raises
+        :class:`SlackDeepContentError` when the create hand-off reports a failed
+        artifact (at-least-once; idempotent replace by artifact id).
         """
-        messages = [self._to_conversation_message(r) for r in records]
-        return ingest_conversation_content(
+        changes = [
+            ConversationChange(
+                self._to_conversation_message(r),
+                normalise_change_kind(r.get("change_kind")),
+            )
+            for r in records
+        ]
+        return ingest_conversation_changes(
             org_id,
             RETRIEVAL_SOURCE_SYSTEM,
-            messages,
+            changes,
             scope_container_ids=self._selected_scope_channel_ids(org_id),
             window_seconds=THREAD_WINDOW_SECONDS,
             ingest_fn=ingest_fn,
+            freshness_fn=freshness_fn,
         )
 
     def _messages_since(
@@ -539,10 +632,19 @@ class SlackIngestor(ChangeBasedIngestor):
         reference (AC5).
         """
         ts = msg.get("ts", "")
-        # An edited message is an update to an artifact we may already have seen;
-        # everything else newly appearing is a creation. (Pure metadata — no
-        # content inspection.)
-        change_kind = ChangeKind.UPDATED if msg.get("edited") else ChangeKind.CREATED
+        # Deletion first: Slack marks a removed message with a ``message_deleted`` /
+        # ``tombstone`` subtype (or a truthy ``deleted``). History polling does not
+        # reliably surface these (``reports_deletes = False``), but when one IS
+        # produced (e.g. a future Events-API tombstone) it must propagate as a delete
+        # so the thread's content leaves retrieval (R18-A4 / AT-596, T3). An edited
+        # message is an update to an artifact we may already have seen; everything
+        # else newly appearing is a creation. (Pure metadata — no content inspection.)
+        if _is_deleted_message(msg):
+            change_kind = ChangeKind.DELETED
+        elif msg.get("edited"):
+            change_kind = ChangeKind.UPDATED
+        else:
+            change_kind = ChangeKind.CREATED
         text = msg.get("text", "")
         return {
             "artifact_id": f"{channel['id']}:{ts}",
@@ -602,6 +704,27 @@ class SlackIngestor(ChangeBasedIngestor):
                 "to run without credentials."
             )
         return SlackClient(token.strip())
+
+
+def resolve_thread_content(org_id: str, source_artifact: str) -> Any:
+    """Re-extract one Slack thread's CURRENT content for the refresh worker (T3).
+
+    The content-resolver the R18-B2 refresh worker calls for a stale/queued Slack
+    thread (``source_artifact = "{channel}:{thread_key}"``): re-read the channel's
+    live messages and re-assemble the WHOLE thread via the shared conversation model.
+    Returns the thread's ``ContentArtifact`` (empty content — chunks removed — when
+    the thread no longer exists), or ``None`` when the channel cannot be read right
+    now (the artifact stays queued for retry). Registered under ``'slack'`` by
+    :func:`app.retrieval.default_resolvers.register_default_content_resolvers`.
+    """
+    ingestor = SlackIngestor()
+    return resolve_conversation_thread(
+        org_id,
+        source_artifact,
+        RETRIEVAL_SOURCE_SYSTEM,
+        ingestor._read_container_messages,
+        window_seconds=THREAD_WINDOW_SECONDS,
+    )
 
 
 def list_selectable_channels(org_id: str) -> List[Dict[str, str]]:

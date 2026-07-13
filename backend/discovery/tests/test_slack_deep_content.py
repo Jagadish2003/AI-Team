@@ -324,7 +324,9 @@ def test_deep_path_rides_shared_checkpoint_and_does_not_re_hand(monkeypatch):
         # Reach signal is untouched: records still carry their signals block.
         for r in batch.records:
             assert "signals" in r
-        ing.ingest_deep_content(ORG, batch.records, ingest_fn=sub)
+        # freshness_fn is a no-op here so the offline suite never touches a DB; the
+        # edit/delete propagation itself is covered in test_slack_deep_content_freshness.
+        ing.ingest_deep_content(ORG, batch.records, ingest_fn=sub, freshness_fn=lambda e: None)
 
     r1 = change_runner.ingest_with_checkpoint(
         ing, ORG, process_batch=lambda b: process(b, first),
