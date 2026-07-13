@@ -65,6 +65,15 @@ def _seed_opp(run_id):
     from app import db
 
     db.run_kv_set("opps", run_id, [dict(_OPP)])
+    # The run started via /api/runs/start already persisted roadmap /
+    # executive_report / llm_enrichment from the real offline pipeline. Clear
+    # them so the roadmap, executive-report, and enrichment endpoints rebuild
+    # deterministically from our single injected opportunity (the build-from-opps
+    # and enrichment-fallback code paths), instead of serving the pipeline's own
+    # (non-lending) findings.
+    db.run_kv_set("roadmap", run_id, None)
+    db.run_kv_set("executive_report", run_id, None)
+    db.run_kv_set("llm_enrichment", run_id, None)
 
 
 def _activate_lending(run_id):
