@@ -157,7 +157,7 @@ class TestCommercialLendingTemplateLaunch:
         data = resp.json()
         assert data["packId"] == "ncino"
         assert data["focusId"] == "approvals_compliance"
-        assert data["systemCount"] == 4  # the template's 4 suggested systems
+        assert data["systemCount"] == 6  # the template's suggested systems
 
     def test_untouched_template_settings_visible_in_run_record(self, client):
         """AC2: the run record shows the template and its resolved settings."""
@@ -193,7 +193,9 @@ class TestCommercialLendingTemplateLaunch:
             # Edit the pack away from the lending default and change a role.
             "pack_id": "service_cloud",
             "focus_id": "approvals_compliance",  # unchanged (matches default)
-            "selected_system_ids": ["salesforce_ncino", "jira", "servicenow", "confluence"],
+            "selected_system_ids": [
+                "salesforce_ncino", "jira", "servicenow", "slack", "teams", "confluence"
+            ],
             "weightings": {
                 "jira": {"systemId": "jira", "role": "documentation_system", "confirmed": True},
             },

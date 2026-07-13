@@ -16,6 +16,8 @@ import {
   SystemRole,
   FocusId,
   IndustryId,
+  IndustryListItem,
+  TemplateListItem,
 } from '../types/stack_builder';
 import { useSetupState } from '../components/stack_builder';
 import type { LendingGuideLaunchState } from '../components/stack_builder';
@@ -66,25 +68,16 @@ const FOCUS_LABELS: Record<string, string> = {
   enterprise_wide: 'Enterprise-wide discovery',
 };
 
-const INDUSTRY_LABELS: Record<string, string> = {
-  financial_services: 'Financial services',
-  public_sector: 'Public sector',
-  logistics_supply_chain: 'Logistics & supply chain',
-  retail_commerce: 'Retail & commerce',
-  healthcare: 'Healthcare',
-  energy_utilities: 'Energy & utilities',
-  manufacturing: 'Manufacturing',
-  technology: 'Technology',
-};
-
-const TEMPLATE_LABELS: Record<string, string> = {
-  commercial_lending: 'Commercial lending',
-  service_operations: 'Service operations',
-  revenue_operations: 'Revenue operations',
-};
-
 function getSystemName(id: string) {
   return SYSTEM_META[id]?.name ?? id;
+}
+
+function packLabel(packId: string) {
+  if (packId === 'ncino') return 'nCino lending';
+  return packId
+    .split(/[_-]+/)
+    .map(part => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(' ');
 }
 
 function calcQualityRows(
@@ -260,12 +253,18 @@ function SummaryRow({
 
 interface Props {
   setupState: ReturnType<typeof useSetupState>;
+  industries: IndustryListItem[];
+  templates: TemplateListItem[];
+  activePackId: string;
   onLaunch: () => void;
   launchState?: LendingGuideLaunchState;
 }
 
 export default function DiscoveryPlanPage({
   setupState,
+  industries,
+  templates,
+  activePackId,
   onLaunch,
   launchState = 'ready',
 }: Props) {
@@ -297,6 +296,19 @@ export default function DiscoveryPlanPage({
   );
 
   const confidenceLabel = confidence.level.charAt(0).toUpperCase() + confidence.level.slice(1);
+  const industryLabel = state.industryId
+    ? industries.find(item => item.industry_id === state.industryId)?.label
+      ?? state.industryId
+    : '-';
+  const templateLabel = state.templateId
+    ? templates.find(item => item.template_id === state.templateId)?.label
+      ?? state.templateId
+    : '-';
+  const packOptions = Array.from(new Set([
+    activePackId,
+    ...industries.flatMap(item => item.pack_hints),
+    ...templates.map(item => item.pack_id),
+  ].filter(Boolean)));
 
   return (
     <div className="space-y-5">
@@ -314,12 +326,28 @@ export default function DiscoveryPlanPage({
             />
             <SummaryRow
               label="Industry"
-              value={state.industryId ? INDUSTRY_LABELS[state.industryId] : '-'}
+              value={industryLabel}
             />
             <SummaryRow
               label="Template"
-              value={state.templateId ? TEMPLATE_LABELS[state.templateId] : '-'}
+              value={templateLabel}
             />
+            <div className="flex items-center justify-between gap-4 border-b border-border/70 py-2">
+              <label htmlFor="analysis-pack" className="text-xs text-muted">
+                Analysis pack
+              </label>
+              <select
+                id="analysis-pack"
+                aria-label="Analysis pack"
+                value={activePackId}
+                onChange={event => setupState.setPack(event.target.value)}
+                className="max-w-[220px] rounded-md border border-border bg-panel px-2 py-1 text-right text-xs font-medium text-text"
+              >
+                {packOptions.map(packId => (
+                  <option key={packId} value={packId}>{packLabel(packId)}</option>
+                ))}
+              </select>
+            </div>
             <SummaryRow
               label="Total systems"
               value={String(state.selectedSystemIds.length)}
@@ -405,7 +433,7 @@ export default function DiscoveryPlanPage({
             <h2 className="text-sm font-semibold text-text">Ready to discover</h2>
             <p className="mt-1 text-sm leading-relaxed text-muted">
               {state.selectedSystemIds.length} system{state.selectedSystemIds.length !== 1 ? 's' : ''}
-              {state.industryId ? ` / ${INDUSTRY_LABELS[state.industryId]}` : ''}
+              {state.industryId ? ` / ${industryLabel}` : ''}
               {state.focusId ? ` / ${FOCUS_LABELS[state.focusId]} focus` : ''}
               {' / '}Confidence: {confidenceLabel}
             </p>

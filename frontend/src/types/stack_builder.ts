@@ -234,6 +234,8 @@ export interface SetupState {
   focusId: FocusId | null;
   industryId: IndustryId | null;
   templateId: TemplateId | null;
+  /** Explicit editable pack choice; null lets registry/catalog defaults resolve it. */
+  packId?: string | null;
   templatePreselectedIds: string[];
   selectedSystemIds: string[];
   selectedSalesforceClouds: string[];

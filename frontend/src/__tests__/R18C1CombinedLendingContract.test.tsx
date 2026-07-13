@@ -14,6 +14,7 @@ import LendingFirstRunGuide, {
 import { useSetupState } from '../components/stack_builder';
 import TemplateRunNotice from '../components/discovery_run/TemplateRunNotice';
 import DiscoveryFocusPage from '../pages/DiscoveryFocusPage';
+import DiscoveryPlanPage from '../pages/DiscoveryPlanPage';
 import SourceWeightingPage from '../pages/SourceWeightingPage';
 import { buildStackBuilderLaunchPayload } from '../pages/StackBuilderPage';
 import type { DiscoveryRun } from '../types/discoveryRun';
@@ -26,16 +27,20 @@ const LENDING: TemplateListItem = {
   template_id: 'commercial_lending',
   label: 'Commercial lending from registry',
   description: 'Registry-owned lending configuration used by this contract.',
-  suggested_systems: ['salesforce_ncino', 'jira', 'servicenow', 'confluence'],
+  suggested_systems: [
+    'salesforce_ncino', 'jira', 'servicenow', 'slack', 'teams', 'confluence',
+  ],
   suggested_roles: {
     salesforce_ncino: 'system_of_record',
     jira: 'workflow_system',
     servicenow: 'workflow_system',
+    slack: 'operational_signal_source',
+    teams: 'operational_signal_source',
     confluence: 'documentation_system',
   },
   focus_defaults: {
     focus_id: 'approvals_compliance',
-    emphasis: ['approvals', 'compliance_risk'],
+    emphasis: ['approvals', 'compliance_risk', 'backlog_work_queues'],
   },
   pack_id: 'ncino',
   detector_emphasis: [
@@ -126,6 +131,33 @@ function ContractHarness({
       </button>
 
       <output data-testid="launch-payload">{JSON.stringify(payload)}</output>
+    </div>
+  );
+}
+
+function PlanHarness() {
+  const setupState = useSetupState();
+  const activePackId = setupState.state.packId ?? LENDING.pack_id;
+  return (
+    <div>
+      <button
+        type="button"
+        onClick={() => {
+          setupState.applyTemplate(LENDING);
+          setupState.setIndustry('financial_services');
+          setupState.goTo(4);
+        }}
+      >
+        Load registry plan
+      </button>
+      <DiscoveryPlanPage
+        setupState={setupState}
+        industries={[FINANCIAL_SERVICES]}
+        templates={[LENDING, INSURANCE_FIXTURE]}
+        activePackId={activePackId}
+        onLaunch={vi.fn()}
+      />
+      <output data-testid="selected-pack">{setupState.state.packId ?? ''}</output>
     </div>
   );
 }
@@ -242,5 +274,19 @@ describe('R18-C1 T6 - combined registry and first-run guide contract', () => {
     expect(screen.getByText('Using the Commercial Lending template')).toBeInTheDocument();
     expect(screen.getByText(/Discovery is running with 3 configured systems/)).toBeInTheDocument();
     expect(screen.getByText(/Focus Id, Selected System Ids, Roles/)).toBeInTheDocument();
+  });
+
+  it('uses registry labels throughout the plan and keeps the template pack editable', () => {
+    render(<PlanHarness />);
+    fireEvent.click(screen.getByRole('button', { name: 'Load registry plan' }));
+
+    expect(screen.getByText(FINANCIAL_SERVICES.label)).toBeInTheDocument();
+    expect(screen.getByText(LENDING.label)).toBeInTheDocument();
+
+    const packSelect = screen.getByRole('combobox', { name: 'Analysis pack' });
+    expect(packSelect).toHaveValue('ncino');
+    fireEvent.change(packSelect, { target: { value: 'service_cloud' } });
+    expect(packSelect).toHaveValue('service_cloud');
+    expect(screen.getByTestId('selected-pack')).toHaveTextContent('service_cloud');
   });
 });

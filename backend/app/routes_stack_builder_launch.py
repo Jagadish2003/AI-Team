@@ -162,6 +162,7 @@ def register_stack_builder_launch_routes(app: FastAPI) -> None:
         eff_pack = effective["pack_id"]
         eff_focus = effective["focus_id"]
         eff_systems = effective["selected_system_ids"]
+        eff_roles = effective["roles"]
 
         if not eff_systems:
             raise HTTPException(
@@ -180,6 +181,27 @@ def register_stack_builder_launch_routes(app: FastAPI) -> None:
         now = datetime.now(timezone.utc).isoformat()
         org_id = get_current_org_id()
 
+        # Build the exact weighting map the discovery engine will read. An
+        # untouched template request may omit weightings entirely, so seed its
+        # configured roles here instead of persisting an empty map (which would
+        # make weighting_context.load_for_run fall back to neutral behavior).
+        # Submitted values still win and systems removed by the user are omitted.
+        effective_weightings: Dict[str, Any] = {}
+        for system_id in eff_systems:
+            submitted = body.weightings.get(system_id)
+            weighting = dict(submitted) if isinstance(submitted, dict) else {}
+            role = eff_roles.get(system_id)
+            if role and not weighting.get("role"):
+                weighting["role"] = role
+            weighting.setdefault("systemId", system_id)
+            weighting.setdefault(
+                "priority",
+                "primary" if role == "system_of_record" else "secondary",
+            )
+            weighting.setdefault("workflowFocus", [])
+            weighting.setdefault("confirmed", False)
+            effective_weightings[system_id] = weighting
+
         # Persist run record. Template provenance (which template was selected,
         # which fields the user edited vs. the template defaults, and whether the
         # template was launched untouched) lives on the run so analysts can see
@@ -195,6 +217,7 @@ def register_stack_builder_launch_routes(app: FastAPI) -> None:
             "industryId": body.industry_id,
             "templateId": body.template_id,
             "selectedSystemIds": eff_systems,
+            "weightings": effective_weightings,
             "systemCount": len(eff_systems),
             "source": "stack_builder",
             "templateProvenance": provenance,
@@ -223,7 +246,7 @@ def register_stack_builder_launch_routes(app: FastAPI) -> None:
             "template_id":         body.template_id,
             "selected_system_ids": eff_systems,
             "pack_id":             eff_pack,
-            "weightings":          body.weightings,
+            "weightings":          effective_weightings,
             "template_provenance": provenance,
         })
 

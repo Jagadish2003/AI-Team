@@ -99,19 +99,28 @@ TEMPLATE_REGISTRY: Dict[str, TemplateDefinition] = {
         label="Commercial lending",
         description=(
             "Commercial lending starting point: nCino/Salesforce as the system "
-            "of record, workflow and documentation sources for corroboration, "
+            "of record, workflow, communication, and documentation sources for corroboration, "
             "the lending pack, and approvals & compliance focus."
         ),
-        suggested_systems=["salesforce_ncino", "jira", "servicenow", "confluence"],
+        suggested_systems=[
+            "salesforce_ncino",
+            "jira",
+            "servicenow",
+            "slack",
+            "teams",
+            "confluence",
+        ],
         suggested_roles={
             "salesforce_ncino": "system_of_record",
             "jira": "workflow_system",
             "servicenow": "workflow_system",
+            "slack": "operational_signal_source",
+            "teams": "operational_signal_source",
             "confluence": "documentation_system",
         },
         focus_defaults=FocusDefaults(
             focus_id="approvals_compliance",
-            emphasis=["approvals", "compliance_risk"],
+            emphasis=["approvals", "compliance_risk", "backlog_work_queues"],
         ),
         # nCino Lending pack (pack_config.PACK_REGISTRY["ncino"]).
         pack_id="ncino",
@@ -237,9 +246,11 @@ def template_defaults_snapshot(defn: TemplateDefinition) -> Dict[str, Any]:
         "template_id": defn.template_id,
         "pack_id": defn.pack_id,
         "focus_id": defn.focus_defaults.focus_id,
+        "focus_emphasis": list(defn.focus_defaults.emphasis),
         "suggested_systems": list(defn.suggested_systems),
         "suggested_roles": dict(defn.suggested_roles),
         "detector_emphasis": list(defn.detector_emphasis),
+        "terminology": dict(defn.terminology),
     }
 
 

@@ -216,6 +216,7 @@ const INITIAL: SetupState = {
   focusId: null,
   industryId: null,
   templateId: null,
+  packId: null,
   selectedSystemIds: [],
   selectedSalesforceClouds: [],
   weightings: {},
@@ -232,6 +233,10 @@ export function useSetupState(catalog?: WorkspaceCatalogResponse | null) {
 
   const setIndustry = useCallback((id: IndustryId | null) => {
     setState(s => ({ ...s, industryId: id }));
+  }, []);
+
+  const setPack = useCallback((packId: string | null) => {
+    setState(s => ({ ...s, packId }));
   }, []);
 
   const setTemplate = useCallback((id: TemplateId | null, preselected: string[] = []) => {
@@ -271,10 +276,7 @@ export function useSetupState(catalog?: WorkspaceCatalogResponse | null) {
   //                defaults, and `confirmed` stays false so Step 3 still asks);
   //   * focus    → the discovery focus is set from focus_defaults.focus_id when
   //                it is a known focus tile (user can pick another tile).
-  // Pack selection is NOT forced here: it resolves from the selected Salesforce
-  // cloud / industry at launch, and the backend also derives the template's pack
-  // for an untouched launch — so pre-selecting the template's systems already
-  // steers the pack while leaving it editable.
+  //   * pack     → selected from template.pack_id and editable on Step 4.
   //
   // Passing `null` clears the template and removes only the systems this template
   // added (systems the user selected by hand are untouched).
@@ -294,6 +296,7 @@ export function useSetupState(catalog?: WorkspaceCatalogResponse | null) {
         return {
           ...s,
           templateId: null,
+          packId: null,
           templatePreselectedIds: [],
           selectedSystemIds: keptSystemIds,
           weightings,
@@ -314,6 +317,7 @@ export function useSetupState(catalog?: WorkspaceCatalogResponse | null) {
       return {
         ...s,
         templateId: template.template_id,
+        packId: template.pack_id,
         focusId: isFocusId(suggestedFocus) ? suggestedFocus : s.focusId,
         templatePreselectedIds: preselected,
         selectedSystemIds,
@@ -489,6 +493,7 @@ export function useSetupState(catalog?: WorkspaceCatalogResponse | null) {
     state,
     setFocus,
     setIndustry,
+    setPack,
     setTemplate,
     applyTemplate,
     applyIndustryDefaults,

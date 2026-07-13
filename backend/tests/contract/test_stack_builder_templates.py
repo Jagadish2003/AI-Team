@@ -248,6 +248,8 @@ def test_resolve_untouched_template_fills_lending_defaults():
         "salesforce_ncino",
         "jira",
         "servicenow",
+        "slack",
+        "teams",
         "confluence",
     ]
     assert r["provenance"]["untouched"] is True
@@ -260,7 +262,9 @@ def test_resolve_records_only_the_edited_fields():
         "commercial_lending",
         pack_id="service_cloud",              # edited
         focus_id="approvals_compliance",      # unchanged
-        selected_system_ids=["salesforce_ncino", "jira", "servicenow", "confluence"],
+        selected_system_ids=[
+            "salesforce_ncino", "jira", "servicenow", "slack", "teams", "confluence"
+        ],
         weightings={"jira": {"role": "documentation_system"}},  # role edited
     )
     assert set(r["provenance"]["edited_fields"]) == {"pack_id", "roles"}

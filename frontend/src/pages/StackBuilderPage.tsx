@@ -44,17 +44,6 @@ import DiscoveryPlanPage from './DiscoveryPlanPage';
 
 // ── Static Definitions ───────────────────────────────────────────────────────
 
-export const INDUSTRY_PACK_HINTS: Record<string, string[]> = {
-  financial_services: ['ncino', 'service_cloud'],
-  public_sector: ['service_cloud'],
-  logistics_supply_chain: ['service_cloud'],
-  retail_commerce: ['service_cloud'],
-  healthcare: ['service_cloud'],
-  energy_utilities: ['service_cloud'],
-  manufacturing: ['service_cloud'],
-  technology: ['service_cloud'],
-};
-
 // R16-C1 T5 — Truthfulness check.
 // Step 3's "weight evidence correctly" promise is intentionally retained:
 // after R16-C1 T1–T4 the discovery engine now reads the per-system role and
@@ -90,23 +79,6 @@ const FOCUS_LABELS: Record<string, string> = {
   back_office_productivity: 'Back-office productivity',
   engineering_change: 'Engineering / change',
   enterprise_wide: 'Enterprise-wide discovery',
-};
-
-const INDUSTRY_LABELS: Record<string, string> = {
-  financial_services: 'Financial services',
-  public_sector: 'Public sector',
-  logistics_supply_chain: 'Logistics & supply chain',
-  retail_commerce: 'Retail & commerce',
-  healthcare: 'Healthcare',
-  energy_utilities: 'Energy & utilities',
-  manufacturing: 'Manufacturing',
-  technology: 'Technology',
-};
-
-const TEMPLATE_LABELS: Record<string, string> = {
-  commercial_lending: 'Commercial lending',
-  service_operations: 'Service operations',
-  revenue_operations: 'Revenue operations',
 };
 
 const SALESFORCE_CLOUD_IDS = new Set([
@@ -146,15 +118,21 @@ function getCatalogSalesforceProducts(catalog: WorkspaceCatalogResponse | null):
   return Array.isArray(salesforce?.products) ? salesforce.products : [];
 }
 
-function resolvePackId(
+export function resolvePackId(
   state: ReturnType<typeof useSetupState>['state'],
   catalog: WorkspaceCatalogResponse | null,
+  industries: IndustryListItem[],
+  templates: TemplateListItem[],
 ): string {
-  const selectedCloudFromCatalog = getCatalogSalesforceProducts(catalog)
-    .find(productId => CLOUD_PACK_REGISTRY[productId]);
+  // An explicit Step 4 choice is authoritative and is what makes template and
+  // industry pack defaults editable before launch.
+  if (state.packId) return state.packId;
 
-  if (selectedCloudFromCatalog) {
-    return CLOUD_PACK_REGISTRY[selectedCloudFromCatalog];
+  const selectedTemplate = templates.find(
+    template => template.template_id === state.templateId,
+  );
+  if (selectedTemplate?.pack_id) {
+    return selectedTemplate.pack_id;
   }
 
   const selectedCloudFromSystems = state.selectedSystemIds
@@ -164,6 +142,13 @@ function resolvePackId(
     return CLOUD_PACK_REGISTRY[selectedCloudFromSystems];
   }
 
+  const selectedCloudFromCatalog = getCatalogSalesforceProducts(catalog)
+    .find(productId => CLOUD_PACK_REGISTRY[productId]);
+
+  if (selectedCloudFromCatalog) {
+    return CLOUD_PACK_REGISTRY[selectedCloudFromCatalog];
+  }
+
   const selectedCloudFromState = state.selectedSalesforceClouds
     .find(productId => CLOUD_PACK_REGISTRY[productId]);
 
@@ -171,9 +156,12 @@ function resolvePackId(
     return CLOUD_PACK_REGISTRY[selectedCloudFromState];
   }
 
-  // Priority 2: Use industry hints if set
+  // Industry pack hints come from the registry response. There is deliberately
+  // no frontend mirror: relabeling/adding an industry requires no UI code edit.
   if (state.industryId) {
-    const hints = INDUSTRY_PACK_HINTS[state.industryId];
+    const hints = industries.find(
+      industry => industry.industry_id === state.industryId,
+    )?.pack_hints;
     if (hints && hints.length > 0) return hints[0];
   }
 
@@ -350,17 +338,14 @@ function StackBuilderSidePanel({
   const confirmedCount = state.selectedSystemIds.filter(id => state.weightings[id]?.confirmed).length;
   const activeStep = setupState.steps.find(step => step.number === state.currentStep);
 
-  // Registry-driven labels: prefer the backend label so a relabelled industry /
-  // template reads correctly here with no code change; fall back to the static
-  // label map, then the raw id.
+  // Registry-driven labels: a relabelled industry/template reads correctly on
+  // every summary surface with no frontend code change.
   const industryLabel = state.industryId
     ? industries.find(i => i.industry_id === state.industryId)?.label
-        ?? INDUSTRY_LABELS[state.industryId]
         ?? state.industryId
     : 'Optional';
   const templateLabel = state.templateId
     ? templates.find(t => t.template_id === state.templateId)?.label
-        ?? TEMPLATE_LABELS[state.templateId]
         ?? state.templateId
     : 'Optional';
 
@@ -538,7 +523,7 @@ export default function StackBuilderPage({
   const handleLaunch = useCallback(async () => {
     if (launchState === 'launching') return;
     setLaunchState('launching');
-    const packId = resolvePackId(state, catalog);
+    const packId = resolvePackId(state, catalog, industries, templates);
     console.log(`packId:`, packId);
     const systems = normaliseSystems(state.selectedSystemIds);
     const headers = buildAuthHeaders(token);
@@ -582,7 +567,7 @@ export default function StackBuilderPage({
     setRunId(runId);
     navigate(`/discovery-run?runId=${runId}`);
 
-  }, [state, catalog, orgId, apiBase, clearSession, navigate, setRunId, token, launchState]);
+  }, [state, catalog, industries, templates, orgId, apiBase, clearSession, navigate, setRunId, token, launchState]);
 
   // Viewers cannot configure or launch discovery (analyst+ only). The nav hides
   // this destination for them, but a viewer can still reach it via a direct URL
@@ -633,7 +618,7 @@ export default function StackBuilderPage({
               <LendingFirstRunGuide
                 template={selectedTemplate}
                 state={state}
-                packId={resolvePackId(state, catalog)}
+                packId={resolvePackId(state, catalog, industries, templates)}
                 launchState={
                   launchState === 'setup' && state.currentStep === 4
                     ? 'ready'
@@ -681,6 +666,9 @@ export default function StackBuilderPage({
           {state.currentStep === 4 && (
             <DiscoveryPlanPage
               setupState={setupState}
+              industries={industries}
+              templates={templates}
+              activePackId={resolvePackId(state, catalog, industries, templates)}
               onLaunch={handleLaunch}
               launchState={launchState}
             />

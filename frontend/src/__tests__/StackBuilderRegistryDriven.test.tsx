@@ -40,11 +40,15 @@ const LENDING: TemplateListItem = {
   template_id: 'commercial_lending',
   label: 'Commercial lending',
   description: 'Commercial lending starting point.',
-  suggested_systems: ['salesforce_ncino', 'jira', 'servicenow', 'confluence'],
+  suggested_systems: [
+    'salesforce_ncino', 'jira', 'servicenow', 'slack', 'teams', 'confluence',
+  ],
   suggested_roles: {
     salesforce_ncino: 'system_of_record',
     jira: 'workflow_system',
     servicenow: 'workflow_system',
+    slack: 'operational_signal_source',
+    teams: 'operational_signal_source',
     confluence: 'documentation_system',
   },
   focus_defaults: { focus_id: 'approvals_compliance', emphasis: ['approvals', 'compliance_risk'] },
@@ -166,6 +170,8 @@ describe('R18-C1 T3 — Commercial Lending pre-populates editable defaults', () 
     expect(systems).toContain('salesforce_ncino');
     expect(systems).toContain('jira');
     expect(systems).toContain('servicenow');
+    expect(systems).toContain('slack');
+    expect(systems).toContain('teams');
     expect(systems).toContain('confluence');
 
     // Role pre-filled from the template's suggested_roles…

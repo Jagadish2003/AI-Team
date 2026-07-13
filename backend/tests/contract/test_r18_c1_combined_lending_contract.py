@@ -115,17 +115,21 @@ def test_registry_contract_exposes_lending_bundle_and_config_only_fixtures(
         "salesforce_ncino",
         "jira",
         "servicenow",
+        "slack",
+        "teams",
         "confluence",
     ]
     assert lending["suggested_roles"] == {
         "salesforce_ncino": "system_of_record",
         "jira": "workflow_system",
         "servicenow": "workflow_system",
+        "slack": "operational_signal_source",
+        "teams": "operational_signal_source",
         "confluence": "documentation_system",
     }
     assert lending["focus_defaults"] == {
         "focus_id": "approvals_compliance",
-        "emphasis": ["approvals", "compliance_risk"],
+        "emphasis": ["approvals", "compliance_risk", "backlog_work_queues"],
     }
     assert lending["pack_id"] == "ncino"
     assert set(lending["detector_emphasis"]) == {
@@ -181,6 +185,8 @@ def test_lending_defaults_are_editable_and_run_provenance_preserves_effective_st
         "salesforce_ncino",
         "jira",
         "servicenow",
+        "slack",
+        "teams",
         "confluence",
     ]
     assert untouched["templateProvenance"]["untouched"] is True
@@ -188,6 +194,19 @@ def test_lending_defaults_are_editable_and_run_provenance_preserves_effective_st
     assert "COVENANT_TRACKING_GAP" in untouched["templateProvenance"][
         "template_defaults"
     ]["detector_emphasis"]
+    assert untouched["templateProvenance"]["template_defaults"][
+        "focus_emphasis"
+    ] == ["approvals", "compliance_risk", "backlog_work_queues"]
+    assert untouched["templateProvenance"]["template_defaults"]["terminology"][
+        "customer"
+    ] == "borrower"
+
+    untouched_context = db.run_kv_get("setup_context", untouched["id"])
+    assert untouched_context["weightings"]["salesforce_ncino"]["role"] == (
+        "system_of_record"
+    )
+    assert untouched_context["weightings"]["jira"]["role"] == "workflow_system"
+    assert untouched["weightings"] == untouched_context["weightings"]
 
     edited_body = {
         "org_id": "r18_c1_t6",
@@ -230,7 +249,14 @@ def test_lending_defaults_are_editable_and_run_provenance_preserves_effective_st
     setup_context = db.run_kv_get("setup_context", edited["id"])
     assert setup_context["template_id"] == "commercial_lending"
     assert setup_context["selected_system_ids"] == edited_body["selected_system_ids"]
-    assert setup_context["weightings"] == edited_body["weightings"]
+    assert setup_context["weightings"]["salesforce_ncino"] == edited_body[
+        "weightings"
+    ]["salesforce_ncino"]
+    assert setup_context["weightings"]["slack"] == edited_body["weightings"]["slack"]
+    assert setup_context["weightings"]["confluence"]["role"] == (
+        "documentation_system"
+    )
+    assert edited["weightings"] == setup_context["weightings"]
     assert setup_context["template_provenance"] == edited["templateProvenance"]
 
 
@@ -288,7 +314,11 @@ def test_stack_builder_runtime_has_no_hardcoded_industry_or_template_arrays():
     """AC10 regression guard: runtime UI must consume registry responses."""
     repo_root = Path(__file__).resolve().parents[3]
     frontend_src = repo_root / "frontend" / "src"
-    forbidden = re.compile(r"\b(?:const|let|var)\s+(?:INDUSTRIES|TEMPLATES)\b")
+    forbidden = re.compile(
+        r"\b(?:const|let|var)\s+(?:"
+        r"INDUSTRIES|TEMPLATES|INDUSTRY_PACK_HINTS|"
+        r"INDUSTRY_LABELS|TEMPLATE_LABELS)\b"
+    )
 
     offenders = []
     for source in frontend_src.rglob("*.ts*"):
