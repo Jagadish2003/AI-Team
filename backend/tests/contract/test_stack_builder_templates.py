@@ -30,9 +30,11 @@ from discovery.packs.template_registry import (
     get_template,
     list_templates,
     register_template,
+    resolve_launch_config,
     unregister_template,
 )
 from discovery.packs.pack_config import list_packs
+from discovery.lending_scorer import is_lending_detector
 
 
 # ── Test client ───────────────────────────────────────────────────────────────
@@ -215,3 +217,65 @@ def test_register_template_rejects_unknown_pack():
         register_template(bad)
     # ensure the failed registration did not leak
     assert get_template("bad_pack") is None
+
+
+# ── R18-C1 T2 — lending instance + launch resolution (unit) ───────────────────
+
+def test_lending_template_detector_emphasis_are_real_lending_detectors():
+    """The lending template emphasises exactly the ncino lending detectors."""
+    lending = get_template("commercial_lending")
+    assert lending.detector_emphasis, "lending template must declare emphasis"
+    for det in lending.detector_emphasis:
+        assert is_lending_detector(det), (
+            f"{det} is not a known lending detector (lending_scorer._LENDING_SCORES)"
+        )
+
+
+def test_lending_template_endpoint_exposes_detector_emphasis(client):
+    resp = client.get(
+        "/api/stack-builder/templates/commercial_lending", headers=_auth()
+    )
+    assert resp.status_code == 200
+    assert "COVENANT_TRACKING_GAP" in resp.json()["detector_emphasis"]
+
+
+def test_resolve_untouched_template_fills_lending_defaults():
+    """AC2: an untouched template resolves to the lending pack + focus, no edits."""
+    r = resolve_launch_config("commercial_lending")
+    assert r["effective"]["pack_id"] == "ncino"
+    assert r["effective"]["focus_id"] == "approvals_compliance"
+    assert r["effective"]["selected_system_ids"] == [
+        "salesforce_ncino",
+        "jira",
+        "servicenow",
+        "confluence",
+    ]
+    assert r["provenance"]["untouched"] is True
+    assert r["provenance"]["edited_fields"] == []
+
+
+def test_resolve_records_only_the_edited_fields():
+    """AC5: a submitted value that diverges from the default is recorded once."""
+    r = resolve_launch_config(
+        "commercial_lending",
+        pack_id="service_cloud",              # edited
+        focus_id="approvals_compliance",      # unchanged
+        selected_system_ids=["salesforce_ncino", "jira", "servicenow", "confluence"],
+        weightings={"jira": {"role": "documentation_system"}},  # role edited
+    )
+    assert set(r["provenance"]["edited_fields"]) == {"pack_id", "roles"}
+    assert r["provenance"]["untouched"] is False
+    assert r["effective"]["pack_id"] == "service_cloud"
+    assert r["effective"]["roles"]["jira"] == "documentation_system"
+
+
+def test_resolve_no_template_is_passthrough():
+    r = resolve_launch_config(None, pack_id="service_cloud", focus_id="core_operations")
+    assert r["provenance"]["applied"] is False
+    assert r["effective"]["pack_id"] == "service_cloud"
+
+
+def test_resolve_unknown_template_is_passthrough():
+    r = resolve_launch_config("nope", pack_id="service_cloud")
+    assert r["provenance"]["applied"] is False
+    assert r["effective"]["pack_id"] == "service_cloud"
