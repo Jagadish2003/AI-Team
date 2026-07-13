@@ -33,10 +33,10 @@ inside ``content_freshness_view``: R18-B2 metrics must never degrade to a
 false-healthy zero, so a store read failure is allowed to propagate and surface
 as an HTTP error (matching ``retrieval/metrics.py``).
 
-Gaps deferred to T2 (emit-at-source, never computed speculatively here):
-skipped-with-reason items are not yet emitted as a queryable telemetry event, so
-``content_freshness_view`` reads the (future) ``ingestion.artifact_skipped``
-event and reports an empty breakdown until T2 emits it at the ingestor.
+Skipped-with-reason items are read from the ``ingestion.artifact_skipped``
+telemetry event that R18-C2 T2 emits at origin in the document ingestor
+(``discovery/ingest/documents.py``); ``content_freshness_view`` groups them by
+reason. An org with no skips simply yields an empty breakdown.
 """
 from __future__ import annotations
 
