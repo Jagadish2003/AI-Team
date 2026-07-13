@@ -651,6 +651,35 @@ def count_chunks(org_id: str, embedded_only: bool = False) -> int:
     return int(row[0]) if row else 0
 
 
+def count_chunks_by_source(org_id: str) -> list[dict[str, Any]]:
+    """Return the org's indexed-content volume broken down by source system.
+
+    R18-C2 T1 (Run-Health Dashboard, content panel): a read-only aggregation of
+    the chunks already stored — assembling existing truth, not new instrumentation.
+    Org-scoped like every read. Each row reports the total chunk count and the
+    embedded (retrievable) subset for one ``source_system``, ordered by source so
+    the panel renders deterministically.
+    """
+    with closing(db.connect()) as con:
+        cur = con.cursor()
+        cur.execute(
+            "SELECT source_system, COUNT(*) AS chunk_count, "
+            "COUNT(*) FILTER (WHERE embedding IS NOT NULL) AS embedded_count "
+            "FROM retrieval_chunks WHERE org_id = %s "
+            "GROUP BY source_system ORDER BY source_system ASC",
+            (org_id,),
+        )
+        rows = cur.fetchall()
+    return [
+        {
+            "source_system": r[0],
+            "chunk_count": int(r[1]),
+            "embedded_count": int(r[2]),
+        }
+        for r in rows
+    ]
+
+
 # ---------------------------------------------------------------------------
 # Async embedding pipeline support  (T3) — reads are ALWAYS org-scoped
 # ---------------------------------------------------------------------------
