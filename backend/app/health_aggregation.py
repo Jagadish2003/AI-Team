@@ -396,12 +396,12 @@ def _redaction_count(org_id: str) -> int:
 def _skipped_breakdown(org_id: str) -> List[Dict[str, Any]]:
     """Skipped-with-reason items grouped by reason.
 
-    T2 gap-fill note: skips (size_capped / unsupported_format / encrypted /
-    budget_exceeded) are today recorded only on the ingest hand-off record and as
-    WARNING logs — there is NO org-scoped queryable telemetry event yet. Per the
-    R18-C2 design principle ("emit at source, never compute speculatively in the
-    dashboard"), this reader consumes a future ``ingestion.artifact_skipped``
-    event and returns an empty breakdown until T2 emits it at the ingestor.
+    Reads the ``ingestion.artifact_skipped`` telemetry event emitted at origin by
+    the document ingestor (R18-C2 T2 gap-fill — ``discovery/ingest/documents.py``).
+    Each event carries one skipped artifact's ``reason`` (size_capped /
+    budget_exceeded / unsupported_format / no_handler / encrypted / scanned_image);
+    this groups them into ``{reason, count}`` for the content panel. An org with
+    no skips (or a build predating the emission) simply yields an empty list.
     """
     counts: Dict[str, int] = {}
     for e in _safe_range(org_id, "ingestion.artifact_skipped"):
