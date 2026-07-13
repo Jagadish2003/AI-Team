@@ -27,11 +27,25 @@ are NOT done here:
     (``change_runner.py``, AT-381); every record this ingestor yields already
     carries ``artifact_id`` + ``change_kind`` so the runner can emit them.
 
-Per the reach/depth boundary (AC8), this ingestor reads only structured message
+Per the reach/depth boundary (AC8), the reach path reads only structured message
 *signal* — it carries message metadata (ts, author, reply/reaction counts, the
-raw text for later cross-reference marker scanning) through to the records. It
-does NOT do deep conversation-content NLP; that is the separate 1.8 deep-content
-story.
+raw text for later cross-reference marker scanning) through to the records.
+
+Deep-content path (R18-A4 / AT-594 — T1)
+----------------------------------------
+The 1.8 depth phase adds a CONTENT path BESIDE the unchanged signal path. It reads
+the conversation TEXT itself: the same change-based delta records are assembled
+into threads (or a time-bounded window of channel messages where no thread
+structure exists — threads are the conversational unit), scope-checked against the
+P5 channel selection so only explicitly selected channels are read (AC2), rendered
+as author-attributed thread text, and each thread is handed to the R18-B1 retrieval
+substrate via ``retrieval.ingest_content(org_id, artifacts)`` as a
+``ContentArtifact`` carrying an ``origin='observed'`` thread-level evidence pointer
+(AC1). The substrate owns everything after the hand-off (chunking under its
+*conversation* policy, embedding, indexing) — this connector never writes vectors.
+The reach-phase signal extraction is untouched and continues to feed scoring; the
+depth path rides the SAME per-``(org, 'slack')`` checkpoint — no new connector, no
+new checkpointing. See :meth:`SlackIngestor.ingest_deep_content`.
 
 Checkpoint shape (opaque to the runner)
 ---------------------------------------
@@ -70,8 +84,12 @@ from __future__ import annotations
 
 import json
 import logging
+from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Iterator, List, Optional
+from typing import Any, Callable, Dict, Iterator, List, Optional
+
+from app.provenance import EvidencePointer, utc_now_iso
 
 from . import get_live_connector, is_live, resolve_vault_connector
 from .base import ChangeBasedIngestor, ChangeKind, Checkpoint, DeltaBatch
@@ -84,6 +102,23 @@ from .slack_signals import (
 logger = logging.getLogger(__name__)
 
 FIXTURE_PATH = Path(__file__).parent / "fixtures" / "slack_sample.json"
+
+#: The retrieval substrate's canonical source-system tag for Slack conversation
+#: content (R18-B1 ``KNOWN_SOURCE_SYSTEMS``). Slack's connector id and its
+#: substrate source-system happen to coincide (``'slack'``) — reporting content
+#: under this exact name is also what keeps the conversation MEDIUM ceiling
+#: applicable to a retrieval hit (AC6), so it must never be relabelled.
+RETRIEVAL_SOURCE_SYSTEM = "slack"
+
+#: Slack conversation text chunks under the substrate's *conversation* policy
+#: (thread-aware splitting with overlap) — R18-A4 §1.
+CONTENT_TYPE = "conversation"
+
+#: Messages that carry no thread structure are grouped into a time-bounded window
+#: so the conversational unit is never a lone, context-free message (R18-A4 §1 /
+#: §4 "Threads are the unit of meaning"). Consecutive standalone messages within
+#: this many seconds of the window's first message form one window "thread".
+THREAD_WINDOW_SECONDS = 3600
 
 #: Opaque-checkpoint schema version, so a future shape change can be detected.
 _CHECKPOINT_VERSION = 1
@@ -155,6 +190,108 @@ def _ts_gt(ts: str, cursor: Optional[str]) -> bool:
     except (TypeError, ValueError):
         # Fall back to string compare if a ts is somehow non-numeric.
         return ts > cursor
+
+
+def _ts_float(ts: Any) -> float:
+    """Parse a Slack ``epoch.micro`` ts to a float; unparseable → -inf.
+
+    Used only to ORDER messages within a thread/window deterministically, so a
+    malformed ts sorts first rather than crashing the assembly.
+    """
+    try:
+        return float(ts)
+    except (TypeError, ValueError):
+        return float("-inf")
+
+
+def _ts_to_iso(ts: Any) -> Optional[str]:
+    """Convert a Slack ``epoch.micro`` ts string to a UTC ISO-8601 string.
+
+    Returns None for a missing/unparseable ts so callers can fall back to
+    ``utc_now_iso()`` and keep the evidence-pointer spine populated.
+    """
+    try:
+        return datetime.fromtimestamp(float(ts), tz=timezone.utc).isoformat()
+    except (TypeError, ValueError, OSError):
+        return None
+
+
+class SlackDeepContentError(RuntimeError):
+    """Raised by the deep-content hand-off when the substrate reports failures.
+
+    Propagated into the change runner so the checkpoint is NOT advanced past
+    conversation content that never reached retrieval — the batch is re-read and
+    re-handed on the next run (idempotent via ``ingest_content``'s per-artifact
+    replace by ``(source_system, source_artifact)``).
+    """
+
+
+@dataclass
+class SlackDeepContentResult:
+    """Accounting for one :meth:`SlackIngestor.ingest_deep_content` call.
+
+    Records how many in-scope threads were assembled and the substrate's
+    per-artifact totals, so a caller sees both how much conversation was read and
+    how much was indexed.
+    """
+
+    org_id: str
+    threads: int = 0
+    windows: int = 0
+    artifacts_handed_off: int = 0
+    artifacts_indexed: int = 0
+    artifacts_empty: int = 0
+    artifacts_failed: int = 0
+    chunks_indexed: int = 0
+
+
+@dataclass
+class _SlackThread:
+    """One assembled conversational unit ready for the retrieval substrate.
+
+    A thread is either an explicit Slack thread (a parent message plus its
+    replies, grouped by ``thread_ts``) or a time-bounded window of standalone
+    channel messages where no thread structure exists (R18-A4 §1). ``messages``
+    are the delta records in oldest-first order; ``key`` is the thread anchor
+    (parent ``ts`` for an explicit thread, the window's first ``ts`` otherwise).
+    """
+
+    channel_id: str
+    channel_name: str
+    key: str
+    messages: List[Dict[str, Any]]
+    is_window: bool = False
+
+    @property
+    def root_ts(self) -> str:
+        return str(self.messages[0].get("ts", "")) if self.messages else ""
+
+    @property
+    def latest_ts(self) -> str:
+        return str(self.messages[-1].get("ts", "")) if self.messages else ""
+
+    @property
+    def unit(self) -> str:
+        return "window" if self.is_window else "thread"
+
+    @property
+    def participants(self) -> List[str]:
+        seen: List[str] = []
+        for m in self.messages:
+            user = m.get("user")
+            if user and user not in seen:
+                seen.append(str(user))
+        return seen
+
+    def source_artifact(self, channel_id: Optional[str] = None) -> str:
+        """The substrate identity for this thread: ``"{channel_id}:{key}"``.
+
+        Stable and thread-level (AC1): every chunk the substrate derives for this
+        thread shares this id, so a retrieval hit points at the exact thread. The
+        anchor ``key`` is a message ``ts`` (parent or window-first), so the id
+        format is the uniform ``channel:ts`` used across the Slack connector.
+        """
+        return f"{self.channel_id}:{self.key}"
 
 
 class SlackIngestor(ChangeBasedIngestor):
@@ -308,6 +445,281 @@ class SlackIngestor(ChangeBasedIngestor):
         if selected is None:
             return channels
         return [c for c in channels if str(c.get("id")) in selected]
+
+    # ── Deep-content path (R18-A4 / AT-594 — T1) ─────────────────────────────
+    def _selected_scope_channel_ids(self, org_id: str) -> set:
+        """Ids of channels the deep-content path may read conversation text from.
+
+        The SAME boundary the reach path applies in :meth:`_accessible_channels`,
+        expressed as an id set: a channel must be public + member + live (so
+        private channels, DMs, non-member and archived channels are excluded — the
+        AC4 access guarantee) AND, when a P5 selection is configured, be in that
+        selection. With no selection configured, every accessible channel is in
+        scope (backwards-compatible default). This is the AC2 boundary: content
+        from unselected/private/DM channels is never assembled or handed off.
+        """
+        accessible = {str(c.get("id")) for c in self._public_member_channels(org_id)}
+        selected = self._selected_channel_ids(org_id)
+        if selected is None:
+            return accessible
+        return accessible & selected
+
+    def _in_selected_scope(self, org_id: str, channel_id: Optional[str]) -> bool:
+        """True when ``channel_id`` is in the deep-content read scope (AC2).
+
+        The per-channel form of :meth:`_selected_scope_channel_ids`. The batch
+        path computes the scope set once and filters against it; this predicate
+        exists so the boundary can be asserted for a single channel too.
+        """
+        if not channel_id:
+            return False
+        return str(channel_id) in self._selected_scope_channel_ids(org_id)
+
+    def assemble_threads(self, records: List[Dict[str, Any]]) -> List[_SlackThread]:
+        """Assemble delta records into conversational units — threads or windows.
+
+        Threads are the unit of meaning (R18-A4 §4): messages are grouped per
+        channel by their thread anchor (``thread_ts`` when present, else the
+        message's own ``ts`` when it is itself a thread parent). Messages that
+        carry no thread structure at all are bucketed into time-bounded windows
+        (:data:`THREAD_WINDOW_SECONDS`) so a lone message is never handed over as a
+        context-free artifact. Deterministically ordered (channel id, then anchor).
+        """
+        by_channel: Dict[str, List[Dict[str, Any]]] = {}
+        for r in records:
+            by_channel.setdefault(str(r.get("channel_id", "")), []).append(r)
+
+        threads: List[_SlackThread] = []
+        for channel_id in sorted(by_channel):
+            threads.extend(self._assemble_channel(channel_id, by_channel[channel_id]))
+        return threads
+
+    def _assemble_channel(
+        self, channel_id: str, msgs: List[Dict[str, Any]]
+    ) -> List[_SlackThread]:
+        """Assemble one channel's messages into explicit threads + time windows."""
+        channel_name = ""
+        for m in msgs:
+            if m.get("channel_name"):
+                channel_name = str(m["channel_name"])
+                break
+
+        explicit: Dict[str, List[Dict[str, Any]]] = {}
+        loose: List[Dict[str, Any]] = []
+        for m in msgs:
+            key = self._thread_key(m)
+            if key is None:
+                loose.append(m)
+            else:
+                explicit.setdefault(key, []).append(m)
+
+        threads: List[_SlackThread] = []
+        for key in sorted(explicit, key=_ts_float):
+            group = sorted(explicit[key], key=lambda x: _ts_float(x.get("ts")))
+            threads.append(_SlackThread(channel_id, channel_name, key, group, is_window=False))
+        threads.extend(self._window_loose(channel_id, channel_name, loose))
+        return threads
+
+    @staticmethod
+    def _thread_key(msg: Dict[str, Any]) -> Optional[str]:
+        """The thread anchor for a message, or None when it belongs to no thread.
+
+        A reply carries ``thread_ts`` = the parent's ``ts``; a parent explicitly in
+        a thread carries ``thread_ts`` = its own ``ts`` — both key to the parent
+        ``ts``. A parent WITH replies but no ``thread_ts`` (``reply_count > 0``)
+        keys to its own ``ts`` so it and any replies group together. Everything
+        else is a standalone message (windowed, not threaded).
+        """
+        thread_ts = msg.get("thread_ts")
+        if thread_ts:
+            return str(thread_ts)
+        try:
+            reply_count = int(msg.get("reply_count", 0) or 0)
+        except (TypeError, ValueError):
+            reply_count = 0
+        if reply_count > 0:
+            return str(msg.get("ts", ""))
+        return None
+
+    def _window_loose(
+        self, channel_id: str, channel_name: str, loose: List[Dict[str, Any]]
+    ) -> List[_SlackThread]:
+        """Bucket standalone messages into time-bounded windows (R18-A4 §1).
+
+        A new window starts once a message is more than
+        :data:`THREAD_WINDOW_SECONDS` after the current window's first message, so
+        a channel with no threads still yields readable, time-coherent units rather
+        than one artifact per message.
+        """
+        if not loose:
+            return []
+        ordered = sorted(loose, key=lambda m: _ts_float(m.get("ts")))
+        windows: List[List[Dict[str, Any]]] = []
+        current: List[Dict[str, Any]] = []
+        window_start = 0.0
+        for m in ordered:
+            ts = _ts_float(m.get("ts"))
+            if not current:
+                current = [m]
+                window_start = ts
+            elif ts - window_start <= THREAD_WINDOW_SECONDS:
+                current.append(m)
+            else:
+                windows.append(current)
+                current = [m]
+                window_start = ts
+        if current:
+            windows.append(current)
+        return [
+            _SlackThread(
+                channel_id,
+                channel_name,
+                str(w[0].get("ts", "")),
+                w,
+                is_window=True,
+            )
+            for w in windows
+        ]
+
+    def _render_thread_text(self, thread: _SlackThread) -> str:
+        """Render a thread as author-attributed text, oldest message first.
+
+        Each message becomes an ``author: text`` line so a human reviewing a
+        finding can read who said what (R18-A4 §1: "Message text with author").
+        The author is the Slack user id (resolved to an entity elsewhere — T4);
+        blank-bodied messages keep their attribution line so participation is
+        visible.
+        """
+        lines: List[str] = []
+        for m in thread.messages:
+            author = str(m.get("user") or "unknown")
+            text = str(m.get("text") or "").strip()
+            lines.append(f"{author}: {text}" if text else f"{author}:")
+        return "\n".join(lines)
+
+    def _thread_evidence_pointer(self, thread: _SlackThread) -> Dict[str, Any]:
+        """Build the R16-B1 OBSERVED, THREAD-LEVEL evidence pointer (AC1, AC5).
+
+        A finding citing this conversation can point at the exact thread: the
+        pointer's ``source_artifact`` is the thread identity ``"{channel}:{key}"``
+        and ``origin='observed'`` (read directly from Slack). ``source_timestamp``
+        anchors to the thread's first message, falling back to now only when the ts
+        is unparseable so the mandatory spine is always populated.
+        """
+        return EvidencePointer.observed(
+            source_system=RETRIEVAL_SOURCE_SYSTEM,
+            source_artifact=thread.source_artifact(),
+            source_timestamp=_ts_to_iso(thread.root_ts) or utc_now_iso(),
+            source_artifact_type="record_id",
+        ).to_dict()
+
+    def _thread_to_artifact(self, thread: _SlackThread) -> Any:
+        """Map one assembled thread to a substrate :class:`ContentArtifact`.
+
+        Carries the rendered author-attributed text plus thread-level provenance
+        (channel, thread/window position, participants, and the observed evidence
+        pointer) so a retrieval hit shows the exact source thread (AC1/AC5).
+        Imported lazily so this discovery module carries no import-time dependency
+        on the app.retrieval package.
+        """
+        from app.retrieval.ingest import ContentArtifact
+
+        return ContentArtifact(
+            source_system=RETRIEVAL_SOURCE_SYSTEM,
+            source_artifact=thread.source_artifact(),
+            content=self._render_thread_text(thread),
+            content_type=CONTENT_TYPE,
+            # Recency of the last message drives freshness; the evidence pointer
+            # anchors to the thread's origin.
+            source_timestamp=_ts_to_iso(thread.latest_ts),
+            provenance={
+                "channel_id": thread.channel_id,
+                "channel_name": thread.channel_name,
+                "thread_ts": None if thread.is_window else thread.key,
+                "unit": thread.unit,
+                "message_count": len(thread.messages),
+                "participants": thread.participants,
+                "first_ts": thread.root_ts or None,
+                "last_ts": thread.latest_ts or None,
+                "origin": "observed",
+                "evidence_pointer": self._thread_evidence_pointer(thread),
+            },
+        )
+
+    def ingest_deep_content(
+        self,
+        org_id: str,
+        records: List[Dict[str, Any]],
+        *,
+        ingest_fn: Optional[Callable[[str, List[Any]], Any]] = None,
+    ) -> SlackDeepContentResult:
+        """Hand a batch's conversation content to the retrieval substrate (T1).
+
+        The depth path that rides beside the unchanged reach signal path: it
+        scope-checks the batch's records against the P5 channel selection (AC2),
+        assembles the in-scope messages into threads/windows, and hands each as a
+        ``ContentArtifact`` to ``retrieval.ingest_content(org_id, artifacts)``
+        (AC1). The substrate owns chunking/embedding/indexing — this method never
+        writes vectors.
+
+        Called per fully-processed delta batch (so it is naturally incremental and
+        rides the existing ``(org, 'slack')`` checkpoint — no new checkpointing).
+        ``ingest_fn`` is injectable for tests; it defaults to the real
+        ``ingest_content``. Raises :class:`SlackDeepContentError` when the substrate
+        reports any failed artifact, so the change runner leaves the checkpoint
+        un-advanced and the batch is re-handed next run (at-least-once; idempotent
+        replace by artifact id).
+        """
+        result = SlackDeepContentResult(org_id=org_id)
+        if not records:
+            return result
+
+        scope = self._selected_scope_channel_ids(org_id)
+        in_scope = [r for r in records if str(r.get("channel_id", "")) in scope]
+        if not in_scope:
+            return result
+
+        threads = self.assemble_threads(in_scope)
+        result.threads = len(threads)
+        result.windows = sum(1 for t in threads if t.is_window)
+        if not threads:
+            return result
+
+        artifacts = [self._thread_to_artifact(t) for t in threads]
+        result.artifacts_handed_off = len(artifacts)
+
+        fn = ingest_fn
+        if fn is None:
+            from app.retrieval.ingest import ingest_content as fn  # type: ignore
+
+        ingest_result = fn(org_id, artifacts)
+        result.artifacts_indexed = getattr(ingest_result, "artifacts_indexed", 0)
+        result.artifacts_empty = getattr(ingest_result, "artifacts_empty", 0)
+        result.artifacts_failed = getattr(ingest_result, "artifacts_failed", 0)
+        result.chunks_indexed = getattr(ingest_result, "chunks_indexed", 0)
+
+        logger.info(
+            "slack deep content: org=%s threads=%d (windows=%d) handed_off=%d "
+            "indexed=%d empty=%d failed=%d chunks_indexed=%d (embedding is async)",
+            org_id,
+            result.threads,
+            result.windows,
+            result.artifacts_handed_off,
+            result.artifacts_indexed,
+            result.artifacts_empty,
+            result.artifacts_failed,
+            result.chunks_indexed,
+        )
+
+        if result.artifacts_failed:
+            # Do not let the checkpoint advance past content the substrate did not
+            # accept — raise so the runner leaves the position for a re-hand next
+            # run (idempotent replace by (source_system, source_artifact)).
+            raise SlackDeepContentError(
+                f"{result.artifacts_failed} Slack thread(s) failed retrieval "
+                f"hand-off for org {org_id}; checkpoint not advanced (will retry)"
+            )
+        return result
 
     def _messages_since(
         self, org_id: str, channel: Dict[str, Any], cursor: Optional[str]

@@ -207,6 +207,20 @@ def _ingest_slack_corroboration(org_id: str, run_id: str) -> Dict[str, Any]:
     ``_find_corroboration_block('slack', …)`` recognises
     (:func:`slack_signals.build_slack_corroboration_payload`).
 
+    R18-A4 / AT-594 (T1) — deep content BESIDE the signal path: the SAME
+    fully-processed batch is also handed to
+    :meth:`SlackIngestor.ingest_deep_content`, which assembles the messages into
+    threads, scope-checks them against the P5 selection, and hands the conversation
+    TEXT to the retrieval substrate (``ingest_content``). One change-runner pass
+    therefore drives BOTH the reach signal AND the depth content off the single
+    ``(org, 'slack')`` checkpoint — no new connector, no new checkpointing, and the
+    reach signal extraction is untouched. Because reach and depth SHARE that one
+    checkpoint, the deep-content hand-off is non-blocking here: a substrate failure
+    is logged (type name only) and the run continues rather than freezing the shared
+    checkpoint or aborting corroboration. Re-handing is idempotent — the substrate
+    replaces an artifact's chunks by ``(source_system, source_artifact)`` — so a
+    thread re-indexes when it next changes.
+
     The Slack MEDIUM ceiling (Slack-only stays MEDIUM, never standalone HIGH; it
     elevates only WITH a primary corroborator) is enforced by the engine's
     COR-05/COR-06 rules and the T3 clamp, never here. Non-blocking: any failure
@@ -222,16 +236,34 @@ def _ingest_slack_corroboration(org_id: str, run_id: str) -> Dict[str, Any]:
         logger.warning("Slack connector import failed (non-blocking): %s", e)
         return {}
 
+    ingestor = SlackIngestor()
     collected: List[Dict[str, Any]] = []
+
+    def _process_batch(batch) -> None:
+        # Reach: collect the batch's records for the corroboration block.
+        collected.extend(batch.records)
+        # Depth (T1): hand this batch's conversation content to the retrieval
+        # substrate beside the signal path. Guarded and non-blocking: reach and
+        # depth share ONE checkpoint, so a content hand-off failure must not freeze
+        # it or abort corroboration — it is logged (type name only, never the
+        # exception str, which may carry a Bearer token) and the run continues.
+        try:
+            ingestor.ingest_deep_content(org_id, batch.records)
+        except Exception as e:  # noqa: BLE001 — depth must not break reach/checkpoint
+            logger.warning(
+                "Slack deep-content hand-off failed (non-blocking) org=%s run=%s: [%s]",
+                org_id, run_id, type(e).__name__,
+            )
+
     try:
         # The runner reads the checkpoint, streams the delta, emits an
         # artifact_changed event per changed record, and advances the checkpoint
-        # only on full success. process_batch hands us each fully-processed
-        # batch's records for the corroboration block.
+        # only on full success. process_batch collects each fully-processed
+        # batch's records for corroboration AND hands its content to retrieval.
         result = change_runner.ingest_with_checkpoint(
-            SlackIngestor(),
+            ingestor,
             org_id,
-            process_batch=lambda batch: collected.extend(batch.records),
+            process_batch=_process_batch,
         )
     except Exception as e:  # noqa: BLE001 — belt-and-braces; runner is non-raising.
         # Type name only — the exception str may carry a Bearer token from the
