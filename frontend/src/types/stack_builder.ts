@@ -45,6 +45,14 @@ export interface FocusCard {
 }
 
 // ── Industry ──────────────────────────────────────────────────────────────────
+//
+// R18-C1 T3 (Addendum A): industries and templates are now sourced from the
+// backend registry (GET /api/stack-builder/industries and /templates — see
+// api/stackBuilderApi.ts) instead of hardcoded frontend arrays. These IDs are
+// therefore backend-owned: adding or relabelling an industry/template is a
+// registry config change with NO frontend edit (AC7/AC8/AC10). The known
+// production IDs stay in the union purely for editor hints; the `(string & {})`
+// escape keeps the type open to any registry-supplied ID.
 
 export type IndustryId =
   | 'financial_services'
@@ -54,7 +62,8 @@ export type IndustryId =
   | 'healthcare'
   | 'energy_utilities'
   | 'manufacturing'
-  | 'technology';
+  | 'technology'
+  | (string & {});
 
 export interface Industry {
   id: IndustryId;
@@ -66,13 +75,54 @@ export interface Industry {
 export type TemplateId =
   | 'commercial_lending'
   | 'service_operations'
-  | 'revenue_operations';
+  | 'revenue_operations'
+  | (string & {});
 
 export interface StackTemplate {
   id: TemplateId;
   label: string;
   suggestedFocus: FocusId;
   preselectedSystems: string[];   // system IDs
+}
+
+// ── Registry API shapes (R18-C1 T3 / Addendum A) ──────────────────────────────
+//
+// Wire shapes returned by the Stack Builder registry endpoints. The frontend
+// renders these directly (the source of truth is the backend registry /
+// template model), so a new industry or template appears in the UI by
+// configuration alone. Mirrors the Pydantic response models in
+// backend/app/routes_stack_builder.py exactly.
+
+export interface IndustryListItem {
+  industry_id: string;
+  label: string;
+  pack_hints: string[];
+  recommended_systems: string[];
+}
+
+export interface SystemDefaultItem {
+  system_id: string;
+  role: string;
+  priority: string;
+  workflow_focus: string[];
+}
+
+export interface TemplateFocusDefaults {
+  focus_id: string;
+  emphasis: string[];
+}
+
+export interface TemplateListItem {
+  template_id: string;
+  label: string;
+  description: string;
+  suggested_systems: string[];
+  suggested_roles: Record<string, string>;
+  focus_defaults: TemplateFocusDefaults;
+  pack_id: string;
+  detector_emphasis: string[];
+  terminology: Record<string, string>;
+  metadata: Record<string, unknown>;
 }
 
 // ── System ────────────────────────────────────────────────────────────────────
