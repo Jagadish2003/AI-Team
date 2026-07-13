@@ -77,6 +77,12 @@ class TemplateDefinition:
     suggested_roles: Dict[str, str]          # system_id -> SystemRole
     focus_defaults: FocusDefaults
     pack_id: str
+    # Detector IDs this template emphasises — provenance/documentation of what
+    # the template's pack surfaces. The REAL scoring is already wired: pack_id
+    # activates the pack's detectors + scorer, and focus_defaults.focus_id drives
+    # focus_affinity ranking. This field records that emphasis for the run and UI;
+    # it does not itself change scoring. Empty = "whatever the pack emphasises".
+    detector_emphasis: List[str] = field(default_factory=list)
     terminology: Dict[str, str] = field(default_factory=dict)
     metadata: Dict[str, Any] = field(default_factory=dict)
 
@@ -109,6 +115,19 @@ TEMPLATE_REGISTRY: Dict[str, TemplateDefinition] = {
         ),
         # nCino Lending pack (pack_config.PACK_REGISTRY["ncino"]).
         pack_id="ncino",
+        # The lending detector set emphasised by this template — the exact keys
+        # scored by discovery/lending_scorer._LENDING_SCORES (covenant tracking
+        # gaps, approval bottlenecks, exception/checklist queues, spreading and
+        # loan-origination friction). Launching the untouched template with
+        # pack_id="ncino" + focus_id="approvals_compliance" applies this emphasis
+        # through the already-wired lending scorer and focus-affinity ranking.
+        detector_emphasis=[
+            "COVENANT_TRACKING_GAP",
+            "APPROVAL_BOTTLENECK",
+            "CHECKLIST_BOTTLENECK",
+            "SPREADING_BOTTLENECK",
+            "LOAN_ORIGINATION_ROUTING_FRICTION",
+        ],
         terminology={
             "customer": "borrower",
             "account": "facility",
@@ -208,3 +227,134 @@ def register_template(defn: TemplateDefinition, *, validate_pack: bool = True) -
 def unregister_template(template_id: str) -> None:
     """Remove a template if present (idempotent). Used by test teardown."""
     TEMPLATE_REGISTRY.pop(template_id, None)
+
+
+# ── Launch resolution + provenance (R18-C1 T2) ────────────────────────────────
+
+def template_defaults_snapshot(defn: TemplateDefinition) -> Dict[str, Any]:
+    """A plain-dict snapshot of the defaults a template contributes to a launch."""
+    return {
+        "template_id": defn.template_id,
+        "pack_id": defn.pack_id,
+        "focus_id": defn.focus_defaults.focus_id,
+        "suggested_systems": list(defn.suggested_systems),
+        "suggested_roles": dict(defn.suggested_roles),
+        "detector_emphasis": list(defn.detector_emphasis),
+    }
+
+
+def resolve_launch_config(
+    template_id: Optional[str],
+    *,
+    pack_id: Optional[str] = None,
+    focus_id: Optional[str] = None,
+    selected_system_ids: Optional[List[str]] = None,
+    weightings: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """
+    Resolve the effective launch configuration for a template-driven run and the
+    provenance of how it was assembled (R18-C1 T2, AC1/AC2/AC5).
+
+    Every value a template sets is an EDITABLE default:
+      * When the caller leaves a field empty, the template default fills it —
+        so a run launched from the UNTOUCHED template applies the lending pack
+        and focus (AC2). This is why an "untouched" launch works even before the
+        frontend is wired to send every field (T3).
+      * When the caller submits a value, THAT value wins (edits are preserved,
+        AC1) and the field is recorded as a user edit (AC5).
+
+    Returns a dict:
+      {
+        "effective": {pack_id, focus_id, selected_system_ids, roles},
+        "provenance": {
+          "template_id", "applied" (bool),
+          "template_defaults" (snapshot),
+          "edited_fields" (list[str]),      # which fields the user changed
+          "untouched" (bool),               # no edits vs the template
+        }
+      }
+
+    When template_id is None/unknown, `effective` echoes the submitted values and
+    provenance records that no template was applied (fully backward compatible).
+    """
+    submitted_systems = list(selected_system_ids or [])
+    submitted_weightings = dict(weightings or {})
+
+    defn = get_template(template_id) if template_id else None
+
+    if defn is None:
+        return {
+            "effective": {
+                "pack_id": pack_id,
+                "focus_id": focus_id,
+                "selected_system_ids": submitted_systems,
+                "roles": _roles_from_weightings(submitted_weightings),
+            },
+            "provenance": {
+                "template_id": template_id,
+                "applied": False,
+                "template_defaults": None,
+                "edited_fields": [],
+                "untouched": False,
+            },
+        }
+
+    defaults = template_defaults_snapshot(defn)
+    edited_fields: List[str] = []
+
+    # pack_id — template default fills an empty submission; otherwise the caller
+    # value wins and, if it diverges, is an edit.
+    eff_pack = pack_id or defn.pack_id
+    if pack_id and pack_id != defn.pack_id:
+        edited_fields.append("pack_id")
+
+    # focus_id — same rule.
+    eff_focus = focus_id or defn.focus_defaults.focus_id
+    if focus_id and focus_id != defn.focus_defaults.focus_id:
+        edited_fields.append("focus_id")
+
+    # selected_system_ids — empty submission inherits the template's suggested
+    # systems; a non-empty submission that differs (as a set) is an edit.
+    if submitted_systems:
+        eff_systems = submitted_systems
+        if set(submitted_systems) != set(defn.suggested_systems):
+            edited_fields.append("selected_system_ids")
+    else:
+        eff_systems = list(defn.suggested_systems)
+
+    # roles — start from the template's suggested roles, overlay any caller
+    # weightings' roles; a role that differs from the template default is an edit.
+    submitted_roles = _roles_from_weightings(submitted_weightings)
+    eff_roles = dict(defn.suggested_roles)
+    roles_edited = False
+    for system_id, role in submitted_roles.items():
+        if eff_roles.get(system_id) != role:
+            roles_edited = True
+        eff_roles[system_id] = role
+    if roles_edited:
+        edited_fields.append("roles")
+
+    return {
+        "effective": {
+            "pack_id": eff_pack,
+            "focus_id": eff_focus,
+            "selected_system_ids": eff_systems,
+            "roles": eff_roles,
+        },
+        "provenance": {
+            "template_id": defn.template_id,
+            "applied": True,
+            "template_defaults": defaults,
+            "edited_fields": edited_fields,
+            "untouched": not edited_fields,
+        },
+    }
+
+
+def _roles_from_weightings(weightings: Dict[str, Any]) -> Dict[str, str]:
+    """Extract system_id -> role from a SystemWeighting map (role key optional)."""
+    roles: Dict[str, str] = {}
+    for system_id, w in (weightings or {}).items():
+        if isinstance(w, dict) and w.get("role"):
+            roles[system_id] = w["role"]
+    return roles

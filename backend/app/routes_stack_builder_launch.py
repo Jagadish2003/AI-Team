@@ -43,12 +43,14 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from fastapi import Depends, FastAPI, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from .db import run_kv_set, next_run_id, upsert_run
 from .middleware.tenancy import get_current_org_id
 from .security import require_auth
 from .rbac import require_role
+
+from discovery.packs.template_registry import resolve_launch_config
 
 
 # ── Request / response models ─────────────────────────────────────────────────
@@ -66,16 +68,35 @@ class LaunchRequest(BaseModel):
         default_factory=list,
         description="All selected system IDs including Salesforce cloud IDs",
     )
-    pack_id: str = Field(
+    pack_id: Optional[str] = Field(
+        default=None,
         description=(
             "Pack resolved by frontend from industry pack hints. "
-            "Falls back to 'service_cloud' if no industry or hints."
+            "Falls back to 'service_cloud' if no industry or hints. "
+            "Optional when template_id is set — the template supplies its pack "
+            "for an untouched launch (R18-C1 T2)."
         ),
     )
     weightings: Dict[str, Any] = Field(
         default_factory=dict,
         description="SystemWeighting per system_id — role, priority, workflowFocus, confirmed",
     )
+
+    @model_validator(mode="after")
+    def _require_pack_or_template(self) -> "LaunchRequest":
+        # A pack is mandatory unless a REGISTERED template is selected to supply
+        # one — this keeps the pre-T2 contract (no pack, and no template that can
+        # provide a pack → 422) intact while letting an untouched template drive
+        # the pack (R18-C1 T2 / AC2). An unknown template_id cannot supply a pack.
+        if self.pack_id:
+            return self
+        from discovery.packs.template_registry import get_template
+
+        if self.template_id and get_template(self.template_id) is not None:
+            return self
+        raise ValueError(
+            "pack_id is required when no known template_id is provided"
+        )
 
 
 class LaunchResponse(BaseModel):
@@ -122,13 +143,33 @@ def register_stack_builder_launch_routes(app: FastAPI) -> None:
 
         Returns 400 if selected_system_ids is empty (cannot run with no systems).
         """
-        if not body.selected_system_ids:
+        # R18-C1 T2: resolve the effective launch config against the selected
+        # template. Every template value is an editable default — a field the
+        # caller submitted wins (and is recorded as a user edit); a field the
+        # caller left empty inherits the template default, so an UNTOUCHED
+        # template applies its lending pack + focus (AC1/AC2/AC5). With no
+        # template_id this is a pass-through of the submitted values.
+        resolved = resolve_launch_config(
+            body.template_id,
+            pack_id=body.pack_id,
+            focus_id=body.focus_id,
+            selected_system_ids=body.selected_system_ids,
+            weightings=body.weightings,
+        )
+        effective = resolved["effective"]
+        provenance = resolved["provenance"]
+
+        eff_pack = effective["pack_id"]
+        eff_focus = effective["focus_id"]
+        eff_systems = effective["selected_system_ids"]
+
+        if not eff_systems:
             raise HTTPException(
                 status_code=400,
                 detail="selected_system_ids must not be empty",
             )
 
-        if not body.pack_id:
+        if not eff_pack:
             raise HTTPException(
                 status_code=400,
                 detail="pack_id is required",
@@ -139,50 +180,57 @@ def register_stack_builder_launch_routes(app: FastAPI) -> None:
         now = datetime.now(timezone.utc).isoformat()
         org_id = get_current_org_id()
 
-        # Persist run record
+        # Persist run record. Template provenance (which template was selected,
+        # which fields the user edited vs. the template defaults, and whether the
+        # template was launched untouched) lives on the run so analysts can see
+        # what configuration shaped the output (AC2/AC5).
         run_record: Dict[str, Any] = {
             "id": run_id,
             "status": "created",
             "startedAt": now,
             "updatedAt": now,
             "orgId": org_id,
-            "packId": body.pack_id,
-            "focusId": body.focus_id,
+            "packId": eff_pack,
+            "focusId": eff_focus,
             "industryId": body.industry_id,
             "templateId": body.template_id,
-            "selectedSystemIds": body.selected_system_ids,
-            "systemCount": len(body.selected_system_ids),
+            "selectedSystemIds": eff_systems,
+            "systemCount": len(eff_systems),
             "source": "stack_builder",
+            "templateProvenance": provenance,
         }
         upsert_run(run_id, run_record)
 
         # Store run-scoped context entries
         # pack_id is used by normalization and evidence_builder for pack routing
-        run_kv_set("pack_id", run_id, body.pack_id)
+        run_kv_set("pack_id", run_id, eff_pack)
 
         # focus_id and industry_id used by LLM enrichment (Sprint 8)
         # for industry-aware prompt injection
-        if body.focus_id:
-            run_kv_set("focus_id", run_id, body.focus_id)
+        if eff_focus:
+            run_kv_set("focus_id", run_id, eff_focus)
         if body.industry_id:
             run_kv_set("industry_id", run_id, body.industry_id)
 
-        # Full setup context — weightings, template, all system IDs
-        # Available for evidence_builder and enrichment to consume
+        # Full setup context — weightings, template, all system IDs, plus the
+        # template provenance. Available for evidence_builder and enrichment to
+        # consume. Effective (template-resolved) values are stored so the
+        # pipeline reads the same config the run record reports.
         run_kv_set("setup_context", run_id, {
             "org_id":              org_id,
-            "focus_id":            body.focus_id,
+            "focus_id":            eff_focus,
             "industry_id":         body.industry_id,
             "template_id":         body.template_id,
-            "selected_system_ids": body.selected_system_ids,
-            "pack_id":             body.pack_id,
+            "selected_system_ids": eff_systems,
+            "pack_id":             eff_pack,
             "weightings":          body.weightings,
+            "template_provenance": provenance,
         })
 
         return LaunchResponse(
             runId=run_id,
-            packId=body.pack_id,
-            focusId=body.focus_id,
+            packId=eff_pack,
+            focusId=eff_focus,
             industryId=body.industry_id,
-            systemCount=len(body.selected_system_ids),
+            systemCount=len(eff_systems),
         )

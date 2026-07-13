@@ -124,6 +124,7 @@ class TemplateListItem(BaseModel):
     suggested_roles: Dict[str, str]
     focus_defaults: TemplateFocusDefaults
     pack_id: str
+    detector_emphasis: List[str]
     terminology: Dict[str, str]
     metadata: Dict[str, Any]
 
@@ -140,6 +141,7 @@ def _to_template_item(defn) -> "TemplateListItem":
             emphasis=defn.focus_defaults.emphasis,
         ),
         pack_id=defn.pack_id,
+        detector_emphasis=defn.detector_emphasis,
         terminology=defn.terminology,
         metadata=defn.metadata,
     )
