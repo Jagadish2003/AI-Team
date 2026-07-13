@@ -18,6 +18,7 @@ import {
   IndustryId,
 } from '../types/stack_builder';
 import { useSetupState } from '../components/stack_builder';
+import type { LendingGuideLaunchState } from '../components/stack_builder';
 
 const SYSTEM_META: Record<string, { name: string }> = {
   sap: { name: 'SAP' },
@@ -260,9 +261,14 @@ function SummaryRow({
 interface Props {
   setupState: ReturnType<typeof useSetupState>;
   onLaunch: () => void;
+  launchState?: LendingGuideLaunchState;
 }
 
-export default function DiscoveryPlanPage({ setupState, onLaunch }: Props) {
+export default function DiscoveryPlanPage({
+  setupState,
+  onLaunch,
+  launchState = 'ready',
+}: Props) {
   const { state, confidence } = setupState;
 
   const qualityRows = calcQualityRows(
@@ -408,11 +414,16 @@ export default function DiscoveryPlanPage({ setupState, onLaunch }: Props) {
           <Button
             variant="tertiary"
             onClick={onLaunch}
+            disabled={launchState === 'launching'}
             ariaLabel={`Start discovery - confidence ${confidence.level}`}
             className="gap-2"
           >
-            <Play size={16} fill="currentColor" strokeWidth={2.2} aria-hidden="true" />
-            Start discovery
+            {launchState === 'launching' ? (
+              <Clock3 size={16} className="animate-spin" aria-hidden="true" />
+            ) : (
+              <Play size={16} fill="currentColor" strokeWidth={2.2} aria-hidden="true" />
+            )}
+            {launchState === 'launching' ? 'Starting discovery...' : 'Start discovery'}
           </Button>
         </div>
       </section>
