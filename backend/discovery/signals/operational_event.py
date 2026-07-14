@@ -48,6 +48,8 @@ try:
 except ModuleNotFoundError:  # project-root execution uses backend as package
     from backend.app.provenance import EvidencePointer, utc_now_iso
 
+from .event_signature import compute_event_signature
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Normalised vocabularies (T1-AC1)
@@ -300,6 +302,10 @@ class OperationalEvent(CommonSignal):
     resource: Optional[ResourceRef] = None
     message: Optional[str] = None
     payload: Dict[str, Any] = field(default_factory=dict)
+    # Deterministic recurrence fingerprint (MSP-B0 / AT-636). Auto-derived from
+    # the event's identity in __post_init__ when not supplied; the same recurring
+    # event always yields the same signature. See event_signature.py.
+    event_signature: str = ""
 
     def __post_init__(self) -> None:
         super().__post_init__()
@@ -320,6 +326,31 @@ class OperationalEvent(CommonSignal):
             )
         if self.resource is not None and not isinstance(self.resource, ResourceRef):
             raise ValueError("resource must be a ResourceRef or None")
+        # Derive the deterministic recurrence fingerprint from the event's
+        # identity unless the caller supplied one (AT-636). Recomputed here so a
+        # directly-constructed event carries a signature just like a built one.
+        if not self.event_signature:
+            self.event_signature = compute_event_signature(
+                source_system=self.source_system,
+                event_class=self.event_class,
+                resource_type=self.resource_type,
+                event_type=self.event_type,
+                resource_id=self.resource.resource_id if self.resource else None,
+                principal=self._principal(),
+            )
+
+    def _principal(self) -> Optional[str]:
+        """The acting principal for actor-sensitive event classes.
+
+        Read from the free-form ``payload`` under the common keys a provider may
+        use. Only the access/audit/security recipes consult it, but resolving it
+        uniformly keeps the signature call site simple.
+        """
+        for key in ("principal", "actor", "user", "user_identity", "caller"):
+            val = self.payload.get(key)
+            if val:
+                return str(val)
+        return None
 
     @property
     def severity_rank(self) -> int:

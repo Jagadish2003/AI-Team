@@ -9,6 +9,13 @@ consume a single normalised shape.
 See :mod:`discovery.signals.operational_event`.
 """
 
+from .event_signature import (  # noqa: F401
+    EVENT_SIGNATURE_VERSION,
+    PROVIDER_FAMILIES,
+    compute_event_signature,
+    provider_family,
+    signature_components,
+)
 from .operational_event import (  # noqa: F401
     EVENT_CLASSES,
     RESOURCE_TYPES,
@@ -31,4 +38,10 @@ __all__ = [
     "normalize_resource_type",
     "normalize_event_class",
     "normalize_severity",
+    # AT-636 — event signature
+    "compute_event_signature",
+    "signature_components",
+    "provider_family",
+    "PROVIDER_FAMILIES",
+    "EVENT_SIGNATURE_VERSION",
 ]

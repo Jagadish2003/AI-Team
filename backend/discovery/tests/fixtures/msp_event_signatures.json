@@ -1,0 +1,140 @@
+{
+  "_comment": "MSP-B0 / AT-636 provider-specific event-signature fixtures. Each case lists two occurrences that MUST share a signature (recurrence) and, where present, a 'differs_from' case that MUST NOT. Occurrences deliberately vary observed_at / signal_id / severity / message to prove those are excluded from the signature.",
+  "recurring_groups": [
+    {
+      "name": "aws_ec2_state_change",
+      "provider_family": "aws",
+      "occurrences": [
+        {
+          "org_id": "acme",
+          "source_system": "aws",
+          "signal_id": "aws-evt-0001",
+          "observed_at": "2026-07-14T01:00:00+00:00",
+          "event_type": "EC2 Instance State-change Notification",
+          "event_class": "state_change",
+          "severity": "high",
+          "message": "instance stopping",
+          "resource": {"provider": "aws", "resource_type": "compute", "resource_id": "arn:aws:ec2:us-east-1:111122223333:instance/i-abc"}
+        },
+        {
+          "org_id": "acme",
+          "source_system": "AWS-CloudWatch",
+          "signal_id": "aws-evt-0002",
+          "observed_at": "2026-07-14T09:30:00+00:00",
+          "event_type": "ec2 instance state-change notification",
+          "event_class": "state_change",
+          "severity": "medium",
+          "message": "instance starting",
+          "resource": {"provider": "aws", "resource_type": "compute", "resource_id": "ARN:AWS:EC2:us-east-1:111122223333:INSTANCE/i-abc"}
+        }
+      ]
+    },
+    {
+      "name": "azure_vm_write",
+      "provider_family": "azure",
+      "occurrences": [
+        {
+          "org_id": "acme",
+          "source_system": "azure",
+          "signal_id": "az-evt-0001",
+          "observed_at": "2026-07-14T02:00:00+00:00",
+          "event_type": "Microsoft.Compute/virtualMachines/write",
+          "event_class": "configuration",
+          "severity": "critical",
+          "resource": {"provider": "azure", "resource_type": "compute", "resource_id": "/subscriptions/sub-1/resourceGroups/rg/providers/Microsoft.Compute/virtualMachines/vm1"}
+        },
+        {
+          "org_id": "acme",
+          "source_system": "azure_monitor",
+          "signal_id": "az-evt-0002",
+          "observed_at": "2026-07-14T12:00:00+00:00",
+          "event_type": "microsoft.compute/virtualmachines/write",
+          "event_class": "configuration",
+          "severity": "low",
+          "resource": {"provider": "azure", "resource_type": "compute", "resource_id": "/SUBSCRIPTIONS/sub-1/resourceGroups/rg/providers/Microsoft.Compute/virtualMachines/vm1"}
+        }
+      ]
+    },
+    {
+      "name": "bridge_error_recurrence",
+      "provider_family": "event_bridge",
+      "occurrences": [
+        {
+          "org_id": "acme",
+          "source_system": "event_history_bridge",
+          "signal_id": "br-evt-0001",
+          "observed_at": "2026-07-14T03:00:00+00:00",
+          "event_type": "storage.request.failed",
+          "event_class": "error",
+          "severity": "high",
+          "resource": {"provider": "aws", "resource_type": "storage", "resource_id": "arn:aws:s3:::my-bucket"}
+        },
+        {
+          "org_id": "acme",
+          "source_system": "event_bridge",
+          "signal_id": "br-evt-0002",
+          "observed_at": "2026-07-15T03:00:00+00:00",
+          "event_type": "storage.request.failed",
+          "event_class": "error",
+          "severity": "critical",
+          "resource": {"provider": "aws", "resource_type": "storage", "resource_id": "arn:aws:s3:::my-bucket"}
+        }
+      ]
+    },
+    {
+      "name": "aws_access_by_principal",
+      "provider_family": "aws",
+      "occurrences": [
+        {
+          "org_id": "acme",
+          "source_system": "aws_cloudtrail",
+          "signal_id": "ct-evt-0001",
+          "observed_at": "2026-07-14T04:00:00+00:00",
+          "event_type": "AssumeRole",
+          "event_class": "access",
+          "severity": "info",
+          "resource": {"provider": "aws", "resource_type": "identity", "resource_id": "arn:aws:iam::111122223333:role/admin"},
+          "payload": {"principal": "arn:aws:iam::111122223333:user/alice"}
+        },
+        {
+          "org_id": "acme",
+          "source_system": "aws_cloudtrail",
+          "signal_id": "ct-evt-0002",
+          "observed_at": "2026-07-14T18:00:00+00:00",
+          "event_type": "AssumeRole",
+          "event_class": "access",
+          "severity": "info",
+          "resource": {"provider": "aws", "resource_type": "identity", "resource_id": "arn:aws:iam::111122223333:role/admin"},
+          "payload": {"principal": "arn:aws:iam::111122223333:user/alice"}
+        }
+      ]
+    }
+  ],
+  "distinct_pairs": [
+    {
+      "why": "different resource -> different signature (hotspot correlation)",
+      "a": {"org_id": "acme", "source_system": "aws", "signal_id": "d1", "observed_at": "2026-07-14T00:00:00+00:00", "event_type": "EC2 Instance State-change Notification", "event_class": "state_change", "severity": "high", "resource": {"provider": "aws", "resource_type": "compute", "resource_id": "arn:aws:ec2:us-east-1:111122223333:instance/i-abc"}},
+      "b": {"org_id": "acme", "source_system": "aws", "signal_id": "d2", "observed_at": "2026-07-14T00:00:00+00:00", "event_type": "EC2 Instance State-change Notification", "event_class": "state_change", "severity": "high", "resource": {"provider": "aws", "resource_type": "compute", "resource_id": "arn:aws:ec2:us-east-1:111122223333:instance/i-xyz"}}
+    },
+    {
+      "why": "different event_class -> different signature",
+      "a": {"org_id": "acme", "source_system": "azure", "signal_id": "d3", "observed_at": "2026-07-14T00:00:00+00:00", "event_type": "Microsoft.Compute/virtualMachines/write", "event_class": "configuration", "severity": "high", "resource": {"provider": "azure", "resource_type": "compute", "resource_id": "/subscriptions/s/vm1"}},
+      "b": {"org_id": "acme", "source_system": "azure", "signal_id": "d4", "observed_at": "2026-07-14T00:00:00+00:00", "event_type": "Microsoft.Compute/virtualMachines/write", "event_class": "lifecycle", "severity": "high", "resource": {"provider": "azure", "resource_type": "compute", "resource_id": "/subscriptions/s/vm1"}}
+    },
+    {
+      "why": "different provider family, same logical event -> different signature",
+      "a": {"org_id": "acme", "source_system": "aws", "signal_id": "d5", "observed_at": "2026-07-14T00:00:00+00:00", "event_type": "storage.request.failed", "event_class": "error", "severity": "high", "resource": {"provider": "aws", "resource_type": "storage", "resource_id": "bucket-1"}},
+      "b": {"org_id": "acme", "source_system": "azure", "signal_id": "d6", "observed_at": "2026-07-14T00:00:00+00:00", "event_type": "storage.request.failed", "event_class": "error", "severity": "high", "resource": {"provider": "azure", "resource_type": "storage", "resource_id": "bucket-1"}}
+    },
+    {
+      "why": "access: different principal, same action+resource -> different signature",
+      "a": {"org_id": "acme", "source_system": "aws_cloudtrail", "signal_id": "d7", "observed_at": "2026-07-14T00:00:00+00:00", "event_type": "AssumeRole", "event_class": "access", "severity": "info", "resource": {"provider": "aws", "resource_type": "identity", "resource_id": "arn:aws:iam::111122223333:role/admin"}, "payload": {"principal": "user/alice"}},
+      "b": {"org_id": "acme", "source_system": "aws_cloudtrail", "signal_id": "d8", "observed_at": "2026-07-14T00:00:00+00:00", "event_type": "AssumeRole", "event_class": "access", "severity": "info", "resource": {"provider": "aws", "resource_type": "identity", "resource_id": "arn:aws:iam::111122223333:role/admin"}, "payload": {"principal": "user/bob"}}
+    },
+    {
+      "why": "different event_type -> different signature",
+      "a": {"org_id": "acme", "source_system": "aws", "signal_id": "d9", "observed_at": "2026-07-14T00:00:00+00:00", "event_type": "RunInstances", "event_class": "lifecycle", "severity": "info", "resource": {"provider": "aws", "resource_type": "compute", "resource_id": "i-1"}},
+      "b": {"org_id": "acme", "source_system": "aws", "signal_id": "d10", "observed_at": "2026-07-14T00:00:00+00:00", "event_type": "TerminateInstances", "event_class": "lifecycle", "severity": "info", "resource": {"provider": "aws", "resource_type": "compute", "resource_id": "i-1"}}
+    }
+  ]
+}
