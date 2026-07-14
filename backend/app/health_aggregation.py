@@ -223,14 +223,14 @@ def _connector_entry(
     err_health = _latest_by(
         health_events,
         lambda e: getattr(e, "connector_id", None) == connector_id
-        and str((getattr(e, "payload", {}) or {}).get("status", "")).lower()
+        and str(_event_payload(e).get("status", "")).lower()
         in ("error", "needs_refresh", "refresh_failed"),
     )
     if err_health is not None:
-        payload = getattr(err_health, "payload", {}) or {}
+        payload = _event_payload(err_health)
         last_error = payload.get("message") or payload.get("status")
     elif last_ingest_event is not None:
-        payload = getattr(last_ingest_event, "payload", {}) or {}
+        payload = _event_payload(last_ingest_event)
         degraded = payload.get("degraded_count")
         if isinstance(degraded, int) and degraded > 0:
             last_error = f"{degraded} record(s) degraded during last ingestion"
@@ -339,7 +339,7 @@ def _run_entry(org_id: str, run: Dict[str, Any], snapshot_events: List[Any]) -> 
     detectors_evaluated: Optional[int] = None
     detectors_fired: Optional[int] = None
     if snapshot is not None:
-        payload = getattr(snapshot, "payload", {}) or {}
+        payload = _event_payload(snapshot)
         detectors_evaluated = payload.get("detector_count")
         detectors_fired = payload.get("fired_count")
 
@@ -402,7 +402,7 @@ def runs_view(org_id: str, limit: int = 10) -> List[Dict[str, Any]]:
 def _redaction_count(org_id: str) -> int:
     total = 0
     for e in _safe_range(org_id, "ingestion.secret_redacted"):
-        payload = getattr(e, "payload", {}) or {}
+        payload = _event_payload(e)
         try:
             total += int(payload.get("redaction_count", 0) or 0)
         except (TypeError, ValueError):
@@ -422,7 +422,7 @@ def _skipped_breakdown(org_id: str) -> List[Dict[str, Any]]:
     """
     counts: Dict[str, int] = {}
     for e in _safe_range(org_id, "ingestion.artifact_skipped"):
-        payload = getattr(e, "payload", {}) or {}
+        payload = _event_payload(e)
         reason = payload.get("reason") or "unknown"
         try:
             counts[reason] = counts.get(reason, 0) + int(payload.get("count", 1) or 1)
