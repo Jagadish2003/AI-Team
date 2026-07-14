@@ -284,6 +284,48 @@ def test_org_approval_request_links_carry_token_and_org_id(monkeypatch):
     assert html.count("org_id=org-xyz-789") >= 2
 
 
+def test_org_approval_links_resolve_against_internal_deployment_url(monkeypatch):
+    """R18-A3 T7 / AC6: in a no-public-inbound deployment the AUTH-2 approve/reject
+    links resolve against the INTERNAL deployment URL (AGENTIQ_BACKEND_URL), so an
+    internal admin completes the flow from inside the network with no inbound
+    exposure. No localhost default and no public host leaks into the links."""
+    internal_url = "https://agentiq.internal.bank.local"
+    monkeypatch.setenv("AGENTIQ_BACKEND_URL", internal_url)
+    captured = _capture_send_email(monkeypatch)
+
+    email_service.send_org_approval_request_email(
+        admin_email="agentiqadmin@dwpglobal.com",
+        org_name="Acme Bank",
+        registrant_email="owner@acme.test",
+        approval_token="TOK_ABC123",
+        org_id="org-xyz-789",
+    )
+    html = captured["html"]
+
+    # Both action links are absolute against the internal deployment host.
+    assert f"{internal_url}/api/auth/org-approval/approve" in html
+    assert f"{internal_url}/api/auth/org-approval/reject" in html
+    # No stray localhost default and no public host — the link never points outside
+    # the internal network.
+    assert "localhost" not in html
+    assert "cloudfulcrum.com" not in html
+
+
+def test_org_approved_login_link_uses_public_hostname(monkeypatch):
+    """R18-A3 T7 / AC6: the follow-on 'approved' email login link is built from
+    PUBLIC_HOSTNAME, so it too points at the internal deployment URL in a no-inbound
+    environment (the newly approved registrant lands on the internal login page)."""
+    internal_url = "https://agentiq.internal.bank.local"
+    monkeypatch.setenv("PUBLIC_HOSTNAME", internal_url)
+    captured = _capture_send_email(monkeypatch)
+
+    email_service.send_org_approved_email(
+        registrant_email="owner@acme.test", org_name="Acme Bank"
+    )
+    assert f"{internal_url}/login" in captured["html"]
+    assert "localhost" not in captured["html"]
+
+
 def test_org_approval_request_states_seven_day_expiry(monkeypatch):
     """T5-AC3: the request email states the links expire in 7 days."""
     captured = _capture_send_email(monkeypatch)

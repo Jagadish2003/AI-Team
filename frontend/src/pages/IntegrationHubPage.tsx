@@ -56,7 +56,7 @@ import { ApiError } from '../lib/apiClient';
 import { useConnectorContext } from '../context/ConnectorContext';
 import { isDiscoveryReadyConnector } from '../utils/sourceReadiness';
 import { computeConfidence } from '../utils/confidence';
-import { Connector } from '../types/connector';
+import { Connector, OutboundSetupRequest } from '../types/connector';
 import { fetchLicenseLimits } from '../api/licenseApi';
 import type { LicenseLimitsResponse } from '../types/license';
 
@@ -308,6 +308,19 @@ export default function IntegrationHubPage() {
   const [disconnectTarget, setDisconnectTarget] = useState<Connector | null>(null);
   const [disconnecting, setDisconnecting] = useState(false);
 
+  // R18-A3 follow-up: a one-shot request that pops a connector's outbound /
+  // credential setup modal when the tile's "Set up outbound access" button is
+  // clicked. Selecting mounts the detail panel (which hosts the modal); the
+  // nonce bump makes the relevant setup manager open its modal immediately, so
+  // the button no longer looks inert when the panel is already showing.
+  const [outboundSetupRequest, setOutboundSetupRequest] =
+    useState<OutboundSetupRequest | null>(null);
+
+  function handleSetupOutbound(id: string) {
+    selectConnector(id);
+    setOutboundSetupRequest(prev => ({ connectorId: id, nonce: (prev?.nonce ?? 0) + 1 }));
+  }
+
   function handleDisconnect(id: string) {
     const c = allConnectors.find(x => x.id === id);
     if (!c) return;
@@ -393,6 +406,7 @@ export default function IntegrationHubPage() {
                     onPrimary={handlePrimary}
                     onReconnect={handleReconnect}
                     onDisconnect={handleDisconnect}
+                    onSetupOutbound={handleSetupOutbound}
                     onAddSource={handleAddSource}
                     connectBlocked={atSystemLimit}
                     connectBlockMessage={systemLimitMsg}
@@ -405,6 +419,7 @@ export default function IntegrationHubPage() {
             <div className="min-w-0">
               <RightPanel
                 selected={selected}
+                outboundSetupRequest={outboundSetupRequest}
                 onConfigure={() => {
                   if (!selected) return;
                   configureSync(selected.id);

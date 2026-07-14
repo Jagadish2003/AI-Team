@@ -68,14 +68,21 @@ class JiraClient:
     """
     Minimal Jira Cloud REST API v3 client.
 
-    Auth: OAuth (3LO) Bearer token only. ``base_url`` is the api.atlassian.com
-    gateway (https://api.atlassian.com/ex/jira/{cloudId}) resolved at OAuth
-    connect time, against which the Bearer access token is presented.
+    Auth (selected by whether ``username`` is present — R18-A3 outbound modes):
+
+    * OAuth (3LO) Bearer token — ``username`` empty. ``base_url`` is the
+      api.atlassian.com gateway (https://api.atlassian.com/ex/jira/{cloudId})
+      resolved at OAuth connect time, against which the Bearer token is presented.
+    * Basic (email + API token) — ``username`` set; the static vault credential
+      path (the outbound-only connect in a no-public-inbound deployment).
+      ``base_url`` is the site URL itself (https://yourco.atlassian.net) — Basic
+      auth does not go through the OAuth gateway. The REST paths are identical.
     """
 
-    def __init__(self, base_url: str, token: str = ""):
+    def __init__(self, base_url: str, token: str = "", username: str = ""):
         self.base_url = base_url.rstrip("/")
         self.token = token
+        self.username = username
         self._session = None
 
     def _get_session(self):
@@ -93,11 +100,15 @@ class JiraClient:
                     "Content-Type": "application/json",
                 }
             )
-            if self.token:
+            if self.token and self.username:
+                # Static API-token credential → Basic auth (email:token).
+                self._session.auth = (self.username, self.token)
+            elif self.token:
                 self._session.headers["Authorization"] = f"Bearer {self.token}"
             else:
                 raise JiraIngestError(
-                    "Live mode requires a Jira OAuth Bearer token (JIRA_TOKEN). "
+                    "Live mode requires a Jira credential (OAuth Bearer token or "
+                    "email + API token) from the credential vault. "
                     "Set INGEST_MODE=offline to run without credentials."
                 )
         return self._session
@@ -235,9 +246,13 @@ def _get_client() -> JiraClient:
     if cred:
         jira_url = (cred.get("url") or os.getenv("JIRA_URL", "")).rstrip("/")
         token = cred.get("token") or ""
+        # Present on a static credential only — selects Basic auth against the
+        # site URL (its base_url) instead of Bearer against the OAuth gateway.
+        username = cred.get("username") or ""
     else:
         jira_url = os.getenv("JIRA_URL", "").rstrip("/")
         token = ""
+        username = ""
 
     if not jira_url:
         raise JiraIngestError(
@@ -249,7 +264,7 @@ def _get_client() -> JiraClient:
             "Live mode requires a Jira credential (OAuth Bearer token or API "
             "token) from the credential vault. Connect Jira in the Integration Hub."
         )
-    return JiraClient(jira_url, token=token)
+    return JiraClient(jira_url, token=token, username=username)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

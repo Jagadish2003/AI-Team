@@ -16,7 +16,7 @@
  * height stays constant as inline errors appear and clear.
  */
 import React, { useEffect, useState } from "react";
-import { useSearchParams } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 
 import PasswordInput from "../components/auth/PasswordInput";
 import PasswordStrengthIndicator, {
@@ -26,7 +26,6 @@ import { getInviteInfo } from "../api/authApi";
 import { useAuth } from "../context/AuthContext";
 import { useTheme } from "../context/ThemeContext";
 import { ApiError } from "../lib/apiClient";
-import { hardRedirect } from "../utils/navigation";
 
 // ── Validation ────────────────────────────────────────────────────────────────
 
@@ -77,6 +76,7 @@ type InviteState = "loading" | "valid" | "invalid";
 export default function AcceptInvitePage() {
   const { acceptInvite } = useAuth();
   const { theme } = useTheme();
+  const navigate = useNavigate();
   const [searchParams] = useSearchParams();
 
   const inviteToken = searchParams.get("token") ?? "";
@@ -135,9 +135,11 @@ export default function AcceptInvitePage() {
     setSubmitting(true);
     try {
       await acceptInvite(inviteToken, password);
-      // Full reload (not SPA navigate) so all in-session context is rebuilt for
-      // this user — otherwise the previous user's connector/run state leaks.
-      hardRedirect("/integration-hub");
+      // SPA navigate — no document reload. App.tsx's SessionBoundary is keyed on
+      // the auth token, so the new session remounts the data-provider subtree
+      // once with a clean per-user slate (what the old hardRedirect() full reload
+      // provided), in a single load.
+      navigate("/integration-hub", { replace: true });
     } catch (err) {
       setError(acceptInviteErrorMessage(err));
     } finally {

@@ -106,8 +106,8 @@ See `backend/.env.template` for the full list including non-secret client IDs.
 | Slack         | `SLACK_CLIENT_SECRET`        | authorization_code    |
 | SAP           | `SAP_CLIENT_SECRET`          | client_credentials    |
 | Dynamics 365  | `DYNAMICS365_CLIENT_SECRET`  | client_credentials    |
-| Microsoft Teams | `TEAMS_CLIENT_SECRET`      | authorization_code    |
-| SharePoint      | `SHAREPOINT_CLIENT_SECRET`   | authorization_code    |
+| Microsoft Teams | `TEAMS_CLIENT_SECRET`      | authorization_code / client_credentials |
+| SharePoint      | `SHAREPOINT_CLIENT_SECRET`   | authorization_code / client_credentials |
 
 Set each to `your_secret_here` as a placeholder; replace with the real value from the
 provider's OAuth app registration before going to production.
@@ -144,6 +144,15 @@ provider's OAuth app registration before going to production.
   (framework convention) — set it to the shared Teams app's secret when reusing that app.
   SharePoint requests minimal read-only Graph scopes (`Sites.Read.All`, `offline_access`).
 - SAP and Dynamics 365 use client_credentials flow — no OAuth redirect URI is needed.
+- **Microsoft Teams / SharePoint outbound-only (R18-A3 T3 / AT-556):** in addition to the
+  browser authorization_code flow, both connectors support a **client_credentials** mode
+  that authenticates the Graph app registration under a *service identity* — outbound-only,
+  with **no callback**, for `NETWORK_PROFILE=no_public_inbound` deployments (e.g. TCU). It
+  reuses the same `TEAMS_CLIENT_SECRET` / `SHAREPOINT_CLIENT_SECRET` app secret; the app
+  registration must be granted **application** (not delegated) Graph permissions with
+  tenant-wide **admin consent**, and the token is requested with the `https://graph.microsoft.com/.default`
+  scope. An Owner connects with `POST /api/connectors/{teams|sharepoint}/client-credentials`
+  (no body). **Full admin-consent setup: [`docs/INTEGRATE_GRAPH_CLIENT_CREDENTIALS.md`](../docs/INTEGRATE_GRAPH_CLIENT_CREDENTIALS.md).**
 - Slack revocation uses the `auth.revoke` Web API (not RFC 7009). No extra config required.
 - **Deploy note (R17-D3):** connector tokens are now stored under the authenticated
   org instead of a hardcoded `default` org. Any connector tokens stored under `default`
@@ -151,6 +160,102 @@ provider's OAuth app registration before going to production.
   as **disconnected** and must be reconnected once. No data is lost; the stale rows are
   simply not read under the real org. Communicate this one-time reconnect to early-access
   customers when deploying this change.
+
+---
+
+## No-Public-Inbound Deployments (R18-A3)
+
+Security-conscious deployments (e.g. banks) often expose **no public inbound HTTPS** at all.
+AgentIQ is designed to run outbound-only in that posture: connector ingestion is entirely
+pull-based, and most connectors authenticate with an **outbound-only auth mode**
+(client-credentials, JWT bearer, or a static vault credential) that never needs a provider
+to redirect back into the network. See `backend/app/auth/README.md` for the auth-mode
+abstraction and `OUTBOUND_ONLY_MODES`.
+
+### `NETWORK_PROFILE` deployment flag (R18-A3 T5 / AT-558)
+
+A deployment declares its inbound-network posture with one env var:
+
+| Value | Meaning |
+|---|---|
+| `standard` (default) | The deployment can accept inbound HTTPS; the browser authorization-code OAuth flow (provider redirect → callback) completes normally. Nothing changes. |
+| `no_public_inbound` | The deployment exposes **no public inbound HTTPS**. The Integration Hub then **hides the authorization-code Connect button** for every connector that has an outbound-only mode configured, and shows the **outbound setup path** instead (JWT-bearer key entry for Salesforce, client-credentials connect for Microsoft Graph / ServiceNow, or the static-credential form). The customer can never start a flow that cannot complete (AC4). |
+
+Anything unset or unrecognised falls back to `standard` — an unknown value must never
+silently hide connect flows.
+
+The backend exposes the flag plus a per-connector auth-capability map at
+`GET /api/network-profile` (viewer+), which the frontend pairs with each connector's
+`has_outbound_only_mode` to decide, per tile, whether to offer the browser flow or the
+outbound setup path. The flag lives at the connect/setup edge only — it never touches
+ingestion (which stays mode-agnostic via `get_connector_credentials()`).
+
+Connectors whose **only** grant is `authorization_code` (**GitHub**, **Slack** — and
+Teams / SharePoint before their client-credentials mode shipped) have no outbound-only
+mode, so their Connect button is **not** hidden. Those fall back to the two options below.
+
+The one exception is a connector whose **only** OAuth grant is `authorization_code`
+(currently **GitHub** and **Slack**, plus **Teams / SharePoint** until their client-credentials
+mode ships). That grant finishes with a browser redirect to a callback URL, which needs an
+inbound-reachable path. Two options, in order of preference:
+
+1. **Internal-only completion (zero inbound).** Because the callback is browser-delivered, an
+   admin **inside** the network completes the flow against the internal deployment URL with no
+   public inbound at all — the same property AUTH-2 approval links rely on. Set
+   `OAUTH_REDIRECT_URI` to the internal URL.
+2. **Scoped-inbound fallback (Approach B).** When internal-only completion cannot be
+   guaranteed, expose **only** `GET /api/connectors/oauth/callback` through a
+   customer-controlled reverse proxy, restricted to allowlisted source ranges. This is the
+   package a customer's security team reviews and negotiates:
+
+   **→ See [`deployment/SCOPED_INBOUND_CALLBACK.md`](SCOPED_INBOUND_CALLBACK.md)** for the
+   full reverse-proxy patterns (nginx / Apache / cloud WAF), the source-IP allowlist
+   guidance, the exact exposed surface, the application-layer defences already enforced on
+   the callback, and a security-team review checklist.
+
+> A vendor-hosted callback relay (Approach C) is **rejected** for boundary-sensitive
+> deployments — it would route an auth artifact through vendor infrastructure. The fallback
+> is always a path the **customer** controls. Details in the linked package.
+
+### AUTH-2 org-approval email links in no-inbound environments (R18-A3 T7)
+
+AUTH-2 sends the CloudFulcrum/deployment admin an email with **Approve** and **Reject**
+links when a new organisation registers. These links work in a no-public-inbound
+deployment **without any inbound exposure**, because — unlike an OAuth provider callback,
+which the *provider* initiates inbound from the internet — an approval link is clicked by an
+**internal admin whose browser is already inside the deployment network**. The request is
+outbound *from the admin's browser to the internal deployment*, never inbound from the
+public internet.
+
+Two properties make this hold, and both are already built in — nothing hits a dead flow:
+
+- The **email links are built from `AGENTIQ_BACKEND_URL`** (`app/email_service.py`
+  `send_org_approval_request_email`). Set it to the **internal deployment URL** (e.g.
+  `https://agentiq.internal.bank.local`) and every approve/reject link resolves against the
+  internal host.
+- The GET link renders a **confirmation page whose form POSTs to a relative,
+  same-host path** (`/api/auth/org-approval/{approve,reject}` — see `routes_auth.py`
+  `_confirmation_page`). The state-changing POST therefore lands on whatever internal host
+  served the page; the commit step never depends on an absolute or public URL. (The GET is
+  deliberately non-mutating so email security scanners can't pre-approve an org.)
+
+The follow-on **“organisation approved”** email link (`login_url`) is built from
+**`PUBLIC_HOSTNAME`**; set that to the internal deployment URL too so the newly approved
+registrant lands on the internal login page.
+
+**Configuration for no-inbound deployments — set both to the internal deployment URL:**
+
+| Variable | Used for | No-inbound value |
+|---|---|---|
+| `AGENTIQ_BACKEND_URL` | AUTH-2 approve/reject links (backend action links) | Internal deployment URL (e.g. `https://agentiq.internal.bank.local`) |
+| `PUBLIC_HOSTNAME` | login / reset-password / invite / approved-email links | Internal deployment URL |
+
+**Limitation to communicate to the customer:** approving or rejecting an organisation
+requires an admin **with network access to the deployment** (VPN or on-network) — this is by
+design, and it is the *only* AUTH-2 constraint added by the no-inbound posture. If
+`AGENTIQ_BACKEND_URL` / `PUBLIC_HOSTNAME` are left at their `localhost` defaults, or pointed
+at a public host the internal admin cannot reach, the links will not resolve; point them at
+the internal deployment URL. No inbound firewall rule is required.
 
 ---
 

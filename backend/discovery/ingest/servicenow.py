@@ -63,12 +63,18 @@ class ServiceNowClient:
     """
     Minimal ServiceNow Table API client with pagination support.
 
-    Auth: OAuth Bearer token (SERVICENOW_TOKEN) only.
+    Auth (selected by whether ``username`` is present — R18-A3 outbound modes):
+
+    * OAuth Bearer token — ``username`` empty (existing behaviour).
+    * Basic (user + password) — ``username`` set; the static vault credential
+      path (the outbound-only connect in a no-public-inbound deployment).
+      ServiceNow's Table API supports Basic auth natively.
     """
 
-    def __init__(self, instance_url: str, token: str = ""):
+    def __init__(self, instance_url: str, token: str = "", username: str = ""):
         self.instance_url = instance_url.rstrip("/")
         self.token = token
+        self.username = username
         self._session = None
 
     def _get_session(self):
@@ -86,11 +92,15 @@ class ServiceNowClient:
                     "Content-Type": "application/json",
                 }
             )
-            if self.token:
+            if self.token and self.username:
+                # Static user/password credential → Basic auth.
+                self._session.auth = (self.username, self.token)
+            elif self.token:
                 self._session.headers["Authorization"] = f"Bearer {self.token}"
             else:
                 raise ServiceNowIngestError(
-                    "Live mode requires a ServiceNow OAuth Bearer token (SERVICENOW_TOKEN)."
+                    "Live mode requires a ServiceNow credential (OAuth Bearer "
+                    "token or user/password) from the credential vault."
                 )
         return self._session
 
@@ -184,9 +194,13 @@ def _get_client() -> ServiceNowClient:
     if cred:
         sn_url = (cred.get("url") or os.getenv("SERVICENOW_URL", "")).rstrip("/")
         token = cred.get("token") or ""
+        # Present on a static credential only — selects Basic auth (user/password)
+        # instead of an OAuth Bearer header.
+        username = cred.get("username") or ""
     else:
         sn_url = os.getenv("SERVICENOW_URL", "").rstrip("/")
         token = ""
+        username = ""
 
     if not sn_url:
         raise ServiceNowIngestError(
@@ -199,7 +213,7 @@ def _get_client() -> ServiceNowClient:
             "user/password) from the credential vault. Connect ServiceNow in the "
             "Integration Hub."
         )
-    return ServiceNowClient(sn_url, token=token)
+    return ServiceNowClient(sn_url, token=token, username=username)
 
 
 def _sn_scalar(value: Any) -> Any:

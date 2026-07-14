@@ -4,7 +4,9 @@
  * Tests the component in isolation by mocking:
  *   - useAuth() (the API boundary)
  *   - useTheme() (returns "light" by default)
- *   - utils/navigation/hardRedirect (the full-reload after a successful login)
+ *   - react-router-dom useNavigate (the SPA redirect after a successful login;
+ *     the data-provider subtree is remounted by App.tsx's token-keyed
+ *     SessionBoundary, so no full document reload is needed anymore)
  *
  * We do NOT reach into the backend or real AuthContext.
  */
@@ -18,7 +20,7 @@ import { ApiError } from "../lib/apiClient";
 // ── Mocks ─────────────────────────────────────────────────────────────────────
 
 const mockLogin = vi.fn();
-const mockHardRedirect = vi.fn();
+const mockNavigate = vi.fn();
 
 vi.mock("../context/AuthContext", () => ({
   useAuth: () => ({ login: mockLogin }),
@@ -28,9 +30,12 @@ vi.mock("../context/ThemeContext", () => ({
   useTheme: () => ({ theme: "light" }),
 }));
 
-vi.mock("../utils/navigation", () => ({
-  hardRedirect: (path: string) => mockHardRedirect(path),
-}));
+// Partial-mock so MemoryRouter/Link keep working; only useNavigate is stubbed
+// (the post-login SPA redirect target we assert on).
+vi.mock("react-router-dom", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("react-router-dom")>();
+  return { ...actual, useNavigate: () => mockNavigate };
+});
 
 // ── Helper ────────────────────────────────────────────────────────────────────
 
@@ -47,7 +52,7 @@ function renderPage() {
 describe("LoginPage", () => {
   beforeEach(() => {
     mockLogin.mockReset();
-    mockHardRedirect.mockReset();
+    mockNavigate.mockReset();
   });
 
   // ── Rendering ──────────────────────────────────────────────────────────────
@@ -156,7 +161,7 @@ describe("LoginPage", () => {
     });
   });
 
-  it("reloads into /integration-hub on successful login", async () => {
+  it("navigates into /integration-hub on successful login", async () => {
     mockLogin.mockResolvedValue(undefined);
     renderPage();
 
@@ -169,7 +174,7 @@ describe("LoginPage", () => {
     fireEvent.click(screen.getByRole("button", { name: /sign in/i }));
 
     await waitFor(() => {
-      expect(mockHardRedirect).toHaveBeenCalledWith("/integration-hub");
+      expect(mockNavigate).toHaveBeenCalledWith("/integration-hub", { replace: true });
     });
   });
 
@@ -293,7 +298,7 @@ describe("LoginPage", () => {
     await waitFor(() => {
       expect(screen.getByTestId("login-error")).toBeTruthy();
     });
-    expect(mockHardRedirect).not.toHaveBeenCalled();
+    expect(mockNavigate).not.toHaveBeenCalled();
   });
 
   // ── AUTH-2 T7: pending / rejected org states ─────────────────────────────────
@@ -324,7 +329,7 @@ describe("LoginPage", () => {
     });
     // Distinct from the bad-credentials error component.
     expect(screen.queryByTestId("login-error")).toBeNull();
-    expect(mockHardRedirect).not.toHaveBeenCalled();
+    expect(mockNavigate).not.toHaveBeenCalled();
   });
 
   it("renders the registration-rejected message on a 403 org_rejected (T7-AC2)", async () => {
@@ -342,7 +347,7 @@ describe("LoginPage", () => {
       );
     });
     expect(screen.queryByTestId("login-error")).toBeNull();
-    expect(mockHardRedirect).not.toHaveBeenCalled();
+    expect(mockNavigate).not.toHaveBeenCalled();
   });
 
   it("renders the three error states via distinct components (T7-AC3)", async () => {
