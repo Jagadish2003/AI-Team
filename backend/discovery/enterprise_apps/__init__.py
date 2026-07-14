@@ -22,6 +22,10 @@ share-the-extraction discipline established for the operational phase.
 :mod:`.app_repo_map` (T6/AT-611) owns the per-org, configured (never
 auto-discovered) declaration of which repos ARE an application — the scope T1/T2
 parse over and T5 scopes retrieval against.
+
+:mod:`.component_retrieval` (T5/AT-610) bridges the structure map into the
+platform retrieval API, so retrieval can be scoped to one component's real
+files — never a path/name coincidence.
 """
 
 from .app_repo_map import (
@@ -34,6 +38,10 @@ from .app_repo_map import (
     load_app_repo_mappings,
     repo_content_for_app,
     repo_ids_for_app,
+)
+from .component_retrieval import (
+    resolve_component_artifacts,
+    retrieve_component_code,
 )
 from .structure import (
     AppStructure,
@@ -62,4 +70,7 @@ __all__ = [
     "load_app_repo_mappings",
     "repo_content_for_app",
     "repo_ids_for_app",
+    # component-scoped retrieval (T5)
+    "resolve_component_artifacts",
+    "retrieve_component_code",
 ]
