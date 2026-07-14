@@ -212,3 +212,47 @@ crashes a run, consistent with the connector conventions.
 2. Register it in `reference_mappers.MAPPERS`.
 3. Add a golden fixture case (raw payload + expected normalised fields) to
    `msp_provider_mapping_golden.json`.
+
+---
+
+## 6. Raw-payload storage + evidence resolution (AT-638)
+
+The normalised event is provider-agnostic and, by design, does **not** embed the
+raw provider payload (T4-AC4). To keep every finding auditable, the raw payload
+is persisted separately and reached through the event's evidence pointer. Code:
+[`backend/discovery/signals/evidence_store.py`](../backend/discovery/signals/evidence_store.py).
+
+### How it fits together
+
+- **Evidence pointer** — `OperationalEvent.build()` already mints an OBSERVED
+  `EvidencePointer` whose `(source_system, source_artifact)` uniquely names the
+  raw event (T4-AC1). No schema change; it reuses the R16-B1 provenance spine.
+- **Raw-event store** — `RawEventStore` persists raw payloads keyed by
+  `(org_id, source_system, source_artifact)` — the exact tuple the pointer
+  carries. `InMemoryRawEventStore` is the offline/default implementation
+  (deep-copies on put/get so stored payloads can't be mutated via an alias); a
+  DB-backed store drops in for live ingestion (B1/B2/B8) with the same interface.
+- **Resolution** — `resolve_raw_event(store, org_id, event)` walks the pointer
+  back to the stored raw payload (T4-AC2).
+
+### Organization isolation (T4-AC3)
+
+Evidence is hard-partitioned by `org_id`. The store key includes `org_id`, so a
+`get` under a different org never returns another org's payload; and
+`store_raw_event` / `resolve_raw_event` raise `OrgScopeError` if asked to act
+under a different org than the event owns. Two orgs with the same provider event
+id never see each other's raw payload.
+
+### Usage
+
+```python
+from discovery.signals import InMemoryRawEventStore, map_and_store, resolve_raw_event, MAPPERS
+
+store = InMemoryRawEventStore()
+event = map_and_store(MAPPERS["map_cloudtrail"], raw_payload, org_id="acme", store=store)
+# ... detectors consume `event` (no provider payload visible) ...
+raw = resolve_raw_event(store, "acme", event)   # audit: back to the original payload
+```
+
+`map_and_store` maps + persists in one step (the connector entry point). To
+persist an already-mapped event, use `store_raw_event(store, org_id, event, raw)`.

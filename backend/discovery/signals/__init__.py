@@ -27,6 +27,14 @@ from .operational_event import (  # noqa: F401
     normalize_resource_type,
     normalize_severity,
 )
+from .evidence_store import (  # noqa: F401
+    InMemoryRawEventStore,
+    OrgScopeError,
+    RawEventStore,
+    map_and_store,
+    resolve_raw_event,
+    store_raw_event,
+)
 from .reference_mappers import (  # noqa: F401
     MAPPERS,
     aws_resource_type_from_arn,
@@ -63,4 +71,11 @@ __all__ = [
     "aws_resource_type_from_arn",
     "azure_resource_type_from_id",
     "MAPPERS",
+    # AT-638 — raw-payload storage + evidence resolution
+    "RawEventStore",
+    "InMemoryRawEventStore",
+    "OrgScopeError",
+    "store_raw_event",
+    "resolve_raw_event",
+    "map_and_store",
 ]

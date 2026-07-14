@@ -238,10 +238,13 @@ def map_eventbridge(payload: Dict[str, Any], *, org_id: str) -> OperationalEvent
         resource=resource,
         message=detail_type or None,
         payload={
+            # Curated, normalised scalars only — the raw provider `detail` blob is
+            # NOT embedded here; it lives in the evidence store and is reached via
+            # the event's evidence pointer (AT-638 / T4-AC4).
             "source": payload.get("source"),
             "account": payload.get("account"),
             "region": region,
-            "detail": detail,
+            "state": detail.get("state"),
         },
     )
 
