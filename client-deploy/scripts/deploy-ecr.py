@@ -87,9 +87,15 @@ from botocore.exceptions import ClientError, NoCredentialsError  # noqa: E402
 # Config
 # ---------------------------------------------------------------------------
 
-AWS_ACCOUNT_ID = "070206924228"
-AWS_REGION     = "us-east-1"
-ECR_REPO       = "agentiq"
+# Defaults only — the actual account/region are PROMPTED at run time (step 3)
+# so a deployment can target any registry without editing this file.
+DEFAULT_ACCOUNT_ID = "070206924228"
+DEFAULT_REGION     = "us-east-1"
+ECR_REPO           = "agentiq"
+
+# Populated from the prompts in main(); all consumers read these globals.
+AWS_ACCOUNT_ID = DEFAULT_ACCOUNT_ID
+AWS_REGION     = DEFAULT_REGION
 ECR_REGISTRY   = f"{AWS_ACCOUNT_ID}.dkr.ecr.{AWS_REGION}.amazonaws.com"
 
 # ECR tags to pull — docker-compose.yml references these directly via ${ECR_REGISTRY}
@@ -282,12 +288,13 @@ def _clear_docker_config() -> None:
 # ECR pull
 # ---------------------------------------------------------------------------
 
-def pull_images(access_key: str, secret_key: str) -> None:
+def pull_images(access_key: str, secret_key: str, session_token: str = "") -> None:
     docker_password = None
     try:
         session = boto3.Session(
             aws_access_key_id=access_key,
             aws_secret_access_key=secret_key,
+            aws_session_token=session_token or None,
             region_name=AWS_REGION,
         )
         ecr = session.client("ecr")
@@ -392,10 +399,10 @@ def wait_healthy(container: str, timeout_secs: int,
 # ---------------------------------------------------------------------------
 
 def main() -> None:
+    global AWS_ACCOUNT_ID, AWS_REGION, ECR_REGISTRY
+
     banner("AgentIQ — On-Premise Deployment")
-    print(f"  Registry : {ECR_REGISTRY}")
     print(f"  Repo     : {ECR_REPO}")
-    print(f"  Region   : {AWS_REGION}")
 
     # ── Step 1: configuration ──────────────────────────────────────────────
     step("1/7", "Application configuration — collecting URL and integration settings...")
@@ -408,20 +415,28 @@ def main() -> None:
     check_compose_file()
     pg_user, pg_pass, pg_db, prod_url, public_url = check_env()
 
-    # ── Step 3: AWS credentials ────────────────────────────────────────────
-    step("3/7", "Enter AWS credentials (not stored — cleared after pull):")
+    # ── Step 3: AWS credentials + registry ─────────────────────────────────
+    step("3/7", "Enter AWS ECR details (credentials are not stored — cleared after pull):")
+    account_id = input(f"  AWS Account ID  [{DEFAULT_ACCOUNT_ID}] : ").strip() or DEFAULT_ACCOUNT_ID
+    region     = input(f"  AWS Region      [{DEFAULT_REGION}] : ").strip() or DEFAULT_REGION
     access_key = input("  AWS Access Key ID     : ").strip()
     secret_key = getpass.getpass("  AWS Secret Access Key : ")
+    session_token = getpass.getpass("  AWS Session Token (Enter if none) : ")
     if not access_key or not secret_key:
         fail("Both Access Key ID and Secret Access Key are required.")
         sys.exit(1)
+    AWS_ACCOUNT_ID = account_id
+    AWS_REGION     = region
+    ECR_REGISTRY   = f"{AWS_ACCOUNT_ID}.dkr.ecr.{AWS_REGION}.amazonaws.com"
+    info(f"Registry: {ECR_REGISTRY}")
 
     # ── Step 4: pull images ────────────────────────────────────────────────
     step("4/7", "Pulling images from ECR...")
-    pull_images(access_key, secret_key)
+    pull_images(access_key, secret_key, session_token)
     _zero_string(access_key)
     _zero_string(secret_key)
-    del access_key, secret_key
+    _zero_string(session_token)
+    del access_key, secret_key, session_token
     info("AWS credentials cleared from memory.")
 
     # ── Step 5: compose env ────────────────────────────────────────────────
