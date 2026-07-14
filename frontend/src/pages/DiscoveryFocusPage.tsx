@@ -1,6 +1,7 @@
 import React from 'react';
 import { Info, Loader2, MoveRight } from 'lucide-react';
 import Button from '../components/common/Button';
+import InlineError from '../components/common/InlineError';
 import {
   FocusCard as FocusCardType,
   IndustryListItem,
@@ -107,14 +108,7 @@ interface Props {
 // local data would falsely imply the user is seeing current backend config
 // (R18-C1 T3 / AC10).
 function RegistryRetry({ message, onRetry }: { message: string; onRetry: () => void }) {
-  return (
-    <div className="rounded-lg border border-red-400/30 bg-red-500/10 px-3 py-3 text-xs text-red-200">
-      <p className="mb-2 leading-relaxed">{message}</p>
-      <Button variant="tertiary" onClick={onRetry} className="px-3 py-1 text-xs">
-        Retry
-      </Button>
-    </div>
-  );
+  return <InlineError title="Couldn't load from the registry" message={message} onRetry={onRetry} />;
 }
 
 function RegistryLoading({ label }: { label: string }) {
