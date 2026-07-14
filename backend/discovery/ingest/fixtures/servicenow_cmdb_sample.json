@@ -1,7 +1,8 @@
 {
   "_meta": {
-    "description": "Synthetic bounded ServiceNow CMDB fixture for MSP-B3 T1-T2",
-    "note": "Contains only approved CI fields and explicit relationships among admitted CIs."
+    "description": "Synthetic bounded ServiceNow CMDB fixture for MSP-B3 T1-T3",
+    "note": "Contains only approved CI fields and explicit relationships among admitted CIs.",
+    "instance_url": "https://example.service-now.com"
   },
   "result": [
     {

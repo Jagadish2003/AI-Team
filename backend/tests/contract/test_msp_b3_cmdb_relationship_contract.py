@@ -7,6 +7,8 @@ from discovery.ingest import servicenow as sn
 
 def test_cmdb_relationship_contract_is_bounded_normalized_and_observed(monkeypatch):
     class ReadOnlyServiceNowClient:
+        instance_url = "https://acme.service-now.com"
+
         def table_query(self, table, params, max_records):
             if table == "cmdb_ci":
                 return [
@@ -71,6 +73,10 @@ def test_cmdb_relationship_contract_is_bounded_normalized_and_observed(monkeypat
             "source_relationship_name": "Runs on::Runs",
             "source_type": "servicenow_cmdb_rel_ci",
             "source_timestamp": "2026-07-14 12:00:00",
+            "source_url": (
+                "https://acme.service-now.com/nav_to.do?"
+                "uri=cmdb_rel_ci.do%3Fsys_id%3Drel-admitted"
+            ),
             "origin": "observed",
         }
     ]

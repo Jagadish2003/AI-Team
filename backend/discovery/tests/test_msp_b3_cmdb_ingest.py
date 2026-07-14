@@ -90,6 +90,8 @@ def test_live_path_server_filters_projects_fields_and_returns_stable_items(monke
     captured = {}
 
     class Client:
+        instance_url = "https://acme.service-now.com"
+
         def table_query(self, table, params, max_records):
             captured.update(table=table, params=dict(params), max_records=max_records)
             return [
@@ -148,6 +150,10 @@ def test_live_path_server_filters_projects_fields_and_returns_stable_items(monke
         "owned_by": "Data Platform",
         "environment": "production",
         "updated_at": "2026-07-13 11:00:00",
+        "source_url": (
+            "https://acme.service-now.com/nav_to.do?"
+            "uri=cmdb_ci.do%3Fsys_id%3Dci-2"
+        ),
     }
     assert "password" not in db_item
     assert "discovery_credentials" not in db_item
@@ -196,4 +202,27 @@ def test_offline_fixture_uses_same_stable_representation(monkeypatch):
     assert set(payload["configuration_items"][0]) == {
         "sys_id", "name", "ci_class", "operational_status",
         "assignment_group", "owned_by", "environment", "updated_at",
+        "source_url",
     }
+
+
+def test_main_live_ingest_reuses_the_authenticated_client_for_cmdb(monkeypatch):
+    client = object()
+    seen = []
+
+    monkeypatch.setattr(sn, "is_live", lambda: True)
+    monkeypatch.setenv("SERVICENOW_URL", "https://acme.service-now.com")
+    monkeypatch.setattr(sn, "get_incident_metrics", lambda value: {"assignment_groups": []})
+    monkeypatch.setattr(sn, "get_cross_system_references", lambda value: {})
+    monkeypatch.setattr(sn, "get_lending_correlation", lambda value: {})
+
+    def cmdb(value):
+        seen.append(value)
+        return {"org_id": "org-live", "configuration_items": [], "relationships": []}
+
+    monkeypatch.setattr(sn, "ingest_cmdb", cmdb)
+
+    payload = sn.ingest(client)
+
+    assert seen == [client]
+    assert payload["cmdb"]["org_id"] == "org-live"

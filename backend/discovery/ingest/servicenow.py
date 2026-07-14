@@ -26,6 +26,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any, Dict, List, Mapping, Optional, Tuple
+from urllib.parse import quote, urlsplit
 
 from . import is_live
 
@@ -94,6 +95,7 @@ class ServiceNowConfigurationItem:
     owned_by: Optional[str]
     environment: Optional[str]
     updated_at: Optional[str]
+    source_url: Optional[str]
 
     def as_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -165,6 +167,7 @@ class ServiceNowCIRelationship:
     source_relationship_name: str
     source_type: str
     source_timestamp: Optional[str]
+    source_url: Optional[str]
     origin: str = "observed"
 
     def as_dict(self) -> Dict[str, Any]:
@@ -438,6 +441,44 @@ def _optional_sn_text(value: Any) -> Optional[str]:
     return text or None
 
 
+def _safe_servicenow_instance_url(value: Any) -> Optional[str]:
+    """Return a credential-free ServiceNow instance origin for deep links."""
+    if not value:
+        return None
+    try:
+        parsed = urlsplit(str(value).strip())
+    except ValueError:
+        return None
+    try:
+        port = parsed.port
+    except ValueError:
+        return None
+    if (
+        parsed.scheme not in {"http", "https"}
+        or not parsed.hostname
+        or parsed.username
+        or parsed.password
+    ):
+        return None
+    host = parsed.hostname
+    if port:
+        host = f"{host}:{port}"
+    return f"{parsed.scheme}://{host}"
+
+
+def _servicenow_record_url(
+    instance_url: Optional[str], table: str, sys_id: str
+) -> Optional[str]:
+    """Build a resolvable, read-only classic UI link to one source record."""
+    base = _safe_servicenow_instance_url(instance_url)
+    if not base:
+        return None
+    return (
+        f"{base}/nav_to.do?uri={quote(table, safe='')}.do%3Fsys_id%3D"
+        f"{quote(sys_id, safe='')}"
+    )
+
+
 def _sn_reference_id(value: Any) -> Optional[str]:
     """Return the stable sys_id from a ServiceNow reference value.
 
@@ -499,7 +540,9 @@ def normalize_cmdb_relationship_type(
 
 
 def _configuration_item_from_record(
-    record: Dict[str, Any], allowed_classes: Tuple[str, ...]
+    record: Dict[str, Any],
+    allowed_classes: Tuple[str, ...],
+    instance_url: Optional[str] = None,
 ) -> Optional[ServiceNowConfigurationItem]:
     sys_id = _optional_sn_text(record.get("sys_id"))
     ci_class = (_optional_sn_text(record.get("sys_class_name")) or "").lower()
@@ -522,6 +565,7 @@ def _configuration_item_from_record(
         owned_by=_optional_sn_text(record.get("owned_by")),
         environment=_optional_sn_text(record.get("environment")),
         updated_at=_optional_sn_text(record.get("sys_updated_on")),
+        source_url=_servicenow_record_url(instance_url, "cmdb_ci", sys_id),
     )
 
 
@@ -555,15 +599,18 @@ def _read_cmdb_configuration_items(
             },
             max_records=CMDB_RECORD_CAP,
         )
+        instance_url = getattr(client, "instance_url", None)
     else:
-        records = _load_cmdb_fixture().get("result", [])
+        fixture = _load_cmdb_fixture()
+        records = fixture.get("result", [])
+        instance_url = (fixture.get("_meta") or {}).get("instance_url")
 
     items: List[ServiceNowConfigurationItem] = []
     for record in records:
         if not isinstance(record, dict):
             logger.warning("ServiceNow CMDB returned a non-object record; skipping")
             continue
-        item = _configuration_item_from_record(record, class_scope)
+        item = _configuration_item_from_record(record, class_scope, instance_url)
         if item is not None:
             items.append(item)
     return sorted(
@@ -576,6 +623,7 @@ def _relationship_from_record(
     record: Dict[str, Any],
     admitted_ci_ids: frozenset[str],
     rules: Optional[Mapping[str, CMDBRelationshipRule]] = None,
+    instance_url: Optional[str] = None,
 ) -> Optional[ServiceNowCIRelationship]:
     """Build one edge only when both raw endpoints are already admitted."""
     sys_id = _optional_sn_text(record.get("sys_id"))
@@ -618,6 +666,7 @@ def _relationship_from_record(
         source_relationship_name=raw_name,
         source_type=CMDB_RELATIONSHIP_SOURCE_TYPE,
         source_timestamp=_optional_sn_text(record.get("sys_updated_on")),
+        source_url=_servicenow_record_url(instance_url, "cmdb_rel_ci", sys_id),
     )
 
 
@@ -655,8 +704,11 @@ def _read_cmdb_relationships(
             },
             max_records=CMDB_RECORD_CAP,
         )
+        instance_url = getattr(client, "instance_url", None)
     else:
-        records = _load_cmdb_fixture().get("relationships", [])
+        fixture = _load_cmdb_fixture()
+        records = fixture.get("relationships", [])
+        instance_url = (fixture.get("_meta") or {}).get("instance_url")
 
     admitted_ci_ids = frozenset(item.sys_id for item in configuration_items)
     relationships: List[ServiceNowCIRelationship] = []
@@ -666,7 +718,12 @@ def _read_cmdb_relationships(
                 "ServiceNow CMDB returned a non-object relationship; skipping"
             )
             continue
-        relationship = _relationship_from_record(record, admitted_ci_ids, rules)
+        relationship = _relationship_from_record(
+            record,
+            admitted_ci_ids,
+            rules,
+            instance_url,
+        )
         if relationship is not None:
             relationships.append(relationship)
     return sorted(
@@ -701,11 +758,17 @@ def get_cmdb_relationships(
 
 def ingest_cmdb(
     client: Optional[ServiceNowClient] = None,
+    *,
+    class_scope: Optional[Tuple[str, ...]] = None,
 ) -> Dict[str, Any]:
-    """Return the bounded CMDB payload later MSP-B3 tasks can persist."""
+    """Return the bounded CMDB payload consumed by graph persistence."""
     from . import get_ingest_org
 
-    class_scope = resolve_cmdb_class_scope()
+    class_scope = (
+        resolve_cmdb_class_scope()
+        if class_scope is None
+        else normalize_cmdb_class_scope(class_scope)
+    )
     if is_live() and client is None and class_scope:
         client = _get_client()
     items = _read_cmdb_configuration_items(class_scope, client)
@@ -1148,6 +1211,9 @@ def ingest(sn_client: Optional[ServiceNowClient] = None) -> Dict[str, Any]:
         fixture["lending_correlation"] = get_lending_correlation(
             fixture_incidents=raw_incidents
         )
+        # Offline fixtures contain no customer data, so use the bounded product
+        # default without requiring an organization connector-config database.
+        fixture["cmdb"] = ingest_cmdb(class_scope=DEFAULT_CMDB_CLASSES)
         return fixture
 
     # OAuth-first: the live instance URL comes from the per-run context (DB-sourced
@@ -1176,11 +1242,13 @@ def ingest(sn_client: Optional[ServiceNowClient] = None) -> Dict[str, Any]:
         cross_system_references = get_cross_system_references(sn_client)
 
         lending_correlation = get_lending_correlation(sn_client)
+        cmdb = ingest_cmdb(sn_client)
 
         return {
             "incident_metrics": incident_metrics,
             "cross_system_references": cross_system_references,
             "lending_correlation": lending_correlation,
+            "cmdb": cmdb,
             "assignment_groups": incident_metrics.get("assignment_groups", []),
             # ── ENT-5 enterprise_ops cross-system blocks (LIVE) ───────────────
             # UNCOMMENT the three lines below once the SME team confirms the

@@ -42,6 +42,7 @@ from database.models.entity_relationships import (
     EntityRelationship,
     INFERRED_CONFIDENCE,
     OBSERVED_CONFIDENCE,
+    RELATIONSHIP_TYPES,
 )
 from app.provenance import EvidencePointer
 
@@ -401,6 +402,28 @@ def get_resolved_entity(
     return None
 
 
+def get_resolved_source_entity(
+    org_id: str,
+    entity_type: str,
+    source_system: str,
+    source_record_id: str,
+    entities: List[Entity],
+) -> Optional[Entity]:
+    """Look up an exact resolved source identity within the current org."""
+    stable_id = str(source_record_id or "").strip()
+    if not stable_id:
+        return None
+    for entity in entities:
+        if (
+            entity.org_id == org_id
+            and entity.entity_type == entity_type
+            and entity.source_system == source_system
+            and str(entity.source_record_id or "").strip() == stable_id
+        ):
+            return entity if entity.resolution_status == "resolved" else None
+    return None
+
+
 def _sn_ref_name(value: Any) -> Optional[str]:
     """Extract a display name from a ServiceNow reference field.
 
@@ -473,6 +496,7 @@ def map_directly_observed(
       owns        — Salesforce/nCino Person → Object via OwnerId/owner fields.
       member_of   — ServiceNow Person → Team via assigned_to/assignment_group.
       escalates_to — ServiceNow and Jira Object → Person/Team via escalation fields.
+      CMDB graph verbs — ServiceNow System → System via explicit cmdb_rel_ci rows.
 
     Individual record failures are caught and logged; the function continues
     processing remaining records and never raises to the caller.
@@ -590,9 +614,74 @@ def map_directly_observed(
                 logger.debug("map_directly_observed ncino owns — record skipped: %s", exc)
 
     # -----------------------------------------------------------------------
-    # member_of: ServiceNow Person → Team via assigned_to / assignment_group
+    # ServiceNow CMDB: System -> System, explicitly observed in cmdb_rel_ci.
     # -----------------------------------------------------------------------
     sn_data: Dict[str, Any] = ingestor_data.get("servicenow") or {}
+    cmdb_data: Dict[str, Any] = sn_data.get("cmdb") or {}
+    payload_org = str(cmdb_data.get("org_id") or "").strip()
+    if payload_org and payload_org != org_id:
+        raise ValueError(
+            f"ServiceNow CMDB payload org {payload_org!r} does not match {org_id!r}"
+        )
+    for relationship in cmdb_data.get("relationships", []) or []:
+        if not isinstance(relationship, dict):
+            continue
+        try:
+            source_ci_id = str(relationship.get("source_ci_id") or "").strip()
+            target_ci_id = str(relationship.get("target_ci_id") or "").strip()
+            relationship_type = str(
+                relationship.get("relationship_type") or ""
+            ).strip()
+            relationship_sys_id = str(relationship.get("sys_id") or "").strip()
+            if (
+                not source_ci_id
+                or not target_ci_id
+                or not relationship_sys_id
+                or relationship_type not in RELATIONSHIP_TYPES
+            ):
+                continue
+            source_entity = get_resolved_source_entity(
+                org_id,
+                "system",
+                "servicenow",
+                source_ci_id,
+                entities,
+            )
+            target_entity = get_resolved_source_entity(
+                org_id,
+                "system",
+                "servicenow",
+                target_ci_id,
+                entities,
+            )
+            if source_entity is None or target_entity is None:
+                continue
+            if write_once(
+                source_entity,
+                target_entity,
+                relationship_type,
+                {
+                    "field": "cmdb_rel_ci",
+                    "source": "servicenow",
+                    "source_artifact": relationship_sys_id,
+                    "source_record_id": relationship_sys_id,
+                    "source_type": relationship.get("source_type"),
+                    "source_timestamp": relationship.get("source_timestamp"),
+                    "source_url": relationship.get("source_url"),
+                    "relationship_sys_id": relationship_sys_id,
+                },
+            ):
+                count += 1
+        except Exception as exc:
+            logger.debug(
+                "map_directly_observed CMDB relationship %s skipped: %s",
+                relationship.get("sys_id"),
+                exc,
+            )
+
+    # -----------------------------------------------------------------------
+    # member_of: ServiceNow Person -> Team via assigned_to / assignment_group
+    # -----------------------------------------------------------------------
     incident_metrics: Dict[str, Any] = sn_data.get("incident_metrics") or {}
     for incident in (incident_metrics.get("incidents") or []):
         if not isinstance(incident, dict):

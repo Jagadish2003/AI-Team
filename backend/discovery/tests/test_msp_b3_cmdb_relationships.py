@@ -129,6 +129,7 @@ def test_relationship_representation_has_stable_observed_provenance_only():
         "source_relationship_name": "Depends on::Used by",
         "source_type": "servicenow_cmdb_rel_ci",
         "source_timestamp": "2026-07-14 09:42:00",
+        "source_url": None,
         "origin": "observed",
     }
     assert "password" not in edge.as_dict()
@@ -235,6 +236,8 @@ def test_offline_combined_payload_contains_only_explicit_fixture_edges(monkeypat
         and edge["servicenow_child_id"] in admitted
         for edge in payload["relationships"]
     )
+    assert all(edge["source_url"].startswith("https://example.service-now.com/")
+               for edge in payload["relationships"])
 
 
 def test_empty_scope_performs_no_servicenow_read(monkeypatch):

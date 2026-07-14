@@ -9,7 +9,7 @@ Extraction sources per Section 4b:
                     Process (detector_id)
   Jira:             Person (assignee, reporter), Team (project), Object (issue.key)
   ServiceNow:       Person (assigned_to, caller_id), Team (assignment_group),
-                    Object (incident number)
+                    Object (incident number), System (bounded CMDB CI)
   All sources:      System (signal_source), Process (detector_id)
 
 Confidence rules (Section 4b):
@@ -30,7 +30,10 @@ from contextvars import ContextVar
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
-from app.entity_resolution import resolve_or_create_entity as _core_resolve_or_create_entity
+from app.entity_resolution import (
+    resolve_or_create_entity as _core_resolve_or_create_entity,
+    upsert_source_entity,
+)
 from database.models.entities import Entity, ENTITY_MIN_RUN_COUNT
 
 logger = logging.getLogger(__name__)
@@ -830,6 +833,105 @@ def _extract_jira_entities(
     return entities
 
 
+def _cmdb_lifecycle_state(operational_status: Any) -> str:
+    """Classify ServiceNow's raw status without discarding the source value."""
+    status = _safe_str(operational_status).casefold().replace("_", " ")
+    if status in {"6", "retired", "decommissioned", "decommissioned retired"}:
+        return "retired"
+    if status in {
+        "2",
+        "3",
+        "9",
+        "non operational",
+        "non-operational",
+        "repair in progress",
+        "unavailable",
+        "absent",
+        "down",
+        "offline",
+    }:
+        return "unavailable"
+    if status in {
+        "1",
+        "4",
+        "5",
+        "7",
+        "8",
+        "operational",
+        "ready",
+        "dr standby",
+        "pipeline",
+        "catalog",
+        "active",
+    }:
+        return "active"
+    return "unknown"
+
+
+def _extract_servicenow_cmdb_entities(
+    *,
+    org_id: str,
+    run_id: str,
+    cmdb_data: Dict[str, Any],
+) -> List[Entity]:
+    """Persist bounded ServiceNow CIs as stable, observed graph systems."""
+    payload_org = _safe_str(cmdb_data.get("org_id"))
+    if payload_org and payload_org != org_id:
+        raise ValueError(
+            f"ServiceNow CMDB payload org {payload_org!r} does not match {org_id!r}"
+        )
+    class_scope = {
+        _safe_str(ci_class).casefold()
+        for ci_class in cmdb_data.get("class_scope", []) or []
+        if _safe_str(ci_class)
+    }
+
+    entities: List[Entity] = []
+    for item in cmdb_data.get("configuration_items", []) or []:
+        if not isinstance(item, dict):
+            continue
+        sys_id = _safe_str(item.get("sys_id"))
+        if not sys_id:
+            continue
+        ci_class = _safe_str(item.get("ci_class")).casefold()
+        if not ci_class or ci_class not in class_scope:
+            logger.warning(
+                "ServiceNow CMDB CI %s is outside the payload class scope; skipping",
+                sys_id,
+            )
+            continue
+        display_name = _safe_str(item.get("name")) or sys_id
+        status = item.get("operational_status")
+        lifecycle_state = _cmdb_lifecycle_state(status)
+        entity = upsert_source_entity(
+            org_id=org_id,
+            entity_type="system",
+            display_name=display_name,
+            source_system="servicenow",
+            source_record_id=sys_id,
+            run_id=run_id,
+            source_timestamp=_safe_str(item.get("updated_at")) or None,
+            metadata={
+                "record_type": "configuration_item",
+                "ci_sys_id": sys_id,
+                "ci_class": ci_class,
+                "operational_status": status,
+                "lifecycle_state": lifecycle_state,
+                "is_active": lifecycle_state == "active",
+                "is_retired": lifecycle_state == "retired",
+                "is_unavailable": lifecycle_state == "unavailable",
+                "assignment_group": item.get("assignment_group"),
+                "owned_by": item.get("owned_by"),
+                "owner": item.get("owned_by") or item.get("assignment_group"),
+                "environment": item.get("environment"),
+                "source_updated_at": item.get("updated_at"),
+                "source_url": item.get("source_url"),
+            },
+        )
+        _append_entity(entities, entity)
+    return entities
+
+
 def _extract_servicenow_entities(
     *,
     org_id: str,
@@ -837,7 +939,11 @@ def _extract_servicenow_entities(
     sn_data: Dict[str, Any],
 ) -> List[Entity]:
     """Extract Person, Team, Project, and Object entities from ServiceNow output."""
-    entities: List[Entity] = []
+    entities = _extract_servicenow_cmdb_entities(
+        org_id=org_id,
+        run_id=run_id,
+        cmdb_data=sn_data.get("cmdb") or {},
+    )
 
     # Team: assignment_groups — names frequently overlap with Jira project names;
     # entity_type='team' vs entity_type='team' prevents false merge here because
