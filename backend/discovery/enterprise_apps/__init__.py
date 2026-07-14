@@ -22,6 +22,11 @@ share-the-extraction discipline established for the operational phase.
 :mod:`.app_repo_map` (T6/AT-611) owns the per-org, configured (never
 auto-discovered) declaration of which repos ARE an application — the scope T1/T2
 parse over and T5 scopes retrieval against.
+
+:mod:`.runtime_structure_resolution` (T4/AT-609) resolves phase-one operational
+(runtime) entities to their structural counterparts — "the service emitting
+errors IS this application" — conservatively (confident matches merge, ambiguous
+stay separate), consistent with the standing entity-resolution discipline.
 """
 
 from .app_repo_map import (
@@ -34,6 +39,17 @@ from .app_repo_map import (
     load_app_repo_mappings,
     repo_content_for_app,
     repo_ids_for_app,
+)
+from .runtime_structure_resolution import (
+    ResolutionOutcome,
+    RuntimeEntity,
+    StructuralEntity,
+    resolve_for_org,
+    resolve_runtime_entity,
+    resolve_runtime_to_structure,
+    runtime_entity_from_operational,
+    structural_entities_for_org,
+    structural_entities_from_mappings,
 )
 from .structure import (
     AppStructure,
@@ -62,4 +78,14 @@ __all__ = [
     "load_app_repo_mappings",
     "repo_content_for_app",
     "repo_ids_for_app",
+    # runtime→structure resolution (T4)
+    "ResolutionOutcome",
+    "RuntimeEntity",
+    "StructuralEntity",
+    "resolve_for_org",
+    "resolve_runtime_entity",
+    "resolve_runtime_to_structure",
+    "runtime_entity_from_operational",
+    "structural_entities_for_org",
+    "structural_entities_from_mappings",
 ]
