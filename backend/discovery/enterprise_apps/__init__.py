@@ -25,7 +25,12 @@ parse over and T5 scopes retrieval against.
 
 :mod:`.graph_ingest` (T3/AT-608) loads T1/T2's extracted structure into the
 Stage 2 Knowledge Graph as observed entities/relationships with repo/path/SHA
-provenance — the join surface T4 (runtime→structure resolution) will read.
+provenance — the join surface T4 (runtime→structure resolution) reads.
+
+:mod:`.runtime_structure_resolution` (T4/AT-609) resolves phase-one operational
+(runtime) entities to their structural counterparts — "the service emitting
+errors IS this application" — conservatively (confident matches merge, ambiguous
+stay separate), consistent with the standing entity-resolution discipline.
 """
 
 from .app_repo_map import (
@@ -43,6 +48,17 @@ from .graph_ingest import (
     CommitShaProvider,
     GraphIngestResult,
     ingest_app_structure,
+)
+from .runtime_structure_resolution import (
+    ResolutionOutcome,
+    RuntimeEntity,
+    StructuralEntity,
+    resolve_for_org,
+    resolve_runtime_entity,
+    resolve_runtime_to_structure,
+    runtime_entity_from_operational,
+    structural_entities_for_org,
+    structural_entities_from_mappings,
 )
 from .structure import (
     AppStructure,
@@ -75,4 +91,14 @@ __all__ = [
     "CommitShaProvider",
     "GraphIngestResult",
     "ingest_app_structure",
+    # runtime→structure resolution (T4)
+    "ResolutionOutcome",
+    "RuntimeEntity",
+    "StructuralEntity",
+    "resolve_for_org",
+    "resolve_runtime_entity",
+    "resolve_runtime_to_structure",
+    "runtime_entity_from_operational",
+    "structural_entities_for_org",
+    "structural_entities_from_mappings",
 ]
