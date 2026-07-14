@@ -24,7 +24,8 @@ import os
 import re
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from types import MappingProxyType
+from typing import Any, Dict, List, Mapping, Optional, Tuple
 
 from . import is_live
 
@@ -62,6 +63,17 @@ CMDB_FIELDS: Tuple[str, ...] = (
     "environment",
     "sys_updated_on",
 )
+CMDB_RELATIONSHIP_FIELDS: Tuple[str, ...] = (
+    "sys_id",
+    "parent",
+    "child",
+    "type",
+    "sys_updated_on",
+)
+CMDB_RELATIONSHIP_SOURCE_TYPE = "servicenow_cmdb_rel_ci"
+CMDB_GRAPH_RELATIONSHIP_TYPES = frozenset(
+    {"depends_on", "used_by", "runs_on", "connects_to"}
+)
 _CMDB_CLASS_RE = re.compile(r"^cmdb_ci_[a-z0-9_]+$")
 
 
@@ -82,6 +94,78 @@ class ServiceNowConfigurationItem:
     owned_by: Optional[str]
     environment: Optional[str]
     updated_at: Optional[str]
+
+    def as_dict(self) -> Dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
+class CMDBRelationshipRule:
+    """Map a ServiceNow descriptor to a graph verb and endpoint direction."""
+
+    relationship_type: str
+    reverse_endpoints: bool = False
+
+
+# ServiceNow relationship types commonly expose both descriptors as
+# ``parent descriptor::child descriptor``.  Keeping every string decision here
+# makes direction reviewable and lets callers extend the map without changing
+# the ingestion loop.  Reverse descriptors swap the ServiceNow endpoints; they
+# must never silently acquire the direction of their forward counterpart.
+DEFAULT_CMDB_RELATIONSHIP_RULES: Mapping[str, CMDBRelationshipRule] = (
+    MappingProxyType(
+        {
+            "depends on": CMDBRelationshipRule("depends_on"),
+            "depends upon": CMDBRelationshipRule("depends_on"),
+            "uses": CMDBRelationshipRule("depends_on"),
+            "used by": CMDBRelationshipRule("used_by", reverse_endpoints=True),
+            "is used by": CMDBRelationshipRule("used_by", reverse_endpoints=True),
+            "runs on": CMDBRelationshipRule("runs_on"),
+            "hosted on": CMDBRelationshipRule("runs_on"),
+            "runs": CMDBRelationshipRule("runs_on", reverse_endpoints=True),
+            "hosts": CMDBRelationshipRule("runs_on", reverse_endpoints=True),
+            "connects to": CMDBRelationshipRule("connects_to"),
+            "connected to": CMDBRelationshipRule("connects_to"),
+            "connected by": CMDBRelationshipRule(
+                "connects_to", reverse_endpoints=True
+            ),
+            "depends on::used by": CMDBRelationshipRule("depends_on"),
+            "depends upon::used by": CMDBRelationshipRule("depends_on"),
+            "uses::used by": CMDBRelationshipRule("depends_on"),
+            "used by::uses": CMDBRelationshipRule(
+                "used_by", reverse_endpoints=True
+            ),
+            "runs on::runs": CMDBRelationshipRule("runs_on"),
+            "hosted on::hosts": CMDBRelationshipRule("runs_on"),
+            "runs::runs on": CMDBRelationshipRule(
+                "runs_on", reverse_endpoints=True
+            ),
+            "hosts::hosted on": CMDBRelationshipRule(
+                "runs_on", reverse_endpoints=True
+            ),
+            "connects to::connected by": CMDBRelationshipRule("connects_to"),
+            "connected by::connects to": CMDBRelationshipRule(
+                "connects_to", reverse_endpoints=True
+            ),
+        }
+    )
+)
+
+
+@dataclass(frozen=True)
+class ServiceNowCIRelationship:
+    """Stable observed edge derived from one explicit ``cmdb_rel_ci`` row."""
+
+    sys_id: str
+    relationship_type: str
+    source_ci_id: str
+    target_ci_id: str
+    servicenow_parent_id: str
+    servicenow_child_id: str
+    source_relationship_name: str
+    source_type: str
+    source_timestamp: Optional[str]
+    origin: str = "observed"
 
     def as_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -354,6 +438,66 @@ def _optional_sn_text(value: Any) -> Optional[str]:
     return text or None
 
 
+def _sn_reference_id(value: Any) -> Optional[str]:
+    """Return the stable sys_id from a ServiceNow reference value.
+
+    With ``sysparm_display_value=all`` a reference is an object whose display
+    value is a human name and whose raw value is the sys_id.  Endpoint security
+    and provenance must always use the raw value, never the display name.
+    """
+    if isinstance(value, dict):
+        value = value.get("value") or value.get("sys_id")
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def _normalise_relationship_label(value: Any) -> str:
+    """Canonicalize a ServiceNow relationship display label for rule lookup."""
+    label = _optional_sn_text(value) or ""
+    parts = []
+    for part in label.split("::"):
+        part = re.sub(r"[^a-z0-9]+", " ", part.casefold()).strip()
+        if part:
+            parts.append(part)
+    return "::".join(parts)
+
+
+def normalize_cmdb_relationship_type(
+    value: Any,
+    rules: Optional[Mapping[str, CMDBRelationshipRule]] = None,
+) -> Optional[CMDBRelationshipRule]:
+    """Resolve one explicit ServiceNow label to the bounded graph vocabulary.
+
+    ``rules`` is an optional centralized extension point for deployments with
+    additional known ServiceNow labels.  Unknown labels are excluded instead
+    of guessed from CI names, classes, or any other record content.
+    """
+    label = _normalise_relationship_label(value)
+    if not label:
+        return None
+    effective_rules = DEFAULT_CMDB_RELATIONSHIP_RULES if rules is None else rules
+    rule = effective_rules.get(label)
+    if rule is None and rules is not None:
+        # Extension keys receive the same normalization as source labels.
+        rule = next(
+            (
+                candidate
+                for configured_label, candidate in rules.items()
+                if _normalise_relationship_label(configured_label) == label
+            ),
+            None,
+        )
+    if rule is None:
+        return None
+    if rule.relationship_type not in CMDB_GRAPH_RELATIONSHIP_TYPES:
+        raise ValueError(
+            f"unsupported CMDB graph relationship type {rule.relationship_type!r}"
+        )
+    return rule
+
+
 def _configuration_item_from_record(
     record: Dict[str, Any], allowed_classes: Tuple[str, ...]
 ) -> Optional[ServiceNowConfigurationItem]:
@@ -428,11 +572,131 @@ def _read_cmdb_configuration_items(
     )
 
 
+def _relationship_from_record(
+    record: Dict[str, Any],
+    admitted_ci_ids: frozenset[str],
+    rules: Optional[Mapping[str, CMDBRelationshipRule]] = None,
+) -> Optional[ServiceNowCIRelationship]:
+    """Build one edge only when both raw endpoints are already admitted."""
+    sys_id = _optional_sn_text(record.get("sys_id"))
+    parent_id = _sn_reference_id(record.get("parent"))
+    child_id = _sn_reference_id(record.get("child"))
+    if not sys_id or not parent_id or not child_id:
+        logger.warning("ServiceNow CMDB relationship missing identity; skipping")
+        return None
+    if parent_id not in admitted_ci_ids or child_id not in admitted_ci_ids:
+        # The server query is class-bounded as a first barrier.  This exact-ID
+        # check is the authoritative boundary and handles races or malformed
+        # upstream data without allowing an edge to expose another CI.
+        logger.warning(
+            "ServiceNow CMDB relationship %s has an unadmitted endpoint; skipping",
+            sys_id,
+        )
+        return None
+
+    raw_name = _optional_sn_text(record.get("type")) or ""
+    rule = normalize_cmdb_relationship_type(raw_name, rules)
+    if rule is None:
+        logger.info(
+            "ServiceNow CMDB relationship %s has unsupported type %r; skipping",
+            sys_id,
+            raw_name,
+        )
+        return None
+
+    source_id, target_id = parent_id, child_id
+    if rule.reverse_endpoints:
+        source_id, target_id = target_id, source_id
+
+    return ServiceNowCIRelationship(
+        sys_id=sys_id,
+        relationship_type=rule.relationship_type,
+        source_ci_id=source_id,
+        target_ci_id=target_id,
+        servicenow_parent_id=parent_id,
+        servicenow_child_id=child_id,
+        source_relationship_name=raw_name,
+        source_type=CMDB_RELATIONSHIP_SOURCE_TYPE,
+        source_timestamp=_optional_sn_text(record.get("sys_updated_on")),
+    )
+
+
+def _read_cmdb_relationships(
+    class_scope: Tuple[str, ...],
+    configuration_items: List[ServiceNowConfigurationItem],
+    client: Optional[ServiceNowClient] = None,
+    rules: Optional[Mapping[str, CMDBRelationshipRule]] = None,
+) -> List[ServiceNowCIRelationship]:
+    """Read explicit ``cmdb_rel_ci`` edges within an admitted CI set.
+
+    The Table API query applies the current org's class scope to both reference
+    endpoints before ServiceNow returns any rows.  An exact admitted-sys-id
+    membership check then fails closed against response drift and malformed
+    records.  Only relationship identity, endpoints, type, and timestamp cross
+    the connector boundary.
+    """
+    if not class_scope or not configuration_items:
+        return []
+
+    if is_live():
+        if client is None:
+            client = _get_client()
+        class_csv = ",".join(class_scope)
+        records = client.table_query(
+            "cmdb_rel_ci",
+            {
+                "sysparm_query": (
+                    f"parent.sys_class_nameIN{class_csv}^"
+                    f"child.sys_class_nameIN{class_csv}^ORDERBYsys_id"
+                ),
+                "sysparm_fields": ",".join(CMDB_RELATIONSHIP_FIELDS),
+                "sysparm_display_value": "all",
+                "sysparm_exclude_reference_link": "true",
+            },
+            max_records=CMDB_RECORD_CAP,
+        )
+    else:
+        records = _load_cmdb_fixture().get("relationships", [])
+
+    admitted_ci_ids = frozenset(item.sys_id for item in configuration_items)
+    relationships: List[ServiceNowCIRelationship] = []
+    for record in records:
+        if not isinstance(record, dict):
+            logger.warning(
+                "ServiceNow CMDB returned a non-object relationship; skipping"
+            )
+            continue
+        relationship = _relationship_from_record(record, admitted_ci_ids, rules)
+        if relationship is not None:
+            relationships.append(relationship)
+    return sorted(
+        relationships,
+        key=lambda edge: (
+            edge.relationship_type,
+            edge.source_ci_id,
+            edge.target_ci_id,
+            edge.sys_id,
+        ),
+    )
+
+
 def get_cmdb_configuration_items(
     client: Optional[ServiceNowClient] = None,
 ) -> List[ServiceNowConfigurationItem]:
     """Read the bounded CMDB estate configured for the current organization."""
     return _read_cmdb_configuration_items(resolve_cmdb_class_scope(), client)
+
+
+def get_cmdb_relationships(
+    client: Optional[ServiceNowClient] = None,
+    rules: Optional[Mapping[str, CMDBRelationshipRule]] = None,
+) -> List[ServiceNowCIRelationship]:
+    """Read bounded observed edges for the current organization."""
+    class_scope = resolve_cmdb_class_scope()
+    if is_live() and client is None and class_scope:
+        client = _get_client()
+    items = _read_cmdb_configuration_items(class_scope, client)
+    return _read_cmdb_relationships(class_scope, items, client, rules)
 
 
 def ingest_cmdb(
@@ -442,11 +706,15 @@ def ingest_cmdb(
     from . import get_ingest_org
 
     class_scope = resolve_cmdb_class_scope()
+    if is_live() and client is None and class_scope:
+        client = _get_client()
     items = _read_cmdb_configuration_items(class_scope, client)
+    relationships = _read_cmdb_relationships(class_scope, items, client)
     return {
         "org_id": get_ingest_org(),
         "class_scope": list(class_scope),
         "configuration_items": [item.as_dict() for item in items],
+        "relationships": [relationship.as_dict() for relationship in relationships],
     }
 
 
