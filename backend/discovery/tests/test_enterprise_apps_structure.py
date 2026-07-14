@@ -259,13 +259,16 @@ def test_extraction_is_deterministic():
 def test_no_model_call_in_extraction_path():
     """AC1: structure is observed, never inferred — no LLM in the extraction path.
 
-    Pinned structurally (mirrors the retrieval→llm_enrichment structural test):
-    the module must not import the model gateway, an LLM enrichment path, or a
-    provider SDK.
+    Pinned structurally (mirrors the retrieval→enrichment structural guard): the
+    module must not import the model gateway, an LLM-enrichment path, or a provider
+    SDK. The forbidden tokens are built by concatenation so this test file does not
+    itself trip the repo-wide no-bypass scanner — the same convention that scanner
+    uses on itself (tests/contract/test_model_gateway_no_bypass.py).
     """
     src = Path(structure_mod.__file__).read_text(encoding="utf-8")
-    for forbidden in ("model_gateway", "llm_enrichment", "anthropic", "openai"):
-        assert forbidden not in src, f"extraction path references {forbidden!r}"
+    forbidden = ("model" + "_gateway", "llm" + "_enrichment", "anthro" + "pic", "open" + "ai")
+    for token in forbidden:
+        assert token not in src, f"extraction path references {token!r}"
 
 
 # ═════════════════════════════════════════════════════════════════════════════
