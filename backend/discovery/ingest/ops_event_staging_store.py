@@ -94,6 +94,7 @@ _INSERT_COLUMNS = (
     "batch_id",
     "provider_event_id",
     "raw",
+    "event_time",
 )
 
 
@@ -121,6 +122,7 @@ class DbStagingSink:
                 r.batch_id,
                 r.provider_event_id,
                 json.dumps(r.raw),
+                r.event_time,
             )
             for r in rows
         ]
@@ -129,12 +131,13 @@ class DbStagingSink:
             inserted = execute_values(
                 cur,
                 "INSERT INTO ops_event_staging "
-                "(org_id, provider, source_format, batch_id, provider_event_id, raw) "
+                "(org_id, provider, source_format, batch_id, provider_event_id, "
+                "raw, event_time) "
                 "VALUES %s "
                 "ON CONFLICT (org_id, provider, provider_event_id) DO NOTHING "
                 "RETURNING 1",
                 values,
-                template="(%s, %s, %s, %s, %s, %s::jsonb)",
+                template="(%s, %s, %s, %s, %s, %s::jsonb, %s)",
                 fetch=True,
             )
             con.commit()

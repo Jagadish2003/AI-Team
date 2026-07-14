@@ -1,6 +1,6 @@
 # MSP-B8 Event-History Bridge — Staging Schema (Partner Guide)
 
-**Schema contract version:** `1.0.0`
+**Schema contract version:** `1.1.0`
 **Audience:** partner / customer engineers performing export-and-load, with **no
 CloudFulcrum assistance required** (this document is the partner-enablement
 deliverable — MSP-B8 AC8).
@@ -80,6 +80,7 @@ One row per exported event. Loaders insert into it; the bridge reads from it.
 | `provider_event_id` | `VARCHAR(256)` | `NVARCHAR(256)` | no | **The idempotency key** — the provider's own event identity (see §5.2). |
 | `raw` | `JSONB` | `NVARCHAR(MAX)` (valid JSON) | no | **The provider payload, intact.** Never transform it at load time — mapping and evidence resolution happen downstream against this exact record. |
 | `loaded_at` | `TIMESTAMPTZ` (`now()`) | `DATETIME2` UTC (`SYSUTCDATETIME()`) | no | When the row landed in staging (UTC). Defaulted — leave it to the database. |
+| `event_time` | `TIMESTAMPTZ` | `DATETIMEOFFSET` | **yes** | *(v1.1.0)* The provider event timestamp, extracted "where available" (CloudWatch `Timestamp`, EventBridge `time`, CloudTrail `eventTime`, Azure Monitor `firedDateTime`, Activity Log `eventTimestamp`). `NULL` when the record has no parseable time. Staging metadata for bridge ordering/dedupe — **not** the detector-facing `occurred_at`, which the B0 mapper normalises later. |
 
 **Constraints & indexes:**
 
@@ -203,9 +204,16 @@ Multi-tenancy is enforced by `org_id`, exactly as elsewhere in AgentIQ:
 
 This schema is versioned (`STAGING_SCHEMA_VERSION` in
 `backend/database/models/ops_event_staging.py`, and the header of each `.sql`
-artifact). The current contract is **`1.0.0`**. Any change to the staging shape
+artifact). The current contract is **`1.1.0`**. Any change to the staging shape
 bumps this version and is reflected in the model, both `.sql` artifacts, and this
 document together — a DB-free parity test keeps them from drifting.
+
+Version history:
+
+- **`1.0.0`** — initial staging schema (T1).
+- **`1.1.0`** — added the nullable `event_time` column (T3). Additive and
+  backward compatible: apply the updated `.sql` (its `ALTER`/`ADD COLUMN` guard is
+  idempotent) or run migration `0027` for an AgentIQ-hosted store.
 
 ## 9. Checklist — "can a partner engineer do this unaided?"
 

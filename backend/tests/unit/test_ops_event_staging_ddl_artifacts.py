@@ -36,6 +36,7 @@ STAGING_COLUMNS = [
     "provider_event_id",
     "raw",
     "loaded_at",
+    "event_time",
 ]
 BATCH_COLUMNS = [
     "org_id",

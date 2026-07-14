@@ -1,6 +1,6 @@
 -- =====================================================================
 -- MSP-B8 Event-History Bridge — Staging Schema (PostgreSQL)
--- Schema contract version: 1.0.0
+-- Schema contract version: 1.1.0
 -- =====================================================================
 --
 -- The staging database contract for the Event-History Bridge. Load exported
@@ -35,6 +35,10 @@
 --   batch_id          the export batch this row was loaded under.
 --   provider_event_id the provider's own event identity — the idempotency key.
 --   raw               the provider payload, kept intact (evidence resolution).
+--   event_time        the provider event timestamp "where available" (v1.1.0);
+--                     NULL when the record carries no parseable time. Staging
+--                     metadata for bridge ordering/dedupe, not the detector-facing
+--                     occurred_at (that is the B0 mapper's job).
 --   loaded_at         when the row landed in staging (UTC).
 -- The UNIQUE (org_id, provider, provider_event_id) constraint makes re-loading
 -- an export batch produce zero duplicate rows (idempotent loads).
@@ -48,6 +52,7 @@ CREATE TABLE IF NOT EXISTS ops_event_staging (
     provider_event_id VARCHAR(256)             NOT NULL,
     raw               JSONB                    NOT NULL,
     loaded_at         TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(),
+    event_time        TIMESTAMP WITH TIME ZONE,
     CONSTRAINT uq_ops_event_staging_provider_event
         UNIQUE (org_id, provider, provider_event_id)
 );

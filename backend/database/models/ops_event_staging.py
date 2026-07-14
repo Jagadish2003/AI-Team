@@ -51,6 +51,10 @@ Schema shape (Section 1 of the story fixes the required fields):
   * ``raw`` — the provider payload kept fully intact (``JSONB``), so evidence
     resolution can point back at the exact source record. Never lossily
     transformed at load time — mapping happens later, in the bridge.
+  * ``event_time`` — the provider event timestamp, extracted "where available"
+    by the loaders (T3, v1.1.0). Nullable staging metadata for bridge ordering /
+    dedupe; NOT the detector-facing ``occurred_at`` (that is normalised by the B0
+    mapper in T4). Left NULL when the source record carries no parseable time.
   * ``loaded_at`` — when the row landed in staging (UTC), for load auditing and
     the MSP-B7 volume signal.
 
@@ -68,7 +72,11 @@ from typing import Any, Optional
 # Versioned contract. Bump on any change to the staging shape and record it in
 # both partner .sql headers and docs/MSP-B8_STAGING_SCHEMA.md. Partner engineers
 # key their load tooling to this version.
-STAGING_SCHEMA_VERSION = "1.0.0"
+#   1.0.0 — initial staging schema (T1).
+#   1.1.0 — add nullable event_time column (T3): the provider event timestamp,
+#           extracted "where available" by the loaders (additive, backward
+#           compatible — existing rows/loaders leave it NULL).
+STAGING_SCHEMA_VERSION = "1.1.0"
 
 # Providers V1 loads. NOT a DDL CHECK — kept here so loaders/tests/docs agree on
 # the expected set while the column stays open to future providers.
@@ -162,12 +170,25 @@ CREATE_OPS_EVENT_LOAD_BATCHES_TABLE = f"""
     )
 """
 
+# T3 (v1.1.0) — the provider event timestamp, "where available". Nullable and
+# added by ALTER (not folded into the CREATE above) so the migration path
+# (0026 create → 0027 alter) and a fresh create both converge on the SAME column
+# order — event_time last — and existing 0026 stores gain it without a rebuild.
+# Same split-DDL pattern as ingestion_checkpoints (0017 create / 0018 alter).
+# Not a detector-facing field: it is staging metadata for bridge ordering/dedupe;
+# final occurred_at normalisation belongs to the B0 mapper (T4).
+ALTER_OPS_EVENT_STAGING_ADD_EVENT_TIME = """
+    ALTER TABLE ops_event_staging
+        ADD COLUMN IF NOT EXISTS event_time TIMESTAMP WITH TIME ZONE
+"""
+
 ALL_OPS_EVENT_STAGING_DDL: tuple[str, ...] = (
     CREATE_OPS_EVENT_STAGING_TABLE,
     CREATE_OPS_EVENT_STAGING_IDX_ORG_ROW,
     CREATE_OPS_EVENT_STAGING_IDX_ORG_BATCH,
     CREATE_OPS_EVENT_STAGING_IDX_ORG_FORMAT,
     CREATE_OPS_EVENT_LOAD_BATCHES_TABLE,
+    ALTER_OPS_EVENT_STAGING_ADD_EVENT_TIME,
 )
 
 # DROP order for downgrade() — indexes, then tables.
@@ -196,6 +217,7 @@ class OpsEventStagingRow:
     batch_id: str
     provider_event_id: str
     raw: dict[str, Any]
+    event_time: Optional[datetime] = None
     row_id: Optional[int] = None
     loaded_at: Optional[datetime] = None
 

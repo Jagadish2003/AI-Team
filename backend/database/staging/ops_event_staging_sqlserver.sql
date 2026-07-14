@@ -1,6 +1,6 @@
 -- =====================================================================
 -- MSP-B8 Event-History Bridge — Staging Schema (SQL Server)
--- Schema contract version: 1.0.0
+-- Schema contract version: 1.1.0
 -- =====================================================================
 --
 -- The staging database contract for the Event-History Bridge, SQL Server
@@ -43,6 +43,10 @@
 --   batch_id          the export batch this row was loaded under.
 --   provider_event_id the provider's own event identity — the idempotency key.
 --   raw               the provider payload, kept intact (evidence resolution).
+--   event_time        the provider event timestamp "where available" (v1.1.0);
+--                     NULL when the record carries no parseable time. Staging
+--                     metadata for bridge ordering/dedupe, not the detector-facing
+--                     occurred_at (that is the B0 mapper's job).
 --   loaded_at         when the row landed in staging (UTC).
 -- The UNIQUE (org_id, provider, provider_event_id) constraint makes re-loading
 -- an export batch produce zero duplicate rows (idempotent loads).
@@ -63,10 +67,16 @@ BEGIN
         loaded_at         DATETIME2            NOT NULL
                               CONSTRAINT df_ops_event_staging_loaded_at
                               DEFAULT SYSUTCDATETIME(),
+        event_time        DATETIMEOFFSET       NULL,
         CONSTRAINT uq_ops_event_staging_provider_event
             UNIQUE (org_id, provider, provider_event_id)
     );
 END;
+GO
+
+-- For a store already created at v1.0.0, add the column in place (idempotent).
+IF COL_LENGTH(N'dbo.ops_event_staging', N'event_time') IS NULL
+    ALTER TABLE dbo.ops_event_staging ADD event_time DATETIMEOFFSET NULL;
 GO
 
 -- Org-scoped row-id paging — the bridge's incremental cursor.

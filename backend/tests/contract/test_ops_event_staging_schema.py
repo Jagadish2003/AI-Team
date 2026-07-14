@@ -16,6 +16,9 @@ import psycopg2
 import pytest
 
 # (name, data_type, character_maximum_length, required, primary_key)
+# event_time is last: added by ALTER (0027) so it appends after loaded_at, and the
+# fresh-create path lists it last too — the migration path and a fresh create
+# converge on the same column order.
 EXPECTED_COLUMNS = [
     ("row_id", "bigint", None, True, True),
     ("org_id", "character varying", 64, True, False),
@@ -25,6 +28,7 @@ EXPECTED_COLUMNS = [
     ("provider_event_id", "character varying", 256, True, False),
     ("raw", "jsonb", None, True, False),
     ("loaded_at", "timestamp with time zone", None, True, False),
+    ("event_time", "timestamp with time zone", None, False, False),
 ]
 
 EXPECTED_INDEXES = {
