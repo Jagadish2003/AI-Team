@@ -36,6 +36,7 @@ import os
 import secrets as _secrets_mod
 from datetime import datetime, timezone
 from typing import Dict, Optional
+from urllib.parse import urlparse
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Response
 from fastapi.responses import RedirectResponse
@@ -536,6 +537,25 @@ def register_connector_auth_routes(app: FastAPI) -> None:
                 detail="Connector does not use authorization_code flow",
             )
 
+        # R18-A3 T5 / AC4: in a no-public-inbound deployment the authorization-code
+        # callback can never arrive, so an authorization_code flow cannot complete.
+        # Where the connector has an outbound-only mode (JWT bearer / client-
+        # credentials / static), refuse to START the flow server-side — the UI
+        # already hides the Connect button (NetworkProfileContext), and this closes
+        # the same gap for direct API callers so a user can never begin a flow that
+        # cannot finish. The response points at the outbound setup path.
+        if network_profile.is_no_public_inbound():
+            capability = get_connector_auth_capability(connector_id)
+            if capability.get("has_outbound_only_mode"):
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        "authorization_code flow is unavailable in a "
+                        "no_public_inbound deployment for a connector with an "
+                        "outbound-only auth mode; use the outbound setup path"
+                    ),
+                )
+
         # R17-D4 Addendum A / T9: block STARTING an OAuth flow for a NEW system
         # once the org is at its licensed max_systems, so the user is stopped
         # before the provider consent step rather than after exchanging a token.
@@ -936,6 +956,24 @@ def register_connector_auth_routes(app: FastAPI) -> None:
                 status_code=400,
                 detail=f"Missing required field(s): {', '.join(missing)}.",
             )
+
+        # Normalise the Salesforce login host so the outbound token URL
+        # ({base}/services/oauth2/token) and the JWT `aud` claim are always
+        # well-formed (R18-A3 T2 hardening). A bare host defaults to https; only
+        # an http(s) URL with a host is accepted, so a misconfig fails loudly here
+        # at setup rather than silently at first mint.
+        if "://" not in login_url:
+            login_url = "https://" + login_url
+        parsed = urlparse(login_url)
+        if parsed.scheme not in ("http", "https") or not parsed.netloc:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "login URL must be an http(s) URL, e.g. "
+                    "https://login.salesforce.com"
+                ),
+            )
+        login_url = login_url.rstrip("/")
 
         org_id = get_current_org_id()
         try:

@@ -101,6 +101,7 @@ def test_servicenow_declares_client_credentials_support():
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.anyio
 async def test_get_client_credentials_token_for_servicenow():
     """Exchange ServiceNow client_id + client_secret for an access token."""
     config = _sn_config()
@@ -135,6 +136,7 @@ async def test_get_client_credentials_token_for_servicenow():
     # client_secret would be resolved from env in real code, but test mocks it.
 
 
+@pytest.mark.anyio
 async def test_client_credentials_token_failure_on_invalid_credentials():
     """Token acquisition fails gracefully on invalid client_id/client_secret."""
     config = _sn_config()
