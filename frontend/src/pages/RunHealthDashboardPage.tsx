@@ -32,7 +32,6 @@ import type {
   ConnectorHealthResponse,
   ContentHealthResponse,
   HealthPanelId,
-  HealthSeverity,
   PackHealthResponse,
   RunHealthItem,
   RunHealthResponse,
@@ -50,13 +49,6 @@ const INITIAL_STATE: ResourceState<never> = {
 };
 
 const PANEL_IDS: HealthPanelId[] = ["connectors", "runs", "content", "packs"];
-
-const severityStyles: Record<HealthSeverity, string> = {
-  critical: "border-red-500/30 bg-red-500/15 text-red-200",
-  high: "border-orange-500/30 bg-orange-500/15 text-orange-200",
-  medium: "border-amber-500/30 bg-amber-500/15 text-amber-200",
-  low: "border-blue-500/30 bg-blue-500/15 text-blue-200",
-};
 
 function errorMessage(error: unknown, fallback: string): string {
   if (error instanceof Error && error.message.trim()) return error.message;
@@ -849,7 +841,7 @@ function AttentionStrip({ resource, retry }: { resource: ResourceState<Attention
         <ol className="space-y-3">
           {resource.data.items.map((item) => (
             <li key={item.id} className="rounded-xl border border-amber-500/30 bg-panel p-4">
-              <div className="flex flex-wrap items-start justify-between gap-3"><div className="min-w-0"><div className="flex flex-wrap items-center gap-2"><StatusPill label={item.severity.toUpperCase()} tone={item.severity === "critical" ? "bad" : item.severity === "high" || item.severity === "medium" ? "warn" : "info"} /><h3 className="font-semibold text-text">{item.title}</h3></div><p className="mt-2 text-sm text-muted">{item.explanation}</p><p className="mt-2 text-xs text-muted">Detected {formatDate(item.timestamp)}</p></div><Link to={item.href} className={`shrink-0 rounded-lg border px-3 py-2 text-sm font-semibold hover:brightness-95 ${severityStyles[item.severity]}`}>View {item.panel} details</Link></div>
+              <div className="flex flex-wrap items-start justify-between gap-3"><div className="min-w-0"><div className="flex flex-wrap items-center gap-2"><StatusPill label={item.severity.toUpperCase()} tone={item.severity === "critical" ? "bad" : item.severity === "high" || item.severity === "medium" ? "warn" : "info"} /><h3 className="font-semibold text-text">{item.title}</h3></div><p className="mt-2 text-sm text-muted">{item.explanation}</p><p className="mt-2 text-xs text-muted">Detected {formatDate(item.timestamp)}</p></div><Link to={item.href} className="shrink-0 rounded-lg border border-amber-500/30 bg-amber-500/15 px-3 py-2 text-sm font-semibold text-amber-300 hover:brightness-110">View {item.panel} details</Link></div>
             </li>
           ))}
         </ol>
