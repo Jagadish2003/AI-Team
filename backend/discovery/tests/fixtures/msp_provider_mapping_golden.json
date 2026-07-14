@@ -1,0 +1,211 @@
+{
+  "_comment": "MSP-B0 / AT-637 golden fixtures. Each case is a representative RAW provider payload plus the EXPECTED normalised OperationalEvent fields the reference mapper must produce. Fixtures, not live connections (live is B1/B2/B8).",
+  "cases": [
+    {
+      "name": "aws_cloudwatch_alarm",
+      "mapper": "map_cloudwatch",
+      "org_id": "acme",
+      "raw": {
+        "version": "0",
+        "id": "cw-evt-1",
+        "detail-type": "CloudWatch Alarm State Change",
+        "source": "aws.cloudwatch",
+        "account": "111122223333",
+        "time": "2026-07-14T01:00:00Z",
+        "region": "us-east-1",
+        "resources": ["arn:aws:cloudwatch:us-east-1:111122223333:alarm:HighCPU"],
+        "detail": {
+          "alarmName": "HighCPU",
+          "state": {"value": "ALARM", "reason": "Threshold Crossed: 1 datapoint"},
+          "previousState": {"value": "OK"}
+        }
+      },
+      "expected": {
+        "source_system": "aws_cloudwatch",
+        "provider_family": "aws",
+        "signal_id": "cw-evt-1",
+        "event_type": "CloudWatch Alarm State Change",
+        "event_class": "state_change",
+        "resource_type": "monitoring",
+        "severity": "high",
+        "resource_id": "arn:aws:cloudwatch:us-east-1:111122223333:alarm:HighCPU",
+        "resource_type_on_ref": "monitoring",
+        "observed_at": "2026-07-14T01:00:00Z",
+        "message": "Threshold Crossed: 1 datapoint"
+      }
+    },
+    {
+      "name": "aws_eventbridge_ec2_state_change",
+      "mapper": "map_eventbridge",
+      "org_id": "acme",
+      "raw": {
+        "version": "0",
+        "id": "eb-evt-1",
+        "detail-type": "EC2 Instance State-change Notification",
+        "source": "aws.ec2",
+        "account": "111122223333",
+        "time": "2026-07-14T02:00:00Z",
+        "region": "us-east-1",
+        "resources": ["arn:aws:ec2:us-east-1:111122223333:instance/i-abc"],
+        "detail": {"instance-id": "i-abc", "state": "stopped"}
+      },
+      "expected": {
+        "source_system": "aws",
+        "provider_family": "aws",
+        "signal_id": "eb-evt-1",
+        "event_type": "EC2 Instance State-change Notification",
+        "event_class": "state_change",
+        "resource_type": "compute",
+        "severity": "info",
+        "resource_id": "arn:aws:ec2:us-east-1:111122223333:instance/i-abc",
+        "observed_at": "2026-07-14T02:00:00Z"
+      }
+    },
+    {
+      "name": "aws_cloudtrail_assume_role",
+      "mapper": "map_cloudtrail",
+      "org_id": "acme",
+      "raw": {
+        "eventVersion": "1.08",
+        "eventID": "ct-evt-1",
+        "eventTime": "2026-07-14T03:00:00Z",
+        "eventSource": "sts.amazonaws.com",
+        "eventName": "AssumeRole",
+        "awsRegion": "us-east-1",
+        "readOnly": false,
+        "errorCode": null,
+        "userIdentity": {"type": "IAMUser", "arn": "arn:aws:iam::111122223333:user/alice"},
+        "resources": [{"ARN": "arn:aws:iam::111122223333:role/admin", "type": "AWS::IAM::Role"}]
+      },
+      "expected": {
+        "source_system": "aws_cloudtrail",
+        "provider_family": "aws",
+        "signal_id": "ct-evt-1",
+        "event_type": "AssumeRole",
+        "event_class": "access",
+        "resource_type": "identity",
+        "severity": "info",
+        "resource_id": "arn:aws:iam::111122223333:role/admin",
+        "principal": "arn:aws:iam::111122223333:user/alice",
+        "observed_at": "2026-07-14T03:00:00Z"
+      }
+    },
+    {
+      "name": "aws_cloudtrail_failed_call",
+      "mapper": "map_cloudtrail",
+      "org_id": "acme",
+      "raw": {
+        "eventVersion": "1.08",
+        "eventID": "ct-evt-2",
+        "eventTime": "2026-07-14T03:30:00Z",
+        "eventSource": "ec2.amazonaws.com",
+        "eventName": "TerminateInstances",
+        "awsRegion": "us-east-1",
+        "errorCode": "Client.UnauthorizedOperation",
+        "errorMessage": "You are not authorized to perform this operation.",
+        "userIdentity": {"type": "IAMUser", "arn": "arn:aws:iam::111122223333:user/bob"}
+      },
+      "expected": {
+        "source_system": "aws_cloudtrail",
+        "provider_family": "aws",
+        "signal_id": "ct-evt-2",
+        "event_type": "TerminateInstances",
+        "event_class": "error",
+        "resource_type": "compute",
+        "severity": "high",
+        "resource_id": "ec2.amazonaws.com",
+        "principal": "arn:aws:iam::111122223333:user/bob",
+        "observed_at": "2026-07-14T03:30:00Z"
+      }
+    },
+    {
+      "name": "azure_monitor_metric_alert",
+      "mapper": "map_azure_monitor",
+      "org_id": "acme",
+      "raw": {
+        "schemaId": "azureMonitorCommonAlertSchema",
+        "data": {
+          "essentials": {
+            "alertId": "/subscriptions/s1/providers/Microsoft.AlertsManagement/alerts/aid-1",
+            "alertRule": "CPU High",
+            "severity": "Sev2",
+            "signalType": "Metric",
+            "monitorCondition": "Fired",
+            "alertTargetIDs": ["/subscriptions/s1/resourceGroups/rg/providers/Microsoft.Compute/virtualMachines/vm1"],
+            "firedDateTime": "2026-07-14T04:00:00Z",
+            "description": "CPU exceeded 90%"
+          },
+          "alertContext": {"conditionType": "DynamicThresholdCriteria"}
+        }
+      },
+      "expected": {
+        "source_system": "azure_monitor",
+        "provider_family": "azure",
+        "signal_id": "/subscriptions/s1/providers/Microsoft.AlertsManagement/alerts/aid-1",
+        "event_type": "CPU High",
+        "event_class": "state_change",
+        "resource_type": "compute",
+        "severity": "high",
+        "resource_id": "/subscriptions/s1/resourceGroups/rg/providers/Microsoft.Compute/virtualMachines/vm1",
+        "observed_at": "2026-07-14T04:00:00Z",
+        "message": "CPU exceeded 90%"
+      }
+    },
+    {
+      "name": "azure_activity_log_vm_write",
+      "mapper": "map_azure_activity_log",
+      "org_id": "acme",
+      "raw": {
+        "operationName": "Microsoft.Compute/virtualMachines/write",
+        "resourceId": "/subscriptions/s1/resourceGroups/rg/providers/Microsoft.Compute/virtualMachines/vm1",
+        "eventTimestamp": "2026-07-14T05:00:00Z",
+        "level": "Informational",
+        "status": {"value": "Succeeded"},
+        "caller": "alice@contoso.com",
+        "category": {"value": "Administrative"},
+        "correlationId": "corr-1",
+        "eventDataId": "edi-1"
+      },
+      "expected": {
+        "source_system": "azure_activity",
+        "provider_family": "azure",
+        "signal_id": "edi-1",
+        "event_type": "Microsoft.Compute/virtualMachines/write",
+        "event_class": "configuration",
+        "resource_type": "compute",
+        "severity": "info",
+        "resource_id": "/subscriptions/s1/resourceGroups/rg/providers/Microsoft.Compute/virtualMachines/vm1",
+        "principal": "alice@contoso.com",
+        "observed_at": "2026-07-14T05:00:00Z"
+      }
+    },
+    {
+      "name": "azure_activity_log_failed_delete",
+      "mapper": "map_azure_activity_log",
+      "org_id": "acme",
+      "raw": {
+        "operationName": "Microsoft.Storage/storageAccounts/delete",
+        "resourceId": "/subscriptions/s1/resourceGroups/rg/providers/Microsoft.Storage/storageAccounts/sa1",
+        "eventTimestamp": "2026-07-14T06:00:00Z",
+        "level": "Error",
+        "status": {"value": "Failed"},
+        "caller": "ops@contoso.com",
+        "category": {"value": "Administrative"},
+        "correlationId": "corr-2",
+        "eventDataId": "edi-2"
+      },
+      "expected": {
+        "source_system": "azure_activity",
+        "provider_family": "azure",
+        "signal_id": "edi-2",
+        "event_type": "Microsoft.Storage/storageAccounts/delete",
+        "event_class": "error",
+        "resource_type": "storage",
+        "severity": "high",
+        "resource_id": "/subscriptions/s1/resourceGroups/rg/providers/Microsoft.Storage/storageAccounts/sa1",
+        "principal": "ops@contoso.com",
+        "observed_at": "2026-07-14T06:00:00Z"
+      }
+    }
+  ]
+}
