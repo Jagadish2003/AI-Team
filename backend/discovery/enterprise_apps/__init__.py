@@ -23,6 +23,10 @@ share-the-extraction discipline established for the operational phase.
 auto-discovered) declaration of which repos ARE an application — the scope T1/T2
 parse over and T5 scopes retrieval against.
 
+:mod:`.graph_ingest` (T3/AT-608) loads T1/T2's extracted structure into the
+Stage 2 Knowledge Graph as observed entities/relationships with repo/path/SHA
+provenance — the join surface T4 (runtime→structure resolution) reads.
+
 :mod:`.runtime_structure_resolution` (T4/AT-609) resolves phase-one operational
 (runtime) entities to their structural counterparts — "the service emitting
 errors IS this application" — conservatively (confident matches merge, ambiguous
@@ -39,6 +43,11 @@ from .app_repo_map import (
     load_app_repo_mappings,
     repo_content_for_app,
     repo_ids_for_app,
+)
+from .graph_ingest import (
+    CommitShaProvider,
+    GraphIngestResult,
+    ingest_app_structure,
 )
 from .runtime_structure_resolution import (
     ResolutionOutcome,
@@ -78,6 +87,10 @@ __all__ = [
     "load_app_repo_mappings",
     "repo_content_for_app",
     "repo_ids_for_app",
+    # graph ingestion (T3)
+    "CommitShaProvider",
+    "GraphIngestResult",
+    "ingest_app_structure",
     # runtime→structure resolution (T4)
     "ResolutionOutcome",
     "RuntimeEntity",
