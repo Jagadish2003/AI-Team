@@ -27,6 +27,16 @@ from .operational_event import (  # noqa: F401
     normalize_resource_type,
     normalize_severity,
 )
+from .reference_mappers import (  # noqa: F401
+    MAPPERS,
+    aws_resource_type_from_arn,
+    azure_resource_type_from_id,
+    map_azure_activity_log,
+    map_azure_monitor,
+    map_cloudtrail,
+    map_cloudwatch,
+    map_eventbridge,
+)
 
 __all__ = [
     "CommonSignal",
@@ -44,4 +54,13 @@ __all__ = [
     "provider_family",
     "PROVIDER_FAMILIES",
     "EVENT_SIGNATURE_VERSION",
+    # AT-637 — reference mappers
+    "map_cloudwatch",
+    "map_eventbridge",
+    "map_cloudtrail",
+    "map_azure_monitor",
+    "map_azure_activity_log",
+    "aws_resource_type_from_arn",
+    "azure_resource_type_from_id",
+    "MAPPERS",
 ]

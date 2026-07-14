@@ -171,7 +171,12 @@ def _normalize(value: Optional[str], synonyms: Dict[str, str],
     """
     if not value:
         return default
-    key = "".join(ch for ch in str(value).strip().lower() if ch.isalnum())
+    lowered = str(value).strip().lower()
+    # An already-canonical token (incl. multi-word ones like "state_change")
+    # matches directly — before alnum-folding, which would strip the underscore.
+    if lowered in canonical:
+        return lowered
+    key = "".join(ch for ch in lowered if ch.isalnum())
     if key in canonical:
         return key
     return synonyms.get(key, default)

@@ -150,3 +150,65 @@ event = OperationalEvent.build(
 `build()` normalises provider-native tokens and mints the OBSERVED provenance
 pointer; construct `OperationalEvent(...)` directly when the caller already holds
 canonical values.
+
+---
+
+## 5. Provider mapping contract (AT-637 — for connector implementers)
+
+A **mapper** converts one raw provider payload into an `OperationalEvent`. The
+reference mappers in
+[`backend/discovery/signals/reference_mappers.py`](../backend/discovery/signals/reference_mappers.py)
+are the executable contract: a connector implementer (B1 AWS, B2 Azure, B8 export
+bridge) either reuses them or matches their behaviour. They run over **golden
+fixtures** ([`msp_provider_mapping_golden.json`](../backend/discovery/tests/fixtures/msp_provider_mapping_golden.json)),
+not live connections.
+
+Every mapper resolves the same target fields and calls `OperationalEvent.build()`,
+so **all providers emit the identical detector-visible structure** — a detector
+never branches on provider (T3-AC3).
+
+### Reference mappers
+
+| Mapper | Provider surface | `source_system` | family |
+|--------|------------------|-----------------|--------|
+| `map_cloudwatch` | CloudWatch alarm state change | `aws_cloudwatch` | aws |
+| `map_eventbridge` | EventBridge event (e.g. EC2 state change) | `aws` | aws |
+| `map_cloudtrail` | CloudTrail management/API record | `aws_cloudtrail` | aws |
+| `map_azure_monitor` | Azure Monitor common-alert-schema alert | `azure_monitor` | azure |
+| `map_azure_activity_log` | Azure Activity Log administrative record | `azure_activity` | azure |
+
+### Field-by-field mapping
+
+| Schema field | CloudWatch | EventBridge | CloudTrail | Azure Monitor | Azure Activity Log |
+|--------------|-----------|-------------|-----------|---------------|--------------------|
+| `signal_id` | `id` | `id` | `eventID` | `data.essentials.alertId` | `eventDataId` \| `correlationId` |
+| `event_type` | `detail-type` | `detail-type` | `eventName` | `essentials.alertRule` \| `signalType` | `operationName` |
+| `event_class` | `state_change` | classified from `detail-type` | `access` (or `error` if `errorCode`) | `state_change` | classified from operation verb (or `error` if failed) |
+| `resource_type` | from alarm ARN | from `resources[0]` ARN | from resource ARN / `eventSource` | from `alertTargetIDs[0]` | from `resourceId` |
+| `severity` | from alarm `state.value` | `info` | `high` if error else `info` | `essentials.severity` (`Sev0..4`) | `level` |
+| `observed_at` | `time` | `time` | `eventTime` | `essentials.firedDateTime` | `eventTimestamp` |
+| `resource` | alarm ARN | `resources[0]` | resource ARN / service | `alertTargetIDs[0]` | `resourceId` |
+| `payload.principal` | — | — | `userIdentity.arn` | — | `caller` |
+
+**Resource-type derivation.** `aws_resource_type_from_arn()` maps an ARN's
+service token (`ec2`→compute, `s3`→storage, `rds`→database, `iam`→identity,
+`cloudwatch`→monitoring, …); `azure_resource_type_from_id()` maps the resource
+id's provider type (`virtualMachines`→compute, `storageAccounts`→storage,
+`virtualNetworks`→network, …). Both fall back to `normalize_resource_type()`
+then `"other"` — they never raise.
+
+**Severity/class normalisation.** Providers' raw tokens are folded to the
+schema vocabulary by `build()` (`Sev2`→`high`, `Informational`→`info`, `stop`→
+`lifecycle`, …). See §2 / §3.
+
+**Resilience.** Mappers are tolerant: a missing optional field degrades to a
+sensible default (no resource → `resource=None`; no timestamp → now) and never
+crashes a run, consistent with the connector conventions.
+
+### Adding a new provider surface
+
+1. Write `map_<surface>(payload, *, org_id) -> OperationalEvent` resolving the
+   fields above and calling `OperationalEvent.build(...)`.
+2. Register it in `reference_mappers.MAPPERS`.
+3. Add a golden fixture case (raw payload + expected normalised fields) to
+   `msp_provider_mapping_golden.json`.
