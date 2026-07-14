@@ -15,5 +15,15 @@ fi
 
 MASKED=$(printf '%s' "$DATABASE_URL" | sed 's|.*@||; s|\?.*||')
 echo "[entrypoint] DATABASE_URL -> $MASKED"
+
+# Bring an existing database up to the code's schema before serving.
+# provision.sql only runs on a FIRST start with an empty data directory, so a
+# persisted database from an older image would otherwise stay on the old
+# schema forever (e.g. orgs.name_normalised missing -> 500 on /api/auth/register).
+# alembic is a no-op when the schema is already at head.
+echo "[entrypoint] Applying database migrations (alembic upgrade head)..."
+alembic upgrade head
+echo "[entrypoint] Migrations up to date."
+
 echo "[entrypoint] Starting AgentIQ backend on port 8000..."
 exec python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
