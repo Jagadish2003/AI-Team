@@ -161,7 +161,8 @@ describe("RunHealthDashboardPage", () => {
       "href",
       "/run-health?panel=connectors&connector=salesforce",
     );
-    expect(screen.getByTestId("panel-connectors")).toHaveClass("ring-blue-100");
+    // Selected panel is highlighted with the app accent ring (theme-aware).
+    expect(screen.getByTestId("panel-connectors")).toHaveClass("ring-accent/30");
   });
 
   it("distinguishes successful, degraded, failed, and in-progress runs", async () => {

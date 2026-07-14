@@ -52,10 +52,10 @@ const INITIAL_STATE: ResourceState<never> = {
 const PANEL_IDS: HealthPanelId[] = ["connectors", "runs", "content", "packs"];
 
 const severityStyles: Record<HealthSeverity, string> = {
-  critical: "border-red-300 bg-red-50 text-red-800",
-  high: "border-orange-300 bg-orange-50 text-orange-800",
-  medium: "border-amber-300 bg-amber-50 text-amber-800",
-  low: "border-blue-300 bg-blue-50 text-blue-800",
+  critical: "border-red-500/30 bg-red-500/15 text-red-200",
+  high: "border-orange-500/30 bg-orange-500/15 text-orange-200",
+  medium: "border-amber-500/30 bg-amber-500/15 text-amber-200",
+  low: "border-blue-500/30 bg-blue-500/15 text-blue-200",
 };
 
 function errorMessage(error: unknown, fallback: string): string {
@@ -122,11 +122,11 @@ function detectorLabel(value: string): string {
 
 function StatusPill({ label, tone }: { label: string; tone: "good" | "warn" | "bad" | "info" | "neutral" }) {
   const styles = {
-    good: "border-emerald-200 bg-emerald-50 text-emerald-700",
-    warn: "border-amber-200 bg-amber-50 text-amber-800",
-    bad: "border-red-200 bg-red-50 text-red-700",
-    info: "border-blue-200 bg-blue-50 text-blue-700",
-    neutral: "border-slate-200 bg-slate-50 text-slate-700",
+    good: "border-emerald-500/30 bg-emerald-500/15 text-emerald-300",
+    warn: "border-amber-500/30 bg-amber-500/15 text-amber-300",
+    bad: "border-red-500/30 bg-red-500/15 text-red-300",
+    info: "border-blue-500/30 bg-blue-500/15 text-blue-300",
+    neutral: "border-border bg-bg/40 text-muted",
   };
   return (
     <span className={`inline-flex rounded-full border px-2.5 py-1 text-xs font-semibold ${styles[tone]}`}>
@@ -137,10 +137,10 @@ function StatusPill({ label, tone }: { label: string; tone: "good" | "warn" | "b
 
 function Metric({ label, value, detail }: { label: string; value: string | number; detail?: string }) {
   return (
-    <div className="rounded-xl border border-slate-200 bg-slate-50/80 p-3">
-      <div className="text-xs font-medium uppercase tracking-wide text-slate-500">{label}</div>
-      <div className="mt-1 text-2xl font-semibold text-slate-900">{value}</div>
-      {detail ? <div className="mt-1 text-xs text-slate-500">{detail}</div> : null}
+    <div className="rounded-xl border border-border bg-bg/40 p-3">
+      <div className="text-xs font-medium uppercase tracking-wide text-muted">{label}</div>
+      <div className="mt-1 text-2xl font-semibold text-text">{value}</div>
+      {detail ? <div className="mt-1 text-xs text-muted">{detail}</div> : null}
     </div>
   );
 }
@@ -178,15 +178,15 @@ function PanelFrame({
       id={id}
       data-testid={id}
       data-state={state}
-      className={`scroll-mt-24 rounded-2xl border bg-white p-5 shadow-sm transition ${
-        highlighted ? "border-blue-400 ring-4 ring-blue-100" : "border-slate-200"
+      className={`scroll-mt-24 rounded-2xl border bg-panel p-5 shadow-sm transition ${
+        highlighted ? "border-accent ring-4 ring-accent/30" : "border-border"
       }`}
     >
       <div className="mb-4 flex items-start gap-3">
-        <div className="rounded-xl bg-slate-100 p-2 text-slate-700">{icon}</div>
+        <div className="rounded-xl bg-bg/40 p-2 text-muted">{icon}</div>
         <div className="min-w-0 flex-1">
-          <h2 className="text-lg font-semibold text-slate-900">{title}</h2>
-          <p className="mt-1 text-sm text-slate-600">{description}</p>
+          <h2 className="text-lg font-semibold text-text">{title}</h2>
+          <p className="mt-1 text-sm text-muted">{description}</p>
         </div>
         <PanelStateIndicator state={state} />
       </div>
@@ -197,8 +197,8 @@ function PanelFrame({
 
 function PanelLoading({ label }: { label: string }) {
   return (
-    <div role="status" className="flex items-center gap-3 rounded-xl border border-slate-200 bg-slate-50 p-5 text-sm text-slate-600">
-      <Loader2 className="h-5 w-5 animate-spin text-blue-600" aria-hidden="true" />
+    <div role="status" className="flex items-center gap-3 rounded-xl border border-border bg-bg/40 p-5 text-sm text-muted">
+      <Loader2 className="h-5 w-5 animate-spin text-accent" aria-hidden="true" />
       Loading {label.toLowerCase()}…
     </div>
   );
@@ -206,17 +206,17 @@ function PanelLoading({ label }: { label: string }) {
 
 function PanelError({ label, message, onRetry }: { label: string; message: string; onRetry: () => void }) {
   return (
-    <div role="alert" className="rounded-xl border border-red-200 bg-red-50 p-4 text-red-900">
+    <div role="alert" className="rounded-xl border border-red-500/30 bg-red-500/10 p-4 text-red-200">
       <div className="flex gap-3">
         <AlertCircle className="mt-0.5 h-5 w-5 shrink-0" aria-hidden="true" />
         <div className="min-w-0">
           <div className="font-semibold">{label} unavailable</div>
-          <p className="mt-1 break-words text-sm text-red-800">{message}</p>
-          <p className="mt-1 text-xs text-red-700">No healthy or zero-value state is inferred while this read is unavailable.</p>
+          <p className="mt-1 break-words text-sm text-red-200/90">{message}</p>
+          <p className="mt-1 text-xs text-red-200/70">No healthy or zero-value state is inferred while this read is unavailable.</p>
           <button
             type="button"
             onClick={onRetry}
-            className="mt-3 rounded-lg border border-red-300 bg-white px-3 py-1.5 text-sm font-semibold hover:bg-red-100"
+            className="mt-3 rounded-lg border border-red-500/40 bg-panel px-3 py-1.5 text-sm font-semibold text-text hover:bg-red-500/10"
           >
             Retry {label.toLowerCase()}
           </button>
@@ -228,9 +228,9 @@ function PanelError({ label, message, onRetry }: { label: string; message: strin
 
 function EmptyState({ title, detail }: { title: string; detail: string }) {
   return (
-    <div className="rounded-xl border border-dashed border-slate-300 bg-slate-50 p-5 text-center">
-      <div className="font-semibold text-slate-800">{title}</div>
-      <p className="mt-1 text-sm text-slate-600">{detail}</p>
+    <div className="rounded-xl border border-dashed border-border bg-bg/40 p-5 text-center">
+      <div className="font-semibold text-text">{title}</div>
+      <p className="mt-1 text-sm text-muted">{detail}</p>
     </div>
   );
 }
@@ -374,7 +374,7 @@ function ConnectorActions({
           <Link
             to={reconnectHref(item.connector_id)}
             data-testid={`reconnect-${item.connector_id}`}
-            className="inline-flex items-center gap-1.5 rounded-lg border border-blue-300 bg-blue-50 px-3 py-1.5 text-sm font-semibold text-blue-800 hover:bg-blue-100"
+            className="inline-flex items-center gap-1.5 rounded-lg border border-accent/40 bg-accent/10 px-3 py-1.5 text-sm font-semibold text-accent hover:bg-accent/20"
           >
             <RefreshCw className="h-4 w-4" aria-hidden="true" />
             Reconnect in Integration Hub
@@ -388,7 +388,7 @@ function ConnectorActions({
               onOutcome(item.connector_id, null);
               setConfirmOpen(true);
             }}
-            className="inline-flex items-center gap-1.5 rounded-lg border border-amber-300 bg-amber-50 px-3 py-1.5 text-sm font-semibold text-amber-900 hover:bg-amber-100"
+            className="inline-flex items-center gap-1.5 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-1.5 text-sm font-semibold text-amber-200 hover:bg-amber-500/20"
           >
             <RotateCcw className="h-4 w-4" aria-hidden="true" />
             Reset checkpoint
@@ -400,7 +400,7 @@ function ConnectorActions({
         <div
           role="status"
           data-testid={`reset-result-${item.connector_id}`}
-          className="mt-2 rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-900"
+          className="mt-2 rounded-lg border border-emerald-500/30 bg-emerald-500/10 p-3 text-sm text-emerald-300"
         >
           {outcome.kind === "cleared"
             ? "Checkpoint cleared. The next ingestion for this connector will re-read from the start."
@@ -412,7 +412,7 @@ function ConnectorActions({
         <div
           role="alert"
           data-testid={`reset-error-${item.connector_id}`}
-          className="mt-2 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-900"
+          className="mt-2 rounded-lg border border-red-500/30 bg-red-500/10 p-3 text-sm text-red-300"
         >
           {outcome.message}
         </div>
@@ -503,29 +503,29 @@ function ConnectorsPanel({
           </div>
           <div className="space-y-3">
             {resource.data.connectors.map((item) => (
-              <article key={item.connector_id} className="rounded-xl border border-slate-200 p-4">
+              <article key={item.connector_id} className="rounded-xl border border-border p-4">
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div>
-                    <h3 className="font-semibold text-slate-900">{item.name}</h3>
-                    <p className="text-sm text-slate-500">{item.tier ? `${labelize(item.tier)} connector` : labelize(item.connector_id)}</p>
+                    <h3 className="font-semibold text-text">{item.name}</h3>
+                    <p className="text-sm text-muted">{item.tier ? `${labelize(item.tier)} connector` : labelize(item.connector_id)}</p>
                   </div>
                   <StatusPill label={labelize(item.connection_state)} tone={connectorTone(item)} />
                 </div>
                 <dl className="mt-4 grid gap-3 text-sm sm:grid-cols-3">
-                  <div><dt className="text-slate-500">Last ingestion</dt><dd className="mt-0.5 font-medium text-slate-800">{formatDate(item.last_successful_ingestion)}</dd></div>
-                  <div><dt className="text-slate-500">Checkpoint age</dt><dd className="mt-0.5 font-medium text-slate-800">{formatAge(item.checkpoint_age_seconds)}</dd></div>
-                  <div><dt className="text-slate-500">Authentication</dt><dd className="mt-0.5 font-medium text-slate-800">{item.auth_mode ? labelize(item.auth_mode) : "Not available"}</dd></div>
+                  <div><dt className="text-muted">Last ingestion</dt><dd className="mt-0.5 font-medium text-text">{formatDate(item.last_successful_ingestion)}</dd></div>
+                  <div><dt className="text-muted">Checkpoint age</dt><dd className="mt-0.5 font-medium text-text">{formatAge(item.checkpoint_age_seconds)}</dd></div>
+                  <div><dt className="text-muted">Authentication</dt><dd className="mt-0.5 font-medium text-text">{item.auth_mode ? labelize(item.auth_mode) : "Not available"}</dd></div>
                 </dl>
                 {item.last_error ? (
-                  <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+                  <div className="mt-3 rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-sm text-amber-200">
                     <span className="font-semibold">Latest issue:</span> {item.last_error}
                   </div>
                 ) : null}
                 <details className="mt-3 text-sm">
-                  <summary className="cursor-pointer font-medium text-blue-700">Supporting details</summary>
-                  <dl className="mt-2 grid gap-2 rounded-lg bg-slate-50 p-3 sm:grid-cols-2">
-                    <div><dt className="text-slate-500">Checkpoint position</dt><dd className="font-medium text-slate-800">{item.checkpoint_position ?? "Not available"}</dd></div>
-                    <div><dt className="text-slate-500">Checkpoint recorded</dt><dd className="font-medium text-slate-800">{formatDate(item.checkpoint_captured_at)}</dd></div>
+                  <summary className="cursor-pointer font-medium text-accent">Supporting details</summary>
+                  <dl className="mt-2 grid gap-2 rounded-lg bg-bg/40 p-3 sm:grid-cols-2">
+                    <div><dt className="text-muted">Checkpoint position</dt><dd className="font-medium text-text">{item.checkpoint_position ?? "Not available"}</dd></div>
+                    <div><dt className="text-muted">Checkpoint recorded</dt><dd className="font-medium text-text">{formatDate(item.checkpoint_captured_at)}</dd></div>
                   </dl>
                 </details>
                 <ConnectorActions
@@ -555,12 +555,12 @@ function runTone(status: string | null | undefined): "good" | "warn" | "bad" | "
 function RunDetails({ run }: { run: RunHealthItem }) {
   return (
     <details className="mt-3 text-sm">
-      <summary className="cursor-pointer font-medium text-blue-700">Stage and detector details</summary>
-      <div className="mt-2 space-y-3 rounded-lg bg-slate-50 p-3">
+      <summary className="cursor-pointer font-medium text-accent">Stage and detector details</summary>
+      <div className="mt-2 space-y-3 rounded-lg bg-bg/40 p-3">
         {(run.degraded_stages?.length ?? 0) > 0 ? (
           <div>
-            <div className="font-semibold text-slate-800">Stages needing attention</div>
-            <ul className="mt-1 space-y-1 text-slate-700">
+            <div className="font-semibold text-text">Stages needing attention</div>
+            <ul className="mt-1 space-y-1 text-muted">
               {run.degraded_stages?.map((stage, index) => (
                 <li key={`${stage.stage}-${index}`}>
                   <span className="font-medium">{labelize(stage.stage)}:</span> {stage.reason}
@@ -576,7 +576,7 @@ function RunDetails({ run }: { run: RunHealthItem }) {
             ))}
           </div>
         ) : (
-          <div className="text-slate-500">No stage-level events were recorded.</div>
+          <div className="text-muted">No stage-level events were recorded.</div>
         )}
       </div>
     </details>
@@ -643,24 +643,24 @@ function RunsPanel({
           </div>
           <div className="space-y-3">
             {resource.data.runs.map((run) => (
-              <article key={run.run_id} className="rounded-xl border border-slate-200 p-4">
+              <article key={run.run_id} className="rounded-xl border border-border p-4">
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div>
-                    <h3 className="font-semibold text-slate-900">Run {run.run_id.slice(0, 8)}</h3>
-                    <p className="text-sm text-slate-500">{formatDate(run.started_at)}</p>
+                    <h3 className="font-semibold text-text">Run {run.run_id.slice(0, 8)}</h3>
+                    <p className="text-sm text-muted">{formatDate(run.started_at)}</p>
                   </div>
                   <StatusPill label={labelize(run.health_status)} tone={runTone(run.health_status)} />
                 </div>
                 <dl className="mt-4 grid gap-3 text-sm sm:grid-cols-2 lg:grid-cols-5">
-                  <div><dt className="text-slate-500">Systems</dt><dd className="font-semibold text-slate-800">{run.system_count ?? "Not available"}</dd></div>
-                  <div><dt className="text-slate-500">Detectors</dt><dd className="font-semibold text-slate-800">{run.detectors_evaluated ?? "Not available"} evaluated</dd></div>
-                  <div><dt className="text-slate-500">Findings</dt><dd className="font-semibold text-slate-800">{run.detectors_fired ?? "Not available"} fired</dd></div>
-                  <div><dt className="text-slate-500">Opportunities</dt><dd className="font-semibold text-slate-800">{run.opportunities ?? "Not available"}</dd></div>
-                  <div><dt className="text-slate-500">Duration</dt><dd className="font-semibold text-slate-800">{run.duration_seconds === null || run.duration_seconds === undefined ? "Not available" : formatDuration(run.duration_seconds * 1000)}</dd></div>
+                  <div><dt className="text-muted">Systems</dt><dd className="font-semibold text-text">{run.system_count ?? "Not available"}</dd></div>
+                  <div><dt className="text-muted">Detectors</dt><dd className="font-semibold text-text">{run.detectors_evaluated ?? "Not available"} evaluated</dd></div>
+                  <div><dt className="text-muted">Findings</dt><dd className="font-semibold text-text">{run.detectors_fired ?? "Not available"} fired</dd></div>
+                  <div><dt className="text-muted">Opportunities</dt><dd className="font-semibold text-text">{run.opportunities ?? "Not available"}</dd></div>
+                  <div><dt className="text-muted">Duration</dt><dd className="font-semibold text-text">{run.duration_seconds === null || run.duration_seconds === undefined ? "Not available" : formatDuration(run.duration_seconds * 1000)}</dd></div>
                 </dl>
                 {run.pack_id ? (
-                  <p className="mt-3 text-sm text-slate-600">
-                    Pack: <span className="font-medium text-slate-800">{run.pack_id}</span>
+                  <p className="mt-3 text-sm text-muted">
+                    Pack: <span className="font-medium text-text">{run.pack_id}</span>
                   </p>
                 ) : null}
                 <RunDetails run={run} />
@@ -730,38 +730,38 @@ function ContentPanel({
             <Metric label="Redactions" value={resource.data.redaction_count} />
             <Metric label="Pending changes" value={resource.data.pending_change_events} />
           </div>
-          <div className="rounded-xl border border-slate-200 p-4">
+          <div className="rounded-xl border border-border p-4">
             <div className="flex flex-wrap items-center justify-between gap-2">
-              <h3 className="font-semibold text-slate-900">Refresh progress</h3>
+              <h3 className="font-semibold text-text">Refresh progress</h3>
               <StatusPill label={resource.data.backfill.complete ? "Complete" : resource.data.backfill.awaiting_backfill ? "In progress" : "No active refresh"} tone={resource.data.backfill.complete ? "good" : resource.data.backfill.awaiting_backfill ? "info" : "neutral"} />
             </div>
             {progress !== null ? (
               <div className="mt-3">
-                <div className="h-2 overflow-hidden rounded-full bg-slate-200" aria-label={`Refresh ${progress}% complete`}>
-                  <div className="h-full rounded-full bg-blue-600" style={{ width: `${progress}%` }} />
+                <div className="h-2 overflow-hidden rounded-full bg-border" aria-label={`Refresh ${progress}% complete`}>
+                  <div className="h-full rounded-full bg-accent" style={{ width: `${progress}%` }} />
                 </div>
-                <p className="mt-1 text-xs text-slate-500">{progress}% complete</p>
+                <p className="mt-1 text-xs text-muted">{progress}% complete</p>
               </div>
             ) : (
-              <p className="mt-2 text-sm text-slate-500">No active refresh progress is available.</p>
+              <p className="mt-2 text-sm text-muted">No active refresh progress is available.</p>
             )}
           </div>
-          <details className="rounded-xl border border-slate-200 p-4" open={resource.data.skipped.length > 0}>
-            <summary className="cursor-pointer font-semibold text-slate-900">Supporting source details</summary>
+          <details className="rounded-xl border border-border p-4" open={resource.data.skipped.length > 0}>
+            <summary className="cursor-pointer font-semibold text-text">Supporting source details</summary>
             <div className="mt-3 overflow-x-auto">
               <table className="min-w-full text-left text-sm">
-                <thead className="text-xs uppercase text-slate-500"><tr><th className="pb-2 pr-4">Source</th><th className="pb-2 pr-4">Discovered</th><th className="pb-2">Embedded</th></tr></thead>
-                <tbody className="divide-y divide-slate-100">
+                <thead className="text-xs uppercase text-muted"><tr><th className="pb-2 pr-4">Source</th><th className="pb-2 pr-4">Discovered</th><th className="pb-2">Embedded</th></tr></thead>
+                <tbody className="divide-y divide-border">
                   {resource.data.indexed_by_source.map((source) => (
-                    <tr key={source.source_system}><td className="py-2 pr-4 font-medium text-slate-800">{labelize(source.source_system)}</td><td className="py-2 pr-4">{source.chunk_count}</td><td className="py-2">{source.embedded_count}</td></tr>
+                    <tr key={source.source_system}><td className="py-2 pr-4 font-medium text-text">{labelize(source.source_system)}</td><td className="py-2 pr-4">{source.chunk_count}</td><td className="py-2">{source.embedded_count}</td></tr>
                   ))}
                 </tbody>
               </table>
             </div>
             {resource.data.skipped.length > 0 ? (
               <div className="mt-4">
-                <div className="text-sm font-semibold text-slate-800">Skipped items</div>
-                <ul className="mt-2 space-y-1 text-sm text-slate-600">
+                <div className="text-sm font-semibold text-text">Skipped items</div>
+                <ul className="mt-2 space-y-1 text-sm text-muted">
                   {resource.data.skipped.map((item) => <li key={item.reason}>{labelize(item.reason)}: {item.count}</li>)}
                 </ul>
               </div>
@@ -812,18 +812,18 @@ function PacksPanel({
       {resource.status === "success" && resource.data.packs.length > 0 ? (
         <div className="space-y-3">
           {resource.data.packs.map((pack) => (
-            <article key={`${resource.data.run_id}-${pack.pack_id}`} className="rounded-xl border border-slate-200 p-4">
+            <article key={`${resource.data.run_id}-${pack.pack_id}`} className="rounded-xl border border-border p-4">
               <div className="flex flex-wrap items-start justify-between gap-3">
-                <div><h3 className="font-semibold text-slate-900">{pack.pack_name ?? pack.pack_id}</h3><p className="text-sm text-slate-500">Run {resource.data.run_id?.slice(0, 8) ?? "Not available"} · Executed {formatDate(pack.executed_at)}</p></div>
+                <div><h3 className="font-semibold text-text">{pack.pack_name ?? pack.pack_id}</h3><p className="text-sm text-muted">Run {resource.data.run_id?.slice(0, 8) ?? "Not available"} · Executed {formatDate(pack.executed_at)}</p></div>
                 <StatusPill label={pack.pack_version ? `Version ${pack.pack_version}` : "Version unavailable"} tone={pack.pack_version ? "info" : "warn"} />
               </div>
               <dl className="mt-4 grid gap-3 text-sm sm:grid-cols-2">
-                <div><dt className="text-slate-500">Detectors attempted</dt><dd className="text-xl font-semibold text-slate-900">{pack.detector_count}</dd></div>
-                <div><dt className="text-slate-500">Pack identifier</dt><dd className="text-lg font-semibold text-slate-900">{pack.pack_id}</dd></div>
-                {pack.evaluated_count !== null && pack.evaluated_count !== undefined ? <div><dt className="text-slate-500">Evaluated successfully</dt><dd className="text-xl font-semibold text-slate-900">{pack.evaluated_count}</dd></div> : null}
-                {pack.not_evaluated_count !== null && pack.not_evaluated_count !== undefined ? <div><dt className="text-slate-500">Not evaluated</dt><dd className="text-xl font-semibold text-slate-900">{pack.not_evaluated_count}</dd></div> : null}
+                <div><dt className="text-muted">Detectors attempted</dt><dd className="text-xl font-semibold text-text">{pack.detector_count}</dd></div>
+                <div><dt className="text-muted">Pack identifier</dt><dd className="text-lg font-semibold text-text">{pack.pack_id}</dd></div>
+                {pack.evaluated_count !== null && pack.evaluated_count !== undefined ? <div><dt className="text-muted">Evaluated successfully</dt><dd className="text-xl font-semibold text-text">{pack.evaluated_count}</dd></div> : null}
+                {pack.not_evaluated_count !== null && pack.not_evaluated_count !== undefined ? <div><dt className="text-muted">Not evaluated</dt><dd className="text-xl font-semibold text-text">{pack.not_evaluated_count}</dd></div> : null}
               </dl>
-              {pack.detectors && pack.detectors.length > 0 ? <details className="mt-3 text-sm"><summary className="cursor-pointer font-medium text-blue-700">Detector list</summary><div className="mt-2 flex flex-wrap gap-2">{pack.detectors.map((detector) => <StatusPill key={detector} label={detectorLabel(detector)} tone="neutral" />)}</div></details> : null}
+              {pack.detectors && pack.detectors.length > 0 ? <details className="mt-3 text-sm"><summary className="cursor-pointer font-medium text-accent">Detector list</summary><div className="mt-2 flex flex-wrap gap-2">{pack.detectors.map((detector) => <StatusPill key={detector} label={detectorLabel(detector)} tone="neutral" />)}</div></details> : null}
             </article>
           ))}
         </div>
@@ -835,21 +835,21 @@ function PacksPanel({
 function AttentionStrip({ resource, retry }: { resource: ResourceState<AttentionHealthResponse>; retry: () => void }) {
   const state = resource.status === "success" ? (resource.data.items.length === 0 ? "empty" : "attention") : resource.status;
   return (
-    <section data-testid="attention-strip" data-state={state} className="rounded-2xl border border-amber-300 bg-amber-50/70 p-5 shadow-sm">
+    <section data-testid="attention-strip" data-state={state} className="rounded-2xl border border-amber-500/30 bg-amber-500/10 p-5 shadow-sm">
       <div className="mb-4 flex items-start gap-3">
-        <div className="rounded-xl bg-amber-100 p-2 text-amber-800"><ShieldAlert className="h-5 w-5" aria-hidden="true" /></div>
-        <div><h2 className="text-lg font-semibold text-slate-900">Attention Strip</h2><p className="mt-1 text-sm text-slate-600">Prioritized conditions that may need investigation, linked directly to supporting details.</p></div>
+        <div className="rounded-xl bg-amber-500/15 p-2 text-amber-300"><ShieldAlert className="h-5 w-5" aria-hidden="true" /></div>
+        <div><h2 className="text-lg font-semibold text-text">Attention Strip</h2><p className="mt-1 text-sm text-muted">Prioritized conditions that may need investigation, linked directly to supporting details.</p></div>
       </div>
       {resource.status === "loading" ? <PanelLoading label="Attention items" /> : null}
       {resource.status === "error" ? <PanelError label="Attention strip" message={resource.error} onRetry={retry} /> : null}
       {resource.status === "success" && resource.data.items.length === 0 ? (
-        <div className="flex items-start gap-3 rounded-xl border border-emerald-200 bg-white p-4 text-emerald-800"><CheckCircle2 className="mt-0.5 h-5 w-5" aria-hidden="true" /><div><div className="font-semibold">No current attention items</div><p className="mt-1 text-sm">The health service did not report any prioritized conditions for this organization.</p></div></div>
+        <div className="flex items-start gap-3 rounded-xl border border-emerald-500/30 bg-panel p-4 text-emerald-300"><CheckCircle2 className="mt-0.5 h-5 w-5" aria-hidden="true" /><div><div className="font-semibold">No current attention items</div><p className="mt-1 text-sm">The health service did not report any prioritized conditions for this organization.</p></div></div>
       ) : null}
       {resource.status === "success" && resource.data.items.length > 0 ? (
         <ol className="space-y-3">
           {resource.data.items.map((item) => (
-            <li key={item.id} className="rounded-xl border border-amber-200 bg-white p-4">
-              <div className="flex flex-wrap items-start justify-between gap-3"><div className="min-w-0"><div className="flex flex-wrap items-center gap-2"><StatusPill label={item.severity.toUpperCase()} tone={item.severity === "critical" ? "bad" : item.severity === "high" || item.severity === "medium" ? "warn" : "info"} /><h3 className="font-semibold text-slate-900">{item.title}</h3></div><p className="mt-2 text-sm text-slate-700">{item.explanation}</p><p className="mt-2 text-xs text-slate-500">Detected {formatDate(item.timestamp)}</p></div><Link to={item.href} className={`shrink-0 rounded-lg border px-3 py-2 text-sm font-semibold hover:brightness-95 ${severityStyles[item.severity]}`}>View {item.panel} details</Link></div>
+            <li key={item.id} className="rounded-xl border border-amber-500/30 bg-panel p-4">
+              <div className="flex flex-wrap items-start justify-between gap-3"><div className="min-w-0"><div className="flex flex-wrap items-center gap-2"><StatusPill label={item.severity.toUpperCase()} tone={item.severity === "critical" ? "bad" : item.severity === "high" || item.severity === "medium" ? "warn" : "info"} /><h3 className="font-semibold text-text">{item.title}</h3></div><p className="mt-2 text-sm text-muted">{item.explanation}</p><p className="mt-2 text-xs text-muted">Detected {formatDate(item.timestamp)}</p></div><Link to={item.href} className={`shrink-0 rounded-lg border px-3 py-2 text-sm font-semibold hover:brightness-95 ${severityStyles[item.severity]}`}>View {item.panel} details</Link></div>
             </li>
           ))}
         </ol>
@@ -896,7 +896,7 @@ function overallSummary(
 function ViewerDenied() {
   return (
     <PageShell title="Run Health" description="Tenant-level operational health for connectors, discovery runs, content, and analysis packs.">
-      <section role="alert" className="mx-auto max-w-2xl rounded-2xl border border-amber-200 bg-amber-50 p-6 text-amber-950">
+      <section role="alert" className="mx-auto max-w-2xl rounded-2xl border border-amber-500/30 bg-amber-500/10 p-6 text-amber-200">
         <div className="flex gap-3"><ShieldAlert className="mt-0.5 h-6 w-6 shrink-0" aria-hidden="true" /><div><h2 className="text-lg font-semibold">Run Health access is restricted</h2><p className="mt-2 text-sm">Owners and Analysts can view organization health. Viewers do not have permission to access this dashboard.</p></div></div>
       </section>
     </PageShell>
@@ -935,11 +935,11 @@ function RunHealthDashboard({ role }: { role: "owner" | "analyst" }) {
     <PageShell
       title="Run Health"
       description="A tenant-level view of whether data is flowing, discovery is completing, content is fresh, and the expected analysis packs ran."
-      actions={<div className="flex items-center gap-2">{role === "analyst" ? <StatusPill label="Read-only" tone="neutral" /> : null}<button type="button" onClick={refreshAll} className="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 shadow-sm hover:bg-slate-50"><RefreshCw className="h-4 w-4" aria-hidden="true" />Refresh</button></div>}
+      actions={<div className="flex items-center gap-2">{role === "analyst" ? <StatusPill label="Read-only" tone="neutral" /> : null}<button type="button" onClick={refreshAll} className="inline-flex items-center gap-2 rounded-lg border border-border bg-panel px-3 py-2 text-sm font-semibold text-muted shadow-sm hover:bg-bg/40"><RefreshCw className="h-4 w-4" aria-hidden="true" />Refresh</button></div>}
     >
       <div className="space-y-5">
-        <section data-testid="tenant-health-summary" className="rounded-2xl border border-slate-200 bg-gradient-to-br from-slate-900 to-slate-800 p-5 text-white shadow-sm">
-          <div className="flex flex-wrap items-start justify-between gap-4"><div className="flex items-start gap-3"><div className="rounded-xl bg-white/10 p-2"><SummaryIcon className={`h-5 w-5 ${summary.icon === Loader2 ? "animate-spin" : ""}`} aria-hidden="true" /></div><div><h2 className="text-lg font-semibold">{summary.label}</h2><p className="mt-1 max-w-3xl text-sm text-slate-300">{summary.detail}</p></div></div><div className="text-xs text-slate-400">{refreshedAt ? `Updated ${formatDate(refreshedAt)}` : "Update time unavailable"}</div></div>
+        <section data-testid="tenant-health-summary" className="rounded-2xl border border-border bg-gradient-to-br from-panel to-panel2 p-5 text-text shadow-sm">
+          <div className="flex flex-wrap items-start justify-between gap-4"><div className="flex items-start gap-3"><div className="rounded-xl bg-accent/10 p-2"><SummaryIcon className={`h-5 w-5 ${summary.icon === Loader2 ? "animate-spin" : ""}`} aria-hidden="true" /></div><div><h2 className="text-lg font-semibold">{summary.label}</h2><p className="mt-1 max-w-3xl text-sm text-muted">{summary.detail}</p></div></div><div className="text-xs text-muted">{refreshedAt ? `Updated ${formatDate(refreshedAt)}` : "Update time unavailable"}</div></div>
         </section>
         <AttentionStrip resource={attention.state} retry={attention.refresh} />
         <div className="grid gap-5 xl:grid-cols-2">
