@@ -134,6 +134,30 @@ describe('R18-C1 T5 - Commercial Lending first-run guide', () => {
     expect(screen.queryByText('Covenant Tracking Gap')).not.toBeInTheDocument();
   });
 
+  it('uses the app accent (blue) theme for the guide chrome, not a green shade', () => {
+    const { container } = render(
+      <LendingFirstRunGuide
+        template={template}
+        state={setupState()}
+        packId="ncino"
+        launchState="setup"
+      />,
+    );
+
+    // The panel chrome (border, gradient, header rule, label, icon, list marks)
+    // is themed via the accent token so it matches light and dark. The old
+    // emerald shade must be gone from all of it.
+    const section = container.querySelector('section');
+    expect(section?.className).toContain('border-accent/30');
+    expect(section?.className).toContain('from-accent/10');
+    const label = screen.getByText('First-run guide');
+    expect(label.className).toContain('text-accent');
+    // No emerald chrome anywhere in the guide (the success "Confirmed" chip is a
+    // separate semantic and is not part of the panel shade under test).
+    expect(container.querySelector('[class*="emerald-400"]')).toBeNull();
+    expect(container.querySelector('[class*="from-emerald"]')).toBeNull();
+  });
+
   it('makes launch progress and failure explicit', () => {
     const view = render(
       <LendingFirstRunGuide
