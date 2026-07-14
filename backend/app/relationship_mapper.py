@@ -424,6 +424,172 @@ def get_resolved_source_entity(
     return None
 
 
+def _remove_servicenow_relationship_source(
+    *,
+    org_id: str,
+    relationship_sys_id: str,
+    keep_key: Optional[tuple[str, str, str]] = None,
+) -> int:
+    """Remove graph edges for one explicit ServiceNow relationship record.
+
+    The evidence match and delete are both organization-scoped. ``keep_key``
+    lets a changed relationship retain its current natural key while removing
+    a prior direction/type/end-point representation of the same source row.
+    """
+    conn = _connect()
+    removed = 0
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT id, from_entity_id, to_entity_id, relationship_type, evidence
+            FROM entity_relationships
+            WHERE org_id = %s AND inferred = %s
+            """,
+            (org_id, False),
+        )
+        for row in cur.fetchall():
+            evidence = row["evidence"]
+            if isinstance(evidence, str):
+                try:
+                    evidence = json.loads(evidence)
+                except (TypeError, ValueError):
+                    continue
+            if not isinstance(evidence, dict):
+                continue
+            source_id = str(
+                evidence.get("relationship_sys_id")
+                or evidence.get("source_record_id")
+                or ""
+            ).strip()
+            if evidence.get("source") != "servicenow" or source_id != relationship_sys_id:
+                continue
+            natural_key = (
+                str(row["from_entity_id"]),
+                str(row["to_entity_id"]),
+                str(row["relationship_type"]),
+            )
+            if keep_key is not None and natural_key == keep_key:
+                continue
+            cur.execute(
+                "DELETE FROM entity_relationships WHERE id = %s AND org_id = %s",
+                (row["id"], org_id),
+            )
+            removed += 1
+        conn.commit()
+        return removed
+    finally:
+        conn.close()
+
+
+def list_servicenow_relationship_source_ids(org_id: str) -> set[str]:
+    """List explicit ServiceNow edge ids already admitted for one org."""
+    conn = _connect()
+    source_ids: set[str] = set()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT evidence FROM entity_relationships WHERE org_id = %s AND inferred = %s",
+            (org_id, False),
+        )
+        for row in cur.fetchall():
+            evidence = row["evidence"]
+            if isinstance(evidence, str):
+                try:
+                    evidence = json.loads(evidence)
+                except (TypeError, ValueError):
+                    continue
+            if not isinstance(evidence, dict) or evidence.get("source") != "servicenow":
+                continue
+            source_id = str(
+                evidence.get("relationship_sys_id")
+                or evidence.get("source_record_id")
+                or ""
+            ).strip()
+            if source_id:
+                source_ids.add(source_id)
+        return source_ids
+    finally:
+        conn.close()
+
+
+def apply_servicenow_cmdb_relationship_delta(
+    *,
+    org_id: str,
+    run_id: str,
+    relationships: List[Dict[str, Any]],
+    entities: List[Entity],
+) -> int:
+    """Apply explicit changed or deleted ``cmdb_rel_ci`` records.
+
+    A tombstone removes only the observed edge carrying that ServiceNow record
+    id. An active row is upserted and any older representation of that same
+    source relationship is removed. No edge is inferred from topology or names.
+    """
+    count = 0
+    for relationship in relationships:
+        if not isinstance(relationship, dict):
+            continue
+        relationship_sys_id = str(
+            relationship.get("sys_id") or relationship.get("artifact_id") or ""
+        ).strip()
+        if not relationship_sys_id:
+            continue
+        if relationship.get("change_kind") == "deleted":
+            _remove_servicenow_relationship_source(
+                org_id=org_id,
+                relationship_sys_id=relationship_sys_id,
+            )
+            count += 1
+            continue
+
+        source_ci_id = str(relationship.get("source_ci_id") or "").strip()
+        target_ci_id = str(relationship.get("target_ci_id") or "").strip()
+        relationship_type = str(relationship.get("relationship_type") or "").strip()
+        if relationship_type not in RELATIONSHIP_TYPES:
+            continue
+        source_entity = get_resolved_source_entity(
+            org_id, "system", "servicenow", source_ci_id, entities
+        )
+        target_entity = get_resolved_source_entity(
+            org_id, "system", "servicenow", target_ci_id, entities
+        )
+        if source_entity is None or target_entity is None:
+            continue
+        natural_key = (
+            str(source_entity.id),
+            str(target_entity.id),
+            relationship_type,
+        )
+        _remove_servicenow_relationship_source(
+            org_id=org_id,
+            relationship_sys_id=relationship_sys_id,
+            keep_key=natural_key,
+        )
+        persisted = upsert_relationship(
+            org_id=org_id,
+            from_entity_id=natural_key[0],
+            to_entity_id=natural_key[1],
+            relationship_type=relationship_type,
+            confidence=OBSERVED_CONFIDENCE,
+            inferred=False,
+            run_id=run_id,
+            evidence={
+                "field": "cmdb_rel_ci",
+                "source": "servicenow",
+                "source_artifact": relationship_sys_id,
+                "source_record_id": relationship_sys_id,
+                "source_type": relationship.get("source_type"),
+                "source_timestamp": relationship.get("source_timestamp"),
+                "source_url": relationship.get("source_url"),
+                "relationship_sys_id": relationship_sys_id,
+            },
+        )
+        if persisted is not None:
+            count += 1
+    return count
+
+
 def _sn_ref_name(value: Any) -> Optional[str]:
     """Extract a display name from a ServiceNow reference field.
 

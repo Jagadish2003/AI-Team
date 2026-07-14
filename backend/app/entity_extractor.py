@@ -945,11 +945,32 @@ def prepare_servicenow_ci_resolution(
     idempotent within a run.
     """
     cmdb_data = sn_data.get("cmdb") or {}
-    cmdb_entities = _extract_servicenow_cmdb_entities(
+    _extract_servicenow_cmdb_entities(
         org_id=org_id,
         run_id=run_id,
         cmdb_data=cmdb_data,
     )
+    # Incremental CMDB payloads contain only changed CIs. Incident references
+    # and changed relationships must still resolve against every currently
+    # admitted CI in this organization, not only this run's delta.
+    from app.entity_resolution import list_source_entities
+
+    class_scope = {
+        _safe_str(value).casefold()
+        for value in cmdb_data.get("class_scope", []) or []
+        if _safe_str(value)
+    }
+    cmdb_entities = [
+        entity
+        for entity in list_source_entities(
+            org_id=org_id,
+            entity_type="system",
+            source_system="servicenow",
+        )
+        if not class_scope
+        or _safe_str((entity.metadata or {}).get("ci_class")).casefold()
+        in class_scope
+    ]
     from app.incident_ci_resolution import resolve_incident_ci_references
 
     resolve_incident_ci_references(

@@ -2,14 +2,20 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
 from uuid import uuid4
 
 import pytest
 
 from app import db
 from app.entity_extractor import _extract_servicenow_cmdb_entities, extract_entities
-from app.entity_resolution import get_source_entity
-from app.relationship_mapper import map_relationships
+from app.entity_resolution import get_source_entity, list_source_entities
+from app.relationship_mapper import (
+    apply_servicenow_cmdb_relationship_delta,
+    map_relationships,
+)
+from discovery.ingest.base import tombstone
+from discovery.ingest import servicenow as sn
 
 
 def _item(sys_id: str, name: str, status: str = "Operational") -> dict:
@@ -100,6 +106,7 @@ def _cleanup(*org_ids: str) -> None:
         for org_id in org_ids:
             cur.execute("DELETE FROM entity_relationships WHERE org_id = %s", (org_id,))
             cur.execute("DELETE FROM entities WHERE org_id = %s", (org_id,))
+            cur.execute("DELETE FROM ingestion_checkpoints WHERE org_id = %s", (org_id,))
         conn.commit()
     finally:
         conn.close()
@@ -228,3 +235,132 @@ def test_cmdb_graph_persistence_is_observed_idempotent_and_org_scoped():
         ]
     finally:
         _cleanup(org_a, org_b)
+
+
+def test_explicit_relationship_deletion_removes_only_the_current_org_observed_edge():
+    org_a = f"org-cmdb-delete-a-{uuid4().hex}"
+    org_b = f"org-cmdb-delete-b-{uuid4().hex}"
+    try:
+        _persist(org_a, "run-delete-a-1", _payload(org_a))
+        _persist(org_b, "run-delete-b-1", _payload(org_b))
+        entities = list_source_entities(
+            org_id=org_a, entity_type="system", source_system="servicenow"
+        )
+
+        applied = apply_servicenow_cmdb_relationship_delta(
+            org_id=org_a,
+            run_id="run-delete-a-2",
+            relationships=[tombstone("rel-001", sys_id="rel-001")],
+            entities=entities,
+        )
+
+        assert applied == 1
+        assert _rows(
+            "SELECT * FROM entity_relationships WHERE org_id = %s", (org_a,)
+        ) == []
+        assert len(_rows(
+            "SELECT * FROM entity_relationships WHERE org_id = %s", (org_b,)
+        )) == 1
+    finally:
+        _cleanup(org_a, org_b)
+
+
+def test_incremental_coordinator_updates_retirement_and_removes_relationship(monkeypatch):
+    org_id = f"org-cmdb-delta-{uuid4().hex}"
+
+    class ReadOnlyClient:
+        instance_url = "https://acme.service-now.com"
+
+        def __init__(self):
+            self.retired = False
+
+        def table_query(self, table, params, max_records):
+            if table == "cmdb_ci":
+                if self.retired:
+                    return [{
+                        "sys_id": "ci-app",
+                        "name": "Citizen Portal",
+                        "sys_class_name": "cmdb_ci_server",
+                        "operational_status": "Retired",
+                        "sys_updated_on": "2026-07-14 11:30:00",
+                    }]
+                return [
+                    {
+                        "sys_id": "ci-app",
+                        "name": "Citizen Portal",
+                        "sys_class_name": "cmdb_ci_server",
+                        "operational_status": "Operational",
+                        "sys_updated_on": "2026-07-14 09:00:00",
+                    },
+                    {
+                        "sys_id": "ci-host",
+                        "name": "app-prod-01",
+                        "sys_class_name": "cmdb_ci_server",
+                        "operational_status": "Operational",
+                        "sys_updated_on": "2026-07-14 09:00:00",
+                    },
+                ]
+            if table == "cmdb_rel_ci":
+                return [{
+                    "sys_id": "rel-001",
+                    "parent": "ci-app",
+                    "child": "ci-host",
+                    "type": "Runs on::Runs",
+                    "active": "false" if self.retired else "true",
+                    "sys_updated_on": (
+                        "2026-07-14 11:31:00" if self.retired
+                        else "2026-07-14 09:05:00"
+                    ),
+                }]
+            assert table == "sys_audit_delete"
+            return []
+
+    client = ReadOnlyClient()
+    monkeypatch.setattr(sn, "is_live", lambda: True)
+    try:
+        first = sn.ingest_cmdb_changes(
+            org_id=org_id,
+            run_id="run-cmdb-delta-1",
+            client=client,
+            class_scope=("cmdb_ci_server",),
+            clock=lambda: datetime(2026, 7, 14, 10, 0, tzinfo=timezone.utc),
+        )
+        assert first["streams"]["cmdb_ci"]["checkpoint_advanced"] is True
+        assert first["streams"]["cmdb_rel_ci"]["checkpoint_advanced"] is True
+        assert len(_rows(
+            "SELECT * FROM entity_relationships WHERE org_id = %s", (org_id,)
+        )) == 1
+
+        client.retired = True
+        second = sn.ingest_cmdb_changes(
+            org_id=org_id,
+            run_id="run-cmdb-delta-2",
+            client=client,
+            class_scope=("cmdb_ci_server",),
+            clock=lambda: datetime(2026, 7, 14, 12, 0, tzinfo=timezone.utc),
+        )
+
+        entity = get_source_entity(
+            org_id=org_id,
+            entity_type="system",
+            source_system="servicenow",
+            source_record_id="ci-app",
+        )
+        assert entity is not None
+        assert entity.metadata["lifecycle_state"] == "retired"
+        assert entity.metadata["is_retired"] is True
+        assert _rows(
+            "SELECT * FROM entity_relationships WHERE org_id = %s", (org_id,)
+        ) == []
+        assert second["relationship_deletions"][0]["artifact_id"] == "rel-001"
+        checkpoints = _rows(
+            "SELECT connector_id, value FROM ingestion_checkpoints "
+            "WHERE org_id = %s ORDER BY connector_id",
+            (org_id,),
+        )
+        assert checkpoints == [
+            {"connector_id": sn.CMDB_CI_CHECKPOINT_ID, "value": "2026-07-14 12:00:00"},
+            {"connector_id": sn.CMDB_RELATIONSHIP_CHECKPOINT_ID, "value": "2026-07-14 12:00:00"},
+        ]
+    finally:
+        _cleanup(org_id)

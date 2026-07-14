@@ -810,8 +810,33 @@ def run(
     try:
         if "servicenow" in _systems:
             update_run_step(run_id, "sn")
-            sn_data = servicenow.ingest()
-            if sn_data: logger.info("ServiceNow ingestion: OK")
+            # MSP-B3 T5: regular ServiceNow data is still ingested once, while
+            # CMDB CIs and relationships run through independent incremental
+            # checkpoints whose callbacks persist graph state before advancing.
+            sn_data = servicenow.ingest(include_cmdb=False)
+            if sn_data:
+                cmdb_data = servicenow.ingest_cmdb_changes(
+                    org_id=org_id,
+                    run_id=run_id,
+                    class_scope=(
+                        servicenow.DEFAULT_CMDB_CLASSES
+                        if mode == "offline"
+                        else None
+                    ),
+                )
+                sn_data["cmdb"] = cmdb_data
+                stream_errors = [
+                    stream.get("error")
+                    for stream in (cmdb_data.get("streams") or {}).values()
+                    if stream.get("error")
+                ]
+                if stream_errors:
+                    sn_ok = False
+                    sn_err = "; ".join(stream_errors)
+            if sn_data and sn_ok:
+                logger.info("ServiceNow ingestion: OK")
+            elif sn_data:
+                logger.warning("ServiceNow ingestion: partial (%s)", sn_err)
     except SNError as e:
         sn_ok = False
         sn_err = str(e)

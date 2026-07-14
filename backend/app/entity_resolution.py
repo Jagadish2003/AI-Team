@@ -550,6 +550,32 @@ def get_source_entity(
         conn.close()
 
 
+def list_source_entities(
+    *,
+    org_id: str,
+    entity_type: str,
+    source_system: str,
+) -> list[Entity]:
+    """Return resolved source-backed nodes within exactly one organization."""
+    conn = _connect()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT * FROM entities
+            WHERE org_id = %s
+              AND entity_type = %s
+              AND source_system = %s
+              AND resolution_status = 'resolved'
+            ORDER BY source_record_id, id
+            """,
+            (org_id, entity_type, source_system),
+        )
+        return [_row_to_entity(row) for row in cur.fetchall()]
+    finally:
+        conn.close()
+
+
 def resolve_or_create_entity(
     *,
     org_id: str,

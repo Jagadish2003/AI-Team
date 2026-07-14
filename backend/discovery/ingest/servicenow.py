@@ -23,12 +23,14 @@ import logging
 import os
 import re
 from dataclasses import asdict, dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from types import MappingProxyType
-from typing import Any, Dict, List, Mapping, Optional, Tuple
+from typing import Any, Callable, Dict, Iterator, List, Mapping, Optional, Tuple
 from urllib.parse import quote, urlsplit
 
 from . import is_live
+from .base import ChangeBasedIngestor, ChangeKind, Checkpoint, DeltaBatch, tombstone
 
 logger = logging.getLogger(__name__)
 
@@ -69,8 +71,18 @@ CMDB_RELATIONSHIP_FIELDS: Tuple[str, ...] = (
     "parent",
     "child",
     "type",
+    "active",
     "sys_updated_on",
 )
+CMDB_DELETION_FIELDS: Tuple[str, ...] = (
+    "sys_id",
+    "documentkey",
+    "tablename",
+    "sys_updated_on",
+)
+CMDB_CI_CHECKPOINT_ID = "servicenow:cmdb_ci"
+CMDB_RELATIONSHIP_CHECKPOINT_ID = "servicenow:cmdb_rel_ci"
+CMDB_CURSOR_FORMAT = "%Y-%m-%d %H:%M:%S"
 INCIDENT_CI_FIELDS: Tuple[str, ...] = (
     "sys_id",
     "number",
@@ -445,12 +457,12 @@ def _load_org_cmdb_config(org_id: str) -> Optional[Any]:
     return connector.get(CMDB_CLASS_SCOPE_CONFIG_KEY)
 
 
-def resolve_cmdb_class_scope() -> Tuple[str, ...]:
-    """Resolve the effective class scope from the current ingest organization."""
+def resolve_cmdb_class_scope(org_id: Optional[str] = None) -> Tuple[str, ...]:
+    """Resolve the effective class scope for one explicit or current org."""
     from . import get_ingest_org
 
-    org_id = get_ingest_org()
-    return normalize_cmdb_class_scope(_load_org_cmdb_config(org_id))
+    effective_org = org_id or get_ingest_org()
+    return normalize_cmdb_class_scope(_load_org_cmdb_config(effective_org))
 
 
 def _optional_sn_text(value: Any) -> Optional[str]:
@@ -589,9 +601,60 @@ def _configuration_item_from_record(
     )
 
 
+def _parse_cmdb_timestamp(value: str) -> datetime:
+    """Parse a ServiceNow UTC cursor without accepting query syntax."""
+    text = str(value or "").strip()
+    try:
+        parsed = datetime.strptime(text, CMDB_CURSOR_FORMAT)
+    except ValueError as exc:
+        raise ServiceNowIngestError(
+            f"invalid ServiceNow CMDB checkpoint {text!r}"
+        ) from exc
+    return parsed.replace(tzinfo=timezone.utc)
+
+
+def _validated_cmdb_cursor(value: Optional[str]) -> Optional[str]:
+    if value is None:
+        return None
+    parsed = _parse_cmdb_timestamp(value)
+    return parsed.strftime(CMDB_CURSOR_FORMAT)
+
+
+def _cmdb_watermark(clock: Optional[Callable[[], datetime]] = None) -> str:
+    now = (clock or (lambda: datetime.now(timezone.utc)))()
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=timezone.utc)
+    return now.astimezone(timezone.utc).strftime(CMDB_CURSOR_FORMAT)
+
+
+def _record_in_cursor_window(
+    record: Any,
+    updated_after: Optional[str],
+    updated_through: Optional[str],
+) -> bool:
+    if not isinstance(record, dict):
+        return False
+    timestamp = _optional_sn_text(record.get("sys_updated_on"))
+    if not timestamp:
+        return updated_after is None
+    try:
+        value = datetime.strptime(timestamp[:19].replace("T", " "), CMDB_CURSOR_FORMAT)
+    except ValueError:
+        logger.warning("ServiceNow CMDB record has invalid sys_updated_on; skipping")
+        return False
+    if updated_after and value <= _parse_cmdb_timestamp(updated_after).replace(tzinfo=None):
+        return False
+    if updated_through and value > _parse_cmdb_timestamp(updated_through).replace(tzinfo=None):
+        return False
+    return True
+
+
 def _read_cmdb_configuration_items(
     class_scope: Tuple[str, ...],
     client: Optional[ServiceNowClient] = None,
+    *,
+    updated_after: Optional[str] = None,
+    updated_through: Optional[str] = None,
 ) -> List[ServiceNowConfigurationItem]:
     """Read one already-resolved bounded ``cmdb_ci`` scope, without mutation.
 
@@ -606,12 +669,18 @@ def _read_cmdb_configuration_items(
     if is_live():
         if client is None:
             client = _get_client()
-        class_filter = f"sys_class_nameIN{','.join(class_scope)}"
+        query_parts = [f"sys_class_nameIN{','.join(class_scope)}"]
+        if updated_after:
+            query_parts.append(f"sys_updated_on>{updated_after}")
+        if updated_through:
+            query_parts.append(f"sys_updated_on<={updated_through}")
         records = client.table_query(
             "cmdb_ci",
             {
-                "sysparm_query": (
-                    f"{class_filter}^ORDERBYsys_class_name^ORDERBYname^ORDERBYsys_id"
+                "sysparm_query": "^".join(query_parts) + (
+                    "^ORDERBYsys_updated_on^ORDERBYsys_id"
+                    if updated_after or updated_through
+                    else "^ORDERBYsys_class_name^ORDERBYname^ORDERBYsys_id"
                 ),
                 "sysparm_fields": ",".join(CMDB_FIELDS),
                 "sysparm_display_value": "all",
@@ -624,6 +693,11 @@ def _read_cmdb_configuration_items(
         fixture = _load_cmdb_fixture()
         records = fixture.get("result", [])
         instance_url = (fixture.get("_meta") or {}).get("instance_url")
+        records = [
+            record
+            for record in records
+            if _record_in_cursor_window(record, updated_after, updated_through)
+        ]
 
     items: List[ServiceNowConfigurationItem] = []
     for record in records:
@@ -695,6 +769,9 @@ def _read_cmdb_relationships(
     configuration_items: List[ServiceNowConfigurationItem],
     client: Optional[ServiceNowClient] = None,
     rules: Optional[Mapping[str, CMDBRelationshipRule]] = None,
+    *,
+    updated_after: Optional[str] = None,
+    updated_through: Optional[str] = None,
 ) -> List[ServiceNowCIRelationship]:
     """Read explicit ``cmdb_rel_ci`` edges within an admitted CI set.
 
@@ -711,12 +788,21 @@ def _read_cmdb_relationships(
         if client is None:
             client = _get_client()
         class_csv = ",".join(class_scope)
+        query_parts = [
+            f"parent.sys_class_nameIN{class_csv}",
+            f"child.sys_class_nameIN{class_csv}",
+        ]
+        if updated_after:
+            query_parts.append(f"sys_updated_on>{updated_after}")
+        if updated_through:
+            query_parts.append(f"sys_updated_on<={updated_through}")
         records = client.table_query(
             "cmdb_rel_ci",
             {
-                "sysparm_query": (
-                    f"parent.sys_class_nameIN{class_csv}^"
-                    f"child.sys_class_nameIN{class_csv}^ORDERBYsys_id"
+                "sysparm_query": "^".join(query_parts) + (
+                    "^ORDERBYsys_updated_on^ORDERBYsys_id"
+                    if updated_after or updated_through
+                    else "^ORDERBYsys_id"
                 ),
                 "sysparm_fields": ",".join(CMDB_RELATIONSHIP_FIELDS),
                 "sysparm_display_value": "all",
@@ -729,6 +815,11 @@ def _read_cmdb_relationships(
         fixture = _load_cmdb_fixture()
         records = fixture.get("relationships", [])
         instance_url = (fixture.get("_meta") or {}).get("instance_url")
+        records = [
+            record
+            for record in records
+            if _record_in_cursor_window(record, updated_after, updated_through)
+        ]
 
     admitted_ci_ids = frozenset(item.sys_id for item in configuration_items)
     relationships: List[ServiceNowCIRelationship] = []
@@ -804,6 +895,275 @@ def ingest_cmdb(
 # ─────────────────────────────────────────────────────────────────────────────
 # Ingestion functions
 # ─────────────────────────────────────────────────────────────────────────────
+
+
+class ServiceNowCMDBCIChangeIngestor(ChangeBasedIngestor):
+    """Incremental, bounded ``cmdb_ci`` reader using ``sys_updated_on``."""
+
+    connector_id = CMDB_CI_CHECKPOINT_ID
+    reports_deletes = False
+
+    def __init__(self, *, org_id: str, class_scope: Tuple[str, ...],
+                 client: Optional[ServiceNowClient] = None,
+                 clock: Optional[Callable[[], datetime]] = None) -> None:
+        self.org_id = org_id
+        self.class_scope = normalize_cmdb_class_scope(class_scope)
+        self.client = client
+        self.clock = clock
+
+    def ingest_changes(self, org_id: str, since: Optional[Checkpoint]) -> Iterator[DeltaBatch]:
+        if org_id != self.org_id:
+            raise ServiceNowIngestError("CMDB CI stream organization mismatch")
+        if since is not None and (since.org_id != org_id or since.connector_id != self.connector_id):
+            raise ServiceNowIngestError("CMDB CI checkpoint scope mismatch")
+        updated_after = _validated_cmdb_cursor(since.value if since else None)
+        watermark = _cmdb_watermark(self.clock)
+        items = _read_cmdb_configuration_items(
+            self.class_scope, self.client,
+            updated_after=updated_after, updated_through=watermark,
+        )
+        records: List[Dict[str, Any]] = []
+        for item in items:
+            record = item.as_dict()
+            record.update(artifact_id=item.sys_id, change_kind=ChangeKind.UPDATED)
+            records.append(record)
+        yield DeltaBatch(records=records, next_checkpoint=watermark, is_complete=True)
+
+
+class ServiceNowCMDBRelationshipChangeIngestor(ChangeBasedIngestor):
+    """Incremental explicit ``cmdb_rel_ci`` stream with native tombstones."""
+
+    connector_id = CMDB_RELATIONSHIP_CHECKPOINT_ID
+    reports_deletes = True
+
+    def __init__(self, *, org_id: str, class_scope: Tuple[str, ...],
+                 admitted_ci_ids: frozenset[str],
+                 known_relationship_ids: frozenset[str] = frozenset(),
+                 client: Optional[ServiceNowClient] = None,
+                 rules: Optional[Mapping[str, CMDBRelationshipRule]] = None,
+                 clock: Optional[Callable[[], datetime]] = None) -> None:
+        self.org_id = org_id
+        self.class_scope = normalize_cmdb_class_scope(class_scope)
+        self.admitted_ci_ids = admitted_ci_ids
+        self.known_relationship_ids = known_relationship_ids
+        self.client = client
+        self.rules = rules
+        self.clock = clock
+
+    def _changed_records(self, updated_after: Optional[str], watermark: str) -> tuple[List[Dict[str, Any]], Optional[str]]:
+        if not self.class_scope or not self.admitted_ci_ids:
+            return [], None
+        if is_live():
+            client = self.client or _get_client()
+            class_csv = ",".join(self.class_scope)
+            query_parts = [f"parent.sys_class_nameIN{class_csv}", f"child.sys_class_nameIN{class_csv}"]
+            if updated_after:
+                query_parts.append(f"sys_updated_on>{updated_after}")
+            query_parts.append(f"sys_updated_on<={watermark}")
+            records = client.table_query(
+                "cmdb_rel_ci",
+                {
+                    "sysparm_query": "^".join(query_parts) + "^ORDERBYsys_updated_on^ORDERBYsys_id",
+                    "sysparm_fields": ",".join(CMDB_RELATIONSHIP_FIELDS),
+                    "sysparm_display_value": "all",
+                    "sysparm_exclude_reference_link": "true",
+                },
+                max_records=CMDB_RECORD_CAP,
+            )
+            return records, getattr(client, "instance_url", None)
+        fixture = _load_cmdb_fixture()
+        records = [record for record in fixture.get("relationships", [])
+                   if _record_in_cursor_window(record, updated_after, watermark)]
+        return records, (fixture.get("_meta") or {}).get("instance_url")
+
+    def _deleted_records(self, updated_after: Optional[str], watermark: str) -> List[Dict[str, Any]]:
+        if not updated_after or not self.known_relationship_ids:
+            return []
+        if is_live():
+            client = self.client or _get_client()
+            known_ids = ",".join(sorted(self.known_relationship_ids))
+            return client.table_query(
+                "sys_audit_delete",
+                {
+                    "sysparm_query": (
+                        "tablename=cmdb_rel_ci^" f"documentkeyIN{known_ids}^"
+                        f"sys_updated_on>{updated_after}^sys_updated_on<={watermark}^"
+                        "ORDERBYsys_updated_on^ORDERBYsys_id"
+                    ),
+                    "sysparm_fields": ",".join(CMDB_DELETION_FIELDS),
+                    "sysparm_display_value": "false",
+                    "sysparm_exclude_reference_link": "true",
+                },
+                max_records=CMDB_RECORD_CAP,
+            )
+        fixture = _load_cmdb_fixture()
+        return [record for record in fixture.get("relationship_deletions", [])
+                if _record_in_cursor_window(record, updated_after, watermark)
+                and _optional_sn_text(record.get("documentkey")) in self.known_relationship_ids]
+
+    def ingest_changes(self, org_id: str, since: Optional[Checkpoint]) -> Iterator[DeltaBatch]:
+        if org_id != self.org_id:
+            raise ServiceNowIngestError("CMDB relationship stream organization mismatch")
+        if since is not None and (since.org_id != org_id or since.connector_id != self.connector_id):
+            raise ServiceNowIngestError("CMDB relationship checkpoint scope mismatch")
+        updated_after = _validated_cmdb_cursor(since.value if since else None)
+        watermark = _cmdb_watermark(self.clock)
+        raw_records, instance_url = self._changed_records(updated_after, watermark)
+        changed: Dict[str, Dict[str, Any]] = {}
+        for record in raw_records:
+            if not isinstance(record, dict):
+                continue
+            relationship_id = _optional_sn_text(record.get("sys_id"))
+            if not relationship_id:
+                continue
+            active = str(_optional_sn_text(record.get("active")) or "true").casefold()
+            if active in {"false", "0", "no", "retired", "inactive"}:
+                changed[relationship_id] = tombstone(
+                    relationship_id, sys_id=relationship_id,
+                    source_type=CMDB_RELATIONSHIP_SOURCE_TYPE,
+                    source_timestamp=_optional_sn_text(record.get("sys_updated_on")),
+                    source_url=_servicenow_record_url(instance_url, "cmdb_rel_ci", relationship_id),
+                )
+                continue
+            relationship = _relationship_from_record(
+                record, self.admitted_ci_ids, self.rules, instance_url
+            )
+            if relationship is not None:
+                item = relationship.as_dict()
+                item.update(artifact_id=relationship.sys_id, change_kind=ChangeKind.UPDATED)
+                changed[relationship.sys_id] = item
+        for deletion in self._deleted_records(updated_after, watermark):
+            relationship_id = _optional_sn_text(deletion.get("documentkey"))
+            if relationship_id in self.known_relationship_ids:
+                changed[relationship_id] = tombstone(
+                    relationship_id, sys_id=relationship_id,
+                    source_type=CMDB_RELATIONSHIP_SOURCE_TYPE,
+                    source_timestamp=_optional_sn_text(deletion.get("sys_updated_on")),
+                )
+        yield DeltaBatch(
+            records=[changed[key] for key in sorted(changed)],
+            next_checkpoint=watermark,
+            is_complete=True,
+        )
+
+
+def _ingestion_result_payload(result: Any) -> Dict[str, Any]:
+    return {
+        "connector_id": result.connector_id,
+        "records": result.records,
+        "checkpoint_advanced": result.checkpoint_advanced,
+        "checkpoint": result.new_checkpoint.value if result.new_checkpoint else None,
+        "error": str(result.error) if result.error else None,
+    }
+
+
+def ingest_cmdb_changes(
+    *, org_id: str, run_id: str,
+    client: Optional[ServiceNowClient] = None,
+    class_scope: Optional[Tuple[str, ...]] = None,
+    clock: Optional[Callable[[], datetime]] = None,
+) -> Dict[str, Any]:
+    """Apply both CMDB streams; persist a cursor only after graph processing."""
+    from app.entity_extractor import _extract_servicenow_cmdb_entities
+    from app.entity_resolution import list_source_entities
+    from app.relationship_mapper import (
+        apply_servicenow_cmdb_relationship_delta,
+        list_servicenow_relationship_source_ids,
+    )
+    from discovery.ingest.change_runner import ingest_with_checkpoint
+
+    scope = resolve_cmdb_class_scope(org_id) if class_scope is None else normalize_cmdb_class_scope(class_scope)
+    payload: Dict[str, Any] = {
+        "org_id": org_id,
+        "class_scope": list(scope),
+        "configuration_items": [],
+        "relationships": [],
+        "relationship_deletions": [],
+        "streams": {},
+    }
+    if not scope:
+        return payload
+    if is_live() and client is None:
+        client = _get_client()
+    # Both tables share one closed upper bound. A relationship written after
+    # that boundary cannot advance past a CI endpoint that this run has not read.
+    fixed_now = (clock or (lambda: datetime.now(timezone.utc)))()
+
+    def stream_clock() -> datetime:
+        return fixed_now
+
+    def process_ci(batch: DeltaBatch) -> None:
+        items = [
+            {key: value for key, value in record.items()
+             if key not in {"artifact_id", "change_kind"}}
+            for record in batch.records
+        ]
+        _extract_servicenow_cmdb_entities(
+            org_id=org_id,
+            run_id=run_id,
+            cmdb_data={
+                "org_id": org_id,
+                "class_scope": list(scope),
+                "configuration_items": items,
+            },
+        )
+        payload["configuration_items"].extend(items)
+
+    ci_result = ingest_with_checkpoint(
+        ServiceNowCMDBCIChangeIngestor(
+            org_id=org_id, class_scope=scope, client=client, clock=stream_clock
+        ),
+        org_id,
+        process_batch=process_ci,
+    )
+    payload["streams"]["cmdb_ci"] = _ingestion_result_payload(ci_result)
+    if not ci_result.ok:
+        return payload
+
+    all_entities = list_source_entities(
+        org_id=org_id, entity_type="system", source_system="servicenow"
+    )
+    scoped_entities = [
+        entity for entity in all_entities
+        if str((entity.metadata or {}).get("ci_class") or "").casefold() in scope
+    ]
+    admitted_ids = frozenset(
+        str(entity.source_record_id) for entity in scoped_entities
+        if entity.source_record_id
+    )
+
+    def process_relationships(batch: DeltaBatch) -> None:
+        apply_servicenow_cmdb_relationship_delta(
+            org_id=org_id,
+            run_id=run_id,
+            relationships=batch.records,
+            entities=scoped_entities,
+        )
+        for record in batch.records:
+            if record.get("change_kind") == ChangeKind.DELETED:
+                payload["relationship_deletions"].append(dict(record))
+            else:
+                payload["relationships"].append({
+                    key: value for key, value in record.items()
+                    if key not in {"artifact_id", "change_kind"}
+                })
+
+    relationship_result = ingest_with_checkpoint(
+        ServiceNowCMDBRelationshipChangeIngestor(
+            org_id=org_id,
+            class_scope=scope,
+            admitted_ci_ids=admitted_ids,
+            known_relationship_ids=frozenset(
+                list_servicenow_relationship_source_ids(org_id)
+            ),
+            client=client,
+            clock=stream_clock,
+        ),
+        org_id,
+        process_batch=process_relationships,
+    )
+    payload["streams"]["cmdb_rel_ci"] = _ingestion_result_payload(relationship_result)
+    return payload
 
 
 def get_incident_metrics(client: Optional[ServiceNowClient] = None) -> Dict[str, Any]:
@@ -1332,7 +1692,11 @@ def get_sla_breach_by_team(client: Optional[ServiceNowClient] = None) -> Dict[st
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-def ingest(sn_client: Optional[ServiceNowClient] = None) -> Dict[str, Any]:
+def ingest(
+    sn_client: Optional[ServiceNowClient] = None,
+    *,
+    include_cmdb: bool = True,
+) -> Dict[str, Any]:
     """
     Orchestrate ServiceNow ingestion. Returns combined payload.
 
@@ -1352,7 +1716,8 @@ def ingest(sn_client: Optional[ServiceNowClient] = None) -> Dict[str, Any]:
         )
         # Offline fixtures contain no customer data, so use the bounded product
         # default without requiring an organization connector-config database.
-        fixture["cmdb"] = ingest_cmdb(class_scope=DEFAULT_CMDB_CLASSES)
+        if include_cmdb:
+            fixture["cmdb"] = ingest_cmdb(class_scope=DEFAULT_CMDB_CLASSES)
         return fixture
 
     # OAuth-first: the live instance URL comes from the per-run context (DB-sourced
@@ -1382,13 +1747,13 @@ def ingest(sn_client: Optional[ServiceNowClient] = None) -> Dict[str, Any]:
         cross_system_references = get_cross_system_references(sn_client)
 
         lending_correlation = get_lending_correlation(sn_client)
-        cmdb = ingest_cmdb(sn_client)
+        cmdb = ingest_cmdb(sn_client) if include_cmdb else None
 
         return {
             "incident_metrics": incident_metrics,
             "cross_system_references": cross_system_references,
             "lending_correlation": lending_correlation,
-            "cmdb": cmdb,
+            **({"cmdb": cmdb} if include_cmdb else {}),
             "assignment_groups": incident_metrics.get("assignment_groups", []),
             # ── ENT-5 enterprise_ops cross-system blocks (LIVE) ───────────────
             # UNCOMMENT the three lines below once the SME team confirms the
