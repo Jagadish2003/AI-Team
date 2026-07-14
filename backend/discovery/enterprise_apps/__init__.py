@@ -16,7 +16,7 @@ operational-friction findings, now with code-level grounding.
 The extraction is DETERMINISTIC — build files, annotations/attributes and
 directory convention only, no LLM in the extraction path (structure is observed,
 never inferred). The shared model lives in :mod:`.structure`; platform-specific
-parsers sit at the edges (Java: T1/AT-606; .NET: T2), mirroring the
+parsers sit at the edges (Java: T1/AT-606; .NET: T2/AT-607), mirroring the
 share-the-extraction discipline established for the operational phase.
 
 :mod:`.app_repo_map` (T6/AT-611) owns the per-org, configured (never

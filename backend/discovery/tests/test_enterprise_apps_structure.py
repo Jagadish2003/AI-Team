@@ -341,11 +341,6 @@ def test_accepts_dict_and_tuple_file_shapes():
     )
 
 
-def test_dotnet_platform_is_the_t2_seam():
-    with pytest.raises(NotImplementedError):
-        extract_structure([], "dotnet")
-
-
 def test_unknown_platform_raises_value_error():
     with pytest.raises(ValueError):
         extract_structure([], "python")

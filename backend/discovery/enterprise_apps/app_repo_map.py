@@ -76,9 +76,9 @@ _CONFIG_ENV = "ENTERPRISE_APP_REPOS"
 #: has no explicit entry — a single shared declaration for every org.
 _DEFAULT_ORG_KEYS: Tuple[str, ...] = ("default", "*")
 
-#: Platforms an application may declare. Structure extraction for ``dotnet`` lands
-#: in T2; the mapping accepts it now so a .NET application can be declared ahead of
-#: its parser (the mapping is platform-agnostic by design).
+#: Platforms an application may declare. Both ``java`` (T1/AT-606) and
+#: ``dotnet`` (T2/AT-607) have a structure parser (the mapping itself is
+#: platform-agnostic by design).
 SUPPORTED_PLATFORMS: frozenset = frozenset({PLATFORM_JAVA, PLATFORM_DOTNET})
 
 #: A source of A2-ingested repo content: given a repo id, yields that repo's files

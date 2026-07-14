@@ -26,9 +26,15 @@ Following the share-the-extraction discipline from the operational phase
 (:class:`Component` / :class:`Dependency` / :class:`Endpoint` /
 :class:`AppStructure`) is platform-agnostic and lives here once;
 platform-specific PARSERS sit at the edges. :func:`extract_structure` dispatches
-on ``platform``. This subtask (AT-606) implements the **Java** parser; the
-matching **.NET** parser (T2) registers against the same model with no change to
-this contract.
+on ``platform``. AT-606 (T1) implements the **Java** parser; AT-607 (T2) adds the
+matching **.NET** parser against the same model with no change to this contract:
+solutions/csproj projects and NuGet package references become ``module``
+components and versioned :class:`Dependency` entries, ``[ApiController]``/
+``ControllerBase``-derived (or ``*Controller``-named) classes become
+``controller`` components with their ``[Http*]``/``[Route]``-declared
+:class:`Endpoint` entries, ``*Service``/``*Repository``-named classes (and background
+services) become ``service``/``repository`` components, and ``appsettings*.json``
+contributes to ``config_shape`` with every value redacted (AC6).
 
 This module is pure — no DB, no ``app`` import — so it is trivially testable and,
 per the R18-A6 "rides A2, adds interpretation" note, reusable by any future code
@@ -37,6 +43,7 @@ mover (GitLab/Bitbucket) that hands it repository content.
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 from dataclasses import asdict, dataclass, field
@@ -220,24 +227,16 @@ def extract_structure(repo_content: Iterable[Any], platform: str) -> AppStructur
 
     ``repo_content`` is the application's files (see :func:`_coerce_files` for the
     shapes accepted); ``platform`` selects the parser (``'java'`` | ``'dotnet'``).
-    No model is ever consulted — structure is observed, not inferred (AC1).
+    No model is ever consulted — structure is observed, not inferred (AC1/AC2).
 
-    Raises :class:`ValueError` for an unknown platform, and
-    :class:`NotImplementedError` for a known platform whose parser has not landed
-    yet (``dotnet`` — T2), so a mis-wired caller fails loudly rather than silently
-    returning nothing.
+    Raises :class:`ValueError` for an unknown platform, so a mis-wired caller
+    fails loudly rather than silently returning nothing.
     """
     key = (platform or "").strip().lower()
     parser = _PARSERS.get(key)
     if parser is None:
-        if key == PLATFORM_DOTNET:
-            raise NotImplementedError(
-                "R18-A6 T1 (AT-606) implements the Java structure parser; the .NET "
-                "parser arrives in T2. Call extract_structure(..., platform='java')."
-            )
         raise ValueError(
-            f"unknown platform {platform!r}; expected one of "
-            f"{sorted(_PARSERS) + [PLATFORM_DOTNET]!r}"
+            f"unknown platform {platform!r}; expected one of {sorted(_PARSERS)!r}"
         )
     files = _coerce_files(repo_content)
     return parser(files)
@@ -345,7 +344,7 @@ def _extract_java(files: List[RepoFile]) -> AppStructure:
 # ── Java source: Spring components + REST endpoints ──────────────────────────
 def _parse_java_source(f: RepoFile) -> Tuple[List[Component], List[Endpoint]]:
     """Parse one ``.java`` file for stereotyped components and REST endpoints."""
-    text = _strip_java_comments(f.content)
+    text = _strip_c_style_comments(f.content)
     pkg_match = _JAVA_PACKAGE_RE.search(text)
     package = pkg_match.group(1) if pkg_match else ""
 
@@ -854,18 +853,19 @@ def _deep_merge(base: Dict[str, Any], incoming: Dict[str, Any]) -> Dict[str, Any
     return base
 
 
-# ── Java comment stripping (so annotations in comments are never parsed) ─────
-_JAVA_BLOCK_COMMENT_RE = re.compile(r"/\*.*?\*/", re.DOTALL)
-_JAVA_LINE_COMMENT_RE = re.compile(r"//[^\n]*")
+# ── C-style comment stripping (Java + C# share `//` and `/* */`) ─────────────
+# So a commented-out ``@RestController``/``[ApiController]`` or a mapping
+# annotation/attribute inside a doc comment is never mistaken for a real
+# declaration. String literals may in theory contain ``//``; annotation/attribute
+# parsing tolerates the rare false strip because it only ever reads
+# annotation/attribute and class/type tokens.
+_C_STYLE_BLOCK_COMMENT_RE = re.compile(r"/\*.*?\*/", re.DOTALL)
+_C_STYLE_LINE_COMMENT_RE = re.compile(r"//[^\n]*")
 
 
-def _strip_java_comments(text: str) -> str:
-    """Remove block and line comments so a commented-out ``@RestController`` or an
-    ``@GetMapping`` inside Javadoc is never mistaken for a real declaration.
-    String literals may in theory contain ``//``; annotation parsing tolerates the
-    rare false strip because it only ever reads annotation/class tokens."""
-    text = _JAVA_BLOCK_COMMENT_RE.sub(" ", text)
-    text = _JAVA_LINE_COMMENT_RE.sub("", text)
+def _strip_c_style_comments(text: str) -> str:
+    text = _C_STYLE_BLOCK_COMMENT_RE.sub(" ", text)
+    text = _C_STYLE_LINE_COMMENT_RE.sub("", text)
     return text
 
 
@@ -903,9 +903,493 @@ def _dedupe_endpoints(endpoints: List[Endpoint]) -> List[Endpoint]:
     return out
 
 
+# ═════════════════════════════════════════════════════════════════════════════
+# .NET parser (AT-607 / T2) — same AppStructure model, .NET conventions
+# ═════════════════════════════════════════════════════════════════════════════
+
+# Base type (simple name) → normalised component kind, mirroring the Java
+# stereotype table. ``ApiController``/``ControllerBase``/``Controller`` are the
+# ASP.NET Core MVC conventions; a ``*Controller`` name is the fallback when a
+# controller omits both (some minimal-hosting styles do).
+_DOTNET_CONTROLLER_BASES = {"ControllerBase", "Controller"}
+_DOTNET_SERVICE_BASES = {"BackgroundService", "IHostedService"}
+
+# HTTP verb attribute (simple name) → HTTP verb.
+_DOTNET_HTTP_VERB: Dict[str, str] = {
+    "HttpGet": "GET",
+    "HttpPost": "POST",
+    "HttpPut": "PUT",
+    "HttpDelete": "DELETE",
+    "HttpPatch": "PATCH",
+    "HttpHead": "HEAD",
+    "HttpOptions": "OPTIONS",
+}
+
+# namespace Foo.Bar; (file-scoped, C# 10+) or namespace Foo.Bar { ... } (block).
+_DOTNET_NAMESPACE_RE = re.compile(r"^\s*namespace\s+([\w.]+)\s*[;{]", re.MULTILINE)
+
+# `class Name` preceded by optional modifiers. The attribute run (if any) that
+# precedes it is resolved separately via `_attribute_runs` — a naive
+# `\[[^\[\]]*\]` block regex breaks on ASP.NET Core's own default convention
+# `[Route("api/[controller]")]`, whose STRING ARGUMENT contains a nested
+# `[controller]` bracket, so block boundaries are found with a string-aware scan
+# (`_scan_attribute_blocks`) instead of a single regex.
+_DOTNET_CLASS_KEYWORD_RE = re.compile(
+    r"(?:(?:public|internal|private|protected|sealed|abstract|static|partial)\s+)*"
+    r"class\s+([A-Za-z_]\w*)"
+)
+
+_DOTNET_ATTR_ITEM_RE = re.compile(r"^([\w.]+)\s*(?:\(([^()]*)\))?$")
+
+# The handler method name declared just after an attribute run: consumes
+# modifiers/return type, then reads the identifier immediately before the
+# parameter-list ``(``. Starts right after the run, so no attributes to skip.
+_DOTNET_HANDLER_RE = re.compile(
+    r"\s*(?:(?:public|private|protected|internal|static|virtual|override|sealed|async|new)\s+)*"
+    r"[\w.<>\[\],?]+?\s+([A-Za-z_]\w*)\s*\("
+)
+
+_DOTNET_CONFIG_FILE_RE = re.compile(r"^appsettings(\.[\w.-]+)?\.json$")
+_DOTNET_PROJECT_EXTS = (".csproj", ".vbproj", ".fsproj")
+_DOTNET_SLN_PROJECT_RE = re.compile(
+    r'^Project\("\{[0-9A-Fa-f-]+\}"\)\s*=\s*"([^"]+)"\s*,\s*"([^"]+)"\s*,\s*"\{[0-9A-Fa-f-]+\}"',
+    re.MULTILINE,
+)
+
+
+def _extract_dotnet(files: List[RepoFile]) -> AppStructure:
+    """Deterministic .NET structure extraction (AC2), through the shared model."""
+    components: List[Component] = []
+    endpoints: List[Endpoint] = []
+    dependencies: List[Dependency] = []
+    config_shape: Dict[str, Any] = {}
+    config_files: List[str] = []
+
+    for f in sorted(files, key=lambda x: x.path):
+        name = _basename(f.path).lower()
+        if name.endswith(".sln"):
+            components.extend(_parse_solution(f))
+        elif name.endswith(".csproj"):
+            dependencies.extend(_parse_csproj_packages(f))
+            components.append(_csproj_module(f))
+        elif name == "packages.config":
+            dependencies.extend(_parse_packages_config(f))
+        elif f.path.endswith(".cs"):
+            comps, eps = _parse_dotnet_source(f)
+            components.extend(comps)
+            endpoints.extend(eps)
+        elif _DOTNET_CONFIG_FILE_RE.match(name):
+            shape = _parse_appsettings(f)
+            if shape:
+                _deep_merge(config_shape, shape)
+                config_files.append(f.path)
+
+    return AppStructure(
+        platform=PLATFORM_DOTNET,
+        components=tuple(_dedupe_sorted_components(components)),
+        dependencies=tuple(
+            sorted(
+                _dedupe_dependencies(dependencies),
+                key=lambda d: (d.path, d.group or "", d.name, d.version or "", d.scope or ""),
+            )
+        ),
+        endpoints=tuple(
+            sorted(
+                _dedupe_endpoints(endpoints),
+                key=lambda e: (e.source_path, e.path, e.method, e.handler or ""),
+            )
+        ),
+        config_shape=config_shape,
+        config_files=tuple(sorted(set(config_files))),
+    )
+
+
+# ── Attribute scanning (string-aware — see `_DOTNET_CLASS_KEYWORD_RE` note) ───
+def _scan_attribute_blocks(text: str) -> List[Tuple[int, int, str]]:
+    """Every top-level ``[...]`` block in ``text`` as ``(start, end, inner)``.
+
+    A ``[``/``]`` inside a double-quoted string literal does not open/close a
+    block — only the OUTER bracket pair does — so ``[Route("api/[controller]")]``
+    is one block, not a match truncated at the string's own ``[controller]``.
+    A block is bounded to a generous length; a ``[`` that never finds its close
+    within that bound is treated as a stray bracket (e.g. array syntax), not an
+    unterminated attribute, so it can never swallow the rest of the file."""
+    blocks: List[Tuple[int, int, str]] = []
+    i = 0
+    n = len(text)
+    while i < n:
+        if text[i] != "[":
+            i += 1
+            continue
+        j = i + 1
+        in_string = False
+        limit = min(n, i + 2000)
+        while j < limit:
+            ch = text[j]
+            if ch == '"' and text[j - 1] != "\\":
+                in_string = not in_string
+            elif ch == "]" and not in_string:
+                break
+            j += 1
+        else:
+            j = -1
+        if j == -1:
+            i += 1
+            continue
+        blocks.append((i, j + 1, text[i + 1 : j]))
+        i = j + 1
+    return blocks
+
+
+def _attribute_runs(text: str) -> Dict[int, Tuple[int, List[str]]]:
+    """Group consecutive attribute blocks (whitespace-only gaps) into runs.
+
+    Keyed by each run's END position so a class/method declaration immediately
+    following a run can be located by its own start position after stripping
+    trailing whitespace back to that same position."""
+    blocks = _scan_attribute_blocks(text)
+    runs: Dict[int, Tuple[int, List[str]]] = {}
+    i = 0
+    n = len(blocks)
+    while i < n:
+        run_start = blocks[i][0]
+        inner = [blocks[i][2]]
+        prev_end = blocks[i][1]
+        j = i + 1
+        while j < n and text[prev_end : blocks[j][0]].strip() == "":
+            inner.append(blocks[j][2])
+            prev_end = blocks[j][1]
+            j += 1
+        runs[prev_end] = (run_start, inner)
+        i = j
+    return runs
+
+
+def _run_attributes(inner_texts: List[str]) -> List[Tuple[str, str]]:
+    """Parse a run's block contents into ``(name, args)`` pairs, splitting
+    comma-grouped attributes (``[Route("x"), ApiController]``) within a block."""
+    attrs: List[Tuple[str, str]] = []
+    for block in inner_texts:
+        for item in _split_top_level(block, ","):
+            item = item.strip()
+            if not item:
+                continue
+            m = _DOTNET_ATTR_ITEM_RE.match(item)
+            if m:
+                attrs.append((m.group(1), m.group(2) or ""))
+    return attrs
+
+
+# ── C# source: controllers/services/repositories + REST endpoints ────────────
+def _parse_dotnet_source(f: RepoFile) -> Tuple[List[Component], List[Endpoint]]:
+    """Parse one ``.cs`` file for stereotyped components and REST endpoints."""
+    text = _strip_c_style_comments(f.content)
+    ns_match = _DOTNET_NAMESPACE_RE.search(text)
+    namespace = ns_match.group(1) if ns_match else ""
+    runs = _attribute_runs(text)
+
+    components: List[Component] = []
+    endpoints: List[Endpoint] = []
+
+    for m in _DOTNET_CLASS_KEYWORD_RE.finditer(text):
+        class_name = m.group(1)
+        prefix_end = len(text[: m.start()].rstrip())
+        run = runs.get(prefix_end)
+        attrs = _run_attributes(run[1]) if run else []
+        attr_names = {_dotnet_attr_simple_name(n) for n, _ in attrs}
+
+        body_open = text.find("{", m.end())
+        if body_open == -1:
+            continue
+        base_str = _dotnet_base_list_from_header(text[m.end() : body_open])
+        bases = {_dotnet_simple_base(b) for b in _split_top_level(base_str, ",")} if base_str else set()
+        body_close = _match_brace(text, body_open)
+        if body_close is None:
+            continue
+
+        kind = _dotnet_kind_for(class_name, attr_names, bases)
+        if kind is None:
+            continue
+        qualified = f"{namespace}.{class_name}" if namespace else class_name
+        components.append(
+            Component(
+                name=class_name,
+                kind=kind,
+                qualified_name=qualified,
+                path=f.path,
+                platform=PLATFORM_DOTNET,
+                annotations=tuple(sorted(attr_names)),
+            )
+        )
+        if kind != "controller":
+            continue
+
+        base_route = ""
+        for n, args in attrs:
+            if _dotnet_attr_simple_name(n) == "Route":
+                base_route = _first_quoted(args)
+                break
+
+        body_text = text[body_open + 1 : body_close]
+        for run_end, (run_start, inner_texts) in _attribute_runs(body_text).items():
+            run_attrs = _run_attributes(inner_texts)
+            verb: Optional[str] = None
+            verb_route = ""
+            route_attr = ""
+            for n, args in run_attrs:
+                simple = _dotnet_attr_simple_name(n)
+                if simple in _DOTNET_HTTP_VERB and verb is None:
+                    verb = _DOTNET_HTTP_VERB[simple]
+                    verb_route = _first_quoted(args)
+                elif simple == "Route":
+                    route_attr = _first_quoted(args)
+            if verb is None:
+                continue
+            handler = _dotnet_handler_after(body_text, run_end)
+            full = _join_route(base_route, verb_route or route_attr)
+            full = _substitute_dotnet_tokens(full, class_name, handler)
+            endpoints.append(
+                Endpoint(
+                    method=verb,
+                    path=full,
+                    component=class_name,
+                    handler=handler,
+                    platform=PLATFORM_DOTNET,
+                    source_path=f.path,
+                )
+            )
+
+    return components, endpoints
+
+
+def _dotnet_kind_for(class_name: str, attr_names: set, bases: set) -> Optional[str]:
+    if "ApiController" in attr_names:
+        return "controller"
+    if bases & _DOTNET_CONTROLLER_BASES:
+        return "controller"
+    if class_name.endswith("Controller"):
+        return "controller"
+    if class_name.endswith("Service"):
+        return "service"
+    if bases & _DOTNET_SERVICE_BASES:
+        return "service"
+    if class_name.endswith("Repository"):
+        return "repository"
+    if class_name == "Startup":
+        return "configuration"
+    return None
+
+
+def _dotnet_base_list_from_header(header_tail: str) -> str:
+    """The base/interface list text between a class name and its ``{`` body.
+
+    Strips a leading generic type-parameter clause (``<T>``) and a trailing
+    generic constraint clause (``where T : ...``), neither of which is a base
+    type, leaving just the comma-separated base/interface list (or ``""``)."""
+    tail = re.sub(r"^\s*<.*?>", "", header_tail, count=1, flags=re.DOTALL)
+    m = re.match(r"\s*:\s*(.*)$", tail, re.DOTALL)
+    if not m:
+        return ""
+    bases = m.group(1)
+    where_idx = bases.find(" where ")
+    if where_idx != -1:
+        bases = bases[:where_idx]
+    return bases.strip()
+
+
+def _dotnet_simple_base(name: str) -> str:
+    """Simple base-type name: strip generic args and namespace qualification."""
+    name = name.strip()
+    lt = name.find("<")
+    if lt != -1:
+        name = name[:lt]
+    return name.rsplit(".", 1)[-1].strip()
+
+
+def _split_top_level(s: str, sep: str) -> List[str]:
+    """Split ``s`` on ``sep`` at bracket depth 0 (``()``/``<>``/``[]`` all nest).
+
+    Used for both C# base/interface lists and attribute argument lists, where a
+    naive ``str.split`` would break on a comma inside a generic argument or a
+    nested attribute call."""
+    parts: List[str] = []
+    depth = 0
+    current: List[str] = []
+    for ch in s:
+        if ch in "(<[":
+            depth += 1
+            current.append(ch)
+        elif ch in ")>]":
+            depth -= 1
+            current.append(ch)
+        elif ch == sep and depth == 0:
+            parts.append("".join(current))
+            current = []
+        else:
+            current.append(ch)
+    parts.append("".join(current))
+    return parts
+
+
+def _dotnet_attr_simple_name(name: str) -> str:
+    """Simple attribute name: strip namespace qualification and a trailing
+    ``Attribute`` suffix (``[ApiController]`` and ``[ApiControllerAttribute]``
+    are the same attribute)."""
+    simple = name.rsplit(".", 1)[-1]
+    if simple.endswith("Attribute") and len(simple) > len("Attribute"):
+        simple = simple[: -len("Attribute")]
+    return simple
+
+
+def _first_quoted(args: str) -> str:
+    """First string literal in an attribute's argument text, else ``""``."""
+    m = _JAVA_FIRST_STRING_RE.search(args or "")
+    return m.group(1) if m else ""
+
+
+def _substitute_dotnet_tokens(path: str, controller_name: str, handler: Optional[str]) -> str:
+    """Resolve ASP.NET Core's ``[controller]``/``[action]`` route tokens."""
+    ctrl_token = controller_name
+    if ctrl_token.lower().endswith("controller"):
+        ctrl_token = ctrl_token[: -len("controller")]
+    out = re.sub(r"\[controller\]", ctrl_token, path, flags=re.IGNORECASE)
+    if handler:
+        out = re.sub(r"\[action\]", handler, out, flags=re.IGNORECASE)
+    return out
+
+
+def _dotnet_handler_after(text: str, pos: int) -> Optional[str]:
+    window = text[pos : pos + 400]
+    m = _DOTNET_HANDLER_RE.match(window)
+    return m.group(1) if m else None
+
+
+def _match_brace(text: str, open_pos: int) -> Optional[int]:
+    """Index of the ``}`` matching the ``{`` at ``open_pos``, via brace counting."""
+    depth = 0
+    i = open_pos
+    n = len(text)
+    while i < n:
+        ch = text[i]
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                return i
+        i += 1
+    return None
+
+
+# ── Solution + project files (modules) ────────────────────────────────────────
+def _parse_solution(f: RepoFile) -> List[Component]:
+    """Module components for each project declared in a ``.sln`` file.
+
+    Solution folders (a project entry whose path has no project-file extension)
+    are not modules and are skipped."""
+    out: List[Component] = []
+    for m in _DOTNET_SLN_PROJECT_RE.finditer(f.content):
+        proj_name, proj_path = m.group(1), _norm_path(m.group(2))
+        if not proj_path.lower().endswith(_DOTNET_PROJECT_EXTS):
+            continue
+        out.append(
+            Component(
+                name=proj_name,
+                kind="module",
+                qualified_name=proj_path,
+                path=f.path,
+                platform=PLATFORM_DOTNET,
+                annotations=(),
+            )
+        )
+    return out
+
+
+def _csproj_module(f: RepoFile) -> Component:
+    """One module component for a ``.csproj`` (module = the project itself)."""
+    basename = _basename(f.path)
+    name = basename[: -len(".csproj")] if basename.lower().endswith(".csproj") else basename
+    return Component(
+        name=name,
+        kind="module",
+        qualified_name=name,
+        path=f.path,
+        platform=PLATFORM_DOTNET,
+        annotations=(),
+    )
+
+
+# ── NuGet package references ─────────────────────────────────────────────────
+def _parse_csproj_packages(f: RepoFile) -> List[Dependency]:
+    """Parse ``<PackageReference>`` elements (attribute or child-element version;
+    ``Version`` is absent under central package management — kept as ``None``,
+    matching a build's own declaration)."""
+    import xml.etree.ElementTree as ET
+
+    try:
+        root = _strip_ns(ET.fromstring(f.content))
+    except ET.ParseError as exc:
+        logger.warning("enterprise_apps: could not parse csproj %s: %s", f.path, exc)
+        return []
+
+    deps: List[Dependency] = []
+    for pkg in root.findall(".//PackageReference"):
+        name = (pkg.get("Include") or pkg.get("Update") or "").strip()
+        if not name:
+            continue
+        version = (pkg.get("Version") or pkg.findtext("Version") or "").strip() or None
+        deps.append(
+            Dependency(
+                name=name, version=version, group=None, scope=None, manifest="nuget", path=f.path
+            )
+        )
+    return deps
+
+
+def _parse_packages_config(f: RepoFile) -> List[Dependency]:
+    """Parse legacy ``packages.config`` ``<package id="" version="" />`` entries."""
+    import xml.etree.ElementTree as ET
+
+    try:
+        root = _strip_ns(ET.fromstring(f.content))
+    except ET.ParseError as exc:
+        logger.warning("enterprise_apps: could not parse packages.config %s: %s", f.path, exc)
+        return []
+
+    deps: List[Dependency] = []
+    for pkg in root.findall("package"):
+        pkg_id = (pkg.get("id") or "").strip()
+        if not pkg_id:
+            continue
+        version = (pkg.get("version") or "").strip() or None
+        deps.append(
+            Dependency(
+                name=pkg_id, version=version, group=None, scope=None, manifest="nuget", path=f.path
+            )
+        )
+    return deps
+
+
+# ── appsettings*.json (keys kept, values redacted — AC6) ─────────────────────
+def _parse_appsettings(f: RepoFile) -> Dict[str, Any]:
+    """Parse an ``appsettings*.json`` file into a redacted key shape.
+
+    A parse failure degrades to an empty shape with a warning rather than
+    raising — a malformed config never sinks extraction."""
+    try:
+        doc = json.loads(f.content)
+    except ValueError as exc:
+        logger.warning("enterprise_apps: could not parse appsettings %s: %s", f.path, exc)
+        return {}
+    if isinstance(doc, dict):
+        return _redact_values(doc)
+    return {}
+
+
 # ─────────────────────────────────────────────────────────────────────────────
-# Platform parser registry — the T2 (.NET) seam plugs in here.
+# Platform parser registry
 # ─────────────────────────────────────────────────────────────────────────────
 _PARSERS: Dict[str, Callable[[List[RepoFile]], AppStructure]] = {
     PLATFORM_JAVA: _extract_java,
+    PLATFORM_DOTNET: _extract_dotnet,
 }
