@@ -932,6 +932,35 @@ def _extract_servicenow_cmdb_entities(
     return entities
 
 
+def prepare_servicenow_ci_resolution(
+    *,
+    org_id: str,
+    run_id: str,
+    sn_data: Dict[str, Any],
+) -> List[Entity]:
+    """Persist current-scope CIs and resolve explicit incident references.
+
+    This preparation can run before detector evaluation.  The normal entity
+    extraction pass may safely repeat it later because source entity upserts are
+    idempotent within a run.
+    """
+    cmdb_data = sn_data.get("cmdb") or {}
+    cmdb_entities = _extract_servicenow_cmdb_entities(
+        org_id=org_id,
+        run_id=run_id,
+        cmdb_data=cmdb_data,
+    )
+    from app.incident_ci_resolution import resolve_incident_ci_references
+
+    resolve_incident_ci_references(
+        org_id=org_id,
+        incident_metrics=sn_data.get("incident_metrics") or {},
+        cmdb_entities=cmdb_entities,
+        cmdb_relationships=cmdb_data.get("relationships") or [],
+    )
+    return cmdb_entities
+
+
 def _extract_servicenow_entities(
     *,
     org_id: str,
@@ -939,10 +968,10 @@ def _extract_servicenow_entities(
     sn_data: Dict[str, Any],
 ) -> List[Entity]:
     """Extract Person, Team, Project, and Object entities from ServiceNow output."""
-    entities = _extract_servicenow_cmdb_entities(
+    entities = prepare_servicenow_ci_resolution(
         org_id=org_id,
         run_id=run_id,
-        cmdb_data=sn_data.get("cmdb") or {},
+        sn_data=sn_data,
     )
 
     # Team: assignment_groups — names frequently overlap with Jira project names;

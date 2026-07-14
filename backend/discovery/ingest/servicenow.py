@@ -71,6 +71,26 @@ CMDB_RELATIONSHIP_FIELDS: Tuple[str, ...] = (
     "type",
     "sys_updated_on",
 )
+INCIDENT_CI_FIELDS: Tuple[str, ...] = (
+    "sys_id",
+    "number",
+    "category",
+    "state",
+    "assigned_to",
+    "assignment_group",
+    "caller_id",
+    "resolved_at",
+    "sys_created_on",
+    "sys_updated_on",
+    "cmdb_ci",
+)
+AFFECTED_CI_TASK_FIELDS: Tuple[str, ...] = (
+    "sys_id",
+    "task",
+    "ci_item",
+    "sys_updated_on",
+)
+AFFECTED_CI_TASK_SOURCE_TYPE = "servicenow_task_ci"
 CMDB_RELATIONSHIP_SOURCE_TYPE = "servicenow_cmdb_rel_ci"
 CMDB_GRAPH_RELATIONSHIP_TYPES = frozenset(
     {"depends_on", "used_by", "runs_on", "connects_to"}
@@ -800,7 +820,8 @@ def get_incident_metrics(client: Optional[ServiceNowClient] = None) -> Dict[str,
         GET /api/now/table/incident
             ?sysparm_query=sys_created_on>=javascript:gs.daysAgo(90)
             &sysparm_fields=sys_id,number,category,state,assigned_to,
-                            assignment_group,caller_id,resolved_at,sys_created_on
+                            assignment_group,caller_id,resolved_at,sys_created_on,
+                            sys_updated_on,cmdb_ci
             &sysparm_limit=1000
 
     Returns: incident_metrics dict matching servicenow_sample.json shape
@@ -814,17 +835,7 @@ def get_incident_metrics(client: Optional[ServiceNowClient] = None) -> Dict[str,
     total = client.aggregate_count("incident", window_query)
 
     # Incident details for category breakdown
-    fields = [
-        "sys_id",
-        "number",
-        "category",
-        "state",
-        "assigned_to",
-        "assignment_group",
-        "caller_id",
-        "resolved_at",
-        "sys_created_on",
-    ]
+    fields = list(INCIDENT_CI_FIELDS)
     escalation_field = os.getenv("SERVICENOW_ESCALATION_FIELD", "").strip()
     if escalation_field:
         fields.append(escalation_field)
@@ -888,14 +899,30 @@ def get_incident_metrics(client: Optional[ServiceNowClient] = None) -> Dict[str,
 
     incidents: List[Dict[str, Any]] = []
     for record in records:
+        incident_sys_id = _sn_reference_id(record.get("sys_id"))
         incident = {
-            "id": _sn_scalar(record.get("sys_id")) or _sn_scalar(record.get("number")),
+            "id": incident_sys_id or _sn_scalar(record.get("number")),
+            "sys_id": incident_sys_id,
             "number": _sn_scalar(record.get("number")) or _sn_scalar(record.get("sys_id")),
             "category": _sn_scalar(record.get("category")),
             "state": _sn_scalar(record.get("state")),
             "assigned_to": record.get("assigned_to"),
             "assignment_group": record.get("assignment_group"),
             "caller_id": record.get("caller_id"),
+            # Preserve the raw explicit reference.  Resolution deliberately uses
+            # only its stable value/sys_id, never the display name.
+            "cmdb_ci": record.get("cmdb_ci"),
+            "source_timestamp": _optional_sn_text(record.get("sys_updated_on")),
+            "source_url": (
+                _servicenow_record_url(
+                    getattr(client, "instance_url", None),
+                    "incident",
+                    incident_sys_id or "",
+                )
+                if incident_sys_id
+                else None
+            ),
+            "affected_ci_references": [],
         }
         if escalation_field and record.get(escalation_field):
             incident["escalated_to"] = record.get(escalation_field)
@@ -930,6 +957,118 @@ def get_incident_metrics(client: Optional[ServiceNowClient] = None) -> Dict[str,
         "incidents": incidents,
         "assignment_groups": list(assignment_groups.values()),
     }
+
+
+def get_affected_ci_task_references(
+    client: ServiceNowClient,
+    incident_sys_ids: List[str],
+) -> Dict[str, List[Dict[str, Any]]]:
+    """Read explicit ``task_ci`` links for the supplied incident records.
+
+    The query is bounded to the incident IDs already admitted by the current
+    incident read.  Returned task and CI references are checked against that
+    exact set, so a malformed response cannot attach another task's CI to an
+    incident.  No names or free-text fields are requested or inspected.
+    """
+    admitted_incidents = {
+        str(sys_id).strip() for sys_id in incident_sys_ids if str(sys_id).strip()
+    }
+    if not admitted_incidents:
+        return {}
+
+    instance_url = getattr(client, "instance_url", None)
+    grouped: Dict[str, List[Dict[str, Any]]] = {
+        sys_id: [] for sys_id in admitted_incidents
+    }
+    # Keep encoded queries comfortably below common proxy URL limits while
+    # retaining deterministic ordering and the connector's normal record cap.
+    ordered_ids = sorted(admitted_incidents)
+    remaining_records = CMDB_RECORD_CAP
+    for offset in range(0, len(ordered_ids), 100):
+        if remaining_records <= 0:
+            break
+        batch = ordered_ids[offset : offset + 100]
+        records = client.table_query(
+            "task_ci",
+            {
+                "sysparm_query": (
+                    f"taskIN{','.join(batch)}^ci_itemISNOTEMPTY^ORDERBYsys_id"
+                ),
+                "sysparm_fields": ",".join(AFFECTED_CI_TASK_FIELDS),
+                "sysparm_display_value": "all",
+                "sysparm_exclude_reference_link": "true",
+            },
+            max_records=remaining_records,
+        )
+        remaining_records -= len(records)
+        for record in records:
+            if not isinstance(record, dict):
+                continue
+            relationship_sys_id = _sn_reference_id(record.get("sys_id"))
+            incident_sys_id = _sn_reference_id(record.get("task"))
+            ci_sys_id = _sn_reference_id(record.get("ci_item"))
+            if (
+                not relationship_sys_id
+                or incident_sys_id not in admitted_incidents
+                or not ci_sys_id
+            ):
+                logger.warning(
+                    "ServiceNow affected-CI relationship is incomplete or outside "
+                    "the admitted incident set; skipping"
+                )
+                continue
+            grouped[incident_sys_id].append(
+                {
+                    "relationship_sys_id": relationship_sys_id,
+                    "incident_sys_id": incident_sys_id,
+                    "ci_sys_id": ci_sys_id,
+                    "source_type": AFFECTED_CI_TASK_SOURCE_TYPE,
+                    "source_timestamp": _optional_sn_text(
+                        record.get("sys_updated_on")
+                    ),
+                    "source_url": _servicenow_record_url(
+                        instance_url, "task_ci", relationship_sys_id
+                    ),
+                    "origin": "observed",
+                }
+            )
+
+    for references in grouped.values():
+        references.sort(
+            key=lambda ref: (ref["ci_sys_id"], ref["relationship_sys_id"])
+        )
+    return grouped
+
+
+def _attach_affected_ci_task_references(
+    incident_metrics: Dict[str, Any],
+    client: ServiceNowClient,
+) -> None:
+    """Attach bounded secondary CI references and their read status in place."""
+    incidents = incident_metrics.get("incidents") or []
+    incident_ids = [
+        str(incident.get("sys_id") or "").strip()
+        for incident in incidents
+        if isinstance(incident, dict) and incident.get("sys_id")
+    ]
+    try:
+        grouped = get_affected_ci_task_references(client, incident_ids)
+    except ServiceNowIngestError as exc:
+        # Primary cmdb_ci resolution remains useful when the optional secondary
+        # table is unavailable.  Preserve that partial state instead of turning
+        # the whole ServiceNow ingest into a failure.
+        logger.warning("ServiceNow affected-CI read unavailable: %s", exc)
+        incident_metrics["affected_ci_lookup"] = {"status": "unavailable"}
+        return
+
+    incident_metrics["affected_ci_lookup"] = {"status": "available"}
+    for incident in incidents:
+        if not isinstance(incident, dict):
+            continue
+        incident_sys_id = str(incident.get("sys_id") or "").strip()
+        incident["affected_ci_references"] = list(
+            grouped.get(incident_sys_id, [])
+        )
 
 
 def get_cross_system_references(
@@ -1239,6 +1378,7 @@ def ingest(sn_client: Optional[ServiceNowClient] = None) -> Dict[str, Any]:
 
     try:
         incident_metrics = get_incident_metrics(sn_client)
+        _attach_affected_ci_task_references(incident_metrics, sn_client)
         cross_system_references = get_cross_system_references(sn_client)
 
         lending_correlation = get_lending_correlation(sn_client)

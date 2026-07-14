@@ -863,6 +863,29 @@ def run(
         empty["perSystem"], empty["succeeded"], empty["ingestErrors"] = _ps, _succ, _errs
         return empty
 
+    # MSP-B3 T4: current-scope CMDB nodes must exist before detector evaluation
+    # so ServiceNow incident signals can carry an exact CI entity identifier.
+    # The later full extraction pass confirms the same source entities without
+    # duplicating them. Failure is non-blocking and leaves incidents unresolved;
+    # it must never trigger a guessed name- or text-based join.
+    if sn_data:
+        try:
+            from app.entity_extractor import prepare_servicenow_ci_resolution
+
+            prepare_servicenow_ci_resolution(
+                org_id=org_id,
+                run_id=run_id,
+                sn_data=sn_data,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "ServiceNow incident-to-CI preparation failed (non-blocking): "
+                "run_id=%s org_id=%s error=%s",
+                run_id,
+                org_id,
+                exc,
+            )
+
     # 2-pre. Slack change ingest — R16-A2 / AT-421 (T6) + AT-419 (T4).
     # Slack is a connected SOURCE, so it ingests here — after the systems of
     # record (Salesforce CRM / ServiceNow / Jira) and BEFORE the pack-specific
