@@ -1,7 +1,7 @@
 {
   "_meta": {
-    "description": "Synthetic bounded ServiceNow CMDB fixture for MSP-B3 T1",
-    "note": "Contains only the six default CI categories and approved fields."
+    "description": "Synthetic bounded ServiceNow CMDB fixture for MSP-B3 T1-T2",
+    "note": "Contains only approved CI fields and explicit relationships among admitted CIs."
   },
   "result": [
     {
@@ -63,6 +63,56 @@
       "owned_by": "Infrastructure",
       "environment": "production",
       "sys_updated_on": "2026-07-01 10:25:00"
+    }
+  ],
+  "relationships": [
+    {
+      "sys_id": "rel-app-runs-server-001",
+      "parent": {
+        "value": "ci-app-service-001",
+        "display_value": "Citizen Services Portal"
+      },
+      "child": {
+        "value": "ci-server-001",
+        "display_value": "app-prod-01"
+      },
+      "type": {
+        "value": "rel-type-runs-on",
+        "display_value": "Runs on::Runs"
+      },
+      "sys_updated_on": "2026-07-01 11:00:00"
+    },
+    {
+      "sys_id": "rel-server-depends-db-001",
+      "parent": {
+        "value": "ci-server-001",
+        "display_value": "app-prod-01"
+      },
+      "child": {
+        "value": "ci-db-001",
+        "display_value": "citizen-services-db"
+      },
+      "type": {
+        "value": "rel-type-depends-on",
+        "display_value": "Depends on::Used by"
+      },
+      "sys_updated_on": "2026-07-01 11:05:00"
+    },
+    {
+      "sys_id": "rel-lb-connects-network-001",
+      "parent": {
+        "value": "ci-lb-001",
+        "display_value": "public-lb-01"
+      },
+      "child": {
+        "value": "ci-network-001",
+        "display_value": "core-router-01"
+      },
+      "type": {
+        "value": "rel-type-connects-to",
+        "display_value": "Connects to::Connected by"
+      },
+      "sys_updated_on": "2026-07-01 11:10:00"
     }
   ]
 }
