@@ -45,6 +45,10 @@ from .reference_mappers import (  # noqa: F401
     map_cloudwatch,
     map_eventbridge,
 )
+from .resource_graph import (  # noqa: F401
+    CLOUD_RESOURCE_ENTITY_TYPE,
+    create_resource_entities,
+)
 
 __all__ = [
     "CommonSignal",
@@ -78,4 +82,7 @@ __all__ = [
     "store_raw_event",
     "resolve_raw_event",
     "map_and_store",
+    # AT-639 — resource entities into the graph
+    "create_resource_entities",
+    "CLOUD_RESOURCE_ENTITY_TYPE",
 ]

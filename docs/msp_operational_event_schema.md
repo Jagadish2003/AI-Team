@@ -256,3 +256,51 @@ raw = resolve_raw_event(store, "acme", event)   # audit: back to the original pa
 
 `map_and_store` maps + persists in one step (the connector entry point). To
 persist an already-mapped event, use `store_raw_event(store, org_id, event, raw)`.
+
+---
+
+## 7. Resource entities into the graph (AT-639)
+
+When an operational event references a cloud resource, that resource is promoted
+to a knowledge-graph entity so downstream discovery (relationship mapping, graph
+context, correlation) can reason about it. Code:
+[`backend/discovery/signals/resource_graph.py`](../backend/discovery/signals/resource_graph.py).
+
+### Conservative, event-driven creation
+
+- A resource becomes an entity **only** when an observed event references it
+  (T5-AC1/AC2) — `create_resource_entities(events, run_id=...)` skips any event
+  with no `resource`.
+- **No speculative estate modelling** (T5-AC3): we promote exactly the resources
+  events name — never inferred parents/children/siblings or an estate topology.
+  The full estate map is **B3's CMDB**, not event inference. This step draws
+  *nodes* only, no speculative edges.
+- Distinct resources are de-duplicated per `(org_id, resource_id)`, so one node
+  is created per resource however many events reference it; org isolation rides
+  on each event's `org_id`.
+
+### How resources map to entities
+
+Each resource is created through the existing conservative resolver
+(`app.entity_resolution.resolve_or_create_entity`), so it lands in the standard
+`entities` table — resolved, org-scoped, with an OBSERVED evidence pointer — and
+is immediately usable by every downstream graph consumer (T5-AC4).
+
+| Entity field | Value |
+|--------------|-------|
+| `entity_type` | `system` (cloud resources are infrastructure systems; the entity schema is locked — no new type) |
+| `display_name` / `source_record_id` | the resource's globally-unique provider id (ARN / Azure resource id) — so repeat sightings resolve to one node and distinct resources never false-merge |
+| `source_system` | the resource `provider` (`aws` / `azure`) |
+| `metadata` | `{cloud_resource, provider, resource_type, region, resource_name, observed_via, event_signature}` — marks an event-observed estate node and preserves the friendly name for display |
+
+### Usage
+
+```python
+from discovery.signals import create_resource_entities
+
+entities = create_resource_entities(events, run_id=run_id)
+# events referencing resources -> graph nodes; events without -> nothing.
+```
+
+The resolver is injectable for testing and resolved lazily, so importing
+`discovery.signals` stays dependency-light.
