@@ -64,6 +64,40 @@ if [[ $missing -eq 1 ]]; then
   exit 1
 fi
 
+# ── Pre-check: required ports must be free ────────────────────────────────────
+# AgentIQ needs 80/443 (frontend) and 8000 (backend). Detect conflicts NOW,
+# before any installation work, instead of failing 15 minutes in at deploy.
+# Listeners that are AgentIQ's own containers are fine (re-run / upgrade).
+echo "  Checking required ports (80, 443, 8000) ..."
+PORT_CONFLICT=0
+for port in 80 443 8000; do
+  # ss output example: users:(("nginx",pid=123,fd=6))
+  line="$(ss -ltnpH "sport = :$port" 2>/dev/null | head -1 || true)"
+  [[ -z "$line" ]] && continue
+  proc="$(sed -n 's/.*users:(("\([^"]*\)",pid=\([0-9]*\).*/\1 (pid \2)/p' <<<"$line")"
+  # Our own stack? docker-proxy listeners backed by an agentiq-* container are OK.
+  if [[ "$proc" == docker-proxy* ]] && command -v docker >/dev/null 2>&1 \
+     && docker ps --format '{{.Names}} {{.Ports}}' 2>/dev/null | grep -E "^agentiq-" | grep -q ":$port->"; then
+    printf "    ${Y}Port %s is held by an existing AgentIQ container — it will be replaced.${N}\n" "$port"
+    continue
+  fi
+  printf "    ${R}Port %s is in use by: %s${N}\n" "$port" "${proc:-unknown process}"
+  PORT_CONFLICT=1
+done
+if [[ $PORT_CONFLICT -eq 1 ]]; then
+  echo ""
+  printf "  ${R}${BOLD}Cannot continue: required ports are in use.${N}\n"
+  echo "  Free them first, e.g. for a preinstalled web server:"
+  echo "      sudo systemctl stop apache2 nginx"
+  echo "      sudo systemctl disable apache2 nginx"
+  echo "  Identify other listeners with:"
+  echo "      sudo ss -ltnp | grep -E ':80 |:443 |:8000 '"
+  echo "  Then re-run this installer."
+  echo ""
+  exit 1
+fi
+printf "    ${G}All required ports are free.${N}\n\n"
+
 # ── Error trap ────────────────────────────────────────────────────────────────
 trap '_ec=$?
   echo ""
