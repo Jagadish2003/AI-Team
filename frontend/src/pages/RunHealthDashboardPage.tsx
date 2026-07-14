@@ -10,6 +10,7 @@ import {
   Database,
   Loader2,
   RefreshCw,
+  RotateCcw,
   ShieldAlert,
 } from "lucide-react";
 
@@ -20,6 +21,9 @@ import {
   fetchPackHealth,
   fetchRunHealth,
 } from "../api/runHealthApi";
+import { resetIngestionCheckpoint } from "../api/ingestionApi";
+import { ApiError } from "../lib/apiClient";
+import ConfirmDialog from "../components/common/ConfirmDialog";
 import PageShell from "../components/common/PageShell";
 import { useAuth } from "../context/AuthContext";
 import type {
@@ -237,15 +241,230 @@ function connectorTone(item: ConnectorHealthItem): "good" | "warn" | "bad" | "ne
   return "good";
 }
 
+// ── In-context actions (R18-C2 T5) ────────────────────────────────────────────
+// The dashboard surfaces the EXISTING reconnect and checkpoint-reset operations
+// where they are relevant. No new operational controls are introduced.
+
+// Connection states that mean authentication needs attention → reconnect. This
+// mirrors the backend's _AUTH_ACTION_STATES (health_aggregation.py) so the
+// dashboard offers the reconnect action for exactly the states the health
+// service flags. "disconnected" is included because a disconnected source is
+// also re-established via the Integration Hub connect flow.
+const AUTH_ACTION_STATES = new Set(["needs_auth", "refresh_failed", "error", "disconnected"]);
+
+// Mirrors backend STALLED_CHECKPOINT_SECONDS (health_aggregation.py, 24h): a
+// checkpoint that exists but has not advanced for at least this long is stalled.
+const STALLED_CHECKPOINT_SECONDS = 24 * 60 * 60;
+
+// Integration Hub groups connectors by category and supports a ?category=
+// deep-link (IntegrationHubPage). Map a connector id to its category so the
+// reconnect link lands on the group containing that connector.
+const CONNECTOR_CATEGORY: Record<string, string> = {
+  salesforce: "primary_platforms",
+  sap: "primary_platforms",
+  oracle_ebs: "primary_platforms",
+  workday: "primary_platforms",
+  dynamics365: "primary_platforms",
+  jira: "operational_systems",
+  jira_confluence: "operational_systems",
+  servicenow: "operational_systems",
+  azure_devops: "operational_systems",
+  linear: "operational_systems",
+  zendesk: "operational_systems",
+  slack: "comms_knowledge",
+  teams: "comms_knowledge",
+  m365: "comms_knowledge",
+  confluence: "comms_knowledge",
+  sharepoint: "comms_knowledge",
+  notion: "comms_knowledge",
+  github: "data_engineering",
+  gitlab: "data_engineering",
+  bitbucket: "data_engineering",
+  azure_repos: "data_engineering",
+  postgresql: "data_engineering",
+  sql_server: "data_engineering",
+  oracle_db: "data_engineering",
+  databricks: "data_engineering",
+  snowflake: "data_engineering",
+  dbt: "data_engineering",
+};
+
+function reconnectHref(connectorId: string): string {
+  const category = CONNECTOR_CATEGORY[connectorId];
+  return category ? `/integration-hub?category=${category}` : "/integration-hub";
+}
+
+function authNeedsAttention(item: ConnectorHealthItem): boolean {
+  return AUTH_ACTION_STATES.has(item.connection_state);
+}
+
+function checkpointExists(item: ConnectorHealthItem): boolean {
+  // A checkpoint exists when the backend reported a position or capture time.
+  return item.checkpoint_position != null || item.checkpoint_captured_at != null;
+}
+
+function checkpointStalled(item: ConnectorHealthItem): boolean {
+  return (
+    checkpointExists(item) &&
+    item.checkpoint_age_seconds != null &&
+    item.checkpoint_age_seconds >= STALLED_CHECKPOINT_SECONDS
+  );
+}
+
+type ResetOutcome =
+  | { kind: "cleared" }
+  | { kind: "nothing" }
+  | { kind: "error"; message: string };
+
+function ConnectorActions({
+  item,
+  role,
+  outcome,
+  onOutcome,
+  onResetSuccess,
+}: {
+  item: ConnectorHealthItem;
+  role: "owner" | "analyst";
+  // Reset outcome is held by the panel (keyed by connector) so the "existed and
+  // cleared" message survives the post-success refresh, which briefly re-renders
+  // the connector list.
+  outcome: ResetOutcome | null;
+  onOutcome: (connectorId: string, outcome: ResetOutcome | null) => void;
+  // Called after a successful reset so the panel can refresh and show the
+  // updated state. Not called on failure — known health must not change.
+  onResetSuccess: () => void;
+}) {
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const [resetting, setResetting] = useState(false);
+
+  const showReconnect = authNeedsAttention(item);
+  // Reset is an owner-only backend operation, surfaced only when a checkpoint
+  // exists and is stalled. Analysts inspect but cannot reset.
+  const showReset = role === "owner" && checkpointStalled(item);
+
+  if (!showReconnect && !showReset) return null;
+
+  async function runReset() {
+    setResetting(true);
+    onOutcome(item.connector_id, null);
+    try {
+      const result = await resetIngestionCheckpoint(item.connector_id);
+      setConfirmOpen(false);
+      onOutcome(item.connector_id, { kind: result.cleared ? "cleared" : "nothing" });
+      // Refresh the panel so it reflects the reset (post-success only).
+      onResetSuccess();
+    } catch (error) {
+      // Failure surfaces a clear error and leaves the previously known health
+      // untouched — never a false "resolved". The dialog stays open so the
+      // owner can retry or cancel.
+      const message =
+        error instanceof ApiError && error.message.trim()
+          ? error.message
+          : "Checkpoint reset failed. The connector's health is unchanged.";
+      onOutcome(item.connector_id, { kind: "error", message });
+    } finally {
+      setResetting(false);
+    }
+  }
+
+  return (
+    <div className="mt-3">
+      <div className="flex flex-wrap items-center gap-2">
+        {showReconnect ? (
+          <Link
+            to={reconnectHref(item.connector_id)}
+            data-testid={`reconnect-${item.connector_id}`}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-blue-300 bg-blue-50 px-3 py-1.5 text-sm font-semibold text-blue-800 hover:bg-blue-100"
+          >
+            <RefreshCw className="h-4 w-4" aria-hidden="true" />
+            Reconnect in Integration Hub
+          </Link>
+        ) : null}
+        {showReset ? (
+          <button
+            type="button"
+            data-testid={`reset-checkpoint-${item.connector_id}`}
+            onClick={() => {
+              onOutcome(item.connector_id, null);
+              setConfirmOpen(true);
+            }}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-amber-300 bg-amber-50 px-3 py-1.5 text-sm font-semibold text-amber-900 hover:bg-amber-100"
+          >
+            <RotateCcw className="h-4 w-4" aria-hidden="true" />
+            Reset checkpoint
+          </button>
+        ) : null}
+      </div>
+
+      {outcome && outcome.kind !== "error" ? (
+        <div
+          role="status"
+          data-testid={`reset-result-${item.connector_id}`}
+          className="mt-2 rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-900"
+        >
+          {outcome.kind === "cleared"
+            ? "Checkpoint cleared. The next ingestion for this connector will re-read from the start."
+            : "No checkpoint existed to clear — this connector was already set to re-read from the start."}
+        </div>
+      ) : null}
+
+      {outcome && outcome.kind === "error" ? (
+        <div
+          role="alert"
+          data-testid={`reset-error-${item.connector_id}`}
+          className="mt-2 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-900"
+        >
+          {outcome.message}
+        </div>
+      ) : null}
+
+      {showReset ? (
+        <ConfirmDialog
+          open={confirmOpen}
+          title={`Reset ${item.name} checkpoint?`}
+          confirmLabel="Reset checkpoint"
+          busyLabel="Resetting…"
+          busy={resetting}
+          message={
+            <span>
+              This clears the ingestion checkpoint for <span className="font-semibold text-text">{item.name}</span>.
+              The next discovery run will perform a <span className="font-semibold text-text">full re-read</span> of
+              this source from the beginning instead of an incremental update, which can take longer. The result
+              will confirm whether a checkpoint actually existed and was cleared. This cannot be undone.
+            </span>
+          }
+          onConfirm={() => {
+            void runReset();
+          }}
+          onCancel={() => {
+            if (!resetting) setConfirmOpen(false);
+          }}
+        />
+      ) : null}
+    </div>
+  );
+}
+
 function ConnectorsPanel({
   resource,
   retry,
+  refresh,
+  role,
   highlighted,
 }: {
   resource: ResourceState<ConnectorHealthResponse>;
   retry: () => void;
+  refresh: () => void;
+  role: "owner" | "analyst";
   highlighted: boolean;
 }) {
+  // Reset outcomes are held here (keyed by connector) so a success message
+  // survives the post-reset refresh, which momentarily re-renders the list.
+  const [resetOutcomes, setResetOutcomes] = useState<Record<string, ResetOutcome | null>>({});
+  const setOutcome = useCallback((connectorId: string, outcome: ResetOutcome | null) => {
+    setResetOutcomes((prev) => ({ ...prev, [connectorId]: outcome }));
+  }, []);
+
   let state: string = resource.status;
   if (resource.status === "success") {
     const hasIssues = resource.data.connectors.some((item) => connectorTone(item) !== "good");
@@ -305,6 +524,13 @@ function ConnectorsPanel({
                     <div><dt className="text-slate-500">Checkpoint recorded</dt><dd className="font-medium text-slate-800">{formatDate(item.checkpoint_captured_at)}</dd></div>
                   </dl>
                 </details>
+                <ConnectorActions
+                  item={item}
+                  role={role}
+                  outcome={resetOutcomes[item.connector_id] ?? null}
+                  onOutcome={setOutcome}
+                  onResetSuccess={refresh}
+                />
               </article>
             ))}
           </div>
@@ -689,7 +915,7 @@ function RunHealthDashboard({ role }: { role: "owner" | "analyst" }) {
         </section>
         <AttentionStrip resource={attention.state} retry={attention.refresh} />
         <div className="grid gap-5 xl:grid-cols-2">
-          <ConnectorsPanel resource={connectors.state} retry={connectors.refresh} highlighted={selectedPanel === "connectors"} />
+          <ConnectorsPanel resource={connectors.state} retry={connectors.refresh} refresh={connectors.refresh} role={role} highlighted={selectedPanel === "connectors"} />
           <RunsPanel resource={runs.state} retry={runs.refresh} highlighted={selectedPanel === "runs"} />
           <ContentPanel resource={content.state} retry={content.refresh} highlighted={selectedPanel === "content"} />
           <PacksPanel resource={packs.state} retry={packs.refresh} highlighted={selectedPanel === "packs"} />
