@@ -307,7 +307,14 @@ def test_attention_surfaces_expired_auth_before_stalled_checkpoint(client):
     assert body["org_id"] == org
     assert body["severity_order"] == ["critical", "high", "medium", "low"]
 
-    items = body["items"]
+    # Restrict to the two connectors this test seeded — the shared telemetry
+    # table can carry health-check events for other connectors from the session,
+    # which is fine: the contract is that the seeded auth item precedes the
+    # seeded checkpoint item (critical before high), each linking to its panel.
+    items = [
+        item for item in body["items"]
+        if item["connector_id"] in ("salesforce", "servicenow")
+    ]
     assert [item["condition"] for item in items] == [
         "expired_authentication",
         "stalled_checkpoint",
