@@ -1,0 +1,28 @@
+{
+  "AlarmHistoryItems": [
+    {
+      "AlarmName": "prod-api-5xx-rate",
+      "AlarmType": "MetricAlarm",
+      "Timestamp": "2026-06-01T12:34:56.789+00:00",
+      "HistoryItemType": "StateUpdate",
+      "HistorySummary": "Alarm updated from OK to ALARM",
+      "HistoryData": "{\"version\":\"1.0\",\"oldState\":{\"stateValue\":\"OK\"},\"newState\":{\"stateValue\":\"ALARM\",\"stateReason\":\"Threshold Crossed: 1 datapoint (7.0) was greater than the threshold (5.0).\"}}"
+    },
+    {
+      "AlarmName": "prod-api-5xx-rate",
+      "AlarmType": "MetricAlarm",
+      "Timestamp": "2026-06-01T12:49:56.123+00:00",
+      "HistoryItemType": "StateUpdate",
+      "HistorySummary": "Alarm updated from ALARM to OK",
+      "HistoryData": "{\"version\":\"1.0\",\"oldState\":{\"stateValue\":\"ALARM\"},\"newState\":{\"stateValue\":\"OK\",\"stateReason\":\"Threshold no longer crossed.\"}}"
+    },
+    {
+      "AlarmName": "prod-db-cpu-high",
+      "AlarmType": "MetricAlarm",
+      "Timestamp": "2026-06-01T15:05:01.000+00:00",
+      "HistoryItemType": "ConfigurationUpdate",
+      "HistorySummary": "Alarm \"prod-db-cpu-high\" updated",
+      "HistoryData": "{\"type\":\"Update\",\"version\":\"1.0\"}"
+    }
+  ]
+}
