@@ -408,6 +408,55 @@ def _initial_confidence(
     return 0.8
 
 
+def lookup_resolved_entity(
+    *,
+    org_id: str,
+    entity_type: str,
+    display_name: Optional[str] = None,
+    source_system: Optional[str] = None,
+    source_record_id: Optional[str] = None,
+) -> Optional[Entity]:
+    """Read-only conservative lookup — return an EXISTING resolved entity, or None.
+
+    R18-A4 / AT-597 (T4): conversation participants must link into the knowledge
+    graph ONLY where the entity layer already knows them — never by creating a new
+    entity, marking anything ambiguous, or forcing a merge. This function is that
+    pure, side-effect-free read; it complements :func:`resolve_or_create_entity`
+    (which mutates) and follows the same conservative discipline:
+
+      1. If a ``source_record_id`` is given, prefer a same-source stable-ID match
+         (the strongest signal). Exactly one ``resolved`` row → that entity;
+         several resolved rows → ``None`` (ambiguous, do not link).
+      2. Otherwise match on the canonical display name across sources. Exactly one
+         ``resolved`` candidate → that entity; zero or several → ``None``.
+
+    Never returns an ``ambiguous``/``unresolved`` row, so a caller only ever links a
+    participant to a confidently-known entity; everything else stays a plain
+    reference. Never writes. Org-scoped by construction.
+    """
+    conn = _connect()
+    try:
+        if source_record_id and source_system:
+            source_matches = get_entities_by_source_record_id(
+                conn, org_id, entity_type, source_system, source_record_id
+            )
+            resolved = [m for m in source_matches if m.resolution_status == "resolved"]
+            if len(resolved) == 1:
+                return resolved[0]
+            if len(resolved) > 1:
+                return None  # several confident rows for one id → ambiguous, no link
+
+        if display_name and display_name.strip():
+            canonical = _canonicalize(display_name)
+            candidates = get_entities_by_canonical(conn, org_id, entity_type, canonical)
+            resolved = [c for c in candidates if c.resolution_status == "resolved"]
+            if len(resolved) == 1:
+                return resolved[0]
+        return None
+    finally:
+        conn.close()
+
+
 def resolve_or_create_entity(
     *,
     org_id: str,

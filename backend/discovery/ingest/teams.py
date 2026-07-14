@@ -117,6 +117,7 @@ from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple
 from . import get_live_connector, is_live, resolve_vault_connector
 from .base import ChangeBasedIngestor, ChangeKind, Checkpoint, DeltaBatch
 from .conversation_content import (
+    _DEFAULT_AUTHOR_RESOLVER,
     ConversationChange,
     ConversationDeepContentError,
     ConversationDeepContentResult,
@@ -617,6 +618,7 @@ class TeamsIngestor(ChangeBasedIngestor):
         *,
         ingest_fn: Optional[Callable[[str, List[Any]], Any]] = None,
         freshness_fn: Optional[Callable[[dict], Any]] = None,
+        author_resolver: Any = _DEFAULT_AUTHOR_RESOLVER,
     ) -> TeamsDeepContentResult:
         """Hand a batch's Teams conversation content to the substrate + freshness (T2/T3).
 
@@ -632,13 +634,17 @@ class TeamsIngestor(ChangeBasedIngestor):
             re-chunks the whole thread, a deletion removes its content (R18-A4 /
             AT-596, T3, AC3).
 
-        The substrate owns chunking/embedding/indexing and the async refresh — this
-        method never writes vectors. Called per fully-processed delta batch, so it is
-        naturally incremental and rides the existing ``(org, 'teams')`` Graph-delta
-        checkpoint — no new checkpointing (AC4). ``ingest_fn`` / ``freshness_fn`` are
-        injectable for tests (defaulting to ``ingest_content`` / ``on_artifact_changed``).
-        Raises :class:`TeamsDeepContentError` when the create hand-off reports a
-        failed artifact (at-least-once; idempotent replace).
+        Thread participants are resolved to knowledge-graph entities where the entity
+        layer already knows them (R18-A4 / AT-597, T4) — confident links land in each
+        artifact's ``provenance['participant_entities']``; unresolved authors stay
+        plain references. The substrate owns chunking/embedding/indexing and the async
+        refresh — this method never writes vectors. Called per fully-processed delta
+        batch, so it is naturally incremental and rides the existing ``(org, 'teams')``
+        Graph-delta checkpoint — no new checkpointing (AC4). ``ingest_fn`` /
+        ``freshness_fn`` / ``author_resolver`` are injectable for tests (defaulting to
+        ``ingest_content`` / ``on_artifact_changed`` / the conservative entity-layer
+        lookup). Raises :class:`TeamsDeepContentError` when the create hand-off reports
+        a failed artifact (at-least-once; idempotent replace).
         """
         changes = [
             ConversationChange(
@@ -655,6 +661,7 @@ class TeamsIngestor(ChangeBasedIngestor):
             window_seconds=THREAD_WINDOW_SECONDS,
             ingest_fn=ingest_fn,
             freshness_fn=freshness_fn,
+            author_resolver=author_resolver,
         )
 
     def _channel_delta(

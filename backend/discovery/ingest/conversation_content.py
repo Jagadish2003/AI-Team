@@ -340,7 +340,110 @@ def thread_evidence_pointer(thread: ConversationThread) -> Dict[str, Any]:
     ).to_dict()
 
 
-def thread_to_artifact(thread: ConversationThread) -> Any:
+#: An author resolver maps ``(display_name, source_record_id)`` for one participant
+#: to the entity-layer link dict for a CONFIDENT match, or ``None`` (no confident
+#: match → the author stays a plain reference). Injected so the discovery layer
+#: carries no import-time dependency on the entity layer and tests stay DB-free.
+AuthorResolver = Callable[[str, Optional[str]], Optional[dict]]
+
+#: Sentinel distinguishing "caller did not specify a resolver" (build the default,
+#: DB-backed one) from an explicit ``None`` (author resolution disabled).
+_DEFAULT_AUTHOR_RESOLVER: Any = object()
+
+
+def _participant_identity(msg: ConversationMessage) -> tuple:
+    """The ``(display_name, source_record_id)`` a participant is resolved by (T4).
+
+    Uniform across platforms: the display name is the message's author reference,
+    and the stable source id is the platform's user id when it carries one (Teams
+    ``extra['user_id']``) else the author reference itself (Slack, whose author IS
+    the user id). A resolver can therefore match either by same-source id or by
+    canonical display name without knowing which platform produced the message.
+    """
+    ref = msg.author or ""
+    source_record_id = (msg.extra or {}).get("user_id") or ref or None
+    return ref, source_record_id
+
+
+def _resolve_participants(
+    thread: ConversationThread, author_resolver: Optional[AuthorResolver]
+) -> list:
+    """Resolve a thread's distinct participants to entity links (T4, conservative).
+
+    Returns one link dict per participant the resolver CONFIDENTLY matched (keyed by
+    the raw ``ref`` so a consumer can tie it back to the rendered author line); an
+    unresolved participant is simply omitted. Order follows first appearance in the
+    thread. Never raises — a resolver failure for one author drops only that link.
+    """
+    if author_resolver is None:
+        return []
+    links: list = []
+    seen: set = set()
+    for m in thread.messages:
+        ref = m.author
+        if not ref or ref in seen:
+            continue
+        seen.add(ref)
+        display_name, source_record_id = _participant_identity(m)
+        try:
+            link = author_resolver(display_name, source_record_id)
+        except Exception:  # noqa: BLE001 — one author's link never breaks the thread
+            link = None
+        if link:
+            links.append({"ref": ref, **link})
+    return links
+
+
+def build_author_resolver(
+    org_id: str, source_system: str
+) -> Optional[AuthorResolver]:
+    """Build the default read-only participant→entity resolver (T4 / AT-597).
+
+    Looks each participant up against the entity layer via the conservative,
+    side-effect-free :func:`app.entity_resolution.lookup_resolved_entity` — a
+    confident ``person`` match returns its graph entity id + canonical name; anything
+    else returns ``None`` (the author stays a plain reference). Fully guarded and a
+    no-op when no database is configured, so an offline run never touches a DB and
+    resolution can only ever ADD links, never break or block ingestion.
+    """
+    import os
+
+    if not os.getenv("DATABASE_URL"):
+        return None
+    try:
+        from app.entity_resolution import lookup_resolved_entity
+    except Exception:  # pragma: no cover — entity layer unavailable → no links
+        return None
+
+    def _resolve(display_name: str, source_record_id: Optional[str]) -> Optional[dict]:
+        try:
+            entity = lookup_resolved_entity(
+                org_id=org_id,
+                entity_type="person",
+                display_name=display_name,
+                source_system=source_system,
+                source_record_id=source_record_id,
+            )
+        except Exception:  # noqa: BLE001 — a lookup failure just means "no link"
+            return None
+        if entity is None:
+            return None
+        return {
+            "entity_id": str(entity.id),
+            "canonical_name": entity.canonical_name,
+            "display_name": entity.display_name,
+            "resolution_confidence": entity.resolution_confidence,
+            "resolution_status": entity.resolution_status,
+        }
+
+    return _resolve
+
+
+def thread_to_artifact(
+    thread: ConversationThread,
+    *,
+    author_resolver: Optional[Callable[[str, Optional[str]], Optional[dict]]] = None,
+) -> Any:
     """Map one assembled thread to a substrate :class:`ContentArtifact`.
 
     Carries the rendered author-attributed text plus thread-level provenance
@@ -349,6 +452,14 @@ def thread_to_artifact(thread: ConversationThread) -> Any:
     platform's per-message ``extra`` fields (e.g. Teams ``team_id``) are merged in.
     Imported lazily so this discovery module carries no import-time dependency on
     the app.retrieval package.
+
+    R18-A4 / AT-597 (T4): when an ``author_resolver`` is supplied, each distinct
+    participant is looked up against the entity layer and CONFIDENT matches are
+    recorded under ``provenance['participant_entities']`` (the graph entity id +
+    canonical name), so a finding citing this thread can trace participants into the
+    knowledge graph (AC5). Resolution is conservative — unresolved authors are simply
+    absent from that list and remain plain references in ``participants``; nothing is
+    ever created or merged here.
     """
     from app.retrieval.ingest import ContentArtifact
 
@@ -359,6 +470,7 @@ def thread_to_artifact(thread: ConversationThread) -> Any:
         "thread_id": None if thread.is_window else thread.key,
         "message_count": len(thread.messages),
         "participants": thread.participants,
+        "participant_entities": _resolve_participants(thread, author_resolver),
         "first_ts": thread.root_iso,
         "last_ts": thread.latest_iso,
         "origin": "observed",
@@ -430,6 +542,7 @@ def ingest_conversation_changes(
     window_seconds: int = DEFAULT_WINDOW_SECONDS,
     ingest_fn: Optional[Callable[[str, List[Any]], Any]] = None,
     freshness_fn: Optional[Callable[[dict], Any]] = None,
+    author_resolver: Any = _DEFAULT_AUTHOR_RESOLVER,
 ) -> ConversationDeepContentResult:
     """Route a batch's conversation changes to the substrate + R18-B2 freshness (T3).
 
@@ -469,11 +582,15 @@ def ingest_conversation_changes(
     if not in_scope:
         return result
 
+    if author_resolver is _DEFAULT_AUTHOR_RESOLVER:
+        author_resolver = build_author_resolver(org_id, source_system)
+
     handoff_msgs, refresh_ids, delete_ids = _classify_changes(in_scope)
 
     if handoff_msgs:
         _handoff_created_threads(
-            result, org_id, source_system, handoff_msgs, window_seconds, ingest_fn
+            result, org_id, source_system, handoff_msgs, window_seconds, ingest_fn,
+            author_resolver,
         )
 
     if refresh_ids or delete_ids:
@@ -538,15 +655,20 @@ def _handoff_created_threads(
     messages: List[ConversationMessage],
     window_seconds: int,
     ingest_fn: Optional[Callable[[str, List[Any]], Any]],
+    author_resolver: Optional[AuthorResolver] = None,
 ) -> None:
-    """Assemble fully-present created threads and hand them to the substrate (AC1)."""
+    """Assemble fully-present created threads and hand them to the substrate (AC1).
+
+    Participants are resolved to graph entities (T4) via ``author_resolver`` as each
+    artifact's provenance is built.
+    """
     threads = assemble_threads(source_system, messages, window_seconds=window_seconds)
     result.threads = len(threads)
     result.windows = sum(1 for t in threads if t.is_window)
     if not threads:
         return
 
-    artifacts = [thread_to_artifact(t) for t in threads]
+    artifacts = [thread_to_artifact(t, author_resolver=author_resolver) for t in threads]
     result.artifacts_handed_off = len(artifacts)
 
     fn = ingest_fn
@@ -637,6 +759,7 @@ def resolve_conversation_thread(
     read_container_messages: Callable[[str, str], List[ConversationMessage]],
     *,
     window_seconds: int = DEFAULT_WINDOW_SECONDS,
+    author_resolver: Any = _DEFAULT_AUTHOR_RESOLVER,
 ) -> Optional[Any]:
     """Re-extract one thread's CURRENT content for the freshness refresh worker (T3).
 
@@ -673,9 +796,12 @@ def resolve_conversation_thread(
         )
         return None
 
+    if author_resolver is _DEFAULT_AUTHOR_RESOLVER:
+        author_resolver = build_author_resolver(org_id, source_system)
+
     for thread in assemble_threads(source_system, messages, window_seconds=window_seconds):
         if thread.source_artifact() == source_artifact:
-            return thread_to_artifact(thread)
+            return thread_to_artifact(thread, author_resolver=author_resolver)
 
     # The thread/window is gone — return empty content so the swap removes its chunks.
     return ContentArtifact(
