@@ -252,11 +252,11 @@ describe("RunHealthDashboardPage", () => {
   it("marks incomplete successful responses as partial instead of healthy", async () => {
     api.fetchConnectorHealth.mockResolvedValue({
       org_id: "org-health",
-      connectors: [{ ...connectorResponse.connectors[0], last_successful_ingestion: null, checkpoint_age_seconds: null }],
+      connectors: [{ ...connectorResponse.connectors[0], auth_mode: null }],
     });
-    api.fetchRunHealth.mockResolvedValue({ org_id: "org-health", runs: [{ run_id: "unknown-run", status: "unknown", health_status: "unknown" }] });
+    api.fetchRunHealth.mockResolvedValue({ org_id: "org-health", runs: [{ run_id: "incomplete-run", status: "complete", health_status: "healthy" }] });
     api.fetchContentHealth.mockResolvedValue({ ...contentResponse, indexed_by_source: [], pending_embeddings: 0, stale_chunks: 0, failed_refreshes: 0 });
-    api.fetchPackHealth.mockResolvedValue({ run_id: "unknown-run", packs: [{ ...packResponse.packs[0], pack_version: null }] });
+    api.fetchPackHealth.mockResolvedValue({ run_id: "incomplete-run", packs: [{ ...packResponse.packs[0], detectors: [] }] });
     api.fetchAttentionHealth.mockResolvedValue({ org_id: "org-health", severity_order: ["critical", "high", "medium", "low"], items: [] });
     renderPage();
 

@@ -30,11 +30,10 @@ impossible):
                               those same records, severity ordered and linked to
                               the supporting dashboard panel.
 
-Resilience: connector/run assembly is defensive per item — one malformed record
-never blanks the whole panel. The ONE deliberate exception is the freshness read
-inside ``content_freshness_view``: R18-B2 metrics must never degrade to a
-false-healthy zero, so a store read failure is allowed to propagate and surface
-as an HTTP error (matching ``retrieval/metrics.py``).
+Resilience: malformed individual records are isolated where they can be shown as
+partial data, but failed backing-store reads are never converted into an empty or
+false-healthy response. Those failures propagate so the frontend can report the
+affected panel as unavailable.
 
 Skipped-with-reason items are read from the ``ingestion.artifact_skipped``
 telemetry event that R18-C2 T2 emits at origin in the document ingestor
@@ -114,13 +113,14 @@ def _wide_range() -> tuple[datetime, datetime]:
 
 
 def _safe_range(org_id: str, event_type: str) -> List[Any]:
-    """Org-scoped telemetry read that never breaks a panel: returns [] on error
-    or when the (possibly not-yet-emitted) event type has no rows."""
+    """Required org-scoped telemetry read.
+
+    An absent event type legitimately returns an empty list. A telemetry-store
+    failure must propagate, otherwise the dashboard could report zero errors,
+    skips, or attention items while its evidence source is unavailable.
+    """
     frm, to = _wide_range()
-    try:
-        return get_telemetry_range(org_id, event_type, frm, to, limit=1000) or []
-    except Exception:
-        return []
+    return get_telemetry_range(org_id, event_type, frm, to, limit=1000) or []
 
 
 def _latest_by(events: List[Any], predicate) -> Optional[Any]:
@@ -141,12 +141,9 @@ def _latest_by(events: List[Any], predicate) -> Optional[Any]:
 def _auth_mode(org_id: str, connector_id: str) -> Optional[str]:
     """oauth | static | None — read from the credential vault kind, never the
     secret value."""
-    try:
-        from .auth import vault
+    from .auth import vault
 
-        rec = vault.get_credential(org_id, connector_id)
-    except Exception:
-        return None
+    rec = vault.get_credential(org_id, connector_id)
     if rec is None:
         return None
     kind = getattr(rec, "kind", None)
@@ -157,13 +154,10 @@ def _auth_mode(org_id: str, connector_id: str) -> Optional[str]:
 
 def _read_checkpoint(org_id: str, connector_id: str):
     try:
-        try:
-            from discovery.ingest.checkpoint_repository import read_checkpoint
-        except ModuleNotFoundError:  # pragma: no cover - repo-root import style
-            from backend.discovery.ingest.checkpoint_repository import read_checkpoint  # type: ignore
-        return read_checkpoint(org_id, connector_id)
-    except Exception:
-        return None
+        from discovery.ingest.checkpoint_repository import read_checkpoint
+    except ModuleNotFoundError:  # pragma: no cover - repo-root import style
+        from backend.discovery.ingest.checkpoint_repository import read_checkpoint  # type: ignore
+    return read_checkpoint(org_id, connector_id)
 
 
 _CONNECTED_STATES = {"connected", "live", "needs_refresh", "refresh_failed", "needs_auth"}
@@ -253,20 +247,14 @@ def _connector_entry(
 
 def connectors_view(org_id: str) -> List[Dict[str, Any]]:
     """Per-connector health for every connected system in the org (AC1)."""
-    try:
-        records = db.org_connectors_list(org_id)
-    except Exception:
-        records = []
+    records = db.org_connectors_list(org_id)
 
     ingest_events = _safe_range(org_id, "db.ingestor_completed")
     health_events = _safe_range(org_id, "connector.health_check")
 
     out: List[Dict[str, Any]] = []
     for record in records:
-        try:
-            entry = _connector_entry(org_id, record, ingest_events, health_events)
-        except Exception:
-            entry = None
+        entry = _connector_entry(org_id, record, ingest_events, health_events)
         if entry is not None:
             out.append(entry)
     return out
@@ -378,10 +366,7 @@ def _run_entry(org_id: str, run: Dict[str, Any], snapshot_events: List[Any]) -> 
 
 def runs_view(org_id: str, limit: int = 10) -> List[Dict[str, Any]]:
     """Recent discovery runs for the org, newest first, degradation visible (AC2)."""
-    try:
-        runs = db.tenancy_get_runs(org_id)
-    except Exception:
-        runs = []
+    runs = db.tenancy_get_runs(org_id)
     runs = sorted(runs, key=lambda r: r.get("startedAt") or "", reverse=True)
     if limit and limit > 0:
         runs = runs[:limit]
@@ -392,7 +377,7 @@ def runs_view(org_id: str, limit: int = 10) -> List[Dict[str, Any]]:
     for run in runs:
         try:
             out.append(_run_entry(org_id, run, snapshot_events))
-        except Exception:
+        except (AttributeError, TypeError, ValueError):
             out.append({"run_id": run.get("id"), "status": run.get("status"), "health_status": "unknown"})
     return out
 
@@ -464,62 +449,105 @@ def content_freshness_view(org_id: str) -> Dict[str, Any]:
 # ── Packs panel ─────────────────────────────────────────────────────────────
 
 def _latest_run(org_id: str) -> Optional[Dict[str, Any]]:
-    try:
-        runs = db.tenancy_get_runs(org_id)
-    except Exception:
-        return None
+    runs = db.tenancy_get_runs(org_id)
     if not runs:
         return None
     return sorted(runs, key=lambda r: r.get("startedAt") or "", reverse=True)[0]
 
 
-def packs_view(org_id: str) -> Dict[str, Any]:
-    """Packs executed on the latest run, with versions + detector counts (AC).
+def _snapshot_detector_ids(org_id: str, run_id: str, pack_id: str) -> List[str]:
+    """Read the detector ids actually persisted for one org-scoped run."""
+    con = db.connect()
+    try:
+        cur = con.cursor()
+        cur.execute(
+            "SELECT DISTINCT detector_id FROM signal_snapshots "
+            "WHERE org_id = %s AND run_id = %s AND pack_id = %s "
+            "ORDER BY detector_id ASC",
+            (org_id, run_id, pack_id),
+        )
+        rows = cur.fetchall()
+    finally:
+        con.close()
+    return [str(row[0]) for row in rows if row and row[0]]
 
-    Pack ids and versions come from the run record / pack execution data
-    (R16-B1 ``packVersion`` stamp), never recreated in the dashboard layer.
+
+def packs_view(org_id: str) -> Dict[str, Any]:
+    """Return the exact pack execution recorded for the latest run.
+
+    Historical execution details come from immutable run fields, the
+    ``run.pack_executed`` origin event, or org/run-scoped signal snapshots. The
+    mutable pack registry is deliberately not consulted: changing a pack later
+    must not rewrite which version or detectors the dashboard says executed.
     """
     latest = _latest_run(org_id)
     if latest is None:
         return {"run_id": None, "packs": []}
 
-    run_id = latest.get("id")
-    pack_id = latest.get("packId") or db.run_kv_get("pack_id", run_id, None)
+    run_id = str(latest.get("id") or "")
+    if not run_id:
+        return {"run_id": None, "packs": []}
+
+    pack_event = _latest_by(
+        _safe_range(org_id, "run.pack_executed"),
+        lambda event: (
+            getattr(event, "run_id", None) == run_id
+            or _event_payload(event).get("run_id") == run_id
+        ),
+    )
+    event_payload = _event_payload(pack_event) if pack_event is not None else {}
+    pack_id = str(
+        event_payload.get("pack_id")
+        or latest.get("packId")
+        or db.run_kv_get("pack_id", run_id, None)
+        or ""
+    )
     if not pack_id:
         return {"run_id": run_id, "packs": []}
 
-    try:
-        from discovery.packs.pack_config import get_pack_version, get_detector_modules, get_pack
-    except ModuleNotFoundError:  # pragma: no cover
-        from backend.discovery.packs.pack_config import (  # type: ignore
-            get_pack_version,
-            get_detector_modules,
-            get_pack,
-        )
+    run_detectors = latest.get("executedDetectorIds")
+    event_detectors = event_payload.get("detector_ids")
+    if isinstance(run_detectors, list):
+        detectors = [str(value) for value in run_detectors if str(value).strip()]
+    elif isinstance(event_detectors, list):
+        detectors = [str(value) for value in event_detectors if str(value).strip()]
+    else:
+        detectors = _snapshot_detector_ids(org_id, run_id, pack_id)
 
-    # Prefer the version stamped on the run (the exact version that executed);
-    # fall back to the registry version for the pack id.
-    pack_version = latest.get("packVersion") or get_pack_version(pack_id)
-    try:
-        detector_modules = list(get_detector_modules(pack_id))
-        detector_count = len(detector_modules)
-    except Exception:
-        detector_modules = []
-        detector_count = 0
-    try:
-        pack_name = get_pack(pack_id).get("packName")
-    except Exception:
-        pack_name = None
+    execution_recorded_at = (
+        latest.get("packExecutedAt")
+        or event_payload.get("executed_at")
+        or _to_iso(getattr(pack_event, "timestamp", None))
+    )
+    execution_exists = (
+        isinstance(run_detectors, list)
+        or pack_event is not None
+        or bool(detectors)
+        or bool(latest.get("packExecutedAt"))
+    )
+    if not execution_exists:
+        # A selected pack is not proof that its detectors ran. A run that failed
+        # during ingestion must not be presented as a successful pack execution.
+        return {"run_id": run_id, "packs": []}
+
+    detector_count = len(detectors)
+    if not detectors and event_payload.get("detector_count") is not None:
+        detector_count = int(event_payload["detector_count"])
 
     return {
         "run_id": run_id,
         "packs": [
             {
                 "pack_id": pack_id,
-                "pack_name": pack_name,
-                "pack_version": pack_version,
+                "pack_name": event_payload.get("pack_name") or latest.get("packName"),
+                "pack_version": (
+                    event_payload.get("pack_version") or latest.get("packVersion")
+                ),
                 "detector_count": detector_count,
-                "detectors": detector_modules,
+                "detectors": detectors,
+                "evaluated_count": event_payload.get("evaluated_count"),
+                "not_evaluated_count": event_payload.get("not_evaluated_count"),
+                "executed_at": execution_recorded_at,
             }
         ],
     }

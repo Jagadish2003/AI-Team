@@ -94,6 +94,9 @@ export interface PackHealthItem {
   pack_version?: string | null;
   detector_count: number;
   detectors?: string[];
+  evaluated_count?: number | null;
+  not_evaluated_count?: number | null;
+  executed_at?: string | null;
 }
 
 export interface PackHealthResponse {

@@ -94,22 +94,33 @@ def _seed_expired_token(org_id: str, connector_id: str = "salesforce") -> str:
 
 
 def _seed_run(org_id: str, *, status: str, pack_id: str = "ncino", errors=None,
-              opps: int = 0, started_offset: int = -120) -> str:
+              opps: int = 0, started_offset: int = -120,
+              pack_executed: bool = True) -> str:
     run_id = f"run_{uuid4().hex[:10]}"
+    run_payload = {
+        "id": run_id,
+        "org_id": org_id,
+        "orgId": org_id,
+        "status": status,
+        "startedAt": _now_iso(started_offset),
+        "updatedAt": _now_iso(),
+        "packId": pack_id,
+        "selectedSystemIds": ["servicenow", "jira"],
+        "systemCount": 2,
+        "source": "stack_builder",
+    }
+    if pack_executed:
+        run_payload.update(
+            {
+                "packName": "nCino Lending",
+                "packVersion": "seeded-1.0.1",
+                "executedDetectorIds": ["LOAN_ROUTING", "COVENANT_TRACKING"],
+                "packExecutedAt": _now_iso(-30),
+            }
+        )
     db.upsert_run(
         run_id,
-        {
-            "id": run_id,
-            "org_id": org_id,
-            "orgId": org_id,
-            "status": status,
-            "startedAt": _now_iso(started_offset),
-            "updatedAt": _now_iso(),
-            "packId": pack_id,
-            "selectedSystemIds": ["servicenow", "jira"],
-            "systemCount": 2,
-            "source": "stack_builder",
-        },
+        run_payload,
     )
     db.run_kv_set(
         "status",
@@ -248,10 +259,24 @@ def test_packs_from_latest_run(client):
     assert len(body["packs"]) == 1
     pack = body["packs"][0]
     assert pack["pack_id"] == "ncino"
-    assert isinstance(pack["pack_version"], str) and pack["pack_version"]
-    assert pack["detector_count"] > 0
+    assert pack["pack_version"] == "seeded-1.0.1"
+    assert pack["detectors"] == ["LOAN_ROUTING", "COVENANT_TRACKING"]
+    assert pack["detector_count"] == 2
     assert len(pack["detectors"]) == pack["detector_count"]
     assert all(isinstance(detector, str) and detector for detector in pack["detectors"])
+
+
+def test_selected_pack_is_not_reported_when_detectors_never_executed(client):
+    org = _owner_org("rh_pack_not_run")
+    run_id = _seed_run(
+        org,
+        status="failed",
+        pack_id="ncino",
+        pack_executed=False,
+    )
+
+    body = client.get("/api/run-health/packs", headers=_auth(org)).json()
+    assert body == {"run_id": run_id, "packs": []}
 
 
 def test_packs_empty_without_runs(client):

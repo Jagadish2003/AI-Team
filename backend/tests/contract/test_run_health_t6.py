@@ -156,20 +156,25 @@ def _seed_ingest_completed(org_id: str, connector_id: str, *, degraded: int = 0)
 def _seed_run(org_id: str, *, status: str, pack_id: str = "ncino", errors=None,
               opps: int = 0, started_offset: int = -120) -> str:
     run_id = f"run_{uuid4().hex[:10]}"
+    run_payload = {
+        "id": run_id,
+        "org_id": org_id,
+        "orgId": org_id,
+        "status": status,
+        "startedAt": _now_iso(started_offset),
+        "updatedAt": _now_iso(),
+        "packId": pack_id,
+        "packName": "nCino Lending",
+        "packVersion": "seeded-1.0.1",
+        "executedDetectorIds": ["LOAN_ROUTING", "COVENANT_TRACKING"],
+        "packExecutedAt": _now_iso(-30),
+        "selectedSystemIds": ["servicenow", "jira"],
+        "systemCount": 2,
+        "source": "stack_builder",
+    }
     db.upsert_run(
         run_id,
-        {
-            "id": run_id,
-            "org_id": org_id,
-            "orgId": org_id,
-            "status": status,
-            "startedAt": _now_iso(started_offset),
-            "updatedAt": _now_iso(),
-            "packId": pack_id,
-            "selectedSystemIds": ["servicenow", "jira"],
-            "systemCount": 2,
-            "source": "stack_builder",
-        },
+        run_payload,
     )
     db.run_kv_set(
         "status",

@@ -119,9 +119,17 @@ RunSignalSnapshotEvent = RunSignalSnapshotPayload   # alias
 
 
 class PackExecutedPayload(TypedDict, total=False):
-    """T1-S14-C — written after each pack execution."""
+    """Exact, org-scoped execution snapshot for a discovery pack."""
+    org_id: NotRequired[str]
+    run_id: NotRequired[str]
     pack_id: NotRequired[str]
+    pack_name: NotRequired[str]
+    pack_version: NotRequired[str]
+    detector_ids: NotRequired[list[str]]
     detector_count: NotRequired[int]
+    evaluated_count: NotRequired[int]
+    not_evaluated_count: NotRequired[int]
+    executed_at: NotRequired[str]
     duration_ms: NotRequired[int]
 
 
@@ -752,6 +760,10 @@ register_event_type("connector.health_check", ConnectorHealthPayload)
 register_event_type("db.query_executed", DbQueryExecutedEvent)
 register_event_type("db.ingestor_completed", DBIngestorCompletedPayload)
 register_event_type("run.signal_snapshot", RunSignalSnapshotPayload)
+# R18-C2 T2: emitted at the detector execution origin. The run-health Packs
+# panel consumes this historical snapshot instead of reconstructing an old run
+# from the mutable pack registry.
+register_event_type("run.pack_executed", PackExecutedPayload)
 # T3-S11-A Sprint 11
 register_event_type("temporal.enrichment_completed", TemporalEnrichmentCompletedPayload)
 # T3-S12-A T7 Sprint 12

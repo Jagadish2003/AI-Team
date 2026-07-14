@@ -649,7 +649,7 @@ export default function StackBuilderPage({
             <InlineError
               title="Could not load your connected systems"
               message={catalogError}
-              onRetry={fetchCatalog}
+              onRetry={refetchCatalog}
             />
           )}
           {state.currentStep === 2 && !catalogLoading && !catalogError && (

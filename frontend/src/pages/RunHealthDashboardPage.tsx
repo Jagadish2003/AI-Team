@@ -469,7 +469,11 @@ function ConnectorsPanel({
   if (resource.status === "success") {
     const hasIssues = resource.data.connectors.some((item) => connectorTone(item) !== "good");
     const hasMissing = resource.data.connectors.some(
-      (item) => !item.last_successful_ingestion || item.checkpoint_age_seconds === null,
+      (item) =>
+        !item.last_successful_ingestion ||
+        item.checkpoint_age_seconds === null ||
+        item.checkpoint_age_seconds === undefined ||
+        !item.auth_mode,
     );
     state = resource.data.connectors.length === 0 ? "empty" : hasIssues ? "degraded" : hasMissing ? "partial" : "healthy";
   }
@@ -588,6 +592,22 @@ function RunsPanel({
   retry: () => void;
   highlighted: boolean;
 }) {
+  const hasIncompleteSummary = resource.status === "success" && resource.data.runs.some(
+    (run) =>
+      !["running", "created", "queued", "pending"].includes(run.health_status) &&
+      (
+        run.duration_seconds === null ||
+        run.duration_seconds === undefined ||
+        run.system_count === null ||
+        run.system_count === undefined ||
+        run.detectors_evaluated === null ||
+        run.detectors_evaluated === undefined ||
+        run.detectors_fired === null ||
+        run.detectors_fired === undefined ||
+        run.opportunities === null ||
+        run.opportunities === undefined
+      ),
+  );
   const state = resource.status === "success"
     ? resource.data.runs.length === 0
       ? "empty"
@@ -595,7 +615,7 @@ function RunsPanel({
         ? "degraded"
         : resource.data.runs.some((run) => ["running", "created", "queued", "pending"].includes(run.health_status))
           ? "in-progress"
-          : resource.data.runs.some((run) => run.health_status !== "healthy")
+          : resource.data.runs.some((run) => run.health_status !== "healthy") || hasIncompleteSummary
             ? "partial"
             : "healthy"
     : resource.status;
@@ -765,7 +785,13 @@ function PacksPanel({
   const state = resource.status === "success"
     ? resource.data.packs.length === 0
       ? "empty"
-      : resource.data.packs.some((pack) => !pack.pack_version)
+      : resource.data.packs.some(
+          (pack) =>
+            !pack.pack_version ||
+            pack.detector_count <= 0 ||
+            !pack.detectors ||
+            pack.detectors.length !== pack.detector_count,
+        )
         ? "partial"
         : "healthy"
     : resource.status;
@@ -788,12 +814,14 @@ function PacksPanel({
           {resource.data.packs.map((pack) => (
             <article key={`${resource.data.run_id}-${pack.pack_id}`} className="rounded-xl border border-slate-200 p-4">
               <div className="flex flex-wrap items-start justify-between gap-3">
-                <div><h3 className="font-semibold text-slate-900">{pack.pack_name ?? pack.pack_id}</h3><p className="text-sm text-slate-500">Run {resource.data.run_id?.slice(0, 8) ?? "Not available"}</p></div>
+                <div><h3 className="font-semibold text-slate-900">{pack.pack_name ?? pack.pack_id}</h3><p className="text-sm text-slate-500">Run {resource.data.run_id?.slice(0, 8) ?? "Not available"} · Executed {formatDate(pack.executed_at)}</p></div>
                 <StatusPill label={pack.pack_version ? `Version ${pack.pack_version}` : "Version unavailable"} tone={pack.pack_version ? "info" : "warn"} />
               </div>
               <dl className="mt-4 grid gap-3 text-sm sm:grid-cols-2">
-                <div><dt className="text-slate-500">Detectors in executed pack</dt><dd className="text-xl font-semibold text-slate-900">{pack.detector_count}</dd></div>
+                <div><dt className="text-slate-500">Detectors attempted</dt><dd className="text-xl font-semibold text-slate-900">{pack.detector_count}</dd></div>
                 <div><dt className="text-slate-500">Pack identifier</dt><dd className="text-lg font-semibold text-slate-900">{pack.pack_id}</dd></div>
+                {pack.evaluated_count !== null && pack.evaluated_count !== undefined ? <div><dt className="text-slate-500">Evaluated successfully</dt><dd className="text-xl font-semibold text-slate-900">{pack.evaluated_count}</dd></div> : null}
+                {pack.not_evaluated_count !== null && pack.not_evaluated_count !== undefined ? <div><dt className="text-slate-500">Not evaluated</dt><dd className="text-xl font-semibold text-slate-900">{pack.not_evaluated_count}</dd></div> : null}
               </dl>
               {pack.detectors && pack.detectors.length > 0 ? <details className="mt-3 text-sm"><summary className="cursor-pointer font-medium text-blue-700">Detector list</summary><div className="mt-2 flex flex-wrap gap-2">{pack.detectors.map((detector) => <StatusPill key={detector} label={detectorLabel(detector)} tone="neutral" />)}</div></details> : null}
             </article>
