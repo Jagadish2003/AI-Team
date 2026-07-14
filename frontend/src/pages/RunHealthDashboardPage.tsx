@@ -50,6 +50,21 @@ const INITIAL_STATE: ResourceState<never> = {
 
 const PANEL_IDS: HealthPanelId[] = ["connectors", "runs", "content", "packs"];
 
+// Panels with more than this many cards get an internal scrollbar so the panel
+// stays compact instead of growing with the list. The height fits ~3 cards.
+const CARD_LIST_SCROLL_THRESHOLD = 3;
+
+/**
+ * Classes for a card list that scrolls internally once it exceeds the threshold.
+ * The extra right padding keeps the scrollbar from overlapping the card borders.
+ */
+function cardListClasses(count: number): string {
+  const base = "space-y-3";
+  return count > CARD_LIST_SCROLL_THRESHOLD
+    ? `${base} max-h-[30rem] overflow-y-auto pr-1`
+    : base;
+}
+
 function errorMessage(error: unknown, fallback: string): string {
   if (error instanceof Error && error.message.trim()) return error.message;
   return fallback;
@@ -493,7 +508,7 @@ function ConnectorsPanel({
             <Metric label="Data flowing" value={resource.data.connectors.filter((item) => connectorTone(item) === "good").length} />
             <Metric label="Need attention" value={resource.data.connectors.filter((item) => connectorTone(item) !== "good").length} />
           </div>
-          <div className="space-y-3">
+          <div className={cardListClasses(resource.data.connectors.length)}>
             {resource.data.connectors.map((item) => (
               <article key={item.connector_id} className="rounded-xl border border-border p-4">
                 <div className="flex flex-wrap items-start justify-between gap-3">
@@ -633,7 +648,7 @@ function RunsPanel({
             <Metric label="Failed" value={resource.data.runs.filter((run) => run.health_status === "failed").length} />
             <Metric label="In progress" value={resource.data.runs.filter((run) => ["running", "created", "queued", "pending"].includes(run.health_status)).length} />
           </div>
-          <div className="space-y-3">
+          <div className={cardListClasses(resource.data.runs.length)}>
             {resource.data.runs.map((run) => (
               <article key={run.run_id} className="rounded-xl border border-border p-4">
                 <div className="flex flex-wrap items-start justify-between gap-3">

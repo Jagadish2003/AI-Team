@@ -277,4 +277,79 @@ describe("RunHealthDashboardPage", () => {
     expect(api.fetchConnectorHealth).toHaveBeenCalledTimes(1);
     expect(await screen.findByText("Commercial Lending")).toBeInTheDocument();
   });
+
+  // Internal scroll: the Connectors and Runs card lists scroll once they exceed
+  // three cards, so the panels stay compact instead of growing with the list.
+  function makeConnectors(n: number) {
+    return {
+      org_id: "org-health",
+      connectors: Array.from({ length: n }, (_, i) => ({
+        connector_id: `conn-${i}`,
+        name: `Connector ${i}`,
+        tier: "primary",
+        connection_state: "connected",
+        auth_mode: "oauth",
+        last_successful_ingestion: "2026-07-13T09:45:00Z",
+        checkpoint_position: `cursor-${i}`,
+        checkpoint_captured_at: "2026-07-13T09:50:00Z",
+        checkpoint_age_seconds: 600,
+        last_error: null,
+      })),
+    };
+  }
+
+  function makeRuns(n: number) {
+    return {
+      org_id: "org-health",
+      runs: Array.from({ length: n }, (_, i) => ({
+        run_id: `run-${i}-000`,
+        status: "complete",
+        health_status: "healthy",
+        degraded: false,
+        started_at: "2026-07-13T09:00:00Z",
+        updated_at: "2026-07-13T09:05:00Z",
+        duration_seconds: 300,
+        systems: ["servicenow"],
+        system_count: 1,
+        pack_id: "ncino",
+        detectors_evaluated: 4,
+        detectors_fired: 1,
+        opportunities: 2,
+        degraded_stages: [],
+        stage_outcomes: [],
+      })),
+    };
+  }
+
+  // The card list is the space-y-3 container that directly holds the <article> cards.
+  function cardListOf(panel: HTMLElement): HTMLElement | null {
+    const article = panel.querySelector("article");
+    return (article?.parentElement as HTMLElement) ?? null;
+  }
+
+  it("gives the Connectors card list an internal scrollbar only when there are more than three connectors", async () => {
+    api.fetchConnectorHealth.mockResolvedValue(makeConnectors(4));
+    const { unmount } = renderPage();
+    await screen.findByText("Connector 0");
+    expect(cardListOf(screen.getByTestId("panel-connectors"))?.className).toContain("overflow-y-auto");
+    unmount();
+
+    api.fetchConnectorHealth.mockResolvedValue(makeConnectors(3));
+    renderPage();
+    await screen.findByText("Connector 0");
+    expect(cardListOf(screen.getByTestId("panel-connectors"))?.className).not.toContain("overflow-y-auto");
+  });
+
+  it("gives the Runs card list an internal scrollbar only when there are more than three runs", async () => {
+    api.fetchRunHealth.mockResolvedValue(makeRuns(4));
+    const { unmount } = renderPage();
+    await screen.findByText("Run run-0-00");
+    expect(cardListOf(screen.getByTestId("panel-runs"))?.className).toContain("overflow-y-auto");
+    unmount();
+
+    api.fetchRunHealth.mockResolvedValue(makeRuns(2));
+    renderPage();
+    await screen.findByText("Run run-0-00");
+    expect(cardListOf(screen.getByTestId("panel-runs"))?.className).not.toContain("overflow-y-auto");
+  });
 });
