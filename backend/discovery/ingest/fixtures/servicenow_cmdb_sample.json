@@ -1,0 +1,68 @@
+{
+  "_meta": {
+    "description": "Synthetic bounded ServiceNow CMDB fixture for MSP-B3 T1",
+    "note": "Contains only the six default CI categories and approved fields."
+  },
+  "result": [
+    {
+      "sys_id": "ci-app-service-001",
+      "name": "Citizen Services Portal",
+      "sys_class_name": "cmdb_ci_service_auto",
+      "operational_status": "Operational",
+      "assignment_group": "Application Operations",
+      "owned_by": "Digital Services",
+      "environment": "production",
+      "sys_updated_on": "2026-07-01 10:00:00"
+    },
+    {
+      "sys_id": "ci-server-001",
+      "name": "app-prod-01",
+      "sys_class_name": "cmdb_ci_server",
+      "operational_status": "Operational",
+      "assignment_group": "Platform Operations",
+      "owned_by": "Infrastructure",
+      "environment": "production",
+      "sys_updated_on": "2026-07-01 10:05:00"
+    },
+    {
+      "sys_id": "ci-db-001",
+      "name": "citizen-services-db",
+      "sys_class_name": "cmdb_ci_db_instance",
+      "operational_status": "Operational",
+      "assignment_group": "Database Operations",
+      "owned_by": "Infrastructure",
+      "environment": "production",
+      "sys_updated_on": "2026-07-01 10:10:00"
+    },
+    {
+      "sys_id": "ci-storage-001",
+      "name": "prod-storage-01",
+      "sys_class_name": "cmdb_ci_storage_device",
+      "operational_status": "Operational",
+      "assignment_group": "Storage Operations",
+      "owned_by": "Infrastructure",
+      "environment": "production",
+      "sys_updated_on": "2026-07-01 10:15:00"
+    },
+    {
+      "sys_id": "ci-network-001",
+      "name": "core-router-01",
+      "sys_class_name": "cmdb_ci_netgear",
+      "operational_status": "Operational",
+      "assignment_group": "Network Operations",
+      "owned_by": "Infrastructure",
+      "environment": "production",
+      "sys_updated_on": "2026-07-01 10:20:00"
+    },
+    {
+      "sys_id": "ci-lb-001",
+      "name": "public-lb-01",
+      "sys_class_name": "cmdb_ci_lb",
+      "operational_status": "Operational",
+      "assignment_group": "Network Operations",
+      "owned_by": "Infrastructure",
+      "environment": "production",
+      "sys_updated_on": "2026-07-01 10:25:00"
+    }
+  ]
+}

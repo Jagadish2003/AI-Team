@@ -4,7 +4,7 @@ import os
 import time
 import uuid
 from datetime import datetime, timezone
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 from uuid import uuid4
 
 from dotenv import load_dotenv
@@ -450,13 +450,27 @@ def connect_connector(connector_id: str, body: Dict[str, Any]) -> Dict[str, Any]
     "/api/connectors/{connector_id}/configure",
     dependencies=[Depends(require_auth), Depends(require_role("analyst"))],
 )
-def configure_connector(connector_id: str) -> Dict[str, Any]:
+def configure_connector(
+    connector_id: str,
+    body: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
     org_id = get_current_org_id()
     c = org_connector_get(org_id, connector_id)
     if not c:
         raise HTTPException(404, "connector not found")
     if c.get("status") != "connected":
         raise HTTPException(400, "connector must be connected before configuring")
+    if connector_id == "servicenow" and body is not None:
+        if "cmdb_class_scope" in body:
+            try:
+                from discovery.ingest.servicenow import normalize_cmdb_class_scope
+
+                class_scope = normalize_cmdb_class_scope(body["cmdb_class_scope"])
+            except ValueError as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
+            # Store the canonical exact list on THIS org's connector override.
+            # An empty list intentionally disables the bounded CMDB read.
+            c["cmdb_class_scope"] = list(class_scope)
     c["configured"] = True
     c["lastSynced"] = "Just now"
     org_connector_set(org_id, connector_id, c)

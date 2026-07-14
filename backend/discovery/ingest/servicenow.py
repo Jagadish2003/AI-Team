@@ -21,16 +21,70 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
+from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from . import is_live
 
 logger = logging.getLogger(__name__)
 
 FIXTURE_PATH = Path(__file__).parent / "fixtures" / "servicenow_sample.json"
+CMDB_FIXTURE_PATH = Path(__file__).parent / "fixtures" / "servicenow_cmdb_sample.json"
 SN_API_VERSION = "v1"
 WINDOW_DAYS = 90
+
+# MSP-B3 T1: deliberately small estate scope.  These are ServiceNow's common
+# base classes for the six product categories promised by the MSP pack.  An org
+# can replace this list through its own ServiceNow connector configuration.
+DEFAULT_CMDB_CLASSES: Tuple[str, ...] = tuple(
+    sorted(
+        {
+            "cmdb_ci_service_auto",   # application services
+            "cmdb_ci_server",         # servers / compute
+            "cmdb_ci_db_instance",    # databases
+            "cmdb_ci_storage_device", # storage
+            "cmdb_ci_netgear",        # network equipment
+            "cmdb_ci_lb",             # load balancers
+        }
+    )
+)
+CMDB_CLASS_SCOPE_CONFIG_KEY = "cmdb_class_scope"
+CMDB_RECORD_CAP = 10_000
+CMDB_FIELDS: Tuple[str, ...] = (
+    "sys_id",
+    "name",
+    "sys_class_name",
+    "operational_status",
+    "assignment_group",
+    "owned_by",
+    "environment",
+    "sys_updated_on",
+)
+_CMDB_CLASS_RE = re.compile(r"^cmdb_ci_[a-z0-9_]+$")
+
+
+@dataclass(frozen=True)
+class ServiceNowConfigurationItem:
+    """Stable, bounded internal representation of one ServiceNow CI.
+
+    It intentionally contains no raw ServiceNow payload.  In particular,
+    discovery credentials, connection attributes, and arbitrary CMDB columns
+    cannot cross this boundary into later graph tasks.
+    """
+
+    sys_id: str
+    name: str
+    ci_class: str
+    operational_status: Optional[str]
+    assignment_group: Optional[str]
+    owned_by: Optional[str]
+    environment: Optional[str]
+    updated_at: Optional[str]
+
+    def as_dict(self) -> Dict[str, Any]:
+        return asdict(self)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -51,6 +105,15 @@ def _load_fixture() -> Dict[str, Any]:
     if not FIXTURE_PATH.exists():
         raise ServiceNowIngestError(f"ServiceNow fixture not found: {FIXTURE_PATH}")
     with open(FIXTURE_PATH, encoding="utf-8") as f:
+        return json.load(f)
+
+
+def _load_cmdb_fixture() -> Dict[str, Any]:
+    if not CMDB_FIXTURE_PATH.exists():
+        raise ServiceNowIngestError(
+            f"ServiceNow CMDB fixture not found: {CMDB_FIXTURE_PATH}"
+        )
+    with open(CMDB_FIXTURE_PATH, encoding="utf-8") as f:
         return json.load(f)
 
 
@@ -226,6 +289,165 @@ def _sn_scalar(value: Any) -> Any:
             or value.get("name")
         )
     return value
+
+
+def normalize_cmdb_class_scope(value: Any) -> Tuple[str, ...]:
+    """Validate and deterministically canonicalize a configured CI class list.
+
+    ``None`` means the bounded product default.  A configured list replaces the
+    default, which lets an organization either extend it (include extra valid
+    classes) or narrow it (provide a subset, including an empty list to disable
+    CMDB reads).  ServiceNow encoded-query control characters are impossible
+    because only canonical ``cmdb_ci_*`` identifiers are accepted.
+    """
+    if value is None:
+        return DEFAULT_CMDB_CLASSES
+    if not isinstance(value, (list, tuple, set)):
+        raise ValueError("cmdb_class_scope must be a list of ServiceNow CI classes")
+    if len(value) > 100:
+        raise ValueError("cmdb_class_scope cannot contain more than 100 classes")
+
+    classes = set()
+    for raw_class in value:
+        if not isinstance(raw_class, str):
+            raise ValueError("every cmdb_class_scope entry must be a string")
+        ci_class = raw_class.strip().lower()
+        if not _CMDB_CLASS_RE.fullmatch(ci_class):
+            raise ValueError(
+                f"invalid ServiceNow CI class {raw_class!r}; expected cmdb_ci_*"
+            )
+        classes.add(ci_class)
+    return tuple(sorted(classes))
+
+
+def _load_org_cmdb_config(org_id: str) -> Optional[Any]:
+    """Read only this org's ServiceNow override, never a shared catalog row."""
+    try:
+        from app import db
+
+        connector = db.org_connector_get(org_id, "servicenow") or {}
+    except Exception as exc:
+        # Never turn an unavailable org-scoped config read into the broader
+        # default scope.  That would be a fail-open data-boundary violation for
+        # an organization that had deliberately narrowed its allowed classes.
+        raise ServiceNowIngestError(
+            f"ServiceNow CMDB class configuration unavailable for org {org_id!r}"
+        ) from exc
+    if connector.get("org_id") != org_id:
+        return None
+    return connector.get(CMDB_CLASS_SCOPE_CONFIG_KEY)
+
+
+def resolve_cmdb_class_scope() -> Tuple[str, ...]:
+    """Resolve the effective class scope from the current ingest organization."""
+    from . import get_ingest_org
+
+    org_id = get_ingest_org()
+    return normalize_cmdb_class_scope(_load_org_cmdb_config(org_id))
+
+
+def _optional_sn_text(value: Any) -> Optional[str]:
+    scalar = _sn_scalar(value)
+    if scalar is None:
+        return None
+    text = str(scalar).strip()
+    return text or None
+
+
+def _configuration_item_from_record(
+    record: Dict[str, Any], allowed_classes: Tuple[str, ...]
+) -> Optional[ServiceNowConfigurationItem]:
+    sys_id = _optional_sn_text(record.get("sys_id"))
+    ci_class = (_optional_sn_text(record.get("sys_class_name")) or "").lower()
+    if not sys_id or not ci_class:
+        logger.warning("ServiceNow CMDB record missing sys_id or class; skipping")
+        return None
+    if ci_class not in allowed_classes:
+        # The query is server-filtered.  Receiving anything else means the
+        # upstream contract was violated; fail closed rather than leak it.
+        raise ServiceNowIngestError(
+            f"ServiceNow returned out-of-scope CI class {ci_class!r}"
+        )
+
+    return ServiceNowConfigurationItem(
+        sys_id=sys_id,
+        name=_optional_sn_text(record.get("name")) or sys_id,
+        ci_class=ci_class,
+        operational_status=_optional_sn_text(record.get("operational_status")),
+        assignment_group=_optional_sn_text(record.get("assignment_group")),
+        owned_by=_optional_sn_text(record.get("owned_by")),
+        environment=_optional_sn_text(record.get("environment")),
+        updated_at=_optional_sn_text(record.get("sys_updated_on")),
+    )
+
+
+def _read_cmdb_configuration_items(
+    class_scope: Tuple[str, ...],
+    client: Optional[ServiceNowClient] = None,
+) -> List[ServiceNowConfigurationItem]:
+    """Read one already-resolved bounded ``cmdb_ci`` scope, without mutation.
+
+    Live reads go through :class:`ServiceNowClient`, inheriting its vault-backed
+    OAuth/Basic authentication, 30-second timeout, pagination, record cap, and
+    error translation.  The encoded class filter and exact field projection are
+    sent to ServiceNow so unrelated records and attributes are never fetched.
+    """
+    if not class_scope:
+        return []
+
+    if is_live():
+        if client is None:
+            client = _get_client()
+        class_filter = f"sys_class_nameIN{','.join(class_scope)}"
+        records = client.table_query(
+            "cmdb_ci",
+            {
+                "sysparm_query": (
+                    f"{class_filter}^ORDERBYsys_class_name^ORDERBYname^ORDERBYsys_id"
+                ),
+                "sysparm_fields": ",".join(CMDB_FIELDS),
+                "sysparm_display_value": "all",
+                "sysparm_exclude_reference_link": "true",
+            },
+            max_records=CMDB_RECORD_CAP,
+        )
+    else:
+        records = _load_cmdb_fixture().get("result", [])
+
+    items: List[ServiceNowConfigurationItem] = []
+    for record in records:
+        if not isinstance(record, dict):
+            logger.warning("ServiceNow CMDB returned a non-object record; skipping")
+            continue
+        item = _configuration_item_from_record(record, class_scope)
+        if item is not None:
+            items.append(item)
+    return sorted(
+        items,
+        key=lambda item: (item.ci_class, item.name.casefold(), item.sys_id),
+    )
+
+
+def get_cmdb_configuration_items(
+    client: Optional[ServiceNowClient] = None,
+) -> List[ServiceNowConfigurationItem]:
+    """Read the bounded CMDB estate configured for the current organization."""
+    return _read_cmdb_configuration_items(resolve_cmdb_class_scope(), client)
+
+
+def ingest_cmdb(
+    client: Optional[ServiceNowClient] = None,
+) -> Dict[str, Any]:
+    """Return the bounded CMDB payload later MSP-B3 tasks can persist."""
+    from . import get_ingest_org
+
+    class_scope = resolve_cmdb_class_scope()
+    items = _read_cmdb_configuration_items(class_scope, client)
+    return {
+        "org_id": get_ingest_org(),
+        "class_scope": list(class_scope),
+        "configuration_items": [item.as_dict() for item in items],
+    }
 
 
 # ─────────────────────────────────────────────────────────────────────────────
