@@ -543,3 +543,76 @@ if report.breached:
 ```
 
 This is MSP-B7 **T4**. Correlation windows (T5) are a separate task.
+
+---
+
+## 12. Correlation windows (MSP-B7 / AT-673)
+
+Cross-stream joins turn separate facts into one story — an AWS event and a
+ServiceNow incident, two provider events about the same resource. But two things
+happening *near* each other in a noisy stream is not the same as two things
+happening *because* of each other. The correlation-window service is the honesty
+discipline applied to time: **a join is valid only within a configurable time
+window**, the window and observed delta are **recorded in the joined claim's
+evidence trace**, and **out-of-window agreement contributes zero confidence**.
+Code:
+[`backend/discovery/correlation/windows.py`](../backend/discovery/correlation/windows.py).
+
+> *Windows are epistemology, not plumbing.* Corroboration means independent
+> sources agreeing about the **same moment**; recording the window in the trace
+> lets a reviewer challenge the join itself.
+
+### Per-join-type, per-org windows
+
+| Join type | Default window | Meaning |
+|-----------|----------------|---------|
+| `event_incident` | 2 h | a cloud event ↔ a ServiceNow-style incident |
+| `event_event` | 15 min | a cloud event ↔ another cloud event (cross-provider) |
+| *any other* | `DEFAULT_WINDOW_SECONDS` = 1 h | fallback |
+
+`CorrelationWindowPolicy` holds the per-join-type defaults and per-org overrides
+(`set_org_window(org, join_type, seconds)` → the `window_config(org_id,
+join_type)` resolver of the MSP-B7 sketch). Defaults are tunable; T6 calibrates
+them from B8's month-scale measurements.
+
+### The join and its evidence trace
+
+`join_within_window(a, b, join_type, org_id=…)` returns a `WindowJoin` carrying
+`(join_type, window_seconds, delta_seconds, within_window, a_at, b_at)`;
+`to_trace()` is the `correlation_window` fragment attached to the joined claim's
+evidence — recorded whether the join succeeds **or fails**, so a rejected
+coincidence is auditable, never silent. Timestamp handling is tolerant
+(`OperationalEvent`, active signals, incident dicts, ISO strings, `Z` suffix,
+`datetime`); an unparseable timestamp yields `within=False, delta=None` (a join
+that cannot be confirmed never counts). The boundary is inclusive (delta ==
+window is within).
+
+### Corroboration integration (coincidence never inflates confidence)
+
+`gate_operational_corroboration(event, incident, …)` is the surface the
+operational corroboration rules consult: an event↔incident agreement **inside**
+the window elevates confidence (`MEDIUM → HIGH`, like an observed
+system-of-record corroborator — the same bar as COR-09/COR-10); the identical
+agreement **outside** the window contributes **zero** and confidence stays at the
+base. The confidence vocabulary is shared verbatim with the corroboration rule
+registry (`discovery/packs/corroboration_rules.py`). Either outcome — elevation or
+rejection — is recorded on the trace.
+
+### Usage
+
+```python
+from discovery.correlation import within_window, gate_operational_corroboration
+
+if within_window(aws_event, servicenow_incident, "event_incident", org_id=org):
+    ...  # valid join
+
+gate = gate_operational_corroboration(aws_event, servicenow_incident, org_id=org)
+# gate.confidence == "HIGH" inside window, "MEDIUM" (zero contribution) outside
+claim_evidence.append(gate.to_trace())
+```
+
+This is MSP-B7 **T5**, the reusable surface the MSP event corroboration rules
+(B4/B6) consult. It does not rewire the existing app-friction corroborators
+(COR-09/COR-10), which are 30-day freshness rules, not cloud event↔incident
+joins. Calibration of all floors/budgets/windows against B8's month-scale sample
+is **T6**.
