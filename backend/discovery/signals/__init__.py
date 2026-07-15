@@ -64,6 +64,13 @@ from .aggregation import (  # noqa: F401
     aggregate_events,
     roll_up,
 )
+from .noise_floor import (  # noqa: F401
+    DEFAULT_FLOOR,
+    DEFAULT_NOISE_FLOORS,
+    NoiseFloorPolicy,
+    SuppressionReport,
+    apply_noise_floors,
+)
 
 __all__ = [
     "CommonSignal",
@@ -113,4 +120,10 @@ __all__ = [
     "aggregate_events",
     "HIGH_CARDINALITY_CLASSES",
     "DEFAULT_EVIDENCE_SAMPLE_SIZE",
+    # AT-671 (MSP-B7 T3) — noise floors per event class
+    "NoiseFloorPolicy",
+    "SuppressionReport",
+    "apply_noise_floors",
+    "DEFAULT_NOISE_FLOORS",
+    "DEFAULT_FLOOR",
 ]

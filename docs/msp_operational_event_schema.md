@@ -428,3 +428,58 @@ aggregates = roll_up(stream.active_signals())
 
 This is MSP-B7 **T2**. Noise floors (T3), per-run budgets (T4), and correlation
 windows (T5) are separate tasks.
+
+---
+
+## 10. Noise floors per event class (MSP-B7 / AT-671)
+
+Cloud streams carry vast low-value chatter — one-off audit records, single state
+flips, access noise. A per-event-class **noise floor** sets the minimum number of
+times a signature must recur within its active period to be worth a detector's
+attention. A signature **below its class floor never becomes a detector-visible
+signal**. Code:
+[`backend/discovery/signals/noise_floor.py`](../backend/discovery/signals/noise_floor.py).
+
+### The loud-skip rule applied to noise
+
+Suppression is a *decision*, not a silent drop. Every suppressed signature and
+every suppressed event is **counted and reported per run, per class**, in a
+`SuppressionReport` — so *"we ignored 40 000 events across 12 000 one-off
+signatures"* is a visible, tunable decision an operator can challenge. The report
+names the floors it applied and is JSON-serialisable for the run record /
+run-health surface (R18-C2).
+
+### Where it sits & the defaults
+
+Per the MSP-B7 pipeline (**dedup → floor → budget → aggregate**), the floor is
+applied to the T1 **folded** active signals — after folding (so each signature's
+count is known) and before aggregation (so only survivors are rolled up and reach
+detectors). `apply_noise_floors(signals)` returns `(visible, report)`.
+
+| Class | Default floor | Rationale |
+|-------|---------------|-----------|
+| `audit` | 5 | audit floods — an action recurring < 5× a window is chatter |
+| `state_change` | 5 | state-change storms |
+| `access` | 5 | access / API chatter |
+| *any other* | `DEFAULT_FLOOR` = 1 | surfaced even at a single occurrence — **`error` and `security` are never floored by default** (you never silently drop a security finding) |
+
+Floors are configurable per policy (`NoiseFloorPolicy({"lifecycle": 5})`); the
+calibrated defaults come from B8's month-scale measurements in T6. A signature is
+suppressed when its occurrence count is **strictly below** its class floor (count
+== floor is visible). The split is pure and order-independent.
+
+### Usage
+
+```python
+from discovery.signals import apply_noise_floors, NoiseFloorPolicy, fold_events
+
+signals = fold_events(events)                        # T1 fold
+visible, report = apply_noise_floors(signals)        # T3 floor (default policy)
+# ... detectors consume `visible`; `report.to_dict()` goes to the run record ...
+
+policy = NoiseFloorPolicy({"audit": 10})             # tune per org/run
+visible, report = policy.apply(signals)
+```
+
+This is MSP-B7 **T3**. Per-run budgets (T4) and correlation windows (T5) are
+separate tasks.
