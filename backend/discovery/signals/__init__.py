@@ -49,6 +49,13 @@ from .resource_graph import (  # noqa: F401
     CLOUD_RESOURCE_ENTITY_TYPE,
     create_resource_entities,
 )
+from .ops_stream import (  # noqa: F401
+    DEFAULT_ACTIVE_PERIOD_SECONDS,
+    ActiveSignal,
+    Admission,
+    OpsEventStream,
+    fold_events,
+)
 
 __all__ = [
     "CommonSignal",
@@ -85,4 +92,10 @@ __all__ = [
     # AT-639 — resource entities into the graph
     "create_resource_entities",
     "CLOUD_RESOURCE_ENTITY_TYPE",
+    # AT-669 (MSP-B7 T1) — dedup at admission (active-signal folding)
+    "OpsEventStream",
+    "ActiveSignal",
+    "Admission",
+    "fold_events",
+    "DEFAULT_ACTIVE_PERIOD_SECONDS",
 ]

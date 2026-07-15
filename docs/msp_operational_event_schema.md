@@ -304,3 +304,65 @@ entities = create_resource_entities(events, run_id=run_id)
 
 The resolver is injectable for testing and resolved lazily, so importing
 `discovery.signals` stays dependency-light.
+
+---
+
+## 8. Dedup at admission — active-signal folding (MSP-B7 / AT-669)
+
+Cloud event streams are orders of magnitude noisier than any business system:
+a stuck alarm re-fires every few minutes. **Deduplication at the door** — the
+first discipline of MSP-B7 — collapses those re-fires into **one active signal**
+per `(event_signature, resource, active period)`, carrying an occurrence count
+and first/last timestamps. A stuck alarm firing every five minutes is ONE fact
+with a count of 288/day, not 288 facts. Code:
+[`backend/discovery/signals/ops_stream.py`](../backend/discovery/signals/ops_stream.py).
+
+### The fold key
+
+| Component | Meaning |
+|-----------|---------|
+| `org_id` | Tenancy — two orgs sharing a signature never fold together. |
+| `event_signature` | The recurrence fingerprint (AT-636): same recurring event → same signature. |
+| `resource` | The `resource_id` the event concerns (`""` when the event names none). |
+| `active period` | An epoch-anchored time bucket, **default one day** (`DEFAULT_ACTIVE_PERIOD_SECONDS`, tunable per stream; MSP-B7 T6 calibrates it). Same alarm on two days → two active signals. |
+
+### The honesty rule (aggregation compresses volume, never evidence)
+
+An `ActiveSignal` carries its proof: `occurrence_count` (over **distinct**
+provider event ids), the `first_seen`/`last_seen` span, and the provider event id
+of every folded firing. The raw provider payloads stay in the raw-event store
+(§6) — never embedded — and `ActiveSignal.resolve_raw_instances(store)` walks each
+member's evidence pointer back to its stored raw payload, so *"this alarm fired
+200 times"* opens to the real instances on click.
+
+### Deterministic & org-scoped
+
+- **Deterministic** — folding depends only on event fields, never arrival order:
+  the active period is a pure function of the timestamp, the count is over
+  distinct provider ids, the span is min/max of observation times, and the
+  detector-visible representative is the earliest firing by
+  `(observed_at, signal_id)`. Admitting a set of events in any order yields the
+  identical active signals.
+- **Org-scoped** — the fold key includes `org_id`; `admit` refuses an event under
+  a different org, and `resolve_raw_instances` refuses to cross an org boundary.
+- **Idempotent** — an at-least-once redelivery of an already-counted firing
+  (same provider event id) is a no-op (`disposition == "duplicate"`).
+
+### Usage
+
+```python
+from discovery.signals import OpsEventStream, fold_events
+
+stream = OpsEventStream()            # default: one active signal per day
+for event in events:
+    stream.admit(event)             # re-fires fold; new keys open a signal
+signals = stream.active_signals()   # the detector-visible, deduplicated units
+
+# or, over a whole batch:
+signals = fold_events(events)
+raws = signals[0].resolve_raw_instances(store)   # audit → the raw firings
+```
+
+This is MSP-B7 **T1** only. Aggregation roll-ups (T2), noise floors (T3), per-run
+budgets (T4), and correlation windows (T5) layer on top of admission in later
+tasks.
