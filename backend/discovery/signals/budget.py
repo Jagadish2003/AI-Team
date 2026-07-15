@@ -43,6 +43,14 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Dict, Optional
 
+from .ops_calibration import CALIBRATED_RUN_EVENT_BUDGET
+
+#: Recommended per-run event-volume budget — CALIBRATED from B8's month-scale
+#: sample (MSP-B7 T6, ≈8× a measured month; see
+#: :mod:`discovery.signals.ops_calibration`). ``OpsEventStream`` stays opt-in
+#: (``budget=None`` → unbounded); production wiring passes this value.
+DEFAULT_RUN_EVENT_BUDGET = CALIBRATED_RUN_EVENT_BUDGET
+
 
 @dataclass
 class BudgetReport:

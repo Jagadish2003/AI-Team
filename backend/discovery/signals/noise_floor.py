@@ -38,24 +38,23 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Dict, Iterable, List, Optional, Tuple
 
+from .ops_calibration import CALIBRATED_DEFAULT_FLOOR, CALIBRATED_NOISE_FLOORS
 from .ops_stream import ActiveSignal
 
-#: Pre-calibration per-event-class floors (minimum occurrence count within a
-#: signature's active period to be detector-visible). These are the noisy,
+#: Per-event-class floors (minimum occurrence count within a signature's active
+#: period to be detector-visible) — CALIBRATED from B8's month-scale sample
+#: (MSP-B7 T6, see :mod:`discovery.signals.ops_calibration`). These are the noisy,
 #: high-chatter classes; a signature in one of them that recurs fewer than the
 #: floor's worth of times in its window is treated as noise. Classes NOT listed
 #: fall back to :data:`DEFAULT_FLOOR` (= 1 → never suppressed) — deliberately
 #: including ``error`` and ``security``, which must never be silently dropped.
-#: Tunable per policy; T6 sets the calibrated defaults from B8's real volumes.
-DEFAULT_NOISE_FLOORS: Dict[str, int] = {
-    "audit": 5,          # audit floods — an action recurring < 5× a window is chatter
-    "state_change": 5,   # state-change storms
-    "access": 5,         # access/API chatter
-}
+#: Tunable per policy.
+DEFAULT_NOISE_FLOORS: Dict[str, int] = dict(CALIBRATED_NOISE_FLOORS)
 
 #: Floor for any event class not named in the active floor map. 1 means "surface
-#: even a single occurrence" — i.e. no suppression unless a class is explicitly floored.
-DEFAULT_FLOOR = 1
+#: even a single occurrence" — i.e. no suppression unless a class is explicitly
+#: floored. Calibrated (T6).
+DEFAULT_FLOOR = CALIBRATED_DEFAULT_FLOOR
 
 
 @dataclass

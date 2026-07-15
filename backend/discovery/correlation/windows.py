@@ -51,11 +51,19 @@ try:
         CONFIDENCE_MEDIUM,
         CONFIDENCE_ORDER,
     )
+    from discovery.signals.ops_calibration import (
+        CALIBRATED_CORRELATION_WINDOWS,
+        CALIBRATED_DEFAULT_WINDOW_SECONDS,
+    )
 except ModuleNotFoundError:  # project-root execution uses backend as package
     from backend.discovery.packs.corroboration_rules import (
         CONFIDENCE_HIGH,
         CONFIDENCE_MEDIUM,
         CONFIDENCE_ORDER,
+    )
+    from backend.discovery.signals.ops_calibration import (
+        CALIBRATED_CORRELATION_WINDOWS,
+        CALIBRATED_DEFAULT_WINDOW_SECONDS,
     )
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -67,16 +75,14 @@ JOIN_EVENT_INCIDENT = "event_incident"
 #: A cloud event correlated with another cloud event (cross-provider).
 JOIN_EVENT_EVENT = "event_event"
 
-#: Pre-calibration default windows in SECONDS, per join type. The event↔incident
-#: default (2h) is the value named in the MSP-B7 sketch. T6 sets the calibrated
-#: defaults from B8's measured month-scale sample.
-DEFAULT_CORRELATION_WINDOWS: Dict[str, int] = {
-    JOIN_EVENT_INCIDENT: 2 * 3600,   # 2 hours
-    JOIN_EVENT_EVENT: 15 * 60,       # 15 minutes
-}
+#: Default windows in SECONDS, per join type — CALIBRATED from B8's month-scale
+#: sample (MSP-B7 T6, see :mod:`discovery.signals.ops_calibration`): ``event_event``
+#: is kept tight against the measured ~42 events/hour density, ``event_incident``
+#: is the operational incident-creation lag (2h). Per-org tunable.
+DEFAULT_CORRELATION_WINDOWS: Dict[str, int] = dict(CALIBRATED_CORRELATION_WINDOWS)
 
-#: Fallback window for a join type with no configured default (1 hour).
-DEFAULT_WINDOW_SECONDS = 3600
+#: Fallback window for a join type with no configured default (1 hour). Calibrated (T6).
+DEFAULT_WINDOW_SECONDS = CALIBRATED_DEFAULT_WINDOW_SECONDS
 
 
 # ─────────────────────────────────────────────────────────────────────────────
