@@ -304,3 +304,375 @@ entities = create_resource_entities(events, run_id=run_id)
 
 The resolver is injectable for testing and resolved lazily, so importing
 `discovery.signals` stays dependency-light.
+
+---
+
+## 8. Dedup at admission — active-signal folding (MSP-B7 / AT-669)
+
+Cloud event streams are orders of magnitude noisier than any business system:
+a stuck alarm re-fires every few minutes. **Deduplication at the door** — the
+first discipline of MSP-B7 — collapses those re-fires into **one active signal**
+per `(event_signature, resource, active period)`, carrying an occurrence count
+and first/last timestamps. A stuck alarm firing every five minutes is ONE fact
+with a count of 288/day, not 288 facts. Code:
+[`backend/discovery/signals/ops_stream.py`](../backend/discovery/signals/ops_stream.py).
+
+### The fold key
+
+| Component | Meaning |
+|-----------|---------|
+| `org_id` | Tenancy — two orgs sharing a signature never fold together. |
+| `event_signature` | The recurrence fingerprint (AT-636): same recurring event → same signature. |
+| `resource` | The `resource_id` the event concerns (`""` when the event names none). |
+| `active period` | An epoch-anchored time bucket, **default one day** (`DEFAULT_ACTIVE_PERIOD_SECONDS`, tunable per stream; MSP-B7 T6 calibrates it). Same alarm on two days → two active signals. |
+
+### The honesty rule (aggregation compresses volume, never evidence)
+
+An `ActiveSignal` carries its proof: `occurrence_count` (over **distinct**
+provider event ids), the `first_seen`/`last_seen` span, and the provider event id
+of every folded firing. The raw provider payloads stay in the raw-event store
+(§6) — never embedded — and `ActiveSignal.resolve_raw_instances(store)` walks each
+member's evidence pointer back to its stored raw payload, so *"this alarm fired
+200 times"* opens to the real instances on click.
+
+### Deterministic & org-scoped
+
+- **Deterministic** — folding depends only on event fields, never arrival order:
+  the active period is a pure function of the timestamp, the count is over
+  distinct provider ids, the span is min/max of observation times, and the
+  detector-visible representative is the earliest firing by
+  `(observed_at, signal_id)`. Admitting a set of events in any order yields the
+  identical active signals.
+- **Org-scoped** — the fold key includes `org_id`; `admit` refuses an event under
+  a different org, and `resolve_raw_instances` refuses to cross an org boundary.
+- **Idempotent** — an at-least-once redelivery of an already-counted firing
+  (same provider event id) is a no-op (`disposition == "duplicate"`).
+
+### Usage
+
+```python
+from discovery.signals import OpsEventStream, fold_events
+
+stream = OpsEventStream()            # default: one active signal per day
+for event in events:
+    stream.admit(event)             # re-fires fold; new keys open a signal
+signals = stream.active_signals()   # the detector-visible, deduplicated units
+
+# or, over a whole batch:
+signals = fold_events(events)
+raws = signals[0].resolve_raw_instances(store)   # audit → the raw firings
+```
+
+This is MSP-B7 **T1** only. Aggregation roll-ups (T2), noise floors (T3), per-run
+budgets (T4), and correlation windows (T5) layer on top of admission in later
+tasks.
+
+---
+
+## 9. Aggregation roll-ups for high-cardinality classes (MSP-B7 / AT-670)
+
+Some event classes flood at cloud volumes — **audit floods** and **state-change
+storms**. Their T1 active signals are rolled up into a compact
+`AggregateSignal` that becomes the **detector-visible unit**, so a detector
+reasons about *"this audit action fired 9 000 times this window"* as ONE fact.
+Code: [`backend/discovery/signals/aggregation.py`](../backend/discovery/signals/aggregation.py).
+
+### What an aggregate carries (the traceable-aggregate rule)
+
+| Field | Meaning |
+|-------|---------|
+| `member_count` | The **exact** number of distinct firings (never compressed). |
+| `first_seen` / `last_seen` | The time span the aggregate covers. |
+| `severity_profile` | `{severity: count}` — the spread the signature ignores (AT-636), preserved. |
+| `sample_pointers` | A **bounded** sample of member evidence pointers (`DEFAULT_EVIDENCE_SAMPLE_SIZE`, default 10) — each resolves to a stored raw payload via `resolve_sample_raw(store)`. |
+| `sampled_from` / `is_sampled` | The true member count the sample was drawn from, so the compression ratio is never hidden. |
+
+**Raw retention is unchanged** — every raw payload stays stored in the raw-event
+store (§6); only the *pointers held on the aggregate* are bounded. `'this fired
+9 000 times'` still opens to real instances on click.
+
+### Which signals are rolled up
+
+`roll_up(active_signals)` aggregates only signals whose event class is in
+`HIGH_CARDINALITY_CLASSES` (`audit`, `state_change`) by default — low-cardinality
+signals (individual alarms) keep their full T1 traceability. The class set and
+the sample size are tunable per call (T6 calibrates the defaults from B8's
+month-scale measurements). Pass `only_high_cardinality=False` to aggregate every
+signal.
+
+### Deterministic & span-anchored sampling
+
+The roll-up is a pure projection of the (deterministic, org-scoped) T1 active
+signals: count/span/severity-profile pass straight through, and the evidence
+sample is chosen deterministically — members sorted by `(source_timestamp,
+source_artifact)`, then evenly spaced **including both span endpoints** so the
+earliest and latest instance are always reachable. Same members → same sample,
+regardless of arrival order. `resolve_sample_raw` refuses to cross an org
+boundary.
+
+### Usage
+
+```python
+from discovery.signals import aggregate_events, roll_up, OpsEventStream
+
+# batch convenience: fold (T1) then roll up the high-cardinality classes (T2)
+aggregates = aggregate_events(events)
+raws = aggregates[0].resolve_sample_raw(store)   # audit → sampled raw instances
+
+# or over an existing stream:
+stream = OpsEventStream()
+for e in events:
+    stream.admit(e)
+aggregates = roll_up(stream.active_signals())
+```
+
+This is MSP-B7 **T2**. Noise floors (T3), per-run budgets (T4), and correlation
+windows (T5) are separate tasks.
+
+---
+
+## 10. Noise floors per event class (MSP-B7 / AT-671)
+
+Cloud streams carry vast low-value chatter — one-off audit records, single state
+flips, access noise. A per-event-class **noise floor** sets the minimum number of
+times a signature must recur within its active period to be worth a detector's
+attention. A signature **below its class floor never becomes a detector-visible
+signal**. Code:
+[`backend/discovery/signals/noise_floor.py`](../backend/discovery/signals/noise_floor.py).
+
+### The loud-skip rule applied to noise
+
+Suppression is a *decision*, not a silent drop. Every suppressed signature and
+every suppressed event is **counted and reported per run, per class**, in a
+`SuppressionReport` — so *"we ignored 40 000 events across 12 000 one-off
+signatures"* is a visible, tunable decision an operator can challenge. The report
+names the floors it applied and is JSON-serialisable for the run record /
+run-health surface (R18-C2).
+
+### Where it sits & the defaults
+
+Per the MSP-B7 pipeline (**dedup → floor → budget → aggregate**), the floor is
+applied to the T1 **folded** active signals — after folding (so each signature's
+count is known) and before aggregation (so only survivors are rolled up and reach
+detectors). `apply_noise_floors(signals)` returns `(visible, report)`.
+
+| Class | Default floor | Rationale |
+|-------|---------------|-----------|
+| `audit` | 5 | audit floods — an action recurring < 5× a window is chatter |
+| `state_change` | 5 | state-change storms |
+| `access` | 5 | access / API chatter |
+| *any other* | `DEFAULT_FLOOR` = 1 | surfaced even at a single occurrence — **`error` and `security` are never floored by default** (you never silently drop a security finding) |
+
+Floors are configurable per policy (`NoiseFloorPolicy({"lifecycle": 5})`); the
+calibrated defaults come from B8's month-scale measurements in T6. A signature is
+suppressed when its occurrence count is **strictly below** its class floor (count
+== floor is visible). The split is pure and order-independent.
+
+### Usage
+
+```python
+from discovery.signals import apply_noise_floors, NoiseFloorPolicy, fold_events
+
+signals = fold_events(events)                        # T1 fold
+visible, report = apply_noise_floors(signals)        # T3 floor (default policy)
+# ... detectors consume `visible`; `report.to_dict()` goes to the run record ...
+
+policy = NoiseFloorPolicy({"audit": 10})             # tune per org/run
+visible, report = policy.apply(signals)
+```
+
+This is MSP-B7 **T3**. Per-run budgets (T4) and correlation windows (T5) are
+separate tasks.
+
+---
+
+## 11. Per-run event-volume budgets (MSP-B7 / AT-672)
+
+A run has an event-volume **budget** — the hard backstop that keeps a single
+run's cost bounded when a month of cloud events would otherwise make it slow and
+expensive. The run processes the **budgeted window** (the first `budget` events,
+in admission order) and, on breach, **defers the rest** — never silent
+truncation. Code:
+[`backend/discovery/signals/budget.py`](../backend/discovery/signals/budget.py)
+(enforced inside `OpsEventStream.admit`).
+
+### Loud degradation, never silent truncation
+
+A budget breach is *an operator decision surfaced, not a data loss hidden*.
+`OpsEventStream(budget=N)` enforces the cap during admission: while it has
+capacity an event is folded and charged; once the budget is exhausted every
+further event is **deferred-and-counted** (`Admission.is_deferred`, `signal is
+None`). `stream.budget_report()` returns a `BudgetReport`:
+
+| Field | Meaning |
+|-------|---------|
+| `budget` | The configured limit (`None` = unbounded). |
+| `processed` / `deferred` / `seen` | Events processed, deferred, and total seen. |
+| `breached` | True iff any event was deferred. |
+| `deferred_by_source` | Per-`source_system` deferred counts. |
+| `deferred_window` | `{first, last}` observation times of the deferred events. |
+| `reason` | Human-readable explanation (`None` when not breached). |
+
+`to_dict()` is the JSON shape written into the run record and the R18-C2
+run-health content panel. The run always *completes* — it never crashes and
+never quietly drops events off the end.
+
+### Where it sits & why it's arrival-ordered
+
+Per the pipeline (**dedup → floor → budget → aggregate**), the budget is enforced
+**during admission** — it must be, because its job is to stop the run from
+*processing* everything (post-hoc filtering would already have paid the cost).
+The budget is **volume-based**: every event (including re-fires) counts against
+it, so a stuck alarm firing past the budget is deferred like anything else.
+Because the budgeted window is the first `budget` events in arrival order, budget
+enforcement is deliberately arrival-ordered — unlike the order-independent
+dedup/floor/aggregate stages, a budget is a statement about processing order. The
+limit is tunable; T6 calibrates the default from B8's month-scale measurements.
+
+### Usage
+
+```python
+from discovery.signals import OpsEventStream
+
+stream = OpsEventStream(budget=100_000)     # per-run event-volume budget
+for event in events:
+    stream.admit(event)                     # deferred-and-counted once full
+report = stream.budget_report()             # → run record + R18-C2 panel
+if report.breached:
+    log.warning(report.reason)
+```
+
+This is MSP-B7 **T4**. Correlation windows (T5) are a separate task.
+
+---
+
+## 12. Correlation windows (MSP-B7 / AT-673)
+
+Cross-stream joins turn separate facts into one story — an AWS event and a
+ServiceNow incident, two provider events about the same resource. But two things
+happening *near* each other in a noisy stream is not the same as two things
+happening *because* of each other. The correlation-window service is the honesty
+discipline applied to time: **a join is valid only within a configurable time
+window**, the window and observed delta are **recorded in the joined claim's
+evidence trace**, and **out-of-window agreement contributes zero confidence**.
+Code:
+[`backend/discovery/correlation/windows.py`](../backend/discovery/correlation/windows.py).
+
+> *Windows are epistemology, not plumbing.* Corroboration means independent
+> sources agreeing about the **same moment**; recording the window in the trace
+> lets a reviewer challenge the join itself.
+
+### Per-join-type, per-org windows
+
+| Join type | Default window | Meaning |
+|-----------|----------------|---------|
+| `event_incident` | 2 h | a cloud event ↔ a ServiceNow-style incident |
+| `event_event` | 15 min | a cloud event ↔ another cloud event (cross-provider) |
+| *any other* | `DEFAULT_WINDOW_SECONDS` = 1 h | fallback |
+
+`CorrelationWindowPolicy` holds the per-join-type defaults and per-org overrides
+(`set_org_window(org, join_type, seconds)` → the `window_config(org_id,
+join_type)` resolver of the MSP-B7 sketch). Defaults are tunable; T6 calibrates
+them from B8's month-scale measurements.
+
+### The join and its evidence trace
+
+`join_within_window(a, b, join_type, org_id=…)` returns a `WindowJoin` carrying
+`(join_type, window_seconds, delta_seconds, within_window, a_at, b_at)`;
+`to_trace()` is the `correlation_window` fragment attached to the joined claim's
+evidence — recorded whether the join succeeds **or fails**, so a rejected
+coincidence is auditable, never silent. Timestamp handling is tolerant
+(`OperationalEvent`, active signals, incident dicts, ISO strings, `Z` suffix,
+`datetime`); an unparseable timestamp yields `within=False, delta=None` (a join
+that cannot be confirmed never counts). The boundary is inclusive (delta ==
+window is within).
+
+### Corroboration integration (coincidence never inflates confidence)
+
+`gate_operational_corroboration(event, incident, …)` is the surface the
+operational corroboration rules consult: an event↔incident agreement **inside**
+the window elevates confidence (`MEDIUM → HIGH`, like an observed
+system-of-record corroborator — the same bar as COR-09/COR-10); the identical
+agreement **outside** the window contributes **zero** and confidence stays at the
+base. The confidence vocabulary is shared verbatim with the corroboration rule
+registry (`discovery/packs/corroboration_rules.py`). Either outcome — elevation or
+rejection — is recorded on the trace.
+
+### Usage
+
+```python
+from discovery.correlation import within_window, gate_operational_corroboration
+
+if within_window(aws_event, servicenow_incident, "event_incident", org_id=org):
+    ...  # valid join
+
+gate = gate_operational_corroboration(aws_event, servicenow_incident, org_id=org)
+# gate.confidence == "HIGH" inside window, "MEDIUM" (zero contribution) outside
+claim_evidence.append(gate.to_trace())
+```
+
+This is MSP-B7 **T5**, the reusable surface the MSP event corroboration rules
+(B4/B6) consult. It does not rewire the existing app-friction corroborators
+(COR-09/COR-10), which are 30-day freshness rules, not cloud event↔incident
+joins. Calibration of all floors/budgets/windows against B8's month-scale sample
+is **T6** (§13).
+
+---
+
+## 13. Calibration from B8's month-scale sample (MSP-B7 / AT-674, T6)
+
+The five disciplines each ship a *default* — noise floors, the per-run event
+budget, correlation windows. T6 makes those defaults **evidence-based, not
+guessed**: they are derived from MSP-B8's measured month-scale volume run and
+documented with their rationale. The single source of truth is
+[`backend/discovery/signals/ops_calibration.py`](../backend/discovery/signals/ops_calibration.py);
+the T3/T4/T5 modules import their defaults from it, so there is no divergent
+hardcoded guess anywhere.
+
+### The measured input (MSP-B8)
+
+B8 ran a representative month of AWS+Azure exports end to end and recorded the
+numbers in [`MSP-B8_VOLUME_VALIDATION.md`](MSP-B8_VOLUME_VALIDATION.md) (its
+T5/AC7 output). The load-bearing figures, captured verbatim in `B8_MEASUREMENTS`:
+
+| Measurement | Value |
+|-------------|-------|
+| Events in a representative month (generated) | 30,225 |
+| Normalized events ingested (post skip+dedupe) | 29,553 |
+| Ingest throughput | 678.5 events/s |
+| Per-event ingest cost (tracemalloc active → conservative) | 1.474 ms |
+| Peak memory (flat) | 89.61 MB |
+
+### What is derived, and how
+
+| Default | Calibrated value | Derivation |
+|---------|------------------|------------|
+| **Per-run event budget** (T4) | **250,000 events** | Quantitatively derived: `ceil(8 × 30,225)` = 241,800, rounded up to a clean 250,000. ×8 headroom tolerates an 8×-noisier month or an ~8-month backfill in one run; at the measured 1.474 ms/event that is a ~6-min worst-case ingest ceiling, and flat ~89.6 MB memory means volume drives time, not memory. |
+| **Noise floors** (T3) | `audit`/`state_change`/`access` = 5; else 1 | B8 measured aggregate volume (~1,000 events/day) but **not** a per-class recurrence histogram, so floors are set conservatively for the demonstrably-noisy high-cardinality classes (≥5×/day to surface) and everything else stays at 1. `error`/`security` are never floored — no silent drop. Refined to exact per-class values once per-class recurrence telemetry exists. |
+| **Correlation windows** (T5) | `event_event` = 15 min; `event_incident` = 2 h; else 1 h | The measured density (~42 events/hour) is the evidence for keeping the cross-provider `event_event` window **tight** — a 15-min window already admits ~10 unrelated events, so it is a ceiling, not a guess. `event_incident` = 2 h is the operationally-justified incident-creation lag (B8 did not measure lag directly); per-org tunable. |
+
+### Honesty about the evidence
+
+The calibration states plainly where the evidence stops: the **budget** is a
+direct quantitative derivation from measured volume; the **floors** and the
+`event_incident` **window** are operationally-justified defaults consistent with
+the measured density, pending finer per-class-recurrence and incident-lag
+telemetry. `calibration_summary()` exposes the measured input, the derived
+defaults, and the derivation string for run-health/audit — so a reviewer can
+trace every default back to a real measurement (AC7).
+
+Calibration reruns whenever B8 re-measures: update `B8_MEASUREMENTS` and the
+derived defaults move with it.
+
+---
+
+## 14. Contract suite (MSP-B7 / AT-675, T7)
+
+[`backend/discovery/tests/test_msp_b7_contract.py`](../backend/discovery/tests/test_msp_b7_contract.py)
+is the consolidated contract for the five disciplines — one test per Section-3
+acceptance criterion (AC1–AC7), each reproducing that criterion's scenario as
+stated, plus an end-to-end composition test (dedup → floor → aggregate under a
+budget). It is pure-Python (in-memory evidence store, no DB) and runs alongside
+the per-task suites (`test_ops_stream_dedup.py`, `test_ops_stream_aggregation.py`,
+`test_ops_stream_noise_floor.py`, `test_ops_stream_budget.py`,
+`test_correlation_windows.py`, `test_ops_calibration.py`).

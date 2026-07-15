@@ -49,6 +49,42 @@ from .resource_graph import (  # noqa: F401
     CLOUD_RESOURCE_ENTITY_TYPE,
     create_resource_entities,
 )
+from .ops_stream import (  # noqa: F401
+    DEFAULT_ACTIVE_PERIOD_SECONDS,
+    ActiveSignal,
+    Admission,
+    OpsEventStream,
+    fold_events,
+)
+from .budget import (  # noqa: F401
+    DEFAULT_RUN_EVENT_BUDGET,
+    BudgetReport,
+    RunBudget,
+)
+from .ops_calibration import (  # noqa: F401
+    B8_MEASUREMENTS,
+    CALIBRATED_CORRELATION_WINDOWS,
+    CALIBRATED_DEFAULT_FLOOR,
+    CALIBRATED_DEFAULT_WINDOW_SECONDS,
+    CALIBRATED_NOISE_FLOORS,
+    CALIBRATED_RUN_EVENT_BUDGET,
+    calibration_summary,
+)
+from .aggregation import (  # noqa: F401
+    DEFAULT_EVIDENCE_SAMPLE_SIZE,
+    HIGH_CARDINALITY_CLASSES,
+    AggregateSignal,
+    aggregate_active_signal,
+    aggregate_events,
+    roll_up,
+)
+from .noise_floor import (  # noqa: F401
+    DEFAULT_FLOOR,
+    DEFAULT_NOISE_FLOORS,
+    NoiseFloorPolicy,
+    SuppressionReport,
+    apply_noise_floors,
+)
 
 __all__ = [
     "CommonSignal",
@@ -85,4 +121,35 @@ __all__ = [
     # AT-639 — resource entities into the graph
     "create_resource_entities",
     "CLOUD_RESOURCE_ENTITY_TYPE",
+    # AT-669 (MSP-B7 T1) — dedup at admission (active-signal folding)
+    "OpsEventStream",
+    "ActiveSignal",
+    "Admission",
+    "fold_events",
+    "DEFAULT_ACTIVE_PERIOD_SECONDS",
+    # AT-670 (MSP-B7 T2) — aggregation roll-ups for high-cardinality classes
+    "AggregateSignal",
+    "roll_up",
+    "aggregate_active_signal",
+    "aggregate_events",
+    "HIGH_CARDINALITY_CLASSES",
+    "DEFAULT_EVIDENCE_SAMPLE_SIZE",
+    # AT-671 (MSP-B7 T3) — noise floors per event class
+    "NoiseFloorPolicy",
+    "SuppressionReport",
+    "apply_noise_floors",
+    "DEFAULT_NOISE_FLOORS",
+    "DEFAULT_FLOOR",
+    # AT-672 (MSP-B7 T4) — per-run event-volume budgets
+    "BudgetReport",
+    "RunBudget",
+    "DEFAULT_RUN_EVENT_BUDGET",
+    # AT-674 (MSP-B7 T6) — calibration from B8's month-scale sample
+    "B8_MEASUREMENTS",
+    "CALIBRATED_RUN_EVENT_BUDGET",
+    "CALIBRATED_NOISE_FLOORS",
+    "CALIBRATED_DEFAULT_FLOOR",
+    "CALIBRATED_CORRELATION_WINDOWS",
+    "CALIBRATED_DEFAULT_WINDOW_SECONDS",
+    "calibration_summary",
 ]
