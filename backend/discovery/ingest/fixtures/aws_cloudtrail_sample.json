@@ -1,0 +1,43 @@
+{
+  "Records": [
+    {
+      "eventVersion": "1.08",
+      "eventID": "e2f1a3b4-1111-4c2d-9e88-0a1b2c3d4e5f",
+      "eventTime": "2026-06-01T14:15:16Z",
+      "eventSource": "s3.amazonaws.com",
+      "eventName": "DeleteBucket",
+      "awsRegion": "us-east-1",
+      "sourceIPAddress": "203.0.113.10",
+      "userIdentity": {"type": "IAMUser", "userName": "ops-admin", "accountId": "111122223333"},
+      "requestParameters": {"bucketName": "prod-logs-archive"},
+      "readOnly": false,
+      "managementEvent": true
+    },
+    {
+      "eventVersion": "1.08",
+      "eventID": "7c9d0e1f-2222-4a3b-8c77-1f2e3d4c5b6a",
+      "eventTime": "2026-06-01T14:52:03Z",
+      "eventSource": "iam.amazonaws.com",
+      "eventName": "CreateAccessKey",
+      "awsRegion": "us-east-1",
+      "sourceIPAddress": "198.51.100.7",
+      "userIdentity": {"type": "IAMUser", "userName": "ci-deployer", "accountId": "111122223333"},
+      "requestParameters": {"userName": "ci-deployer"},
+      "readOnly": false,
+      "managementEvent": true
+    },
+    {
+      "eventVersion": "1.08",
+      "eventID": "0a1b2c3d-3333-4d5e-9f01-2a3b4c5d6e7f",
+      "eventTime": "2026-06-01T15:30:44Z",
+      "eventSource": "ec2.amazonaws.com",
+      "eventName": "TerminateInstances",
+      "awsRegion": "us-east-1",
+      "sourceIPAddress": "203.0.113.10",
+      "userIdentity": {"type": "AssumedRole", "arn": "arn:aws:sts::111122223333:assumed-role/deploy/ci"},
+      "requestParameters": {"instancesSet": {"items": [{"instanceId": "i-0abcd1234efgh5678"}]}},
+      "readOnly": false,
+      "managementEvent": true
+    }
+  ]
+}
