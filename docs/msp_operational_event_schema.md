@@ -662,5 +662,17 @@ defaults, and the derivation string for run-health/audit — so a reviewer can
 trace every default back to a real measurement (AC7).
 
 Calibration reruns whenever B8 re-measures: update `B8_MEASUREMENTS` and the
-derived defaults move with it. This is the final MSP-B7 task (T6); contract tests
-are T7.
+derived defaults move with it.
+
+---
+
+## 14. Contract suite (MSP-B7 / AT-675, T7)
+
+[`backend/discovery/tests/test_msp_b7_contract.py`](../backend/discovery/tests/test_msp_b7_contract.py)
+is the consolidated contract for the five disciplines — one test per Section-3
+acceptance criterion (AC1–AC7), each reproducing that criterion's scenario as
+stated, plus an end-to-end composition test (dedup → floor → aggregate under a
+budget). It is pure-Python (in-memory evidence store, no DB) and runs alongside
+the per-task suites (`test_ops_stream_dedup.py`, `test_ops_stream_aggregation.py`,
+`test_ops_stream_noise_floor.py`, `test_ops_stream_budget.py`,
+`test_correlation_windows.py`, `test_ops_calibration.py`).
