@@ -27,7 +27,18 @@ from typing import Any, Optional
 from uuid import UUID, uuid4
 
 
-RELATIONSHIP_TYPES = frozenset({"owns", "member_of", "escalates_to", "depends_on", "routes_to"})
+RELATIONSHIP_TYPES = frozenset(
+    {
+        "owns",
+        "member_of",
+        "escalates_to",
+        "depends_on",
+        "routes_to",
+        "used_by",
+        "runs_on",
+        "connects_to",
+    }
+)
 
 # Confidence defaults per edge category. These are the only permitted values —
 # never derive confidence from an arbitrary float in Sprint 13.

@@ -25,6 +25,9 @@ def test_servicenow_fixture_loads():
     from discovery.ingest.servicenow import ingest
     data = ingest()
     assert "incident_metrics" in data
+    assert "cmdb" in data
+    assert len(data["cmdb"]["configuration_items"]) == 6
+    assert len(data["cmdb"]["relationships"]) == 3
     assert data["cross_system_references"]["sn_echo_score"] == 0.16
     assert data["cross_system_references"]["sn_match_count"] == 80
 

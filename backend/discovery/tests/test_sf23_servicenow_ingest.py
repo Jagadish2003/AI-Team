@@ -104,8 +104,10 @@ def test_live_incident_metrics_keep_relationship_fields(monkeypatch):
                 "assigned_to": {"value": "user-1", "display_value": "Sarah Chen"},
                 "assignment_group": {"value": "group-1", "display_value": "Loan Ops"},
                 "caller_id": {"value": "caller-1", "display_value": "Alex Doe"},
+                "cmdb_ci": {"value": "ci-app-1", "display_value": "Citizen Portal"},
                 "resolved_at": "",
                 "sys_created_on": "2026-06-01 10:00:00",
+                "sys_updated_on": "2026-06-01 10:30:00",
             }]
 
     monkeypatch.setattr(sn_mod, "is_live", lambda: True)
@@ -113,10 +115,61 @@ def test_live_incident_metrics_keep_relationship_fields(monkeypatch):
 
     incident = result["incidents"][0]
     assert incident["number"] == "INC001"
+    assert incident["sys_id"] == "sys-1"
+    assert incident["cmdb_ci"]["value"] == "ci-app-1"
+    assert incident["source_timestamp"] == "2026-06-01 10:30:00"
     assert incident["assigned_to"]["display_value"] == "Sarah Chen"
     assert result["assignment_groups"] == [
         {"group_name": "Loan Ops", "incident_count": 1}
     ]
+
+
+def test_affected_ci_task_references_are_explicit_bounded_and_provenanced():
+    from discovery.ingest import servicenow as sn_mod
+
+    class Client:
+        instance_url = "https://acme.service-now.com"
+
+        def table_query(self, table, params, max_records):
+            assert table == "task_ci"
+            assert params["sysparm_fields"] == ",".join(
+                sn_mod.AFFECTED_CI_TASK_FIELDS
+            )
+            assert "taskINincident-1" in params["sysparm_query"]
+            assert "ci_itemISNOTEMPTY" in params["sysparm_query"]
+            return [
+                {
+                    "sys_id": {"value": "task-ci-1", "display_value": "task-ci-1"},
+                    "task": {"value": "incident-1", "display_value": "INC001"},
+                    "ci_item": {"value": "ci-app-1", "display_value": "Citizen Portal"},
+                    "sys_updated_on": "2026-07-14 09:00:00",
+                },
+                # A response outside the requested incident set fails closed.
+                {
+                    "sys_id": "task-ci-other",
+                    "task": "incident-other",
+                    "ci_item": "ci-secret",
+                },
+            ]
+
+    references = sn_mod.get_affected_ci_task_references(Client(), ["incident-1"])
+
+    assert references == {
+        "incident-1": [
+            {
+                "relationship_sys_id": "task-ci-1",
+                "incident_sys_id": "incident-1",
+                "ci_sys_id": "ci-app-1",
+                "source_type": "servicenow_task_ci",
+                "source_timestamp": "2026-07-14 09:00:00",
+                "source_url": (
+                    "https://acme.service-now.com/nav_to.do?"
+                    "uri=task_ci.do%3Fsys_id%3Dtask-ci-1"
+                ),
+                "origin": "observed",
+            }
+        ]
+    }
 
 
 class TestErrorHandling:

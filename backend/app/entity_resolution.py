@@ -20,6 +20,7 @@ fuzzy matching story as intentional data.
 """
 from __future__ import annotations
 
+import json
 import logging
 import re
 from datetime import datetime, timezone
@@ -84,6 +85,7 @@ def _with_observed_evidence(
     canonical_name: str,
     confidence: float,
     run_id: str,
+    source_timestamp: Optional[str] = None,
 ) -> dict[str, Any]:
     """Return a copy of *metadata* carrying an OBSERVED EvidencePointer (R16-B1).
 
@@ -98,7 +100,9 @@ def _with_observed_evidence(
     ('record_id' vs 'canonical_name') so a consumer knows whether the artifact
     can be looked up in the source system — a canonical name is NOT guaranteed
     stable across resolution-algorithm changes. ``source_timestamp`` is the run's
-    observation time (stable), not the resolution-time wall clock.
+    observation time (stable), not the resolution-time wall clock. Callers
+    persisting source-backed records may provide the record's own timestamp;
+    otherwise the run observation time is used.
     """
     if source_record_id:
         source_artifact = source_record_id
@@ -116,7 +120,7 @@ def _with_observed_evidence(
     md["evidence_pointer"] = EvidencePointer.observed(
         source_system=source_system,
         source_artifact=source_artifact,
-        source_timestamp=_resolve_run_observed_at(run_id),
+        source_timestamp=source_timestamp or _resolve_run_observed_at(run_id),
         confidence=confidence,
         source_artifact_type=source_artifact_type,
     ).to_dict()
@@ -406,6 +410,170 @@ def _initial_confidence(
     if source_record_id:
         return 1.0
     return 0.8
+
+
+def upsert_source_entity(
+    *,
+    org_id: str,
+    entity_type: str,
+    display_name: str,
+    source_system: str,
+    source_record_id: str,
+    run_id: str,
+    metadata: Optional[dict[str, Any]] = None,
+    source_timestamp: Optional[str] = None,
+) -> Entity:
+    """Idempotently persist an entity with a stable source-system identity.
+
+    This is the source-first counterpart to conservative name resolution. Its
+    natural key is ``(org_id, entity_type, source_system, source_record_id)``;
+    display-name changes therefore update the same record and identical source
+    IDs in different organizations can never collide. A transaction-scoped
+    advisory lock serializes concurrent writers for the same natural key.
+    """
+    stable_id = str(source_record_id or "").strip()
+    if not stable_id:
+        raise ValueError("source_record_id is required for source entity upsert")
+    canonical = _canonicalize(display_name)
+    display = _truncate(display_name)
+    confidence = _initial_confidence(entity_type, stable_id)
+    stored_metadata = _with_observed_evidence(
+        metadata,
+        source_system=source_system,
+        source_record_id=stable_id,
+        canonical_name=canonical,
+        confidence=confidence,
+        run_id=run_id,
+        source_timestamp=source_timestamp,
+    )
+    natural_key = "|".join(
+        (str(org_id), entity_type, source_system, stable_id)
+    )
+
+    conn = _connect()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT pg_advisory_xact_lock(hashtext(%s))",
+            (natural_key,),
+        )
+        cur.execute(
+            """
+            SELECT * FROM entities
+            WHERE org_id = %s
+              AND entity_type = %s
+              AND source_system = %s
+              AND source_record_id = %s
+            ORDER BY created_at ASC, id ASC
+            FOR UPDATE
+            """,
+            (org_id, entity_type, source_system, stable_id),
+        )
+        existing = cur.fetchone()
+        if existing is None:
+            entity = Entity(
+                org_id=org_id,
+                entity_type=entity_type,
+                canonical_name=canonical,
+                display_name=display,
+                source_system=source_system,
+                source_record_id=stable_id,
+                resolution_confidence=confidence,
+                resolution_status="resolved",
+                first_seen_run_id=run_id,
+                last_seen_run_id=run_id,
+                run_count=1,
+                metadata=stored_metadata,
+            )
+            _insert_entity(conn, entity)
+            conn.commit()
+            return entity
+
+        entity_id = str(existing["id"])
+        cur.execute(
+            """
+            UPDATE entities
+            SET canonical_name = %s,
+                display_name = %s,
+                resolution_confidence = GREATEST(resolution_confidence, %s),
+                resolution_status = 'resolved',
+                last_seen_run_id = %s,
+                run_count = CASE
+                    WHEN last_seen_run_id = %s THEN run_count
+                    ELSE run_count + 1
+                END,
+                metadata = %s,
+                updated_at = %s
+            WHERE id = %s AND org_id = %s
+            """,
+            (
+                canonical,
+                display,
+                confidence,
+                run_id,
+                run_id,
+                json.dumps(stored_metadata),
+                _now(),
+                entity_id,
+                org_id,
+            ),
+        )
+        conn.commit()
+        cur.execute(
+            "SELECT * FROM entities WHERE id = %s AND org_id = %s",
+            (entity_id, org_id),
+        )
+        return _row_to_entity(cur.fetchone())
+    finally:
+        conn.close()
+
+
+def get_source_entity(
+    *,
+    org_id: str,
+    entity_type: str,
+    source_system: str,
+    source_record_id: str,
+) -> Optional[Entity]:
+    """Resolve one source-backed graph node without crossing org boundaries."""
+    conn = _connect()
+    try:
+        matches = get_entities_by_source_record_id(
+            conn,
+            org_id,
+            entity_type,
+            source_system,
+            source_record_id,
+        )
+        return matches[0] if matches else None
+    finally:
+        conn.close()
+
+
+def list_source_entities(
+    *,
+    org_id: str,
+    entity_type: str,
+    source_system: str,
+) -> list[Entity]:
+    """Return resolved source-backed nodes within exactly one organization."""
+    conn = _connect()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT * FROM entities
+            WHERE org_id = %s
+              AND entity_type = %s
+              AND source_system = %s
+              AND resolution_status = 'resolved'
+            ORDER BY source_record_id, id
+            """,
+            (org_id, entity_type, source_system),
+        )
+        return [_row_to_entity(row) for row in cur.fetchall()]
+    finally:
+        conn.close()
 
 
 def resolve_or_create_entity(
