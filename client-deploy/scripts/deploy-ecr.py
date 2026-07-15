@@ -87,19 +87,16 @@ from botocore.exceptions import ClientError, NoCredentialsError  # noqa: E402
 # Config
 # ---------------------------------------------------------------------------
 
-# Defaults only — the actual account/region are PROMPTED at run time (step 3)
-# so a deployment can target any registry without editing this file.
-# Account ID and region are NOT secrets — defaulted so the client just presses
-# Enter. The Access Key ID and Secret Access Key are never stored here; they
-# are prompted at run time (the client provides them) and cleared after pull.
-DEFAULT_ACCOUNT_ID = "393354520949"
-DEFAULT_REGION     = "us-east-1"
-ECR_REPO           = "agentiq"
+# No AWS account or credentials are baked in. Account ID, Access Key ID and
+# Secret Access Key are all entered by the operator at run time (step 3);
+# region only has a default because it is not sensitive.
+DEFAULT_REGION = "us-east-1"
+ECR_REPO       = "agentiq"
 
 # Populated from the prompts in main(); all consumers read these globals.
-AWS_ACCOUNT_ID = DEFAULT_ACCOUNT_ID
+AWS_ACCOUNT_ID = ""
 AWS_REGION     = DEFAULT_REGION
-ECR_REGISTRY   = f"{AWS_ACCOUNT_ID}.dkr.ecr.{AWS_REGION}.amazonaws.com"
+ECR_REGISTRY   = ""
 
 # ECR tags to pull — docker-compose.yml references these directly via ${ECR_REGISTRY}
 IMAGES = [
@@ -149,11 +146,21 @@ def run(cmd: list, check: bool = True, capture: bool = False) -> subprocess.Comp
 # ---------------------------------------------------------------------------
 
 def run_config() -> None:
-    """Invoke Configfile-create.sh to collect inputs and write /opt/aiqstore/.env."""
-    if not CONFIG_SCRIPT.exists():
-        fail(f"Configfile-create.sh not found at {CONFIG_SCRIPT}")
+    """Invoke the config collector to write /opt/aiqstore/.env.
+
+    Prefers a compiled binary (Configfile-create, produced by the hardened
+    build) over the .sh source, so a compiled bundle has no readable config
+    script either.
+    """
+    compiled = CONFIG_SCRIPT.with_suffix("")   # …/Configfile-create
+    if compiled.exists() and os.access(compiled, os.X_OK):
+        cmd = [str(compiled)]
+    elif CONFIG_SCRIPT.exists():
+        cmd = ["bash", str(CONFIG_SCRIPT)]
+    else:
+        fail(f"Config collector not found at {compiled} or {CONFIG_SCRIPT}")
         sys.exit(1)
-    result = subprocess.run(["bash", str(CONFIG_SCRIPT)])
+    result = subprocess.run(cmd)
     if result.returncode != 0:
         fail("Configuration step failed. Fix the errors above and re-run.")
         sys.exit(1)
@@ -465,14 +472,16 @@ def main() -> None:
         load_images_offline(tarball)
         step("4/7", "Images loaded.")
     else:
-        step("3/7", "Enter AWS ECR details (credentials are not stored — cleared after pull):")
-        account_id = input(f"  AWS Account ID  [{DEFAULT_ACCOUNT_ID}] : ").strip() or DEFAULT_ACCOUNT_ID
+        step("3/7", "Enter AWS ECR details (nothing is stored — cleared after pull):")
+        # All three are entered by the operator at run time; no AWS account or
+        # credential is baked into this script.
+        account_id = input("  AWS Account ID        : ").strip()
         region     = input(f"  AWS Region      [{DEFAULT_REGION}] : ").strip() or DEFAULT_REGION
         access_key = input("  AWS Access Key ID     : ").strip()
         secret_key = getpass.getpass("  AWS Secret Access Key : ")
         session_token = getpass.getpass("  AWS Session Token (Enter if none) : ")
-        if not access_key or not secret_key:
-            fail("Both Access Key ID and Secret Access Key are required.")
+        if not account_id or not access_key or not secret_key:
+            fail("Account ID, Access Key ID and Secret Access Key are all required.")
             sys.exit(1)
         AWS_ACCOUNT_ID = account_id
         AWS_REGION     = region

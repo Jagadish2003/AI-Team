@@ -47,21 +47,24 @@ echo ""
 printf "  ${DIM:-}Started : $(date)${N}\n"
 echo ""
 
-# ── Verify sub-scripts are present ───────────────────────────────────────────
-PREREQ_SCRIPT="$SCRIPT_DIR/install-prereqs.sh"
-DEPLOY_SCRIPT="$SCRIPT_DIR/scripts/deploy-ecr.py"
+# ── Resolve sub-steps: prefer a compiled binary, fall back to source ─────────
+# The hardened build (build-client-package.sh --compile) ships binaries with no
+# extension (install-prereqs, scripts/deploy-ecr); the plain build ships the
+# .sh / .py source. Support both transparently.
+if [[ -x "$SCRIPT_DIR/install-prereqs" ]]; then
+  PREREQ_CMD=("$SCRIPT_DIR/install-prereqs")
+elif [[ -f "$SCRIPT_DIR/install-prereqs.sh" ]]; then
+  PREREQ_CMD=(bash "$SCRIPT_DIR/install-prereqs.sh")
+else
+  printf "  ${R}[ERROR]${N} Prerequisite step not found (install-prereqs[.sh]).\n"; exit 1
+fi
 
-missing=0
-for f in "$PREREQ_SCRIPT" "$DEPLOY_SCRIPT"; do
-  if [[ ! -f "$f" ]]; then
-    printf "  ${R}[ERROR]${N} Required file not found: %s\n" "$f"
-    missing=1
-  fi
-done
-if [[ $missing -eq 1 ]]; then
-  echo ""
-  echo "  The install package is incomplete. Re-download and retry."
-  exit 1
+if [[ -x "$SCRIPT_DIR/scripts/deploy-ecr" ]]; then
+  DEPLOY_CMD=("$SCRIPT_DIR/scripts/deploy-ecr")
+elif [[ -f "$SCRIPT_DIR/scripts/deploy-ecr.py" ]]; then
+  DEPLOY_CMD=(python3 "$SCRIPT_DIR/scripts/deploy-ecr.py")
+else
+  printf "  ${R}[ERROR]${N} Deploy step not found (scripts/deploy-ecr[.py]).\n"; exit 1
 fi
 
 # ── Pre-check: required ports must be free ────────────────────────────────────
@@ -112,7 +115,7 @@ trap '_ec=$?
 # =============================================================================
 printf "${BOLD}  ══ Step 1 / 2 — Pre-requisite Installation ═══════════════${N}\n\n"
 
-bash "$PREREQ_SCRIPT"
+"${PREREQ_CMD[@]}"
 
 echo ""
 printf "  ${G}${BOLD}✓ Step 1 complete.${N}\n"
@@ -123,15 +126,14 @@ echo ""
 # =============================================================================
 printf "${BOLD}  ══ Step 2 / 2 — Application Deployment ═══════════════════${N}\n\n"
 
-# Strip Windows CRLF (\r) from all Python and shell scripts in the package.
-# Git on Windows stores CRLF which breaks Python's tokenizer and bash on Linux.
+# Strip Windows CRLF (\r) from any source scripts (no-op for compiled binaries).
 printf "  Normalising line endings ...\n"
 find "$SCRIPT_DIR" -type f \( -name "*.py" -o -name "*.sh" \) \
-  -exec sed -i 's/\r//' {} +
+  -exec sed -i 's/\r//' {} + 2>/dev/null || true
 printf "  ${G}done${N}\n\n"
 
 # python3 is guaranteed to exist at this point (installed by step 1).
-python3 "$DEPLOY_SCRIPT"
+"${DEPLOY_CMD[@]}"
 
 # deploy-ecr.py prints its own completion banner and URL, so no extra message
 # is needed here. We only reach this line if deploy succeeded (exit 0).
