@@ -56,6 +56,10 @@ from .ops_stream import (  # noqa: F401
     OpsEventStream,
     fold_events,
 )
+from .budget import (  # noqa: F401
+    BudgetReport,
+    RunBudget,
+)
 from .aggregation import (  # noqa: F401
     DEFAULT_EVIDENCE_SAMPLE_SIZE,
     HIGH_CARDINALITY_CLASSES,
@@ -126,4 +130,7 @@ __all__ = [
     "apply_noise_floors",
     "DEFAULT_NOISE_FLOORS",
     "DEFAULT_FLOOR",
+    # AT-672 (MSP-B7 T4) — per-run event-volume budgets
+    "BudgetReport",
+    "RunBudget",
 ]
