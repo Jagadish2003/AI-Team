@@ -32,6 +32,7 @@ import ExecutiveReportPage from "./pages/ExecutiveReportPage";
 import StackBuilderPage from "./pages/StackBuilderPage";
 import SettingsPage from "./pages/SettingsPage";
 import LicensePage from "./pages/LicensePage";
+import RunHealthDashboardPage from "./pages/RunHealthDashboardPage";
 
 function PilotRoadmapRedirect() {
   const location = useLocation();
@@ -140,6 +141,10 @@ export default function App() {
                               <Route
                                 path="/stack-builder"
                                 element={<StackBuilderPage />}
+                              />
+                              <Route
+                                path="/run-health"
+                                element={<RunHealthDashboardPage />}
                               />
                               <Route
                                 path="/discovery-run"

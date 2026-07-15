@@ -29,6 +29,7 @@ const items = [
   // /integration-hub for backward compatibility. Configuration merged into
   // Integration Hub right panel.
   { to: "/stack-builder", label: "Stack Builder", runScoped: false, analystOnly: true },
+  { to: "/run-health", label: "Run Health", runScoped: false, analystOnly: true },
   // Run-scoped screens
   { to: "/discovery-run", label: "Discovery Run", runScoped: true },
   // { to: "/partial-results", label: "Evidence Collection", runScoped: true }, // Hidden - Sprint 5.1

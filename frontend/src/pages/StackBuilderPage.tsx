@@ -25,6 +25,7 @@ import type {
   SystemDefaultItem,
 } from '../types/stack_builder';
 import PageShell from '../components/common/PageShell';
+import InlineError from '../components/common/InlineError';
 import {
   DiscoveryConfidenceBar,
   LendingFirstRunGuide,
@@ -640,21 +641,16 @@ export default function StackBuilderPage({
           )}
           {state.currentStep === 2 && catalogLoading && (
             <div className="flex flex-col items-center justify-center gap-3 py-16 text-muted">
-              <Loader2 size={24} className="animate-spin text-emerald-500" aria-hidden />
+              <Loader2 size={24} className="animate-spin text-accent" aria-hidden />
               <p className="text-sm">Loading your connected systems…</p>
             </div>
           )}
           {state.currentStep === 2 && catalogError && !catalogLoading && (
-            <div className="rounded-xl border border-red-200 bg-red-50/10 px-5 py-4 text-sm text-red-400">
-              {catalogError}
-              <button
-                type="button"
-                onClick={() => window.location.reload()}
-                className="ml-2 underline hover:no-underline"
-              >
-                Retry
-              </button>
-            </div>
+            <InlineError
+              title="Could not load your connected systems"
+              message={catalogError}
+              onRetry={refetchCatalog}
+            />
           )}
           {state.currentStep === 2 && !catalogLoading && !catalogError && (
             <YourSystemsPage setupState={setupState} catalog={catalog} />
