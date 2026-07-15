@@ -299,6 +299,38 @@ def content_artifacts(
     return artifacts
 
 
+def accessible_space_keys(ingestor: ConfluenceIngestor, org_id: str) -> Optional[set]:
+    """The CURRENT granted, non-archived space keys — or ``None`` if unresolvable.
+
+    R18-A5 / AT-604 (T5, AC4): the depth path RE-VERIFIES the reach-phase grant
+    boundary against this set before fetching any page body. Reading page bodies
+    is more sensitive than reading activity, so the boundary is re-checked at
+    depth rather than assumed inherited from the reach phase's earlier filter.
+    Reuses the single source of truth — :meth:`ConfluenceIngestor._accessible_spaces`
+    (the same ``is_accessible`` + non-archived gate the reach phase applies).
+
+    Returns ``None`` (not an empty set) when the granted set cannot be resolved —
+    e.g. a transient spaces-listing error — so the caller falls back to the
+    reach-phase boundary that already gated the records, rather than blocking
+    legitimate content. An empty set (nothing granted) is distinct and DOES refuse
+    all content.
+    """
+    try:
+        return {
+            s.get("key")
+            for s in ingestor._accessible_spaces(org_id)
+            if s.get("key")
+        }
+    except Exception:  # noqa: BLE001 — never block content on a grant-listing error
+        logger.warning(
+            "confluence_content: could not resolve granted spaces for org=%s; "
+            "falling back to the reach-phase boundary",
+            org_id,
+            exc_info=True,
+        )
+        return None
+
+
 # ---------------------------------------------------------------------------
 # Hand-off
 # ---------------------------------------------------------------------------
@@ -310,6 +342,9 @@ class DeepContentResult:
 
     org_id: str
     pages_seen: int = 0
+    # R18-A5 / AT-604 (T5, AC4) — page(s) refused at depth because their space is
+    # not in the CURRENT granted/non-archived set (body never fetched).
+    pages_ungranted_skipped: int = 0
     pages_render_failed: int = 0
     artifacts_handed_off: int = 0
     artifacts_indexed: int = 0
@@ -341,11 +376,17 @@ def ingest_confluence_content(
     (see module docstring). Scope is decided by the page-vs-file router
     (AT-602 / T3, ``content_router.classify_confluence_content``): only records
     it classifies PAGE_CONTENT are considered — comments and attachment-shaped
-    records are ignored here exactly as they are on the reach phase. Records
-    already reflect the granted-space boundary (AC4) — the ConfluenceIngestor's
-    ``_accessible_spaces`` filter excludes ungranted/archived spaces before any
-    record is ever yielded, so this depth path inherits that boundary
-    automatically rather than re-implementing it.
+    records are ignored here exactly as they are on the reach phase. The
+    granted-space boundary (AC4) is RE-VERIFIED here at depth, not assumed
+    inherited (R18-A5 / AT-604, T5): before any page body is fetched, each
+    record's ``space_key`` is re-checked against the CURRENT accessible set
+    (:func:`accessible_space_keys` → :meth:`ConfluenceIngestor._accessible_spaces`)
+    and any ungranted/archived space is refused with its body never fetched —
+    reading a page body is more sensitive than reading activity, so the boundary
+    is re-checked rather than trusted from the reach-phase filter alone. (In the
+    normal flow the reach phase already excluded those spaces, so this is
+    defence-in-depth; it becomes load-bearing if a record for an ungranted space
+    is ever handed in directly.)
 
     Deletion / archival (R18-A5 / AT-603, T4, AC3): records with
     ``change_kind='deleted'`` (:mod:`confluence.py`'s known-id diff — see its
@@ -400,6 +441,28 @@ def ingest_confluence_content(
         r for r in valid_records
         if classify_confluence_content(r.get("content_type")) == ContentRoute.PAGE_CONTENT
     ]
+
+    # AC4 — re-verify the granted-space boundary AT DEPTH, before any body fetch.
+    # We do not merely trust that each record came from a granted space (the
+    # reach-phase filter); a page body is more sensitive than page activity, so we
+    # re-check every record's space against the CURRENT accessible set and refuse
+    # any that is not granted/non-archived — its body is never fetched. This
+    # mirrors the SharePoint content path's own ``_accessible_sites`` gate.
+    granted = accessible_space_keys(ing, org_id)
+    if granted is not None:
+        in_scope = [r for r in scoped if r.get("space_key") in granted]
+        refused = [r for r in scoped if r.get("space_key") not in granted]
+        if refused:
+            result.pages_ungranted_skipped = len(refused)
+            logger.warning(
+                "confluence_content: refused %d page(s) at depth in ungranted/"
+                "archived space(s) %s (org=%s) — body never fetched (AC4)",
+                len(refused),
+                sorted({str(r.get("space_key")) for r in refused}),
+                org_id,
+            )
+        scoped = in_scope
+
     result.pages_seen = len(scoped)
     if not scoped:
         return result
