@@ -622,3 +622,39 @@ class SharePointGraphClient:
                 f"Microsoft Graph GET {url} HTTP {resp.status_code}"
             )
         return resp.content
+
+    # ── Page-native content reads (R18-A5 / AT-601 — the deep-content path) ────
+    # These three read the PAGE-NATIVE content surface (site pages + list text),
+    # which is DISTINCT from the driveItem/binary-file surface above: library files
+    # route to the R18-A1 document path, page-native content routes here. Graph only
+    # returns resources the OAuth token is granted, so every read is site-scoped.
+    def list_site_pages(self, site_id: str) -> List[Dict[str, Any]]:
+        """Return a site's modern site pages WITH their canvas content (AT-601).
+
+        ``GET /sites/{id}/pages/microsoft.graph.sitePage?$expand=canvasLayout`` — the
+        page id/title/webUrl/timestamps plus the ``canvasLayout`` whose text
+        webparts carry the page body (rendered to structure-preserving text by
+        :func:`discovery.ingest.sharepoint_content.render_page_text`). Site pages are
+        page-native content, never library files — the two never overlap.
+        """
+        url = (
+            f"{_GRAPH_API_BASE}/sites/{site_id}/pages/microsoft.graph.sitePage"
+            "?$expand=canvasLayout"
+        )
+        return self._get_all(url)
+
+    def list_site_lists(self, site_id: str) -> List[Dict[str, Any]]:
+        """Return a site's lists (metadata) — ``GET /sites/{id}/lists`` (AT-601)."""
+        return self._get_all(f"{_GRAPH_API_BASE}/sites/{site_id}/lists")
+
+    def list_item_fields(self, site_id: str, list_id: str) -> List[Dict[str, Any]]:
+        """Return a list's items with their field text (AT-601).
+
+        ``GET /sites/{id}/lists/{id}/items?$expand=fields`` — the ``fields`` map on
+        each item holds the page-native list text (Title + text columns) rendered by
+        :func:`discovery.ingest.sharepoint_content.render_list_text`.
+        """
+        url = (
+            f"{_GRAPH_API_BASE}/sites/{site_id}/lists/{list_id}/items?$expand=fields"
+        )
+        return self._get_all(url)
