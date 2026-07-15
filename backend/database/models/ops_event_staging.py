@@ -7,7 +7,7 @@ each raw payload through the MSP-B0 mappers.
 
 This module is the SINGLE SOURCE OF TRUTH for the PostgreSQL staging schema:
 
-  * ``migrations/versions/0026_create_ops_event_staging.py`` (the CI gate)
+  * ``migrations/versions/0027_create_ops_event_staging.py`` (the CI gate)
     imports ``ALL_OPS_EVENT_STAGING_DDL`` from here, and
   * the partner-facing PostgreSQL artifact
     ``database/staging/ops_event_staging_postgresql.sql`` mirrors it verbatim
@@ -172,7 +172,7 @@ CREATE_OPS_EVENT_LOAD_BATCHES_TABLE = f"""
 
 # T3 (v1.1.0) — the provider event timestamp, "where available". Nullable and
 # added by ALTER (not folded into the CREATE above) so the migration path
-# (0026 create → 0027 alter) and a fresh create both converge on the SAME column
+# (0027 create → 0028 alter) and a fresh create both converge on the SAME column
 # order — event_time last — and existing 0026 stores gain it without a rebuild.
 # Same split-DDL pattern as ingestion_checkpoints (0017 create / 0018 alter).
 # Not a detector-facing field: it is staging metadata for bridge ordering/dedupe;

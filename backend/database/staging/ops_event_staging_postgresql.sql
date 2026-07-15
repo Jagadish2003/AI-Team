@@ -10,7 +10,7 @@
 -- This file is the STANDALONE partner artifact for a PostgreSQL staging store
 -- (apply it with psql). It mirrors, statement for statement, the canonical DDL
 -- in backend/database/models/ops_event_staging.py, which the alembic migration
--- 0026_create_ops_event_staging.py applies when AgentIQ's own PostgreSQL hosts
+-- 0027_create_ops_event_staging.py applies when AgentIQ's own PostgreSQL hosts
 -- the store. A DB-free parity test
 -- (backend/tests/unit/test_ops_event_staging_ddl_artifacts.py) fails if this
 -- file and the model drift on columns or constraints — keep them in sync.

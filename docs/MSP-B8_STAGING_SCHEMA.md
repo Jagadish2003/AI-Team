@@ -38,7 +38,7 @@ identical logical shape:
 | SQL Server | `sqlcmd` | [`backend/database/staging/ops_event_staging_sqlserver.sql`](../backend/database/staging/ops_event_staging_sqlserver.sql) |
 
 If AgentIQ's own PostgreSQL hosts the staging store, the schema is instead created
-by the alembic migration `0026_create_ops_event_staging.py` — the DDL is identical
+by the alembic migration `0027_create_ops_event_staging.py` — the DDL is identical
 either way (both derive from the single source of truth in
 `backend/database/models/ops_event_staging.py`).
 

@@ -7,7 +7,7 @@ against the real ``ops_event_staging`` table via :class:`DbStagingSink` — the
 ``ON CONFLICT DO NOTHING`` (MSP-B8 AC3), and org isolation (AC6).
 
 The conftest migrates the test database to head (including
-0026_create_ops_event_staging.py) before the suite runs.
+0027_create_ops_event_staging.py) before the suite runs.
 """
 import json
 import os

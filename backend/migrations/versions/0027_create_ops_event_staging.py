@@ -25,8 +25,8 @@ artifact instead.
 Idempotent (every statement is ``IF NOT EXISTS``); rollback drops the indexes then
 the tables.
 
-Revision ID: 0026
-Revises: 0025
+Revision ID: 0027
+Revises: 0026
 Create Date: 2026-07-14
 """
 import os
@@ -35,8 +35,8 @@ from typing import Sequence, Union
 
 from alembic import op
 
-revision: str = "0026"
-down_revision: Union[str, None] = "0025"
+revision: str = "0027"
+down_revision: Union[str, None] = "0026"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

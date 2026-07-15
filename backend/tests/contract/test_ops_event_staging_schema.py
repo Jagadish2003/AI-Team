@@ -1,7 +1,7 @@
 """Live-schema lock for the MSP-B8 staging schema — PostgreSQL (T1).
 
 The conftest migrates the test database to head (including
-0026_create_ops_event_staging.py) before the suite runs, so this module
+0027_create_ops_event_staging.py) before the suite runs, so this module
 introspects the live schema and exercises the constraints that carry the
 acceptance criteria:
 
@@ -16,7 +16,7 @@ import psycopg2
 import pytest
 
 # (name, data_type, character_maximum_length, required, primary_key)
-# event_time is last: added by ALTER (0027) so it appends after loaded_at, and the
+# event_time is last: added by ALTER (0028) so it appends after loaded_at, and the
 # fresh-create path lists it last too — the migration path and a fresh create
 # converge on the same column order.
 EXPECTED_COLUMNS = [

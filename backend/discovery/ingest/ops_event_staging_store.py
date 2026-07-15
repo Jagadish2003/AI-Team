@@ -69,7 +69,7 @@ def ensure_ops_event_staging() -> None:
     """Create the staging tables/indexes if absent (idempotent).
 
     Runs the identical ``ALL_OPS_EVENT_STAGING_DDL`` that migration
-    ``0026_create_ops_event_staging.py`` applies, so a runtime-created schema and a
+    ``0027_create_ops_event_staging.py`` applies, so a runtime-created schema and a
     migration-applied schema can never drift — the same pattern as
     ``app.retrieval.store.ensure_retrieval_store``. Every statement is
     ``IF NOT EXISTS``.
