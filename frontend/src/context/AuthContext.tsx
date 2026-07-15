@@ -91,7 +91,22 @@ function writeStoredToken(token: string | null): void {
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   // Token restored from sessionStorage on mount (Section 3) so a refresh keeps
   // the user signed in; user is re-fetched via /api/auth/me below.
-  const [token, setToken] = useState<string | null>(() => readStoredToken());
+  //
+  // apiClient's module token is synced SYNCHRONOUSLY here (and in login/
+  // acceptInvite/logout below), not only in the [token] effect: React runs
+  // children's effects BEFORE a parent's, so every data provider and the
+  // workspace prefetch mount-fetch under SessionBoundary fired before the
+  // effect-based sync landed — apiClient still held null, authHeader() fell
+  // back to the static dev token, and the whole workspace was fetched AND
+  // CACHED as the `default` org (header "Your Organisation", licence
+  // "0 (unlimited)", empty product declaration) for a correctly logged-in
+  // user. The assignment is an idempotent module write, safe in an
+  // initializer; the [token] effect remains as belt-and-braces.
+  const [token, setToken] = useState<string | null>(() => {
+    const restored = readStoredToken();
+    setAuthToken(restored);
+    return restored;
+  });
   const [user, setUser] = useState<AuthUser | null>(null);
   // Start in "loading" when a token was restored, so AuthGuard holds the route
   // (shows "Verifying session…") instead of flashing /login before the mount
@@ -104,6 +119,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   // setToken and setUser are stable useState setters — empty dep array is correct.
   useEffect(() => {
     setUnauthorizedHandler(() => {
+      // Synchronous apiClient clear: when already on /login there is no redirect
+      // (no page reload), so without this the stale module token would keep
+      // signing requests until the [token] effect flushed.
+      setAuthToken(null);
       setToken(null);
       setUser(null);
       if (!window.location.pathname.startsWith("/login")) {
@@ -156,8 +175,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const login = useCallback(async (email: string, password: string) => {
     const result = await apiLogin(email, password);
-    // Persist synchronously: the caller reloads the document immediately after
-    // (see writeStoredToken) so the post-render [token] effect would be too late.
+    // Persist AND sync apiClient synchronously, BEFORE the state update:
+    // setToken remounts the SessionBoundary subtree, whose children's mount
+    // fetches run before this provider's [token] effect — with a stale module
+    // token they would fetch (and cache) the default org's workspace instead
+    // of the user's (see the initializer note above).
+    setAuthToken(result.token);
     writeStoredToken(result.token);
     setToken(result.token);
     setUser(result.user);
@@ -180,6 +203,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const acceptInvite = useCallback(async (inviteToken: string, password: string) => {
     const result = await apiAcceptInvite(inviteToken, password);
+    // Synchronous apiClient sync before the state update — same race as login.
+    setAuthToken(result.token);
     writeStoredToken(result.token);
     setToken(result.token);
     setUser(result.user);
@@ -188,7 +213,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const logout = useCallback(async () => {
     const current = token;
     // Clear local state regardless of whether the server call succeeds, so the
-    // UI never gets stuck authenticated if logout fails.
+    // UI never gets stuck authenticated if logout fails. apiClient is cleared
+    // synchronously for the same child-effects-run-first reason as login.
+    setAuthToken(null);
     setToken(null);
     setUser(null);
     if (current) {

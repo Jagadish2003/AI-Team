@@ -424,5 +424,17 @@ export function useResource<T>(
     if (enabled) store!.run(key!);
   }, [enabled, key, store]);
 
-  return { data: snap.data, loading: snap.loading, error: snap.error, refetch };
+  // An enabled key with no data and no error yet IS loading — either prime()
+  // has not run (the effect above fires after the first render, so the store has
+  // no entry and peek() returns the empty snapshot) or its fetch is in flight.
+  // Reporting false there is indistinguishable from "loaded and empty", so a
+  // consumer renders its empty/absent state for a tick before the skeleton: the
+  // licence strip vanished (reserving no space, then shoving the page down) and
+  // the product picker flashed an unselected form. A DISABLED key is never
+  // loading, and a cached key reports false immediately — so prefetched data
+  // still renders instantly with no skeleton.
+  const loading =
+    enabled && snap.data === undefined && snap.error === null ? true : snap.loading;
+
+  return { data: snap.data, loading, error: snap.error, refetch };
 }
