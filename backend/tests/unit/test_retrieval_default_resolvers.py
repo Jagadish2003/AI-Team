@@ -115,7 +115,12 @@ def test_slack_resolver_returns_current_message_artifact(monkeypatch):
     assert artifact.provenance["thread_ts"] == "1700000000.000000"
 
 
-def test_confluence_resolver_returns_metadata_artifact(monkeypatch):
+def test_confluence_resolver_returns_full_rendered_page_artifact(monkeypatch):
+    """R18-A5 / AT-603 (T4): the refresh-worker resolver must render the SAME
+    full page body confluence_content.py's direct hand-off does — not a
+    metadata-only stub — so a freshness-driven re-chunk of an edited page is
+    never a downgrade (AC3)."""
+
     class FakeConfluenceIngestor:
         def _raw_content(self, org_id, space):
             assert org_id == "org_1"
@@ -136,6 +141,15 @@ def test_confluence_resolver_returns_metadata_artifact(monkeypatch):
                 },
             ]
 
+        def _raw_page_body(self, org_id, space_key, content_id):
+            assert org_id == "org_1"
+            assert space_key == "OPS"
+            assert content_id == "42"
+            return {
+                "body": {"storage": {"value": "<h1>Operating Model</h1><p>How the team runs day to day.</p>"}},
+                "metadata": {"labels": {"results": [{"prefix": "global", "name": "process"}]}},
+            }
+
     monkeypatch.setattr(confluence_mod, "ConfluenceIngestor", FakeConfluenceIngestor)
 
     artifact = resolvers._resolve_confluence("org_1", "OPS:42")
@@ -143,9 +157,36 @@ def test_confluence_resolver_returns_metadata_artifact(monkeypatch):
     assert artifact.source_system == "confluence"
     assert artifact.source_artifact == "OPS:42"
     assert artifact.content_type == "prose"
-    assert "Operating model" in artifact.content
-    assert "Analyst One" in artifact.content
+    # Full rendered body with headings preserved — not a metadata line.
+    assert artifact.content.startswith("# Operating Model")
+    assert "How the team runs day to day." in artifact.content
     assert artifact.source_timestamp == "2026-07-08T12:00:00Z"
+    assert artifact.provenance["labels"] == ["process"]
+    assert artifact.provenance["url"] == "/wiki/spaces/OPS/pages/42"
+
+
+def test_confluence_resolver_returns_none_for_trashed_or_archived_page(monkeypatch):
+    """R18-A5 / AT-603 (T4): a page whose status is no longer current must not
+    be resolved into fresh content — the connector's own known-id diff already
+    handles this case as a deletion (remove_artifact), not an upsert."""
+
+    class FakeConfluenceIngestor:
+        def _raw_content(self, org_id, space):
+            return [
+                {
+                    "id": "42",
+                    "type": "page",
+                    "status": "trashed",
+                    "version": {"number": 4, "when": "2026-07-09T00:00:00Z"},
+                },
+            ]
+
+        def _raw_page_body(self, org_id, space_key, content_id):  # pragma: no cover
+            raise AssertionError("must not fetch a body for a non-current page")
+
+    monkeypatch.setattr(confluence_mod, "ConfluenceIngestor", FakeConfluenceIngestor)
+
+    assert resolvers._resolve_confluence("org_1", "OPS:42") is None
 
 
 def test_operational_resolver_returns_log_artifact(monkeypatch):
