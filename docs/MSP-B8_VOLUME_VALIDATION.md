@@ -64,7 +64,14 @@
 | Resume exactness | required |
 | Evidence resolves | required |
 
-## For MSP-B7 (calibration input)
+## For MSP-B7 (calibration input) — CONSUMED by T6 (AT-674)
+
+> These numbers are now the calibration input for the MSP-B7 volume defaults.
+> `backend/discovery/signals/ops_calibration.py` captures them verbatim
+> (`B8_MEASUREMENTS`) and derives: per-run event budget = **250,000** (ceil(8 ×
+> 30,225 month) → rounded), noise floors (audit/state_change/access = 5; else 1),
+> and correlation windows (event↔event 15 min, event↔incident 2 h). See
+> `docs/msp_operational_event_schema.md` §13 for the full derivation and rationale.
 
 These are the first realistic event-volume signals for the MSP pack — use
 them to seed the budget/operational-envelope, not as final limits:

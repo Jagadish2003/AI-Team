@@ -57,8 +57,18 @@ from .ops_stream import (  # noqa: F401
     fold_events,
 )
 from .budget import (  # noqa: F401
+    DEFAULT_RUN_EVENT_BUDGET,
     BudgetReport,
     RunBudget,
+)
+from .ops_calibration import (  # noqa: F401
+    B8_MEASUREMENTS,
+    CALIBRATED_CORRELATION_WINDOWS,
+    CALIBRATED_DEFAULT_FLOOR,
+    CALIBRATED_DEFAULT_WINDOW_SECONDS,
+    CALIBRATED_NOISE_FLOORS,
+    CALIBRATED_RUN_EVENT_BUDGET,
+    calibration_summary,
 )
 from .aggregation import (  # noqa: F401
     DEFAULT_EVIDENCE_SAMPLE_SIZE,
@@ -133,4 +143,13 @@ __all__ = [
     # AT-672 (MSP-B7 T4) — per-run event-volume budgets
     "BudgetReport",
     "RunBudget",
+    "DEFAULT_RUN_EVENT_BUDGET",
+    # AT-674 (MSP-B7 T6) — calibration from B8's month-scale sample
+    "B8_MEASUREMENTS",
+    "CALIBRATED_RUN_EVENT_BUDGET",
+    "CALIBRATED_NOISE_FLOORS",
+    "CALIBRATED_DEFAULT_FLOOR",
+    "CALIBRATED_CORRELATION_WINDOWS",
+    "CALIBRATED_DEFAULT_WINDOW_SECONDS",
+    "calibration_summary",
 ]

@@ -615,4 +615,52 @@ This is MSP-B7 **T5**, the reusable surface the MSP event corroboration rules
 (B4/B6) consult. It does not rewire the existing app-friction corroborators
 (COR-09/COR-10), which are 30-day freshness rules, not cloud event↔incident
 joins. Calibration of all floors/budgets/windows against B8's month-scale sample
-is **T6**.
+is **T6** (§13).
+
+---
+
+## 13. Calibration from B8's month-scale sample (MSP-B7 / AT-674, T6)
+
+The five disciplines each ship a *default* — noise floors, the per-run event
+budget, correlation windows. T6 makes those defaults **evidence-based, not
+guessed**: they are derived from MSP-B8's measured month-scale volume run and
+documented with their rationale. The single source of truth is
+[`backend/discovery/signals/ops_calibration.py`](../backend/discovery/signals/ops_calibration.py);
+the T3/T4/T5 modules import their defaults from it, so there is no divergent
+hardcoded guess anywhere.
+
+### The measured input (MSP-B8)
+
+B8 ran a representative month of AWS+Azure exports end to end and recorded the
+numbers in [`MSP-B8_VOLUME_VALIDATION.md`](MSP-B8_VOLUME_VALIDATION.md) (its
+T5/AC7 output). The load-bearing figures, captured verbatim in `B8_MEASUREMENTS`:
+
+| Measurement | Value |
+|-------------|-------|
+| Events in a representative month (generated) | 30,225 |
+| Normalized events ingested (post skip+dedupe) | 29,553 |
+| Ingest throughput | 678.5 events/s |
+| Per-event ingest cost (tracemalloc active → conservative) | 1.474 ms |
+| Peak memory (flat) | 89.61 MB |
+
+### What is derived, and how
+
+| Default | Calibrated value | Derivation |
+|---------|------------------|------------|
+| **Per-run event budget** (T4) | **250,000 events** | Quantitatively derived: `ceil(8 × 30,225)` = 241,800, rounded up to a clean 250,000. ×8 headroom tolerates an 8×-noisier month or an ~8-month backfill in one run; at the measured 1.474 ms/event that is a ~6-min worst-case ingest ceiling, and flat ~89.6 MB memory means volume drives time, not memory. |
+| **Noise floors** (T3) | `audit`/`state_change`/`access` = 5; else 1 | B8 measured aggregate volume (~1,000 events/day) but **not** a per-class recurrence histogram, so floors are set conservatively for the demonstrably-noisy high-cardinality classes (≥5×/day to surface) and everything else stays at 1. `error`/`security` are never floored — no silent drop. Refined to exact per-class values once per-class recurrence telemetry exists. |
+| **Correlation windows** (T5) | `event_event` = 15 min; `event_incident` = 2 h; else 1 h | The measured density (~42 events/hour) is the evidence for keeping the cross-provider `event_event` window **tight** — a 15-min window already admits ~10 unrelated events, so it is a ceiling, not a guess. `event_incident` = 2 h is the operationally-justified incident-creation lag (B8 did not measure lag directly); per-org tunable. |
+
+### Honesty about the evidence
+
+The calibration states plainly where the evidence stops: the **budget** is a
+direct quantitative derivation from measured volume; the **floors** and the
+`event_incident` **window** are operationally-justified defaults consistent with
+the measured density, pending finer per-class-recurrence and incident-lag
+telemetry. `calibration_summary()` exposes the measured input, the derived
+defaults, and the derivation string for run-health/audit — so a reviewer can
+trace every default back to a real measurement (AC7).
+
+Calibration reruns whenever B8 re-measures: update `B8_MEASUREMENTS` and the
+derived defaults move with it. This is the final MSP-B7 task (T6); contract tests
+are T7.
