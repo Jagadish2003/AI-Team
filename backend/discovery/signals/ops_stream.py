@@ -140,6 +140,11 @@ class ActiveSignal:
     provider_event_ids: List[str] = field(default_factory=list)
     #: One evidence pointer per folded firing — each resolves to a stored raw payload.
     member_pointers: List[Dict[str, Any]] = field(default_factory=list)
+    #: Distribution of member severities (severity token → distinct-firing count).
+    #: The signature deliberately ignores severity (AT-636), so one recurring event
+    #: may span severities; this profile preserves that spread for the MSP-B7 T2
+    #: aggregate roll-up. Order-independent (a count map).
+    severity_profile: Dict[str, int] = field(default_factory=dict)
     #: Earliest/latest observation time as aware datetimes (span comparison state).
     _first_dt: Optional[datetime] = field(default=None, repr=False)
     _last_dt: Optional[datetime] = field(default=None, repr=False)
@@ -164,6 +169,7 @@ class ActiveSignal:
             active_period_start=self.active_period_start,
             is_recurrence=self.is_recurrence,
             provider_event_ids=sorted(self.provider_event_ids),
+            severity_profile=dict(self.severity_profile),
         )
         return data
 
@@ -311,6 +317,7 @@ class OpsEventStream:
             last_seen=ts,
             provider_event_ids=[event.signal_id],
             member_pointers=[dict(event.provenance)],
+            severity_profile={event.severity: 1},
             _first_dt=dt,
             _last_dt=dt,
         )
@@ -326,6 +333,9 @@ class OpsEventStream:
         signal.occurrence_count += 1
         signal.provider_event_ids.append(event.signal_id)
         signal.member_pointers.append(dict(event.provenance))
+        signal.severity_profile[event.severity] = (
+            signal.severity_profile.get(event.severity, 0) + 1
+        )
 
         # Span maintenance — only parseable times move the span (an unparseable
         # timestamp still counts as a firing but cannot extend first/last).

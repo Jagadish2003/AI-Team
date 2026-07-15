@@ -366,3 +366,65 @@ raws = signals[0].resolve_raw_instances(store)   # audit → the raw firings
 This is MSP-B7 **T1** only. Aggregation roll-ups (T2), noise floors (T3), per-run
 budgets (T4), and correlation windows (T5) layer on top of admission in later
 tasks.
+
+---
+
+## 9. Aggregation roll-ups for high-cardinality classes (MSP-B7 / AT-670)
+
+Some event classes flood at cloud volumes — **audit floods** and **state-change
+storms**. Their T1 active signals are rolled up into a compact
+`AggregateSignal` that becomes the **detector-visible unit**, so a detector
+reasons about *"this audit action fired 9 000 times this window"* as ONE fact.
+Code: [`backend/discovery/signals/aggregation.py`](../backend/discovery/signals/aggregation.py).
+
+### What an aggregate carries (the traceable-aggregate rule)
+
+| Field | Meaning |
+|-------|---------|
+| `member_count` | The **exact** number of distinct firings (never compressed). |
+| `first_seen` / `last_seen` | The time span the aggregate covers. |
+| `severity_profile` | `{severity: count}` — the spread the signature ignores (AT-636), preserved. |
+| `sample_pointers` | A **bounded** sample of member evidence pointers (`DEFAULT_EVIDENCE_SAMPLE_SIZE`, default 10) — each resolves to a stored raw payload via `resolve_sample_raw(store)`. |
+| `sampled_from` / `is_sampled` | The true member count the sample was drawn from, so the compression ratio is never hidden. |
+
+**Raw retention is unchanged** — every raw payload stays stored in the raw-event
+store (§6); only the *pointers held on the aggregate* are bounded. `'this fired
+9 000 times'` still opens to real instances on click.
+
+### Which signals are rolled up
+
+`roll_up(active_signals)` aggregates only signals whose event class is in
+`HIGH_CARDINALITY_CLASSES` (`audit`, `state_change`) by default — low-cardinality
+signals (individual alarms) keep their full T1 traceability. The class set and
+the sample size are tunable per call (T6 calibrates the defaults from B8's
+month-scale measurements). Pass `only_high_cardinality=False` to aggregate every
+signal.
+
+### Deterministic & span-anchored sampling
+
+The roll-up is a pure projection of the (deterministic, org-scoped) T1 active
+signals: count/span/severity-profile pass straight through, and the evidence
+sample is chosen deterministically — members sorted by `(source_timestamp,
+source_artifact)`, then evenly spaced **including both span endpoints** so the
+earliest and latest instance are always reachable. Same members → same sample,
+regardless of arrival order. `resolve_sample_raw` refuses to cross an org
+boundary.
+
+### Usage
+
+```python
+from discovery.signals import aggregate_events, roll_up, OpsEventStream
+
+# batch convenience: fold (T1) then roll up the high-cardinality classes (T2)
+aggregates = aggregate_events(events)
+raws = aggregates[0].resolve_sample_raw(store)   # audit → sampled raw instances
+
+# or over an existing stream:
+stream = OpsEventStream()
+for e in events:
+    stream.admit(e)
+aggregates = roll_up(stream.active_signals())
+```
+
+This is MSP-B7 **T2**. Noise floors (T3), per-run budgets (T4), and correlation
+windows (T5) are separate tasks.
