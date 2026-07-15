@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import {
   AlertCircle,
@@ -8,13 +8,13 @@ import {
   FileText,
   Link2,
   ListChecks,
-  Loader2,
   Map,
   Settings,
   Shield,
   Zap,
 } from 'lucide-react';
 import PageShell from '../components/common/PageShell';
+import { Skeleton } from '../components/common/Skeleton';
 import StagesGrid from '../components/pilot_roadmap/StagesGrid';
 import { useConnectorContext } from '../context/ConnectorContext';
 import { useAnalystReviewContext } from '../context/AnalystReviewContext';
@@ -136,13 +136,24 @@ function WorkspaceNotice({
   );
 }
 
+// Skeleton shaped like the blueprint detail (header + the design/guardrails/
+// permissions/evidence blocks), so the real content fills the reserved space
+// rather than snapping in after a spinner.
 function LoadingState({ blueprintLabel }: { blueprintLabel: string }) {
   return (
-    <WorkspaceNotice
-      icon={<Loader2 size={24} className="animate-spin" />}
-      title="Loading blueprint"
-      message={`Fetching the ${blueprintLabel} for the selected opportunity.`}
-    />
+    <div
+      aria-busy="true"
+      aria-label={`Loading ${blueprintLabel}`}
+      className="rounded-xl border border-border bg-panel p-5"
+    >
+      <Skeleton className="h-5 w-64" />
+      <Skeleton className="mt-2 h-3 w-96" />
+      <div className="mt-5 grid gap-4 lg:grid-cols-2">
+        <Skeleton className="h-56 w-full rounded-lg" />
+        <Skeleton className="h-56 w-full rounded-lg" />
+      </div>
+      <Skeleton className="mt-4 h-40 w-full rounded-lg" />
+    </div>
   );
 }
 
@@ -284,9 +295,16 @@ function RoadmapSection({
 
       <div>
         {showLoading ? (
-          <div className="flex min-h-48 items-center justify-center rounded-lg border border-border bg-bg/20 px-4 py-8 text-sm text-muted">
-            <Loader2 className="mr-2 h-4 w-4 animate-spin text-accent" />
-            Loading Agent Roadmap for this discovery run.
+          // Skeleton shaped like the roadmap's phase/stage cards, so they fill
+          // the same space instead of replacing a centered spinner.
+          <div
+            aria-busy="true"
+            aria-label="Loading Agent Roadmap"
+            className="grid gap-3 sm:grid-cols-3"
+          >
+            {[0, 1, 2].map((i) => (
+              <Skeleton key={i} className="h-40 w-full rounded-lg" />
+            ))}
           </div>
         ) : error ? (
           <div className="rounded-lg border border-red-400/20 bg-red-500/10 px-4 py-4">
@@ -435,39 +453,25 @@ function EvidencePanel({
   const nav = useNavigate();
   const opportunityReviewPath = runId ? `/opportunity-review?runId=${runId}` : '/opportunity-review';
   const evidenceIds = blueprint.evidenceIds ?? [];
-  const evidenceKey = evidenceIds.join(',');
-  const [evidenceMap, setEvidenceMap] = useState<Record<string, EvidenceReview>>({});
   const prevOpp = selectedIdx > 0 ? opportunities[selectedIdx - 1] : null;
   const nextOpp = selectedIdx < opportunities.length - 1 ? opportunities[selectedIdx + 1] : null;
 
-  useEffect(() => {
-    let active = true;
-
-    if (evidenceIds.length === 0 || !runId) {
-      setEvidenceMap({});
-      return () => {
-        active = false;
-      };
-    }
-
-    setEvidenceMap({});
-    fetchEvidence(runId)
-      .then((all) => {
-        if (!active) return;
-        const map: Record<string, EvidenceReview> = {};
-        all.forEach((ev) => {
-          map[ev.id] = ev;
-        });
-        setEvidenceMap(map);
-      })
-      .catch(() => {
-        if (active) setEvidenceMap({});
-      });
-
-    return () => {
-      active = false;
-    };
-  }, [runId, evidenceKey]);
+  // The full run evidence set is the SAME for every opportunity — fetch it ONCE
+  // per run through the shared cache (deduped, started as soon as runId resolves)
+  // and filter client-side by evidenceIds. Previously this re-fetched ALL
+  // evidence on every opportunity switch via a keyed effect; now switching
+  // opportunities is instant and makes no network call.
+  const { data: allEvidence } = useResource<EvidenceReview[]>(
+    runId ? cacheKeys.runEvidence(runId) : null,
+    () => fetchEvidence(runId as string),
+  );
+  const evidenceMap = useMemo(() => {
+    const map: Record<string, EvidenceReview> = {};
+    (allEvidence ?? []).forEach((ev) => {
+      map[ev.id] = ev;
+    });
+    return map;
+  }, [allEvidence]);
 
   return (
     <div className="flex h-full flex-col overflow-hidden rounded-xl border border-border bg-panel">
@@ -564,9 +568,7 @@ export default function BlueprintPage() {
   const nav = useNavigate();
   const blueprintSectionRef = useRef<HTMLElement | null>(null);
 
-  const [blueprint, setBlueprint] = useState<BlueprintResponse | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  // blueprint / loading / error are derived from the shared cache below.
 
   // Roadmap via the shared cache: an opportunity decision/override in Opportunity
   // Review invalidates the run scope (AnalystReviewContext), so the roadmap here
@@ -639,33 +641,24 @@ export default function BlueprintPage() {
     return () => window.clearTimeout(timer);
   }, [runId, roadmapPreparing, roadmapLoading, refetchRoadmap]);
 
-  useEffect(() => {
-    if (!runId || !selectedId || !salesforceConnected) {
-      setBlueprint(null);
-      setError(null);
-      return;
-    }
-
-    let cancelled = false;
-    setLoading(true);
-    setError(null);
-    setBlueprint(null);
-
-    fetchBlueprint(runId, selectedId)
-      .then((data) => {
-        if (!cancelled) setBlueprint(data);
-      })
-      .catch((err) => {
-        if (!cancelled) setError(err?.message ?? 'Failed to load blueprint');
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [runId, selectedId, salesforceConnected]);
+  // The selected opportunity's blueprint, on the SHARED cache — keyed per
+  // opportunity, so switching between opportunities (or leaving and returning to
+  // this page) renders instantly from cache instead of re-fetching every time.
+  // PrefetchWorkspaceData warms this key for EVERY opportunity after login, so
+  // in practice the blueprint is already there before it is asked for.
+  const blueprintKey =
+    runId && selectedId && salesforceConnected
+      ? cacheKeys.runBlueprint(runId, selectedId)
+      : null;
+  const {
+    data: blueprintData,
+    loading,
+    error: blueprintErrObj,
+  } = useResource<BlueprintResponse>(blueprintKey, () =>
+    fetchBlueprint(runId as string, selectedId as string),
+  );
+  const blueprint = blueprintData ?? null;
+  const error = blueprintErrObj ? (blueprintErrObj.message ?? 'Failed to load blueprint') : null;
 
   const renderBlueprintContent = () => {
     if (!runId) {

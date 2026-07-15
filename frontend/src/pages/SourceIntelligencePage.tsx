@@ -10,7 +10,7 @@
     Loader2,
   } from "lucide-react";
   import TopNav from "../components/common/TopNav";
-  import LoadingPanel from "../components/common/LoadingPanel";
+  import { Skeleton, SkeletonStatCards } from "../components/common/Skeleton";
   import { useNormalizationContext } from "../context/NormalizationContext";
   import { useConnectorContext } from "../context/ConnectorContext";
   import { useRunContext } from "../context/RunContext";
@@ -389,12 +389,16 @@
       return (
         <div className="min-h-screen text-text">
           <TopNav />
-          <div className="px-8 py-6">
-            <SourceIntelligenceHeader />
-            <LoadingPanel
-              title="Loading Source Intelligence"
-              subtitle="Reading source mappings, confidence signals, and permission context for this discovery run."
-            />
+          <div className="w-full px-8 py-6">
+            <div className="mb-6">
+              <SourceIntelligenceHeader />
+            </div>
+            {/* Skeleton mirrors the stat-card row + mapping content so the real
+                sections fill the same space instead of snapping in. */}
+            <div aria-busy="true" aria-label="Loading Source Intelligence">
+              <SkeletonStatCards count={3} />
+              <Skeleton className="mt-6 h-[420px] w-full" />
+            </div>
           </div>
         </div>
       );

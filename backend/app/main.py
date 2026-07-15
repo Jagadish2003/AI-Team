@@ -31,7 +31,7 @@ from .db import (
     org_connector_set,
 )
 from . import license_limits
-from .normalization_enrichment import enrich_ambiguous_mappings
+from .normalization_enrichment import KV_NORMALIZATION, enrich_ambiguous_mappings
 from .opportunity_display import (
     with_display,
     with_display_title,
@@ -72,6 +72,7 @@ from .auth.configs import CONNECTOR_AUTH_CONFIGS
 from .auth.secrets import validate_all_secrets
 from .middleware.tenancy import get_current_org_id, register_tenancy
 from .middleware.license_gate import register_license_gate
+from .event_stream import register_change_publisher, register_event_stream_routes
 from .retrieval.default_resolvers import register_default_content_resolvers
 from .rbac import require_role, seed_owner
 
@@ -280,6 +281,12 @@ app = FastAPI(title="AgentIQ Layer 1 API Skeleton", version="0.1.0", lifespan=li
 # CORS is added last (below) so it stays outermost and blocked 402s keep their
 # CORS headers; reads/login/valid+grace are untouched.
 register_license_gate(app)
+# Org change stream (multi-user reactivity): publish a "changed" ping after every
+# successful mutating request so other users' browsers refresh what they show.
+# Registered BEFORE tenancy for the same reason as the license gate above — it
+# must run INSIDE TenancyMiddleware so the per-request org context is still set
+# when it reads it.
+register_change_publisher(app)
 register_tenancy(app)
 
 # Register routes in order
@@ -303,6 +310,7 @@ register_normalization_routes(app)
 if not any(r.path == "/api/connectors/oauth/callback" for r in app.routes):
     register_connector_auth_routes(app)
 register_db_connector_routes(app)
+register_event_stream_routes(app)
 register_temporal_routes(app)
 register_workspace_routes(app)
 register_entities_routes(app)
@@ -650,6 +658,18 @@ def list_mappings(run_id: str) -> List[Dict[str, Any]]:
     except KeyError:
         raise HTTPException(404, "run not found")
 
+    # Serve precomputed enrichment when available — never re-run the LLM on a
+    # read. enrich_ambiguous_mappings caches its enriched rows under
+    # KV_NORMALIZATION (marked with 'batchCallMade', written only by it). Return
+    # those if present; only compute — the one synchronous Claude batch call —
+    # when the cache is absent, so repeat GETs never trigger an LLM round-trip.
+    cached = run_kv_get(KV_NORMALIZATION, run_id, None)
+    if (
+        isinstance(cached, dict)
+        and "batchCallMade" in cached
+        and isinstance(cached.get("rows"), list)
+    ):
+        return cached["rows"]
     raw_mappings = get_all("mappings")
     return enrich_ambiguous_mappings(run_id, raw_mappings, db)
 
@@ -657,22 +677,28 @@ def list_mappings(run_id: str) -> List[Dict[str, Any]]:
 @app.get("/api/runs/{run_id}/opportunities", dependencies=[Depends(require_auth), Depends(require_role("viewer"))])
 def list_opportunities(run_id: str) -> List[Dict[str, Any]]:
     try:
-        read_run(run_id)
+        run = read_run(run_id)
     except KeyError:
         raise HTTPException(404, "run not found")
 
     opps = run_kv_get("opps", run_id, None)
     if opps is None:
-        raise HTTPException(
-            status_code=404,
-            detail=f"No opportunities for run '{run_id}'. T2 materialisation may not have completed.",
-        )
+        # The run EXISTS (read_run above did not 404) but has not materialised
+        # opportunities yet — it is still computing. Return an EMPTY list (200),
+        # not 404, so a client can fetch opportunities in parallel with run
+        # status without erroring on an in-progress run; the "still preparing"
+        # vs "no opportunities" distinction is made from run status client-side.
+        # A genuinely unknown/cross-org run still 404s at read_run above, so
+        # tenant isolation and the "no latest-run fallback" contract are intact.
+        return []
     # Apply the full display shaping (title overrides + the stable matrix score
     # offset). The decision/override endpoints below apply the SAME shaping via
     # with_display(), so a bubble keeps its coordinates when its decision changes.
     # R18-C1 T4: then adapt the finding WORDING to the run's active template
     # (lending language for Commercial Lending). No-op when no template is active.
-    terminology = resolve_run_terminology(run_id)
+    # Pass the run record we already loaded above so terminology resolution does
+    # not re-read it from the DB (one fewer round-trip per opportunities fetch).
+    terminology = resolve_run_terminology(run_id, run=run)
     return [apply_terminology(with_display(opp), terminology) for opp in opps]
 
 

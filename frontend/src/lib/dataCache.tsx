@@ -34,6 +34,7 @@ import React, {
   useRef,
   useSyncExternalStore,
 } from 'react';
+import { subscribeOrgChanged } from './orgEvents';
 
 export interface ResourceState<T> {
   data: T | undefined;
@@ -44,6 +45,12 @@ export interface ResourceState<T> {
 }
 
 export interface DataCacheApi {
+  /**
+   * Warm a key WITHOUT subscribing to it: fetches only if the key has no data
+   * yet, so it is safe to call repeatedly and never re-fetches what is cached.
+   * Used to pre-load a workspace after login so later navigation is instant.
+   */
+  prefetch: <T>(key: string, fetcher: () => Promise<T>) => void;
   /** Refetch (or drop, if unobserved) every key equal to `prefix` or under `prefix/`. Coalesced. */
   invalidate: (prefix: string) => void;
   /** Refetch (or drop, if unobserved) exactly one key. */
@@ -71,9 +78,50 @@ interface Entry {
   subscribers: Set<() => void>;
   /** Stable object returned to consumers; replaced (new ref) only on change. */
   snapshot: Snapshot<unknown>;
+  /** Epoch ms of the last successful fetch (0 = never). Drives stale-while-revalidate. */
+  fetchedAt: number;
 }
 
 const EMPTY_SNAPSHOT: Snapshot<unknown> = { data: undefined, loading: false, error: null };
+
+/**
+ * Default staleness window for cached resources. Within this window a (re)mount
+ * serves the cached value with no refetch; past it, the cached value is served
+ * immediately AND refreshed in the background (stale-while-revalidate). Tunable
+ * per call via useResource's `staleTime` opt; <= 0 disables revalidation.
+ */
+const DEFAULT_STALE_MS = 30_000;
+
+/**
+ * Cross-user freshness (an org is used by several people at once).
+ *
+ * A resource changed by ANOTHER user must show up here without a manual reload.
+ * Both knobs below drive BACKGROUND revalidation of currently-observed keys —
+ * the cached value stays on screen and is silently replaced when the fresh one
+ * lands, so there is no spinner and no flicker.
+ *
+ * - FOCUS: returning to the tab/window revalidates immediately (debounced by a
+ *   small minimum age so rapid focus/blur does not hammer the API).
+ * - INTERVAL: while the tab is visible, observed keys are refreshed on a slow
+ *   tick so a change made elsewhere appears without the user doing anything.
+ *
+ * A push feed (SSE) can later make this instant; these make it correct today.
+ */
+const FOCUS_REVALIDATE_MIN_AGE_MS = 5_000;
+const BACKGROUND_REVALIDATE_INTERVAL_MS = 30_000;
+
+/**
+ * Minimum age before an org-changed push re-fetches a key.
+ *
+ * The stream pings on EVERY mutation in the org, and some flows mutate
+ * repeatedly (Stack Builder autosaves its setup state as you edit). Refreshing
+ * everything on screen per ping turned that into a request storm — bursts of a
+ * dozen calls that saturated the browser's connection pool, so pages never
+ * finished loading. Skipping keys refreshed within this window coalesces a burst
+ * of pings into ONE refresh, which is all a coarse "something changed" signal
+ * ever needed.
+ */
+const ORG_CHANGED_MIN_AGE_MS = 5_000;
 
 /**
  * The cache store. One instance per DataCacheProvider (i.e. per user session,
@@ -95,6 +143,7 @@ class DataCacheStore {
         fetcher: null,
         subscribers: new Set(),
         snapshot: EMPTY_SNAPSHOT,
+        fetchedAt: 0,
       };
       this.map.set(key, e);
     }
@@ -119,28 +168,48 @@ class DataCacheStore {
     return this.map.get(key)?.snapshot ?? EMPTY_SNAPSHOT;
   }
 
-  /** Register the latest fetcher for a key and kick off the first fetch if idle. */
-  prime(key: string, fetcher: () => Promise<unknown>): void {
+  /**
+   * Register the latest fetcher for a key and either kick off the first fetch
+   * (no data yet) or, if the cached data is older than `staleTime`, refresh it in
+   * the background (stale-while-revalidate). `staleTime <= 0` disables the
+   * revalidation (fetch-once). An errored entry is left for an explicit refetch.
+   */
+  prime(key: string, fetcher: () => Promise<unknown>, staleTime = DEFAULT_STALE_MS): void {
     const e = this.ensure(key);
     e.fetcher = fetcher;
     if (e.data === undefined && e.error === null && !e.promise && !e.loading) {
-      this.run(key);
+      this.run(key); // first load for this key
+      return;
+    }
+    if (
+      e.data !== undefined &&
+      !e.promise &&
+      staleTime > 0 &&
+      Date.now() - e.fetchedAt > staleTime
+    ) {
+      this.run(key, true); // background revalidate — keep showing the stale value
     }
   }
 
-  run(key: string): void {
+  run(key: string, background = false): void {
     const e = this.map.get(key);
     if (!e || !e.fetcher) return;
     const fetcher = e.fetcher;
-    e.loading = true;
-    e.error = null;
-    this.emit(e);
+    // A background (stale-while-revalidate) refresh keeps the current value and
+    // does NOT flip loading, so consumers never flash a spinner while fresh data
+    // is fetched. A foreground run (first load / invalidate) shows loading.
+    if (!(background && e.data !== undefined)) {
+      e.loading = true;
+      e.error = null;
+      this.emit(e);
+    }
     const p = fetcher().then(
       (data) => {
         if (e.promise !== p) return; // superseded by a newer run
         e.data = data;
         e.error = null;
         e.loading = false;
+        e.fetchedAt = Date.now();
         e.promise = null;
         this.emit(e);
       },
@@ -202,6 +271,24 @@ class DataCacheStore {
     }
   }
 
+  /**
+   * Background-revalidate every OBSERVED key whose data is older than maxAgeMs.
+   *
+   * This is how another user's change reaches this client: the mounted consumers
+   * of a shared org resource silently refetch and re-render with the new value.
+   * Unobserved keys are skipped (nothing is showing them; they revalidate on
+   * their next mount via prime()), as are first-loads and in-flight fetches.
+   */
+  revalidateObserved(maxAgeMs = 0): void {
+    const now = Date.now();
+    for (const [key, e] of this.map.entries()) {
+      if (e.subscribers.size === 0) continue; // nobody is displaying it
+      if (e.data === undefined || e.promise) continue; // first load / in-flight
+      if (now - e.fetchedAt <= maxAgeMs) continue; // still fresh enough
+      this.run(key, true); // background → keeps the current value, no spinner
+    }
+  }
+
   clear(): void {
     this.map.clear();
   }
@@ -214,13 +301,49 @@ export function DataCacheProvider({ children }: { children: React.ReactNode }) {
   // per user (App.tsx SessionBoundary), so the store is naturally per-session.
   const storeRef = useRef<DataCacheStore>();
   if (!storeRef.current) storeRef.current = new DataCacheStore();
-  return (
-    <DataCacheContext.Provider value={storeRef.current}>{children}</DataCacheContext.Provider>
-  );
+  const store = storeRef.current;
+
+  // Keep this client in step with the rest of the org (several people use one
+  // workspace at a time): background-revalidate what is on screen when the tab
+  // regains focus, and on a slow tick while it stays visible. Both are silent —
+  // the current value stays rendered until the fresh one arrives.
+  useEffect(() => {
+    const isVisible = () => typeof document === 'undefined' || !document.hidden;
+
+    const onFocus = () => {
+      if (isVisible()) store.revalidateObserved(FOCUS_REVALIDATE_MIN_AGE_MS);
+    };
+    window.addEventListener('focus', onFocus);
+    document.addEventListener('visibilitychange', onFocus);
+
+    // Paused while hidden — a background tab must not poll.
+    const timer = setInterval(() => {
+      if (isVisible()) store.revalidateObserved(BACKGROUND_REVALIDATE_INTERVAL_MS);
+    }, BACKGROUND_REVALIDATE_INTERVAL_MS);
+
+    // Push: the server-sent events stream announces that another user changed
+    // something in this org. Refresh everything on screen immediately (age 0) —
+    // this is what makes another user's change appear in about a second rather
+    // than on the next focus/tick above (which remain the fallback if the stream
+    // is unavailable).
+    const unsubscribe = subscribeOrgChanged(() => {
+      if (isVisible()) store.revalidateObserved(ORG_CHANGED_MIN_AGE_MS);
+    });
+
+    return () => {
+      window.removeEventListener('focus', onFocus);
+      document.removeEventListener('visibilitychange', onFocus);
+      clearInterval(timer);
+      unsubscribe();
+    };
+  }, [store]);
+
+  return <DataCacheContext.Provider value={store}>{children}</DataCacheContext.Provider>;
 }
 
 const NOOP = () => {};
 const INERT_API: DataCacheApi = {
+  prefetch: NOOP,
   invalidate: NOOP,
   invalidateExact: NOOP,
   getData: () => undefined,
@@ -237,6 +360,11 @@ export function useDataCache(): DataCacheApi {
   return useMemo<DataCacheApi>(() => {
     if (!store) return INERT_API;
     return {
+      // prime() fetches only when the key holds no data, so a repeated prefetch
+      // is a no-op rather than a re-fetch. staleTime 0 disables the
+      // stale-while-revalidate path here: warming must never trigger a refresh
+      // of something already cached.
+      prefetch: (key, fetcher) => store.prime(key, fetcher as () => Promise<unknown>, 0),
       invalidate: (prefix) => store.invalidate(prefix),
       invalidateExact: (key) => store.invalidateExact(key),
       getData: (key) => store.getData(key),
@@ -257,7 +385,7 @@ export function useDataCache(): DataCacheApi {
 export function useResource<T>(
   key: string | null,
   fetcher: () => Promise<T>,
-  opts?: { enabled?: boolean },
+  opts?: { enabled?: boolean; staleTime?: number },
 ): ResourceState<T> {
   const store = useContext(DataCacheContext);
   const enabled = (opts?.enabled ?? true) && key !== null && store !== null;
@@ -289,8 +417,8 @@ export function useResource<T>(
 
   useEffect(() => {
     if (!enabled) return;
-    store!.prime(key!, stableFetcherRef.current!);
-  }, [enabled, key, store]);
+    store!.prime(key!, stableFetcherRef.current!, opts?.staleTime);
+  }, [enabled, key, store, opts?.staleTime]);
 
   const refetch = useCallback(() => {
     if (enabled) store!.run(key!);

@@ -12,7 +12,7 @@ import TopQuickWins from "../components/opportunity_map/TopQuickWins";
 import OpportunityRankedList from "../components/opportunity_map/OpportunityRankedList";
 import OpportunityDetail from "../components/analyst_review/OpportunityDetail";
 import ReasoningOverride from "../components/analyst_review/ReasoningOverride";
-import LoadingPanel from "../components/common/LoadingPanel";
+import { Skeleton } from "../components/common/Skeleton";
 import ErrorPanel from "../components/common/ErrorPanel";
 import { RunRequiredEmptyState } from "../components/common/RunRequiredEmptyState";
 import { useAnalystReviewContext } from "../context/AnalystReviewContext";
@@ -155,7 +155,17 @@ export default function OpportunityReviewPage() {
   if (loading) {
     return (
       <PageShell title="Opportunity Review" description={pageDescription}>
-        <LoadingPanel title="Loading Opportunity Review..." />
+        {/* Skeleton mirrors the toolbar + matrix box (same height) so the real
+            content fills the same space with no layout shift. */}
+        <div aria-busy="true" aria-label="Loading Opportunity Review">
+          <div className="flex flex-wrap items-center gap-3">
+            <Skeleton className="h-9 w-64" />
+            <Skeleton className="h-9 w-28" />
+            <Skeleton className="h-9 w-28" />
+            <Skeleton className="h-9 w-28" />
+          </div>
+          <Skeleton className="mt-4 h-[560px] w-full lg:h-[720px]" />
+        </div>
       </PageShell>
     );
   }

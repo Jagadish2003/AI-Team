@@ -185,7 +185,11 @@ def evaluate_license(
             if emit:
                 record_event(
                     "license.clock_anomaly",
-                    {"last_seen": str(last_seen), "now": str(today)},
+                    # org_id threaded for the same reason as the status events
+                    # below: this path also runs from the background startup /
+                    # periodic sweeps, where there is no request context to
+                    # attribute the event from.
+                    {"org_id": org_id, "last_seen": str(last_seen), "now": str(today)},
                 )
             # Treat as read-only until the clock is consistent again. Do NOT
             # advance last_seen (the clock cannot be trusted right now).
@@ -282,10 +286,17 @@ def _emit_status_events(result: dict, *, org_id: str, prev_status: str | None) -
     customer = result.get("customer")
     expires_at = result.get("expires_at")
 
+    # org_id is threaded into every payload: these events are emitted from
+    # BACKGROUND paths (the startup validation sweep and the periodic re-check)
+    # where there is no request context, so without it record_event cannot resolve
+    # a tenant and files them under UNATTRIBUTED — losing the attribution and
+    # logging "event org attribution unresolved" at startup. The org is already
+    # known here (it is what was validated), so pass it.
     if customer is not None and expires_at is not None:
         record_event(
             "license.validated",
             {
+                "org_id": org_id,
                 "customer": customer,
                 "status": status,
                 "expires_at": expires_at,
@@ -296,12 +307,12 @@ def _emit_status_events(result: dict, *, org_id: str, prev_status: str | None) -
             if status == LicenseStatus.GRACE:
                 record_event(
                     "license.entered_grace",
-                    {"customer": customer, "expires_at": expires_at},
+                    {"org_id": org_id, "customer": customer, "expires_at": expires_at},
                 )
             elif status == LicenseStatus.READONLY:
                 record_event(
                     "license.entered_readonly",
-                    {"customer": customer, "expires_at": expires_at},
+                    {"org_id": org_id, "customer": customer, "expires_at": expires_at},
                 )
 
 

@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Loader2 } from 'lucide-react';
 import PageShell from '../components/common/PageShell';
-import LoadingPanel from '../components/common/LoadingPanel';
+import { Skeleton, SkeletonStatCard } from '../components/common/Skeleton';
 import ErrorPanel from '../components/common/ErrorPanel';
 import { useToast } from '../components/common/Toast';
 import { useAnalystReviewContext } from '../context/AnalystReviewContext';
@@ -188,10 +188,25 @@ export default function ExecutiveReportPage() {
       title="Executive Report"
       description="Board-ready summary of source coverage, confidence, opportunity value, and implementation readiness."
     >
-      <LoadingPanel
-        title="Loading Executive Report"
-        subtitle="Waiting for executive report results to become available for this discovery run."
-      />
+      {/* Skeleton mirrors the summary bar + 4-card stat row + report sections so
+          the real content fills the same space with no layout shift. */}
+      <div aria-busy="true" aria-label="Loading Executive Report">
+        <Skeleton className="mb-4 h-12 w-full" />
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-4">
+          <SkeletonStatCard />
+          <SkeletonStatCard />
+          <SkeletonStatCard />
+          <SkeletonStatCard />
+        </div>
+        <div className="mt-4 space-y-4">
+          <Skeleton className="h-40 w-full" />
+          <div className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(420px,520px)]">
+            <Skeleton className="h-64 w-full" />
+            <Skeleton className="h-64 w-full" />
+          </div>
+          <Skeleton className="h-72 w-full" />
+        </div>
+      </div>
     </PageShell>
   );
 

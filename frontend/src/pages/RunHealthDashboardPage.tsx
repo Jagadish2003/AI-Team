@@ -23,8 +23,11 @@ import {
 } from "../api/runHealthApi";
 import { resetIngestionCheckpoint } from "../api/ingestionApi";
 import { ApiError } from "../lib/apiClient";
+import { useResource } from "../lib/dataCache";
+import { cacheKeys } from "../lib/cacheKeys";
 import ConfirmDialog from "../components/common/ConfirmDialog";
 import PageShell from "../components/common/PageShell";
+import { Skeleton } from "../components/common/Skeleton";
 import { useAuth } from "../context/AuthContext";
 import type {
   AttentionHealthResponse,
@@ -70,28 +73,36 @@ function errorMessage(error: unknown, fallback: string): string {
   return fallback;
 }
 
-function useHealthResource<T>(loader: () => Promise<T>, label: string) {
-  const [state, setState] = useState<ResourceState<T>>(INITIAL_STATE);
+/**
+ * A health panel's data, on the SHARED cache.
+ *
+ * The cache lives at the app root, so navigating away and back re-renders each
+ * panel from its cached value with NO refetch and no skeleton — previously every
+ * visit refetched all five panels from zero. Freshness is handled for us:
+ * background revalidation (tab focus / the org change stream) updates panels
+ * silently, with the current data still on screen.
+ *
+ * The returned shape is deliberately unchanged (the loading/success/error union
+ * plus `refresh`), so every panel below renders exactly as before.
+ */
+function useHealthResource<T>(cacheKey: string, loader: () => Promise<T>, label: string) {
+  const { data, error, refetch } = useResource<T>(cacheKey, loader);
 
-  const refresh = useCallback(async () => {
-    setState({ status: "loading", data: null, error: null });
-    try {
-      const data = await loader();
-      setState({ status: "success", data, error: null });
-    } catch (error) {
-      setState({
+  const state: ResourceState<T> = useMemo(() => {
+    // Data wins over a later error: if a BACKGROUND revalidation fails we keep
+    // showing the last good panel rather than replacing it with an error.
+    if (data !== undefined) return { status: "success", data, error: null };
+    if (error) {
+      return {
         status: "error",
         data: null,
         error: errorMessage(error, `${label} could not be loaded.`),
-      });
+      };
     }
-  }, [label, loader]);
+    return INITIAL_STATE as ResourceState<T>;
+  }, [data, error, label]);
 
-  useEffect(() => {
-    void refresh();
-  }, [refresh]);
-
-  return { state, refresh };
+  return { state, refresh: refetch };
 }
 
 function formatDate(value: string | null | undefined): string {
@@ -202,11 +213,22 @@ function PanelFrame({
   );
 }
 
+// Skeleton rows shaped like the panel's real list content, so a panel fills its
+// reserved space when the data lands instead of swapping a spinner for a block
+// of rows (which shifted everything below it).
 function PanelLoading({ label }: { label: string }) {
   return (
-    <div role="status" className="flex items-center gap-3 rounded-xl border border-border bg-bg/40 p-5 text-sm text-muted">
-      <Loader2 className="h-5 w-5 animate-spin text-accent" aria-hidden="true" />
-      Loading {label.toLowerCase()}…
+    <div
+      role="status"
+      aria-busy="true"
+      aria-label={`Loading ${label.toLowerCase()}`}
+      className="rounded-xl border border-border bg-bg/40 p-5"
+    >
+      <div className="space-y-3">
+        {[0, 1, 2].map((i) => (
+          <Skeleton key={i} className="h-12 w-full rounded-lg" />
+        ))}
+      </div>
     </div>
   );
 }
@@ -913,11 +935,11 @@ function ViewerDenied() {
 function RunHealthDashboard({ role }: { role: "owner" | "analyst" }) {
   const [searchParams] = useSearchParams();
   const selectedPanel = searchParams.get("panel") as HealthPanelId | null;
-  const connectors = useHealthResource(fetchConnectorHealth, "Connector health");
-  const runs = useHealthResource(fetchRunHealth, "Run health");
-  const content = useHealthResource(fetchContentHealth, "Content health");
-  const packs = useHealthResource(fetchPackHealth, "Pack health");
-  const attention = useHealthResource(fetchAttentionHealth, "Attention items");
+  const connectors = useHealthResource(cacheKeys.runHealthConnectors, fetchConnectorHealth, "Connector health");
+  const runs = useHealthResource(cacheKeys.runHealthRuns, fetchRunHealth, "Run health");
+  const content = useHealthResource(cacheKeys.runHealthContent, fetchContentHealth, "Content health");
+  const packs = useHealthResource(cacheKeys.runHealthPacks, fetchPackHealth, "Pack health");
+  const attention = useHealthResource(cacheKeys.runHealthAttention, fetchAttentionHealth, "Attention items");
 
   useEffect(() => {
     if (!selectedPanel || !PANEL_IDS.includes(selectedPanel)) return;

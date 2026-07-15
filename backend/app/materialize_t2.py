@@ -127,6 +127,14 @@ def _finalise(
     _audit_prepend(run_id, _audit_event(audit_action))
     run["status"] = status
     run["updatedAt"] = db.now_iso()
+    # A materialised run (complete/partial) has finished the whole pipeline, so
+    # its stored current_step must read "complete" — otherwise this run_set (which
+    # writes the whole run dict, possibly carrying a stale earlier current_step)
+    # reverts the runner's own end-of-pipeline stamp, and the Discovery Progress
+    # UI shows an early step still spinning on an already-finished run. A failed
+    # run keeps the step it failed at.
+    if status in ("complete", "completed", "partial"):
+        run["current_step"] = "complete"
     db.run_set(run_id, run)
 
 
