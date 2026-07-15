@@ -33,13 +33,15 @@ Determinism & org-scoping (the two hard requirements)
   share a signature never fold together. :meth:`OpsEventStream.admit` refuses to
   admit an event under an ``org_id`` other than the one the event owns.
 
-Scope (T1 only)
----------------
-This is MSP-B7 **T1**. The remaining disciplines — aggregation roll-ups for
-high-cardinality classes (T2), noise floors (T3), per-run budgets (T4), and
-correlation windows (T5) — are separate tasks that layer on top of admission.
-``admit`` deliberately implements only the dedup fold; the others slot in around
-it without reworking this module.
+Scope
+-----
+This module owns MSP-B7 **T1** (the dedup fold) and hosts **T4** (the per-run
+event-volume budget enforced inside :meth:`OpsEventStream.admit` — see
+:mod:`discovery.signals.budget`), since a budget must be applied while events are
+being admitted. Aggregation roll-ups for high-cardinality classes (T2,
+:mod:`discovery.signals.aggregation`), noise floors (T3,
+:mod:`discovery.signals.noise_floor`), and correlation windows (T5) are separate
+modules that layer on top of the folded active signals.
 """
 
 from __future__ import annotations
@@ -54,6 +56,7 @@ try:
 except ModuleNotFoundError:  # project-root execution uses backend as package
     from backend.app.provenance import EvidencePointer
 
+from .budget import BudgetReport, RunBudget
 from .evidence_store import OrgScopeError, RawEventStore
 from .operational_event import OperationalEvent
 
@@ -203,13 +206,18 @@ class ActiveSignal:
 class Admission:
     """The outcome of admitting one event.
 
-    ``signal`` is the (live) active signal the event belongs to. ``disposition``
-    is ``"new"`` (opened a fresh active signal), ``"folded"`` (a re-fire folded
-    into an existing one), or ``"duplicate"`` (an at-least-once redelivery of a
-    firing already counted — no state change, so admission stays idempotent).
+    ``signal`` is the (live) active signal the event belongs to, or ``None`` when
+    the event was deferred (no signal is formed). ``disposition`` is:
+
+    * ``"new"`` — opened a fresh active signal;
+    * ``"folded"`` — a re-fire folded into an existing one;
+    * ``"duplicate"`` — an at-least-once redelivery of a firing already counted
+      (no state change, so admission stays idempotent);
+    * ``"deferred"`` — the run's event budget was exhausted, so the event was
+      deferred-and-counted rather than processed (MSP-B7 T4). Never silent.
     """
 
-    signal: ActiveSignal
+    signal: Optional[ActiveSignal]
     disposition: str
 
     @property
@@ -223,6 +231,10 @@ class Admission:
     @property
     def is_duplicate(self) -> bool:
         return self.disposition == "duplicate"
+
+    @property
+    def is_deferred(self) -> bool:
+        return self.disposition == "deferred"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -239,28 +251,38 @@ class OpsEventStream:
     orgs safely — the fold key includes ``org_id``, so orgs never fold together.
 
     ``active_period_seconds`` sets the active-period bucket length (default one
-    day); tune it per stream (MSP-B7 T6 calibrates the defaults).
+    day); tune it per stream (MSP-B7 T6 calibrates the defaults). ``budget`` sets
+    the per-run event-volume budget (MSP-B7 T4): once that many events have been
+    processed, further events are deferred-and-counted rather than folded, and
+    :meth:`budget_report` reports the deferred volume. ``None`` (default) means
+    no budget — every event is processed.
     """
 
-    def __init__(self, *, active_period_seconds: int = DEFAULT_ACTIVE_PERIOD_SECONDS):
+    def __init__(
+        self,
+        *,
+        active_period_seconds: int = DEFAULT_ACTIVE_PERIOD_SECONDS,
+        budget: Optional[int] = None,
+    ):
         if active_period_seconds <= 0:
             raise ValueError("active_period_seconds must be positive")
         self._active_period_seconds = int(active_period_seconds)
         self._signals: Dict[_FoldKey, ActiveSignal] = {}
+        self._budget = RunBudget(budget)
 
     # -- fold key ------------------------------------------------------------
 
-    def _fold_key(self, event: OperationalEvent) -> Tuple[_FoldKey, str, Optional[datetime]]:
-        """Compute the deterministic fold key for an event.
+    def _fold_key(
+        self, event: OperationalEvent, dt: Optional[datetime]
+    ) -> Tuple[_FoldKey, str]:
+        """Compute the deterministic fold key for an event (dt pre-parsed).
 
-        Returns the key plus the resolved active-period start and the parsed
-        observation datetime (reused by the caller for span maintenance).
+        Returns the key plus the resolved active-period start.
         """
-        dt = _parse_iso(event.observed_at)
         period_key = _active_period_key(dt, self._active_period_seconds)
         resource_id = event.resource.resource_id if event.resource else ""
         key: _FoldKey = (event.org_id, event.event_signature, resource_id, period_key)
-        return key, period_key, dt
+        return key, period_key
 
     # -- admission -----------------------------------------------------------
 
@@ -272,7 +294,9 @@ class OpsEventStream:
         signature, resource, active period)`` — increments the count and extends
         the span. A redelivery of an already-counted firing is idempotent
         (``disposition == "duplicate"``). The first firing of a key opens a new
-        active signal.
+        active signal. When the run's event budget is exhausted the event is
+        deferred-and-counted instead of processed (``disposition == "deferred"``,
+        MSP-B7 T4) — never silently dropped.
 
         Args:
             event:  the normalised operational event to admit.
@@ -288,17 +312,28 @@ class OpsEventStream:
                 f"event belongs to org {event.org_id!r}, cannot admit under {scope!r}"
             )
 
-        key, period_key, dt = self._fold_key(event)
+        dt = _parse_iso(event.observed_at)
+
+        # Per-run budget (T4): once the budgeted window is full, defer-and-count
+        # every further event rather than processing it — loud, never silent.
+        if not self._budget.has_capacity():
+            self._budget.defer(event.source_system, event.observed_at, dt)
+            return Admission(None, "deferred")
+
+        key, period_key = self._fold_key(event, dt)
         existing = self._signals.get(key)
         if existing is None:
             self._signals[key] = self._open(event, period_key, dt)
+            self._budget.charge()
             return Admission(self._signals[key], "new")
 
         # An at-least-once redelivery of a firing already counted — idempotent.
         if event.signal_id in existing.provider_event_ids:
+            self._budget.charge()
             return Admission(existing, "duplicate")
 
         self._fold(existing, event, dt)
+        self._budget.charge()
         return Admission(existing, "folded")
 
     def _open(
@@ -375,6 +410,16 @@ class OpsEventStream:
         ]
         signals.sort(key=lambda s: (s.event_signature, s.resource_id, s.active_period_start))
         return signals
+
+    def budget_report(self) -> BudgetReport:
+        """The run's event-budget outcome (MSP-B7 T4).
+
+        A snapshot of how many events were processed vs deferred, the per-source
+        deferred breakdown, and the deferred time window — the loud-degradation
+        proof written into the run record / R18-C2 run-health panel. When no
+        budget was set (or it was never breached) ``breached`` is ``False``.
+        """
+        return self._budget.snapshot()
 
 
 # ─────────────────────────────────────────────────────────────────────────────

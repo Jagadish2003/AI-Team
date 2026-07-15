@@ -483,3 +483,63 @@ visible, report = policy.apply(signals)
 
 This is MSP-B7 **T3**. Per-run budgets (T4) and correlation windows (T5) are
 separate tasks.
+
+---
+
+## 11. Per-run event-volume budgets (MSP-B7 / AT-672)
+
+A run has an event-volume **budget** — the hard backstop that keeps a single
+run's cost bounded when a month of cloud events would otherwise make it slow and
+expensive. The run processes the **budgeted window** (the first `budget` events,
+in admission order) and, on breach, **defers the rest** — never silent
+truncation. Code:
+[`backend/discovery/signals/budget.py`](../backend/discovery/signals/budget.py)
+(enforced inside `OpsEventStream.admit`).
+
+### Loud degradation, never silent truncation
+
+A budget breach is *an operator decision surfaced, not a data loss hidden*.
+`OpsEventStream(budget=N)` enforces the cap during admission: while it has
+capacity an event is folded and charged; once the budget is exhausted every
+further event is **deferred-and-counted** (`Admission.is_deferred`, `signal is
+None`). `stream.budget_report()` returns a `BudgetReport`:
+
+| Field | Meaning |
+|-------|---------|
+| `budget` | The configured limit (`None` = unbounded). |
+| `processed` / `deferred` / `seen` | Events processed, deferred, and total seen. |
+| `breached` | True iff any event was deferred. |
+| `deferred_by_source` | Per-`source_system` deferred counts. |
+| `deferred_window` | `{first, last}` observation times of the deferred events. |
+| `reason` | Human-readable explanation (`None` when not breached). |
+
+`to_dict()` is the JSON shape written into the run record and the R18-C2
+run-health content panel. The run always *completes* — it never crashes and
+never quietly drops events off the end.
+
+### Where it sits & why it's arrival-ordered
+
+Per the pipeline (**dedup → floor → budget → aggregate**), the budget is enforced
+**during admission** — it must be, because its job is to stop the run from
+*processing* everything (post-hoc filtering would already have paid the cost).
+The budget is **volume-based**: every event (including re-fires) counts against
+it, so a stuck alarm firing past the budget is deferred like anything else.
+Because the budgeted window is the first `budget` events in arrival order, budget
+enforcement is deliberately arrival-ordered — unlike the order-independent
+dedup/floor/aggregate stages, a budget is a statement about processing order. The
+limit is tunable; T6 calibrates the default from B8's month-scale measurements.
+
+### Usage
+
+```python
+from discovery.signals import OpsEventStream
+
+stream = OpsEventStream(budget=100_000)     # per-run event-volume budget
+for event in events:
+    stream.admit(event)                     # deferred-and-counted once full
+report = stream.budget_report()             # → run record + R18-C2 panel
+if report.breached:
+    log.warning(report.reason)
+```
+
+This is MSP-B7 **T4**. Correlation windows (T5) are a separate task.
