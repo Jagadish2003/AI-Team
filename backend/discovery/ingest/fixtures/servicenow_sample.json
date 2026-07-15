@@ -35,7 +35,15 @@
     "incidents": [
       {
         "id": "INC0000001",
+        "sys_id": "incident-sys-0001",
         "number": "INC0000001",
+        "cmdb_ci": {
+          "value": "ci-app-service-001",
+          "display_value": "Citizen Services Portal"
+        },
+        "source_timestamp": "2026-07-01 12:00:00",
+        "source_url": "https://example.service-now.com/nav_to.do?uri=incident.do%3Fsys_id%3Dincident-sys-0001",
+        "affected_ci_references": [],
         "short_description": "Compliance team cannot update covenant status in nCino",
         "description": "nCino covenant tracking fields not saving. Compliance risk accumulating.",
         "category": "compliance",
