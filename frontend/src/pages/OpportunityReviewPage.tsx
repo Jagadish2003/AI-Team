@@ -147,7 +147,7 @@ export default function OpportunityReviewPage() {
   if (!runId) {
     return (
       <PageShell title="Opportunity Review" description={pageDescription}>
-        <RunRequiredEmptyState onStart={() => nav("/discovery-run")} />
+        <RunRequiredEmptyState onStart={() => nav("/integration-hub")} />
       </PageShell>
     );
   }

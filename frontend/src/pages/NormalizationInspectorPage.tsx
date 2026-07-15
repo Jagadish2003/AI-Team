@@ -51,7 +51,7 @@ export default function NormalizationInspectorPage() {
           <RunRequiredEmptyState
             pageTitle="Normalization & Mapping Inspector"
             pageDescription="Transparency view: inspect how fields from sources map into AgentIQ's common schema."
-            onStart={() => nav('/discovery-run')}
+            onStart={() => nav('/integration-hub')}
           />
         </div>
       </div>

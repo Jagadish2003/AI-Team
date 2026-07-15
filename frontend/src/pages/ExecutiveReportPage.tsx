@@ -201,7 +201,7 @@ export default function ExecutiveReportPage() {
         title="Executive Report"
         description="Board-ready summary of source coverage, confidence, opportunity value, and implementation readiness."
       >
-        <RunRequiredEmptyState onStart={() => nav('/discovery-run')} />
+        <RunRequiredEmptyState onStart={() => nav('/integration-hub')} />
       </PageShell>
     );
   }

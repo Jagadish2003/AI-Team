@@ -378,7 +378,7 @@
             <RunRequiredEmptyState
               pageTitle={SOURCE_INTELLIGENCE_TITLE}
               pageDescription={SOURCE_INTELLIGENCE_DESCRIPTION}
-              onStart={() => nav("/discovery-run")}
+              onStart={() => nav("/integration-hub")}
             />
           </div>
         </div>

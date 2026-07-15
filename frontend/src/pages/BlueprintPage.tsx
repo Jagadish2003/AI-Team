@@ -673,9 +673,9 @@ export default function BlueprintPage() {
         <WorkspaceNotice
           icon={<Map size={24} />}
           title="No discovery run selected"
-          message={`Run a discovery first to generate the Agent Roadmap and ${blueprintLabel}s.`}
-          actionLabel="Go to Discovery Run"
-          onAction={() => nav('/discovery-run')}
+          message={`Connect a source in the Integration Hub and run a discovery first to generate the Agent Roadmap and ${blueprintLabel}s.`}
+          actionLabel="Go to Integration Hub"
+          onAction={() => nav('/integration-hub')}
         />
       );
     }

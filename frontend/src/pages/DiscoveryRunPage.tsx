@@ -923,9 +923,14 @@ export default function DiscoveryRunPage() {
         <InfoPanel
           title="No Active Run"
           message="Start a new discovery run to continue."
-          actionLabel="Start New Discovery Run"
-          actionDisabled={!hasAtLeastOneSource}
-          onAction={() => void startRun(inputs)}
+          actionLabel={
+            hasAtLeastOneSource ? "Start New Discovery Run" : "Go to Integration Hub"
+          }
+          onAction={
+            hasAtLeastOneSource
+              ? () => void startRun(inputs)
+              : () => nav("/integration-hub")
+          }
         >
           {!hasAtLeastOneSource && (
             <div className="mt-3 text-center text-sm font-medium text-muted">
