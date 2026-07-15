@@ -47,8 +47,9 @@ from html.parser import HTMLParser
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from app.provenance import EvidencePointer, utc_now_iso
-from app.retrieval.ingest import ContentArtifact, IngestResult, ingest_content
+from app.retrieval.ingest import ContentArtifact, IngestResult, ingest_content, remove_content
 
+from .base import ChangeKind
 from .confluence import ConfluenceIngestor
 from .content_router import ContentRoute, classify_confluence_content
 
@@ -62,6 +63,9 @@ RETRIEVAL_SOURCE_SYSTEM = "confluence"
 CONTENT_TYPE = "prose"
 
 IngestFn = Callable[[str, List[ContentArtifact]], IngestResult]
+#: The substrate's freshness-removal entry point, injectable for tests (R18-A5
+#: / AT-603, T4) — mirrors ``git_content.py``'s AT-533 ``_remove_fn`` seam.
+RemoveFn = Callable[[str, List[tuple]], Any]
 
 
 # ---------------------------------------------------------------------------
@@ -313,6 +317,12 @@ class DeepContentResult:
     artifacts_failed: int = 0
     chunks_indexed: int = 0
     chunks_replaced: int = 0
+    # R18-A5 / AT-603 (T4) — deletion/archival propagation.
+    deletions_seen: int = 0
+    artifacts_removed: int = 0
+    artifacts_absent: int = 0
+    artifacts_removal_failed: int = 0
+    chunks_removed: int = 0
 
 
 def ingest_confluence_content(
@@ -321,6 +331,7 @@ def ingest_confluence_content(
     *,
     ingestor: Optional[ConfluenceIngestor] = None,
     ingest_fn: IngestFn = ingest_content,
+    remove_fn: RemoveFn = remove_content,
 ) -> DeepContentResult:
     """Render + hand off page/blogpost bodies for one run's CHANGED records.
 
@@ -336,17 +347,58 @@ def ingest_confluence_content(
     record is ever yielded, so this depth path inherits that boundary
     automatically rather than re-implementing it.
 
+    Deletion / archival (R18-A5 / AT-603, T4, AC3): records with
+    ``change_kind='deleted'`` (:mod:`confluence.py`'s known-id diff — see its
+    module docstring) carry no body — the router already excludes them from
+    ``scoped``/rendering — and are instead routed straight to
+    ``retrieval.ingest.remove_content`` in THIS SAME call, synchronously. This is
+    belt-and-braces on top of the standard ``ingestion.artifact_changed`` ->
+    retrieval-freshness event pipeline (which ALSO purges the same artifact,
+    idempotently, off the ``change_runner`` emission the reach phase already
+    drives) — deletion does not depend solely on that fire-and-forget path
+    (mirrors ``git_content.py``'s AT-533 pattern).
+
     Never raises: a body-fetch/render failure is isolated per page, and a
-    substrate hand-off failure is isolated per artifact by ``ingest_content``
-    itself (or caught here defensively) — deep content is additive and must never
-    block the reach-phase corroboration signal that already rides this checkpoint.
+    substrate hand-off (or removal) failure is isolated per artifact by
+    ``ingest_content``/``remove_content`` themselves (or caught here
+    defensively) — deep content is additive and must never block the
+    reach-phase corroboration signal that already rides this checkpoint.
     """
     result = DeepContentResult(org_id=org_id)
     ing = ingestor if ingestor is not None else ConfluenceIngestor()
+    valid_records = [r for r in (records or []) if isinstance(r, dict)]
+
+    deletions = [r for r in valid_records if r.get("change_kind") == ChangeKind.DELETED]
+    result.deletions_seen = len(deletions)
+    if deletions:
+        removals = [("confluence", r.get("artifact_id")) for r in deletions if r.get("artifact_id")]
+        try:
+            removal = remove_fn(org_id, removals)
+        except Exception:  # noqa: BLE001 — deletion must never block the run
+            logger.warning(
+                "confluence_content: retrieval removal failed for org=%s "
+                "(non-blocking)",
+                org_id,
+                exc_info=True,
+            )
+        else:
+            result.artifacts_removed = removal.artifacts_removed
+            result.artifacts_absent = removal.artifacts_absent
+            result.artifacts_removal_failed = removal.artifacts_failed
+            result.chunks_removed = removal.chunks_removed
+            logger.info(
+                "confluence_content: org=%s removed=%d absent=%d failed=%d "
+                "chunks_removed=%d",
+                org_id,
+                result.artifacts_removed,
+                result.artifacts_absent,
+                result.artifacts_removal_failed,
+                result.chunks_removed,
+            )
+
     scoped = [
-        r for r in (records or [])
-        if isinstance(r, dict)
-        and classify_confluence_content(r.get("content_type")) == ContentRoute.PAGE_CONTENT
+        r for r in valid_records
+        if classify_confluence_content(r.get("content_type")) == ContentRoute.PAGE_CONTENT
     ]
     result.pages_seen = len(scoped)
     if not scoped:

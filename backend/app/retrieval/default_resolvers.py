@@ -181,39 +181,46 @@ def _resolve_teams(org_id: str, source_artifact: str) -> Optional[ContentArtifac
 
 
 def _resolve_confluence(org_id: str, source_artifact: str) -> Optional[ContentArtifact]:
+    """Resolve a queued Confluence page/blogpost by rendering its FULL body.
+
+    R18-A5 / AT-603 (T4): reuses ``confluence_content.build_content_artifact`` —
+    the exact rendering + provenance logic the direct T1 hand-off
+    (``confluence_content.ingest_confluence_content``) uses — so a
+    refresh-worker-driven re-chunk produces the SAME structure-preserving
+    content, never the metadata-only stub this resolver used to build. This is
+    what makes "editing a page refreshes its chunks" (AC3) hold true even on
+    the rare path where the async freshness refresh (rather than the
+    synchronous hand-off) ends up doing the re-chunking.
+
+    Returns ``None`` for a page/blogpost whose status is no longer current
+    (trashed/archived) — the connector's own known-id diff already emits a
+    ``deleted`` event for that case (handled by ``remove_artifact``, not this
+    resolver); finding one here would mean a race, and leaving the artifact's
+    existing state alone is safer than fabricating content for it.
+    """
     space_key, sep, content_id = source_artifact.partition(":")
     if not sep or not space_key or not content_id:
         return None
-    mod = _import_module("discovery.ingest.confluence")
-    ingestor = mod.ConfluenceIngestor()
+    confluence_mod = _import_module("discovery.ingest.confluence")
+    content_mod = _import_module("discovery.ingest.confluence_content")
+    ingestor = confluence_mod.ConfluenceIngestor()
     for item in ingestor._raw_content(org_id, {"key": space_key}):
         if str(item.get("id", "")) != content_id:
             continue
+        if not confluence_mod._is_current(item):
+            return None
         version = item.get("version") or {}
-        by = version.get("by") or {}
         links = item.get("_links") or {}
-        modified = version.get("when") or item.get("lastModified")
-        content = _text_lines(
-            ("Title", item.get("title")),
-            ("Type", item.get("type")),
-            ("Status", item.get("status")),
-            ("Version", version.get("number")),
-            ("Modified by", by.get("accountId") or by.get("displayName")),
-            ("URL", links.get("webui")),
-        )
-        return _artifact(
-            "confluence",
-            source_artifact,
-            content,
-            "prose",
-            source_timestamp=modified,
-            provenance={
-                "space_key": space_key,
-                "content_id": content_id,
-                "url": links.get("webui"),
-                "version_number": version.get("number"),
-            },
-        )
+        record = {
+            "content_type": item.get("type"),
+            "space_key": space_key,
+            "content_id": content_id,
+            "space_name": "",
+            "title": item.get("title", ""),
+            "url": links.get("webui"),
+            "modified_at": version.get("when") or item.get("lastModified"),
+        }
+        return content_mod.build_content_artifact(ingestor, org_id, record)
     return None
 
 
