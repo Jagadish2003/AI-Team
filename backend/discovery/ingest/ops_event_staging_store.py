@@ -28,7 +28,7 @@ from __future__ import annotations
 import json
 import logging
 from contextlib import closing
-from typing import Dict, List, Protocol, Sequence, Tuple
+from typing import Any, Dict, List, Protocol, Sequence, Tuple
 
 from database.models.ops_event_staging import (
     ALL_OPS_EVENT_STAGING_DDL,
@@ -194,6 +194,7 @@ class InMemoryStagingSink:
         self.rows: List[OpsEventStagingRow] = []
         self.batches: Dict[Tuple[str, str], OpsEventLoadBatch] = {}
         self._keys: set[Tuple[str, str, str]] = set()
+        self._row_seq = 0
 
     def insert_rows(self, rows: Sequence[OpsEventStagingRow]) -> int:
         inserted = 0
@@ -202,6 +203,12 @@ class InMemoryStagingSink:
             if key in self._keys:
                 continue
             self._keys.add(key)
+            # Mint a store-owned monotonic row_id exactly as the DB IDENTITY does,
+            # so this sink can also serve as a faithful StagingReader for the
+            # bridge's row-id paging (T4) in DB-free tests.
+            self._row_seq += 1
+            if r.row_id is None:
+                r.row_id = self._row_seq
             self.rows.append(r)
             inserted += 1
         return inserted
@@ -209,7 +216,111 @@ class InMemoryStagingSink:
     def record_batch(self, batch: OpsEventLoadBatch) -> None:
         self.batches[(batch.org_id, batch.batch_id)] = batch
 
+    # --- StagingReader surface (so tests write via the sink, read via it) --
+
+    def fetch_after(
+        self, org_id: str, *, after_row_id: int, limit: int
+    ) -> List[OpsEventStagingRow]:
+        """Return this org's rows with ``row_id > after_row_id`` (row-id paged).
+
+        Mirrors :class:`DbStagingReader.fetch_after` — org-scoped, ordered by
+        ``row_id``, capped at ``limit`` — so the bridge's incremental cursor logic
+        is exercised identically with or without a database.
+        """
+        ordered = sorted(
+            (r for r in self.rows if r.org_id == org_id and (r.row_id or 0) > after_row_id),
+            key=lambda r: r.row_id or 0,
+        )
+        return ordered[:limit]
+
     # --- convenience for tests -------------------------------------------
 
     def rows_for(self, org_id: str) -> List[OpsEventStagingRow]:
         return [r for r in self.rows if r.org_id == org_id]
+
+
+# ---------------------------------------------------------------------------
+# Read side — the bridge's staging reader (read-only, fail-closed)
+# ---------------------------------------------------------------------------
+
+
+class StagingReader(Protocol):
+    """Where the bridge ingestor (T4) reads staged rows from, row-id paged."""
+
+    def fetch_after(
+        self, org_id: str, *, after_row_id: int, limit: int
+    ) -> Sequence[OpsEventStagingRow]:
+        """Return up to ``limit`` rows for ``org_id`` with ``row_id > after_row_id``."""
+        ...
+
+
+class DbStagingReader:
+    """Reads staged rows from ``ops_event_staging`` on the read-only DB path (T4).
+
+    The bridge is a CONSUMER of the staging store, never a writer into it, so this
+    reader is deliberately read-only and fail-closed:
+
+      * **Read-only** — every fetch opens the transaction with
+        ``SET TRANSACTION READ ONLY`` before the ``SELECT``, so any accidental
+        write in the same transaction is rejected by PostgreSQL. The bridge cannot
+        become a privileged write path into a partner database (MSP-B8 AC6). The
+        read-only mode is per-transaction and clears on the ``closing`` rollback,
+        so no pooled-connection state leaks to the next borrower.
+      * **Fail-closed** — any DB error propagates; the caller (the ingestor) does
+        not swallow it, so the checkpoint is never advanced over rows that were not
+        actually read (MSP-B8 AC4 / AC6).
+
+    Org-scoped and row-id paged via the ``(org_id, row_id)`` index (T1).
+    """
+
+    _SELECT = (
+        "SELECT row_id, org_id, provider, source_format, batch_id, "
+        "       provider_event_id, raw, event_time, loaded_at "
+        "FROM ops_event_staging "
+        "WHERE org_id = %s AND row_id > %s "
+        "ORDER BY row_id ASC "
+        "LIMIT %s"
+    )
+
+    def fetch_after(
+        self, org_id: str, *, after_row_id: int, limit: int
+    ) -> List[OpsEventStagingRow]:
+        if not org_id:
+            raise ValueError("org_id is required")
+        from app import db
+
+        with closing(db.connect()) as con:
+            cur = con.cursor()
+            cur.execute("SET TRANSACTION READ ONLY")
+            cur.execute(self._SELECT, (org_id, int(after_row_id), int(limit)))
+            fetched = cur.fetchall()
+        return [_row_from_db(r) for r in fetched]
+
+
+def _row_from_db(r: Any) -> OpsEventStagingRow:
+    """Build an :class:`OpsEventStagingRow` from a DB row (dict-like or tuple)."""
+    if hasattr(r, "keys"):  # DictCursor row
+        raw = r["raw"]
+        return OpsEventStagingRow(
+            org_id=r["org_id"],
+            provider=r["provider"],
+            source_format=r["source_format"],
+            batch_id=r["batch_id"],
+            provider_event_id=r["provider_event_id"],
+            raw=raw if isinstance(raw, dict) else json.loads(raw),
+            row_id=r["row_id"],
+            event_time=r["event_time"],
+            loaded_at=r["loaded_at"],
+        )
+    row_id, org_id, provider, source_format, batch_id, peid, raw, event_time, loaded_at = r
+    return OpsEventStagingRow(
+        org_id=org_id,
+        provider=provider,
+        source_format=source_format,
+        batch_id=batch_id,
+        provider_event_id=peid,
+        raw=raw if isinstance(raw, dict) else json.loads(raw),
+        row_id=row_id,
+        event_time=event_time,
+        loaded_at=loaded_at,
+    )
