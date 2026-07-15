@@ -78,9 +78,18 @@ def _sn_config() -> ConnectorAuthConfig:
 
 
 @pytest.fixture(autouse=True)
-def _setup_vault():
-    """Vault key must be set before any vault operation."""
-    os.environ["CREDENTIAL_VAULT_KEY"] = _VAULT_KEY
+def _setup_vault(monkeypatch):
+    """Vault key + the ServiceNow client secret must be set before any exchange.
+
+    SERVICENOW_CLIENT_SECRET is resolved from the environment at call time by the
+    client-credentials exchange (oauth.get_client_credentials_token). It is set on
+    a local .env but NOT in CI, so the token-exchange tests failed there with
+    MissingSecretError — set a fake value here (monkeypatch reverts it after each
+    test, so it never leaks into another suite). The name mirrors the Graph
+    client-credentials test's TEAMS_CLIENT_SECRET fixture.
+    """
+    monkeypatch.setenv("CREDENTIAL_VAULT_KEY", _VAULT_KEY)
+    monkeypatch.setenv("SERVICENOW_CLIENT_SECRET", "FAKE-servicenow-client-secret")
     yield
 
 
