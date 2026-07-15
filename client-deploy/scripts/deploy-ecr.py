@@ -89,7 +89,10 @@ from botocore.exceptions import ClientError, NoCredentialsError  # noqa: E402
 
 # Defaults only — the actual account/region are PROMPTED at run time (step 3)
 # so a deployment can target any registry without editing this file.
-DEFAULT_ACCOUNT_ID = "070206924228"
+# Account ID and region are NOT secrets — defaulted so the client just presses
+# Enter. The Access Key ID and Secret Access Key are never stored here; they
+# are prompted at run time (the client provides them) and cleared after pull.
+DEFAULT_ACCOUNT_ID = "393354520949"
 DEFAULT_REGION     = "us-east-1"
 ECR_REPO           = "agentiq"
 

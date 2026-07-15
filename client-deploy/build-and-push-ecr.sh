@@ -25,7 +25,7 @@ set -Eeuo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-DEFAULT_ACCOUNT_ID="070206924228"
+DEFAULT_ACCOUNT_ID="393354520949"
 DEFAULT_REGION="us-east-1"
 ECR_REPO="agentiq"
 IMAGE_VERSION="1.7.0"    # bump per release; client compose pins this exact version
