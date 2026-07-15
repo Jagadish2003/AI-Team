@@ -291,6 +291,40 @@ def _clear_docker_config() -> None:
 # ECR pull
 # ---------------------------------------------------------------------------
 
+def _find_image_tarball():
+    """Return the sealed-bundle image tarball if present, else None.
+
+    The vendor build (build-sealed-bundle.sh) drops the saved images at
+    <bundle>/images/agentiq-images-*.tar.gz. An explicit override is honoured
+    via the AGENTIQ_IMAGE_TARBALL environment variable.
+    """
+    override = os.environ.get("AGENTIQ_IMAGE_TARBALL", "").strip()
+    if override:
+        p = pathlib.Path(override)
+        return p if p.is_file() else None
+    images_dir = SCRIPT_DIR.parent / "images"
+    if images_dir.is_dir():
+        hits = sorted(images_dir.glob("agentiq-images-*.tar.gz")) or sorted(images_dir.glob("*.tar.gz"))
+        if hits:
+            return hits[0]
+    return None
+
+
+def load_images_offline(tarball) -> None:
+    """docker load the sealed image tarball. No registry, no credentials.
+
+    Images are saved with their full tag (…/agentiq:backend-<ver>), so after
+    load the compose ECR_REGISTRY reference resolves to the local images and
+    Docker never contacts a registry (pull_policy 'missing' finds them present).
+    """
+    info(f"Image archive: {tarball}  ({tarball.stat().st_size // (1024*1024)} MB)")
+    run(["docker", "load", "--input", str(tarball)])
+    ok("Images loaded into the local Docker engine.")
+
+# ---------------------------------------------------------------------------
+# ECR pull (online mode)
+# ---------------------------------------------------------------------------
+
 def pull_images(access_key: str, secret_key: str, session_token: str = "") -> None:
     docker_password = None
     try:
@@ -418,29 +452,40 @@ def main() -> None:
     check_compose_file()
     pg_user, pg_pass, pg_db, prod_url, public_url = check_env()
 
-    # ── Step 3: AWS credentials + registry ─────────────────────────────────
-    step("3/7", "Enter AWS ECR details (credentials are not stored — cleared after pull):")
-    account_id = input(f"  AWS Account ID  [{DEFAULT_ACCOUNT_ID}] : ").strip() or DEFAULT_ACCOUNT_ID
-    region     = input(f"  AWS Region      [{DEFAULT_REGION}] : ").strip() or DEFAULT_REGION
-    access_key = input("  AWS Access Key ID     : ").strip()
-    secret_key = getpass.getpass("  AWS Secret Access Key : ")
-    session_token = getpass.getpass("  AWS Session Token (Enter if none) : ")
-    if not access_key or not secret_key:
-        fail("Both Access Key ID and Secret Access Key are required.")
-        sys.exit(1)
-    AWS_ACCOUNT_ID = account_id
-    AWS_REGION     = region
-    ECR_REGISTRY   = f"{AWS_ACCOUNT_ID}.dkr.ecr.{AWS_REGION}.amazonaws.com"
-    info(f"Registry: {ECR_REGISTRY}")
+    # ── Steps 3-4: obtain images ───────────────────────────────────────────
+    # Two modes:
+    #   OFFLINE (sealed bundle) — a pre-built image tarball ships alongside this
+    #     script. No AWS account, credentials, or registry access is involved;
+    #     images are loaded locally. This is the default when the tarball exists.
+    #   ONLINE  — pull from ECR with credentials the operator provides at the
+    #     prompt (never stored; cleared after pull).
+    tarball = _find_image_tarball()
+    if tarball:
+        step("3/7", "Loading application images (offline bundle — no AWS required)...")
+        load_images_offline(tarball)
+        step("4/7", "Images loaded.")
+    else:
+        step("3/7", "Enter AWS ECR details (credentials are not stored — cleared after pull):")
+        account_id = input(f"  AWS Account ID  [{DEFAULT_ACCOUNT_ID}] : ").strip() or DEFAULT_ACCOUNT_ID
+        region     = input(f"  AWS Region      [{DEFAULT_REGION}] : ").strip() or DEFAULT_REGION
+        access_key = input("  AWS Access Key ID     : ").strip()
+        secret_key = getpass.getpass("  AWS Secret Access Key : ")
+        session_token = getpass.getpass("  AWS Session Token (Enter if none) : ")
+        if not access_key or not secret_key:
+            fail("Both Access Key ID and Secret Access Key are required.")
+            sys.exit(1)
+        AWS_ACCOUNT_ID = account_id
+        AWS_REGION     = region
+        ECR_REGISTRY   = f"{AWS_ACCOUNT_ID}.dkr.ecr.{AWS_REGION}.amazonaws.com"
+        info(f"Registry: {ECR_REGISTRY}")
 
-    # ── Step 4: pull images ────────────────────────────────────────────────
-    step("4/7", "Pulling images from ECR...")
-    pull_images(access_key, secret_key, session_token)
-    _zero_string(access_key)
-    _zero_string(secret_key)
-    _zero_string(session_token)
-    del access_key, secret_key, session_token
-    info("AWS credentials cleared from memory.")
+        step("4/7", "Pulling images from ECR...")
+        pull_images(access_key, secret_key, session_token)
+        _zero_string(access_key)
+        _zero_string(secret_key)
+        _zero_string(session_token)
+        del access_key, secret_key, session_token
+        info("AWS credentials cleared from memory.")
 
     # ── Step 5: compose env ────────────────────────────────────────────────
     step("5/7", "Generating compose environment...")
