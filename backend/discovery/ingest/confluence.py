@@ -425,6 +425,21 @@ class ConfluenceIngestor(ChangeBasedIngestor):
             return list(self._fixture().get("content", {}).get(space["key"], []))
         return self._client(org_id).content_for_space(space["key"])
 
+    def _raw_page_body(self, org_id: str, space_key: str, content_id: str) -> Dict[str, Any]:
+        """Return one page/blogpost's rendered body + labels (R18-A5 / T1 — depth).
+
+        The ONE seam that crosses the reach/depth boundary this ingestor otherwise
+        enforces (AC7): ``_raw_content``/``content_for_space`` above never expand
+        ``body.*``. Only called for a page already known changed (from the same
+        delta batch the reach phase produced) — never a full re-scan. A missing
+        fixture entry (or a page the depth caller has no business reading) degrades
+        to ``{}`` rather than raising, so one bad page never aborts the batch.
+        """
+        if not is_live():
+            bodies = self._fixture().get("bodies", {}).get(space_key, {})
+            return dict(bodies.get(content_id) or {})
+        return self._client(org_id).page_body(content_id)
+
     def _fixture(self) -> Dict[str, Any]:
         if not FIXTURE_PATH.exists():
             raise ConfluenceIngestError(f"Confluence fixture not found: {FIXTURE_PATH}")
@@ -561,6 +576,19 @@ class ConfluenceClient:
                 break
             start += 100
         return items
+
+    def page_body(self, content_id: str) -> Dict[str, Any]:
+        """Fetch one page/blogpost's rendered body, labels, and version (R18-A5 / T1).
+
+        The ONLY place this client expands ``body.storage`` / ``metadata.labels`` —
+        the reach-phase ``content_for_space`` above deliberately never does (AC7 of
+        R17-A2). Called only for content already known changed via the delta feed,
+        never for a full re-scan.
+        """
+        return self._get(
+            f"content/{content_id}",
+            {"expand": "body.storage,metadata.labels,version,space"},
+        )
 
     def list_attachments(self, page_id: str) -> List[Dict[str, Any]]:
         """Return a page's attachments with version metadata (R18-A1 / T5).

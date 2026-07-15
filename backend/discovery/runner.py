@@ -524,19 +524,28 @@ def _ingest_confluence_corroboration(org_id: str, run_id: str) -> Dict[str, Any]
     Non-blocking: any failure degrades to an empty block (`{}`) so a Confluence
     read never aborts the run (the runner swallows ingestion errors and leaves the
     checkpoint unadvanced for the next run to re-read).
+
+    R18-A5 / T1 (AT-600): the SAME changed-record set collected below also drives
+    the page/blogpost DEEP CONTENT hand-off to retrieval (``confluence_content.
+    ingest_confluence_content``) — page bodies rendered to structure-preserving
+    text and indexed with page-level provenance (AC1). This rides this checkpoint
+    rather than opening a second one, and is itself non-blocking: a deep-content
+    failure never affects the corroboration block returned here.
     """
     try:
         from .ingest import change_runner
         from .ingest.confluence import ConfluenceIngestor
+        from .ingest.confluence_content import ingest_confluence_content
         from .ingest.confluence_signals import build_confluence_corroboration_payload
     except Exception as e:  # noqa: BLE001 — Confluence corroboration is optional.
         logger.warning("Confluence connector import failed (non-blocking): %s", e)
         return {}
 
     collected: List[Dict[str, Any]] = []
+    ingestor = ConfluenceIngestor()
     try:
         result = change_runner.ingest_with_checkpoint(
-            ConfluenceIngestor(),
+            ingestor,
             org_id,
             process_batch=lambda batch: collected.extend(batch.records),
         )
@@ -557,6 +566,21 @@ def _ingest_confluence_corroboration(org_id: str, run_id: str) -> Dict[str, Any]
             "Confluence change ingest: %s — %d batch(es), %d changed record(s), checkpoint_advanced=%s",
             "first run (streamed full load)" if result.first_run else "incremental",
             result.batches, result.records, result.checkpoint_advanced,
+        )
+
+    try:
+        content_result = ingest_confluence_content(org_id, collected, ingestor=ingestor)
+        logger.info(
+            "Confluence deep content: org=%s run=%s pages=%d handed_off=%d indexed=%d "
+            "empty=%d failed=%d",
+            org_id, run_id, content_result.pages_seen, content_result.artifacts_handed_off,
+            content_result.artifacts_indexed, content_result.artifacts_empty,
+            content_result.artifacts_failed,
+        )
+    except Exception as e:  # noqa: BLE001 — deep content must never block corroboration.
+        logger.warning(
+            "Confluence deep content hand-off failed (non-blocking) org=%s run=%s: [%s]",
+            org_id, run_id, type(e).__name__,
         )
 
     return build_confluence_corroboration_payload(collected)
