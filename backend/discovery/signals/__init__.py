@@ -56,6 +56,14 @@ from .ops_stream import (  # noqa: F401
     OpsEventStream,
     fold_events,
 )
+from .aggregation import (  # noqa: F401
+    DEFAULT_EVIDENCE_SAMPLE_SIZE,
+    HIGH_CARDINALITY_CLASSES,
+    AggregateSignal,
+    aggregate_active_signal,
+    aggregate_events,
+    roll_up,
+)
 
 __all__ = [
     "CommonSignal",
@@ -98,4 +106,11 @@ __all__ = [
     "Admission",
     "fold_events",
     "DEFAULT_ACTIVE_PERIOD_SECONDS",
+    # AT-670 (MSP-B7 T2) — aggregation roll-ups for high-cardinality classes
+    "AggregateSignal",
+    "roll_up",
+    "aggregate_active_signal",
+    "aggregate_events",
+    "HIGH_CARDINALITY_CLASSES",
+    "DEFAULT_EVIDENCE_SAMPLE_SIZE",
 ]
