@@ -100,9 +100,9 @@ ECR_REGISTRY   = f"{AWS_ACCOUNT_ID}.dkr.ecr.{AWS_REGION}.amazonaws.com"
 
 # ECR tags to pull — docker-compose.yml references these directly via ${ECR_REGISTRY}
 IMAGES = [
-    "postgres-1.0",
-    "backend-latest",
-    "frontend-1.0",
+    "postgres-1.7.0",
+    "backend-1.7.0",
+    "frontend-1.7.0",
 ]
 
 STORE_DIR    = pathlib.Path("/opt/aiqstore")

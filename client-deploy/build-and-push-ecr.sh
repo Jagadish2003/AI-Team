@@ -6,9 +6,13 @@
 # WSL). Builds the three AgentIQ images and pushes them to ECR with exactly
 # the tags client-deploy/docker-compose.yml pulls:
 #
-#     <registry>/agentiq:postgres-1.0
-#     <registry>/agentiq:backend-latest
-#     <registry>/agentiq:frontend-1.0
+#     <registry>/agentiq:postgres-1.7.0
+#     <registry>/agentiq:backend-1.7.0
+#     <registry>/agentiq:frontend-1.7.0
+#
+# Bump IMAGE_VERSION below for each release so every image carries an
+# immutable, traceable tag (no moving "latest") - the client compose pins
+# the exact version, so a later push cannot silently change a running client.
 #
 # AWS credentials are PROMPTED interactively (secret hidden), used only for
 # the login token, and cleared afterwards. Nothing is written to disk.
@@ -24,6 +28,7 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 DEFAULT_ACCOUNT_ID="070206924228"
 DEFAULT_REGION="us-east-1"
 ECR_REPO="agentiq"
+IMAGE_VERSION="1.7.0"    # bump per release; client compose pins this exact version
 
 if [[ -t 1 ]]; then G='\033[0;32m'; R='\033[0;31m'; Y='\033[1;33m'; C='\033[0;36m'; N='\033[0m'
 else G=''; R=''; Y=''; C=''; N=''; fi
@@ -102,17 +107,18 @@ ok "Logged in"
 cd "$REPO_ROOT"
 echo ""
 info "Building images (this can take several minutes on first run) ..."
-docker build -t "$REGISTRY/$ECR_REPO:postgres-1.0"   -f postgres/Dockerfile .  || fail "postgres image build failed."
-ok "postgres-1.0 built"
-docker build -t "$REGISTRY/$ECR_REPO:backend-latest" backend/                  || fail "backend image build failed."
-ok "backend-latest built"
-docker build -t "$REGISTRY/$ECR_REPO:frontend-1.0"   frontend/                 || fail "frontend image build failed."
-ok "frontend-1.0 built"
+docker build -t "$REGISTRY/$ECR_REPO:postgres-$IMAGE_VERSION" -f postgres/Dockerfile .  || fail "postgres image build failed."
+ok "postgres-$IMAGE_VERSION built"
+docker build -t "$REGISTRY/$ECR_REPO:backend-$IMAGE_VERSION" backend/                   || fail "backend image build failed."
+ok "backend-$IMAGE_VERSION built"
+docker build -t "$REGISTRY/$ECR_REPO:frontend-$IMAGE_VERSION" frontend/                 || fail "frontend image build failed."
+ok "frontend-$IMAGE_VERSION built"
 
 # ── Push ─────────────────────────────────────────────────────────────────────
 echo ""
 info "Pushing to $REGISTRY/$ECR_REPO ..."
-for tag in postgres-1.0 backend-latest frontend-1.0; do
+for svc in postgres backend frontend; do
+    tag="$svc-$IMAGE_VERSION"
     docker push "$REGISTRY/$ECR_REPO:$tag" || fail "push failed for tag $tag."
     ok "pushed $tag"
 done
