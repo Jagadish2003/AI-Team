@@ -50,6 +50,7 @@ from app.provenance import EvidencePointer, utc_now_iso
 from app.retrieval.ingest import ContentArtifact, IngestResult, ingest_content
 
 from .confluence import ConfluenceIngestor
+from .content_router import ContentRoute, classify_confluence_content
 
 logger = logging.getLogger(__name__)
 
@@ -59,10 +60,6 @@ RETRIEVAL_SOURCE_SYSTEM = "confluence"
 
 #: Page/blogpost bodies are prose — chunked on heading/paragraph structure (R18-B1 T2).
 CONTENT_TYPE = "prose"
-
-#: Content kinds the depth path reads bodies for — mirrors the reach phase's scope
-#: (comments and other content types are out of scope for both phases).
-_CONTENT_KINDS = ("page", "blogpost")
 
 IngestFn = Callable[[str, List[ContentArtifact]], IngestResult]
 
@@ -219,15 +216,17 @@ def build_content_artifact(
     ``record`` is one changed-content record as already shaped by
     :meth:`ConfluenceIngestor._to_record` (the reach-phase delta) — only its
     ``content_type``/``space_key``/``content_id`` identity is needed to fetch the
-    body via the depth-only :meth:`ConfluenceIngestor._raw_page_body` seam. Only
-    ``page``/``blogpost`` records are handled (mirrors the reach-phase scope);
-    anything else (comments, …) returns ``None``.
+    body via the depth-only :meth:`ConfluenceIngestor._raw_page_body` seam.
+    Scope is decided by the page-vs-file router (AT-602 / T3): only records the
+    router classifies :attr:`~discovery.ingest.content_router.ContentRoute.
+    PAGE_CONTENT` are handled — anything else (a comment, an attachment-shaped
+    record, an unrecognised type) returns ``None``.
 
     Provenance carries the full R16-B1 observed spine plus space/label context and
     the heading map (AC1, AC6): a retrieved chunk's ``evidence_pointer`` /
     ``url`` resolve back to the exact source page.
     """
-    if record.get("content_type") not in _CONTENT_KINDS:
+    if classify_confluence_content(record.get("content_type")) != ContentRoute.PAGE_CONTENT:
         return None
     space_key = record.get("space_key")
     content_id = record.get("content_id")
@@ -328,12 +327,14 @@ def ingest_confluence_content(
     ``records`` is the same changed-record set the reach-phase corroboration path
     already collected off the ConfluenceIngestor's checkpoint (R17-A2) — this
     function rides that delta rather than driving a second checkpointed pass
-    (see module docstring). Only ``page``/``blogpost`` records are considered;
-    comments and other content types are ignored here exactly as in the reach
-    phase. Records already reflect the granted-space boundary (AC4) — the
-    ConfluenceIngestor's ``_accessible_spaces`` filter excludes ungranted/archived
-    spaces before any record is ever yielded, so this depth path inherits that
-    boundary automatically rather than re-implementing it.
+    (see module docstring). Scope is decided by the page-vs-file router
+    (AT-602 / T3, ``content_router.classify_confluence_content``): only records
+    it classifies PAGE_CONTENT are considered — comments and attachment-shaped
+    records are ignored here exactly as they are on the reach phase. Records
+    already reflect the granted-space boundary (AC4) — the ConfluenceIngestor's
+    ``_accessible_spaces`` filter excludes ungranted/archived spaces before any
+    record is ever yielded, so this depth path inherits that boundary
+    automatically rather than re-implementing it.
 
     Never raises: a body-fetch/render failure is isolated per page, and a
     substrate hand-off failure is isolated per artifact by ``ingest_content``
@@ -344,7 +345,8 @@ def ingest_confluence_content(
     ing = ingestor if ingestor is not None else ConfluenceIngestor()
     scoped = [
         r for r in (records or [])
-        if isinstance(r, dict) and r.get("content_type") in _CONTENT_KINDS
+        if isinstance(r, dict)
+        and classify_confluence_content(r.get("content_type")) == ContentRoute.PAGE_CONTENT
     ]
     result.pages_seen = len(scoped)
     if not scoped:

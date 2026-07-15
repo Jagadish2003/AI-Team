@@ -55,5 +55,12 @@
         "metadata": {"labels": {"results": [{"prefix": "global", "name": "deployment"}, {"prefix": "global", "name": "checklist"}]}}
       }
     }
+  },
+  "_attachments_comment": "R18-A5 / AT-602 (T3) — page ATTACHMENTS, the R18-A1 document-path surface. Distinct listing endpoint from 'content'/'bodies' above (content/{id}/child/attachment, never the page-content delta) so page-native content (this story) and files (R18-A1) can never collide even though both originate from Confluence — the page-vs-file router (content_router.py) formalizes and tests this boundary.",
+  "attachments": {
+    "ENG": [
+      {"id": "att-501", "title": "runbook-diagram.png", "mediaType": "image/png", "version": {"number": 1, "when": "2026-06-10T09:05:00Z"}, "page_id": "100", "_links": {"webui": "/download/attachments/100/runbook-diagram.png", "download": "/download/attachments/100/runbook-diagram.png"}, "text": "binary-placeholder-diagram-bytes"},
+      {"id": "att-502", "title": "postmortem-timeline.xlsx", "mediaType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "version": {"number": 1, "when": "2026-06-10T09:15:00Z"}, "page_id": "200", "_links": {"webui": "/download/attachments/200/postmortem-timeline.xlsx", "download": "/download/attachments/200/postmortem-timeline.xlsx"}, "text": "event,timestamp\nroot cause identified,2026-06-10T02:00:00Z\n"}
+    ]
   }
 }
