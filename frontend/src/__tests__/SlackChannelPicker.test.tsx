@@ -68,6 +68,19 @@ describe('SlackChannelPicker', () => {
     expect(screen.getByText('#deploys')).toBeInTheDocument();
   });
 
+  // R18-A4 / AT-598 (T5, AC7): the depth-phase consent copy must state plainly
+  // that message CONTENT in the selected channels is read and used as evidence.
+  it('shows the depth-phase message-content consent copy', async () => {
+    render(<SlackChannelPicker />);
+    await screen.findByText('#ops-incidents');
+    expect(
+      screen.getByText(/message content in selected channels is read and used as discovery evidence/i),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/private\s+channels and direct messages are never read/i),
+    ).toBeInTheDocument();
+  });
+
   it('pre-selects all channels when no selection has been saved yet', async () => {
     render(<SlackChannelPicker />);
     await screen.findByText('#ops-incidents');
@@ -135,5 +148,55 @@ describe('SlackChannelPicker placement in ConnectorDetailPanel', () => {
       />,
     );
     expect(screen.queryByText('Channels AgentIQ reads')).not.toBeInTheDocument();
+  });
+});
+
+// ── Teams depth-phase consent (R18-A4 / AT-598, T5 AC7) ───────────────────────
+// Teams channel scope is admin-granted (no in-app picker), so ConnectorDetailPanel
+// shows the same message-content consent directly when Teams is connected.
+
+const teamsConnector: Connector = {
+  id: 'teams',
+  name: 'Microsoft Teams',
+  category: 'Comms · Ops',
+  tier: 'standard',
+  status: 'connected',
+  configured: true,
+  metrics: [],
+  lastSynced: '1 hour ago',
+  reads: ['Channels', 'Threads', 'Mentions'],
+  signalStrength: 65,
+};
+
+describe('Teams deep-content consent in ConnectorDetailPanel', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockUnconfigured();
+  });
+  afterEach(() => {
+    cleanup();
+    vi.restoreAllMocks();
+  });
+
+  it('states message content in granted channels is used as evidence when Teams is connected', () => {
+    render(<ConnectorDetailPanel connector={teamsConnector} onConfigure={vi.fn()} />);
+    expect(
+      screen.getByText(/message content in granted channels is read and used as discovery evidence/i),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/private\s+channels and direct messages are never read/i),
+    ).toBeInTheDocument();
+  });
+
+  it('does not show the consent notice when Teams is not connected', () => {
+    render(
+      <ConnectorDetailPanel
+        connector={{ ...teamsConnector, status: 'not_connected', configured: false }}
+        onConfigure={vi.fn()}
+      />,
+    );
+    expect(
+      screen.queryByText(/message content in granted channels is read and used as discovery evidence/i),
+    ).not.toBeInTheDocument();
   });
 });

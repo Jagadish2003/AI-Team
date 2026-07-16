@@ -24,6 +24,7 @@ import { useToast } from '../common/Toast';
 import { ApiError, apiGet, apiPatch } from '../../lib/apiClient';
 import { useAuthOptional } from '../../context/AuthContext';
 import { isViewerRole } from '../../utils/roles';
+import ConversationContentConsentNotice from './ConversationContentConsentNotice';
 
 interface SlackChannel {
   id: string;
@@ -135,6 +136,13 @@ export default function SlackChannelPicker({ onSaved }: Props) {
         selected channels — unselected channels are never ingested, even if the
         connection can see them. You can change this later.
       </p>
+
+      {/* R18-A4 / AT-598 (T5, AC7): depth-phase consent — reading conversation
+          text is more sensitive than reading activity counts, so the copy states
+          plainly that message CONTENT in selected channels is used as evidence. */}
+      <ConversationContentConsentNotice scopeLabel="selected channels" />
+
+      <div className="mt-3" />
 
       {available.length === 0 ? (
         <p className="text-xs text-muted italic">
