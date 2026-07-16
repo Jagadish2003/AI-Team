@@ -49,12 +49,11 @@ function teamsDisconnected() {
   };
 }
 
-// UI gate (July 2026): only Salesforce/ServiceNow/Jira are connectable from the
-// Integration Hub for now. Teams' Microsoft Graph OAuth backend stays wired
-// (AT-434/AT-436) — only the tile's Connect button is disabled until Teams is
-// re-added to ConnectorTile's ENABLED_CONNECTOR_IDS.
-describe("Teams tile Connect is UI-disabled (hub allowlist = SF/SNOW/Jira)", () => {
-  it("renders a disabled Connect button for Teams that never fires onPrimary", () => {
+// UI gate: R18-A4 (Slack & Teams Deep Content) adds Teams to the Integration Hub
+// allowlist, so its Connect button is now ENABLED and drives the real Microsoft
+// Graph OAuth flow (AT-434/AT-436).
+describe("Teams tile Connect is enabled (R18-A4 hub allowlist)", () => {
+  it("renders an enabled Connect button for Teams that fires onPrimary", () => {
     const onPrimary = vi.fn();
     render(
       <ConnectorTile
@@ -67,10 +66,10 @@ describe("Teams tile Connect is UI-disabled (hub allowlist = SF/SNOW/Jira)", () 
     );
 
     const btn = screen.getByRole("button", { name: "Connect" }) as HTMLButtonElement;
-    expect(btn.disabled).toBe(true);
+    expect(btn.disabled).toBe(false);
 
     fireEvent.click(btn);
-    expect(onPrimary).not.toHaveBeenCalled();
+    expect(onPrimary).toHaveBeenCalledTimes(1);
   });
 });
 

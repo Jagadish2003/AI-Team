@@ -45,11 +45,11 @@ function sharepointDisconnected() {
 }
 
 // UI gate (July 2026): only Salesforce/ServiceNow/Jira are connectable from the
-// Integration Hub for now. SharePoint's Microsoft Graph OAuth backend stays
-// wired (AT-462/AT-464) — only the tile's Connect button is disabled until
-// SharePoint is re-added to ConnectorTile's ENABLED_CONNECTOR_IDS.
-describe("SharePoint tile Connect is UI-disabled (hub allowlist = SF/SNOW/Jira)", () => {
-  it("renders a disabled Connect button for SharePoint that never fires onPrimary", () => {
+// UI gate: R18-A5 (Confluence & SharePoint Deep Content) adds SharePoint to the
+// Integration Hub allowlist, so its Connect button is now ENABLED and drives the
+// real Microsoft Graph OAuth flow (AT-462/AT-464).
+describe("SharePoint tile Connect is enabled (R18-A5 hub allowlist)", () => {
+  it("renders an enabled Connect button for SharePoint that fires onPrimary", () => {
     const onPrimary = vi.fn();
     render(
       <ConnectorTile
@@ -62,10 +62,10 @@ describe("SharePoint tile Connect is UI-disabled (hub allowlist = SF/SNOW/Jira)"
     );
 
     const btn = screen.getByRole("button", { name: "Connect" }) as HTMLButtonElement;
-    expect(btn.disabled).toBe(true);
+    expect(btn.disabled).toBe(false);
 
     fireEvent.click(btn);
-    expect(onPrimary).not.toHaveBeenCalled();
+    expect(onPrimary).toHaveBeenCalledTimes(1);
   });
 });
 

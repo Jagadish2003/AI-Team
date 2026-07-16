@@ -100,7 +100,9 @@ def _is_persistable_checkpoint(value: str, connector_id: str, org_id: str) -> bo
     return False
 
 
-def _emit_artifact_changed(org_id: str, connector_id: str, records: list) -> None:
+def _emit_artifact_changed(
+    org_id: str, connector_id: str, records: list, *, notify_freshness: bool = True
+) -> None:
     """Emit one ``ingestion.artifact_changed`` telemetry event per changed
     artifact in a fully-processed batch (R16-A1 §4 / AT-381, AC4).
 
@@ -109,6 +111,13 @@ def _emit_artifact_changed(org_id: str, connector_id: str, records: list) -> Non
     EMITS — there is no consumer yet (the 1.8 retrieval-freshness layer subscribes
     later). Fire-and-forget: a telemetry import/write failure must NEVER break
     ingestion, so the whole path is guarded and any error is only logged.
+
+    ``notify_freshness`` (R18-A4 / AT-596 T3): when False, the per-record retrieval-
+    freshness notification is SKIPPED (the telemetry event is still emitted). A
+    conversation connector that manages its own thread-level freshness sets
+    ``manages_retrieval_freshness = True`` so the runner passes False here — its
+    per-MESSAGE change records must not drive per-message freshness against
+    thread-level chunks.
 
     ``record_event`` is imported lazily (like the repository's app.db import) to
     avoid an import cycle with the app package at module load.
@@ -153,7 +162,11 @@ def _emit_artifact_changed(org_id: str, connector_id: str, records: list) -> Non
         # stream. Fully guarded and lazily imported (like record_event above) so a
         # freshness or import failure can NEVER break ingestion — the subscriber is
         # itself fire-and-forget, this guard is the belt-and-braces boundary.
-        _notify_freshness(event)
+        # R18-A4 / AT-596 (T3): skipped for connectors that drive their own
+        # thread-level freshness (Slack/Teams) — a per-message notification would be
+        # the wrong granularity for their thread-level chunks.
+        if notify_freshness:
+            _notify_freshness(event)
 
 
 def _notify_freshness(event: dict) -> None:
@@ -275,8 +288,15 @@ def ingest_with_checkpoint(
             # AT-381 (§4, AC4): emit one ingestion.artifact_changed per changed
             # artifact in this fully-processed batch. Reached only after
             # process_batch succeeded; fire-and-forget — never affects the
-            # checkpoint lifecycle or the run outcome.
-            _emit_artifact_changed(org_id, connector_id, batch.records)
+            # checkpoint lifecycle or the run outcome. A connector that manages its
+            # own thread-level retrieval freshness (Slack/Teams, R18-A4 T3) still
+            # emits the telemetry event but skips the per-record freshness notify.
+            _emit_artifact_changed(
+                org_id,
+                connector_id,
+                batch.records,
+                notify_freshness=not getattr(ingestor, "manages_retrieval_freshness", False),
+            )
 
             if is_first_run and _is_persistable_checkpoint(
                 batch.next_checkpoint, connector_id, org_id

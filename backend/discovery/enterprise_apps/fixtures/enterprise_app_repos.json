@@ -1,0 +1,27 @@
+{
+  "_comment": "R18-A6 / AT-611 (T6) — offline app->repo mapping fixture. Keyed by org id (a 'default'/'*' key is the fallback for any org). Each entry declares which A2-ingested repos ARE an application, and on which platform. Non-secret configuration only — credentials never live here. The app_id/service is the SAME identity phase one uses for the running application, so the runtime->structure join (T4) has a key.",
+  "default": [
+    {
+      "app_id": "covenant-service",
+      "name": "Covenant Service",
+      "platform": "java",
+      "repos": ["covenant-web", "covenant-core"],
+      "metadata": {
+        "service": "covenant-service",
+        "team": "lending",
+        "environment": "prod"
+      }
+    },
+    {
+      "app_id": "billing-api",
+      "name": "Billing API",
+      "platform": "dotnet",
+      "repos": ["billing-api"],
+      "metadata": {
+        "service": "billing-api",
+        "team": "payments",
+        "environment": "prod"
+      }
+    }
+  ]
+}

@@ -24,5 +24,43 @@
     "OLD": [
       {"id": "950", "type": "page", "title": "archived space page", "status": "current", "version": {"number": 1, "when": "2026-05-01T09:00:00Z", "by": {"accountId": "u0", "displayName": "Old"}}, "_links": {"webui": "/spaces/OLD/pages/950"}}
     ]
+  },
+  "_bodies_comment": "R18-A5 / AT-600 (T1) — page/blogpost BODY fixture for the deep-content path. Deliberately absent for HR/OLD (ungranted/archived) so a test can prove the depth path never needs, and never fetches, their content — the permission boundary holds all the way to depth (AC4). Storage-format HTML preserves heading structure (h1/h2/...) so the rendered text keeps ATX-style headings for the substrate's prose chunker to split on (AC1).",
+  "bodies": {
+    "ENG": {
+      "100": {
+        "body": {"storage": {"value": "<h1>Payments API Runbook</h1><p>This runbook covers the on-call response for the payments API.</p><h2>Rollback Steps</h2><ol><li>Disable the canary deployment.</li><li>Re-point traffic to the previous stable release.</li><li>Notify the incident channel.</li></ol>"}},
+        "metadata": {"labels": {"results": [{"prefix": "global", "name": "runbook"}, {"prefix": "global", "name": "payments"}]}}
+      },
+      "200": {
+        "body": {"storage": {"value": "<h1>Incident INC-4821 postmortem</h1><p>Summary of the INC-4821 outage and remediation.</p><h2>Root Cause</h2><p>A misconfigured retry policy amplified load on the payments service.</p><h2>Action Items</h2><ul><li>Add a circuit breaker.</li><li>Add alerting on retry-storm patterns.</li></ul>"}},
+        "metadata": {"labels": {"results": [{"prefix": "global", "name": "postmortem"}]}}
+      },
+      "300": {
+        "body": {"storage": {"value": "<h1>Release notes 1.7</h1><p>Highlights from the 1.7 release, see PR-2290.</p><h2>Highlights</h2><p>Improved connector reliability and new dashboards.</p>"}},
+        "metadata": {"labels": {"results": [{"prefix": "global", "name": "release-notes"}]}}
+      },
+      "400": {
+        "body": {"storage": {"value": "<h1>Architecture overview</h1><p>High level component map of the platform.</p><h2>Services</h2><table><tr><th>Service</th><th>Owner</th></tr><tr><td>ingest</td><td>Team Ada</td></tr><tr><td>scoring</td><td>Team Lin</td></tr></table>"}},
+        "metadata": {"labels": {"results": [{"prefix": "global", "name": "architecture"}]}}
+      }
+    },
+    "OPS": {
+      "500": {
+        "body": {"storage": {"value": "<h1>On-call rota</h1><p>Weekly on-call rotation and escalation contacts.</p>"}},
+        "metadata": {"labels": {"results": [{"prefix": "global", "name": "on-call"}]}}
+      },
+      "600": {
+        "body": {"storage": {"value": "<h1>Deployment checklist</h1><p>Steps to follow before every production deployment.</p><h2>Pre-flight</h2><ol><li>Run the smoke suite.</li><li>Confirm rollback plan.</li></ol>"}},
+        "metadata": {"labels": {"results": [{"prefix": "global", "name": "deployment"}, {"prefix": "global", "name": "checklist"}]}}
+      }
+    }
+  },
+  "_attachments_comment": "R18-A5 / AT-602 (T3) — page ATTACHMENTS, the R18-A1 document-path surface. Distinct listing endpoint from 'content'/'bodies' above (content/{id}/child/attachment, never the page-content delta) so page-native content (this story) and files (R18-A1) can never collide even though both originate from Confluence — the page-vs-file router (content_router.py) formalizes and tests this boundary.",
+  "attachments": {
+    "ENG": [
+      {"id": "att-501", "title": "runbook-diagram.png", "mediaType": "image/png", "version": {"number": 1, "when": "2026-06-10T09:05:00Z"}, "page_id": "100", "_links": {"webui": "/download/attachments/100/runbook-diagram.png", "download": "/download/attachments/100/runbook-diagram.png"}, "text": "binary-placeholder-diagram-bytes"},
+      {"id": "att-502", "title": "postmortem-timeline.xlsx", "mediaType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "version": {"number": 1, "when": "2026-06-10T09:15:00Z"}, "page_id": "200", "_links": {"webui": "/download/attachments/200/postmortem-timeline.xlsx", "download": "/download/attachments/200/postmortem-timeline.xlsx"}, "text": "event,timestamp\nroot cause identified,2026-06-10T02:00:00Z\n"}
+    ]
   }
 }

@@ -9,6 +9,7 @@ import { isViewerRole } from '../../utils/roles';
 import { ExternalLink, CheckCircle2 } from 'lucide-react';
 import SalesforceProductPicker from './SalesforceProductPicker';
 import SlackChannelPicker from './SlackChannelPicker';
+import ConversationContentConsentNotice from './ConversationContentConsentNotice';
 import SqlServerScopePicker from './SqlServerScopePicker';
 import OracleScopePicker from './OracleScopePicker';
 import PostgreSQLScopePicker from './PostgreSQLScopePicker';
@@ -231,10 +232,29 @@ export default function ConnectorDetailPanel({
         </>
       )}
 
-      {/* R18-C0 P5: Slack channel selection — pick which channels AgentIQ reads. */}
+      {/* R18-C0 P5: Slack channel selection — pick which channels AgentIQ reads.
+          The picker carries the R18-A4 depth-phase consent notice inline. */}
       {connector.id === 'slack' && isConnected && (
         <>
           <SlackChannelPicker />
+          <div className="mt-4 border-t border-border" />
+        </>
+      )}
+
+      {/* R18-A4 / AT-598 (T5, AC7): Teams depth-phase consent. Teams channel scope
+          is admin-granted (no in-app picker), so the message-content consent is
+          shown directly here when Teams is connected — the same disclosure Slack
+          carries, over Teams' granted channels. */}
+      {connector.id === 'teams' && isConnected && (
+        <>
+          <div className="mt-4">
+            <div className="text-sm font-medium text-text">Channels AgentIQ reads</div>
+            <p className="mt-2 text-xs text-muted leading-relaxed">
+              AgentIQ reads only the standard channels your Microsoft 365 admin has
+              granted it, even if the connection can see more.
+            </p>
+            <ConversationContentConsentNotice scopeLabel="granted channels" />
+          </div>
           <div className="mt-4 border-t border-border" />
         </>
       )}

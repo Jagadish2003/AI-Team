@@ -16,11 +16,17 @@ import { cacheKeys } from '../../lib/cacheKeys';
 // (CONNECTOR_AUTH_CONFIGS + the generic auth-url → callback flow), so re-enabling
 // one later is just adding its id back to this list.
 //
-// Product decision (July 2026): only the three systems of record are connectable
-// from the hub for now; every other tile renders its action button disabled with
-// the "Connecting new sources is currently unavailable" tooltip.
+// Product decision (July 2026): the three systems of record plus GitHub are
+// connectable from the hub. R18-A4 (Slack & Teams Deep Content) adds the two chat
+// platforms and R18-A5 (Confluence & SharePoint Deep Content) adds the two
+// knowledge platforms — their OAuth backends (AT-420 Slack / AT-434 Teams /
+// AT-462 Confluence+SharePoint) and the reach + depth ingestion paths are fully
+// wired, and connecting them is what surfaces the deep-content consent copy and
+// starts conversation/page ingestion. Every other tile renders its action button
+// disabled with the "Connecting new sources is currently unavailable" tooltip.
 const ENABLED_CONNECTOR_IDS = [
-  'salesforce', 'servicenow', 'jira', 'github',
+  'salesforce', 'servicenow', 'jira', 'github', 'slack', 'teams',
+  'confluence', 'sharepoint',
 ];
 
 export default function ConnectorTile({
