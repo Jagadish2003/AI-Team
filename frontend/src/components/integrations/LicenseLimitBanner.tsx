@@ -12,12 +12,15 @@
  * pre-addendum license (systemsLicensed null) shows the used count without a cap
  * and never a limit notice.
  *
- * Presentational only — a null `limits` (endpoint not yet loaded, or a fail-open
- * fetch error) renders nothing, since the backend remains the source of truth for
- * enforcement regardless of what the hub displays.
+ * Presentational only — a null `limits` (a fail-open fetch error) renders
+ * nothing, since the backend remains the source of truth for enforcement
+ * regardless of what the hub displays. While the endpoint is still in flight
+ * (`loading`) a skeleton strip of the same shape holds the space, so the real
+ * strip fills it instead of appearing later and shoving the page down.
  */
 import React from 'react';
 import type { LicenseLimitsResponse } from '../../types/license';
+import { Skeleton } from '../common/Skeleton';
 
 /** The exact message the backend (license_limits.limit_message) surfaces. */
 export function systemLimitMessage(systemsLicensed: number): string {
@@ -26,9 +29,25 @@ export function systemLimitMessage(systemsLicensed: number): string {
 
 export default function LicenseLimitBanner({
   limits,
+  loading = false,
 }: {
   limits: LicenseLimitsResponse | null;
+  /** True while GET /api/license/limits is in flight — reserve the strip's space. */
+  loading?: boolean;
 }) {
+  if (loading && !limits) {
+    return (
+      <div
+        aria-busy="true"
+        aria-label="Loading license usage"
+        className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1 rounded-xl border border-border bg-panel px-4 py-2.5 shadow-sm"
+      >
+        <Skeleton className="h-3 w-40" />
+        <Skeleton className="h-3 w-64" />
+      </div>
+    );
+  }
+
   if (!limits) return null;
 
   const { systemsUsed, systemsLicensed, unlimited, canConnectMore } = limits;

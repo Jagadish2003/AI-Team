@@ -7,6 +7,8 @@ import { fetchTokenStatus, TokenStatus } from '../../services/staticApi';
 import { useAuthOptional } from '../../context/AuthContext';
 import { useNetworkProfileOptional } from '../../context/NetworkProfileContext';
 import { isViewerRole } from '../../utils/roles';
+import { useResource } from '../../lib/dataCache';
+import { cacheKeys } from '../../lib/cacheKeys';
 
 // Connectors whose Connect button is ENABLED on the Integration Hub. This is a
 // UI gate only — the OAuth backends for the other connectors (Slack AT-420,
@@ -72,19 +74,17 @@ export default function ConnectorTile({
   const auth = useAuthOptional();
   const isViewer = isViewerRole(auth?.user?.role);
 
-  const [tokenStatus, setTokenStatus] = useState<TokenStatus | null>(null);
-
-  useEffect(() => {
-    if (!isConnected || !isEnabled) {
-      setTokenStatus(null);
-      return;
-    }
-    let alive = true;
-    fetchTokenStatus(connector.id)
-      .then((r) => { if (alive) setTokenStatus(r.status); })
-      .catch(() => { /* non-fatal — tile still renders without token status */ });
-    return () => { alive = false; };
-  }, [connector.id, isConnected, isEnabled]);
+  // Token status on the SHARED cache, keyed per connector: it survives navigation
+  // (no refetch when you come back to the hub), is deduped across tiles, and is
+  // refreshed live — a connect/disconnect invalidates it, and another user's
+  // change arrives via the org event stream. Disabled (null key) unless the
+  // connector is actually connected, so we never ask for a token that cannot
+  // exist. A failure is non-fatal: the tile just renders without the status.
+  const { data: tokenStatusData } = useResource(
+    isConnected && isEnabled ? cacheKeys.connectorTokenStatus(connector.id) : null,
+    () => fetchTokenStatus(connector.id),
+  );
+  const tokenStatus: TokenStatus | null = tokenStatusData?.status ?? null;
 
   // R18-A3 T5 (AT-558): in a no-public-inbound deployment the browser
   // authorization-code flow can never complete (the provider redirect can't

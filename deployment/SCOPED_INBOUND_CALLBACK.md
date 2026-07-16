@@ -14,8 +14,7 @@ AgentIQ 2.0 · Release 1.8 · R18-A3 (Outbound-Initiated Connector Authenticatio
 ## 1. TL;DR
 
 For a small set of connectors that offer **no outbound-only authentication mode** (today:
-**GitHub, Slack**, and **Microsoft Teams / SharePoint** until their client-credentials mode
-ships), the only OAuth grant available is `authorization_code`, which finishes with the
+**GitHub** and **Slack**), the only OAuth grant available is `authorization_code`, which finishes with the
 identity provider redirecting a browser back to a **callback URL**. In a deployment that
 exposes no public inbound HTTPS, that redirect has nowhere to land and the connect flow
 fails at the last step.
@@ -89,8 +88,8 @@ not hard-code it elsewhere.
 | Native DBs (Oracle / PostgreSQL / SQL Server) | `static` | ✅ direct outbound + vault creds | **No** |
 | **GitHub** | `authorization_code` | ❌ none | **Yes** |
 | **Slack** | `authorization_code` | ❌ none | **Yes** |
-| **Microsoft Teams** | `authorization_code` | ⏳ client-credentials via AT-556 (pending) | **Yes, until AT-556** |
-| **SharePoint** | `authorization_code` | ⏳ client-credentials via AT-556 (pending) | **Yes, until AT-556** |
+| Microsoft Teams | `authorization_code`, `client_credentials` | ✅ client-credentials (AT-556) | **No** — use Graph client-credentials |
+| SharePoint | `authorization_code`, `client_credentials` | ✅ client-credentials (AT-556) | **No** — use Graph client-credentials |
 
 Confirm the live list for your build with the registry rather than this table:
 

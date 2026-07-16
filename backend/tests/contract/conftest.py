@@ -127,6 +127,14 @@ os.environ["OAUTH_CALLBACK_ALLOW_UNAUTH"] = ""
 # overrides via monkeypatch.setenv (e.g. test_email_service.py) still apply.
 os.environ["EMAIL_PROVIDER"] = "noop"
 
+# Default the deployment network posture to 'standard' for the suite regardless
+# of backend/.env (which may set no_public_inbound for local outbound-auth
+# testing). Under no_public_inbound the authorization_code /auth-url flow is
+# intentionally 409 for connectors with an outbound-only mode (R18-A3 AC4), which
+# would break the many tests that exercise that flow. The no-public-inbound
+# suites set NETWORK_PROFILE themselves via monkeypatch (auto-reverts to this).
+os.environ["NETWORK_PROFILE"] = "standard"
+
 
 # ---------------------------------------------------------------------------
 # Test-only connection helper (NO SQL translation)
@@ -419,6 +427,9 @@ def pytest_configure(config):
     os.environ["ANTHROPIC_API_KEY"] = ""
     os.environ["AGENTIQ_DISABLE_BACKGROUND_JOBS"] = "1"
     os.environ["EMAIL_PROVIDER"] = "noop"  # no real SMTP during tests
+    # Deterministic network posture regardless of backend/.env — see the
+    # module-level note above. No-public-inbound suites override via monkeypatch.
+    os.environ["NETWORK_PROFILE"] = "standard"
     os.environ["SEED_DIR"] = str(_resolve_seed_dir())
     os.environ.setdefault("CORS_ORIGINS", "http://localhost:5173")
 

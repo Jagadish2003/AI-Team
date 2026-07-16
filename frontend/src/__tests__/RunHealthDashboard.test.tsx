@@ -1,5 +1,6 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
+import { renderWithCache } from "../test-utils/renderWithCache";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const api = vi.hoisted(() => ({
@@ -127,8 +128,11 @@ const attentionResponse = {
   }],
 };
 
+// The health panels read from the shared data cache (so they survive
+// navigation), which needs a DataCacheProvider ancestor. Each render gets a
+// fresh provider, so the cache never leaks between tests.
 function renderPage(path = "/run-health") {
-  return render(<MemoryRouter initialEntries={[path]}><RunHealthDashboardPage /></MemoryRouter>);
+  return renderWithCache(<MemoryRouter initialEntries={[path]}><RunHealthDashboardPage /></MemoryRouter>);
 }
 
 beforeEach(() => {
@@ -215,11 +219,13 @@ describe("RunHealthDashboardPage", () => {
     api.fetchAttentionHealth.mockReturnValue(pending);
     renderPage();
 
-    expect(screen.getByText("Loading connector health…")).toBeInTheDocument();
-    expect(screen.getByText("Loading run health…")).toBeInTheDocument();
-    expect(screen.getByText("Loading content health…")).toBeInTheDocument();
-    expect(screen.getByText("Loading pack health…")).toBeInTheDocument();
-    expect(screen.getByText("Loading attention items…")).toBeInTheDocument();
+    // Each panel now shows a layout-shaped skeleton (labelled for a11y) rather
+    // than a spinner + text, so the rows fill the reserved space with no shift.
+    expect(screen.getByLabelText("Loading connector health")).toBeInTheDocument();
+    expect(screen.getByLabelText("Loading run health")).toBeInTheDocument();
+    expect(screen.getByLabelText("Loading content health")).toBeInTheDocument();
+    expect(screen.getByLabelText("Loading pack health")).toBeInTheDocument();
+    expect(screen.getByLabelText("Loading attention items")).toBeInTheDocument();
   });
 
   it("uses explicit empty states when successful reads contain no activity", async () => {

@@ -35,6 +35,24 @@ describe("DiscoveryStepList step state (CS-4 T5)", () => {
     expect(screen.getByLabelText("active")).toBeInTheDocument();
   });
 
+  it("marks every step completed on a finished run even when current_step is stale/early", () => {
+    // Regression: the backend does not always advance current_step to "complete"
+    // for a finished run — it can be left at an early stage (e.g. "sf_crm"). A
+    // finished run (runComplete) must still show every step done and NEVER a
+    // spinner on step 0 or a pending circle.
+    render(
+      <DiscoveryStepList
+        currentStep="sf_crm"
+        runComplete
+        connectedSources={["salesforce", "servicenow", "jira"]}
+      />
+    );
+    expect(screen.queryByLabelText("active")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("pending")).not.toBeInTheDocument();
+    const items = screen.getAllByRole("listitem").length;
+    expect(screen.getAllByLabelText("completed").length).toBe(items);
+  });
+
   it("renders a Slack stage so a connected Slack source shows in Discovery Progress", () => {
     // Slack is a connected source, ingested after the systems of record and
     // BEFORE the pack-specific second pass, so its step is active while

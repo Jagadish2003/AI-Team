@@ -1,4 +1,4 @@
-import { Fragment } from "react";
+import { Fragment, Suspense, lazy } from "react";
 import { Routes, Route, Navigate, useLocation } from "react-router-dom";
 import { ConnectorProvider } from "./context/ConnectorContext";
 import { NetworkProfileProvider } from "./context/NetworkProfileContext";
@@ -14,25 +14,31 @@ import { ThemeProvider } from "./context/ThemeContext";
 import { AuthProvider, useAuth } from "./context/AuthContext";
 import { DataCacheProvider } from "./lib/dataCache";
 import AuthGuard from "./components/auth/AuthGuard";
+import LoadingPanel from "./components/common/LoadingPanel";
+import OrgEventSync from "./components/common/OrgEventSync";
+import PrefetchWorkspaceData from "./components/common/PrefetchWorkspaceData";
 
-import LoginPage from "./pages/LoginPage";
-import RegisterPage from "./pages/RegisterPage";
-import PendingApprovalPage from "./pages/PendingApprovalPage";
-import AcceptInvitePage from "./pages/AcceptInvitePage";
-import OAuthCallbackPage from "./pages/OAuthCallbackPage";
-import ForgotPasswordPage from "./pages/ForgotPasswordPage";
-import ResetPasswordPage from "./pages/ResetPasswordPage";
+// Route components are lazy-loaded so opening any page ships only that page's
+// chunk (plus shared vendor), not the JS for all pages up front. The Suspense
+// boundary around <Routes> shows a lightweight fallback while a chunk loads.
+const LoginPage = lazy(() => import("./pages/LoginPage"));
+const RegisterPage = lazy(() => import("./pages/RegisterPage"));
+const PendingApprovalPage = lazy(() => import("./pages/PendingApprovalPage"));
+const AcceptInvitePage = lazy(() => import("./pages/AcceptInvitePage"));
+const OAuthCallbackPage = lazy(() => import("./pages/OAuthCallbackPage"));
+const ForgotPasswordPage = lazy(() => import("./pages/ForgotPasswordPage"));
+const ResetPasswordPage = lazy(() => import("./pages/ResetPasswordPage"));
 
-import IntegrationHubPage from "./pages/IntegrationHubPage";
-import DiscoveryRunPage from "./pages/DiscoveryRunPage";
-import OpportunityReviewPage from "./pages/OpportunityReviewPage";
-import SourceIntelligencePage from "./pages/SourceIntelligencePage";
-import BlueprintPage from "./pages/BlueprintPage";
-import ExecutiveReportPage from "./pages/ExecutiveReportPage";
-import StackBuilderPage from "./pages/StackBuilderPage";
-import SettingsPage from "./pages/SettingsPage";
-import LicensePage from "./pages/LicensePage";
-import RunHealthDashboardPage from "./pages/RunHealthDashboardPage";
+const IntegrationHubPage = lazy(() => import("./pages/IntegrationHubPage"));
+const DiscoveryRunPage = lazy(() => import("./pages/DiscoveryRunPage"));
+const OpportunityReviewPage = lazy(() => import("./pages/OpportunityReviewPage"));
+const SourceIntelligencePage = lazy(() => import("./pages/SourceIntelligencePage"));
+const BlueprintPage = lazy(() => import("./pages/BlueprintPage"));
+const ExecutiveReportPage = lazy(() => import("./pages/ExecutiveReportPage"));
+const StackBuilderPage = lazy(() => import("./pages/StackBuilderPage"));
+const SettingsPage = lazy(() => import("./pages/SettingsPage"));
+const LicensePage = lazy(() => import("./pages/LicensePage"));
+const RunHealthDashboardPage = lazy(() => import("./pages/RunHealthDashboardPage"));
 
 function PilotRoadmapRedirect() {
   const location = useLocation();
@@ -71,6 +77,10 @@ export default function App() {
               is discarded on user change (SessionBoundary remount), and it backs
               cross-page reactivity (useResource / invalidate). */}
           <DataCacheProvider>
+          {/* Multi-user reactivity: holds the org change stream open so another
+              user's change refreshes this browser (see OrgEventSync). Inside the
+              cache provider so the whole data layer is listening. */}
+          <OrgEventSync />
           <NetworkProfileProvider>
           <ConnectorProvider>
             <RunProvider>
@@ -80,6 +90,12 @@ export default function App() {
                     <NormalizationProvider>
                       <AnalystReviewProvider>
                         <EvidenceProvider>
+                          {/* Warms this user's whole workspace into the shared
+                              cache after login, so every page renders from cache
+                              with no waiting. Inside the run + analyst-review
+                              providers because it warms per-opportunity data. */}
+                          <PrefetchWorkspaceData />
+                          <Suspense fallback={<LoadingPanel />}>
                           <Routes>
                             {/*
                              * ── Public routes ────────────────────────────────
@@ -213,6 +229,7 @@ export default function App() {
                               />
                             </Route>
                           </Routes>
+                          </Suspense>
                         </EvidenceProvider>
                       </AnalystReviewProvider>
                     </NormalizationProvider>

@@ -4,6 +4,7 @@ import React, {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from "react";
 import { useSearchParams } from "react-router-dom";
@@ -68,6 +69,15 @@ async function fetchLatestOrgRunId(token: string | null): Promise<string | null>
 export function RunProvider({ children }: { children: React.ReactNode }) {
   const [searchParams, setSearchParams] = useSearchParams();
   const urlRunId = searchParams.get("runId");
+  // react-router recreates setSearchParams as the location/search params change.
+  // Depending on it (in the effect below, or in setRunId's useCallback) meant a
+  // new identity on navigation/render → the effect re-ran → it validated the run
+  // (GET /api/runs/{id}) and set state → re-render → a new identity again: an
+  // endless request loop that saturated the browser's connection pool and
+  // starved every other page. Read it through a ref so the effect stays keyed on
+  // its real inputs and setRunId/clearRunId stay STABLE for every consumer.
+  const setSearchParamsRef = useRef(setSearchParams);
+  setSearchParamsRef.current = setSearchParams;
   const [runId, _setRunId] = useState<string | null>(null);
   // Use OUR own in-session token, not apiClient's module token: RunProvider is a
   // child of AuthProvider, so this effect runs before AuthProvider syncs the
@@ -108,7 +118,7 @@ export function RunProvider({ children }: { children: React.ReactNode }) {
     };
 
     const clearUrlRunId = () => {
-      setSearchParams((prev) => {
+      setSearchParamsRef.current((prev) => {
         const next = new URLSearchParams(prev);
         next.delete("runId");
         return next;
@@ -136,13 +146,18 @@ export function RunProvider({ children }: { children: React.ReactNode }) {
       };
     }
 
+    // Commit the canonical candidate OPTIMISTICALLY so downstream run-scoped
+    // fetches (DiscoveryRunContext, opportunities, …) start immediately instead
+    // of waiting a full round-trip for validation — this removes the blocking
+    // first hop of the cold-load waterfall. Validate concurrently and only
+    // correct course on a DEFINITIVE 404 (stale / cross-org id): drop it and fall
+    // back to the org's latest run. A transient error keeps the optimistic id.
+    // (DiscoveryRunContext independently clears the id if its own fetch 404s, so
+    // a bad id is dropped even if this validation is slow.)
+    setActiveRunId(candidate);
     validateRunId(candidate, token).then((valid) => {
       if (cancelled) return;
-      if (valid) {
-        setActiveRunId(candidate);
-      } else {
-        // Stale or belongs to another org — drop it and fall back to this
-        // org's latest run instead of leaving the user with nothing.
+      if (!valid) {
         if (fromUrl) clearUrlRunId();
         void selectLatestForOrg();
       }
@@ -151,7 +166,7 @@ export function RunProvider({ children }: { children: React.ReactNode }) {
     return () => {
       cancelled = true;
     };
-  }, [urlRunId, setSearchParams, token]);
+  }, [urlRunId, token]);
 
   const setRunId = useCallback(
     (id: string | null) => {
@@ -162,14 +177,16 @@ export function RunProvider({ children }: { children: React.ReactNode }) {
         else localStorage.removeItem(LS_KEY);
       } catch {}
 
-      setSearchParams((prev) => {
+      setSearchParamsRef.current((prev) => {
         const next = new URLSearchParams(prev);
         if (nextId) next.set("runId", nextId);
         else next.delete("runId");
         return next;
       }, { replace: true });
     },
-    [setSearchParams]
+    // Stable: setSearchParams is read through a ref (see above), so setRunId —
+    // and therefore clearRunId and the context value — keep a constant identity.
+    []
   );
 
   const clearRunId = useCallback(() => setRunId(null), [setRunId]);
