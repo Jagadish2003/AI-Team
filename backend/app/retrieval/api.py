@@ -14,6 +14,11 @@ What T4 completes on top of the T1 skeleton:
   ('only Confluence', 'only Slack', 'only this repo'); the filter is normalised
   (trimmed, de-duplicated) so callers get predictable behaviour, and an explicit
   scope that names nothing valid returns nothing rather than silently widening (AC4).
+* **Artifact-scoped** — ``artifact_filter`` narrows to an EXACT set of
+  ``source_artifact`` ids (never a substring/LIKE match), normalised the same
+  way as ``source_filter``. R18-A6 T5's component-scoped retrieval builds this
+  from the structure map (component -> declaring file) so a query can be
+  confined to one component's REAL code, not a path-coincidental match.
 * **min-score** — ``min_score`` drops weak matches below a cosine-similarity floor
   so low-quality evidence never enters the downstream reasoning flow (AC4).
 * **Ranked, reproducible** — results come back best-first (descending similarity)
@@ -80,21 +85,22 @@ class RetrievedChunk:
         )
 
 
-def _normalize_source_filter(
-    source_filter: Optional[List[str]],
+def _normalize_filter_list(
+    values: Optional[List[str]],
 ) -> Optional[List[str]]:
-    """Normalise a caller's source filter into a clean, ordered, unique list.
+    """Normalise a caller's filter list into a clean, ordered, unique list.
 
-    Returns ``None`` when no filter was supplied (unscoped search). Otherwise trims
+    Shared by ``source_filter`` and ``artifact_filter`` — both are "scope to
+    exactly these named values" filters, just over different columns. Returns
+    ``None`` when no filter was supplied (unscoped search). Otherwise trims
     whitespace, drops empty entries, and de-duplicates while sorting for
     determinism. A filter that was supplied but names nothing valid normalises to
-    an empty list — the caller explicitly scoped to no source, which must return
-    no results rather than silently widening to all sources.
+    an empty list — the caller explicitly scoped to nothing, which must return no
+    results rather than silently widening to everything.
     """
-    if source_filter is None:
+    if values is None:
         return None
-    cleaned = sorted({s.strip() for s in source_filter if s and s.strip()})
-    return cleaned
+    return sorted({s.strip() for s in values if s and s.strip()})
 
 
 def retrieve(
@@ -102,6 +108,7 @@ def retrieve(
     query_text: str,
     k: int = 10,
     source_filter: Optional[List[str]] = None,
+    artifact_filter: Optional[List[str]] = None,
     min_score: Optional[float] = None,
     include_stale: bool = False,
 ) -> List[RetrievedChunk]:
@@ -112,11 +119,17 @@ def retrieve(
     content, similarity, source_system, source_artifact, chunk_id,
     retrieval_result_id, source_timestamp, is_stale.
 
-    ``source_filter``  scopes to named source systems ('only Confluence', 'only
-                       this repo'); normalised and de-duplicated. An explicit
-                       filter naming nothing valid returns ``[]`` (AC4).
-    ``min_score``      excludes matches below this cosine-similarity floor so weak
-                       evidence never reaches the reasoning flow (AC4).
+    ``source_filter``    scopes to named source systems ('only Confluence', 'only
+                         this repo'); normalised and de-duplicated. An explicit
+                         filter naming nothing valid returns ``[]`` (AC4).
+    ``artifact_filter``  scopes to an EXACT set of ``source_artifact`` ids — never
+                         a substring/LIKE match; normalised the same way as
+                         ``source_filter``. R18-A6 T5's component-scoped retrieval
+                         passes the structure map's declaring-file set here so a
+                         query is confined to one component's REAL code, never a
+                         path-coincidental match (AC5).
+    ``min_score``        excludes matches below this cosine-similarity floor so weak
+                         evidence never reaches the reasoning flow (AC4).
     ``include_stale``  when ``False`` (default) chunks whose source artifact has
                        changed but not yet been refreshed are EXCLUDED, so a
                        finding is never quietly based on stale evidence (R18-B2 T4
@@ -140,15 +153,16 @@ def retrieve(
     if k <= 0:
         return []
 
-    sources = _normalize_source_filter(source_filter)
-    if sources is not None and not sources:
-        # Caller explicitly scoped to source systems but named none valid. The
-        # query was NOT embedded on this path (we return before embedding), so the
-        # telemetry flag must be False — otherwise monitors that track gateway
-        # embedding success rates count a phantom embed.
+    sources = _normalize_filter_list(source_filter)
+    artifacts = _normalize_filter_list(artifact_filter)
+    if (sources is not None and not sources) or (artifacts is not None and not artifacts):
+        # Caller explicitly scoped to source systems and/or artifacts but named
+        # none valid. The query was NOT embedded on this path (we return before
+        # embedding), so the telemetry flag must be False — otherwise monitors
+        # that track gateway embedding success rates count a phantom embed.
         _emit_query_telemetry(
             org_id, k, 0, sources, min_score, query_embedded=False,
-            include_stale=include_stale, stale_count=0,
+            include_stale=include_stale, stale_count=0, artifacts=artifacts,
         )
         return []
 
@@ -163,7 +177,7 @@ def retrieve(
         logger.debug("retrieve: query embedding unavailable; returning no candidates")
         _emit_query_telemetry(
             org_id, k, 0, sources, min_score, query_embedded=False,
-            include_stale=include_stale, stale_count=0,
+            include_stale=include_stale, stale_count=0, artifacts=artifacts,
         )
         return []
     query_vector = vectors[0]
@@ -173,6 +187,7 @@ def retrieve(
         query_vector=query_vector,
         k=k,
         source_filter=sources,
+        artifact_filter=artifacts,
         min_score=min_score,
         embedding_model=model_identity,
         embedding_model_version=model_version,
@@ -203,7 +218,7 @@ def retrieve(
 
     _emit_query_telemetry(
         org_id, k, len(results), sources, min_score, query_embedded=True,
-        include_stale=include_stale, stale_count=stale_count,
+        include_stale=include_stale, stale_count=stale_count, artifacts=artifacts,
     )
     return results
 
@@ -218,14 +233,18 @@ def _emit_query_telemetry(
     query_embedded: bool,
     include_stale: bool = False,
     stale_count: int = 0,
+    artifacts: Optional[List[str]] = None,
 ) -> None:
     """Emit one ``retrieval.query_completed`` event. Never raises.
 
     Counts and filter shape only — never the query text, the chunk content, or the
-    vectors (PII guard). ``include_stale`` records the freshness policy in force and
-    ``stale_count`` how many returned chunks were stale, so freshness lag stays
-    visible in observability (Section 1: "staleness is never invisible"). Imported
-    lazily and fully guarded so a telemetry problem can never break a retrieval call.
+    vectors (PII guard). ``artifacts`` records only the COUNT of artifacts scoped
+    (never the paths themselves — file/repo names are more identifying than a
+    source-system label, so only their shape is observable). ``include_stale``
+    records the freshness policy in force and ``stale_count`` how many returned
+    chunks were stale, so freshness lag stays visible in observability (Section 1:
+    "staleness is never invisible"). Imported lazily and fully guarded so a
+    telemetry problem can never break a retrieval call.
     """
     try:
         from app.telemetry import record_event
@@ -241,6 +260,8 @@ def _emit_query_telemetry(
             payload["stale_count"] = stale_count
         if sources is not None:
             payload["source_filter"] = sources
+        if artifacts is not None:
+            payload["artifact_filter_count"] = len(artifacts)
         if min_score is not None:
             payload["min_score"] = float(min_score)
         record_event("retrieval.query_completed", payload)
