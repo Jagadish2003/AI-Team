@@ -659,10 +659,21 @@ def _ingest_sharepoint_corroboration(org_id: str, run_id: str) -> Dict[str, Any]
     into the ``{activity, cross_references, estates}`` block wrapped under the
     ``'sharepoint'`` key. Non-blocking: any failure degrades to an empty block so a
     SharePoint read never aborts the run.
+
+    R18-A5 / T2 (AT-601): beside the reach signal path, the SharePoint site-page /
+    list-text DEEP CONTENT path is driven too (``sharepoint_content.
+    ingest_sharepoint_content``) — page/list bodies rendered to structure-preserving
+    text and indexed with page-level provenance (AC1). Unlike Confluence (whose
+    depth reuses the reach ingestor's records), SharePoint depth is a SEPARATE
+    ``ChangeBasedIngestor`` (``connector_id='sharepoint_content'``) with its OWN
+    ``(org, 'sharepoint_content')`` checkpoint, so it is invoked independently here
+    rather than sharing the reach records. Non-blocking: a deep-content failure never
+    affects the corroboration block returned here.
     """
     try:
         from .ingest import change_runner
         from .ingest.sharepoint import SharePointIngestor
+        from .ingest.sharepoint_content import ingest_sharepoint_content
         from .ingest.sharepoint_signals import build_sharepoint_corroboration_payload
     except Exception as e:  # noqa: BLE001 — SharePoint corroboration is optional.
         logger.warning("SharePoint connector import failed (non-blocking): %s", e)
@@ -694,6 +705,21 @@ def _ingest_sharepoint_corroboration(org_id: str, run_id: str) -> Dict[str, Any]
             "SharePoint change ingest: %s — %d batch(es), %d changed record(s), checkpoint_advanced=%s",
             "first run (streamed full load)" if result.first_run else "incremental",
             result.batches, result.records, result.checkpoint_advanced,
+        )
+
+    try:
+        content_result = ingest_sharepoint_content(org_id)
+        logger.info(
+            "SharePoint deep content: org=%s run=%s records=%d handed_off=%d indexed=%d "
+            "empty=%d failed=%d",
+            org_id, run_id, content_result.records, content_result.artifacts_handed_off,
+            content_result.artifacts_indexed, content_result.artifacts_empty,
+            content_result.artifacts_failed,
+        )
+    except Exception as e:  # noqa: BLE001 — deep content must never block corroboration.
+        logger.warning(
+            "SharePoint deep content hand-off failed (non-blocking) org=%s run=%s: [%s]",
+            org_id, run_id, type(e).__name__,
         )
 
     return build_sharepoint_corroboration_payload(collected)

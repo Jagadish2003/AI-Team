@@ -67,8 +67,10 @@ def test_confluence_implements_change_based_ingestor():
     ing = ConfluenceIngestor()
     assert isinstance(ing, ChangeBasedIngestor)
     assert ing.connector_id == "confluence"
-    # Last-modified-forward polling cannot surface deletions — declared explicitly.
-    assert ing.reports_deletes is False
+    # R18-A5 / AT-603 (T4): deletion IS detected now — each run diffs the current
+    # page/blogpost id set against the checkpoint's known ids and tombstones any
+    # that disappeared or flipped to archived, so the connector reports deletes.
+    assert ing.reports_deletes is True
 
 
 def test_records_carry_artifact_id_and_change_kind():
