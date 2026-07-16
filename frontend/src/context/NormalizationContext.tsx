@@ -29,6 +29,7 @@ import { fetchPermissions } from "../services/staticApi";
 import { apiGet } from "../lib/apiClient";
 import { useRunContext } from "./RunContext";
 import { useDiscoveryRunContext } from "./DiscoveryRunContext";
+import { useRevalidateOnFocus } from "../lib/useRevalidate";
 
 export type Tab = "MAPPED" | "UNMAPPED" | "AMBIGUOUS";
 type SortMode = "Confidence High→Low" | "Source A→Z";
@@ -136,16 +137,34 @@ export function NormalizationProvider({
     };
   }, [runId, fetchCount]);
 
-  // Auto-refresh normalization data while the run is computing
+  // Auto-refresh normalization data while the run is computing. Paused while the
+  // tab is backgrounded (no point refreshing a view the user isn't looking at);
+  // the visibilitychange listener refreshes immediately when it is foregrounded.
   useEffect(() => {
     if (!runId || !computing) return;
 
-    const interval = setInterval(() => {
+    const tick = () => {
+      if (typeof document !== "undefined" && document.hidden) return;
       refetchRows();
-    }, 3000);
+    };
+    const interval = setInterval(tick, 3000);
+    const onVisibility = () => {
+      if (typeof document !== "undefined" && !document.hidden) refetchRows();
+    };
+    document.addEventListener("visibilitychange", onVisibility);
 
-    return () => clearInterval(interval);
+    return () => {
+      clearInterval(interval);
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
   }, [runId, computing, refetchRows]);
+
+  // Normalization mappings are SHARED across the org — another analyst's edit
+  // must appear here without a reload. While the run is computing the 3s poll
+  // above already refreshes, so this covers the settled (post-run) case.
+  useRevalidateOnFocus(refetchRows, {
+    enabled: Boolean(runId) && !computing,
+  });
 
   // Confidence — still from mock until Sprint 5 adds an endpoint
   const [confidence] = useState<ConfidenceExplanation>(

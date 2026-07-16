@@ -13,7 +13,8 @@
  *  - A reset failure shows a clear error and does NOT refresh / falsely resolve.
  *  - Analysts see reconnect but never the owner-only reset. Viewers are denied.
  */
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { screen, waitFor, within } from "@testing-library/react";
+import { renderWithCache } from "../test-utils/renderWithCache";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -86,8 +87,11 @@ const emptyContent = {
   skipped: [],
 };
 
+// The health panels read from the shared data cache (so they survive
+// navigation), which needs a DataCacheProvider ancestor. Each render gets a
+// fresh provider, so the cache never leaks between tests.
 function renderPage(path = "/run-health") {
-  return render(<MemoryRouter initialEntries={[path]}><RunHealthDashboardPage /></MemoryRouter>);
+  return renderWithCache(<MemoryRouter initialEntries={[path]}><RunHealthDashboardPage /></MemoryRouter>);
 }
 
 beforeEach(() => {

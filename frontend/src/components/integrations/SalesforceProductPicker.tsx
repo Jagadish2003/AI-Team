@@ -33,12 +33,13 @@
  * Props:
  *   onSaved — called after successful save (parent can refetch connector)
  */
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useToast } from '../common/Toast';
+import { Skeleton } from '../common/Skeleton';
 import { ApiError, apiGet, apiPatch } from '../../lib/apiClient';
 import { useAuthOptional } from '../../context/AuthContext';
 import { isViewerRole } from '../../utils/roles';
-import { useDataCache } from '../../lib/dataCache';
+import { useDataCache, useResource } from '../../lib/dataCache';
 import { cacheKeys } from '../../lib/cacheKeys';
 
 // ── Product definitions ───────────────────────────────────────────────────────
@@ -95,27 +96,33 @@ export default function SalesforceProductPicker({ onSaved }: Props) {
   const isViewer = isViewerRole(auth?.user?.role);
   const cache = useDataCache();
   const [selected, setSelected] = useState<Set<string>>(new Set());
-  const [loading,  setLoading]  = useState(true);
   const [saving,   setSaving]   = useState(false);
+  // True once the user has changed the selection without saving it. A background
+  // refresh must never overwrite an edit in progress (see the sync effect below).
+  const dirtyRef = useRef(false);
 
-  // Load current declaration on mount
+  // The declaration on the SHARED cache rather than component-local state: the
+  // cache lives at the app root, so re-opening this panel (or navigating away
+  // and back) renders it from cache with no refetch and no skeleton. It refreshes
+  // only when it should — saving invalidates this key, and another user's change
+  // arrives via the org event stream — and those refreshes are background.
+  const { data: productsData, loading } = useResource<SalesforceProductsResponse>(
+    cacheKeys.connectorProducts,
+    () => apiGet<SalesforceProductsResponse>('/api/connectors/salesforce/products'),
+  );
+
+  // Mirror the server declaration into the local selection, EXCEPT while the user
+  // has an unsaved edit — a background revalidation landing mid-edit must not
+  // reset what they just picked.
   useEffect(() => {
-    setLoading(true);
-    apiGet<SalesforceProductsResponse>('/api/connectors/salesforce/products')
-      .then(data => {
-        if (data?.products) {
-          setSelected(new Set(data.products));
-        }
-      })
-      .catch(() => {
-        // Silent failure — empty selection is safe default
-      })
-      .finally(() => setLoading(false));
-  }, []);
+    if (dirtyRef.current) return;
+    if (productsData?.products) setSelected(new Set(productsData.products));
+  }, [productsData]);
 
   function selectProduct(id: string) {
     // Radio behaviour: only one product can be selected at a time. Selecting a
     // product replaces any previous selection; clicking the selected one clears it.
+    dirtyRef.current = true;
     setSelected(prev => (prev.has(id) ? new Set() : new Set([id])));
   }
 
@@ -127,6 +134,9 @@ export default function SalesforceProductPicker({ onSaved }: Props) {
         { products: [...selected] },
       );
       setSelected(new Set(data.products));
+      // Saved — the server declaration is authoritative again, so let background
+      // refreshes drive the selection from here on.
+      dirtyRef.current = false;
       // Cross-page reactivity: the pack Stack Builder resolves is driven by this
       // declaration (read there via the workspace catalog), so invalidate the
       // declaration, the catalog, and the connector list. Any mounted consumer
@@ -155,9 +165,21 @@ export default function SalesforceProductPicker({ onSaved }: Props) {
   }, [selected, push, onSaved, cache]);
 
   if (loading) {
+    // Skeleton mirrors the header + description + product rows below, so the real
+    // declaration fills the same space instead of popping in under the panel.
     return (
-      <div className="mt-4 text-xs text-muted animate-pulse">
-        Loading product declaration…
+      <div className="mt-4" aria-busy="true" aria-label="Loading product declaration">
+        <div className="mb-2 flex items-center justify-between">
+          <Skeleton className="h-4 w-44" />
+          <Skeleton className="h-3 w-28" />
+        </div>
+        <Skeleton className="mb-1 h-3 w-full" />
+        <Skeleton className="mb-3 h-3 w-3/4" />
+        <div className="space-y-2">
+          {[0, 1, 2].map((i) => (
+            <Skeleton key={i} className="h-14 w-full rounded-lg" />
+          ))}
+        </div>
       </div>
     );
   }

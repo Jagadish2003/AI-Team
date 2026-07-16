@@ -413,3 +413,29 @@ def test_route_status_and_delete(client):
 
     g2 = client.get("/api/connectors/salesforce/jwt-credentials", headers=OWNER)
     assert g2.json()["configured"] is False
+
+
+def test_route_normalises_bare_login_host(client):
+    # A bare host (no scheme) is accepted and defaulted to https, so the outbound
+    # token URL and JWT `aud` claim are well-formed. Fails loudly at setup would be
+    # worse than a silent malformed mint.
+    vault.revoke_jwt_bearer_credential("default", "salesforce")
+    body = _body()
+    body["login_url"] = "login.salesforce.com"
+    r = client.post(
+        "/api/connectors/salesforce/jwt-credentials", json=body, headers=OWNER
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["base_url"] == "https://login.salesforce.com"
+    vault.revoke_jwt_bearer_credential("default", "salesforce")
+
+
+def test_route_rejects_non_http_login_url(client):
+    vault.revoke_jwt_bearer_credential("default", "salesforce")
+    body = _body()
+    body["login_url"] = "ftp://not-a-web-url"
+    r = client.post(
+        "/api/connectors/salesforce/jwt-credentials", json=body, headers=OWNER
+    )
+    assert r.status_code == 400
+    assert "login URL" in r.json()["detail"]
