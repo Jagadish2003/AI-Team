@@ -103,6 +103,57 @@ def _snapshot_detector_evaluations(
     return run_completed_at
 
 
+def _record_pack_execution(
+    *,
+    org_id: str,
+    run_id: str,
+    pack_id: str,
+    pack_name: str,
+    pack_version: str,
+    detectors: List[Any],
+    evaluated_count: int,
+    executed_at: datetime,
+) -> List[str]:
+    """Emit and return the immutable detector list used for this run.
+
+    Run Health must describe what actually executed, not whatever the mutable
+    pack registry contains when the dashboard is opened later. Every configured
+    detector is attempted by ``_run_detector_phase``; identifiers therefore come
+    from that exact module list, including a detector whose evaluation raised.
+    """
+    detector_ids = [
+        str(
+            getattr(
+                detector,
+                "DETECTOR_ID",
+                getattr(detector, "__name__", type(detector).__name__).split(".")[-1],
+            )
+        )
+        for detector in detectors
+    ]
+    try:
+        record_event(
+            "run.pack_executed",
+            {
+                "org_id": org_id,
+                "run_id": run_id,
+                "pack_id": pack_id,
+                "pack_name": pack_name,
+                "pack_version": pack_version,
+                "detector_ids": detector_ids,
+                "detector_count": len(detector_ids),
+                "evaluated_count": evaluated_count,
+                "not_evaluated_count": max(0, len(detector_ids) - evaluated_count),
+                "executed_at": executed_at.isoformat(),
+            },
+        )
+    except Exception as exc:
+        # Telemetry is observability, not a reason to fail discovery. The same
+        # snapshot is also returned to materialization and persisted on the run.
+        logger.warning("Pack execution telemetry failed (non-blocking): %s", exc)
+    return detector_ids
+
+
 def build_org_context(sf_data: Dict, sn_data: Dict, jira_data: Dict) -> Dict[str, Any]:
     cm = sf_data.get("case_metrics") or {}
     fi = sf_data.get("flow_inventory") or {}
@@ -535,19 +586,28 @@ def _ingest_confluence_corroboration(org_id: str, run_id: str) -> Dict[str, Any]
     Non-blocking: any failure degrades to an empty block (`{}`) so a Confluence
     read never aborts the run (the runner swallows ingestion errors and leaves the
     checkpoint unadvanced for the next run to re-read).
+
+    R18-A5 / T1 (AT-600): the SAME changed-record set collected below also drives
+    the page/blogpost DEEP CONTENT hand-off to retrieval (``confluence_content.
+    ingest_confluence_content``) — page bodies rendered to structure-preserving
+    text and indexed with page-level provenance (AC1). This rides this checkpoint
+    rather than opening a second one, and is itself non-blocking: a deep-content
+    failure never affects the corroboration block returned here.
     """
     try:
         from .ingest import change_runner
         from .ingest.confluence import ConfluenceIngestor
+        from .ingest.confluence_content import ingest_confluence_content
         from .ingest.confluence_signals import build_confluence_corroboration_payload
     except Exception as e:  # noqa: BLE001 — Confluence corroboration is optional.
         logger.warning("Confluence connector import failed (non-blocking): %s", e)
         return {}
 
     collected: List[Dict[str, Any]] = []
+    ingestor = ConfluenceIngestor()
     try:
         result = change_runner.ingest_with_checkpoint(
-            ConfluenceIngestor(),
+            ingestor,
             org_id,
             process_batch=lambda batch: collected.extend(batch.records),
         )
@@ -568,6 +628,21 @@ def _ingest_confluence_corroboration(org_id: str, run_id: str) -> Dict[str, Any]
             "Confluence change ingest: %s — %d batch(es), %d changed record(s), checkpoint_advanced=%s",
             "first run (streamed full load)" if result.first_run else "incremental",
             result.batches, result.records, result.checkpoint_advanced,
+        )
+
+    try:
+        content_result = ingest_confluence_content(org_id, collected, ingestor=ingestor)
+        logger.info(
+            "Confluence deep content: org=%s run=%s pages=%d handed_off=%d indexed=%d "
+            "empty=%d failed=%d",
+            org_id, run_id, content_result.pages_seen, content_result.artifacts_handed_off,
+            content_result.artifacts_indexed, content_result.artifacts_empty,
+            content_result.artifacts_failed,
+        )
+    except Exception as e:  # noqa: BLE001 — deep content must never block corroboration.
+        logger.warning(
+            "Confluence deep content hand-off failed (non-blocking) org=%s run=%s: [%s]",
+            org_id, run_id, type(e).__name__,
         )
 
     return build_confluence_corroboration_payload(collected)
@@ -1263,12 +1338,22 @@ def run(
         jira_data,
     )
 
-    _snapshot_detector_evaluations(
+    pack_executed_at = _snapshot_detector_evaluations(
         org_id=org_id,
         run_id=run_id,
         pack_id=pack_id,
         detector_results=detector_results,
         all_evaluated=all_evaluated,
+    )
+    executed_detector_ids = _record_pack_execution(
+        org_id=org_id,
+        run_id=run_id,
+        pack_id=pack_id,
+        pack_name=str(pack_config.get("packName") or pack_id),
+        pack_version=pack_version,
+        detectors=all_detectors,
+        evaluated_count=len(all_evaluated),
+        executed_at=pack_executed_at,
     )
 
     update_run_step(run_id, "enrich")
@@ -1664,6 +1749,9 @@ def run(
         # apply focus emphasis deterministically (None => unbiased view).
         "focusId": _focus_id,
         "packVersion": pack_version,
+        "packName": pack_config.get("packName") or pack_id,
+        "detectorsExecuted": executed_detector_ids,
+        "packExecutedAt": pack_executed_at.isoformat(),
         "startedAt": started_at, "completedAt": datetime.now(timezone.utc).isoformat(),
         "inputs": org_ctx, "opportunities": opportunities,
         "perSystem": _per_system,

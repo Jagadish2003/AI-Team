@@ -236,6 +236,22 @@ def run_trackb_and_persist(
             mode=mode, systems=systems, run_id=run_id, org_id=run_org_id, pack=pack_id
         )
 
+        # R18-C2 T2: preserve the exact pack execution snapshot returned by the
+        # runner. The Run-Health dashboard reads these immutable run fields (and
+        # the matching run.pack_executed event) instead of consulting today's
+        # mutable pack registry for a historical run.
+        executed_detectors = payload.get("detectorsExecuted")
+        if isinstance(executed_detectors, list):
+            run["packId"] = payload.get("packId") or pack_id
+            run["packName"] = payload.get("packName") or run.get("packName")
+            run["packVersion"] = payload.get("packVersion")
+            run["executedDetectorIds"] = [
+                str(detector_id)
+                for detector_id in executed_detectors
+                if str(detector_id).strip()
+            ]
+            run["packExecutedAt"] = payload.get("packExecutedAt")
+
         per_system, succeeded, ingest_errors = _ingest_summary_from_payload(
             payload, systems
         )

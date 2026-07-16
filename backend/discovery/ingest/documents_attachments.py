@@ -47,6 +47,12 @@ import base64
 import logging
 from typing import Any, Dict, List, Optional, Tuple
 
+from .content_router import (
+    CONFLUENCE_ATTACHMENT_TYPE,
+    ContentRoute,
+    classify_confluence_content,
+    classify_sharepoint_drive_item,
+)
 from .documents_source import DocumentRef, DocumentSource, DocumentSourceError
 
 logger = logging.getLogger(__name__)
@@ -101,13 +107,17 @@ class SharePointDocumentSource(DocumentSource):
 
         Cached per org on this (per-run) instance so ``list_documents`` and the
         subsequent ``read`` calls share one enumeration instead of re-scanning.
+        Classification is the page-vs-file router's job (AT-602 / T3,
+        ``content_router.classify_sharepoint_drive_item``): only items it routes
+        to DOCUMENT are enumerated — folders, deleted items, and (should the
+        driveItem surface ever widen to include page-like items) anything the
+        router does NOT classify as a document are skipped here rather than
+        guessed into this path.
         """
         cache: Dict[str, Tuple[Dict[str, Any], Dict[str, Any]]] = {}
         for library in self._ing._accessible_libraries(org_id):
             for item in self._ing._raw_items(org_id, library):
-                if item.get("deleted"):
-                    continue
-                if "file" not in item:  # folders / non-file items carry no bytes
+                if classify_sharepoint_drive_item(item) != ContentRoute.DOCUMENT:
                     continue
                 item_id = str(item.get("id") or "").strip()
                 if not item_id:
@@ -215,9 +225,29 @@ class ConfluenceDocumentSource(DocumentSource):
         return attachments
 
     def _scan(self, org_id: str) -> Dict[str, Dict[str, Any]]:
+        """Enumerate a space's page ATTACHMENTS, keyed by artifact id.
+
+        Classification is the page-vs-file router's job (AT-602 / T3,
+        ``content_router.classify_confluence_content``): an attachment listing
+        entry's own ``type`` field (present on live Graph/Confluence responses;
+        defaulted to :data:`CONFLUENCE_ATTACHMENT_TYPE` for the offline fixture
+        shape, which carries none) must classify as DOCUMENT — anything else is
+        a data anomaly and is skipped defensively rather than mis-routed.
+        """
         cache: Dict[str, Dict[str, Any]] = {}
         for space in self._ing._accessible_spaces(org_id):
             for att in self._raw_attachments(org_id, space):
+                route = classify_confluence_content(
+                    att.get("type", CONFLUENCE_ATTACHMENT_TYPE)
+                )
+                if route != ContentRoute.DOCUMENT:
+                    logger.warning(
+                        "documents: Confluence attachment %r classified %s "
+                        "(expected document) — skipping defensively",
+                        att.get("id"),
+                        route,
+                    )
+                    continue
                 att_id = str(att.get("id") or "").strip()
                 if not att_id:
                     continue

@@ -48,22 +48,79 @@ connector therefore encodes a per-space cursor MAP as the opaque checkpoint
 value, keyed by space key; each cursor is the high-water content-modified
 timestamp (ISO-8601) seen in that space::
 
-    {"v": 1, "spaces": {"ENG": "2026-06-11T08:05:00.000Z", "OPS": "2026-06-10T09:30:00.000Z"}}
+    {"v": 2, "spaces": {"ENG": "2026-06-11T08:05:00.000Z", "OPS": "2026-06-10T09:30:00.000Z"},
+     "known_ids": {"ENG": ["100", "200", "300", "400"], "OPS": ["500", "600"]}}
 
 The runner never interprets this — it persists and returns the string verbatim
 (R16-A1 AC5). Only this connector, which owns the shape, parses it back. A space
-absent from the map is read from the beginning, which is exactly what makes a
-first load resumable: if the streamed first load fails partway, the next run
-finds a checkpoint (incremental mode) whose map covers the spaces already loaded,
-resumes the partially-loaded space from its last content-modified timestamp, and
-loads any not-yet-started space in full. No content is skipped and the load
-completes across runs.
+absent from the ``spaces`` map is read from the beginning, which is exactly what
+makes a first load resumable: if the streamed first load fails partway, the next
+run finds a checkpoint (incremental mode) whose map covers the spaces already
+loaded, resumes the partially-loaded space from its last content-modified
+timestamp, and loads any not-yet-started space in full. No content is skipped
+and the load completes across runs.
+
+``known_ids`` (R18-A5 / AT-603, T4) is the per-space set of page/blogpost ids
+this connector has confirmed CURRENT as of its last full-inventory read of that
+space — schema version bumped to 2 to mark the shape change (a v1 checkpoint,
+lacking ``known_ids``, decodes to an empty map and simply skips deletion
+detection until the next run repopulates it — a safe, self-healing bootstrap).
+See :meth:`ConfluenceIngestor.ingest_changes` for how it drives deletion/
+archival propagation.
 
 Permissions / privacy (AC4)
 ---------------------------
 Only spaces AgentIQ is granted are read, and the source's own space permissions
 are respected: :meth:`_accessible_spaces` filters to ``is_accessible == True``
 and excludes archived spaces. Content in an ungranted space is never fetched.
+
+Deletion / archival propagation (R18-A5 / AT-603, T4 — AC3 + AC5)
+-------------------------------------------------------------------
+Confluence's default content listing returns only ``status='current'`` content
+(``content_for_space`` never passes a ``status`` filter), so a page that is
+trashed or archived simply STOPS appearing in the space's listing — the exact
+"disappeared from a full-inventory read" signal :mod:`documents.py` already uses
+to infer deletions. Each run, alongside the modified-cursor delta, this
+connector re-derives the space's CURRENT page/blogpost id set from the SAME
+``_raw_content`` read (no extra fetch) and diffs it against the previous run's
+``known_ids`` (see the checkpoint shape above): an id that dropped out of the
+current set — because it was deleted/trashed/archived, OR because its own
+``status`` field flipped away from ``current`` while still listed — is emitted
+as a :func:`~discovery.ingest.base.tombstone` (``change_kind='deleted'``, no
+content). A space that disappears from :meth:`_accessible_spaces` entirely
+(revoked grant, or newly archived at the space level) tombstones every id
+previously known for it WITHOUT reading that now-inaccessible space (AC4 holds
+at the deletion path too — never fetch what is no longer granted, not even to
+check whether it still exists).
+
+Every tombstone flows through the SAME shared runner
+(:mod:`discovery.ingest.change_runner`) as ordinary changes, so it emits a
+``change_kind='deleted'`` ``ingestion.artifact_changed`` event exactly like any
+other connector's deletion (R16-A1 §5) — the retrieval-freshness subscriber
+(R18-B2) turns that into an immediate ``store.purge_artifact`` for
+``(source_system='confluence', source_artifact='{space_key}:{content_id}')``,
+the SAME identity :mod:`confluence_content` ingests page bodies under, so the
+exact chunks a page produced are the ones removed (AC3's "removes its content
+from retrieval immediately"). :mod:`confluence_content` additionally routes
+these tombstones straight to ``retrieval.ingest.remove_content`` in the SAME
+hand-off call, synchronously, so removal does not depend solely on the
+fire-and-forget telemetry/freshness path (belt-and-braces, mirroring
+``git_content.py``'s AT-533 deletion propagation).
+
+``known_ids`` is a per-run FULL snapshot of a space's current ids, computed
+independently of how far this run's upsert batches progress — it answers "does
+this id still exist in the source", not "was its content re-ingested this
+run" — so it is safe to finalise up front, even on an interrupted first load;
+the per-space modified cursor (unchanged, resumable exactly as before) is what
+governs re-emission of un-ingested content changes. The two concerns are
+orthogonal and do not interfere with each other's correctness.
+
+``reports_deletes = True``: unlike the reach-phase-only v1 connector, deletion
+IS now detected (via the disappearance/status-flip diff above) for any page
+this connector has previously observed. The one residual gap: a page deleted
+before this connector ever saw it (never entered ``known_ids``) leaves no
+trace to tombstone — but it was also never ingested, so there is nothing stale
+to remove.
 
 Offline vs live
 ---------------
@@ -87,7 +144,7 @@ from typing import Any, Dict, Iterator, List, Optional
 from app.provenance import EvidencePointer, utc_now_iso
 
 from . import get_live_connector, is_live, resolve_vault_connector
-from .base import ChangeBasedIngestor, ChangeKind, Checkpoint, DeltaBatch
+from .base import ChangeBasedIngestor, ChangeKind, Checkpoint, DeltaBatch, tombstone
 from .confluence_signals import build_page_signals
 
 logger = logging.getLogger(__name__)
@@ -95,7 +152,9 @@ logger = logging.getLogger(__name__)
 FIXTURE_PATH = Path(__file__).parent / "fixtures" / "confluence_sample.json"
 
 #: Opaque-checkpoint schema version, so a future shape change can be detected.
-_CHECKPOINT_VERSION = 1
+#: Bumped 1 -> 2 (R18-A5 / AT-603, T4) to add the per-space ``known_ids`` set
+#: deletion/archival detection diffs against.
+_CHECKPOINT_VERSION = 2
 
 #: Default number of content items emitted per :class:`DeltaBatch`. Kept modest
 #: so a large initial load is streamed as many small, individually-checkpointed
@@ -106,6 +165,13 @@ _DEFAULT_BATCH_SIZE = 100
 #: comments, etc. are out of scope.
 _CONTENT_TYPES = ("page", "blogpost")
 
+#: Confluence content ``status`` values that mean "no longer live content" —
+#: treated as a deletion for retrieval-freshness purposes (R18-A5 / AT-603, T4).
+#: A page usually stops appearing in the listing entirely once trashed/archived
+#: (Confluence's default content query returns only ``status='current'``); this
+#: set also catches the rarer case where a non-current item is still listed.
+_REMOVED_STATUSES = frozenset({"trashed", "archived"})
+
 _REQUEST_TIMEOUT = 30
 
 
@@ -113,17 +179,24 @@ class ConfluenceIngestError(Exception):
     """Raised when live Confluence ingestion fails with a clear, actionable message."""
 
 
-def _encode_checkpoint(cursors: Dict[str, str]) -> str:
-    """Encode the per-space content-modified cursor map as the opaque checkpoint.
+def _encode_checkpoint(
+    cursors: Dict[str, str], known_ids: Optional[Dict[str, Any]] = None
+) -> str:
+    """Encode the per-space cursor map + known-id sets as the opaque checkpoint.
 
-    ``sort_keys`` keeps the encoding deterministic so two runs over identical
-    state produce byte-identical checkpoints (testable, diff-friendly).
+    ``known_ids`` (R18-A5 / AT-603) defaults to empty — existing callers that
+    pass only ``cursors`` (e.g. hand-built ``since`` checkpoints in tests) still
+    work exactly as before, simply with no prior known-id state to diff
+    deletions against (a safe no-op, not an error). ``sort_keys`` keeps the
+    encoding deterministic so two runs over identical state produce
+    byte-identical checkpoints (testable, diff-friendly).
     """
-    return json.dumps(
-        {"v": _CHECKPOINT_VERSION, "spaces": cursors},
-        sort_keys=True,
-        separators=(",", ":"),
-    )
+    payload = {
+        "v": _CHECKPOINT_VERSION,
+        "spaces": cursors,
+        "known_ids": {k: sorted(set(v)) for k, v in (known_ids or {}).items()},
+    }
+    return json.dumps(payload, sort_keys=True, separators=(",", ":"))
 
 
 def _decode_checkpoint(value: Optional[str]) -> Dict[str, str]:
@@ -131,7 +204,9 @@ def _decode_checkpoint(value: Optional[str]) -> Dict[str, str]:
 
     Tolerant by design: a missing, empty, or unparseable value yields an empty
     map (read every space from the beginning) rather than raising — a degenerate
-    checkpoint must degrade to a safe full re-read, never crash the run.
+    checkpoint must degrade to a safe full re-read, never crash the run. Ignores
+    a ``known_ids`` key if present (see :func:`_decode_known_ids`) — this reader
+    is scoped to the cursor map only.
     """
     if not value:
         return {}
@@ -149,6 +224,42 @@ def _decode_checkpoint(value: Optional[str]) -> Dict[str, str]:
         return {}
     # Keep only string→string entries; ignore anything malformed.
     return {str(k): str(v) for k, v in spaces.items() if v is not None}
+
+
+def _decode_known_ids(value: Optional[str]) -> Dict[str, set]:
+    """Decode the per-space known-page-id sets (R18-A5 / AT-603, T4).
+
+    Tolerant exactly like :func:`_decode_checkpoint`: a missing/unparseable
+    value, or a v1 checkpoint predating this key, yields an empty map — the
+    connector simply has no prior inventory to diff against yet, so deletion
+    detection quietly sits out this one run and resumes from the next (a safe,
+    self-healing bootstrap, never a crash).
+    """
+    if not value:
+        return {}
+    try:
+        data = json.loads(value)
+    except (TypeError, ValueError):
+        return {}
+    known = data.get("known_ids") if isinstance(data, dict) else None
+    if not isinstance(known, dict):
+        return {}
+    result: Dict[str, set] = {}
+    for k, v in known.items():
+        if isinstance(v, list):
+            result[str(k)] = {str(x) for x in v}
+    return result
+
+
+def _is_current(content: Dict[str, Any]) -> bool:
+    """True unless a content item's ``status`` marks it removed (AT-603).
+
+    Missing ``status`` defaults to ``current`` (the common case; the offline
+    fixture and most live responses always carry it, but a defensive default
+    avoids ever mistaking an absent field for a removal).
+    """
+    status = str(content.get("status") or "current").strip().lower()
+    return status not in _REMOVED_STATUSES
 
 
 def _modified_iso(content: Dict[str, Any]) -> str:
@@ -237,18 +348,20 @@ class ConfluenceIngestor(ChangeBasedIngestor):
     first run (``since is None``) performs a full initial load of accessible
     spaces, streamed as resumable, individually-checkpointed batches.
 
-    Deletes / tombstones (R16-A1 §5)
-    --------------------------------
-    ``reports_deletes = False``: this connector polls content by
-    last-modified-forward ordering, which does not surface deletions of
-    previously-seen pages — a deleted/trashed page simply stops appearing in
-    future results. Confluence does expose content-restriction / trash events,
-    but consuming that stream is out of scope for the reach phase. The gap is
-    declared explicitly here rather than silently pretending deletes are caught.
+    Deletes / tombstones (R16-A1 §5; R18-A5 / AT-603 T4)
+    -----------------------------------------------------
+    ``reports_deletes = True``: alongside the last-modified-forward delta, each
+    run also diffs a space's current page/blogpost id set against the previous
+    run's known ids (the checkpoint's ``known_ids``) and emits a
+    :func:`~discovery.ingest.base.tombstone` for any id that disappeared or
+    whose status flipped to trashed/archived — see the module docstring's
+    "Deletion / archival propagation" section for the full mechanism. The one
+    residual gap: a page deleted before this connector ever observed it leaves
+    no trace to tombstone (nothing was ingested, so nothing is stale).
     """
 
     connector_id = "confluence"
-    reports_deletes = False
+    reports_deletes = True
 
     def __init__(self, batch_size: int = _DEFAULT_BATCH_SIZE):
         if batch_size < 1:
@@ -263,17 +376,22 @@ class ConfluenceIngestor(ChangeBasedIngestor):
 
         First run (``since is None``): full load of every accessible space,
         streamed as checkpointed batches (resumable — AC3). Incremental run: only
-        content modified after the stored per-space cursor (AC2). An unchanged
-        source yields a single empty :class:`DeltaBatch` whose ``next_checkpoint``
-        echoes the incoming position (AC2).
+        content modified after the stored per-space cursor (AC2) — PLUS any
+        deletion/archival tombstones the known-id diff surfaces (AT-603, AC3 /
+        AC5; see the module docstring). An unchanged source yields a single
+        empty :class:`DeltaBatch` whose ``next_checkpoint`` echoes the incoming
+        position (AC2).
         """
         cursors: Dict[str, str] = _decode_checkpoint(since.value if since else None)
-        # Working copy we advance as batches are emitted; each yielded
-        # next_checkpoint encodes the cumulative map so any single batch is a
+        known_prev: Dict[str, set] = _decode_known_ids(since.value if since else None)
+        # Working copies advanced as batches are emitted; each yielded
+        # next_checkpoint encodes the cumulative state so any single batch is a
         # valid resume point on the next run.
         running = dict(cursors)
+        running_known: Dict[str, set] = {k: set(v) for k, v in known_prev.items()}
 
         spaces = self._accessible_spaces(org_id)
+        accessible_keys = {s["key"] for s in spaces}
         logger.info(
             "confluence: org=%s %s — %d accessible space(s)",
             org_id,
@@ -283,31 +401,59 @@ class ConfluenceIngestor(ChangeBasedIngestor):
 
         # Gather each space's changed content first so we know which batch is the
         # final one overall and can flag is_complete=True on exactly that batch
-        # (the runner needs one terminal batch to advance).
+        # (the runner needs one terminal batch to advance). One read of a
+        # space's raw content serves BOTH the upsert delta and the known-id
+        # snapshot used for deletion diffing (AT-603) — no extra fetch.
         pending: List[tuple] = []  # (space, [content]) for spaces with changes
+        removed: List[tuple] = []  # (space_key, content_id) tombstones
         for space in spaces:
-            cursor = cursors.get(space["key"])
-            changed = self._changed_content(org_id, space, cursor)
+            key = space["key"]
+            cursor = cursors.get(key)
+            raw = self._raw_content(org_id, space)
+            changed = self._changed_content(org_id, space, cursor, raw_content=raw)
             if changed:
                 pending.append((space, changed))
 
-        if not pending:
+            current_ids = self._current_page_ids(raw)
+            removed.extend(
+                (key, cid) for cid in sorted(known_prev.get(key, set()) - current_ids)
+            )
+            running_known[key] = current_ids
+
+        # A space that dropped out of accessibility entirely (grant revoked, or
+        # archived at the space level) tombstones everything previously known
+        # for it — WITHOUT reading that now-ungranted space (AC4 holds at the
+        # deletion path too).
+        for key, ids in known_prev.items():
+            if key in accessible_keys:
+                continue
+            removed.extend((key, cid) for cid in sorted(ids))
+            running_known.pop(key, None)
+
+        deletions = [self._tombstone(key, cid) for key, cid in removed]
+
+        if not pending and not deletions:
             # Unchanged source → empty delta that echoes the incoming position
             # (no regression). On a first run with no accessible spaces this
             # records an empty cursor map.
             yield DeltaBatch(
                 records=[],
-                next_checkpoint=_encode_checkpoint(running),
+                next_checkpoint=_encode_checkpoint(running, running_known),
                 is_complete=True,
             )
             return
 
-        # Total number of batches across all spaces, so the very last one is
-        # marked terminal.
-        total_batches = sum(
+        # Total number of batches across all spaces (upserts + deletions), so
+        # the very last one is marked terminal.
+        total_upsert_batches = sum(
             (len(items) + self.batch_size - 1) // self.batch_size
             for _, items in pending
         )
+        deletion_pages = [
+            deletions[start : start + self.batch_size]
+            for start in range(0, len(deletions), self.batch_size)
+        ]
+        total_batches = total_upsert_batches + len(deletion_pages)
         emitted = 0
         for space, items in pending:
             key = space["key"]
@@ -321,9 +467,17 @@ class ConfluenceIngestor(ChangeBasedIngestor):
                 emitted += 1
                 yield DeltaBatch(
                     records=records,
-                    next_checkpoint=_encode_checkpoint(running),
+                    next_checkpoint=_encode_checkpoint(running, running_known),
                     is_complete=(emitted == total_batches),
                 )
+
+        for page in deletion_pages:
+            emitted += 1
+            yield DeltaBatch(
+                records=page,
+                next_checkpoint=_encode_checkpoint(running, running_known),
+                is_complete=(emitted == total_batches),
+            )
 
     # ── Space access (AC4) ────────────────────────────────────────────────────
     def _accessible_spaces(self, org_id: str) -> List[Dict[str, Any]]:
@@ -341,7 +495,11 @@ class ConfluenceIngestor(ChangeBasedIngestor):
         ]
 
     def _changed_content(
-        self, org_id: str, space: Dict[str, Any], cursor: Optional[str]
+        self,
+        org_id: str,
+        space: Dict[str, Any],
+        cursor: Optional[str],
+        raw_content: Optional[List[Dict[str, Any]]] = None,
     ) -> List[Dict[str, Any]]:
         """Return this space's content modified after ``cursor``, oldest-first.
 
@@ -350,17 +508,54 @@ class ConfluenceIngestor(ChangeBasedIngestor):
         content whose modified timestamp is strictly newer than the stored cursor
         is returned. Sorting oldest-first (by modified timestamp) guarantees the
         checkpoint advances monotonically as batches are emitted. Only page /
-        blog-post content types are considered (reach phase).
+        blog-post content types with ``status='current'`` are considered (reach
+        phase) — a non-current item (trashed/archived) is deletion-path territory
+        (AT-603), never an upsert. ``raw_content``, when given, is used instead of
+        re-fetching (``ingest_changes`` already reads it once for the known-id
+        diff — AT-603).
         """
-        content = self._raw_content(org_id, space)
+        content = raw_content if raw_content is not None else self._raw_content(org_id, space)
         fresh = [
             c
             for c in content
             if c.get("type", "page") in _CONTENT_TYPES
+            and _is_current(c)
             and _modified_gt(_modified_iso(c), cursor)
         ]
         fresh.sort(key=lambda c: _iso_to_epoch(_modified_iso(c)) or float("-inf"))
         return fresh
+
+    @staticmethod
+    def _current_page_ids(raw_content: List[Dict[str, Any]]) -> set:
+        """Return the set of page/blogpost ids currently ``status='current'``.
+
+        The known-id snapshot deletion detection (AT-603) diffs the PREVIOUS
+        run's set against. Comments and other non-page content types never
+        entered ``known_ids`` in the first place, so they are excluded here too.
+        """
+        return {
+            str(c["id"])
+            for c in raw_content
+            if c.get("type", "page") in _CONTENT_TYPES and _is_current(c) and c.get("id")
+        }
+
+    @staticmethod
+    def _tombstone(space_key: str, content_id: str) -> Dict[str, Any]:
+        """Build a deletion/archival tombstone (R18-A5 / AT-603, AC3).
+
+        Carries no content — the shared runner emits it as a
+        ``change_kind='deleted'`` ``ingestion.artifact_changed`` event, which the
+        retrieval-freshness subscriber (R18-B2) turns into an immediate
+        ``store.purge_artifact`` for this exact ``(source_system='confluence',
+        source_artifact='{space_key}:{content_id}')`` identity — the same one
+        :mod:`confluence_content` ingests page bodies under.
+        """
+        return tombstone(
+            f"{space_key}:{content_id}",
+            source_system="confluence",
+            space_key=space_key,
+            content_id=content_id,
+        )
 
     def _to_record(self, space: Dict[str, Any], content: Dict[str, Any]) -> Dict[str, Any]:
         """Shape one Confluence content item into a change-delta record.
@@ -424,6 +619,21 @@ class ConfluenceIngestor(ChangeBasedIngestor):
         if not is_live():
             return list(self._fixture().get("content", {}).get(space["key"], []))
         return self._client(org_id).content_for_space(space["key"])
+
+    def _raw_page_body(self, org_id: str, space_key: str, content_id: str) -> Dict[str, Any]:
+        """Return one page/blogpost's rendered body + labels (R18-A5 / T1 — depth).
+
+        The ONE seam that crosses the reach/depth boundary this ingestor otherwise
+        enforces (AC7): ``_raw_content``/``content_for_space`` above never expand
+        ``body.*``. Only called for a page already known changed (from the same
+        delta batch the reach phase produced) — never a full re-scan. A missing
+        fixture entry (or a page the depth caller has no business reading) degrades
+        to ``{}`` rather than raising, so one bad page never aborts the batch.
+        """
+        if not is_live():
+            bodies = self._fixture().get("bodies", {}).get(space_key, {})
+            return dict(bodies.get(content_id) or {})
+        return self._client(org_id).page_body(content_id)
 
     def _fixture(self) -> Dict[str, Any]:
         if not FIXTURE_PATH.exists():
@@ -561,6 +771,19 @@ class ConfluenceClient:
                 break
             start += 100
         return items
+
+    def page_body(self, content_id: str) -> Dict[str, Any]:
+        """Fetch one page/blogpost's rendered body, labels, and version (R18-A5 / T1).
+
+        The ONLY place this client expands ``body.storage`` / ``metadata.labels`` —
+        the reach-phase ``content_for_space`` above deliberately never does (AC7 of
+        R17-A2). Called only for content already known changed via the delta feed,
+        never for a full re-scan.
+        """
+        return self._get(
+            f"content/{content_id}",
+            {"expand": "body.storage,metadata.labels,version,space"},
+        )
 
     def list_attachments(self, page_id: str) -> List[Dict[str, Any]]:
         """Return a page's attachments with version metadata (R18-A1 / T5).
