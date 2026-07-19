@@ -15,7 +15,6 @@ import { AuthProvider, useAuth } from "./context/AuthContext";
 import { DataCacheProvider } from "./lib/dataCache";
 import AuthGuard from "./components/auth/AuthGuard";
 import LoadingPanel from "./components/common/LoadingPanel";
-import OrgEventSync from "./components/common/OrgEventSync";
 import PrefetchWorkspaceData from "./components/common/PrefetchWorkspaceData";
 
 // Route components are lazy-loaded so opening any page ships only that page's
@@ -77,10 +76,9 @@ export default function App() {
               is discarded on user change (SessionBoundary remount), and it backs
               cross-page reactivity (useResource / invalidate). */}
           <DataCacheProvider>
-          {/* Multi-user reactivity: holds the org change stream open so another
-              user's change refreshes this browser (see OrgEventSync). Inside the
-              cache provider so the whole data layer is listening. */}
-          <OrgEventSync />
+          {/* Cross-user freshness comes from the cache's focus + interval
+              revalidation (see DataCacheProvider); the current user's own actions
+              refresh instantly via cache.invalidate at each mutation site. */}
           <NetworkProfileProvider>
           <ConnectorProvider>
             <RunProvider>

@@ -72,7 +72,6 @@ from .auth.configs import CONNECTOR_AUTH_CONFIGS
 from .auth.secrets import validate_all_secrets
 from .middleware.tenancy import get_current_org_id, register_tenancy
 from .middleware.license_gate import register_license_gate
-from .event_stream import register_change_publisher, register_event_stream_routes
 from .retrieval.default_resolvers import register_default_content_resolvers
 from .rbac import require_role, seed_owner
 
@@ -281,12 +280,6 @@ app = FastAPI(title="AgentIQ Layer 1 API Skeleton", version="0.1.0", lifespan=li
 # CORS is added last (below) so it stays outermost and blocked 402s keep their
 # CORS headers; reads/login/valid+grace are untouched.
 register_license_gate(app)
-# Org change stream (multi-user reactivity): publish a "changed" ping after every
-# successful mutating request so other users' browsers refresh what they show.
-# Registered BEFORE tenancy for the same reason as the license gate above — it
-# must run INSIDE TenancyMiddleware so the per-request org context is still set
-# when it reads it.
-register_change_publisher(app)
 register_tenancy(app)
 
 # Register routes in order
@@ -310,7 +303,6 @@ register_normalization_routes(app)
 if not any(r.path == "/api/connectors/oauth/callback" for r in app.routes):
     register_connector_auth_routes(app)
 register_db_connector_routes(app)
-register_event_stream_routes(app)
 register_temporal_routes(app)
 register_workspace_routes(app)
 register_entities_routes(app)

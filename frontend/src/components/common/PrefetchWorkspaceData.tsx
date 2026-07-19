@@ -5,6 +5,7 @@ import { useAnalystReviewContext } from '../../context/AnalystReviewContext';
 import { useConnectorContext } from '../../context/ConnectorContext';
 import { fetchJwtBearerCredentialStatus, fetchTokenStatus } from '../../services/staticApi';
 import { useDataCache } from '../../lib/dataCache';
+import { enqueuePrefetch } from '../../lib/prefetchQueue';
 import { cacheKeys } from '../../lib/cacheKeys';
 import { apiGet } from '../../lib/apiClient';
 import { fetchLicenseLimits } from '../../api/licenseApi';
@@ -22,25 +23,29 @@ import { fetchBlueprint } from '../../api/blueprintApi';
 import { fetchIndustries, fetchTemplates } from '../../api/stackBuilderApi';
 
 /**
- * Headless: warms this user's whole workspace into the shared cache after login.
+ * Headless: warms this user's whole workspace into the shared cache after login,
+ * WITHOUT starving the page the user is actually looking at.
  *
  * Every page's data is fetched up front and kept in the cache (which lives at the
  * app root), so navigating anywhere afterwards renders from cache — no refetch,
- * no skeleton, no waiting. Freshness is unaffected: the cache still revalidates
- * in the background on focus / the org change stream, and mutations still
- * invalidate their keys, so warmed data can never go stale silently.
+ * no skeleton, no waiting.
  *
- * prefetch() only fetches a key that has NO data yet, so this is idempotent —
- * re-running it never re-fetches what is already cached, and it never fights the
- * pages, which read the very same keys.
+ * The load-bearing rule (why this used to make login SLOW): the browser allows
+ * only ~6 connections per origin over HTTP/1.1. Firing the whole workspace's
+ * requests at once — this component previously fired ~14 synchronously plus more
+ * on a timer — saturates that pool, so the request for the page you just
+ * navigated to queues behind the entire warm. The fix: every warm here goes
+ * through `enqueuePrefetch`, an idle-gated queue capped at 2 in-flight
+ * (prefetchQueue.ts). A page that mounts fetches its OWN keys directly through
+ * `useResource` (NOT this queue) at full priority, and `prefetchAsync` dedupes,
+ * so the foreground page always wins the connection pool and the warm fills in
+ * quietly behind it. Freshness is unaffected — the cache still revalidates on
+ * focus / interval, and mutations still invalidate their keys.
  *
- * Per-opportunity warming is DELIBERATELY staggered. A run can hold many
- * opportunities, and firing a blueprint + enrichment request for each at once
- * would exceed the browser's ~6 connections per origin and starve the page the
- * user is actually looking at — the pathology this prefetch exists to prevent.
- * Spacing them keeps warming strictly in the background.
+ * Warming is idempotent: `prefetchAsync` only fetches a key with no data yet, so
+ * re-running an effect never re-fetches what is already cached and it never
+ * fights the pages, which read the very same keys.
  */
-const PREFETCH_STAGGER_MS = 200;
 const API_BASE =
   (import.meta.env.VITE_API_BASE_URL as string | undefined) ?? 'http://localhost:8000';
 
@@ -52,19 +57,22 @@ export default function PrefetchWorkspaceData() {
   const { opportunities } = useAnalystReviewContext();
   const { all: connectors } = useConnectorContext();
 
+  // Every warm is enqueued (idle-gated, concurrency-capped) rather than fired
+  // directly, so it can never contend with the foreground page's own fetches.
+  const warm = (key: string, fetcher: () => Promise<unknown>) =>
+    enqueuePrefetch(() => cache.prefetchAsync(key, fetcher));
+
   // ── Org-scoped: everything that is not tied to a run ──────────────────────
   // (Connectors and the network profile are already primed by their providers
   // at app mount, so they are not repeated here.)
   useEffect(() => {
     if (!token) return;
-    cache.prefetch(cacheKeys.license, fetchLicenseLimits);
-    cache.prefetch(cacheKeys.connectorProducts, () =>
-      apiGet('/api/connectors/salesforce/products'),
-    );
-    cache.prefetch(cacheKeys.workspaceCatalog, () =>
+    warm(cacheKeys.license, fetchLicenseLimits);
+    warm(cacheKeys.connectorProducts, () => apiGet('/api/connectors/salesforce/products'));
+    warm(cacheKeys.workspaceCatalog, () =>
       apiGet('/api/integration-hub/workspace-catalog'),
     );
-    cache.prefetch(cacheKeys.stackBuilderRegistry, async () => {
+    warm(cacheKeys.stackBuilderRegistry, async () => {
       const [industries, templates] = await Promise.all([
         fetchIndustries(API_BASE, token),
         fetchTemplates(API_BASE, token),
@@ -72,70 +80,51 @@ export default function PrefetchWorkspaceData() {
       return { industries, templates };
     });
     // Run Health's five panels.
-    cache.prefetch(cacheKeys.runHealthConnectors, fetchConnectorHealth);
-    cache.prefetch(cacheKeys.runHealthRuns, fetchRunHealth);
-    cache.prefetch(cacheKeys.runHealthContent, fetchContentHealth);
-    cache.prefetch(cacheKeys.runHealthPacks, fetchPackHealth);
-    cache.prefetch(cacheKeys.runHealthAttention, fetchAttentionHealth);
-  }, [token, cache]);
+    warm(cacheKeys.runHealthConnectors, fetchConnectorHealth);
+    warm(cacheKeys.runHealthRuns, fetchRunHealth);
+    warm(cacheKeys.runHealthContent, fetchContentHealth);
+    warm(cacheKeys.runHealthPacks, fetchPackHealth);
+    warm(cacheKeys.runHealthAttention, fetchAttentionHealth);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [token]);
 
   // ── Per-connector: the Integration Hub's status cards ─────────────────────
-  // Token status for each CONNECTED connector, and the JWT-bearer credential
-  // status. Staggered for the same reason as the per-opportunity warming below.
+  // Token + JWT-bearer status for each CONNECTED connector. The queue paces these
+  // (cap 2, idle-gated), so no manual stagger is needed any more.
   useEffect(() => {
     if (!token || connectors.length === 0) return;
-    const connected = connectors.filter((c) => c.status === 'connected');
-    if (connected.length === 0) return;
-    let cancelled = false;
-    (async () => {
-      for (const connector of connected) {
-        if (cancelled) return;
-        cache.prefetch(cacheKeys.connectorTokenStatus(connector.id), () =>
-          fetchTokenStatus(connector.id),
-        );
-        cache.prefetch(cacheKeys.connectorJwtStatus(connector.id), () =>
-          fetchJwtBearerCredentialStatus(connector.id),
-        );
-        await new Promise((resolve) => setTimeout(resolve, PREFETCH_STAGGER_MS));
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [token, connectors, cache]);
+    for (const connector of connectors) {
+      if (connector.status !== 'connected') continue;
+      warm(cacheKeys.connectorTokenStatus(connector.id), () => fetchTokenStatus(connector.id));
+      warm(cacheKeys.connectorJwtStatus(connector.id), () =>
+        fetchJwtBearerCredentialStatus(connector.id),
+      );
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [token, connectors]);
 
   // ── Run-scoped: the active run's derived artifacts ────────────────────────
   useEffect(() => {
     if (!token || !runId) return;
-    cache.prefetch(cacheKeys.runRoadmap(runId), () => fetchRunRoadmap(runId));
-    cache.prefetch(cacheKeys.runExecutiveReport(runId), () => fetchRunExecutiveReport(runId));
-    cache.prefetch(cacheKeys.runEnrichment(runId), () => fetchRunEnrichment(runId));
-    cache.prefetch(cacheKeys.runEvidence(runId), () => fetchEvidence(runId));
-  }, [token, runId, cache]);
+    warm(cacheKeys.runRoadmap(runId), () => fetchRunRoadmap(runId));
+    warm(cacheKeys.runExecutiveReport(runId), () => fetchRunExecutiveReport(runId));
+    warm(cacheKeys.runEnrichment(runId), () => fetchRunEnrichment(runId));
+    warm(cacheKeys.runEvidence(runId), () => fetchEvidence(runId));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [token, runId]);
 
   // ── Per-opportunity: every opportunity's blueprint + AI analysis ──────────
   // This is what makes Opportunity Review and the Agentforce Blueprint instant
-  // for ANY opportunity, not just the one that happens to be selected first.
+  // for ANY opportunity, not just the one selected first. The queue keeps the
+  // fan-out (2 requests × N opportunities) strictly in the background.
   useEffect(() => {
     if (!token || !runId || opportunities.length === 0) return;
-    let cancelled = false;
-    (async () => {
-      for (const opp of opportunities) {
-        if (cancelled) return;
-        cache.prefetch(cacheKeys.runBlueprint(runId, opp.id), () =>
-          fetchBlueprint(runId, opp.id),
-        );
-        cache.prefetch(cacheKeys.runOppEnrichment(runId, opp.id), () =>
-          fetchOppEnrichment(runId, opp.id),
-        );
-        // Yield between opportunities — see the stagger note above.
-        await new Promise((resolve) => setTimeout(resolve, PREFETCH_STAGGER_MS));
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [token, runId, opportunities, cache]);
+    for (const opp of opportunities) {
+      warm(cacheKeys.runBlueprint(runId, opp.id), () => fetchBlueprint(runId, opp.id));
+      warm(cacheKeys.runOppEnrichment(runId, opp.id), () => fetchOppEnrichment(runId, opp.id));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [token, runId, opportunities]);
 
   return null;
 }
