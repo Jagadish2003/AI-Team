@@ -14,6 +14,7 @@ from app.incident_ci_resolution import (
     resolve_explicit_servicenow_ci_reference,
 )
 from database.models.entities import Entity
+from discovery.signals.remediation_signature import apply_remediation_signatures
 
 
 RESOLUTION_VERSION = "servicenow_explicit_vulnerable_item_ci_v1"
@@ -186,4 +187,9 @@ def resolve_vulnerable_item_ci_references(
         counts["resolved"] += 1
 
     vulnerable_item_metrics["ci_resolution_summary"] = counts.copy()
+    vulnerable_item_metrics["remediation_workload_summary"] = (
+        apply_remediation_signatures(
+            vulnerable_item_metrics.get("vulnerable_items", []) or []
+        )
+    )
     return counts
