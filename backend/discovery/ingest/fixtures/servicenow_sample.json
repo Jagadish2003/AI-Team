@@ -114,6 +114,28 @@
         "priority": "2 - High",
         "state": "Resolved",
         "assignment_group": "Level 2 Support",
+        "assignment_history": [
+          {
+            "assignment_group": "Level 1 Support",
+            "changed_at": "2026-06-09 10:05:00",
+            "history_sys_id": "audit-assignment-0001"
+          },
+          {
+            "assignment_group": "Loan Operations",
+            "changed_at": "2026-06-09 11:10:00",
+            "history_sys_id": "audit-assignment-0002"
+          },
+          {
+            "assignment_group": "Level 1 Support",
+            "changed_at": "2026-06-09 12:20:00",
+            "history_sys_id": "audit-assignment-0003"
+          },
+          {
+            "assignment_group": "Loan Operations",
+            "changed_at": "2026-06-09 13:30:00",
+            "history_sys_id": "audit-assignment-0004"
+          }
+        ],
         "opened_at": "2026-06-09 10:00:00",
         "resolved_at": "2026-06-09 18:00:00",
         "close_code": "Solved (Permanently)",

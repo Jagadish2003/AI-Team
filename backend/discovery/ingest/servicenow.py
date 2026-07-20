@@ -119,6 +119,21 @@ INCIDENT_RESOLUTION_FIELDS: Tuple[str, ...] = (
     "closed_at",
 )
 
+# MSP-B4 T4 — the only ServiceNow audit fields needed to reconstruct incident
+# assignment-group movement.  The query is bounded to incident records already
+# admitted by the current organization-scoped incident read.  Deliberately do
+# not request ``user``, ``assigned_to``, or any other individual-level field.
+ASSIGNMENT_HISTORY_TABLE = "sys_audit"
+ASSIGNMENT_HISTORY_FIELDS: Tuple[str, ...] = (
+    "sys_id",
+    "documentkey",
+    "oldvalue",
+    "newvalue",
+    "sys_created_on",
+)
+ASSIGNMENT_HISTORY_RECORD_CAP = 10_000
+_SN_SYS_ID_RE = re.compile(r"^[0-9a-f]{32}$", re.IGNORECASE)
+
 # ServiceNow has no universally-standard "first assigned" timestamp; orgs that
 # track it expose it under a custom column. Read it only when the deployment
 # names the field, so first-assignment time is supported "where available"
@@ -1651,6 +1666,208 @@ def get_incident_metrics(client: Optional[ServiceNowClient] = None) -> Dict[str,
     }
 
 
+def _assignment_group_display_names(
+    client: ServiceNowClient,
+    group_values: List[str],
+) -> Dict[str, str]:
+    """Resolve raw ServiceNow group sys_ids to queue names, read-only.
+
+    ``sys_audit.oldvalue/newvalue`` are string columns and therefore commonly
+    contain the referenced group's raw sys_id even with display values enabled.
+    Resolve only values that have the canonical sys_id shape and request only
+    ``sys_id,name`` from ``sys_user_group``.  Values that are already display
+    names never trigger this extra query.
+    """
+    group_ids = sorted(
+        {
+            value.strip()
+            for value in group_values
+            if value and _SN_SYS_ID_RE.fullmatch(value.strip())
+        }
+    )
+    if not group_ids:
+        return {}
+
+    resolved: Dict[str, str] = {}
+    for offset in range(0, len(group_ids), 100):
+        batch = group_ids[offset : offset + 100]
+        records = client.table_query(
+            "sys_user_group",
+            {
+                "sysparm_query": f"sys_idIN{','.join(batch)}^ORDERBYsys_id",
+                "sysparm_fields": "sys_id,name",
+                "sysparm_display_value": "false",
+                "sysparm_exclude_reference_link": "true",
+            },
+            max_records=len(batch) + 1,
+        )
+        admitted = set(batch)
+        for record in records:
+            if not isinstance(record, dict):
+                continue
+            group_id = _sn_reference_id(record.get("sys_id"))
+            group_name = _optional_sn_text(record.get("name"))
+            if group_id in admitted and group_name:
+                resolved[group_id] = group_name
+    return resolved
+
+
+def get_assignment_group_history(
+    client: ServiceNowClient,
+    incident_sys_ids: List[str],
+    *,
+    org_id: Optional[str] = None,
+) -> Dict[str, List[Dict[str, Any]]]:
+    """Read ordered assignment-group history for admitted incidents only.
+
+    ServiceNow's ``sys_audit`` rows explicitly record each assignment-group
+    change.  This function reconstructs group states from ``oldvalue`` and
+    ``newvalue`` without reading assignees or the user who made the change.
+    Results are deterministic (timestamp + audit sys_id ordering), carry
+    observed provenance, and are bounded to the supplied incident set.
+    """
+    from . import get_ingest_org
+
+    admitted_incidents = {
+        str(sys_id).strip() for sys_id in incident_sys_ids if str(sys_id).strip()
+    }
+    if not admitted_incidents:
+        return {}
+
+    effective_org = org_id or get_ingest_org()
+    grouped_audits: Dict[str, List[Dict[str, Any]]] = {
+        sys_id: [] for sys_id in admitted_incidents
+    }
+    instance_url = getattr(client, "instance_url", None)
+    ordered_ids = sorted(admitted_incidents)
+    remaining_records = ASSIGNMENT_HISTORY_RECORD_CAP
+
+    for offset in range(0, len(ordered_ids), 100):
+        if remaining_records <= 0:
+            raise ServiceNowIngestError(
+                "ServiceNow assignment history exceeded the bounded record cap"
+            )
+        batch = ordered_ids[offset : offset + 100]
+        records = client.table_query(
+            ASSIGNMENT_HISTORY_TABLE,
+            {
+                "sysparm_query": (
+                    "tablename=incident^fieldname=assignment_group^"
+                    f"documentkeyIN{','.join(batch)}^"
+                    "ORDERBYsys_created_on^ORDERBYsys_id"
+                ),
+                "sysparm_fields": ",".join(ASSIGNMENT_HISTORY_FIELDS),
+                "sysparm_display_value": "all",
+                "sysparm_exclude_reference_link": "true",
+            },
+            max_records=remaining_records,
+        )
+        remaining_records -= len(records)
+        for record in records:
+            if not isinstance(record, dict):
+                continue
+            incident_sys_id = _sn_reference_id(record.get("documentkey"))
+            history_sys_id = _sn_reference_id(record.get("sys_id"))
+            if incident_sys_id not in admitted_incidents or not history_sys_id:
+                logger.warning(
+                    "ServiceNow assignment-history row is incomplete or outside "
+                    "the admitted incident set; skipping"
+                )
+                continue
+            grouped_audits[incident_sys_id].append(
+                {
+                    "history_sys_id": history_sys_id,
+                    "old_group": _assignment_group_name(record.get("oldvalue")),
+                    "new_group": _assignment_group_name(record.get("newvalue")),
+                    "changed_at": _optional_sn_text(record.get("sys_created_on")),
+                }
+            )
+
+    raw_group_values = [
+        value
+        for rows in grouped_audits.values()
+        for row in rows
+        for value in (row.get("old_group"), row.get("new_group"))
+        if value
+    ]
+    display_names = _assignment_group_display_names(client, raw_group_values)
+
+    histories: Dict[str, List[Dict[str, Any]]] = {
+        sys_id: [] for sys_id in admitted_incidents
+    }
+    for incident_sys_id, audit_rows in grouped_audits.items():
+        audit_rows.sort(
+            key=lambda row: (
+                row.get("changed_at") or "",
+                row.get("history_sys_id") or "",
+            )
+        )
+        for index, row in enumerate(audit_rows):
+            # The first audit row supplies the state before the first observed
+            # transition.  Later rows add only their new state; the detector
+            # collapses duplicate consecutive group entries defensively.
+            states = []
+            if index == 0 and row.get("old_group"):
+                states.append(row["old_group"])
+            if row.get("new_group"):
+                states.append(row["new_group"])
+            for raw_group in states:
+                group_name = display_names.get(raw_group, raw_group)
+                pointer = EvidencePointer.observed(
+                    source_system="servicenow",
+                    source_artifact=row["history_sys_id"],
+                    source_timestamp=row.get("changed_at") or "unknown",
+                    source_artifact_type="record_id",
+                ).to_dict()
+                histories[incident_sys_id].append(
+                    {
+                        "assignment_group": group_name,
+                        "assignment_group_id": (
+                            raw_group if _SN_SYS_ID_RE.fullmatch(raw_group) else None
+                        ),
+                        "changed_at": row.get("changed_at"),
+                        "history_sys_id": row["history_sys_id"],
+                        "org_id": effective_org,
+                        "source_url": _servicenow_record_url(
+                            instance_url,
+                            ASSIGNMENT_HISTORY_TABLE,
+                            row["history_sys_id"],
+                        ),
+                        "evidence": pointer,
+                    }
+                )
+    return histories
+
+
+def _attach_assignment_group_histories(
+    incident_metrics: Dict[str, Any],
+    client: ServiceNowClient,
+) -> None:
+    """Attach bounded group-level assignment histories to incident records."""
+    incidents = incident_metrics.get("incidents") or []
+    incident_ids = [
+        str(incident.get("sys_id") or "").strip()
+        for incident in incidents
+        if isinstance(incident, dict) and incident.get("sys_id")
+    ]
+    try:
+        grouped = get_assignment_group_history(client, incident_ids)
+    except ServiceNowIngestError as exc:
+        # Assignment history is detector enrichment.  If an instance denies
+        # sys_audit access, keep incident ingestion usable and report the
+        # unavailable state instead of inventing an empty/healthy history.
+        logger.warning("ServiceNow assignment-history read unavailable: %s", exc)
+        incident_metrics["assignment_history_lookup"] = {"status": "unavailable"}
+        return
+
+    incident_metrics["assignment_history_lookup"] = {"status": "available"}
+    for incident in incidents:
+        if not isinstance(incident, dict):
+            continue
+        incident_sys_id = str(incident.get("sys_id") or "").strip()
+        incident["assignment_history"] = list(grouped.get(incident_sys_id, []))
+
+
 def get_affected_ci_task_references(
     client: ServiceNowClient,
     incident_sys_ids: List[str],
@@ -2037,9 +2254,12 @@ def ingest(
     The runner treats empty SN data as graceful skip — D7 will still fire
     from the Salesforce sf_echo_score side if that threshold is met.
     """
+    from . import get_ingest_org
+
     if not is_live():
         logger.info("ServiceNow ingestion: offline mode (fixture)")
         fixture = _load_fixture()
+        fixture["org_id"] = get_ingest_org()
         raw_incidents = fixture.get("incident_metrics", {}).get(
             "incidents", fixture.get("incident_metrics", {}).get("recent_incidents", [])
         )
@@ -2084,6 +2304,7 @@ def ingest(
 
     try:
         incident_metrics = get_incident_metrics(sn_client)
+        _attach_assignment_group_histories(incident_metrics, sn_client)
         _attach_affected_ci_task_references(incident_metrics, sn_client)
         cross_system_references = get_cross_system_references(sn_client)
 
@@ -2091,6 +2312,7 @@ def ingest(
         cmdb = ingest_cmdb(sn_client) if include_cmdb else None
 
         return {
+            "org_id": get_ingest_org(),
             "incident_metrics": incident_metrics,
             "cross_system_references": cross_system_references,
             "lending_correlation": lending_correlation,
