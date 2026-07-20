@@ -670,6 +670,37 @@ trace every default back to a real measurement (AC7).
 Calibration reruns whenever B8 re-measures: update `B8_MEASUREMENTS` and the
 derived defaults move with it.
 
+### The VR scan-cycle analogue (MSP-B11 / AT-701, T6)
+
+MSP-B11 reads ServiceNow Vulnerability Response as workflow signal, and a single
+scan cycle can create **thousands** of vulnerable-item updates at once. Rather than
+invent an independent SecOps limit, VR volume answers to the SAME per-run budget as
+cloud events: [`backend/discovery/signals/secops_volume.py`](../backend/discovery/signals/secops_volume.py)
+(`SecOpsVolumeStream`) reuses the MSP-B7 `RunBudget`/`BudgetReport` verbatim and folds
+each record into ONE workflow aggregate per MSP-B11 T4 `remediation_signature`
+(`vulnerability_class` + `ci_class` + `remediation_path`) — a fold key that by
+construction carries no host, CVE, or per-item id, so aggregation **cannot enumerate
+host×vulnerability pairs** (AC6). A budget breach defers loudly (per-table breakdown,
+deferred window, safe checkpoint), and the deferred tail resumes exactly.
+
+The AT-701 reference scan-cycle run (the VR analogue of B8's AC7, recorded in
+[`MSP-B11_VR_VOLUME_VALIDATION.md`](MSP-B11_VR_VOLUME_VALIDATION.md) and captured
+verbatim in `B11_VR_MEASUREMENTS`):
+
+| Measurement | Value |
+|-------------|-------|
+| Scan-cycle records (items + groups + tasks) | 7,000 |
+| Distinct workflow aggregates folded into | 60 |
+| Aggregate ratio (patterns / processed) | 0.0086 |
+| Peak memory (bounded by patterns, not volume) | 1.43 MB |
+| Shared per-run budget reused | 250,000 |
+
+The conclusion is a **budget-adequacy confirmation, not a new derivation**: a scan
+cycle folds into a few dozen workflow patterns (memory is bounded by patterns, not
+record volume) and fits within the shared 250,000 budget with ~35× headroom, so VR
+reuses the calibrated per-run budget. `calibration_summary()` surfaces this under
+`vr_scan_cycle_volume`.
+
 ---
 
 ## 14. Contract suite (MSP-B7 / AT-675, T7)
