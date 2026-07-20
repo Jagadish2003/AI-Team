@@ -501,6 +501,11 @@ def list_servicenow_relationship_source_ids(org_id: str) -> set[str]:
                     continue
             if not isinstance(evidence, dict) or evidence.get("source") != "servicenow":
                 continue
+            if (
+                evidence.get("field") != "cmdb_rel_ci"
+                and evidence.get("source_type") != "servicenow_cmdb_rel_ci"
+            ):
+                continue
             source_id = str(
                 evidence.get("relationship_sys_id")
                 or evidence.get("source_record_id")
@@ -509,6 +514,87 @@ def list_servicenow_relationship_source_ids(org_id: str) -> set[str]:
             if source_id:
                 source_ids.add(source_id)
         return source_ids
+    finally:
+        conn.close()
+
+
+def list_servicenow_cmdb_relationships(org_id: str) -> List[Dict[str, Any]]:
+    """Return active observed CMDB edges with their source provenance.
+
+    Both relationship and endpoint lookups are constrained to ``org_id``.
+    This lets workflow-signal resolvers traverse relationships that were
+    confirmed on an earlier incremental run without treating registry or
+    topology data as a new source observation.
+    """
+    conn = _connect()
+    relationships: List[Dict[str, Any]] = []
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT er.relationship_type, er.evidence,
+                   source.source_record_id AS source_ci_id,
+                   target.source_record_id AS target_ci_id
+            FROM entity_relationships er
+            JOIN entities source
+              ON source.id = er.from_entity_id AND source.org_id = er.org_id
+            JOIN entities target
+              ON target.id = er.to_entity_id AND target.org_id = er.org_id
+            WHERE er.org_id = %s
+              AND er.inferred = %s
+              AND source.entity_type = 'system'
+              AND target.entity_type = 'system'
+              AND source.source_system = 'servicenow'
+              AND target.source_system = 'servicenow'
+              AND source.resolution_status = 'resolved'
+              AND target.resolution_status = 'resolved'
+            """,
+            (org_id, False),
+        )
+        for row in cur.fetchall():
+            evidence = row["evidence"]
+            if isinstance(evidence, str):
+                try:
+                    evidence = json.loads(evidence)
+                except (TypeError, ValueError):
+                    continue
+            if not isinstance(evidence, dict) or evidence.get("source") != "servicenow":
+                continue
+            if (
+                evidence.get("field") != "cmdb_rel_ci"
+                and evidence.get("source_type") != "servicenow_cmdb_rel_ci"
+            ):
+                continue
+            relationship_sys_id = str(
+                evidence.get("relationship_sys_id")
+                or evidence.get("source_record_id")
+                or ""
+            ).strip()
+            source_ci_id = str(row["source_ci_id"] or "").strip()
+            target_ci_id = str(row["target_ci_id"] or "").strip()
+            if not relationship_sys_id or not source_ci_id or not target_ci_id:
+                continue
+            relationships.append(
+                {
+                    "sys_id": relationship_sys_id,
+                    "relationship_type": str(row["relationship_type"]),
+                    "source_ci_id": source_ci_id,
+                    "target_ci_id": target_ci_id,
+                    "source_type": evidence.get("source_type"),
+                    "source_timestamp": evidence.get("source_timestamp"),
+                    "source_url": evidence.get("source_url"),
+                    "origin": "observed",
+                }
+            )
+        return sorted(
+            relationships,
+            key=lambda relationship: (
+                relationship["relationship_type"],
+                relationship["source_ci_id"],
+                relationship["target_ci_id"],
+                relationship["sys_id"],
+            ),
+        )
     finally:
         conn.close()
 

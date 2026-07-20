@@ -938,11 +938,12 @@ def prepare_servicenow_ci_resolution(
     run_id: str,
     sn_data: Dict[str, Any],
 ) -> List[Entity]:
-    """Persist current-scope CIs and resolve explicit incident references.
+    """Persist current-scope CIs and resolve explicit workflow references.
 
     This preparation can run before detector evaluation.  The normal entity
     extraction pass may safely repeat it later because source entity upserts are
-    idempotent within a run.
+    idempotent within a run.  Incident and vulnerable-item joins both use exact
+    ServiceNow source identifiers and the same organization-scoped CI set.
     """
     cmdb_data = sn_data.get("cmdb") or {}
     _extract_servicenow_cmdb_entities(
@@ -971,13 +972,43 @@ def prepare_servicenow_ci_resolution(
         or _safe_str((entity.metadata or {}).get("ci_class")).casefold()
         in class_scope
     ]
+    # CMDB changes are incremental, while evidence traversal must include every
+    # active observed edge.  Merge the persisted current-org graph with this
+    # run's relationship delta (the latter also supports isolated unit callers).
+    from app.relationship_mapper import list_servicenow_cmdb_relationships
+
+    relationships_by_id = {
+        _safe_str(relationship.get("sys_id")): relationship
+        for relationship in list_servicenow_cmdb_relationships(org_id)
+        if _safe_str(relationship.get("sys_id"))
+    }
+    for relationship in cmdb_data.get("relationships", []) or []:
+        if not isinstance(relationship, dict):
+            continue
+        relationship_id = _safe_str(relationship.get("sys_id"))
+        if relationship_id:
+            relationships_by_id[relationship_id] = relationship
+    active_cmdb_relationships = [
+        relationships_by_id[relationship_id]
+        for relationship_id in sorted(relationships_by_id)
+    ]
     from app.incident_ci_resolution import resolve_incident_ci_references
 
     resolve_incident_ci_references(
         org_id=org_id,
         incident_metrics=sn_data.get("incident_metrics") or {},
         cmdb_entities=cmdb_entities,
-        cmdb_relationships=cmdb_data.get("relationships") or [],
+        cmdb_relationships=active_cmdb_relationships,
+    )
+    from app.vulnerable_item_ci_resolution import (
+        resolve_vulnerable_item_ci_references,
+    )
+
+    resolve_vulnerable_item_ci_references(
+        org_id=org_id,
+        vulnerable_item_metrics=sn_data.get("vulnerability_response") or {},
+        cmdb_entities=cmdb_entities,
+        cmdb_relationships=active_cmdb_relationships,
     )
     return cmdb_entities
 
