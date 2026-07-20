@@ -16,6 +16,16 @@ from .event_signature import (  # noqa: F401
     provider_family,
     signature_components,
 )
+from .resolution_signature import (  # noqa: F401
+    INCIDENT_IDENTITY_SIGNATURE_VERSION,
+    RESOLUTION_SIGNATURE_VERSION,
+    compute_incident_identity_signature,
+    compute_resolution_signature,
+    incident_identity_signature_components,
+    normalize_short_description,
+    normalize_token,
+    resolution_signature_components,
+)
 from .operational_event import (  # noqa: F401
     EVENT_CLASSES,
     RESOURCE_TYPES,

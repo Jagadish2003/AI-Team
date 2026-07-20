@@ -30,6 +30,10 @@ from typing import Any, Callable, Dict, Iterator, List, Mapping, Optional, Tuple
 from urllib.parse import quote, urlsplit
 
 from app.provenance import EvidencePointer
+from discovery.signals.resolution_signature import (
+    compute_incident_identity_signature,
+    compute_resolution_signature,
+)
 
 from . import is_live
 from .base import ChangeBasedIngestor, ChangeKind, Checkpoint, DeltaBatch, tombstone
@@ -262,6 +266,12 @@ class IncidentResolution:
     runbook_references: Tuple[str, ...]
     notes_evidence: Optional[Dict[str, Any]]
     evidence: Dict[str, Any]
+    # MSP-B4 T2 — deterministic structured signatures (see
+    # discovery/signals/resolution_signature.py). ``incident_identity_signature``
+    # is WHAT KIND of incident this is (always present). ``resolution_signature``
+    # is HOW it was resolved and is present only for resolved incidents.
+    incident_identity_signature: Optional[str] = None
+    resolution_signature: Optional[str] = None
 
     def as_dict(self) -> Dict[str, Any]:
         data = asdict(self)
@@ -1327,12 +1337,17 @@ def _build_incident_resolution(
     incident_number: Optional[str],
     instance_url: Optional[str],
     first_assigned_field: str = "",
+    ci_class: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Build one incident's structured resolution payload from a source record.
 
     ``source`` is either a raw ServiceNow record (``display_value=all`` objects)
     or an offline fixture incident (plain scalars); ``_sn_scalar`` /
     ``_optional_sn_text`` handle both. Read-only: it inspects fields only.
+
+    ``ci_class`` is the CMDB class of the incident's CI when a B3 CMDB join has
+    resolved it; ``None`` (the T2 default) yields an unlocated CI component that
+    the signatures still compute over deterministically (MSP-B4 AC5).
     """
     close_code = _optional_sn_text(source.get("close_code"))
     resolution_category = _optional_sn_text(source.get("category"))
@@ -1353,6 +1368,32 @@ def _build_incident_resolution(
     notes_text = _optional_sn_text(source.get("close_notes"))
     runbook_references = _extract_runbook_references(notes_text)
     is_resolved = bool(resolved_at or closed_at or close_code)
+
+    # MSP-B4 T2 — deterministic structured signatures. The CI is keyed on its
+    # STABLE sys_id (never the drifting display name); short-description tokens
+    # are structural, never fuzzy. ``ci_class`` sharpens the CI component when a
+    # B3 join supplies it (T5); until then the stable CI id is used, and an
+    # incident with no CI stays unlocated but still signable (AC5).
+    ci_id = _sn_reference_id(source.get("cmdb_ci"))
+    short_description = _optional_sn_text(source.get("short_description"))
+    incident_identity_signature = compute_incident_identity_signature(
+        category=resolution_category,
+        short_description=short_description,
+        ci_class=ci_class,
+        ci_id=ci_id,
+    )
+    # HOW it was resolved is only meaningful once the incident has been resolved.
+    resolution_signature = (
+        compute_resolution_signature(
+            category=resolution_category,
+            close_code=close_code,
+            resolved_by_group=resolved_by_group,
+            ci_class=ci_class,
+            ci_id=ci_id,
+        )
+        if is_resolved
+        else None
+    )
 
     # The evidence artifact is the incident itself. Prefer the stable sys_id;
     # fall back to the incident number when a fixture omits it.
@@ -1389,6 +1430,8 @@ def _build_incident_resolution(
         # as text on this payload. Present only when a note exists.
         notes_evidence=dict(evidence) if notes_text else None,
         evidence=evidence,
+        incident_identity_signature=incident_identity_signature,
+        resolution_signature=resolution_signature,
     )
     return resolution.as_dict()
 
@@ -1469,6 +1512,11 @@ def get_incident_metrics(client: Optional[ServiceNowClient] = None) -> Dict[str,
     for resolution_field in INCIDENT_RESOLUTION_FIELDS:
         if resolution_field not in fields:
             fields.append(resolution_field)
+    # MSP-B4 T2: short_description feeds the incident-identity signature only —
+    # its normalised token set, never its raw text — so it is read but not
+    # surfaced on the incident payload.
+    if "short_description" not in fields:
+        fields.append("short_description")
     first_assigned_field = os.getenv(FIRST_ASSIGNED_FIELD_ENV, "").strip()
     if first_assigned_field and first_assigned_field not in fields:
         fields.append(first_assigned_field)

@@ -72,6 +72,12 @@ recurrence detection, and hotspot correlation**.
 `EVENT_SIGNATURE_VERSION` is bumped whenever the recipe or a normalisation rule
 changes, so signatures from different rule versions never compare equal.
 
+> **One signature discipline across the pack.** `event_signature` (B0, this
+> section) and the ITSM `resolution_signature` / `incident_identity_signature`
+> (MSP-B4) share the same rules — deterministic, explainable, tested,
+> conservative, versioned. The B4 contract is documented alongside this one in
+> [`docs/msp_resolution_signature.md`](msp_resolution_signature.md).
+
 ### Deliberately excluded from the signature
 
 So that repeated occurrences of one recurring event collapse to a single
