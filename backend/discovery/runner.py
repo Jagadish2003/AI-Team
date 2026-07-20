@@ -343,6 +343,47 @@ def _ingest_slack_corroboration(org_id: str, run_id: str) -> Dict[str, Any]:
     return build_slack_corroboration_payload(collected)
 
 
+def _surface_operational_credential_health(
+    run_id: str, health_records: List[Dict[str, Any]]
+) -> None:
+    """Merge fail-closed operational-app credential-miss records into run health (AC1).
+
+    R191-H1 / T1: when an operational-app target is skipped because its vault
+    credential is missing, the ingestor records an actionable, credential-free
+    connector-health entry (org / target / credential ref). This surfaces those
+    entries in the run's ``connector_health`` KV — the same store the connector-
+    health API and S1 badges read — so a missing credential is visible with an
+    actionable reason rather than a silent no-op. Each entry is keyed
+    ``"<System> (<app_id>)"`` so multiple failed targets never collide.
+
+    Non-blocking: any KV read/write problem is logged and swallowed — surfacing
+    health must never abort a run. Records carry no secret value.
+    """
+    if not health_records:
+        return
+    try:
+        try:
+            from app.db import run_kv_get, run_kv_set
+        except ModuleNotFoundError:  # project-root execution uses backend as package
+            from backend.app.db import run_kv_get, run_kv_set  # type: ignore
+
+        existing = run_kv_get("connector_health", run_id, None) or {}
+        if not isinstance(existing, dict):
+            existing = {}
+        for rec in health_records:
+            system = str(rec.get("system") or "Operational Application")
+            app_id = str(rec.get("appId") or "").strip()
+            key = f"{system} ({app_id})" if app_id else system
+            existing[key] = rec
+        run_kv_set("connector_health", run_id, existing)
+    except Exception as e:  # noqa: BLE001 — health surfacing is non-blocking.
+        logger.warning(
+            "Could not surface operational-app credential health (non-blocking) "
+            "run=%s: [%s]",
+            run_id, type(e).__name__,
+        )
+
+
 def _ingest_java_app_corroboration(org_id: str, run_id: str) -> Dict[str, Any]:
     """Drive Java application change-based ingestion and build its corroboration block.
 
@@ -381,9 +422,10 @@ def _ingest_java_app_corroboration(org_id: str, run_id: str) -> Dict[str, Any]:
         return {}
 
     collected: List[Dict[str, Any]] = []
+    ingestor = JavaAppIngestor()
     try:
         result = change_runner.ingest_with_checkpoint(
-            JavaAppIngestor(),
+            ingestor,
             org_id,
             process_batch=lambda batch: collected.extend(batch.records),
         )
@@ -393,6 +435,11 @@ def _ingest_java_app_corroboration(org_id: str, run_id: str) -> Dict[str, Any]:
         logger.warning(
             "Java app ingestion failed (non-blocking) org=%s run=%s: [%s]",
             org_id, run_id, type(e).__name__,
+        )
+        # A target skipped fail-closed for a missing vault credential still surfaces
+        # in connector health even if a later phase raised (R191-H1 / T1, AC1).
+        _surface_operational_credential_health(
+            run_id, getattr(ingestor, "credential_health", [])
         )
         return {}
 
@@ -407,6 +454,11 @@ def _ingest_java_app_corroboration(org_id: str, run_id: str) -> Dict[str, Any]:
             "first run (streamed full load)" if result.first_run else "incremental",
             result.batches, result.records, result.checkpoint_advanced,
         )
+
+    # Fail-closed credential misses (targets skipped for a missing vault
+    # credential) surface in the run's connector_health KV with an actionable
+    # reason naming the org, the target, and the credential ref (R191-H1 / T1, AC1).
+    _surface_operational_credential_health(run_id, ingestor.credential_health)
 
     return build_java_app_corroboration_payload(collected)
 
@@ -448,9 +500,10 @@ def _ingest_dotnet_app_corroboration(org_id: str, run_id: str) -> Dict[str, Any]
         return {}
 
     collected: List[Dict[str, Any]] = []
+    ingestor = DotNetAppIngestor()
     try:
         result = change_runner.ingest_with_checkpoint(
-            DotNetAppIngestor(),
+            ingestor,
             org_id,
             process_batch=lambda batch: collected.extend(batch.records),
         )
@@ -460,6 +513,11 @@ def _ingest_dotnet_app_corroboration(org_id: str, run_id: str) -> Dict[str, Any]
         logger.warning(
             ".NET app ingestion failed (non-blocking) org=%s run=%s: [%s]",
             org_id, run_id, type(e).__name__,
+        )
+        # A target skipped fail-closed for a missing vault credential still surfaces
+        # in connector health even if a later phase raised (R191-H1 / T1, AC1).
+        _surface_operational_credential_health(
+            run_id, getattr(ingestor, "credential_health", [])
         )
         return {}
 
@@ -474,6 +532,11 @@ def _ingest_dotnet_app_corroboration(org_id: str, run_id: str) -> Dict[str, Any]
             "first run (streamed full load)" if result.first_run else "incremental",
             result.batches, result.records, result.checkpoint_advanced,
         )
+
+    # Fail-closed credential misses (targets skipped for a missing vault
+    # credential) surface in the run's connector_health KV with an actionable
+    # reason naming the org, the target, and the credential ref (R191-H1 / T1, AC1).
+    _surface_operational_credential_health(run_id, ingestor.credential_health)
 
     return build_dotnet_app_corroboration_payload(collected)
 

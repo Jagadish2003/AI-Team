@@ -53,6 +53,7 @@ from discovery.ingest.java_app_config import (
     load_targets,
     resolve_secret,
 )
+from discovery.ingest.operational_config import OperationalCredentialMissing
 from discovery.ingest.java_app_signals import (
     build_evidence_pointer,
     build_java_app_corroboration_payload,
@@ -287,19 +288,26 @@ def test_ac3_credential_resolved_from_the_vault_context():
     secret = resolve_secret(
         ORG, target,
         connector_lookup=lambda ref: {"token": "VAULT_TOKEN_123"} if ref == "java_app" else None,
-        env={},
     )
     assert secret == "VAULT_TOKEN_123"
 
 
-def test_ac3_credential_env_fallback_for_cli_use():
+def test_ac3_credential_vault_miss_fails_closed_no_env_fallback(monkeypatch):
+    # R191-H1 / T1 (F1 fix): a vault miss NEVER falls back to the environment.
+    # An env token present is irrelevant — resolution fails closed.
+    monkeypatch.setenv("JAVA_APP_TOKEN", "ENV_TOKEN_456")
     target = load_targets(ORG)[0]
-    secret = resolve_secret(
-        ORG, target,
-        connector_lookup=lambda ref: None,        # nothing in the vault context
-        env={"JAVA_APP_TOKEN": "ENV_TOKEN_456"},  # CLI/standalone fallback
-    )
-    assert secret == "ENV_TOKEN_456"
+    with pytest.raises(OperationalCredentialMissing) as exc:
+        resolve_secret(
+            ORG, target,
+            connector_lookup=lambda ref: None,        # nothing in the vault context
+            env={"JAVA_APP_TOKEN": "ENV_TOKEN_456"},  # accepted but never read
+        )
+    # The exception is actionable: it names the org, the target, and the ref.
+    assert exc.value.org_id == ORG
+    assert exc.value.app_id == target.app_id
+    assert exc.value.credential_ref == target.credential_ref
+    assert "ENV_TOKEN_456" not in str(exc.value)
 
 
 def test_ac3_no_credential_ref_resolves_to_none():
@@ -316,7 +324,6 @@ def test_ac3_resolved_secret_is_never_logged(caplog):
         secret = resolve_secret(
             ORG, target,
             connector_lookup=lambda ref: {"token": "VAULT_SECRET_XYZ"},
-            env={},
         )
     assert secret == "VAULT_SECRET_XYZ"
     assert "VAULT_SECRET_XYZ" not in caplog.text

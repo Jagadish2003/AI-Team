@@ -45,6 +45,10 @@ import logging
 from typing import Any, Callable, Dict, Iterator, List, Optional
 
 from .base import ChangeBasedIngestor, ChangeKind, Checkpoint, DeltaBatch
+from .operational_config import (
+    OperationalCredentialMissing,
+    credential_missing_health,
+)
 from .operational_signals import build_evidence_pointer
 
 logger = logging.getLogger(__name__)
@@ -203,12 +207,26 @@ class OperationalChangeIngestor(ChangeBasedIngestor):
     source_system: str = ""
     reports_deletes = False
 
+    #: Human-facing connector name used in connector-health records for a
+    #: fail-closed target (R191-H1 / T1, AC1). Subclasses set it (e.g.
+    #: ``"Java Application"`` / ``".NET Application"``); it defaults to the
+    #: connector id so a record is always attributable.
+    health_system: str = ""
+
     def __init__(self, batch_size: int = DEFAULT_BATCH_SIZE):
         if batch_size < 1:
             raise ValueError("batch_size must be >= 1")
         self.batch_size = batch_size
         if not self.source_system:
             self.source_system = self.connector_id
+        if not self.health_system:
+            self.health_system = self.connector_id
+        #: Connector-health records for targets skipped this ingest pass because
+        #: their vault credential was missing (fail-closed — R191-H1 / T1, AC1).
+        #: Populated during :meth:`ingest_changes`; the runner reads it after the
+        #: pass and surfaces it in the run's ``connector_health`` KV. One entry per
+        #: skipped target; the shape matches ``ConnectorHealth.to_dict()``.
+        self.credential_health: List[Dict[str, Any]] = []
 
     # ── Collection hooks (implemented per platform) ─────────────────────────
     @abc.abstractmethod
@@ -242,9 +260,18 @@ class OperationalChangeIngestor(ChangeBasedIngestor):
         samples newer than the stored position and log entries past the stored
         ``log_offset`` per app (AC2). An idle deployment yields a single empty
         :class:`DeltaBatch` whose ``next_checkpoint`` echoes the incoming position.
+
+        Fail-closed on a vault miss (R191-H1 / T1, AC1): if a target declares a
+        credential its vault does not hold, reading it raises
+        :class:`OperationalCredentialMissing`; that ONE target is skipped (its
+        cursor is left untouched so it is retried once the credential is connected)
+        and a connector-health record is appended to :attr:`credential_health` for
+        the runner to surface. The pass continues for every other target.
         """
         cursors = decode_checkpoint(since.value if since else None)
         running = {app_id: dict(cur) for app_id, cur in cursors.items()}
+        # Fresh health slate for this pass — one entry per fail-closed target.
+        self.credential_health = []
 
         targets = self._load_targets(org_id)
         logger.info(
@@ -261,7 +288,25 @@ class OperationalChangeIngestor(ChangeBasedIngestor):
         pending: List[tuple] = []  # (target, [records], new_cursor)
         for target in targets:
             cursor = app_cursor(cursors, target.app_id)
-            records, new_cursor = self._read_operational(org_id, target, cursor)
+            try:
+                records, new_cursor = self._read_operational(org_id, target, cursor)
+            except OperationalCredentialMissing as miss:
+                # Fail closed: vault has no credential for this target. Skip it,
+                # record actionable connector health (org / target / credential
+                # ref), and leave its cursor untouched so it is retried once the
+                # credential is connected. No env fallback, no secret in the log.
+                logger.warning(
+                    "%s: skipping target (fail-closed, no vault credential) "
+                    "org=%s app_id=%s credential_ref=%s",
+                    self.connector_id,
+                    miss.org_id,
+                    miss.app_id,
+                    miss.credential_ref,
+                )
+                self.credential_health.append(
+                    credential_missing_health(system=self.health_system, exc=miss)
+                )
+                continue
             if records:
                 pending.append((target, records, new_cursor))
             else:
