@@ -255,20 +255,65 @@ class TestErrorHandling:
         with pytest.raises(sf_mod.IngestError, match="Fixture file not found"):
             sf_mod.ingest()
 
-    def test_live_mode_without_env_vars_raises_ingest_error(self, monkeypatch):
+    def test_live_mode_without_credential_raises_ingest_error(self, monkeypatch):
+        import discovery.ingest as ingest_pkg
         from discovery.ingest import salesforce as sf_mod
 
         # Force is_live to return True for this test
         monkeypatch.setattr(sf_mod, "is_live", lambda: True)
 
-        # Ensure env vars are missing
-        monkeypatch.delenv("SF_INSTANCE_URL", raising=False)
-        monkeypatch.delenv("SF_ACCESS_TOKEN", raising=False)
+        # No credential in the per-run context or the vault, and an env
+        # SF_INSTANCE_URL must be irrelevant (no env fallback — R191-H1 / T2).
+        # _get_client imports these from the package at call time, so patch there.
+        monkeypatch.setenv("SF_INSTANCE_URL", "https://env-should-never-be-used")
+        monkeypatch.setattr(ingest_pkg, "get_live_connector", lambda cid: None)
+        monkeypatch.setattr(ingest_pkg, "resolve_vault_connector", lambda cid: None)
 
-        # Live ingest is OAuth-only now — with no SF_INSTANCE_URL / SF_ACCESS_TOKEN
-        # in the env, _get_client raises (no server-key regeneration fallback).
-        with pytest.raises(sf_mod.IngestError, match="SF_INSTANCE_URL"):
+        # Live ingest is credential-record-only now — with no credential, _get_client
+        # raises a clear IngestError naming Salesforce (never a silent env default).
+        with pytest.raises(sf_mod.IngestError, match="Salesforce credential"):
             sf_mod._get_client()
+
+    def test_live_mode_credential_missing_url_raises_named_error(self, monkeypatch):
+        # AC4: a credential record present but missing its instance URL is a LOUD,
+        # NAMED configuration error — never a silent SF_INSTANCE_URL env default.
+        import discovery.ingest as ingest_pkg
+        from discovery.ingest import salesforce as sf_mod
+
+        monkeypatch.setattr(sf_mod, "is_live", lambda: True)
+        monkeypatch.setenv("SF_INSTANCE_URL", "https://env-should-never-be-used")
+        # A credential with a token but NO url (e.g. an OAuth row whose instance URL
+        # was never captured onto the per-run context).
+        monkeypatch.setattr(
+            ingest_pkg, "get_live_connector",
+            lambda cid: {"token": "tok"} if cid == "salesforce" else None,
+        )
+        monkeypatch.setattr(ingest_pkg, "resolve_vault_connector", lambda cid: None)
+
+        with pytest.raises(sf_mod.IngestError) as exc:
+            sf_mod._get_client()
+        msg = str(exc.value)
+        assert "instance URL" in msg
+        assert "salesforce" in msg                      # names the record
+        assert "env-should-never-be-used" not in msg    # never leaks / uses the env value
+
+    def test_live_mode_credential_url_used_no_env(self, monkeypatch):
+        # The instance URL comes from the credential record, not the environment.
+        import discovery.ingest as ingest_pkg
+        from discovery.ingest import salesforce as sf_mod
+
+        monkeypatch.setattr(sf_mod, "is_live", lambda: True)
+        monkeypatch.setenv("SF_INSTANCE_URL", "https://env-should-never-be-used")
+        monkeypatch.setattr(
+            ingest_pkg, "get_live_connector",
+            lambda cid: {"url": "https://record.my.salesforce.com", "token": "tok"}
+            if cid == "salesforce" else None,
+        )
+        monkeypatch.setattr(ingest_pkg, "resolve_vault_connector", lambda cid: None)
+
+        client = sf_mod._get_client()
+        assert client is not None
+        assert client.instance_url == "https://record.my.salesforce.com"
 
 
 class TestUserNameResolution:
