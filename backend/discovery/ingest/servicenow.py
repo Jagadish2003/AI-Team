@@ -29,6 +29,12 @@ from types import MappingProxyType
 from typing import Any, Callable, Dict, Iterator, List, Mapping, Optional, Tuple
 from urllib.parse import quote, urlsplit
 
+from app.provenance import EvidencePointer
+from discovery.signals.resolution_signature import (
+    compute_incident_identity_signature,
+    compute_resolution_signature,
+)
+
 from . import is_live
 from .base import ChangeBasedIngestor, ChangeKind, Checkpoint, DeltaBatch, tombstone
 
@@ -96,6 +102,58 @@ INCIDENT_CI_FIELDS: Tuple[str, ...] = (
     "sys_updated_on",
     "cmdb_ci",
 )
+
+# MSP-B4 T1 — resolution-depth fields read alongside the existing incident
+# metrics on the SAME incremental incident query (no separate broad scan).
+# These describe HOW an incident ended: the structured close/resolution fields
+# and the timestamps needed to compute time-to-resolve. ``close_notes`` is the
+# resolution-notes free text; it is read so the note can be stored AS EVIDENCE
+# (an EvidencePointer back to the incident) and mined for DETERMINISTIC data
+# only (a referenced runbook identifier). Its raw text never enters the
+# detector-facing resolution payload — semantic matching of notes is MSP-B5.
+INCIDENT_RESOLUTION_FIELDS: Tuple[str, ...] = (
+    "close_code",
+    "close_notes",
+    "subcategory",
+    "opened_at",
+    "closed_at",
+)
+
+# MSP-B4 T4 — the only ServiceNow audit fields needed to reconstruct incident
+# assignment-group movement.  The query is bounded to incident records already
+# admitted by the current organization-scoped incident read.  Deliberately do
+# not request ``user``, ``assigned_to``, or any other individual-level field.
+ASSIGNMENT_HISTORY_TABLE = "sys_audit"
+ASSIGNMENT_HISTORY_FIELDS: Tuple[str, ...] = (
+    "sys_id",
+    "documentkey",
+    "oldvalue",
+    "newvalue",
+    "sys_created_on",
+)
+ASSIGNMENT_HISTORY_RECORD_CAP = 10_000
+_SN_SYS_ID_RE = re.compile(r"^[0-9a-f]{32}$", re.IGNORECASE)
+
+# ServiceNow has no universally-standard "first assigned" timestamp; orgs that
+# track it expose it under a custom column. Read it only when the deployment
+# names the field, so first-assignment time is supported "where available"
+# without inventing a value. Instance config, not a credential.
+FIRST_ASSIGNED_FIELD_ENV = "SERVICENOW_FIRST_ASSIGNED_FIELD"
+
+# Deterministic runbook / knowledge-article identifiers explicitly referenced in
+# resolution notes. This is the ONLY thing B4 mines from note text — a stable,
+# structured reference, never semantic content. Kept conservative and anchored
+# so ordinary prose does not produce false hits.
+# A RUNBOOK identifier must be a structured, separator-joined token
+# (RUNBOOK-LOAN-CLOSE) — not the bare English word "runbook" that appears in
+# prose ("resolved per runbook KB0010234", where KB0010234 is the real id).
+_RUNBOOK_REF_RE = re.compile(
+    r"\b(?:KB\d{4,}|RB\d{3,}|RUNBOOK[-_][A-Z0-9]+(?:[-_][A-Z0-9]+)*)\b",
+    re.IGNORECASE,
+)
+
+# ServiceNow's canonical datetime format for resolution timestamps.
+_SN_DATETIME_FORMAT = "%Y-%m-%d %H:%M:%S"
 AFFECTED_CI_TASK_FIELDS: Tuple[str, ...] = (
     "sys_id",
     "task",
@@ -184,6 +242,56 @@ DEFAULT_CMDB_RELATIONSHIP_RULES: Mapping[str, CMDBRelationshipRule] = (
         }
     )
 )
+
+
+@dataclass(frozen=True)
+class IncidentResolution:
+    """Structured, detector-facing record of HOW one incident was resolved.
+
+    MSP-B4 T1. This is the stable payload downstream signature (T2) and detector
+    (T3/T4) logic consume. Two deliberate boundaries:
+
+    * **Groups, never people.** ``resolved_by_group`` is the incident's
+      assignment group — a queue, not an individual. No person is carried here.
+    * **Notes are evidence, not text.** The resolution note is represented by
+      ``notes_evidence`` (an observed :class:`EvidencePointer` back to the
+      incident, so the note stays reachable in the source system under its own
+      access control) plus ``runbook_references`` (the only DETERMINISTIC thing
+      mined from the note). The raw free-text never appears on this record —
+      semantic matching of notes belongs to MSP-B5.
+
+    Timestamps are normalised to stable internal fields so recurrence detection
+    can compute median time-to-resolve consistently. ``time_to_resolve_seconds``
+    measures from the first-assignment time when the deployment tracks it, else
+    from creation, to the resolved (or, failing that, closed) time.
+    """
+
+    incident_sys_id: str
+    is_resolved: bool
+    close_code: Optional[str]
+    resolution_category: Optional[str]
+    resolution_subcategory: Optional[str]
+    resolved_by_group: Optional[str]
+    created_at: Optional[str]
+    first_assigned_at: Optional[str]
+    resolved_at: Optional[str]
+    closed_at: Optional[str]
+    time_to_resolve_seconds: Optional[int]
+    has_resolution_notes: bool
+    runbook_references: Tuple[str, ...]
+    notes_evidence: Optional[Dict[str, Any]]
+    evidence: Dict[str, Any]
+    # MSP-B4 T2 — deterministic structured signatures (see
+    # discovery/signals/resolution_signature.py). ``incident_identity_signature``
+    # is WHAT KIND of incident this is (always present). ``resolution_signature``
+    # is HOW it was resolved and is present only for resolved incidents.
+    incident_identity_signature: Optional[str] = None
+    resolution_signature: Optional[str] = None
+
+    def as_dict(self) -> Dict[str, Any]:
+        data = asdict(self)
+        data["runbook_references"] = list(self.runbook_references)
+        return data
 
 
 @dataclass(frozen=True)
@@ -2374,6 +2482,216 @@ def ingest_vr_changes(
         "workload_summary": summarize_vulnerability_workload(collected["vulnerable_items"]),
         "streams": streams,
     }
+def _assignment_group_name(value: Any) -> Optional[str]:
+    """Return a ServiceNow assignment group's display name (a queue, not a person).
+
+    Handles both the ``display_value=all`` reference object and a plain scalar
+    (the offline fixture shape). Returns ``None`` when no group is set.
+    """
+    if isinstance(value, dict):
+        name = (
+            value.get("display_value")
+            or value.get("displayName")
+            or value.get("name")
+            or value.get("value")
+        )
+    else:
+        name = value
+    if name is None:
+        return None
+    text = str(name).strip()
+    return text or None
+
+
+def _parse_sn_datetime(value: Optional[str]) -> Optional[datetime]:
+    """Parse a ServiceNow datetime string; ``None`` when absent or malformed."""
+    if not value:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    # Tolerate an ISO 'T' separator and a trailing fractional/zone suffix.
+    text = text[:19].replace("T", " ")
+    try:
+        return datetime.strptime(text, _SN_DATETIME_FORMAT)
+    except ValueError:
+        logger.warning("ServiceNow resolution timestamp %r is unparseable; ignoring", value)
+        return None
+
+
+def _time_to_resolve_seconds(
+    *, created_at: Optional[str], first_assigned_at: Optional[str],
+    resolved_at: Optional[str], closed_at: Optional[str],
+) -> Optional[int]:
+    """Compute a stable time-to-resolve in whole seconds.
+
+    Start = first-assignment time when the deployment tracks it, else creation.
+    End = resolved time, else closed time. Returns ``None`` unless both ends
+    parse and the interval is non-negative — a negative interval means dirty
+    source data and must not become a spurious TTR.
+    """
+    start = _parse_sn_datetime(first_assigned_at) or _parse_sn_datetime(created_at)
+    end = _parse_sn_datetime(resolved_at) or _parse_sn_datetime(closed_at)
+    if start is None or end is None:
+        return None
+    seconds = (end - start).total_seconds()
+    if seconds < 0:
+        return None
+    return int(seconds)
+
+
+def _extract_runbook_references(notes_text: Optional[str]) -> Tuple[str, ...]:
+    """Extract deterministic runbook / KB identifiers explicitly cited in notes.
+
+    The ONLY thing B4 reads out of resolution-note text: a structured reference,
+    never semantic content. Returns a deterministic (uppercased, de-duplicated,
+    sorted) tuple.
+    """
+    if not notes_text:
+        return ()
+    found = {match.group(0).upper() for match in _RUNBOOK_REF_RE.finditer(str(notes_text))}
+    return tuple(sorted(found))
+
+
+def _build_incident_resolution(
+    source: Mapping[str, Any],
+    *,
+    incident_sys_id: Optional[str],
+    incident_number: Optional[str],
+    instance_url: Optional[str],
+    first_assigned_field: str = "",
+    ci_class: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Build one incident's structured resolution payload from a source record.
+
+    ``source`` is either a raw ServiceNow record (``display_value=all`` objects)
+    or an offline fixture incident (plain scalars); ``_sn_scalar`` /
+    ``_optional_sn_text`` handle both. Read-only: it inspects fields only.
+
+    ``ci_class`` is the CMDB class of the incident's CI when a B3 CMDB join has
+    resolved it; ``None`` (the T2 default) yields an unlocated CI component that
+    the signatures still compute over deterministically (MSP-B4 AC5).
+    """
+    close_code = _optional_sn_text(source.get("close_code"))
+    resolution_category = _optional_sn_text(source.get("category"))
+    resolution_subcategory = _optional_sn_text(source.get("subcategory"))
+    resolved_by_group = _assignment_group_name(source.get("assignment_group"))
+
+    created_at = _optional_sn_text(source.get("opened_at")) or _optional_sn_text(
+        source.get("sys_created_on")
+    )
+    first_assigned_at = (
+        _optional_sn_text(source.get(first_assigned_field))
+        if first_assigned_field
+        else None
+    )
+    resolved_at = _optional_sn_text(source.get("resolved_at"))
+    closed_at = _optional_sn_text(source.get("closed_at"))
+
+    notes_text = _optional_sn_text(source.get("close_notes"))
+    runbook_references = _extract_runbook_references(notes_text)
+    is_resolved = bool(resolved_at or closed_at or close_code)
+
+    # MSP-B4 T2 — deterministic structured signatures. The CI is keyed on its
+    # STABLE sys_id (never the drifting display name); short-description tokens
+    # are structural, never fuzzy. ``ci_class`` sharpens the CI component when a
+    # B3 join supplies it (T5); until then the stable CI id is used, and an
+    # incident with no CI stays unlocated but still signable (AC5).
+    ci_id = _sn_reference_id(source.get("cmdb_ci"))
+    short_description = _optional_sn_text(source.get("short_description"))
+    incident_identity_signature = compute_incident_identity_signature(
+        category=resolution_category,
+        short_description=short_description,
+        ci_class=ci_class,
+        ci_id=ci_id,
+    )
+    # HOW it was resolved is only meaningful once the incident has been resolved.
+    resolution_signature = (
+        compute_resolution_signature(
+            category=resolution_category,
+            close_code=close_code,
+            resolved_by_group=resolved_by_group,
+            ci_class=ci_class,
+            ci_id=ci_id,
+        )
+        if is_resolved
+        else None
+    )
+
+    # The evidence artifact is the incident itself. Prefer the stable sys_id;
+    # fall back to the incident number when a fixture omits it.
+    artifact = incident_sys_id or incident_number or ""
+    artifact_type = "record_id" if incident_sys_id else None
+    pointer_timestamp = resolved_at or closed_at or created_at
+    evidence = EvidencePointer.observed(
+        source_system="servicenow",
+        source_artifact=artifact,
+        source_timestamp=pointer_timestamp,
+        source_artifact_type=artifact_type,
+    ).to_dict()
+
+    resolution = IncidentResolution(
+        incident_sys_id=incident_sys_id or "",
+        is_resolved=is_resolved,
+        close_code=close_code,
+        resolution_category=resolution_category,
+        resolution_subcategory=resolution_subcategory,
+        resolved_by_group=resolved_by_group,
+        created_at=created_at,
+        first_assigned_at=first_assigned_at,
+        resolved_at=resolved_at,
+        closed_at=closed_at,
+        time_to_resolve_seconds=_time_to_resolve_seconds(
+            created_at=created_at,
+            first_assigned_at=first_assigned_at,
+            resolved_at=resolved_at,
+            closed_at=closed_at,
+        ),
+        has_resolution_notes=bool(notes_text),
+        runbook_references=runbook_references,
+        # The note is stored AS EVIDENCE (a pointer back to the incident), never
+        # as text on this payload. Present only when a note exists.
+        notes_evidence=dict(evidence) if notes_text else None,
+        evidence=evidence,
+        incident_identity_signature=incident_identity_signature,
+        resolution_signature=resolution_signature,
+    )
+    return resolution.as_dict()
+
+
+def _fixture_instance_url(fixture: Dict[str, Any]) -> Optional[str]:
+    """Derive a credential-free instance origin from the incident fixture meta."""
+    meta = fixture.get("_meta") or {}
+    instance_url = meta.get("instance_url")
+    if not instance_url:
+        instance = meta.get("instance")
+        if instance:
+            instance_url = f"https://{instance}"
+    return _safe_servicenow_instance_url(instance_url) if instance_url else None
+
+
+def _attach_incident_resolutions(
+    incident_metrics: Dict[str, Any],
+    instance_url: Optional[str],
+    *,
+    first_assigned_field: str = "",
+) -> None:
+    """Attach a ``resolution`` block to each incident in place (offline path).
+
+    Idempotent: an incident that already carries a resolution block is left
+    untouched, so re-attaching is safe.
+    """
+    for incident in incident_metrics.get("incidents") or []:
+        if not isinstance(incident, dict) or "resolution" in incident:
+            continue
+        incident["resolution"] = _build_incident_resolution(
+            incident,
+            incident_sys_id=_optional_sn_text(incident.get("sys_id")),
+            incident_number=_optional_sn_text(incident.get("number"))
+            or _optional_sn_text(incident.get("id")),
+            instance_url=instance_url,
+            first_assigned_field=first_assigned_field,
+        )
 
 
 def get_incident_metrics(client: Optional[ServiceNowClient] = None) -> Dict[str, Any]:
@@ -2397,7 +2715,14 @@ def get_incident_metrics(client: Optional[ServiceNowClient] = None) -> Dict[str,
     Returns: incident_metrics dict matching servicenow_sample.json shape
     """
     if not is_live():
-        return _load_fixture()["incident_metrics"]
+        fixture = _load_fixture()
+        metrics = fixture["incident_metrics"]
+        _attach_incident_resolutions(
+            metrics,
+            _fixture_instance_url(fixture),
+            first_assigned_field=os.getenv(FIRST_ASSIGNED_FIELD_ENV, "").strip(),
+        )
+        return metrics
 
     window_query = f"sys_created_on>=javascript:gs.daysAgo({WINDOW_DAYS})"
 
@@ -2406,6 +2731,18 @@ def get_incident_metrics(client: Optional[ServiceNowClient] = None) -> Dict[str,
 
     # Incident details for category breakdown
     fields = list(INCIDENT_CI_FIELDS)
+    # MSP-B4 T1: read resolution-depth fields on this SAME query (no new scan).
+    for resolution_field in INCIDENT_RESOLUTION_FIELDS:
+        if resolution_field not in fields:
+            fields.append(resolution_field)
+    # MSP-B4 T2: short_description feeds the incident-identity signature only —
+    # its normalised token set, never its raw text — so it is read but not
+    # surfaced on the incident payload.
+    if "short_description" not in fields:
+        fields.append("short_description")
+    first_assigned_field = os.getenv(FIRST_ASSIGNED_FIELD_ENV, "").strip()
+    if first_assigned_field and first_assigned_field not in fields:
+        fields.append(first_assigned_field)
     escalation_field = os.getenv("SERVICENOW_ESCALATION_FIELD", "").strip()
     if escalation_field:
         fields.append(escalation_field)
@@ -2494,6 +2831,14 @@ def get_incident_metrics(client: Optional[ServiceNowClient] = None) -> Dict[str,
             ),
             "affected_ci_references": [],
         }
+        # MSP-B4 T1: structured resolution payload built from the SAME record.
+        incident["resolution"] = _build_incident_resolution(
+            record,
+            incident_sys_id=incident_sys_id,
+            incident_number=_sn_scalar(record.get("number")),
+            instance_url=getattr(client, "instance_url", None),
+            first_assigned_field=first_assigned_field,
+        )
         if escalation_field and record.get(escalation_field):
             incident["escalated_to"] = record.get(escalation_field)
         incidents.append(incident)
@@ -2527,6 +2872,208 @@ def get_incident_metrics(client: Optional[ServiceNowClient] = None) -> Dict[str,
         "incidents": incidents,
         "assignment_groups": list(assignment_groups.values()),
     }
+
+
+def _assignment_group_display_names(
+    client: ServiceNowClient,
+    group_values: List[str],
+) -> Dict[str, str]:
+    """Resolve raw ServiceNow group sys_ids to queue names, read-only.
+
+    ``sys_audit.oldvalue/newvalue`` are string columns and therefore commonly
+    contain the referenced group's raw sys_id even with display values enabled.
+    Resolve only values that have the canonical sys_id shape and request only
+    ``sys_id,name`` from ``sys_user_group``.  Values that are already display
+    names never trigger this extra query.
+    """
+    group_ids = sorted(
+        {
+            value.strip()
+            for value in group_values
+            if value and _SN_SYS_ID_RE.fullmatch(value.strip())
+        }
+    )
+    if not group_ids:
+        return {}
+
+    resolved: Dict[str, str] = {}
+    for offset in range(0, len(group_ids), 100):
+        batch = group_ids[offset : offset + 100]
+        records = client.table_query(
+            "sys_user_group",
+            {
+                "sysparm_query": f"sys_idIN{','.join(batch)}^ORDERBYsys_id",
+                "sysparm_fields": "sys_id,name",
+                "sysparm_display_value": "false",
+                "sysparm_exclude_reference_link": "true",
+            },
+            max_records=len(batch) + 1,
+        )
+        admitted = set(batch)
+        for record in records:
+            if not isinstance(record, dict):
+                continue
+            group_id = _sn_reference_id(record.get("sys_id"))
+            group_name = _optional_sn_text(record.get("name"))
+            if group_id in admitted and group_name:
+                resolved[group_id] = group_name
+    return resolved
+
+
+def get_assignment_group_history(
+    client: ServiceNowClient,
+    incident_sys_ids: List[str],
+    *,
+    org_id: Optional[str] = None,
+) -> Dict[str, List[Dict[str, Any]]]:
+    """Read ordered assignment-group history for admitted incidents only.
+
+    ServiceNow's ``sys_audit`` rows explicitly record each assignment-group
+    change.  This function reconstructs group states from ``oldvalue`` and
+    ``newvalue`` without reading assignees or the user who made the change.
+    Results are deterministic (timestamp + audit sys_id ordering), carry
+    observed provenance, and are bounded to the supplied incident set.
+    """
+    from . import get_ingest_org
+
+    admitted_incidents = {
+        str(sys_id).strip() for sys_id in incident_sys_ids if str(sys_id).strip()
+    }
+    if not admitted_incidents:
+        return {}
+
+    effective_org = org_id or get_ingest_org()
+    grouped_audits: Dict[str, List[Dict[str, Any]]] = {
+        sys_id: [] for sys_id in admitted_incidents
+    }
+    instance_url = getattr(client, "instance_url", None)
+    ordered_ids = sorted(admitted_incidents)
+    remaining_records = ASSIGNMENT_HISTORY_RECORD_CAP
+
+    for offset in range(0, len(ordered_ids), 100):
+        if remaining_records <= 0:
+            raise ServiceNowIngestError(
+                "ServiceNow assignment history exceeded the bounded record cap"
+            )
+        batch = ordered_ids[offset : offset + 100]
+        records = client.table_query(
+            ASSIGNMENT_HISTORY_TABLE,
+            {
+                "sysparm_query": (
+                    "tablename=incident^fieldname=assignment_group^"
+                    f"documentkeyIN{','.join(batch)}^"
+                    "ORDERBYsys_created_on^ORDERBYsys_id"
+                ),
+                "sysparm_fields": ",".join(ASSIGNMENT_HISTORY_FIELDS),
+                "sysparm_display_value": "all",
+                "sysparm_exclude_reference_link": "true",
+            },
+            max_records=remaining_records,
+        )
+        remaining_records -= len(records)
+        for record in records:
+            if not isinstance(record, dict):
+                continue
+            incident_sys_id = _sn_reference_id(record.get("documentkey"))
+            history_sys_id = _sn_reference_id(record.get("sys_id"))
+            if incident_sys_id not in admitted_incidents or not history_sys_id:
+                logger.warning(
+                    "ServiceNow assignment-history row is incomplete or outside "
+                    "the admitted incident set; skipping"
+                )
+                continue
+            grouped_audits[incident_sys_id].append(
+                {
+                    "history_sys_id": history_sys_id,
+                    "old_group": _assignment_group_name(record.get("oldvalue")),
+                    "new_group": _assignment_group_name(record.get("newvalue")),
+                    "changed_at": _optional_sn_text(record.get("sys_created_on")),
+                }
+            )
+
+    raw_group_values = [
+        value
+        for rows in grouped_audits.values()
+        for row in rows
+        for value in (row.get("old_group"), row.get("new_group"))
+        if value
+    ]
+    display_names = _assignment_group_display_names(client, raw_group_values)
+
+    histories: Dict[str, List[Dict[str, Any]]] = {
+        sys_id: [] for sys_id in admitted_incidents
+    }
+    for incident_sys_id, audit_rows in grouped_audits.items():
+        audit_rows.sort(
+            key=lambda row: (
+                row.get("changed_at") or "",
+                row.get("history_sys_id") or "",
+            )
+        )
+        for index, row in enumerate(audit_rows):
+            # The first audit row supplies the state before the first observed
+            # transition.  Later rows add only their new state; the detector
+            # collapses duplicate consecutive group entries defensively.
+            states = []
+            if index == 0 and row.get("old_group"):
+                states.append(row["old_group"])
+            if row.get("new_group"):
+                states.append(row["new_group"])
+            for raw_group in states:
+                group_name = display_names.get(raw_group, raw_group)
+                pointer = EvidencePointer.observed(
+                    source_system="servicenow",
+                    source_artifact=row["history_sys_id"],
+                    source_timestamp=row.get("changed_at") or "unknown",
+                    source_artifact_type="record_id",
+                ).to_dict()
+                histories[incident_sys_id].append(
+                    {
+                        "assignment_group": group_name,
+                        "assignment_group_id": (
+                            raw_group if _SN_SYS_ID_RE.fullmatch(raw_group) else None
+                        ),
+                        "changed_at": row.get("changed_at"),
+                        "history_sys_id": row["history_sys_id"],
+                        "org_id": effective_org,
+                        "source_url": _servicenow_record_url(
+                            instance_url,
+                            ASSIGNMENT_HISTORY_TABLE,
+                            row["history_sys_id"],
+                        ),
+                        "evidence": pointer,
+                    }
+                )
+    return histories
+
+
+def _attach_assignment_group_histories(
+    incident_metrics: Dict[str, Any],
+    client: ServiceNowClient,
+) -> None:
+    """Attach bounded group-level assignment histories to incident records."""
+    incidents = incident_metrics.get("incidents") or []
+    incident_ids = [
+        str(incident.get("sys_id") or "").strip()
+        for incident in incidents
+        if isinstance(incident, dict) and incident.get("sys_id")
+    ]
+    try:
+        grouped = get_assignment_group_history(client, incident_ids)
+    except ServiceNowIngestError as exc:
+        # Assignment history is detector enrichment.  If an instance denies
+        # sys_audit access, keep incident ingestion usable and report the
+        # unavailable state instead of inventing an empty/healthy history.
+        logger.warning("ServiceNow assignment-history read unavailable: %s", exc)
+        incident_metrics["assignment_history_lookup"] = {"status": "unavailable"}
+        return
+
+    incident_metrics["assignment_history_lookup"] = {"status": "available"}
+    for incident in incidents:
+        if not isinstance(incident, dict):
+            continue
+        incident_sys_id = str(incident.get("sys_id") or "").strip()
+        incident["assignment_history"] = list(grouped.get(incident_sys_id, []))
 
 
 def get_affected_ci_task_references(
@@ -2915,12 +3462,24 @@ def ingest(
     The runner treats empty SN data as graceful skip — D7 will still fire
     from the Salesforce sf_echo_score side if that threshold is met.
     """
+    from . import get_ingest_org
+
     if not is_live():
         logger.info("ServiceNow ingestion: offline mode (fixture)")
         fixture = _load_fixture()
+        fixture["org_id"] = get_ingest_org()
         raw_incidents = fixture.get("incident_metrics", {}).get(
             "incidents", fixture.get("incident_metrics", {}).get("recent_incidents", [])
         )
+        # MSP-B4 T1: attach the structured resolution payload to each incident.
+        # ingest() returns the fixture's incident_metrics verbatim (it does not
+        # route through get_incident_metrics), so the attach must happen here too.
+        if isinstance(fixture.get("incident_metrics"), dict):
+            _attach_incident_resolutions(
+                fixture["incident_metrics"],
+                _fixture_instance_url(fixture),
+                first_assigned_field=os.getenv(FIRST_ASSIGNED_FIELD_ENV, "").strip(),
+            )
         fixture["lending_correlation"] = get_lending_correlation(
             fixture_incidents=raw_incidents
         )
@@ -2953,6 +3512,7 @@ def ingest(
 
     try:
         incident_metrics = get_incident_metrics(sn_client)
+        _attach_assignment_group_histories(incident_metrics, sn_client)
         _attach_affected_ci_task_references(incident_metrics, sn_client)
         cross_system_references = get_cross_system_references(sn_client)
 
@@ -2960,6 +3520,7 @@ def ingest(
         cmdb = ingest_cmdb(sn_client) if include_cmdb else None
 
         return {
+            "org_id": get_ingest_org(),
             "incident_metrics": incident_metrics,
             "cross_system_references": cross_system_references,
             "lending_correlation": lending_correlation,
