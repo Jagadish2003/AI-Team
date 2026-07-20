@@ -833,6 +833,24 @@ def run(
                 if stream_errors:
                     sn_ok = False
                     sn_err = "; ".join(stream_errors)
+                # MSP-B11 T1: Security Operations SIR workflow signal, on the
+                # same incremental sys_updated_on rails. Additive (a new
+                # sn_data["secops"] key, no existing consumer) and non-blocking:
+                # a stream failure degrades ServiceNow to partial, never aborts.
+                secops_data = servicenow.ingest_sir_changes(
+                    org_id=org_id, run_id=run_id
+                )
+                sn_data["secops"] = secops_data
+                secops_errors = [
+                    stream.get("error")
+                    for stream in (secops_data.get("streams") or {}).values()
+                    if stream.get("error")
+                ]
+                if secops_errors:
+                    sn_ok = False
+                    sn_err = "; ".join(
+                        part for part in [sn_err, *secops_errors] if part
+                    )
             if sn_data and sn_ok:
                 logger.info("ServiceNow ingestion: OK")
             elif sn_data:
