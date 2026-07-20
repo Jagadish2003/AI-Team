@@ -57,7 +57,7 @@ function uid(prefix: string): string {
 
 export function AnalystReviewProvider({ children }: { children: React.ReactNode }) {
   const { runId } = useRunContext();
-  const { run } = useDiscoveryRunContext();
+  const { run, computing } = useDiscoveryRunContext();
   const runStatus = run?.status?.toLowerCase();
   const cache = useDataCache();
 
@@ -96,6 +96,12 @@ export function AnalystReviewProvider({ children }: { children: React.ReactNode 
       setLoading(false);
       return;
     }
+    // Defer the opportunities/audit fetch until the run has SETTLED (not
+    // computing): /opportunities is fetched ONCE the run reaches 100% (this effect
+    // re-runs as `computing` flips to false), never polled during the run. While
+    // computing, the "preparing" state below drives the view. This removes the
+    // during-run /runs/{id}/opportunities + /audit hits.
+    if (computing) return;
     let cancelled = false;
 
     (async () => {
@@ -140,14 +146,16 @@ export function AnalystReviewProvider({ children }: { children: React.ReactNode 
     })();
 
     return () => { cancelled = true; };
-  }, [runId, runStatus, fetchCount]);
+  }, [runId, runStatus, computing, fetchCount]);
 
   // Opportunities, decisions and the audit trail are SHARED across the org —
   // several analysts review the same run. Revalidate on tab focus and on a slow
   // tick so another analyst's approve/reject/override appears here without a
   // reload. The fetch replaces the list only on success, so there is no flicker,
   // and the server stays the source of truth for a concurrently-edited decision.
-  useRevalidateOnFocus(refetch, { enabled: Boolean(runId) });
+  // Post-run collaborative sync only — never while the run is computing (the
+  // completion fetch above covers that, and we don't poll during a run).
+  useRevalidateOnFocus(refetch, { enabled: Boolean(runId) && !computing });
 
   // A run that exists but has not materialised yet (still computing, or status
   // not yet loaded) with no opportunities in hand is "preparing" — surface a

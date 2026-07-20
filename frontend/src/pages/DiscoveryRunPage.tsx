@@ -68,6 +68,36 @@ const DISCOVERY_STEPS: DiscoveryStep[] = [
     subLabel: "Ingesting channel activity, escalation, and cross-reference signals",
   },
   {
+    id: "teams",
+    label: "Microsoft Teams",
+    subLabel: "Ingesting channel activity, escalation, and cross-reference signals",
+  },
+  {
+    id: "confluence",
+    label: "Confluence",
+    subLabel: "Ingesting page and space activity signals",
+  },
+  {
+    id: "sharepoint",
+    label: "SharePoint",
+    subLabel: "Ingesting document library activity signals",
+  },
+  {
+    id: "github",
+    label: "GitHub",
+    subLabel: "Ingesting pull request, commit, and branch signals",
+  },
+  {
+    id: "java_app",
+    label: "Java Application",
+    subLabel: "Ingesting operational health and log signals",
+  },
+  {
+    id: "dotnet_app",
+    label: ".NET Application",
+    subLabel: "Ingesting operational health and log signals",
+  },
+  {
     id: "sf_ncino",
     label: "nCino Lending",
     subLabel: "Ingesting nCino loan origination signals",
@@ -109,7 +139,19 @@ const STEP_INDEX = Object.fromEntries(
 // Salesforce drives two passes (CRM + the declared second product), so both
 // sf_crm and sf_ncino map to the salesforce source.
 // ---------------------------------------------------------------------------
-const SOURCE_STEP_IDS = new Set(["sf_crm", "sn", "jira", "sf_ncino", "slack"]);
+const SOURCE_STEP_IDS = new Set([
+  "sf_crm",
+  "sn",
+  "jira",
+  "sf_ncino",
+  "slack",
+  "teams",
+  "confluence",
+  "sharepoint",
+  "github",
+  "java_app",
+  "dotnet_app",
+]);
 
 // The pack-specific second Salesforce pass (labelled by the selected pack —
 // Service Cloud / nCino / …). It is a source step, but it is rendered LAST among
@@ -123,6 +165,12 @@ const STEP_SOURCE_TOKENS: Record<string, string[]> = {
   sn: ["servicenow"],
   jira: ["jira"],
   slack: ["slack"],
+  teams: ["teams"],
+  confluence: ["confluence"],
+  sharepoint: ["sharepoint"],
+  github: ["github"],
+  java_app: ["java_app"],
+  dotnet_app: ["dotnet_app"],
 };
 
 // Normalise a connected-source label/id for matching: lower-cased, trimmed.

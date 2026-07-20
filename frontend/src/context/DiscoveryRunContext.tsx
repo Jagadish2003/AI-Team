@@ -24,6 +24,13 @@ type DiscoveryRunContextValue = {
 
 const Ctx = createContext<DiscoveryRunContextValue | null>(null);
 
+// How often the single run-progress poll (status + events) fires WHILE a run is
+// computing. A discovery run takes minutes, so a calm cadence is plenty for the
+// progress bar / step list — the derived data (normalization, opportunities) is
+// no longer polled alongside it (it fetches once at completion), so this is the
+// only in-run poll. Kept as a named constant so it is easy to tune.
+const RUN_PROGRESS_POLL_MS = 5000;
+
 function isTerminalStatus(status: string | undefined) {
   const normalized = status?.toLowerCase();
   return normalized === 'complete' || normalized === 'completed' || normalized === 'partial' || normalized === 'failed';
@@ -167,7 +174,7 @@ export function DiscoveryRunProvider({ children }: { children: React.ReactNode }
       }
     };
     void pollRunProgress();
-    const interval = setInterval(pollRunProgress, 1500);
+    const interval = setInterval(pollRunProgress, RUN_PROGRESS_POLL_MS);
     const onVisibility = () => {
       if (typeof document !== 'undefined' && !document.hidden) void pollRunProgress();
     };
@@ -180,9 +187,9 @@ export function DiscoveryRunProvider({ children }: { children: React.ReactNode }
   }, [runId, computing]);
 
   // A run is SHARED across the org — another user may replay it or drive it to a
-  // new state. While it is computing the 1.5s poll above already tracks it, so
-  // this covers the settled case: on focus / a slow tick, pick up a run another
-  // user has since changed, without a reload.
+  // new state. While it is computing the run-progress poll above already tracks
+  // it, so this covers the settled case: on focus / a slow tick, pick up a run
+  // another user has since changed, without a reload.
   useRevalidateOnFocus(refetch, {
     enabled: Boolean(runId) && !computing,
   });

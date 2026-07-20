@@ -1,25 +1,25 @@
 /**
- * SlackChannelPicker — R18-C0 P5
+ * TeamsChannelPicker — Microsoft Teams channel selection.
  *
- * Rendered inside ConnectorDetailPanel when connector.id === 'slack' and
- * connector.status === 'connected'. On Slack connect the customer chooses which
- * public channels AgentIQ may read; the Slack ingestor (R16-A2) then reads ONLY
- * the selected channels for that org.
+ * The Teams analogue of SlackChannelPicker (R18-C0 P5): rendered inside
+ * ConnectorDetailPanel when connector.id === 'teams' && connector.status ===
+ * 'connected'. The customer chooses which granted Teams channels AgentIQ reads;
+ * the Teams ingestor (R17-A1 reach + R18-A4 depth) then reads ONLY the selected
+ * channels for that org.
  *
  * What it does:
- *   - Lists the selectable public channels (GET /api/connectors/slack/channels)
+ *   - Lists the selectable channels (GET /api/connectors/teams/channels) — the
+ *     granted standard channels across the connected teams
  *   - Multi-select checkboxes (a workspace may read many channels)
- *   - Saves the selection via PATCH /api/connectors/slack/channels
+ *   - Saves the selection via PATCH /api/connectors/teams/channels
  *   - Editable later — re-open, change the selection, save again
+ *   - Carries the R18-A4 depth-phase consent notice inline
  *
- * Consent clarity: the customer can see exactly which channels are part of
- * discovery and exclude noisy/irrelevant ones. When no selection has been saved
- * yet (configured === false) NO channel is pre-checked. Until a selection is
- * saved the ingestor still reads every accessible channel (the backwards-
- * compatible default); the picker just doesn't pre-check them, so the customer
- * explicitly opts channels in.
- *
- * Viewers get a read-only picker (PATCH is analyst+).
+ * When no selection has been saved yet (configured === false) NO channel is
+ * pre-checked. Until a selection is saved the ingestor still reads every granted
+ * channel (the backwards-compatible default); the picker just doesn't pre-check
+ * them, so the customer explicitly opts channels in. Viewers get a read-only
+ * picker (PATCH is analyst+).
  */
 import React, { useCallback, useEffect, useState } from 'react';
 import { useToast } from '../common/Toast';
@@ -29,14 +29,15 @@ import { isViewerRole } from '../../utils/roles';
 import PickerSkeleton from './PickerSkeleton';
 import ConversationContentConsentNotice from './ConversationContentConsentNotice';
 
-interface SlackChannel {
+interface TeamsChannel {
   id: string;
   name: string;
+  team?: string;
 }
 
-interface SlackChannelsResponse {
+interface TeamsChannelsResponse {
   ok: boolean;
-  available: SlackChannel[];
+  available: TeamsChannel[];
   selected: string[];
   configured: boolean;
 }
@@ -55,28 +56,26 @@ function getSaveErrorMessage(error: unknown): string {
   return 'Network error saving channel selection. Please try again.';
 }
 
-export default function SlackChannelPicker({ onSaved }: Props) {
+export default function TeamsChannelPicker({ onSaved }: Props) {
   const { push } = useToast();
   const auth = useAuthOptional();
   const isViewer = isViewerRole(auth?.user?.role);
 
-  const [available, setAvailable] = useState<SlackChannel[]>([]);
+  const [available, setAvailable] = useState<TeamsChannel[]>([]);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
 
-  // Load selectable channels + current selection on mount.
   useEffect(() => {
     setLoading(true);
-    apiGet<SlackChannelsResponse>('/api/connectors/slack/channels')
+    apiGet<TeamsChannelsResponse>('/api/connectors/teams/channels')
       .then((data) => {
         const channels = data?.available ?? [];
         setAvailable(channels);
         // Configured → the saved selection. Not configured yet → pre-select NONE
-        // (consistent with the Jira/Confluence/SharePoint/GitHub pickers). Until
-        // the customer saves a selection the ingestor still reads every accessible
-        // channel (the backwards-compatible default); the picker just doesn't
-        // pre-check them.
+        // (consistent with the Jira/Confluence/SharePoint/GitHub pickers). Until a
+        // selection is saved the ingestor still reads every granted channel (the
+        // backwards-compatible default); the picker just doesn't pre-check them.
         setSelected(
           data?.configured ? new Set(data.selected ?? []) : new Set(),
         );
@@ -99,15 +98,15 @@ export default function SlackChannelPicker({ onSaved }: Props) {
   const handleSave = useCallback(async () => {
     setSaving(true);
     try {
-      const data = await apiPatch<SlackChannelsResponse>(
-        '/api/connectors/slack/channels',
+      const data = await apiPatch<TeamsChannelsResponse>(
+        '/api/connectors/teams/channels',
         { channels: [...selected] },
       );
       setSelected(new Set(data.selected));
       push(
         data.selected.length > 0
-          ? `Reading ${data.selected.length} Slack channel${data.selected.length > 1 ? 's' : ''}.`
-          : 'No Slack channels selected — none will be read.',
+          ? `Reading ${data.selected.length} Teams channel${data.selected.length > 1 ? 's' : ''}.`
+          : 'No Teams channels selected — none will be read.',
       );
       onSaved?.();
     } catch (error) {
@@ -118,7 +117,7 @@ export default function SlackChannelPicker({ onSaved }: Props) {
   }, [selected, push, onSaved]);
 
   if (loading) {
-    return <PickerSkeleton label="Loading Slack channels" />;
+    return <PickerSkeleton label="Loading Teams channels" />;
   }
 
   return (
@@ -131,27 +130,24 @@ export default function SlackChannelPicker({ onSaved }: Props) {
       </div>
 
       <p className="text-xs text-muted mb-3 leading-relaxed">
-        Choose which Slack channels are part of discovery. AgentIQ reads only the
+        Choose which Teams channels are part of discovery. AgentIQ reads only the
         selected channels — unselected channels are never ingested, even if the
-        connection can see them. You can change this later.
+        connection is granted them. You can change this later.
       </p>
 
-      {/* R18-A4 / AT-598 (T5, AC7): depth-phase consent — reading conversation
-          text is more sensitive than reading activity counts, so the copy states
-          plainly that message CONTENT in selected channels is used as evidence. */}
       <ConversationContentConsentNotice scopeLabel="selected channels" />
 
       <div className="mt-3" />
 
       {available.length === 0 ? (
         <p className="text-xs text-muted italic">
-          No public channels available. Invite AgentIQ to the channels it should
-          read, then reopen this panel.
+          No Teams channels available. Confirm your Microsoft 365 admin has granted
+          AgentIQ access to at least one standard channel, then reopen this panel.
         </p>
       ) : (
         <div
           role="group"
-          aria-label="Slack channels"
+          aria-label="Teams channels"
           className="space-y-1.5 max-h-[15rem] overflow-y-auto pr-1"
         >
           {available.map((channel) => {
@@ -189,7 +185,12 @@ export default function SlackChannelPicker({ onSaved }: Props) {
                     isSelected ? 'text-accent' : 'text-text'
                   }`}
                 >
-                  #{channel.name || channel.id}
+                  {channel.name || channel.id}
+                  {channel.team ? (
+                    <span className="ml-1.5 text-[10px] font-normal text-muted">
+                      {channel.team}
+                    </span>
+                  ) : null}
                 </span>
               </button>
             );

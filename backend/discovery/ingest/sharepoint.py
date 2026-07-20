@@ -98,7 +98,7 @@ from typing import Any, Dict, Iterator, List, Optional
 
 from app.provenance import EvidencePointer, utc_now_iso
 
-from . import get_live_connector, is_live, resolve_vault_connector
+from . import get_ingest_org, get_live_connector, is_live, resolve_vault_connector
 from .base import ChangeBasedIngestor, ChangeKind, Checkpoint, DeltaBatch
 from .sharepoint_signals import build_item_signals
 
@@ -344,6 +344,29 @@ class SharePointIngestor(ChangeBasedIngestor):
                 )
 
     # ── Library access (R17-A2 §3) ───────────────────────────────────────────
+    def _selected_site_ids(self, org_id: str) -> Optional[set]:
+        """The org's saved site selection (site ids), or ``None`` when none is
+        saved (read every granted site — backward compatible).
+
+        Mirrors slack ``_selected_channel_ids``: a DB failure degrades to ``None``
+        (read all granted) so a run is never blocked by the selection store. Both
+        the reach path (:meth:`_accessible_libraries`) and the R18-A5 deep-content
+        path (``sharepoint_content._accessible_sites``) narrow to this selection.
+        """
+        try:
+            from app.db import org_connector_get
+
+            record = org_connector_get(org_id, "sharepoint") if org_id else None
+            if record:
+                sites = record.get("sites")
+                if isinstance(sites, list):
+                    ids = {str(s).strip() for s in sites if str(s).strip()}
+                    if ids:
+                        return ids
+        except Exception:  # pragma: no cover — never block a run on the selection store
+            logger.debug("sharepoint: could not read saved site selection; reading all granted")
+        return None
+
     def _accessible_libraries(self, org_id: str) -> List[Dict[str, Any]]:
         """Return only document libraries AgentIQ is granted and that are live.
 
@@ -351,16 +374,21 @@ class SharePointIngestor(ChangeBasedIngestor):
         (``is_accessible == False``), and hidden/system libraries
         (``is_hidden == True``) are excluded. In live mode Microsoft Graph only
         returns resources the OAuth token is scoped to, so this filter is the
-        offline-fixture equivalent of that least-privilege boundary.
+        offline-fixture equivalent of that least-privilege boundary. When the org
+        has saved a site selection (Integration Hub), the granted sites are further
+        narrowed to that selection.
 
         Each returned library dict carries its owning ``site_id`` / ``site_name``
         so records and checkpoint keys can be site-scoped.
         """
+        selected = self._selected_site_ids(org_id)
         accessible: List[Dict[str, Any]] = []
         for site in self._raw_sites(org_id):
             if not site.get("is_accessible", True):
                 continue  # AgentIQ was not granted this site
             site_id = site.get("id", "")
+            if selected is not None and str(site_id) not in selected:
+                continue  # site not in the org's saved selection
             site_name = site.get("displayName", site.get("name", ""))
             for d in self._raw_drives(org_id, site_id):
                 if not d.get("is_accessible", False):
@@ -658,3 +686,30 @@ class SharePointGraphClient:
             f"{_GRAPH_API_BASE}/sites/{site_id}/lists/{list_id}/items?$expand=fields"
         )
         return self._get_all(url)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Site selection (Integration Hub picker)
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def list_selectable_sites(org_id: Optional[str] = None) -> List[Dict[str, str]]:
+    """SharePoint sites the customer can choose from — ``[{id, name}]``.
+
+    The option list for ``GET /api/connectors/sharepoint/sites``: every GRANTED
+    site (the selection narrowing is deliberately NOT applied here). Offline reads
+    the fixture; live lists sites via Microsoft Graph. Resolves identically to what
+    a discovery run sees, so a saved id is always among the options.
+    """
+    ingestor = SharePointIngestor()
+    org = org_id or get_ingest_org()
+    out: List[Dict[str, str]] = []
+    for site in ingestor._raw_sites(org):
+        if not site.get("is_accessible", True):
+            continue
+        site_id = site.get("id")
+        if not site_id:
+            continue
+        name = site.get("displayName") or site.get("name") or str(site_id)
+        out.append({"id": str(site_id), "name": str(name)})
+    return out

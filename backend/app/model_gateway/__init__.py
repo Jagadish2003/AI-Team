@@ -303,6 +303,22 @@ def validate_provider_config() -> None:
     gen_provider = _resolve_provider(gen_name, _ENV_GENERATION)
     emb_provider = _resolve_provider(emb_name, _ENV_EMBEDDING)
 
+    # The 'hosted' provider has no embeddings endpoint — its embed() returns []
+    # by design (Anthropic's hosted API does not expose embeddings). Selecting it
+    # for embeddings therefore silently DISABLES retrieval: every retrieval_chunk
+    # stays pending (embedding IS NULL) forever and search returns nothing. Make
+    # that misconfiguration loud at startup instead of leaving it to be inferred
+    # from an endless "gateway returned 0 vectors" worker log.
+    if emb_provider.name == "hosted":
+        logger.warning(
+            "%s=hosted: the hosted provider does not support embeddings — retrieval "
+            "embedding is DISABLED (chunks never embed; search returns nothing). Set "
+            "%s to 'in_boundary' (any OpenAI-compatible embeddings API) or "
+            "'customer_tenant' to enable retrieval. See backend/.env.template.",
+            _ENV_EMBEDDING,
+            _ENV_EMBEDDING,
+        )
+
     # R17-D2 T2 — reserved-connector-id collision guard. The customer-tenant model
     # credential is vaulted in the shared `credentials` table under a reserved
     # connector_id ("customer_tenant"). If a REAL OAuth connector were ever

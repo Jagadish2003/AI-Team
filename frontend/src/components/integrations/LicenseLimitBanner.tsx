@@ -21,10 +21,40 @@
 import React from 'react';
 import type { LicenseLimitsResponse } from '../../types/license';
 import { Skeleton } from '../common/Skeleton';
+import { useLicense } from '../../context/LicenseContext';
 
 /** The exact message the backend (license_limits.limit_message) surfaces. */
 export function systemLimitMessage(systemsLicensed: number): string {
   return `Your license covers ${systemsLicensed} systems. Contact CloudFulcrum to add more.`;
+}
+
+/**
+ * Wording for the used-systems count.
+ *
+ * `unlimited` (no numeric cap) is true both for a genuine unlimited license AND
+ * for NO license at all — the backend's `max_systems` is null in both cases — so
+ * the count alone can't tell them apart. Using the live license STATUS
+ * disambiguates, so a never-licensed install is never mislabelled as having an
+ * "unlimited license":
+ *   - active license (valid / grace) + no cap → "N (unlimited license)"
+ *   - no active license (readonly / invalid)  → "N · no active license"
+ *   - status not yet known (loading/error)    → "N" (make no license claim)
+ *   - a numeric cap                           → "N of M"
+ */
+function usageCountLabel(
+  systemsUsed: number,
+  systemsLicensed: number | null,
+  unlimited: boolean,
+  licenseState: string | undefined,
+): string {
+  if (!unlimited) return `${systemsUsed} of ${systemsLicensed}`;
+  if (licenseState === 'valid' || licenseState === 'grace') {
+    return `${systemsUsed} (unlimited license)`;
+  }
+  if (licenseState === 'readonly' || licenseState === 'invalid') {
+    return `${systemsUsed} · no active license`;
+  }
+  return `${systemsUsed}`;
 }
 
 export default function LicenseLimitBanner({
@@ -35,6 +65,11 @@ export default function LicenseLimitBanner({
   /** True while GET /api/license/limits is in flight — reserve the strip's space. */
   loading?: boolean;
 }) {
+  // Live license status disambiguates "unlimited license" from "no license" for
+  // the count wording below. Called unconditionally (Rules of Hooks); useLicense
+  // returns a safe default ({status: null}) outside a provider.
+  const licenseState = useLicense().status?.status;
+
   if (loading && !limits) {
     return (
       <div
@@ -67,7 +102,7 @@ export default function LicenseLimitBanner({
       <div className="flex items-center gap-2">
         <span className="uppercase tracking-wide">Systems used</span>
         <span data-testid="license-usage-count" className="font-semibold text-text">
-          {unlimited ? `${systemsUsed} (unlimited license)` : `${systemsUsed} of ${systemsLicensed}`}
+          {usageCountLabel(systemsUsed, systemsLicensed, unlimited, licenseState)}
         </span>
       </div>
       {atLimit && systemsLicensed != null && (

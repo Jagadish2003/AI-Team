@@ -1,24 +1,20 @@
 /**
- * SlackChannelPicker — R18-C0 P5
+ * JiraProjectPicker — Jira project selection (multi-project).
  *
- * Rendered inside ConnectorDetailPanel when connector.id === 'slack' and
- * connector.status === 'connected'. On Slack connect the customer chooses which
- * public channels AgentIQ may read; the Slack ingestor (R16-A2) then reads ONLY
- * the selected channels for that org.
+ * The Jira analogue of SlackChannelPicker (R18-C0 P5): rendered inside
+ * ConnectorDetailPanel when connector.id === 'jira' && connector.status ===
+ * 'connected'. The customer picks WHICH Jira projects AgentIQ scopes discovery to
+ * (JQL project IN (...)), instead of the hardcoded JIRA_PROJECT_KEY default.
  *
  * What it does:
- *   - Lists the selectable public channels (GET /api/connectors/slack/channels)
- *   - Multi-select checkboxes (a workspace may read many channels)
- *   - Saves the selection via PATCH /api/connectors/slack/channels
+ *   - Lists the selectable projects (GET /api/connectors/jira/projects)
+ *   - Multi-select checkboxes — a workspace may scope to several projects
+ *   - Saves the selection via PATCH /api/connectors/jira/projects
  *   - Editable later — re-open, change the selection, save again
  *
- * Consent clarity: the customer can see exactly which channels are part of
- * discovery and exclude noisy/irrelevant ones. When no selection has been saved
- * yet (configured === false) NO channel is pre-checked. Until a selection is
- * saved the ingestor still reads every accessible channel (the backwards-
- * compatible default); the picker just doesn't pre-check them, so the customer
- * explicitly opts channels in.
- *
+ * When no selection has been saved yet (configured === false) NO project is
+ * pre-selected — the ingestor falls back to the JIRA_PROJECT_KEY default until the
+ * customer picks. Saving an empty selection clears it (back to that default).
  * Viewers get a read-only picker (PATCH is analyst+).
  */
 import React, { useCallback, useEffect, useState } from 'react';
@@ -27,16 +23,15 @@ import { ApiError, apiGet, apiPatch } from '../../lib/apiClient';
 import { useAuthOptional } from '../../context/AuthContext';
 import { isViewerRole } from '../../utils/roles';
 import PickerSkeleton from './PickerSkeleton';
-import ConversationContentConsentNotice from './ConversationContentConsentNotice';
 
-interface SlackChannel {
-  id: string;
+interface JiraProject {
+  key: string;
   name: string;
 }
 
-interface SlackChannelsResponse {
+interface JiraProjectsResponse {
   ok: boolean;
-  available: SlackChannel[];
+  available: JiraProject[];
   selected: string[];
   configured: boolean;
 }
@@ -50,36 +45,30 @@ function getSaveErrorMessage(error: unknown): string {
     const body = error.body as { detail?: unknown };
     return typeof body?.detail === 'string'
       ? body.detail
-      : 'Failed to save channel selection.';
+      : 'Failed to save project selection.';
   }
-  return 'Network error saving channel selection. Please try again.';
+  return 'Network error saving project selection. Please try again.';
 }
 
-export default function SlackChannelPicker({ onSaved }: Props) {
+export default function JiraProjectPicker({ onSaved }: Props) {
   const { push } = useToast();
   const auth = useAuthOptional();
   const isViewer = isViewerRole(auth?.user?.role);
 
-  const [available, setAvailable] = useState<SlackChannel[]>([]);
+  const [available, setAvailable] = useState<JiraProject[]>([]);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
 
-  // Load selectable channels + current selection on mount.
+  // Load selectable projects + current selection on mount.
   useEffect(() => {
     setLoading(true);
-    apiGet<SlackChannelsResponse>('/api/connectors/slack/channels')
+    apiGet<JiraProjectsResponse>('/api/connectors/jira/projects')
       .then((data) => {
-        const channels = data?.available ?? [];
-        setAvailable(channels);
-        // Configured → the saved selection. Not configured yet → pre-select NONE
-        // (consistent with the Jira/Confluence/SharePoint/GitHub pickers). Until
-        // the customer saves a selection the ingestor still reads every accessible
-        // channel (the backwards-compatible default); the picker just doesn't
-        // pre-check them.
-        setSelected(
-          data?.configured ? new Set(data.selected ?? []) : new Set(),
-        );
+        setAvailable(data?.available ?? []);
+        // Only a saved selection pre-selects; unconfigured leaves it blank (the
+        // ingestor uses the JIRA_PROJECT_KEY default until the customer chooses).
+        setSelected(data?.configured ? new Set(data.selected ?? []) : new Set());
       })
       .catch(() => {
         // Silent failure — an empty picker is a safe default.
@@ -87,11 +76,11 @@ export default function SlackChannelPicker({ onSaved }: Props) {
       .finally(() => setLoading(false));
   }, []);
 
-  function toggleChannel(id: string) {
+  function toggleProject(key: string) {
     setSelected((prev) => {
       const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
       return next;
     });
   }
@@ -99,15 +88,15 @@ export default function SlackChannelPicker({ onSaved }: Props) {
   const handleSave = useCallback(async () => {
     setSaving(true);
     try {
-      const data = await apiPatch<SlackChannelsResponse>(
-        '/api/connectors/slack/channels',
-        { channels: [...selected] },
+      const data = await apiPatch<JiraProjectsResponse>(
+        '/api/connectors/jira/projects',
+        { projects: [...selected] },
       );
       setSelected(new Set(data.selected));
       push(
         data.selected.length > 0
-          ? `Reading ${data.selected.length} Slack channel${data.selected.length > 1 ? 's' : ''}.`
-          : 'No Slack channels selected — none will be read.',
+          ? `Scoping discovery to ${data.selected.length} Jira project${data.selected.length > 1 ? 's' : ''}.`
+          : 'Jira project selection cleared — using the default project.',
       );
       onSaved?.();
     } catch (error) {
@@ -118,51 +107,44 @@ export default function SlackChannelPicker({ onSaved }: Props) {
   }, [selected, push, onSaved]);
 
   if (loading) {
-    return <PickerSkeleton label="Loading Slack channels" />;
+    return <PickerSkeleton label="Loading Jira projects" />;
   }
 
   return (
     <div className="mt-4">
       <div className="flex items-center justify-between mb-2">
-        <div className="text-sm font-medium text-text">Channels AgentIQ reads</div>
+        <div className="text-sm font-medium text-text">Projects AgentIQ reads</div>
         <div className="text-[10px] font-medium uppercase tracking-wide text-muted">
           Per workspace
         </div>
       </div>
 
       <p className="text-xs text-muted mb-3 leading-relaxed">
-        Choose which Slack channels are part of discovery. AgentIQ reads only the
-        selected channels — unselected channels are never ingested, even if the
-        connection can see them. You can change this later.
+        Choose which Jira projects are part of discovery. AgentIQ scopes its Jira
+        reads to the selected projects — unselected projects are never ingested. You
+        can change this later.
       </p>
-
-      {/* R18-A4 / AT-598 (T5, AC7): depth-phase consent — reading conversation
-          text is more sensitive than reading activity counts, so the copy states
-          plainly that message CONTENT in selected channels is used as evidence. */}
-      <ConversationContentConsentNotice scopeLabel="selected channels" />
-
-      <div className="mt-3" />
 
       {available.length === 0 ? (
         <p className="text-xs text-muted italic">
-          No public channels available. Invite AgentIQ to the channels it should
-          read, then reopen this panel.
+          No Jira projects available. Confirm the connection has access to at least
+          one project, then reopen this panel.
         </p>
       ) : (
         <div
           role="group"
-          aria-label="Slack channels"
+          aria-label="Jira projects"
           className="space-y-1.5 max-h-[15rem] overflow-y-auto pr-1"
         >
-          {available.map((channel) => {
-            const isSelected = selected.has(channel.id);
+          {available.map((project) => {
+            const isSelected = selected.has(project.key);
             return (
               <button
-                key={channel.id}
+                key={project.key}
                 type="button"
                 role="checkbox"
                 aria-checked={isSelected}
-                onClick={() => toggleChannel(channel.id)}
+                onClick={() => toggleProject(project.key)}
                 disabled={isViewer}
                 className={[
                   'w-full flex items-center gap-3 rounded-lg border px-3 py-2.5',
@@ -189,7 +171,10 @@ export default function SlackChannelPicker({ onSaved }: Props) {
                     isSelected ? 'text-accent' : 'text-text'
                   }`}
                 >
-                  #{channel.name || channel.id}
+                  {project.name}
+                  <span className="ml-1.5 text-[10px] font-normal text-muted">
+                    {project.key}
+                  </span>
                 </span>
               </button>
             );
@@ -208,12 +193,12 @@ export default function SlackChannelPicker({ onSaved }: Props) {
           saving || isViewer || available.length === 0 ? 'opacity-60 cursor-not-allowed' : 'cursor-pointer',
         ].join(' ')}
       >
-        {saving ? 'Saving…' : 'Save channel selection'}
+        {saving ? 'Saving…' : 'Save project selection'}
       </button>
 
       {available.length > 0 && (
         <p className="mt-2 text-center text-[11px] text-accent">
-          {selected.size} of {available.length} channel{available.length > 1 ? 's' : ''} selected
+          {selected.size} of {available.length} project{available.length > 1 ? 's' : ''} selected
         </p>
       )}
     </div>

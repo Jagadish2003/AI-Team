@@ -3,7 +3,7 @@ import { useAuthOptional } from '../../context/AuthContext';
 import { useRunContext } from '../../context/RunContext';
 import { useAnalystReviewContext } from '../../context/AnalystReviewContext';
 import { useConnectorContext } from '../../context/ConnectorContext';
-import { fetchJwtBearerCredentialStatus, fetchTokenStatus } from '../../services/staticApi';
+import { fetchTokenStatus } from '../../services/staticApi';
 import { useDataCache } from '../../lib/dataCache';
 import { enqueuePrefetch } from '../../lib/prefetchQueue';
 import { cacheKeys } from '../../lib/cacheKeys';
@@ -89,16 +89,20 @@ export default function PrefetchWorkspaceData() {
   }, [token]);
 
   // ── Per-connector: the Integration Hub's status cards ─────────────────────
-  // Token + JWT-bearer status for each CONNECTED connector. The queue paces these
-  // (cap 2, idle-gated), so no manual stagger is needed any more.
+  // Token status for each CONNECTED connector. The queue paces these (cap 2,
+  // idle-gated), so no manual stagger is needed any more.
+  //
+  // NOTE: JWT-bearer credential status is deliberately NOT prefetched here. That
+  // endpoint (GET /api/connectors/{id}/jwt-credentials) only applies to connectors
+  // with the jwt_bearer outbound auth mode (Salesforce today) and returns 400 for
+  // every other connector — so warming it for all connectors floods the log with
+  // 400s. OutboundAuthSetup fetches it on demand, gated on `supportsJwt`, only for
+  // the connector(s) that actually support it — the single correct fetch site.
   useEffect(() => {
     if (!token || connectors.length === 0) return;
     for (const connector of connectors) {
       if (connector.status !== 'connected') continue;
       warm(cacheKeys.connectorTokenStatus(connector.id), () => fetchTokenStatus(connector.id));
-      warm(cacheKeys.connectorJwtStatus(connector.id), () =>
-        fetchJwtBearerCredentialStatus(connector.id),
-      );
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token, connectors]);

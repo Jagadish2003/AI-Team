@@ -1,25 +1,15 @@
 /**
- * SlackChannelPicker — R18-C0 P5
+ * ConfluenceSpacePicker — Confluence space selection (multi-space).
  *
- * Rendered inside ConnectorDetailPanel when connector.id === 'slack' and
- * connector.status === 'connected'. On Slack connect the customer chooses which
- * public channels AgentIQ may read; the Slack ingestor (R16-A2) then reads ONLY
- * the selected channels for that org.
+ * The Confluence analogue of JiraProjectPicker / SlackChannelPicker: rendered
+ * inside ConnectorDetailPanel when connector.id === 'confluence' &&
+ * connector.status === 'connected'. The customer picks WHICH Confluence spaces
+ * AgentIQ scopes discovery to (reach signal + R18-A5 deep content), instead of
+ * reading every granted space.
  *
- * What it does:
- *   - Lists the selectable public channels (GET /api/connectors/slack/channels)
- *   - Multi-select checkboxes (a workspace may read many channels)
- *   - Saves the selection via PATCH /api/connectors/slack/channels
- *   - Editable later — re-open, change the selection, save again
- *
- * Consent clarity: the customer can see exactly which channels are part of
- * discovery and exclude noisy/irrelevant ones. When no selection has been saved
- * yet (configured === false) NO channel is pre-checked. Until a selection is
- * saved the ingestor still reads every accessible channel (the backwards-
- * compatible default); the picker just doesn't pre-check them, so the customer
- * explicitly opts channels in.
- *
- * Viewers get a read-only picker (PATCH is analyst+).
+ * When no selection has been saved yet (configured === false) NO space is
+ * pre-selected — the ingestor reads every granted space until the customer picks.
+ * Saving an empty selection means read nothing. Viewers get a read-only picker.
  */
 import React, { useCallback, useEffect, useState } from 'react';
 import { useToast } from '../common/Toast';
@@ -27,16 +17,15 @@ import { ApiError, apiGet, apiPatch } from '../../lib/apiClient';
 import { useAuthOptional } from '../../context/AuthContext';
 import { isViewerRole } from '../../utils/roles';
 import PickerSkeleton from './PickerSkeleton';
-import ConversationContentConsentNotice from './ConversationContentConsentNotice';
 
-interface SlackChannel {
-  id: string;
+interface ConfluenceSpace {
+  key: string;
   name: string;
 }
 
-interface SlackChannelsResponse {
+interface ConfluenceSpacesResponse {
   ok: boolean;
-  available: SlackChannel[];
+  available: ConfluenceSpace[];
   selected: string[];
   configured: boolean;
 }
@@ -50,36 +39,27 @@ function getSaveErrorMessage(error: unknown): string {
     const body = error.body as { detail?: unknown };
     return typeof body?.detail === 'string'
       ? body.detail
-      : 'Failed to save channel selection.';
+      : 'Failed to save space selection.';
   }
-  return 'Network error saving channel selection. Please try again.';
+  return 'Network error saving space selection. Please try again.';
 }
 
-export default function SlackChannelPicker({ onSaved }: Props) {
+export default function ConfluenceSpacePicker({ onSaved }: Props) {
   const { push } = useToast();
   const auth = useAuthOptional();
   const isViewer = isViewerRole(auth?.user?.role);
 
-  const [available, setAvailable] = useState<SlackChannel[]>([]);
+  const [available, setAvailable] = useState<ConfluenceSpace[]>([]);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
 
-  // Load selectable channels + current selection on mount.
   useEffect(() => {
     setLoading(true);
-    apiGet<SlackChannelsResponse>('/api/connectors/slack/channels')
+    apiGet<ConfluenceSpacesResponse>('/api/connectors/confluence/spaces')
       .then((data) => {
-        const channels = data?.available ?? [];
-        setAvailable(channels);
-        // Configured → the saved selection. Not configured yet → pre-select NONE
-        // (consistent with the Jira/Confluence/SharePoint/GitHub pickers). Until
-        // the customer saves a selection the ingestor still reads every accessible
-        // channel (the backwards-compatible default); the picker just doesn't
-        // pre-check them.
-        setSelected(
-          data?.configured ? new Set(data.selected ?? []) : new Set(),
-        );
+        setAvailable(data?.available ?? []);
+        setSelected(data?.configured ? new Set(data.selected ?? []) : new Set());
       })
       .catch(() => {
         // Silent failure — an empty picker is a safe default.
@@ -87,11 +67,11 @@ export default function SlackChannelPicker({ onSaved }: Props) {
       .finally(() => setLoading(false));
   }, []);
 
-  function toggleChannel(id: string) {
+  function toggle(key: string) {
     setSelected((prev) => {
       const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
       return next;
     });
   }
@@ -99,15 +79,15 @@ export default function SlackChannelPicker({ onSaved }: Props) {
   const handleSave = useCallback(async () => {
     setSaving(true);
     try {
-      const data = await apiPatch<SlackChannelsResponse>(
-        '/api/connectors/slack/channels',
-        { channels: [...selected] },
+      const data = await apiPatch<ConfluenceSpacesResponse>(
+        '/api/connectors/confluence/spaces',
+        { spaces: [...selected] },
       );
       setSelected(new Set(data.selected));
       push(
         data.selected.length > 0
-          ? `Reading ${data.selected.length} Slack channel${data.selected.length > 1 ? 's' : ''}.`
-          : 'No Slack channels selected — none will be read.',
+          ? `Reading ${data.selected.length} Confluence space${data.selected.length > 1 ? 's' : ''}.`
+          : 'No Confluence spaces selected — none will be read.',
       );
       onSaved?.();
     } catch (error) {
@@ -118,51 +98,44 @@ export default function SlackChannelPicker({ onSaved }: Props) {
   }, [selected, push, onSaved]);
 
   if (loading) {
-    return <PickerSkeleton label="Loading Slack channels" />;
+    return <PickerSkeleton label="Loading Confluence spaces" />;
   }
 
   return (
     <div className="mt-4">
       <div className="flex items-center justify-between mb-2">
-        <div className="text-sm font-medium text-text">Channels AgentIQ reads</div>
+        <div className="text-sm font-medium text-text">Spaces AgentIQ reads</div>
         <div className="text-[10px] font-medium uppercase tracking-wide text-muted">
           Per workspace
         </div>
       </div>
 
       <p className="text-xs text-muted mb-3 leading-relaxed">
-        Choose which Slack channels are part of discovery. AgentIQ reads only the
-        selected channels — unselected channels are never ingested, even if the
-        connection can see them. You can change this later.
+        Choose which Confluence spaces are part of discovery. AgentIQ reads only the
+        selected spaces — unselected spaces are never ingested, even if the
+        connection is granted them. You can change this later.
       </p>
-
-      {/* R18-A4 / AT-598 (T5, AC7): depth-phase consent — reading conversation
-          text is more sensitive than reading activity counts, so the copy states
-          plainly that message CONTENT in selected channels is used as evidence. */}
-      <ConversationContentConsentNotice scopeLabel="selected channels" />
-
-      <div className="mt-3" />
 
       {available.length === 0 ? (
         <p className="text-xs text-muted italic">
-          No public channels available. Invite AgentIQ to the channels it should
-          read, then reopen this panel.
+          No Confluence spaces available. Confirm the connection has access to at
+          least one space, then reopen this panel.
         </p>
       ) : (
         <div
           role="group"
-          aria-label="Slack channels"
+          aria-label="Confluence spaces"
           className="space-y-1.5 max-h-[15rem] overflow-y-auto pr-1"
         >
-          {available.map((channel) => {
-            const isSelected = selected.has(channel.id);
+          {available.map((space) => {
+            const isSelected = selected.has(space.key);
             return (
               <button
-                key={channel.id}
+                key={space.key}
                 type="button"
                 role="checkbox"
                 aria-checked={isSelected}
-                onClick={() => toggleChannel(channel.id)}
+                onClick={() => toggle(space.key)}
                 disabled={isViewer}
                 className={[
                   'w-full flex items-center gap-3 rounded-lg border px-3 py-2.5',
@@ -189,7 +162,10 @@ export default function SlackChannelPicker({ onSaved }: Props) {
                     isSelected ? 'text-accent' : 'text-text'
                   }`}
                 >
-                  #{channel.name || channel.id}
+                  {space.name || space.key}
+                  <span className="ml-1.5 text-[10px] font-normal text-muted">
+                    {space.key}
+                  </span>
                 </span>
               </button>
             );
@@ -208,12 +184,12 @@ export default function SlackChannelPicker({ onSaved }: Props) {
           saving || isViewer || available.length === 0 ? 'opacity-60 cursor-not-allowed' : 'cursor-pointer',
         ].join(' ')}
       >
-        {saving ? 'Saving…' : 'Save channel selection'}
+        {saving ? 'Saving…' : 'Save space selection'}
       </button>
 
       {available.length > 0 && (
         <p className="mt-2 text-center text-[11px] text-accent">
-          {selected.size} of {available.length} channel{available.length > 1 ? 's' : ''} selected
+          {selected.size} of {available.length} space{available.length > 1 ? 's' : ''} selected
         </p>
       )}
     </div>
