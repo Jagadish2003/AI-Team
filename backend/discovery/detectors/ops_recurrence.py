@@ -25,6 +25,13 @@ from ..signals.resolution_signature import (
     incident_identity_signature_components,
     resolution_signature_components,
 )
+from .ops_recurrence_joins import (
+    build_cmdb_index,
+    build_ci_location_join,
+    build_event_signature_join,
+    build_evidence_trace,
+    extract_event_signatures,
+)
 
 DETECTOR_ID = "OPS_RESOLUTION_RECURRENCE"
 
@@ -91,6 +98,13 @@ class RecurrenceRecord:
     signature_components: Dict[str, Any]
     examples: Tuple[Dict[str, Any], ...]
     example_evidence_pointers: Tuple[Dict[str, Any], ...]
+    # MSP-B4 T5 — soft enrichment joins (both optional; a recurrence still emits
+    # unlocated/unlinked). ``ci_location`` / ``event_signature_link`` are the two
+    # hop traces; ``evidence_trace`` is the assembled hop-by-hop provenance
+    # showing which hops were present (and, when absent, not_available vs failed).
+    ci_location: Dict[str, Any]
+    event_signature_link: Dict[str, Any]
+    evidence_trace: Dict[str, Any]
 
     @property
     def count(self) -> int:
@@ -141,6 +155,11 @@ class _IncidentCandidate:
     resolution_components: Dict[str, Any]
     evidence: Dict[str, Any]
     source_url: Optional[str]
+    # MSP-B4 T5 — soft-join inputs carried per candidate so the joins operate on
+    # the exact incidents that formed the recurrence (never a broader scan).
+    ci_reference: Optional[str]
+    affected_ci_ids: Tuple[str, ...]
+    event_signatures: Tuple[str, ...]
 
 
 def _text(value: Any) -> Optional[str]:
@@ -390,6 +409,24 @@ def _candidate(
         short_description_token_count
     )
 
+    # MSP-B4 T5 — soft-join inputs. The primary CI reference (its stable sys_id)
+    # is the B3 CI-location key; ``affected_ci_references`` is the documented
+    # fallback CI source. Explicit event signatures (stamped upstream by the
+    # B0/B7 event bridge) are read from the incident and its resolution block —
+    # explicit deterministic links only, never derived here.
+    affected_ci_ids = tuple(
+        ref_id
+        for ref in (
+            incident.get("affected_ci_references")
+            if isinstance(incident.get("affected_ci_references"), Sequence)
+            and not isinstance(incident.get("affected_ci_references"), (str, bytes))
+            else []
+        )
+        if isinstance(ref, Mapping)
+        and (ref_id := _reference_id(ref.get("ci_sys_id") or ref.get("ci_item")))
+    )
+    event_signatures = extract_event_signatures(incident, resolution)
+
     return _IncidentCandidate(
         incident_sys_id=incident_sys_id,
         incident_number=incident_number,
@@ -408,6 +445,9 @@ def _candidate(
         ),
         evidence=pointer,
         source_url=_text(incident.get("source_url")),
+        ci_reference=ci_id or None,
+        affected_ci_ids=affected_ci_ids,
+        event_signatures=event_signatures,
     )
 
 
@@ -470,6 +510,10 @@ def find_recurrences(
         return []
     window_start = window_end - timedelta(days=resolved_config.window_days)
 
+    # MSP-B4 T5 — build the B3 CMDB index once for the whole run (org-scoped).
+    # ``None`` means B3 is not available; a dict (possibly empty) means it is.
+    cmdb_index = build_cmdb_index(sn_data, org_id=effective_org)
+
     in_window = [
         candidate
         for candidate in candidates
@@ -508,6 +552,12 @@ def find_recurrences(
         )
         example_pointers = tuple(
             dict(example["evidence"]) for example in examples
+        )
+        # MSP-B4 T5 — soft enrichment joins over the exact recurrence members.
+        ci_join = build_ci_location_join(members, cmdb_index)
+        event_join = build_event_signature_join(members)
+        evidence_trace = build_evidence_trace(
+            members, ci_join, event_join, example_pointers
         )
         identity_signature, resolution_signature = signature_pair
         record_material = {
@@ -566,6 +616,9 @@ def find_recurrences(
                 },
                 examples=examples,
                 example_evidence_pointers=example_pointers,
+                ci_location=ci_join.to_trace(),
+                event_signature_link=event_join.to_trace(),
+                evidence_trace=evidence_trace,
             )
         )
 

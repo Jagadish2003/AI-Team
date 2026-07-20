@@ -100,3 +100,73 @@ truly match.
 - **Tested** — [`test_msp_b4_signatures.py`](../backend/discovery/tests/test_msp_b4_signatures.py)
   covers stable grouping, near-miss separation from both sides, missing-optional
   behaviour, normalisation, and integration through the ServiceNow ingest path.
+
+## Soft enrichment joins (T5 / AT-666)
+
+The recurrence finding is the truth: *"this same loop happened N times, always
+resolved the same way."* T5 layers two **optional, conservative** provenance hops
+on top of it so the finding can, when the upstream data exists, tell a fuller
+story — without ever changing what recurs or how it groups (that is the
+signature's job, above).
+
+Implementation:
+[`backend/discovery/detectors/ops_recurrence_joins.py`](../backend/discovery/detectors/ops_recurrence_joins.py),
+attached to every `RecurrenceRecord` by
+[`ops_recurrence.py`](../backend/discovery/detectors/ops_recurrence.py) as
+`ci_location`, `event_signature_link`, and the assembled `evidence_trace`.
+
+```
+recurrence  →  incident                        (always present — the finding's own examples)
+incident    →  CI / CI-class                   (B3 soft join — "located" when CMDB is present)
+event_sig   →  incident  →  resolution         (B0/B7 soft join — "linked" when the event
+                                                bridge already tied alerts to incidents)
+```
+
+### Both joins are soft
+
+A recurrence that cannot be located or linked is **still emitted, unenriched** —
+never suppressed and never failed (AC5). Each hop records a status so a consumer
+can tell *why* a hop is missing:
+
+| Status | Meaning |
+|--------|---------|
+| `joined` | The hop landed and carries its provenance. |
+| `not_available` | The upstream dependency was absent (no B3 CMDB block; no event-signature link on any incident) — the join was never attemptable. |
+| `join_failed` | The dependency **was** present but this specific join did not resolve (an incident named a CI that does not resolve in the scoped CMDB). |
+
+The `not_available` / `join_failed` split is the whole point: a silently missing
+hop would read as *no relationship exists* when the truth is *the join was
+attempted and did not land.*
+
+### CI-location join (B3)
+
+A deterministic `sys_id` lookup: each recurrence member's CI reference (primary
+`cmdb_ci`, else `affected_ci_references[].ci_sys_id`) is resolved against the
+run's B3 CMDB index (`sn_data["cmdb"].configuration_items`, org-scoped). No
+guessing, no fuzzy matching. `b3_cmdb_absent` (no CMDB block) and `no_ci_reference`
+(CMDB present, incident names no CI) are both `not_available`; a named-but-unknown
+CI is `join_failed` (`unresolved_ci_reference`). This complements the signature's
+own `ci:`→`class:` sharpening: the signature decides grouping, the join records
+the estate provenance.
+
+### Event-signature join (B0/B7)
+
+Records **only an explicit deterministic alert→incident link the upstream bridge
+already stamped** on the incident (`event_signatures` / `event_signature`), and
+accepts a value only when it matches the deterministic `event_signature` shape
+`"{version}:{sha256_128bit_hex}"` — so free text, a bare timestamp, or a
+similar-looking string can never be mistaken for a link. B4 never derives a link
+from timing or text (that similarity work is MSP-B5/B7). Absence is
+`not_available` (`no_event_link`), not a failure.
+
+### Groups, never people (AC4)
+
+The only identities that cross this boundary are CI classes / CI (system) names
+and assignment groups — no individual is named in any join output, exactly as for
+the signatures above.
+
+Tested by
+[`test_msp_b4_recurrence_joins.py`](../backend/discovery/tests/test_msp_b4_recurrence_joins.py):
+located and unlocated (both ways), `not_available` vs `join_failed`, the
+affected-CI fallback, event link present/absent, no speculative link, hop-order,
+determinism, privacy, and org-scope.
