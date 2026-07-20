@@ -116,6 +116,106 @@ _PATTERNS: Tuple[_SecretPattern, ...] = (
 )
 
 
+# ---------------------------------------------------------------------------
+# The extended SECURITY signature set — MSP-B11 / AT-700 (T5)
+# ---------------------------------------------------------------------------
+# Security work notes are the highest-risk note corpus on the platform: analysts
+# paste indicators of compromise (IOCs), copied commands, scanner fragments,
+# access tokens, and credential dumps into them. Before a security note can reach
+# the retrieval substrate it is redacted with the base set ABOVE plus this
+# security-specific set, so an IOC or credential never becomes searchable.
+#
+# Same discipline as the base set: every pattern is anchored on a real structural
+# signature (a defang marker, a URL userinfo section, a fixed-width hash, a dotted
+# quad, an ``@`` local-part), never bare high-entropy guessing. This set is applied
+# ONLY to the security-note path via :func:`scan_and_redact_security` — the base
+# :func:`scan_and_redact` (Git content, B4 resolution notes) is unchanged, so
+# ordinary IT content is not aggressively IOC-redacted.
+_SECURITY_PREFIX: Tuple[_SecretPattern, ...] = (
+    # A URL carrying inline credentials: scheme://user:pass@host. The whole URL is
+    # replaced (host + credentials) — in a security note the host itself is an IOC.
+    _SecretPattern(
+        "url_credentials",
+        re.compile(
+            r"\b[a-z][a-z0-9+.\-]*://" + _NOT_PLACEHOLDER
+            + r"[^\s:/@]+:[^\s:/@]+@[^\s]+",
+            re.IGNORECASE,
+        ),
+    ),
+    # Defanged indicators — the canonical way analysts write IOCs so they are not
+    # clickable: hxxp(s)://…, 1[.]2[.]3[.]4, evil(.)com, bad[dot]net.
+    _SecretPattern(
+        "defanged_indicator",
+        re.compile(
+            r"(?i)(?:hxxps?://\S+"
+            r"|[\w\-]+(?:(?:\[\.\]|\(\.\)|\[dot\])[\w\-]+)+(?:/\S*)?)",
+        ),
+    ),
+)
+_SECURITY_SUFFIX: Tuple[_SecretPattern, ...] = (
+    # Authorization: Bearer <opaque-token>. A JWT bearer is already caught by the
+    # base ``jwt`` rule; this catches opaque bearer tokens. The word "Bearer" is
+    # kept as context; only the token (group 2) is redacted.
+    _SecretPattern(
+        "bearer_token",
+        re.compile(
+            r"(?i)\b(bearer)\s+" + _NOT_PLACEHOLDER + r"([A-Za-z0-9\-._~+/]{8,}=*)",
+        ),
+        value_group=2,
+    ),
+    # File / artefact hashes (malware samples, scanner findings). Longest first so
+    # a 64-hex SHA-256 is not clipped by the 40- or 32-hex rules (word boundaries
+    # already prevent a sub-span match, but ordering keeps the label correct).
+    _SecretPattern("sha256_hash", re.compile(r"\b[0-9a-fA-F]{64}\b")),
+    _SecretPattern("sha1_hash", re.compile(r"\b[0-9a-fA-F]{40}\b")),
+    _SecretPattern("md5_hash", re.compile(r"\b[0-9a-fA-F]{32}\b")),
+    # MAC address (host artefact). Before IPv6 so its colon-separated hex groups
+    # are consumed here, not mis-read as a compressed IPv6.
+    _SecretPattern(
+        "mac_address",
+        re.compile(r"\b(?:[0-9a-fA-F]{2}[:\-]){5}[0-9a-fA-F]{2}\b"),
+    ),
+    # IPv4 address (network IOC) — strict octets so version strings like "1.2.3.4"
+    # in ordinary prose are the only false positives, acceptable on the highest-
+    # risk corpus where an IP is far more likely an indicator.
+    _SecretPattern(
+        "ipv4_address",
+        re.compile(
+            r"\b(?:(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.){3}"
+            r"(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\b",
+        ),
+    ),
+    # IPv6 address (network IOC) — full and ``::``-compressed forms.
+    _SecretPattern(
+        "ipv6_address",
+        re.compile(
+            r"\b(?:[0-9a-fA-F]{1,4}:){2,7}[0-9a-fA-F]{1,4}\b"
+            r"|\b(?:[0-9a-fA-F]{1,4}:){1,7}:(?:[0-9a-fA-F]{1,4})?\b"
+            r"|::(?:[0-9a-fA-F]{1,4}:){0,6}[0-9a-fA-F]{1,4}\b",
+        ),
+    ),
+    # Email address (phishing sender / account IOC).
+    _SecretPattern(
+        "email_address",
+        re.compile(r"\b[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}\b"),
+    ),
+)
+
+#: The composite security scan: structural indicators first, the whole base set
+#: next (so provider tokens and the ``key = value`` assignment rule keep their
+#: precise labels), and the IOC/artefact indicators last. Reuses ``_PATTERNS``
+#: verbatim — the security path is an EXTENSION of the shared foundation, not a
+#: fork of it.
+_SECURITY_PATTERNS: Tuple[_SecretPattern, ...] = (
+    _SECURITY_PREFIX + _PATTERNS + _SECURITY_SUFFIX
+)
+
+#: Distinct pattern-type names this security set can emit (docs / test anchor).
+SECURITY_PATTERN_TYPES: Tuple[str, ...] = tuple(
+    dict.fromkeys(pat.name for pat in _SECURITY_PATTERNS)
+)
+
+
 @dataclass
 class RedactionOutcome:
     """The result of scanning one piece of text.
@@ -157,20 +257,20 @@ def _replace_group(placeholder: str, group: int) -> Callable[[re.Match], str]:
     return _repl
 
 
-def scan_and_redact(text: str) -> RedactionOutcome:
-    """Redact every recognised secret signature in ``text``.
+def _apply(patterns: Tuple[_SecretPattern, ...], text: str) -> RedactionOutcome:
+    """Apply an ordered pattern set to ``text``, redacting every match.
 
-    Applies each pattern in order (most-specific first), replacing matches with a
-    typed placeholder. Returns the redacted text plus the list of pattern-type
-    names that fired (one per match). Empty/blank text is returned unchanged with
-    no redactions. The returned outcome never contains a secret value.
+    Each pattern replaces its matches with a typed placeholder; the pattern-type
+    name is recorded once per match (never the value). Empty/blank text returns
+    unchanged. Shared by the base and security scans so detection/replacement
+    logic exists in exactly one place.
     """
     if not text:
         return RedactionOutcome(text=text or "")
 
     working = text
     hits: List[str] = []
-    for pat in _PATTERNS:
+    for pat in patterns:
         placeholder = _placeholder(pat.name)
         working, n = pat.regex.subn(
             _replace_group(placeholder, pat.value_group), working
@@ -178,3 +278,27 @@ def scan_and_redact(text: str) -> RedactionOutcome:
         if n:
             hits.extend([pat.name] * n)
     return RedactionOutcome(text=working, pattern_types=hits)
+
+
+def scan_and_redact(text: str) -> RedactionOutcome:
+    """Redact every recognised secret signature in ``text`` (base set).
+
+    Applies the key/token/password signatures (most-specific first), replacing
+    matches with a typed placeholder. Returns the redacted text plus the list of
+    pattern-type names that fired (one per match). Empty/blank text is returned
+    unchanged with no redactions. The returned outcome never contains a secret
+    value. Used by Git content and B4 resolution notes.
+    """
+    return _apply(_PATTERNS, text)
+
+
+def scan_and_redact_security(text: str) -> RedactionOutcome:
+    """Redact secrets AND security IOC/artefact indicators from ``text``.
+
+    The extended MSP-B11 (AT-700) scan for security work notes: the base secret
+    set PLUS defanged indicators, URL-embedded credentials, bearer tokens,
+    file/artefact hashes, IP/MAC addresses, and email indicators. Applied before
+    any security-note content reaches the retrieval substrate so an IOC or
+    credential is never indexed. Never returns or logs a matched value.
+    """
+    return _apply(_SECURITY_PATTERNS, text)
