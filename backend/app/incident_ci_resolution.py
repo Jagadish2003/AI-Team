@@ -7,12 +7,22 @@ connections never participate in resolution.
 """
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any, Iterable, Mapping
 
 from database.models.entities import Entity
 
 
 RESOLUTION_VERSION = "servicenow_explicit_ci_v1"
+
+
+@dataclass(frozen=True)
+class ExplicitCIReferenceResult:
+    """Outcome of one exact, organization-scoped ServiceNow CI lookup."""
+
+    ci_sys_id: str | None
+    entity: Entity | None
+    reason: str | None
 
 
 def _text(value: Any) -> str:
@@ -59,6 +69,44 @@ def _matching_entities(
     ]
 
 
+def resolve_explicit_servicenow_ci_reference(
+    *,
+    org_id: str,
+    reference: Any,
+    entities: Iterable[Entity],
+) -> ExplicitCIReferenceResult:
+    """Resolve one explicit ServiceNow reference without inferred matching.
+
+    This is the shared conservative lookup used by incident and SecOps
+    workflow signals.  Display values, names, descriptions, ownership, and
+    other textual fields are deliberately ignored.
+    """
+    if not _reference_is_present(reference):
+        return ExplicitCIReferenceResult(None, None, "missing_explicit_reference")
+
+    ci_sys_id = _explicit_reference_id(reference)
+    if not ci_sys_id:
+        return ExplicitCIReferenceResult(None, None, "invalid_explicit_reference")
+
+    matches = _matching_entities(
+        org_id=org_id,
+        ci_sys_id=ci_sys_id,
+        entities=entities,
+    )
+    if not matches:
+        return ExplicitCIReferenceResult(ci_sys_id, None, "ci_not_in_current_scope")
+    if len(matches) != 1 or matches[0].resolution_status != "resolved":
+        return ExplicitCIReferenceResult(ci_sys_id, None, "ambiguous_ci_entity")
+
+    entity = matches[0]
+    metadata = _entity_metadata(entity)
+    if metadata.get("is_retired") is True or _text(
+        metadata.get("lifecycle_state")
+    ).casefold() == "retired":
+        return ExplicitCIReferenceResult(ci_sys_id, None, "retired_ci")
+    return ExplicitCIReferenceResult(ci_sys_id, entity, None)
+
+
 def _base_resolution(incident: Mapping[str, Any]) -> dict[str, Any]:
     return {
         "version": RESOLUTION_VERSION,
@@ -101,7 +149,7 @@ def _set_unresolved(
     incident.pop("ci_evidence_trace", None)
 
 
-def _dependency_hops(
+def observed_ci_dependency_hops(
     *,
     org_id: str,
     ci_sys_id: str,
@@ -261,46 +309,24 @@ def resolve_incident_ci_references(
                 }
             )
 
-        matches = _matching_entities(
+        ci_result = resolve_explicit_servicenow_ci_reference(
             org_id=org_id,
-            ci_sys_id=ci_sys_id,
+            reference=ci_sys_id,
             entities=entities,
         )
-        if not matches:
+        if ci_result.reason is not None or ci_result.entity is None:
             _set_unresolved(
                 incident,
                 resolution,
-                "ci_not_in_current_scope",
-                method=method,
-                ci_sys_id=ci_sys_id,
-            )
-            counts["unresolved"] += 1
-            continue
-        if len(matches) != 1 or matches[0].resolution_status != "resolved":
-            _set_unresolved(
-                incident,
-                resolution,
-                "ambiguous_ci_entity",
+                ci_result.reason or "ambiguous_ci_entity",
                 method=method,
                 ci_sys_id=ci_sys_id,
             )
             counts["unresolved"] += 1
             continue
 
-        entity = matches[0]
+        entity = ci_result.entity
         metadata = _entity_metadata(entity)
-        if metadata.get("is_retired") is True or _text(
-            metadata.get("lifecycle_state")
-        ).casefold() == "retired":
-            _set_unresolved(
-                incident,
-                resolution,
-                "retired_ci",
-                method=method,
-                ci_sys_id=ci_sys_id,
-            )
-            counts["unresolved"] += 1
-            continue
 
         reference_field = "cmdb_ci" if method == "incident_cmdb_ci" else "task_ci.ci_item"
         source_artifact = incident_sys_id
@@ -338,7 +364,7 @@ def resolve_incident_ci_references(
             "ci_entity_id": str(entity.id),
             "ci_source_url": metadata.get("source_url"),
         }
-        dependencies = _dependency_hops(
+        dependencies = observed_ci_dependency_hops(
             org_id=org_id,
             ci_sys_id=ci_sys_id,
             entities=entities,

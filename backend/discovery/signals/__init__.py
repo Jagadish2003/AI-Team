@@ -26,6 +26,18 @@ from .resolution_signature import (  # noqa: F401
     normalize_token,
     resolution_signature_components,
 )
+from .remediation_signature import (  # noqa: F401
+    REMEDIATION_SIGNATURE_EXCLUDED_FIELDS,
+    REMEDIATION_SIGNATURE_INCLUDED_FIELDS,
+    REMEDIATION_SIGNATURE_VERSION,
+    aggregate_remediation_workload,
+    apply_remediation_signature,
+    apply_remediation_signatures,
+    compute_remediation_signature,
+    normalize_remediation_path,
+    remediation_path_from_history,
+    remediation_signature_components,
+)
 from .operational_event import (  # noqa: F401
     EVENT_CLASSES,
     RESOURCE_TYPES,
@@ -112,6 +124,17 @@ __all__ = [
     "provider_family",
     "PROVIDER_FAMILIES",
     "EVENT_SIGNATURE_VERSION",
+    # MSP-B11 T4 - vulnerability-remediation workflow signatures
+    "compute_remediation_signature",
+    "remediation_signature_components",
+    "normalize_remediation_path",
+    "remediation_path_from_history",
+    "apply_remediation_signature",
+    "apply_remediation_signatures",
+    "aggregate_remediation_workload",
+    "REMEDIATION_SIGNATURE_VERSION",
+    "REMEDIATION_SIGNATURE_INCLUDED_FIELDS",
+    "REMEDIATION_SIGNATURE_EXCLUDED_FIELDS",
     # AT-637 — reference mappers
     "map_cloudwatch",
     "map_eventbridge",

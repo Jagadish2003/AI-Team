@@ -127,6 +127,48 @@ CALIBRATED_DEFAULT_WINDOW_SECONDS = 3600   # 1h
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# MSP-B11 T6 (AT-701) — Vulnerability-Response scan-cycle volume (the VR analogue)
+# ─────────────────────────────────────────────────────────────────────────────
+# MSP-B11 reads ServiceNow Vulnerability Response as workflow signal. A single scan
+# cycle can create thousands of vulnerable-item updates at once, so its volume must
+# answer to the SAME per-run budget as cloud events — not an independent SecOps
+# limit. AT-701 measured a representative scan cycle through the reused MSP-B7
+# volume-control foundations (RunBudget/BudgetReport) and the T4 remediation-workflow
+# fold key; the figures below are captured verbatim from that run
+# (docs/MSP-B11_VR_VOLUME_VALIDATION.md, its AC7-analogue output) so the budget
+# adequacy conclusion is traceable, not asserted.
+#
+# The load-bearing conclusion: a scan cycle of ~thousands of records folds into a
+# few dozen workflow patterns (aggregation compresses volume — a scan re-finds the
+# same estate), and the whole burst fits within CALIBRATED_RUN_EVENT_BUDGET with
+# multiple orders of magnitude of headroom. VR therefore REUSES the shared per-run
+# budget; no separate VR budget is derived.
+
+#: Verbatim figures from the AT-701 reference scan-cycle run (7,000-record burst
+#: over a 200-CI estate). Volume/aggregation counts are deterministic and
+#: environment-independent; throughput/memory are a conservative reference (Windows
+#: 11, Python 3.11.9, tracemalloc active) — see the doc for the recorded run.
+B11_VR_MEASUREMENTS: Dict[str, Any] = {
+    "source": "docs/MSP-B11_VR_VOLUME_VALIDATION.md",
+    "org": "org_vr_ac7",
+    "scan_cycle_records": 7_000,          # vulnerable items + groups + remediation tasks
+    "estate_size": 200,                   # bounded CI estate a scan re-finds
+    "workflow_aggregates": 60,            # distinct workflow patterns the burst folded into
+    "aggregate_ratio": 0.0086,            # patterns / processed — the compression factor
+    "peak_memory_mb": 1.43,               # bounded by patterns, not record volume
+    "records_per_sec": 3170.6,            # reference throughput (conservative)
+    "budget_reused": CALIBRATED_RUN_EVENT_BUDGET,  # shared B7 budget — no separate VR limit
+}
+
+#: Headroom of the shared per-run budget over one measured scan cycle. The budget is
+#: NOT re-derived for VR — this ratio only documents that the shared ceiling has
+#: ample room for scan-cycle bursts (a budget breach is still handled loudly).
+VR_SCAN_CYCLE_BUDGET_HEADROOM = round(
+    CALIBRATED_RUN_EVENT_BUDGET / B11_VR_MEASUREMENTS["scan_cycle_records"], 1
+)  # ≈ 35× one scan cycle
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Summary (run-health / telemetry / audit)
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -157,5 +199,14 @@ def calibration_summary() -> Dict[str, Any]:
             "windows_seconds": dict(CALIBRATED_CORRELATION_WINDOWS),
             "default_window_seconds": CALIBRATED_DEFAULT_WINDOW_SECONDS,
             "basis": "event↔event kept tight vs measured event density; event↔incident = operational lag",
+        },
+        "vr_scan_cycle_volume": {
+            "measured_input": dict(B11_VR_MEASUREMENTS),
+            "budget_reused": CALIBRATED_RUN_EVENT_BUDGET,
+            "scan_cycle_budget_headroom": VR_SCAN_CYCLE_BUDGET_HEADROOM,
+            "basis": (
+                "MSP-B11 VR reuses the shared per-run budget (no independent SecOps limit); "
+                "a scan cycle folds into a few dozen workflow patterns and fits with ample headroom"
+            ),
         },
     }

@@ -1155,6 +1155,1088 @@ class ServiceNowCMDBRelationshipChangeIngestor(ChangeBasedIngestor):
         )
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# MSP-B11 T1 — Security Incident Response (SIR) ingestion
+#
+# Extends the SAME production ServiceNow connector (auth, org scoping,
+# pagination, timeout, record cap, error handling, and the sys_updated_on
+# checkpoint discipline used by the CMDB streams above) to read the Security
+# Operations SIR table `sn_si_incident` as WORKFLOW SIGNAL — the operational
+# effort of security-incident triage and resolution, never the customer's
+# security exposure ("workload, not weakness").
+#
+# The field scope IS the security posture: only workflow scalars and
+# classifications are ever requested (sysparm_fields), and the internal
+# representation is built solely from those named fields, so exploit detail,
+# scanner payload, credentials, IOCs, and free-text notes cannot cross this
+# boundary even if a response carries them (MSP-B11 AC2). Free-text/notes fields
+# are deliberately NOT fetched here at all; the redaction-before-indexing path
+# for security notes is a separate task (T5).
+# ─────────────────────────────────────────────────────────────────────────────
+
+SECOPS_FIXTURE_PATH = Path(__file__).parent / "fixtures" / "servicenow_secops_sample.json"
+# The ServiceNow field-level change-audit table backs the state/assignment
+# history for BOTH the SIR (T1) and Vulnerability Response (T2) streams.
+SECOPS_AUDIT_TABLE = "sys_audit"
+SIR_TABLE = "sn_si_incident"
+SIR_AUDIT_TABLE = SECOPS_AUDIT_TABLE  # retained name; shared audit table
+SIR_CHECKPOINT_ID = "servicenow:sn_si_incident"
+SIR_RECORD_CAP = CMDB_RECORD_CAP
+SIR_SOURCE_TYPE = "servicenow_security_incident"
+
+# Workflow field scope — workload, not weakness.  Scalars, assignment details,
+# timestamps, and workflow classifications only.
+SIR_FIELDS: Tuple[str, ...] = (
+    "sys_id",
+    "number",
+    "state",
+    "category",
+    "subcategory",
+    "severity",
+    "priority",
+    "assigned_to",
+    "assignment_group",
+    "opened_at",
+    "sys_created_on",
+    "sys_updated_on",
+    "resolved_at",
+    "closed_at",
+    "close_code",
+    "resolution_code",
+)
+
+# Field-scope guard (MSP-B11 AC2).  These are the sensitive-content fields a SIR
+# record can carry — exploit detail, scanner output, credentials/IOCs, and
+# free-text notes.  They are NEVER requested and, as belt-and-braces against a
+# response that includes them anyway, never read into the emitted signal.  The
+# internal dataclass is built only from SIR_FIELDS, so this set documents the
+# exclusion and backs the data-layer test rather than performing the exclusion.
+SIR_FORBIDDEN_FIELDS: frozenset[str] = frozenset(
+    {
+        "description",
+        "short_description",
+        "work_notes",
+        "comments",
+        "close_notes",
+        "additional_comments",
+        "exploit_details",
+        "exploit_detail",
+        "scanner_output",
+        "scan_output",
+        "attack_vector",
+        "ioc",
+        "iocs",
+        "u_ioc",
+        "u_iocs",
+        "credentials",
+        "u_credentials",
+        "proof_of_concept",
+        "u_poc",
+        "payload",
+        "cve_details",
+        "vulnerability_detail",
+    }
+)
+
+# Fields whose transitions are captured as workflow history so downstream
+# detectors (MSP-B12) can identify repeated handoffs, triage loops, long
+# resolution paths, and concentrated workloads.
+SIR_HISTORY_FIELDS: Tuple[str, ...] = ("state", "assignment_group")
+# Audit projection shared by every SecOps stream's history read.
+SECOPS_AUDIT_FIELDS: Tuple[str, ...] = (
+    "documentkey",
+    "fieldname",
+    "oldvalue",
+    "newvalue",
+    "sys_created_on",
+    "sys_updated_on",
+)
+SIR_AUDIT_FIELDS: Tuple[str, ...] = SECOPS_AUDIT_FIELDS  # retained name
+
+
+@dataclass(frozen=True)
+class ServiceNowWorkflowTransition:
+    """One audited workflow transition (a state change or an assignment handoff).
+
+    Shared by the SIR (T1) and Vulnerability Response (T2) streams — the
+    transition shape is identical: which field changed, from what to what, when.
+    """
+
+    field: str
+    from_value: Optional[str]
+    to_value: Optional[str]
+    changed_at: Optional[str]
+
+    def as_dict(self) -> Dict[str, Any]:
+        return asdict(self)
+
+
+# Backwards-compatible alias (the SIR dataclass and helpers reference this name).
+ServiceNowSecurityIncidentTransition = ServiceNowWorkflowTransition
+
+
+@dataclass(frozen=True)
+class ServiceNowSecurityIncident:
+    """Stable, bounded workflow representation of one SIR record.
+
+    Contains ONLY workflow fields (states, assignment details, timestamps, and
+    classifications) plus the state/assignment transition history.  No raw
+    ServiceNow payload, exploit detail, scanner output, or free-text note can
+    cross this boundary.  Every instance retains its organization, source record,
+    source timestamp, and observed provenance.
+    """
+
+    sys_id: str
+    number: Optional[str]
+    state: Optional[str]
+    category: Optional[str]
+    subcategory: Optional[str]
+    severity: Optional[str]
+    priority: Optional[str]
+    assigned_to: Optional[str]
+    assignment_group: Optional[str]
+    opened_at: Optional[str]
+    created_at: Optional[str]
+    resolved_at: Optional[str]
+    closed_at: Optional[str]
+    close_code: Optional[str]
+    resolution_code: Optional[str]
+    state_history: Tuple[ServiceNowSecurityIncidentTransition, ...]
+    assignment_history: Tuple[ServiceNowSecurityIncidentTransition, ...]
+    org_id: str
+    source_timestamp: Optional[str]
+    source_url: Optional[str]
+    source_type: str = SIR_SOURCE_TYPE
+    origin: str = "observed"
+
+    def as_dict(self) -> Dict[str, Any]:
+        return asdict(self)
+
+
+def _load_secops_fixture() -> Dict[str, Any]:
+    if not SECOPS_FIXTURE_PATH.exists():
+        raise ServiceNowIngestError(
+            f"ServiceNow SecOps fixture not found: {SECOPS_FIXTURE_PATH}"
+        )
+    with open(SECOPS_FIXTURE_PATH, encoding="utf-8") as f:
+        return json.load(f)
+
+
+def _parse_secops_timestamp(value: str) -> datetime:
+    """Parse a ServiceNow UTC cursor without accepting query syntax."""
+    text = str(value or "").strip()
+    try:
+        parsed = datetime.strptime(text, CMDB_CURSOR_FORMAT)
+    except ValueError as exc:
+        raise ServiceNowIngestError(
+            f"invalid ServiceNow SecOps checkpoint {text!r}"
+        ) from exc
+    return parsed.replace(tzinfo=timezone.utc)
+
+
+def _validated_secops_cursor(value: Optional[str]) -> Optional[str]:
+    if value is None:
+        return None
+    return _parse_secops_timestamp(value).strftime(CMDB_CURSOR_FORMAT)
+
+
+def _read_workflow_field_history(
+    table: str,
+    admitted_ids: Tuple[str, ...],
+    history_fields: Tuple[str, ...],
+    *,
+    client: Optional[ServiceNowClient] = None,
+    audit_records: Optional[List[Dict[str, Any]]] = None,
+    record_cap: int = CMDB_RECORD_CAP,
+) -> Dict[str, Dict[str, List[ServiceNowWorkflowTransition]]]:
+    """Read audited transitions of ``history_fields`` for the supplied records.
+
+    Shared by every SecOps workflow stream (SIR, Vulnerability Response).  The
+    live query is bounded to the exact source sys_ids admitted by the current
+    delta and to the named audited workflow fields — no free-text, finding, or
+    scanner-payload field is ever read.  Returned transitions are checked against
+    the admitted set, so a malformed response cannot attach another record's
+    history.  In offline mode the caller supplies the fixture ``audit_records``.
+    """
+    grouped: Dict[str, Dict[str, List[ServiceNowWorkflowTransition]]] = {
+        sys_id: {field: [] for field in history_fields} for sys_id in admitted_ids
+    }
+    if not admitted_ids:
+        return grouped
+
+    field_set = set(history_fields)
+    if is_live():
+        if client is None:
+            client = _get_client()
+        ordered_ids = sorted(admitted_ids)
+        remaining = record_cap
+        records: List[Dict[str, Any]] = []
+        for offset in range(0, len(ordered_ids), 100):
+            if remaining <= 0:
+                break
+            batch = ordered_ids[offset : offset + 100]
+            page = client.table_query(
+                SECOPS_AUDIT_TABLE,
+                {
+                    "sysparm_query": (
+                        f"tablename={table}^"
+                        f"documentkeyIN{','.join(batch)}^"
+                        f"fieldnameIN{','.join(history_fields)}^"
+                        "ORDERBYsys_created_on^ORDERBYsys_id"
+                    ),
+                    "sysparm_fields": ",".join(SECOPS_AUDIT_FIELDS),
+                    "sysparm_display_value": "all",
+                    "sysparm_exclude_reference_link": "true",
+                },
+                max_records=remaining,
+            )
+            remaining -= len(page)
+            records.extend(page)
+    else:
+        records = audit_records or []
+
+    for record in records:
+        if not isinstance(record, dict):
+            continue
+        document_key = _optional_sn_text(record.get("documentkey"))
+        field_name = _optional_sn_text(record.get("fieldname"))
+        if document_key not in grouped or field_name not in field_set:
+            continue
+        grouped[document_key][field_name].append(
+            ServiceNowWorkflowTransition(
+                field=field_name,
+                from_value=_optional_sn_text(record.get("oldvalue")),
+                to_value=_optional_sn_text(record.get("newvalue")),
+                changed_at=_optional_sn_text(record.get("sys_created_on")),
+            )
+        )
+
+    for transitions in grouped.values():
+        for entries in transitions.values():
+            entries.sort(key=lambda t: (t.changed_at or "", t.from_value or "", t.to_value or ""))
+    return grouped
+
+
+def _read_security_incident_history(
+    admitted_ids: Tuple[str, ...],
+    client: Optional[ServiceNowClient] = None,
+) -> Dict[str, Dict[str, List[ServiceNowWorkflowTransition]]]:
+    """Read state and assignment transitions for the supplied SIR records."""
+    audit_records = None
+    if not is_live():
+        audit_records = _load_secops_fixture().get("sn_si_incident_audit", [])
+    return _read_workflow_field_history(
+        SIR_TABLE,
+        admitted_ids,
+        SIR_HISTORY_FIELDS,
+        client=client,
+        audit_records=audit_records,
+        record_cap=SIR_RECORD_CAP,
+    )
+
+
+def _security_incident_from_record(
+    record: Dict[str, Any],
+    org_id: str,
+    history: Dict[str, List[ServiceNowSecurityIncidentTransition]],
+    instance_url: Optional[str] = None,
+) -> Optional[ServiceNowSecurityIncident]:
+    """Build one bounded SIR workflow signal from a raw record.
+
+    Only the named workflow fields are read; any other attribute on the record
+    (exploit detail, scanner payload, notes) is ignored by construction.
+    """
+    sys_id = _optional_sn_text(record.get("sys_id"))
+    if not sys_id:
+        logger.warning("ServiceNow SIR record missing sys_id; skipping")
+        return None
+    return ServiceNowSecurityIncident(
+        sys_id=sys_id,
+        number=_optional_sn_text(record.get("number")),
+        state=_optional_sn_text(record.get("state")),
+        category=_optional_sn_text(record.get("category")),
+        subcategory=_optional_sn_text(record.get("subcategory")),
+        severity=_optional_sn_text(record.get("severity")),
+        priority=_optional_sn_text(record.get("priority")),
+        assigned_to=_optional_sn_text(record.get("assigned_to")),
+        assignment_group=_optional_sn_text(record.get("assignment_group")),
+        opened_at=_optional_sn_text(record.get("opened_at")),
+        created_at=_optional_sn_text(record.get("sys_created_on")),
+        resolved_at=_optional_sn_text(record.get("resolved_at")),
+        closed_at=_optional_sn_text(record.get("closed_at")),
+        close_code=_optional_sn_text(record.get("close_code")),
+        resolution_code=_optional_sn_text(record.get("resolution_code")),
+        state_history=tuple(history.get("state", [])),
+        assignment_history=tuple(history.get("assignment_group", [])),
+        org_id=org_id,
+        source_timestamp=_optional_sn_text(record.get("sys_updated_on")),
+        source_url=_servicenow_record_url(instance_url, SIR_TABLE, sys_id),
+    )
+
+
+def _read_security_incidents(
+    org_id: str,
+    client: Optional[ServiceNowClient] = None,
+    *,
+    updated_after: Optional[str] = None,
+    updated_through: Optional[str] = None,
+) -> List[ServiceNowSecurityIncident]:
+    """Read the bounded SIR workflow scope, incremental on ``sys_updated_on``.
+
+    Live reads go through :class:`ServiceNowClient`, inheriting its vault-backed
+    authentication, 30-second timeout, pagination, record cap, and error
+    translation.  The exact workflow field projection is sent to ServiceNow so
+    out-of-scope attributes are never fetched.
+    """
+    if is_live():
+        if client is None:
+            client = _get_client()
+        query_parts: List[str] = []
+        if updated_after:
+            query_parts.append(f"sys_updated_on>{updated_after}")
+        if updated_through:
+            query_parts.append(f"sys_updated_on<={updated_through}")
+        prefix = ("^".join(query_parts) + "^") if query_parts else ""
+        records = client.table_query(
+            SIR_TABLE,
+            {
+                "sysparm_query": prefix + "ORDERBYsys_updated_on^ORDERBYsys_id",
+                "sysparm_fields": ",".join(SIR_FIELDS),
+                "sysparm_display_value": "all",
+                "sysparm_exclude_reference_link": "true",
+            },
+            max_records=SIR_RECORD_CAP,
+        )
+        instance_url = getattr(client, "instance_url", None)
+    else:
+        fixture = _load_secops_fixture()
+        instance_url = (fixture.get("_meta") or {}).get("instance_url")
+        records = [
+            record
+            for record in fixture.get("sn_si_incident", [])
+            if _record_in_cursor_window(record, updated_after, updated_through)
+        ]
+
+    admitted_ids = tuple(
+        sys_id
+        for sys_id in (
+            _optional_sn_text(record.get("sys_id"))
+            for record in records
+            if isinstance(record, dict)
+        )
+        if sys_id
+    )
+    history = _read_security_incident_history(admitted_ids, client)
+
+    incidents: List[ServiceNowSecurityIncident] = []
+    for record in records:
+        if not isinstance(record, dict):
+            logger.warning("ServiceNow SIR returned a non-object record; skipping")
+            continue
+        sys_id = _optional_sn_text(record.get("sys_id"))
+        incident = _security_incident_from_record(
+            record,
+            org_id,
+            history.get(sys_id, {}) if sys_id else {},
+            instance_url,
+        )
+        if incident is not None:
+            incidents.append(incident)
+    return sorted(
+        incidents,
+        key=lambda item: (item.source_timestamp or "", item.sys_id),
+    )
+
+
+def get_security_incidents(
+    org_id: str,
+    client: Optional[ServiceNowClient] = None,
+) -> List[ServiceNowSecurityIncident]:
+    """Read the full bounded SIR workflow scope for one organization."""
+    if is_live() and client is None:
+        client = _get_client()
+    return _read_security_incidents(org_id, client)
+
+
+class ServiceNowSecurityIncidentChangeIngestor(ChangeBasedIngestor):
+    """Incremental, bounded ``sn_si_incident`` reader using ``sys_updated_on``.
+
+    Reuses the CMDB streams' checkpoint discipline (``change_runner`` writes the
+    cursor only after a batch is fully processed; a failed or partial run leaves
+    the prior checkpoint intact).
+
+    ``reports_deletes = False``: SIR records are not hard-deleted in the normal
+    Security Operations workflow — closure is a workflow STATE, captured as
+    state history, not a source deletion — so there is no tombstone signal to
+    emit and none is fabricated.
+    """
+
+    connector_id = SIR_CHECKPOINT_ID
+    reports_deletes = False
+
+    def __init__(
+        self,
+        *,
+        org_id: str,
+        client: Optional[ServiceNowClient] = None,
+        clock: Optional[Callable[[], datetime]] = None,
+    ) -> None:
+        self.org_id = org_id
+        self.client = client
+        self.clock = clock
+
+    def ingest_changes(
+        self, org_id: str, since: Optional[Checkpoint]
+    ) -> Iterator[DeltaBatch]:
+        if org_id != self.org_id:
+            raise ServiceNowIngestError("SIR stream organization mismatch")
+        if since is not None and (
+            since.org_id != org_id or since.connector_id != self.connector_id
+        ):
+            raise ServiceNowIngestError("SIR checkpoint scope mismatch")
+        updated_after = _validated_secops_cursor(since.value if since else None)
+        watermark = _cmdb_watermark(self.clock)
+        incidents = _read_security_incidents(
+            self.org_id,
+            self.client,
+            updated_after=updated_after,
+            updated_through=watermark,
+        )
+        records: List[Dict[str, Any]] = []
+        for incident in incidents:
+            record = incident.as_dict()
+            record.update(artifact_id=incident.sys_id, change_kind=ChangeKind.UPDATED)
+            records.append(record)
+        yield DeltaBatch(records=records, next_checkpoint=watermark, is_complete=True)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# MSP-B11 T2 — Vulnerability Response (VR) ingestion
+#
+# Extends the SAME connector rails to the Security Operations VR module family:
+# vulnerable items, vulnerability groups, and remediation tasks — how security
+# teams ORGANIZE and COMPLETE remediation work.  Every discipline from T1
+# applies: workload not weakness, strict field projection at the request, the
+# observed-provenance spine, and a per-table sys_updated_on checkpoint on the
+# shared change-ingestion rails.
+#
+# AC6 (no host×vulnerability enumeration) is enforced structurally by the field
+# scope: the specific vulnerability/CVE identity is NEVER projected — only the
+# vulnerability CLASS/family and severity BAND are kept.  A vulnerable item
+# therefore references its CI (for the T3 join and CI-class concentration) and a
+# vulnerability CLASS, never a (host, CVE) pair.  Scanner payloads, exploit
+# descriptions, proof-of-concept content, and raw findings are excluded at the
+# request and can never enter AgentIQ, even temporarily (AC2).
+# ─────────────────────────────────────────────────────────────────────────────
+
+VR_FIXTURE_PATH = Path(__file__).parent / "fixtures" / "servicenow_vr_sample.json"
+VR_RECORD_CAP = CMDB_RECORD_CAP
+VR_HISTORY_FIELDS: Tuple[str, ...] = ("state", "assignment_group")
+
+VR_VULN_ITEM_TABLE = "sn_vul_vulnerable_item"
+VR_GROUP_TABLE = "sn_vul_vulnerability_group"
+VR_REMEDIATION_TASK_TABLE = "sn_vul_remediation_task"
+
+VR_VULN_ITEM_CHECKPOINT_ID = "servicenow:sn_vul_vulnerable_item"
+VR_GROUP_CHECKPOINT_ID = "servicenow:sn_vul_vulnerability_group"
+VR_REMEDIATION_TASK_CHECKPOINT_ID = "servicenow:sn_vul_remediation_task"
+
+VR_VULN_ITEM_SOURCE_TYPE = "servicenow_vulnerable_item"
+VR_GROUP_SOURCE_TYPE = "servicenow_vulnerability_group"
+VR_REMEDIATION_TASK_SOURCE_TYPE = "servicenow_remediation_task"
+
+# Workflow field scope — workload, not weakness.  Lifecycle state, operational
+# classifications (family/severity band), assignment, timestamps, CI reference
+# (opaque sys_id, for the T3 join), and deferral/exception classification only.
+# The specific vulnerability/CVE identity is deliberately NOT projected (AC6).
+VR_VULN_ITEM_FIELDS: Tuple[str, ...] = (
+    "sys_id",
+    "number",
+    "state",
+    "substate",
+    "vulnerability_class",
+    "severity",
+    "risk_rating",
+    "cmdb_ci",
+    "vulnerability_group",
+    "assigned_to",
+    "assignment_group",
+    "first_found",
+    "last_found",
+    "opened_at",
+    "sys_created_on",
+    "sys_updated_on",
+    "resolved_at",
+    "closed_at",
+    "close_code",
+    "resolution_status",
+    "deferral_category",
+    "exception_category",
+    "justification_class",
+)
+VR_GROUP_FIELDS: Tuple[str, ...] = (
+    "sys_id",
+    "number",
+    "name",
+    "state",
+    "vulnerability_class",
+    "severity",
+    "assigned_to",
+    "assignment_group",
+    "opened_at",
+    "sys_created_on",
+    "sys_updated_on",
+    "resolved_at",
+    "closed_at",
+    "remediation_status",
+)
+VR_REMEDIATION_TASK_FIELDS: Tuple[str, ...] = (
+    "sys_id",
+    "number",
+    "state",
+    "assigned_to",
+    "assignment_group",
+    "vulnerability_group",
+    "opened_at",
+    "sys_created_on",
+    "sys_updated_on",
+    "due_date",
+    "resolved_at",
+    "closed_at",
+    "close_code",
+)
+
+# Field-scope guard (MSP-B11 AC2 / AC6).  Scanner payloads, exploit detail,
+# proof-of-concept content, raw technical findings, and the specific
+# vulnerability/CVE identity that would enable host×CVE enumeration.  NEVER
+# requested; the dataclasses are built only from the field scopes above, so
+# these can never enter a normalized record even if a response carries them.
+VR_FORBIDDEN_FIELDS: frozenset[str] = frozenset(
+    {
+        # Scanner / exploit / PoC / raw finding content.
+        "description",
+        "short_description",
+        "proof",
+        "proof_of_concept",
+        "u_poc",
+        "exploit",
+        "exploit_code",
+        "exploit_details",
+        "exploit_detail",
+        "scanner_output",
+        "scan_output",
+        "scanner_result",
+        "raw_finding",
+        "raw_findings",
+        "finding_detail",
+        "technical_details",
+        "technical_detail",
+        "solution",
+        "remediation_steps",
+        "references",
+        "external_references",
+        "payload",
+        "attack_vector",
+        "source_data",
+        "raw",
+        # Free-text notes / credentials / IOCs.
+        "work_notes",
+        "comments",
+        "additional_comments",
+        "close_notes",
+        "credentials",
+        "u_credentials",
+        "ioc",
+        "u_ioc",
+        # Specific vulnerability / CVE identity (AC6: no host×vulnerability pairs).
+        "vulnerability",
+        "vulnerability_id",
+        "cve",
+        "cve_id",
+        "cvss_vector",
+        "third_party_id",
+    }
+)
+
+
+@dataclass(frozen=True)
+class ServiceNowVulnerableItem:
+    """Bounded workflow representation of one ``sn_vul_vulnerable_item``.
+
+    Lifecycle state + operational classification + assignment + timestamps +
+    deferral/exception class, plus the CI reference (opaque sys_id) and the
+    vulnerability CLASS — never the specific CVE, scanner payload, or finding
+    detail.  Carries org, source record, source timestamp, and observed origin.
+    """
+
+    sys_id: str
+    number: Optional[str]
+    state: Optional[str]
+    substate: Optional[str]
+    vulnerability_class: Optional[str]
+    severity: Optional[str]
+    risk_rating: Optional[str]
+    cmdb_ci: Optional[str]
+    vulnerability_group: Optional[str]
+    assigned_to: Optional[str]
+    assignment_group: Optional[str]
+    first_found: Optional[str]
+    last_found: Optional[str]
+    opened_at: Optional[str]
+    created_at: Optional[str]
+    resolved_at: Optional[str]
+    closed_at: Optional[str]
+    close_code: Optional[str]
+    resolution_status: Optional[str]
+    deferral_category: Optional[str]
+    exception_category: Optional[str]
+    justification_class: Optional[str]
+    state_history: Tuple[ServiceNowWorkflowTransition, ...]
+    assignment_history: Tuple[ServiceNowWorkflowTransition, ...]
+    org_id: str
+    source_timestamp: Optional[str]
+    source_url: Optional[str]
+    source_type: str = VR_VULN_ITEM_SOURCE_TYPE
+    origin: str = "observed"
+
+    def as_dict(self) -> Dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
+class ServiceNowVulnerabilityGroup:
+    """Bounded workflow representation of one ``sn_vul_vulnerability_group``.
+
+    A vulnerability group is a unit security teams actually work, so its
+    group-level state, assignment, and timestamps measure effort concentration.
+    """
+
+    sys_id: str
+    number: Optional[str]
+    name: Optional[str]
+    state: Optional[str]
+    vulnerability_class: Optional[str]
+    severity: Optional[str]
+    assigned_to: Optional[str]
+    assignment_group: Optional[str]
+    opened_at: Optional[str]
+    created_at: Optional[str]
+    resolved_at: Optional[str]
+    closed_at: Optional[str]
+    remediation_status: Optional[str]
+    state_history: Tuple[ServiceNowWorkflowTransition, ...]
+    assignment_history: Tuple[ServiceNowWorkflowTransition, ...]
+    org_id: str
+    source_timestamp: Optional[str]
+    source_url: Optional[str]
+    source_type: str = VR_GROUP_SOURCE_TYPE
+    origin: str = "observed"
+
+    def as_dict(self) -> Dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
+class ServiceNowRemediationTask:
+    """Bounded workflow representation of one ``sn_vul_remediation_task``."""
+
+    sys_id: str
+    number: Optional[str]
+    state: Optional[str]
+    assigned_to: Optional[str]
+    assignment_group: Optional[str]
+    vulnerability_group: Optional[str]
+    opened_at: Optional[str]
+    created_at: Optional[str]
+    due_date: Optional[str]
+    resolved_at: Optional[str]
+    closed_at: Optional[str]
+    close_code: Optional[str]
+    state_history: Tuple[ServiceNowWorkflowTransition, ...]
+    assignment_history: Tuple[ServiceNowWorkflowTransition, ...]
+    org_id: str
+    source_timestamp: Optional[str]
+    source_url: Optional[str]
+    source_type: str = VR_REMEDIATION_TASK_SOURCE_TYPE
+    origin: str = "observed"
+
+    def as_dict(self) -> Dict[str, Any]:
+        return asdict(self)
+
+
+def _load_vr_fixture() -> Dict[str, Any]:
+    if not VR_FIXTURE_PATH.exists():
+        raise ServiceNowIngestError(
+            f"ServiceNow Vulnerability Response fixture not found: {VR_FIXTURE_PATH}"
+        )
+    with open(VR_FIXTURE_PATH, encoding="utf-8") as f:
+        return json.load(f)
+
+
+def _vulnerable_item_from_record(
+    record: Dict[str, Any],
+    org_id: str,
+    history: Dict[str, List[ServiceNowWorkflowTransition]],
+    instance_url: Optional[str] = None,
+) -> Optional[ServiceNowVulnerableItem]:
+    sys_id = _optional_sn_text(record.get("sys_id"))
+    if not sys_id:
+        logger.warning("ServiceNow VR vulnerable item missing sys_id; skipping")
+        return None
+    return ServiceNowVulnerableItem(
+        sys_id=sys_id,
+        number=_optional_sn_text(record.get("number")),
+        state=_optional_sn_text(record.get("state")),
+        substate=_optional_sn_text(record.get("substate")),
+        vulnerability_class=_optional_sn_text(record.get("vulnerability_class")),
+        severity=_optional_sn_text(record.get("severity")),
+        risk_rating=_optional_sn_text(record.get("risk_rating")),
+        cmdb_ci=_sn_reference_id(record.get("cmdb_ci")),
+        vulnerability_group=_sn_reference_id(record.get("vulnerability_group")),
+        assigned_to=_optional_sn_text(record.get("assigned_to")),
+        assignment_group=_optional_sn_text(record.get("assignment_group")),
+        first_found=_optional_sn_text(record.get("first_found")),
+        last_found=_optional_sn_text(record.get("last_found")),
+        opened_at=_optional_sn_text(record.get("opened_at")),
+        created_at=_optional_sn_text(record.get("sys_created_on")),
+        resolved_at=_optional_sn_text(record.get("resolved_at")),
+        closed_at=_optional_sn_text(record.get("closed_at")),
+        close_code=_optional_sn_text(record.get("close_code")),
+        resolution_status=_optional_sn_text(record.get("resolution_status")),
+        deferral_category=_optional_sn_text(record.get("deferral_category")),
+        exception_category=_optional_sn_text(record.get("exception_category")),
+        justification_class=_optional_sn_text(record.get("justification_class")),
+        state_history=tuple(history.get("state", [])),
+        assignment_history=tuple(history.get("assignment_group", [])),
+        org_id=org_id,
+        source_timestamp=_optional_sn_text(record.get("sys_updated_on")),
+        source_url=_servicenow_record_url(instance_url, VR_VULN_ITEM_TABLE, sys_id),
+    )
+
+
+def _vulnerability_group_from_record(
+    record: Dict[str, Any],
+    org_id: str,
+    history: Dict[str, List[ServiceNowWorkflowTransition]],
+    instance_url: Optional[str] = None,
+) -> Optional[ServiceNowVulnerabilityGroup]:
+    sys_id = _optional_sn_text(record.get("sys_id"))
+    if not sys_id:
+        logger.warning("ServiceNow VR group missing sys_id; skipping")
+        return None
+    return ServiceNowVulnerabilityGroup(
+        sys_id=sys_id,
+        number=_optional_sn_text(record.get("number")),
+        name=_optional_sn_text(record.get("name")),
+        state=_optional_sn_text(record.get("state")),
+        vulnerability_class=_optional_sn_text(record.get("vulnerability_class")),
+        severity=_optional_sn_text(record.get("severity")),
+        assigned_to=_optional_sn_text(record.get("assigned_to")),
+        assignment_group=_optional_sn_text(record.get("assignment_group")),
+        opened_at=_optional_sn_text(record.get("opened_at")),
+        created_at=_optional_sn_text(record.get("sys_created_on")),
+        resolved_at=_optional_sn_text(record.get("resolved_at")),
+        closed_at=_optional_sn_text(record.get("closed_at")),
+        remediation_status=_optional_sn_text(record.get("remediation_status")),
+        state_history=tuple(history.get("state", [])),
+        assignment_history=tuple(history.get("assignment_group", [])),
+        org_id=org_id,
+        source_timestamp=_optional_sn_text(record.get("sys_updated_on")),
+        source_url=_servicenow_record_url(instance_url, VR_GROUP_TABLE, sys_id),
+    )
+
+
+def _remediation_task_from_record(
+    record: Dict[str, Any],
+    org_id: str,
+    history: Dict[str, List[ServiceNowWorkflowTransition]],
+    instance_url: Optional[str] = None,
+) -> Optional[ServiceNowRemediationTask]:
+    sys_id = _optional_sn_text(record.get("sys_id"))
+    if not sys_id:
+        logger.warning("ServiceNow VR remediation task missing sys_id; skipping")
+        return None
+    return ServiceNowRemediationTask(
+        sys_id=sys_id,
+        number=_optional_sn_text(record.get("number")),
+        state=_optional_sn_text(record.get("state")),
+        assigned_to=_optional_sn_text(record.get("assigned_to")),
+        assignment_group=_optional_sn_text(record.get("assignment_group")),
+        vulnerability_group=_sn_reference_id(record.get("vulnerability_group")),
+        opened_at=_optional_sn_text(record.get("opened_at")),
+        created_at=_optional_sn_text(record.get("sys_created_on")),
+        due_date=_optional_sn_text(record.get("due_date")),
+        resolved_at=_optional_sn_text(record.get("resolved_at")),
+        closed_at=_optional_sn_text(record.get("closed_at")),
+        close_code=_optional_sn_text(record.get("close_code")),
+        state_history=tuple(history.get("state", [])),
+        assignment_history=tuple(history.get("assignment_group", [])),
+        org_id=org_id,
+        source_timestamp=_optional_sn_text(record.get("sys_updated_on")),
+        source_url=_servicenow_record_url(instance_url, VR_REMEDIATION_TASK_TABLE, sys_id),
+    )
+
+
+def _read_vr_stream(
+    *,
+    table: str,
+    fields: Tuple[str, ...],
+    fixture_key: str,
+    audit_key: str,
+    builder: Callable[..., Any],
+    org_id: str,
+    client: Optional[ServiceNowClient] = None,
+    updated_after: Optional[str] = None,
+    updated_through: Optional[str] = None,
+) -> List[Any]:
+    """Read one bounded VR table's delta, incremental on ``sys_updated_on``.
+
+    Live reads go through :class:`ServiceNowClient` (vault auth, 30-second
+    timeout, offset pagination, record cap, error translation).  The exact
+    workflow field projection is sent to ServiceNow so scanner payloads, exploit
+    detail, and finding content are never fetched.  Deterministic ordering
+    (``sys_updated_on``, ``sys_id``) over the full paginated result means a large
+    scan-cycle delta is read completely, never skipped.
+    """
+    if is_live():
+        if client is None:
+            client = _get_client()
+        query_parts: List[str] = []
+        if updated_after:
+            query_parts.append(f"sys_updated_on>{updated_after}")
+        if updated_through:
+            query_parts.append(f"sys_updated_on<={updated_through}")
+        prefix = ("^".join(query_parts) + "^") if query_parts else ""
+        records = client.table_query(
+            table,
+            {
+                "sysparm_query": prefix + "ORDERBYsys_updated_on^ORDERBYsys_id",
+                "sysparm_fields": ",".join(fields),
+                "sysparm_display_value": "all",
+                "sysparm_exclude_reference_link": "true",
+            },
+            max_records=VR_RECORD_CAP,
+        )
+        instance_url = getattr(client, "instance_url", None)
+        audit_records: Optional[List[Dict[str, Any]]] = None
+    else:
+        fixture = _load_vr_fixture()
+        instance_url = (fixture.get("_meta") or {}).get("instance_url")
+        records = [
+            record
+            for record in fixture.get(fixture_key, [])
+            if _record_in_cursor_window(record, updated_after, updated_through)
+        ]
+        audit_records = fixture.get(audit_key, [])
+
+    admitted_ids = tuple(
+        sys_id
+        for sys_id in (
+            _optional_sn_text(record.get("sys_id"))
+            for record in records
+            if isinstance(record, dict)
+        )
+        if sys_id
+    )
+    history = _read_workflow_field_history(
+        table,
+        admitted_ids,
+        VR_HISTORY_FIELDS,
+        client=client,
+        audit_records=audit_records,
+        record_cap=VR_RECORD_CAP,
+    )
+
+    out: List[Any] = []
+    for record in records:
+        if not isinstance(record, dict):
+            logger.warning("ServiceNow VR %s returned a non-object record; skipping", table)
+            continue
+        sys_id = _optional_sn_text(record.get("sys_id"))
+        obj = builder(record, org_id, history.get(sys_id, {}) if sys_id else {}, instance_url)
+        if obj is not None:
+            out.append(obj)
+    return sorted(out, key=lambda item: (item.source_timestamp or "", item.sys_id))
+
+
+def _read_vulnerable_items(
+    org_id: str,
+    client: Optional[ServiceNowClient] = None,
+    *,
+    updated_after: Optional[str] = None,
+    updated_through: Optional[str] = None,
+) -> List[ServiceNowVulnerableItem]:
+    return _read_vr_stream(
+        table=VR_VULN_ITEM_TABLE,
+        fields=VR_VULN_ITEM_FIELDS,
+        fixture_key="sn_vul_vulnerable_item",
+        audit_key="sn_vul_vulnerable_item_audit",
+        builder=_vulnerable_item_from_record,
+        org_id=org_id,
+        client=client,
+        updated_after=updated_after,
+        updated_through=updated_through,
+    )
+
+
+def _read_vulnerability_groups(
+    org_id: str,
+    client: Optional[ServiceNowClient] = None,
+    *,
+    updated_after: Optional[str] = None,
+    updated_through: Optional[str] = None,
+) -> List[ServiceNowVulnerabilityGroup]:
+    return _read_vr_stream(
+        table=VR_GROUP_TABLE,
+        fields=VR_GROUP_FIELDS,
+        fixture_key="sn_vul_vulnerability_group",
+        audit_key="sn_vul_vulnerability_group_audit",
+        builder=_vulnerability_group_from_record,
+        org_id=org_id,
+        client=client,
+        updated_after=updated_after,
+        updated_through=updated_through,
+    )
+
+
+def _read_remediation_tasks(
+    org_id: str,
+    client: Optional[ServiceNowClient] = None,
+    *,
+    updated_after: Optional[str] = None,
+    updated_through: Optional[str] = None,
+) -> List[ServiceNowRemediationTask]:
+    return _read_vr_stream(
+        table=VR_REMEDIATION_TASK_TABLE,
+        fields=VR_REMEDIATION_TASK_FIELDS,
+        fixture_key="sn_vul_remediation_task",
+        audit_key="sn_vul_remediation_task_audit",
+        builder=_remediation_task_from_record,
+        org_id=org_id,
+        client=client,
+        updated_after=updated_after,
+        updated_through=updated_through,
+    )
+
+
+class _ServiceNowVRStreamIngestor(ChangeBasedIngestor):
+    """Shared incremental base for the three VR table streams.
+
+    Each concrete stream sets its own ``connector_id`` (its independent,
+    org-scoped ``sys_updated_on`` checkpoint) and supplies ``_read``.  The
+    checkpoint discipline is inherited from ``change_runner``: the cursor
+    advances only after the batch is fully processed; a failed or partial run
+    leaves the prior checkpoint intact.
+
+    ``reports_deletes = False``: VR records are not hard-deleted in the normal
+    workflow — closure/deferral/exception are workflow STATES, captured as state
+    history — so no tombstone is fabricated.
+    """
+
+    reports_deletes = False
+    _stream_label = "VR"
+
+    def __init__(
+        self,
+        *,
+        org_id: str,
+        client: Optional[ServiceNowClient] = None,
+        clock: Optional[Callable[[], datetime]] = None,
+    ) -> None:
+        self.org_id = org_id
+        self.client = client
+        self.clock = clock
+
+    def _read(self, updated_after: Optional[str], updated_through: Optional[str]) -> List[Any]:
+        raise NotImplementedError
+
+    def ingest_changes(
+        self, org_id: str, since: Optional[Checkpoint]
+    ) -> Iterator[DeltaBatch]:
+        if org_id != self.org_id:
+            raise ServiceNowIngestError(f"{self._stream_label} stream organization mismatch")
+        if since is not None and (
+            since.org_id != org_id or since.connector_id != self.connector_id
+        ):
+            raise ServiceNowIngestError(f"{self._stream_label} checkpoint scope mismatch")
+        updated_after = _validated_secops_cursor(since.value if since else None)
+        watermark = _cmdb_watermark(self.clock)
+        records: List[Dict[str, Any]] = []
+        for obj in self._read(updated_after, watermark):
+            record = obj.as_dict()
+            record.update(artifact_id=obj.sys_id, change_kind=ChangeKind.UPDATED)
+            records.append(record)
+        yield DeltaBatch(records=records, next_checkpoint=watermark, is_complete=True)
+
+
+class ServiceNowVulnerableItemChangeIngestor(_ServiceNowVRStreamIngestor):
+    """Incremental ``sn_vul_vulnerable_item`` stream."""
+
+    connector_id = VR_VULN_ITEM_CHECKPOINT_ID
+    _stream_label = "vulnerable item"
+
+    def _read(self, updated_after, updated_through):
+        return _read_vulnerable_items(
+            self.org_id, self.client,
+            updated_after=updated_after, updated_through=updated_through,
+        )
+
+
+class ServiceNowVulnerabilityGroupChangeIngestor(_ServiceNowVRStreamIngestor):
+    """Incremental ``sn_vul_vulnerability_group`` stream."""
+
+    connector_id = VR_GROUP_CHECKPOINT_ID
+    _stream_label = "vulnerability group"
+
+    def _read(self, updated_after, updated_through):
+        return _read_vulnerability_groups(
+            self.org_id, self.client,
+            updated_after=updated_after, updated_through=updated_through,
+        )
+
+
+class ServiceNowRemediationTaskChangeIngestor(_ServiceNowVRStreamIngestor):
+    """Incremental ``sn_vul_remediation_task`` stream."""
+
+    connector_id = VR_REMEDIATION_TASK_CHECKPOINT_ID
+    _stream_label = "remediation task"
+
+    def _read(self, updated_after, updated_through):
+        return _read_remediation_tasks(
+            self.org_id, self.client,
+            updated_after=updated_after, updated_through=updated_through,
+        )
+
+
+def summarize_vulnerability_workload(
+    vulnerable_items: List[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """Aggregate VR effort by CLASSIFICATION only — never host×vulnerability.
+
+    Rolls vulnerable-item workflow records up by vulnerability class, severity
+    band, and assignment group so effort concentration is measured at the level
+    humans experience it (MSP-B11 AC6).  Deliberately produces no per-host,
+    per-vulnerability breakdown; combined with the CVE-free field scope, no
+    emitted signal can enumerate a (host, vulnerability) pair.
+    """
+    by_class: Dict[str, int] = {}
+    by_severity: Dict[str, int] = {}
+    by_assignment_group: Dict[str, int] = {}
+    for item in vulnerable_items:
+        cls = item.get("vulnerability_class") or "unclassified"
+        by_class[cls] = by_class.get(cls, 0) + 1
+        sev = item.get("severity") or "unclassified"
+        by_severity[sev] = by_severity.get(sev, 0) + 1
+        grp = item.get("assignment_group") or "unassigned"
+        by_assignment_group[grp] = by_assignment_group.get(grp, 0) + 1
+    return {
+        "total_items": len(vulnerable_items),
+        "by_vulnerability_class": by_class,
+        "by_severity_band": by_severity,
+        "by_assignment_group": by_assignment_group,
+    }
+
+
 def _ingestion_result_payload(result: Any) -> Dict[str, Any]:
     return {
         "connector_id": result.connector_id,
@@ -1274,6 +2356,132 @@ def ingest_cmdb_changes(
     return payload
 
 
+def ingest_sir_changes(
+    *,
+    org_id: str,
+    run_id: str,
+    client: Optional[ServiceNowClient] = None,
+    clock: Optional[Callable[[], datetime]] = None,
+    read_checkpoint: Optional[Callable[[str, str], Optional[Checkpoint]]] = None,
+    save_checkpoint: Optional[Callable[[Checkpoint], None]] = None,
+) -> Dict[str, Any]:
+    """Apply the SIR workflow-signal stream on the shared change-ingestion rails.
+
+    Drives :class:`ServiceNowSecurityIncidentChangeIngestor` through
+    :func:`ingest_with_checkpoint`, so the ``sys_updated_on`` checkpoint advances
+    only after the delta is fully processed and a failed or partial run leaves
+    the last valid checkpoint intact.  Returns the bounded workflow signal for
+    this run (consumed by MSP-B12); ``run_id`` is retained for traceability and
+    the later CI-join task (T3).  ``read_checkpoint`` / ``save_checkpoint`` default
+    to the AT-378 repository and are injectable for tests.
+    """
+    from discovery.ingest.change_runner import ingest_with_checkpoint
+    from discovery.ingest import checkpoint_repository as _repo
+
+    if is_live() and client is None:
+        client = _get_client()
+
+    collected: List[Dict[str, Any]] = []
+
+    def process(batch: DeltaBatch) -> None:
+        for record in batch.records:
+            collected.append(
+                {
+                    key: value
+                    for key, value in record.items()
+                    if key not in {"artifact_id", "change_kind"}
+                }
+            )
+
+    result = ingest_with_checkpoint(
+        ServiceNowSecurityIncidentChangeIngestor(
+            org_id=org_id, client=client, clock=clock
+        ),
+        org_id,
+        process_batch=process,
+        read_checkpoint=read_checkpoint or _repo.read_checkpoint,
+        save_checkpoint=save_checkpoint or _repo.save_checkpoint,
+    )
+    return {
+        "org_id": org_id,
+        "run_id": run_id,
+        "security_incidents": collected,
+        "streams": {"sn_si_incident": _ingestion_result_payload(result)},
+    }
+
+
+def ingest_vr_changes(
+    *,
+    org_id: str,
+    run_id: str,
+    client: Optional[ServiceNowClient] = None,
+    clock: Optional[Callable[[], datetime]] = None,
+    read_checkpoint: Optional[Callable[[str, str], Optional[Checkpoint]]] = None,
+    save_checkpoint: Optional[Callable[[Checkpoint], None]] = None,
+) -> Dict[str, Any]:
+    """Apply the three Vulnerability Response streams on the shared rails.
+
+    Each VR table (vulnerable items, vulnerability groups, remediation tasks)
+    runs through :func:`ingest_with_checkpoint` under its OWN org-scoped
+    ``sys_updated_on`` checkpoint, so a large scan-cycle delta on one table
+    neither blocks nor skips the others, and each cursor advances only after its
+    batch is fully processed.  Returns the bounded workflow signal plus a
+    classification-only workload summary (MSP-B11 AC6); ``run_id`` is retained
+    for traceability and the T3 CI join.  ``read_checkpoint`` / ``save_checkpoint``
+    default to the AT-378 repository and are injectable for tests.
+    """
+    from discovery.ingest.change_runner import ingest_with_checkpoint
+    from discovery.ingest import checkpoint_repository as _repo
+
+    if is_live() and client is None:
+        client = _get_client()
+
+    read_cp = read_checkpoint or _repo.read_checkpoint
+    save_cp = save_checkpoint or _repo.save_checkpoint
+
+    streams: Dict[str, Any] = {}
+    collected: Dict[str, List[Dict[str, Any]]] = {
+        "vulnerable_items": [],
+        "vulnerability_groups": [],
+        "remediation_tasks": [],
+    }
+
+    plan = (
+        ("sn_vul_vulnerable_item", "vulnerable_items", ServiceNowVulnerableItemChangeIngestor),
+        ("sn_vul_vulnerability_group", "vulnerability_groups", ServiceNowVulnerabilityGroupChangeIngestor),
+        ("sn_vul_remediation_task", "remediation_tasks", ServiceNowRemediationTaskChangeIngestor),
+    )
+    for stream_key, collection_key, ingestor_cls in plan:
+        bucket = collected[collection_key]
+
+        def process(batch: DeltaBatch, _bucket=bucket) -> None:
+            for record in batch.records:
+                _bucket.append(
+                    {
+                        key: value
+                        for key, value in record.items()
+                        if key not in {"artifact_id", "change_kind"}
+                    }
+                )
+
+        result = ingest_with_checkpoint(
+            ingestor_cls(org_id=org_id, client=client, clock=clock),
+            org_id,
+            process_batch=process,
+            read_checkpoint=read_cp,
+            save_checkpoint=save_cp,
+        )
+        streams[stream_key] = _ingestion_result_payload(result)
+
+    return {
+        "org_id": org_id,
+        "run_id": run_id,
+        "vulnerable_items": collected["vulnerable_items"],
+        "vulnerability_groups": collected["vulnerability_groups"],
+        "remediation_tasks": collected["remediation_tasks"],
+        "workload_summary": summarize_vulnerability_workload(collected["vulnerable_items"]),
+        "streams": streams,
+    }
 def _assignment_group_name(value: Any) -> Optional[str]:
     """Return a ServiceNow assignment group's display name (a queue, not a person).
 
