@@ -789,3 +789,178 @@ def retrieve_runbook_candidates(
     if not available:
         return RunbookRetrievalResult(status=RETRIEVAL_UNAVAILABLE, query=query, candidates=())
     return RunbookRetrievalResult(status=RETRIEVAL_OK, query=query, candidates=())
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# MSP-B5 T3 — deterministic scoring + threshold => PROPOSED match.
+#
+# Scores the T2 candidates for how strongly each corresponds to the recurrence's
+# resolution pattern (retrieval similarity + structured agreement), selects the
+# strongest with stable tie-breaking, and — only when it meets the CONFIGURED
+# threshold — emits a RunbookMatch(origin='proposed', match_confidence=…). Below
+# threshold: no match, never a stretch. A proposed match is visibly distinct from
+# an observed (T1) or analyst-confirmed (T4) one: match_state/origin='proposed'
+# and a numeric match_confidence. Retrieval PROPOSES; it never becomes fact here.
+# ═════════════════════════════════════════════════════════════════════════════
+
+# Scoring knobs are CONFIG, not code (task requirement / AC3): the match threshold
+# lives here so it can be calibrated per pack/org without touching the matching
+# function. Defaults are conservative; overridable via env or an injected config
+# (the org/pack-configuration seam). The threshold sits at/above the T2 retrieval
+# floor so a candidate that barely cleared retrieval is not auto-proposed.
+DEFAULT_MATCH_THRESHOLD = 0.75
+DEFAULT_STRUCTURED_WEIGHT = 0.15
+MATCH_THRESHOLD_ENV = "MSP_B5_RUNBOOK_MATCH_THRESHOLD"
+STRUCTURED_WEIGHT_ENV = "MSP_B5_RUNBOOK_STRUCTURED_WEIGHT"
+
+# Score is rounded to this many places so float noise can never flip a stable
+# ordering or a threshold comparison between otherwise-identical runs.
+_SCORE_PRECISION = 6
+_WORD_RE = re.compile(r"[a-z0-9_]+")
+
+
+@dataclass(frozen=True)
+class RunbookScoringConfig:
+    """Tunable proposed-match scoring — thresholds are config, not code (AC3).
+
+    ``match_threshold`` is the minimum combined score for a candidate to be
+    PROPOSED; below it, no match is emitted. ``structured_agreement_weight`` is how
+    much structured agreement (resolution-pattern terms present in the candidate)
+    can lift a candidate above its bare retrieval similarity. Resolve per pack/org
+    by constructing this with the calibrated values; ``from_env`` is the dev/default
+    path.
+    """
+
+    match_threshold: float = DEFAULT_MATCH_THRESHOLD
+    structured_agreement_weight: float = DEFAULT_STRUCTURED_WEIGHT
+
+    @classmethod
+    def from_env(cls) -> "RunbookScoringConfig":
+        return cls(
+            match_threshold=_env_float(MATCH_THRESHOLD_ENV, DEFAULT_MATCH_THRESHOLD),
+            structured_agreement_weight=_env_float(
+                STRUCTURED_WEIGHT_ENV, DEFAULT_STRUCTURED_WEIGHT
+            ),
+        )
+
+
+def _word_set(text: Any) -> frozenset:
+    """Lower-cased word tokens of ``text`` (alphanumeric/underscore runs)."""
+    return frozenset(
+        tok for tok in _WORD_RE.findall(str(text or "").casefold()) if len(tok) > 1
+    )
+
+
+def _structured_agreement(rec: "RecurrenceRecord", candidate: "RunbookCandidate") -> float:
+    """Fraction of the recurrence's resolution-pattern terms present in the
+    candidate content — a deterministic bag-of-words agreement in ``[0, 1]``.
+
+    Zero when the recurrence carries no usable structured pattern (no bonus, never
+    a penalty). Uses only the privacy-safe structured fields (never free text).
+    """
+    pattern_words = set()
+    for value in _query_fields(rec).values():
+        pattern_words |= _word_set(value)
+    if not pattern_words:
+        return 0.0
+    content_words = _word_set(getattr(candidate, "content", ""))
+    matched = len(pattern_words & content_words)
+    return matched / len(pattern_words)
+
+
+def score_candidate(
+    rec: "RecurrenceRecord",
+    candidate: "RunbookCandidate",
+    config: Optional[RunbookScoringConfig] = None,
+) -> float:
+    """Deterministically score how strongly ``candidate`` matches the recurrence.
+
+    The score PRESERVES the retrieval similarity as its anchor and lifts it by the
+    structured agreement (bounded by ``structured_agreement_weight``), so a
+    candidate never scores below its own similarity and structured agreement can
+    only strengthen — never fabricate — a match. Clamped to ``[0, 1]`` and rounded
+    for stable comparisons. Pure function of ``(rec, candidate, config)``.
+    """
+    cfg = config or RunbookScoringConfig.from_env()
+    similarity = float(getattr(candidate, "similarity", 0.0) or 0.0)
+    similarity = max(0.0, min(1.0, similarity))
+    agreement = _structured_agreement(rec, candidate)
+    score = similarity + cfg.structured_agreement_weight * agreement
+    return round(max(0.0, min(1.0, score)), _SCORE_PRECISION)
+
+
+def _candidate_summary(candidate: "RunbookCandidate") -> Dict[str, Any]:
+    """The matched-runbook descriptor for a PROPOSED match (provenance only)."""
+    return {
+        "source_system": candidate.source_system,
+        "source_artifact": candidate.source_artifact,
+        "title": None,
+        "url": None,
+        "identifiers": [],
+    }
+
+
+def _candidate_evidence(candidate: "RunbookCandidate") -> Dict[str, Any]:
+    """An OBSERVED (retrieved) evidence pointer preserving the retrieval-result ids
+    that explain WHY the candidate was proposed (chunk id, retrieval-result id, and
+    the retrieval similarity as confidence)."""
+    return EvidencePointer.retrieved(
+        source_system=candidate.source_system,
+        source_artifact=candidate.source_artifact,
+        chunk_id=candidate.chunk_id,
+        retrieval_result_id=candidate.retrieval_result_id,
+        source_timestamp=candidate.source_timestamp or None,
+        confidence=candidate.similarity,
+        source_artifact_type="record_id",
+    ).to_dict()
+
+
+def propose_runbook_match(
+    org_id: str,
+    rec: "RecurrenceRecord",
+    candidates: Sequence["RunbookCandidate"],
+    *,
+    config: Optional[RunbookScoringConfig] = None,
+) -> Optional[RunbookMatch]:
+    """Score T2 candidates and PROPOSE the strongest, iff it meets the threshold.
+
+    Deterministic and org-scoped. Scores every candidate, selects the strongest
+    with a STABLE ordering (highest score, then ``source_artifact`` then
+    ``chunk_id`` so equal scores resolve identically across runs), and returns a
+    :class:`RunbookMatch` with ``origin='proposed'`` / ``match_state='proposed'``
+    and a numeric ``match_confidence`` when it meets the configured threshold.
+    Below threshold: ``None`` — the weaker candidate is never selected, the
+    threshold is never auto-lowered, and a low-quality result is never dressed up
+    as a possible match. A proposed match is visibly distinct from an observed or
+    confirmed one and never becomes established fact here (AC2).
+    """
+    org = _require_org(org_id)
+    rec_org = getattr(rec, "org_id", None)
+    if rec_org and str(rec_org).strip() != org:
+        raise OrgScopeError(
+            f"recurrence belongs to org {rec_org!r}, cannot propose under {org!r}"
+        )
+    if not candidates:
+        return None
+
+    cfg = config or RunbookScoringConfig.from_env()
+    scored = [(score_candidate(rec, c, cfg), c) for c in candidates]
+    # Stable ordering: strongest score first, then stable provenance tie-breakers
+    # so repeated runs over an equal-scored set always pick the same candidate.
+    scored.sort(key=lambda sc: (-sc[0], sc[1].source_artifact, sc[1].chunk_id))
+    best_score, best = scored[0]
+
+    if best_score < cfg.match_threshold:
+        return None  # below threshold => no match, never a stretch
+
+    return RunbookMatch(
+        org_id=org,
+        recurrence_id=str(getattr(rec, "record_id", "") or ""),
+        match_state=MATCH_PROPOSED,
+        origin=MATCH_PROPOSED,
+        runbook=_candidate_summary(best),
+        runbook_evidence=_candidate_evidence(best),
+        citing_incident_evidence=(),  # a proposal has no citing incident (uncited)
+        cited_references=(),
+        match_confidence=best_score,
+    )
