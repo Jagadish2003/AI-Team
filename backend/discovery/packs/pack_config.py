@@ -180,6 +180,40 @@ PACK_REGISTRY: Dict[str, Dict[str, Any]] = {
         ),
     },
 
+    "cloud_ops": {
+        "packId":        "cloud_ops",
+        # MSP-B6 T1 AC1: version stamped on every run (R16-B1). The scaffold
+        # version; bump on any future detector/scorer/corroboration change.
+        "packVersion":   "1.0.0",
+        "packName":      "Cloud Operations",
+        "domain":        "cloud_ops",
+        "pack_domain":   "cloud_ops",
+        # MSP-B6 T1 AC4: no detector logic in this ticket. The recurring-resolution
+        # loop, alert-triage-toil, ping-pong, queue-ageing (T2) and shared-CI
+        # hotspot (T3) detectors register their module paths here when built.
+        "detectors": [],
+        # UI labels are per-detector (S6/S7); added with the detectors in T2/T3.
+        "ui_labels_path": None,
+        # MSP-B6 T1 AC2/AC3: calibration values, thresholds, and the NOC
+        # terminology set load from this external file, not from code — a config
+        # change alters behaviour with no code deploy. See cloud_ops_config.py.
+        "config_path":   str(_PACKS_DIR / "cloud_ops_pack_config.json"),
+        "llm_context": (
+            "Managed cloud-operations (NOC) analysis. "
+            "Speak NOC language: alerts, incidents, runbooks, MTTR, toil, escalation. "
+            "Focus on recurring resolution loops, alert-triage toil, reassignment "
+            "ping-pong between groups and queues, queue ageing against baseline, and "
+            "incidents concentrating on a shared dependency. "
+            "Reference groups, queues, services, and CIs only — never individuals. "
+            "State corroboration honestly: a single-source finding is capped and "
+            "labelled; concentration is described as 'incidents concentrate on...', "
+            "never as causation. "
+            "IMPORTANT: agent surfaces operational findings to NOC and operations "
+            "leaders only. No automated incident remediation, ticket resolution, or "
+            "runbook execution — humans remain responsible for every action."
+        ),
+    },
+
     # CPQ pack slot — reserved for Sprint 6
 
     # "ncino_cpq": {
@@ -264,6 +298,16 @@ def get_ui_labels(pack_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
 def get_llm_context(pack_id: Optional[str] = None) -> str:
     """Return the LLM context hint string for this pack."""
     return get_pack(pack_id)["llm_context"]
+
+
+def get_pack_config_path(pack_id: Optional[str] = None) -> Optional[str]:
+    """Return the path to a pack's externalized config file, or None if it has none.
+
+    MSP-B6 T1: the Cloud-Operations pack keeps its calibration values, thresholds,
+    and terminology in an external JSON file (loaded via cloud_ops_config.py) so a
+    config change alters behaviour with no code deploy (AC2).
+    """
+    return get_pack(pack_id).get("config_path")
 def is_strs_benefits_pack(pack_id: Optional[str] = None) -> bool:
     """
     Returns True when the active pack is STRS Benefits Administration.
@@ -310,3 +354,12 @@ def is_enterprise_ops_pack(pack_id: Optional[str] = None) -> bool:
     pattern as is_ncino_pack() and is_github_engineering_pack().
     """
     return get_pack(pack_id)["domain"] == "enterprise_ops"
+
+
+def is_cloud_ops_pack(pack_id: Optional[str] = None) -> bool:
+    """Return True when the active pack is the Cloud-Operations Discovery pack (MSP-B6).
+
+    Used in runner.py and scorer for pack routing.  Follows the identical
+    pattern as is_ncino_pack() and is_enterprise_ops_pack().
+    """
+    return get_pack(pack_id)["domain"] == "cloud_ops"
