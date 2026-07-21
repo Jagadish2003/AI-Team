@@ -360,6 +360,74 @@ class RunbookMatch:
             "match_confidence": self.match_confidence,
         }
 
+    @classmethod
+    def from_dict(cls, value: Mapping[str, Any]) -> "RunbookMatch":
+        """Rebuild a stored match without accepting arbitrary extra fields.
+
+        MSP-B5 T4 persists proposed matches before an analyst decides on them.
+        Keeping deserialisation here means the persisted lifecycle and the
+        detector use one contract instead of maintaining two subtly different
+        match shapes.
+        """
+        if not isinstance(value, Mapping):
+            raise ValueError("runbook match must be a mapping")
+        recurrence_id = str(value.get("recurrence_id") or "").strip()
+        if not recurrence_id:
+            raise ValueError("recurrence_id is required on a runbook match")
+        state = str(value.get("match_state") or "").strip().lower()
+        origin = str(value.get("origin") or "").strip().lower()
+        if state not in (MATCH_OBSERVED, MATCH_PROPOSED, MATCH_CONFIRMED):
+            raise ValueError(f"invalid runbook match state: {state!r}")
+        if origin != state:
+            raise ValueError("runbook match origin must equal its lifecycle state")
+        return cls(
+            org_id=_require_org(value.get("org_id")),
+            recurrence_id=recurrence_id,
+            match_state=state,
+            origin=origin,
+            runbook=dict(value.get("runbook") or {}),
+            runbook_evidence=dict(value.get("runbook_evidence") or {}),
+            citing_incident_evidence=tuple(
+                dict(pointer)
+                for pointer in (value.get("citing_incident_evidence") or ())
+                if isinstance(pointer, Mapping)
+            ),
+            cited_references=tuple(
+                str(reference)
+                for reference in (value.get("cited_references") or ())
+                if str(reference).strip()
+            ),
+            match_confidence=(
+                float(value["match_confidence"])
+                if value.get("match_confidence") is not None
+                else None
+            ),
+        )
+
+    def with_state(self, match_state: str) -> "RunbookMatch":
+        """Return the same match in a valid lifecycle state.
+
+        Only analyst acceptance may call this with ``confirmed``.  Evidence is
+        intentionally unchanged: confirmation changes the status of the match,
+        not the source page or retrieval result that led to it.
+        """
+        state = str(match_state or "").strip().lower()
+        if state not in (MATCH_OBSERVED, MATCH_PROPOSED, MATCH_CONFIRMED):
+            raise ValueError(f"invalid runbook match state: {match_state!r}")
+        return RunbookMatch(
+            org_id=self.org_id,
+            recurrence_id=self.recurrence_id,
+            match_state=state,
+            origin=state,
+            runbook=dict(self.runbook),
+            runbook_evidence=dict(self.runbook_evidence),
+            citing_incident_evidence=tuple(
+                dict(pointer) for pointer in self.citing_incident_evidence
+            ),
+            cited_references=tuple(self.cited_references),
+            match_confidence=self.match_confidence,
+        )
+
 
 def match_runbooks(
     org_id: str,

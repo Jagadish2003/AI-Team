@@ -1,6 +1,15 @@
 # AgentIQ — API_CONTRACT.md (EPIC E0)
-Version: v1.10
-Date: 2026-07-09
+Version: v1.11
+Date: 2026-07-21
+
+> v1.11 — MSP-B5 T4: added authenticated Analyst+ runbook-match lifecycle
+> endpoints: `GET /api/runbook-matches/{recurrenceId}`, `POST
+> /api/runbook-matches/{recurrenceId}/decision`, and `GET
+> /api/runbook-matches/{recurrenceId}/decision-history`. Decisions are
+> organization-scoped and accept `accept`, `dismiss`, or `defer`. Real changes
+> append history; repeating the current action is idempotent. The response keeps
+> `proposed` visibly distinct from `observed` and `confirmed`, and represents a
+> dismissed match as `absent`. Additive; existing consumers are unaffected.
 
 > v1.10 — R18-C0 P8 (Re-editable review decisions, AC8): extended
 > `ReviewAuditEvent` with the optional `tsEpoch` (`number`, the newest-first sort
@@ -256,6 +265,78 @@ Request:
 { "decision": "APPROVED" }
 ```
 Response: updated `OpportunityCandidate`
+
+#### GET /api/runbook-matches/{recurrenceId}
+Purpose: return the current runbook-match lifecycle state for one recurrence.
+Requires: authenticated Analyst or Owner. The organization comes only from the
+authenticated request.
+
+Response:
+```json
+{
+  "org_id": "org_001",
+  "recurrence_id": "rec_001",
+  "base_state": "proposed",
+  "current_state": "proposed",
+  "current_action": null,
+  "revision": 0,
+  "current_match": {
+    "org_id": "org_001",
+    "recurrence_id": "rec_001",
+    "match_state": "proposed",
+    "origin": "proposed",
+    "runbook": {
+      "source_system": "document",
+      "source_artifact": "runbooks/restart.md"
+    },
+    "runbook_evidence": {},
+    "citing_incident_evidence": [],
+    "cited_references": [],
+    "match_confidence": 0.89,
+    "label": "Proposed match, pending confirmation",
+    "lifecycle": {
+      "state": "proposed",
+      "label": "Proposed match, pending confirmation",
+      "documented_status": "proposed",
+      "composite_status": "provisional",
+      "ranking_treatment": "provisional",
+      "evidence_status": "proposed",
+      "active": true
+    }
+  },
+  "lifecycle": {
+    "state": "proposed",
+    "label": "Proposed match, pending confirmation",
+    "documented_status": "proposed",
+    "composite_status": "provisional",
+    "ranking_treatment": "provisional",
+    "evidence_status": "proposed",
+    "active": true
+  },
+  "updated_by": null,
+  "updated_at": "2026-07-21T10:00:00Z"
+}
+```
+
+#### POST /api/runbook-matches/{recurrenceId}/decision
+Purpose: accept, dismiss, or defer a proposed runbook match.
+Requires: authenticated Analyst or Owner.
+
+Request:
+```json
+{ "action": "accept" }
+```
+
+`action` is one of `accept | dismiss | defer`. Accept returns
+`current_state="confirmed"`; dismiss returns `current_state="absent"` and
+`current_match=null`; defer keeps `current_state="proposed"`. `changed=false`
+means the same action was already current and no history/feedback row was added.
+
+#### GET /api/runbook-matches/{recurrenceId}/decision-history
+Purpose: return the append-only analyst decision history, newest first.
+Requires: authenticated Analyst or Owner. Each item includes `revision`,
+`action`, `previous_action`, `previous_state`, `resulting_state`, `actor_id`, and
+`decided_at`.
 
 ---
 
