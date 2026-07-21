@@ -95,22 +95,21 @@ class TestAC1PackRegistration:
         assert m.DEFAULT_PACK == "service_cloud"
 
 
-# ── AC4 — scaffold config carries no scorer logic ───────────────────────────────
-# NOTE: T1's original "detectors list is empty" assertion has been superseded by
-# MSP-B6 T2 (AT-737), which registers the four record/stream detectors. The scorer
-# is still MSP-B6 T4 and must remain absent.
+# ── AC4 — scaffold evolution ─────────────────────────────────────────────────────
+# NOTE: T1's original "detectors list is empty" assertion was superseded by MSP-B6
+# T2 (AT-737), which registered the four record/stream detectors. T1's "the scorer
+# must not exist yet" assertion is likewise superseded by MSP-B6 T4 (AT-739), which
+# adds the ops-impact scorer. It must now exist and be importable.
 
-class TestAC4NoScorerLogic:
+class TestAC4ScorerNowExists:
 
-    def test_no_scorer_module_yet(self):
-        """The ops-impact scorer is MSP-B6 T4 — it must not exist yet."""
+    def test_scorer_module_importable(self):
+        """The ops-impact scorer is MSP-B6 T4 — it now exists."""
         import importlib
-        for mod in (
-            "discovery.packs.cloud_ops_scorer",
-            "backend.discovery.packs.cloud_ops_scorer",
-        ):
-            with pytest.raises(ModuleNotFoundError):
-                importlib.import_module(mod)
+        mod = importlib.import_module("discovery.packs.cloud_ops_scorer")
+        assert hasattr(mod, "score_cloud_ops")
+        assert hasattr(mod, "rank_cloud_ops_findings")
+        assert hasattr(mod, "is_cloud_ops_detector")
 
 
 # ── AC2 — calibration + thresholds load from config ─────────────────────────────

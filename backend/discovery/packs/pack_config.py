@@ -182,9 +182,10 @@ PACK_REGISTRY: Dict[str, Dict[str, Any]] = {
 
     "cloud_ops": {
         "packId":        "cloud_ops",
-        # MSP-B6 T1 AC1: version stamped on every run (R16-B1). The scaffold
-        # version; bump on any future detector/scorer/corroboration change.
-        "packVersion":   "1.0.0",
+        # MSP-B6 T1 AC1: version stamped on every run (R16-B1). Bumped to 1.1.0 by
+        # MSP-B6 T4 (AT-739) — adds the config-driven ops-impact scorer (behaviour
+        # change). Bump on any future detector/scorer/corroboration change.
+        "packVersion":   "1.1.0",
         "packName":      "Cloud Operations",
         "domain":        "cloud_ops",
         "pack_domain":   "cloud_ops",

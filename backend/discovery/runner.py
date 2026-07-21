@@ -1399,6 +1399,11 @@ def run(
         score_enterprise_ops,
         is_enterprise_ops_detector,
     )
+    from .packs.cloud_ops_scorer import (
+        score_cloud_ops,
+        is_cloud_ops_detector,
+        rank_cloud_ops_findings,
+    )
     from .evidence_builder import build_evidence
     # R16-B1 (T3): stable cross-run opportunity identity, computed at assembly.
     from .opportunity_identity import (
@@ -1484,6 +1489,18 @@ def run(
         except Exception as _corr_data_err:  # noqa: BLE001 — non-blocking.
             logger.warning("ENT-2 corroboration run_data build failed (non-blocking): %s", _corr_data_err)
 
+    # ── MSP-B6 T4: Cloud-Operations ops-impact ranking ──
+    # Rank the whole finding SET once (config-weighted across the four Section-2
+    # dimensions) so per-finding scoring below reads a ranking normalised across
+    # all findings, not each finding in isolation. Non-blocking: a failure leaves
+    # the map empty and each finding is ranked against itself.
+    _cloud_ops_ranking: Dict[int, Dict[str, Any]] = {}
+    if is_cloud_ops_pack(pack_id):
+        try:
+            _cloud_ops_ranking = rank_cloud_ops_findings(detector_results)
+        except Exception as _rank_err:  # noqa: BLE001 — ranking is non-blocking.
+            logger.warning("cloud_ops ops-impact ranking failed (non-blocking): %s", _rank_err)
+
     opportunities = []
     for dr in detector_results:
         # Select scorer based on pack
@@ -1512,6 +1529,11 @@ def run(
                 jira_data=jira_data,
                 org_id=org_id,
             )
+        elif is_cloud_ops_pack(pack_id) and is_cloud_ops_detector(dr.detector_id):
+            # MSP-B6 T4 (AT-739): rank by config-driven ops impact across effort
+            # concentration, breadth, recurrence stability, and automation shape.
+            # Confidence stays the detector's honest four-part-contract level.
+            scored = score_cloud_ops(dr, ranking=_cloud_ops_ranking)
         else:
             # R16-C1 T1: pass weighting context so the scorer can read
             # role/priority for dr.signal_source (modulation is T2 work).
@@ -1640,6 +1662,11 @@ def run(
             # present; descriptive only — never mutates scoring fields).
             "focus_emphasis": _build_focus_emphasis(_focus_id, dr.detector_id),
         }
+        # MSP-B6 T4: surface the config-driven ops-impact ranking on the opportunity
+        # when the cloud_ops scorer produced it (descriptive; never mutates scoring).
+        if "ops_impact_score" in scored:
+            opp["ops_impact_score"] = scored["ops_impact_score"]
+            opp["ops_impact_rank"] = scored.get("ops_impact_rank")
         # ENG-AIQ-NC-5 Issue 1: inject approved UI labels from pack UI label files.
         # Deterministic config text — not LLM generated:
         #   title      → s6_title   (S6 opportunity card heading)
