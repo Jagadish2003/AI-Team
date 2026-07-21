@@ -65,6 +65,9 @@ function reasonExplanation(reason: string | null | undefined): string | null {
   switch (reason) {
     case "org_mismatch":
       return "This license was issued to a different organisation. Paste the key issued for this installation.";
+    case "unknown_key":
+      // R-1.9.1-L1 / T3: signed by a key this installation does not trust.
+      return "This license was signed with a key this installation does not recognise. Contact CloudFulcrum for a current license key.";
     case "no_license":
     case "signature_or_format":
       return "No valid license is installed. Paste a valid license key to activate AgentIQ.";

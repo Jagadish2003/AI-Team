@@ -79,13 +79,40 @@ with — stop and reconcile before shipping.
 The private key is the only genuinely sensitive secret in the system. If it is
 ever compromised, **every issued key must be treated as forgeable.**
 
+### Preferred: key-set (kid) rotation — config only, no release (R-1.9.1-L1 / T3)
+
+The trusted public keys are a **keyed set**: a payload v2 license carries a `kid`
+(key identifier) and verification selects the trusted public key by it. Rotating
+the signing key is a config change on the deployment, not a binary release:
+
+1. Generate a new Ed25519 keypair on the secured signing host, under a NEW kid
+   (e.g. `cf-2027-2`).
+2. Store the new private key in the secrets manager (keep the old one until every
+   license issued under its kid is re-issued).
+3. Add the new kid's **public** key to the deployment's `LICENSE_TRUSTED_KEYS`
+   JSON (`{"cf-2026-1": "...", "cf-2027-2": "..."}`) — both kids are now trusted,
+   so in-field licenses keep verifying.
+4. Issue new licenses under the new kid (`generate_license.py --kid cf-2027-2`).
+5. Once no active license references the old kid, drop it from
+   `LICENSE_TRUSTED_KEYS`. A license under a retired/unknown kid then fails as
+   `invalid: unknown_key`.
+6. Record the rotation (date, reason, who) in the ticket / security log.
+
+A license under a kid not in the trusted set is `invalid: unknown_key` (distinct
+from `signature_or_format`), so an operator can tell "trust/rotate this signing
+key" from "this key is corrupt or forged".
+
+### Last resort: replace the baked-in root of trust (needs a release)
+
+Use only if the config path is unavailable (e.g. the baked-in default key itself
+is compromised and no `LICENSE_TRUSTED_KEYS` override is deployed):
+
 1. Generate a new Ed25519 keypair on the secured signing host.
 2. Store the new private key in the secrets manager; revoke/retire the old one.
-3. Replace `CLOUDFULCRUM_PUBLIC_KEY` in `backend/app/licensing.py` with the new
-   public key.
+3. Replace `CLOUDFULCRUM_PUBLIC_KEY` in `backend/app/licensing.py` (registered
+   under `DEFAULT_KID`) with the new public key.
 4. Cut a new app release so customers receive the new public key.
-5. Re-issue active customer licenses with the new key (old keys stop verifying
-   once the new public key ships).
+5. Re-issue active customer licenses with the new key.
 6. Record the rotation (date, reason, who) in the ticket / security log.
 
 ## Security rules
