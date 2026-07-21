@@ -1,24 +1,33 @@
-"""R1.9.1-R1 T1 — industry_registry.py "anchor-on-shipped" re-anchor tests.
+"""R1.9.1-R1 T1/T2 — industry_registry.py "anchor-on-shipped" re-anchor tests.
 
-Covers the manufacturing / logistics_supply_chain re-anchor: SAP and
+T1 covers the manufacturing / logistics_supply_chain re-anchor: SAP and
 Dynamics 365 no longer appear as connectable defaults (they have no shipped
 ingestor), shipped sources that genuinely fit (databases, documents, Teams)
 take their place, and SAP/Dynamics 365 are still represented — as an explicit,
-non-connectable roadmap entry (target 2.0.1) via the new roadmap_systems
-field.
+non-connectable roadmap entry (target 2.0.1) via the roadmap_systems field.
+
+T2 covers the technology re-anchor: GitLab (no shipped ingestor) moves to
+roadmap_systems (target "unscheduled" — the story never commits GitLab to
+2.0.1 the way it does SAP/D365/Kafka/Windows Event Log/Health Cloud), GitHub
+(shipped) stays a connectable "optional" default unchanged, and databases
+(sqlserver) are added as a genuinely-fitting shipped source.
 
 Pure-config module (no DB, no app import) — runs standalone, matching
 CLAUDE.md's tests/unit/ purpose ("unit tests for individual backend modules").
 
 Acceptance Criteria covered (R1.9.1-R1)
 ----------------------------------------
-AC1 (partial — the two industries in this task's scope): no system_default or
-    recommended_system for manufacturing/logistics_supply_chain references a
-    connector without a shipped ingestor. The full AC1 guarantee (every
-    industry, enforced by a dynamically-discovered CI cross-check against
-    backend/discovery/ingest/) is a separate, later task.
-AC2: SAP/Dynamics 365 are represented as roadmap (target 2.0.1) for these two
-     industries, never as a connectable default — so no run can select them.
+AC1 (partial — the three industries in these tasks' scope): no system_default
+    or recommended_system for manufacturing/logistics_supply_chain/technology
+    references a connector without a shipped ingestor. The full AC1 guarantee
+    (every industry, enforced by a dynamically-discovered CI cross-check
+    against backend/discovery/ingest/) is a separate, later task.
+AC2: SAP/Dynamics 365 are represented as roadmap (target 2.0.1) for
+     manufacturing/logistics_supply_chain, never as a connectable default —
+     so no run can select them (T1).
+AC4: databases appear in the agreed industry profiles (manufacturing,
+     logistics_supply_chain, technology); technology carries GitHub-optional
+     and GitLab-as-roadmap (T2).
 """
 from __future__ import annotations
 
@@ -34,9 +43,16 @@ from discovery.packs.industry_registry import (
     list_industries,
 )
 
-# The two SAP/D365 alternates the story's re-anchoring removes from these
-# industries' connectable defaults.
+# The two SAP/D365 alternates the story's re-anchoring removes from
+# manufacturing/logistics_supply_chain's connectable defaults (T1).
 _ABSENT_CONNECTORS = frozenset({"sap", "dynamics365"})
+
+# Every industry touched by a re-anchor task so far (T1 + T2) — used by the
+# cross-industry regression guard below to know which industries are allowed
+# to declare roadmap_systems / have changed defaults.
+_TOUCHED_INDUSTRIES = frozenset(
+    {"manufacturing", "logistics_supply_chain", "technology"}
+)
 
 # Shipped sources the story specifies as the replacement anchor.
 _REANCHOR_TARGETS = ("sqlserver", "documents", "teams")
@@ -161,9 +177,73 @@ def test_recommended_systems_for_reanchored_industries_are_shipped():
 
 
 # ---------------------------------------------------------------------------
+# T2 — technology: GitLab -> roadmap, GitHub stays optional, databases added.
+# ---------------------------------------------------------------------------
+
+
+def test_technology_no_longer_anchors_on_gitlab():
+    """GitLab is gone from the connectable surface: not a system_default key,
+    not a recommended_system."""
+    config = get_industry("technology")
+    assert "gitlab" not in config.system_defaults
+    assert "gitlab" not in config.recommended_systems
+
+
+def test_technology_declares_gitlab_as_roadmap_unscheduled():
+    """GitLab is still represented — as an explicit, non-connectable roadmap
+    entry. Unlike SAP/D365 (T1, committed to 2.0.1), the story never commits
+    GitLab to a release, so its target must NOT be fabricated as "2.0.1"."""
+    roadmap = get_roadmap_systems("technology")
+    roadmap_ids = {r.system_id for r in roadmap}
+    assert roadmap_ids == {"gitlab"}
+    entry = roadmap[0]
+    assert entry.target_release != "2.0.1", (
+        "GitLab has no committed release target in the story — must not "
+        "borrow SAP/D365's 2.0.1 commitment"
+    )
+    assert entry.label
+    assert entry.reason
+
+
+def test_technology_github_stays_connectable_and_optional_unchanged():
+    """GitHub has a shipped connector/pack and must remain a connectable
+    default at 'optional' priority — the re-anchor must not touch it."""
+    defaults = get_system_defaults("technology", "github")
+    assert defaults is not None
+    assert defaults.role == "engineering_change_system"
+    assert defaults.priority == "optional"
+
+
+def test_technology_re_anchors_on_a_shipped_database():
+    """sqlserver — the shipped native-DB / sqlserver_opsignal source — is now
+    a genuine connectable default for technology."""
+    defaults = get_system_defaults("technology", "sqlserver")
+    assert defaults is not None
+    assert defaults.role in _VALID_ROLES
+    assert defaults.priority in _VALID_PRIORITIES
+    assert set(defaults.workflow_focus) <= _VALID_WORKFLOW_TAGS
+
+
+def test_technology_pack_hints_include_sqlserver_opsignal():
+    assert "sqlserver_opsignal" in get_pack_hints("technology")
+
+
+def test_technology_recommended_systems_never_surface_gitlab():
+    recs = get_recommended_systems("technology", selected_ids=[])
+    assert "gitlab" not in recs
+
+
+def test_get_system_defaults_returns_none_for_gitlab_in_technology():
+    """The accessor used by the Stack Builder API also reflects the removal —
+    not just direct dict access."""
+    assert get_system_defaults("technology", "gitlab") is None
+
+
+# ---------------------------------------------------------------------------
 # Structural invariant — a system is either shipped-and-connectable or
-# roadmap-and-not, never both, for EVERY industry (not just the two in scope).
-# Documented in the module docstring; this test enforces it going forward.
+# roadmap-and-not, never both, for EVERY industry (not just the ones in
+# scope so far). Documented in the module docstring; this test enforces it
+# going forward.
 # ---------------------------------------------------------------------------
 
 
@@ -183,9 +263,10 @@ def test_no_industry_double_lists_a_system_as_both_connectable_and_roadmap():
 
 
 def test_untouched_industries_have_no_roadmap_systems_and_are_unaffected():
-    """Only manufacturing/logistics_supply_chain gain roadmap_systems in this
-    change; every other industry's connectable surface is unaffected."""
-    untouched = set(INDUSTRY_REGISTRY) - set(_REANCHORED_INDUSTRIES)
+    """Only industries touched by a re-anchor task (T1: manufacturing/
+    logistics_supply_chain; T2: technology) declare roadmap_systems; every
+    other industry's connectable surface is unaffected."""
+    untouched = set(INDUSTRY_REGISTRY) - _TOUCHED_INDUSTRIES
     assert untouched, "sanity: expected other industries to exist"
     for industry_id in untouched:
         config = get_industry(industry_id)
