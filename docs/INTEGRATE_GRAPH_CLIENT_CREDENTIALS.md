@@ -47,6 +47,36 @@ so **ingestion is unchanged** regardless of which mode an org uses.
 
 ---
 
+## Permissions for the **standard** (browser / authorization_code) flow
+
+> The rest of this doc is the **client-credentials** (no-public-inbound) path.
+> If you connect Teams/SharePoint the normal way — `NETWORK_PROFILE=standard`,
+> user signs in through the browser — you use the **authorization_code** flow, and
+> the **delegated** permissions below still require a **one-time tenant admin
+> consent**. This is the usual cause of a `403` on a fresh connect.
+
+The browser flow requests exactly these **delegated** Microsoft Graph scopes
+(read-only; defined in `backend/app/auth/configs.py`):
+
+| Connector | Delegated Graph permissions | Graph reads they authorize |
+| --- | --- | --- |
+| Teams | `Team.ReadBasic.All`, `Channel.ReadBasic.All`, `ChannelMessage.Read.All` | granted teams/channels + channel message content |
+| SharePoint | `Sites.Read.All` | granted sites, their **pages, lists, document-library drives, driveItems, and file content** (deep content included) |
+
+**All of these are admin-consent Graph permissions.** Even though a user signs in,
+Microsoft returns `403` on the actual Graph calls until a tenant admin has granted
+consent once (Azure portal → **Entra ID → Enterprise applications → [AgentIQ] →
+Permissions → Grant admin consent**, or the `/adminconsent` endpoint below). A
+`403` can also mean the **signed-in user has no access to that specific site/team**
+— delegated permissions never exceed what the user themselves can see.
+
+> `Sites.Read.All` is the ONLY SharePoint permission needed — it already covers
+> site pages, lists, document libraries, and file-content downloads. Do **not** add
+> `Files.*`, `Sites.Manage.All`, `Sites.FullControl.All`, or any `*.ReadWrite`
+> scope; AgentIQ is read-only.
+
+---
+
 ## Step 1 — Grant **application** Graph permissions
 
 In the Azure portal → **Entra ID → App registrations → [AgentIQ app] → API
@@ -154,6 +184,7 @@ inbound is ever required.
 | Connect returns `500 "Connector client secret is not configured."` | `TEAMS_CLIENT_SECRET` / `SHAREPOINT_CLIENT_SECRET` not set in the deployment env. |
 | Connect returns `502` with `AADSTS700016` / `AADSTS7000215` | Wrong `client_id` / bad or expired client secret. |
 | Connect succeeds but Graph reads return `403` | Admin consent not granted (Step 2), or the permissions were added as **delegated** instead of **application** (Step 1). |
+| Ingest logs `Microsoft Graph GET .../sites/{id}/drives HTTP 403` (standard/browser flow) | `Sites.Read.All` not admin-consented for the app, **or** the signed-in user has no access to that SharePoint site. See "Permissions for the standard flow" above. The run degrades gracefully (SharePoint is skipped, other connectors continue). |
 | Connect returns `400 "does not support the client-credentials auth mode"` | Called on a connector other than `teams` / `sharepoint` (only these register the Graph client-credentials mode). |
 
 ---

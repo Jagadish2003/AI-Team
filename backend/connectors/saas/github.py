@@ -493,11 +493,21 @@ def _resolve_repos(session, org_id: str) -> List[Tuple[str, str]]:
     """
     Resolve (owner, repo) pairs to read signals from.
 
-    If ``GITHUB_REPOS`` is configured, use EXACTLY those repositories (no
-    discovery). Otherwise auto-discover all repositories accessible to the
-    authenticated token. Returns a list of (owner, repo) tuples.
+    Precedence: the org's saved Integration-Hub selection (the ``repos`` list on
+    the github connector record) wins; else the ``GITHUB_REPOS`` env scope; else
+    auto-discover all repositories accessible to the authenticated token. Returns a
+    list of (owner, repo) tuples.
     """
-    # Explicit scope wins — target only the configured repositories.
+    # Saved per-org selection wins — target only the repositories the customer chose.
+    selected = _selected_repos(org_id)
+    if selected:
+        logger.info(
+            "GitHub: reading saved repo selection — %d repo(s): %s",
+            len(selected), ", ".join(f"{o}/{r}" for o, r in selected),
+        )
+        return selected
+
+    # Explicit env scope next — target only the configured repositories.
     scope = _configured_repo_scope()
     if scope:
         logger.info(
@@ -762,3 +772,89 @@ def _degraded_payload(org_id: str, run_id: str) -> Dict[str, Any]:
         "org_id": org_id,
         "run_id": run_id,
     }
+
+
+# ---------------------------------------------------------------------------
+# Repository selection (Integration Hub picker)
+# ---------------------------------------------------------------------------
+
+
+def _selected_repos(org_id: str) -> List[Tuple[str, str]]:
+    """The org's saved repo selection as ``(owner, repo)`` tuples, or ``[]`` when
+    none is saved. Reads the ``repos`` list (``["owner/repo", ...]``) on the github
+    connector record — the highest-precedence scope in :func:`_resolve_repos`
+    (saved selection > ``GITHUB_REPOS`` env > auto-discover). A DB failure degrades
+    to ``[]`` (fall through to env/auto-discover) so a run is never blocked."""
+    try:
+        from app.db import org_connector_get
+
+        record = org_connector_get(org_id, "github") if org_id else None
+    except Exception:  # pragma: no cover — never block a run on the selection store
+        return []
+    if not record:
+        return []
+    repos = record.get("repos")
+    if not isinstance(repos, list):
+        return []
+    result: List[Tuple[str, str]] = []
+    seen: set = set()
+    for entry in repos:
+        spec = str(entry).strip().strip("/")
+        parts = spec.split("/")
+        if len(parts) == 2 and parts[0].strip() and parts[1].strip():
+            pair = (parts[0].strip(), parts[1].strip())
+            if pair not in seen:
+                seen.add(pair)
+                result.append(pair)
+    return result
+
+
+def list_selectable_repos(org_id: Optional[str] = None) -> List[Dict[str, str]]:
+    """Repositories the customer can choose from — ``[{id:"owner/repo", name, owner}]``.
+
+    The option list for ``GET /api/connectors/github/repos``: every repo the
+    connected token can access (``/user/repos``). Selection filtering is NOT applied
+    here. Offline reads the fixture's ``selectable_repos``; live lists via the REST
+    API using the org's vaulted GitHub token (resolved through the app credential
+    layer, never the discovery layer). No token → ``[]``."""
+    if not _is_live_mode():
+        try:
+            with _FIXTURE_PATH.open("r", encoding="utf-8") as fh:
+                payload = json.load(fh)
+            repos = payload.get("selectable_repos", [])
+            return [
+                {"id": str(r["id"]), "name": str(r.get("name", "")), "owner": str(r.get("owner", ""))}
+                for r in repos
+                if r.get("id")
+            ]
+        except (OSError, ValueError, KeyError):
+            return []
+
+    # Live: resolve the org's GitHub token from the app credential vault.
+    try:
+        from app.auth.credentials import try_get_connector_credentials
+
+        cred = try_get_connector_credentials(org_id, "github") if org_id else None
+    except Exception:  # noqa: BLE001
+        cred = None
+    token = getattr(cred, "access_token", None) if cred else None
+    if not token:
+        return []
+
+    session = _make_session(token)
+    repos, _degraded, _transient = _paginate(
+        session,
+        f"{GITHUB_API_BASE}/user/repos",
+        {"affiliation": "owner,organization_member"},
+    )
+    out: List[Dict[str, str]] = []
+    seen: set = set()
+    for repo in repos:
+        owner = (repo.get("owner") or {}).get("login", "")
+        name = repo.get("name", "")
+        if owner and name:
+            rid = f"{owner}/{name}"
+            if rid not in seen:
+                seen.add(rid)
+                out.append({"id": rid, "name": name, "owner": owner})
+    return out

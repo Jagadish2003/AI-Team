@@ -19,6 +19,7 @@ from discovery.ingest.java_app_config import (
     load_targets,
     resolve_secret,
 )
+from discovery.ingest.operational_config import OperationalCredentialMissing
 
 
 @pytest.fixture(autouse=True)
@@ -91,7 +92,10 @@ def test_target_has_no_field_that_could_hold_a_plaintext_secret():
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# AC3 — credentials resolved from the vault (per-run context), env as CLI fallback
+# AC3 / R191-H1 T1 (AC1) — credentials resolved from the vault ONLY; a vault miss
+# fails CLOSED (no env fallback). The env-fallback path R17-D3 Addendum A removed
+# everywhere else lived on here (the 1.8 verification's critical F1 finding); it
+# is gone. ``env=`` is accepted for signature compatibility but never read.
 # ─────────────────────────────────────────────────────────────────────────────
 def _target(ref=DEFAULT_CREDENTIAL_REF):
     return JavaAppTarget(app_id="payments-api", name="P", actuator_url="u",
@@ -103,27 +107,36 @@ def test_secret_resolved_from_per_run_vault_context():
     secret = resolve_secret(
         "org-1", _target(),
         connector_lookup=lambda ref: captured if ref == DEFAULT_CREDENTIAL_REF else None,
-        env={},
     )
     assert secret == "VAULT-TOKEN-123"
 
 
-def test_secret_env_fallback_for_cli(monkeypatch):
-    secret = resolve_secret(
-        "org-1", _target(),
-        connector_lookup=lambda ref: None,        # nothing in the per-run context
-        env={"JAVA_APP_TOKEN": "ENV-TOKEN-456"},
-    )
-    assert secret == "ENV-TOKEN-456"
+def test_vault_miss_fails_closed_no_env_fallback(monkeypatch):
+    # A JAVA_APP_TOKEN in the environment must NOT be used — a vault miss fails
+    # closed regardless of what the environment holds (R191-H1 / T1, F1 fix).
+    monkeypatch.setenv("JAVA_APP_TOKEN", "ENV-TOKEN-456")
+    with pytest.raises(OperationalCredentialMissing) as exc:
+        resolve_secret(
+            "org-1", _target(),
+            connector_lookup=lambda ref: None,        # nothing in the vault
+            env={"JAVA_APP_TOKEN": "ENV-TOKEN-456"},   # accepted but never read
+        )
+    # The exception names the org, the target, and the credential ref (actionable).
+    assert exc.value.org_id == "org-1"
+    assert exc.value.app_id == "payments-api"
+    assert exc.value.credential_ref == DEFAULT_CREDENTIAL_REF
+    # The environment token is never leaked into the raised message.
+    assert "ENV-TOKEN-456" not in str(exc.value)
 
 
-def test_secret_custom_credential_ref_uses_namespaced_env():
-    secret = resolve_secret(
-        "org-1", _target(ref="payments_actuator"),
-        connector_lookup=lambda ref: None,
-        env={"PAYMENTS_ACTUATOR_TOKEN": "NS-TOKEN"},
-    )
-    assert secret == "NS-TOKEN"
+def test_custom_credential_ref_vault_miss_fails_closed():
+    with pytest.raises(OperationalCredentialMissing) as exc:
+        resolve_secret(
+            "org-1", _target(ref="payments_actuator"),
+            connector_lookup=lambda ref: None,
+            env={"PAYMENTS_ACTUATOR_TOKEN": "NS-TOKEN"},  # accepted but never read
+        )
+    assert exc.value.credential_ref == "payments_actuator"
 
 
 def test_no_credential_ref_means_no_secret():
@@ -132,12 +145,16 @@ def test_no_credential_ref_means_no_secret():
     assert resolve_secret("org-1", t, connector_lookup=lambda ref: None, env={}) is None
 
 
-def test_secret_lookup_failure_degrades_to_env(caplog):
+def test_secret_lookup_failure_fails_closed(caplog):
+    # A lookup EXCEPTION is treated as a vault miss — fail closed, never env fallback.
     def _boom(ref):
         raise RuntimeError("vault down")
 
     with caplog.at_level(logging.WARNING):
-        secret = resolve_secret(
-            "org-1", _target(), connector_lookup=_boom, env={"JAVA_APP_TOKEN": "FALLBACK"}
-        )
-    assert secret == "FALLBACK"          # degrade, don't crash
+        with pytest.raises(OperationalCredentialMissing):
+            resolve_secret(
+                "org-1", _target(), connector_lookup=_boom,
+                env={"JAVA_APP_TOKEN": "FALLBACK"},  # accepted but never read
+            )
+    # The warning names the credential ref, never the (would-be) token value.
+    assert "FALLBACK" not in caplog.text

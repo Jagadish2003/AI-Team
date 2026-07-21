@@ -26,6 +26,7 @@ from fastapi.testclient import TestClient
 
 from app import db
 from app.license_runtime import read_org_license, set_org_license_key
+from app.licensing import DEFAULT_KID
 
 AUTH = {"Authorization": "Bearer dev-token-change-me"}
 DEV_USER = "dev-token-change-me"
@@ -57,7 +58,12 @@ def _mint(
     grace_days: int = 14,
     deployment_type: str | None = None,
     org_id: str | None = None,
+    kid: str | None = DEFAULT_KID,
 ) -> str:
+    """Mint a signed key. ``kid`` is present by default (the DEFAULT_KID, which
+    resolves through the LICENSE_PUBLIC_KEY single-key override these tests set),
+    so any key carrying an ``org_id`` is v2-shaped and clears the T4 version gate.
+    A caller wanting a v1-shaped key passes ``kid=None`` and omits ``org_id``."""
     payload = {
         "customer": "City National Bank",
         "license_id": "cnb-2026-001",
@@ -71,6 +77,8 @@ def _mint(
         payload["deployment_type"] = deployment_type
     if org_id is not None:
         payload["org_id"] = org_id
+    if kid is not None:
+        payload["kid"] = kid
     payload_b64 = base64.b64encode(json.dumps(payload, sort_keys=True).encode()).decode()
     sig_b64 = base64.b64encode(priv.sign(payload_b64.encode())).decode()
     return f"{payload_b64}.{sig_b64}"
@@ -140,7 +148,9 @@ def test_owner_post_valid_key_stores_and_refreshes(client: TestClient, monkeypat
     monkeypatch.setenv("LICENSE_PUBLIC_KEY", _pub_pem(priv))
     headers = _set_role("owner")
     org_id = headers["X-Org-Id"]
-    key = _mint(priv, expires_at=_future())
+    # v2 key bound to THIS installation org, so it clears the T4 version gate and
+    # org binding.
+    key = _mint(priv, expires_at=_future(), org_id=org_id)
 
     resp = client.post(UPDATE_PATH, json={"key": key}, headers=headers)
 
@@ -160,7 +170,8 @@ def test_owner_status_exposes_deployment_type(client: TestClient, monkeypatch):
     priv = Ed25519PrivateKey.generate()
     monkeypatch.setenv("LICENSE_PUBLIC_KEY", _pub_pem(priv))
     headers = _set_role("owner")
-    key = _mint(priv, expires_at=_future(), deployment_type="customer_hosted")
+    org_id = headers["X-Org-Id"]
+    key = _mint(priv, expires_at=_future(), deployment_type="customer_hosted", org_id=org_id)
 
     install = client.post(UPDATE_PATH, json={"key": key}, headers=headers)
     assert install.status_code == 200, install.text

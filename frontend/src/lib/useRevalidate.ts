@@ -1,5 +1,4 @@
 import { useEffect, useRef } from 'react';
-import { subscribeOrgChanged } from './orgEvents';
 
 /**
  * Cross-user freshness for data that is NOT on the shared cache.
@@ -23,14 +22,6 @@ import { subscribeOrgChanged } from './orgEvents';
  */
 const FOCUS_MIN_AGE_MS = 5_000;
 const DEFAULT_INTERVAL_MS = 30_000;
-/**
- * Minimum gap between org-changed-driven refetches. The stream pings on EVERY
- * mutation in the org and some flows mutate repeatedly (Stack Builder autosaves
- * as you edit), so refetching per ping produced request storms that starved the
- * browser's connection pool. Coalescing a burst into one refetch is all a coarse
- * "something changed" signal needs.
- */
-const ORG_CHANGED_MIN_AGE_MS = 5_000;
 
 export function useRevalidateOnFocus(
   refetch: () => void,
@@ -62,16 +53,10 @@ export function useRevalidateOnFocus(
     // Paused while hidden — a background tab must not poll.
     const timer = setInterval(() => maybeRefetch(intervalMs), intervalMs);
 
-    // Push: another user changed something in this org (server-sent events).
-    // Coalesced (see ORG_CHANGED_MIN_AGE_MS) so a burst of mutations produces one
-    // refetch, not one per ping.
-    const unsubscribe = subscribeOrgChanged(() => maybeRefetch(ORG_CHANGED_MIN_AGE_MS));
-
     return () => {
       window.removeEventListener('focus', onFocus);
       document.removeEventListener('visibilitychange', onFocus);
       clearInterval(timer);
-      unsubscribe();
     };
   }, [enabled, intervalMs]);
 }

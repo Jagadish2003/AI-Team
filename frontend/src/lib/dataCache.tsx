@@ -34,7 +34,6 @@ import React, {
   useRef,
   useSyncExternalStore,
 } from 'react';
-import { subscribeOrgChanged } from './orgEvents';
 
 export interface ResourceState<T> {
   data: T | undefined;
@@ -46,11 +45,15 @@ export interface ResourceState<T> {
 
 export interface DataCacheApi {
   /**
-   * Warm a key WITHOUT subscribing to it: fetches only if the key has no data
-   * yet, so it is safe to call repeatedly and never re-fetches what is cached.
-   * Used to pre-load a workspace after login so later navigation is instant.
+   * Warm a key without subscribing to it: fetches only if the key has no data yet
+   * (so it is safe to call repeatedly and never re-fetches what is cached), and
+   * returns a promise that resolves when the warm settles — immediately if the key
+   * is already cached. The promise lets a background scheduler (see
+   * prefetchQueue.ts) CAP how many warms are in flight at once, so login-time
+   * warming never starves the foreground page's own fetches. Used to pre-load a
+   * workspace after login so later navigation renders from cache.
    */
-  prefetch: <T>(key: string, fetcher: () => Promise<T>) => void;
+  prefetchAsync: <T>(key: string, fetcher: () => Promise<T>) => Promise<void>;
   /** Refetch (or drop, if unobserved) every key equal to `prefix` or under `prefix/`. Coalesced. */
   invalidate: (prefix: string) => void;
   /** Refetch (or drop, if unobserved) exactly one key. */
@@ -105,23 +108,10 @@ const DEFAULT_STALE_MS = 30_000;
  * - INTERVAL: while the tab is visible, observed keys are refreshed on a slow
  *   tick so a change made elsewhere appears without the user doing anything.
  *
- * A push feed (SSE) can later make this instant; these make it correct today.
+ * A push feed could later make this instant; these make it correct today.
  */
 const FOCUS_REVALIDATE_MIN_AGE_MS = 5_000;
 const BACKGROUND_REVALIDATE_INTERVAL_MS = 30_000;
-
-/**
- * Minimum age before an org-changed push re-fetches a key.
- *
- * The stream pings on EVERY mutation in the org, and some flows mutate
- * repeatedly (Stack Builder autosaves its setup state as you edit). Refreshing
- * everything on screen per ping turned that into a request storm — bursts of a
- * dozen calls that saturated the browser's connection pool, so pages never
- * finished loading. Skipping keys refreshed within this window coalesces a burst
- * of pings into ONE refresh, which is all a coarse "something changed" signal
- * ever needed.
- */
-const ORG_CHANGED_MIN_AGE_MS = 5_000;
 
 /**
  * The cache store. One instance per DataCacheProvider (i.e. per user session,
@@ -224,6 +214,24 @@ class DataCacheStore {
     e.promise = p;
   }
 
+  /**
+   * Prime a key and return a promise that resolves once its fetch settles (or at
+   * once if it already holds data). `staleTime = 0` means "warm only" — an already
+   * cached key never refetches — so this is safe to call repeatedly. Never rejects:
+   * a warm failure is swallowed (the observing page surfaces its own error later).
+   */
+  async primeAsync(key: string, fetcher: () => Promise<unknown>): Promise<void> {
+    this.prime(key, fetcher, 0);
+    const e = this.map.get(key);
+    if (e?.promise) {
+      try {
+        await e.promise;
+      } catch {
+        /* a warm failure is not the warmer's to surface */
+      }
+    }
+  }
+
   getData<T>(key: string): T | undefined {
     return this.map.get(key)?.data as T | undefined;
   }
@@ -321,20 +329,10 @@ export function DataCacheProvider({ children }: { children: React.ReactNode }) {
       if (isVisible()) store.revalidateObserved(BACKGROUND_REVALIDATE_INTERVAL_MS);
     }, BACKGROUND_REVALIDATE_INTERVAL_MS);
 
-    // Push: the server-sent events stream announces that another user changed
-    // something in this org. Refresh everything on screen immediately (age 0) —
-    // this is what makes another user's change appear in about a second rather
-    // than on the next focus/tick above (which remain the fallback if the stream
-    // is unavailable).
-    const unsubscribe = subscribeOrgChanged(() => {
-      if (isVisible()) store.revalidateObserved(ORG_CHANGED_MIN_AGE_MS);
-    });
-
     return () => {
       window.removeEventListener('focus', onFocus);
       document.removeEventListener('visibilitychange', onFocus);
       clearInterval(timer);
-      unsubscribe();
     };
   }, [store]);
 
@@ -343,7 +341,7 @@ export function DataCacheProvider({ children }: { children: React.ReactNode }) {
 
 const NOOP = () => {};
 const INERT_API: DataCacheApi = {
-  prefetch: NOOP,
+  prefetchAsync: () => Promise.resolve(),
   invalidate: NOOP,
   invalidateExact: NOOP,
   getData: () => undefined,
@@ -360,11 +358,11 @@ export function useDataCache(): DataCacheApi {
   return useMemo<DataCacheApi>(() => {
     if (!store) return INERT_API;
     return {
-      // prime() fetches only when the key holds no data, so a repeated prefetch
-      // is a no-op rather than a re-fetch. staleTime 0 disables the
-      // stale-while-revalidate path here: warming must never trigger a refresh
-      // of something already cached.
-      prefetch: (key, fetcher) => store.prime(key, fetcher as () => Promise<unknown>, 0),
+      // primeAsync() fetches only when the key holds no data, so a repeated warm
+      // is a no-op rather than a re-fetch, and resolves once the fetch settles so
+      // the prefetch queue can bound concurrency.
+      prefetchAsync: (key, fetcher) =>
+        store.primeAsync(key, fetcher as () => Promise<unknown>),
       invalidate: (prefix) => store.invalidate(prefix),
       invalidateExact: (key) => store.invalidateExact(key),
       getData: (key) => store.getData(key),

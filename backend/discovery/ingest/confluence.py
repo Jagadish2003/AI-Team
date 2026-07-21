@@ -126,10 +126,11 @@ Offline vs live
 ---------------
 Offline (default, ``INGEST_MODE`` != ``live``): reads the deterministic fixture
 ``fixtures/confluence_sample.json`` — parity with the Salesforce/ServiceNow/Jira/
-Slack/Teams connectors. Live: calls the Confluence Cloud REST API through the
-Atlassian ``api.atlassian.com`` gateway (``/wiki/rest/api``) using the OAuth
-token from the per-run credential context — resolved exactly like the other
-connectors (``get_live_connector('confluence')`` first, then env fallback).
+Slack/Teams connectors. Live: calls the Confluence Cloud v2 REST API through the
+Atlassian ``api.atlassian.com`` gateway (``/wiki/api/v2`` — the v1 ``/wiki/rest/api``
+API is deprecated and returns HTTP 410) using the OAuth token from the per-run
+credential context — resolved exactly like the other connectors
+(``get_live_connector('confluence')`` first, then env fallback).
 """
 
 from __future__ import annotations
@@ -143,7 +144,7 @@ from typing import Any, Dict, Iterator, List, Optional
 
 from app.provenance import EvidencePointer, utc_now_iso
 
-from . import get_live_connector, is_live, resolve_vault_connector
+from . import get_ingest_org, get_live_connector, is_live, resolve_vault_connector
 from .base import ChangeBasedIngestor, ChangeKind, Checkpoint, DeltaBatch, tombstone
 from .confluence_signals import build_page_signals
 
@@ -480,18 +481,44 @@ class ConfluenceIngestor(ChangeBasedIngestor):
             )
 
     # ── Space access (AC4) ────────────────────────────────────────────────────
+    def _selected_space_keys(self, org_id: str) -> Optional[set]:
+        """The org's saved space selection (space keys), or ``None`` when none is
+        saved (read every granted space — backward compatible).
+
+        Mirrors slack ``_selected_channel_ids`` / jira ``resolve_jira_projects``:
+        a DB failure degrades to ``None`` (read all granted) so a run is never
+        blocked by the selection store.
+        """
+        try:
+            from app.db import org_connector_get
+
+            record = org_connector_get(org_id, "confluence") if org_id else None
+            if record:
+                spaces = record.get("spaces")
+                if isinstance(spaces, list):
+                    keys = {str(s).strip() for s in spaces if str(s).strip()}
+                    if keys:
+                        return keys
+        except Exception:  # pragma: no cover — never block a run on the selection store
+            logger.debug("confluence: could not read saved space selection; reading all granted")
+        return None
+
     def _accessible_spaces(self, org_id: str) -> List[Dict[str, Any]]:
         """Return only spaces AgentIQ is granted and that are live.
 
         Spaces AgentIQ was not granted (``is_accessible == False``) and archived
         spaces are excluded — the source's own space permissions are respected
-        (AC4). Content in an ungranted space is never fetched.
+        (AC4). Content in an ungranted space is never fetched. When the org has
+        saved a space selection (Integration Hub), the granted set is further
+        narrowed to that selection; no selection means read every granted space.
         """
+        selected = self._selected_space_keys(org_id)
         return [
             s
             for s in self._raw_spaces(org_id)
             if s.get("is_accessible", False)
             and str(s.get("status", "current")).lower() != "archived"
+            and (selected is None or str(s.get("key")) in selected)
         ]
 
     def _changed_content(
@@ -669,6 +696,35 @@ class ConfluenceIngestor(ChangeBasedIngestor):
         # gateway URL is instance config and keeps its CONFLUENCE_URL env fallback.
         base_url = (cred.get("url") if cred else None) or os.getenv("CONFLUENCE_URL")
         token = cred.get("token") if cred else None
+
+        # An on-demand API call (e.g. the space picker) has NO per-run context, so
+        # the api.atlassian.com gateway base is not on `cred` (resolve_vault_connector
+        # returns the OAuth token only — the gateway is instance config captured
+        # separately). Resolve it the SAME way resolve_live_systems does: the
+        # persisted per-org instance URL, then derive-and-persist from the token via
+        # the accessible-resources endpoint — reusing the single-source helpers so
+        # the logic can't drift (mirrors the Jira project picker).
+        if not base_url and token:
+            org = org_id or get_ingest_org()
+            try:
+                from app.live_ingest_credentials import (
+                    _derive_oauth_instance_url,
+                    get_connector_instance_url,
+                    store_connector_instance_url,
+                )
+
+                base_url = (get_connector_instance_url(org, "confluence") or "").rstrip("/")
+                if not base_url:
+                    derived = _derive_oauth_instance_url("confluence", token)
+                    if derived:
+                        base_url = derived.rstrip("/")
+                        try:
+                            store_connector_instance_url(org, "confluence", base_url)
+                        except Exception:  # pragma: no cover — best-effort cache
+                            pass
+            except Exception:  # pragma: no cover — degrade to the error below
+                base_url = base_url or None
+
         if not base_url or not token:
             raise ConfluenceIngestError(
                 "Live mode requires a Confluence OAuth token (from the credential "
@@ -693,6 +749,9 @@ class ConfluenceClient:
         self.base_url = base_url  # api.atlassian.com/ex/confluence/{cloudId}
         self.token = token
         self._session = None
+        # v2 lists content by numeric space id, not key; cache key -> id as
+        # list_spaces() sees them so content_for_space() need not re-resolve.
+        self._space_id_by_key: Dict[str, str] = {}
 
     def _sess(self):
         try:
@@ -708,17 +767,83 @@ class ConfluenceClient:
             )
         return self._session
 
-    def _get(self, path: str, params: Dict[str, Any]) -> Dict[str, Any]:
-        resp = self._sess().get(
-            f"{self.base_url}/wiki/rest/api/{path}",
-            params=params,
-            timeout=_REQUEST_TIMEOUT,
-        )
+    # ── Confluence Cloud v2 REST API ─────────────────────────────────────────
+    # The v1 REST API (``/wiki/rest/api/*``) is deprecated by Atlassian and now
+    # returns HTTP 410 Gone, so this client speaks the v2 API (``/wiki/api/v2/*``).
+    # Every public method still returns the SAME normalised dict shape the rest
+    # of the connector consumes (``id``/``type``/``title``/``status``/
+    # ``version.when``/``version.by.accountId``/``_links.webui`` for a content
+    # item; ``body.storage.value`` + ``metadata.labels.results[].name`` for a page
+    # body; ``version`` + ``_links.download`` for an attachment), so nothing
+    # downstream — ``_to_record``, ``confluence_content``, ``documents_attachments``
+    # — changes with the API version. v2 differs in three ways this layer hides:
+    # it lists content by numeric space id (not key), paginates by an opaque
+    # ``_links.next`` cursor (not ``start``/``limit`` offsets), and serves pages
+    # and blog posts on separate endpoints.
+
+    def _get_v2(self, path_or_url: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """GET one v2 endpoint (or follow a cursor ``_links.next``) and return JSON.
+
+        ``path_or_url`` is a bare v2 path (``"spaces"``), an absolute wiki path
+        (the ``_links.next`` cursor link, ``"/wiki/api/v2/..."``), or a full URL.
+        A cursor link already carries its query string, so ``params`` is passed
+        only for the first page.
+        """
+        if path_or_url.startswith("http"):
+            url = path_or_url
+        elif path_or_url.startswith("/"):
+            url = f"{self.base_url}{path_or_url}"
+        else:
+            url = f"{self.base_url}/wiki/api/v2/{path_or_url}"
+        resp = self._sess().get(url, params=params, timeout=_REQUEST_TIMEOUT)
         if not resp.ok:
             raise ConfluenceIngestError(
-                f"Confluence GET {path} HTTP {resp.status_code}"
+                f"Confluence GET {path_or_url} HTTP {resp.status_code}"
             )
         return resp.json()
+
+    def _paged_v2(self, path: str, params: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """Return all results across v2 cursor pagination (follows ``_links.next``)."""
+        out: List[Dict[str, Any]] = []
+        data = self._get_v2(path, params)
+        while True:
+            out.extend(data.get("results", []))
+            nxt = ((data.get("_links") or {}).get("next")) or ""
+            if not nxt:
+                break
+            data = self._get_v2(nxt)  # cursor link already carries the params
+        return out
+
+    def _space_id(self, space_key: str) -> Optional[str]:
+        """Resolve a space key to its numeric v2 id (cache first, else look up)."""
+        cached = self._space_id_by_key.get(str(space_key))
+        if cached:
+            return cached
+        data = self._get_v2("spaces", {"keys": space_key, "limit": 1})
+        results = data.get("results", [])
+        if results and results[0].get("id") is not None:
+            sid = str(results[0]["id"])
+            self._space_id_by_key[str(space_key)] = sid
+            return sid
+        return None
+
+    @staticmethod
+    def _normalise_content(item: Dict[str, Any], content_type: str) -> Dict[str, Any]:
+        """Map a v2 page/blogpost object to the connector's v1-shaped content dict."""
+        version = item.get("version") or {}
+        return {
+            "id": str(item.get("id", "")),
+            "type": content_type,
+            "title": item.get("title", ""),
+            "status": item.get("status", "current"),
+            "version": {
+                "number": version.get("number", 1),
+                # v2 stamps the last-modified time on version.createdAt.
+                "when": version.get("createdAt") or version.get("when") or "",
+                "by": {"accountId": version.get("authorId")},
+            },
+            "_links": {"webui": (item.get("_links") or {}).get("webui")},
+        }
 
     def list_spaces(self) -> List[Dict[str, Any]]:
         """Return spaces the token can see, normalised to the fixture field shape.
@@ -726,86 +851,123 @@ class ConfluenceClient:
         Confluence returns spaces the caller is permitted to see, so a returned
         space is one AgentIQ is granted (``is_accessible`` True). Archived spaces
         are surfaced with their status so the ingestor's filter can exclude them.
+        The numeric v2 space id is kept (and cached key->id) because v2 lists
+        content by space id, not key.
         """
         spaces: List[Dict[str, Any]] = []
-        start = 0
-        while True:
-            data = self._get("space", {"limit": 100, "start": start, "status": "current"})
-            results = data.get("results", [])
-            for s in results:
-                spaces.append(
-                    {
-                        "key": s.get("key"),
-                        "name": s.get("name", ""),
-                        "status": s.get("status", "current"),
-                        "is_accessible": True,
-                    }
-                )
-            if len(results) < 100:
-                break
-            start += 100
+        for s in self._paged_v2("spaces", {"status": "current", "limit": 100}):
+            key = s.get("key")
+            space_id = s.get("id")
+            if key and space_id is not None:
+                self._space_id_by_key[str(key)] = str(space_id)
+            spaces.append(
+                {
+                    "id": space_id,
+                    "key": key,
+                    "name": s.get("name", ""),
+                    "status": s.get("status", "current"),
+                    "is_accessible": True,
+                }
+            )
         return spaces
 
     def content_for_space(self, space_key: str) -> List[Dict[str, Any]]:
-        """Return a space's page/blog-post content with version metadata only.
+        """Return a space's page + blog-post content with version metadata only.
 
-        ``expand=version,space`` fetches the last-modified metadata WITHOUT the
-        body (no ``body.storage`` expand), so no document content is read (AC7).
+        v2 lists pages and blog posts on SEPARATE endpoints
+        (``/spaces/{id}/pages`` and ``/spaces/{id}/blogposts``); both are queried
+        and normalised to the single content shape ``_to_record`` consumes. No
+        body is fetched (AC7) — v2 omits the body unless ``body-format`` is asked
+        for, which this call never does.
         """
+        space_id = self._space_id(space_key)
+        if not space_id:
+            return []
         items: List[Dict[str, Any]] = []
-        start = 0
-        while True:
-            data = self._get(
-                "content",
-                {
-                    "spaceKey": space_key,
-                    "type": "page",
-                    "expand": "version,space",
-                    "limit": 100,
-                    "start": start,
-                },
-            )
-            results = data.get("results", [])
-            items.extend(results)
-            if len(results) < 100:
-                break
-            start += 100
+        for page in self._paged_v2(
+            f"spaces/{space_id}/pages", {"status": "current", "limit": 100}
+        ):
+            items.append(self._normalise_content(page, "page"))
+        for blog in self._paged_v2(
+            f"spaces/{space_id}/blogposts", {"status": "current", "limit": 100}
+        ):
+            items.append(self._normalise_content(blog, "blogpost"))
         return items
 
     def page_body(self, content_id: str) -> Dict[str, Any]:
-        """Fetch one page/blogpost's rendered body, labels, and version (R18-A5 / T1).
+        """Fetch one page/blogpost's storage body + labels (R18-A5 / T1).
 
-        The ONLY place this client expands ``body.storage`` / ``metadata.labels`` —
-        the reach-phase ``content_for_space`` above deliberately never does (AC7 of
-        R17-A2). Called only for content already known changed via the delta feed,
-        never for a full re-scan.
+        The ONLY place this client reads a body. The reach-phase
+        ``content_for_space`` above deliberately never does (AC7 of R17-A2).
+        Called only for content already known changed via the delta feed, never a
+        full re-scan. v2 splits body and labels across endpoints and by content
+        type; this tries the page endpoints first and falls back to blogpost, then
+        normalises to the v1 ``body.storage.value`` +
+        ``metadata.labels.results[].name`` shape the depth renderer consumes.
         """
-        return self._get(
-            f"content/{content_id}",
-            {"expand": "body.storage,metadata.labels,version,space"},
-        )
+        body_value = ""
+        labels: List[Dict[str, Any]] = []
+        for kind in ("pages", "blogposts"):
+            try:
+                doc = self._get_v2(f"{kind}/{content_id}", {"body-format": "storage"})
+            except ConfluenceIngestError:
+                continue  # wrong content type for this endpoint — try the next
+            body_value = (
+                ((doc.get("body") or {}).get("storage") or {}).get("value")
+            ) or ""
+            try:
+                lab = self._get_v2(f"{kind}/{content_id}/labels", {"limit": 100})
+                labels = [
+                    {"name": l.get("name")}
+                    for l in lab.get("results", [])
+                    if l.get("name")
+                ]
+            except ConfluenceIngestError:
+                labels = []
+            break
+        return {
+            "body": {"storage": {"value": body_value}},
+            "metadata": {"labels": {"results": labels}},
+        }
 
     def list_attachments(self, page_id: str) -> List[Dict[str, Any]]:
-        """Return a page's attachments with version metadata (R18-A1 / T5).
+        """Return a page/blogpost's attachments with version + download link (v2).
 
-        The ``content/{id}/child/attachment`` endpoint the reach-phase connector
-        never called — attachments (files) are the document-path surface (content
-        was the 1.8 story). ``expand=version`` carries the change marker the
-        DocumentIngestor uses so an unchanged attachment is not re-downloaded (AC2).
-        No attachment BYTES are fetched here (that is :meth:`download_attachment`).
+        Attachments (files) are the document-path surface. v2
+        ``/pages/{id}/attachments`` (falling back to ``/blogposts/{id}/...``),
+        normalised to ``version`` (the change marker the DocumentIngestor uses so
+        an unchanged attachment is not re-downloaded — AC2) + ``_links.download``
+        + ``title``/``mediaType``. No attachment BYTES are fetched here (that is
+        :meth:`download_attachment`).
         """
-        attachments: List[Dict[str, Any]] = []
-        start = 0
-        while True:
-            data = self._get(
-                f"content/{page_id}/child/attachment",
-                {"expand": "version", "limit": 100, "start": start},
-            )
-            results = data.get("results", [])
-            attachments.extend(results)
-            if len(results) < 100:
+        raw: List[Dict[str, Any]] = []
+        for kind in ("pages", "blogposts"):
+            try:
+                raw = self._paged_v2(f"{kind}/{page_id}/attachments", {"limit": 100})
                 break
-            start += 100
+            except ConfluenceIngestError:
+                continue  # wrong content type for this endpoint — try the next
+        attachments: List[Dict[str, Any]] = []
+        for a in raw:
+            version = a.get("version") or {}
+            download = a.get("downloadLink") or (a.get("_links") or {}).get("download")
+            attachments.append(
+                {
+                    "id": str(a.get("id", "")),
+                    "type": "attachment",
+                    "title": a.get("title", ""),
+                    "mediaType": a.get("mediaType"),
+                    "fileSize": a.get("fileSize"),
+                    "version": {
+                        "number": version.get("number", 1),
+                        "when": version.get("createdAt") or version.get("when"),
+                    },
+                    "_links": {
+                        "download": download,
+                        "webui": (a.get("_links") or {}).get("webui"),
+                    },
+                }
+            )
         return attachments
 
     def download_attachment(self, download_path: str) -> bytes:
@@ -826,3 +988,31 @@ class ConfluenceClient:
                 f"Confluence GET attachment HTTP {resp.status_code}"
             )
         return resp.content
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Space selection (Integration Hub picker)
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def list_selectable_spaces(org_id: Optional[str] = None) -> List[Dict[str, str]]:
+    """Confluence spaces the customer can choose from — ``[{key, name}]``.
+
+    The option list for ``GET /api/connectors/confluence/spaces``: every GRANTED,
+    non-archived space (the selection narrowing is deliberately NOT applied here —
+    the customer picks from all granted spaces). Offline reads the fixture; live
+    lists spaces via the v2 REST client. Resolves identically to what a discovery
+    run sees, so a saved key is always among the options.
+    """
+    ingestor = ConfluenceIngestor()
+    org = org_id or get_ingest_org()
+    out: List[Dict[str, str]] = []
+    for s in ingestor._raw_spaces(org):
+        if not s.get("is_accessible", False):
+            continue
+        if str(s.get("status", "current")).lower() == "archived":
+            continue
+        key = s.get("key")
+        if key:
+            out.append({"key": str(key), "name": str(s.get("name", "") or key)})
+    return out

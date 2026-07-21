@@ -137,6 +137,8 @@ class DotNetAppIngestor(OperationalChangeIngestor):
     connector_id = "dotnet_app"
     source_system = "dotnet_app"
     reports_deletes = False
+    #: Human-facing name for a fail-closed credential-miss health record (AC1).
+    health_system = ".NET Application"
 
     # ── Collection hooks ─────────────────────────────────────────────────────
     def _load_targets(self, org_id: str) -> List[DotNetAppTarget]:

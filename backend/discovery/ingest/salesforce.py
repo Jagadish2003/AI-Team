@@ -4,9 +4,11 @@ SF-2.2 — Salesforce Ingestion Module
 Offline mode: reads backend/discovery/ingest/fixtures/salesforce_sample.json
 Live mode:    calls Salesforce REST + SOQL + Tooling APIs
 
-Environment variables for live mode:
-    SF_INSTANCE_URL   e.g. https://myorg.my.salesforce.com
-    SF_ACCESS_TOKEN   OAuth access token
+Live-mode credentials come from the connector's credential record ONLY (the
+per-run credential context, or the per-org vault) — the instance URL and OAuth
+access token are BOTH part of that record, captured at OAuth connect. There is
+no SF_INSTANCE_URL / SF_ACCESS_TOKEN environment fallback (R191-H1 / T2 — F2 fix):
+connection config is part of the connector record (one source of connector truth).
 
 SME-authored queries are documented inline per function.
 All seven functions return data in the same shape regardless of mode.
@@ -60,39 +62,58 @@ def _load_fixture() -> Dict[str, Any]:
 def _get_client() -> Optional["SalesforceClient"]:
     """Build a REST client from the OAuth-provided Salesforce credentials.
 
-    SF_INSTANCE_URL / SF_ACCESS_TOKEN are populated from the credential vault at
-    run start (CS-2 live ingest): Salesforce returns ``instance_url`` in its
-    token response, and the access token is the stored OAuth token. They may also
-    be set directly in the environment.
+    The Salesforce instance URL and access token are sourced from the credential
+    record ONLY (R191-H1 / T2 — F2 fix). Salesforce returns ``instance_url`` in
+    its token response; it is captured at OAuth connect and published to the
+    per-run credential context alongside the vault access token, isolated per
+    org/run. With no per-run context (CLI/standalone) the credential resolves
+    per-org from the vault via the single credential path
+    (``get_connector_credentials``). There is **no ``SF_INSTANCE_URL`` env
+    fallback** — connection config is part of the connector's credential record
+    (one source of connector truth); a record without a URL is a loud
+    configuration error naming the record, never a silent env default.
 
     The old server-key token-generation fallback (token_generation/salesforce)
-    was removed — live ingest now relies solely on the OAuth token. A missing or
+    was removed — live ingest relies solely on the OAuth token. A missing or
     invalid token surfaces as a clear IngestError (the run degrades that system)
     instead of silently re-minting a token via the JWT path. An expired token is
     detected naturally when the first SOQL call returns HTTP 401.
-
-    Credentials are read from the per-run context (DB-sourced: vault token +
-    captured instance URL, isolated per org/run). With no per-run context
-    (CLI/standalone) the access token resolves per-org from the vault via the
-    single credential path (``get_connector_credentials``) — never from a
-    process-global env credential (R17-D3 Addendum A, AC8/AC11). SF_INSTANCE_URL
-    is instance configuration, not a credential, so it keeps its env fallback.
     """
     from . import get_live_connector, resolve_vault_connector
 
     cred = get_live_connector("salesforce") or resolve_vault_connector("salesforce")
-    if cred:
-        instance_url = cred.get("url") or os.getenv("SF_INSTANCE_URL")
-        access_token = cred.get("token")
-    else:
-        instance_url = os.getenv("SF_INSTANCE_URL")
-        access_token = None
 
-    if not instance_url or not access_token:
+    # No credential at all: in live mode this is a clear, actionable error; offline
+    # simply has no client (the fixture path is used instead).
+    if not cred:
         if is_live():
             raise IngestError(
-                "Live mode requires a Salesforce OAuth token (from the credential "
-                "vault) and SF_INSTANCE_URL. Connect Salesforce in the Integration "
+                "Live mode requires a Salesforce credential from the credential "
+                "vault (instance URL + OAuth access token). Connect Salesforce in "
+                "the Integration Hub, or set INGEST_MODE=offline to run without "
+                "credentials."
+            )
+        return None
+
+    instance_url = cred.get("url")
+    access_token = cred.get("token")
+
+    # The instance URL is part of the connector's credential record. A record
+    # without one is a configuration error surfaced loudly and named — never a
+    # silent env default (R191-H1 / T2, AC4).
+    if not instance_url:
+        raise IngestError(
+            "Salesforce credential record is missing its instance URL "
+            "('salesforce' connector). The instance URL is captured at OAuth "
+            "connect and stored on the credential record; reconnect Salesforce in "
+            "the Integration Hub so the record carries its URL. "
+            "(No SF_INSTANCE_URL environment fallback is used.)"
+        )
+    if not access_token:
+        if is_live():
+            raise IngestError(
+                "Salesforce credential record is missing its OAuth access token "
+                "('salesforce' connector). Connect Salesforce in the Integration "
                 "Hub, or set INGEST_MODE=offline to run without credentials."
             )
         return None

@@ -20,10 +20,19 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from app import db
 from app import license_runtime as lr
-from app.licensing import LicenseStatus
+from app.licensing import DEFAULT_KID, LicenseStatus
 
 
-def _mint(private_key: Ed25519PrivateKey, *, expires_at: str, grace_days: int = 14) -> str:
+def _mint(
+    private_key: Ed25519PrivateKey,
+    *,
+    expires_at: str,
+    grace_days: int = 14,
+    org_id: str = "default",
+) -> str:
+    """v2-shaped key (org_id + default kid). ``org_id`` should match the org the
+    key is evaluated for so org binding passes; the default kid resolves through
+    the single-key path when no explicit public key is supplied."""
     payload = {
         "customer": "City National Bank",
         "license_id": "cnb-2026-001",
@@ -31,6 +40,8 @@ def _mint(private_key: Ed25519PrivateKey, *, expires_at: str, grace_days: int = 
         "expires_at": expires_at,
         "term_months": 12,
         "grace_days": grace_days,
+        "org_id": org_id,
+        "kid": DEFAULT_KID,
         "limits": {"max_workspaces": None, "enabled_packs": None},
     }
     payload_b64 = base64.b64encode(json.dumps(payload, sort_keys=True).encode()).decode()
@@ -89,7 +100,8 @@ def test_valid_key_in_db_validates_and_persists(monkeypatch, keypair, org_id):
     monkeypatch.delenv("LICENSE_KEY", raising=False)
     today = datetime.date.today()
     lr.set_org_license_key(
-        org_id, _mint(priv, expires_at=(today + datetime.timedelta(days=200)).isoformat())
+        org_id,
+        _mint(priv, expires_at=(today + datetime.timedelta(days=200)).isoformat(), org_id=org_id),
     )
 
     result = lr.evaluate_license(org_id=org_id, public_key=pub)
@@ -108,7 +120,8 @@ def test_startup_validation_runs_for_licensed_org(monkeypatch, keypair, org_id):
     monkeypatch.setattr("app.licensing.load_public_key", lambda *a, **k: pub)
     today = datetime.date.today()
     lr.set_org_license_key(
-        org_id, _mint(priv, expires_at=(today + datetime.timedelta(days=200)).isoformat())
+        org_id,
+        _mint(priv, expires_at=(today + datetime.timedelta(days=200)).isoformat(), org_id=org_id),
     )
 
     # Never raises; advances the org's baseline + caches the valid status.
@@ -127,7 +140,8 @@ def test_clock_rollback_against_real_db(monkeypatch, keypair, org_id):
     last_seen = datetime.date.today()
     rolled_back = last_seen - datetime.timedelta(days=10)
     lr.set_org_license_key(
-        org_id, _mint(priv, expires_at=(rolled_back + datetime.timedelta(days=200)).isoformat())
+        org_id,
+        _mint(priv, expires_at=(rolled_back + datetime.timedelta(days=200)).isoformat(), org_id=org_id),
     )
     lr.persist_org_status(org_id, last_seen.isoformat(), None)
 

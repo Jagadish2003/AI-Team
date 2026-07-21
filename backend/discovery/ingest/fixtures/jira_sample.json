@@ -1,4 +1,9 @@
 {
+  "projects": [
+    {"key": "CRM", "name": "Customer Platform"},
+    {"key": "OPS", "name": "Operations"},
+    {"key": "PLAT", "name": "Core Platform"}
+  ],
   "_meta": {
     "description": "SF-2.1 Jira fixture \u2014 crafted for D7 cross-system echo (Jira side)",
     "instance": "synthetic-enterprise.atlassian.net",

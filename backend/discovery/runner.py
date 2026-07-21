@@ -29,6 +29,17 @@ try:
 except ModuleNotFoundError:  # project-root execution uses backend as package
     from backend.app.db import update_run_step
 
+try:
+    from app.live_ingest_credentials import (
+        clear_connector_auth_failure,
+        flag_connector_auth_failure,
+    )
+except ModuleNotFoundError:  # project-root execution uses backend as package
+    from backend.app.live_ingest_credentials import (
+        clear_connector_auth_failure,
+        flag_connector_auth_failure,
+    )
+
 # Track A adapter
 from .track_a_adapter import export_track_a_seed
 
@@ -343,6 +354,47 @@ def _ingest_slack_corroboration(org_id: str, run_id: str) -> Dict[str, Any]:
     return build_slack_corroboration_payload(collected)
 
 
+def _surface_operational_credential_health(
+    run_id: str, health_records: List[Dict[str, Any]]
+) -> None:
+    """Merge fail-closed operational-app credential-miss records into run health (AC1).
+
+    R191-H1 / T1: when an operational-app target is skipped because its vault
+    credential is missing, the ingestor records an actionable, credential-free
+    connector-health entry (org / target / credential ref). This surfaces those
+    entries in the run's ``connector_health`` KV — the same store the connector-
+    health API and S1 badges read — so a missing credential is visible with an
+    actionable reason rather than a silent no-op. Each entry is keyed
+    ``"<System> (<app_id>)"`` so multiple failed targets never collide.
+
+    Non-blocking: any KV read/write problem is logged and swallowed — surfacing
+    health must never abort a run. Records carry no secret value.
+    """
+    if not health_records:
+        return
+    try:
+        try:
+            from app.db import run_kv_get, run_kv_set
+        except ModuleNotFoundError:  # project-root execution uses backend as package
+            from backend.app.db import run_kv_get, run_kv_set  # type: ignore
+
+        existing = run_kv_get("connector_health", run_id, None) or {}
+        if not isinstance(existing, dict):
+            existing = {}
+        for rec in health_records:
+            system = str(rec.get("system") or "Operational Application")
+            app_id = str(rec.get("appId") or "").strip()
+            key = f"{system} ({app_id})" if app_id else system
+            existing[key] = rec
+        run_kv_set("connector_health", run_id, existing)
+    except Exception as e:  # noqa: BLE001 — health surfacing is non-blocking.
+        logger.warning(
+            "Could not surface operational-app credential health (non-blocking) "
+            "run=%s: [%s]",
+            run_id, type(e).__name__,
+        )
+
+
 def _ingest_java_app_corroboration(org_id: str, run_id: str) -> Dict[str, Any]:
     """Drive Java application change-based ingestion and build its corroboration block.
 
@@ -381,9 +433,10 @@ def _ingest_java_app_corroboration(org_id: str, run_id: str) -> Dict[str, Any]:
         return {}
 
     collected: List[Dict[str, Any]] = []
+    ingestor = JavaAppIngestor()
     try:
         result = change_runner.ingest_with_checkpoint(
-            JavaAppIngestor(),
+            ingestor,
             org_id,
             process_batch=lambda batch: collected.extend(batch.records),
         )
@@ -393,6 +446,11 @@ def _ingest_java_app_corroboration(org_id: str, run_id: str) -> Dict[str, Any]:
         logger.warning(
             "Java app ingestion failed (non-blocking) org=%s run=%s: [%s]",
             org_id, run_id, type(e).__name__,
+        )
+        # A target skipped fail-closed for a missing vault credential still surfaces
+        # in connector health even if a later phase raised (R191-H1 / T1, AC1).
+        _surface_operational_credential_health(
+            run_id, getattr(ingestor, "credential_health", [])
         )
         return {}
 
@@ -407,6 +465,11 @@ def _ingest_java_app_corroboration(org_id: str, run_id: str) -> Dict[str, Any]:
             "first run (streamed full load)" if result.first_run else "incremental",
             result.batches, result.records, result.checkpoint_advanced,
         )
+
+    # Fail-closed credential misses (targets skipped for a missing vault
+    # credential) surface in the run's connector_health KV with an actionable
+    # reason naming the org, the target, and the credential ref (R191-H1 / T1, AC1).
+    _surface_operational_credential_health(run_id, ingestor.credential_health)
 
     return build_java_app_corroboration_payload(collected)
 
@@ -448,9 +511,10 @@ def _ingest_dotnet_app_corroboration(org_id: str, run_id: str) -> Dict[str, Any]
         return {}
 
     collected: List[Dict[str, Any]] = []
+    ingestor = DotNetAppIngestor()
     try:
         result = change_runner.ingest_with_checkpoint(
-            DotNetAppIngestor(),
+            ingestor,
             org_id,
             process_batch=lambda batch: collected.extend(batch.records),
         )
@@ -460,6 +524,11 @@ def _ingest_dotnet_app_corroboration(org_id: str, run_id: str) -> Dict[str, Any]
         logger.warning(
             ".NET app ingestion failed (non-blocking) org=%s run=%s: [%s]",
             org_id, run_id, type(e).__name__,
+        )
+        # A target skipped fail-closed for a missing vault credential still surfaces
+        # in connector health even if a later phase raised (R191-H1 / T1, AC1).
+        _surface_operational_credential_health(
+            run_id, getattr(ingestor, "credential_health", [])
         )
         return {}
 
@@ -474,6 +543,11 @@ def _ingest_dotnet_app_corroboration(org_id: str, run_id: str) -> Dict[str, Any]
             "first run (streamed full load)" if result.first_run else "incremental",
             result.batches, result.records, result.checkpoint_advanced,
         )
+
+    # Fail-closed credential misses (targets skipped for a missing vault
+    # credential) surface in the run's connector_health KV with an actionable
+    # reason naming the org, the target, and the credential ref (R191-H1 / T1, AC1).
+    _surface_operational_credential_health(run_id, ingestor.credential_health)
 
     return build_dotnet_app_corroboration_payload(collected)
 
@@ -963,10 +1037,13 @@ def run(
             update_run_step(run_id, "sf_crm")
             sf_data = salesforce.ingest()
             logger.info("Salesforce ingestion: OK")
+            clear_connector_auth_failure(org_id, "salesforce")
     except SFError as e:
         sf_ok = False
         sf_err = str(e)
         logger.error(f"Salesforce ingestion FAILED: {e}")
+        # A 401 / INVALID_SESSION_ID means the token is dead — flag for Reconnect.
+        flag_connector_auth_failure(org_id, "salesforce", e)
     update_run_step(run_id, "sf_crm", ok=sf_ok)
 
     sn_ok = True
@@ -975,10 +1052,12 @@ def run(
             update_run_step(run_id, "sn")
             sn_data = servicenow.ingest()
             if sn_data: logger.info("ServiceNow ingestion: OK")
+            clear_connector_auth_failure(org_id, "servicenow")
     except SNError as e:
         sn_ok = False
         sn_err = str(e)
         logger.error(f"ServiceNow ingestion FAILED: {e}")
+        flag_connector_auth_failure(org_id, "servicenow", e)
     update_run_step(run_id, "sn", ok=sn_ok)
 
     jira_ok = True
@@ -987,10 +1066,12 @@ def run(
             update_run_step(run_id, "jira")
             jira_data = jira_mod.ingest()
             if jira_data: logger.info("Jira ingestion: OK")
+            clear_connector_auth_failure(org_id, "jira")
     except JiraIngestError as e:
         jira_ok = False
         jira_err = str(e)
         logger.error(f"Jira ingestion FAILED: {e}")
+        flag_connector_auth_failure(org_id, "jira", e)
     update_run_step(run_id, "jira", ok=jira_ok)
 
     # Single-ingest: materialization now hands the runner ALL connected systems
@@ -1041,6 +1122,7 @@ def run(
     # Slack-only stays MEDIUM, never standalone HIGH; it elevates only WITH a
     # primary corroborator (COR-06) — is enforced by the engine and the T3 clamp.
     if "slack" in _systems:
+        update_run_step(run_id, "slack")
         slack_data = _ingest_slack_corroboration(org_id, run_id) or {}
         if slack_data.get("slack", {}).get("escalation_pattern", {}).get("fired"):
             logger.info("Slack corroboration: escalation pattern present for this run")
@@ -1056,6 +1138,7 @@ def run(
     # corroborate findings from systems of record — capped at MEDIUM unless a
     # primary corroborator is present (the conversation-source ceiling, AC6).
     if "teams" in _systems:
+        update_run_step(run_id, "teams")
         teams_data = _ingest_teams_corroboration(org_id, run_id) or {}
         if teams_data.get("teams", {}).get("escalation_pattern", {}).get("fired"):
             logger.info("Teams corroboration: escalation pattern present for this run")
@@ -1069,22 +1152,19 @@ def run(
     # aggregated into the connector's corroboration block. Gated on the connector
     # being in the org's connected/live systems.
     if "confluence" in _systems:
+        update_run_step(run_id, "confluence")
         confluence_data = _ingest_confluence_corroboration(org_id, run_id) or {}
         logger.info(
             "Confluence ingest: %d space activity block(s) this run",
             len(confluence_data.get("confluence", {}).get("activity", {})),
         )
     if "sharepoint" in _systems:
+        update_run_step(run_id, "sharepoint")
         sharepoint_data = _ingest_sharepoint_corroboration(org_id, run_id) or {}
         logger.info(
             "SharePoint ingest: %d library activity block(s) this run",
             len(sharepoint_data.get("sharepoint", {}).get("activity", {})),
         )
-    # Emit the Slack stage so a connected Slack source appears in the Discovery
-    # Progress checklist alongside the systems of record (ordered before the
-    # pack). Slack ingest is non-blocking so the stage is reported ok (failures
-    # degrade to an empty corroboration block rather than a failed run).
-    update_run_step(run_id, "slack", ok=True)
 
     # 2a. nCino ingest — if ncino pack, fetch lending signals from nCino objects
     from .packs.pack_config import is_ncino_pack as _is_ncino
@@ -1138,6 +1218,7 @@ def run(
     # the run. Jira is still ingested above when in _systems so the pack's
     # confidence-elevation corroboration can run.
     if is_github_engineering_pack(pack_id) or "github" in _systems:
+        update_run_step(run_id, "github")
         github_data = _ingest_github(org_id, run_id) or {}
         if github_data:
             # Log degraded state per sub-signal so a pagination failure in one
@@ -1234,6 +1315,7 @@ def run(
     # findings from other systems (COR-09, AC5). Operational surface only —
     # no source code (AC8). Gated on "java_app" ∈ connected systems.
     if "java_app" in _systems:
+        update_run_step(run_id, "java_app")
         java_data = _ingest_java_app_corroboration(org_id, run_id) or {}
         if java_data.get("java_app", {}).get("operational_friction", {}).get("fired"):
             logger.info("Java app corroboration: operational friction present for this run")
@@ -1251,6 +1333,7 @@ def run(
     # AC6). Operational surface only — no source code (AC8). Gated on "dotnet_app"
     # ∈ connected systems.
     if "dotnet_app" in _systems:
+        update_run_step(run_id, "dotnet_app")
         dotnet_data = _ingest_dotnet_app_corroboration(org_id, run_id) or {}
         if dotnet_data.get("dotnet_app", {}).get("operational_friction", {}).get("fired"):
             logger.info(".NET app corroboration: operational friction present for this run")

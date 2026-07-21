@@ -187,28 +187,65 @@ class TestErrorHandling:
         with pytest.raises(jira_mod.JiraIngestError, match="fixture not found"):
             jira_mod.ingest()
 
-    def test_live_no_url_returns_empty(self, monkeypatch):
-        """If JIRA_URL not set in live mode, ingest() returns {} gracefully."""
+    def test_live_no_credential_returns_empty(self, monkeypatch):
+        """No Jira credential record in live mode → ingest() returns {} gracefully.
+
+        R191-H1 / T2: a JIRA_URL in the environment must NOT be treated as a
+        connection — the base URL comes from the credential record only.
+        """
         monkeypatch.setenv("INGEST_MODE", "live")
-        monkeypatch.delenv("JIRA_URL", raising=False)
+        monkeypatch.setenv("JIRA_URL", "https://env-should-never-be-used")  # ignored
         import importlib
         import discovery.ingest as pkg
         import discovery.ingest.jira as jira_mod
         importlib.reload(pkg)
         importlib.reload(jira_mod)
+        # No per-run context and no vault credential → not connected.
+        monkeypatch.setattr(pkg, "get_live_connector", lambda cid: None)
+        monkeypatch.setattr(pkg, "resolve_vault_connector", lambda cid: None)
         result = jira_mod.ingest()
         assert result == {}
 
-    def test_live_no_token_raises(self, monkeypatch):
-        """If JIRA_URL set but no token, _get_client raises JiraIngestError."""
+    def test_live_url_from_record_no_token_raises(self, monkeypatch):
+        """A credential record with a URL but no token → _get_client raises.
+
+        Proves the URL is taken from the record (not the env) and the token check
+        still fires (R191-H1 / T2).
+        """
         monkeypatch.setenv("INGEST_MODE", "live")
-        monkeypatch.setenv("JIRA_URL", "https://test.atlassian.net")
-        monkeypatch.delenv("JIRA_TOKEN", raising=False)
-        monkeypatch.delenv("JIRA_USER", raising=False)
+        monkeypatch.setenv("JIRA_URL", "https://env-should-never-be-used")  # ignored
         import importlib
         import discovery.ingest as pkg
         import discovery.ingest.jira as jira_mod
         importlib.reload(pkg)
         importlib.reload(jira_mod)
+        monkeypatch.setattr(
+            pkg, "get_live_connector",
+            lambda cid: {"url": "https://record.atlassian.net"} if cid == "jira" else None,
+        )
+        monkeypatch.setattr(pkg, "resolve_vault_connector", lambda cid: None)
         with pytest.raises(jira_mod.JiraIngestError, match="credential"):
             jira_mod._get_client()
+
+    def test_live_credential_missing_url_raises_named_error(self, monkeypatch):
+        """AC4: a Jira credential record present but missing its base URL is a
+        LOUD, NAMED configuration error — never a silent JIRA_URL env default."""
+        monkeypatch.setenv("INGEST_MODE", "live")
+        monkeypatch.setenv("JIRA_URL", "https://env-should-never-be-used")  # ignored
+        import importlib
+        import discovery.ingest as pkg
+        import discovery.ingest.jira as jira_mod
+        importlib.reload(pkg)
+        importlib.reload(jira_mod)
+        # A credential with a token but NO url.
+        monkeypatch.setattr(
+            pkg, "get_live_connector",
+            lambda cid: {"token": "tok"} if cid == "jira" else None,
+        )
+        monkeypatch.setattr(pkg, "resolve_vault_connector", lambda cid: None)
+        with pytest.raises(jira_mod.JiraIngestError) as exc:
+            jira_mod._get_client()
+        msg = str(exc.value)
+        assert "base URL" in msg
+        assert "jira" in msg                             # names the record
+        assert "env-should-never-be-used" not in msg     # never uses / leaks the env value
