@@ -11,10 +11,22 @@ export interface LicenseStatusResponse {
   customer: string | null;
   /** Term length in months (3 | 6 | 12); null when there is no valid key. */
   term: number | null;
+  /**
+   * R-1.9.1-L1 / T1 (payload v2) — deployment topology ("saas" | "customer_hosted")
+   * parsed from the signed payload; null for a pre-v2 key or any non-verifiable state.
+   */
+  deployment_type: string | null;
   /** Term boundary, ISO date (YYYY-MM-DD); null when there is no valid key. */
   expires_at: string | null;
   /** Days until expiry (negative once expired); null when there is no valid key. */
   days_remaining: number | null;
+  /**
+   * R-1.9.1-L1 / T2 (AC1) — machine-readable invalid reason when `status` is
+   * "invalid" (notably "org_mismatch" for a key bound to a different organisation),
+   * so the License UI can render the specific plain-language explanation. Null for a
+   * healthy (valid/grace) status.
+   */
+  reason?: string | null;
 }
 
 /** Request body for POST /api/license/update-key. */
@@ -80,8 +92,10 @@ export interface LicenseBannerResponse {
   /**
    * Why the license is not valid, when applicable. Lets the banner distinguish a
    * never-licensed install (`no_license` / `signature_or_format` → "No valid
-   * license installed") from an expired term (null → "License expired") and a
-   * clock anomaly (`clock_rollback`). Null for valid/grace and past-grace expiry.
+   * license installed") from an expired term (null → "License expired"), a clock
+   * anomaly (`clock_rollback`), and a wrong-org key (`org_mismatch` → "This license
+   * was issued to a different organisation", R-1.9.1-L1 / T2). Null for valid/grace
+   * and past-grace expiry.
    */
   reason?: string | null;
   /**

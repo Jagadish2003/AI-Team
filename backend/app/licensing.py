@@ -102,15 +102,30 @@ class LicenseStatus:
     INVALID = "invalid"    # signature failed, no key, or unparseable payload
 
 
+# Structured invalid-reason codes. Stable machine-readable strings the status
+# API / banner map to plain-language copy; keep them in sync with the UI reason
+# map. ``signature_or_format`` is the catch-all for any signature/format/parse
+# failure (AC2); ``org_mismatch`` (R-1.9.1-L1 / T2) is a signature-valid key
+# bound to a DIFFERENT installation org.
+REASON_SIGNATURE_OR_FORMAT = "signature_or_format"
+REASON_ORG_MISMATCH = "org_mismatch"
+
 # Exact failure shape returned on any signature/format/parse error (AC2).
-_INVALID_RESULT = {"status": LicenseStatus.INVALID, "reason": "signature_or_format"}
+_INVALID_RESULT = {"status": LicenseStatus.INVALID, "reason": REASON_SIGNATURE_OR_FORMAT}
 
 DEFAULT_GRACE_DAYS = 14
+
+
+def _invalid(reason: str) -> dict:
+    """A fresh ``invalid`` result carrying the given machine-readable reason."""
+    return {"status": LicenseStatus.INVALID, "reason": reason}
 
 
 def validate_license(
     key_string: str,
     public_key: Optional[Ed25519PublicKey] = None,
+    *,
+    installation_org_id: Optional[str] = None,
 ) -> dict:
     """Validate a license key fully offline and return a status dict.
 
@@ -121,6 +136,18 @@ def validate_license(
       * ``today <= expires_at``                       -> ``valid``
       * ``expires_at < today <= expires_at + grace``  -> ``grace``
       * ``today > expires_at + grace``                -> ``readonly``
+
+    Org binding (R-1.9.1-L1 / T2, AC1): when ``installation_org_id`` is supplied
+    and the verified payload carries an ``org_id`` (payload v2), the two must
+    match. A signature-valid key whose ``org_id`` is bound to a DIFFERENT
+    installation org returns ``{'status': 'invalid', 'reason': 'org_mismatch'}``
+    — the "Customer A's key pasted into Customer B's install must fail closed and
+    say why" case. This check runs BEFORE the date logic: an org-mismatched key
+    is invalid regardless of its term. The comparison is skipped (no binding
+    enforced) when the caller passes no ``installation_org_id`` — so the pure,
+    org-agnostic callers (e.g. offline issuing tests) are unaffected — and also
+    when the payload has no ``org_id`` (a pre-v2 key), which is handled by the
+    separate v1-rejection step (T4), not here.
 
     Returns ``{status, customer, deployment_type, expires_at, days_remaining,
     payload}`` for a verified key. ``deployment_type`` (R-1.9.1-L1 / T1, payload
@@ -133,6 +160,18 @@ def validate_license(
     payload = verify_license_signature(key_string, public_key)
     if payload is None:
         return dict(_INVALID_RESULT)
+
+    # Org binding (T2 / AC1) — checked before the date logic so a key bound to a
+    # different org is invalid regardless of its term. Only enforced when the
+    # caller names an installation org AND the payload declares an org_id; a
+    # pre-v2 key with no org_id is left to the T4 v1-rejection path.
+    payload_org_id = payload.get("org_id")
+    if (
+        installation_org_id is not None
+        and payload_org_id is not None
+        and payload_org_id != installation_org_id
+    ):
+        return _invalid(REASON_ORG_MISMATCH)
 
     try:
         today = datetime.date.today()

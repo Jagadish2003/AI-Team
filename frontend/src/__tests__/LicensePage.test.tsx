@@ -56,8 +56,10 @@ const VALID: LicenseStatusResponse = {
   status: "valid",
   customer: "City National Bank",
   term: 12,
+  deployment_type: "saas",
   expires_at: "2027-06-18",
   days_remaining: 200,
+  reason: null,
 };
 
 function renderPage() {
@@ -138,8 +140,10 @@ describe("update key flow", () => {
       status: "valid",
       customer: "City National Bank",
       term: 12,
+      deployment_type: "saas",
       expires_at: "2028-06-18",
       days_remaining: 365,
+      reason: null,
     };
     h.mockUpdate.mockResolvedValue(RENEWED);
 
@@ -203,6 +207,39 @@ describe("update key flow", () => {
     // Original status remains.
     const badge = screen.getByTestId("license-status-badge");
     expect(badge).toHaveTextContent("Valid");
+  });
+
+  it("org-mismatch key: surfaces the backend's plain-language reason (R-1.9.1-L1 / T2, AC1)", async () => {
+    h.mockUpdate.mockRejectedValue(
+      new ApiError("bad", 400, {
+        detail: "This license was issued to a different organisation",
+      }),
+    );
+
+    renderPage();
+    const field = await screen.findByLabelText("License key");
+    fireEvent.change(field, { target: { value: "wrong-org-key" } });
+    fireEvent.click(screen.getByRole("button", { name: /update key/i }));
+
+    await waitFor(() =>
+      expect(h.mockPush).toHaveBeenCalledWith(
+        "This license was issued to a different organisation",
+        "error",
+      ),
+    );
+  });
+
+  it("shows the org-mismatch reason line under the badge for an installed wrong-org key (AC1)", async () => {
+    h.mockFetch.mockResolvedValue({
+      ...VALID,
+      status: "invalid",
+      reason: "org_mismatch",
+    });
+
+    renderPage();
+    const reasonLine = await screen.findByTestId("license-status-reason");
+    expect(reasonLine).toHaveAttribute("data-reason", "org_mismatch");
+    expect(reasonLine.textContent).toMatch(/different organisation/i);
   });
 });
 
