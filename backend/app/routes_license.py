@@ -51,11 +51,17 @@ router = APIRouter(tags=["license"])
 class LicenseStatusResponse(BaseModel):
     """Owner-facing license status. Detail fields are null when there is no
     valid key (no_license / invalid / clock_rollback), where only ``status``
-    is meaningful."""
+    is meaningful.
+
+    ``deployment_type`` (R-1.9.1-L1 / T1, payload v2) is the deployment topology
+    (``saas`` | ``customer_hosted``) parsed from the validated payload and
+    exposed here so the License UI can show it (AC5). It is ``null`` for a pre-v2
+    key that carries no such field, and for any non-verifiable state."""
 
     status: str
     customer: Optional[str] = None
     term: Optional[int] = None  # term_months from the validated payload
+    deployment_type: Optional[str] = None
     expires_at: Optional[str] = None
     days_remaining: Optional[int] = None
 
@@ -136,6 +142,7 @@ def _to_status_response(result: dict) -> LicenseStatusResponse:
         status=result.get("status"),
         customer=result.get("customer"),
         term=payload.get("term_months"),
+        deployment_type=result.get("deployment_type"),
         expires_at=result.get("expires_at"),
         days_remaining=result.get("days_remaining"),
     )

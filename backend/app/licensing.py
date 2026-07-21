@@ -122,9 +122,12 @@ def validate_license(
       * ``expires_at < today <= expires_at + grace``  -> ``grace``
       * ``today > expires_at + grace``                -> ``readonly``
 
-    Returns ``{status, customer, expires_at, days_remaining, payload}`` for a
-    verified key. ``public_key`` defaults to the baked-in CloudFulcrum key;
-    tests pass a throwaway key to exercise the date logic without the real
+    Returns ``{status, customer, deployment_type, expires_at, days_remaining,
+    payload}`` for a verified key. ``deployment_type`` (R-1.9.1-L1 / T1, payload
+    v2) is lifted to the top level so the status API can expose it without every
+    caller reaching into ``payload`` (AC5); it is ``None`` for a pre-v2 key that
+    carries no such field. ``public_key`` defaults to the baked-in CloudFulcrum
+    key; tests pass a throwaway key to exercise the date logic without the real
     private key.
     """
     payload = verify_license_signature(key_string, public_key)
@@ -150,6 +153,7 @@ def validate_license(
     return {
         "status": status,
         "customer": payload.get("customer"),
+        "deployment_type": payload.get("deployment_type"),
         "expires_at": payload["expires_at"],
         "days_remaining": (expires - today).days,
         "payload": payload,

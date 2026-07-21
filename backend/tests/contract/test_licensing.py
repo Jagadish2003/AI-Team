@@ -28,8 +28,11 @@ def keypair():
 
 
 def _sign(priv, *, expires_at, grace_days=14, customer="City National Bank",
-          license_id="cnb-2026-001", term_months=12):
-    """Replicate the issuing scheme exactly (sort_keys=True, base64, Ed25519)."""
+          license_id="cnb-2026-001", term_months=12, deployment_type=None):
+    """Replicate the issuing scheme exactly (sort_keys=True, base64, Ed25519).
+
+    ``deployment_type`` is added to the payload only when supplied, so the default
+    call still exercises a payload that omits it (the pre-v2 shape)."""
     payload = {
         "customer": customer,
         "license_id": license_id,
@@ -39,6 +42,8 @@ def _sign(priv, *, expires_at, grace_days=14, customer="City National Bank",
         "grace_days": grace_days,
         "limits": {"max_workspaces": None, "enabled_packs": None},
     }
+    if deployment_type is not None:
+        payload["deployment_type"] = deployment_type
     payload_b64 = base64.b64encode(json.dumps(payload, sort_keys=True).encode()).decode()
     sig_b64 = base64.b64encode(priv.sign(payload_b64.encode())).decode()
     return f"{payload_b64}.{sig_b64}"
@@ -121,6 +126,27 @@ def test_signature_valid_but_payload_missing_expiry_is_invalid(keypair):
     sig_b64 = base64.b64encode(priv.sign(payload_b64.encode())).decode()
     result = validate_license(f"{payload_b64}.{sig_b64}", public_key=pub)
     assert result == {"status": LicenseStatus.INVALID, "reason": "signature_or_format"}
+
+
+def test_deployment_type_surfaced_at_top_level(keypair):
+    """R-1.9.1-L1 / T1 (AC5): deployment_type is parsed from the payload and
+    lifted to the top level of the result so the status API exposes it."""
+    priv, pub = keypair
+    key = _sign(priv, expires_at=_iso(100), deployment_type="customer_hosted")
+    result = validate_license(key, public_key=pub)
+    assert result["status"] == LicenseStatus.VALID
+    assert result["deployment_type"] == "customer_hosted"
+    # Still readable via the raw payload too.
+    assert result["payload"]["deployment_type"] == "customer_hosted"
+
+
+def test_deployment_type_none_for_pre_v2_payload(keypair):
+    """A pre-v2 key that carries no deployment_type resolves to None, not an error."""
+    priv, pub = keypair
+    key = _sign(priv, expires_at=_iso(100))  # no deployment_type
+    result = validate_license(key, public_key=pub)
+    assert result["status"] == LicenseStatus.VALID
+    assert result["deployment_type"] is None
 
 
 def test_default_uses_baked_in_key_and_never_raises():

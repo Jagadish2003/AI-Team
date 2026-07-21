@@ -33,12 +33,16 @@ def main(argv=None) -> int:
         return 1
 
     print("VALID")
-    print(f"  customer    : {payload.get('customer')}")
-    print(f"  license_id  : {payload.get('license_id')}")
-    print(f"  issued_at   : {payload.get('issued_at')}")
-    print(f"  expires_at  : {payload.get('expires_at')}")
-    print(f"  term_months : {payload.get('term_months')}")
-    print(f"  grace_days  : {payload.get('grace_days')}")
+    print(f"  payload_version : {payload.get('payload_version')}")
+    print(f"  customer        : {payload.get('customer')}")
+    print(f"  org_id          : {payload.get('org_id')}")
+    print(f"  kid             : {payload.get('kid')}")
+    print(f"  deployment_type : {payload.get('deployment_type')}")
+    print(f"  license_id      : {payload.get('license_id')}")
+    print(f"  issued_at       : {payload.get('issued_at')}")
+    print(f"  expires_at      : {payload.get('expires_at')}")
+    print(f"  term_months     : {payload.get('term_months')}")
+    print(f"  grace_days      : {payload.get('grace_days')}")
     return 0
 
 
