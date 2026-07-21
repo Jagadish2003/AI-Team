@@ -211,6 +211,142 @@ def is_contract_complete(contract: Any) -> bool:
     return all(bool(contract.get(field)) for field in FOUR_PART_CONTRACT_FIELDS)
 
 
+def missing_contract_parts(contract: Any) -> List[str]:
+    """Return the four-part fields absent/empty on ``contract`` ([] when complete)."""
+    if not isinstance(contract, dict):
+        return list(FOUR_PART_CONTRACT_FIELDS)
+    return [f for f in FOUR_PART_CONTRACT_FIELDS if not contract.get(f)]
+
+
+# ── Pack-boundary enforcement (MSP-B6 T6 / AC1) ─────────────────────────────────
+#
+# The four-part criterion is enforced HERE, at the pack boundary: a finding this
+# pack emits that is missing any of the four parts — or that references an
+# individual — is a CONTRACT VIOLATION that fails the run's pack execution, not a
+# cosmetic gap (MSP-B6 §"four-part criterion"). The detectors already build
+# complete contracts via ``build_finding_contract``; this boundary check is the
+# defence that guarantees a future detector cannot ship an incomplete finding
+# unnoticed, and it is what the contract test drives to prove the run fails.
+
+
+class CloudOpsContractViolation(ValueError):
+    """A Cloud-Operations finding failed the four-part contract at the pack
+    boundary. Raised to FAIL the run's pack execution (never swallowed)."""
+
+
+def _finding_contract_of(result: Any) -> Any:
+    """Extract the four-part contract from a DetectorResult-like object or dict."""
+    raw = getattr(result, "raw_evidence", None)
+    if raw is None and isinstance(result, dict):
+        raw = result.get("raw_evidence", result)
+    if not isinstance(raw, dict):
+        return None
+    return raw.get("finding_contract")
+
+
+def enforce_finding_contract(
+    contract: Any,
+    *,
+    detector_id: str = "",
+    index: Optional[int] = None,
+) -> None:
+    """Raise :class:`CloudOpsContractViolation` unless ``contract`` carries all
+    four non-empty parts AND references no individual (AC1/AC7). No-op when valid."""
+    where = f"detector {detector_id!r}" if detector_id else "finding"
+    if index is not None:
+        where += f" (index {index})"
+
+    if contract is None:
+        raise CloudOpsContractViolation(
+            f"{where} carries no four-part finding_contract — every Cloud-Operations "
+            f"finding must carry {list(FOUR_PART_CONTRACT_FIELDS)}."
+        )
+    missing = missing_contract_parts(contract)
+    if missing:
+        raise CloudOpsContractViolation(
+            f"{where} is missing required contract part(s) {missing}; a finding must "
+            f"carry all four: {list(FOUR_PART_CONTRACT_FIELDS)}."
+        )
+    leaked = find_individual_references(contract)
+    if leaked:
+        raise CloudOpsContractViolation(
+            f"{where} references an individual (forbidden — groups/queues/services/"
+            f"CIs only): {leaked}."
+        )
+
+
+def enforce_pack_findings(results: Sequence[Any]) -> int:
+    """Enforce the four-part contract across every emitted finding at the pack
+    boundary. Raises :class:`CloudOpsContractViolation` on the first violation
+    (failing the run). Returns the number of findings validated."""
+    count = 0
+    for i, result in enumerate(results or []):
+        detector_id = str(getattr(result, "detector_id", "") or "")
+        enforce_finding_contract(
+            _finding_contract_of(result), detector_id=detector_id, index=i
+        )
+        count += 1
+    return count
+
+
+# ── Graceful MSP-B5 degradation (T6 / AC2) ──────────────────────────────────────
+#
+# MSP-B5 (runbook matching) supplies the "documented" leg of the composite
+# "documented-repeated-manual" recurrence finding. When B5 is unavailable, the
+# composite degrades to REPEATED-MANUAL ONLY with an EXPLICIT, visible label —
+# never a silently narrower finding. The degradation is data-shaped (a leg on the
+# finding's evidence), so the four-part contract stays complete either way.
+
+RUNBOOK_MATCH_UNAVAILABLE_LABEL = "runbook match unavailable"
+
+# Composite-leg kinds.
+LEG_DOCUMENTED_REPEATED_MANUAL = "documented_repeated_manual"
+LEG_REPEATED_MANUAL = "repeated_manual"
+
+
+def runbook_matching_available(block: Dict[str, Any]) -> bool:
+    """Return True when MSP-B5 runbook matching is present for this run.
+
+    B5 populates a ``runbook_matching`` sub-block on the cloud_ops ITSM/event
+    block. Absent (the default in a B5-less deployment) → not available.
+    """
+    rb = (block or {}).get("runbook_matching")
+    if isinstance(rb, dict):
+        return bool(rb.get("available", True))
+    return bool(rb)
+
+
+def build_runbook_leg(
+    *,
+    runbook_match: Optional[Dict[str, Any]] = None,
+    b5_available: bool = False,
+) -> Dict[str, Any]:
+    """Build the recurrence finding's runbook (documented) leg.
+
+    * B5 available AND a runbook matched → the composite ``documented_repeated_manual``
+      leg (documented=True), carrying the matched runbook id.
+    * Otherwise → the degraded ``repeated_manual`` leg with the explicit
+      ``"runbook match unavailable"`` label (documented=False, degraded=True) so
+      the narrowing is visible, never silent (AC2).
+    """
+    if b5_available and runbook_match:
+        return {
+            "kind": LEG_DOCUMENTED_REPEATED_MANUAL,
+            "documented": True,
+            "b5_available": True,
+            "degraded": False,
+            "runbook_id": str(runbook_match.get("runbook_id", runbook_match.get("id", ""))),
+            "runbook_title": str(runbook_match.get("title", "")),
+        }
+    return {
+        "kind": LEG_REPEATED_MANUAL,
+        "documented": False,
+        "b5_available": bool(b5_available),
+        "degraded": True,
+        "label": RUNBOOK_MATCH_UNAVAILABLE_LABEL,
+    }
+
+
 # ── "No individuals" guarantee (MSP-B6 AC2 / AC7) ───────────────────────────────
 
 
