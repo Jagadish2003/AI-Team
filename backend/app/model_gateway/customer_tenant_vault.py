@@ -16,6 +16,20 @@ Resolution order (secure first, dev fallback second)
    production the credential lives ONLY in the vault (the env var is unset), so
    revoking the vault credential fully revokes access.
 
+Production guard (R1.9.1-H1 T4 — F4 fix)
+------------------------------------------
+The 1.8 verification's F4 finding: the env fallback above is acceptable in
+dev, but must be *impossible* under a production deployment profile — not
+merely discouraged. :func:`resolve_customer_tenant_api_key` now gates the env
+fallback on :func:`app.deployment_profile.is_production` rather than checking
+``REQUIRE_CONNECTOR_SECRETS`` directly, so both recognised production signals
+(``ENVIRONMENT=production`` and ``REQUIRE_CONNECTOR_SECRETS=1``) block it, not
+just the latter. :func:`validate_no_production_env_fallback` is the paired
+startup check: if the deployment is production AND the env var is still set,
+it logs a warning naming the var — the value is never read for use, but a
+stale var left in a production environment is a config-hygiene problem worth
+surfacing even though it can no longer leak into a model call.
+
 Contract
 --------
 - Returns "" when neither source yields a credential. The provider then degrades
@@ -33,6 +47,7 @@ from __future__ import annotations
 import logging
 import os
 
+from app.deployment_profile import is_production
 from app.model_gateway.customer_tenant_config import CONFIG_KEY_API_KEY
 
 logger = logging.getLogger(__name__)
@@ -77,17 +92,49 @@ def resolve_customer_tenant_api_key() -> str:
 
     # 2) Dev/standalone fallback: the environment variable.
     #
-    # Suppressed in production. When REQUIRE_CONNECTOR_SECRETS=1 (the production
-    # posture the rest of the auth framework enforces), the credential MUST come
-    # from the vault so that customer rotation/revocation is authoritative. If we
-    # fell back to CUSTOMER_TENANT_API_KEY here, a revoked vault credential could
-    # be silently overridden by a stale env var — bypassing the vault entirely.
-    # In that case return "" so the provider degrades gracefully (ok=False / [])
-    # exactly as it does for any missing credential.
-    if os.getenv("REQUIRE_CONNECTOR_SECRETS") == "1":
+    # Suppressed in production (R1.9.1-H1 T4 / F4 fix): under the production
+    # deployment profile — ENVIRONMENT=production or REQUIRE_CONNECTOR_SECRETS=1
+    # — the credential MUST come from the vault so that customer
+    # rotation/revocation is authoritative. If we fell back to
+    # CUSTOMER_TENANT_API_KEY here, a revoked vault credential could be silently
+    # overridden by a stale env var — bypassing the vault entirely. In that case
+    # return "" so the provider degrades gracefully (ok=False / []) exactly as it
+    # does for any missing credential. The env var is never read for use in
+    # production; see validate_no_production_env_fallback() for the paired
+    # startup-visibility check.
+    if is_production():
         logger.debug(
-            "customer_tenant: REQUIRE_CONNECTOR_SECRETS=1 — env fallback disabled; "
-            "credential must come from the vault"
+            "customer_tenant: production deployment profile — env fallback "
+            "disabled; credential must come from the vault"
         )
         return ""
     return os.getenv(CONFIG_KEY_API_KEY, "")
+
+
+def validate_no_production_env_fallback() -> None:
+    """Startup check: warn when the env fallback is set under production.
+
+    :func:`resolve_customer_tenant_api_key` already never reads
+    ``CUSTOMER_TENANT_API_KEY`` under the production deployment profile, so a
+    stale value here cannot leak into a model call. This is pure operator
+    visibility (R1.9.1-H1 T4 / F4, AC5): a production deployment that still
+    has the dev/standalone env var set has a configuration-hygiene problem
+    worth flagging at startup, even though the value is provably never used.
+
+    Called from ``validate_provider_config()`` unconditionally — regardless
+    of whether ``customer_tenant`` is the currently selected provider — so the
+    warning fires as soon as the var is set in a production environment, not
+    only after an operator switches modes. Never raises; startup must not be
+    blocked by this check.
+    """
+    if is_production() and os.getenv(CONFIG_KEY_API_KEY):
+        logger.warning(
+            "%s is set in the environment, but this deployment is running "
+            "under the production profile (ENVIRONMENT=production or "
+            "REQUIRE_CONNECTOR_SECRETS=1). The customer-tenant credential "
+            "vault is the sole source of this credential in production, so "
+            "the environment variable is ignored. Remove it from the "
+            "production environment and manage the credential through the "
+            "vault instead.",
+            CONFIG_KEY_API_KEY,
+        )
