@@ -29,9 +29,11 @@ no-match case is what MSP-B5 T5's documentation-gap finding consumes.
 """
 from __future__ import annotations
 
+import logging
+import os
 import re
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Dict, Mapping, Optional, Sequence, Tuple
+from typing import TYPE_CHECKING, Any, Callable, Dict, Mapping, Optional, Sequence, Tuple
 from urllib.parse import urlsplit, urlunsplit
 
 from app.provenance import OBSERVED, EvidencePointer
@@ -39,6 +41,8 @@ from discovery.signals.evidence_store import OrgScopeError
 
 if TYPE_CHECKING:  # pragma: no cover - typing only, avoids an import cycle
     from discovery.detectors.ops_recurrence import RecurrenceRecord
+
+logger = logging.getLogger(__name__)
 
 # ---- match-state lifecycle (Section 1 of the MSP-B5 story) ----
 # T1 produces only OBSERVED. PROPOSED (T2/T3, carries match_confidence) and
@@ -450,3 +454,338 @@ def _safe_pointer(value: Any) -> Optional[Dict[str, Any]]:
 def default_runbook_library() -> RunbookLibrary:
     """The production runbook library — backed by the retrieval substrate."""
     return RetrievalRunbookLibrary()
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# MSP-B5 T2 — the semantic retrieval PATH (query construction + runbook-scoped
+# retrieval). This is the input to T3's scoring/threshold, invoked for recurrence
+# records that have NO resolved explicit citation (T1). It PROPOSES candidates;
+# it never decides a match — T3 scores them and, above threshold, emits a
+# RunbookMatch(origin='proposed'). Reuses the Release 1.8 retrieval API
+# (``app.retrieval.api.retrieve``); it never opens a second vector store or search.
+# ═════════════════════════════════════════════════════════════════════════════
+
+# The runbook library scope: the source systems that carry runbook content
+# (R18-A1 documents + R18-A5 Confluence/SharePoint page deep content). Restricting
+# retrieval to these keeps Slack messages, source code, incidents, and other
+# unrelated content out of the runbook candidate set. Alias of the T1 scope so the
+# "what counts as the runbook library" answer lives in exactly one place.
+RUNBOOK_SCOPE: Tuple[str, ...] = RUNBOOK_SOURCE_SYSTEMS
+
+# Retrieval-path result status — the load-bearing distinction the task requires:
+# a genuine "search ran, found no runbook" (OK + no candidates) must never be
+# confused with "we could not search" (UNAVAILABLE: embedding provider down or a
+# retrieval failure). T3 must not read a documentation gap from UNAVAILABLE.
+RETRIEVAL_OK = "ok"
+RETRIEVAL_UNAVAILABLE = "unavailable"
+
+# Thresholds are CONFIG, not code (AC3): overridable per deployment via env, or
+# per call via a RunbookRetrievalConfig. Defaults are conservative — a tight
+# candidate set and a similarity floor so weak matches never enter T3's scoring.
+DEFAULT_CANDIDATE_LIMIT = 5
+DEFAULT_MIN_SCORE = 0.7
+CANDIDATE_LIMIT_ENV = "MSP_B5_RUNBOOK_CANDIDATE_LIMIT"
+MIN_SCORE_ENV = "MSP_B5_RUNBOOK_MIN_SCORE"
+INCLUDE_STALE_ENV = "MSP_B5_RUNBOOK_INCLUDE_STALE"
+SOURCE_SYSTEMS_ENV = "MSP_B5_RUNBOOK_SOURCE_SYSTEMS"
+
+# Fixed, ordered structured fields that form the resolution-pattern query. Order
+# is fixed so the SAME recurrence always yields the SAME query text (determinism).
+_QUERY_STRUCTURED_FIELDS = ("category", "close_code", "ci_class", "resolved_by_group")
+
+
+def _env_int(name: str, default: int) -> int:
+    raw = os.getenv(name)
+    if raw is None or not raw.strip():
+        return default
+    try:
+        value = int(raw.strip())
+    except (TypeError, ValueError):
+        logger.warning("runbook retrieval: %s=%r is not an int; using %d", name, raw, default)
+        return default
+    return value if value > 0 else default
+
+
+def _env_float(name: str, default: float) -> float:
+    raw = os.getenv(name)
+    if raw is None or not raw.strip():
+        return default
+    try:
+        return float(raw.strip())
+    except (TypeError, ValueError):
+        logger.warning("runbook retrieval: %s=%r is not a float; using %s", name, raw, default)
+        return default
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None or not raw.strip():
+        return default
+    return raw.strip().lower() in ("1", "true", "yes", "on")
+
+
+@dataclass(frozen=True)
+class RunbookRetrievalConfig:
+    """Tunable retrieval-path knobs — thresholds are config, not code (AC3).
+
+    ``candidate_limit`` is the ``k`` passed to the retrieval API; ``min_score`` is
+    the cosine-similarity floor below which a chunk is not even a candidate;
+    ``include_stale`` keeps stale chunks EXCLUDED by default (a changed-but-not-yet-
+    refreshed runbook is not served as current evidence) unless a caller explicitly
+    opts to surface staleness; ``source_systems`` is the runbook library scope.
+    """
+
+    candidate_limit: int = DEFAULT_CANDIDATE_LIMIT
+    min_score: float = DEFAULT_MIN_SCORE
+    include_stale: bool = False
+    source_systems: Tuple[str, ...] = RUNBOOK_SCOPE
+
+    @classmethod
+    def from_env(cls) -> "RunbookRetrievalConfig":
+        raw_sources = os.getenv(SOURCE_SYSTEMS_ENV)
+        if raw_sources and raw_sources.strip():
+            sources = tuple(
+                s.strip() for s in raw_sources.split(",") if s.strip()
+            ) or RUNBOOK_SCOPE
+        else:
+            sources = RUNBOOK_SCOPE
+        return cls(
+            candidate_limit=_env_int(CANDIDATE_LIMIT_ENV, DEFAULT_CANDIDATE_LIMIT),
+            min_score=_env_float(MIN_SCORE_ENV, DEFAULT_MIN_SCORE),
+            include_stale=_env_bool(INCLUDE_STALE_ENV, False),
+            source_systems=sources,
+        )
+
+
+def _ci_class_from_component(component: Any) -> str:
+    """Extract the CI CLASS from a signature ``ci_component`` marker, else ''.
+
+    ``ci_component`` is ``'class:<ci_class>'`` (broad, descriptive), ``'ci:<sys_id>'``
+    (a specific, opaque record id), or ``''``. Only the class is useful query text;
+    an opaque sys_id would be search noise, so it is deliberately dropped.
+    """
+    text = str(component or "").strip()
+    if text.lower().startswith("class:"):
+        return text[len("class:"):].strip()
+    return ""
+
+
+def _query_fields(rec: "RecurrenceRecord") -> Dict[str, str]:
+    """Pull the structured resolution-pattern fields off the recurrence record.
+
+    Reads ONLY the deterministic, privacy-safe signature components (never free
+    text, never short-description tokens — those are stripped upstream). A missing
+    component yields an empty string, handled predictably by the query builder.
+    """
+    components = getattr(rec, "signature_components", None) or {}
+    resolution = components.get("resolution") or {}
+    identity = components.get("incident_identity") or {}
+    category = resolution.get("category") or identity.get("category") or ""
+    ci_class = _ci_class_from_component(
+        resolution.get("ci_component") or identity.get("ci_component")
+    )
+    return {
+        "category": str(category).strip(),
+        "close_code": str(resolution.get("close_code") or "").strip(),
+        "ci_class": ci_class,
+        "resolved_by_group": str(resolution.get("resolved_by_group") or "").strip(),
+    }
+
+
+def build_resolution_query(
+    rec: "RecurrenceRecord",
+    *,
+    redacted_texts: Sequence[str] = (),
+) -> str:
+    """Deterministically construct the runbook retrieval query for a recurrence.
+
+    The query is the recurrence's normalised resolution pattern — its category,
+    close code, CI class, and resolved-by group — followed by any REDACTED
+    resolution text. Only redacted text supplied by MSP-B4 (whose T6 redacts notes
+    before they leave the incident) may be passed in; this builder holds no path to
+    raw notes, so a seeded secret cannot reach the query (AC7). The recurrence
+    record carries no free text itself, so the structured pattern is always safe.
+
+    Determinism (task requirement): a fixed field order and stable de-duplication
+    mean the SAME recurrence record (and same redacted texts) always yields the
+    SAME query string. Empty or incomplete fields are simply omitted — never filled
+    with a placeholder that would add noise to the embedding.
+    """
+    parts: list = []
+    fields = _query_fields(rec)
+    for key in _QUERY_STRUCTURED_FIELDS:
+        value = fields.get(key, "")
+        if value:
+            parts.append(value)
+    for text in redacted_texts or ():
+        cleaned = _WHITESPACE_RE.sub(" ", str(text or "")).strip()
+        if cleaned and cleaned not in parts:
+            parts.append(cleaned)
+    return " ".join(parts)
+
+
+@dataclass(frozen=True)
+class RunbookCandidate:
+    """One runbook-library chunk proposed by retrieval (input to T3 scoring)."""
+
+    source_system: str
+    source_artifact: str
+    content: str
+    similarity: float
+    chunk_id: str
+    retrieval_result_id: str
+    source_timestamp: str
+    is_stale: bool = False
+
+    @classmethod
+    def from_chunk(cls, chunk: Any) -> "RunbookCandidate":
+        return cls(
+            source_system=getattr(chunk, "source_system", ""),
+            source_artifact=getattr(chunk, "source_artifact", ""),
+            content=getattr(chunk, "content", ""),
+            similarity=float(getattr(chunk, "similarity", 0.0) or 0.0),
+            chunk_id=getattr(chunk, "chunk_id", ""),
+            retrieval_result_id=getattr(chunk, "retrieval_result_id", ""),
+            source_timestamp=getattr(chunk, "source_timestamp", "") or "",
+            is_stale=bool(getattr(chunk, "is_stale", False)),
+        )
+
+
+@dataclass(frozen=True)
+class RunbookRetrievalResult:
+    """The outcome of the runbook retrieval path — status + proposed candidates.
+
+    ``status`` is the load-bearing field: :data:`RETRIEVAL_OK` means the search ran
+    (``candidates`` may still be empty — a genuine "no runbook matched"), while
+    :data:`RETRIEVAL_UNAVAILABLE` means retrieval could not run (embedding provider
+    down or a retrieval failure) and the empty candidate set carries NO meaning. A
+    discovery run never breaks on either outcome.
+    """
+
+    status: str
+    query: str
+    candidates: Tuple[RunbookCandidate, ...] = ()
+
+    @property
+    def available(self) -> bool:
+        return self.status == RETRIEVAL_OK
+
+    @property
+    def found_any(self) -> bool:
+        return bool(self.candidates)
+
+    def as_dict(self) -> Dict[str, Any]:
+        return {
+            "status": self.status,
+            "query": self.query,
+            "candidates": [
+                {
+                    "source_system": c.source_system,
+                    "source_artifact": c.source_artifact,
+                    "similarity": c.similarity,
+                    "chunk_id": c.chunk_id,
+                    "retrieval_result_id": c.retrieval_result_id,
+                    "is_stale": c.is_stale,
+                }
+                for c in self.candidates
+            ],
+        }
+
+
+def _default_retrieve(
+    org_id: str,
+    query_text: str,
+    *,
+    k: int,
+    source_filter: Sequence[str],
+    min_score: float,
+    include_stale: bool,
+) -> list:
+    """Call the Release 1.8 retrieval API (no separate search implementation)."""
+    from app.retrieval.api import retrieve  # lazy: keep DB/gateway off the import path
+
+    return retrieve(
+        org_id,
+        query_text,
+        k=k,
+        source_filter=list(source_filter),
+        min_score=min_score,
+        include_stale=include_stale,
+    )
+
+
+def _default_embedding_available(query_text: str) -> bool:
+    """True iff the embedding provider can currently embed — the signal that tells
+    a genuine empty result apart from a degraded provider. Probes through the SAME
+    gateway the retrieval API uses; a miss (empty vectors) means unavailable."""
+    from app.retrieval import embedder  # lazy
+
+    vectors, _ = embedder.embed_texts_with_model([query_text])
+    return bool(vectors)
+
+
+def retrieve_runbook_candidates(
+    org_id: str,
+    rec: "RecurrenceRecord",
+    *,
+    config: Optional[RunbookRetrievalConfig] = None,
+    redacted_texts: Sequence[str] = (),
+    retrieve_fn: Optional[Callable[..., list]] = None,
+    embedding_available_fn: Optional[Callable[[str], bool]] = None,
+) -> RunbookRetrievalResult:
+    """Retrieve runbook-library candidates for a non-cited recurrence (MSP-B5 T2).
+
+    Builds the deterministic resolution-pattern query and searches ONLY the runbook
+    library via the org-scoped Release 1.8 retrieval API, with a configured
+    candidate limit and minimum score, stale chunks excluded by default. Returns a
+    :class:`RunbookRetrievalResult` whose ``status`` keeps an unavailable provider /
+    retrieval failure distinguishable from a genuine no-match — and never raises
+    into the discovery run.
+
+    ``retrieve_fn`` / ``embedding_available_fn`` are injectable for tests; in
+    production they default to the 1.8 retrieval API and its embedding gateway.
+    """
+    org = _require_org(org_id)
+    rec_org = getattr(rec, "org_id", None)
+    if rec_org and str(rec_org).strip() != org:
+        raise OrgScopeError(
+            f"recurrence belongs to org {rec_org!r}, cannot retrieve under {org!r}"
+        )
+
+    cfg = config or RunbookRetrievalConfig.from_env()
+    query = build_resolution_query(rec, redacted_texts=redacted_texts)
+    if not query:
+        # Nothing to search on — a predictable, genuine empty result (no noise,
+        # no phantom query embedded). Distinct from "unavailable".
+        return RunbookRetrievalResult(status=RETRIEVAL_OK, query="", candidates=())
+
+    retrieve = retrieve_fn or _default_retrieve
+    try:
+        chunks = retrieve(
+            org,
+            query,
+            k=cfg.candidate_limit,
+            source_filter=cfg.source_systems,
+            min_score=cfg.min_score,
+            include_stale=cfg.include_stale,
+        )
+    except Exception:  # retrieval failure (e.g. store/DB down) — never break the run
+        logger.warning("runbook retrieval failed for org %s; reporting unavailable", org, exc_info=True)
+        return RunbookRetrievalResult(status=RETRIEVAL_UNAVAILABLE, query=query, candidates=())
+
+    candidates = tuple(RunbookCandidate.from_chunk(c) for c in (chunks or ()))
+    if candidates:
+        return RunbookRetrievalResult(status=RETRIEVAL_OK, query=query, candidates=candidates)
+
+    # Empty result: the 1.8 API returns [] for BOTH a genuine miss AND a degraded
+    # embedding provider. Probe the provider ONCE to tell them apart so T3 never
+    # reads a documentation gap from an outage.
+    probe = embedding_available_fn or _default_embedding_available
+    try:
+        available = probe(query)
+    except Exception:  # a failing probe is itself an unavailable signal
+        logger.warning("runbook retrieval: embedding probe failed for org %s", org, exc_info=True)
+        available = False
+    if not available:
+        return RunbookRetrievalResult(status=RETRIEVAL_UNAVAILABLE, query=query, candidates=())
+    return RunbookRetrievalResult(status=RETRIEVAL_OK, query=query, candidates=())
