@@ -1467,6 +1467,19 @@ def run(
         jira_data,
     )
 
+    # ── MSP-B6 T6 (AT-741 / AC1): four-part-contract enforcement at the pack
+    # boundary. Every Cloud-Operations finding must carry all four parts
+    # (evidence, confidence, corroboration status, source trace) and reference no
+    # individual; a finding missing any part is a CONTRACT VIOLATION that FAILS the
+    # run's pack execution here — not a cosmetic gap surfaced later. Deliberately
+    # NOT wrapped in a try/except: the violation must propagate and fail the run.
+    if is_cloud_ops_pack(pack_id):
+        from .packs.cloud_ops_finding import enforce_pack_findings
+        _validated = enforce_pack_findings(detector_results)
+        logger.info(
+            "Pack: cloud_ops — four-part contract enforced on %d finding(s)", _validated
+        )
+
     pack_executed_at = _snapshot_detector_evaluations(
         org_id=org_id,
         run_id=run_id,

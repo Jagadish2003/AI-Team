@@ -83,7 +83,34 @@ def _recurring_event_index(block: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
     return index
 
 
-def _build_result(rec: Dict[str, Any], event_index: Dict[str, Dict[str, Any]], threshold: int) -> DetectorResult:
+def _runbook_match_for(rec: Dict[str, Any], block: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """The B5 runbook match for this recurrence, if any.
+
+    Prefers a per-record ``runbook_match``; falls back to the run-level
+    ``runbook_matching.matches`` keyed by the recurrence signature (both shapes
+    MSP-B5 may supply). Returns None when B5 provided no match for this record.
+    """
+    direct = rec.get("runbook_match")
+    if isinstance(direct, dict) and direct:
+        return direct
+    rb = block.get("runbook_matching")
+    if isinstance(rb, dict):
+        matches = rb.get("matches")
+        if isinstance(matches, dict):
+            hit = matches.get(str(rec.get("signature", "")))
+            if isinstance(hit, dict) and hit:
+                return hit
+    return None
+
+
+def _build_result(
+    rec: Dict[str, Any],
+    event_index: Dict[str, Dict[str, Any]],
+    threshold: int,
+    *,
+    b5_available: bool = False,
+    runbook_match: Optional[Dict[str, Any]] = None,
+) -> DetectorResult:
     count = int(rec.get("count", 0) or 0)
     median_ttr = float(rec.get("median_ttr_minutes", 0.0) or 0.0)
     effort = round(count * median_ttr, 2)
@@ -102,6 +129,12 @@ def _build_result(rec: Dict[str, Any], event_index: Dict[str, Dict[str, Any]], t
     for svc in services:
         artifacts.append({"type": "service", "id": svc})
 
+    # MSP-B6 T6 (AC2): the composite "documented-repeated-manual" leg. With MSP-B5
+    # (runbook matching) present and a runbook matched, this is the full composite;
+    # with B5 absent it degrades to repeated-manual only, carrying the explicit
+    # "runbook match unavailable" label — never silently narrower.
+    runbook_leg = fc.build_runbook_leg(runbook_match=runbook_match, b5_available=b5_available)
+
     evidence = {
         "incident_kind": str(rec.get("incident_kind", "")),
         "resolution": str(rec.get("resolution", "")),
@@ -111,6 +144,11 @@ def _build_result(rec: Dict[str, Any], event_index: Dict[str, Dict[str, Any]], t
         "close_code": str(rec.get("close_code", "")),
         "group": group,
         "affected_services": services,
+        # The composite/degradation leg travels on the evidence so the four-part
+        # contract stays complete either way (documented composite or labelled
+        # repeated-manual).
+        "composite": runbook_leg,
+        "finding_kind": runbook_leg["kind"],
     }
 
     if matched_event is not None:
@@ -162,6 +200,10 @@ def _build_result(rec: Dict[str, Any], event_index: Dict[str, Dict[str, Any]], t
         "confidence": confidence["level"],
         "corroborated": corroboration["status"] == fc.STATUS_CORROBORATED,
         "corroboration_sources": corroboration["sources"],
+        # T6 composite/degradation mirrors (visible on the finding, never silent).
+        "finding_kind": runbook_leg["kind"],
+        "runbook_documented": runbook_leg["documented"],
+        "runbook_match_available": bool(b5_available and runbook_match),
         "finding_contract": contract,
     }
 
@@ -225,4 +267,12 @@ def detect(
     block = (sn_data or {}).get("cloud_ops", {}) or {}
     threshold = int(_thresholds().get("min_occurrences", DEFAULT_MIN_OCCURRENCES))
     event_index = _recurring_event_index(block)
-    return [_build_result(rec, event_index, threshold) for rec in _qualifying(block, threshold)]
+    b5_available = fc.runbook_matching_available(block)
+    return [
+        _build_result(
+            rec, event_index, threshold,
+            b5_available=b5_available,
+            runbook_match=_runbook_match_for(rec, block),
+        )
+        for rec in _qualifying(block, threshold)
+    ]
