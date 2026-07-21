@@ -298,3 +298,42 @@ def test_customer_tenant_for_both_generation_and_embedding(monkeypatch):
 
     assert get_generation_provider().name == CUSTOMER_TENANT_PROVIDER_NAME
     assert get_embedding_provider().name == CUSTOMER_TENANT_PROVIDER_NAME
+
+
+# ---------------------------------------------------------------------------
+# R1.9.1-H1 T4 (F4 fix) — validate_provider_config() wires in the
+# CUSTOMER_TENANT_API_KEY production env-fallback warning UNCONDITIONALLY,
+# regardless of which provider is currently selected for generation/embedding.
+# ---------------------------------------------------------------------------
+
+
+def test_startup_validation_warns_on_production_env_fallback_even_when_hosted_selected(
+    caplog, monkeypatch, _clear_customer_tenant_env
+):
+    """The warning fires under production even when customer_tenant is not the
+    active provider — the env var is a hygiene risk regardless of selection."""
+    monkeypatch.delenv("MODEL_GENERATION_PROVIDER", raising=False)
+    monkeypatch.delenv("MODEL_EMBEDDING_PROVIDER", raising=False)
+    monkeypatch.setenv("REQUIRE_CONNECTOR_SECRETS", "1")
+    monkeypatch.setenv(CONFIG_KEY_API_KEY, "ct-FAKE-KEY-not-logged")
+
+    with caplog.at_level(logging.WARNING):
+        validate_provider_config()  # must not raise
+
+    assert any(CONFIG_KEY_API_KEY in m for m in _warnings(caplog))
+
+
+def test_startup_validation_silent_on_env_fallback_warning_in_dev(
+    caplog, monkeypatch, _clear_customer_tenant_env
+):
+    """Dev/standalone: the env var being set produces no production warning."""
+    monkeypatch.delenv("MODEL_GENERATION_PROVIDER", raising=False)
+    monkeypatch.delenv("MODEL_EMBEDDING_PROVIDER", raising=False)
+    monkeypatch.delenv("REQUIRE_CONNECTOR_SECRETS", raising=False)
+    monkeypatch.delenv("ENVIRONMENT", raising=False)
+    monkeypatch.setenv(CONFIG_KEY_API_KEY, "ct-FAKE-KEY-not-logged")
+
+    with caplog.at_level(logging.WARNING):
+        validate_provider_config()
+
+    assert not any(CONFIG_KEY_API_KEY in m for m in _warnings(caplog))

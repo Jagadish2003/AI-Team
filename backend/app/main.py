@@ -102,14 +102,13 @@ def _verify_db_driver_imports() -> None:
 def _is_production() -> bool:
     """True when this process should be treated as production.
 
-    Mirrors the two signals already used elsewhere: an explicit
-    ENVIRONMENT=production, or REQUIRE_CONNECTOR_SECRETS=1 (the deployment flag
-    that gates connector-secret enforcement).
+    Delegates to :func:`app.deployment_profile.is_production`, the single
+    source of truth for this check (R1.9.1-H1 T4) — kept as a thin wrapper
+    here so existing call sites in this module are unaffected.
     """
-    return (
-        os.getenv("ENVIRONMENT", "").strip().lower() == "production"
-        or os.getenv("REQUIRE_CONNECTOR_SECRETS") == "1"
-    )
+    from .deployment_profile import is_production
+
+    return is_production()
 
 
 def _validate_org_approval_config() -> None:
