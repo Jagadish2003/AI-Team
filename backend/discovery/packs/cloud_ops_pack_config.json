@@ -7,7 +7,7 @@
     "note": "Editing a value below changes behaviour on the next run; no restart or code change required."
   },
 
-  "packVersion": "1.0.0",
+  "packVersion": "1.1.0",
 
   "terminology": {
     "_note": "The NOC vocabulary this pack speaks in findings, roadmap, and executive report — the same externalized mechanism the lending pack uses to drive borrower/covenant language. glossary defines each canonical NOC term (MSP-B6 T1 AC3); language_map re-labels generic AgentIQ vocabulary into NOC language for terminology-aware rendering (later tasks).",
@@ -55,12 +55,25 @@
   },
 
   "calibration": {
-    "_note": "Ops impact scorer calibration. Read by the scorer built in MSP-B6 T4; no scorer logic lives here. impact_weights are relative ranking weights across the four dimensions in Section 2 of the scope; confidence describes the honest-confidence caps enforced at the pack boundary (T6).",
+    "_note": "Ops impact scorer calibration. Read by the scorer built in MSP-B6 T4; no scorer logic lives here. impact_weights are relative ranking weights across the four dimensions in Section 2 of the scope; automation_shape/recurrence_stability carry the per-dimension thresholds the scorer derives those two 0..1 dimension scores from (T4 AC2 — a value change alters ranked order with no code deploy); confidence describes the honest-confidence caps enforced at the pack boundary (T6).",
     "impact_weights": {
       "effort_concentration": 0.4,
       "breadth": 0.25,
       "recurrence_stability": 0.2,
       "automation_shape": 0.15
+    },
+    "automation_shape": {
+      "_note": "Automation-shape dimension (0..1): a trivially-resolved finding (short MTTR, one close code) scores high and outranks a judgment-heavy one (T4 AC3). Derived from median MTTR against these bounds unless the finding carries an explicit automation_shape value.",
+      "trivial_ttr_minutes": 30,
+      "judgment_ttr_minutes": 240,
+      "single_close_code_bonus": 0.15,
+      "default": 0.5
+    },
+    "recurrence_stability": {
+      "_note": "Recurrence-stability dimension (0..1): a steady cadence scores higher than a bursty one. Used when a finding carries a recurrence_shape ('steady'/'burst') or an interarrival coefficient-of-variation; otherwise the default applies.",
+      "steady": 1.0,
+      "burst": 0.4,
+      "default": 0.6
     },
     "confidence": {
       "single_source_cap": "MEDIUM",

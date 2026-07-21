@@ -83,11 +83,20 @@ class CloudOpsTerminology:
 class CloudOpsCalibration:
     """Ops-impact scorer calibration (read by MSP-B6 T4; no scoring logic here).
 
-    impact_weights — relative ranking weights across the four Section-2 dimensions.
-    confidence     — the honest-confidence caps enforced at the pack boundary (T6).
+    impact_weights       — relative ranking weights across the four Section-2
+                           dimensions (effort_concentration, breadth,
+                           recurrence_stability, automation_shape).
+    automation_shape     — per-dimension thresholds the T4 scorer uses to derive
+                           the automation-shape score (trivial vs judgment-heavy).
+    recurrence_stability — per-dimension values the T4 scorer uses to derive the
+                           recurrence-stability score (steady vs burst).
+    confidence           — the honest-confidence caps enforced at the pack
+                           boundary (T6).
     """
     impact_weights: Dict[str, float] = field(default_factory=dict)
     confidence: Dict[str, str] = field(default_factory=dict)
+    automation_shape: Dict[str, float] = field(default_factory=dict)
+    recurrence_stability: Dict[str, float] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -106,6 +115,24 @@ class CloudOpsPackConfig:
 # (path, mtime) so repeated reads are cheap, but an edit to the file (new mtime)
 # transparently invalidates the cache and is picked up on the next call.
 _CACHE: Dict[str, Any] = {}
+
+
+def _numeric_map(raw: Any) -> Dict[str, float]:
+    """Coerce a config sub-block into a {str: float} map, dropping non-numeric values.
+
+    Used for the scorer's per-dimension calibration blocks (automation_shape /
+    recurrence_stability), which carry only numeric thresholds. Documentation-only
+    keys (already stripped by ``_strip_meta``) and any stray non-numeric value are
+    ignored so a malformed entry never crashes the loader.
+    """
+    out: Dict[str, float] = {}
+    if isinstance(raw, dict):
+        for k, v in raw.items():
+            if isinstance(v, bool):
+                continue
+            if isinstance(v, (int, float)):
+                out[str(k)] = float(v)
+    return out
 
 
 def _strip_meta(obj: Any) -> Any:
@@ -167,6 +194,8 @@ def load_cloud_ops_config(path: Optional[str] = None) -> CloudOpsPackConfig:
             str(k): float(v) for k, v in (calibration_raw.get("impact_weights", {}) or {}).items()
         },
         confidence=dict(calibration_raw.get("confidence", {}) or {}),
+        automation_shape=_numeric_map(calibration_raw.get("automation_shape", {})),
+        recurrence_stability=_numeric_map(calibration_raw.get("recurrence_stability", {})),
     )
 
     config = CloudOpsPackConfig(
