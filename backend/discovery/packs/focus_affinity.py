@@ -125,6 +125,7 @@ FOCUS_AFFINITY: Dict[str, Optional[Tuple[str, ...]]] = {
         "ENT_CHANGE_INCIDENT_CORRELATION",   # incident/change correlation
         "LOAN_ORIGINATION_ROUTING_FRICTION", # cross-stage routing/handoff friction
         "REASSIGNMENT_PING_PONG",            # NOC: incident bounced between groups/queues
+        "SHARED_CI_HOTSPOT",                 # NOC: multi-service incidents on one shared CI
     ),
     # Internal staff productivity — repetitive manual work, document & data prep.
     FOCUS_BACK_OFFICE_PRODUCTIVITY: (
