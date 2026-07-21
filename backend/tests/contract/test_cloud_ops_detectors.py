@@ -324,7 +324,7 @@ class TestDetectorIdentityAndWiring:
     def test_all_registered_in_pack(self):
         from discovery.packs.pack_config import get_detector_modules
         mods = get_detector_modules("cloud_ops")
-        assert len(mods) == 4
+        # T2's four record/stream detectors (the T3 shared-CI hotspot is also present).
         for name in (
             "cloud_ops_recurring_resolution_loop",
             "cloud_ops_alert_triage_toil",
