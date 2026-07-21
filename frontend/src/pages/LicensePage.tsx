@@ -28,6 +28,21 @@ import type { LicenseStatusResponse, LicenseStatusValue } from "../types/license
 
 type BadgeTone = "green" | "amber" | "red";
 
+/**
+ * The backend's plain-language `detail` string from a rejected request body
+ * (`{ detail: "..." }`), or null if none is present. Lets the update-key toast
+ * show the specific reason (e.g. the R-1.9.1-L1 / T2 org-mismatch message)
+ * instead of a generic fallback.
+ */
+function errorDetail(err: ApiError): string | null {
+  const body = err.body;
+  if (body && typeof body === "object" && "detail" in body) {
+    const detail = (body as { detail?: unknown }).detail;
+    if (typeof detail === "string" && detail.trim()) return detail;
+  }
+  return null;
+}
+
 const STATUS_BADGE: Record<LicenseStatusValue, { label: string; tone: BadgeTone }> = {
   valid: { label: "Valid", tone: "green" },
   grace: { label: "Grace", tone: "amber" },
@@ -40,6 +55,30 @@ const TONE_CLS: Record<BadgeTone, string> = {
   amber: "bg-amber-500/15 text-amber-200 border-amber-500/30",
   red: "bg-red-500/15 text-red-300 border-red-500/30",
 };
+
+/**
+ * Plain-language explanation for an invalid status reason, shown under the Status
+ * badge so an Owner sees WHY a key is not valid — notably an org-mismatched key
+ * ("this license was issued to a different organisation", R-1.9.1-L1 / T2, AC1)
+ * rather than a bare "Invalid" badge. Returns null when there is nothing to
+ * explain (healthy status, or a reason with no specific copy).
+ */
+function reasonExplanation(reason: string | null | undefined): string | null {
+  switch (reason) {
+    case "org_mismatch":
+      return "This license was issued to a different organisation. Paste the key issued for this installation.";
+    case "unknown_key":
+      // R-1.9.1-L1 / T3: signed by a key this installation does not trust.
+      return "This license was signed with a key this installation does not recognise. Contact CloudFulcrum for a current license key.";
+    case "no_license":
+    case "signature_or_format":
+      return "No valid license is installed. Paste a valid license key to activate AgentIQ.";
+    case "clock_rollback":
+      return "License validation is paused — the system clock looks inconsistent.";
+    default:
+      return null;
+  }
+}
 
 function StatusBadge({ status }: { status: string }) {
   // Any non valid/grace/readonly value (no_license, clock_rollback, …) reads as
@@ -131,9 +170,12 @@ export default function LicensePage() {
       push("License updated.", "success");
     } catch (err) {
       // Validate-before-store: a rejected key changes nothing server-side, and
-      // we keep the displayed status untouched.
+      // we keep the displayed status untouched. Surface the backend's specific
+      // plain-language reason where it gives one — notably org_mismatch, "this
+      // license was issued to a different organisation" (R-1.9.1-L1 / T2, AC1) —
+      // instead of a generic "not valid".
       if (err instanceof ApiError) {
-        push("This key is not valid", "error");
+        push(errorDetail(err) ?? "This key is not valid", "error");
       } else {
         push("Could not update the license key.", "error");
       }
@@ -159,6 +201,17 @@ export default function LicensePage() {
               <h2 className="text-sm font-semibold text-text">Status</h2>
               <StatusBadge status={status?.status ?? "invalid"} />
             </div>
+            {/* R-1.9.1-L1 / T2 (AC1): when the installed key is invalid, name the
+                reason in plain language (e.g. wrong organisation) under the badge. */}
+            {reasonExplanation(status?.reason) && (
+              <p
+                data-testid="license-status-reason"
+                data-reason={status?.reason ?? undefined}
+                className="mb-4 text-xs leading-relaxed text-red-300"
+              >
+                {reasonExplanation(status?.reason)}
+              </p>
+            )}
             <dl className="grid grid-cols-2 gap-4 sm:grid-cols-5">
               {/* Organisation display name resolved from the license (Addendum A
                   §2 / T12). The neutral default shows before a key is installed. */}

@@ -212,8 +212,13 @@ def evaluate_license(
     if not key_string:
         result = {"status": LicenseStatus.READONLY, "reason": "no_license"}
     else:
-        # 4. Offline validation of the installed key.
-        result = validate_license(key_string, public_key)
+        # 4. Offline validation of the installed key, BOUND to this installation
+        # org (R-1.9.1-L1 / T2, AC1): a key whose payload org_id names a different
+        # org validates as invalid: org_mismatch. The org being evaluated IS the
+        # installation org, so pass it straight through.
+        result = validate_license(
+            key_string, public_key, installation_org_id=org_id
+        )
 
     # 5. Clock was consistent → record today as the org's new baseline. UPDATE-only,
     # so a keyless (row-less) org persists nothing and stays ``no_license``.

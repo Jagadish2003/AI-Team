@@ -28,8 +28,13 @@ def keypair():
 
 
 def _sign(priv, *, expires_at, grace_days=14, customer="City National Bank",
-          license_id="cnb-2026-001", term_months=12):
-    """Replicate the issuing scheme exactly (sort_keys=True, base64, Ed25519)."""
+          license_id="cnb-2026-001", term_months=12, deployment_type=None,
+          org_id=None):
+    """Replicate the issuing scheme exactly (sort_keys=True, base64, Ed25519).
+
+    ``deployment_type`` / ``org_id`` are added to the payload only when supplied,
+    so the default call still exercises a payload that omits them (the pre-v2
+    shape)."""
     payload = {
         "customer": customer,
         "license_id": license_id,
@@ -39,6 +44,10 @@ def _sign(priv, *, expires_at, grace_days=14, customer="City National Bank",
         "grace_days": grace_days,
         "limits": {"max_workspaces": None, "enabled_packs": None},
     }
+    if deployment_type is not None:
+        payload["deployment_type"] = deployment_type
+    if org_id is not None:
+        payload["org_id"] = org_id
     payload_b64 = base64.b64encode(json.dumps(payload, sort_keys=True).encode()).decode()
     sig_b64 = base64.b64encode(priv.sign(payload_b64.encode())).decode()
     return f"{payload_b64}.{sig_b64}"
@@ -121,6 +130,74 @@ def test_signature_valid_but_payload_missing_expiry_is_invalid(keypair):
     sig_b64 = base64.b64encode(priv.sign(payload_b64.encode())).decode()
     result = validate_license(f"{payload_b64}.{sig_b64}", public_key=pub)
     assert result == {"status": LicenseStatus.INVALID, "reason": "signature_or_format"}
+
+
+def test_deployment_type_surfaced_at_top_level(keypair):
+    """R-1.9.1-L1 / T1 (AC5): deployment_type is parsed from the payload and
+    lifted to the top level of the result so the status API exposes it."""
+    priv, pub = keypair
+    key = _sign(priv, expires_at=_iso(100), deployment_type="customer_hosted")
+    result = validate_license(key, public_key=pub)
+    assert result["status"] == LicenseStatus.VALID
+    assert result["deployment_type"] == "customer_hosted"
+    # Still readable via the raw payload too.
+    assert result["payload"]["deployment_type"] == "customer_hosted"
+
+
+def test_deployment_type_none_for_pre_v2_payload(keypair):
+    """A pre-v2 key that carries no deployment_type resolves to None, not an error."""
+    priv, pub = keypair
+    key = _sign(priv, expires_at=_iso(100))  # no deployment_type
+    result = validate_license(key, public_key=pub)
+    assert result["status"] == LicenseStatus.VALID
+    assert result["deployment_type"] is None
+
+
+# ---------------------------------------------------------------------------
+# R-1.9.1-L1 / T2 (AT-688) — org binding at verification time (AC1).
+# ---------------------------------------------------------------------------
+def test_org_match_validates(keypair):
+    """A v2 key whose org_id matches the installation org validates normally."""
+    priv, pub = keypair
+    key = _sign(priv, expires_at=_iso(100), org_id="org-A")
+    result = validate_license(key, public_key=pub, installation_org_id="org-A")
+    assert result["status"] == LicenseStatus.VALID
+
+
+def test_org_mismatch_is_invalid(keypair):
+    """AC1: the SAME key in a different org is invalid: org_mismatch — checked
+    before the date logic, so it fails closed regardless of term."""
+    priv, pub = keypair
+    key = _sign(priv, expires_at=_iso(100), org_id="org-A")
+    result = validate_license(key, public_key=pub, installation_org_id="org-B")
+    assert result == {"status": LicenseStatus.INVALID, "reason": "org_mismatch"}
+
+
+def test_org_mismatch_beats_expiry(keypair):
+    """An org-mismatched key is org_mismatch, not readonly, even when expired —
+    the binding check runs first."""
+    priv, pub = keypair
+    key = _sign(priv, expires_at=_iso(-999), org_id="org-A")
+    result = validate_license(key, public_key=pub, installation_org_id="org-B")
+    assert result == {"status": LicenseStatus.INVALID, "reason": "org_mismatch"}
+
+
+def test_no_installation_org_skips_binding(keypair):
+    """The pure/org-agnostic callers (no installation_org_id) enforce no binding,
+    so a v2 key with an org_id still validates on the date logic alone."""
+    priv, pub = keypair
+    key = _sign(priv, expires_at=_iso(100), org_id="org-A")
+    result = validate_license(key, public_key=pub)  # no installation_org_id
+    assert result["status"] == LicenseStatus.VALID
+
+
+def test_pre_v2_payload_not_org_mismatched(keypair):
+    """A pre-v2 key (no org_id) is NOT org_mismatch even against a named org —
+    the v1-rejection path (T4) owns that case, not org binding (T2)."""
+    priv, pub = keypair
+    key = _sign(priv, expires_at=_iso(100))  # no org_id
+    result = validate_license(key, public_key=pub, installation_org_id="org-B")
+    assert result["status"] == LicenseStatus.VALID
 
 
 def test_default_uses_baked_in_key_and_never_raises():
