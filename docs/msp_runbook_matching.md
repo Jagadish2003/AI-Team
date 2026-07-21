@@ -25,3 +25,27 @@ incident notes or runbook text.
 `runbook_composite.present_runbook_match` is the presentation source of truth.
 Finding, executive-report, and demonstration shaping all use it, preventing a
 proposal from being displayed as observed or confirmed.
+
+## Documentation-gap finding
+
+`runbook_documentation_gap.evaluate_documentation_gap` emits the inverse finding
+only for a high-volume recurrence after both checks complete successfully:
+
+1. explicit runbook citations resolve to no observed match; and
+2. runbook-scoped retrieval and deterministic scoring produce no proposal.
+
+A citation-library or retrieval failure returns `unavailable` with no finding. A
+low-volume recurrence returns `not_eligible`. The emitted finding carries the
+recurrence's incident evidence pointers and a structured record of both search
+outcomes, so an analyst can verify why the gap was raised.
+
+Sensitivity is configuration, not detector code:
+
+| Setting | Default | Purpose |
+|---|---:|---|
+| `MSP_B5_DOCUMENTATION_GAP_FLOOR` | `5` | Minimum recurrence count required before missing documentation is raised as an organizational risk. |
+| `MSP_B5_DOCUMENTATION_GAP_CONFIDENCE_CAP` | `0.65` | Maximum confidence assigned to the absence-based finding. |
+
+Titles and explanations use only the structured incident category and CI class.
+They name the repeated loop, recurrence volume, and missing documentation; they do
+not copy assignees, resolvers, or any other individual identity.

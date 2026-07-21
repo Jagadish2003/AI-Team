@@ -52,6 +52,12 @@ MATCH_OBSERVED = "observed"
 MATCH_PROPOSED = "proposed"
 MATCH_CONFIRMED = "confirmed"
 
+# Explicit-citation resolution has the same availability distinction as semantic
+# retrieval. A successful lookup with no page is meaningful; a failed library
+# read is not evidence that documentation is absent.
+CITATION_RESOLUTION_OK = "ok"
+CITATION_RESOLUTION_UNAVAILABLE = "unavailable"
+
 # The source systems that carry runbook content in the 1.8 retrieval substrate.
 # The runbook library is scoped to these when reading library provenance; reused
 # by MSP-B5 T2's runbook-scoped retrieval so the "library" is defined in one place.
@@ -159,20 +165,24 @@ class RunbookPage:
 
     def evidence_pointer(self) -> Dict[str, Any]:
         """An OBSERVED evidence pointer to this runbook page (the resolved side)."""
+        # Never let the shared pointer builder substitute the wall clock. A library
+        # row without a source time stays honestly unavailable and repeated matching
+        # remains byte-for-byte deterministic.
+        source_timestamp = self.source_timestamp or "not_available"
         if self.chunk_id and self.retrieval_result_id:
             pointer = EvidencePointer.retrieved(
                 source_system=self.source_system,
                 source_artifact=self.source_artifact,
                 chunk_id=self.chunk_id,
                 retrieval_result_id=self.retrieval_result_id,
-                source_timestamp=self.source_timestamp,
+                source_timestamp=source_timestamp,
                 source_artifact_type="record_id",
             )
         else:
             pointer = EvidencePointer.observed(
                 source_system=self.source_system,
                 source_artifact=self.source_artifact,
-                source_timestamp=self.source_timestamp,
+                source_timestamp=source_timestamp,
                 source_artifact_type="record_id",
             )
         return pointer.to_dict()
@@ -199,6 +209,12 @@ class RunbookLibrary:
 
     def resolve(self, org_id: str, normalized_ref: str) -> Tuple[RunbookPage, ...]:
         raise NotImplementedError
+
+    def resolve_checked(
+        self, org_id: str, normalized_ref: str
+    ) -> Tuple[str, Tuple[RunbookPage, ...]]:
+        """Resolve and report whether the library lookup was available."""
+        return CITATION_RESOLUTION_OK, self.resolve(org_id, normalized_ref)
 
 
 class InMemoryRunbookLibrary(RunbookLibrary):
@@ -240,10 +256,11 @@ class RetrievalRunbookLibrary(RunbookLibrary):
     provenance join (no vectors, no similarity), which is exactly what an explicit
     citation needs.
 
-    Defensive by design: it never raises into a discovery run — if the substrate is
-    unavailable the index is empty and every citation simply fails to resolve
-    (documentation-gap path), never a crash. The provenance reader is injectable so
-    the join logic is unit-testable without a database.
+    Defensive by design: it never raises into a discovery run. A failed substrate
+    read returns an unavailable checked result, keeping it distinct from a
+    successful empty lookup so it cannot become a false documentation gap. The
+    provenance reader is injectable so the join logic is unit-testable without a
+    database.
     """
 
     def __init__(
@@ -255,25 +272,31 @@ class RetrievalRunbookLibrary(RunbookLibrary):
         self._source_systems = tuple(source_systems)
         self._reader = provenance_reader
         self._cache: Dict[str, Dict[str, Dict[Tuple[str, str], RunbookPage]]] = {}
+        self._availability: Dict[str, str] = {}
 
-    def _read(self, org_id: str) -> list:
-        # Never raise into a discovery run: any failure reading library provenance
-        # degrades to an empty index, so the citation simply fails to resolve
-        # (documentation-gap path) instead of crashing the run.
+    def _read(self, org_id: str) -> Tuple[str, list]:
+        # Never raise into a discovery run; preserve an explicit unavailable state.
         try:
             reader = self._reader
             if reader is None:
                 from app.retrieval import store  # lazy: keep DB import off hot path
                 reader = store.iter_artifact_provenance
-            return list(reader(org_id, self._source_systems) or ())
+            return CITATION_RESOLUTION_OK, list(reader(org_id, self._source_systems) or ())
         except Exception:  # pragma: no cover - substrate unavailable / read failed
-            return []
+            logger.warning(
+                "explicit runbook citation resolution unavailable for org %s",
+                org_id,
+                exc_info=True,
+            )
+            return CITATION_RESOLUTION_UNAVAILABLE, []
 
     def _index(self, org_id: str) -> Dict[str, Dict[Tuple[str, str], RunbookPage]]:
         if org_id in self._cache:
             return self._cache[org_id]
         index: Dict[str, Dict[Tuple[str, str], RunbookPage]] = {}
-        for row in self._read(org_id):
+        status, rows = self._read(org_id)
+        self._availability[org_id] = status
+        for row in rows:
             page = _page_from_provenance_row(org_id, row)
             if page is None:
                 continue
@@ -284,10 +307,16 @@ class RetrievalRunbookLibrary(RunbookLibrary):
         return index
 
     def resolve(self, org_id: str, normalized_ref: str) -> Tuple[RunbookPage, ...]:
+        return self.resolve_checked(org_id, normalized_ref)[1]
+
+    def resolve_checked(
+        self, org_id: str, normalized_ref: str
+    ) -> Tuple[str, Tuple[RunbookPage, ...]]:
         org = _require_org(org_id)
         if not normalized_ref:
-            return ()
-        return tuple(self._index(org).get(normalized_ref, {}).values())
+            return CITATION_RESOLUTION_OK, ()
+        pages = tuple(self._index(org).get(normalized_ref, {}).values())
+        return self._availability.get(org, CITATION_RESOLUTION_OK), pages
 
 
 def _page_from_provenance_row(org_id: str, row: Mapping[str, Any]) -> Optional[RunbookPage]:
@@ -429,18 +458,42 @@ class RunbookMatch:
         )
 
 
-def match_runbooks(
+@dataclass(frozen=True)
+class CitationResolutionResult:
+    """Availability-aware outcome of deterministic citation resolution.
+
+    ``match is None`` proves no explicit match only when ``status`` is ``ok``.
+    Checked references and the reason keep the conclusion auditable.
+    """
+
+    status: str
+    match: Optional[RunbookMatch]
+    checked_references: Tuple[str, ...] = ()
+    reason: Optional[str] = None
+
+    @property
+    def available(self) -> bool:
+        return self.status == CITATION_RESOLUTION_OK
+
+    def as_dict(self) -> Dict[str, Any]:
+        return {
+            "status": self.status,
+            "match": self.match.as_dict() if self.match else None,
+            "checked_references": list(self.checked_references),
+            "reason": self.reason,
+        }
+
+
+def resolve_runbook_citations(
     org_id: str,
     rec: "RecurrenceRecord",
     library: Optional[RunbookLibrary] = None,
-) -> Optional[RunbookMatch]:
+) -> CitationResolutionResult:
     """Resolve a recurrence's explicit runbook citations to an OBSERVED match.
 
-    Deterministic and org-scoped. Returns a :class:`RunbookMatch` with
-    ``origin='observed'`` when the recurrence's citations resolve, unambiguously,
-    to exactly one runbook page in the org's library; otherwise ``None`` — a
-    missing, invalid, ambiguous, or unresolvable citation is NOT a match and is
-    never guessed at (the semantic ``proposed`` path is MSP-B5 T2/T3).
+    Deterministic and org-scoped. The outcome carries an observed match when the
+    recurrence resolves unambiguously to one page. A successful miss and a failed
+    library read remain distinct; neither is guessed into a match.
 
     ``library`` defaults to the retrieval-substrate-backed library; inject an
     :class:`InMemoryRunbookLibrary` for offline/deterministic use.
@@ -455,7 +508,11 @@ def match_runbooks(
 
     citations = tuple(getattr(rec, "runbook_citations", ()) or ())
     if not citations:
-        return None  # no citation -> no observed match (documentation-gap path)
+        return CitationResolutionResult(
+            status=CITATION_RESOLUTION_OK,
+            match=None,
+            reason="no_explicit_citation",
+        )
 
     if library is None:
         library = default_runbook_library()
@@ -463,21 +520,40 @@ def match_runbooks(
     # Resolve each cited reference against the org's library, grouping by the
     # distinct page each resolves to and remembering which incidents cited it.
     resolved: Dict[Tuple[str, str], Dict[str, Any]] = {}
+    checked_references = set()
     for citation in citations:
         if not isinstance(citation, Mapping):
             continue
         incident_evidence = citation.get("evidence")
         incident_sys_id = citation.get("incident_sys_id")
         for raw_ref in citation.get("runbook_references", ()) or ():
+            if str(raw_ref).strip():
+                checked_references.add(str(raw_ref).strip())
             key = normalize_reference(raw_ref)
             if not key:
                 continue  # invalid / unusable reference
-            pages = library.resolve(org, key)
+            status, pages = library.resolve_checked(org, key)
+            if status == CITATION_RESOLUTION_UNAVAILABLE:
+                return CitationResolutionResult(
+                    status=CITATION_RESOLUTION_UNAVAILABLE,
+                    match=None,
+                    checked_references=tuple(sorted(checked_references)),
+                    reason="runbook_library_unavailable",
+                )
             if len(pages) > 1:
-                return None  # a single citation matching many runbooks is ambiguous
+                return CitationResolutionResult(
+                    status=CITATION_RESOLUTION_OK,
+                    match=None,
+                    checked_references=tuple(sorted(checked_references)),
+                    reason="ambiguous_citation",
+                )
             if not pages:
                 continue  # cannot be resolved
             page = pages[0]
+            if _require_org(page.org_id) != org:
+                raise OrgScopeError(
+                    "runbook library returned a page outside the requested org"
+                )
             page_key = (page.source_system, page.source_artifact)
             entry = resolved.setdefault(
                 page_key, {"page": page, "refs": set(), "incidents": {}}
@@ -490,14 +566,21 @@ def match_runbooks(
 
     if len(resolved) != 1:
         # Zero -> unresolvable; more than one distinct runbook -> ambiguous.
-        return None
+        return CitationResolutionResult(
+            status=CITATION_RESOLUTION_OK,
+            match=None,
+            checked_references=tuple(sorted(checked_references)),
+            reason=(
+                "unresolved_citation" if not resolved else "ambiguous_runbook_match"
+            ),
+        )
 
     (entry,) = resolved.values()
     page: RunbookPage = entry["page"]
     citing_evidence = tuple(
         entry["incidents"][key] for key in sorted(entry["incidents"])
     )
-    return RunbookMatch(
+    match = RunbookMatch(
         org_id=org,
         recurrence_id=str(getattr(rec, "record_id", "") or ""),
         match_state=MATCH_OBSERVED,
@@ -507,6 +590,25 @@ def match_runbooks(
         citing_incident_evidence=citing_evidence,
         cited_references=tuple(sorted(entry["refs"])),
     )
+    return CitationResolutionResult(
+        status=CITATION_RESOLUTION_OK,
+        match=match,
+        checked_references=tuple(sorted(checked_references)),
+        reason="explicit_citation_resolved",
+    )
+
+
+def match_runbooks(
+    org_id: str,
+    rec: "RecurrenceRecord",
+    library: Optional[RunbookLibrary] = None,
+) -> Optional[RunbookMatch]:
+    """Return the observed match while preserving the original T1 API.
+
+    Use :func:`resolve_runbook_citations` when an unavailable library must remain
+    distinct from a successful no-match.
+    """
+    return resolve_runbook_citations(org_id, rec, library).match
 
 
 def _safe_pointer(value: Any) -> Optional[Dict[str, Any]]:

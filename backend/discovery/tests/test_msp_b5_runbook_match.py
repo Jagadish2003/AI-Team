@@ -27,12 +27,14 @@ from discovery.detectors.ops_recurrence import (  # noqa: E402
     find_recurrences,
 )
 from discovery.detectors.runbook_match import (  # noqa: E402
+    CITATION_RESOLUTION_UNAVAILABLE,
     MATCH_OBSERVED,
     InMemoryRunbookLibrary,
     RetrievalRunbookLibrary,
     RunbookPage,
     match_runbooks,
     normalize_reference,
+    resolve_runbook_citations,
 )
 from discovery.signals.evidence_store import OrgScopeError  # noqa: E402
 from discovery.signals.resolution_signature import (  # noqa: E402
@@ -370,6 +372,18 @@ class TestRetrievalRunbookLibrary:
 
         library = RetrievalRunbookLibrary(provenance_reader=boom)
         rec = _recurrence(runbook_refs=(_KB,))
-        # A failing library read must never crash the run — it degrades to no
-        # observed match (the documentation-gap path), never an exception.
+        # The legacy match API still never crashes the discovery run.
         assert match_runbooks("org-a", rec, library) is None
+
+    def test_substrate_failure_is_not_a_documentation_gap_miss(self):
+        def boom(org_id, source_systems):
+            raise RuntimeError("substrate down")
+
+        outcome = resolve_runbook_citations(
+            "org-a",
+            _recurrence(runbook_refs=(_KB,)),
+            RetrievalRunbookLibrary(provenance_reader=boom),
+        )
+        assert outcome.status == CITATION_RESOLUTION_UNAVAILABLE
+        assert outcome.match is None
+        assert outcome.reason == "runbook_library_unavailable"
