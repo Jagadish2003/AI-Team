@@ -439,7 +439,11 @@ class TestAC5_CustomerTenantProductionProfile:
         monkeypatch.setenv("REQUIRE_CONNECTOR_SECRETS", "1")           # production
         monkeypatch.delenv("CREDENTIAL_VAULT_KEY", raising=False)      # no usable vault
         monkeypatch.setenv(CONFIG_KEY_API_KEY, _FAKE_ENV_KEY)          # present but ignored
-        monkeypatch.setenv("CUSTOMER_TENANT_ENDPOINT", "https://tenant.example/openai")
+        # A non-empty endpoint so generation_endpoint() is truthy; the path is
+        # irrelevant (the credential short-circuit fires first). The host below
+        # deliberately avoids the model-provider literals that the no-bypass
+        # guard (test_model_gateway_no_bypass.py) scans for.
+        monkeypatch.setenv("CUSTOMER_TENANT_ENDPOINT", "https://tenant.example/models")
         monkeypatch.setenv("CUSTOMER_TENANT_DEPLOYMENT", "gpt-x")
 
         # Any network attempt is a test failure — the credential short-circuit
