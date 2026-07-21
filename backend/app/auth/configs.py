@@ -174,9 +174,22 @@ CONNECTOR_AUTH_CONFIGS: Dict[str, ConnectorAuthConfig] = {
         secret_key="CONFLUENCE_CLIENT_SECRET",
         token_url="https://auth.atlassian.com/oauth/token",
         revocation_url="https://auth.atlassian.com/oauth/token/revoke",
+        # Confluence GRANULAR scopes (v2 REST API). AgentIQ's Confluence client
+        # speaks the v2 API exclusively (`/wiki/api/v2/*`) — the deprecated v1 API
+        # returns HTTP 410/401. v2 is gated behind GRANULAR scopes; the classic
+        # `read:confluence-content.all` / `read:confluence-space.summary` scopes
+        # only authorize v1 and yield 401 on every v2 call. These cover exactly
+        # what the client reads: spaces, pages + blogposts (incl. body.storage and
+        # labels), and attachments (list + download). READ-ONLY — no write scope.
+        # NOTE: the Atlassian OAuth app (Developer Console → Permissions →
+        # Confluence API) must have these granular scopes ENABLED, and each org
+        # must RECONNECT Confluence so its token carries them.
         scopes=[
-            "read:confluence-content.all",
-            "read:confluence-space.summary",
+            "read:space:confluence",
+            "read:page:confluence",
+            "read:blogpost:confluence",
+            "read:attachment:confluence",
+            "read:label:confluence",
             "offline_access",
         ],
         authorization_url="https://auth.atlassian.com/authorize",
@@ -312,15 +325,18 @@ CONNECTOR_AUTH_CONFIGS: Dict[str, ConnectorAuthConfig] = {
         # what the reach-phase SharePointIngestor needs to enumerate granted sites,
         # their document libraries, and changed driveItems (the drive delta query),
         # and NOTHING more:
-        #   Sites.Read.All → read items in all site collections the token is granted
-        #                    (the /sites, /sites/{id}/drives and /drives/{id}/root/delta
-        #                    metadata reads the connector performs)
+        #   Sites.Read.All → read items in all site collections the token is granted:
+        #                    the reach-phase /sites, /sites/{id}/drives and
+        #                    /drives/{id}/root/delta metadata reads AND the R18-A5 deep
+        #                    content reads (/sites/{id}/pages, /sites/{id}/lists) and
+        #                    document-library file-content downloads
+        #                    (/drives/{id}/items/{id}/content). Sites.Read.All already
+        #                    covers site-hosted file content, so no Files.* scope is added.
         #   offline_access → issue a refresh token so the access token auto-refreshes
         #                    (vault) instead of expiring for good
         # Deliberately NO write scope (*.ReadWrite, Sites.Manage.All,
-        # Sites.FullControl.All) and NO Files.* scope — the connector only reads
-        # document activity/metadata SIGNAL; it never mutates SharePoint and never
-        # reads document bodies (that is the 1.8 deep-content story). Microsoft Graph
+        # Sites.FullControl.All) and NO Files.* scope — the connector is strictly
+        # read-only and never mutates SharePoint. Microsoft Graph
         # only returns the sites/libraries the token is scoped to, so ungranted
         # sites can never be read — the AC4 least-privilege guarantee is enforced at
         # the scope level, in addition to the SharePointIngestor's granted-only

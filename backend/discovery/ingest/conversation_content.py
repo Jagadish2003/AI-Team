@@ -789,10 +789,17 @@ def resolve_conversation_thread(
         return None
     try:
         messages = read_container_messages(org_id, container_id)
-    except Exception:  # noqa: BLE001 — a transient read failure → stay queued
+    except Exception as exc:  # noqa: BLE001 — a transient read failure → stay queued
+        # Log the reason on ONE line (no stack trace): the common case is simply
+        # "this source isn't connected for this org" (e.g. a leftover queued
+        # artifact for an org that never authenticated the connector) — an
+        # expected, handled condition that leaves the artifact queued for retry,
+        # not an unexpected crash. Matches the plain-message logging the refresh
+        # worker uses for the Confluence/SharePoint content resolvers.
         logger.warning(
-            "%s thread resolver: could not read container %r for org %s (will retry)",
-            source_system, container_id, org_id, exc_info=True,
+            "%s thread resolver: could not read container %r for org %s "
+            "(will retry): %s",
+            source_system, container_id, org_id, exc,
         )
         return None
 

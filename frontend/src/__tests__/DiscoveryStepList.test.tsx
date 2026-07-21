@@ -20,8 +20,10 @@ describe("DiscoveryStepList step state (CS-4 T5)", () => {
   it("shows the terminal Complete step as completed (check) only once the run has finished", () => {
     render(<DiscoveryStepList currentStep="complete" runComplete />);
 
-    // All eight steps — including "Complete" — render the completed check.
-    expect(screen.getAllByLabelText("completed").length).toBe(8);
+    // Legacy (no connected-source list) shows every known source stage; all of
+    // them — including "Complete" — render the completed check on a finished run.
+    const items = screen.getAllByRole("listitem").length;
+    expect(screen.getAllByLabelText("completed").length).toBe(items);
     // No spinner remains once the run has finished.
     expect(screen.queryByLabelText("active")).not.toBeInTheDocument();
   });
@@ -29,8 +31,9 @@ describe("DiscoveryStepList step state (CS-4 T5)", () => {
   it("keeps Complete as a spinner while the run is still computing at the complete step", () => {
     render(<DiscoveryStepList currentStep="complete" runComplete={false} />);
 
-    // The seven preceding steps are done, but Complete is not ticked yet.
-    expect(screen.getAllByLabelText("completed").length).toBe(7);
+    // Every preceding step is done, but Complete is not ticked yet.
+    const items = screen.getAllByRole("listitem").length;
+    expect(screen.getAllByLabelText("completed").length).toBe(items - 1);
     // Complete shows the active spinner until the run reaches 100%.
     expect(screen.getByLabelText("active")).toBeInTheDocument();
   });
@@ -97,10 +100,11 @@ describe("DiscoveryStepList Salesforce product labelling (CS-4)", () => {
         salesforceProduct="salesforce_sc"
       />
     );
-    // The pack pass (sf_ncino) is index 4, after every connected source
-    // (sf_crm, sn, jira, slack) → four completed steps, confirming the selected
-    // pack renders after all connected sources.
-    expect(screen.getAllByLabelText("completed").length).toBe(4);
+    // The pack pass (sf_ncino) is emitted last among the ingest steps, after
+    // every connected source (sf_crm, sn, jira, slack, teams, confluence,
+    // sharepoint, github, java_app, dotnet_app) → all ten source stages
+    // completed, confirming the selected pack renders after all sources.
+    expect(screen.getAllByLabelText("completed").length).toBe(10);
     expect(screen.getByLabelText("active")).toBeInTheDocument();
   });
 });
@@ -157,18 +161,19 @@ describe("DiscoveryStepList dynamic connected-source progress", () => {
   });
 
   it("renders a generic stage for a connected source with no dedicated step", () => {
-    // A connector without its own pipeline step (e.g. Microsoft Teams) still
-    // appears so every connected source is represented in progress.
+    // A connector without its own pipeline step (e.g. SAP) still appears so
+    // every connected source is represented in progress. (Teams/Confluence/
+    // SharePoint/GitHub now each have a dedicated step and are covered above.)
     render(
       <DiscoveryStepList
         currentStep="complete"
         runComplete
-        connectedSources={["Microsoft Teams"]}
+        connectedSources={["SAP"]}
       />
     );
-    expect(screen.getByText("Microsoft Teams")).toBeInTheDocument();
+    expect(screen.getByText("SAP")).toBeInTheDocument();
     // Once the run is complete the generic source stage is ticked too.
-    // Generic Teams + Pattern Detection + Entity Enrichment + Complete = 4.
+    // Generic SAP + Pattern Detection + Entity Enrichment + Complete = 4.
     expect(screen.getAllByLabelText("completed").length).toBe(4);
   });
 
@@ -208,7 +213,7 @@ describe("DiscoveryStepList dynamic connected-source progress", () => {
       "Jira",
       "Microsoft Teams",
       "Confluence",
-      "Sharepoint",
+      "SharePoint",
       "GitHub",
       "Salesforce CRM",
       "Service Cloud", // pack second pass, appended after every connected source

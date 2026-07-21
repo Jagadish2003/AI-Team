@@ -33,7 +33,7 @@ import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from . import is_live
+from . import get_ingest_org, is_live
 
 logger = logging.getLogger(__name__)
 
@@ -235,37 +235,89 @@ class JiraClient:
             logger.warning(f"Could not fetch issues for sprint {sprint_id} — skipping")
             return []
 
+    def list_projects(self, max_results: int = 200) -> List[Dict[str, str]]:
+        """List projects visible to this credential as ``{key, name}`` dicts.
 
-def _get_client() -> JiraClient:
-    # Credentials come from the credential record ONLY (R191-H1 / T2 — F2 fix).
-    # The per-run context (DB-sourced) carries the vault Bearer token + the
-    # captured api.atlassian.com gateway base (OAuth), isolated per org/run; with
-    # no per-run context (CLI/standalone) or for a static API-token credential the
-    # record resolves per-org from the vault via the single credential path. A
-    # static credential supplies its own base_url; an OAuth credential carries the
-    # captured gateway base. There is **no JIRA_URL env fallback** — the base URL
-    # is part of the connector's credential record (one source of connector
-    # truth); a record without a URL is a loud configuration error naming the
-    # record, never a silent env default.
+        The Jira analogue of Slack's ``conversations.list`` — the options a
+        customer chooses from in the Integration Hub. Uses the Jira Cloud project
+        search endpoint with startAt pagination. Read-only.
+        """
+        projects: List[Dict[str, str]] = []
+        start_at = 0
+        page_size = 50
+        while len(projects) < max_results:
+            data = self.get(
+                f"/rest/api/{JIRA_API_VERSION}/project/search",
+                params={"startAt": start_at, "maxResults": page_size},
+            )
+            values = data.get("values", []) if isinstance(data, dict) else []
+            for p in values:
+                key = str(p.get("key", "") or "")
+                if key:
+                    projects.append({"key": key, "name": str(p.get("name", "") or key)})
+            if not values or (isinstance(data, dict) and data.get("isLast", True)):
+                break
+            start_at += len(values)
+        return projects[:max_results]
+
+
+def _get_client(org_id: Optional[str] = None) -> JiraClient:
+    # Credentials come from the connector's credential record ONLY (R191-H1 / T2 —
+    # F2 fix). The per-run context (DB-sourced) carries the vault Bearer token + the
+    # captured api.atlassian.com gateway base (OAuth), isolated per org/run. With no
+    # per-run context (CLI/standalone, or an on-demand API call like the project
+    # picker) or for a static API-token credential, the record resolves per-org from
+    # the vault via the single credential path. A static credential supplies its own
+    # base_url; an OAuth credential carries the captured gateway base. There is
+    # **no JIRA_URL env fallback** — the base URL is part of the connector's
+    # credential record (one source of connector truth); a record without a URL is a
+    # loud configuration error naming the record, never a silent env default.
     from . import get_live_connector, resolve_vault_connector
 
-    cred = get_live_connector("jira") or resolve_vault_connector("jira")
-    if not cred:
-        raise JiraIngestError(
-            "Live mode requires a Jira credential from the credential vault "
-            "(base URL + OAuth Bearer token or API token). Connect Jira in the "
-            "Integration Hub, or set INGEST_MODE=offline to run without credentials."
-        )
+    cred = get_live_connector("jira") or resolve_vault_connector("jira", org_id)
+    if cred:
+        jira_url = (cred.get("url") or "").rstrip("/")
+        token = cred.get("token") or ""
+        # Present on a static credential only — selects Basic auth against the
+        # site URL (its base_url) instead of Bearer against the OAuth gateway.
+        username = cred.get("username") or ""
+    else:
+        jira_url = ""
+        token = ""
+        username = ""
 
-    jira_url = (cred.get("url") or "").rstrip("/")
-    token = cred.get("token") or ""
-    # Present on a static credential only — selects Basic auth against the site
-    # URL (its base_url) instead of Bearer against the OAuth gateway.
-    username = cred.get("username") or ""
+    # OAuth Jira's api.atlassian.com gateway is NOT on the vault credential (it is
+    # instance config captured at connect). During a discovery run resolve_live_
+    # systems supplies it via the per-run context above; for an on-demand call
+    # (the project picker) resolve it the SAME way here — the persisted per-org
+    # instance URL, then derive-and-persist from the token — reusing the
+    # single-source helpers so the logic can't drift. There is NO JIRA_URL env
+    # fallback (R191-H1 / T2, AC4): instance config is captured at connect and
+    # persisted per-org, never read from the process environment.
+    if not jira_url and token:
+        org = org_id or get_ingest_org()
+        try:
+            from app.live_ingest_credentials import (
+                _derive_oauth_instance_url,
+                get_connector_instance_url,
+                store_connector_instance_url,
+            )
 
-    # The base URL is part of the connector's credential record. A record without
-    # one is a configuration error surfaced loudly and named — never a silent env
-    # default (R191-H1 / T2, AC4).
+            jira_url = (get_connector_instance_url(org, "jira") or "").rstrip("/")
+            if not jira_url:
+                derived = _derive_oauth_instance_url("jira", token)
+                if derived:
+                    jira_url = derived.rstrip("/")
+                    try:
+                        store_connector_instance_url(org, "jira", jira_url)
+                    except Exception:  # pragma: no cover — best-effort cache
+                        pass
+        except Exception:  # pragma: no cover — persisted/derived URL unavailable
+            jira_url = jira_url or ""
+
+    # The base URL is part of the connector's credential record (or captured/derived
+    # at connect). A record without one is a configuration error surfaced loudly and
+    # named — never a silent env default (R191-H1 / T2, AC4).
     if not jira_url:
         raise JiraIngestError(
             "Jira credential record is missing its base URL ('jira' connector). "
@@ -280,6 +332,107 @@ def _get_client() -> JiraClient:
             "token) from the credential vault. Connect Jira in the Integration Hub."
         )
     return JiraClient(jira_url, token=token, username=username)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Project selection (Integration Hub) — the Jira analogue of Slack's P5 channels
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def list_selectable_projects(org_id: Optional[str] = None) -> List[Dict[str, str]]:
+    """Projects the customer can choose from — ``{key, name}`` dicts.
+
+    Offline (default) reads the fixture's ``projects``; live lists projects visible
+    to the connected Jira credential. Selection filtering is deliberately NOT
+    applied here — this is the full option list, resolved identically to what a
+    discovery run would see (mirrors :func:`slack.list_selectable_channels`).
+    ``org_id`` is accepted for API symmetry; the live credential resolves from the
+    per-run/vault context, not the argument.
+    """
+    if not is_live():
+        fixture = _load_fixture()
+        projects = fixture.get("projects")
+        if isinstance(projects, list):
+            return [
+                {"key": str(p.get("key", "")), "name": str(p.get("name", "") or p.get("key", ""))}
+                for p in projects
+                if p.get("key")
+            ]
+        # Back-compat: derive a single option from _meta when no explicit list.
+        meta_key = str((fixture.get("_meta") or {}).get("project_key", "") or "")
+        return [{"key": meta_key, "name": meta_key}] if meta_key else []
+    return _get_client(org_id).list_projects()
+
+
+def _env_project_keys() -> List[str]:
+    """The ``JIRA_PROJECT_KEY`` env fallback as a key list (comma-separated
+    allowed), else the historical default ``["AIC"]``."""
+    env = os.getenv("JIRA_PROJECT_KEY", "AIC")
+    keys = [k.strip() for k in env.split(",") if k.strip()]
+    return keys or ["AIC"]
+
+
+def resolve_jira_projects(org_id: Optional[str] = None) -> List[str]:
+    """The Jira project keys to ingest for ``org_id`` (multi-project selection).
+
+    Resolution order:
+      1. the org's saved Integration-Hub selection — the ``projects`` list on the
+         Jira connector record (set by ``PATCH /api/connectors/jira/projects``);
+      2. the legacy single ``project`` key (backward compatible with the earlier
+         single-project selection);
+      3. the ``JIRA_PROJECT_KEY`` env var (CLI/standalone fallback, comma-separated
+         allowed); else the historical default ``["AIC"]``.
+
+    Any DB/lookup failure degrades to the env/default, so a run is never blocked by
+    the selection store being unavailable (mirrors slack ``_selected_channel_ids``).
+    """
+    org = org_id or get_ingest_org()
+    try:
+        from app.db import org_connector_get
+
+        record = org_connector_get(org, "jira") if org else None
+        if record:
+            projects = record.get("projects")
+            if isinstance(projects, list):
+                keys = [str(p).strip() for p in projects if str(p).strip()]
+                if keys:
+                    return keys
+            # Backward compat: the earlier single-project selection.
+            single = record.get("project")
+            if isinstance(single, str) and single.strip():
+                return [single.strip()]
+    except Exception:  # pragma: no cover — never block a run on the selection store
+        logger.debug("jira: could not read saved project selection; using env/default")
+    return _env_project_keys()
+
+
+def resolve_jira_project(org_id: Optional[str] = None) -> str:
+    """The FIRST Jira project key for ``org_id`` — backward-compatible single-key
+    accessor kept for any caller that still expects one key. Prefer
+    :func:`resolve_jira_projects` (the multi-project selection)."""
+    return resolve_jira_projects(org_id)[0]
+
+
+def _as_key_list(project_key: "Optional[str | List[str]]") -> List[str]:
+    """Normalise a single key, a list of keys, or None into a non-empty key list
+    (None → the env/default). Lets the per-project ingest functions accept either
+    a single project (backward compatible) or the multi-project selection."""
+    if project_key is None:
+        return _env_project_keys()
+    if isinstance(project_key, str):
+        key = project_key.strip()
+        return [key] if key else _env_project_keys()
+    keys = [str(k).strip() for k in project_key if str(k).strip()]
+    return keys or _env_project_keys()
+
+
+def _project_jql_clause(keys: List[str]) -> str:
+    """Build the JQL project scope: ``project = X`` for one key (identical to the
+    single-project JQL), ``project IN (A, B, C)`` for several. Jira project keys
+    are uppercase-alphanumeric, so they need no quoting."""
+    if len(keys) == 1:
+        return f"project = {keys[0]}"
+    return f"project IN ({', '.join(keys)})"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -338,8 +491,10 @@ def get_issue_metrics(
     if not is_live():
         return _load_fixture()["issue_metrics"]
 
-    if not project_key:
-        project_key = os.getenv("JIRA_PROJECT_KEY", "AIC")
+    # Accept a single key (backward compatible) or the multi-project selection.
+    keys = _as_key_list(project_key)
+    clause = _project_jql_clause(keys)
+    project_label = keys[0] if len(keys) == 1 else ",".join(keys)
 
     escalation_field = os.getenv("JIRA_ESCALATION_FIELD", "").strip()
     issue_fields = [
@@ -359,7 +514,7 @@ def get_issue_metrics(
 
     # Total issues in window
     all_issues = client.search_issues(
-        jql=f"project = {project_key} AND created >= -{WINDOW_DAYS}d",
+        jql=f"{clause} AND created >= -{WINDOW_DAYS}d",
         fields=issue_fields,
     )
 
@@ -375,7 +530,7 @@ def get_issue_metrics(
     # Search summary and labels (description search varies by Jira config)
     sf_issues = client.search_issues(
         jql=(
-            f"project = {project_key} AND created >= -{WINDOW_DAYS}d "
+            f"{clause} AND created >= -{WINDOW_DAYS}d "
             f'AND (summary ~ "CS-" OR labels = "Salesforce" OR labels = "salesforce-case")'
         ),
         fields=["summary", "labels"],
@@ -407,7 +562,7 @@ def get_issue_metrics(
             "summary": fields.get("summary", ""),
             "labels": fields.get("labels") or [],
             "status": (fields.get("status") or {}).get("name", ""),
-            "project": fields.get("project") or project_key,
+            "project": fields.get("project") or project_label,
             "assignee": fields.get("assignee"),
             "reporter": fields.get("reporter"),
         }
@@ -417,8 +572,9 @@ def get_issue_metrics(
 
     return {
         "total_issues_90d": total,
-        "project": project_key,
-        "project_key": project_key,
+        "project": project_label,
+        "project_key": project_label,
+        "project_keys": keys,
         "salesforce_label_count": salesforce_label_count,
         "jira_echo_score": jira_echo_score,
         "issue_type_breakdown": [
@@ -465,71 +621,75 @@ def get_sprint_velocity(
     if not is_live():
         return _load_fixture()["sprint_velocity"]
 
-    if not project_key:
-        project_key = os.getenv("JIRA_PROJECT_KEY", "AIC")
-
-    # Find the board for this project
-    boards = client.get_boards(project_key)
-    if not boards:
-        logger.warning(
-            f"No Scrum boards found for Jira project {project_key}. "
-            f"Sprint velocity will be empty. "
-            f"Project may be Kanban or non-sprint based."
-        )
-        return []
-
-    target_board_id = board_id or boards[0]["id"]
-    sprints = client.get_recent_sprints(target_board_id, limit=3)
-
-    if not sprints:
-        logger.warning(f"No closed sprints found for board {target_board_id}.")
-        return []
+    # Accept a single key (backward compatible) or the multi-project selection;
+    # velocity is collected per project and aggregated into one list.
+    keys = _as_key_list(project_key)
 
     results: List[Dict] = []
 
-    for sprint in sprints:
-        sprint_id = sprint["id"]
-        sprint_name = sprint.get("name", f"Sprint {sprint_id}")
-
-        # Second call: get issues WITH story points
-        sprint_issues = client.get_sprint_issues(sprint_id)
-
-        # Completed issues (status = Done)
-        completed_issues = [
-            i
-            for i in sprint_issues
-            if (i.get("fields") or {}).get("status", {}).get("name", "").lower()
-            in ("done", "closed", "resolved", "complete")
-        ]
-
-        # Story points — try to sum, fall back to issue count
-        points_list = [_extract_story_points(i) for i in completed_issues]
-        has_points = any(p is not None for p in points_list)
-
-        if has_points:
-            completed_points = sum(p or 0.0 for p in points_list)
-            velocity_unit = "story_points"
-        else:
-            # Fallback: count of completed issues as velocity proxy
-            completed_points = float(len(completed_issues))
-            velocity_unit = "issue_count"
-            logger.info(
-                f"Sprint {sprint_name}: no story points found — "
-                f"using issue count ({int(completed_points)}) as velocity proxy"
+    for pk in keys:
+        # Find the board for this project
+        boards = client.get_boards(pk)
+        if not boards:
+            logger.warning(
+                f"No Scrum boards found for Jira project {pk}. "
+                f"Sprint velocity will be empty for it. "
+                f"Project may be Kanban or non-sprint based."
             )
+            continue
 
-        # Salesforce-related issues in this sprint
-        sf_count = sum(1 for i in sprint_issues if _is_salesforce_related(i))
+        # A board_id override only applies to a single-project selection.
+        target_board_id = board_id if (board_id and len(keys) == 1) else boards[0]["id"]
+        sprints = client.get_recent_sprints(target_board_id, limit=3)
+        if not sprints:
+            logger.warning(
+                f"No closed sprints found for board {target_board_id} (project {pk})."
+            )
+            continue
 
-        results.append(
-            {
-                "sprint_name": sprint_name,
-                "completed_points": round(completed_points, 1),
-                "salesforce_issue_count": sf_count,
-                "velocity_unit": velocity_unit,
-                "velocity_trend": _compute_trend(results),
-            }
-        )
+        for sprint in sprints:
+            sprint_id = sprint["id"]
+            sprint_name = sprint.get("name", f"Sprint {sprint_id}")
+
+            # Second call: get issues WITH story points
+            sprint_issues = client.get_sprint_issues(sprint_id)
+
+            # Completed issues (status = Done)
+            completed_issues = [
+                i
+                for i in sprint_issues
+                if (i.get("fields") or {}).get("status", {}).get("name", "").lower()
+                in ("done", "closed", "resolved", "complete")
+            ]
+
+            # Story points — try to sum, fall back to issue count
+            points_list = [_extract_story_points(i) for i in completed_issues]
+            has_points = any(p is not None for p in points_list)
+
+            if has_points:
+                completed_points = sum(p or 0.0 for p in points_list)
+                velocity_unit = "story_points"
+            else:
+                # Fallback: count of completed issues as velocity proxy
+                completed_points = float(len(completed_issues))
+                velocity_unit = "issue_count"
+                logger.info(
+                    f"Sprint {sprint_name}: no story points found — "
+                    f"using issue count ({int(completed_points)}) as velocity proxy"
+                )
+
+            # Salesforce-related issues in this sprint
+            sf_count = sum(1 for i in sprint_issues if _is_salesforce_related(i))
+
+            results.append(
+                {
+                    "sprint_name": sprint_name,
+                    "completed_points": round(completed_points, 1),
+                    "salesforce_issue_count": sf_count,
+                    "velocity_unit": velocity_unit,
+                    "velocity_trend": _compute_trend(results),
+                }
+            )
 
     return results
 
@@ -713,9 +873,15 @@ def ingest(jira_client: Optional[JiraClient] = None) -> Dict[str, Any]:
     if jira_client is None:
         jira_client = _get_client()
 
+    # Multi-project scope: the org's saved Integration-Hub selection, else the
+    # JIRA_PROJECT_KEY env fallback (resolve_jira_projects). Passed to both reads so
+    # a run ingests exactly the project(s) the customer chose (JQL project IN (...)).
+    project_keys = resolve_jira_projects()
+    logger.info("Jira ingestion: projects=%s", ", ".join(project_keys))
+
     try:
-        issue_metrics = get_issue_metrics(jira_client)
-        sprint_velocity = get_sprint_velocity(jira_client)
+        issue_metrics = get_issue_metrics(jira_client, project_keys)
+        sprint_velocity = get_sprint_velocity(jira_client, project_keys)
 
         lending_correlation = get_lending_correlation(jira_client)
 

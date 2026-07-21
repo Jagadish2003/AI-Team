@@ -438,10 +438,17 @@ class SharePointContentIngestor(ChangeBasedIngestor):
         The same least-privilege boundary the reach connector applies to sites; in
         live mode Graph only returns granted sites anyway, so this is the offline
         equivalent of that boundary — an ungranted site's pages/lists are never read.
+        When the org has saved a site selection (Integration Hub), the granted set
+        is further narrowed to it — the SAME selection the reach path applies (via
+        the shared ``SharePointIngestor._selected_site_ids``), so reach and depth
+        stay consistent.
         """
+        selected = self._reach._selected_site_ids(org_id)
         sites: List[Dict[str, Any]] = []
         for site in self._reach._raw_sites(org_id):
             if not site.get("is_accessible", True):
+                continue
+            if selected is not None and str(site.get("id", "")) not in selected:
                 continue
             sites.append(site)
         return sites

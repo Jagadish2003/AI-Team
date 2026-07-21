@@ -35,12 +35,12 @@
  */
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useToast } from '../common/Toast';
-import { Skeleton } from '../common/Skeleton';
 import { ApiError, apiGet, apiPatch } from '../../lib/apiClient';
 import { useAuthOptional } from '../../context/AuthContext';
 import { isViewerRole } from '../../utils/roles';
 import { useDataCache, useResource } from '../../lib/dataCache';
 import { cacheKeys } from '../../lib/cacheKeys';
+import PickerSkeleton from './PickerSkeleton';
 
 // ── Product definitions ───────────────────────────────────────────────────────
 
@@ -165,23 +165,9 @@ export default function SalesforceProductPicker({ onSaved }: Props) {
   }, [selected, push, onSaved, cache]);
 
   if (loading) {
-    // Skeleton mirrors the header + description + product rows below, so the real
-    // declaration fills the same space instead of popping in under the panel.
-    return (
-      <div className="mt-4" aria-busy="true" aria-label="Loading product declaration">
-        <div className="mb-2 flex items-center justify-between">
-          <Skeleton className="h-4 w-44" />
-          <Skeleton className="h-3 w-28" />
-        </div>
-        <Skeleton className="mb-1 h-3 w-full" />
-        <Skeleton className="mb-3 h-3 w-3/4" />
-        <div className="space-y-2">
-          {[0, 1, 2].map((i) => (
-            <Skeleton key={i} className="h-14 w-full rounded-lg" />
-          ))}
-        </div>
-      </div>
-    );
+    // Shared skeleton mirrors the header + description + product rows below, so
+    // the real declaration fills the same space instead of popping in.
+    return <PickerSkeleton rows={6} label="Loading product declaration" />;
   }
 
   return (

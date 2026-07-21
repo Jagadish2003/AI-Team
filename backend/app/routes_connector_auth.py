@@ -464,7 +464,12 @@ def register_connector_auth_routes(app: FastAPI) -> None:
         try:
             record = db.org_connector_get(org_id, connector_id) or {}
             record["status"] = "connected"
-            record["lastSynced"] = record.get("lastSynced", "—")
+            # Connecting a source now makes it immediately usable — there is no
+            # separate "Configure & Sync" step. Mark it configured (discovery-ready)
+            # right here so the Integration Hub tile goes straight from Connect to
+            # "View data" (the /configure flag-flip is now automatic on connect).
+            record["configured"] = True
+            record["lastSynced"] = "Just now"
             db.org_connector_set(org_id, connector_id, record)
         except Exception:
             logger.exception("Failed to mark connector %s connected", connector_id)
@@ -711,6 +716,15 @@ def register_connector_auth_routes(app: FastAPI) -> None:
         # user would be forced to re-run the OAuth flow every time the short-lived
         # access token lapses (ServiceNow ~30 min, Salesforce/Jira ~1 h).
         has_refresh_token = refresh_token_enc is not None and str(refresh_token_enc) != ""
+
+        # A recorded failure means the connection needs re-auth REGARDLESS of the
+        # stored expiry. This covers a server-side session invalidation flagged
+        # during ingestion (e.g. Salesforce INVALID_SESSION_ID / HTTP 401), where
+        # the access token was revoked BEFORE its stored expires_at — so a pure
+        # expiry check would still read "connected" while every live call 401s.
+        if refresh_failed_flag:
+            return {"status": "refresh_failed"}
+
         expires_at = datetime.fromisoformat(expires_at_str)
         if expires_at.tzinfo is None:
             expires_at = expires_at.replace(tzinfo=timezone.utc)
