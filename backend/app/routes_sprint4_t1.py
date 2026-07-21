@@ -13,7 +13,7 @@ import time
 from typing import Any, Dict, List, Optional
 
 from fastapi import BackgroundTasks, Depends, HTTPException, FastAPI
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from .security import require_auth
 from .rbac import require_role
@@ -28,7 +28,37 @@ logger = logging.getLogger(__name__)
 class ComputeRequest(BaseModel):
     mode: str = Field(default="offline", pattern="^(offline|live)$")
     systems: List[str] = Field(default_factory=lambda: ["salesforce", "servicenow", "jira"])
-    pack: Optional[str] = Field(default=None, description="Pack ID: service_cloud or ncino")
+    pack: Optional[str] = Field(
+        default=None,
+        description=(
+            "Primary pack ID (backward-compatible singular alias for pack_ids). "
+            "e.g. service_cloud or ncino."
+        ),
+    )
+    pack_ids: Optional[List[str]] = Field(
+        default=None,
+        description=(
+            "R191-P1 T1: multi-pack selection (order-preserving, de-duplicated). "
+            "Supersedes the singular pack; a single-element list behaves exactly "
+            "as pack. Reconciled with pack in the validator — both stay in sync, "
+            "pack being the primary (first) pack."
+        ),
+    )
+
+    @model_validator(mode="after")
+    def _reconcile_packs(self) -> "ComputeRequest":
+        # R191-P1 T1: fold the singular pack and the pack_ids list into ONE
+        # order-preserving, de-duplicated selection via the shared primitive, then
+        # re-derive pack as the primary (first). Single-pack callers — the current
+        # frontend sends only `pack` — are unaffected: [pack] normalises to pack.
+        from discovery.packs.pack_config import normalize_pack_ids
+
+        combined = normalize_pack_ids(
+            list(self.pack_ids or []) + ([self.pack] if self.pack else [])
+        )
+        self.pack_ids = combined
+        self.pack = combined[0] if combined else None
+        return self
 
 
 class ComputeResponse(BaseModel):
