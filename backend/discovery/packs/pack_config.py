@@ -188,10 +188,14 @@ PACK_REGISTRY: Dict[str, Dict[str, Any]] = {
         "packName":      "Cloud Operations",
         "domain":        "cloud_ops",
         "pack_domain":   "cloud_ops",
-        # MSP-B6 T1 AC4: no detector logic in this ticket. The recurring-resolution
-        # loop, alert-triage-toil, ping-pong, queue-ageing (T2) and shared-CI
-        # hotspot (T3) detectors register their module paths here when built.
-        "detectors": [],
+        # MSP-B6 T2 (AT-737): the four record/stream detectors. The shared-CI
+        # hotspot (T3) registers its module path here when built.
+        "detectors": [
+            "discovery.detectors.cloud_ops_recurring_resolution_loop",
+            "discovery.detectors.cloud_ops_alert_triage_toil",
+            "discovery.detectors.cloud_ops_reassignment_ping_pong",
+            "discovery.detectors.cloud_ops_queue_ageing",
+        ],
         # UI labels are per-detector (S6/S7); added with the detectors in T2/T3.
         "ui_labels_path": None,
         # MSP-B6 T1 AC2/AC3: calibration values, thresholds, and the NOC
