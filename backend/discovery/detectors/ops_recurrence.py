@@ -105,6 +105,14 @@ class RecurrenceRecord:
     ci_location: Dict[str, Any]
     event_signature_link: Dict[str, Any]
     evidence_trace: Dict[str, Any]
+    # MSP-B5 T1 — the explicit runbook citations MSP-B4 mined from the resolution
+    # notes, surfaced for deterministic runbook matching. ``cited_runbook_refs`` is
+    # the sorted union of runbook identifiers across the whole loop;
+    # ``runbook_citations`` records, per citing incident, its cited identifiers and
+    # the observed evidence pointer back to that incident. Both default empty so a
+    # recurrence with no cited runbook is unchanged (the documentation-gap case).
+    cited_runbook_refs: Tuple[str, ...] = ()
+    runbook_citations: Tuple[Dict[str, Any], ...] = ()
 
     @property
     def count(self) -> int:
@@ -128,12 +136,28 @@ class RecurrenceRecord:
             "resolution_signature": self.resolution_signature,
         }
 
+    def citing_incident_pointers(self) -> Tuple[Dict[str, Any], ...]:
+        """Evidence pointers for the incidents that cited a runbook (MSP-B5 T1).
+
+        One pointer per citing incident, in ``runbook_citations`` order — the
+        "incidents that cited the runbook" side of a deterministic runbook match.
+        """
+        return tuple(
+            dict(citation["evidence"])
+            for citation in self.runbook_citations
+            if isinstance(citation.get("evidence"), Mapping)
+        )
+
     def as_dict(self) -> Dict[str, Any]:
         payload = asdict(self)
         payload["matched_fields"] = list(self.matched_fields)
         payload["examples"] = [dict(example) for example in self.examples]
         payload["example_evidence_pointers"] = [
             dict(pointer) for pointer in self.example_evidence_pointers
+        ]
+        payload["cited_runbook_refs"] = list(self.cited_runbook_refs)
+        payload["runbook_citations"] = [
+            dict(citation) for citation in self.runbook_citations
         ]
         payload["count"] = self.count
         payload["window"] = self.window
@@ -160,6 +184,10 @@ class _IncidentCandidate:
     ci_reference: Optional[str]
     affected_ci_ids: Tuple[str, ...]
     event_signatures: Tuple[str, ...]
+    # MSP-B5 T1 — the explicitly-cited runbook identifiers MSP-B4 already mined
+    # from the (redacted) resolution note. Carried per candidate so the recurrence
+    # can surface WHICH incidents cited a runbook, for deterministic matching.
+    runbook_references: Tuple[str, ...] = ()
 
 
 def _text(value: Any) -> Optional[str]:
@@ -427,6 +455,11 @@ def _candidate(
     )
     event_signatures = extract_event_signatures(incident, resolution)
 
+    # MSP-B5 T1 — the deterministic runbook identifiers B4 mined from the note.
+    # Read only; deduplicated + ordered so the recurrence is reproducible. No
+    # free-text is read here (the raw note never reaches this record).
+    runbook_references = _runbook_references(resolution.get("runbook_references"))
+
     return _IncidentCandidate(
         incident_sys_id=incident_sys_id,
         incident_number=incident_number,
@@ -448,6 +481,7 @@ def _candidate(
         ci_reference=ci_id or None,
         affected_ci_ids=affected_ci_ids,
         event_signatures=event_signatures,
+        runbook_references=runbook_references,
     )
 
 
@@ -467,6 +501,19 @@ def _select_as_of(
     if parsed is not None:
         return parsed
     return max((candidate.resolved_at for candidate in candidates), default=None)
+
+
+def _runbook_references(value: Any) -> Tuple[str, ...]:
+    """Normalise a resolution block's ``runbook_references`` to a clean tuple.
+
+    MSP-B4 captures these as already-uppercased structured tokens; here we only
+    coerce to strings, drop blanks, deduplicate, and sort so the recurrence is
+    deterministic regardless of source ordering. No parsing/guessing.
+    """
+    if not isinstance(value, Sequence) or isinstance(value, (str, bytes)):
+        return ()
+    refs = {text for ref in value if (text := _text(ref))}
+    return tuple(sorted(refs))
 
 
 def _example(candidate: _IncidentCandidate) -> Dict[str, Any]:
@@ -553,6 +600,26 @@ def find_recurrences(
         example_pointers = tuple(
             dict(example["evidence"]) for example in examples
         )
+        # MSP-B5 T1 — surface the explicit runbook citations for deterministic
+        # matching. Aggregated over ALL members (not just the capped examples) so
+        # no citing incident is dropped: ``runbook_citations`` records, per citing
+        # incident, its cited identifiers + the observed evidence pointer back to
+        # that incident (the "incidents that cited the runbook" side of a match);
+        # ``cited_runbook_refs`` is the sorted union across the loop.
+        runbook_citations = tuple(
+            {
+                "incident_sys_id": member.incident_sys_id,
+                "runbook_references": list(member.runbook_references),
+                "evidence": dict(member.evidence),
+            }
+            for member in members
+            if member.runbook_references
+        )
+        cited_runbook_refs = tuple(
+            sorted(
+                {ref for member in members for ref in member.runbook_references}
+            )
+        )
         # MSP-B4 T5 — soft enrichment joins over the exact recurrence members.
         ci_join = build_ci_location_join(members, cmdb_index)
         event_join = build_event_signature_join(members)
@@ -619,6 +686,8 @@ def find_recurrences(
                 ci_location=ci_join.to_trace(),
                 event_signature_link=event_join.to_trace(),
                 evidence_trace=evidence_trace,
+                cited_runbook_refs=cited_runbook_refs,
+                runbook_citations=runbook_citations,
             )
         )
 
