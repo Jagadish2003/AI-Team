@@ -4,6 +4,11 @@ from typing import Any, Dict, List
 
 from .roadmap_engine import overall_readiness, uniq_permissions_merge
 
+from discovery.detectors.runbook_composite import (
+    present_runbook_match,
+    presentation_for_state,
+)
+
 try:
     from discovery.track_a_adapter import get_required_permissions_for_detector
 except ModuleNotFoundError:  # project-root execution uses backend as package
@@ -32,7 +37,38 @@ def with_display_title(opp: Dict[str, Any]) -> Dict[str, Any]:
     )
     if display_title:
         display_opp["title"] = display_title
-    return display_opp
+    return with_runbook_lifecycle(display_opp)
+
+
+def with_runbook_lifecycle(opp: Dict[str, Any]) -> Dict[str, Any]:
+    """Apply one lifecycle label to finding, report, and demo opportunity data.
+
+    B6 may be carried directly as ``runbook_match`` or nested under
+    ``runbook_composite``.  Both shapes are normalised from the authoritative
+    state map, so no display path can quietly turn ``proposed`` into
+    ``confirmed``.
+    """
+    result = dict(opp)
+    for key in ("runbook_match", "runbookMatch"):
+        value = result.get(key)
+        if isinstance(value, dict):
+            result[key] = present_runbook_match(value)
+
+    for key in ("runbook_composite", "runbookComposite"):
+        value = result.get(key)
+        if not isinstance(value, dict):
+            continue
+        composite = dict(value)
+        state = composite.get("runbook_state") or composite.get("runbookState")
+        if state:
+            lifecycle = presentation_for_state(str(state))
+            composite["runbook_label"] = lifecycle["label"]
+            composite["runbook_lifecycle"] = lifecycle
+        nested = composite.get("runbook_match")
+        if isinstance(nested, dict):
+            composite["runbook_match"] = present_runbook_match(nested)
+        result[key] = composite
+    return result
 
 
 def with_display_titles(opps: List[Dict[str, Any]]) -> List[Dict[str, Any]]:

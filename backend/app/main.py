@@ -66,6 +66,7 @@ from .routes_retrieval import register_retrieval_routes
 from .routes_auth import register_auth_routes
 from .routes_license import register_license_routes
 from .routes_ingestion import register_ingestion_routes
+from .routes_runbook_matches import register_runbook_match_routes
 from .security import require_auth
 from .auth.configs import CONNECTOR_AUTH_CONFIGS
 from .auth.secrets import validate_all_secrets
@@ -314,6 +315,8 @@ register_auth_routes(app)
 register_license_routes(app)
 # R16-A1 / AT-383 (T7): admin ingestion-checkpoint reset.
 register_ingestion_routes(app)
+# MSP-B5 T4: analyst accept/dismiss/defer lifecycle for proposed runbook matches.
+register_runbook_match_routes(app)
 
 origins = [
     o.strip()
