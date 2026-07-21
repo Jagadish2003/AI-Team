@@ -188,13 +188,13 @@ PACK_REGISTRY: Dict[str, Dict[str, Any]] = {
         "packName":      "Cloud Operations",
         "domain":        "cloud_ops",
         "pack_domain":   "cloud_ops",
-        # MSP-B6 T2 (AT-737): the four record/stream detectors. The shared-CI
-        # hotspot (T3) registers its module path here when built.
+        # MSP-B6 T2 (AT-737) record/stream detectors + T3 (AT-738) shared-CI hotspot.
         "detectors": [
             "discovery.detectors.cloud_ops_recurring_resolution_loop",
             "discovery.detectors.cloud_ops_alert_triage_toil",
             "discovery.detectors.cloud_ops_reassignment_ping_pong",
             "discovery.detectors.cloud_ops_queue_ageing",
+            "discovery.detectors.cloud_ops_shared_ci_hotspot",
         ],
         # UI labels are per-detector (S6/S7); added with the detectors in T2/T3.
         "ui_labels_path": None,

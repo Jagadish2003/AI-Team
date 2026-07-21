@@ -1426,14 +1426,16 @@ def run(
             cloud_ops_alert_triage_toil,
             cloud_ops_reassignment_ping_pong,
             cloud_ops_queue_ageing,
+            cloud_ops_shared_ci_hotspot,
         )
         all_detectors = [
             cloud_ops_recurring_resolution_loop,
             cloud_ops_alert_triage_toil,
             cloud_ops_reassignment_ping_pong,
             cloud_ops_queue_ageing,
+            cloud_ops_shared_ci_hotspot,
         ]
-        logger.info("Pack: cloud_ops — 4 operations detectors active")
+        logger.info("Pack: cloud_ops — 5 operations detectors active")
     else:
         # Service Cloud detectors — default
         from .detectors import (

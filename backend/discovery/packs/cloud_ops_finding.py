@@ -244,6 +244,75 @@ def assert_no_individual_references(obj: Any) -> None:
         raise ValueError(f"finding references individuals (forbidden): {hits}")
 
 
+# ── Causal-gate: concentration-shaped wording only (MSP-B6 §1 / T3 AC3) ─────────
+#
+# The shared-CI hotspot (and any pack finding) may state a LOCATED, OBSERVED
+# pattern — "incidents concentrate on a shared dependency" — but must NEVER assert
+# causation ("the dependency causes them"). Causality is reserved for the causal
+# engine's standards. This is enforced by a template-level CHECK, not by reviewer
+# discipline: findings are produced through ``build_concentration_statement`` and
+# validated by ``find_causal_language`` / ``assert_not_causal``.
+
+CAUSAL_PHRASES = (
+    "caused by",
+    "because",
+    "cause of",
+    "causes",
+    "causing",
+    "due to",
+    "root cause",
+    "root-cause",
+    "responsible for",
+    "leads to",
+    "led to",
+    "results in",
+    "resulted in",
+    "driven by",
+    "blamed on",
+    "culprit",
+    "triggered by",
+    "stems from",
+)
+
+
+def find_causal_language(text: str) -> List[str]:
+    """Return the causal phrases present in ``text`` (case-insensitive), else []."""
+    lowered = str(text).lower()
+    return [phrase for phrase in CAUSAL_PHRASES if phrase in lowered]
+
+
+def assert_not_causal(text: str) -> None:
+    """Raise ValueError if ``text`` uses causal language (causality is the causal
+    engine's job — MSP-B6 T3 AC3). The template-level gate."""
+    hits = find_causal_language(text)
+    if hits:
+        raise ValueError(
+            f"finding wording is causal (forbidden — concentration-shaped only): "
+            f"{hits} in {text!r}"
+        )
+
+
+def build_concentration_statement(
+    *,
+    service_count: int,
+    common_ci: str,
+    incident_count: Optional[int] = None,
+) -> str:
+    """Produce the concentration-shaped hotspot statement and self-validate it.
+
+    Always phrased "incidents concentrate on a shared dependency ..." — never
+    "caused by ...". Runs ``assert_not_causal`` on its own output so the wording
+    contract cannot regress silently (T3 AC3).
+    """
+    tail = f" ({incident_count} incidents)" if incident_count is not None else ""
+    statement = (
+        f"Incidents across {service_count} services concentrate on a shared "
+        f"dependency ({common_ci}){tail}."
+    )
+    assert_not_causal(statement)
+    return statement
+
+
 # ── internal ─────────────────────────────────────────────────────────────────
 
 
