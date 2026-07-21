@@ -735,6 +735,7 @@ def run(
         is_sqlserver_opsignal_pack,
         is_github_engineering_pack,
         is_enterprise_ops_pack,
+        is_cloud_ops_pack,
     )
     pack_config = get_pack(pack)
     pack_id     = pack_config["packId"]
@@ -1246,6 +1247,25 @@ def run(
             ent_sla_breach_by_team,
         ]
         logger.info("Pack: enterprise_ops — 3 cross-system detectors active")
+    elif is_cloud_ops_pack(pack_id):
+        # MSP-B6 T2 — Cloud-Operations pack: package B4's records + B0/B7 streams
+        # (in sn_data['cloud_ops']) into findings carrying the four-part contract.
+        # (Shared-CI hotspot detector is added by MSP-B6 T3.)
+        from .detectors import (
+            cloud_ops_recurring_resolution_loop,
+            cloud_ops_alert_triage_toil,
+            cloud_ops_reassignment_ping_pong,
+            cloud_ops_queue_ageing,
+            cloud_ops_shared_ci_hotspot,
+        )
+        all_detectors = [
+            cloud_ops_recurring_resolution_loop,
+            cloud_ops_alert_triage_toil,
+            cloud_ops_reassignment_ping_pong,
+            cloud_ops_queue_ageing,
+            cloud_ops_shared_ci_hotspot,
+        ]
+        logger.info("Pack: cloud_ops — 5 operations detectors active")
     else:
         # Service Cloud detectors — default
         from .detectors import (
@@ -1276,6 +1296,19 @@ def run(
         sn_data,
         jira_data,
     )
+
+    # ── MSP-B6 T6 (AT-741 / AC1): four-part-contract enforcement at the pack
+    # boundary. Every Cloud-Operations finding must carry all four parts
+    # (evidence, confidence, corroboration status, source trace) and reference no
+    # individual; a finding missing any part is a CONTRACT VIOLATION that FAILS the
+    # run's pack execution here — not a cosmetic gap surfaced later. Deliberately
+    # NOT wrapped in a try/except: the violation must propagate and fail the run.
+    if is_cloud_ops_pack(pack_id):
+        from .packs.cloud_ops_finding import enforce_pack_findings
+        _validated = enforce_pack_findings(detector_results)
+        logger.info(
+            "Pack: cloud_ops — four-part contract enforced on %d finding(s)", _validated
+        )
 
     _snapshot_detector_evaluations(
         org_id=org_id,
@@ -1379,6 +1412,11 @@ def run(
         score_enterprise_ops,
         is_enterprise_ops_detector,
     )
+    from .packs.cloud_ops_scorer import (
+        score_cloud_ops,
+        is_cloud_ops_detector,
+        rank_cloud_ops_findings,
+    )
     from .evidence_builder import build_evidence
     # R16-B1 (T3): stable cross-run opportunity identity, computed at assembly.
     from .opportunity_identity import (
@@ -1464,6 +1502,18 @@ def run(
         except Exception as _corr_data_err:  # noqa: BLE001 — non-blocking.
             logger.warning("ENT-2 corroboration run_data build failed (non-blocking): %s", _corr_data_err)
 
+    # ── MSP-B6 T4: Cloud-Operations ops-impact ranking ──
+    # Rank the whole finding SET once (config-weighted across the four Section-2
+    # dimensions) so per-finding scoring below reads a ranking normalised across
+    # all findings, not each finding in isolation. Non-blocking: a failure leaves
+    # the map empty and each finding is ranked against itself.
+    _cloud_ops_ranking: Dict[int, Dict[str, Any]] = {}
+    if is_cloud_ops_pack(pack_id):
+        try:
+            _cloud_ops_ranking = rank_cloud_ops_findings(detector_results)
+        except Exception as _rank_err:  # noqa: BLE001 — ranking is non-blocking.
+            logger.warning("cloud_ops ops-impact ranking failed (non-blocking): %s", _rank_err)
+
     opportunities = []
     for dr in detector_results:
         # Select scorer based on pack
@@ -1492,6 +1542,11 @@ def run(
                 jira_data=jira_data,
                 org_id=org_id,
             )
+        elif is_cloud_ops_pack(pack_id) and is_cloud_ops_detector(dr.detector_id):
+            # MSP-B6 T4 (AT-739): rank by config-driven ops impact across effort
+            # concentration, breadth, recurrence stability, and automation shape.
+            # Confidence stays the detector's honest four-part-contract level.
+            scored = score_cloud_ops(dr, ranking=_cloud_ops_ranking)
         else:
             # R16-C1 T1: pass weighting context so the scorer can read
             # role/priority for dr.signal_source (modulation is T2 work).
@@ -1620,6 +1675,11 @@ def run(
             # present; descriptive only — never mutates scoring fields).
             "focus_emphasis": _build_focus_emphasis(_focus_id, dr.detector_id),
         }
+        # MSP-B6 T4: surface the config-driven ops-impact ranking on the opportunity
+        # when the cloud_ops scorer produced it (descriptive; never mutates scoring).
+        if "ops_impact_score" in scored:
+            opp["ops_impact_score"] = scored["ops_impact_score"]
+            opp["ops_impact_rank"] = scored.get("ops_impact_rank")
         # ENG-AIQ-NC-5 Issue 1: inject approved UI labels from pack UI label files.
         # Deterministic config text — not LLM generated:
         #   title      → s6_title   (S6 opportunity card heading)
