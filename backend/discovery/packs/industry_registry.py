@@ -29,8 +29,18 @@ IndustryConfig fields:
   system_defaults     — dict[system_id -> SystemDefaultConfig]
                         industry-calibrated role + workflow focus defaults
                         for each system. Replaces generic SYSTEM_DEFAULT_ASSUMPTIONS.
+                        R191-R1 "anchor-on-shipped" rule: every key here MUST have
+                        a shipped ingestor/connector — never a roadmap system. See
+                        roadmap_systems below for the non-connectable counterpart.
   recommended_systems — system IDs to suggest as additions on Screen 4
-                        when not already selected. Ordered by priority.
+                        when not already selected. Ordered by priority. Same
+                        anchor-on-shipped rule as system_defaults.
+  roadmap_systems     — (R191-R1) list[RoadmapSystemConfig] for systems this
+                        industry genuinely wants but that have no shipped
+                        ingestor yet (e.g. SAP/D365, target 2.0.1). Rendered as
+                        an explicit roadmap label in Stack Builder / the
+                        Integration Hub — never a connectable default, never
+                        selectable by a run. Defaults to empty.
   llm_context_suffix  — appended to pack llm_context for industry specificity
 
 SystemDefaultConfig fields:
@@ -38,12 +48,22 @@ SystemDefaultConfig fields:
   priority       — SystemPriority default
   workflow_focus — list of WorkflowFocusTag defaults (max 3)
 
+RoadmapSystemConfig fields (R191-R1 — anchor-on-shipped):
+  system_id      — same id space as SystemDefaultConfig keys; MUST NOT also
+                   appear in system_defaults or recommended_systems for the
+                   same industry (a system is either shipped-and-connectable
+                   or roadmap-and-not, never both).
+  label          — display label for the roadmap tile/badge.
+  target_release — the release expected to ship the ingestor (e.g. "2.0.1").
+  reason         — short, honest, user-facing note on why it isn't connectable yet.
+
 Public API:
   get_industry(industry_id) -> Optional[IndustryConfig]
   list_industries() -> list[IndustryConfig]
   get_system_defaults(industry_id, system_id) -> Optional[SystemDefaultConfig]
   get_recommended_systems(industry_id, selected_ids) -> list[str]
   get_pack_hints(industry_id) -> list[str]
+  get_roadmap_systems(industry_id) -> list[RoadmapSystemConfig]
 """
 from __future__ import annotations
 
@@ -65,6 +85,20 @@ class SystemDefaultConfig:
 
 
 @dataclass
+class RoadmapSystemConfig:
+    """
+    A system this industry genuinely wants but that has no shipped ingestor
+    yet (R191-R1 "anchor-on-shipped" rule). Rendered as an explicit roadmap
+    label in Stack Builder / the Integration Hub catalog — never a connectable
+    default, never selectable by a run.
+    """
+    system_id: str        # same id space as SystemDefaultConfig keys
+    label: str             # display label for the roadmap tile/badge
+    target_release: str    # e.g. "2.0.1"
+    reason: str             # short, honest, user-facing note
+
+
+@dataclass
 class IndustryConfig:
     """
     Full configuration for one industry in the Stack Builder registry.
@@ -75,6 +109,7 @@ class IndustryConfig:
     system_defaults: Dict[str, SystemDefaultConfig]   # system_id -> defaults
     recommended_systems: List[str]                     # ordered by priority
     llm_context_suffix: str
+    roadmap_systems: List[RoadmapSystemConfig] = field(default_factory=list)
 
 
 # ── Registry ──────────────────────────────────────────────────────────────────
@@ -132,23 +167,45 @@ INDUSTRY_REGISTRY: Dict[str, IndustryConfig] = {
    "logistics_supply_chain": IndustryConfig(
     industry_id="logistics_supply_chain",
     label="Logistics & supply chain",
-    pack_hints=["service_cloud"],
+    # R191-R1: sqlserver_opsignal added — the shipped native-DB pack fits the
+    # operational-signal role sap/dynamics365 used to (incorrectly) anchor.
+    pack_hints=["service_cloud", "sqlserver_opsignal"],
     system_defaults={
         "salesforce":     SystemDefaultConfig("system_of_record",          "primary",   ["service_casework", "handoffs_routing", "approvals"]),
         "salesforce_sc":  SystemDefaultConfig("system_of_record",          "primary",   ["service_casework", "handoffs_routing"]),
-        "sap":            SystemDefaultConfig("system_of_record",          "primary",   ["handoffs_routing", "approvals", "compliance_risk"]),
-        "dynamics365":    SystemDefaultConfig("system_of_record",          "primary",   ["handoffs_routing", "approvals"]),
         "jira":           SystemDefaultConfig("operational_signal_source", "secondary", ["backlog_work_queues", "handoffs_routing"]),
         "servicenow":     SystemDefaultConfig("operational_signal_source", "secondary", ["backlog_work_queues", "compliance_risk"]),
         "confluence":     SystemDefaultConfig("documentation_system",      "secondary", ["documents_knowledge"]),
+        # R191-R1 re-anchor: databases, documents, and Teams are shipped sources
+        # that genuinely fit logistics/supply-chain operations (dispatch/procurement
+        # records, carrier and customs paperwork, cross-team handoff chat) — replacing
+        # the removed SAP/D365 anchoring below.
+        "sqlserver":      SystemDefaultConfig("operational_signal_source", "secondary", ["data_analytics", "backlog_work_queues"]),
+        "documents":      SystemDefaultConfig("documentation_system",      "secondary", ["documents_knowledge", "handoffs_routing"]),
+        "teams":          SystemDefaultConfig("operational_signal_source", "secondary", ["communications", "handoffs_routing"]),
         "slack":          SystemDefaultConfig("operational_signal_source", "secondary", ["communications", "handoffs_routing"]),
     },
-    recommended_systems=["jira", "slack", "confluence"],
+    recommended_systems=["jira", "sqlserver", "documents"],
     llm_context_suffix=(
         "Logistics and supply chain context. Cross-system handoffs, "
         "throughput bottlenecks, and approval delays in procurement and "
         "dispatch workflows are the primary friction categories."
     ),
+    # R191-R1 "anchor-on-shipped": SAP and Dynamics 365 are genuinely relevant
+    # to this industry but have no shipped ingestor/pack today. They render as
+    # roadmap (target 2.0.1) rather than a connectable default — never
+    # selectable by a run — until a real connector ships (CEO decision:
+    # SAP/D365 connectors and packs defer to 2.0.1, demand-gated).
+    roadmap_systems=[
+        RoadmapSystemConfig(
+            "sap", "SAP", "2.0.1",
+            "SAP connector and pack are demand-gated for 2.0.1 — not yet connectable.",
+        ),
+        RoadmapSystemConfig(
+            "dynamics365", "Dynamics 365", "2.0.1",
+            "Dynamics 365 connector and pack are demand-gated for 2.0.1 — not yet connectable.",
+        ),
+    ],
 ),
 
     "retail_commerce": IndustryConfig(
@@ -218,23 +275,45 @@ INDUSTRY_REGISTRY: Dict[str, IndustryConfig] = {
     "manufacturing": IndustryConfig(
         industry_id="manufacturing",
         label="Manufacturing",
-        pack_hints=["service_cloud"],
+        # R191-R1: sqlserver_opsignal added — the shipped native-DB pack fits the
+        # operational-signal role sap/dynamics365 used to (incorrectly) anchor.
+        pack_hints=["service_cloud", "sqlserver_opsignal"],
         system_defaults={
-            "sap":            SystemDefaultConfig("system_of_record",          "primary",   ["approvals", "handoffs_routing", "compliance_risk"]),
-            "dynamics365":    SystemDefaultConfig("system_of_record",          "primary",   ["approvals", "handoffs_routing"]),
             "salesforce":     SystemDefaultConfig("system_of_record",          "primary",   ["service_casework", "approvals"]),
             "salesforce_sc":  SystemDefaultConfig("system_of_record",          "primary",   ["service_casework", "handoffs_routing"]),
             "servicenow":     SystemDefaultConfig("operational_signal_source", "secondary", ["backlog_work_queues", "compliance_risk"]),
             "jira":           SystemDefaultConfig("operational_signal_source", "secondary", ["backlog_work_queues", "change_release"]),
             "confluence":     SystemDefaultConfig("documentation_system",      "secondary", ["documents_knowledge"]),
+            # R191-R1 re-anchor: databases, documents, and Teams are shipped sources
+            # that genuinely fit manufacturing operations (MES/plant-floor database
+            # signal, work-order/quality documentation, cross-shift handoff chat) —
+            # replacing the removed SAP/D365 anchoring below.
+            "sqlserver":      SystemDefaultConfig("operational_signal_source", "secondary", ["data_analytics", "backlog_work_queues"]),
+            "documents":      SystemDefaultConfig("documentation_system",      "secondary", ["documents_knowledge", "compliance_risk"]),
+            "teams":          SystemDefaultConfig("operational_signal_source", "optional",  ["communications"]),
             "slack":          SystemDefaultConfig("operational_signal_source", "optional",  ["communications"]),
         },
-        recommended_systems=["servicenow", "jira", "confluence"],
+        recommended_systems=["servicenow", "sqlserver", "documents"],
         llm_context_suffix=(
             "Manufacturing context. Work order approval friction, maintenance "
             "scheduling bottlenecks, and cross-system handoffs between ERP "
             "and operations systems are primary friction patterns."
         ),
+        # R191-R1 "anchor-on-shipped": SAP and Dynamics 365 are genuinely relevant
+        # to this industry but have no shipped ingestor/pack today. They render as
+        # roadmap (target 2.0.1) rather than a connectable default — never
+        # selectable by a run — until a real connector ships (CEO decision:
+        # SAP/D365 connectors and packs defer to 2.0.1, demand-gated).
+        roadmap_systems=[
+            RoadmapSystemConfig(
+                "sap", "SAP", "2.0.1",
+                "SAP connector and pack are demand-gated for 2.0.1 — not yet connectable.",
+            ),
+            RoadmapSystemConfig(
+                "dynamics365", "Dynamics 365", "2.0.1",
+                "Dynamics 365 connector and pack are demand-gated for 2.0.1 — not yet connectable.",
+            ),
+        ],
     ),
 
     "technology": IndustryConfig(
@@ -335,3 +414,18 @@ def get_llm_context_suffix(industry_id: str) -> str:
     if not config:
         return ""
     return config.llm_context_suffix
+
+
+def get_roadmap_systems(industry_id: str) -> List[RoadmapSystemConfig]:
+    """
+    Return the non-connectable roadmap systems for this industry (R191-R1).
+
+    These are systems the industry genuinely wants but that have no shipped
+    ingestor yet (e.g. SAP/D365, target 2.0.1). Callers must render them as an
+    explicit roadmap label — never as a connectable default, never as a run
+    selection. Returns [] if the industry is not found or declares none.
+    """
+    config = INDUSTRY_REGISTRY.get(industry_id)
+    if not config:
+        return []
+    return config.roadmap_systems
