@@ -194,6 +194,31 @@ def get_thresholds(path: Optional[str] = None) -> Dict[str, Any]:
     return dict(load_cloud_ops_config(path).thresholds)
 
 
+def get_detector_thresholds(
+    section: str,
+    fallback: Optional[Dict[str, Any]] = None,
+    path: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Return one detector's threshold block, config-driven with a safe fallback.
+
+    Reads ``thresholds[section]`` from the external config (MSP-B6 T1 AC2). If the
+    config is missing/unreadable, returns ``fallback`` so a detector degrades to
+    its documented defaults rather than failing a run — the config edit still wins
+    when the file is present.
+    """
+    base = dict(fallback or {})
+    try:
+        section_cfg = load_cloud_ops_config(path).thresholds.get(section, {}) or {}
+    except CloudOpsConfigError as exc:  # pragma: no cover - defensive
+        logger.warning(
+            "cloud_ops thresholds for %r unavailable (%s); using defaults %s",
+            section, exc, base,
+        )
+        return base
+    base.update({k: v for k, v in section_cfg.items() if not str(k).startswith("_")})
+    return base
+
+
 def get_calibration(path: Optional[str] = None) -> CloudOpsCalibration:
     """Return the externalized scorer calibration (read by the T4 ops-impact scorer)."""
     return load_cloud_ops_config(path).calibration

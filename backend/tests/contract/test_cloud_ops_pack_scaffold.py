@@ -95,17 +95,15 @@ class TestAC1PackRegistration:
         assert m.DEFAULT_PACK == "service_cloud"
 
 
-# ── AC4 — scaffold only, no detector/scorer logic ───────────────────────────────
+# ── AC4 — scaffold config carries no scorer logic ───────────────────────────────
+# NOTE: T1's original "detectors list is empty" assertion has been superseded by
+# MSP-B6 T2 (AT-737), which registers the four record/stream detectors. The scorer
+# is still MSP-B6 T4 and must remain absent.
 
-class TestAC4NoDetectorOrScorerLogic:
-
-    def test_detectors_list_is_empty(self):
-        """No detector logic in this ticket — detector module paths arrive in T2/T3."""
-        m = _pack_config()
-        assert m.get_detector_modules("cloud_ops") == []
+class TestAC4NoScorerLogic:
 
     def test_no_scorer_module_yet(self):
-        """The ops-impact scorer is MSP-B6 T4 — it must not exist in the T1 diff."""
+        """The ops-impact scorer is MSP-B6 T4 — it must not exist yet."""
         import importlib
         for mod in (
             "discovery.packs.cloud_ops_scorer",

@@ -972,6 +972,7 @@ def run(
         is_sqlserver_opsignal_pack,
         is_github_engineering_pack,
         is_enterprise_ops_pack,
+        is_cloud_ops_pack,
     )
     pack_config = get_pack(pack)
     pack_id     = pack_config["packId"]
@@ -1416,6 +1417,23 @@ def run(
             ent_sla_breach_by_team,
         ]
         logger.info("Pack: enterprise_ops — 3 cross-system detectors active")
+    elif is_cloud_ops_pack(pack_id):
+        # MSP-B6 T2 — Cloud-Operations pack: package B4's records + B0/B7 streams
+        # (in sn_data['cloud_ops']) into findings carrying the four-part contract.
+        # (Shared-CI hotspot detector is added by MSP-B6 T3.)
+        from .detectors import (
+            cloud_ops_recurring_resolution_loop,
+            cloud_ops_alert_triage_toil,
+            cloud_ops_reassignment_ping_pong,
+            cloud_ops_queue_ageing,
+        )
+        all_detectors = [
+            cloud_ops_recurring_resolution_loop,
+            cloud_ops_alert_triage_toil,
+            cloud_ops_reassignment_ping_pong,
+            cloud_ops_queue_ageing,
+        ]
+        logger.info("Pack: cloud_ops — 4 operations detectors active")
     else:
         # Service Cloud detectors — default
         from .detectors import (
