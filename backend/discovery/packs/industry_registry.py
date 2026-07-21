@@ -319,24 +319,46 @@ INDUSTRY_REGISTRY: Dict[str, IndustryConfig] = {
     "technology": IndustryConfig(
         industry_id="technology",
         label="Technology",
-        pack_hints=["service_cloud"],
+        # R191-R1 T2: sqlserver_opsignal added — the shipped native-DB pack
+        # serves the new database anchor below.
+        pack_hints=["service_cloud", "sqlserver_opsignal"],
         system_defaults={
             "salesforce":     SystemDefaultConfig("system_of_record",          "primary",   ["service_casework", "intake_requests"]),
             "salesforce_sc":  SystemDefaultConfig("system_of_record",          "primary",   ["service_casework", "intake_requests"]),
             "salesforce_rc":  SystemDefaultConfig("system_of_record",          "primary",   ["intake_requests", "approvals"]),
             "jira":           SystemDefaultConfig("operational_signal_source", "secondary", ["backlog_work_queues", "change_release"]),
             "servicenow":     SystemDefaultConfig("operational_signal_source", "secondary", ["backlog_work_queues", "compliance_risk"]),
+            # R191-R1 T2: GitHub has a shipped connector/pack (connectors/saas/
+            # github.py + github_engineering) and stays a connectable default —
+            # optional priority, unchanged. GitLab has no shipped ingestor and
+            # moves to roadmap_systems below (was incorrectly anchored here).
             "github":         SystemDefaultConfig("engineering_change_system", "optional",  ["change_release", "backlog_work_queues"]),
-            "gitlab":         SystemDefaultConfig("engineering_change_system", "optional",  ["change_release", "backlog_work_queues"]),
             "confluence":     SystemDefaultConfig("documentation_system",      "secondary", ["documents_knowledge"]),
             "slack":          SystemDefaultConfig("operational_signal_source", "secondary", ["communications", "change_release"]),
+            # R191-R1 T2: databases — a shipped source (native DB connector,
+            # sqlserver_opsignal pack) that genuinely fits a technology company's
+            # internal operational/ticketing database signal.
+            "sqlserver":      SystemDefaultConfig("operational_signal_source", "secondary", ["data_analytics", "backlog_work_queues"]),
         },
-        recommended_systems=["jira", "slack", "confluence"],
+        recommended_systems=["jira", "slack", "confluence", "sqlserver"],
         llm_context_suffix=(
             "Technology company context. Engineering delivery friction, "
             "backlog bottlenecks, deployment approval delays, and cross-team "
             "handoff failures are primary signal categories."
         ),
+        # R191-R1 "anchor-on-shipped": GitLab is genuinely relevant to a
+        # technology company but has no shipped ingestor today. It renders as
+        # roadmap rather than a connectable default — never selectable by a
+        # run. Unlike SAP/D365 (explicitly committed to 2.0.1), GitLab carries
+        # no committed release target in the story, so it is marked
+        # "unscheduled" rather than a fabricated version.
+        roadmap_systems=[
+            RoadmapSystemConfig(
+                "gitlab", "GitLab", "unscheduled",
+                "GitLab has no shipped ingestor — GitHub is the connectable "
+                "engineering-change source today; GitLab is not yet connectable.",
+            ),
+        ],
     ),
 }
 
