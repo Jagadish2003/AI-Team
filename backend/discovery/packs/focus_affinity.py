@@ -40,8 +40,9 @@ Product boundaries encoded here (Section 2 / Section 3):
 
 Detector ids are drawn from every registered pack (see
 ``discovery/packs/pack_config.py``): Service Cloud, nCino, STRS Benefits,
-SQL Server operational signals, GitHub engineering, and Enterprise
-operations. Every non-enterprise detector appears in at least one focus.
+SQL Server operational signals, GitHub engineering, Enterprise operations,
+and Cloud operations (MSP-B6). Every non-enterprise detector appears in at
+least one focus.
 """
 from __future__ import annotations
 
@@ -99,6 +100,9 @@ FOCUS_AFFINITY: Dict[str, Optional[Tuple[str, ...]]] = {
         "DB_TICKET_VOLUME_SURGE",       # throughput / volume surge
         "ENT_INCIDENT_RESOLUTION_LAG",  # incident resolution throughput
         "SPREADING_BOTTLENECK",         # core processing throughput
+        "RECURRING_RESOLUTION_LOOP",    # NOC: repeated same-resolution toil
+        "ALERT_TRIAGE_TOIL",            # NOC: high-volume trivially-resolved alerts
+        "QUEUE_AGEING",                 # NOC: operational queue ageing vs baseline
     ),
     # The gate is the bottleneck: approval gates, compliance deadlines,
     # covenant tracking, permissions, SLA breaches, regulatory control points.
@@ -120,6 +124,7 @@ FOCUS_AFFINITY: Dict[str, Optional[Tuple[str, ...]]] = {
         "INTEGRATION_CONCENTRATION",         # integration / sync concentration
         "ENT_CHANGE_INCIDENT_CORRELATION",   # incident/change correlation
         "LOAN_ORIGINATION_ROUTING_FRICTION", # cross-stage routing/handoff friction
+        "REASSIGNMENT_PING_PONG",            # NOC: incident bounced between groups/queues
     ),
     # Internal staff productivity — repetitive manual work, document & data prep.
     FOCUS_BACK_OFFICE_PRODUCTIVITY: (
