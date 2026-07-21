@@ -70,6 +70,10 @@ function reasonExplanation(reason: string | null | undefined): string | null {
     case "unknown_key":
       // R-1.9.1-L1 / T3: signed by a key this installation does not trust.
       return "This license was signed with a key this installation does not recognise. Contact CloudFulcrum for a current license key.";
+    case "unsupported_payload_version":
+      // R-1.9.1-L1 / T4: an outdated (pre-v2) license format. Contact CloudFulcrum
+      // for a current license key.
+      return "This license uses an outdated format and is no longer supported. Contact CloudFulcrum for a current license key.";
     case "no_license":
     case "signature_or_format":
       return "No valid license is installed. Paste a valid license key to activate AgentIQ.";

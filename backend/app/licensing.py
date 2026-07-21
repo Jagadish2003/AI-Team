@@ -249,10 +249,13 @@ class LicenseStatus:
 # map. ``signature_or_format`` is the catch-all for any signature/format/parse
 # failure (AC2); ``org_mismatch`` (R-1.9.1-L1 / T2) is a signature-valid key
 # bound to a DIFFERENT installation org; ``unknown_key`` (R-1.9.1-L1 / T3) is a
-# key whose ``kid`` is not in the configured trusted key set.
+# key whose ``kid`` is not in the configured trusted key set;
+# ``unsupported_payload_version`` (R-1.9.1-L1 / T4) is a signature-valid but
+# pre-v2 payload — one missing ``org_id`` and/or ``kid``.
 REASON_SIGNATURE_OR_FORMAT = "signature_or_format"
 REASON_ORG_MISMATCH = "org_mismatch"
 REASON_UNKNOWN_KEY = "unknown_key"
+REASON_UNSUPPORTED_PAYLOAD_VERSION = "unsupported_payload_version"
 
 # Exact failure shape returned on any signature/format/parse error (AC2).
 _INVALID_RESULT = {"status": LicenseStatus.INVALID, "reason": REASON_SIGNATURE_OR_FORMAT}
@@ -289,17 +292,25 @@ def validate_license(
     ``signature_or_format`` failure — so an operator can tell "I need to trust /
     rotate this signing key" from "this key is corrupt or forged".
 
-    Org binding (R-1.9.1-L1 / T2, AC1): when ``installation_org_id`` is supplied
-    and the verified payload carries an ``org_id`` (payload v2), the two must
-    match. A signature-valid key whose ``org_id`` is bound to a DIFFERENT
-    installation org returns ``{'status': 'invalid', 'reason': 'org_mismatch'}``
-    — the "Customer A's key pasted into Customer B's install must fail closed and
-    say why" case. This check runs BEFORE the date logic: an org-mismatched key
-    is invalid regardless of its term. The comparison is skipped (no binding
-    enforced) when the caller passes no ``installation_org_id`` — so the pure,
-    org-agnostic callers (e.g. offline issuing tests) are unaffected — and also
-    when the payload has no ``org_id`` (a pre-v2 key), which is handled by the
-    separate v1-rejection step (T4), not here.
+    Payload v1 rejection (R-1.9.1-L1 / T4, AC3): a signature-valid payload that is
+    not v2-shaped — i.e. missing ``org_id`` and/or ``kid`` — returns
+    ``{'status': 'invalid', 'reason': 'unsupported_payload_version'}``. This is
+    the schema floor and runs BEFORE org binding and the date logic: org binding
+    (T2) and kid-set verification (T3) both presuppose a v2 payload, so a pre-v2
+    key is turned away here rather than partially interpreted. Safe precisely
+    because no real customer key is in the field yet — every issued key
+    (``generate_license.py``) and every dev/test key is v2 (``org_id`` + ``kid``).
+
+    Org binding (R-1.9.1-L1 / T2, AC1): when ``installation_org_id`` is supplied,
+    the verified payload's ``org_id`` (always present on a v2 payload, which the
+    v1-rejection above has already guaranteed) must match it. A signature-valid
+    key whose ``org_id`` is bound to a DIFFERENT installation org returns
+    ``{'status': 'invalid', 'reason': 'org_mismatch'}`` — the "Customer A's key
+    pasted into Customer B's install must fail closed and say why" case. This
+    check runs BEFORE the date logic: an org-mismatched key is invalid regardless
+    of its term. The comparison is skipped (no binding enforced) when the caller
+    passes no ``installation_org_id`` — so the pure, org-agnostic callers (e.g.
+    offline issuing tests) are unaffected.
 
     Returns ``{status, customer, deployment_type, expires_at, days_remaining,
     payload}`` for a verified key. ``deployment_type`` (R-1.9.1-L1 / T1, payload
@@ -318,10 +329,18 @@ def validate_license(
         return dict(_INVALID_RESULT)
     payload = verified
 
+    # Payload v1 rejection (T4 / AC3) — the schema floor, checked first on a
+    # verified payload. A payload missing org_id and/or kid is not v2-shaped and
+    # is rejected as unsupported_payload_version, BEFORE org binding (T2) and the
+    # date logic — both of which presuppose a v2 payload. No real key is in the
+    # field yet, so requiring v2 here is safe (all issued + dev/test keys are v2).
+    if payload.get("org_id") is None or payload.get("kid") is None:
+        return _invalid(REASON_UNSUPPORTED_PAYLOAD_VERSION)
+
     # Org binding (T2 / AC1) — checked before the date logic so a key bound to a
     # different org is invalid regardless of its term. Only enforced when the
-    # caller names an installation org AND the payload declares an org_id; a
-    # pre-v2 key with no org_id is left to the T4 v1-rejection path.
+    # caller names an installation org; the payload's org_id is guaranteed present
+    # here by the v1-rejection above.
     payload_org_id = payload.get("org_id")
     if (
         installation_org_id is not None

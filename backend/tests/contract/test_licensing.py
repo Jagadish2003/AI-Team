@@ -18,7 +18,7 @@ import json
 import pytest
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
-from app.licensing import LicenseStatus, validate_license
+from app.licensing import DEFAULT_KID, LicenseStatus, validate_license
 
 
 @pytest.fixture
@@ -29,12 +29,15 @@ def keypair():
 
 def _sign(priv, *, expires_at, grace_days=14, customer="City National Bank",
           license_id="cnb-2026-001", term_months=12, deployment_type=None,
-          org_id=None):
+          org_id="org-A", kid=DEFAULT_KID):
     """Replicate the issuing scheme exactly (sort_keys=True, base64, Ed25519).
 
-    ``deployment_type`` / ``org_id`` are added to the payload only when supplied,
-    so the default call still exercises a payload that omits them (the pre-v2
-    shape)."""
+    Defaults to a v2-shaped payload (``org_id`` + ``kid`` present) — the shape a
+    real issued key carries — so the date/status tests exercise a payload the
+    verifier accepts after R-1.9.1-L1 / T4 (v1 rejection). Pass ``org_id=None`` or
+    ``kid=None`` to omit that field and mint a v1-shaped payload for the
+    ``unsupported_payload_version`` tests. ``deployment_type`` is added only when
+    supplied (it is not part of the v1/v2 gate)."""
     payload = {
         "customer": customer,
         "license_id": license_id,
@@ -48,6 +51,8 @@ def _sign(priv, *, expires_at, grace_days=14, customer="City National Bank",
         payload["deployment_type"] = deployment_type
     if org_id is not None:
         payload["org_id"] = org_id
+    if kid is not None:
+        payload["kid"] = kid
     payload_b64 = base64.b64encode(json.dumps(payload, sort_keys=True).encode()).decode()
     sig_b64 = base64.b64encode(priv.sign(payload_b64.encode())).decode()
     return f"{payload_b64}.{sig_b64}"
@@ -124,9 +129,12 @@ def test_wrong_key_is_invalid(keypair):
 
 
 def test_signature_valid_but_payload_missing_expiry_is_invalid(keypair):
-    """A correctly signed but structurally bad payload is still invalid."""
+    """A correctly signed, v2-shaped, but structurally bad payload (no expires_at)
+    is still invalid — signature_or_format (it clears the v1 gate but fails the
+    date parse)."""
     priv, pub = keypair
-    payload_b64 = base64.b64encode(json.dumps({"customer": "X"}, sort_keys=True).encode()).decode()
+    payload = {"customer": "X", "org_id": "org-A", "kid": DEFAULT_KID}
+    payload_b64 = base64.b64encode(json.dumps(payload, sort_keys=True).encode()).decode()
     sig_b64 = base64.b64encode(priv.sign(payload_b64.encode())).decode()
     result = validate_license(f"{payload_b64}.{sig_b64}", public_key=pub)
     assert result == {"status": LicenseStatus.INVALID, "reason": "signature_or_format"}
@@ -144,10 +152,11 @@ def test_deployment_type_surfaced_at_top_level(keypair):
     assert result["payload"]["deployment_type"] == "customer_hosted"
 
 
-def test_deployment_type_none_for_pre_v2_payload(keypair):
-    """A pre-v2 key that carries no deployment_type resolves to None, not an error."""
+def test_deployment_type_none_when_absent(keypair):
+    """A v2 key that carries no deployment_type resolves to None, not an error
+    (deployment_type is optional and not part of the v1/v2 gate)."""
     priv, pub = keypair
-    key = _sign(priv, expires_at=_iso(100))  # no deployment_type
+    key = _sign(priv, expires_at=_iso(100))  # v2 (org_id+kid) but no deployment_type
     result = validate_license(key, public_key=pub)
     assert result["status"] == LicenseStatus.VALID
     assert result["deployment_type"] is None
@@ -191,16 +200,65 @@ def test_no_installation_org_skips_binding(keypair):
     assert result["status"] == LicenseStatus.VALID
 
 
-def test_pre_v2_payload_not_org_mismatched(keypair):
-    """A pre-v2 key (no org_id) is NOT org_mismatch even against a named org —
-    the v1-rejection path (T4) owns that case, not org binding (T2)."""
+def test_pre_v2_payload_is_unsupported_not_org_mismatched(keypair):
+    """A pre-v2 key (no org_id/kid) is unsupported_payload_version, NOT
+    org_mismatch, even against a named installation org — the v1-rejection (T4)
+    runs before org binding (T2)."""
     priv, pub = keypair
-    key = _sign(priv, expires_at=_iso(100))  # no org_id
+    key = _sign(priv, expires_at=_iso(100), org_id=None, kid=None)  # v1 shape
     result = validate_license(key, public_key=pub, installation_org_id="org-B")
-    assert result["status"] == LicenseStatus.VALID
+    assert result == {"status": LicenseStatus.INVALID, "reason": "unsupported_payload_version"}
 
 
 def test_default_uses_baked_in_key_and_never_raises():
     """Calling with no public_key uses the shipped constant; garbage -> invalid."""
     result = validate_license("garbage-not-a-key")
     assert result == {"status": LicenseStatus.INVALID, "reason": "signature_or_format"}
+
+
+# ---------------------------------------------------------------------------
+# R-1.9.1-L1 / T4 (AT-690) — payload v1 rejection (AC3): a signature-valid but
+# pre-v2 payload (missing org_id and/or kid) is invalid:
+# unsupported_payload_version, distinct from signature_or_format / org_mismatch.
+# ---------------------------------------------------------------------------
+def test_v1_payload_missing_both_is_unsupported(keypair):
+    """AC3: a v1-shaped payload (no org_id AND no kid) is rejected as
+    unsupported_payload_version, even though its signature verifies."""
+    priv, pub = keypair
+    key = _sign(priv, expires_at=_iso(100), org_id=None, kid=None)
+    result = validate_license(key, public_key=pub)
+    assert result == {"status": LicenseStatus.INVALID, "reason": "unsupported_payload_version"}
+
+
+def test_v1_payload_missing_org_id_is_unsupported(keypair):
+    """A payload with a kid but no org_id is not v2-shaped → unsupported."""
+    priv, pub = keypair
+    key = _sign(priv, expires_at=_iso(100), org_id=None)  # kid present by default
+    result = validate_license(key, public_key=pub)
+    assert result == {"status": LicenseStatus.INVALID, "reason": "unsupported_payload_version"}
+
+
+def test_v1_payload_missing_kid_is_unsupported(keypair):
+    """A payload with an org_id but no kid is not v2-shaped → unsupported."""
+    priv, pub = keypair
+    key = _sign(priv, expires_at=_iso(100), kid=None)  # org_id present by default
+    result = validate_license(key, public_key=pub)
+    assert result == {"status": LicenseStatus.INVALID, "reason": "unsupported_payload_version"}
+
+
+def test_v1_rejection_precedes_date_logic(keypair):
+    """The v1 gate runs before the date logic: a long-expired v1 key is
+    unsupported_payload_version, not readonly — its term is never evaluated."""
+    priv, pub = keypair
+    key = _sign(priv, expires_at=_iso(-999), org_id=None, kid=None)
+    result = validate_license(key, public_key=pub)
+    assert result == {"status": LicenseStatus.INVALID, "reason": "unsupported_payload_version"}
+
+
+def test_v2_payload_clears_the_version_gate(keypair):
+    """A payload carrying both org_id and kid is v2-shaped and passes the gate
+    (validated on the date logic) — the positive side of AC3."""
+    priv, pub = keypair
+    key = _sign(priv, expires_at=_iso(100), org_id="org-A", kid=DEFAULT_KID)
+    result = validate_license(key, public_key=pub)
+    assert result["status"] == LicenseStatus.VALID

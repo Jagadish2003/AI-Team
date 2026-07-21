@@ -38,7 +38,7 @@ from app.license_runtime import (
     set_org_license_key,
 )
 from app.license_runtime import get_current_license_status as real_status
-from app.licensing import LicenseStatus, validate_license
+from app.licensing import DEFAULT_KID, LicenseStatus, validate_license
 
 DEV_DEFAULT_ORG = "default"
 
@@ -67,15 +67,23 @@ def _mint(
     customer: str = "City National Bank",
     license_id: str = "cnb-2026-001",
     term_months: int = 12,
+    org_id: str = DEV_DEFAULT_ORG,
 ) -> str:
-    """Mint a real signed key using the exact issuing encoding (sort_keys + b64)."""
+    """Mint a real signed key using the exact issuing encoding (sort_keys + b64).
+
+    v2-shaped: carries ``org_id`` (default the dev/default org, so the key clears
+    both the T4 version gate and org binding when evaluated for that org) and the
+    default ``kid`` (which resolves through the throwaway public key the module
+    fixture installs). Pass ``org_id`` to bind a key to a different installation
+    org."""
     payload = {
         "customer": customer,
         "license_id": license_id,
         "issued_at": _iso(-1),
         "expires_at": expires_at,
         "term_months": term_months,
-        "grace_days": grace_days,
+        "org_id": org_id,
+        "kid": DEFAULT_KID,
         "limits": {"max_workspaces": None, "enabled_packs": None},
     }
     payload_b64 = base64.b64encode(json.dumps(payload, sort_keys=True).encode()).decode()
@@ -236,7 +244,7 @@ def test_admin_update_key_updates_status(client):
     headers = _set_role("owner")
     org_id = headers["X-Org-Id"]
     _reset_license(org_id)
-    key = _mint(expires_at=_iso(200))
+    key = _mint(expires_at=_iso(200), org_id=org_id)  # bound to THIS install org
 
     resp = client.post(UPDATE_PATH, json={"key": key}, headers=headers)
     assert resp.status_code == 200, resp.text
@@ -290,7 +298,10 @@ def test_banner_status_readable_by_every_role(client, role):
     """Unlike the Owner-only full status, the banner endpoint is auth-only so the
     global expiry banner renders for every role (AC4/AC5)."""
     headers = _set_role(role)
-    set_org_license_key(headers["X-Org-Id"], _mint(expires_at=_iso(-7), grace_days=14))  # grace
+    set_org_license_key(
+        headers["X-Org-Id"],
+        _mint(expires_at=_iso(-7), grace_days=14, org_id=headers["X-Org-Id"]),  # grace, bound to this org
+    )
 
     resp = client.get(BANNER_PATH, headers=headers)
     assert resp.status_code == 200, resp.text

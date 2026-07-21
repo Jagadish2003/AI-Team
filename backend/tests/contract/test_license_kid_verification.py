@@ -47,7 +47,16 @@ def _iso(days: int) -> str:
     return (datetime.date.today() + datetime.timedelta(days=days)).isoformat()
 
 
-def _mint(priv: Ed25519PrivateKey, *, kid: str | None = None, expires_at: str | None = None) -> str:
+def _mint(
+    priv: Ed25519PrivateKey,
+    *,
+    kid: str | None = None,
+    org_id: str | None = "org-cnb",
+    expires_at: str | None = None,
+) -> str:
+    """Mint a signed key. ``org_id`` is present by default so a payload carrying a
+    ``kid`` is v2-shaped and clears the T4 version gate; the kid-less case (no
+    ``kid``) is deliberately pre-v2 and exercises the single-key path."""
     payload: dict = {
         "customer": "City National Bank",
         "license_id": "cnb-2026-001",
@@ -59,6 +68,8 @@ def _mint(priv: Ed25519PrivateKey, *, kid: str | None = None, expires_at: str | 
     }
     if kid is not None:
         payload["kid"] = kid
+    if org_id is not None:
+        payload["org_id"] = org_id
     payload_b64 = base64.b64encode(json.dumps(payload, sort_keys=True).encode()).decode()
     sig_b64 = base64.b64encode(priv.sign(payload_b64.encode())).decode()
     return f"{payload_b64}.{sig_b64}"
@@ -143,13 +154,23 @@ def test_default_kid_resolves_to_root_of_trust(monkeypatch):
 
 
 def test_kidless_payload_uses_single_key_path(monkeypatch):
-    """A payload with NO kid still resolves through load_public_key (the
-    LICENSE_PUBLIC_KEY / baked-in single-key path) — pre-v2 / rotation stays intact."""
+    """A payload with NO kid still resolves through load_public_key at the
+    SIGNATURE level (the LICENSE_PUBLIC_KEY / baked-in single-key path) — pre-v2
+    rotation stays intact for the low-level primitive. But validate_license (T4)
+    rejects a kid-less payload as unsupported_payload_version: it is not
+    v2-shaped, so the STATUS layer turns it away even though the signature is
+    good."""
     root = Ed25519PrivateKey.generate()
     monkeypatch.setenv(licensing.LICENSE_PUBLIC_KEY_ENV, _pub_pem(root))
 
-    assert validate_license(_mint(root))["status"] == LicenseStatus.VALID  # kid-less
-    # Signed by a non-trusted key with no kid → invalid (single-key mismatch).
+    # Primitive still resolves the kid-less key via the single-key path.
+    assert verify_license_signature(_mint(root)) is not None
+    # ...but the status validator turns it away as a pre-v2 payload (T4 / AC3).
+    assert validate_license(_mint(root)) == {
+        "status": LicenseStatus.INVALID,
+        "reason": "unsupported_payload_version",
+    }
+    # Signed by a non-trusted key with no kid → invalid at the signature level.
     other = Ed25519PrivateKey.generate()
     assert validate_license(_mint(other))["status"] == LicenseStatus.INVALID
 
