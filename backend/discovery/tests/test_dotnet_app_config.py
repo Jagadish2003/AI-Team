@@ -27,6 +27,7 @@ from discovery.ingest.dotnet_app_config import (
     resolve_secret,
     safe_endpoint_error,
 )
+from discovery.ingest.operational_config import OperationalCredentialMissing
 
 
 @pytest.fixture(autouse=True)
@@ -125,7 +126,10 @@ def test_target_has_no_field_that_could_hold_a_plaintext_secret():
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# AC4 — credentials resolved from the vault (per-run context), env as CLI fallback
+# AC4 / R191-H1 T1 (AC1) — credentials resolved from the vault ONLY; a vault miss
+# fails CLOSED (no env fallback). Shared with Java, so this also proves the F1 fix
+# holds for the .NET target shape. ``env=`` is accepted for signature compatibility
+# but never read.
 # ─────────────────────────────────────────────────────────────────────────────
 def _target(ref=DEFAULT_CREDENTIAL_REF):
     return DotNetAppTarget(app_id="orders-api", name="O", diagnostics_url="u",
@@ -137,27 +141,33 @@ def test_secret_resolved_from_per_run_vault_context():
     secret = resolve_secret(
         "org-1", _target(),
         connector_lookup=lambda ref: captured if ref == DEFAULT_CREDENTIAL_REF else None,
-        env={},
     )
     assert secret == "VAULT-TOKEN-123"
 
 
-def test_secret_env_fallback_for_cli():
-    secret = resolve_secret(
-        "org-1", _target(),
-        connector_lookup=lambda ref: None,        # nothing in the per-run context
-        env={"DOTNET_APP_TOKEN": "ENV-TOKEN-456"},
-    )
-    assert secret == "ENV-TOKEN-456"
+def test_vault_miss_fails_closed_no_env_fallback(monkeypatch):
+    # A DOTNET_APP_TOKEN in the environment must NOT be used (R191-H1 / T1, F1 fix).
+    monkeypatch.setenv("DOTNET_APP_TOKEN", "ENV-TOKEN-456")
+    with pytest.raises(OperationalCredentialMissing) as exc:
+        resolve_secret(
+            "org-1", _target(),
+            connector_lookup=lambda ref: None,        # nothing in the vault
+            env={"DOTNET_APP_TOKEN": "ENV-TOKEN-456"},  # accepted but never read
+        )
+    assert exc.value.org_id == "org-1"
+    assert exc.value.app_id == "orders-api"
+    assert exc.value.credential_ref == DEFAULT_CREDENTIAL_REF
+    assert "ENV-TOKEN-456" not in str(exc.value)
 
 
-def test_secret_custom_credential_ref_uses_namespaced_env():
-    secret = resolve_secret(
-        "org-1", _target(ref="orders_diagnostics"),
-        connector_lookup=lambda ref: None,
-        env={"ORDERS_DIAGNOSTICS_TOKEN": "NS-TOKEN"},
-    )
-    assert secret == "NS-TOKEN"
+def test_custom_credential_ref_vault_miss_fails_closed():
+    with pytest.raises(OperationalCredentialMissing) as exc:
+        resolve_secret(
+            "org-1", _target(ref="orders_diagnostics"),
+            connector_lookup=lambda ref: None,
+            env={"ORDERS_DIAGNOSTICS_TOKEN": "NS-TOKEN"},  # accepted but never read
+        )
+    assert exc.value.credential_ref == "orders_diagnostics"
 
 
 def test_no_credential_ref_means_no_secret():
@@ -165,15 +175,18 @@ def test_no_credential_ref_means_no_secret():
     assert resolve_secret("org-1", t, connector_lookup=lambda ref: {"token": "x"}, env={}) is None
 
 
-def test_secret_lookup_failure_degrades_to_env(caplog):
+def test_secret_lookup_failure_fails_closed(caplog):
+    # A lookup EXCEPTION is treated as a vault miss — fail closed, never env fallback.
     def _boom(ref):
         raise RuntimeError("vault down")
 
     with caplog.at_level(logging.WARNING):
-        secret = resolve_secret(
-            "org-1", _target(), connector_lookup=_boom, env={"DOTNET_APP_TOKEN": "FALLBACK"}
-        )
-    assert secret == "FALLBACK"          # degrade, don't crash
+        with pytest.raises(OperationalCredentialMissing):
+            resolve_secret(
+                "org-1", _target(), connector_lookup=_boom,
+                env={"DOTNET_APP_TOKEN": "FALLBACK"},  # accepted but never read
+            )
+    assert "FALLBACK" not in caplog.text
 
 
 def test_resolved_secret_is_never_logged(caplog):
@@ -181,7 +194,6 @@ def test_resolved_secret_is_never_logged(caplog):
         secret = resolve_secret(
             "org-1", _target(),
             connector_lookup=lambda ref: {"token": "VAULT_SECRET_XYZ"},
-            env={},
         )
     assert secret == "VAULT_SECRET_XYZ"
     assert "VAULT_SECRET_XYZ" not in caplog.text

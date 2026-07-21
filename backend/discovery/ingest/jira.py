@@ -4,10 +4,14 @@ SF-2.4 — Jira Ingestion Module
 Offline mode: reads backend/discovery/ingest/fixtures/jira_sample.json
 Live mode:    calls Jira REST API v3
 
-Environment variables for live mode (OAuth-only):
-    JIRA_URL     Jira Cloud API gateway base (https://api.atlassian.com/ex/jira/{cloudId}),
-                 captured at OAuth connect from the accessible-resources lookup
-    JIRA_TOKEN   OAuth Bearer access token (hydrated from the credential vault)
+Live-mode credentials come from the connector's credential record ONLY (the
+per-run credential context, or the per-org vault) — the Jira Cloud API gateway
+base (captured at OAuth connect from the accessible-resources lookup, or a static
+credential's own base_url) and the Bearer/API token are BOTH part of that record.
+There is no JIRA_URL / JIRA_TOKEN environment fallback for the connection
+(R191-H1 / T2 — F2 fix): connection config is part of the connector record (one
+source of connector truth). Non-credential tuning (JIRA_PROJECT_KEY, team/field
+overrides) still reads from the environment.
 
 Known fixes applied (vs earlier stub):
     1. completed_points was None — now fetched via /rest/agile/1.0/sprint/{id}/issue
@@ -258,14 +262,16 @@ class JiraClient:
 
 
 def _get_client(org_id: Optional[str] = None) -> JiraClient:
-    # Credentials come from the per-run context (DB-sourced: vault Bearer token +
-    # captured api.atlassian.com gateway base, isolated per org/run). With no
+    # Credentials come from the connector's credential record ONLY (R191-H1 / T2 —
+    # F2 fix). The per-run context (DB-sourced) carries the vault Bearer token + the
+    # captured api.atlassian.com gateway base (OAuth), isolated per org/run. With no
     # per-run context (CLI/standalone, or an on-demand API call like the project
-    # picker) or for a static API-token credential, the token resolves per-org from
-    # the vault via the single credential path — never from a process-global env
-    # credential (R17-D3 Addendum A, AC8/AC11). A static credential also supplies
-    # its base_url; JIRA_URL is instance config (not a credential) and remains the
-    # env fallback.
+    # picker) or for a static API-token credential, the record resolves per-org from
+    # the vault via the single credential path. A static credential supplies its own
+    # base_url; an OAuth credential carries the captured gateway base. There is
+    # **no JIRA_URL env fallback** — the base URL is part of the connector's
+    # credential record (one source of connector truth); a record without a URL is a
+    # loud configuration error naming the record, never a silent env default.
     from . import get_live_connector, resolve_vault_connector
 
     cred = get_live_connector("jira") or resolve_vault_connector("jira", org_id)
@@ -284,9 +290,11 @@ def _get_client(org_id: Optional[str] = None) -> JiraClient:
     # instance config captured at connect). During a discovery run resolve_live_
     # systems supplies it via the per-run context above; for an on-demand call
     # (the project picker) resolve it the SAME way here — the persisted per-org
-    # instance URL, then the JIRA_URL env fallback, then derive-and-persist from
-    # the token — reusing the single-source helpers so the logic can't drift.
-    if not jira_url:
+    # instance URL, then derive-and-persist from the token — reusing the
+    # single-source helpers so the logic can't drift. There is NO JIRA_URL env
+    # fallback (R191-H1 / T2, AC4): instance config is captured at connect and
+    # persisted per-org, never read from the process environment.
+    if not jira_url and token:
         org = org_id or get_ingest_org()
         try:
             from app.live_ingest_credentials import (
@@ -297,8 +305,6 @@ def _get_client(org_id: Optional[str] = None) -> JiraClient:
 
             jira_url = (get_connector_instance_url(org, "jira") or "").rstrip("/")
             if not jira_url:
-                jira_url = os.getenv("JIRA_URL", "").rstrip("/")
-            if not jira_url and token:
                 derived = _derive_oauth_instance_url("jira", token)
                 if derived:
                     jira_url = derived.rstrip("/")
@@ -306,14 +312,19 @@ def _get_client(org_id: Optional[str] = None) -> JiraClient:
                         store_connector_instance_url(org, "jira", jira_url)
                     except Exception:  # pragma: no cover — best-effort cache
                         pass
-        except Exception:  # pragma: no cover — degrade to the env fallback below
-            jira_url = jira_url or os.getenv("JIRA_URL", "").rstrip("/")
+        except Exception:  # pragma: no cover — persisted/derived URL unavailable
+            jira_url = jira_url or ""
 
+    # The base URL is part of the connector's credential record (or captured/derived
+    # at connect). A record without one is a configuration error surfaced loudly and
+    # named — never a silent env default (R191-H1 / T2, AC4).
     if not jira_url:
         raise JiraIngestError(
-            "Live mode requires the Jira Cloud API gateway base — reconnect Jira in "
-            "the Integration Hub so its site URL is captured, or set JIRA_URL. "
-            "Set INGEST_MODE=offline to run without credentials."
+            "Jira credential record is missing its base URL ('jira' connector). "
+            "The Jira Cloud API gateway base is captured at OAuth connect (and a "
+            "static API-token credential carries its own base_url); reconnect Jira "
+            "in the Integration Hub so the record carries its URL. "
+            "(No JIRA_URL environment fallback is used.)"
         )
     if not token:
         raise JiraIngestError(
@@ -821,7 +832,8 @@ def ingest(jira_client: Optional[JiraClient] = None) -> Dict[str, Any]:
     Orchestrate Jira ingestion. Returns combined payload.
 
     Offline: reads fixture. Live: calls both functions.
-    If JIRA_URL is not set in live mode, logs warning and returns {}.
+    If the Jira credential record has no base URL in live mode, logs a warning
+    and returns {} (Jira is treated as not connected).
     D7 will still fire if Salesforce-side echo score exceeds threshold.
 
     AgentIQ is READ-ONLY. This module never writes to Jira.
@@ -838,19 +850,21 @@ def ingest(jira_client: Optional[JiraClient] = None) -> Dict[str, Any]:
         )
         return fixture
 
-    # OAuth-first: the live gateway base comes from the per-run context (DB-sourced
-    # vault token + captured/derived api.atlassian.com gateway, set by
-    # resolve_live_systems); the JIRA_URL env var is only a CLI/standalone fallback.
-    # Gating on the env var alone wrongly skipped Jira even when it was
-    # authenticated via the Integration Hub OAuth flow.
+    # OAuth-first: the live gateway base comes from the credential record ONLY
+    # (R191-H1 / T2 — F2 fix) — the per-run context (DB-sourced vault token +
+    # captured/derived api.atlassian.com gateway, set by resolve_live_systems), or
+    # a static credential's base_url. There is no JIRA_URL env fallback: the base
+    # URL is part of the connector's credential record (one source of connector
+    # truth). Gating on the record's URL (never an env var) means Jira is treated
+    # as connected exactly when it has a credential record with a URL.
     from . import get_live_connector, resolve_vault_connector
 
     cred = get_live_connector("jira") or resolve_vault_connector("jira")
-    jira_url = (cred.get("url") if cred else None) or os.getenv("JIRA_URL", "")
+    jira_url = (cred.get("url") if cred else None) or ""
     if not jira_url:
         logger.warning(
-            "Jira is not connected (no OAuth credentials for this run, and JIRA_URL "
-            "is unset) — skipping Jira ingestion. "
+            "Jira is not connected (no Jira credential record with a base URL for "
+            "this run) — skipping Jira ingestion. "
             "D7 will rely on Salesforce/ServiceNow echo scores only."
         )
         return {}
