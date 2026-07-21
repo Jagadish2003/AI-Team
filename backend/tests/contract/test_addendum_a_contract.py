@@ -385,10 +385,11 @@ def test_ac16_neutral_default_before_any_key(client: TestClient):
     assert client.get(ORG_NAME_PATH, headers=hdr).json() == {"orgName": DEFAULT_ORG_DISPLAY_NAME}
     assert DEFAULT_ORG_DISPLAY_NAME == "Your Organisation"
 
-    # And an unlicensed org carries no numeric cap (unlimited state, per AC13).
+    # An unlicensed org is now capped at the unlicensed cap (default 2), not
+    # unlimited (R-1.9.1-L1 / T5, AC4) — a real numeric limit before any key.
     state = client.get(LIMITS_PATH, headers=hdr).json()
-    assert state["systemsLicensed"] is None
-    assert state["unlimited"] is True
+    assert state["systemsLicensed"] == 2
+    assert state["unlimited"] is False
 
 
 # ===========================================================================

@@ -29,6 +29,17 @@ export function systemLimitMessage(systemsLicensed: number): string {
 }
 
 /**
+ * The exact message the backend (license_limits.unlicensed_limit_message)
+ * surfaces when an UNLICENSED install hits the cap (R-1.9.1-L1 / T5, AC4). Kept
+ * byte-identical to the backend so the proactive strip and the connect-time 402
+ * read the same — an unlicensed install must never be told "your license covers
+ * N" (it has no license); the remedy is to install one.
+ */
+export function unlicensedLimitMessage(cap: number): string {
+  return `No license is installed. Unlicensed installations can connect up to ${cap} systems. Install a license from CloudFulcrum to connect more.`;
+}
+
+/**
  * Wording for the used-systems count.
  *
  * `unlimited` (no numeric cap) is true both for a genuine unlimited license AND
@@ -87,6 +98,11 @@ export default function LicenseLimitBanner({
 
   const { systemsUsed, systemsLicensed, unlimited, canConnectMore } = limits;
   const atLimit = !unlimited && !canConnectMore;
+  // An org with no ACTIVE license (readonly / invalid) that is capped is at the
+  // unlicensed cap (R-1.9.1-L1 / T5), not a licensed limit — so the notice must
+  // name the missing license rather than claim "your license covers N". A valid /
+  // grace license (or the brief status-unknown window) keeps the licensed wording.
+  const noActiveLicense = licenseState === 'readonly' || licenseState === 'invalid';
 
   return (
     <div
@@ -107,7 +123,9 @@ export default function LicenseLimitBanner({
       </div>
       {atLimit && systemsLicensed != null && (
         <span data-testid="license-at-limit" className="font-medium">
-          {systemLimitMessage(systemsLicensed)}
+          {noActiveLicense
+            ? unlicensedLimitMessage(systemsLicensed)
+            : systemLimitMessage(systemsLicensed)}
         </span>
       )}
     </div>

@@ -20,9 +20,15 @@ Principles this module encodes (Addendum A §1 / AC10–AC13):
     (AC12). This mirrors LIC-1's never-a-cold-stop posture — commercial pressure
     comes from blocking growth, not breaking production.
 
-  * ``max_systems`` of ``None`` (or absent) behaves as UNLIMITED, so keys issued
-    before this addendum remain valid and unconstrained (AC13). Enforcement is
-    opt-in per key.
+  * ``max_systems`` of ``None`` (or absent) on a VALID license behaves as
+    UNLIMITED, so keys issued before this addendum remain valid and unconstrained
+    (AC13). Enforcement is opt-in per key.
+
+  * R-1.9.1-L1 / T5 (AC4): an UNLICENSED org (no verifiable license payload) is
+    NOT unlimited — it is capped at ``get_unlicensed_system_cap()`` (config,
+    default 2). Connecting beyond the cap is refused at connection time with
+    licensing-specific wording. Installing a valid license lifts the cap to the
+    payload's ``max_systems`` (or to unlimited when the payload scopes none).
 
 This module is deliberately the single source of the counting + entitlement
 logic; the connect-time gates (``main.connect_connector``,
@@ -33,6 +39,7 @@ used / systems licensed state) and T11 (frontend) build on the same helpers.
 from __future__ import annotations
 
 import logging
+import os
 from typing import Optional
 
 from fastapi import HTTPException
@@ -51,19 +58,68 @@ CONNECTED_STATUS = "connected"
 # scope block (buy more systems) from a term block (renew the key).
 BLOCK_REASON = "system_limit_reached"
 
+# R-1.9.1-L1 / T5 (AC4) — Unlicensed connection cap.
+# With NO valid license installed, an org may connect only a small number of
+# systems before new connections are refused (naming licensing as the reason),
+# instead of the previous "unlimited until a key is pasted". Config via the
+# ``UNLICENSED_SYSTEM_CAP`` env var (resolved live so an operator change needs no
+# restart); default 2. A *valid* license with no ``limits.max_systems`` stays
+# unlimited — the cap applies ONLY when there is no verifiable license payload.
+UNLICENSED_SYSTEM_CAP_ENV = "UNLICENSED_SYSTEM_CAP"
+DEFAULT_UNLICENSED_SYSTEM_CAP = 2
+
+
+def get_unlicensed_system_cap() -> int:
+    """Systems an UNLICENSED org may connect before new connections are refused.
+
+    Reads the ``UNLICENSED_SYSTEM_CAP`` env var live (so a deployment can tune it
+    without a restart); default ``2``. A missing/blank value uses the default; a
+    non-integer or negative value falls back to the default and logs a warning
+    rather than blocking every connect (forward-only never over-blocks on bad
+    config).
+    """
+    raw = os.getenv(UNLICENSED_SYSTEM_CAP_ENV)
+    if raw is None or raw.strip() == "":
+        return DEFAULT_UNLICENSED_SYSTEM_CAP
+    try:
+        cap = int(raw)
+    except (TypeError, ValueError):
+        logger.warning(
+            "license limits: non-integer %s=%r — using default %d",
+            UNLICENSED_SYSTEM_CAP_ENV,
+            raw,
+            DEFAULT_UNLICENSED_SYSTEM_CAP,
+        )
+        return DEFAULT_UNLICENSED_SYSTEM_CAP
+    if cap < 0:
+        logger.warning(
+            "license limits: negative %s=%d — using default %d",
+            UNLICENSED_SYSTEM_CAP_ENV,
+            cap,
+            DEFAULT_UNLICENSED_SYSTEM_CAP,
+        )
+        return DEFAULT_UNLICENSED_SYSTEM_CAP
+    return cap
+
 
 def get_max_systems(org_id: str) -> Optional[int]:
-    """The org's licensed ``max_systems``, or ``None`` for an unlimited license.
+    """The org's effective system cap, or ``None`` for an unlimited license.
 
     Reads the org's live-validated license via
     ``license_runtime.get_current_license_status`` (the side-effect-free path the
-    run gate also uses) and returns ``payload.limits.max_systems``.
+    run gate also uses). The result is one of three cases:
 
-    ``None`` means "do not enforce a system cap" and is returned for every case
-    where no numeric limit applies: an unlimited/pre-addendum key
-    (``max_systems`` null or absent), or no verifiable payload at all
-    (no_license / invalid — those states are handled by LIC-1's existing
-    read-only behaviour, not by this scope limit). Never raises.
+      * **Valid license with ``limits.max_systems`` = N** → ``N``.
+      * **Valid license with no ``limits.max_systems``** (null/absent, including
+        pre-addendum keys) → ``None`` (unlimited — the issuer's explicit choice).
+      * **No verifiable license payload** (no_license / invalid / org_mismatch /
+        unsupported_payload_version / clock_rollback — an install that has no
+        usable license) → the **unlicensed connection cap**
+        (``get_unlicensed_system_cap()``, config, default 2). This is the
+        R-1.9.1-L1 / T5 (AC4) change: an unlicensed org is capped, not unlimited.
+
+    A status-read exception returns ``None`` (do not over-block on a transient
+    read failure — that is an error state, not an "unlicensed" one). Never raises.
     """
     try:
         result = get_current_license_status(org_id=org_id)
@@ -71,10 +127,19 @@ def get_max_systems(org_id: str) -> Optional[int]:
         logger.exception("license limits: status read failed for org %s", org_id)
         return None
 
-    payload = result.get("payload") or {}
+    payload = result.get("payload")
+    if payload is None:
+        # T5 / AC4: no verifiable license installed → the unlicensed cap, not
+        # unlimited. no_license / invalid / clock_rollback results carry no
+        # ``payload`` key at all, so ``payload is None`` is exactly the unlicensed
+        # signal. A verified license ALWAYS carries a payload (even an empty one,
+        # an older key shape with no limits block) — that stays unlimited below.
+        return get_unlicensed_system_cap()
+
     limits = payload.get("limits") or {}
     max_systems = limits.get("max_systems")
     if max_systems is None:
+        # A verified license that does not scope max_systems stays unlimited.
         return None
     try:
         return int(max_systems)
@@ -87,6 +152,22 @@ def get_max_systems(org_id: str) -> Optional[int]:
             org_id,
         )
         return None
+
+
+def _has_license_payload(org_id: str) -> bool:
+    """Whether the org has a verifiable license payload (a usable license).
+
+    Used only to choose the block wording in :func:`enforce_can_connect` — an
+    unlicensed org gets licensing-specific copy, a licensed-but-capped org gets
+    the "your license covers N" copy. Never raises.
+    """
+    try:
+        result = get_current_license_status(org_id=org_id)
+    except Exception:  # pragma: no cover — defensive
+        return False
+    # A verified license carries a ``payload`` key (present even when empty); the
+    # no-license / invalid results omit it entirely.
+    return result.get("payload") is not None
 
 
 def count_connected_systems(org_id: str) -> int:
@@ -134,8 +215,11 @@ def get_limit_state(org_id: str) -> dict:
     customer sees is exactly the count that is enforced (Addendum A §1 / AC14).
 
     Returns ``{systemsUsed, systemsLicensed, unlimited, canConnectMore}`` where
-    ``systemsLicensed``/``unlimited`` reflect ``max_systems`` (``None`` => unlimited,
-    including pre-addendum keys and no-license/invalid states, per AC13).
+    ``systemsLicensed``/``unlimited`` reflect ``get_max_systems`` — ``None`` =>
+    unlimited (a valid license with no ``max_systems``, including pre-addendum
+    keys). An UNLICENSED org reports the unlicensed cap (default 2) as
+    ``systemsLicensed`` with ``unlimited=False`` (R-1.9.1-L1 / T5, AC4) — it is a
+    real numeric limit now, not unlimited.
     """
     return _build_limit_state(count_connected_systems(org_id), get_max_systems(org_id))
 
@@ -175,21 +259,38 @@ def can_connect_new_system(org_id: str, connector_id: Optional[str] = None) -> b
 
 
 def limit_message(max_systems: int) -> str:
-    """The customer-facing block message (Addendum A §1)."""
+    """The customer-facing block message for a LICENSED org at its cap (Addendum A §1)."""
     return (
         f"Your license covers {max_systems} systems. "
         "Contact CloudFulcrum to add more."
     )
 
 
+def unlicensed_limit_message(cap: int) -> str:
+    """The block message for an UNLICENSED org at the cap (R-1.9.1-L1 / T5, AC4).
+
+    Names licensing explicitly as the reason — this install has no license, so the
+    remedy is to install one, not to "buy more systems".
+    """
+    return (
+        f"No license is installed. Unlicensed installations can connect up to "
+        f"{cap} systems. Install a license from CloudFulcrum to connect more."
+    )
+
+
 def enforce_can_connect(org_id: str, connector_id: Optional[str] = None) -> None:
-    """Raise HTTP 402 if connecting ``connector_id`` would exceed ``max_systems``.
+    """Raise HTTP 402 if connecting ``connector_id`` would exceed the system cap.
 
     No-op when the license is unlimited, when the org is under its limit, or when
     the connector is already connected (idempotent reconnect). On a block it
     raises ``HTTPException(402)`` with a structured detail carrying the clear
-    message and a request path, plus the used/licensed counts the Integration Hub
+    message, the ``BLOCK_REASON``, and the used/licensed counts the Integration Hub
     surfaces (T10/T11).
+
+    The cap applies to BOTH a licensed org that scopes ``max_systems`` AND an
+    unlicensed org (R-1.9.1-L1 / T5, AC4) — the two are distinguished only by the
+    block WORDING: an unlicensed org gets licensing-specific copy naming the
+    missing license, a capped licensed org gets the "your license covers N" copy.
 
     402 Payment Required (the same code LIC-1's run gate uses) cleanly separates a
     license/entitlement block from an auth (401) or RBAC (403) failure.
@@ -197,13 +298,18 @@ def enforce_can_connect(org_id: str, connector_id: Optional[str] = None) -> None
     if can_connect_new_system(org_id, connector_id):
         return
 
-    # Only reachable when a numeric limit applies and it is exceeded.
+    # Only reachable when a numeric cap applies and it is exceeded.
     max_systems = get_max_systems(org_id)
     used = count_connected_systems(org_id)
+    message = (
+        limit_message(max_systems)
+        if _has_license_payload(org_id)
+        else unlicensed_limit_message(max_systems)
+    )
     raise HTTPException(
         status_code=402,
         detail={
-            "detail": limit_message(max_systems),
+            "detail": message,
             "reason": BLOCK_REASON,
             "systemsUsed": used,
             "systemsLicensed": max_systems,
