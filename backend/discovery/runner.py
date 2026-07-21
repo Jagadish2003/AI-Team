@@ -19,7 +19,7 @@ import sys
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 from dotenv import load_dotenv
 
 from app.telemetry import record_event
@@ -962,23 +962,63 @@ def run(
     org_id: str = "demo-org",
     systems: Optional[List[str]] = None,
     pack: Optional[str] = None,
+    pack_ids: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
     # ENG-SHARED-1: resolve pack config — replaces temporary is_ncino_pack conditional
+    # R191-P1 T2: a run selects one OR MORE packs. `pack_ids` (plural, R191-P1 T1)
+    # is the multi-pack selection; the singular `pack` stays accepted as the
+    # primary alias (CLI / older callers). Both fold into ONE order-preserving,
+    # de-duplicated selection via the shared primitive. Each selected pack runs its
+    # own detectors against the ONE shared normalised signal and is scored with its
+    # OWN calibration (AC3); a single selection is byte-identical to the former
+    # single-pack pipeline (AC2).
     from .packs.pack_config import (
         get_pack,
-        get_pack_domain,
         get_pack_version,
+        normalize_pack_ids,
         is_ncino_pack,
         is_sqlserver_opsignal_pack,
         is_github_engineering_pack,
         is_enterprise_ops_pack,
     )
-    pack_config = get_pack(pack)
-    pack_id     = pack_config["packId"]
+    _selected_pack_args = normalize_pack_ids(
+        list(pack_ids or []) + ([pack] if pack else [])
+    )
+    if not _selected_pack_args:
+        # No selection → the historical default pack (get_pack(None)).
+        _selected_pack_args = [None]
+
+    # Resolve each selection to its REGISTERED config, de-duplicated by the
+    # resolved packId (two unknown ids both fall back to the default → one pass),
+    # order preserved. The first entry is the primary pack — every backward-
+    # compatible scalar (packId / packVersion / detectorsExecuted / …) reports it,
+    # so a single-pack run is unchanged.
+    _pack_configs: List[Tuple[Optional[str], Dict[str, Any]]] = []
+    _seen_pack_ids: set = set()
+    for _sel in _selected_pack_args:
+        _cfg = get_pack(_sel)
+        _pid = _cfg["packId"]
+        if _pid in _seen_pack_ids:
+            continue
+        _seen_pack_ids.add(_pid)
+        _pack_configs.append((_sel, _cfg))
+
+    primary_pack_arg, pack_config = _pack_configs[0]
+    pack_id = pack_config["packId"]
     # R16-B1 §4: stamp the pack VERSION (not just the id) onto every opportunity
     # so governance/debugging can later tell a data change from a pack change.
-    pack_version = get_pack_version(pack)
-    pack_domain = pack_config["pack_domain"]
+    pack_version = get_pack_version(primary_pack_arg)
+    primary_pack_id = pack_id
+
+    # Union of pack DOMAINS across the whole selection drives the shared, run-once
+    # ingestion below: ingest a pack-specific source when ANY selected pack needs
+    # it (for a single pack this is identical to the former per-pack gate).
+    _selected_domains = {cfg["domain"] for _, cfg in _pack_configs}
+    _any_ncino = "ncino" in _selected_domains
+    _any_strs = "strs_benefits" in _selected_domains
+    _any_github = "github_engineering" in _selected_domains
+    _any_enterprise_ops = "enterprise_ops" in _selected_domains
+    _any_db_opsignal = "sqlserver_opsignal" in _selected_domains
 
     # Default to all systems if None
     if mode is None:
@@ -1168,7 +1208,7 @@ def run(
 
     # 2a. nCino ingest — if ncino pack, fetch lending signals from nCino objects
     from .packs.pack_config import is_ncino_pack as _is_ncino
-    if _is_ncino(pack_id) and "salesforce" in _systems:
+    if _any_ncino and "salesforce" in _systems:
         ncino_ok = True
         try:
             from .ingest.ncino import ingest as ncino_ingest
@@ -1197,7 +1237,7 @@ def run(
 
     # 2b. STRS Benefits ingest — if strs_benefits pack
     from .packs.pack_config import is_strs_benefits_pack as _is_strs
-    if _is_strs(pack_id) and "salesforce" in _systems:
+    if _any_strs and "salesforce" in _systems:
         try:
             from .ingest.strs_benefits import ingest as strs_ingest
             strs_data = strs_ingest()
@@ -1217,7 +1257,7 @@ def run(
     # source payloads / corroboration. Non-blocking: ingest failure never aborts
     # the run. Jira is still ingested above when in _systems so the pack's
     # confidence-elevation corroboration can run.
-    if is_github_engineering_pack(pack_id) or "github" in _systems:
+    if _any_github or "github" in _systems:
         update_run_step(run_id, "github")
         github_data = _ingest_github(org_id, run_id) or {}
         if github_data:
@@ -1250,7 +1290,7 @@ def run(
     # ServiceNow/Jira data — no fixture seeding — so these detectors fire only
     # once the live block computation exists. Real computed data always wins:
     # the seed fills only blocks not already present.
-    if is_enterprise_ops_pack(pack_id) and str(mode).strip().lower() != "live":
+    if _any_enterprise_ops and str(mode).strip().lower() != "live":
         sn_data, jira_data = _attach_enterprise_ops_demo(sn_data, jira_data)
 
     # 2d. Oracle DB ingest  — T2-S12-A: sqlserver_opsignal pack + oracle_db connector.
@@ -1259,7 +1299,7 @@ def run(
     db_data: Dict[str, Any] = {}
     _db_connector_id: Optional[str] = None
 
-    if _is_db_opsignal(pack_id):
+    if _any_db_opsignal:
         active_db_connectors = sorted(_systems & _DB_CONNECTOR_IDS)
         if len(active_db_connectors) > 1:
             logger.warning(
@@ -1343,207 +1383,31 @@ def run(
     # 2. Context
     org_ctx = build_org_context(sf_data, sn_data, jira_data)
 
-    # 3. Detect — ENG-AIQ-NC-4: pack-driven detector selection
-    # Replaces hardcoded Service Cloud detector list.
-    # pack_config.py (ENG-SHARED-1) defines which detectors each pack activates.
+    # 3. Detect + Score — R191-P1 T2: multi-pack execution.
+    # Each selected pack runs its OWN detectors against the ONE shared normalised
+    # signal ingested above, and its OWN scorer calibration is applied to its OWN
+    # findings — the impact scorer NEVER blends calibrations across packs (AC3).
+    # A single-pack run is byte-identical to the former pipeline (AC2): the pass
+    # body below is exactly the previous single-pack logic with `pack_id` bound to
+    # the current pack. Overlapping opportunities from two packs stay two findings,
+    # each carrying its own packId — no cross-pack merging (AC4, explicit non-goal).
     from .packs.pack_config import is_ncino_pack
 
-    if _is_db_opsignal(pack_id):
-        # DB operational signal detectors — shared across SQL Server, Oracle, PostgreSQL (T2-S12-A)
-        from .detectors import (
-            db_ticket_volume_surge,
-            db_sla_breach_rate,
-            db_queue_depth_elevated,
-        )
-        all_detectors = [
-            db_ticket_volume_surge,
-            db_sla_breach_rate,
-            db_queue_depth_elevated,
-        ]
-        logger.info("Pack: sqlserver_opsignal — 3 DB operational signal detectors active (connector=%s)", _db_connector_id or "none")
-    elif is_ncino_pack(pack_id):
-        # nCino lending detectors — confirmed objects from SF-NC-2
-        from .detectors import (
-            loan_origination_routing_friction,
-            covenant_tracking_gap,
-            checklist_bottleneck,
-            spreading_bottleneck,
-            approval_bottleneck,
-        )
-        all_detectors = [
-            loan_origination_routing_friction,
-            covenant_tracking_gap,
-            checklist_bottleneck,
-            spreading_bottleneck,
-            approval_bottleneck,
-        ]
-        logger.info("Pack: ncino — 5 lending detectors active")
-    elif _is_strs(pack_id):
-        from .detectors import (
-            application_stall,
-            benefit_election_deadline,
-            disbursement_overdue,
-            disability_review_bottleneck,
-        )
-        all_detectors = [
-            application_stall,
-            benefit_election_deadline,
-            disbursement_overdue,
-            disability_review_bottleneck,
-        ]
-        logger.info("Pack: strs_benefits — 4 benefit detectors active")
-    elif is_github_engineering_pack(pack_id):
-        from .detectors import (
-            github_pr_bottleneck,
-            github_commit_concentration,
-            github_stale_branches,
-        )
-        all_detectors = [
-            github_pr_bottleneck,
-            github_commit_concentration,
-            github_stale_branches,
-        ]
-        logger.info("Pack: github_engineering — 3 engineering signal detectors active")
-    elif is_enterprise_ops_pack(pack_id):
-        from .detectors import (
-            ent_incident_resolution_lag,
-            ent_change_incident_correlation,
-            ent_sla_breach_by_team,
-        )
-        all_detectors = [
-            ent_incident_resolution_lag,
-            ent_change_incident_correlation,
-            ent_sla_breach_by_team,
-        ]
-        logger.info("Pack: enterprise_ops — 3 cross-system detectors active")
-    else:
-        # Service Cloud detectors — default
-        from .detectors import (
-            repetition, handoff_friction, approval_delay,
-            knowledge_gap, integration_concentration,
-            permission_bottleneck, cross_system_echo,
-        )
-        all_detectors = [repetition, handoff_friction, approval_delay, knowledge_gap,
-                         integration_concentration, permission_bottleneck, cross_system_echo]
-        logger.info("Pack: service_cloud — 7 SC detectors active")
-
-    # Capture fired and non-firing detector evaluations before scoring.
-    # DB and GitHub packs read their signal from the first positional arg.
-    # Keep Service Cloud, nCino, and STRS on Salesforce-shaped data.
-    if _is_db_opsignal(pack_id):
-        primary_data = db_data
-    elif is_github_engineering_pack(pack_id):
-        primary_data = github_data
-    else:
-        primary_data = sf_data
-
-    # Mark "detect" before the phase so the Pattern Detection step shows as
-    # in-progress while detectors run (it renders completed once "enrich" starts).
-    update_run_step(run_id, "detect")
-    detector_results, all_evaluated = _run_detector_phase(
-        all_detectors,
-        primary_data,
-        sn_data,
-        jira_data,
-    )
-
-    pack_executed_at = _snapshot_detector_evaluations(
-        org_id=org_id,
-        run_id=run_id,
-        pack_id=pack_id,
-        detector_results=detector_results,
-        all_evaluated=all_evaluated,
-    )
-    executed_detector_ids = _record_pack_execution(
-        org_id=org_id,
-        run_id=run_id,
-        pack_id=pack_id,
-        pack_name=str(pack_config.get("packName") or pack_id),
-        pack_version=pack_version,
-        detectors=all_detectors,
-        evaluated_count=len(all_evaluated),
-        executed_at=pack_executed_at,
-    )
-
-    update_run_step(run_id, "enrich")
-
-    try:
-        # Entity extraction is synchronous and DB-safe in this context: every
-        # resolve_or_create_entity() opens its own short-lived raw sqlite3
-        # connection via db.connect(), commits, and closes it (see
-        # entity_resolution._connect). There is no SQLAlchemy session or
-        # thread-local state to leak across an async boundary — unlike the
-        # GitHub ingest above, this call needs no event-loop isolation.
-        from app.entity_extractor import extract_entities
-        entities = extract_entities(
-            org_id=org_id,
-            run_id=run_id,
-            pack_id=pack_id,
-            detector_results=detector_results,
-            ingestor_data={
-                "salesforce": sf_data,
-                "servicenow": sn_data,
-                "jira": jira_data,
-            },
-        ) or []
-    except Exception as e:
-        entities = []
-        logger.warning(
-            "Entity extraction failed (non-blocking): run_id=%s error=%s",
-            run_id,
-            e,
-        )
-
-    # T3-S13-A T6: map relationships AFTER extract_entities() — both mapping
-    # passes draw edges only between the resolved entity rows written during
-    # extraction. map_relationships() is the single entry point (it calls
-    # map_directly_observed() + map_inferred_from_detectors() and emits the
-    # relationship.mapping_completed telemetry on success). Non-blocking: a
-    # failure here must never break opportunity delivery, so the run still
-    # completes and OppEnrichment.relationships simply defaults to empty (AC9).
-    try:
-        from app.relationship_mapper import map_relationships
-        if not entities:
-            logger.warning("map_relationships skipped: no entities from extraction")
-        map_relationships(
-            org_id=org_id,
-            run_id=run_id,
-            ingestor_data={
-                "salesforce": sf_data,
-                "servicenow": sn_data,
-                "jira": jira_data,
-            },
-            detector_results=detector_results,
-            entities=entities,
-        )
-    except Exception as e:
-        logger.warning(
-            "Relationship mapping failed (non-blocking): run_id=%s org_id=%s error=%s",
-            run_id,
-            org_id,
-            e,
-        )
-
-    # R16-C1 T1: load Stack Builder weighting context from run KV store.
-    # Falls back to neutral (no-op) for older runs that pre-date R16-C1 or
-    # for runs started outside the Stack Builder flow. Never raises.
+    # ── Shared, pack-independent setup (runs ONCE for the whole run) ──
+    # R16-C1 T1: Stack Builder weighting context (run-level, pack-independent).
     from .weighting_context import load_for_run as _load_weighting_context
     _weighting_ctx = _load_weighting_context(run_id)
 
-    # R16-C2 T2: load the selected Discovery Focus from the run KV store and
-    # annotate each opportunity with additive focus-emphasis metadata, so the
-    # shared ranking utility can emphasise findings matching the focus affinity.
-    # Emphasis, not exclusion: this only reorders; it never filters detectors or
-    # mutates impact/effort/confidence/tier. None / enterprise_wide / unknown
-    # focus => no bias => unchanged ordering. Never raises.
+    # R16-C2 T2: selected Discovery Focus (run-level, pack-independent). Additive
+    # emphasis annotation only — never mutates a scoring field.
     from .packs.focus_affinity import (
         load_focus_for_run as _load_focus_for_run,
         build_focus_emphasis as _build_focus_emphasis,
     )
     _focus_id = _load_focus_for_run(run_id)
 
-    # 4. Score + Evidence
-    # ENG-AIQ-NC-4: use lending_scorer for ncino pack, SC scorer for service_cloud
+    # Scorers — one family per pack; each pack selects its own inside the pass so
+    # calibrations never mix (AC3). ENG-AIQ-NC-4.
     from .scorer import score as sc_score
     from .lending_scorer import score_lending, is_lending_detector
     from .strs_benefits_scorer import score_strs_benefits, is_strs_benefits_detector
@@ -1584,243 +1448,462 @@ def run(
     except Exception as _corr_imp_err:  # noqa: BLE001 — corroboration is optional.
         logger.warning("ENT-2 corroboration engine unavailable (non-blocking): %s", _corr_imp_err)
         _corroboration_available = False
+
+    # ONE shared evidence-id counter for the whole run so evidence ids stay
+    # globally unique ACROSS packs (a multi-pack run must never collide ids).
     id_counter = itertools.count(1)
     def id_factory() -> str: return f"{run_id[-6:]}_{next(id_counter):04d}"
 
-    # Issue 3 fix: collect Jira/SN lending correlation by detector for ncino pack.
-    # Wave 2 (ENG-AIQ-NC-2/NC-3) built lending_correlation — wire it into evidence here.
-    jira_by_detector: Dict[str, List[str]] = {}
-    sn_by_detector:   Dict[str, List[str]] = {}
-    if is_ncino_pack(pack_id):
-        if jira_data:
-            jira_by_detector = (
-                jira_data.get("lending_correlation", {}).get("by_detector", {})
-            )
-        if sn_data:
-            sn_by_detector = (
-                sn_data.get("lending_correlation", {}).get("by_detector", {})
-            )
-
-    # ── STRS Benefits corroboration — ENG-STRS-CORR-1/2 (Fix Pack Sprint 7) ──
-    # Same pattern as nCino above. strs_benefits.py ingest() now returns
-    # jira_strs_correlation and sn_strs_correlation inside the metrics dict,
-    # which is merged into sf_data["strs_benefits"]. Extract by_detector here.
-    if _is_strs(pack_id):
-        strs_metrics = sf_data.get("strs_benefits", {})
-        jira_by_detector = (
-            strs_metrics.get("jira_strs_correlation", {}).get("by_detector", {})
-        )
-        sn_by_detector = (
-            strs_metrics.get("sn_strs_correlation", {}).get("by_detector", {})
-        )
-        if jira_by_detector:
-            logger.info(
-                "STRS Jira corroboration: %d detectors have Jira evidence",
-                len(jira_by_detector),
-            )
-        if sn_by_detector:
-            logger.info(
-                "STRS ServiceNow corroboration: %d detectors have SN evidence",
-                len(sn_by_detector),
-            )
-
-    # ── ENT-2: build the shared corroboration run_data once for this run ──
-    # Maps already-extracted Jira/ServiceNow correlation by detector and carries
-    # Slack (AT-419 / T4) / Confluence corroboration blocks through when an
-    # upstream connector payload provides them. connected_systems drives COR-08
-    # (single-source no elevation). This only ever ELEVATES confidence downstream
-    # — it never downgrades.
     _run_ts_iso = _run_started_dt.isoformat()
-    _corr_run_data: Dict[str, Any] = {"connected_systems": sorted(_systems)}
-    if _corroboration_available:
-        try:
-            _corr_run_data = build_corroboration_run_data(
-                systems=_systems,
-                sn_by_detector=sn_by_detector,
-                jira_by_detector=jira_by_detector,
-                run_timestamp_iso=_run_ts_iso,
-                source_payloads=[sf_data, sn_data, jira_data, github_data, db_data, slack_data, teams_data, java_data, dotnet_data],
-            )
-        except Exception as _corr_data_err:  # noqa: BLE001 — non-blocking.
-            logger.warning("ENT-2 corroboration run_data build failed (non-blocking): %s", _corr_data_err)
 
-    opportunities = []
-    for dr in detector_results:
-        # Select scorer based on pack
-        if is_ncino_pack(pack_id) and is_lending_detector(dr.detector_id):
-            scored = score_lending(dr)
-        elif _is_strs(pack_id) and is_strs_benefits_detector(dr.detector_id):
-            scored = score_strs_benefits(dr)
-        elif is_sqlserver_opsignal_pack(pack_id) and is_sqlserver_opsignal_detector(dr.detector_id):
-            scored = score_sqlserver_opsignal(dr)
-        elif is_github_engineering_pack(pack_id) and is_github_engineering_detector(dr.detector_id):
-            # T7/AT-191: PR-bottleneck confidence elevates MEDIUM->HIGH when Jira
-            # corroborates. jira_connected mirrors how sources_connected.jira is derived.
-            scored = score_github_engineering(
-                dr,
-                jira_data=jira_data,
-                org_id=org_id,
-                jira_connected=bool(jira_data),
+    # ── Per-pack execution pass ──
+    # Runs ONE selected pack end-to-end against the shared signal and returns its
+    # findings plus its execution metadata. Everything here is scoped to the
+    # current pack (`pack_id`/`pack_version`/`pack_config`) so two packs in one run
+    # never share detector lists, calibration, or by-detector corroboration maps.
+    def _run_pack_pass(
+        current_pack: Optional[str],
+    ) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+        pack_config = get_pack(current_pack)
+        pack_id = pack_config["packId"]
+        pack_version = get_pack_version(current_pack)
+
+        # pack-driven detector selection — pack_config.py (ENG-SHARED-1) defines
+        # which detectors each pack activates.
+        if _is_db_opsignal(pack_id):
+            # DB operational signal detectors — shared across SQL Server, Oracle, PostgreSQL (T2-S12-A)
+            from .detectors import (
+                db_ticket_volume_surge,
+                db_sla_breach_rate,
+                db_queue_depth_elevated,
             )
-        elif is_enterprise_ops_pack(pack_id) and is_enterprise_ops_detector(dr.detector_id):
-            # AT-266 T5: ENT_INCIDENT_RESOLUTION_LAG elevates MEDIUM->HIGH via COR-06
-            # (ENT-2); ENT_SLA_BREACH_BY_TEAM elevates via ENT-1 entity overlay
-            # (result already in dr.raw_evidence, read by scorer).
-            scored = score_enterprise_ops(
-                dr,
-                sn_data=sn_data,
-                jira_data=jira_data,
-                org_id=org_id,
+            all_detectors = [
+                db_ticket_volume_surge,
+                db_sla_breach_rate,
+                db_queue_depth_elevated,
+            ]
+            logger.info("Pack: sqlserver_opsignal — 3 DB operational signal detectors active (connector=%s)", _db_connector_id or "none")
+        elif is_ncino_pack(pack_id):
+            # nCino lending detectors — confirmed objects from SF-NC-2
+            from .detectors import (
+                loan_origination_routing_friction,
+                covenant_tracking_gap,
+                checklist_bottleneck,
+                spreading_bottleneck,
+                approval_bottleneck,
             )
+            all_detectors = [
+                loan_origination_routing_friction,
+                covenant_tracking_gap,
+                checklist_bottleneck,
+                spreading_bottleneck,
+                approval_bottleneck,
+            ]
+            logger.info("Pack: ncino — 5 lending detectors active")
+        elif _is_strs(pack_id):
+            from .detectors import (
+                application_stall,
+                benefit_election_deadline,
+                disbursement_overdue,
+                disability_review_bottleneck,
+            )
+            all_detectors = [
+                application_stall,
+                benefit_election_deadline,
+                disbursement_overdue,
+                disability_review_bottleneck,
+            ]
+            logger.info("Pack: strs_benefits — 4 benefit detectors active")
+        elif is_github_engineering_pack(pack_id):
+            from .detectors import (
+                github_pr_bottleneck,
+                github_commit_concentration,
+                github_stale_branches,
+            )
+            all_detectors = [
+                github_pr_bottleneck,
+                github_commit_concentration,
+                github_stale_branches,
+            ]
+            logger.info("Pack: github_engineering — 3 engineering signal detectors active")
+        elif is_enterprise_ops_pack(pack_id):
+            from .detectors import (
+                ent_incident_resolution_lag,
+                ent_change_incident_correlation,
+                ent_sla_breach_by_team,
+            )
+            all_detectors = [
+                ent_incident_resolution_lag,
+                ent_change_incident_correlation,
+                ent_sla_breach_by_team,
+            ]
+            logger.info("Pack: enterprise_ops — 3 cross-system detectors active")
         else:
-            # R16-C1 T1: pass weighting context so the scorer can read
-            # role/priority for dr.signal_source (modulation is T2 work).
-            scored = sc_score(dr, weighting_context=_weighting_ctx)
+            # Service Cloud detectors — default
+            from .detectors import (
+                repetition, handoff_friction, approval_delay,
+                knowledge_gap, integration_concentration,
+                permission_bottleneck, cross_system_echo,
+            )
+            all_detectors = [repetition, handoff_friction, approval_delay, knowledge_gap,
+                             integration_concentration, permission_bottleneck, cross_system_echo]
+            logger.info("Pack: service_cloud — 7 SC detectors active")
 
-        # ── ENT-2: cross-system corroboration (shared engine, non-blocking) ──
-        # Evaluate corroboration AFTER the detector fired and the scorer ran,
-        # BEFORE final confidence is locked into the opportunity. Corroboration
-        # may only ELEVATE confidence (apply_corroboration_confidence never
-        # downgrades), so existing pack behaviour is preserved. Any failure is
-        # logged and the scorer's confidence is used unchanged (AC10).
-        corr_fields = {
-            "corroboration_sources": [],
-            "corroboration_label": None,
-            "triple_corroboration": False,
-            "corroboration_rule_ids": [],
-        }
+        # Capture fired and non-firing detector evaluations before scoring.
+        # DB and GitHub packs read their signal from the first positional arg.
+        # Keep Service Cloud, nCino, and STRS on Salesforce-shaped data.
+        if _is_db_opsignal(pack_id):
+            primary_data = db_data
+        elif is_github_engineering_pack(pack_id):
+            primary_data = github_data
+        else:
+            primary_data = sf_data
+
+        # Mark "detect" before the phase so the Pattern Detection step shows as
+        # in-progress while detectors run (it renders completed once "enrich" starts).
+        update_run_step(run_id, "detect")
+        detector_results, all_evaluated = _run_detector_phase(
+            all_detectors,
+            primary_data,
+            sn_data,
+            jira_data,
+        )
+
+        pack_executed_at = _snapshot_detector_evaluations(
+            org_id=org_id,
+            run_id=run_id,
+            pack_id=pack_id,
+            detector_results=detector_results,
+            all_evaluated=all_evaluated,
+        )
+        executed_detector_ids = _record_pack_execution(
+            org_id=org_id,
+            run_id=run_id,
+            pack_id=pack_id,
+            pack_name=str(pack_config.get("packName") or pack_id),
+            pack_version=pack_version,
+            detectors=all_detectors,
+            evaluated_count=len(all_evaluated),
+            executed_at=pack_executed_at,
+        )
+
+        update_run_step(run_id, "enrich")
+
+        try:
+            # Entity extraction is synchronous and DB-safe in this context: every
+            # resolve_or_create_entity() opens its own short-lived raw sqlite3
+            # connection via db.connect(), commits, and closes it (see
+            # entity_resolution._connect). There is no SQLAlchemy session or
+            # thread-local state to leak across an async boundary — unlike the
+            # GitHub ingest above, this call needs no event-loop isolation.
+            from app.entity_extractor import extract_entities
+            entities = extract_entities(
+                org_id=org_id,
+                run_id=run_id,
+                pack_id=pack_id,
+                detector_results=detector_results,
+                ingestor_data={
+                    "salesforce": sf_data,
+                    "servicenow": sn_data,
+                    "jira": jira_data,
+                },
+            ) or []
+        except Exception as e:
+            entities = []
+            logger.warning(
+                "Entity extraction failed (non-blocking): run_id=%s error=%s",
+                run_id,
+                e,
+            )
+
+        # T3-S13-A T6: map relationships AFTER extract_entities() — both mapping
+        # passes draw edges only between the resolved entity rows written during
+        # extraction. map_relationships() is the single entry point (it calls
+        # map_directly_observed() + map_inferred_from_detectors() and emits the
+        # relationship.mapping_completed telemetry on success). Non-blocking: a
+        # failure here must never break opportunity delivery, so the run still
+        # completes and OppEnrichment.relationships simply defaults to empty (AC9).
+        try:
+            from app.relationship_mapper import map_relationships
+            if not entities:
+                logger.warning("map_relationships skipped: no entities from extraction")
+            map_relationships(
+                org_id=org_id,
+                run_id=run_id,
+                ingestor_data={
+                    "salesforce": sf_data,
+                    "servicenow": sn_data,
+                    "jira": jira_data,
+                },
+                detector_results=detector_results,
+                entities=entities,
+            )
+        except Exception as e:
+            logger.warning(
+                "Relationship mapping failed (non-blocking): run_id=%s org_id=%s error=%s",
+                run_id,
+                org_id,
+                e,
+            )
+
+        # Issue 3 fix: collect Jira/SN lending correlation by detector for ncino pack.
+        # Wave 2 (ENG-AIQ-NC-2/NC-3) built lending_correlation — wire it into evidence here.
+        jira_by_detector: Dict[str, List[str]] = {}
+        sn_by_detector:   Dict[str, List[str]] = {}
+        if is_ncino_pack(pack_id):
+            if jira_data:
+                jira_by_detector = (
+                    jira_data.get("lending_correlation", {}).get("by_detector", {})
+                )
+            if sn_data:
+                sn_by_detector = (
+                    sn_data.get("lending_correlation", {}).get("by_detector", {})
+                )
+
+        # ── STRS Benefits corroboration — ENG-STRS-CORR-1/2 (Fix Pack Sprint 7) ──
+        # Same pattern as nCino above. strs_benefits.py ingest() now returns
+        # jira_strs_correlation and sn_strs_correlation inside the metrics dict,
+        # which is merged into sf_data["strs_benefits"]. Extract by_detector here.
+        if _is_strs(pack_id):
+            strs_metrics = sf_data.get("strs_benefits", {})
+            jira_by_detector = (
+                strs_metrics.get("jira_strs_correlation", {}).get("by_detector", {})
+            )
+            sn_by_detector = (
+                strs_metrics.get("sn_strs_correlation", {}).get("by_detector", {})
+            )
+            if jira_by_detector:
+                logger.info(
+                    "STRS Jira corroboration: %d detectors have Jira evidence",
+                    len(jira_by_detector),
+                )
+            if sn_by_detector:
+                logger.info(
+                    "STRS ServiceNow corroboration: %d detectors have SN evidence",
+                    len(sn_by_detector),
+                )
+
+        # ── ENT-2: build the corroboration run_data for THIS pack ──
+        # Scoped per pack: shared connected-systems + source payloads combined with
+        # this pack's own by-detector maps (detector ids are disjoint across packs,
+        # so no cross-pack blending is possible). Maps already-extracted Jira/
+        # ServiceNow correlation by detector and carries Slack (AT-419 / T4) /
+        # Confluence corroboration blocks through when an upstream connector payload
+        # provides them. connected_systems drives COR-08 (single-source no
+        # elevation). This only ever ELEVATES confidence downstream — never downgrades.
+        _corr_run_data: Dict[str, Any] = {"connected_systems": sorted(_systems)}
         if _corroboration_available:
             try:
-                _corr = evaluate_corroboration(
-                    detector_id=dr.detector_id,
-                    pack_id=pack_id,
-                    run_data=_corr_run_data,
-                    run_timestamp=_run_started_dt,
+                _corr_run_data = build_corroboration_run_data(
+                    systems=_systems,
+                    sn_by_detector=sn_by_detector,
+                    jira_by_detector=jira_by_detector,
+                    run_timestamp_iso=_run_ts_iso,
+                    source_payloads=[sf_data, sn_data, jira_data, github_data, db_data, slack_data, teams_data, java_data, dotnet_data],
+                )
+            except Exception as _corr_data_err:  # noqa: BLE001 — non-blocking.
+                logger.warning("ENT-2 corroboration run_data build failed (non-blocking): %s", _corr_data_err)
+
+        pack_opportunities: List[Dict[str, Any]] = []
+        for dr in detector_results:
+            # Select scorer based on pack — this pack scores ONLY its own detectors
+            # with its OWN calibration; a two-key guard (pack AND detector family)
+            # means no pack ever applies another pack's calibration (AC3, no blending).
+            if is_ncino_pack(pack_id) and is_lending_detector(dr.detector_id):
+                scored = score_lending(dr)
+            elif _is_strs(pack_id) and is_strs_benefits_detector(dr.detector_id):
+                scored = score_strs_benefits(dr)
+            elif is_sqlserver_opsignal_pack(pack_id) and is_sqlserver_opsignal_detector(dr.detector_id):
+                scored = score_sqlserver_opsignal(dr)
+            elif is_github_engineering_pack(pack_id) and is_github_engineering_detector(dr.detector_id):
+                # T7/AT-191: PR-bottleneck confidence elevates MEDIUM->HIGH when Jira
+                # corroborates. jira_connected mirrors how sources_connected.jira is derived.
+                scored = score_github_engineering(
+                    dr,
+                    jira_data=jira_data,
                     org_id=org_id,
-                    # R16-C1 T1: pass weighting context so the corroboration
-                    # engine can read role/priority per system.
-                    weighting_context=_weighting_ctx,
+                    jira_connected=bool(jira_data),
                 )
-                scored["confidence"] = apply_corroboration_confidence(
-                    scored.get("confidence", "MEDIUM"), _corr
+            elif is_enterprise_ops_pack(pack_id) and is_enterprise_ops_detector(dr.detector_id):
+                # AT-266 T5: ENT_INCIDENT_RESOLUTION_LAG elevates MEDIUM->HIGH via COR-06
+                # (ENT-2); ENT_SLA_BREACH_BY_TEAM elevates via ENT-1 entity overlay
+                # (result already in dr.raw_evidence, read by scorer).
+                scored = score_enterprise_ops(
+                    dr,
+                    sn_data=sn_data,
+                    jira_data=jira_data,
+                    org_id=org_id,
                 )
-                corr_fields = {
-                    "corroboration_sources": list(_corr.corroboration_sources),
-                    "corroboration_label": _corr.corroboration_label,
-                    "triple_corroboration": bool(_corr.triple_corroboration),
-                    "corroboration_rule_ids": list(_corr.rule_ids),
-                }
-                if _corr.corroboration_sources:
-                    logger.info(
-                        "  %s: corroboration %s -> %s via %s",
-                        dr.detector_id,
-                        _corr.original_confidence,
-                        scored.get("confidence"),
-                        _corr.rule_ids,
+            else:
+                # R16-C1 T1: pass weighting context so the scorer can read
+                # role/priority for dr.signal_source (modulation is T2 work).
+                scored = sc_score(dr, weighting_context=_weighting_ctx)
+
+            # ── ENT-2: cross-system corroboration (shared engine, non-blocking) ──
+            # Evaluate corroboration AFTER the detector fired and the scorer ran,
+            # BEFORE final confidence is locked into the opportunity. Corroboration
+            # may only ELEVATE confidence (apply_corroboration_confidence never
+            # downgrades), so existing pack behaviour is preserved. Any failure is
+            # logged and the scorer's confidence is used unchanged (AC10).
+            corr_fields = {
+                "corroboration_sources": [],
+                "corroboration_label": None,
+                "triple_corroboration": False,
+                "corroboration_rule_ids": [],
+            }
+            if _corroboration_available:
+                try:
+                    _corr = evaluate_corroboration(
+                        detector_id=dr.detector_id,
+                        pack_id=pack_id,
+                        run_data=_corr_run_data,
+                        run_timestamp=_run_started_dt,
+                        org_id=org_id,
+                        # R16-C1 T1: pass weighting context so the corroboration
+                        # engine can read role/priority per system.
+                        weighting_context=_weighting_ctx,
                     )
-            except Exception as _corr_err:  # noqa: BLE001 — corroboration is optional.
-                logger.warning(
-                    "ENT-2 corroboration failed for %s (non-blocking): %s",
-                    dr.detector_id, _corr_err,
-                )
+                    scored["confidence"] = apply_corroboration_confidence(
+                        scored.get("confidence", "MEDIUM"), _corr
+                    )
+                    corr_fields = {
+                        "corroboration_sources": list(_corr.corroboration_sources),
+                        "corroboration_label": _corr.corroboration_label,
+                        "triple_corroboration": bool(_corr.triple_corroboration),
+                        "corroboration_rule_ids": list(_corr.rule_ids),
+                    }
+                    if _corr.corroboration_sources:
+                        logger.info(
+                            "  %s: corroboration %s -> %s via %s",
+                            dr.detector_id,
+                            _corr.original_confidence,
+                            scored.get("confidence"),
+                            _corr.rule_ids,
+                        )
+                except Exception as _corr_err:  # noqa: BLE001 — corroboration is optional.
+                    logger.warning(
+                        "ENT-2 corroboration failed for %s (non-blocking): %s",
+                        dr.detector_id, _corr_err,
+                    )
 
-        # Pass packId so build_evidence uses nCino banking-language builders
-        scored_with_pack = {**scored, "packId": pack_id}
-        evidence_list = build_evidence(dr, scored_with_pack, id_factory=id_factory)
+            # Pass packId so build_evidence uses nCino banking-language builders
+            scored_with_pack = {**scored, "packId": pack_id}
+            evidence_list = build_evidence(dr, scored_with_pack, id_factory=id_factory)
 
-        # Issue 3 fix: attach Jira/SN corroboration evidence for ncino pack.
-        # These appear as additional evidence items in S4 alongside nCino evidence.
-        # Does not yet modulate confidence — deferred to post-Sprint 5.
-        if is_ncino_pack(pack_id) or _is_strs(pack_id):
-            corroboration_count = 0
-            for snippet in jira_by_detector.get(dr.detector_id, []):
-                ev_id = id_factory()
-                evidence_list.append({
-                    "id":          ev_id,
-                    "tsLabel":     "",
-                    "source":      "Jira",
-                    "detectorId":  dr.detector_id,
-                    "evidenceType":"Metric",
-                    "title":       f"Jira corroboration: {dr.detector_id}",
-                    "snippet":     snippet,
-                    "entities":    [],
-                    "confidence":  "MEDIUM",
-                    "decision":    "UNREVIEWED",
-                })
-                corroboration_count += 1
-            for snippet in sn_by_detector.get(dr.detector_id, []):
-                ev_id = id_factory()
-                evidence_list.append({
-                    "id":          ev_id,
-                    "tsLabel":     "",
-                    "source":      "ServiceNow",
-                    "detectorId":  dr.detector_id,
-                    "evidenceType":"Metric",
-                    "title":       f"ServiceNow corroboration: {dr.detector_id}",
-                    "snippet":     snippet,
-                    "entities":    [],
-                    "confidence":  "MEDIUM",
-                    "decision":    "UNREVIEWED",
-                })
-                corroboration_count += 1
-            if corroboration_count > 0:
-                logger.info("  %s: +%d corroborating evidence items (Jira/SN)",
-                            dr.detector_id, corroboration_count)
-        # ── R16-B1 (T3): stable, cross-run opportunity identity ──
-        # Derived ONLY from run-invariant inputs (org, pack, detector/signal,
-        # resolved primary entity keys) so the same real-world problem carries
-        # the same id run after run. Deliberately excludes score, confidence,
-        # run timestamp, and narrative — those drift between runs for the SAME
-        # opportunity and must not change its identity, or outcome tracking and
-        # feedback history (1.9/2.0) would treat every run as a brand-new find.
-        opportunity_identity = compute_opportunity_identity(
-            org_id=org_id,
-            pack_id=pack_id,
-            signal_key=dr.detector_id,
-            primary_entity_ids=primary_entity_keys_for_detector(
-                dr.detector_id, dr.signal_source
-            ),
-        )
+            # Issue 3 fix: attach Jira/SN corroboration evidence for ncino pack.
+            # These appear as additional evidence items in S4 alongside nCino evidence.
+            # Does not yet modulate confidence — deferred to post-Sprint 5.
+            if is_ncino_pack(pack_id) or _is_strs(pack_id):
+                corroboration_count = 0
+                for snippet in jira_by_detector.get(dr.detector_id, []):
+                    ev_id = id_factory()
+                    evidence_list.append({
+                        "id":          ev_id,
+                        "tsLabel":     "",
+                        "source":      "Jira",
+                        "detectorId":  dr.detector_id,
+                        "evidenceType":"Metric",
+                        "title":       f"Jira corroboration: {dr.detector_id}",
+                        "snippet":     snippet,
+                        "entities":    [],
+                        "confidence":  "MEDIUM",
+                        "decision":    "UNREVIEWED",
+                    })
+                    corroboration_count += 1
+                for snippet in sn_by_detector.get(dr.detector_id, []):
+                    ev_id = id_factory()
+                    evidence_list.append({
+                        "id":          ev_id,
+                        "tsLabel":     "",
+                        "source":      "ServiceNow",
+                        "detectorId":  dr.detector_id,
+                        "evidenceType":"Metric",
+                        "title":       f"ServiceNow corroboration: {dr.detector_id}",
+                        "snippet":     snippet,
+                        "entities":    [],
+                        "confidence":  "MEDIUM",
+                        "decision":    "UNREVIEWED",
+                    })
+                    corroboration_count += 1
+                if corroboration_count > 0:
+                    logger.info("  %s: +%d corroborating evidence items (Jira/SN)",
+                                dr.detector_id, corroboration_count)
+            # ── R16-B1 (T3): stable, cross-run opportunity identity ──
+            # Derived ONLY from run-invariant inputs (org, pack, detector/signal,
+            # resolved primary entity keys) so the same real-world problem carries
+            # the same id run after run. Because pack_id is an identity input, the
+            # same detector under two packs yields two distinct identities — the
+            # no-cross-pack-merge guarantee at the identity layer (AC4).
+            opportunity_identity = compute_opportunity_identity(
+                org_id=org_id,
+                pack_id=pack_id,
+                signal_key=dr.detector_id,
+                primary_entity_ids=primary_entity_keys_for_detector(
+                    dr.detector_id, dr.signal_source
+                ),
+            )
 
-        opp = {
-            "runId": run_id, "orgId": org_id, "detector_id": dr.detector_id,
-            "packId": pack_id, "opportunity_identity": opportunity_identity,
+            opp = {
+                "runId": run_id, "orgId": org_id, "detector_id": dr.detector_id,
+                "packId": pack_id, "opportunity_identity": opportunity_identity,
+                "packVersion": pack_version,
+                "signal_source": dr.signal_source, "metric_value": dr.metric_value,
+                "threshold": dr.threshold, "impact": scored["impact"], "effort": scored["effort"],
+                "confidence": scored["confidence"], "tier": scored["tier"],
+                "roadmap_stage": scored["roadmap_stage"], "evidenceIds": [e["id"] for e in evidence_list],
+                "evidence": evidence_list, "raw_evidence": dr.raw_evidence, "score_debug": scored["score_debug"],
+                # ENT-2 cross-system corroboration fields (always present; safe defaults).
+                "corroboration_sources": corr_fields["corroboration_sources"],
+                "corroboration_label": corr_fields["corroboration_label"],
+                "triple_corroboration": corr_fields["triple_corroboration"],
+                "corroboration_rule_ids": corr_fields["corroboration_rule_ids"],
+                # R16-C2 T2: additive Discovery Focus emphasis annotation (always
+                # present; descriptive only — never mutates scoring fields).
+                "focus_emphasis": _build_focus_emphasis(_focus_id, dr.detector_id),
+            }
+            # ENG-AIQ-NC-5 Issue 1: inject approved UI labels from pack UI label files.
+            # Deterministic config text — not LLM generated:
+            #   title      → s6_title   (S6 opportunity card heading)
+            #   category   → s7_category (S7 detail panel category)
+            #   description → s6_desc   (S6 one-line description)
+            # LLM-generated narrative (from run_llm_enrichment):
+            #   aiSummary / aiWhyBullets / aiRisks / aiSuggestedNextSteps → S4
+            #   s9_roadmap label seeds the LLM blueprint prompt → S9
+            #   s10_exec label seeds the LLM exec summary prompt → S10
+            from .packs.pack_config import get_ui_labels
+            ui_labels = get_ui_labels(pack_id) or {}
+            if ui_labels:
+                det_labels = ui_labels.get(dr.detector_id, {})
+                opp["title"]       = det_labels.get("s6_title", dr.detector_id)
+                opp["category"]    = det_labels.get("s7_category", "Automation Opportunity")
+                opp["description"] = det_labels.get("s6_desc", "")
+                opp["s9_roadmap"]  = det_labels.get("s9_roadmap", "")
+                opp["s10_exec"]    = det_labels.get("s10_exec", "")
+                opp["compliance_guardrail"] = det_labels.get("compliance_guardrail")
+
+            pack_opportunities.append(opp)
+
+        return pack_opportunities, {
+            "packId": pack_id,
+            "packName": str(pack_config.get("packName") or pack_id),
             "packVersion": pack_version,
-            "signal_source": dr.signal_source, "metric_value": dr.metric_value,
-            "threshold": dr.threshold, "impact": scored["impact"], "effort": scored["effort"],
-            "confidence": scored["confidence"], "tier": scored["tier"],
-            "roadmap_stage": scored["roadmap_stage"], "evidenceIds": [e["id"] for e in evidence_list],
-            "evidence": evidence_list, "raw_evidence": dr.raw_evidence, "score_debug": scored["score_debug"],
-            # ENT-2 cross-system corroboration fields (always present; safe defaults).
-            "corroboration_sources": corr_fields["corroboration_sources"],
-            "corroboration_label": corr_fields["corroboration_label"],
-            "triple_corroboration": corr_fields["triple_corroboration"],
-            "corroboration_rule_ids": corr_fields["corroboration_rule_ids"],
-            # R16-C2 T2: additive Discovery Focus emphasis annotation (always
-            # present; descriptive only — never mutates scoring fields).
-            "focus_emphasis": _build_focus_emphasis(_focus_id, dr.detector_id),
+            "detectorsExecuted": executed_detector_ids,
+            "packExecutedAt": pack_executed_at.isoformat(),
         }
-        # ENG-AIQ-NC-5 Issue 1: inject approved UI labels from pack UI label files.
-        # Deterministic config text — not LLM generated:
-        #   title      → s6_title   (S6 opportunity card heading)
-        #   category   → s7_category (S7 detail panel category)
-        #   description → s6_desc   (S6 one-line description)
-        # LLM-generated narrative (from run_llm_enrichment):
-        #   aiSummary / aiWhyBullets / aiRisks / aiSuggestedNextSteps → S4
-        #   s9_roadmap label seeds the LLM blueprint prompt → S9
-        #   s10_exec label seeds the LLM exec summary prompt → S10
-        from .packs.pack_config import get_ui_labels
-        ui_labels = get_ui_labels(pack_id) or {}
-        if ui_labels:
-            det_labels = ui_labels.get(dr.detector_id, {})
-            opp["title"]       = det_labels.get("s6_title", dr.detector_id)
-            opp["category"]    = det_labels.get("s7_category", "Automation Opportunity")
-            opp["description"] = det_labels.get("s6_desc", "")
-            opp["s9_roadmap"]  = det_labels.get("s9_roadmap", "")
-            opp["s10_exec"]    = det_labels.get("s10_exec", "")
-            opp["compliance_guardrail"] = det_labels.get("compliance_guardrail")
 
-        opportunities.append(opp)
+    # ── Run every selected pack against the ONE shared normalised signal ──
+    # Each pass returns its own findings (each stamped with its packId) and its
+    # execution metadata; the findings concatenate — no cross-pack merging (AC4).
+    opportunities: List[Dict[str, Any]] = []
+    pack_execution_meta: List[Dict[str, Any]] = []
+    for _pack_arg, _ in _pack_configs:
+        _pack_opps, _pack_meta = _run_pack_pass(_pack_arg)
+        opportunities.extend(_pack_opps)
+        pack_execution_meta.append(_pack_meta)
+
+    # Primary pack = first selection. The backward-compatible scalar fields below
+    # report it, so a single-pack run is byte-identical to the former pipeline (AC2).
+    _primary_meta = pack_execution_meta[0]
 
     try:
         _elapsed_ms = int((datetime.now(timezone.utc) - _run_started_dt).total_seconds() * 1000)
@@ -1833,7 +1916,7 @@ def run(
         "duration_ms": _elapsed_ms,
         "success": True,
         "count": len(opportunities),
-        "pack_id": pack_id,
+        "pack_id": primary_pack_id,
         "system_count": len(_systems),
     })
 
@@ -1853,14 +1936,19 @@ def run(
 
     return {
         "runId": run_id, "orgId": org_id, "mode": mode,
-        "packId": pack_id,
+        "packId": _primary_meta["packId"],
         # R16-C2 T2: surface the selected focus so the seed/ranking path can
         # apply focus emphasis deterministically (None => unbiased view).
         "focusId": _focus_id,
-        "packVersion": pack_version,
-        "packName": pack_config.get("packName") or pack_id,
-        "detectorsExecuted": executed_detector_ids,
-        "packExecutedAt": pack_executed_at.isoformat(),
+        "packVersion": _primary_meta["packVersion"],
+        "packName": _primary_meta["packName"],
+        "detectorsExecuted": _primary_meta["detectorsExecuted"],
+        "packExecutedAt": _primary_meta["packExecutedAt"],
+        # R191-P1 T2: full multi-pack execution surface. For a single-pack run
+        # these carry exactly one entry and the scalar fields above mirror it.
+        "packIds": [m["packId"] for m in pack_execution_meta],
+        "packVersions": {m["packId"]: m["packVersion"] for m in pack_execution_meta},
+        "packs": pack_execution_meta,
         "startedAt": started_at, "completedAt": datetime.now(timezone.utc).isoformat(),
         "inputs": org_ctx, "opportunities": opportunities,
         "perSystem": _per_system,
@@ -1884,6 +1972,7 @@ def main():
     parser.add_argument("--mode", choices=["offline", "live"], default=default_mode)
     parser.add_argument("--systems", help="Comma-separated list of systems (e.g. salesforce,jira)")
     parser.add_argument("--pack", default=None, help="Pack ID: service_cloud (default) or ncino")
+    parser.add_argument("--pack-ids", default=None, help="R191-P1: comma-separated pack IDs for a multi-pack run (e.g. service_cloud,github_engineering)")
     parser.add_argument("--output", help="Output JSON file path")
     parser.add_argument("--run-id", help="Explicit run ID")
     parser.add_argument("--org-id", default="demo-org")
@@ -1896,12 +1985,18 @@ def main():
     if args.systems:
         systems_list =[s.strip().lower() for s in args.systems.split(",") if s.strip()]
 
+    # R191-P1 T2: parse an optional multi-pack selection.
+    pack_ids_list = None
+    if args.pack_ids:
+        pack_ids_list = [p.strip() for p in args.pack_ids.split(",") if p.strip()]
+
     payload = run(
         mode=args.mode,
         run_id=args.run_id,
         org_id=args.org_id,
         systems=systems_list,
         pack=args.pack,
+        pack_ids=pack_ids_list,
     )
 
     if args.output_format == "track_a_seed":
