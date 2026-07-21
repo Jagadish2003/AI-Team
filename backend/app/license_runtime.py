@@ -246,6 +246,32 @@ def get_current_license_status(*, org_id: str | None = None, public_key=None) ->
     return evaluate_license(org_id=org_id, public_key=public_key, persist=False, emit=False)
 
 
+def get_deployment_type(org_id: str | None = None) -> str | None:
+    """Resolve the ``deployment_type`` of an org's current license, or ``None``.
+
+    R-1.9.1-L1 / T6 (AC5): the single source the run/telemetry context stamps
+    ``deployment_type`` from. The discovery runner threads this onto its
+    ``run.started`` / ``run.completed`` events so L2 billing can record which AI
+    deployment topology (``saas`` | ``customer_hosted``) a run executed under.
+
+    Side-effect-free — reuses :func:`get_current_license_status`, which lifts
+    ``deployment_type`` to the top level of a verified result (T1). Returns
+    ``None`` for every case with no topology to stamp: a keyless / invalid /
+    pre-v2 license (no verified payload), a valid key that carries no
+    ``deployment_type``, or a non-string value. Never raises — a context read
+    must never break a run, so any failure resolves to ``None``.
+    """
+    try:
+        result = get_current_license_status(org_id=org_id)
+    except Exception:  # pragma: no cover — defensive; a context read must not break a run
+        logger.warning(
+            "license: deployment_type read failed for org %s", org_id, exc_info=True
+        )
+        return None
+    deployment_type = result.get("deployment_type")
+    return deployment_type if isinstance(deployment_type, str) else None
+
+
 def persist_validated_status(
     result: dict, *, org_id: str, today: datetime.date | None = None
 ) -> None:

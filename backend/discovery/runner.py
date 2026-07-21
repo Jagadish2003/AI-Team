@@ -995,10 +995,21 @@ def run(
     started_at = _run_started_dt.isoformat()
     logger.info(f"AgentIQ discovery runner — mode={mode} run_id={run_id} pack={pack_id}")
 
+    # R-1.9.1-L1 / T6 (AC5): stamp the license deployment_type into this run's
+    # telemetry context so L2 billing can record which AI deployment topology the
+    # run executed under. Resolved once, defensively (lazy import + never raises),
+    # so it can never break a run; None when the org has no verifiable license.
+    try:
+        from app.license_runtime import get_deployment_type
+        _deployment_type = get_deployment_type(org_id)
+    except Exception:  # pragma: no cover — a context read must never break a run
+        _deployment_type = None
+
     record_event("run.started", {
         "org_id": org_id,
         "run_id": run_id,
         "source": "run_pipeline",
+        "deployment_type": _deployment_type,
     })
 
     # 1. Ingest
@@ -1094,6 +1105,7 @@ def run(
             "count": 0,
             "pack_id": pack_id,
             "system_count": len(_systems),
+            "deployment_type": _deployment_type,
         })
         empty = _empty_run(run_id, org_id, mode, started_at)
         _ps, _succ, _errs = _build_ingest_summary(
@@ -1835,6 +1847,7 @@ def run(
         "count": len(opportunities),
         "pack_id": pack_id,
         "system_count": len(_systems),
+        "deployment_type": _deployment_type,
     })
 
     update_run_step(run_id, "complete")
