@@ -39,13 +39,19 @@ from discovery.detectors.runbook_composite import (  # noqa: E402
     LABEL_OBSERVED,
     LABEL_PROPOSED,
     LABEL_UNAVAILABLE,
+    RUNBOOK_UNAVAILABLE,
     build_documented_repeated_manual_composite,
 )
 from discovery.detectors.runbook_documentation_gap import (  # noqa: E402
     EVALUATION_GAP,
+    EVALUATION_MATCHED,
     EVALUATION_UNAVAILABLE,
     DocumentationGapConfig,
     evaluate_documentation_gap,
+)
+from discovery.detectors.runbook_pipeline import (  # noqa: E402
+    evaluate_runbook_recurrence,
+    evaluate_runbook_recurrences,
 )
 from discovery.detectors.runbook_match import (  # noqa: E402
     CITATION_RESOLUTION_OK,
@@ -517,3 +523,139 @@ def test_unavailable_retrieval_degrades_b6_and_never_creates_a_false_gap():
     assert composite.runbook_state == "unavailable"
     assert composite.runbook_label == LABEL_UNAVAILABLE
     assert composite.composite_status == "degraded"
+
+
+def test_production_pipeline_resolves_citation_before_semantic_retrieval():
+    rec = _recurrence(count=5, runbook_refs=(_RUNBOOK_ID,))
+
+    def retrieval_must_not_run(*args, **kwargs):
+        raise AssertionError("semantic retrieval ran after an observed citation")
+
+    result = evaluate_runbook_recurrence(
+        "org-a",
+        rec,
+        citation_library=InMemoryRunbookLibrary([_page()]),
+        retrieve_fn=retrieval_must_not_run,
+        decision_store=InMemoryRunbookMatchDecisionStore(),
+    )
+
+    assert result.state == MATCH_OBSERVED
+    assert result.retrieval_performed is False
+    assert result.detected_match.match_state == MATCH_OBSERVED
+    assert result.documentation_gap.state == EVALUATION_MATCHED
+    assert result.composite.runbook_label == LABEL_OBSERVED
+    assert len(result.detected_match.citing_incident_evidence) == 5
+    assert result.detected_match.runbook_evidence["source_artifact"] == (
+        "runbooks/message-service"
+    )
+
+
+def test_production_pipeline_redacts_raw_note_and_keeps_semantic_match_proposed():
+    secret = "AKIAIOSFODNN7EXAMPLE"
+    rec = _recurrence(count=5)
+    retrieve = _Retrieve([_Chunk()])
+    result = evaluate_runbook_recurrence(
+        "org-a",
+        rec,
+        resolution_texts=[f"Restarted service with key {secret}"],
+        citation_library=InMemoryRunbookLibrary(),
+        retrieve_fn=retrieve,
+        embedding_available_fn=lambda query: True,
+        decision_store=InMemoryRunbookMatchDecisionStore(),
+    )
+
+    assert result.state == MATCH_PROPOSED
+    assert result.detected_match.match_state == MATCH_PROPOSED
+    assert result.composite.runbook_label == LABEL_PROPOSED
+    assert result.documentation_gap.state == EVALUATION_MATCHED
+    assert result.query_redaction.notes_redacted == 1
+    assert secret not in result.retrieval.query
+    assert secret not in str(result.as_dict())
+    assert "[REDACTED:aws_access_key_id]" in result.retrieval.query
+
+
+def test_production_batch_connects_b4_note_handoff_to_b5_and_gap_output():
+    secret = "AKIAIOSFODNN7EXAMPLE"
+    incidents = [_incident(i) for i in range(1, 6)]
+    for incident in incidents:
+        incident["close_notes"] = f"Restarted message service with {secret}"
+    payload = {
+        "org_id": "org-a",
+        "incident_metrics": {"org_id": "org-a", "incidents": incidents},
+    }
+    indexed = []
+    retrieve = _Retrieve([])
+
+    result = evaluate_runbook_recurrences(
+        "org-a",
+        payload,
+        recurrence_config=RecurrenceConfig(floor=3, window_days=30, max_examples=3),
+        as_of=_AS_OF,
+        citation_library=InMemoryRunbookLibrary(),
+        retrieve_fn=retrieve,
+        embedding_available_fn=lambda query: True,
+        decision_store=InMemoryRunbookMatchDecisionStore(),
+        gap_config=DocumentationGapConfig(recurrence_floor=5, confidence_cap=0.60),
+        note_ingest_fn=lambda org_id, artifacts: indexed.extend(artifacts),
+        record_event_fn=lambda event_name, payload: None,
+    )
+
+    assert result.note_handoff["status"] == "ok"
+    assert result.note_handoff["artifacts_handed_off"] == 5
+    assert len(indexed) == 5
+    assert all(secret not in artifact.content for artifact in indexed)
+    assert len(result.recurrences) == 1
+    recurrence_result = result.recurrences[0]
+    assert recurrence_result.state == "absent"
+    assert recurrence_result.documentation_gap.state == EVALUATION_GAP
+    assert recurrence_result.documentation_gap.finding.confidence == 0.60
+    assert secret not in recurrence_result.retrieval.query
+    assert retrieve.calls[0]["org_id"] == "org-a"
+
+
+def test_pipeline_applies_persisted_accept_and_dismiss_to_match_and_gap():
+    rec = _recurrence(count=5)
+    retrieve = _Retrieve([_Chunk()])
+    store = InMemoryRunbookMatchDecisionStore()
+    common = {
+        "citation_library": InMemoryRunbookLibrary(),
+        "retrieve_fn": retrieve,
+        "embedding_available_fn": lambda query: True,
+        "decision_store": store,
+        "gap_config": DocumentationGapConfig(recurrence_floor=5),
+    }
+
+    proposed = evaluate_runbook_recurrence("org-a", rec, **common)
+    assert proposed.state == MATCH_PROPOSED
+
+    store.decide("org-a", rec.record_id, ACTION_ACCEPT, "analyst-1")
+    confirmed = evaluate_runbook_recurrence("org-a", rec, **common)
+    assert confirmed.state == MATCH_CONFIRMED
+    assert confirmed.documentation_gap.state == EVALUATION_MATCHED
+    assert confirmed.documentation_gap.reason == "active_lifecycle_runbook_match"
+
+    store.decide("org-a", rec.record_id, ACTION_DISMISS, "analyst-1")
+    dismissed = evaluate_runbook_recurrence("org-a", rec, **common)
+    assert dismissed.state == "absent"
+    assert dismissed.composite.runbook_match is None
+    assert dismissed.documentation_gap.state == EVALUATION_GAP
+    search = dismissed.documentation_gap.finding.search_outcome
+    assert search["semantic_retrieval"]["proposal_dismissed"] is True
+
+
+def test_pipeline_retrieval_outage_is_unavailable_and_never_a_gap():
+    rec = _recurrence(count=6)
+    result = evaluate_runbook_recurrence(
+        "org-a",
+        rec,
+        citation_library=InMemoryRunbookLibrary(),
+        retrieve_fn=_Retrieve(error=RuntimeError("offline")),
+        embedding_available_fn=lambda query: False,
+        decision_store=InMemoryRunbookMatchDecisionStore(),
+        gap_config=DocumentationGapConfig(recurrence_floor=5),
+    )
+
+    assert result.state == RUNBOOK_UNAVAILABLE
+    assert result.composite.composite_status == "degraded"
+    assert result.documentation_gap.state == EVALUATION_UNAVAILABLE
+    assert result.documentation_gap.finding is None

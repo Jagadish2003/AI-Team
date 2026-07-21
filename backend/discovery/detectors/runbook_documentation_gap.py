@@ -198,10 +198,13 @@ def _search_outcome(
     retrieval: RunbookRetrievalResult,
     rec: Any,
     scoring_config: RunbookScoringConfig,
+    *,
+    proposal_dismissed: bool = False,
 ) -> Dict[str, Any]:
     semantic = retrieval.as_dict()
     semantic["candidate_count"] = len(retrieval.candidates)
     semantic["match_found"] = False
+    semantic["proposal_dismissed"] = proposal_dismissed
     semantic["match_threshold"] = scoring_config.match_threshold
     semantic["evaluated_candidates"] = [
         {
@@ -232,12 +235,17 @@ def evaluate_documentation_gap(
     citation_library: Optional[RunbookLibrary] = None,
     scoring_config: Optional[RunbookScoringConfig] = None,
     config: Optional[DocumentationGapConfig] = None,
+    effective_match: Optional[RunbookMatch] = None,
+    proposal_dismissed: bool = False,
 ) -> DocumentationGapEvaluation:
     """Evaluate the inverse finding after both matching paths finish.
 
     Explicit citations are resolved here with availability preserved. Semantic
     candidates are scored here as well, so a caller cannot accidentally treat an
-    unscored candidate set as a completed no-match search.
+    unscored candidate set as a completed no-match search. ``effective_match`` and
+    ``proposal_dismissed`` are the lifecycle integration seam: an accepted match
+    prevents a contradictory gap, while a dismissed proposal is no longer treated
+    as active documentation.
     """
     org = _require_org(org_id)
     rec_org = str(getattr(rec, "org_id", "") or "").strip()
@@ -272,6 +280,19 @@ def evaluate_documentation_gap(
             retrieval_status=retrieval_result.status,
         )
 
+    if effective_match is not None:
+        _validate_match(org, recurrence_id, effective_match)
+        return DocumentationGapEvaluation(
+            org_id=org,
+            recurrence_id=recurrence_id,
+            state=EVALUATION_MATCHED,
+            reason="active_lifecycle_runbook_match",
+            degraded=False,
+            runbook_match=effective_match,
+            citation_resolution=citation,
+            retrieval_status=retrieval_result.status,
+        )
+
     if citation.status == CITATION_RESOLUTION_UNAVAILABLE:
         return DocumentationGapEvaluation(
             org_id=org,
@@ -301,7 +322,7 @@ def evaluate_documentation_gap(
         retrieval_result.candidates,
         config=resolved_scoring_config,
     )
-    if semantic_match is not None:
+    if semantic_match is not None and not proposal_dismissed:
         _validate_match(org, recurrence_id, semantic_match)
         return DocumentationGapEvaluation(
             org_id=org,
@@ -358,7 +379,11 @@ def evaluate_documentation_gap(
             if isinstance(pointer, Mapping)
         ),
         search_outcome=_search_outcome(
-            citation, retrieval_result, rec, resolved_scoring_config
+            citation,
+            retrieval_result,
+            rec,
+            resolved_scoring_config,
+            proposal_dismissed=proposal_dismissed,
         ),
     )
     return DocumentationGapEvaluation(

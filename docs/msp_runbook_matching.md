@@ -49,3 +49,25 @@ Sensitivity is configuration, not detector code:
 Titles and explanations use only the structured incident category and CI class.
 They name the repeated loop, recurrence volume, and missing documentation; they do
 not copy assignees, resolvers, or any other individual identity.
+
+## End-to-end production path
+
+`discovery.detectors.runbook_pipeline` is the single production entry point for
+MSP-B5. `evaluate_runbook_recurrences` accepts the current organization's
+ServiceNow data, hands resolution notes to the B4 retrieval substrate after
+secret redaction, finds qualifying recurrences, and evaluates each one.
+`evaluate_runbook_recurrence` is available when B6 already has a recurrence.
+
+The order is fixed: explicit citations are checked first; semantic retrieval runs
+only when no citation resolves; deterministic scoring creates at most a proposed
+match; persisted analyst state selects the current composite presentation; and
+the inverse gap is considered last. A confirmed match suppresses a contradictory
+gap, while a dismissed proposal is treated as absent documentation. If citation
+resolution or retrieval is unavailable, the result remains visibly unavailable
+and no gap is created.
+
+Only redacted resolution text enters query construction. Raw note text is never
+stored on the pipeline result, decision record, feedback record, composite, or
+documentation-gap finding. Every entry point validates `org_id`, and the same
+organization is used for note ingestion, recurrence detection, citation lookup,
+retrieval, decisions, and output.
