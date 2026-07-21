@@ -56,6 +56,8 @@ import { ApiError } from '../lib/apiClient';
 import { useResource } from '../lib/dataCache';
 import { cacheKeys } from '../lib/cacheKeys';
 import { useConnectorContext } from '../context/ConnectorContext';
+import { useAuthOptional } from '../context/AuthContext';
+import { isViewerRole } from '../utils/roles';
 import { isDiscoveryReadyConnector } from '../utils/sourceReadiness';
 import { computeConfidence } from '../utils/confidence';
 import { Connector, OutboundSetupRequest } from '../types/connector';
@@ -142,6 +144,18 @@ export default function IntegrationHubPage() {
   const navigate         = useNavigate();
   const location         = useLocation();
   const [searchParams]   = useSearchParams();
+  const auth             = useAuthOptional();
+  const isViewer         = isViewerRole(auth?.user?.role);
+
+  // Connect → View data (no manual "Configure & Sync" step). Configuring a
+  // connector is now just a flag-flip that makes it discovery-ready, so it is
+  // done automatically: any connector that is connected but not yet configured is
+  // configured here in the background. This covers every connect path (OAuth
+  // callback, client-credentials, static) AND any connector that was left
+  // connected-but-unconfigured before this change — so its tile flips straight to
+  // "View data". analyst+ only (configuring is a write; viewers can't); guarded by
+  // a ref so each id is attempted once and the post-configure refetch can't loop.
+  const autoConfiguredRef = useRef<Set<string>>(new Set());
 
   // ?category= deep-link param — ENG-IH-2 AC6
   const deepLinkCategory = searchParams.get('category') ?? null;
@@ -172,6 +186,24 @@ export default function IntegrationHubPage() {
     () => [...recommended, ...standard],
     [recommended, standard],
   );
+
+  // Auto-configure connected-but-unconfigured connectors (Connect → View data).
+  // See autoConfiguredRef above for the rationale. Runs whenever the connector
+  // set changes; each id is attempted at most once (the ref), and after configure
+  // the connector reports configured=true so it no longer matches.
+  useEffect(() => {
+    if (isViewer) return; // configuring is analyst+; viewers can't
+    for (const c of allConnectors) {
+      if (
+        c.status === 'connected' &&
+        !c.configured &&
+        !autoConfiguredRef.current.has(c.id)
+      ) {
+        autoConfiguredRef.current.add(c.id);
+        configureSync(c.id);
+      }
+    }
+  }, [allConnectors, isViewer, configureSync]);
 
 
   // R17-D4 Addendum A / T11 (AT-506): license-limit state (systems used /
@@ -297,7 +329,10 @@ export default function IntegrationHubPage() {
       push('Coming Soon');
     } else {
       connectConnector(id);
-      push('Connector connected. Click Configure & Sync to load data.');
+      // Connect now leads straight to "View data" — configuring is automatic
+      // (see the auto-configure effect). For OAuth connectors this toast is not
+      // seen (the browser redirects to the provider), but keep it accurate.
+      push('Connecting…');
     }
   }
 

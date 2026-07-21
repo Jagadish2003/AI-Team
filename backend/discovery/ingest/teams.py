@@ -388,7 +388,7 @@ class TeamsIngestor(ChangeBasedIngestor):
         live = is_live()
 
         try:
-            channels = self._accessible_channels(org_id)
+            channels = self._selected_accessible_channels(org_id)
             logger.info(
                 "teams: org=%s %s — %d accessible standard channel(s)",
                 org_id,
@@ -480,6 +480,45 @@ class TeamsIngestor(ChangeBasedIngestor):
                 accessible.append({**c, "team_id": team_id, "team_name": team_name})
         return accessible
 
+    # ── Channel selection (Integration Hub) — the Teams analogue of Slack P5 ──
+    def _selected_channel_ids(self, org_id: str) -> Optional[set]:
+        """The org's saved Teams channel selection, or None if unset.
+
+        Stored on the Teams connector record by
+        ``PATCH /api/connectors/teams/channels`` under the ``channels`` key, as a
+        list of container ids (``"{team_id}/{channel_id}"``). ``None`` means "no
+        selection configured" → read every granted channel (backwards-compatible
+        default). A saved list (possibly empty) means read ONLY those channels. Any
+        lookup failure degrades to ``None`` so a run is never blocked by the
+        selection store being unavailable (mirrors slack ``_selected_channel_ids``).
+        """
+        try:
+            from app.db import org_connector_get
+
+            record = org_connector_get(org_id, "teams")
+        except Exception:  # pragma: no cover — defensive: never block a run
+            return None
+        if not record:
+            return None
+        channels = record.get("channels")
+        if not isinstance(channels, list):
+            return None
+        return {str(c) for c in channels}
+
+    def _selected_accessible_channels(self, org_id: str) -> List[Dict[str, Any]]:
+        """Granted channels narrowed to the org's saved selection (reach path).
+
+        With no selection configured, every granted channel is read (unchanged
+        default). With a selection saved, only the selected channels are read — a
+        channel the customer did not select is never ingested, even when AgentIQ is
+        granted it. Mirrors slack ``_accessible_channels`` (which applies P5).
+        """
+        channels = self._accessible_channels(org_id)
+        selected = self._selected_channel_ids(org_id)
+        if selected is None:
+            return channels
+        return [c for c in channels if _channel_key(c["team_id"], c["id"]) in selected]
+
     # ── Deep-content path (R18-A4 / AT-595 — T2) ─────────────────────────────
     # Thread assembly, rendering, provenance, and the substrate hand-off are the
     # SHARED conversation model (:mod:`discovery.ingest.conversation_content`),
@@ -489,15 +528,17 @@ class TeamsIngestor(ChangeBasedIngestor):
     def _granted_scope_container_ids(self, org_id: str) -> set:
         """Container ids (``"{team_id}/{channel_id}"``) the depth path may read.
 
-        The SAME boundary the reach path applies in :meth:`_accessible_channels`,
-        expressed as a container-id set: only standard channels AgentIQ is granted
-        and that are live (private/ungranted/archived channels excluded; private
-        chats / DMs are never enumerated at all). This is the AC2 boundary —
-        conversation text from any channel outside this set is never assembled or
-        handed off.
+        The SAME boundary the reach path applies in
+        :meth:`_selected_accessible_channels`, expressed as a container-id set: only
+        standard channels AgentIQ is granted and live (private/ungranted/archived
+        excluded; private chats / DMs never enumerated), AND — when a channel
+        selection is configured in the Integration Hub — only those selected. This
+        is the AC2 boundary: conversation text from any channel outside this set is
+        never assembled or handed off.
         """
         return {
-            _channel_key(c["team_id"], c["id"]) for c in self._accessible_channels(org_id)
+            _channel_key(c["team_id"], c["id"])
+            for c in self._selected_accessible_channels(org_id)
         }
 
     def _in_granted_scope(self, org_id: str, container_id: Optional[str]) -> bool:
@@ -824,6 +865,34 @@ class TeamsIngestor(ChangeBasedIngestor):
         if self._graph_client is not None:
             self._graph_client.close()
             self._graph_client = None
+
+
+def list_selectable_channels(org_id: str) -> List[Dict[str, str]]:
+    """Granted Teams channels AgentIQ can read for ``org_id`` — the option list.
+
+    The Teams analogue of :func:`slack.list_selectable_channels` / the P5 channel
+    selection: the standard, granted, non-archived channels the customer chooses
+    from in the Integration Hub. Selection filtering is deliberately NOT applied
+    here — this is the full option list. Returned as ``{id, name, team}`` dicts
+    where ``id`` is the container id ``"{team_id}/{channel_id}"`` (the value stored
+    in the selection and used by the ingestor's scope check), ``name`` the channel
+    display name, and ``team`` the owning team (channels can share a name across
+    teams). Resolves offline (fixture) or live (Microsoft Graph) exactly as a
+    discovery run would.
+    """
+    ingestor = TeamsIngestor()
+    channels: List[Dict[str, str]] = []
+    for c in ingestor._accessible_channels(org_id):
+        team_id = str(c.get("team_id", ""))
+        channel_id = str(c.get("id", ""))
+        channels.append(
+            {
+                "id": _channel_key(team_id, channel_id),
+                "name": str(c.get("displayName", "") or channel_id),
+                "team": str(c.get("team_name", "") or ""),
+            }
+        )
+    return channels
 
 
 def resolve_thread_content(org_id: str, source_artifact: str) -> Any:

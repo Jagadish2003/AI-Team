@@ -115,6 +115,14 @@ export function NormalizationProvider({
       return;
     }
 
+    // Fetch normalization only once the run has SETTLED (not computing). During a
+    // discovery run only /status is polled (progress + completion detection); the
+    // derived normalization data is fetched a SINGLE time when the run reaches
+    // 100% — this effect re-runs as `computing` flips to false — and again on an
+    // explicit refetch (focus/interval/manual, post-run). This stops the old
+    // every-3-seconds /runs/{id}/normalization poll during a run.
+    if (computing) return;
+
     let alive = true;
     if (fetchCount === 0) setRowsLoading(true);
     setRowsError(null);
@@ -135,33 +143,12 @@ export function NormalizationProvider({
     return () => {
       alive = false;
     };
-  }, [runId, fetchCount]);
-
-  // Auto-refresh normalization data while the run is computing. Paused while the
-  // tab is backgrounded (no point refreshing a view the user isn't looking at);
-  // the visibilitychange listener refreshes immediately when it is foregrounded.
-  useEffect(() => {
-    if (!runId || !computing) return;
-
-    const tick = () => {
-      if (typeof document !== "undefined" && document.hidden) return;
-      refetchRows();
-    };
-    const interval = setInterval(tick, 3000);
-    const onVisibility = () => {
-      if (typeof document !== "undefined" && !document.hidden) refetchRows();
-    };
-    document.addEventListener("visibilitychange", onVisibility);
-
-    return () => {
-      clearInterval(interval);
-      document.removeEventListener("visibilitychange", onVisibility);
-    };
-  }, [runId, computing, refetchRows]);
+  }, [runId, computing, fetchCount]);
 
   // Normalization mappings are SHARED across the org — another analyst's edit
-  // must appear here without a reload. While the run is computing the 3s poll
-  // above already refreshes, so this covers the settled (post-run) case.
+  // must appear here without a reload. Only for a SETTLED run (never while it is
+  // computing — the completion fetch above covers that); a slow focus/interval
+  // revalidation keeps the post-run view in sync.
   useRevalidateOnFocus(refetchRows, {
     enabled: Boolean(runId) && !computing,
   });

@@ -21,6 +21,8 @@ import { useToast } from "../components/common/Toast";
 import { useAuth } from "../context/AuthContext";
 import { useLicense, useOrgName } from "../context/LicenseContext";
 import { ApiError } from "../lib/apiClient";
+import { useDataCache } from "../lib/dataCache";
+import { cacheKeys } from "../lib/cacheKeys";
 import { fetchLicenseStatus, updateLicenseKey } from "../api/licenseApi";
 import type { LicenseStatusResponse, LicenseStatusValue } from "../types/license";
 
@@ -73,6 +75,13 @@ export default function LicensePage() {
   // once and shared; refreshed alongside the banner after a key update so the
   // panel reflects a newly pasted key's org_name immediately (AC15).
   const orgName = useOrgName();
+  // The license limits (systems used / licensed) are served from the shared cache
+  // under cacheKeys.license (e.g. the Integration Hub's "Systems used" strip and
+  // its connect gating). A key update changes those limits, so the cached value
+  // must be invalidated here — otherwise other pages keep showing the OLD limit
+  // until the cache's background revalidation catches up (AC7: reflects with no
+  // reload / no wait).
+  const cache = useDataCache();
 
   const [status, setStatus] = useState<LicenseStatusResponse | null>(null);
   const [loading, setLoading] = useState(true);
@@ -117,6 +126,7 @@ export default function LicensePage() {
       const refreshed = await updateLicenseKey(key);
       setStatus(refreshed); // refresh the page panel immediately, no restart (AC7)
       void refreshBanner(); // re-read the shared banner status so it clears now
+      cache.invalidate(cacheKeys.license); // limits changed → other pages refetch now
       setKeyInput("");
       push("License updated.", "success");
     } catch (err) {

@@ -82,11 +82,23 @@ def _decrypt(ciphertext: str) -> str:
     return _get_fernet().decrypt(ciphertext.encode()).decode()
 
 
+#: Effective "non-expiring" TTL for tokens a provider returns with NO expiry
+#: information. OAuth semantics: a token response without ``expires_in`` /
+#: ``expires_at`` carries no known expiry — e.g. Slack bot tokens (``xoxb-``) and
+#: GitHub OAuth tokens are non-expiring and return neither an expiry nor a
+#: refresh_token (see tests/contract/fixtures/connector_health_samples: both are
+#: documented as ``token_expiry_seconds: null``). We store a far-future expiry
+#: rather than a real timestamp because the ``credentials.expires_at`` column is
+#: NOT NULL. 10 years ≈ "does not expire" for any practical purpose.
+_NON_EXPIRING_TTL = timedelta(days=3650)
+
+
 def _parse_expires_at(token_response: dict) -> datetime:
     """Return a UTC-aware datetime for when the token expires.
 
-    Handles both expires_in (relative seconds) and expires_at (absolute).
-    Falls back to 1 hour if neither is present.
+    Handles both expires_in (relative seconds) and expires_at (absolute). When a
+    provider returns NEITHER, the token has no known expiry (Slack/GitHub) — treat
+    it as non-expiring rather than fabricating a short one.
     """
     now = datetime.now(timezone.utc)
 
@@ -110,8 +122,14 @@ def _parse_expires_at(token_response: dict) -> datetime:
         except ValueError:
             pass
 
-    # Default: 1 hour from now
-    return now + timedelta(hours=1)
+    # No expiry info from the provider → the token does not have a known/enforced
+    # expiry (Slack bot tokens, GitHub OAuth tokens). Fabricating a 1-hour expiry
+    # here made get_token()/the tile report a STILL-VALID token as expired ~1h
+    # after connect — with no refresh_token to renew it — so the connector showed
+    # "Token expired" and ingestion 503'd. Providers that DO issue short-lived
+    # tokens (Microsoft, Salesforce, Atlassian) always send expires_in and are
+    # handled above, so this branch only ever applies to non-expiring tokens.
+    return now + _NON_EXPIRING_TTL
 
 
 def _row_to_token_record(row: tuple) -> TokenRecord:
@@ -886,6 +904,26 @@ def _mark_refresh_failed(org_id: str, connector_id: str) -> None:
         cur = con.cursor()
         cur.execute(
             "UPDATE credentials SET refresh_failed=1 WHERE org_id=%s AND connector_id=%s",
+            (org_id, connector_id),
+        )
+        con.commit()
+    finally:
+        con.close()
+
+
+def _clear_refresh_failed(org_id: str, connector_id: str) -> None:
+    """Clear the refresh_failed flag for a credential row.  No-op if row absent.
+
+    Called when a connector's live call SUCCEEDS again, so a connection that was
+    flagged for reconnect (a prior 401 / failed refresh) un-flags itself once it
+    is proven working — the tile returns from 'Reconnect' to 'View data' without
+    the user re-authenticating."""
+    con = db.connect()
+    try:
+        cur = con.cursor()
+        cur.execute(
+            "UPDATE credentials SET refresh_failed=0 "
+            "WHERE org_id=%s AND connector_id=%s AND COALESCE(refresh_failed,0) <> 0",
             (org_id, connector_id),
         )
         con.commit()
