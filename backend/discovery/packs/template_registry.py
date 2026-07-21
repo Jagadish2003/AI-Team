@@ -196,6 +196,78 @@ TEMPLATE_REGISTRY: Dict[str, TemplateDefinition] = {
         terminology={},
         metadata={"source": "R18-C1", "version": "1.0.0"},
     ),
+
+    # MSP-B6 T5 (AT-740): the Managed Cloud Operations template — the SECOND
+    # production instance of the R18-C1 model, proving a new template is
+    # configuration only (a dict entry here + the already-served registry route),
+    # a domain away from lending. It activates the Cloud-Operations (NOC) pack and
+    # the core-operations focus, both already wired: pack_config.PACK_REGISTRY
+    # ["cloud_ops"] supplies the detectors + T4 ops-impact scorer, and
+    # focus_affinity.FOCUS_CORE_OPERATIONS already emphasises this pack's
+    # detectors. Every field below is an EDITABLE default (resolve_launch_config).
+    "managed_cloud_operations": TemplateDefinition(
+        template_id="managed_cloud_operations",
+        label="Managed Cloud Operations",
+        description=(
+            "Managed cloud-operations (NOC) starting point: ServiceNow as the "
+            "system of record, AWS/Azure event sources for operational signal, "
+            "and a runbook library for supporting context — the Cloud-Operations "
+            "pack with a core-operations focus. Speaks NOC: alerts, incidents, "
+            "runbooks, MTTR, toil, escalation."
+        ),
+        # ServiceNow (system of record) + AWS/Azure event sources (operational
+        # signal) + runbook library (supporting/documentation), per scope §2.
+        suggested_systems=[
+            "servicenow",
+            "aws_event_source",
+            "azure_event_source",
+            "runbook_library",
+        ],
+        suggested_roles={
+            "servicenow": "system_of_record",
+            "aws_event_source": "operational_signal_source",
+            "azure_event_source": "operational_signal_source",
+            # The runbook library is the supporting documentation source (same
+            # lane as Confluence in the lending template).
+            "runbook_library": "documentation_system",
+        },
+        focus_defaults=FocusDefaults(
+            # core_operations already emphasises this pack's detectors
+            # (focus_affinity.FOCUS_CORE_OPERATIONS) — no code change required.
+            focus_id="core_operations",
+            emphasis=["backlog_work_queues", "handoffs_routing", "communications"],
+        ),
+        # Cloud-Operations pack (pack_config.PACK_REGISTRY["cloud_ops"]).
+        pack_id="cloud_ops",
+        # The five Cloud-Operations detectors this template surfaces (MSP-B6
+        # T2 record/stream detectors + the T3 shared-CI hotspot). Launching the
+        # untouched template applies this emphasis through the already-wired
+        # cloud_ops scorer (T4) and core-operations focus-affinity ranking.
+        detector_emphasis=[
+            "RECURRING_RESOLUTION_LOOP",
+            "ALERT_TRIAGE_TOIL",
+            "REASSIGNMENT_PING_PONG",
+            "QUEUE_AGEING",
+            "SHARED_CI_HOTSPOT",
+        ],
+        # NOC vocabulary — mirrors the pack's language_map in
+        # cloud_ops_pack_config.json so template + pack speak the same language.
+        terminology={
+            "opportunity": "finding",
+            "ticket": "incident",
+            "notification": "alert",
+            "documentation": "runbook",
+            "resolution_time": "MTTR",
+            "friction": "toil",
+            "handoff": "escalation",
+        },
+        metadata={
+            "industry_id": "technology",
+            "lane": "managed_services",
+            "source": "MSP-B6",
+            "version": "1.0.0",
+        },
+    ),
 }
 
 
