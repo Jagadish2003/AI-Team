@@ -1001,6 +1001,16 @@ def _emit_billing_run_completed(
             connected_system_count: Optional[int] = count_connected_systems(org_id)
         except Exception:
             connected_system_count = None
+        # R-1.9.1-L2 / T4 (AC4): stamp a per-org monotonic sequence number so a
+        # billing event deleted from the store before report generation shows up
+        # as a gap in the usage report's hash chain. Defensive — a counter hiccup
+        # yields seq=None (the event is still emitted, just unsequenced).
+        try:
+            from app import billing_chain
+
+            _seq: Optional[int] = billing_chain.next_seq(org_id)
+        except Exception:
+            _seq = None
         record_event(
             "billing.run_completed",
             {
@@ -1013,6 +1023,7 @@ def _emit_billing_run_completed(
                 "deployment_type": deployment_type,
                 "started_at": started_at,
                 "completed_at": datetime.now(timezone.utc).isoformat(),
+                "seq": _seq,
                 "source": "run_pipeline",
             },
         )
