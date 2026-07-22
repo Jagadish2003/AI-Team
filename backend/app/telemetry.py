@@ -721,6 +721,36 @@ class RetrievalModelBackfillPayload(TypedDict, total=False):
     batches: NotRequired[int]
 
 
+class BillingRunCompletedPayload(TypedDict, total=False):
+    """billing.run_completed — R-1.9.1-L2 / T1 (AC1).
+
+    Emitted once into the immutable telemetry store for EVERY discovery run,
+    regardless of AI mode. Billability is DERIVED BY THE L2 USAGE REPORT, never
+    decided at emission (hosted = billable; in_boundary / customer_tenant are
+    recorded for audit) — so this event is a neutral, complete record of what ran.
+
+    ai_mode is the active generation provider mode (hosted | in_boundary |
+    customer_tenant); provider is that provider's concrete name (coincides with
+    ai_mode today, kept distinct so the report can evolve). connected_system_count
+    is the org's connected Integration-Hub entities (the pricing "one connected
+    entity = one system" definition), NOT the number of source systems ingested by
+    this run. pack_ids is a list (forward-compatible with multi-pack runs, P1).
+    deployment_type is the license topology stamped from L1.
+
+    PII/secret guard: identifiers, mode, counts, pack ids, and timestamps only —
+    never prompt/output text, tokens, or credentials.
+    """
+    run_id: NotRequired[str]
+    org_id: NotRequired[str]
+    ai_mode: NotRequired[str]
+    provider: NotRequired[Optional[str]]
+    connected_system_count: NotRequired[Optional[int]]
+    pack_ids: NotRequired[list]
+    deployment_type: NotRequired[Optional[str]]
+    started_at: NotRequired[Optional[str]]
+    completed_at: NotRequired[Optional[str]]
+
+
 # ---------------------------------------------------------------------------
 # Registry helpers
 # ---------------------------------------------------------------------------
@@ -847,6 +877,11 @@ register_event_type("retrieval.artifact_invalidated", RetrievalArtifactInvalidat
 # here so app.retrieval.embedder can emit it; record_event() raises ValueError for
 # an unregistered type, so registration must precede emission.
 register_event_type("retrieval.model_backfill", RetrievalModelBackfillPayload)
+# R-1.9.1-L2 / T1 (AC1) — usage metering. billing.run_completed is emitted once
+# per discovery run (every run, every AI mode) by discovery/runner.py so the L2
+# usage report has a complete, immutable record; record_event() raises ValueError
+# for an unregistered type, so registration must precede the first emission.
+register_event_type("billing.run_completed", BillingRunCompletedPayload)
 
 
 # ---------------------------------------------------------------------------
