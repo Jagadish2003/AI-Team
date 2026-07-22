@@ -132,6 +132,10 @@ INDUSTRY_REGISTRY: Dict[str, IndustryConfig] = {
             "confluence":     SystemDefaultConfig("documentation_system",      "secondary", ["documents_knowledge"]),
             "sharepoint":     SystemDefaultConfig("documentation_system",      "secondary", ["documents_knowledge"]),
             "slack":          SystemDefaultConfig("operational_signal_source", "optional",  ["communications"]),
+            # R191-R1 T4: Teams available wherever Slack is offered — mirrors
+            # slack's priority/workflow_focus exactly (the established pattern
+            # from public_sector/manufacturing/logistics_supply_chain).
+            "teams":          SystemDefaultConfig("operational_signal_source", "optional",  ["communications"]),
             # R191-R1 T3: databases — a shipped source (native DB connector,
             # sqlserver_opsignal pack) that genuinely fits core banking / loan
             # servicing / risk data stores underneath the CRM layer.
@@ -234,6 +238,9 @@ INDUSTRY_REGISTRY: Dict[str, IndustryConfig] = {
             "jira":           SystemDefaultConfig("operational_signal_source", "secondary", ["backlog_work_queues"]),
             "servicenow":     SystemDefaultConfig("operational_signal_source", "secondary", ["service_casework", "backlog_work_queues"]),
             "slack":          SystemDefaultConfig("operational_signal_source", "secondary", ["communications"]),
+            # R191-R1 T4: Teams available wherever Slack is offered — mirrors
+            # slack's priority/workflow_focus exactly.
+            "teams":          SystemDefaultConfig("operational_signal_source", "secondary", ["communications"]),
             "confluence":     SystemDefaultConfig("documentation_system",      "optional",  ["documents_knowledge"]),
             # R191-R1 T3: databases — a shipped source (native DB connector,
             # sqlserver_opsignal pack) that genuinely fits POS / inventory /
@@ -263,6 +270,9 @@ INDUSTRY_REGISTRY: Dict[str, IndustryConfig] = {
             "sharepoint":     SystemDefaultConfig("documentation_system",      "secondary", ["documents_knowledge", "compliance_risk"]),
             "confluence":     SystemDefaultConfig("documentation_system",      "optional",  ["documents_knowledge"]),
             "slack":          SystemDefaultConfig("operational_signal_source", "optional",  ["communications"]),
+            # R191-R1 T4: Teams available wherever Slack is offered — mirrors
+            # slack's priority/workflow_focus exactly.
+            "teams":          SystemDefaultConfig("operational_signal_source", "optional",  ["communications"]),
             # R191-R1 T3: databases — a shipped source (native DB connector,
             # sqlserver_opsignal pack) that genuinely fits clinical/ancillary
             # data stores underneath the EHR layer (lab, scheduling, billing).
@@ -293,6 +303,9 @@ INDUSTRY_REGISTRY: Dict[str, IndustryConfig] = {
             "jira":           SystemDefaultConfig("operational_signal_source", "secondary", ["backlog_work_queues", "change_release"]),
             "sharepoint":     SystemDefaultConfig("documentation_system",      "secondary", ["documents_knowledge", "compliance_risk"]),
             "slack":          SystemDefaultConfig("operational_signal_source", "optional",  ["communications"]),
+            # R191-R1 T4: Teams available wherever Slack is offered — mirrors
+            # slack's priority/workflow_focus exactly.
+            "teams":          SystemDefaultConfig("operational_signal_source", "optional",  ["communications"]),
             # R191-R1 T3: databases — a shipped source (native DB connector,
             # sqlserver_opsignal pack) that genuinely fits asset-management /
             # billing / SCADA-adjacent data stores underneath the ERP layer.
@@ -354,13 +367,29 @@ INDUSTRY_REGISTRY: Dict[str, IndustryConfig] = {
         industry_id="technology",
         label="Technology",
         # R191-R1 T2: sqlserver_opsignal added — the shipped native-DB pack
-        # serves the new database anchor below.
-        pack_hints=["service_cloud", "sqlserver_opsignal"],
+        # serves the new database anchor below. T4: github_engineering added —
+        # technology already anchors github as a connectable default (T2); the
+        # pack that actually scores its PR/commit/branch signal was missing
+        # from the hint list, leaving this industry an honest-pack-list gap
+        # (the story's own example for this sub-goal). The 1.9 cloud-ops/
+        # sec-ops packs the story also names are NOT present in this codebase
+        # (no such pack_id exists in pack_config.PACK_REGISTRY) — anchor-on-
+        # shipped means they are deliberately omitted, not guessed at.
+        pack_hints=["service_cloud", "sqlserver_opsignal", "github_engineering"],
         system_defaults={
             "salesforce":     SystemDefaultConfig("system_of_record",          "primary",   ["service_casework", "intake_requests"]),
             "salesforce_sc":  SystemDefaultConfig("system_of_record",          "primary",   ["service_casework", "intake_requests"]),
             "salesforce_rc":  SystemDefaultConfig("system_of_record",          "primary",   ["intake_requests", "approvals"]),
-            "jira":           SystemDefaultConfig("operational_signal_source", "secondary", ["backlog_work_queues", "change_release"]),
+            # R191-R1 T4: reduce Salesforce-centric anchoring — technology's own
+            # llm_context_suffix names engineering delivery friction, backlog
+            # bottlenecks, and deployment approval delays as the PRIMARY signal
+            # category for this industry, not case/service work. Jira (shipped)
+            # is the honest co-primary system for that signal, not a secondary
+            # one — elevated from operational_signal_source/secondary to
+            # workflow_system/primary. Salesforce variants stay primary too
+            # (a tech company's customer-facing side is real); this is additive
+            # primary-anchor diversification, not a Salesforce removal.
+            "jira":           SystemDefaultConfig("workflow_system",           "primary",   ["backlog_work_queues", "change_release"]),
             "servicenow":     SystemDefaultConfig("operational_signal_source", "secondary", ["backlog_work_queues", "compliance_risk"]),
             # R191-R1 T2: GitHub has a shipped connector/pack (connectors/saas/
             # github.py + github_engineering) and stays a connectable default —
@@ -369,6 +398,9 @@ INDUSTRY_REGISTRY: Dict[str, IndustryConfig] = {
             "github":         SystemDefaultConfig("engineering_change_system", "optional",  ["change_release", "backlog_work_queues"]),
             "confluence":     SystemDefaultConfig("documentation_system",      "secondary", ["documents_knowledge"]),
             "slack":          SystemDefaultConfig("operational_signal_source", "secondary", ["communications", "change_release"]),
+            # R191-R1 T4: Teams available wherever Slack is offered — mirrors
+            # slack's priority/workflow_focus exactly.
+            "teams":          SystemDefaultConfig("operational_signal_source", "secondary", ["communications", "change_release"]),
             # R191-R1 T2: databases — a shipped source (native DB connector,
             # sqlserver_opsignal pack) that genuinely fits a technology company's
             # internal operational/ticketing database signal.
