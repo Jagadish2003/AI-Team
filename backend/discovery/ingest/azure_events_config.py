@@ -6,7 +6,7 @@ per-deployment configuration the connector needs BEFORE it authenticates:
 
   * the cloud ENVIRONMENT (AzureCloud vs AzureUSGovernment) and its ARM/authority
     endpoints — resolved from a map shared conceptually with the model gateway's
-    customer-tenant (Azure OpenAI) environment surface;
+    customer-tenant Azure environment surface;
   * the ACCESS MODE (Azure Lighthouse delegated vs direct per-tenant service
     principal);
   * the PINNED SUBSCRIPTION SET — the explicit, Owner-approved list of Azure
@@ -50,7 +50,7 @@ except Exception:  # pragma: no cover - import shim
 
 # MSP-B2 T4 (AT-651): the Azure cloud-environment map lives in ONE shared module
 # (app.azure_environments) so it is reused consistently across Azure integrations
-# (this connector now; the model gateway's Azure OpenAI Government surface per B9)
+# (this connector now; the model gateway's Azure Government model surface per B9)
 # and never duplicated. It is dependency-free (no DB/auth/network), so importing it
 # keeps this config module offline-safe. Names are re-exported below so existing
 # callers/tests keep using ``azure_events_config.AZURE_CLOUD`` etc. unchanged.

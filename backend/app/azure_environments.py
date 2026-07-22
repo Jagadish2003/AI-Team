@@ -13,7 +13,7 @@ awareness" / AT-651 security rule): it resolves endpoints and cloud METADATA onl
 never secrets. Secrets live exclusively in the vault. Because it imports nothing
 heavy (no DB, no auth, no network), both the Azure Event Connector
 (``discovery.ingest.azure_events_config``) and the model gateway's customer-tenant
-Azure surface (Azure OpenAI Government, wired in B9) resolve the same environment
+Azure model surface (Azure Government, wired in B9) resolve the same environment
 concept from here — "shared conceptually with the model-gateway environment map"
 made concrete as ONE reusable map.
 
