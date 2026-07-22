@@ -1342,6 +1342,16 @@ def run(
         logger.info(
             "Pack: security_ops — four-part contract enforced on %d finding(s)", _validated
         )
+        # MSP-B12 T3 (AC2): the mandatory aggregation boundary — the SECOND
+        # enforcement layer after B11. A recursive sweep over every finding's FULL
+        # serialized payload (title, explanation, raw evidence, telemetry mirrors)
+        # rejects any host×vulnerability pair or person-level datum, visible or
+        # hidden. Deliberately NOT wrapped in try/except: a breach fails the run.
+        from .packs.security_ops_aggregation_floor import enforce_pack_output
+        _swept = enforce_pack_output(detector_results)
+        logger.info(
+            "Pack: security_ops — aggregation floor swept %d output(s)", _swept
+        )
 
     _snapshot_detector_evaluations(
         org_id=org_id,
