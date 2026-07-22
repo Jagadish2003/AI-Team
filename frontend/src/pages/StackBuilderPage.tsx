@@ -198,8 +198,21 @@ export function resolvePackIds(
     if (deduped.length > 0) return deduped;
   }
 
-  // Otherwise fall back to the single resolved pack (industry hint / declared
-  // cloud / safe default), as a one-element list.
+  // The workspace may declare MULTIPLE Salesforce products (Integration Hub →
+  // "Salesforce products in use" is a multi-select). Each declared product maps
+  // to a discovery pack, so a multi-product declaration drives a multi-pack run.
+  // Map every declared product to its pack, order-preserving and de-duplicated
+  // (several products share a pack — Service/Financial/Revenue/Health Cloud all
+  // map to service_cloud). The first entry matches resolvePackId's single result.
+  const declaredPacks = getCatalogSalesforceProducts(catalog)
+    .map(productId => CLOUD_PACK_REGISTRY[productId])
+    .filter((packId): packId is string => Boolean(packId));
+  if (declaredPacks.length > 0) {
+    return Array.from(new Set(declaredPacks));
+  }
+
+  // Otherwise fall back to the single resolved pack (industry hint / safe
+  // default), as a one-element list.
   return [resolvePackId(state, catalog, industries, templates)];
 }
 

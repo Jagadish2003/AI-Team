@@ -28,6 +28,15 @@ function emptyCatalog(): WorkspaceCatalogResponse {
   };
 }
 
+function catalogWithSalesforceProducts(products: string[]): WorkspaceCatalogResponse {
+  return {
+    ...emptyCatalog(),
+    primary_platforms: [
+      { system_id: 'salesforce', name: 'Salesforce', status: 'connected', products },
+    ],
+  } as WorkspaceCatalogResponse;
+}
+
 const INDUSTRIES: IndustryListItem[] = [];
 
 function template(overrides: Partial<TemplateListItem>): TemplateListItem {
@@ -102,6 +111,28 @@ describe('resolvePackIds — multi-select run configuration', () => {
   it('falls back to the safe default when nothing is selected', () => {
     const ids = resolvePackIds(stateWith(), emptyCatalog(), INDUSTRIES, []);
     expect(ids).toEqual(['service_cloud']);
+  });
+
+  it('maps every declared Salesforce product to its pack (multi-select declaration)', () => {
+    // Service Cloud + nCino declared → both packs activate.
+    const ids = resolvePackIds(
+      stateWith(),
+      catalogWithSalesforceProducts(['salesforce_sc', 'salesforce_ncino']),
+      INDUSTRIES,
+      [],
+    );
+    expect(ids).toEqual(['service_cloud', 'ncino']);
+  });
+
+  it('de-duplicates when several declared products map to the same pack', () => {
+    // Service Cloud + Financial Services Cloud + nCino → service_cloud once, then ncino.
+    const ids = resolvePackIds(
+      stateWith(),
+      catalogWithSalesforceProducts(['salesforce_sc', 'salesforce_fsc', 'salesforce_ncino']),
+      INDUSTRIES,
+      [],
+    );
+    expect(ids).toEqual(['service_cloud', 'ncino']);
   });
 
   it('treats a template without a packs field as single-pack (pre-v1.11)', () => {
