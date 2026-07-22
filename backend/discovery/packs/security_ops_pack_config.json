@@ -7,7 +7,7 @@
     "note": "Editing a value below changes behaviour on the next run; no restart or code change required. Bump packVersion (mirrored in pack_config.py) on any detector/scorer/corroboration change."
   },
 
-  "packVersion": "1.1.0",
+  "packVersion": "1.2.0",
 
   "terminology": {
     "_note": "The SecOps vocabulary this pack speaks in findings, roadmap, and executive report — the same externalized re-labelling mechanism the lending and cloud-ops packs use. glossary defines each canonical SecOps term (MSP-B12 §2); language_map re-labels generic AgentIQ / service-management vocabulary into SecOps language for terminology-aware rendering (later tasks).",
@@ -66,12 +66,40 @@
       "severity_band": 0.2
     },
     "severity_band": {
+      "default_band": "medium",
       "_note": "Severity-band weighting (T6 AC6). Higher weight ranks that band's toil above a lower band's at equal effort. Config, not code — editing these re-ranks findings with no code deploy.",
       "critical": 1.0,
       "high": 0.75,
       "medium": 0.5,
       "low": 0.25,
       "informational": 0.1
+    },
+    "recurrence_stability": {
+      "_note": "Stable recurrence can be supplied as a 0..1 value. Otherwise the scorer derives it from recurrence count using target_occurrences, or uses default.",
+      "target_occurrences": 6,
+      "default": 0.5
+    },
+    "normalization": {
+      "_note": "Boundaries used when a finding is scored alone. Whole-run ranking compares effort and breadth against the largest eligible finding in that run.",
+      "effort_target_minutes": 1440,
+      "breadth_target": 10,
+      "impact_min": 1,
+      "impact_max": 10
+    },
+    "score_tiers": {
+      "strategic": {"min_score": 0.7, "tier": "Strategic"},
+      "quick_win": {"min_score": 0.0, "tier": "Quick Win"}
+    },
+    "roadmap_stages": {
+      "strategic": "strategic",
+      "quick_win": "quick_win"
+    },
+    "confidence_defaults": {
+      "missing": "MEDIUM"
+    },
+    "presentation": {
+      "effort": 3,
+      "effort_label": "Low-Med"
     },
     "confidence": {
       "single_source_cap": "MEDIUM",

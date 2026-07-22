@@ -441,7 +441,8 @@ class TestVersionBumpGuard:
     # Bumped 1.0.0 → 1.1.0 by MSP-B12 T2 (the five Section-1 detectors + the
     # min_hops calibration change) — the intentional pack-version update this guard
     # exists to force.
-    PINNED_VERSION = "1.1.0"
+    # Bumped 1.1.0 -> 1.2.0 by MSP-B12 T6 for the configuration-driven scorer.
+    PINNED_VERSION = "1.2.0"
     PINNED_FINGERPRINT = "245e0799e9b111584e9e7550c4298dc8a8a05a8e7a882876579eab5e521feb86"
 
     @staticmethod

@@ -227,7 +227,7 @@ PACK_REGISTRY: Dict[str, Dict[str, Any]] = {
         # change — an intentional pack-version update is required so pack governance
         # (1.9) can tell a data change from a pack-logic change. A boundary test
         # guards this: it fails if the detector/scoring surface changes without a bump.
-        "packVersion":   "1.1.0",
+        "packVersion":   "1.2.0",
         "packName":      "Security Operations",
         "domain":        "security_ops",
         "pack_domain":   "security_ops",

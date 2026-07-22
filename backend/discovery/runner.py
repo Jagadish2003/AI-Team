@@ -1312,6 +1312,11 @@ def run(
         is_cloud_ops_detector,
         rank_cloud_ops_findings,
     )
+    from .packs.security_ops_scorer import (
+        score_security_ops,
+        is_security_ops_detector,
+        rank_security_ops_findings,
+    )
     from .evidence_builder import build_evidence
     # R16-B1 (T3): stable cross-run opportunity identity, computed at assembly.
     from .opportunity_identity import (
@@ -1674,6 +1679,16 @@ def run(
                     _rank_err,
                 )
 
+        _security_ops_ranking: Dict[int, Dict[str, Any]] = {}
+        if is_security_ops_pack(pack_id):
+            try:
+                _security_ops_ranking = rank_security_ops_findings(detector_results)
+            except Exception as _rank_err:  # noqa: BLE001 - ranking is non-blocking.
+                logger.warning(
+                    "security_ops impact ranking failed (non-blocking): %s",
+                    _rank_err,
+                )
+
         pack_opportunities: List[Dict[str, Any]] = []
         for dr in detector_results:
             # Select scorer based on pack — this pack scores ONLY its own detectors
@@ -1706,6 +1721,8 @@ def run(
                 )
             elif is_cloud_ops_pack(pack_id) and is_cloud_ops_detector(dr.detector_id):
                 scored = score_cloud_ops(dr, ranking=_cloud_ops_ranking)
+            elif is_security_ops_pack(pack_id) and is_security_ops_detector(dr.detector_id):
+                scored = score_security_ops(dr, ranking=_security_ops_ranking)
             else:
                 # R16-C1 T1: pass weighting context so the scorer can read
                 # role/priority for dr.signal_source (modulation is T2 work).

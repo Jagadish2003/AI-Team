@@ -99,6 +99,13 @@ class SecurityOpsCalibration:
     """
     impact_weights: Dict[str, float] = field(default_factory=dict)
     severity_band: Dict[str, float] = field(default_factory=dict)
+    severity_default: str = ""
+    recurrence_stability: Dict[str, float] = field(default_factory=dict)
+    normalization: Dict[str, float] = field(default_factory=dict)
+    score_tiers: Dict[str, Dict[str, Any]] = field(default_factory=dict)
+    confidence_defaults: Dict[str, str] = field(default_factory=dict)
+    roadmap_stages: Dict[str, str] = field(default_factory=dict)
+    presentation: Dict[str, Any] = field(default_factory=dict)
     confidence: Dict[str, str] = field(default_factory=dict)
 
 
@@ -196,6 +203,22 @@ def load_security_ops_config(path: Optional[str] = None) -> SecurityOpsPackConfi
             str(k): float(v) for k, v in (calibration_raw.get("impact_weights", {}) or {}).items()
         },
         severity_band=_numeric_map(calibration_raw.get("severity_band", {})),
+        severity_default=str(
+            (calibration_raw.get("severity_band", {}) or {}).get("default_band", "")
+        ).strip().lower(),
+        recurrence_stability=_numeric_map(calibration_raw.get("recurrence_stability", {})),
+        normalization=_numeric_map(calibration_raw.get("normalization", {})),
+        score_tiers={
+            str(k): dict(v) for k, v in (calibration_raw.get("score_tiers", {}) or {}).items()
+            if isinstance(v, dict)
+        },
+        confidence_defaults={
+            str(k): str(v) for k, v in (calibration_raw.get("confidence_defaults", {}) or {}).items()
+        },
+        roadmap_stages={
+            str(k): str(v) for k, v in (calibration_raw.get("roadmap_stages", {}) or {}).items()
+        },
+        presentation=dict(calibration_raw.get("presentation", {}) or {}),
         confidence=dict(calibration_raw.get("confidence", {}) or {}),
     )
 
