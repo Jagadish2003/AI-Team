@@ -306,7 +306,14 @@ class TestBuildIngestor:
         assert ing.connector_id == "azure_events"
         assert len(ing.authorized_subscriptions()) == 2
 
-    def test_ingest_is_t2_t3_seam(self):
-        ing = ae.build_ingestor("some-org")
-        with pytest.raises(NotImplementedError):
-            asyncio.run(ing.ingest())
+    def test_alerts_ingestion_available(self):
+        """T2 (AT-649): alerts ingestion is wired; offline it runs cleanly.
+
+        The sample config's pinned subscriptions don't match the alert fixture's
+        subscription, so no alerts are emitted, but every pinned subscription is
+        polled and reported ok (no failure, no silent thinning)."""
+        ing = ae.build_ingestor("some-org", token_fn=_capturing_token_fn({}),
+                                vault_reader=_vault_with(_sp_record()))
+        result = ing.ingest_alerts(token="TESTTOKEN")
+        assert result.all_ok
+        assert set(result.subscription_status) == set(ing.authorized_subscriptions())

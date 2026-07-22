@@ -39,9 +39,10 @@ the T5 partner-security artifact).
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
-from dataclasses import dataclass
-from typing import Any, Awaitable, Callable, Dict, List, Optional
+from dataclasses import dataclass, field
+from typing import Any, Awaitable, Callable, Dict, Iterator, List, Optional
 
 from .azure_events_config import (
     CONNECTOR_ID,
@@ -49,8 +50,26 @@ from .azure_events_config import (
     AzureEventConfigError,
     load_azure_event_config,
 )
+from .azure_alerts import (
+    AzureAlertsClient,
+    alert_fired_at,
+    alert_id,
+    default_alerts_client,
+    filter_new_alerts,
+    max_fired_at,
+)
+from .base import ChangeBasedIngestor, ChangeKind, Checkpoint, DeltaBatch
+
+try:
+    from discovery.signals.reference_mappers import map_azure_monitor
+except ModuleNotFoundError:  # pragma: no cover - import shim
+    from backend.discovery.signals.reference_mappers import map_azure_monitor
 
 logger = logging.getLogger(__name__)
+
+#: The transport provider tag stamped on emitted alert records (not a detector
+#: field — it lives on the record wrapper, alongside account_scope).
+PROVIDER_AZURE = "azure"
 
 
 class AzureAuthError(Exception):
@@ -219,21 +238,92 @@ def acquire_arm_token_blocking(org_id: str, config: AzureEventConfig, **kwargs) 
     return asyncio.run(acquire_arm_token(org_id, config, **kwargs))
 
 
-# ── The connector (auth + subscription discipline; poll/emit are T2/T3) ──────────
+# ── Per-subscription checkpoints (opaque to the runner) ──────────────────────────
+# Each subscription polls independently and keeps its OWN last-seen alert time, so
+# a re-run re-reads nothing (T2-AC2/AC4) and one subscription's position never
+# affects another's. The whole per-subscription map is encoded as the single opaque
+# Checkpoint.value the change-based runner persists (a JSON object keyed by
+# subscription id → last firedDateTime ISO string).
 
 
-class AzureEventIngestor:
-    """Azure Event Connector — authentication + subscription-access foundation.
+def decode_checkpoints(value: Any) -> Dict[str, str]:
+    """Decode the opaque checkpoint value into a {subscription_id: last_iso} map.
 
-    Designed to slot onto the MSP-B1 shared cloud-event skeleton (poll/checkpoint/
-    emit) once it lands: the ``ingest`` method here is the seam T2/T3 fill with the
-    Alerts Management / Activity Log / Service Health polling and the MSP-B0
-    mappers. This T1 delivers the auth + pinned-subscription discipline the whole
-    connector depends on. The connector is transport-only: it invents NO
-    detector-visible fields and emits ONLY normalised MSP-B0 events (T2/T3).
+    Tolerant: None/blank/unparseable → ``{}`` (a safe full re-read), never a crash.
+    Accepts a dict (already decoded) or a JSON string (as persisted).
+    """
+    if value is None:
+        return {}
+    if isinstance(value, dict):
+        return {str(k): str(v) for k, v in value.items() if v}
+    text = str(value).strip()
+    if not text:
+        return {}
+    try:
+        parsed = json.loads(text)
+    except (TypeError, ValueError):
+        logger.warning("azure_events: unreadable checkpoint %r; starting fresh", value)
+        return {}
+    if not isinstance(parsed, dict):
+        return {}
+    return {str(k): str(v) for k, v in parsed.items() if v}
+
+
+def encode_checkpoints(checkpoints: Dict[str, str]) -> str:
+    """Encode a {subscription_id: last_iso} map to the opaque checkpoint string."""
+    return json.dumps({k: v for k, v in checkpoints.items() if v}, sort_keys=True)
+
+
+@dataclass
+class AzureAlertsResult:
+    """Outcome of an alerts ingest across the pinned subscriptions.
+
+    ``records`` are the emitted operational-event records (B0-shaped events wrapped
+    with transport metadata). ``next_checkpoint`` is the opaque per-subscription
+    checkpoint string to persist. ``subscription_status`` reports per-subscription
+    outcome (polled/emitted counts, or an error) so a failure is LOUD and never
+    silently thins a run (MSP-B2 §"Failure posture").
+    """
+    records: List[Dict[str, Any]] = field(default_factory=list)
+    next_checkpoint: str = "{}"
+    subscription_status: Dict[str, Dict[str, Any]] = field(default_factory=dict)
+
+    @property
+    def emitted_count(self) -> int:
+        return len(self.records)
+
+    @property
+    def failed_subscriptions(self) -> List[str]:
+        return [s for s, st in self.subscription_status.items() if st.get("status") == "error"]
+
+    @property
+    def all_ok(self) -> bool:
+        return not self.failed_subscriptions
+
+
+# ── The connector (auth + subscription discipline + alerts polling) ──────────────
+
+
+class AzureEventIngestor(ChangeBasedIngestor):
+    """Azure Event Connector — auth, subscription discipline, and alerts polling.
+
+    Reuses the existing change-based ingestion abstraction (:class:`ChangeBasedIngestor`)
+    — the same one the MSP-B8 bridge uses — so this connector plugs into the current
+    pipeline and migrates cleanly onto the MSP-B1 shared cloud-event skeleton when it
+    lands, with minimal change. Transport-only: it invents NO detector-visible fields
+    and emits ONLY normalised MSP-B0 events.
+
+    T1 (AT-648) delivered auth + the pinned-subscription discipline. T2 (AT-649) adds
+    Azure Monitor **Alerts** polling with per-subscription checkpoints, normalised
+    through ``map_azure_monitor`` — Alerts ONLY (scope defence). Activity Log and
+    Service Health are MSP-B2 T3 and extend :meth:`ingest_alerts`'s per-subscription
+    loop with additional streams.
     """
 
     connector_id = CONNECTOR_ID
+    #: Alerts Management is an append-only fired-instance stream; a native poll has
+    #: no deletion to propagate (matches the bridge's declared limitation).
+    reports_deletes = False
 
     def __init__(
         self,
@@ -242,11 +332,15 @@ class AzureEventIngestor:
         *,
         vault_reader: Optional[Callable[[str, str], Any]] = None,
         token_fn: Optional[TokenFn] = None,
+        alerts_client: Optional[AzureAlertsClient] = None,
+        raw_store: Optional[Any] = None,
     ) -> None:
         self.org_id = org_id
         self.config = config
         self._vault_reader = vault_reader
         self._token_fn = token_fn
+        self._alerts_client = alerts_client
+        self._raw_store = raw_store
 
     # ── subscription access (the pinned-set discipline — AC4) ───────────────────
 
@@ -294,18 +388,155 @@ class AzureEventIngestor:
         token = await self.acquire_token()
         return list(await arm_lister(token, self.config))
 
-    # ── poll/emit seam (MSP-B2 T2/T3) ───────────────────────────────────────────
+    # ── Alerts polling (MSP-B2 T2 / AT-649) ─────────────────────────────────────
 
-    async def ingest(self, checkpoint: Optional[Dict[str, Any]] = None) -> None:
-        """Poll → map → admit, per pinned subscription. Implemented in T2/T3.
+    def _alerts(self) -> AzureAlertsClient:
+        return self._alerts_client or default_alerts_client()
 
-        The auth + subscription-access foundation (this task) is complete; the
-        per-subscription Alerts Management / Activity Log / Service Health polling
-        with per-subscription checkpoints and the MSP-B0 mappers is MSP-B2 T2/T3.
+    def _to_record(
+        self, event: Any, subscription_id: str, raw: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Wrap a normalised OperationalEvent as a pipeline delta record.
+
+        The detector-visible payload is ``event`` (the provider-agnostic MSP-B0
+        event, IDENTICAL in shape to what any other cloud connector emits). The
+        wrapper carries transport-only metadata — the change kind, provider,
+        ``account_scope`` (the subscription, B0's account scope, kept OFF the event
+        so no provider-specific detector field is invented), the dedupe id, and the
+        evidence pointer that resolves to the raw payload.
         """
-        raise NotImplementedError(
-            "Azure event polling is MSP-B2 T2/T3; AT-648 delivers auth + "
-            "subscription-access foundation only"
+        aid = alert_id(raw)
+        return {
+            "artifact_id": f"{event.source_system}:{aid}",
+            "change_kind": ChangeKind.CREATED,
+            "source_system": event.source_system,
+            "provider": PROVIDER_AZURE,
+            "account_scope": subscription_id,
+            "provider_event_id": aid,
+            "event": event.to_dict(),
+            "evidence_pointer": event.provenance,
+        }
+
+    def ingest_alerts(
+        self,
+        *,
+        token: Optional[str] = None,
+        checkpoint: Any = None,
+    ) -> AzureAlertsResult:
+        """Poll Azure Monitor Alerts for every PINNED subscription, incrementally.
+
+        Per subscription: fetch alerts, keep only those newer than that
+        subscription's checkpoint (:func:`filter_new_alerts`), normalise each
+        through ``map_azure_monitor`` (T2-AC3), wrap as a delta record carrying the
+        subscription as ``account_scope``, and advance that subscription's
+        checkpoint to the newest alert seen — ONLY after the subscription's alerts
+        are processed successfully (T2-AC2/AC4). Subscriptions are INDEPENDENT: one
+        subscription's auth/throttle/parse failure is caught, reported loudly in
+        ``subscription_status``, and leaves its checkpoint unadvanced while the
+        others continue (MSP-B2 §"Failure posture").
+
+        ``token`` is acquired once from the vaulted service principal when not
+        supplied (one SP serves all subscriptions in both Lighthouse and direct
+        modes). Alerts ONLY — no Activity Log / Service Health / metrics / Log
+        Analytics (scope defence).
+        """
+        arm_token = token or acquire_arm_token_blocking(
+            self.org_id,
+            self.config,
+            vault_reader=self._vault_reader,
+            token_fn=self._token_fn,
+        )
+        client = self._alerts()
+        env = self.config.environment
+        checkpoints = decode_checkpoints(checkpoint)
+        next_checkpoints: Dict[str, str] = dict(checkpoints)
+        records: List[Dict[str, Any]] = []
+        status: Dict[str, Dict[str, Any]] = {}
+
+        for sub in self.authorized_subscriptions():
+            since_iso = checkpoints.get(sub)
+            try:
+                fetched = client.fetch_alerts(
+                    token=arm_token,
+                    subscription_id=sub,
+                    environment=env,
+                    since_iso=since_iso,
+                )
+                new_alerts = filter_new_alerts(fetched, since_iso)
+                emitted = 0
+                skipped = 0
+                for raw in new_alerts:
+                    try:
+                        event = map_azure_monitor(raw, org_id=self.org_id)
+                    except Exception:  # one malformed alert must not fail the sub
+                        logger.warning(
+                            "azure_events: map_azure_monitor failed for alert %s "
+                            "(sub=%s) — skipped", alert_id(raw), sub, exc_info=True,
+                        )
+                        skipped += 1
+                        continue
+                    if self._raw_store is not None:
+                        try:
+                            self._raw_store.put(
+                                self.org_id, event.source_system, alert_id(raw), raw
+                            )
+                        except Exception:  # evidence store is best-effort
+                            logger.warning(
+                                "azure_events: raw-store put failed for alert %s (sub=%s)",
+                                alert_id(raw), sub, exc_info=True,
+                            )
+                    records.append(self._to_record(event, sub, raw))
+                    emitted += 1
+                # Advance to the newest alert SEEN (incl. loud-skipped ones, so a
+                # malformed alert is not re-read forever) — only reached when the
+                # fetch itself succeeded.
+                advanced = max_fired_at(new_alerts, floor=since_iso)
+                if advanced:
+                    next_checkpoints[sub] = advanced
+                status[sub] = {
+                    "status": "ok",
+                    "polled": len(fetched),
+                    "emitted": emitted,
+                    **({"skipped": skipped} if skipped else {}),
+                }
+            except Exception as exc:  # noqa: BLE001 — isolate per-subscription failure
+                logger.warning(
+                    "azure_events: alerts poll FAILED for subscription %s (org=%s): %s",
+                    sub, self.org_id, exc,
+                )
+                # Do NOT advance this subscription's checkpoint (no silent thinning).
+                status[sub] = {"status": "error", "error": str(exc)}
+
+        return AzureAlertsResult(
+            records=records,
+            next_checkpoint=encode_checkpoints(next_checkpoints),
+            subscription_status=status,
+        )
+
+    # ── ChangeBasedIngestor contract (pipeline entrypoint) ───────────────────────
+
+    def ingest_changes(
+        self, org_id: str, since: Optional[Checkpoint] = None
+    ) -> Iterator[DeltaBatch]:
+        """Yield one delta batch of normalised Azure alert events since ``since``.
+
+        Adapts :meth:`ingest_alerts` to the change-based pipeline: the opaque
+        checkpoint carries the per-subscription map. A subscription failure is
+        isolated inside ``ingest_alerts`` (loud in ``subscription_status``); the
+        batch still advances the checkpoints of the subscriptions that succeeded,
+        so a failing subscription never blocks or thins the others. Emitted here as
+        a single complete batch (alert volume per poll is bounded).
+        """
+        if org_id and org_id != self.org_id:
+            raise ValueError(
+                f"ingest_changes org_id {org_id!r} does not match this ingestor's "
+                f"org {self.org_id!r}"
+            )
+        result = self.ingest_alerts(checkpoint=since.value if since else None)
+        yield DeltaBatch(
+            records=result.records,
+            next_checkpoint=result.next_checkpoint,
+            is_complete=True,
         )
 
 
@@ -315,6 +546,8 @@ def build_ingestor(
     env: Optional[Dict[str, str]] = None,
     vault_reader: Optional[Callable[[str, str], Any]] = None,
     token_fn: Optional[TokenFn] = None,
+    alerts_client: Optional[AzureAlertsClient] = None,
+    raw_store: Optional[Any] = None,
 ) -> Optional[AzureEventIngestor]:
     """Build an :class:`AzureEventIngestor` for ``org_id`` from configuration.
 
@@ -326,5 +559,10 @@ def build_ingestor(
     if config is None:
         return None
     return AzureEventIngestor(
-        org_id, config, vault_reader=vault_reader, token_fn=token_fn
+        org_id,
+        config,
+        vault_reader=vault_reader,
+        token_fn=token_fn,
+        alerts_client=alerts_client,
+        raw_store=raw_store,
     )
