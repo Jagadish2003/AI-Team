@@ -645,6 +645,45 @@ class RetrievalArtifactInvalidatedPayload(TypedDict, total=False):
     queued: NotRequired[bool]
 
 
+class IngestionSubscriptionHealthPayload(TypedDict, total=False):
+    """ingestion.subscription_health — MSP-B2 T6 / AT-653.
+
+    Emitted per PINNED Azure subscription (per event stream) whose poll FAILED, so
+    a subscription-specific failure is LOUD in discovery run health while unaffected
+    subscriptions keep processing (failure isolation). Identifiers + failure
+    classification + retry counts ONLY — never a secret, token, or raw payload.
+
+    org_id:          The org the subscription belongs to.
+    connector_id:    Always 'azure_events'.
+    source_system:   The event stream that failed ('azure_monitor' | 'azure_activity'
+                     | 'azure_service_health'), or the connector when auth failed.
+    account_scope:   The Azure subscription id (B0 account scope).
+    stream:          The connector stream key ('alerts'|'activity_log'|'service_health').
+    status:          'error' (a health event is emitted only on failure).
+    category:        Failure class — 'authentication' | 'authorization' | 'not_found'
+                     | 'throttled' | 'server_error' | 'timeout' | 'network' |
+                     'malformed_response' | 'unexpected'.
+    retryable:       Whether the failure is transient (was eligible for backoff retry).
+    attempts:        How many attempts were made (1 + retries).
+    recoverable:     Whether a later run may recover (transient) vs needs operator
+                     action (auth/authorization/not_found).
+    error_summary:   Short, non-sensitive error string (never a secret/token/body).
+    observed_at:     When the failure was observed during the run (UTC ISO).
+    """
+    org_id: NotRequired[str]
+    connector_id: str
+    source_system: NotRequired[str]
+    account_scope: NotRequired[str]
+    stream: NotRequired[str]
+    status: str
+    category: str
+    retryable: NotRequired[bool]
+    attempts: NotRequired[int]
+    recoverable: NotRequired[bool]
+    error_summary: NotRequired[str]
+    observed_at: NotRequired[str]
+
+
 class RetrievalModelBackfillPayload(TypedDict, total=False):
     """retrieval.model_backfill — R18-B2 T5, emitted per org pass that re-embedded.
 
@@ -766,6 +805,11 @@ register_event_type("ingestion.secret_redacted", IngestionSecretRedactedPayload)
 # metadata). Registered here so the ingestor can emit it; record_event() raises
 # ValueError for an unregistered type, so registration must precede first emission.
 register_event_type("ingestion.structure_captured", IngestionStructureCapturedPayload)
+# MSP-B2 / AT-653 (T6): per-subscription Azure connector failure health, emitted by
+# the Azure Event Connector when a subscription's poll fails so the failure is loud
+# in run health. Registered here so the connector can emit it; record_event() raises
+# ValueError for an unregistered type, so registration must precede first emission.
+register_event_type("ingestion.subscription_health", IngestionSubscriptionHealthPayload)
 # R16-D1 / AT-366 (T5) — model provider gateway telemetry. Registered here so
 # the gateway's generate()/embed() paths can emit them; record_event() raises
 # ValueError for an unregistered type, so registration must land before any

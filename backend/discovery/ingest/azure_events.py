@@ -41,7 +41,10 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
+import time
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable, Dict, Iterator, List, Optional
 
 from .azure_events_config import (
@@ -94,6 +97,13 @@ STREAM_ACTIVITY_LOG = "activity_log"
 STREAM_SERVICE_HEALTH = "service_health"
 V1_STREAMS = (STREAM_ALERTS, STREAM_ACTIVITY_LOG, STREAM_SERVICE_HEALTH)
 
+#: Stream key → the B0 source_system its mapper stamps (for health reporting).
+_STREAM_SOURCE_SYSTEM = {
+    STREAM_ALERTS: "azure_monitor",
+    STREAM_ACTIVITY_LOG: "azure_activity",
+    STREAM_SERVICE_HEALTH: "azure_service_health",
+}
+
 
 def _filter_new(records: List[Dict[str, Any]], since_iso: Optional[str], ts_of) -> List[Dict[str, Any]]:
     """Keep only records whose timestamp is strictly newer than ``since_iso``.
@@ -120,6 +130,123 @@ def _max_ts(records: List[Dict[str, Any]], ts_of, *, floor: Optional[str]) -> Op
         if ts and (best is None or ts > best):
             best = ts
     return best
+
+
+# ── Failure classification + retry/backoff (MSP-B2 T6 / AT-653) ──────────────────
+# Per-subscription resilience: classify a poll failure, retry ONLY transient classes
+# with bounded exponential backoff, and report every failure loudly into run health.
+# Never retry a non-transient failure (bad credentials / permission / not-found /
+# malformed body); never silently drop events or advance a failed checkpoint.
+
+# Failure categories (also the run-health `category` vocabulary).
+CATEGORY_AUTHENTICATION = "authentication"     # bad/expired SP credentials (401 on token)
+CATEGORY_AUTHORIZATION = "authorization"       # RBAC/consent denied (403)
+CATEGORY_NOT_FOUND = "not_found"               # invalid/absent subscription (404)
+CATEGORY_THROTTLED = "throttled"               # rate limited (429)
+CATEGORY_SERVER_ERROR = "server_error"         # transient Azure 5xx
+CATEGORY_TIMEOUT = "timeout"                    # request timed out
+CATEGORY_NETWORK = "network"                    # connection/network failure
+CATEGORY_MALFORMED = "malformed_response"       # unparseable/invalid response body
+CATEGORY_CLIENT_ERROR = "client_error"          # other non-retryable 4xx
+CATEGORY_UNEXPECTED = "unexpected"              # anything unclassified (fail safe: no retry)
+
+#: The categories that are TRANSIENT — eligible for bounded backoff retry. Every
+#: other category is permanent (operator action needed) and is never retried.
+_RETRYABLE_CATEGORIES = frozenset({
+    CATEGORY_THROTTLED, CATEGORY_SERVER_ERROR, CATEGORY_TIMEOUT, CATEGORY_NETWORK,
+})
+
+_TRANSIENT_5XX = frozenset({500, 502, 503, 504})
+
+# Bounded retry defaults (env-overridable, same convention as other connectors).
+DEFAULT_MAX_RETRIES = int(os.getenv("AZURE_EVENT_MAX_RETRIES", "3") or "3")
+DEFAULT_BACKOFF_BASE_SECONDS = float(os.getenv("AZURE_EVENT_BACKOFF_BASE_SECONDS", "0.5") or "0.5")
+DEFAULT_BACKOFF_MAX_SECONDS = float(os.getenv("AZURE_EVENT_BACKOFF_MAX_SECONDS", "8") or "8")
+
+
+def _status_code_of(exc: BaseException) -> Optional[int]:
+    """Best-effort HTTP status extraction (works for httpx errors and duck-typed ones)."""
+    code = getattr(exc, "status_code", None)
+    if isinstance(code, int):
+        return code
+    resp = getattr(exc, "response", None)
+    code = getattr(resp, "status_code", None)
+    return code if isinstance(code, int) else None
+
+
+def classify_failure(exc: BaseException) -> str:
+    """Classify a poll/auth failure into a run-health :data:`CATEGORY_*`.
+
+    Duck-typed so it needs no httpx import: an HTTP status (429/5xx/401/403/404),
+    then timeout/network by exception-type name, then auth/malformed by type, else
+    ``unexpected`` (fail-safe → never retried). Deterministic, side-effect-free.
+    """
+    if isinstance(exc, AzureAuthError):
+        return CATEGORY_AUTHENTICATION
+
+    status = _status_code_of(exc)
+    if status is not None:
+        if status == 429:
+            return CATEGORY_THROTTLED
+        if status in _TRANSIENT_5XX or (500 <= status <= 599):
+            return CATEGORY_SERVER_ERROR
+        if status == 401:
+            return CATEGORY_AUTHENTICATION
+        if status == 403:
+            return CATEGORY_AUTHORIZATION
+        if status == 404:
+            return CATEGORY_NOT_FOUND
+        if 400 <= status <= 499:
+            return CATEGORY_CLIENT_ERROR
+
+    name = type(exc).__name__.lower()
+    if "timeout" in name:
+        return CATEGORY_TIMEOUT
+    if any(k in name for k in ("connect", "network", "readerror", "requesterror", "connection")):
+        return CATEGORY_NETWORK
+    if "oautherror" in name:
+        return CATEGORY_AUTHENTICATION
+    if isinstance(exc, (ValueError, KeyError, TypeError)):
+        return CATEGORY_MALFORMED
+    return CATEGORY_UNEXPECTED
+
+
+def is_retryable(category: str) -> bool:
+    """True when a failure category is transient (eligible for bounded retry)."""
+    return category in _RETRYABLE_CATEGORIES
+
+
+def _recoverable(category: str) -> bool:
+    """Whether a LATER run may recover unaided (transient) vs needs operator action."""
+    return category in _RETRYABLE_CATEGORIES
+
+
+@dataclass
+class RetryPolicy:
+    """Bounded exponential-backoff retry policy (deterministic)."""
+    max_retries: int = DEFAULT_MAX_RETRIES
+    base_seconds: float = DEFAULT_BACKOFF_BASE_SECONDS
+    max_seconds: float = DEFAULT_BACKOFF_MAX_SECONDS
+
+    def backoff_seconds(self, attempt: int) -> float:
+        """Backoff before the Nth retry (attempt = 1 is the first retry)."""
+        delay = self.base_seconds * (2 ** max(0, attempt - 1))
+        return min(delay, self.max_seconds)
+
+
+class AzureSubscriptionError(Exception):
+    """A subscription poll failed after classification + any retries.
+
+    Carries the run-health facts (category, retryable, attempts) so the per-stream
+    loop records a loud, structured failure without re-inspecting the cause.
+    """
+
+    def __init__(self, category: str, *, retryable: bool, attempts: int, cause: BaseException) -> None:
+        super().__init__(f"{category} after {attempts} attempt(s): {cause}")
+        self.category = category
+        self.retryable = retryable
+        self.attempts = attempts
+        self.cause = cause
 
 
 class AzureAuthError(Exception):
@@ -438,6 +565,8 @@ class AzureEventIngestor(ChangeBasedIngestor):
         activity_log_client: Optional[AzureEventStreamClient] = None,
         service_health_client: Optional[AzureEventStreamClient] = None,
         raw_store: Optional[Any] = None,
+        retry_policy: Optional[RetryPolicy] = None,
+        sleep_fn: Optional[Callable[[float], None]] = None,
     ) -> None:
         self.org_id = org_id
         self.config = config
@@ -447,6 +576,10 @@ class AzureEventIngestor(ChangeBasedIngestor):
         self._activity_log_client = activity_log_client
         self._service_health_client = service_health_client
         self._raw_store = raw_store
+        # T6: bounded retry/backoff for transient per-subscription failures, and an
+        # injectable sleep so tests exercise backoff without real delay.
+        self._retry = retry_policy or RetryPolicy()
+        self._sleep = sleep_fn or time.sleep
 
     # ── subscription access (the pinned-set discipline — AC4) ───────────────────
 
@@ -557,8 +690,9 @@ class AzureEventIngestor(ChangeBasedIngestor):
         for sub in self.authorized_subscriptions():
             since_iso = checkpoints.get(sub)
             try:
-                fetched = fetch(
-                    token=token, subscription_id=sub, environment=env, since_iso=since_iso
+                fetched, attempts = self._fetch_with_retry(
+                    fetch, stream=stream, token=token, subscription_id=sub,
+                    environment=env, since_iso=since_iso,
                 )
                 in_scope = [r for r in fetched if prefilter(r)] if prefilter else list(fetched)
                 new_records = _filter_new(in_scope, since_iso, ts_of)
@@ -593,22 +727,109 @@ class AzureEventIngestor(ChangeBasedIngestor):
                     "status": "ok",
                     "polled": len(fetched),
                     "emitted": emitted,
+                    "attempts": attempts,
                     **({"in_scope": len(in_scope)} if prefilter else {}),
                     **({"skipped": skipped} if skipped else {}),
                 }
-            except Exception as exc:  # noqa: BLE001 — isolate per-subscription failure
+            except AzureSubscriptionError as se:
+                # Loud, structured, isolated. Checkpoint is NOT advanced for this
+                # subscription (no silent thinning — it is retried next run).
                 logger.warning(
-                    "azure_events: %s poll FAILED for subscription %s (org=%s): %s",
-                    stream, sub, self.org_id, exc,
+                    "azure_events: %s poll FAILED for subscription %s (org=%s): "
+                    "category=%s retryable=%s attempts=%s cause=%s",
+                    stream, sub, self.org_id, se.category, se.retryable, se.attempts, se.cause,
                 )
-                # Do NOT advance this subscription's checkpoint (no silent thinning).
-                status[sub] = {"status": "error", "error": str(exc)}
+                status[sub] = {
+                    "status": "error",
+                    "category": se.category,
+                    "retryable": se.retryable,
+                    "attempts": se.attempts,
+                    "recoverable": _recoverable(se.category),
+                    "error": str(se.cause),
+                }
+                self._emit_subscription_health(stream, sub, status[sub])
 
         return AzureStreamResult(
             records=records,
             next_checkpoint=encode_checkpoints(next_checkpoints),
             subscription_status=status,
         )
+
+    def _fetch_with_retry(
+        self, fetch, *, stream: str, token: str, subscription_id: str,
+        environment, since_iso: Optional[str],
+    ):
+        """Call a stream ``fetch`` with bounded backoff on TRANSIENT failures.
+
+        Returns ``(records, attempts)``. Retries only transient categories
+        (throttled/5xx/timeout/network) up to ``RetryPolicy.max_retries`` with
+        exponential backoff (the injected ``sleep_fn`` makes it test-fast); a
+        non-transient failure (auth/authorization/not-found/malformed) is NOT
+        retried. On give-up (or a permanent failure) raises
+        :class:`AzureSubscriptionError` carrying the classification + attempt count
+        — never silently returns empty (which would thin the run).
+        """
+        attempt = 0
+        while True:
+            attempt += 1
+            try:
+                return (
+                    fetch(
+                        token=token, subscription_id=subscription_id,
+                        environment=environment, since_iso=since_iso,
+                    ),
+                    attempt,
+                )
+            except Exception as exc:  # noqa: BLE001 — classify, maybe retry, else raise
+                category = classify_failure(exc)
+                retryable = is_retryable(category)
+                if retryable and attempt <= self._retry.max_retries:
+                    delay = self._retry.backoff_seconds(attempt)
+                    logger.warning(
+                        "azure_events: %s transient %s for subscription %s "
+                        "(attempt %d/%d) — backing off %.2fs",
+                        stream, category, subscription_id, attempt,
+                        self._retry.max_retries + 1, delay,
+                    )
+                    self._sleep(delay)
+                    continue
+                raise AzureSubscriptionError(
+                    category, retryable=retryable, attempts=attempt, cause=exc
+                )
+
+    def _emit_subscription_health(
+        self, stream: str, subscription_id: str, status_entry: Dict[str, Any],
+        *, source_system: Optional[str] = None,
+    ) -> None:
+        """Emit a loud run-health telemetry event for a failed subscription.
+
+        Non-blocking and secret-free: identifiers + classification + counts only. A
+        telemetry failure never breaks ingestion (health reporting is observability,
+        not a run-critical path). Imported lazily so offline runs never pull the
+        telemetry/DB subsystem at import time.
+        """
+        try:
+            from app.telemetry import record_event
+        except Exception:  # pragma: no cover - telemetry optional in some contexts
+            return
+        payload = {
+            "org_id": self.org_id,
+            "connector_id": self.connector_id,
+            "source_system": source_system or _STREAM_SOURCE_SYSTEM.get(stream, stream),
+            "account_scope": subscription_id,
+            "stream": stream,
+            "status": "error",
+            "category": str(status_entry.get("category", CATEGORY_UNEXPECTED)),
+            "retryable": bool(status_entry.get("retryable", False)),
+            "attempts": int(status_entry.get("attempts", 1)),
+            "recoverable": bool(status_entry.get("recoverable", False)),
+            "error_summary": str(status_entry.get("error", ""))[:300],
+            "observed_at": datetime.now(timezone.utc).isoformat(),
+        }
+        try:
+            record_event("ingestion.subscription_health", payload)
+        except Exception:  # noqa: BLE001 — never let health reporting break the run
+            logger.debug("azure_events: subscription_health emit failed", exc_info=True)
 
     def _resolve_token(self, token: Optional[str]) -> str:
         return token or acquire_arm_token_blocking(
@@ -690,9 +911,17 @@ class AzureEventIngestor(ChangeBasedIngestor):
         shared across streams. Records are concatenated; ``subscription_status`` is
         keyed ``"{stream}:{sub}"`` so a per-stream, per-subscription failure is
         individually visible (no silent thinning).
+
+        A connector-level AUTHENTICATION failure (the one SP that serves every
+        subscription) is caught here and reported LOUDLY into run health for every
+        pinned subscription — visible, checkpoints preserved, never a silent drop
+        (T6-AC2). It does not crash the run.
         """
-        arm_token = self._resolve_token(token)
         ns = decode_stream_checkpoints(checkpoint)
+        try:
+            arm_token = self._resolve_token(token)
+        except Exception as exc:  # noqa: BLE001 — auth failure is loud, not fatal
+            return self._auth_failure_result(exc, ns)
 
         alerts = self.ingest_alerts(token=arm_token, checkpoint=ns[STREAM_ALERTS])
         activity = self.ingest_activity_log(token=arm_token, checkpoint=ns[STREAM_ACTIVITY_LOG])
@@ -715,6 +944,40 @@ class AzureEventIngestor(ChangeBasedIngestor):
         return AzureStreamResult(
             records=alerts.records + activity.records + health.records,
             next_checkpoint=encode_stream_checkpoints(next_ns),
+            subscription_status=status,
+        )
+
+    def _auth_failure_result(
+        self, exc: BaseException, ns: Dict[str, Dict[str, str]]
+    ) -> AzureStreamResult:
+        """Report a connector-level auth failure loudly for every subscription.
+
+        No records, checkpoints PRESERVED (the incoming namespaced positions are
+        re-emitted unchanged — nothing advances, nothing is thinned), and a
+        run-health event is emitted per pinned subscription per stream. Auth is not
+        retried (a bad credential will not fix itself within a run)."""
+        category = classify_failure(exc)  # → authentication
+        logger.warning(
+            "azure_events: AUTHENTICATION failed for org=%s (%s); all %d pinned "
+            "subscription(s) reported unhealthy, checkpoints preserved",
+            self.org_id, exc, len(self.authorized_subscriptions()),
+        )
+        status: Dict[str, Dict[str, Any]] = {}
+        entry_template = {
+            "status": "error",
+            "category": category,
+            "retryable": False,
+            "attempts": 1,
+            "recoverable": _recoverable(category),
+            "error": str(exc),
+        }
+        for stream in V1_STREAMS:
+            for sub in self.authorized_subscriptions():
+                status[f"{stream}:{sub}"] = dict(entry_template)
+                self._emit_subscription_health(stream, sub, entry_template)
+        return AzureStreamResult(
+            records=[],
+            next_checkpoint=encode_stream_checkpoints(ns),  # preserved, not advanced
             subscription_status=status,
         )
 
