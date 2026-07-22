@@ -377,14 +377,30 @@ def run_trackb_and_persist(
             sources_analyzed = exec_report.get("sourcesAnalyzed", {})
             # ENG-AIQ-NC-5: pass pack_id for banking language prompts
             pack_id = _pack_id_for_run(run)
-            enrichment = run_llm_enrichment(
-                run_id=run_id,
-                opps=opps,
-                evidence=ev,
-                sources_analyzed=sources_analyzed,
-                pack_id=pack_id,
-                org_id=run_org_id,
+            # MSP-B12 T4 (AC4): AI-mode gate for the Security Operations pack. Under
+            # hosted-AI mode, SecOps data must NOT be sent for AI narrative
+            # generation — so the enrichment call (which routes through the model
+            # gateway's generate()) is withheld entirely and a labelled, AI-free
+            # enrichment record is persisted instead. The deterministic findings
+            # remain; the restriction is explicit, never a silent empty narrative.
+            # in_boundary / customer_tenant proceed to full assembly through the
+            # unchanged gateway path (routing + no-bypass controls intact).
+            from discovery.packs.security_ops_ai_mode import (
+                ai_narrative_blocked_for_pack,
+                hosted_enrichment_result,
             )
+            if ai_narrative_blocked_for_pack(pack_id):
+                enrichment = hosted_enrichment_result()
+                _emit_event(run_id, "AI_ANALYZE", enrichment["ai_mode_label"])
+            else:
+                enrichment = run_llm_enrichment(
+                    run_id=run_id,
+                    opps=opps,
+                    evidence=ev,
+                    sources_analyzed=sources_analyzed,
+                    pack_id=pack_id,
+                    org_id=run_org_id,
+                )
             db.run_kv_set(KV_LLM_ENRICHMENT, run_id, enrichment)
             if enrichment.get("executiveSummary"):
                 exec_report["aiExecutiveSummary"] = enrichment["executiveSummary"]

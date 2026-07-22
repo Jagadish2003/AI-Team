@@ -1337,6 +1337,20 @@ def run(
     # individual employee / host / host×vulnerability pair. A violation is a
     # CONTRACT VIOLATION that FAILS the run — deliberately not swallowed.
     if is_security_ops_pack(pack_id):
+        # MSP-B12 T4 (AC4): the explicit AI-mode gate. Reads the ACTIVE generation
+        # provider from the model gateway. In hosted mode the five deterministic
+        # detectors have already run and their findings remain — but each is stamped
+        # with the explicit "AI-assisted narrative unavailable in this mode" label
+        # (the narrative call itself is withheld in materialize_t2). In in_boundary /
+        # customer_tenant mode findings are marked eligible for full assembly.
+        # Stamped BEFORE enforcement so both boundary layers also validate the label.
+        from .packs.security_ops_ai_mode import apply_ai_mode_gate
+        _gate = apply_ai_mode_gate(detector_results)
+        logger.info(
+            "Pack: security_ops — AI-mode gate: mode=%s ai_assembly=%s labelled=%d/%d",
+            _gate["mode"], _gate["ai_assembly_allowed"], _gate["labelled"], _gate["count"],
+        )
+
         from .packs.security_ops_finding import enforce_pack_findings
         _validated = enforce_pack_findings(detector_results)
         logger.info(
