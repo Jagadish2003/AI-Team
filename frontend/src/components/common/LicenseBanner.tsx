@@ -13,6 +13,8 @@
  *   readonly / invalid, no_license or
  *     signature_or_format (no usable key) → red: "No valid license installed.
  *                                   Paste a valid license key to activate AgentIQ."
+ *   invalid, org_mismatch         → red: "This license was issued to a different
+ *                                   organisation..." (R-1.9.1-L1 / T2, AC1).
  *   readonly, clock_rollback      → red: clock-inconsistency message.
  *   readonly, expired past grace  → red: "License expired. Renew to resume
  *                                   discovery runs."
@@ -29,6 +31,8 @@ const RED = "border-b border-red-500/30 bg-red-500/15 px-4 py-2 text-center text
 const UNLICENSED_MSG = "No valid license installed. Paste a valid license key to activate AgentIQ.";
 const CLOCK_MSG = "License validation is paused — the system clock looks inconsistent. Restore the correct date to resume.";
 const EXPIRED_MSG = "License expired. Renew to resume discovery runs.";
+// R-1.9.1-L1 / T2 (AC1): a signature-valid key bound to a different org.
+const ORG_MISMATCH_MSG = "This license was issued to a different organisation. Paste the license key issued for this installation to activate AgentIQ.";
 
 /**
  * Format the license expiry (a plain ISO calendar date, e.g. "2026-06-10") as a
@@ -77,7 +81,12 @@ export default function LicenseBanner() {
     // unusable key; readonly covers no_license / clock_rollback / past-grace.
     let message = EXPIRED_MSG;
     let dataReason = reason ?? "expired";
-    if (state === "invalid" || reason === "no_license" || reason === "signature_or_format") {
+    if (reason === "org_mismatch") {
+      // A wrong-org key is a specific, actionable failure — name it, don't fold
+      // it into the generic "no valid license" copy (R-1.9.1-L1 / T2, AC1).
+      message = ORG_MISMATCH_MSG;
+      dataReason = "org_mismatch";
+    } else if (state === "invalid" || reason === "no_license" || reason === "signature_or_format") {
       message = UNLICENSED_MSG;
       dataReason = reason ?? "invalid";
     } else if (reason === "clock_rollback") {
