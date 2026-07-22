@@ -1,6 +1,22 @@
 # AgentIQ — API_CONTRACT.md (EPIC E0)
-Version: v1.10
-Date: 2026-07-09
+Version: v1.11
+Date: 2026-07-22
+
+> v1.11 — R191-P1 T3 (Multi-Pack Discovery Runs — provenance tagging, AC1/AC6):
+> documents the `packId` (`string`, optional) and `packVersion` (`string`,
+> optional) fields on `OpportunityCandidate` (`GET /api/runs/{runId}/opportunities`)
+> and the `packId` (`string`, optional) field on `EvidenceReview`
+> (`GET /api/runs/{runId}/evidence`) — the backend already stamped `packId`/
+> `packVersion` on stored opportunities (R16-B1 §4); this bump documents that
+> existing field and newly extends the same stamp to every evidence item
+> (previously undocumented and, for evidence, unstamped). Because
+> `RoadmapStage.opportunities` (`src/types/pilotRoadmap.ts`) reuses
+> `OpportunityCandidate`, every roadmap entry carries `packId`/`packVersion` too
+> with no separate type change. All additive/optional — existing consumers are
+> unaffected; absent on runs materialized before this field existed. The run
+> record's `packIds` (`string[]`) / `packVersions` (`Record<string, string>`) /
+> `packs` (per-pack execution metadata) fields were already added by R191-P1 T2
+> and are unchanged here.
 
 > v1.10 — R18-C0 P8 (Re-editable review decisions, AC8): extended
 > `ReviewAuditEvent` with the optional `tsEpoch` (`number`, the newest-first sort
