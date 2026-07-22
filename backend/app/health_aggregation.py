@@ -472,6 +472,84 @@ def _snapshot_detector_ids(org_id: str, run_id: str, pack_id: str) -> List[str]:
     return [str(row[0]) for row in rows if row and row[0]]
 
 
+def _packs_view_multi(
+    org_id: str,
+    run_id: str,
+    latest: Dict[str, Any],
+    run_packs: List[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """Build one pack-execution row PER pack for a multi-pack run (R191-P1 T5, AC5).
+
+    Driven by the per-pack execution list the runner returns and materialize
+    persists on the run record (``run["packs"]``), enriched from the matching
+    per-pack ``run.pack_executed`` origin events (which carry the evaluated /
+    not-evaluated counts). Same immutable-source discipline as the single-pack
+    path: the mutable pack registry is never consulted.
+    """
+    # Per-pack execution events — the runner emits one per pack (T2). Key by
+    # pack_id so each row can be enriched with its own evaluated counts.
+    events_by_pack: Dict[str, Any] = {}
+    for event in _safe_range(org_id, "run.pack_executed"):
+        payload = _event_payload(event)
+        if getattr(event, "run_id", None) == run_id or payload.get("run_id") == run_id:
+            pid = str(payload.get("pack_id") or "")
+            if pid:
+                events_by_pack[pid] = event
+
+    primary_pack_id = str(latest.get("packId") or "")
+    run_executed = latest.get("executedDetectorIds")
+
+    packs_out: List[Dict[str, Any]] = []
+    for meta in run_packs:
+        if not isinstance(meta, dict):
+            continue
+        pack_id = str(meta.get("packId") or "").strip()
+        if not pack_id:
+            continue
+
+        event = events_by_pack.get(pack_id)
+        event_payload = _event_payload(event) if event is not None else {}
+
+        # Detector source per pack: the persisted per-pack list → this pack's
+        # event → the run's primary-pack list (only for the primary) → the
+        # org/run/pack signal snapshot.
+        meta_detectors = meta.get("detectorsExecuted")
+        event_detectors = event_payload.get("detector_ids")
+        if isinstance(meta_detectors, list) and meta_detectors:
+            detectors = [str(v) for v in meta_detectors if str(v).strip()]
+        elif isinstance(event_detectors, list):
+            detectors = [str(v) for v in event_detectors if str(v).strip()]
+        elif pack_id == primary_pack_id and isinstance(run_executed, list):
+            detectors = [str(v) for v in run_executed if str(v).strip()]
+        else:
+            detectors = _snapshot_detector_ids(org_id, run_id, pack_id)
+
+        detector_count = len(detectors)
+        if not detectors and event_payload.get("detector_count") is not None:
+            detector_count = int(event_payload["detector_count"])
+
+        executed_at = (
+            meta.get("packExecutedAt")
+            or event_payload.get("executed_at")
+            or (_to_iso(getattr(event, "timestamp", None)) if event is not None else None)
+        )
+
+        packs_out.append(
+            {
+                "pack_id": pack_id,
+                "pack_name": meta.get("packName") or event_payload.get("pack_name"),
+                "pack_version": meta.get("packVersion") or event_payload.get("pack_version"),
+                "detector_count": detector_count,
+                "detectors": detectors,
+                "evaluated_count": event_payload.get("evaluated_count"),
+                "not_evaluated_count": event_payload.get("not_evaluated_count"),
+                "executed_at": executed_at,
+            }
+        )
+
+    return {"run_id": run_id, "packs": packs_out}
+
+
 def packs_view(org_id: str) -> Dict[str, Any]:
     """Return the exact pack execution recorded for the latest run.
 
@@ -479,6 +557,11 @@ def packs_view(org_id: str) -> Dict[str, Any]:
     ``run.pack_executed`` origin event, or org/run-scoped signal snapshots. The
     mutable pack registry is deliberately not consulted: changing a pack later
     must not rewrite which version or detectors the dashboard says executed.
+
+    R191-P1 T5: a multi-pack run persists a per-pack execution list
+    (``run["packs"]``); when present, report ONE row per pack (AC5). Runs without
+    that list (single-pack-seeded or pre-multi-pack) use the legacy single-pack
+    path below, unchanged.
     """
     latest = _latest_run(org_id)
     if latest is None:
@@ -487,6 +570,10 @@ def packs_view(org_id: str) -> Dict[str, Any]:
     run_id = str(latest.get("id") or "")
     if not run_id:
         return {"run_id": None, "packs": []}
+
+    run_packs = latest.get("packs")
+    if isinstance(run_packs, list) and run_packs:
+        return _packs_view_multi(org_id, run_id, latest, run_packs)
 
     pack_event = _latest_by(
         _safe_range(org_id, "run.pack_executed"),

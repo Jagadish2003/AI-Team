@@ -284,6 +284,37 @@ describe("RunHealthDashboardPage", () => {
     expect(await screen.findByText("Commercial Lending")).toBeInTheDocument();
   });
 
+  // R191-P1 T5 (AC5): a multi-pack run reports one pack row PER pack.
+  it("renders one Packs row per pack for a multi-pack run", async () => {
+    api.fetchPackHealth.mockResolvedValue({
+      run_id: "run-multi-0001",
+      packs: [
+        {
+          pack_id: "service_cloud",
+          pack_name: "Service Cloud",
+          pack_version: "1.0.0",
+          detector_count: 2,
+          detectors: ["repetition", "handoff_friction"],
+        },
+        {
+          pack_id: "enterprise_ops",
+          pack_name: "Enterprise Operations Intelligence",
+          pack_version: "1.0.0",
+          detector_count: 1,
+          detectors: ["ent_incident_resolution_lag"],
+        },
+      ],
+    });
+    renderPage();
+
+    const packsPanel = await screen.findByTestId("panel-packs");
+    // Both packs render as distinct rows in the Packs panel.
+    expect(await within(packsPanel).findByText("Service Cloud")).toBeInTheDocument();
+    expect(within(packsPanel).getByText("Enterprise Operations Intelligence")).toBeInTheDocument();
+    expect(within(packsPanel).getByText("service_cloud")).toBeInTheDocument();
+    expect(within(packsPanel).getByText("enterprise_ops")).toBeInTheDocument();
+  });
+
   // Internal scroll: the Connectors and Runs card lists scroll once they exceed
   // three cards, so the panels stay compact instead of growing with the list.
   function makeConnectors(n: number) {

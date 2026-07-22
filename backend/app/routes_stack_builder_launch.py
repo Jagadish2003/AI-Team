@@ -182,6 +182,10 @@ def register_stack_builder_launch_routes(app: FastAPI) -> None:
         resolved = resolve_launch_config(
             body.template_id,
             pack_id=body.pack_id,
+            # R191-P1 T5: pass the full multi-pack selection so a template's own
+            # packs list is honored end to end — an untouched multi-pack template
+            # activates every one of its packs; an explicit selection overrides it.
+            pack_ids=body.pack_ids,
             focus_id=body.focus_id,
             selected_system_ids=body.selected_system_ids,
             weightings=body.weightings,
@@ -206,12 +210,15 @@ def register_stack_builder_launch_routes(app: FastAPI) -> None:
                 detail="pack_id is required",
             )
 
-        # R191-P1 T1: the effective multi-pack selection. The resolved primary
-        # pack (template-aware) leads, followed by any additional caller-selected
-        # packs, order-preserving and de-duplicated. A single-pack launch yields
-        # exactly [eff_pack], so packId and every existing single-pack read below
-        # are byte-identical to today.
-        eff_pack_ids = normalize_pack_ids([eff_pack] + list(body.pack_ids or []))
+        # R191-P1 T1/T5: the effective multi-pack selection. resolve_launch_config
+        # now returns the template-aware pack list (an untouched multi-pack
+        # template contributes all of its packs; an explicit caller selection
+        # overrides it). The resolved primary pack always leads. A single-pack
+        # launch yields exactly [eff_pack], so packId and every existing
+        # single-pack read below are byte-identical to today.
+        eff_pack_ids = normalize_pack_ids(
+            [eff_pack] + list(effective.get("pack_ids") or []) + list(body.pack_ids or [])
+        )
 
         # Generate run ID
         run_id = next_run_id()

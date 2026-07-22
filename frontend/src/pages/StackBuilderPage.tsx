@@ -172,6 +172,37 @@ export function resolvePackId(
   return 'service_cloud';
 }
 
+// R191-P1 T5 — resolve the full MULTI-pack selection for a run. Run configuration
+// can now activate more than one pack: a template declaring several packs runs
+// them all. Returns an order-preserving, de-duplicated list whose FIRST entry is
+// the primary pack (kept in sync with resolvePackId for backward compatibility).
+export function resolvePackIds(
+  state: ReturnType<typeof useSetupState>['state'],
+  catalog: WorkspaceCatalogResponse | null,
+  industries: IndustryListItem[],
+  templates: TemplateListItem[],
+): string[] {
+  // An explicit Step 4 pack choice is a single, authoritative selection.
+  if (state.packId) return [state.packId];
+
+  // A selected template may declare MULTIPLE packs — honor the whole list so an
+  // untouched multi-pack template activates every one of its packs on launch.
+  const selectedTemplate = templates.find(
+    template => template.template_id === state.templateId,
+  );
+  const templatePacks = selectedTemplate?.packs;
+  if (templatePacks && templatePacks.length > 0) {
+    const deduped = Array.from(
+      new Set(templatePacks.filter(packId => typeof packId === 'string' && packId)),
+    );
+    if (deduped.length > 0) return deduped;
+  }
+
+  // Otherwise fall back to the single resolved pack (industry hint / declared
+  // cloud / safe default), as a one-element list.
+  return [resolvePackId(state, catalog, industries, templates)];
+}
+
 // ── Launch payload builder ─────────────────────────────────────────────────────
 //
 // R16-C1 T5 — the configuration the customer selected is the configuration that
@@ -189,6 +220,10 @@ export interface StackBuilderLaunchPayload {
   template_id: SetupState['templateId'];
   selected_system_ids: string[];
   pack_id: string;
+  // R191-P1 T5: the full multi-pack selection (order-preserving; first = primary).
+  // The backend also accepts the singular pack_id for backward compatibility, and
+  // reconciles the two — a single-pack launch sends a one-element pack_ids.
+  pack_ids: string[];
   weightings: Record<string, SystemWeighting>;
 }
 
@@ -196,6 +231,7 @@ export function buildStackBuilderLaunchPayload(
   state: SetupState,
   packId: string,
   orgId: string,
+  packIds: string[] = [packId],
 ): StackBuilderLaunchPayload {
   // Surface the silent-mismatch case: every selected system should carry a
   // confirmed weighting. If one is missing (e.g. a system was selected but its
@@ -226,6 +262,7 @@ export function buildStackBuilderLaunchPayload(
     template_id: state.templateId,
     selected_system_ids: state.selectedSystemIds,
     pack_id: packId,
+    pack_ids: packIds.length > 0 ? packIds : [packId],
     weightings: state.weightings,
   };
 }
@@ -511,8 +548,10 @@ export default function StackBuilderPage({
   const handleLaunch = useCallback(async () => {
     if (launchState === 'launching') return;
     setLaunchState('launching');
-    const packId = resolvePackId(state, catalog, industries, templates);
-    console.log(`packId:`, packId);
+    // R191-P1 T5: resolve the full multi-pack selection; the primary (first) pack
+    // stays the singular value for backward-compatible callers.
+    const packIds = resolvePackIds(state, catalog, industries, templates);
+    const packId = packIds[0] ?? resolvePackId(state, catalog, industries, templates);
     const systems = normaliseSystems(state.selectedSystemIds);
     const headers = buildAuthHeaders(token);
 
@@ -522,7 +561,7 @@ export default function StackBuilderPage({
         method: 'POST',
         credentials: 'omit',
         headers,
-        body: JSON.stringify(buildStackBuilderLaunchPayload(state, packId, orgId)),
+        body: JSON.stringify(buildStackBuilderLaunchPayload(state, packId, orgId, packIds)),
       });
       if (!launchResp.ok) {
         throw new Error(`Launch failed: ${launchResp.status}`);
@@ -544,6 +583,8 @@ export default function StackBuilderPage({
           mode: 'live',
           systems,
           pack: packId,
+          // R191-P1 T5: run every selected pack; backend reconciles with `pack`.
+          pack_ids: packIds,
         }),
       }).catch((err) => {
         console.error('[StackBuilderPage] Compute trigger failed:', err);
