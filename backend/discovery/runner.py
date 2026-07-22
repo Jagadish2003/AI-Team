@@ -1729,6 +1729,11 @@ def run(
                         "entities":    [],
                         "confidence":  "MEDIUM",
                         "decision":    "UNREVIEWED",
+                        # R191-P1 T3: this evidence item is constructed inline
+                        # (not via evidence_builder.build_evidence()), so it
+                        # needs its own packId stamp for the same provenance
+                        # guarantee every other evidence item carries.
+                        "packId":      pack_id,
                     })
                     corroboration_count += 1
                 for snippet in sn_by_detector.get(dr.detector_id, []):
@@ -1744,6 +1749,7 @@ def run(
                         "entities":    [],
                         "confidence":  "MEDIUM",
                         "decision":    "UNREVIEWED",
+                        "packId":      pack_id,
                     })
                     corroboration_count += 1
                 if corroboration_count > 0:
