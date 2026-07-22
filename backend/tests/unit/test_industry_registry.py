@@ -1,4 +1,4 @@
-"""R1.9.1-R1 T1/T2 — industry_registry.py "anchor-on-shipped" re-anchor tests.
+"""R1.9.1-R1 T1/T2/T3 — industry_registry.py "anchor-on-shipped" re-anchor tests.
 
 T1 covers the manufacturing / logistics_supply_chain re-anchor: SAP and
 Dynamics 365 no longer appear as connectable defaults (they have no shipped
@@ -12,22 +12,32 @@ roadmap_systems (target "unscheduled" — the story never commits GitLab to
 (shipped) stays a connectable "optional" default unchanged, and databases
 (sqlserver) are added as a genuinely-fitting shipped source.
 
+T3 covers the remaining five industries (financial_services, public_sector,
+retail_commerce, healthcare, energy_utilities): databases (sqlserver) added
+as a connectable default, completing "databases in every industry profile
+where they are realistically core" across all eight industries. T3 is
+scoped to databases ONLY — energy_utilities' pre-existing `sap` entry (the
+same anchor-on-absent shape T1 fixed for manufacturing/logistics_supply_chain)
+is deliberately untouched here; re-anchoring it is a separate task.
+
 Pure-config module (no DB, no app import) — runs standalone, matching
 CLAUDE.md's tests/unit/ purpose ("unit tests for individual backend modules").
 
 Acceptance Criteria covered (R1.9.1-R1)
 ----------------------------------------
-AC1 (partial — the three industries in these tasks' scope): no system_default
-    or recommended_system for manufacturing/logistics_supply_chain/technology
+AC1 (partial — the three industries T1/T2 touched): no system_default or
+    recommended_system for manufacturing/logistics_supply_chain/technology
     references a connector without a shipped ingestor. The full AC1 guarantee
     (every industry, enforced by a dynamically-discovered CI cross-check
     against backend/discovery/ingest/) is a separate, later task.
 AC2: SAP/Dynamics 365 are represented as roadmap (target 2.0.1) for
      manufacturing/logistics_supply_chain, never as a connectable default —
      so no run can select them (T1).
-AC4: databases appear in the agreed industry profiles (manufacturing,
-     logistics_supply_chain, technology); technology carries GitHub-optional
-     and GitLab-as-roadmap (T2).
+AC4: databases appear in the agreed industry profiles — manufacturing,
+     logistics_supply_chain, technology (T1/T2), and now financial_services,
+     public_sector, retail_commerce, healthcare, energy_utilities (T3), i.e.
+     all eight industries; technology carries GitHub-optional and
+     GitLab-as-roadmap (T2).
 """
 from __future__ import annotations
 
@@ -52,6 +62,19 @@ _ABSENT_CONNECTORS = frozenset({"sap", "dynamics365"})
 # to declare roadmap_systems / have changed defaults.
 _TOUCHED_INDUSTRIES = frozenset(
     {"manufacturing", "logistics_supply_chain", "technology"}
+)
+
+# T3 — the five industries that gained a database anchor in this task, and
+# every industry that now has one (T1/T2's three + T3's five = all eight).
+_DATABASE_ONLY_INDUSTRIES = (
+    "financial_services",
+    "public_sector",
+    "retail_commerce",
+    "healthcare",
+    "energy_utilities",
+)
+_ALL_INDUSTRIES_WITH_DATABASE = _DATABASE_ONLY_INDUSTRIES + (
+    "manufacturing", "logistics_supply_chain", "technology",
 )
 
 # Shipped sources the story specifies as the replacement anchor.
@@ -237,6 +260,72 @@ def test_get_system_defaults_returns_none_for_gitlab_in_technology():
     """The accessor used by the Stack Builder API also reflects the removal —
     not just direct dict access."""
     assert get_system_defaults("technology", "gitlab") is None
+
+
+# ---------------------------------------------------------------------------
+# T3 — databases added to every remaining industry profile where they are
+# realistically core: financial_services, public_sector, retail_commerce,
+# healthcare, energy_utilities.
+# ---------------------------------------------------------------------------
+
+
+def test_all_five_remaining_industries_gain_a_database_default():
+    for industry_id in _DATABASE_ONLY_INDUSTRIES:
+        defaults = get_system_defaults(industry_id, "sqlserver")
+        assert defaults is not None, f"{industry_id}: missing sqlserver default"
+        assert defaults.role in _VALID_ROLES, (industry_id, defaults.role)
+        assert defaults.priority in _VALID_PRIORITIES, (industry_id, defaults.priority)
+        assert defaults.workflow_focus, industry_id
+        assert len(defaults.workflow_focus) <= 3, industry_id
+        invalid_tags = set(defaults.workflow_focus) - _VALID_WORKFLOW_TAGS
+        assert not invalid_tags, (industry_id, invalid_tags)
+
+
+def test_all_five_remaining_industries_pack_hints_include_sqlserver_opsignal():
+    for industry_id in _DATABASE_ONLY_INDUSTRIES:
+        assert "sqlserver_opsignal" in get_pack_hints(industry_id), industry_id
+
+
+def test_all_five_remaining_industries_recommend_the_new_database():
+    for industry_id in _DATABASE_ONLY_INDUSTRIES:
+        config = get_industry(industry_id)
+        assert "sqlserver" in config.recommended_systems, industry_id
+
+
+def test_all_eight_industries_now_carry_a_database_default():
+    """T1/T2's three industries plus T3's five equal all eight — AC4's
+    "databases in every industry profile where they are realistically core"
+    is now met across the whole registry, not just a subset."""
+    assert set(_ALL_INDUSTRIES_WITH_DATABASE) == set(INDUSTRY_REGISTRY)
+    for industry_id in INDUSTRY_REGISTRY:
+        assert get_system_defaults(industry_id, "sqlserver") is not None, industry_id
+
+
+def test_t3_does_not_touch_energy_utilities_pre_existing_sap_entry():
+    """T3 is scoped to databases only. energy_utilities' pre-existing `sap`
+    system_default (the same anchor-on-absent shape T1 fixed for
+    manufacturing/logistics_supply_chain) is a separate, out-of-scope concern
+    for this task and must be left exactly as it was."""
+    defaults = get_system_defaults("energy_utilities", "sap")
+    assert defaults is not None
+    assert defaults.role == "system_of_record"
+    assert defaults.priority == "primary"
+    # No roadmap entry was added for it — that would imply T3 removed it,
+    # which it deliberately does not.
+    assert get_roadmap_systems("energy_utilities") == []
+
+
+def test_database_only_industries_still_retain_existing_primary_anchors():
+    """Adding a database default must not disturb each industry's existing
+    primary system_of_record anchor(s)."""
+    for industry_id in _DATABASE_ONLY_INDUSTRIES:
+        config = get_industry(industry_id)
+        primaries = [
+            sid
+            for sid, d in config.system_defaults.items()
+            if d.role == "system_of_record" and d.priority == "primary"
+        ]
+        assert primaries, f"{industry_id}: no primary system_of_record remains"
 
 
 # ---------------------------------------------------------------------------

@@ -120,9 +120,11 @@ class TestIndustryRegistry:
 
     def test_get_pack_hints_public_sector(self):
         # R18-C0 P10 — de-POC: public_sector no longer hints a customer-specific
-        # pack. It should suggest only the generic service_cloud pack.
+        # pack. R191-R1 T3 adds the generic (non-customer-specific) database
+        # pack hint alongside service_cloud; the invariant this test actually
+        # guards is "no customer-specific hint", not "exactly one hint".
         hints = get_pack_hints("public_sector")
-        assert hints == ["service_cloud"]
+        assert hints == ["service_cloud", "sqlserver_opsignal"]
         assert "strs_benefits" not in hints
 
     def test_removed_hint_cannot_disable_explicit_strs_pack_execution(self):
@@ -132,7 +134,7 @@ class TestIndustryRegistry:
         registered STRS pack or make detector execution depend on industry UI
         configuration.
         """
-        assert get_pack_hints("public_sector") == ["service_cloud"]
+        assert get_pack_hints("public_sector") == ["service_cloud", "sqlserver_opsignal"]
 
         strs_pack = get_pack("strs_benefits")
         assert strs_pack["packId"] == "strs_benefits"

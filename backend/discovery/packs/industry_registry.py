@@ -119,7 +119,9 @@ INDUSTRY_REGISTRY: Dict[str, IndustryConfig] = {
     "financial_services": IndustryConfig(
         industry_id="financial_services",
         label="Financial services",
-        pack_hints=["ncino", "service_cloud"],
+        # R191-R1 T3: sqlserver_opsignal added — the shipped native-DB pack
+        # serves the new database anchor below.
+        pack_hints=["ncino", "service_cloud", "sqlserver_opsignal"],
         system_defaults={
             "salesforce":     SystemDefaultConfig("system_of_record",          "primary",   ["intake_requests", "approvals", "compliance_risk"]),
             "salesforce_sc":  SystemDefaultConfig("system_of_record",          "primary",   ["service_casework", "intake_requests", "compliance_risk"]),
@@ -130,8 +132,12 @@ INDUSTRY_REGISTRY: Dict[str, IndustryConfig] = {
             "confluence":     SystemDefaultConfig("documentation_system",      "secondary", ["documents_knowledge"]),
             "sharepoint":     SystemDefaultConfig("documentation_system",      "secondary", ["documents_knowledge"]),
             "slack":          SystemDefaultConfig("operational_signal_source", "optional",  ["communications"]),
+            # R191-R1 T3: databases — a shipped source (native DB connector,
+            # sqlserver_opsignal pack) that genuinely fits core banking / loan
+            # servicing / risk data stores underneath the CRM layer.
+            "sqlserver":      SystemDefaultConfig("operational_signal_source", "secondary", ["data_analytics", "backlog_work_queues"]),
         },
-        recommended_systems=["jira", "servicenow", "confluence"],
+        recommended_systems=["jira", "servicenow", "confluence", "sqlserver"],
         llm_context_suffix=(
             "Financial services context. Regulatory compliance (FCA, SEC, OCC) "
             "is the highest-weight signal category. Covenant tracking, approval "
@@ -143,7 +149,9 @@ INDUSTRY_REGISTRY: Dict[str, IndustryConfig] = {
     "public_sector": IndustryConfig(
         industry_id="public_sector",
         label="Public sector",
-        pack_hints=["service_cloud"],
+        # R191-R1 T3: sqlserver_opsignal added — the shipped native-DB pack
+        # serves the new database anchor below.
+        pack_hints=["service_cloud", "sqlserver_opsignal"],
         system_defaults={
             "salesforce":     SystemDefaultConfig("system_of_record",          "primary",   ["intake_requests", "approvals", "compliance_risk"]),
             "salesforce_pss": SystemDefaultConfig("system_of_record",          "primary",   ["intake_requests", "compliance_risk", "approvals"]),
@@ -154,8 +162,13 @@ INDUSTRY_REGISTRY: Dict[str, IndustryConfig] = {
             "sharepoint":     SystemDefaultConfig("documentation_system",      "secondary", ["documents_knowledge"]),
             "slack":          SystemDefaultConfig("operational_signal_source", "optional",  ["communications"]),
             "teams":          SystemDefaultConfig("operational_signal_source", "optional",  ["communications"]),
+            # R191-R1 T3: databases — a shipped source (native DB connector,
+            # sqlserver_opsignal pack) that genuinely fits the legacy
+            # case-management / records databases underneath many agencies'
+            # public-facing systems.
+            "sqlserver":      SystemDefaultConfig("operational_signal_source", "secondary", ["data_analytics", "backlog_work_queues"]),
         },
-        recommended_systems=["slack", "sharepoint", "servicenow"],
+        recommended_systems=["slack", "sharepoint", "servicenow", "sqlserver"],
         llm_context_suffix=(
             "Public sector context. Regulatory deadline compliance, fiduciary "
             "obligations, and audit-trail completeness are highest-weight signals. "
@@ -211,7 +224,9 @@ INDUSTRY_REGISTRY: Dict[str, IndustryConfig] = {
     "retail_commerce": IndustryConfig(
         industry_id="retail_commerce",
         label="Retail & commerce",
-        pack_hints=["service_cloud"],
+        # R191-R1 T3: sqlserver_opsignal added — the shipped native-DB pack
+        # serves the new database anchor below.
+        pack_hints=["service_cloud", "sqlserver_opsignal"],
         system_defaults={
             "salesforce":     SystemDefaultConfig("system_of_record",          "primary",   ["service_casework", "intake_requests"]),
             "salesforce_sc":  SystemDefaultConfig("system_of_record",          "primary",   ["service_casework", "intake_requests"]),
@@ -220,8 +235,12 @@ INDUSTRY_REGISTRY: Dict[str, IndustryConfig] = {
             "servicenow":     SystemDefaultConfig("operational_signal_source", "secondary", ["service_casework", "backlog_work_queues"]),
             "slack":          SystemDefaultConfig("operational_signal_source", "secondary", ["communications"]),
             "confluence":     SystemDefaultConfig("documentation_system",      "optional",  ["documents_knowledge"]),
+            # R191-R1 T3: databases — a shipped source (native DB connector,
+            # sqlserver_opsignal pack) that genuinely fits POS / inventory /
+            # order-management databases underneath the storefront layer.
+            "sqlserver":      SystemDefaultConfig("operational_signal_source", "secondary", ["data_analytics", "backlog_work_queues"]),
         },
-        recommended_systems=["jira", "slack", "confluence"],
+        recommended_systems=["jira", "slack", "confluence", "sqlserver"],
         llm_context_suffix=(
             "Retail and commerce context. Customer service case routing, "
             "returns processing, and order-to-fulfilment handoffs are "
@@ -232,7 +251,9 @@ INDUSTRY_REGISTRY: Dict[str, IndustryConfig] = {
     "healthcare": IndustryConfig(
         industry_id="healthcare",
         label="Healthcare",
-        pack_hints=["service_cloud"],
+        # R191-R1 T3: sqlserver_opsignal added — the shipped native-DB pack
+        # serves the new database anchor below.
+        pack_hints=["service_cloud", "sqlserver_opsignal"],
         system_defaults={
             "salesforce":     SystemDefaultConfig("system_of_record",          "primary",   ["intake_requests", "compliance_risk", "approvals"]),
             "salesforce_hc":  SystemDefaultConfig("system_of_record",          "primary",   ["intake_requests", "compliance_risk", "approvals"]),
@@ -242,8 +263,12 @@ INDUSTRY_REGISTRY: Dict[str, IndustryConfig] = {
             "sharepoint":     SystemDefaultConfig("documentation_system",      "secondary", ["documents_knowledge", "compliance_risk"]),
             "confluence":     SystemDefaultConfig("documentation_system",      "optional",  ["documents_knowledge"]),
             "slack":          SystemDefaultConfig("operational_signal_source", "optional",  ["communications"]),
+            # R191-R1 T3: databases — a shipped source (native DB connector,
+            # sqlserver_opsignal pack) that genuinely fits clinical/ancillary
+            # data stores underneath the EHR layer (lab, scheduling, billing).
+            "sqlserver":      SystemDefaultConfig("operational_signal_source", "secondary", ["data_analytics", "compliance_risk"]),
         },
-        recommended_systems=["servicenow", "sharepoint", "slack"],
+        recommended_systems=["servicenow", "sharepoint", "slack", "sqlserver"],
         llm_context_suffix=(
             "Healthcare context. HIPAA compliance, clinical workflow approvals, "
             "and patient-facing service SLAs are highest-weight signal categories. "
@@ -254,7 +279,12 @@ INDUSTRY_REGISTRY: Dict[str, IndustryConfig] = {
     "energy_utilities": IndustryConfig(
         industry_id="energy_utilities",
         label="Energy & utilities",
-        pack_hints=["service_cloud"],
+        # R191-R1 T3: sqlserver_opsignal added — the shipped native-DB pack
+        # serves the new database anchor below. sap stays as-is here: unlike
+        # manufacturing/logistics_supply_chain (T1), this industry's existing
+        # sap entry is out of this task's scope (databases only) — re-anchoring
+        # it is a separate concern this task does not touch.
+        pack_hints=["service_cloud", "sqlserver_opsignal"],
         system_defaults={
             "salesforce":     SystemDefaultConfig("system_of_record",          "primary",   ["service_casework", "compliance_risk", "approvals"]),
             "salesforce_sc":  SystemDefaultConfig("system_of_record",          "primary",   ["service_casework", "compliance_risk"]),
@@ -263,8 +293,12 @@ INDUSTRY_REGISTRY: Dict[str, IndustryConfig] = {
             "jira":           SystemDefaultConfig("operational_signal_source", "secondary", ["backlog_work_queues", "change_release"]),
             "sharepoint":     SystemDefaultConfig("documentation_system",      "secondary", ["documents_knowledge", "compliance_risk"]),
             "slack":          SystemDefaultConfig("operational_signal_source", "optional",  ["communications"]),
+            # R191-R1 T3: databases — a shipped source (native DB connector,
+            # sqlserver_opsignal pack) that genuinely fits asset-management /
+            # billing / SCADA-adjacent data stores underneath the ERP layer.
+            "sqlserver":      SystemDefaultConfig("operational_signal_source", "secondary", ["data_analytics", "backlog_work_queues"]),
         },
-        recommended_systems=["servicenow", "sharepoint", "jira"],
+        recommended_systems=["servicenow", "sharepoint", "jira", "sqlserver"],
         llm_context_suffix=(
             "Energy and utilities context. Regulatory compliance, asset "
             "maintenance approval workflows, and field-to-office handoff "
