@@ -1259,6 +1259,7 @@ def run_llm_enrichment(
     sources_analyzed: Optional[Dict[str, Any]] = None,
     pack_id: Optional[str] = None,
     org_id: Optional[str] = None,
+    allow_graph_context: bool = True,
 ) -> Dict[str, Any]:
     """
     ENG-AIQ-NC-5: pack_id parameter added.
@@ -1297,10 +1298,19 @@ def run_llm_enrichment(
     from .enrichment_quality import evaluate_preliminary_status
 
     try:
-        graph_entities = db.run_kv_get("entities", run_id, []) or []
+        graph_entities = (
+            db.run_kv_get("entities", run_id, []) or []
+            if allow_graph_context
+            else []
+        )
     except Exception:
         graph_entities = []
-    graph_context = build_graph_context(org_id, run_id, entities=graph_entities)
+    graph_context = build_graph_context(
+        org_id if allow_graph_context else None,
+        run_id,
+        entities=graph_entities,
+        relationships=None if allow_graph_context else [],
+    )
     grounded = bool(org_id) and not graph_context.is_sparse
 
     graph_fields = {

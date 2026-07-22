@@ -219,6 +219,62 @@ PACK_REGISTRY: Dict[str, Dict[str, Any]] = {
         ),
     },
 
+    "security_ops": {
+        "packId":        "security_ops",
+        # MSP-B12 version stamped on every run (R16-B1 §4). T1 shipped the scaffold
+        # at 1.0.0; MSP-B12 T2 adds the five Section-1 detectors (a behaviour change)
+        # → bumped to 1.1.0. Bump on ANY future detector or scorer/calibration (T6)
+        # change — an intentional pack-version update is required so pack governance
+        # (1.9) can tell a data change from a pack-logic change. A boundary test
+        # guards this: it fails if the detector/scoring surface changes without a bump.
+        "packVersion":   "1.2.0",
+        "packName":      "Security Operations",
+        "domain":        "security_ops",
+        "pack_domain":   "security_ops",
+        # Second sibling of the Cloud-Operations pack on the same template model.
+        # MSP-B12 T2 (Section 1) detectors — consume only MSP-B11's SecOps workflow
+        # signal (sn_data['secops'] / ['vulnerability_response']) + B3's
+        # sn_data['cmdb']. Invoked via the runner's uniform pack-dispatch branch.
+        "detectors": [
+            "discovery.detectors.security_ops_remediation_recurrence",
+            "discovery.detectors.security_ops_security_it_pingpong",
+            "discovery.detectors.security_ops_sla_deferral_ageing",
+            "discovery.detectors.security_ops_shared_infra_concentration",
+            "discovery.detectors.security_ops_sir_triage_toil",
+        ],
+        # UI labels are per-detector (S6/S7); added with the detectors in T2.
+        "ui_labels_path": None,
+        # Calibration values, detector thresholds, and the SecOps terminology set
+        # load from this external file, not from code — a config change alters
+        # behaviour with no code deploy (see security_ops_config.py).
+        "config_path":   str(_PACKS_DIR / "security_ops_pack_config.json"),
+        # Model-context hint for LLM enrichment. Security-derived content only
+        # participates in AI-assisted assembly under in-boundary / customer-tenant
+        # model modes; under hosted-AI mode the pack runs deterministic detectors and
+        # emits findings with an explicit "AI-assisted narrative unavailable" label
+        # (the AI-mode gate is MSP-B12 T4). Vulnerability workload data never leaves
+        # the boundary for AI — for federal deployments that is the selling point.
+        "llm_context": (
+            "Security Operations (SecOps) analysis for a managed-security provider. "
+            "Speak SecOps language: remediation, scan cycle, deferral, SLA, triage, "
+            "severity band, security queue, CI class. "
+            "Focus on recurring vulnerability-remediation loops, security<->IT "
+            "reassignment friction, SLA and deferral ageing, and vulnerability "
+            "workload concentrating on shared infrastructure. "
+            "Describe WORKLOAD — effort, recurrence, ageing, concentration — "
+            "aggregated by vulnerability class, service, and CI class. "
+            "Reference groups, queues, services, vulnerability classes, and CI "
+            "classes ONLY — never an individual employee, an individual host, or a "
+            "host x vulnerability pair. "
+            "State corroboration honestly: a single-source finding is capped and "
+            "labelled; concentration is described as 'workload concentrates on...', "
+            "never as causation. "
+            "IMPORTANT: agent surfaces findings to SOC and remediation leaders only. "
+            "No automated remediation, patching, deferral approval, or exception "
+            "sign-off — humans remain responsible for every action."
+        ),
+    },
+
     # CPQ pack slot — reserved for Sprint 6
 
     # "ncino_cpq": {
@@ -326,6 +382,45 @@ def list_packs() -> List[str]:
     return list(PACK_REGISTRY.keys())
 
 
+def normalize_pack_ids(
+    pack_ids: Optional[Any] = None,
+) -> List[str]:
+    """Normalise a multi-pack selection to an order-preserving, de-duplicated list.
+
+    R191-P1 T1 groundwork: run configuration now accepts ``pack_ids: list[str]``
+    in place of a singular ``pack_id``. This is the single normalisation primitive
+    every config entry point (LaunchRequest, ComputeRequest, run record) routes
+    through so the rules cannot drift between callers:
+
+      * order-preserving — the caller's ordering is kept (the first id is the
+        primary pack, which single-pack execution continues to run against, so a
+        single-element list stays byte-identical to today);
+      * de-duplicated — a repeated id keeps its first occurrence only;
+      * empty/whitespace/non-string entries are dropped;
+      * ``None`` (or a bare string, for caller convenience) is accepted.
+
+    Unknown pack ids are intentionally NOT filtered here — validation/fallback of
+    an individual id stays the job of ``get_pack()`` (which warns + falls back),
+    exactly as for the singular path, so behaviour is unchanged for a single id.
+    """
+    if pack_ids is None:
+        return []
+    if isinstance(pack_ids, str):
+        pack_ids = [pack_ids]
+
+    seen: set[str] = set()
+    normalized: List[str] = []
+    for raw in pack_ids:
+        if not isinstance(raw, str):
+            continue
+        pid = raw.strip()
+        if not pid or pid in seen:
+            continue
+        seen.add(pid)
+        normalized.append(pid)
+    return normalized
+
+
 def is_ncino_pack(pack_id: Optional[str] = None) -> bool:
     """
     Convenience helper — replaces the temporary is_ncino_pack conditional.
@@ -368,3 +463,12 @@ def is_cloud_ops_pack(pack_id: Optional[str] = None) -> bool:
     pattern as is_ncino_pack() and is_enterprise_ops_pack().
     """
     return get_pack(pack_id)["domain"] == "cloud_ops"
+
+
+def is_security_ops_pack(pack_id: Optional[str] = None) -> bool:
+    """Return True when the active pack is the Security-Operations Discovery pack (MSP-B12).
+
+    Used in runner.py and scorer for pack routing.  Follows the identical
+    pattern as is_ncino_pack() and is_cloud_ops_pack().
+    """
+    return get_pack(pack_id)["domain"] == "security_ops"

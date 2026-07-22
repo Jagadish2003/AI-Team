@@ -145,8 +145,12 @@ export default function DiscoveryFocusPage({
     canProceedFromStep1,
   } = setupState;
 
-  const selectedTemplate =
-    templates.find(t => t.template_id === state.templateId) ?? null;
+  const selectedTemplateIds = state.templateIds?.length
+    ? state.templateIds
+    : (state.templateId ? [state.templateId] : []);
+  const selectedTemplates = templates.filter(template =>
+    selectedTemplateIds.includes(template.template_id),
+  );
 
   async function handleIndustrySelect(industryId: string) {
     const next = state.industryId === industryId ? null : industryId;
@@ -165,12 +169,8 @@ export default function DiscoveryFocusPage({
   }
 
   function handleTemplateSelect(template: TemplateListItem) {
-    // Toggle off when re-selecting the active template; otherwise apply the
-    // template's editable defaults (systems, roles, focus) — AC1.
-    if (state.templateId === template.template_id) {
-      applyTemplate(null);
-      return;
-    }
+    // The hook toggles this registry template while retaining any other selected
+    // template, allowing compatible packs to share one discovery run.
     applyTemplate(template);
   }
 
@@ -248,8 +248,8 @@ export default function DiscoveryFocusPage({
             <span className="text-xs text-muted">Optional</span>
           </div>
           <p className="mb-4 text-xs leading-relaxed text-muted">
-            Templates pre-populate systems, roles, and a focus for common operating
-            models. Everything stays editable.
+            Choose one or more templates to pre-populate systems, roles, packs, and
+            a focus for common operating models. Everything stays editable.
           </p>
           {registryLoading ? (
             <RegistryLoading label="Loading templates…" />
@@ -266,18 +266,19 @@ export default function DiscoveryFocusPage({
                   <PillTag
                     key={tmpl.template_id}
                     label={tmpl.label}
-                    selected={state.templateId === tmpl.template_id}
+                    selected={selectedTemplateIds.includes(tmpl.template_id)}
                     onToggle={() => handleTemplateSelect(tmpl)}
                   />
                 ))}
               </div>
 
-              {selectedTemplate && (
+              {selectedTemplates.map(selectedTemplate => (
                 <TemplateNoteBlock
+                  key={selectedTemplate.template_id}
                   templateLabel={selectedTemplate.label}
                   suggestedFocus={selectedTemplate.focus_defaults.focus_id}
                 />
-              )}
+              ))}
             </>
           )}
         </section>

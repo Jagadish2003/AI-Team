@@ -41,7 +41,7 @@ from .opportunity_display import (
 )
 from .replay import replay_run as replay_run_
 from .roadmap_engine import build_roadmap
-from .terminology import apply_terminology, resolve_run_terminology
+from .terminology import apply_run_terminology
 from .routes_normalization import register_normalization_routes
 from .routes_connector_auth import register_connector_auth_routes
 from .routes_stack_builder import register_stack_builder_routes
@@ -685,8 +685,7 @@ def list_opportunities(run_id: str) -> List[Dict[str, Any]]:
     # with_display(), so a bubble keeps its coordinates when its decision changes.
     # R18-C1 T4: then adapt the finding WORDING to the run's active template
     # (lending language for Commercial Lending). No-op when no template is active.
-    terminology = resolve_run_terminology(run_id)
-    return [apply_terminology(with_display(opp), terminology) for opp in opps]
+    return apply_run_terminology([with_display(opp) for opp in opps], run_id)
 
 
 @app.post(
@@ -740,7 +739,7 @@ def set_opp_decision(run_id: str, opp_id: str, body: Dict[str, Any]) -> Dict[str
     # offset as the list endpoint — otherwise the bubble jumps when its decision
     # response replaces the listed opportunity in the UI. R18-C1 T4: same
     # template terminology as the list endpoint so wording stays consistent.
-    return apply_terminology(with_display(o), resolve_run_terminology(run_id))
+    return apply_run_terminology(with_display(o), run_id)
 
 
 @app.post(
@@ -802,7 +801,7 @@ def set_opp_override(run_id: str, opp_id: str, body: Dict[str, Any]) -> Dict[str
     # with_display so the override response carries the same stable matrix offset
     # as the list endpoint (keeps the bubble coordinate-stable on override save).
     # R18-C1 T4: same template terminology as the list endpoint.
-    return apply_terminology(with_display(o), resolve_run_terminology(run_id))
+    return apply_run_terminology(with_display(o), run_id)
 
 
 @app.get("/api/runs/{run_id}/audit", dependencies=[Depends(require_auth), Depends(require_role("owner"))])
@@ -817,10 +816,9 @@ def get_roadmap(run_id: str) -> Dict[str, Any]:
     run_get(run_id)
     # R18-C1 T4: adapt roadmap wording (embedded finding titles/descriptions,
     # stage summaries) to the run's active template. No-op without a template.
-    terminology = resolve_run_terminology(run_id)
     run_roadmap = run_kv_get("roadmap", run_id, None)
     if run_roadmap is not None:
-        return apply_terminology(with_roadmap_display_titles(run_roadmap), terminology)
+        return apply_run_terminology(with_roadmap_display_titles(run_roadmap), run_id)
     opps = run_kv_get("opps", run_id, None)
     if opps is None:
         raise HTTPException(
@@ -830,7 +828,7 @@ def get_roadmap(run_id: str) -> Dict[str, Any]:
                 "T2 materialisation has not completed for this run."
             ),
         )
-    return apply_terminology(build_roadmap(with_display_titles(opps)), terminology)
+    return apply_run_terminology(build_roadmap(with_display_titles(opps)), run_id)
 
 
 @app.get("/api/runs/{run_id}/executive-report", dependencies=[Depends(require_auth), Depends(require_role("viewer"))])
@@ -842,12 +840,10 @@ def get_exec_report(run_id: str) -> Dict[str, Any]:
 
     # R18-C1 T4: adapt executive-report wording (the AI executive summary and the
     # embedded quick-win finding titles/descriptions) to the active template.
-    terminology = resolve_run_terminology(run_id)
-
     er = run_kv_get("executive_report", run_id, None)
 
     if er:
-        return apply_terminology(with_exec_report_display_titles(er), terminology)
+        return apply_run_terminology(with_exec_report_display_titles(er), run_id)
 
     inputs = run.get("inputs") or {}
     connected_sources = inputs.get("connectedSources") or []
@@ -877,7 +873,7 @@ def get_exec_report(run_id: str) -> Dict[str, Any]:
     opps = with_display_titles(opps)
     quick_wins = [o for o in opps if o.get("tier") == "Quick Win"]
 
-    return apply_terminology(
+    return apply_run_terminology(
         {
             "confidence": "Moderate",
             "sourcesAnalyzed": sources_analyzed,
@@ -890,7 +886,7 @@ def get_exec_report(run_id: str) -> Dict[str, Any]:
                 "blockerCount": 0,
             },
         },
-        terminology,
+        run_id,
     )
 
 
