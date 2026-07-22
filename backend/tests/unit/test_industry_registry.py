@@ -1,4 +1,4 @@
-"""R1.9.1-R1 T1/T2/T3 — industry_registry.py "anchor-on-shipped" re-anchor tests.
+"""R1.9.1-R1 T1/T2/T3/T4 — industry_registry.py "anchor-on-shipped" re-anchor tests.
 
 T1 covers the manufacturing / logistics_supply_chain re-anchor: SAP and
 Dynamics 365 no longer appear as connectable defaults (they have no shipped
@@ -20,6 +20,24 @@ scoped to databases ONLY — energy_utilities' pre-existing `sap` entry (the
 same anchor-on-absent shape T1 fixed for manufacturing/logistics_supply_chain)
 is deliberately untouched here; re-anchoring it is a separate task.
 
+T4 covers three things: (1) Teams added wherever Slack is offered — the five
+industries that had slack but not teams (financial_services, retail_commerce,
+healthcare, energy_utilities, technology) now have both, mirroring slack's
+priority/workflow_focus exactly, matching the pattern T1 already established
+for manufacturing/logistics_supply_chain and public_sector's pre-existing
+pairing; (2) reducing Salesforce-centric anchoring for technology — the story
+names no specific industry/system (it references an external "C0-A §4"
+findings document not available to this task), so per explicit direction this
+elevates Jira from operational_signal_source/secondary to a co-primary
+workflow_system/primary, reflecting technology's own llm_context_suffix
+naming engineering-delivery friction as the primary signal category —
+additive (Salesforce variants stay primary too), not a Salesforce removal;
+(3) technology's pack_hints gain github_engineering (the pack that scores the
+already-connectable github default — the honest-pack-list gap the story
+names as its own example). The "1.9 cloud-ops/sec-ops packs" the story also
+names for this sub-goal have no registered pack_id in this codebase and are
+deliberately NOT invented (anchor-on-shipped).
+
 Pure-config module (no DB, no app import) — runs standalone, matching
 CLAUDE.md's tests/unit/ purpose ("unit tests for individual backend modules").
 
@@ -33,11 +51,15 @@ AC1 (partial — the three industries T1/T2 touched): no system_default or
 AC2: SAP/Dynamics 365 are represented as roadmap (target 2.0.1) for
      manufacturing/logistics_supply_chain, never as a connectable default —
      so no run can select them (T1).
+AC3 (partial): the eight industries remain present and each has at least one
+     honest primary system after T4's Jira elevation for technology (a
+     full per-industry Stack Builder walkthrough test is a separate concern).
 AC4: databases appear in the agreed industry profiles — manufacturing,
      logistics_supply_chain, technology (T1/T2), and now financial_services,
      public_sector, retail_commerce, healthcare, energy_utilities (T3), i.e.
      all eight industries; technology carries GitHub-optional and
-     GitLab-as-roadmap (T2).
+     GitLab-as-roadmap (T2); Teams parity with Slack holds registry-wide and
+     technology's pack list is honest about what it actually anchors (T4).
 """
 from __future__ import annotations
 
@@ -326,6 +348,105 @@ def test_database_only_industries_still_retain_existing_primary_anchors():
             if d.role == "system_of_record" and d.priority == "primary"
         ]
         assert primaries, f"{industry_id}: no primary system_of_record remains"
+
+
+# ---------------------------------------------------------------------------
+# T4 — Teams available wherever Slack is offered; reduce Salesforce-centric
+# anchoring for technology (Jira elevated to a co-primary workflow_system);
+# technology's pack_hints gain github_engineering (the honest-pack-list gap
+# the story names as its own example).
+# ---------------------------------------------------------------------------
+
+# Every industry that had `slack` but not `teams` before T4.
+_TEAMS_ADDED_INDUSTRIES = (
+    "financial_services",
+    "retail_commerce",
+    "healthcare",
+    "energy_utilities",
+    "technology",
+)
+
+# Industries that already had both slack and teams before T4 (T1's re-anchor
+# gave manufacturing/logistics_supply_chain both; public_sector always had
+# both) — Teams parity must hold for the whole registry, not just the five
+# T4 touches directly.
+_ALREADY_HAD_TEAMS = ("public_sector", "manufacturing", "logistics_supply_chain")
+
+
+def test_teams_added_wherever_slack_is_offered():
+    """Every industry with a slack default now has a teams default too,
+    mirroring slack's exact priority and workflow_focus."""
+    for industry_id in _TEAMS_ADDED_INDUSTRIES:
+        config = get_industry(industry_id)
+        slack = config.system_defaults.get("slack")
+        teams = config.system_defaults.get("teams")
+        assert slack is not None, f"{industry_id}: expected a slack default"
+        assert teams is not None, f"{industry_id}: teams was not added"
+        assert teams.role == slack.role
+        assert teams.priority == slack.priority
+        assert teams.workflow_focus == slack.workflow_focus
+
+
+def test_teams_parity_holds_registry_wide():
+    """No industry has slack without teams, anywhere in the registry —
+    T1-T4 combined must leave the whole registry consistent, not just the
+    industries each task directly touched."""
+    for industry_id, config in INDUSTRY_REGISTRY.items():
+        if "slack" in config.system_defaults:
+            assert "teams" in config.system_defaults, (
+                f"{industry_id}: has slack but not teams"
+            )
+
+
+def test_previously_teams_equipped_industries_unaffected_by_t4():
+    """Industries that already had both slack and teams (T1's three, plus
+    public_sector) are untouched by T4's own edits."""
+    for industry_id in _ALREADY_HAD_TEAMS:
+        config = get_industry(industry_id)
+        slack = config.system_defaults["slack"]
+        teams = config.system_defaults["teams"]
+        assert teams.role == slack.role
+        assert teams.priority == slack.priority
+        assert teams.workflow_focus == slack.workflow_focus
+
+
+def test_technology_jira_elevated_to_co_primary_workflow_system():
+    """Reduce Salesforce-centric anchoring (T4): Jira is now an honest
+    co-primary for technology, not a secondary signal source — Salesforce
+    variants remain primary too (additive, not a removal)."""
+    jira = get_system_defaults("technology", "jira")
+    assert jira is not None
+    assert jira.role == "workflow_system"
+    assert jira.priority == "primary"
+
+
+def test_technology_salesforce_variants_remain_primary_after_jira_elevation():
+    """Elevating Jira must not demote the existing Salesforce anchors — this
+    is diversification, not a Salesforce removal."""
+    for system_id in ("salesforce", "salesforce_sc", "salesforce_rc"):
+        defaults = get_system_defaults("technology", system_id)
+        assert defaults is not None, system_id
+        assert defaults.role == "system_of_record"
+        assert defaults.priority == "primary"
+
+
+def test_technology_pack_hints_include_github_engineering():
+    """The honest-pack-list gap the story names as its own example: technology
+    already anchors github as a connectable default, but the pack that scores
+    its signal was missing from the hint list."""
+    hints = get_pack_hints("technology")
+    assert "github_engineering" in hints
+
+
+def test_technology_pack_hints_do_not_reference_an_unshipped_cloud_ops_pack():
+    """The story also names '1.9 cloud-ops/sec-ops packs' for technology, but
+    no such pack_id exists in pack_config.PACK_REGISTRY in this codebase —
+    anchor-on-shipped means it must not be invented."""
+    from discovery.packs.pack_config import PACK_REGISTRY
+
+    hints = get_pack_hints("technology")
+    for hint in hints:
+        assert hint in PACK_REGISTRY, f"pack_hint '{hint}' has no registered pack"
 
 
 # ---------------------------------------------------------------------------
