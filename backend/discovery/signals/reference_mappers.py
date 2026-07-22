@@ -61,6 +61,7 @@ SOURCE_AWS_EVENTBRIDGE = "aws"          # AWS's own event bus → the aws family
 SOURCE_AWS_CLOUDTRAIL = "aws_cloudtrail"
 SOURCE_AZURE_MONITOR = "azure_monitor"
 SOURCE_AZURE_ACTIVITY = "azure_activity"
+SOURCE_AZURE_SERVICE_HEALTH = "azure_service_health"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -406,6 +407,71 @@ def map_azure_activity_log(payload: Dict[str, Any], *, org_id: str) -> Operation
     )
 
 
+def map_service_health(payload: Dict[str, Any], *, org_id: str) -> OperationalEvent:
+    """Map an Azure Service Health event to an OperationalEvent (MSP-B2 T3).
+
+    Service Health events surface Azure-side service issues, planned maintenance,
+    and health/security advisories for a service in a region. They arrive as
+    Activity-Log-shaped records (``category='ServiceHealth'``) whose
+    service-health specifics live under ``properties``. Mirrors the other Azure
+    mappers: the event is a service-status ``state_change`` (an active service
+    issue is an ``error``), the ``incidentType`` is the provider-native event type,
+    and the affected Azure *service* is the resource the event concerns (Service
+    Health is service/region-scoped, not a single resource id).
+    """
+    props = payload.get("properties")
+    if not isinstance(props, dict):
+        props = {}
+
+    incident_type = str(props.get("incidentType") or props.get("incident_type") or "")
+    stage = str(props.get("stage") or "")
+    status = payload.get("status")
+    status_val = status.get("value") if isinstance(status, dict) else status
+    service = str(props.get("service") or "")
+    region = str(props.get("region") or props.get("impactedRegion") or "")
+    title = str(props.get("title") or "")
+
+    # An active/ongoing service issue is an error; anything resolved / advisory /
+    # maintenance is a state_change (a status transition), classified via the
+    # shared vocabulary by build().
+    active = str(stage or status_val or "").strip().lower() in ("active", "ongoing", "in-progress", "inprogress")
+    is_issue = incident_type.strip().lower() in ("incident", "serviceissue", "service_issue")
+    event_class = "error" if (active and is_issue) else "state_change"
+
+    resource = None
+    if service:
+        resource = ResourceRef(
+            provider="azure",
+            resource_type=normalize_resource_type(service),
+            resource_id=service,
+        )
+
+    return OperationalEvent.build(
+        org_id=org_id,
+        source_system=SOURCE_AZURE_SERVICE_HEALTH,
+        signal_id=(
+            props.get("trackingId")
+            or payload.get("eventDataId")
+            or payload.get("correlationId")
+            or f"azure_service_health:{incident_type or 'event'}"
+        ),
+        observed_at=payload.get("eventTimestamp") or props.get("impactStartTime"),
+        event_type=incident_type or "ServiceHealthEvent",
+        event_class=event_class,
+        severity=payload.get("level"),   # Informational/Warning/... → normalised
+        resource=resource,
+        message=title or (f"{incident_type} {stage}".strip() or None),
+        payload={
+            "incident_type": incident_type,
+            "service": service,
+            "region": region,
+            "stage": stage,
+            "status": status_val,
+            "tracking_id": props.get("trackingId"),
+        },
+    )
+
+
 #: Registry of reference mappers by name — used by the golden-fixture harness and
 #: available to connector implementers as the canonical mapper lookup.
 MAPPERS = {
@@ -414,4 +480,5 @@ MAPPERS = {
     "map_cloudtrail": map_cloudtrail,
     "map_azure_monitor": map_azure_monitor,
     "map_azure_activity_log": map_azure_activity_log,
+    "map_service_health": map_service_health,
 }

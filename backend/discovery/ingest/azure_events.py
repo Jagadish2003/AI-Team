@@ -55,21 +55,71 @@ from .azure_alerts import (
     alert_fired_at,
     alert_id,
     default_alerts_client,
-    filter_new_alerts,
-    max_fired_at,
+)
+from .azure_admin_events import (
+    AzureEventStreamClient,
+    activity_id,
+    activity_subscription_id,
+    activity_timestamp,
+    default_activity_log_client,
+    default_service_health_client,
+    is_administrative,
+    service_health_id,
+    service_health_timestamp,
 )
 from .base import ChangeBasedIngestor, ChangeKind, Checkpoint, DeltaBatch
 
 try:
-    from discovery.signals.reference_mappers import map_azure_monitor
+    from discovery.signals.reference_mappers import (
+        map_azure_activity_log,
+        map_azure_monitor,
+        map_service_health,
+    )
 except ModuleNotFoundError:  # pragma: no cover - import shim
-    from backend.discovery.signals.reference_mappers import map_azure_monitor
+    from backend.discovery.signals.reference_mappers import (
+        map_azure_activity_log,
+        map_azure_monitor,
+        map_service_health,
+    )
 
 logger = logging.getLogger(__name__)
 
-#: The transport provider tag stamped on emitted alert records (not a detector
-#: field — it lives on the record wrapper, alongside account_scope).
+#: The transport provider tag stamped on emitted records (not a detector field —
+#: it lives on the record wrapper, alongside account_scope).
 PROVIDER_AZURE = "azure"
+
+#: The three V1 Azure event streams (scope defence: these three ONLY).
+STREAM_ALERTS = "alerts"
+STREAM_ACTIVITY_LOG = "activity_log"
+STREAM_SERVICE_HEALTH = "service_health"
+V1_STREAMS = (STREAM_ALERTS, STREAM_ACTIVITY_LOG, STREAM_SERVICE_HEALTH)
+
+
+def _filter_new(records: List[Dict[str, Any]], since_iso: Optional[str], ts_of) -> List[Dict[str, Any]]:
+    """Keep only records whose timestamp is strictly newer than ``since_iso``.
+
+    ISO-8601 UTC timestamps compare correctly as strings. ``since_iso`` None/''
+    means first run (take everything). A record with no timestamp is kept (it
+    cannot be proven old) so nothing is silently dropped.
+    """
+    if not since_iso:
+        return list(records)
+    out: List[Dict[str, Any]] = []
+    for r in records:
+        ts = ts_of(r)
+        if not ts or ts > since_iso:
+            out.append(r)
+    return out
+
+
+def _max_ts(records: List[Dict[str, Any]], ts_of, *, floor: Optional[str]) -> Optional[str]:
+    """The maximum timestamp across ``records`` (never below ``floor``)."""
+    best = floor or None
+    for r in records:
+        ts = ts_of(r)
+        if ts and (best is None or ts > best):
+            best = ts
+    return best
 
 
 class AzureAuthError(Exception):
@@ -274,13 +324,58 @@ def encode_checkpoints(checkpoints: Dict[str, str]) -> str:
     return json.dumps({k: v for k, v in checkpoints.items() if v}, sort_keys=True)
 
 
+def decode_stream_checkpoints(value: Any) -> Dict[str, Dict[str, str]]:
+    """Decode the connector's opaque checkpoint into ``{stream: {sub: iso}}``.
+
+    Namespaced per stream (alerts / activity_log / service_health) so the three
+    V1 streams keep INDEPENDENT per-subscription positions in one opaque value.
+    Tolerant: None/blank/unparseable → empty per-stream maps (safe full re-read).
+    Backward tolerant: a legacy flat ``{sub: iso}`` value (T2, alerts-only) is
+    read as the alerts stream's map so an in-flight checkpoint is never lost.
+    """
+    out: Dict[str, Dict[str, str]] = {s: {} for s in V1_STREAMS}
+    if value is None:
+        return out
+    parsed: Any = value
+    if not isinstance(value, dict):
+        text = str(value).strip()
+        if not text:
+            return out
+        try:
+            parsed = json.loads(text)
+        except (TypeError, ValueError):
+            logger.warning("azure_events: unreadable checkpoint %r; starting fresh", value)
+            return out
+    if not isinstance(parsed, dict):
+        return out
+    # Namespaced form: keys are stream names.
+    if any(k in parsed for k in V1_STREAMS):
+        for stream in V1_STREAMS:
+            out[stream] = decode_checkpoints(parsed.get(stream))
+        return out
+    # Legacy flat form (alerts-only, T2): treat the whole map as the alerts stream.
+    out[STREAM_ALERTS] = decode_checkpoints(parsed)
+    return out
+
+
+def encode_stream_checkpoints(checkpoints: Dict[str, Dict[str, str]]) -> str:
+    """Encode ``{stream: {sub: iso}}`` to the connector's opaque checkpoint string."""
+    return json.dumps(
+        {
+            stream: {k: v for k, v in (checkpoints.get(stream) or {}).items() if v}
+            for stream in V1_STREAMS
+        },
+        sort_keys=True,
+    )
+
+
 @dataclass
-class AzureAlertsResult:
-    """Outcome of an alerts ingest across the pinned subscriptions.
+class AzureStreamResult:
+    """Outcome of ingesting one (or all) Azure event stream(s) across subscriptions.
 
     ``records`` are the emitted operational-event records (B0-shaped events wrapped
-    with transport metadata). ``next_checkpoint`` is the opaque per-subscription
-    checkpoint string to persist. ``subscription_status`` reports per-subscription
+    with transport metadata). ``next_checkpoint`` is the opaque checkpoint string to
+    persist. ``subscription_status`` reports per-subscription (or per stream+sub)
     outcome (polled/emitted counts, or an error) so a failure is LOUD and never
     silently thins a run (MSP-B2 §"Failure posture").
     """
@@ -301,6 +396,11 @@ class AzureAlertsResult:
         return not self.failed_subscriptions
 
 
+#: Back-compat alias — T2 named the alerts outcome AzureAlertsResult; the type is
+#: stream-agnostic and now serves all three streams.
+AzureAlertsResult = AzureStreamResult
+
+
 # ── The connector (auth + subscription discipline + alerts polling) ──────────────
 
 
@@ -314,15 +414,17 @@ class AzureEventIngestor(ChangeBasedIngestor):
     and emits ONLY normalised MSP-B0 events.
 
     T1 (AT-648) delivered auth + the pinned-subscription discipline. T2 (AT-649) adds
-    Azure Monitor **Alerts** polling with per-subscription checkpoints, normalised
-    through ``map_azure_monitor`` — Alerts ONLY (scope defence). Activity Log and
-    Service Health are MSP-B2 T3 and extend :meth:`ingest_alerts`'s per-subscription
-    loop with additional streams.
+    Azure Monitor **Alerts** polling; T3 (AT-650) adds Azure **Activity Log**
+    (Administrative events only) and **Service Health** polling. All three V1 streams
+    share ONE per-subscription poll/checkpoint engine (:meth:`_ingest_stream`) and
+    are normalised through their MSP-B0 mappers (``map_azure_monitor`` /
+    ``map_azure_activity_log`` / ``map_service_health``) — those three classes ONLY
+    (scope defence). :meth:`ingest_all` runs the three streams for a full poll.
     """
 
     connector_id = CONNECTOR_ID
-    #: Alerts Management is an append-only fired-instance stream; a native poll has
-    #: no deletion to propagate (matches the bridge's declared limitation).
+    #: The three native streams are append-only event streams; a native poll has no
+    #: deletion to propagate (matches the bridge's declared limitation).
     reports_deletes = False
 
     def __init__(
@@ -333,6 +435,8 @@ class AzureEventIngestor(ChangeBasedIngestor):
         vault_reader: Optional[Callable[[str, str], Any]] = None,
         token_fn: Optional[TokenFn] = None,
         alerts_client: Optional[AzureAlertsClient] = None,
+        activity_log_client: Optional[AzureEventStreamClient] = None,
+        service_health_client: Optional[AzureEventStreamClient] = None,
         raw_store: Optional[Any] = None,
     ) -> None:
         self.org_id = org_id
@@ -340,6 +444,8 @@ class AzureEventIngestor(ChangeBasedIngestor):
         self._vault_reader = vault_reader
         self._token_fn = token_fn
         self._alerts_client = alerts_client
+        self._activity_log_client = activity_log_client
+        self._service_health_client = service_health_client
         self._raw_store = raw_store
 
     # ── subscription access (the pinned-set discipline — AC4) ───────────────────
@@ -388,13 +494,10 @@ class AzureEventIngestor(ChangeBasedIngestor):
         token = await self.acquire_token()
         return list(await arm_lister(token, self.config))
 
-    # ── Alerts polling (MSP-B2 T2 / AT-649) ─────────────────────────────────────
-
-    def _alerts(self) -> AzureAlertsClient:
-        return self._alerts_client or default_alerts_client()
+    # ── record shaping (shared by every stream) ─────────────────────────────────
 
     def _to_record(
-        self, event: Any, subscription_id: str, raw: Dict[str, Any]
+        self, event: Any, subscription_id: str, provider_event_id: str
     ) -> Dict[str, Any]:
         """Wrap a normalised OperationalEvent as a pipeline delta record.
 
@@ -403,52 +506,50 @@ class AzureEventIngestor(ChangeBasedIngestor):
         wrapper carries transport-only metadata — the change kind, provider,
         ``account_scope`` (the subscription, B0's account scope, kept OFF the event
         so no provider-specific detector field is invented), the dedupe id, and the
-        evidence pointer that resolves to the raw payload.
+        evidence pointer that resolves to the raw payload. Identical shape for all
+        three streams; ``event.source_system`` (azure_monitor / azure_activity /
+        azure_service_health) is what distinguishes them.
         """
-        aid = alert_id(raw)
         return {
-            "artifact_id": f"{event.source_system}:{aid}",
+            "artifact_id": f"{event.source_system}:{provider_event_id}",
             "change_kind": ChangeKind.CREATED,
             "source_system": event.source_system,
             "provider": PROVIDER_AZURE,
             "account_scope": subscription_id,
-            "provider_event_id": aid,
+            "provider_event_id": provider_event_id,
             "event": event.to_dict(),
             "evidence_pointer": event.provenance,
         }
 
-    def ingest_alerts(
+    # ── the shared per-subscription stream engine (reused by all 3 streams) ──────
+
+    def _ingest_stream(
         self,
         *,
-        token: Optional[str] = None,
-        checkpoint: Any = None,
-    ) -> AzureAlertsResult:
-        """Poll Azure Monitor Alerts for every PINNED subscription, incrementally.
+        stream: str,
+        token: str,
+        checkpoints: Dict[str, str],
+        fetch,
+        mapper,
+        ts_of,
+        id_of,
+        prefilter=None,
+    ) -> AzureStreamResult:
+        """Poll ONE event stream for every pinned subscription, incrementally.
 
-        Per subscription: fetch alerts, keep only those newer than that
-        subscription's checkpoint (:func:`filter_new_alerts`), normalise each
-        through ``map_azure_monitor`` (T2-AC3), wrap as a delta record carrying the
-        subscription as ``account_scope``, and advance that subscription's
-        checkpoint to the newest alert seen — ONLY after the subscription's alerts
-        are processed successfully (T2-AC2/AC4). Subscriptions are INDEPENDENT: one
-        subscription's auth/throttle/parse failure is caught, reported loudly in
-        ``subscription_status``, and leaves its checkpoint unadvanced while the
-        others continue (MSP-B2 §"Failure posture").
-
-        ``token`` is acquired once from the vaulted service principal when not
-        supplied (one SP serves all subscriptions in both Lighthouse and direct
-        modes). Alerts ONLY — no Activity Log / Service Health / metrics / Log
-        Analytics (scope defence).
+        The single poll → scope-filter → incremental-filter → map → emit →
+        advance-checkpoint loop shared by alerts, activity log, and service health.
+        Per subscription: fetch, drop out-of-scope records (``prefilter``, e.g. the
+        Administrative-only gate — T3-AC4), keep only records newer than the
+        subscription's checkpoint, normalise each through its B0 ``mapper``, wrap as
+        a delta record carrying the subscription as ``account_scope``, and advance
+        that subscription's checkpoint to the newest record SEEN — ONLY after the
+        subscription processed cleanly. Subscriptions are INDEPENDENT: a fetch
+        failure is caught, reported loudly, and leaves that subscription's checkpoint
+        unadvanced while the others continue; a single malformed record is
+        loud-skipped without failing the subscription.
         """
-        arm_token = token or acquire_arm_token_blocking(
-            self.org_id,
-            self.config,
-            vault_reader=self._vault_reader,
-            token_fn=self._token_fn,
-        )
-        client = self._alerts()
         env = self.config.environment
-        checkpoints = decode_checkpoints(checkpoint)
         next_checkpoints: Dict[str, str] = dict(checkpoints)
         records: List[Dict[str, Any]] = []
         status: Dict[str, Dict[str, Any]] = {}
@@ -456,60 +557,164 @@ class AzureEventIngestor(ChangeBasedIngestor):
         for sub in self.authorized_subscriptions():
             since_iso = checkpoints.get(sub)
             try:
-                fetched = client.fetch_alerts(
-                    token=arm_token,
-                    subscription_id=sub,
-                    environment=env,
-                    since_iso=since_iso,
+                fetched = fetch(
+                    token=token, subscription_id=sub, environment=env, since_iso=since_iso
                 )
-                new_alerts = filter_new_alerts(fetched, since_iso)
+                in_scope = [r for r in fetched if prefilter(r)] if prefilter else list(fetched)
+                new_records = _filter_new(in_scope, since_iso, ts_of)
                 emitted = 0
                 skipped = 0
-                for raw in new_alerts:
+                for raw in new_records:
                     try:
-                        event = map_azure_monitor(raw, org_id=self.org_id)
-                    except Exception:  # one malformed alert must not fail the sub
+                        event = mapper(raw, org_id=self.org_id)
+                    except Exception:  # one malformed record must not fail the sub
                         logger.warning(
-                            "azure_events: map_azure_monitor failed for alert %s "
-                            "(sub=%s) — skipped", alert_id(raw), sub, exc_info=True,
+                            "azure_events: %s mapper failed for %s (sub=%s) — skipped",
+                            stream, id_of(raw), sub, exc_info=True,
                         )
                         skipped += 1
                         continue
                     if self._raw_store is not None:
                         try:
                             self._raw_store.put(
-                                self.org_id, event.source_system, alert_id(raw), raw
+                                self.org_id, event.source_system, id_of(raw), raw
                             )
                         except Exception:  # evidence store is best-effort
                             logger.warning(
-                                "azure_events: raw-store put failed for alert %s (sub=%s)",
-                                alert_id(raw), sub, exc_info=True,
+                                "azure_events: raw-store put failed for %s %s (sub=%s)",
+                                stream, id_of(raw), sub, exc_info=True,
                             )
-                    records.append(self._to_record(event, sub, raw))
+                    records.append(self._to_record(event, sub, id_of(raw)))
                     emitted += 1
-                # Advance to the newest alert SEEN (incl. loud-skipped ones, so a
-                # malformed alert is not re-read forever) — only reached when the
-                # fetch itself succeeded.
-                advanced = max_fired_at(new_alerts, floor=since_iso)
+                advanced = _max_ts(new_records, ts_of, floor=since_iso)
                 if advanced:
                     next_checkpoints[sub] = advanced
                 status[sub] = {
                     "status": "ok",
                     "polled": len(fetched),
                     "emitted": emitted,
+                    **({"in_scope": len(in_scope)} if prefilter else {}),
                     **({"skipped": skipped} if skipped else {}),
                 }
             except Exception as exc:  # noqa: BLE001 — isolate per-subscription failure
                 logger.warning(
-                    "azure_events: alerts poll FAILED for subscription %s (org=%s): %s",
-                    sub, self.org_id, exc,
+                    "azure_events: %s poll FAILED for subscription %s (org=%s): %s",
+                    stream, sub, self.org_id, exc,
                 )
                 # Do NOT advance this subscription's checkpoint (no silent thinning).
                 status[sub] = {"status": "error", "error": str(exc)}
 
-        return AzureAlertsResult(
+        return AzureStreamResult(
             records=records,
             next_checkpoint=encode_checkpoints(next_checkpoints),
+            subscription_status=status,
+        )
+
+    def _resolve_token(self, token: Optional[str]) -> str:
+        return token or acquire_arm_token_blocking(
+            self.org_id,
+            self.config,
+            vault_reader=self._vault_reader,
+            token_fn=self._token_fn,
+        )
+
+    # ── Alerts polling (MSP-B2 T2 / AT-649) ─────────────────────────────────────
+
+    def ingest_alerts(self, *, token: Optional[str] = None, checkpoint: Any = None) -> AzureStreamResult:
+        """Poll Azure Monitor Alerts for every pinned subscription, incrementally.
+
+        Alerts ONLY (scope defence); normalised through ``map_azure_monitor``
+        (T2-AC3). See :meth:`_ingest_stream` for the per-subscription checkpoint /
+        failure-isolation semantics.
+        """
+        client = self._alerts_client or default_alerts_client()
+        return self._ingest_stream(
+            stream=STREAM_ALERTS,
+            token=self._resolve_token(token),
+            checkpoints=decode_checkpoints(checkpoint),
+            fetch=client.fetch_alerts,
+            mapper=map_azure_monitor,
+            ts_of=alert_fired_at,
+            id_of=alert_id,
+        )
+
+    # ── Activity Log (administrative) polling (MSP-B2 T3 / AT-650) ───────────────
+
+    def ingest_activity_log(self, *, token: Optional[str] = None, checkpoint: Any = None) -> AzureStreamResult:
+        """Poll Azure Activity Log ADMINISTRATIVE events for every pinned subscription.
+
+        Administrative events ONLY — the ``is_administrative`` prefilter drops every
+        other Activity Log category (ServiceHealth/Security/Policy/…) so out-of-scope
+        classes are never ingested (T3-AC4). Normalised through
+        ``map_azure_activity_log`` (T3-AC1/AC3). Same per-subscription checkpoint and
+        failure-isolation semantics as alerts.
+        """
+        client = self._activity_log_client or default_activity_log_client()
+        return self._ingest_stream(
+            stream=STREAM_ACTIVITY_LOG,
+            token=self._resolve_token(token),
+            checkpoints=decode_checkpoints(checkpoint),
+            fetch=client.fetch,
+            mapper=map_azure_activity_log,
+            ts_of=activity_timestamp,
+            id_of=activity_id,
+            prefilter=is_administrative,
+        )
+
+    # ── Service Health polling (MSP-B2 T3 / AT-650) ─────────────────────────────
+
+    def ingest_service_health(self, *, token: Optional[str] = None, checkpoint: Any = None) -> AzureStreamResult:
+        """Poll Azure Service Health events for every pinned subscription.
+
+        Normalised through ``map_service_health`` (T3-AC2/AC3). Same per-subscription
+        checkpoint and failure-isolation semantics as the other streams.
+        """
+        client = self._service_health_client or default_service_health_client()
+        return self._ingest_stream(
+            stream=STREAM_SERVICE_HEALTH,
+            token=self._resolve_token(token),
+            checkpoints=decode_checkpoints(checkpoint),
+            fetch=client.fetch,
+            mapper=map_service_health,
+            ts_of=service_health_timestamp,
+            id_of=service_health_id,
+        )
+
+    # ── Full poll across all three V1 streams ───────────────────────────────────
+
+    def ingest_all(self, *, token: Optional[str] = None, checkpoint: Any = None) -> AzureStreamResult:
+        """Poll all three V1 streams (alerts + activity log + service health).
+
+        Each stream keeps its OWN per-subscription checkpoint inside the namespaced
+        opaque value (``{stream: {sub: iso}}``). The ARM token is acquired ONCE and
+        shared across streams. Records are concatenated; ``subscription_status`` is
+        keyed ``"{stream}:{sub}"`` so a per-stream, per-subscription failure is
+        individually visible (no silent thinning).
+        """
+        arm_token = self._resolve_token(token)
+        ns = decode_stream_checkpoints(checkpoint)
+
+        alerts = self.ingest_alerts(token=arm_token, checkpoint=ns[STREAM_ALERTS])
+        activity = self.ingest_activity_log(token=arm_token, checkpoint=ns[STREAM_ACTIVITY_LOG])
+        health = self.ingest_service_health(token=arm_token, checkpoint=ns[STREAM_SERVICE_HEALTH])
+
+        next_ns = {
+            STREAM_ALERTS: decode_checkpoints(alerts.next_checkpoint),
+            STREAM_ACTIVITY_LOG: decode_checkpoints(activity.next_checkpoint),
+            STREAM_SERVICE_HEALTH: decode_checkpoints(health.next_checkpoint),
+        }
+        status: Dict[str, Dict[str, Any]] = {}
+        for stream, res in (
+            (STREAM_ALERTS, alerts),
+            (STREAM_ACTIVITY_LOG, activity),
+            (STREAM_SERVICE_HEALTH, health),
+        ):
+            for sub, st in res.subscription_status.items():
+                status[f"{stream}:{sub}"] = st
+
+        return AzureStreamResult(
+            records=alerts.records + activity.records + health.records,
+            next_checkpoint=encode_stream_checkpoints(next_ns),
             subscription_status=status,
         )
 
@@ -518,21 +723,21 @@ class AzureEventIngestor(ChangeBasedIngestor):
     def ingest_changes(
         self, org_id: str, since: Optional[Checkpoint] = None
     ) -> Iterator[DeltaBatch]:
-        """Yield one delta batch of normalised Azure alert events since ``since``.
+        """Yield one delta batch of ALL normalised Azure events since ``since``.
 
-        Adapts :meth:`ingest_alerts` to the change-based pipeline: the opaque
-        checkpoint carries the per-subscription map. A subscription failure is
-        isolated inside ``ingest_alerts`` (loud in ``subscription_status``); the
-        batch still advances the checkpoints of the subscriptions that succeeded,
-        so a failing subscription never blocks or thins the others. Emitted here as
-        a single complete batch (alert volume per poll is bounded).
+        Adapts :meth:`ingest_all` to the change-based pipeline: the opaque checkpoint
+        carries the namespaced per-stream, per-subscription map. A per-stream /
+        per-subscription failure is isolated inside ``ingest_all`` (loud in
+        ``subscription_status``); the batch still advances the positions that
+        succeeded, so a failing subscription never blocks or thins the others.
+        Emitted as one complete batch (per-poll volume is bounded).
         """
         if org_id and org_id != self.org_id:
             raise ValueError(
                 f"ingest_changes org_id {org_id!r} does not match this ingestor's "
                 f"org {self.org_id!r}"
             )
-        result = self.ingest_alerts(checkpoint=since.value if since else None)
+        result = self.ingest_all(checkpoint=since.value if since else None)
         yield DeltaBatch(
             records=result.records,
             next_checkpoint=result.next_checkpoint,
@@ -547,6 +752,8 @@ def build_ingestor(
     vault_reader: Optional[Callable[[str, str], Any]] = None,
     token_fn: Optional[TokenFn] = None,
     alerts_client: Optional[AzureAlertsClient] = None,
+    activity_log_client: Optional[AzureEventStreamClient] = None,
+    service_health_client: Optional[AzureEventStreamClient] = None,
     raw_store: Optional[Any] = None,
 ) -> Optional[AzureEventIngestor]:
     """Build an :class:`AzureEventIngestor` for ``org_id`` from configuration.
@@ -564,5 +771,7 @@ def build_ingestor(
         vault_reader=vault_reader,
         token_fn=token_fn,
         alerts_client=alerts_client,
+        activity_log_client=activity_log_client,
+        service_health_client=service_health_client,
         raw_store=raw_store,
     )
