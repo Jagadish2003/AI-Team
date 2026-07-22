@@ -259,6 +259,25 @@ the internal deployment URL. No inbound firewall rule is required.
 
 ---
 
+## MSP Connector Partner Security Artifacts
+
+Cloud connectors that read a customer's estate ship a **least-privilege, read-only**
+access artifact a customer security team reviews before granting access — the same
+posture per provider.
+
+- **Azure Event Connector (MSP-B2)** — the minimal, read-only Azure custom RBAC role
+  (Alerts + Administrative Activity Log + Service Health reads only; no write/delete/
+  management/metrics/Log Analytics/Defender/Sentinel). Works for both Azure Lighthouse
+  delegated access and direct per-subscription assignment; identical in AzureCloud and
+  AzureUSGovernment.
+
+  **→ See [`deployment/AZURE_EVENT_CONNECTOR_RBAC.md`](AZURE_EVENT_CONNECTOR_RBAC.md)**
+  for the permission-by-capability mapping, exclusions, `az` deployment steps,
+  Lighthouse/direct guidance, and the security-review checklist. The importable role
+  definition is [`deployment/azure_event_connector_role.json`](azure_event_connector_role.json).
+
+---
+
 ## Login Rate Limiting (AUTH-1)
 
 AUTH-1 adds a `login_attempts` table (created by Alembic migration `0004`) that backs

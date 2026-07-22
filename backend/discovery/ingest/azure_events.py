@@ -1,0 +1,1040 @@
+"""
+azure_events.py — MSP-B2 T1 (AT-648): Azure Event Connector authentication.
+
+The Azure half of the MSP-B1/B2 matched pair. THIS task (AT-648) delivers the
+connector's authentication + subscription-access foundation; the event polling and
+normalisation (Alerts Management, Activity Log, Service Health → MSP-B0 mappers)
+are T2/T3 and are left as clearly-marked seams below.
+
+Authentication flow (MSP-B2 §1, reusing the EXISTING Azure AD plumbing — a second
+auth implementation would be a bug):
+
+    per-org vault (service principal: client_id + secret + tenant)
+      ↓
+    Azure AD (Microsoft identity) client-credentials grant
+      ↓  (app.auth.oauth.request_client_credentials_token — the SAME token
+      ↓   exchange the Teams/SharePoint/Graph connectors use)
+    ARM access token (scope = {resource_manager}/.default, environment-aware)
+      ↓
+    Azure Resource Manager APIs (polled outbound-only in T2/T3)
+
+Access modes (both supported — AC3):
+  * Lighthouse — one service principal in SMX's tenant, delegated Reader on many
+    customer subscriptions. ARM authorises the cross-tenant reads; the token is
+    still minted against the SP's HOME tenant.
+  * Direct — a per-tenant service principal (org == customer). Same token flow.
+
+Subscription discipline (AC4 / MSP-B2 AC7): the connector reads ONLY the pinned,
+Owner-approved subscription set in the config. Lighthouse discovery may enumerate
+delegated subscriptions, but a newly delegated one is NEVER auto-ingested — it is a
+candidate for Owner approval until added to the pinned set. ``authorized_subscriptions``
+is always the pinned set, regardless of what discovery returns.
+
+Security (MSP-B2 §1): the service principal secret lives ONLY in the per-org vault
+(``app.auth.vault`` static-credential machinery, Fernet-encrypted at rest). It is
+never in config, never logged, and used only for the outbound token exchange. Only
+Reader-level RBAC is required on the subscriptions (the minimal role definition is
+the T5 partner-security artifact).
+"""
+from __future__ import annotations
+
+import asyncio
+import json
+import logging
+import os
+import time
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from typing import Any, Awaitable, Callable, Dict, Iterator, List, Optional
+
+from .azure_events_config import (
+    CONNECTOR_ID,
+    AzureEventConfig,
+    AzureEventConfigError,
+    load_azure_event_config,
+)
+from .azure_alerts import (
+    AzureAlertsClient,
+    alert_fired_at,
+    alert_id,
+    default_alerts_client,
+)
+from .azure_admin_events import (
+    AzureEventStreamClient,
+    activity_id,
+    activity_subscription_id,
+    activity_timestamp,
+    default_activity_log_client,
+    default_service_health_client,
+    is_administrative,
+    service_health_id,
+    service_health_timestamp,
+)
+from .base import ChangeBasedIngestor, ChangeKind, Checkpoint, DeltaBatch
+
+try:
+    from discovery.signals.reference_mappers import (
+        map_azure_activity_log,
+        map_azure_monitor,
+        map_service_health,
+    )
+except ModuleNotFoundError:  # pragma: no cover - import shim
+    from backend.discovery.signals.reference_mappers import (
+        map_azure_activity_log,
+        map_azure_monitor,
+        map_service_health,
+    )
+
+logger = logging.getLogger(__name__)
+
+#: The transport provider tag stamped on emitted records (not a detector field —
+#: it lives on the record wrapper, alongside account_scope).
+PROVIDER_AZURE = "azure"
+
+#: The three V1 Azure event streams (scope defence: these three ONLY).
+STREAM_ALERTS = "alerts"
+STREAM_ACTIVITY_LOG = "activity_log"
+STREAM_SERVICE_HEALTH = "service_health"
+V1_STREAMS = (STREAM_ALERTS, STREAM_ACTIVITY_LOG, STREAM_SERVICE_HEALTH)
+
+#: Stream key → the B0 source_system its mapper stamps (for health reporting).
+_STREAM_SOURCE_SYSTEM = {
+    STREAM_ALERTS: "azure_monitor",
+    STREAM_ACTIVITY_LOG: "azure_activity",
+    STREAM_SERVICE_HEALTH: "azure_service_health",
+}
+
+
+def _filter_new(records: List[Dict[str, Any]], since_iso: Optional[str], ts_of) -> List[Dict[str, Any]]:
+    """Keep only records whose timestamp is strictly newer than ``since_iso``.
+
+    ISO-8601 UTC timestamps compare correctly as strings. ``since_iso`` None/''
+    means first run (take everything). A record with no timestamp is kept (it
+    cannot be proven old) so nothing is silently dropped.
+    """
+    if not since_iso:
+        return list(records)
+    out: List[Dict[str, Any]] = []
+    for r in records:
+        ts = ts_of(r)
+        if not ts or ts > since_iso:
+            out.append(r)
+    return out
+
+
+def _max_ts(records: List[Dict[str, Any]], ts_of, *, floor: Optional[str]) -> Optional[str]:
+    """The maximum timestamp across ``records`` (never below ``floor``)."""
+    best = floor or None
+    for r in records:
+        ts = ts_of(r)
+        if ts and (best is None or ts > best):
+            best = ts
+    return best
+
+
+# ── Failure classification + retry/backoff (MSP-B2 T6 / AT-653) ──────────────────
+# Per-subscription resilience: classify a poll failure, retry ONLY transient classes
+# with bounded exponential backoff, and report every failure loudly into run health.
+# Never retry a non-transient failure (bad credentials / permission / not-found /
+# malformed body); never silently drop events or advance a failed checkpoint.
+
+# Failure categories (also the run-health `category` vocabulary).
+CATEGORY_AUTHENTICATION = "authentication"     # bad/expired SP credentials (401 on token)
+CATEGORY_AUTHORIZATION = "authorization"       # RBAC/consent denied (403)
+CATEGORY_NOT_FOUND = "not_found"               # invalid/absent subscription (404)
+CATEGORY_THROTTLED = "throttled"               # rate limited (429)
+CATEGORY_SERVER_ERROR = "server_error"         # transient Azure 5xx
+CATEGORY_TIMEOUT = "timeout"                    # request timed out
+CATEGORY_NETWORK = "network"                    # connection/network failure
+CATEGORY_MALFORMED = "malformed_response"       # unparseable/invalid response body
+CATEGORY_CLIENT_ERROR = "client_error"          # other non-retryable 4xx
+CATEGORY_UNEXPECTED = "unexpected"              # anything unclassified (fail safe: no retry)
+
+#: The categories that are TRANSIENT — eligible for bounded backoff retry. Every
+#: other category is permanent (operator action needed) and is never retried.
+_RETRYABLE_CATEGORIES = frozenset({
+    CATEGORY_THROTTLED, CATEGORY_SERVER_ERROR, CATEGORY_TIMEOUT, CATEGORY_NETWORK,
+})
+
+_TRANSIENT_5XX = frozenset({500, 502, 503, 504})
+
+# Bounded retry defaults (env-overridable, same convention as other connectors).
+DEFAULT_MAX_RETRIES = int(os.getenv("AZURE_EVENT_MAX_RETRIES", "3") or "3")
+DEFAULT_BACKOFF_BASE_SECONDS = float(os.getenv("AZURE_EVENT_BACKOFF_BASE_SECONDS", "0.5") or "0.5")
+DEFAULT_BACKOFF_MAX_SECONDS = float(os.getenv("AZURE_EVENT_BACKOFF_MAX_SECONDS", "8") or "8")
+
+
+def _status_code_of(exc: BaseException) -> Optional[int]:
+    """Best-effort HTTP status extraction (works for httpx errors and duck-typed ones)."""
+    code = getattr(exc, "status_code", None)
+    if isinstance(code, int):
+        return code
+    resp = getattr(exc, "response", None)
+    code = getattr(resp, "status_code", None)
+    return code if isinstance(code, int) else None
+
+
+def classify_failure(exc: BaseException) -> str:
+    """Classify a poll/auth failure into a run-health :data:`CATEGORY_*`.
+
+    Duck-typed so it needs no httpx import: an HTTP status (429/5xx/401/403/404),
+    then timeout/network by exception-type name, then auth/malformed by type, else
+    ``unexpected`` (fail-safe → never retried). Deterministic, side-effect-free.
+    """
+    if isinstance(exc, AzureAuthError):
+        return CATEGORY_AUTHENTICATION
+
+    status = _status_code_of(exc)
+    if status is not None:
+        if status == 429:
+            return CATEGORY_THROTTLED
+        if status in _TRANSIENT_5XX or (500 <= status <= 599):
+            return CATEGORY_SERVER_ERROR
+        if status == 401:
+            return CATEGORY_AUTHENTICATION
+        if status == 403:
+            return CATEGORY_AUTHORIZATION
+        if status == 404:
+            return CATEGORY_NOT_FOUND
+        if 400 <= status <= 499:
+            return CATEGORY_CLIENT_ERROR
+
+    name = type(exc).__name__.lower()
+    if "timeout" in name:
+        return CATEGORY_TIMEOUT
+    if any(k in name for k in ("connect", "network", "readerror", "requesterror", "connection")):
+        return CATEGORY_NETWORK
+    if "oautherror" in name:
+        return CATEGORY_AUTHENTICATION
+    if isinstance(exc, (ValueError, KeyError, TypeError)):
+        return CATEGORY_MALFORMED
+    return CATEGORY_UNEXPECTED
+
+
+def is_retryable(category: str) -> bool:
+    """True when a failure category is transient (eligible for bounded retry)."""
+    return category in _RETRYABLE_CATEGORIES
+
+
+def _recoverable(category: str) -> bool:
+    """Whether a LATER run may recover unaided (transient) vs needs operator action."""
+    return category in _RETRYABLE_CATEGORIES
+
+
+@dataclass
+class RetryPolicy:
+    """Bounded exponential-backoff retry policy (deterministic)."""
+    max_retries: int = DEFAULT_MAX_RETRIES
+    base_seconds: float = DEFAULT_BACKOFF_BASE_SECONDS
+    max_seconds: float = DEFAULT_BACKOFF_MAX_SECONDS
+
+    def backoff_seconds(self, attempt: int) -> float:
+        """Backoff before the Nth retry (attempt = 1 is the first retry)."""
+        delay = self.base_seconds * (2 ** max(0, attempt - 1))
+        return min(delay, self.max_seconds)
+
+
+class AzureSubscriptionError(Exception):
+    """A subscription poll failed after classification + any retries.
+
+    Carries the run-health facts (category, retryable, attempts) so the per-stream
+    loop records a loud, structured failure without re-inspecting the cause.
+    """
+
+    def __init__(self, category: str, *, retryable: bool, attempts: int, cause: BaseException) -> None:
+        super().__init__(f"{category} after {attempts} attempt(s): {cause}")
+        self.category = category
+        self.retryable = retryable
+        self.attempts = attempts
+        self.cause = cause
+
+
+class AzureAuthError(Exception):
+    """Raised when Azure authentication cannot proceed (no SP, or token failure)."""
+
+
+# ── Service principal (vault-held) ───────────────────────────────────────────────
+
+
+@dataclass(frozen=True)
+class AzureServicePrincipal:
+    """An Azure AD service principal resolved from the per-org vault.
+
+    ``client_secret`` is masked in ``repr`` so it can never leak into a log line
+    or traceback (the same hygiene as the vault's StaticCredentialRecord).
+    """
+    client_id: str
+    client_secret: str
+    tenant_id: str
+
+    def __repr__(self) -> str:  # never expose the secret
+        return (
+            f"AzureServicePrincipal(client_id={self.client_id!r}, "
+            f"tenant_id={self.tenant_id!r}, client_secret=***)"
+        )
+
+    def is_complete(self) -> bool:
+        return bool(self.client_id and self.client_secret and self.tenant_id)
+
+
+#: Default vault reader — the existing static-credential machinery. Injectable so
+#: tests exercise resolution without a live vault/DB. The service principal reuses
+#: the static-credential record shape: username=client_id, secret=client_secret,
+#: base_url=tenant_id (all Fernet-encrypted / non-secret exactly as that record
+#: defines) — no new vault table or encryption path is introduced.
+def _default_vault_reader(org_id: str, connector_id: str):
+    from app.auth.vault import get_static_credential  # local import: heavy module
+    return get_static_credential(org_id, connector_id)
+
+
+def get_service_principal(
+    org_id: str,
+    *,
+    credential_ref: str = CONNECTOR_ID,
+    vault_reader: Optional[Callable[[str, str], Any]] = None,
+) -> Optional[AzureServicePrincipal]:
+    """Resolve the org's Azure service principal from the vault, or None if unset.
+
+    Reuses the vault's static-credential read path — the credential is NEVER read
+    from config or the environment (MSP-B2 §1). Returns None when no SP is stored
+    for the org (a not-connected connector), so the caller can degrade rather than
+    crash. The secret is handed to the token exchange only; it is never logged.
+    """
+    reader = vault_reader or _default_vault_reader
+    record = reader(org_id, credential_ref)
+    if record is None:
+        return None
+    return AzureServicePrincipal(
+        client_id=str(getattr(record, "username", "") or ""),
+        client_secret=str(getattr(record, "secret", "") or ""),
+        tenant_id=str(getattr(record, "base_url", "") or ""),
+    )
+
+
+def store_service_principal(
+    org_id: str,
+    *,
+    client_id: str,
+    client_secret: str,
+    tenant_id: str,
+    credential_ref: str = CONNECTOR_ID,
+) -> None:
+    """Store (rotate) the org's Azure service principal in the vault.
+
+    Thin wrapper over the existing ``vault.store_static_credential`` so the
+    field mapping (username=client_id, secret=client_secret, base_url=tenant_id)
+    lives in ONE place and store/read agree. The secret is Fernet-encrypted by the
+    vault and never logged here.
+    """
+    if not client_id or not tenant_id:
+        raise AzureAuthError("service principal requires a client_id and tenant_id")
+    from app.auth.vault import store_static_credential
+    store_static_credential(
+        org_id,
+        credential_ref,
+        username=client_id,
+        secret=client_secret,
+        base_url=tenant_id,
+    )
+
+
+# ── ARM token acquisition (reuses the shared client-credentials exchange) ────────
+
+#: A token function: (token_url, client_id, client_secret, scope) -> token dict.
+#: Defaults to the shared OAuth client-credentials exchange; injectable for tests.
+TokenFn = Callable[..., Awaitable[Dict[str, Any]]]
+
+
+async def _default_token_fn(
+    *, token_url: str, client_id: str, client_secret: str, scope: str
+) -> Dict[str, Any]:
+    from app.auth.oauth import request_client_credentials_token  # local import
+    return await request_client_credentials_token(
+        connector_id=CONNECTOR_ID,
+        token_url=token_url,
+        client_id=client_id,
+        client_secret=client_secret,
+        scopes=[scope],
+    )
+
+
+async def acquire_arm_token(
+    org_id: str,
+    config: AzureEventConfig,
+    *,
+    service_principal: Optional[AzureServicePrincipal] = None,
+    vault_reader: Optional[Callable[[str, str], Any]] = None,
+    token_fn: Optional[TokenFn] = None,
+) -> str:
+    """Acquire an ARM-scoped access token for ``org_id`` (client-credentials grant).
+
+    Resolves the service principal from the vault (unless one is supplied), builds
+    the environment-aware AAD token endpoint and ARM ``.default`` scope, and mints
+    the token via the SHARED OAuth client-credentials exchange. Works identically
+    for Lighthouse and direct modes — the token is minted against the SP's home
+    tenant either way; ARM authorises the (possibly cross-tenant) subscription
+    reads. Raises :class:`AzureAuthError` when no SP is configured or the exchange
+    yields no access token. The secret is never logged.
+    """
+    sp = service_principal or get_service_principal(
+        org_id, credential_ref=config.credential_ref, vault_reader=vault_reader
+    )
+    if sp is None or not sp.is_complete():
+        raise AzureAuthError(
+            f"no complete Azure service principal in the vault for org {org_id!r} "
+            f"(credential_ref={config.credential_ref!r}); connect the connector first"
+        )
+
+    env = config.environment
+    fn = token_fn or _default_token_fn
+    token = await fn(
+        token_url=env.token_endpoint(sp.tenant_id),
+        client_id=sp.client_id,
+        client_secret=sp.client_secret,
+        scope=env.arm_scope,
+    )
+    access_token = str((token or {}).get("access_token") or "").strip()
+    if not access_token:
+        raise AzureAuthError(
+            f"Azure ARM token exchange for org {org_id!r} returned no access_token"
+        )
+    logger.info(
+        "azure_events: acquired ARM token for org=%s env=%s mode=%s tenant=%s "
+        "(subscriptions pinned=%d)",
+        org_id, env.name, config.mode, sp.tenant_id, len(config.subscriptions),
+    )
+    return access_token
+
+
+def acquire_arm_token_blocking(org_id: str, config: AzureEventConfig, **kwargs) -> str:
+    """Synchronous convenience wrapper around :func:`acquire_arm_token`.
+
+    For CLI / standalone use where there is no running event loop. Inside async
+    code, await :func:`acquire_arm_token` directly.
+    """
+    return asyncio.run(acquire_arm_token(org_id, config, **kwargs))
+
+
+# ── Per-subscription checkpoints (opaque to the runner) ──────────────────────────
+# Each subscription polls independently and keeps its OWN last-seen alert time, so
+# a re-run re-reads nothing (T2-AC2/AC4) and one subscription's position never
+# affects another's. The whole per-subscription map is encoded as the single opaque
+# Checkpoint.value the change-based runner persists (a JSON object keyed by
+# subscription id → last firedDateTime ISO string).
+
+
+def decode_checkpoints(value: Any) -> Dict[str, str]:
+    """Decode the opaque checkpoint value into a {subscription_id: last_iso} map.
+
+    Tolerant: None/blank/unparseable → ``{}`` (a safe full re-read), never a crash.
+    Accepts a dict (already decoded) or a JSON string (as persisted).
+    """
+    if value is None:
+        return {}
+    if isinstance(value, dict):
+        return {str(k): str(v) for k, v in value.items() if v}
+    text = str(value).strip()
+    if not text:
+        return {}
+    try:
+        parsed = json.loads(text)
+    except (TypeError, ValueError):
+        logger.warning("azure_events: unreadable checkpoint %r; starting fresh", value)
+        return {}
+    if not isinstance(parsed, dict):
+        return {}
+    return {str(k): str(v) for k, v in parsed.items() if v}
+
+
+def encode_checkpoints(checkpoints: Dict[str, str]) -> str:
+    """Encode a {subscription_id: last_iso} map to the opaque checkpoint string."""
+    return json.dumps({k: v for k, v in checkpoints.items() if v}, sort_keys=True)
+
+
+def decode_stream_checkpoints(value: Any) -> Dict[str, Dict[str, str]]:
+    """Decode the connector's opaque checkpoint into ``{stream: {sub: iso}}``.
+
+    Namespaced per stream (alerts / activity_log / service_health) so the three
+    V1 streams keep INDEPENDENT per-subscription positions in one opaque value.
+    Tolerant: None/blank/unparseable → empty per-stream maps (safe full re-read).
+    Backward tolerant: a legacy flat ``{sub: iso}`` value (T2, alerts-only) is
+    read as the alerts stream's map so an in-flight checkpoint is never lost.
+    """
+    out: Dict[str, Dict[str, str]] = {s: {} for s in V1_STREAMS}
+    if value is None:
+        return out
+    parsed: Any = value
+    if not isinstance(value, dict):
+        text = str(value).strip()
+        if not text:
+            return out
+        try:
+            parsed = json.loads(text)
+        except (TypeError, ValueError):
+            logger.warning("azure_events: unreadable checkpoint %r; starting fresh", value)
+            return out
+    if not isinstance(parsed, dict):
+        return out
+    # Namespaced form: keys are stream names.
+    if any(k in parsed for k in V1_STREAMS):
+        for stream in V1_STREAMS:
+            out[stream] = decode_checkpoints(parsed.get(stream))
+        return out
+    # Legacy flat form (alerts-only, T2): treat the whole map as the alerts stream.
+    out[STREAM_ALERTS] = decode_checkpoints(parsed)
+    return out
+
+
+def encode_stream_checkpoints(checkpoints: Dict[str, Dict[str, str]]) -> str:
+    """Encode ``{stream: {sub: iso}}`` to the connector's opaque checkpoint string."""
+    return json.dumps(
+        {
+            stream: {k: v for k, v in (checkpoints.get(stream) or {}).items() if v}
+            for stream in V1_STREAMS
+        },
+        sort_keys=True,
+    )
+
+
+@dataclass
+class AzureStreamResult:
+    """Outcome of ingesting one (or all) Azure event stream(s) across subscriptions.
+
+    ``records`` are the emitted operational-event records (B0-shaped events wrapped
+    with transport metadata). ``next_checkpoint`` is the opaque checkpoint string to
+    persist. ``subscription_status`` reports per-subscription (or per stream+sub)
+    outcome (polled/emitted counts, or an error) so a failure is LOUD and never
+    silently thins a run (MSP-B2 §"Failure posture").
+    """
+    records: List[Dict[str, Any]] = field(default_factory=list)
+    next_checkpoint: str = "{}"
+    subscription_status: Dict[str, Dict[str, Any]] = field(default_factory=dict)
+
+    @property
+    def emitted_count(self) -> int:
+        return len(self.records)
+
+    @property
+    def failed_subscriptions(self) -> List[str]:
+        return [s for s, st in self.subscription_status.items() if st.get("status") == "error"]
+
+    @property
+    def all_ok(self) -> bool:
+        return not self.failed_subscriptions
+
+
+#: Back-compat alias — T2 named the alerts outcome AzureAlertsResult; the type is
+#: stream-agnostic and now serves all three streams.
+AzureAlertsResult = AzureStreamResult
+
+
+# ── The connector (auth + subscription discipline + alerts polling) ──────────────
+
+
+class AzureEventIngestor(ChangeBasedIngestor):
+    """Azure Event Connector — auth, subscription discipline, and alerts polling.
+
+    Reuses the existing change-based ingestion abstraction (:class:`ChangeBasedIngestor`)
+    — the same one the MSP-B8 bridge uses — so this connector plugs into the current
+    pipeline and migrates cleanly onto the MSP-B1 shared cloud-event skeleton when it
+    lands, with minimal change. Transport-only: it invents NO detector-visible fields
+    and emits ONLY normalised MSP-B0 events.
+
+    T1 (AT-648) delivered auth + the pinned-subscription discipline. T2 (AT-649) adds
+    Azure Monitor **Alerts** polling; T3 (AT-650) adds Azure **Activity Log**
+    (Administrative events only) and **Service Health** polling. All three V1 streams
+    share ONE per-subscription poll/checkpoint engine (:meth:`_ingest_stream`) and
+    are normalised through their MSP-B0 mappers (``map_azure_monitor`` /
+    ``map_azure_activity_log`` / ``map_service_health``) — those three classes ONLY
+    (scope defence). :meth:`ingest_all` runs the three streams for a full poll.
+    """
+
+    connector_id = CONNECTOR_ID
+    #: The three native streams are append-only event streams; a native poll has no
+    #: deletion to propagate (matches the bridge's declared limitation).
+    reports_deletes = False
+
+    def __init__(
+        self,
+        org_id: str,
+        config: AzureEventConfig,
+        *,
+        vault_reader: Optional[Callable[[str, str], Any]] = None,
+        token_fn: Optional[TokenFn] = None,
+        alerts_client: Optional[AzureAlertsClient] = None,
+        activity_log_client: Optional[AzureEventStreamClient] = None,
+        service_health_client: Optional[AzureEventStreamClient] = None,
+        raw_store: Optional[Any] = None,
+        retry_policy: Optional[RetryPolicy] = None,
+        sleep_fn: Optional[Callable[[float], None]] = None,
+    ) -> None:
+        self.org_id = org_id
+        self.config = config
+        self._vault_reader = vault_reader
+        self._token_fn = token_fn
+        self._alerts_client = alerts_client
+        self._activity_log_client = activity_log_client
+        self._service_health_client = service_health_client
+        self._raw_store = raw_store
+        # T6: bounded retry/backoff for transient per-subscription failures, and an
+        # injectable sleep so tests exercise backoff without real delay.
+        self._retry = retry_policy or RetryPolicy()
+        self._sleep = sleep_fn or time.sleep
+
+    # ── subscription access (the pinned-set discipline — AC4) ───────────────────
+
+    def authorized_subscriptions(self) -> List[str]:
+        """The subscriptions this connector will read — the pinned set ONLY.
+
+        This is the single source of truth for "what gets ingested". It is the
+        Owner-approved pinned set and never includes an unpinned delegated
+        subscription, so the connected estate can never grow without an explicit
+        config change (AC4 / MSP-B2 AC7).
+        """
+        return self.config.pinned_subscriptions
+
+    def pending_delegated_subscriptions(self, discovered: List[str]) -> List[str]:
+        """Delegated subscriptions discovery found that are NOT yet pinned.
+
+        Surfaced for Owner review / run-health visibility — reported, never
+        ingested. The "never silently growing" report (AC7).
+        """
+        return self.config.newly_delegated(discovered)
+
+    async def acquire_token(self) -> str:
+        """Acquire an ARM-scoped access token using the org's vaulted SP."""
+        return await acquire_arm_token(
+            self.org_id,
+            self.config,
+            vault_reader=self._vault_reader,
+            token_fn=self._token_fn,
+        )
+
+    async def discover_delegated_subscriptions(
+        self,
+        *,
+        arm_lister: Optional[Callable[[str, AzureEventConfig], Awaitable[List[str]]]] = None,
+    ) -> List[str]:
+        """Enumerate subscriptions the token can see (Lighthouse discovery).
+
+        DISCOVERY ONLY — the result is filtered to the pinned set before any read
+        and the unpinned remainder is reported for approval, never ingested
+        (AC4/AC7). ``arm_lister`` is injectable; the live ARM ``/subscriptions``
+        call is T2 wiring. Returns [] when no lister is available (T1).
+        """
+        if arm_lister is None:
+            return []
+        token = await self.acquire_token()
+        return list(await arm_lister(token, self.config))
+
+    # ── record shaping (shared by every stream) ─────────────────────────────────
+
+    def _to_record(
+        self, event: Any, subscription_id: str, provider_event_id: str
+    ) -> Dict[str, Any]:
+        """Wrap a normalised OperationalEvent as a pipeline delta record.
+
+        The detector-visible payload is ``event`` (the provider-agnostic MSP-B0
+        event, IDENTICAL in shape to what any other cloud connector emits). The
+        wrapper carries transport-only metadata — the change kind, provider,
+        ``account_scope`` (the subscription, B0's account scope, kept OFF the event
+        so no provider-specific detector field is invented), the dedupe id, and the
+        evidence pointer that resolves to the raw payload. Identical shape for all
+        three streams; ``event.source_system`` (azure_monitor / azure_activity /
+        azure_service_health) is what distinguishes them.
+        """
+        return {
+            "artifact_id": f"{event.source_system}:{provider_event_id}",
+            "change_kind": ChangeKind.CREATED,
+            "source_system": event.source_system,
+            "provider": PROVIDER_AZURE,
+            "account_scope": subscription_id,
+            "provider_event_id": provider_event_id,
+            "event": event.to_dict(),
+            "evidence_pointer": event.provenance,
+        }
+
+    # ── the shared per-subscription stream engine (reused by all 3 streams) ──────
+
+    def _ingest_stream(
+        self,
+        *,
+        stream: str,
+        token: str,
+        checkpoints: Dict[str, str],
+        fetch,
+        mapper,
+        ts_of,
+        id_of,
+        prefilter=None,
+    ) -> AzureStreamResult:
+        """Poll ONE event stream for every pinned subscription, incrementally.
+
+        The single poll → scope-filter → incremental-filter → map → emit →
+        advance-checkpoint loop shared by alerts, activity log, and service health.
+        Per subscription: fetch, drop out-of-scope records (``prefilter``, e.g. the
+        Administrative-only gate — T3-AC4), keep only records newer than the
+        subscription's checkpoint, normalise each through its B0 ``mapper``, wrap as
+        a delta record carrying the subscription as ``account_scope``, and advance
+        that subscription's checkpoint to the newest record SEEN — ONLY after the
+        subscription processed cleanly. Subscriptions are INDEPENDENT: a fetch
+        failure is caught, reported loudly, and leaves that subscription's checkpoint
+        unadvanced while the others continue; a single malformed record is
+        loud-skipped without failing the subscription.
+        """
+        env = self.config.environment
+        next_checkpoints: Dict[str, str] = dict(checkpoints)
+        records: List[Dict[str, Any]] = []
+        status: Dict[str, Dict[str, Any]] = {}
+
+        for sub in self.authorized_subscriptions():
+            since_iso = checkpoints.get(sub)
+            try:
+                fetched, attempts = self._fetch_with_retry(
+                    fetch, stream=stream, token=token, subscription_id=sub,
+                    environment=env, since_iso=since_iso,
+                )
+                in_scope = [r for r in fetched if prefilter(r)] if prefilter else list(fetched)
+                new_records = _filter_new(in_scope, since_iso, ts_of)
+                emitted = 0
+                skipped = 0
+                for raw in new_records:
+                    try:
+                        event = mapper(raw, org_id=self.org_id)
+                    except Exception:  # one malformed record must not fail the sub
+                        logger.warning(
+                            "azure_events: %s mapper failed for %s (sub=%s) — skipped",
+                            stream, id_of(raw), sub, exc_info=True,
+                        )
+                        skipped += 1
+                        continue
+                    if self._raw_store is not None:
+                        try:
+                            self._raw_store.put(
+                                self.org_id, event.source_system, id_of(raw), raw
+                            )
+                        except Exception:  # evidence store is best-effort
+                            logger.warning(
+                                "azure_events: raw-store put failed for %s %s (sub=%s)",
+                                stream, id_of(raw), sub, exc_info=True,
+                            )
+                    records.append(self._to_record(event, sub, id_of(raw)))
+                    emitted += 1
+                advanced = _max_ts(new_records, ts_of, floor=since_iso)
+                if advanced:
+                    next_checkpoints[sub] = advanced
+                status[sub] = {
+                    "status": "ok",
+                    "polled": len(fetched),
+                    "emitted": emitted,
+                    "attempts": attempts,
+                    **({"in_scope": len(in_scope)} if prefilter else {}),
+                    **({"skipped": skipped} if skipped else {}),
+                }
+            except AzureSubscriptionError as se:
+                # Loud, structured, isolated. Checkpoint is NOT advanced for this
+                # subscription (no silent thinning — it is retried next run).
+                logger.warning(
+                    "azure_events: %s poll FAILED for subscription %s (org=%s): "
+                    "category=%s retryable=%s attempts=%s cause=%s",
+                    stream, sub, self.org_id, se.category, se.retryable, se.attempts, se.cause,
+                )
+                status[sub] = {
+                    "status": "error",
+                    "category": se.category,
+                    "retryable": se.retryable,
+                    "attempts": se.attempts,
+                    "recoverable": _recoverable(se.category),
+                    "error": str(se.cause),
+                }
+                self._emit_subscription_health(stream, sub, status[sub])
+
+        return AzureStreamResult(
+            records=records,
+            next_checkpoint=encode_checkpoints(next_checkpoints),
+            subscription_status=status,
+        )
+
+    def _fetch_with_retry(
+        self, fetch, *, stream: str, token: str, subscription_id: str,
+        environment, since_iso: Optional[str],
+    ):
+        """Call a stream ``fetch`` with bounded backoff on TRANSIENT failures.
+
+        Returns ``(records, attempts)``. Retries only transient categories
+        (throttled/5xx/timeout/network) up to ``RetryPolicy.max_retries`` with
+        exponential backoff (the injected ``sleep_fn`` makes it test-fast); a
+        non-transient failure (auth/authorization/not-found/malformed) is NOT
+        retried. On give-up (or a permanent failure) raises
+        :class:`AzureSubscriptionError` carrying the classification + attempt count
+        — never silently returns empty (which would thin the run).
+        """
+        attempt = 0
+        while True:
+            attempt += 1
+            try:
+                return (
+                    fetch(
+                        token=token, subscription_id=subscription_id,
+                        environment=environment, since_iso=since_iso,
+                    ),
+                    attempt,
+                )
+            except Exception as exc:  # noqa: BLE001 — classify, maybe retry, else raise
+                category = classify_failure(exc)
+                retryable = is_retryable(category)
+                if retryable and attempt <= self._retry.max_retries:
+                    delay = self._retry.backoff_seconds(attempt)
+                    logger.warning(
+                        "azure_events: %s transient %s for subscription %s "
+                        "(attempt %d/%d) — backing off %.2fs",
+                        stream, category, subscription_id, attempt,
+                        self._retry.max_retries + 1, delay,
+                    )
+                    self._sleep(delay)
+                    continue
+                raise AzureSubscriptionError(
+                    category, retryable=retryable, attempts=attempt, cause=exc
+                )
+
+    def _emit_subscription_health(
+        self, stream: str, subscription_id: str, status_entry: Dict[str, Any],
+        *, source_system: Optional[str] = None,
+    ) -> None:
+        """Emit a loud run-health telemetry event for a failed subscription.
+
+        Non-blocking and secret-free: identifiers + classification + counts only. A
+        telemetry failure never breaks ingestion (health reporting is observability,
+        not a run-critical path). Imported lazily so offline runs never pull the
+        telemetry/DB subsystem at import time.
+        """
+        try:
+            from app.telemetry import record_event
+        except Exception:  # pragma: no cover - telemetry optional in some contexts
+            return
+        payload = {
+            "org_id": self.org_id,
+            "connector_id": self.connector_id,
+            "source_system": source_system or _STREAM_SOURCE_SYSTEM.get(stream, stream),
+            "account_scope": subscription_id,
+            "stream": stream,
+            "status": "error",
+            "category": str(status_entry.get("category", CATEGORY_UNEXPECTED)),
+            "retryable": bool(status_entry.get("retryable", False)),
+            "attempts": int(status_entry.get("attempts", 1)),
+            "recoverable": bool(status_entry.get("recoverable", False)),
+            "error_summary": str(status_entry.get("error", ""))[:300],
+            "observed_at": datetime.now(timezone.utc).isoformat(),
+        }
+        try:
+            record_event("ingestion.subscription_health", payload)
+        except Exception:  # noqa: BLE001 — never let health reporting break the run
+            logger.debug("azure_events: subscription_health emit failed", exc_info=True)
+
+    def _resolve_token(self, token: Optional[str]) -> str:
+        return token or acquire_arm_token_blocking(
+            self.org_id,
+            self.config,
+            vault_reader=self._vault_reader,
+            token_fn=self._token_fn,
+        )
+
+    # ── Alerts polling (MSP-B2 T2 / AT-649) ─────────────────────────────────────
+
+    def ingest_alerts(self, *, token: Optional[str] = None, checkpoint: Any = None) -> AzureStreamResult:
+        """Poll Azure Monitor Alerts for every pinned subscription, incrementally.
+
+        Alerts ONLY (scope defence); normalised through ``map_azure_monitor``
+        (T2-AC3). See :meth:`_ingest_stream` for the per-subscription checkpoint /
+        failure-isolation semantics.
+        """
+        client = self._alerts_client or default_alerts_client()
+        return self._ingest_stream(
+            stream=STREAM_ALERTS,
+            token=self._resolve_token(token),
+            checkpoints=decode_checkpoints(checkpoint),
+            fetch=client.fetch_alerts,
+            mapper=map_azure_monitor,
+            ts_of=alert_fired_at,
+            id_of=alert_id,
+        )
+
+    # ── Activity Log (administrative) polling (MSP-B2 T3 / AT-650) ───────────────
+
+    def ingest_activity_log(self, *, token: Optional[str] = None, checkpoint: Any = None) -> AzureStreamResult:
+        """Poll Azure Activity Log ADMINISTRATIVE events for every pinned subscription.
+
+        Administrative events ONLY — the ``is_administrative`` prefilter drops every
+        other Activity Log category (ServiceHealth/Security/Policy/…) so out-of-scope
+        classes are never ingested (T3-AC4). Normalised through
+        ``map_azure_activity_log`` (T3-AC1/AC3). Same per-subscription checkpoint and
+        failure-isolation semantics as alerts.
+        """
+        client = self._activity_log_client or default_activity_log_client()
+        return self._ingest_stream(
+            stream=STREAM_ACTIVITY_LOG,
+            token=self._resolve_token(token),
+            checkpoints=decode_checkpoints(checkpoint),
+            fetch=client.fetch,
+            mapper=map_azure_activity_log,
+            ts_of=activity_timestamp,
+            id_of=activity_id,
+            prefilter=is_administrative,
+        )
+
+    # ── Service Health polling (MSP-B2 T3 / AT-650) ─────────────────────────────
+
+    def ingest_service_health(self, *, token: Optional[str] = None, checkpoint: Any = None) -> AzureStreamResult:
+        """Poll Azure Service Health events for every pinned subscription.
+
+        Normalised through ``map_service_health`` (T3-AC2/AC3). Same per-subscription
+        checkpoint and failure-isolation semantics as the other streams.
+        """
+        client = self._service_health_client or default_service_health_client()
+        return self._ingest_stream(
+            stream=STREAM_SERVICE_HEALTH,
+            token=self._resolve_token(token),
+            checkpoints=decode_checkpoints(checkpoint),
+            fetch=client.fetch,
+            mapper=map_service_health,
+            ts_of=service_health_timestamp,
+            id_of=service_health_id,
+        )
+
+    # ── Full poll across all three V1 streams ───────────────────────────────────
+
+    def ingest_all(self, *, token: Optional[str] = None, checkpoint: Any = None) -> AzureStreamResult:
+        """Poll all three V1 streams (alerts + activity log + service health).
+
+        Each stream keeps its OWN per-subscription checkpoint inside the namespaced
+        opaque value (``{stream: {sub: iso}}``). The ARM token is acquired ONCE and
+        shared across streams. Records are concatenated; ``subscription_status`` is
+        keyed ``"{stream}:{sub}"`` so a per-stream, per-subscription failure is
+        individually visible (no silent thinning).
+
+        A connector-level AUTHENTICATION failure (the one SP that serves every
+        subscription) is caught here and reported LOUDLY into run health for every
+        pinned subscription — visible, checkpoints preserved, never a silent drop
+        (T6-AC2). It does not crash the run.
+        """
+        ns = decode_stream_checkpoints(checkpoint)
+        try:
+            arm_token = self._resolve_token(token)
+        except Exception as exc:  # noqa: BLE001 — auth failure is loud, not fatal
+            return self._auth_failure_result(exc, ns)
+
+        alerts = self.ingest_alerts(token=arm_token, checkpoint=ns[STREAM_ALERTS])
+        activity = self.ingest_activity_log(token=arm_token, checkpoint=ns[STREAM_ACTIVITY_LOG])
+        health = self.ingest_service_health(token=arm_token, checkpoint=ns[STREAM_SERVICE_HEALTH])
+
+        next_ns = {
+            STREAM_ALERTS: decode_checkpoints(alerts.next_checkpoint),
+            STREAM_ACTIVITY_LOG: decode_checkpoints(activity.next_checkpoint),
+            STREAM_SERVICE_HEALTH: decode_checkpoints(health.next_checkpoint),
+        }
+        status: Dict[str, Dict[str, Any]] = {}
+        for stream, res in (
+            (STREAM_ALERTS, alerts),
+            (STREAM_ACTIVITY_LOG, activity),
+            (STREAM_SERVICE_HEALTH, health),
+        ):
+            for sub, st in res.subscription_status.items():
+                status[f"{stream}:{sub}"] = st
+
+        return AzureStreamResult(
+            records=alerts.records + activity.records + health.records,
+            next_checkpoint=encode_stream_checkpoints(next_ns),
+            subscription_status=status,
+        )
+
+    def _auth_failure_result(
+        self, exc: BaseException, ns: Dict[str, Dict[str, str]]
+    ) -> AzureStreamResult:
+        """Report a connector-level auth failure loudly for every subscription.
+
+        No records, checkpoints PRESERVED (the incoming namespaced positions are
+        re-emitted unchanged — nothing advances, nothing is thinned), and a
+        run-health event is emitted per pinned subscription per stream. Auth is not
+        retried (a bad credential will not fix itself within a run)."""
+        category = classify_failure(exc)  # → authentication
+        logger.warning(
+            "azure_events: AUTHENTICATION failed for org=%s (%s); all %d pinned "
+            "subscription(s) reported unhealthy, checkpoints preserved",
+            self.org_id, exc, len(self.authorized_subscriptions()),
+        )
+        status: Dict[str, Dict[str, Any]] = {}
+        entry_template = {
+            "status": "error",
+            "category": category,
+            "retryable": False,
+            "attempts": 1,
+            "recoverable": _recoverable(category),
+            "error": str(exc),
+        }
+        for stream in V1_STREAMS:
+            for sub in self.authorized_subscriptions():
+                status[f"{stream}:{sub}"] = dict(entry_template)
+                self._emit_subscription_health(stream, sub, entry_template)
+        return AzureStreamResult(
+            records=[],
+            next_checkpoint=encode_stream_checkpoints(ns),  # preserved, not advanced
+            subscription_status=status,
+        )
+
+    # ── ChangeBasedIngestor contract (pipeline entrypoint) ───────────────────────
+
+    def ingest_changes(
+        self, org_id: str, since: Optional[Checkpoint] = None
+    ) -> Iterator[DeltaBatch]:
+        """Yield one delta batch of ALL normalised Azure events since ``since``.
+
+        Adapts :meth:`ingest_all` to the change-based pipeline: the opaque checkpoint
+        carries the namespaced per-stream, per-subscription map. A per-stream /
+        per-subscription failure is isolated inside ``ingest_all`` (loud in
+        ``subscription_status``); the batch still advances the positions that
+        succeeded, so a failing subscription never blocks or thins the others.
+        Emitted as one complete batch (per-poll volume is bounded).
+        """
+        if org_id and org_id != self.org_id:
+            raise ValueError(
+                f"ingest_changes org_id {org_id!r} does not match this ingestor's "
+                f"org {self.org_id!r}"
+            )
+        result = self.ingest_all(checkpoint=since.value if since else None)
+        yield DeltaBatch(
+            records=result.records,
+            next_checkpoint=result.next_checkpoint,
+            is_complete=True,
+        )
+
+
+def build_ingestor(
+    org_id: str,
+    *,
+    env: Optional[Dict[str, str]] = None,
+    vault_reader: Optional[Callable[[str, str], Any]] = None,
+    token_fn: Optional[TokenFn] = None,
+    alerts_client: Optional[AzureAlertsClient] = None,
+    activity_log_client: Optional[AzureEventStreamClient] = None,
+    service_health_client: Optional[AzureEventStreamClient] = None,
+    raw_store: Optional[Any] = None,
+) -> Optional[AzureEventIngestor]:
+    """Build an :class:`AzureEventIngestor` for ``org_id`` from configuration.
+
+    Returns None when the connector is not configured for the org (not an error —
+    the connector simply contributes nothing). Raises
+    :class:`AzureEventConfigError` on a present-but-invalid config.
+    """
+    config = load_azure_event_config(org_id, env=env)
+    if config is None:
+        return None
+    return AzureEventIngestor(
+        org_id,
+        config,
+        vault_reader=vault_reader,
+        token_fn=token_fn,
+        alerts_client=alerts_client,
+        activity_log_client=activity_log_client,
+        service_health_client=service_health_client,
+        raw_store=raw_store,
+    )

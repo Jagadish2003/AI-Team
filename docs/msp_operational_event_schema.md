@@ -182,6 +182,7 @@ never branches on provider (T3-AC3).
 | `map_cloudtrail` | CloudTrail management/API record | `aws_cloudtrail` | aws |
 | `map_azure_monitor` | Azure Monitor common-alert-schema alert | `azure_monitor` | azure |
 | `map_azure_activity_log` | Azure Activity Log administrative record | `azure_activity` | azure |
+| `map_service_health` | Azure Service Health event (service issue / maintenance / advisory) | `azure_service_health` | azure |
 
 ### Field-by-field mapping
 

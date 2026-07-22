@@ -66,6 +66,7 @@ from .reference_mappers import (  # noqa: F401
     map_cloudtrail,
     map_cloudwatch,
     map_eventbridge,
+    map_service_health,
 )
 from .resource_graph import (  # noqa: F401
     CLOUD_RESOURCE_ENTITY_TYPE,
@@ -141,6 +142,7 @@ __all__ = [
     "map_cloudtrail",
     "map_azure_monitor",
     "map_azure_activity_log",
+    "map_service_health",
     "aws_resource_type_from_arn",
     "azure_resource_type_from_id",
     "MAPPERS",
