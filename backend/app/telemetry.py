@@ -750,6 +750,7 @@ register_event_type("connector.health_check", ConnectorHealthPayload)
 register_event_type("db.query_executed", DbQueryExecutedEvent)
 register_event_type("db.ingestor_completed", DBIngestorCompletedPayload)
 register_event_type("run.signal_snapshot", RunSignalSnapshotPayload)
+register_event_type("run.pack_executed", PackExecutedPayload)
 # T3-S11-A Sprint 11
 register_event_type("temporal.enrichment_completed", TemporalEnrichmentCompletedPayload)
 # T3-S12-A T7 Sprint 12
