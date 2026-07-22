@@ -736,6 +736,7 @@ def run(
         is_github_engineering_pack,
         is_enterprise_ops_pack,
         is_cloud_ops_pack,
+        is_security_ops_pack,
     )
     pack_config = get_pack(pack)
     pack_id     = pack_config["packId"]
@@ -1266,6 +1267,26 @@ def run(
             cloud_ops_shared_ci_hotspot,
         ]
         logger.info("Pack: cloud_ops — 5 operations detectors active")
+    elif is_security_ops_pack(pack_id):
+        # MSP-B12 T2 — Security-Operations pack: package MSP-B11's SecOps workflow
+        # signal (sn_data['secops'] / ['vulnerability_response'] + B3's
+        # sn_data['cmdb']) into findings carrying the four-part contract and the
+        # SecOps aggregation floor.
+        from .detectors import (
+            security_ops_remediation_recurrence,
+            security_ops_security_it_pingpong,
+            security_ops_sla_deferral_ageing,
+            security_ops_shared_infra_concentration,
+            security_ops_sir_triage_toil,
+        )
+        all_detectors = [
+            security_ops_remediation_recurrence,
+            security_ops_security_it_pingpong,
+            security_ops_sla_deferral_ageing,
+            security_ops_shared_infra_concentration,
+            security_ops_sir_triage_toil,
+        ]
+        logger.info("Pack: security_ops — 5 SecOps detectors active")
     else:
         # Service Cloud detectors — default
         from .detectors import (
@@ -1308,6 +1329,18 @@ def run(
         _validated = enforce_pack_findings(detector_results)
         logger.info(
             "Pack: cloud_ops — four-part contract enforced on %d finding(s)", _validated
+        )
+
+    # ── MSP-B12 T2 (AC1/AC2/AC7): four-part-contract + aggregation-floor
+    # enforcement at the Security-Operations pack boundary. Every finding must
+    # carry all four parts, trace back through valid evidence pointers, and name no
+    # individual employee / host / host×vulnerability pair. A violation is a
+    # CONTRACT VIOLATION that FAILS the run — deliberately not swallowed.
+    if is_security_ops_pack(pack_id):
+        from .packs.security_ops_finding import enforce_pack_findings
+        _validated = enforce_pack_findings(detector_results)
+        logger.info(
+            "Pack: security_ops — four-part contract enforced on %d finding(s)", _validated
         )
 
     _snapshot_detector_evaluations(

@@ -221,23 +221,27 @@ PACK_REGISTRY: Dict[str, Dict[str, Any]] = {
 
     "security_ops": {
         "packId":        "security_ops",
-        # MSP-B12 T1: version stamped on every run (R16-B1 §4). This scaffold ships
-        # at 1.0.0; bump on ANY future detector (T2), scorer/calibration (T6), or
-        # corroboration change — an intentional pack-version update is required so
-        # pack governance (1.9) can tell a data change from a pack-logic change. A
-        # boundary test guards this: it fails if the detector/scorer surface changes
-        # without a version bump.
-        "packVersion":   "1.0.0",
+        # MSP-B12 version stamped on every run (R16-B1 §4). T1 shipped the scaffold
+        # at 1.0.0; MSP-B12 T2 adds the five Section-1 detectors (a behaviour change)
+        # → bumped to 1.1.0. Bump on ANY future detector or scorer/calibration (T6)
+        # change — an intentional pack-version update is required so pack governance
+        # (1.9) can tell a data change from a pack-logic change. A boundary test
+        # guards this: it fails if the detector/scoring surface changes without a bump.
+        "packVersion":   "1.1.0",
         "packName":      "Security Operations",
         "domain":        "security_ops",
         "pack_domain":   "security_ops",
         # Second sibling of the Cloud-Operations pack on the same template model.
-        # Detectors are MSP-B12 T2 (Section 1): remediation recurrence, security<->IT
-        # ping-pong, SLA/deferral ageing, shared-infrastructure concentration, SIR
-        # triage toil. Empty in this scaffold (mirrors cloud_ops's T1->T2 evolution);
-        # T2 populates this list. The pack stays selectable via the registry with no
-        # conditional logic in the discovery runner.
-        "detectors": [],
+        # MSP-B12 T2 (Section 1) detectors — consume only MSP-B11's SecOps workflow
+        # signal (sn_data['secops'] / ['vulnerability_response']) + B3's
+        # sn_data['cmdb']. Invoked via the runner's uniform pack-dispatch branch.
+        "detectors": [
+            "discovery.detectors.security_ops_remediation_recurrence",
+            "discovery.detectors.security_ops_security_it_pingpong",
+            "discovery.detectors.security_ops_sla_deferral_ageing",
+            "discovery.detectors.security_ops_shared_infra_concentration",
+            "discovery.detectors.security_ops_sir_triage_toil",
+        ],
         # UI labels are per-detector (S6/S7); added with the detectors in T2.
         "ui_labels_path": None,
         # Calibration values, detector thresholds, and the SecOps terminology set

@@ -7,7 +7,7 @@
     "note": "Editing a value below changes behaviour on the next run; no restart or code change required. Bump packVersion (mirrored in pack_config.py) on any detector/scorer/corroboration change."
   },
 
-  "packVersion": "1.0.0",
+  "packVersion": "1.1.0",
 
   "terminology": {
     "_note": "The SecOps vocabulary this pack speaks in findings, roadmap, and executive report — the same externalized re-labelling mechanism the lending and cloud-ops packs use. glossary defines each canonical SecOps term (MSP-B12 §2); language_map re-labels generic AgentIQ / service-management vocabulary into SecOps language for terminology-aware rendering (later tasks).",
@@ -40,7 +40,7 @@
       "window_days": 30
     },
     "security_it_ping_pong": {
-      "min_hops": 3
+      "min_hops": 2
     },
     "sla_deferral_ageing": {
       "baseline_departure_pct": 0.25,

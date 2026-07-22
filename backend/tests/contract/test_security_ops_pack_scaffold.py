@@ -438,8 +438,11 @@ class TestVersionBumpGuard:
     # the change author to (1) bump packVersion in BOTH pack_config.py and
     # security_ops_pack_config.json and (2) update these pins. That is the
     # "intentional pack-version update" required by MSP-B12 T1.
-    PINNED_VERSION = "1.0.0"
-    PINNED_FINGERPRINT = "99f10fb01dce9e2f914cd21d118fb677c1a9ff6735e5c99ef6952b674e0de8b0"
+    # Bumped 1.0.0 → 1.1.0 by MSP-B12 T2 (the five Section-1 detectors + the
+    # min_hops calibration change) — the intentional pack-version update this guard
+    # exists to force.
+    PINNED_VERSION = "1.1.0"
+    PINNED_FINGERPRINT = "245e0799e9b111584e9e7550c4298dc8a8a05a8e7a882876579eab5e521feb86"
 
     @staticmethod
     def _scoring_surface_fingerprint():
