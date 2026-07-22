@@ -50,8 +50,12 @@ from .middleware.tenancy import get_current_org_id
 from .security import require_auth
 from .rbac import require_role
 
-from discovery.packs.pack_config import normalize_pack_ids
-from discovery.packs.template_registry import resolve_launch_config
+from discovery.packs.pack_config import get_pack_version, normalize_pack_ids
+from discovery.packs.template_registry import (
+    get_template,
+    normalize_template_ids,
+    resolve_launch_config,
+)
 
 
 # ── Request / response models ─────────────────────────────────────────────────
@@ -65,6 +69,13 @@ class LaunchRequest(BaseModel):
     focus_id: Optional[str] = Field(default=None, description="Selected FocusId")
     industry_id: Optional[str] = Field(default=None, description="Selected IndustryId")
     template_id: Optional[str] = Field(default=None, description="Selected TemplateId")
+    template_ids: Optional[List[str]] = Field(
+        default=None,
+        description=(
+            "Order-preserving template selection. template_id remains the primary "
+            "backward-compatible alias."
+        ),
+    )
     selected_system_ids: List[str] = Field(
         default_factory=list,
         description="All selected system IDs including Salesforce cloud IDs",
@@ -96,6 +107,13 @@ class LaunchRequest(BaseModel):
 
     @model_validator(mode="after")
     def _reconcile_and_require_pack(self) -> "LaunchRequest":
+        combined_templates = normalize_template_ids(
+            list(self.template_ids or [])
+            + ([self.template_id] if self.template_id else [])
+        )
+        self.template_ids = combined_templates
+        self.template_id = combined_templates[0] if combined_templates else None
+
         # R191-P1 T1: reconcile the singular pack_id with the pack_ids list into
         # ONE order-preserving, de-duplicated selection. The list wins ordering;
         # the singular alias is appended (dedup collapses the common case where a
@@ -116,9 +134,7 @@ class LaunchRequest(BaseModel):
         # the pack (R18-C1 T2 / AC2). An unknown template_id cannot supply a pack.
         if self.pack_id:
             return self
-        from discovery.packs.template_registry import get_template
-
-        if self.template_id and get_template(self.template_id) is not None:
+        if any(get_template(template_id) is not None for template_id in combined_templates):
             return self
         raise ValueError(
             "pack_id is required when no known template_id is provided"
@@ -133,6 +149,7 @@ class LaunchResponse(BaseModel):
     # stays the primary (first) pack for backward compatibility; packIds carries
     # the whole list so multi-pack execution (a later P1 task) has its config.
     packIds: List[str] = Field(default_factory=list)
+    templateIds: List[str] = Field(default_factory=list)
     focusId: Optional[str] = None
     industryId: Optional[str] = None
     systemCount: int
@@ -181,7 +198,9 @@ def register_stack_builder_launch_routes(app: FastAPI) -> None:
         # template_id this is a pass-through of the submitted values.
         resolved = resolve_launch_config(
             body.template_id,
+            template_ids=body.template_ids,
             pack_id=body.pack_id,
+            pack_ids=body.pack_ids,
             focus_id=body.focus_id,
             selected_system_ids=body.selected_system_ids,
             weightings=body.weightings,
@@ -190,6 +209,9 @@ def register_stack_builder_launch_routes(app: FastAPI) -> None:
         provenance = resolved["provenance"]
 
         eff_pack = effective["pack_id"]
+        eff_pack_ids = effective["pack_ids"]
+        eff_template_ids = effective["template_ids"]
+        eff_template = eff_template_ids[0] if eff_template_ids else None
         eff_focus = effective["focus_id"]
         eff_systems = effective["selected_system_ids"]
         eff_roles = effective["roles"]
@@ -206,12 +228,16 @@ def register_stack_builder_launch_routes(app: FastAPI) -> None:
                 detail="pack_id is required",
             )
 
-        # R191-P1 T1: the effective multi-pack selection. The resolved primary
-        # pack (template-aware) leads, followed by any additional caller-selected
-        # packs, order-preserving and de-duplicated. A single-pack launch yields
-        # exactly [eff_pack], so packId and every existing single-pack read below
-        # are byte-identical to today.
-        eff_pack_ids = normalize_pack_ids([eff_pack] + list(body.pack_ids or []))
+        # Versions are captured at launch so historical provenance cannot drift
+        # when a registry entry or pack is updated later.
+        pack_versions = {
+            selected_pack_id: get_pack_version(selected_pack_id)
+            for selected_pack_id in eff_pack_ids
+        }
+        template_versions = {
+            snapshot["template_id"]: snapshot["template_version"]
+            for snapshot in provenance.get("template_defaults_list", [])
+        }
 
         # Generate run ID
         run_id = next_run_id()
@@ -251,14 +277,19 @@ def register_stack_builder_launch_routes(app: FastAPI) -> None:
             "orgId": org_id,
             "packId": eff_pack,
             "packIds": eff_pack_ids,
+            "packVersions": pack_versions,
             "focusId": eff_focus,
             "industryId": body.industry_id,
-            "templateId": body.template_id,
+            "templateId": eff_template,
+            "templateIds": eff_template_ids,
+            "templateVersions": template_versions,
             "selectedSystemIds": eff_systems,
             "weightings": effective_weightings,
             "systemCount": len(eff_systems),
             "source": "stack_builder",
             "templateProvenance": provenance,
+            "packBoundaries": effective["pack_boundaries"],
+            "effectiveConfiguration": effective,
         }
         upsert_run(run_id, run_record)
 
@@ -269,6 +300,10 @@ def register_stack_builder_launch_routes(app: FastAPI) -> None:
         # pack_id (kept as the primary-pack alias) so nothing reading pack_id
         # changes and downstream multi-pack execution can read pack_ids.
         run_kv_set("pack_ids", run_id, eff_pack_ids)
+        run_kv_set("pack_versions", run_id, pack_versions)
+        run_kv_set("template_ids", run_id, eff_template_ids)
+        run_kv_set("template_versions", run_id, template_versions)
+        run_kv_set("effective_configuration", run_id, effective)
 
         # focus_id and industry_id used by LLM enrichment (Sprint 8)
         # for industry-aware prompt injection
@@ -285,18 +320,23 @@ def register_stack_builder_launch_routes(app: FastAPI) -> None:
             "org_id":              org_id,
             "focus_id":            eff_focus,
             "industry_id":         body.industry_id,
-            "template_id":         body.template_id,
+            "template_id":         eff_template,
+            "template_ids":        eff_template_ids,
             "selected_system_ids": eff_systems,
             "pack_id":             eff_pack,
             "pack_ids":            eff_pack_ids,
+            "pack_versions":       pack_versions,
             "weightings":          effective_weightings,
             "template_provenance": provenance,
+            "pack_boundaries":      effective["pack_boundaries"],
+            "effective_configuration": effective,
         })
 
         return LaunchResponse(
             runId=run_id,
             packId=eff_pack,
             packIds=eff_pack_ids,
+            templateIds=eff_template_ids,
             focusId=eff_focus,
             industryId=body.industry_id,
             systemCount=len(eff_systems),

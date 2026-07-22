@@ -18,13 +18,22 @@ export default function TemplateRunNotice({
   run: DiscoveryRun;
   computing: boolean;
 }) {
-  if (!run.templateId || !run.templateProvenance?.applied) return null;
+  const templateIds = run.templateIds?.length
+    ? run.templateIds
+    : run.templateId
+      ? [run.templateId]
+      : [];
+  if (!templateIds.length || !run.templateProvenance?.applied) return null;
 
   const provenance = run.templateProvenance;
   const systemCount = run.selectedSystemIds?.length ?? 0;
   const editedFields = provenance.edited_fields ?? [];
-  const templateLabel = humanise(run.templateId);
-  const runSummary = `${computing ? 'Discovery is running with' : 'This run used'} ${systemCount} configured system${systemCount === 1 ? '' : 's'}${run.packId ? ` and the ${humanise(run.packId)} pack` : ''}${run.focusId ? `, focused on ${humanise(run.focusId)}` : ''}.`;
+  const templateLabel = templateIds.map(humanise).join(' + ');
+  const packIds = run.packIds?.length ? run.packIds : run.packId ? [run.packId] : [];
+  const packSummary = packIds.length
+    ? ` and the ${packIds.map(humanise).join(' + ')} pack${packIds.length === 1 ? '' : 's'}`
+    : '';
+  const runSummary = `${computing ? 'Discovery is running with' : 'This run used'} ${systemCount} configured system${systemCount === 1 ? '' : 's'}${packSummary}${run.focusId ? `, focused on ${humanise(run.focusId)}` : ''}.`;
 
   return (
     <section
@@ -39,7 +48,9 @@ export default function TemplateRunNotice({
         )}
         <div>
           <h2 className="text-sm font-semibold text-text">
-            {computing ? `Using the ${templateLabel} template` : `${templateLabel} template run`}
+            {computing
+              ? `Using the ${templateLabel} template${templateIds.length === 1 ? '' : 's'}`
+              : `${templateLabel} template run`}
           </h2>
           <p className="mt-1 text-sm leading-relaxed text-muted">
             {runSummary}

@@ -434,32 +434,22 @@ def run_trackb_and_persist(
 
             exec_report = db.run_kv_get("executive_report", run_id, {})
             sources_analyzed = exec_report.get("sourcesAnalyzed", {})
-            # ENG-AIQ-NC-5: pass pack_id for banking language prompts
-            pack_id = _pack_id_for_run(run)
-            # MSP-B12 T4 (AC4): AI-mode gate for the Security Operations pack. Under
-            # hosted-AI mode, SecOps data must NOT be sent for AI narrative
-            # generation — so the enrichment call (which routes through the model
-            # gateway's generate()) is withheld entirely and a labelled, AI-free
-            # enrichment record is persisted instead. The deterministic findings
-            # remain; the restriction is explicit, never a silent empty narrative.
-            # in_boundary / customer_tenant proceed to full assembly through the
-            # unchanged gateway path (routing + no-bypass controls intact).
-            from discovery.packs.security_ops_ai_mode import (
-                ai_narrative_blocked_for_pack,
-                hosted_enrichment_result,
+            from .pack_aware_enrichment import run_pack_aware_enrichment
+
+            execution_pack_ids = list(payload.get("packIds") or pack_ids or [])
+            if not execution_pack_ids and pack_id:
+                execution_pack_ids = [pack_id]
+            enrichment = run_pack_aware_enrichment(
+                run_id=run_id,
+                opportunities=opps,
+                evidence=ev,
+                sources_analyzed=sources_analyzed,
+                pack_ids=execution_pack_ids,
+                org_id=run_org_id,
+                enrichment_fn=run_llm_enrichment,
             )
-            if ai_narrative_blocked_for_pack(pack_id):
-                enrichment = hosted_enrichment_result()
+            if enrichment.get("ai_mode_label"):
                 _emit_event(run_id, "AI_ANALYZE", enrichment["ai_mode_label"])
-            else:
-                enrichment = run_llm_enrichment(
-                    run_id=run_id,
-                    opps=opps,
-                    evidence=ev,
-                    sources_analyzed=sources_analyzed,
-                    pack_id=pack_id,
-                    org_id=run_org_id,
-                )
             db.run_kv_set(KV_LLM_ENRICHMENT, run_id, enrichment)
             if enrichment.get("executiveSummary"):
                 exec_report["aiExecutiveSummary"] = enrichment["executiveSummary"]
@@ -482,11 +472,20 @@ def run_trackb_and_persist(
             # orgId write under "demo-org" but read under "default", so it
             # would never find its own history.
             _org_id = run_org_id
-            _pack_id = _pack_id_for_run(run)
             # AT-158: baselines are computed per-org; pass the run's org explicitly
             # (the old no-arg calculate_baselines() was removed in that refactor).
             calculate_baselines_for_org(_org_id)
-            opps = enrich_opportunities_with_temporal_context(run_id, _org_id, _pack_id or "", opps)
+            _fallback_pack_id = _pack_id_for_run(run) or ""
+            _opps_by_pack: Dict[str, List[Dict[str, Any]]] = {}
+            for _opp in opps:
+                _opp_pack_id = str(
+                    _opp.get("packId") or _opp.get("pack_id") or _fallback_pack_id
+                )
+                _opps_by_pack.setdefault(_opp_pack_id, []).append(_opp)
+            for _current_pack_id, _pack_opps in _opps_by_pack.items():
+                enrich_opportunities_with_temporal_context(
+                    run_id, _org_id, _current_pack_id, _pack_opps
+                )
 
             _temporal_keys = (
                 "baseline_context", "trend_direction", "anomaly_score",

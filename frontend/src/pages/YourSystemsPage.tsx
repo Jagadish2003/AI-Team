@@ -95,6 +95,8 @@ const SYSTEM_DISPLAY: Record<string, {
   azure_devops:   { logoInitials: 'ADO', logoColor: 'bg-blue-700',   category: 'ALM / CI/CD' },
   linear:         { logoInitials: 'LN',  logoColor: 'bg-violet-600', category: 'Product / issues' },
   zendesk:        { logoInitials: 'ZD',  logoColor: 'bg-green-600',  category: 'Support' },
+  aws_event_source:   { logoInitials: 'AWS', logoColor: 'bg-orange-600', category: 'Cloud operational events' },
+  azure_event_source: { logoInitials: 'AZ',  logoColor: 'bg-blue-600',   category: 'Cloud operational events' },
   // Comms & knowledge
   slack:      { logoInitials: 'SL',  logoColor: 'bg-purple-600', category: 'Messaging' },
   teams:      { logoInitials: 'MS',  logoColor: 'bg-blue-700',   category: 'Comms / docs' },
@@ -102,6 +104,7 @@ const SYSTEM_DISPLAY: Record<string, {
   confluence: { logoInitials: 'CF',  logoColor: 'bg-blue-500',   category: 'Docs / knowledge' },
   sharepoint: { logoInitials: 'SP',  logoColor: 'bg-blue-600',   category: 'Docs / intranet' },
   notion:     { logoInitials: 'NO',  logoColor: 'bg-slate-700',  category: 'Docs / wiki' },
+  runbook_library: { logoInitials: 'RB', logoColor: 'bg-indigo-600', category: 'Runbooks / playbooks' },
   // Data & engineering
   github:      { logoInitials: 'GH',  logoColor: 'bg-slate-800',  category: 'Source control' },
   gitlab:      { logoInitials: 'GL',  logoColor: 'bg-orange-600', category: 'DevOps' },
@@ -357,6 +360,39 @@ export default function YourSystemsPage({ setupState, catalog }: Props) {
     catalogGroups.reduce((sum, g) => sum + g.systems.length, 0),
   [catalogGroups]);
 
+  // Registry templates may suggest logical evidence sources before a dedicated
+  // connector has been added to the workspace catalog. Keep those defaults
+  // visible here so the user can confirm or remove every source before launch.
+  const templateSuggestedSystems = useMemo(() => {
+    const catalogIds = new Set(
+      catalogGroups.flatMap(group => group.systems.map(system => system.id)),
+    );
+    const names: Record<string, string> = {
+      aws_event_source: 'AWS operational events',
+      azure_event_source: 'Azure operational events',
+      runbook_library: 'Runbook or playbook library',
+    };
+    return state.templatePreselectedIds
+      .filter(id => !catalogIds.has(id))
+      .map((id): SystemCardType => {
+        const display = SYSTEM_DISPLAY[id] ?? {
+          logoInitials: id.slice(0, 2).toUpperCase(),
+          logoColor: 'bg-slate-600',
+          category: 'Template-suggested source',
+        };
+        return {
+          id,
+          name: names[id] ?? id,
+          category: display.category,
+          group: id === 'runbook_library' ? 'comms_knowledge' : 'work_tracking',
+          connectionStatus: 'not_configured',
+          logoInitials: display.logoInitials,
+          logoColor: display.logoColor,
+          isSalesforce: false,
+        };
+      });
+  }, [catalogGroups, state.templatePreselectedIds]);
+
   // ── Section 2: Recommended additions from missing_categories ─────────────
   const recommendedAdditions = useMemo(() => {
     if (!catalog) return [];
@@ -372,7 +408,7 @@ export default function YourSystemsPage({ setupState, catalog }: Props) {
 
   // ── Empty catalog state ───────────────────────────────────────────────────
   // AC10: No systems connected → prompt to connect in Integration Hub
-  if (!catalog || totalConnected === 0) {
+  if ((!catalog || totalConnected === 0) && templateSuggestedSystems.length === 0) {
     return (
       <div className="space-y-5">
         <GroupLabel label="Your connected systems" />
@@ -447,6 +483,35 @@ export default function YourSystemsPage({ setupState, catalog }: Props) {
           </div>
         </section>
       ))}
+
+      {templateSuggestedSystems.length > 0 && (
+        <section className="rounded-xl border border-border bg-panel p-5 shadow-sm">
+          <SubGroupHeader
+            icon={<Info size={16} />}
+            label="Sources suggested by your selected templates"
+            count={countInGroup(templateSuggestedSystems)}
+          />
+          <p className="mb-3 text-xs leading-relaxed text-muted">
+            These are editable starting choices. Sources marked not yet configured
+            can be connected in Integration Hub before a live discovery run.
+          </p>
+          <div
+            role="group"
+            aria-label="Sources suggested by your selected templates"
+            className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4"
+          >
+            {templateSuggestedSystems.map(system => (
+              <SystemCard
+                key={system.id}
+                system={system}
+                selected={state.selectedSystemIds.includes(system.id)}
+                recommendationReason="Suggested by selected template"
+                onToggle={toggleSystem}
+              />
+            ))}
+          </div>
+        </section>
+      )}
 
       {/* ── Section 2: Recommended additions ─────────────────────────────── */}
       {recommendedAdditions.length > 0 && (

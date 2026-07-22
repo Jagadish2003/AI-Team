@@ -212,6 +212,15 @@ def resolve_run_terminology(run_id: str) -> Dict[str, str]:
     except Exception:
         return {}
 
+    terminology_by_pack = resolve_run_terminology_by_pack(run_id, run=run)
+    if len(terminology_by_pack) == 1:
+        return dict(next(iter(terminology_by_pack.values())))
+    # A combined run has intentionally separate vocabulary. Returning the
+    # primary map here would incorrectly relabel another pack, so legacy callers
+    # receive the safe no-op and pack-aware callers use apply_run_terminology.
+    if len(terminology_by_pack) > 1:
+        return {}
+
     template_id = run.get("templateId")
     if not template_id:
         try:
@@ -232,3 +241,64 @@ def resolve_run_terminology(run_id: str) -> Dict[str, str]:
     if defn and getattr(defn, "terminology", None):
         return dict(defn.terminology)
     return {}
+
+
+def resolve_run_terminology_by_pack(
+    run_id: str,
+    *,
+    run: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Dict[str, str]]:
+    """Return immutable launch terminology keyed by pack ID."""
+    try:
+        from . import db
+    except ImportError:  # pragma: no cover
+        import app.db as db  # type: ignore
+
+    if run is None:
+        try:
+            run = db.get_run(run_id) or {}
+        except Exception:
+            return {}
+
+    provenance = run.get("templateProvenance") or {}
+    boundaries = provenance.get("pack_boundaries") or run.get("packBoundaries")
+    if not boundaries:
+        try:
+            context = db.run_kv_get("setup_context", run_id, {}) or {}
+        except Exception:
+            context = {}
+        boundaries = context.get("pack_boundaries") or (
+            context.get("template_provenance") or {}
+        ).get("pack_boundaries")
+
+    result: Dict[str, Dict[str, str]] = {}
+    for boundary in boundaries or []:
+        if not isinstance(boundary, dict):
+            continue
+        pack_id = str(boundary.get("pack_id") or "").strip()
+        terminology = boundary.get("terminology")
+        if pack_id and isinstance(terminology, dict):
+            result[pack_id] = dict(terminology)
+    return result
+
+
+def apply_run_terminology(obj: Any, run_id: str) -> Any:
+    """Apply the correct template vocabulary to each pack-owned result."""
+    terminology_by_pack = resolve_run_terminology_by_pack(run_id)
+    if not terminology_by_pack:
+        return apply_terminology(obj, resolve_run_terminology(run_id))
+    if len(terminology_by_pack) == 1:
+        return apply_terminology(obj, next(iter(terminology_by_pack.values())))
+
+    def _apply(value: Any) -> Any:
+        if isinstance(value, list):
+            return [_apply(item) for item in value]
+        if isinstance(value, dict):
+            pack_id = value.get("packId") or value.get("pack_id")
+            terminology = terminology_by_pack.get(str(pack_id))
+            if terminology:
+                return apply_terminology(value, terminology)
+            return {key: _apply(item) for key, item in value.items()}
+        return value
+
+    return _apply(obj)

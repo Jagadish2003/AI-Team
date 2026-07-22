@@ -256,6 +256,7 @@ interface Props {
   industries: IndustryListItem[];
   templates: TemplateListItem[];
   activePackId: string;
+  activePackIds?: string[];
   onLaunch: () => void;
   launchState?: LendingGuideLaunchState;
 }
@@ -265,6 +266,7 @@ export default function DiscoveryPlanPage({
   industries,
   templates,
   activePackId,
+  activePackIds = [activePackId],
   onLaunch,
   launchState = 'ready',
 }: Props) {
@@ -300,9 +302,13 @@ export default function DiscoveryPlanPage({
     ? industries.find(item => item.industry_id === state.industryId)?.label
       ?? state.industryId
     : '-';
-  const templateLabel = state.templateId
-    ? templates.find(item => item.template_id === state.templateId)?.label
-      ?? state.templateId
+  const selectedTemplateIds = state.templateIds?.length
+    ? state.templateIds
+    : (state.templateId ? [state.templateId] : []);
+  const templateLabel = selectedTemplateIds.length
+    ? selectedTemplateIds
+        .map(id => templates.find(item => item.template_id === id)?.label ?? id)
+        .join(' + ')
     : '-';
   const packOptions = Array.from(new Set([
     activePackId,
@@ -332,13 +338,19 @@ export default function DiscoveryPlanPage({
               label="Template"
               value={templateLabel}
             />
+            {activePackIds.length > 1 && (
+              <SummaryRow
+                label="Analysis packs"
+                value={activePackIds.map(packLabel).join(' + ')}
+              />
+            )}
             <div className="flex items-center justify-between gap-4 border-b border-border/70 py-2">
               <label htmlFor="analysis-pack" className="text-xs text-muted">
                 Analysis pack
               </label>
               <select
                 id="analysis-pack"
-                aria-label="Analysis pack"
+                aria-label={activePackIds.length > 1 ? 'Primary analysis pack' : 'Analysis pack'}
                 value={activePackId}
                 onChange={event => setupState.setPack(event.target.value)}
                 className="max-w-[220px] rounded-md border border-border bg-panel px-2 py-1 text-right text-xs font-medium text-text"
