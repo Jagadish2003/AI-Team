@@ -482,10 +482,18 @@ def run_trackb_and_persist(
                     _opp.get("packId") or _opp.get("pack_id") or _fallback_pack_id
                 )
                 _opps_by_pack.setdefault(_opp_pack_id, []).append(_opp)
-            for _current_pack_id, _pack_opps in _opps_by_pack.items():
-                enrich_opportunities_with_temporal_context(
+            if len(_opps_by_pack) == 1:
+                _current_pack_id, _pack_opps = next(iter(_opps_by_pack.items()))
+                # Preserve the original single-pack assignment contract while
+                # multi-pack runs below remain isolated by their own pack id.
+                opps = enrich_opportunities_with_temporal_context(
                     run_id, _org_id, _current_pack_id, _pack_opps
                 )
+            else:
+                for _current_pack_id, _pack_opps in _opps_by_pack.items():
+                    enrich_opportunities_with_temporal_context(
+                        run_id, _org_id, _current_pack_id, _pack_opps
+                    )
 
             _temporal_keys = (
                 "baseline_context", "trend_direction", "anomaly_score",

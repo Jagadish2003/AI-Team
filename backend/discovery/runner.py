@@ -1541,6 +1541,11 @@ def run(
             detector_results=detector_results,
             all_evaluated=all_evaluated,
         )
+        # Snapshot persistence is deliberately non-blocking and test/integration
+        # adapters may return None. Pack provenance must still receive a stable,
+        # valid timestamp instead of failing the otherwise successful run.
+        if not isinstance(pack_executed_at, datetime):
+            pack_executed_at = datetime.now(timezone.utc)
         executed_detector_ids = _record_pack_execution(
             org_id=org_id,
             run_id=run_id,
