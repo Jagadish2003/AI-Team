@@ -713,6 +713,36 @@ class RetrievalModelBackfillPayload(TypedDict, total=False):
     batches: NotRequired[int]
 
 
+class SecOpsEvidencePointerResolvedPayload(TypedDict, total=False):
+    """secops.evidence_pointer_resolved — MSP-B12 T3.
+
+    Emitted on EVERY attempt to resolve a Security-Operations evidence pointer to
+    its individual source record — the access audit the aggregation floor requires.
+    Individual records are reachable only through org-scoped, access-controlled
+    pointers, and each resolution (or denied attempt) leaves this trail.
+
+    PII GUARD: identifiers, outcome, and access time ONLY — never the resolved
+    record's content. ``pointer_id`` is the source-artifact record id (a workflow
+    record identifier, not a host or CVE); ``user_id`` attributes the access.
+
+    org_id:        Requesting organization (the org the resolution was scoped to).
+    user_id:       The requesting user (access attribution).
+    source_system: The source system the pointer resolves into (e.g. 'servicenow').
+    pointer_id:    The source-artifact identifier the pointer names.
+    outcome:       'resolved' | 'denied'.
+    reason:        Why a resolution was denied ('insufficient_role' |
+                   'not_found_or_cross_org' | 'invalid_pointer'); absent on success.
+    access_time:   When the resolution was attempted (UTC ISO-8601).
+    """
+    org_id: str
+    user_id: NotRequired[str]
+    source_system: NotRequired[str]
+    pointer_id: NotRequired[str]
+    outcome: str
+    reason: NotRequired[str]
+    access_time: NotRequired[str]
+
+
 # ---------------------------------------------------------------------------
 # Registry helpers
 # ---------------------------------------------------------------------------
@@ -832,6 +862,12 @@ register_event_type("retrieval.artifact_invalidated", RetrievalArtifactInvalidat
 # here so app.retrieval.embedder can emit it; record_event() raises ValueError for
 # an unregistered type, so registration must precede emission.
 register_event_type("retrieval.model_backfill", RetrievalModelBackfillPayload)
+# MSP-B12 T3 — Security-Operations evidence-pointer resolution audit. Emitted by
+# app/discovery security_ops_evidence_resolver.resolve_evidence_pointer() on every
+# resolution attempt (resolved or denied). Registered here so the resolver can
+# emit it; record_event() raises ValueError for an unregistered type, so
+# registration must precede the first emission.
+register_event_type("secops.evidence_pointer_resolved", SecOpsEvidencePointerResolvedPayload)
 
 
 # ---------------------------------------------------------------------------

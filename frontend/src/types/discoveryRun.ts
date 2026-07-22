@@ -40,16 +40,23 @@ export interface DiscoveryRun {
   steps: RunStep[];
   summary: RunSummary;
   packId?: string;
+  packIds?: string[];
+  packVersions?: Record<string, string>;
   focusId?: string | null;
   industryId?: string | null;
   templateId?: string | null;
+  templateIds?: string[];
+  templateVersions?: Record<string, string>;
   selectedSystemIds?: string[];
   templateProvenance?: {
     template_id?: string | null;
+    template_ids?: string[];
     applied: boolean;
     untouched: boolean;
     edited_fields: string[];
     template_defaults?: Record<string, unknown> | null;
+    template_defaults_list?: Array<Record<string, unknown>>;
+    pack_boundaries?: Array<Record<string, unknown>>;
   };
 }
 

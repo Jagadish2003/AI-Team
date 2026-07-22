@@ -19,6 +19,7 @@ in T4 (``api.py``); the async batch embedding that stamps vectors is T3
 """
 from __future__ import annotations
 
+import json
 import logging
 from contextlib import closing
 from datetime import datetime, timezone
@@ -649,6 +650,59 @@ def count_chunks(org_id: str, embedded_only: bool = False) -> int:
         cur.execute(sql, (org_id,))
         row = cur.fetchone()
     return int(row[0]) if row else 0
+
+
+def iter_artifact_provenance(
+    org_id: str, source_systems: Optional[Sequence[str]] = None
+) -> list[dict[str, Any]]:
+    """Return this org's distinct indexed artifacts with their provenance.
+
+    A DETERMINISTIC, exact read (no vectors, no similarity) that lets a caller
+    resolve a stable identifier against the provenance of ingested content — e.g.
+    MSP-B5's explicit-citation runbook matcher, which joins a cited runbook id to
+    the runbook page that declares it. One row per ``(source_system,
+    source_artifact)`` (the substrate's stable-id key), carrying the parsed
+    ``provenance`` dict, the representative ``chunk_id``, and ``source_timestamp``.
+
+    HARD org partition: the ``WHERE`` leads with ``org_id = %s`` so a caller only
+    ever sees its own partition (AC3). ``source_systems`` optionally scopes to named
+    systems (e.g. the runbook library's ``document``/``confluence``/``sharepoint``)
+    via ``source_system = ANY(...)``. Ordered deterministically so repeated reads
+    return an identical, reproducible sequence.
+    """
+    sql = (
+        "SELECT DISTINCT ON (source_system, source_artifact) "
+        "       source_system, source_artifact, source_timestamp, "
+        "       provenance, chunk_id "
+        "FROM retrieval_chunks "
+        "WHERE org_id = %s "
+    )
+    params: list[Any] = [org_id]
+    systems = [str(s) for s in (source_systems or []) if s]
+    if systems:
+        sql += "AND source_system = ANY(%s) "
+        params.append(systems)
+    sql += (
+        "ORDER BY source_system ASC, source_artifact ASC, "
+        "         chunk_position ASC, chunk_id ASC"
+    )
+    with closing(db.connect()) as con:
+        cur = con.cursor()
+        cur.execute(sql, tuple(params))
+        rows = cur.fetchall()
+    out: list[dict[str, Any]] = []
+    for r in rows:
+        d = dict(r)
+        raw = d.get("provenance")
+        if isinstance(raw, str) and raw:
+            try:
+                d["provenance"] = json.loads(raw)
+            except (ValueError, TypeError):
+                d["provenance"] = {}
+        elif not isinstance(raw, dict):
+            d["provenance"] = {}
+        out.append(d)
+    return out
 
 
 # ---------------------------------------------------------------------------

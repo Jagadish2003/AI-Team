@@ -36,6 +36,26 @@ def _pack_id_for_run(run: Dict[str, Any] | None) -> str | None:
     return input_pack_id or run.get("packId") or None
 
 
+def _pack_ids_for_run(run: Dict[str, Any] | None) -> List[str] | None:
+    """R191-P1 T2: the multi-pack selection for a run, if one was configured.
+
+    Reads the plural ``packIds`` (R191-P1 T1) from the run inputs first, then the
+    run record. Returns ``None`` when no multi-pack selection is present — the
+    runner then falls back to the singular ``pack`` (byte-identical single-pack
+    behaviour for every pre-multi-pack run).
+    """
+    if not run:
+        return None
+    inputs = run.get("inputs") or {}
+    input_pack_ids = inputs.get("packIds") if isinstance(inputs, dict) else None
+    ids = input_pack_ids or run.get("packIds")
+    if isinstance(ids, list):
+        cleaned = [str(p) for p in ids if str(p).strip()]
+        if cleaned:
+            return cleaned
+    return None
+
+
 def resolve_effective_pack(
     explicit_pack_id: str | None, live_systems: List[str] | None
 ) -> str | None:
@@ -231,10 +251,49 @@ def run_trackb_and_persist(
             run_id, "EXTRACT", "Extracting entities and identifying patterns..."
         )
         pack_id = _pack_id_for_run(run)
+        # R191-P1 T2: pass the full multi-pack selection when the run configured
+        # one (T1). The runner runs each selected pack's detectors against the ONE
+        # shared normalised signal with per-pack calibration; `pack` stays the
+        # primary alias so a single-pack run is unchanged.
+        pack_ids = _pack_ids_for_run(run)
         run_org_id = _org_id_for_run(run, "demo-org")
         payload = trackb_run(
-            mode=mode, systems=systems, run_id=run_id, org_id=run_org_id, pack=pack_id
+            mode=mode,
+            systems=systems,
+            run_id=run_id,
+            org_id=run_org_id,
+            pack=pack_id,
+            pack_ids=pack_ids,
         )
+
+        # R18-C2 T2: preserve the exact pack execution snapshot returned by the
+        # runner. The Run-Health dashboard reads these immutable run fields (and
+        # the matching run.pack_executed event) instead of consulting today's
+        # mutable pack registry for a historical run.
+        executed_detectors = payload.get("detectorsExecuted")
+        if isinstance(executed_detectors, list):
+            run["packId"] = payload.get("packId") or pack_id
+            run["packName"] = payload.get("packName") or run.get("packName")
+            run["packVersion"] = payload.get("packVersion")
+            run["executedDetectorIds"] = [
+                str(detector_id)
+                for detector_id in executed_detectors
+                if str(detector_id).strip()
+            ]
+            run["packExecutedAt"] = payload.get("packExecutedAt")
+            # R191-P1 T2: preserve the full multi-pack execution snapshot the
+            # runner returns (each selected pack with its version stamp + the
+            # per-pack execution metadata). Scalar fields above stay the PRIMARY
+            # pack for backward compatibility; a single-pack run lists one entry.
+            payload_pack_ids = payload.get("packIds")
+            if isinstance(payload_pack_ids, list) and payload_pack_ids:
+                run["packIds"] = [str(p) for p in payload_pack_ids if str(p).strip()]
+                payload_pack_versions = payload.get("packVersions")
+                if isinstance(payload_pack_versions, dict):
+                    run["packVersions"] = payload_pack_versions
+                payload_packs = payload.get("packs")
+                if isinstance(payload_packs, list):
+                    run["packs"] = payload_packs
 
         per_system, succeeded, ingest_errors = _ingest_summary_from_payload(
             payload, systems
@@ -375,16 +434,22 @@ def run_trackb_and_persist(
 
             exec_report = db.run_kv_get("executive_report", run_id, {})
             sources_analyzed = exec_report.get("sourcesAnalyzed", {})
-            # ENG-AIQ-NC-5: pass pack_id for banking language prompts
-            pack_id = _pack_id_for_run(run)
-            enrichment = run_llm_enrichment(
+            from .pack_aware_enrichment import run_pack_aware_enrichment
+
+            execution_pack_ids = list(payload.get("packIds") or pack_ids or [])
+            if not execution_pack_ids and pack_id:
+                execution_pack_ids = [pack_id]
+            enrichment = run_pack_aware_enrichment(
                 run_id=run_id,
-                opps=opps,
+                opportunities=opps,
                 evidence=ev,
                 sources_analyzed=sources_analyzed,
-                pack_id=pack_id,
+                pack_ids=execution_pack_ids,
                 org_id=run_org_id,
+                enrichment_fn=run_llm_enrichment,
             )
+            if enrichment.get("ai_mode_label"):
+                _emit_event(run_id, "AI_ANALYZE", enrichment["ai_mode_label"])
             db.run_kv_set(KV_LLM_ENRICHMENT, run_id, enrichment)
             if enrichment.get("executiveSummary"):
                 exec_report["aiExecutiveSummary"] = enrichment["executiveSummary"]
@@ -407,11 +472,20 @@ def run_trackb_and_persist(
             # orgId write under "demo-org" but read under "default", so it
             # would never find its own history.
             _org_id = run_org_id
-            _pack_id = _pack_id_for_run(run)
             # AT-158: baselines are computed per-org; pass the run's org explicitly
             # (the old no-arg calculate_baselines() was removed in that refactor).
             calculate_baselines_for_org(_org_id)
-            opps = enrich_opportunities_with_temporal_context(run_id, _org_id, _pack_id or "", opps)
+            _fallback_pack_id = _pack_id_for_run(run) or ""
+            _opps_by_pack: Dict[str, List[Dict[str, Any]]] = {}
+            for _opp in opps:
+                _opp_pack_id = str(
+                    _opp.get("packId") or _opp.get("pack_id") or _fallback_pack_id
+                )
+                _opps_by_pack.setdefault(_opp_pack_id, []).append(_opp)
+            for _current_pack_id, _pack_opps in _opps_by_pack.items():
+                enrich_opportunities_with_temporal_context(
+                    run_id, _org_id, _current_pack_id, _pack_opps
+                )
 
             _temporal_keys = (
                 "baseline_context", "trend_direction", "anomaly_score",
