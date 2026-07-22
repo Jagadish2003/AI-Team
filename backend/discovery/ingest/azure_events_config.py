@@ -48,6 +48,23 @@ try:
 except Exception:  # pragma: no cover - import shim
     from discovery.ingest import is_live
 
+# MSP-B2 T4 (AT-651): the Azure cloud-environment map lives in ONE shared module
+# (app.azure_environments) so it is reused consistently across Azure integrations
+# (this connector now; the model gateway's Azure OpenAI Government surface per B9)
+# and never duplicated. It is dependency-free (no DB/auth/network), so importing it
+# keeps this config module offline-safe. Names are re-exported below so existing
+# callers/tests keep using ``azure_events_config.AZURE_CLOUD`` etc. unchanged.
+from app.azure_environments import (  # noqa: F401 — re-exported public surface
+    AZURE_CLOUD,
+    AZURE_US_GOVERNMENT,
+    DEFAULT_ENVIRONMENT,
+    ENVIRONMENTS,
+    AzureEnvironment,
+    UnknownAzureEnvironmentError,
+    list_environments,
+)
+from app.azure_environments import resolve_environment as _resolve_environment
+
 logger = logging.getLogger(__name__)
 
 # The connector id — the vault key under which this connector's service principal
@@ -61,67 +78,25 @@ _CONFIG_ENV = "AZURE_EVENT_CONFIG"
 
 
 # ── Cloud environments (AzureCloud / AzureUSGovernment) ──────────────────────────
-# Endpoint-aware from day one (MSP-B2 §1 "Cloud-environment awareness" / AC8). The
-# same authority/resource-manager split the model gateway's customer-tenant mode
-# needs for Azure OpenAI Government — one environment concept, two consumers.
-
-AZURE_CLOUD = "AzureCloud"
-AZURE_US_GOVERNMENT = "AzureUSGovernment"
-
-
-@dataclass(frozen=True)
-class AzureEnvironment:
-    """Resolved endpoints for one Azure cloud environment (all non-secret)."""
-    name: str
-    authority_host: str        # Microsoft identity (AAD) login host
-    resource_manager: str      # ARM (Azure Resource Manager) base endpoint
-
-    @property
-    def arm_scope(self) -> str:
-        """The ARM OAuth scope for the client-credentials grant (``.default``)."""
-        return f"{self.resource_manager.rstrip('/')}/.default"
-
-    def token_endpoint(self, tenant_id: str) -> str:
-        """The AAD v2.0 token endpoint for ``tenant_id`` in this environment."""
-        return f"https://{self.authority_host}/{tenant_id}/oauth2/v2.0/token"
-
-    def subscriptions_url(self) -> str:
-        """ARM endpoint listing subscriptions visible to the token (discovery only)."""
-        return f"{self.resource_manager.rstrip('/')}/subscriptions?api-version=2020-01-01"
-
-
-# Environment map. AzureUSGovernment resolves the sovereign-cloud endpoints
-# (login.microsoftonline.us / management.usgovcloudapi.net) — AC8.
-ENVIRONMENTS: Dict[str, AzureEnvironment] = {
-    AZURE_CLOUD: AzureEnvironment(
-        name=AZURE_CLOUD,
-        authority_host="login.microsoftonline.com",
-        resource_manager="https://management.azure.com",
-    ),
-    AZURE_US_GOVERNMENT: AzureEnvironment(
-        name=AZURE_US_GOVERNMENT,
-        authority_host="login.microsoftonline.us",
-        resource_manager="https://management.usgovcloudapi.net",
-    ),
-}
-
-DEFAULT_ENVIRONMENT = AZURE_CLOUD
+# The environment map + AzureEnvironment type + constants are imported from the
+# shared app.azure_environments module (above) and re-exported here, so this
+# connector and any other Azure integration resolve endpoints from ONE source
+# (MSP-B2 §1 "Cloud-environment awareness" / AT-651 — no duplicate endpoint maps).
 
 
 def resolve_environment(name: Optional[str]) -> AzureEnvironment:
     """Return the :class:`AzureEnvironment` for ``name`` (default AzureCloud).
 
-    Raises :class:`AzureEventConfigError` for an unrecognised environment so a
-    typo surfaces loudly rather than silently defaulting to commercial cloud when
-    a US Government deployment was intended.
+    Thin wrapper over the shared resolver that re-raises its
+    :class:`UnknownAzureEnvironmentError` as :class:`AzureEventConfigError`, so a
+    bad environment surfaces as a connector-config error (consistent with every
+    other invalid-config path here) rather than a bare ValueError. A typo or an
+    unsupported cloud surfaces loudly instead of silently defaulting to Commercial.
     """
-    key = (name or DEFAULT_ENVIRONMENT).strip()
-    env = ENVIRONMENTS.get(key)
-    if env is None:
-        raise AzureEventConfigError(
-            f"unknown Azure environment {key!r}; supported: {sorted(ENVIRONMENTS)}"
-        )
-    return env
+    try:
+        return _resolve_environment(name)
+    except UnknownAzureEnvironmentError as exc:
+        raise AzureEventConfigError(str(exc)) from exc
 
 
 # ── Access modes (Lighthouse delegated / direct) ─────────────────────────────────
