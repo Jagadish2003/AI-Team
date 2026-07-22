@@ -219,6 +219,58 @@ PACK_REGISTRY: Dict[str, Dict[str, Any]] = {
         ),
     },
 
+    "security_ops": {
+        "packId":        "security_ops",
+        # MSP-B12 T1: version stamped on every run (R16-B1 §4). This scaffold ships
+        # at 1.0.0; bump on ANY future detector (T2), scorer/calibration (T6), or
+        # corroboration change — an intentional pack-version update is required so
+        # pack governance (1.9) can tell a data change from a pack-logic change. A
+        # boundary test guards this: it fails if the detector/scorer surface changes
+        # without a version bump.
+        "packVersion":   "1.0.0",
+        "packName":      "Security Operations",
+        "domain":        "security_ops",
+        "pack_domain":   "security_ops",
+        # Second sibling of the Cloud-Operations pack on the same template model.
+        # Detectors are MSP-B12 T2 (Section 1): remediation recurrence, security<->IT
+        # ping-pong, SLA/deferral ageing, shared-infrastructure concentration, SIR
+        # triage toil. Empty in this scaffold (mirrors cloud_ops's T1->T2 evolution);
+        # T2 populates this list. The pack stays selectable via the registry with no
+        # conditional logic in the discovery runner.
+        "detectors": [],
+        # UI labels are per-detector (S6/S7); added with the detectors in T2.
+        "ui_labels_path": None,
+        # Calibration values, detector thresholds, and the SecOps terminology set
+        # load from this external file, not from code — a config change alters
+        # behaviour with no code deploy (see security_ops_config.py).
+        "config_path":   str(_PACKS_DIR / "security_ops_pack_config.json"),
+        # Model-context hint for LLM enrichment. Security-derived content only
+        # participates in AI-assisted assembly under in-boundary / customer-tenant
+        # model modes; under hosted-AI mode the pack runs deterministic detectors and
+        # emits findings with an explicit "AI-assisted narrative unavailable" label
+        # (the AI-mode gate is MSP-B12 T4). Vulnerability workload data never leaves
+        # the boundary for AI — for federal deployments that is the selling point.
+        "llm_context": (
+            "Security Operations (SecOps) analysis for a managed-security provider. "
+            "Speak SecOps language: remediation, scan cycle, deferral, SLA, triage, "
+            "severity band, security queue, CI class. "
+            "Focus on recurring vulnerability-remediation loops, security<->IT "
+            "reassignment friction, SLA and deferral ageing, and vulnerability "
+            "workload concentrating on shared infrastructure. "
+            "Describe WORKLOAD — effort, recurrence, ageing, concentration — "
+            "aggregated by vulnerability class, service, and CI class. "
+            "Reference groups, queues, services, vulnerability classes, and CI "
+            "classes ONLY — never an individual employee, an individual host, or a "
+            "host x vulnerability pair. "
+            "State corroboration honestly: a single-source finding is capped and "
+            "labelled; concentration is described as 'workload concentrates on...', "
+            "never as causation. "
+            "IMPORTANT: agent surfaces findings to SOC and remediation leaders only. "
+            "No automated remediation, patching, deferral approval, or exception "
+            "sign-off — humans remain responsible for every action."
+        ),
+    },
+
     # CPQ pack slot — reserved for Sprint 6
 
     # "ncino_cpq": {
@@ -368,3 +420,12 @@ def is_cloud_ops_pack(pack_id: Optional[str] = None) -> bool:
     pattern as is_ncino_pack() and is_enterprise_ops_pack().
     """
     return get_pack(pack_id)["domain"] == "cloud_ops"
+
+
+def is_security_ops_pack(pack_id: Optional[str] = None) -> bool:
+    """Return True when the active pack is the Security-Operations Discovery pack (MSP-B12).
+
+    Used in runner.py and scorer for pack routing.  Follows the identical
+    pattern as is_ncino_pack() and is_cloud_ops_pack().
+    """
+    return get_pack(pack_id)["domain"] == "security_ops"
