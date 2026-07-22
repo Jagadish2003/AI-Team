@@ -1,7 +1,22 @@
 # AgentIQ — API_CONTRACT.md (EPIC E0)
-Version: v1.11
-Date: 2026-07-21
+Version: v1.12
+Date: 2026-07-22
 
+> v1.12 — R-1.9.1-L2 / T3 (AT-695): added the Owner-only signed usage-report
+> endpoint `GET /api/usage/report?from=YYYY-MM-DD&to=YYYY-MM-DD`, returning the
+> signed envelope `{report, signature, algorithm}`. The `report` body carries,
+> for the inclusive period: `report_version`, `org_id`, the license `kid` and
+> `license_org_id`, `period {from,to}`, `generated_at`, `runs {total, by_ai_mode,
+> per_run[]}` (per-run system counts), `system_ledger[]` (connect/disconnect), and
+> `event_count`. `signature` is the HMAC-SHA256 of the canonical (sorted-key)
+> report bytes keyed by the per-installation `report_key` from the license payload
+> (L1); `algorithm` is `"HMAC-SHA256"`. CloudFulcrum verifies with the same
+> `report_key`, and any altered byte fails verification. The report is generated
+> LOCALLY and never triggers outbound contact (no-phone-home posture). Owner-only
+> (Analyst/Viewer → 403); a malformed period or a license without a `report_key`
+> → 400. Also available offline as a CLI (`backend/scripts/generate_usage_report.py`).
+> Additive — no previously documented shape changed.
+>
 > v1.11 — R-1.9.1-L1 / T1 + T2 (Licensing Completion & Hardening): extended the
 > Owner-only `LicenseStatusResponse` (`GET /api/license`, also returned by
 > `POST /api/license/update-key`) with two additive, optional-null fields:
