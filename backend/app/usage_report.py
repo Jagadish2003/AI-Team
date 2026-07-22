@@ -31,6 +31,7 @@ import json
 import logging
 from typing import Any, Optional
 
+from . import billing_chain
 from .license_runtime import get_current_license_status
 from .telemetry import get_telemetry_range
 
@@ -109,43 +110,58 @@ def build_usage_report_body(
     connected = get_telemetry_range(org_id, BILLING_SYSTEM_CONNECTED, from_dt, to_dt, limit=_MAX_EVENTS)
     disconnected = get_telemetry_range(org_id, BILLING_SYSTEM_DISCONNECTED, from_dt, to_dt, limit=_MAX_EVENTS)
 
+    # chain_events accumulates {seq, event_type, core} for EVERY covered billing
+    # event, feeding the tamper-evidence hash chain (T4). ``core`` is the same
+    # identity/content the report already lists, so the chain binds what's shown.
+    chain_events: list[dict] = []
+
     by_ai_mode: dict[str, int] = {mode: 0 for mode in _AI_MODES}
     per_run: list[dict] = []
     for ev in runs:
         p = _payload(ev)
         mode = p.get("ai_mode") or "unknown"
         by_ai_mode[mode] = by_ai_mode.get(mode, 0) + 1
-        per_run.append(
-            {
-                "run_id": p.get("run_id"),
-                "ai_mode": p.get("ai_mode"),
-                "connected_system_count": p.get("connected_system_count"),
-                "pack_ids": p.get("pack_ids") or [],
-                "completed_at": p.get("completed_at"),
-            }
+        entry = {
+            "run_id": p.get("run_id"),
+            "ai_mode": p.get("ai_mode"),
+            "connected_system_count": p.get("connected_system_count"),
+            "pack_ids": p.get("pack_ids") or [],
+            "completed_at": p.get("completed_at"),
+            "seq": p.get("seq"),
+        }
+        per_run.append(entry)
+        chain_events.append(
+            {"seq": p.get("seq"), "event_type": BILLING_RUN_COMPLETED, "core": {
+                "run_id": entry["run_id"],
+                "ai_mode": entry["ai_mode"],
+                "connected_system_count": entry["connected_system_count"],
+                "pack_ids": entry["pack_ids"],
+                "completed_at": entry["completed_at"],
+            }}
         )
     per_run.sort(key=lambda r: (str(r.get("completed_at") or ""), str(r.get("run_id") or "")))
 
     ledger: list[dict] = []
-    for ev in connected:
+    for ev, kind, etype in (
+        [(e, "connected", BILLING_SYSTEM_CONNECTED) for e in connected]
+        + [(e, "disconnected", BILLING_SYSTEM_DISCONNECTED) for e in disconnected]
+    ):
         p = _payload(ev)
-        ledger.append(
-            {
-                "event": "connected",
-                "connector": p.get("connector"),
-                "system_identity": p.get("system_identity"),
-                "occurred_at": p.get("occurred_at"),
-            }
-        )
-    for ev in disconnected:
-        p = _payload(ev)
-        ledger.append(
-            {
-                "event": "disconnected",
-                "connector": p.get("connector"),
-                "system_identity": p.get("system_identity"),
-                "occurred_at": p.get("occurred_at"),
-            }
+        entry = {
+            "event": kind,
+            "connector": p.get("connector"),
+            "system_identity": p.get("system_identity"),
+            "occurred_at": p.get("occurred_at"),
+            "seq": p.get("seq"),
+        }
+        ledger.append(entry)
+        chain_events.append(
+            {"seq": p.get("seq"), "event_type": etype, "core": {
+                "event": kind,
+                "connector": entry["connector"],
+                "system_identity": entry["system_identity"],
+                "occurred_at": entry["occurred_at"],
+            }}
         )
     ledger.sort(
         key=lambda x: (
@@ -157,6 +173,7 @@ def build_usage_report_body(
     )
 
     event_count = len(runs) + len(connected) + len(disconnected)
+    tamper_evidence = billing_chain.build_tamper_evidence(chain_events, total_event_count=event_count)
 
     return {
         "report_version": REPORT_VERSION,
@@ -172,6 +189,7 @@ def build_usage_report_body(
         },
         "system_ledger": ledger,
         "event_count": event_count,
+        "tamper_evidence": tamper_evidence,
     }
 
 
