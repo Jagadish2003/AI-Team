@@ -311,6 +311,93 @@ def _ingest_slack_corroboration(org_id: str, run_id: str) -> Dict[str, Any]:
     return build_slack_corroboration_payload(collected)
 
 
+def _ingest_ops_event_bridge(org_id: str, run_id: str) -> Dict[str, Any]:
+    """Drive MSP-B8 on the shared checkpoint path and validate each batch.
+
+    Validation happens inside ``process_batch`` so a malformed or cross-org
+    normalised event cannot advance the staging row checkpoint. Runtime failures
+    remain non-blocking for the wider discovery run; the returned health block
+    makes the degradation explicit.
+    """
+    try:
+        from .cloud_ops_runtime import operational_event_from_bridge_record
+        from .ingest import change_runner
+        from .ingest.ops_event_bridge import OpsEventBridgeIngestor
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "Ops event bridge import failed (non-blocking): [%s]",
+            type(exc).__name__,
+        )
+        return {
+            "records": [],
+            "health": {
+                "status": "unavailable",
+                "reason": type(exc).__name__,
+                "records": 0,
+            },
+        }
+
+    collected: List[Dict[str, Any]] = []
+
+    def _process_batch(batch: Any) -> None:
+        validated: List[Dict[str, Any]] = []
+        for record in batch.records:
+            if not isinstance(record, dict):
+                raise TypeError("ops event bridge emitted a non-mapping record")
+            operational_event_from_bridge_record(record, org_id=org_id)
+            validated.append(dict(record))
+        collected.extend(validated)
+
+    try:
+        result = change_runner.ingest_with_checkpoint(
+            OpsEventBridgeIngestor(),
+            org_id,
+            process_batch=_process_batch,
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "Ops event bridge failed (non-blocking) org=%s run=%s: [%s]",
+            org_id,
+            run_id,
+            type(exc).__name__,
+        )
+        return {
+            "records": collected,
+            "health": {
+                "status": "unavailable",
+                "reason": type(exc).__name__,
+                "records": len(collected),
+            },
+        }
+
+    status = "degraded" if result.error is not None else "ok"
+    health: Dict[str, Any] = {
+        "status": status,
+        "records": len(collected),
+        "reported_records": int(result.records),
+        "batches": int(result.batches),
+        "complete": bool(result.complete),
+        "first_run": bool(result.first_run),
+        "checkpoint_advanced": bool(result.checkpoint_advanced),
+    }
+    if result.error is not None:
+        health["reason"] = type(result.error).__name__
+        logger.warning(
+            "Ops event bridge degraded org=%s run=%s: [%s]",
+            org_id,
+            run_id,
+            type(result.error).__name__,
+        )
+    else:
+        logger.info(
+            "Ops event bridge: %d event(s), %d batch(es), checkpoint_advanced=%s",
+            len(collected),
+            result.batches,
+            result.checkpoint_advanced,
+        )
+    return {"records": collected, "health": health}
+
+
 def _ingest_java_app_corroboration(org_id: str, run_id: str) -> Dict[str, Any]:
     """Drive Java application change-based ingestion and build its corroboration block.
 
@@ -836,6 +923,7 @@ def run(
     _any_enterprise_ops = "enterprise_ops" in _selected_domains
     _any_db_opsignal = "sqlserver_opsignal" in _selected_domains
     _any_security_ops = "security_ops" in _selected_domains
+    _any_cloud_ops = "cloud_ops" in _selected_domains
 
     # Default to all systems if None
     if mode is None:
@@ -877,6 +965,11 @@ def run(
     confluence_data: Dict[str, Any] = {}
     sharepoint_data: Dict[str, Any] = {}
     secops_volume_measurements: Optional[Dict[str, Any]] = None
+    ops_event_bridge_data: Dict[str, Any] = {
+        "records": [],
+        "health": {"status": "not_selected", "records": 0},
+    }
+    cloud_ops_runtime_health: Dict[str, Any] = {"status": "not_selected"}
     logger.info(f"Systems: {sorted(list(_systems))}")
 
     # CS-4 / AT-313: each ingest stage reports success to update_run_step via
@@ -1028,12 +1121,25 @@ def run(
         logger.error(f"Jira ingestion FAILED: {e}")
     update_run_step(run_id, "jira", ok=jira_ok)
 
+    # MSP-B8: staged AWS/Azure event histories are an internal Cloud Operations
+    # source. Drive them whenever any selected pack needs cloud_ops, independent
+    # of the external systems list, and before the no-data guard so a bridge-only
+    # cloud run is still allowed to reach detector evaluation.
+    if _any_cloud_ops:
+        ops_event_bridge_data = _ingest_ops_event_bridge(org_id, run_id)
+
     # Single-ingest: materialization now hands the runner ALL connected systems
     # (not just the ones a probe pre-pass confirmed had data), so guard against
     # aborting a run that still has usable data. Abort only when NO system of
     # record produced anything — the same net outcome the old probe+succeeded
     # path produced (a Salesforce-empty run still ran ServiceNow/Jira detectors).
-    if "salesforce" in _systems and not sf_data and not sn_data and not jira_data:
+    if (
+        "salesforce" in _systems
+        and not sf_data
+        and not sn_data
+        and not jira_data
+        and not ops_event_bridge_data.get("records")
+    ):
         logger.error("No system-of-record data available — cannot run detectors. Aborting.")
         try:
             _elapsed_ms = int((datetime.now(timezone.utc) - _run_started_dt).total_seconds() * 1000)
@@ -1059,6 +1165,10 @@ def run(
             ],
         )
         empty["perSystem"], empty["succeeded"], empty["ingestErrors"] = _ps, _succ, _errs
+        empty["cloudOpsRuntime"] = {
+            "eventBridge": dict(ops_event_bridge_data.get("health") or {}),
+            "assembly": cloud_ops_runtime_health,
+        }
         return empty
 
     # MSP-B3 T4: current-scope CMDB nodes must exist before detector evaluation
@@ -1316,6 +1426,43 @@ def run(
         else:
             logger.info(".NET app corroboration: no operational friction this run")
 
+    # MSP-B4/B5/B8 production seam. B3 CI resolution has already run above, and
+    # connected knowledge sources have now ingested, so recurrence enrichment and
+    # runbook matching see the fullest current-run context. The assembled block is
+    # exactly what the existing Cloud Operations detectors consume.
+    if _any_cloud_ops:
+        try:
+            from .cloud_ops_runtime import build_cloud_ops_runtime
+
+            if not isinstance(sn_data, dict):
+                sn_data = {}
+            sn_data.setdefault("org_id", org_id)
+            runtime = build_cloud_ops_runtime(
+                org_id,
+                sn_data,
+                bridge_records=ops_event_bridge_data.get("records") or (),
+                bridge_health=ops_event_bridge_data.get("health"),
+            )
+            sn_data["cloud_ops"] = runtime.block
+            cloud_ops_runtime_health = runtime.health
+            logger.info(
+                "Cloud Operations runtime assembly: status=%s recurrences=%d "
+                "routing_loops=%d event_signatures=%d",
+                runtime.health.get("status"),
+                len(runtime.block.get("recurrence_records") or ()),
+                len(runtime.block.get("oscillation_records") or ()),
+                len(runtime.block.get("event_signatures") or ()),
+            )
+        except Exception as exc:  # noqa: BLE001
+            cloud_ops_runtime_health = {
+                "status": "unavailable",
+                "reason": type(exc).__name__,
+            }
+            logger.warning(
+                "Cloud Operations runtime assembly failed (non-blocking): [%s]",
+                type(exc).__name__,
+            )
+
     # 2. Context
     org_ctx = build_org_context(sf_data, sn_data, jira_data)
 
@@ -1491,6 +1638,7 @@ def run(
                 cloud_ops_reassignment_ping_pong,
                 cloud_ops_queue_ageing,
                 cloud_ops_shared_ci_hotspot,
+                cloud_ops_runbook_documentation_gap,
             )
             all_detectors = [
                 cloud_ops_recurring_resolution_loop,
@@ -1498,8 +1646,9 @@ def run(
                 cloud_ops_reassignment_ping_pong,
                 cloud_ops_queue_ageing,
                 cloud_ops_shared_ci_hotspot,
+                cloud_ops_runbook_documentation_gap,
             ]
-            logger.info("Pack: cloud_ops — 5 operations detectors active")
+            logger.info("Pack: cloud_ops — 6 operations detectors active")
         elif is_security_ops_pack(pack_id):
             from .detectors import (
                 security_ops_remediation_recurrence,
@@ -2010,6 +2159,10 @@ def run(
         "succeeded": _succeeded,
         "ingestErrors": _ingest_errors,
         "secopsVolume": secops_volume_measurements,
+        "cloudOpsRuntime": {
+            "eventBridge": dict(ops_event_bridge_data.get("health") or {}),
+            "assembly": cloud_ops_runtime_health,
+        },
     }
 
 def _empty_run(run_id: str, org_id: str, mode: str, started_at: str) -> Dict:

@@ -239,7 +239,7 @@ TEMPLATE_REGISTRY: Dict[str, TemplateDefinition] = {
         ),
         # Cloud-Operations pack (pack_config.PACK_REGISTRY["cloud_ops"]).
         pack_id="cloud_ops",
-        # The five Cloud-Operations detectors this template surfaces (MSP-B6
+        # The five primary MSP-B6 Cloud-Operations detectors this template emphasizes
         # T2 record/stream detectors + the T3 shared-CI hotspot). Launching the
         # untouched template applies this emphasis through the already-wired
         # cloud_ops scorer (T4) and core-operations focus-affinity ranking.

@@ -103,6 +103,13 @@ def _runbook_match_for(rec: Dict[str, Any], block: Dict[str, Any]) -> Optional[D
     return None
 
 
+def _runbook_available_for(rec: Dict[str, Any], block: Dict[str, Any]) -> bool:
+    """Per-recurrence B5 availability, falling back to the run-level flag."""
+    if "runbook_matching_available" in rec:
+        return bool(rec.get("runbook_matching_available"))
+    return fc.runbook_matching_available(block)
+
+
 def _build_result(
     rec: Dict[str, Any],
     event_index: Dict[str, Dict[str, Any]],
@@ -267,11 +274,10 @@ def detect(
     block = (sn_data or {}).get("cloud_ops", {}) or {}
     threshold = int(_thresholds().get("min_occurrences", DEFAULT_MIN_OCCURRENCES))
     event_index = _recurring_event_index(block)
-    b5_available = fc.runbook_matching_available(block)
     return [
         _build_result(
             rec, event_index, threshold,
-            b5_available=b5_available,
+            b5_available=_runbook_available_for(rec, block),
             runbook_match=_runbook_match_for(rec, block),
         )
         for rec in _qualifying(block, threshold)

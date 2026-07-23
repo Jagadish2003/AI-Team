@@ -14,8 +14,9 @@ criterion" / T2 AC3):
   4. source_trace        — the originating systems and artifacts (incident ids,
                            event signatures, queue names, services/CIs).
 
-This module builds those parts consistently so the four detectors (T2) and the
-shared-CI hotspot (T3) speak one shape, and so the pack-boundary enforcement (T6)
+This module builds those parts consistently so the record/stream detectors,
+shared-CI hotspot, and B5 documentation gap speak one shape, and so the
+pack-boundary enforcement (T6)
 has a single definition to validate against. It contains NO detector or scorer
 logic — only contract construction and the "no individuals" guarantee helpers.
 
@@ -298,6 +299,13 @@ def enforce_pack_findings(results: Sequence[Any]) -> int:
 # finding's evidence), so the four-part contract stays complete either way.
 
 RUNBOOK_MATCH_UNAVAILABLE_LABEL = "runbook match unavailable"
+RUNBOOK_NO_MATCH_LABEL = "no runbook match"
+
+_RUNBOOK_STATE_LABELS = {
+    "observed": "Observed runbook match",
+    "proposed": "Proposed match, pending confirmation",
+    "confirmed": "Confirmed runbook match",
+}
 
 # Composite-leg kinds.
 LEG_DOCUMENTED_REPEATED_MANUAL = "documented_repeated_manual"
@@ -323,26 +331,60 @@ def build_runbook_leg(
 ) -> Dict[str, Any]:
     """Build the recurrence finding's runbook (documented) leg.
 
-    * B5 available AND a runbook matched → the composite ``documented_repeated_manual``
-      leg (documented=True), carrying the matched runbook id.
-    * Otherwise → the degraded ``repeated_manual`` leg with the explicit
-      ``"runbook match unavailable"`` label (documented=False, degraded=True) so
-      the narrowing is visible, never silent (AC2).
+    * B5 available AND a runbook matched → the composite
+      ``documented_repeated_manual`` leg, preserving the observed/proposed/
+      confirmed lifecycle state and canonical nested runbook descriptor.
+    * B5 available AND no match → an honest, non-degraded ``repeated_manual``
+      leg labelled ``"no runbook match"``.
+    * B5 unavailable → the degraded ``repeated_manual`` leg with the explicit
+      ``"runbook match unavailable"`` label, so an outage is never presented as
+      a completed no-match search.
     """
     if b5_available and runbook_match:
+        state = str(
+            runbook_match.get("match_state")
+            or runbook_match.get("state")
+            or "observed"
+        ).strip().lower()
+        if state not in _RUNBOOK_STATE_LABELS:
+            state = "observed"
+        descriptor = runbook_match.get("runbook")
+        descriptor = descriptor if isinstance(descriptor, dict) else {}
+        runbook_id = (
+            descriptor.get("source_artifact")
+            or descriptor.get("runbook_id")
+            or runbook_match.get("runbook_id")
+            or runbook_match.get("id")
+            or ""
+        )
+        runbook_title = descriptor.get("title") or runbook_match.get("title") or ""
+        documented = state in {"observed", "confirmed"}
         return {
             "kind": LEG_DOCUMENTED_REPEATED_MANUAL,
-            "documented": True,
+            "documented": documented,
             "b5_available": True,
             "degraded": False,
-            "runbook_id": str(runbook_match.get("runbook_id", runbook_match.get("id", ""))),
-            "runbook_title": str(runbook_match.get("title", "")),
+            "provisional": state == "proposed",
+            "runbook_state": state,
+            "label": _RUNBOOK_STATE_LABELS[state],
+            "runbook_id": str(runbook_id),
+            "runbook_title": str(runbook_title),
+        }
+    if b5_available:
+        return {
+            "kind": LEG_REPEATED_MANUAL,
+            "documented": False,
+            "b5_available": True,
+            "degraded": False,
+            "runbook_state": "absent",
+            "label": RUNBOOK_NO_MATCH_LABEL,
         }
     return {
         "kind": LEG_REPEATED_MANUAL,
         "documented": False,
-        "b5_available": bool(b5_available),
+        "b5_available": False,
         "degraded": True,
+        "runbook_state": "unavailable",
         "label": RUNBOOK_MATCH_UNAVAILABLE_LABEL,
     }
 
