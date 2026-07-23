@@ -121,7 +121,22 @@ function FormFieldInput({
       <label htmlFor={id} className="block text-sm font-medium text-text">
         {field.label}
       </label>
-      {field.secret ? (
+      {field.options ? (
+        // MSP-B13 T2: a dropdown selection (AWS partition, Azure environment/mode).
+        <select
+          id={id}
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          disabled={disabled}
+          className={INPUT_CLS}
+        >
+          {field.options.map((opt) => (
+            <option key={opt.value} value={opt.value}>
+              {opt.label}
+            </option>
+          ))}
+        </select>
+      ) : field.secret ? (
         // Never pre-filled; autoComplete=new-password so the browser does not
         // autofill a stored value into this write-only field (T1-AC2).
         <PasswordInput
@@ -149,10 +164,14 @@ function FormFieldInput({
   );
 }
 
-/** Build an empty value map for a set of fields. */
+/**
+ * Build the initial/reset value map for a set of fields. A select resets to its
+ * `defaultValue` (or first option) so a required dropdown always carries a value;
+ * every other field (incl. write-only secrets) resets to empty (T1-AC2).
+ */
 function emptyValues(fields: ConnectorFormField[]): Record<string, string> {
   return fields.reduce<Record<string, string>>((acc, f) => {
-    acc[f.key] = '';
+    acc[f.key] = f.defaultValue ?? (f.options ? f.options[0]?.value ?? '' : '');
     return acc;
   }, {});
 }
@@ -176,6 +195,11 @@ interface Props {
   connectionSummary?: string | null;
   /** The scopes (accounts/subscriptions) pinned under this connection. */
   scopes?: ConnectedScope[];
+  /**
+   * Discovered-but-unpinned scopes (Azure subscriptions) surfaced for Owner
+   * approval (T2-AC3). They are NEVER active until explicitly pinned (T2-AC4).
+   */
+  candidates?: string[];
   /** True while scopes are being (re)loaded. */
   loadingScopes?: boolean;
   /**
@@ -190,6 +214,8 @@ interface Props {
   onTestConnection?: (values: Record<string, string>) => Promise<TestConnectionResult>;
   /** Pin a new scope (account/subscription). */
   onAddScope?: (values: Record<string, string>) => Promise<void>;
+  /** Pin a discovered candidate scope by its identifier (T2-AC4). */
+  onPinCandidate?: (candidateId: string) => Promise<void>;
   /** Unpin a scope by id. */
   onRemoveScope?: (scopeId: string) => Promise<void>;
 }
@@ -199,12 +225,14 @@ export default function MultiScopeConnectorCard({
   connected,
   connectionSummary = null,
   scopes = [],
+  candidates = [],
   loadingScopes = false,
   canManage = true,
   manageDisabledReason,
   onCreateConnection,
   onTestConnection,
   onAddScope,
+  onPinCandidate,
   onRemoveScope,
 }: Props) {
   // ── Connection form state ─────────────────────────────────────────────────
@@ -225,6 +253,7 @@ export default function MultiScopeConnectorCard({
   const [addingScope, setAddingScope] = useState(false);
   const [scopeError, setScopeError] = useState<string | null>(null);
   const [removingId, setRemovingId] = useState<string | null>(null);
+  const [pinningId, setPinningId] = useState<string | null>(null);
 
   const disabledTitle = !canManage ? manageDisabledReason : undefined;
 
@@ -312,6 +341,16 @@ export default function MultiScopeConnectorCard({
       await onRemoveScope(scopeId);
     } finally {
       setRemovingId(null);
+    }
+  }
+
+  async function handlePinCandidate(candidateId: string) {
+    if (!onPinCandidate || !canManage) return;
+    setPinningId(candidateId);
+    try {
+      await onPinCandidate(candidateId);
+    } finally {
+      setPinningId(null);
     }
   }
 
@@ -514,6 +553,45 @@ export default function MultiScopeConnectorCard({
               </li>
             ))}
           </ul>
+        )}
+
+        {/* Candidate scopes (T2-AC3/AC4) — discovered but NOT yet ingesting.
+            Each requires an explicit Owner Pin before it activates. */}
+        {onPinCandidate && candidates.length > 0 && (
+          <div className="mt-4" data-testid="candidate-scopes">
+            <div className="mb-2 flex items-center gap-2">
+              <span className="text-xs font-medium text-text">
+                Discovered {config.scopeNounPlural}
+              </span>
+              <span className="inline-flex items-center rounded-full border border-sky-500/30 bg-sky-500/10 px-2 py-0.5 text-[10px] font-medium leading-none text-sky-300">
+                Pending approval
+              </span>
+            </div>
+            <p className="mb-2 text-[11px] leading-relaxed text-muted">
+              These {config.scopeNounPlural} were discovered but are NOT ingested.
+              Pin one to activate it.
+            </p>
+            <ul className="space-y-2" aria-label={`Candidate ${config.scopeNounPlural}`}>
+              {candidates.map((candidate) => (
+                <li
+                  key={candidate}
+                  className="flex items-center justify-between gap-3 rounded-lg border border-dashed border-sky-500/30 bg-sky-500/5 px-3 py-2"
+                >
+                  <span className="min-w-0 truncate text-[11px] text-text">{candidate}</span>
+                  <Button
+                    variant="secondary"
+                    type="button"
+                    disabled={!canManage || pinningId === candidate}
+                    title={disabledTitle}
+                    onClick={() => handlePinCandidate(candidate)}
+                    ariaLabel={`Pin ${candidate}`}
+                  >
+                    {pinningId === candidate ? 'Pinning…' : 'Pin'}
+                  </Button>
+                </li>
+              ))}
+            </ul>
+          </div>
         )}
 
         {/* Add-scope form — only meaningful once a connection exists. */}
