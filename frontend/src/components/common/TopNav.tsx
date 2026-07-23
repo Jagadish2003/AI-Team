@@ -115,13 +115,13 @@ export default function TopNav() {
 
   return (
     <div className="sticky top-0 z-40 h-[70px] w-full border-b border-border bg-bgheader shadow-[0_2px_8px_rgba(0,0,0,0.15)] backdrop-blur">
-      <div className="flex h-full w-full items-center gap-2 px-4 2xl:gap-3">
+      <div className="flex h-full w-full items-center gap-1 px-3 xl:gap-2 xl:px-4 2xl:gap-3">
         {/* Logo + workspace label. This group is flex-1 min-w-0: it absorbs the
             row's slack (pushing the nav to the right, preserving the original
             brand-left / nav-right layout) AND, when space is tight, it is the
             element that shrinks — so a long org name ellipsizes instead of
             stealing width the nav needs. The logo itself never shrinks. */}
-        <div className="flex min-w-0 flex-1 items-center">
+        <div className="flex min-w-0 flex-1 items-center pr-2">
           <img
             src={theme === "dark" ? "/Logo-Dark.svg" : "/Logo-Light.svg"}
             alt="AgentIQ Logo"
@@ -130,12 +130,12 @@ export default function TopNav() {
           {/* Workspace label — the organisation name resolved from the license
               (R17-D4 Addendum A §2 / T13). min-w-0 + truncate lets an arbitrarily
               long org name ellipsize within the flex-1 group (full name on hover
-              via title). No max-w: the group's width bounds it, so on wide
-              viewports the whole name shows and on narrow ones it truncates. */}
+              via title), and the desktop max-width stops it from crowding the
+              primary nav on narrower laptop screens. */}
           <span
             data-testid="org-name-label"
             title={orgName}
-            className="ml-3 hidden min-w-0 truncate border-l border-border pl-3 text-sm font-semibold text-navtext md:inline-block"
+            className="ml-2 hidden min-w-0 max-w-[8rem] truncate border-l border-border pl-2 text-xs font-semibold text-navtext md:inline-block xl:max-w-[11rem] 2xl:max-w-none 2xl:text-sm"
           >
             {orgName}
           </span>
@@ -148,7 +148,7 @@ export default function TopNav() {
             the first item, Integration Hub, visible). */}
         <nav
           aria-label="Primary"
-          className="hidden min-w-0 shrink items-center gap-0.5 overflow-x-auto px-1 lg:flex xl:gap-1"
+          className="hidden min-w-0 shrink items-center gap-0 overflow-x-auto px-0 lg:flex xl:gap-0.5 2xl:gap-1"
           style={{ scrollbarWidth: "none" }}
         >
           {visibleItems.map((i) => {
@@ -161,7 +161,7 @@ export default function TopNav() {
                 key={i.to}
                 to={to}
                 aria-current={isActive ? "page" : undefined}
-                className={`shrink-0 whitespace-nowrap rounded-full border-t-2 px-2.5 py-1.5 text-[13px] font-medium leading-[18px] transition-colors focus:outline-none focus:ring-2 focus:ring-accent/50 xl:px-3 2xl:text-[14px] ${
+                className={`shrink-0 whitespace-nowrap rounded-full border-t-2 px-1.5 py-1.5 text-[12px] font-medium leading-[18px] transition-colors focus:outline-none focus:ring-2 focus:ring-accent/50 xl:px-2 xl:text-[13px] 2xl:px-3 2xl:text-[14px] ${
                   isActive
                     ? "border-navborder bg-gradient-to-b from-activenav text-navtext"
                     : "border-transparent text-navtext/70 hover:bg-navhover hover:text-navtext"

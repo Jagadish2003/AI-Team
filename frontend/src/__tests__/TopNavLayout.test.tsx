@@ -22,7 +22,7 @@
  */
 
 import React from "react";
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { vi, describe, it, expect } from "vitest";
 
@@ -93,5 +93,20 @@ describe("TopNav — org name never crowds out the nav", () => {
       // getAllByText: labels appear in both the desktop and mobile nav lists.
       expect(screen.getAllByText(label).length).toBeGreaterThan(0);
     }
+  });
+
+  it("uses compact desktop spacing so the first nav link does not crowd the org label", () => {
+    renderNav();
+    const orgLabel = screen.getByTestId("org-name-label");
+    const brandGroup = orgLabel.parentElement;
+    const primaryNav = screen.getByRole("navigation", { name: "Primary" });
+    const integrationLink = within(primaryNav).getByRole("link", { name: "Integration Hub" });
+
+    expect(brandGroup?.className).toContain("pr-2");
+    expect(orgLabel.className).toContain("max-w-[8rem]");
+    expect(primaryNav.className).toContain("gap-0");
+    expect(primaryNav.className).toContain("px-0");
+    expect(integrationLink.className).toContain("px-1.5");
+    expect(integrationLink.className).toContain("text-[12px]");
   });
 });
