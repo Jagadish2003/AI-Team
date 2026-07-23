@@ -44,6 +44,7 @@ from .roadmap_engine import build_roadmap
 from .terminology import apply_run_terminology
 from .routes_normalization import register_normalization_routes
 from .routes_connector_auth import register_connector_auth_routes
+from .routes_cloud_connectors import register_cloud_connector_routes
 from .routes_stack_builder import register_stack_builder_routes
 from .routes_stack_builder_launch import register_stack_builder_launch_routes
 from .routes_salesforce_products import register_salesforce_products_routes
@@ -303,6 +304,7 @@ register_blueprint_routes(app)
 register_normalization_routes(app)
 if not any(r.path == "/api/connectors/oauth/callback" for r in app.routes):
     register_connector_auth_routes(app)
+register_cloud_connector_routes(app)
 register_db_connector_routes(app)
 register_temporal_routes(app)
 register_workspace_routes(app)
