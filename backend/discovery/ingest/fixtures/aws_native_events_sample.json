@@ -1,0 +1,108 @@
+{
+  "_comment": "MSP-B1 / AT-641 offline fixture for the native AWS event connector. Each scope's `events` are RAW provider payloads in the NATIVE event shapes the MSP-B0 mappers consume (CloudWatch/EventBridge Alarm State Change envelopes, EventBridge event envelopes, CloudTrail records) — NOT the DescribeAlarmHistory export shapes used by the B8 export loaders. The CloudWatch scope seeds a re-firing HighCPU alarm (3 distinct firings, same alarm) so offline runs demonstrate B7 admission folding them into one active signal with a count.",
+  "scopes": [
+    {
+      "account": "111122223333",
+      "region": "us-east-1",
+      "surface": "cloudwatch",
+      "label": "prod CloudWatch alarms (us-east-1)",
+      "events": [
+        {
+          "version": "0",
+          "id": "cw-firing-1",
+          "detail-type": "CloudWatch Alarm State Change",
+          "source": "aws.cloudwatch",
+          "account": "111122223333",
+          "time": "2026-07-14T01:00:00Z",
+          "region": "us-east-1",
+          "resources": ["arn:aws:cloudwatch:us-east-1:111122223333:alarm:HighCPU"],
+          "detail": {
+            "alarmName": "HighCPU",
+            "state": {"value": "ALARM", "reason": "Threshold Crossed: 1 datapoint"},
+            "previousState": {"value": "OK"}
+          }
+        },
+        {
+          "version": "0",
+          "id": "cw-firing-2",
+          "detail-type": "CloudWatch Alarm State Change",
+          "source": "aws.cloudwatch",
+          "account": "111122223333",
+          "time": "2026-07-14T01:05:00Z",
+          "region": "us-east-1",
+          "resources": ["arn:aws:cloudwatch:us-east-1:111122223333:alarm:HighCPU"],
+          "detail": {
+            "alarmName": "HighCPU",
+            "state": {"value": "ALARM", "reason": "Threshold Crossed: 1 datapoint"},
+            "previousState": {"value": "ALARM"}
+          }
+        },
+        {
+          "version": "0",
+          "id": "cw-firing-3",
+          "detail-type": "CloudWatch Alarm State Change",
+          "source": "aws.cloudwatch",
+          "account": "111122223333",
+          "time": "2026-07-14T01:10:00Z",
+          "region": "us-east-1",
+          "resources": ["arn:aws:cloudwatch:us-east-1:111122223333:alarm:HighCPU"],
+          "detail": {
+            "alarmName": "HighCPU",
+            "state": {"value": "ALARM", "reason": "Threshold Crossed: 1 datapoint"},
+            "previousState": {"value": "ALARM"}
+          }
+        }
+      ]
+    },
+    {
+      "account": "111122223333",
+      "region": "us-east-1",
+      "surface": "eventbridge",
+      "label": "prod EventBridge operational events (us-east-1)",
+      "events": [
+        {
+          "version": "0",
+          "id": "eb-evt-1",
+          "detail-type": "EC2 Instance State-change Notification",
+          "source": "aws.ec2",
+          "account": "111122223333",
+          "time": "2026-07-14T02:00:00Z",
+          "region": "us-east-1",
+          "resources": ["arn:aws:ec2:us-east-1:111122223333:instance/i-abc"],
+          "detail": {"instance-id": "i-abc", "state": "stopped"}
+        }
+      ]
+    },
+    {
+      "account": "111122223333",
+      "region": "us-east-1",
+      "surface": "cloudtrail",
+      "label": "prod CloudTrail management events (us-east-1)",
+      "events": [
+        {
+          "eventVersion": "1.08",
+          "eventID": "ct-evt-1",
+          "eventTime": "2026-07-14T03:00:00Z",
+          "eventSource": "sts.amazonaws.com",
+          "eventName": "AssumeRole",
+          "awsRegion": "us-east-1",
+          "readOnly": false,
+          "errorCode": null,
+          "userIdentity": {"type": "IAMUser", "arn": "arn:aws:iam::111122223333:user/alice"},
+          "resources": [{"ARN": "arn:aws:iam::111122223333:role/admin", "type": "AWS::IAM::Role"}]
+        },
+        {
+          "eventVersion": "1.08",
+          "eventID": "ct-evt-2",
+          "eventTime": "2026-07-14T03:30:00Z",
+          "eventSource": "ec2.amazonaws.com",
+          "eventName": "TerminateInstances",
+          "awsRegion": "us-east-1",
+          "errorCode": "Client.UnauthorizedOperation",
+          "errorMessage": "You are not authorized to perform this operation.",
+          "userIdentity": {"type": "IAMUser", "arn": "arn:aws:iam::111122223333:user/bob"}
+        }
+      ]
+    }
+  ]
+}
