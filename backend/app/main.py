@@ -31,6 +31,7 @@ from .db import (
     org_connector_set,
 )
 from . import license_limits
+from . import connector_roadmap
 from .normalization_enrichment import KV_NORMALIZATION, enrich_ambiguous_mappings
 from .opportunity_display import (
     with_display,
@@ -446,6 +447,18 @@ def connect_connector(connector_id: str, body: Dict[str, Any]) -> Dict[str, Any]
     if not c:
         raise HTTPException(404, "connector not found")
     status = body.get("status", "connected")
+    # R191-R1 T5 (AT-726 / AC2): a roadmap connector (SAP/D365 and any tile whose
+    # ingestion does not ship yet) is NOT connectable — refuse a connect attempt
+    # with an actionable, named reason so it can never become a connected system
+    # a run could select. Applies only to the connect transition; a disconnect on
+    # an unconnected roadmap tile is a harmless no-op.
+    if status == license_limits.CONNECTED_STATUS and connector_roadmap.is_roadmap(
+        connector_id
+    ):
+        raise HTTPException(
+            409,
+            connector_roadmap.roadmap_block_message(connector_id, c.get("name")),
+        )
     # R17-D4 Addendum A / T9: enforce limits.max_systems at connection time.
     # Only a transition TO "connected" adds a system; forward-only, so reconnects
     # of an already-connected connector and any non-connect status change (e.g.

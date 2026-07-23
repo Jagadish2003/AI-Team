@@ -228,6 +228,10 @@ class OperationalChangeIngestor(ChangeBasedIngestor):
         #: skipped target; the shape matches ``ConnectorHealth.to_dict()``.
         self.credential_health: List[Dict[str, Any]] = []
 
+    def reset_credential_health(self) -> None:
+        """Start a distinct run with an empty credential-health slate."""
+        self.credential_health = []
+
     # ── Collection hooks (implemented per platform) ─────────────────────────
     @abc.abstractmethod
     def _load_targets(self, org_id: str) -> List[Any]:
@@ -270,9 +274,6 @@ class OperationalChangeIngestor(ChangeBasedIngestor):
         """
         cursors = decode_checkpoint(since.value if since else None)
         running = {app_id: dict(cur) for app_id, cur in cursors.items()}
-        # Fresh health slate for this pass — one entry per fail-closed target.
-        self.credential_health = []
-
         targets = self._load_targets(org_id)
         logger.info(
             "%s: org=%s %s — %d configured application(s)",

@@ -196,17 +196,19 @@ function PanelFrame({
       id={id}
       data-testid={id}
       data-state={state}
-      className={`scroll-mt-24 rounded-2xl border bg-panel p-5 shadow-sm transition ${
+      className={`min-w-0 overflow-hidden scroll-mt-24 rounded-2xl border bg-panel p-5 shadow-sm transition ${
         highlighted ? "border-accent ring-4 ring-accent/30" : "border-border"
       }`}
     >
       <div className="mb-4 flex items-start gap-3">
-        <div className="rounded-xl bg-bg/40 p-2 text-muted">{icon}</div>
+        <div className="shrink-0 rounded-xl bg-bg/40 p-2 text-muted">{icon}</div>
         <div className="min-w-0 flex-1">
           <h2 className="text-lg font-semibold text-text">{title}</h2>
           <p className="mt-1 text-sm text-muted">{description}</p>
         </div>
-        <PanelStateIndicator state={state} />
+        <div className="shrink-0">
+          <PanelStateIndicator state={state} />
+        </div>
       </div>
       {children}
     </section>
@@ -775,14 +777,14 @@ function ContentPanel({
               <p className="mt-2 text-sm text-muted">No active refresh progress is available.</p>
             )}
           </div>
-          <details className="rounded-xl border border-border p-4" open={resource.data.skipped.length > 0}>
+          <details className="min-w-0 overflow-hidden rounded-xl border border-border p-4" open={resource.data.skipped.length > 0}>
             <summary className="cursor-pointer font-semibold text-text">Supporting source details</summary>
-            <div className="mt-3 overflow-x-auto">
-              <table className="min-w-full text-left text-sm">
-                <thead className="text-xs uppercase text-muted"><tr><th className="pb-2 pr-4">Source</th><th className="pb-2 pr-4">Discovered</th><th className="pb-2">Embedded</th></tr></thead>
+            <div className="mt-3 max-w-full overflow-x-auto">
+              <table className="w-full table-fixed text-left text-sm">
+                <thead className="text-xs uppercase text-muted"><tr><th className="w-[46%] break-words pb-2 pr-3">Source</th><th className="w-[28%] break-words pb-2 pr-3">Discovered</th><th className="w-[26%] break-words pb-2">Embedded</th></tr></thead>
                 <tbody className="divide-y divide-border">
                   {resource.data.indexed_by_source.map((source) => (
-                    <tr key={source.source_system}><td className="py-2 pr-4 font-medium text-text">{labelize(source.source_system)}</td><td className="py-2 pr-4">{source.chunk_count}</td><td className="py-2">{source.embedded_count}</td></tr>
+                    <tr key={source.source_system}><td className="break-words py-2 pr-3 font-medium text-text">{labelize(source.source_system)}</td><td className="break-words py-2 pr-3 tabular-nums">{source.chunk_count}</td><td className="break-words py-2 tabular-nums">{source.embedded_count}</td></tr>
                   ))}
                 </tbody>
               </table>
@@ -791,7 +793,7 @@ function ContentPanel({
               <div className="mt-4">
                 <div className="text-sm font-semibold text-text">Skipped items</div>
                 <ul className="mt-2 space-y-1 text-sm text-muted">
-                  {resource.data.skipped.map((item) => <li key={item.reason}>{labelize(item.reason)}: {item.count}</li>)}
+                  {resource.data.skipped.map((item) => <li key={item.reason} className="break-words">{labelize(item.reason)}: {item.count}</li>)}
                 </ul>
               </div>
             ) : null}
@@ -971,7 +973,7 @@ function RunHealthDashboard({ role }: { role: "owner" | "analyst" }) {
           <div className="flex flex-wrap items-start justify-between gap-4"><div className="flex items-start gap-3"><div className="rounded-xl bg-accent/10 p-2"><SummaryIcon className={`h-5 w-5 ${summary.icon === Loader2 ? "animate-spin" : ""}`} aria-hidden="true" /></div><div><h2 className="text-lg font-semibold">{summary.label}</h2><p className="mt-1 max-w-3xl text-sm text-muted">{summary.detail}</p></div></div><div className="text-xs text-muted">{refreshedAt ? `Updated ${formatDate(refreshedAt)}` : "Update time unavailable"}</div></div>
         </section>
         <AttentionStrip resource={attention.state} retry={attention.refresh} />
-        <div className="grid gap-5 xl:grid-cols-2">
+        <div className="grid min-w-0 gap-5 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
           <ConnectorsPanel resource={connectors.state} retry={connectors.refresh} refresh={connectors.refresh} role={role} highlighted={selectedPanel === "connectors"} />
           <RunsPanel resource={runs.state} retry={runs.refresh} highlighted={selectedPanel === "runs"} />
           <ContentPanel resource={content.state} retry={content.refresh} highlighted={selectedPanel === "content"} />

@@ -314,6 +314,7 @@ def test_startup_validation_warns_on_production_env_fallback_even_when_hosted_se
     active provider — the env var is a hygiene risk regardless of selection."""
     monkeypatch.delenv("MODEL_GENERATION_PROVIDER", raising=False)
     monkeypatch.delenv("MODEL_EMBEDDING_PROVIDER", raising=False)
+    monkeypatch.setenv("ENVIRONMENT", "production")
     monkeypatch.setenv("REQUIRE_CONNECTOR_SECRETS", "1")
     monkeypatch.setenv(CONFIG_KEY_API_KEY, "ct-FAKE-KEY-not-logged")
 

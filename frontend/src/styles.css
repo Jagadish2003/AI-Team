@@ -326,6 +326,20 @@ body *::-webkit-scrollbar-corner {
   color: rgb(4 120 87);
 }
 
+.integration-coming-soon-status-pill {
+  padding: 0.25rem 0.625rem;
+  border-color: rgb(245 158 11 / 0.35);
+  background-color: rgb(245 158 11 / 0.12);
+  color: rgb(251 191 36);
+  font-weight: 600;
+}
+
+:root.theme-light .integration-coming-soon-status-pill {
+  border-color: rgb(245 158 11 / 0.45);
+  background-color: rgb(254 243 199 / 0.72);
+  color: rgb(180 83 9);
+}
+
 .opportunity-round-bullets li > span:first-child {
   display: inline-block;
   width: 0.3125rem;

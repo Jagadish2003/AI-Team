@@ -36,4 +36,10 @@ export interface Connector {
   // Declared Salesforce cloud products for this org (e.g. 'salesforce_ncino',
   // 'salesforce_sc'). Drives the connector's actual read-scope display.
   products?: string[];
+  // R191-R1 T5 (AT-726): anchor-on-shipped roadmap flags. A tile whose ingestion
+  // does not ship yet (SAP/D365 and other unshipped connectors) is roadmap:
+  // rendered as a non-connectable "Coming soon" tile. roadmapTarget is retained
+  // as release metadata ("2.0.1") or "unscheduled"; shipped tiles have roadmap=false.
+  roadmap?: boolean;
+  roadmapTarget?: string | null;
 }

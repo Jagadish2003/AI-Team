@@ -6,7 +6,7 @@ const map: Record<ConnectorStatus, { label: string; cls: string }> = {
   not_connected: { label: 'Not connected', cls: 'bg-slate-500/10 text-muted border-border' },
   disconnected: { label: 'Disconnected', cls: 'bg-slate-500/10 text-muted border-border' },
   not_configured: { label: 'Not configured', cls: 'bg-slate-500/10 text-muted border-border' },
-  coming_soon: { label: 'Coming soon', cls: 'bg-amber-500/15 text-amber-200 border-amber-500/30' }
+  coming_soon: { label: 'Coming soon', cls: 'integration-coming-soon-status-pill' }
 };
 
 export default function Badge({ status }: { status: ConnectorStatus }) {
