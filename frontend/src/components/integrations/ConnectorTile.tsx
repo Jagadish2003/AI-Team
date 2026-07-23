@@ -73,6 +73,15 @@ export default function ConnectorTile({
   const isConfigured = connector.configured;
   const isEnabled = ENABLED_CONNECTOR_IDS.includes(connector.id);
 
+  // R191-R1 T5 (AT-726): a roadmap connector (SAP/D365 and any tile whose
+  // ingestion does not ship yet) is never connectable — it renders as a
+  // "Coming — <target>" tile with a disabled action. SAP/D365 carry a versioned
+  // target (2.0.1); other unshipped tiles are "unscheduled" and read "Coming soon".
+  const isRoadmap = connector.roadmap === true;
+  const roadmapTarget = connector.roadmapTarget ?? null;
+  const roadmapIsVersioned = Boolean(roadmapTarget && /\d/.test(roadmapTarget));
+  const comingLabel = roadmapIsVersioned ? `Coming — ${roadmapTarget}` : 'Coming soon';
+
   // Connecting / configuring / reconnecting are analyst+ writes (the connector
   // auth-url and token routes are analyst+). Viewers get a read-only hub: their
   // action button is disabled, EXCEPT the read-only "View data" action on an
@@ -115,8 +124,11 @@ export default function ConnectorTile({
   // Dynamics 365 / SAP) keeps its normal disabled "Connect" state.
   const outboundSetupGate = hideAuthCode && isEnabled;
 
-  // When the token is expired/missing, override the button to "Reconnect"
-  const actionLabel = outboundSetupGate
+  // When the token is expired/missing, override the button to "Reconnect".
+  // A roadmap tile always shows its "Coming …" label (it can never connect).
+  const actionLabel = isRoadmap
+    ? comingLabel
+    : outboundSetupGate
     ? 'Set up outbound access'
     : tokenExpired
     ? 'Reconnect'
@@ -141,13 +153,17 @@ export default function ConnectorTile({
   // Viewers can only use the read-only "View data" action; every write action
   // (Connect / Configure & Sync / Reconnect) is disabled for them.
   const viewerBlocks = isViewer && actionLabel !== 'View data';
-  const actionDisabled = !isEnabled || limitBlocksNew || viewerBlocks;
+  const actionDisabled = isRoadmap || !isEnabled || limitBlocksNew || viewerBlocks;
 
   // R18-C0 P4 / AT-566: a connected tile offers Disconnect. Disconnecting is a
   // connector write (analyst+), so viewers never see it; it is independent of the
   // new-connection license gate (removing a connection is always allowed).
   const canDisconnect = isConnected && !isViewer && Boolean(onDisconnect);
-  const disabledTitle = limitBlocksNew
+  const disabledTitle = isRoadmap
+    ? roadmapIsVersioned
+      ? `${connector.name} is on the AgentIQ roadmap (coming in ${roadmapTarget}) and is not yet connectable.`
+      : `${connector.name} is on the AgentIQ roadmap and is not yet connectable.`
+    : limitBlocksNew
     ? (connectBlockMessage || 'Your license limit has been reached. Contact CloudFulcrum to add more.')
     : !isEnabled
     ? 'Connecting new sources is currently unavailable'
@@ -184,7 +200,18 @@ export default function ConnectorTile({
                 Token expired
               </span>
             )}
-            <Badge status={connector.status} />
+            {isRoadmap ? (
+              // Roadmap tile: an honest "Coming — <target>" pill in place of the
+              // (meaningless) connection-status badge (R191-R1 T5 / AT-726).
+              <span
+                data-testid="connector-roadmap-badge"
+                className="inline-flex items-center whitespace-nowrap rounded-full border border-amber-500/30 bg-amber-500/15 px-2 py-0.5 text-xs font-medium leading-none text-amber-200"
+              >
+                {comingLabel}
+              </span>
+            ) : (
+              <Badge status={connector.status} />
+            )}
           </div>
         </div>
       </div>
