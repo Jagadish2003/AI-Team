@@ -60,6 +60,20 @@ describe("LicenseLimitBanner (AT-506 / AC14)", () => {
     );
   });
 
+  it("shows licensing-specific wording at the unlicensed cap (T5 / AC4)", () => {
+    licenseMock.status = "readonly"; // no active license → unlicensed cap, not a licensed limit
+    render(
+      <LicenseLimitBanner
+        limits={limits({ systemsUsed: 2, systemsLicensed: 2, unlimited: false, canConnectMore: false })}
+      />,
+    );
+    expect(screen.getByTestId("license-usage-count").textContent).toBe("2 of 2");
+    // Must name the MISSING license, not claim "your license covers 2".
+    expect(screen.getByTestId("license-at-limit").textContent).toBe(
+      "No license is installed. Unlicensed installations can connect up to 2 systems. Install a license from CloudFulcrum to connect more.",
+    );
+  });
+
   it("labels a genuine unlimited license (valid status) as such (AC13)", () => {
     licenseMock.status = "valid";
     render(

@@ -24,9 +24,14 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 # is backend/), so `app.*` and `license.*` both resolve under backend.
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
 
+import pytest  # noqa: E402  (re-imported here for the parametrize below)
+
 from app.licensing import verify_license_signature  # noqa: E402
 from license.generate_license import (  # noqa: E402
+    DEFAULT_DEPLOYMENT_TYPE,
+    DEFAULT_KID,
     DEFAULT_PRIVATE_KEY,
+    PAYLOAD_VERSION,
     build_payload,
     generate,
     sign_payload,
@@ -143,6 +148,92 @@ def test_tampered_payload_is_rejected():
 def test_malformed_key_returns_none_never_raises(bad):
     priv = Ed25519PrivateKey.generate()
     assert verify_license_signature(bad, public_key=priv.public_key()) is None
+
+
+# ---------------------------------------------------------------------------
+# R-1.9.1-L1 / T1 (AT-687) — payload v2 schema.
+# ---------------------------------------------------------------------------
+def test_v2_payload_carries_new_fields_and_version():
+    """T1: a v2 payload stamps payload_version and the four new fields, with sane
+    defaults, while every existing field is unchanged (purely additive)."""
+    today = datetime.date(2026, 6, 19)
+    payload = build_payload(
+        "City National Bank",
+        "cnb-2026-001",
+        12,
+        14,
+        today=today,
+    )
+    # New v2 fields.
+    assert payload["payload_version"] == PAYLOAD_VERSION == 2
+    assert payload["kid"] == DEFAULT_KID
+    assert payload["deployment_type"] == DEFAULT_DEPLOYMENT_TYPE == "saas"
+    assert payload["report_key"] is None
+    # org_id defaults to customer when not given (always populated for a v2 key).
+    assert payload["org_id"] == "City National Bank"
+    # Existing fields unchanged.
+    assert payload["customer"] == "City National Bank"
+    assert payload["org_name"] == "City National Bank"
+    assert payload["term_months"] == 12
+    assert payload["grace_days"] == 14
+    assert payload["issued_at"] == "2026-06-19"
+    assert payload["expires_at"] == "2027-06-14"
+    assert payload["limits"] == {
+        "max_systems": None,
+        "max_workspaces": None,
+        "enabled_packs": None,
+    }
+
+
+def test_v2_payload_carries_explicit_fields():
+    """An explicit org_id, kid, deployment_type, and report_key are baked in."""
+    payload = build_payload(
+        "Teachers Credit Union",
+        "tcu-2027-001",
+        12,
+        14,
+        org_id="org-tcu-prod",
+        kid="cf-2027-2",
+        deployment_type="customer_hosted",
+        report_key="rk-abc123",
+    )
+    assert payload["org_id"] == "org-tcu-prod"
+    assert payload["kid"] == "cf-2027-2"
+    assert payload["deployment_type"] == "customer_hosted"
+    assert payload["report_key"] == "rk-abc123"
+
+
+def test_build_payload_rejects_unknown_deployment_type():
+    """Issuer-side guard: an out-of-set deployment_type is rejected at build time."""
+    with pytest.raises(ValueError):
+        build_payload("ACME", "acme-1", 6, 14, deployment_type="on_prem")
+
+
+def test_v2_fields_survive_signing_and_verification():
+    """T1: the new fields flow through signing into the verified payload, so the
+    verifier (T2–T4) and status API (AC5) can read them."""
+    priv = Ed25519PrivateKey.generate()
+    pub = priv.public_key()
+
+    payload = build_payload(
+        "Teachers Credit Union",
+        "tcu-2027-001",
+        12,
+        14,
+        org_id="org-tcu-prod",
+        kid="cf-2027-2",
+        deployment_type="customer_hosted",
+        report_key="rk-abc123",
+    )
+    key = sign_payload(payload, priv)
+
+    parsed = verify_license_signature(key, public_key=pub)
+    assert parsed is not None
+    assert parsed["payload_version"] == 2
+    assert parsed["org_id"] == "org-tcu-prod"
+    assert parsed["kid"] == "cf-2027-2"
+    assert parsed["deployment_type"] == "customer_hosted"
+    assert parsed["report_key"] == "rk-abc123"
 
 
 @pytest.mark.skipif(

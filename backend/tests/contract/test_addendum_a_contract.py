@@ -36,7 +36,7 @@ from fastapi.testclient import TestClient
 
 from app import db, license_limits
 from app.org_display_name import DEFAULT_ORG_DISPLAY_NAME
-from license.generate_license import build_payload, sign_payload
+from license.generate_license import DEFAULT_KID, build_payload, sign_payload
 
 AUTH = {"Authorization": "Bearer dev-token-change-me"}
 DEV_USER = "dev-token-change-me"
@@ -67,13 +67,19 @@ def _trust(monkeypatch) -> Ed25519PrivateKey:
 def _mint(
     priv: Ed25519PrivateKey,
     *,
+    org=None,
     max_systems=None,
     org_name=None,
     customer="City National Bank",
     term_months: int = 12,
 ) -> str:
     """A real signed key with the addendum fields baked in. ``term_months=12``
-    means ``expires_at`` is ~360 days out, so the installed key is ``valid``."""
+    means ``expires_at`` is ~360 days out, so the installed key is ``valid``.
+
+    ``org`` binds the payload's ``org_id`` to the installation org so the key
+    clears org binding (T2) as well as the T4 version gate — ``build_payload``
+    already stamps ``payload_version=2`` + a default ``kid``, so the payload is
+    v2-shaped."""
     payload = build_payload(
         customer,
         f"lic-{uuid.uuid4().hex[:8]}",
@@ -81,6 +87,7 @@ def _mint(
         14,
         max_systems=max_systems,
         org_name=org_name,
+        org_id=org,
     )
     return sign_payload(payload, priv)
 
@@ -137,7 +144,7 @@ def test_ac10_installed_key_blocks_nth_plus_one(client: TestClient, monkeypatch)
     priv = _trust(monkeypatch)
     org = _owner_org()
     _seed_catalog(["sys1", "sys2", "sys3"])
-    _install(client, org, _mint(priv, max_systems=2, org_name="Teachers Credit Union"))
+    _install(client, org, _mint(priv, org=org, max_systems=2, org_name="Teachers Credit Union"))
 
     # First 2 connect normally (within the licensed scope).
     assert _connect(client, org, "sys1").status_code == 200
@@ -168,14 +175,14 @@ def test_ac11_higher_limit_key_unblocks_no_restart(client: TestClient, monkeypat
     priv = _trust(monkeypatch)
     org = _owner_org()
     _seed_catalog(["sys1", "sys2", "sys3"])
-    _install(client, org, _mint(priv, max_systems=2))
+    _install(client, org, _mint(priv, org=org, max_systems=2))
 
     assert _connect(client, org, "sys1").status_code == 200
     assert _connect(client, org, "sys2").status_code == 200
     assert _connect(client, org, "sys3").status_code == 402  # at the cap
 
     # Paste a renewed key with a higher limit — the existing LIC-1 renewal path.
-    _install(client, org, _mint(priv, max_systems=3))
+    _install(client, org, _mint(priv, org=org, max_systems=3))
 
     # No restart — the very next attempt (same running client) succeeds.
     assert _connect(client, org, "sys3").status_code == 200
@@ -190,12 +197,12 @@ def test_ac12_lower_limit_key_never_disconnects(client: TestClient, monkeypatch)
     org = _owner_org()
     _seed_catalog(["sys1", "sys2", "sys3", "sys4"])
     # Connect three systems under a generous key.
-    _install(client, org, _mint(priv, max_systems=5))
+    _install(client, org, _mint(priv, org=org, max_systems=5))
     for cid in ("sys1", "sys2", "sys3"):
         assert _connect(client, org, cid).status_code == 200
 
     # A renewed key arrives carrying a LOWER limit (2) than the 3 connected.
-    _install(client, org, _mint(priv, max_systems=2))
+    _install(client, org, _mint(priv, org=org, max_systems=2))
 
     # Existing connections are untouched — never auto-disconnected (never a cold stop).
     listed = {c["id"]: c for c in db.org_connectors_list(org)}
@@ -220,7 +227,7 @@ def test_ac13_null_limit_key_is_unlimited(client: TestClient, monkeypatch):
     org = _owner_org()
     ids = [f"sys{i}" for i in range(8)]
     _seed_catalog(ids)
-    _install(client, org, _mint(priv, max_systems=None, org_name="Unlimited Co"))
+    _install(client, org, _mint(priv, org=org, max_systems=None, org_name="Unlimited Co"))
 
     for cid in ids:
         assert _connect(client, org, cid).status_code == 200
@@ -233,12 +240,16 @@ def test_ac13_null_limit_key_is_unlimited(client: TestClient, monkeypatch):
 
 
 def test_ac13_pre_addendum_key_without_limits_is_unlimited(client: TestClient, monkeypatch):
-    """A key issued BEFORE the addendum omits the limits block entirely — it must
-    still validate and be treated as unlimited (opt-in enforcement per key)."""
+    """A key that omits the limits block entirely (as a pre-addendum key did) must
+    still validate and be treated as unlimited (opt-in enforcement per key). The
+    payload is v2-shaped so it clears the T4 gate; only the addendum fields are
+    absent."""
     priv = _trust(monkeypatch)
     org = _owner_org()
     _seed_catalog(["sys1", "sys2", "sys3"])
-    # Minimal pre-addendum payload: no limits, no org_name.
+    # A v2 key that omits the addendum fields (no limits, no org_name). It is
+    # still v2-shaped (org_id + kid), so it clears the T4 version gate; the point
+    # is that the OPTIONAL addendum fields being absent → unlimited.
     payload = {
         "customer": "Legacy Bank",
         "license_id": "legacy-001",
@@ -246,6 +257,8 @@ def test_ac13_pre_addendum_key_without_limits_is_unlimited(client: TestClient, m
         "expires_at": _future(),
         "term_months": 12,
         "grace_days": 14,
+        "org_id": org,
+        "kid": DEFAULT_KID,
     }
     _install(client, org, _mint_raw(priv, payload))
 
@@ -262,7 +275,7 @@ def test_ac14_shown_count_matches_enforced_count(client: TestClient, monkeypatch
     priv = _trust(monkeypatch)
     org = _owner_org()
     _seed_catalog(["sys1", "sys2", "sys3"])
-    _install(client, org, _mint(priv, max_systems=2))
+    _install(client, org, _mint(priv, org=org, max_systems=2))
     hdr = {**AUTH, "X-Org-Id": org}
 
     assert _connect(client, org, "sys1").status_code == 200
@@ -294,7 +307,7 @@ def test_ac14_state_reflects_higher_limit_key_no_restart(client: TestClient, mon
     _seed_catalog(["sys1"])
     hdr = {**AUTH, "X-Org-Id": org}
 
-    _install(client, org, _mint(priv, max_systems=1))
+    _install(client, org, _mint(priv, org=org, max_systems=1))
     assert _connect(client, org, "sys1").status_code == 200
     at_limit = client.get(LIMITS_PATH, headers=hdr).json()
     assert at_limit == {
@@ -304,7 +317,7 @@ def test_ac14_state_reflects_higher_limit_key_no_restart(client: TestClient, mon
         "canConnectMore": False,
     }
 
-    _install(client, org, _mint(priv, max_systems=3))
+    _install(client, org, _mint(priv, org=org, max_systems=3))
     after = client.get(LIMITS_PATH, headers=hdr).json()
     assert after["systemsLicensed"] == 3
     assert after["canConnectMore"] is True
@@ -317,7 +330,7 @@ def test_ac14_state_reflects_higher_limit_key_no_restart(client: TestClient, mon
 def test_ac15_org_name_from_installed_key(client: TestClient, monkeypatch):
     priv = _trust(monkeypatch)
     org = _owner_org()
-    _install(client, org, _mint(priv, org_name="Teachers Credit Union"))
+    _install(client, org, _mint(priv, org=org, org_name="Teachers Credit Union"))
 
     resp = client.get(ORG_NAME_PATH, headers={**AUTH, "X-Org-Id": org})
     assert resp.status_code == 200, resp.text
@@ -329,11 +342,11 @@ def test_ac15_org_name_updates_on_new_key_no_restart(client: TestClient, monkeyp
     org = _owner_org()
     hdr = {**AUTH, "X-Org-Id": org}
 
-    _install(client, org, _mint(priv, org_name="Teachers Credit Union"))
+    _install(client, org, _mint(priv, org=org, org_name="Teachers Credit Union"))
     assert client.get(ORG_NAME_PATH, headers=hdr).json() == {"orgName": "Teachers Credit Union"}
 
     # Paste a key with a different org_name — same running client, no restart.
-    _install(client, org, _mint(priv, org_name="Teachers Credit Union of Indiana"))
+    _install(client, org, _mint(priv, org=org, org_name="Teachers Credit Union of Indiana"))
     assert client.get(ORG_NAME_PATH, headers=hdr).json() == {
         "orgName": "Teachers Credit Union of Indiana"
     }
@@ -350,6 +363,9 @@ def test_ac15_pre_addendum_key_falls_back_to_customer(client: TestClient, monkey
         "expires_at": _future(),
         "term_months": 12,
         "grace_days": 14,
+        # v2-shaped but with no org_name → the display name falls back to customer.
+        "org_id": org,
+        "kid": DEFAULT_KID,
     }
     _install(client, org, _mint_raw(priv, payload))
     assert client.get(ORG_NAME_PATH, headers={**AUTH, "X-Org-Id": org}).json() == {
@@ -369,10 +385,11 @@ def test_ac16_neutral_default_before_any_key(client: TestClient):
     assert client.get(ORG_NAME_PATH, headers=hdr).json() == {"orgName": DEFAULT_ORG_DISPLAY_NAME}
     assert DEFAULT_ORG_DISPLAY_NAME == "Your Organisation"
 
-    # And an unlicensed org carries no numeric cap (unlimited state, per AC13).
+    # An unlicensed org is now capped at the unlicensed cap (default 2), not
+    # unlimited (R-1.9.1-L1 / T5, AC4) — a real numeric limit before any key.
     state = client.get(LIMITS_PATH, headers=hdr).json()
-    assert state["systemsLicensed"] is None
-    assert state["unlimited"] is True
+    assert state["systemsLicensed"] == 2
+    assert state["unlimited"] is False
 
 
 # ===========================================================================
@@ -385,7 +402,7 @@ def test_single_key_drives_both_scope_and_name(client: TestClient, monkeypatch):
     _seed_catalog(["sys1", "sys2"])
     hdr = {**AUTH, "X-Org-Id": org}
 
-    _install(client, org, _mint(priv, max_systems=1, org_name="Teachers Credit Union"))
+    _install(client, org, _mint(priv, org=org, max_systems=1, org_name="Teachers Credit Union"))
 
     # §2 — the name from the same key.
     assert client.get(ORG_NAME_PATH, headers=hdr).json() == {"orgName": "Teachers Credit Union"}

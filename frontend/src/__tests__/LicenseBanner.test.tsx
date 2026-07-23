@@ -97,6 +97,14 @@ describe("LicenseBanner (LIC-1 / T9)", () => {
     ).toBeInTheDocument();
   });
 
+  it("renders the org-mismatch message for a wrong-org key (R-1.9.1-L1 / T2, AC1)", async () => {
+    h.mockFetch.mockResolvedValue(make({ status: "invalid", reason: "org_mismatch", expires_at: null }));
+    renderBanner();
+    const banner = await screen.findByTestId("license-banner");
+    expect(banner).toHaveAttribute("data-reason", "org_mismatch");
+    expect(banner.textContent).toMatch(/issued to a different organisation/i);
+  });
+
   it("renders a clock-inconsistency message when the clock guard trips (AC8)", async () => {
     h.mockFetch.mockResolvedValue(make({ status: "readonly", reason: "clock_rollback", expires_at: null }));
     renderBanner();

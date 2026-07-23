@@ -24,15 +24,20 @@ import pytest
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from app import license_runtime as lr
-from app.licensing import LicenseStatus
+from app.licensing import DEFAULT_KID, LicenseStatus
 
 
 # --------------------------------------------------------------------------
 # Helpers / fixtures
 # --------------------------------------------------------------------------
 def _mint_key(private_key: Ed25519PrivateKey, *, expires_at: str, customer="City National Bank",
-              grace_days: int = 14) -> str:
-    """Mint a base64(payload).base64(signature) key with the issuing encoding."""
+              grace_days: int = 14, org_id: str = "default") -> str:
+    """Mint a base64(payload).base64(signature) key with the issuing encoding.
+
+    v2-shaped: ``org_id`` (default ``"default"``, matching the test org so org
+    binding passes) + ``kid`` are present, so the key clears the T4 version gate.
+    The throwaway public key is passed to validate_license, so the kid is only a
+    shape marker here."""
     payload = {
         "customer": customer,
         "license_id": "cnb-2026-001",
@@ -40,6 +45,8 @@ def _mint_key(private_key: Ed25519PrivateKey, *, expires_at: str, customer="City
         "expires_at": expires_at,
         "term_months": 12,
         "grace_days": grace_days,
+        "org_id": org_id,
+        "kid": DEFAULT_KID,
         "limits": {"max_workspaces": None, "enabled_packs": None},
     }
     payload_b64 = base64.b64encode(json.dumps(payload, sort_keys=True).encode()).decode()
