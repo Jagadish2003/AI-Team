@@ -32,8 +32,9 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import time
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from .aws_auth import AWSAccountConfig, AWSAuthenticator, AWSCredentials
 from .aws_event_connector import (
@@ -45,6 +46,7 @@ from .aws_event_connector import (
     SURFACE_EVENTBRIDGE,
     aws_scope,
 )
+from .aws_health import AWSConnectorHealth, is_throttle_error
 from .aws_partitions import arn_partition_for_region
 from .cloud_event_connector import CloudPollSource, CloudScope, PollPage
 
@@ -56,6 +58,13 @@ MAX_PAGES_PER_POLL = 50
 
 #: Default provider page size per surface API call.
 DEFAULT_PAGE_SIZE = 100
+
+#: Default max throttle back-off retries before a scope is reported failed (loud).
+DEFAULT_MAX_THROTTLE_RETRIES = 5
+
+#: Back-off schedule (seconds) — exponential, capped. Tests inject a no-op sleeper.
+_BACKOFF_BASE_SECONDS = 0.5
+_BACKOFF_CAP_SECONDS = 10.0
 
 #: Surface → the boto3 service name whose client reads it.
 _SERVICE_FOR_SURFACE: Dict[str, str] = {
@@ -427,6 +436,8 @@ class AWSLivePollSource(CloudPollSource):
         *,
         surfaces: Tuple[str, ...] = AWS_SURFACES,
         page_size: int = DEFAULT_PAGE_SIZE,
+        max_throttle_retries: int = DEFAULT_MAX_THROTTLE_RETRIES,
+        sleeper: Optional[Callable[[float], None]] = None,
     ) -> None:
         for surface in surfaces:
             if surface not in AWS_SURFACE_MAPPERS:
@@ -435,7 +446,16 @@ class AWSLivePollSource(CloudPollSource):
         self.authenticator = authenticator
         self.surfaces = tuple(surfaces)
         self.page_size = page_size
+        self.max_throttle_retries = max_throttle_retries
+        self._sleeper = sleeper or time.sleep
         self._by_account: Dict[str, AWSAccountConfig] = {a.account_id: a for a in self.accounts}
+        #: Per-account run-health surface (AT-646) — the R18-C2 connector-panel
+        #: artifact, accumulated as scopes are polled. Loud, never silent.
+        self.health = AWSConnectorHealth()
+
+    def health_report(self) -> Dict[str, Any]:
+        """Per-account run-health report (auth/throttle/partial states)."""
+        return self.health.to_dict()
 
     def list_scopes(self, org_id: str) -> List[CloudScope]:
         scopes: List[CloudScope] = []
@@ -454,31 +474,53 @@ class AWSLivePollSource(CloudPollSource):
             return PollPage(events=[], next_position=position, has_more=False)
 
         # Authenticate this account (assume-role, else direct keys). A per-account
-        # auth failure degrades that scope to empty rather than crashing the run.
+        # auth failure is recorded LOUDLY in run health (never a silent skip) and
+        # degrades only THIS account's scope to empty — other accounts continue (AC8).
         try:
             credentials: AWSCredentials = self.authenticator.credentials_for(org_id, account)
-        except Exception as exc:  # noqa: BLE001 — degrade, don't crash the whole run
-            logger.warning(
-                "aws_poll_source: skipping scope %s — auth failed: %s",
-                scope.scope_key, exc,
-            )
+        except Exception as exc:  # noqa: BLE001 — degrade this account, don't crash the run
+            self.health.mark_auth_failed(scope.account, f"{type(exc).__name__}: {exc}")
             return PollPage(events=[], next_position=position, has_more=False)
 
         service = _SERVICE_FOR_SURFACE[scope.surface]
-        client = self.authenticator.client_factory.client(
-            service, region=scope.region, credentials=credentials
-        )
         reader = _SURFACE_READERS[scope.surface]
-        events, new_watermark = reader(
-            client,
-            region=scope.region,
-            account_id=scope.account,
-            watermark=position or "",
-            page_size=self.page_size,
-        )
-        # All within-run pagination is handled inside the reader, so one page per
-        # scope; across-run resume rides the returned watermark.
-        return PollPage(events=events, next_position=new_watermark, has_more=False)
+
+        # Read with throttle back-off: on a rate-limit error we back off and retry
+        # (counted in run health) rather than thinning the data. Any other error —
+        # or throttling that outlasts the retry budget — is reported as a failed
+        # scope (loud), not silently dropped.
+        attempt = 0
+        while True:
+            try:
+                client = self.authenticator.client_factory.client(
+                    service, region=scope.region, credentials=credentials
+                )
+                events, new_watermark = reader(
+                    client,
+                    region=scope.region,
+                    account_id=scope.account,
+                    watermark=position or "",
+                    page_size=self.page_size,
+                )
+                self.health.mark_scope_ok(scope.account, scope.surface)
+                # All within-run pagination is handled inside the reader, so one
+                # page per scope; across-run resume rides the returned watermark.
+                return PollPage(events=events, next_position=new_watermark, has_more=False)
+            except Exception as exc:  # noqa: BLE001 — loud per-scope failure, not silent
+                if is_throttle_error(exc) and attempt < self.max_throttle_retries:
+                    attempt += 1
+                    self.health.record_throttle(scope.account, scope.surface, attempt)
+                    self._sleeper(_backoff_seconds(attempt))
+                    continue
+                self.health.mark_scope_failed(
+                    scope.account, scope.surface, f"{type(exc).__name__}: {exc}"
+                )
+                return PollPage(events=[], next_position=position, has_more=False)
+
+
+def _backoff_seconds(attempt: int) -> float:
+    """Exponential back-off (capped) for the Nth throttle retry."""
+    return min(_BACKOFF_CAP_SECONDS, _BACKOFF_BASE_SECONDS * (2 ** (attempt - 1)))
 
 
 def build_live_aws_source(
