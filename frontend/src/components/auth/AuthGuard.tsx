@@ -27,6 +27,8 @@ import { Navigate, Outlet } from "react-router-dom";
 
 import { useAuth } from "../../context/AuthContext";
 import { LicenseProvider } from "../../context/LicenseContext";
+import { OnboardingProvider } from "../../context/OnboardingContext";
+import OnboardingModal from "../onboarding/OnboardingModal";
 import LicenseBanner from "../common/LicenseBanner";
 import LoadingPanel from "../common/LoadingPanel";
 
@@ -55,10 +57,18 @@ export default function AuthGuard() {
   // license expiry banner (LIC-1 / T9) shows on every authenticated page from a
   // single shared status fetch. LicenseProvider stays mounted across child
   // route changes (layout-route element), so status is not refetched per page.
+  //
+  // OnboardingProvider wraps this authenticated subtree so the first-login
+  // product tour can layer over the already-rendered dashboard (<Outlet/>) and
+  // shared chrome (TopNav "Replay product tour") can reach it. It is a pure
+  // overlay: it never navigates, fetches, or touches auth/routing.
   return (
-    <LicenseProvider>
-      <LicenseBanner />
-      <Outlet />
-    </LicenseProvider>
+    <OnboardingProvider>
+      <LicenseProvider>
+        <LicenseBanner />
+        <Outlet />
+      </LicenseProvider>
+      <OnboardingModal />
+    </OnboardingProvider>
   );
 }

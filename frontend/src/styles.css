@@ -525,3 +525,118 @@ body *::-webkit-scrollbar-corner {
   background-color: #ffffff;
   color: rgb(7 25 58);
 }
+
+/* ── Onboarding product tour ─────────────────────────────────────────────────
+ * Theme-aware glassmorphism + tasteful entrance animations. All colour comes
+ * from the app's own tokens (--color-panel / --color-border / --color-bgheader)
+ * so the surface is a dark glass panel in the dark theme and a light frosted
+ * panel in the light theme with no hardcoded, conflicting colours.
+ */
+/* ── Layer 1: fullscreen overlay ────────────────────────────────────────────
+   Frosts the dashboard so the app feels recessed behind the card: a moderate
+   backdrop blur + a subtle dark tint. This is a REAL glass layer, not just a
+   dim. */
+.onboarding-scrim {
+  background: rgb(var(--color-bgheader) / 0.32);
+  -webkit-backdrop-filter: blur(12px) saturate(115%);
+  backdrop-filter: blur(12px) saturate(115%);
+}
+
+:root.theme-light .onboarding-scrim {
+  background: rgb(var(--color-bgheader) / 0.24);
+}
+
+/* ── Layer 2: the card ──────────────────────────────────────────────────────
+   A SECOND, independent glass surface (macOS Sonoma / Arc / Liquid Glass): its
+   own strong backdrop blur re-frosts the already-frosted dashboard behind it, a
+   semi-transparent theme-toned fill lets the dashboard show THROUGH, a soft
+   border + layered shadow make it float, and inset highlights give it edge
+   sheen. The ::before adds extremely subtle internal lighting (top-right
+   reflection, soft white bloom, bottom-left accent ambient). */
+.onboarding-glass {
+  position: relative;
+  overflow: hidden;
+  background: rgb(var(--color-panel) / 0.5);
+  border: 1px solid rgb(var(--color-border) / 0.55);
+  -webkit-backdrop-filter: blur(30px) saturate(180%);
+  backdrop-filter: blur(30px) saturate(180%);
+  box-shadow:
+    0 32px 80px -20px rgb(0 0 0 / 0.6),
+    0 4px 12px -6px rgb(0 0 0 / 0.45),
+    inset 0 1px 0 rgb(255 255 255 / 0.16),
+    inset 0 0 0 1px rgb(255 255 255 / 0.05);
+}
+
+.onboarding-glass::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  z-index: 0;
+  background:
+    /* top-right reflection */
+    radial-gradient(55% 45% at 100% 0%, rgb(255 255 255 / 0.14), transparent 60%),
+    /* soft white bloom along the top edge */
+    radial-gradient(90% 55% at 50% -12%, rgb(255 255 255 / 0.08), transparent 55%),
+    /* bottom-left ambient (accent-tinted, theme-aware) */
+    radial-gradient(65% 55% at 0% 100%, rgb(var(--color-accent) / 0.12), transparent 60%);
+}
+
+/* Keep card content above the internal-lighting layer. */
+.onboarding-glass > * {
+  position: relative;
+  z-index: 1;
+}
+
+:root.theme-light .onboarding-glass {
+  background: rgb(var(--color-panel) / 0.55);
+  border: 1px solid rgb(255 255 255 / 0.65);
+  box-shadow:
+    0 32px 80px -20px rgb(15 26 61 / 0.3),
+    0 4px 12px -6px rgb(15 26 61 / 0.14),
+    inset 0 1px 0 rgb(255 255 255 / 0.9),
+    inset 0 0 0 1px rgb(255 255 255 / 0.35);
+}
+
+:root.theme-light .onboarding-glass::before {
+  background:
+    radial-gradient(55% 45% at 100% 0%, rgb(255 255 255 / 0.5), transparent 60%),
+    radial-gradient(90% 55% at 50% -12%, rgb(255 255 255 / 0.35), transparent 55%),
+    radial-gradient(65% 55% at 0% 100%, rgb(var(--color-accent) / 0.1), transparent 60%);
+}
+
+@keyframes onboarding-scrim-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes onboarding-card-in {
+  from { opacity: 0; transform: translateY(12px) scale(0.98); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+@keyframes onboarding-content-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.onboarding-anim-scrim {
+  animation: onboarding-scrim-in 200ms ease-out both;
+}
+
+.onboarding-anim-card {
+  animation: onboarding-card-in 320ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.onboarding-anim-content {
+  animation: onboarding-content-in 280ms ease-out both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .onboarding-anim-scrim,
+  .onboarding-anim-card,
+  .onboarding-anim-content {
+    animation: none;
+  }
+}

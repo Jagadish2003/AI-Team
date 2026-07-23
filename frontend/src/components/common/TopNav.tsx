@@ -1,10 +1,11 @@
 import React, { useEffect, useRef, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
-import { KeyRound, LogOut, Menu, Moon, Settings, Sun, User, Zap } from "lucide-react";
+import { KeyRound, LogOut, Menu, Moon, Settings, Sparkles, Sun, User, Zap } from "lucide-react";
 import { useRunContext } from "../../context/RunContext";
 import { useConnectorContext } from "../../context/ConnectorContext";
 import { useTheme } from "../../context/ThemeContext";
 import { useAuthOptional } from "../../context/AuthContext";
+import { useOnboardingOptional } from "../../context/OnboardingContext";
 import { useOrgName } from "../../context/LicenseContext";
 import { profileNameFromEmail } from "../../utils/profileName";
 import { isViewerRole } from "../../utils/roles";
@@ -66,6 +67,10 @@ export default function TopNav() {
   // useAuthOptional (not useAuth): TopNav is also rendered by page-level tests
   // that don't mount an AuthProvider. In the real app it's always inside one.
   const auth = useAuthOptional();
+  // Optional too: the onboarding provider only exists inside AuthGuard, so the
+  // "Replay product tour" entry appears in the real app but is silently absent
+  // in isolated tests that render a page without it.
+  const onboarding = useOnboardingOptional();
 
   // Profile tooltip uses the user's email local part, e.g.
   // "srivani@dwp.com" -> "Srivani's Profile".
@@ -235,6 +240,23 @@ export default function TopNav() {
                   <Settings className="h-4 w-4" />
                   Settings
                 </button>
+
+                {/* Reopen the first-login product tour on demand. Only shown
+                    when the onboarding provider is present (real app). */}
+                {onboarding && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setProfileOpen(false);
+                      onboarding.replay();
+                    }}
+                    className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm text-text transition-colors hover:bg-navhover focus:outline-none focus:ring-2 focus:ring-accent/50"
+                    role="menuitem"
+                  >
+                    <Sparkles className="h-4 w-4" />
+                    Replay product tour
+                  </button>
+                )}
 
                 {/* LIC-1 / T8 — Owner-only admin License page. Analyst/Viewer
                     never see this entry; the route + data endpoints are also
