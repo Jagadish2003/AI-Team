@@ -1,12 +1,13 @@
 --
--- AgentIQ — consolidated provisioning script (schema + seed), head 0025.
+-- AgentIQ — consolidated provisioning script (schema + seed), head 0026.
 --
 -- Single self-contained replacement for the former 01_schema.sql / 02_seed.sql /
 -- 03_lazy_runtime_tables.sql. Creates the agentiq role, all tables (incl.
--- org_licenses, ingestion_checkpoints, opportunity_instances, and the R18-B1/B2
--- pgvector-backed retrieval_chunks + retrieval_refresh_queue),
+-- org_licenses, ingestion_checkpoints, opportunity_instances, the R18-B1/B2
+-- pgvector-backed retrieval_chunks + retrieval_refresh_queue, and the R-1.9.1-L3
+-- vendor-side license_registry + append-only issuance_audit),
 -- indexes/constraints/rules, seeds the core reference rows, grants the app login
--- role(s) privileges on the schema, and stamps alembic_version to head 0025.
+-- role(s) privileges on the schema, and stamps alembic_version to head 0026.
 --
 -- Requires the pgvector extension for the retrieval_chunks vector column
 -- (CREATE EXTENSION below); the provisioning connection must be permitted to
@@ -503,6 +504,58 @@ CREATE TABLE "public"."telemetry_events" (
 
 
 --
+-- Name: license_registry; Type: TABLE; Schema: public; Owner: -
+-- R-1.9.1-L3 (AT-715 / T1): CloudFulcrum vendor-side license issuance registry.
+--
+
+CREATE TABLE "public"."license_registry" (
+    "license_id" "text" NOT NULL,
+    "customer" "text" NOT NULL,
+    "org_id" "text" NOT NULL,
+    "contract_ref" "text" NOT NULL,
+    "deployment_type" "text" NOT NULL,
+    "max_systems" integer,
+    "expires_at" "date" NOT NULL,
+    "grace_days" integer DEFAULT 14 NOT NULL,
+    "kid" "text" NOT NULL,
+    "issued_by" "text" NOT NULL,
+    "issued_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    "status" "text" DEFAULT 'active'::"text" NOT NULL,
+    "supersedes" "text",
+    "notes" "text",
+    "deployment_fee_collected" boolean DEFAULT false NOT NULL,
+    "deployment_fee_collected_at" timestamp with time zone,
+    "payload_version" integer DEFAULT 2 NOT NULL,
+    "license_key" "text" NOT NULL,
+    CONSTRAINT "license_registry_status_check" CHECK (("status" = ANY (ARRAY['active'::"text", 'superseded'::"text", 'revoked_at_next_rotation'::"text"])))
+);
+
+
+--
+-- Name: issuance_audit; Type: TABLE; Schema: public; Owner: -
+-- R-1.9.1-L3 (AT-717 / T3): append-only issuance ledger (see the rewrite rules
+-- issuance_audit_no_update / issuance_audit_no_delete below).
+--
+
+CREATE TABLE "public"."issuance_audit" (
+    "audit_id" "text" NOT NULL,
+    "license_id" "text" NOT NULL,
+    "action" "text" NOT NULL,
+    "actor" "text" NOT NULL,
+    "occurred_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    "customer" "text",
+    "org_id" "text",
+    "contract_ref" "text",
+    "kid" "text",
+    "deployment_type" "text",
+    "terms" "text",
+    "supersedes" "text",
+    "notes" "text",
+    CONSTRAINT "issuance_audit_action_check" CHECK (("action" = ANY (ARRAY['issue'::"text", 'renew'::"text", 'regenerate'::"text"])))
+);
+
+
+--
 -- Name: uploads; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -746,6 +799,22 @@ ALTER TABLE ONLY "public"."telemetry_events"
 
 
 --
+-- Name: license_registry license_registry_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY "public"."license_registry"
+    ADD CONSTRAINT "license_registry_pkey" PRIMARY KEY ("license_id");
+
+
+--
+-- Name: issuance_audit issuance_audit_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY "public"."issuance_audit"
+    ADD CONSTRAINT "issuance_audit_pkey" PRIMARY KEY ("audit_id");
+
+
+--
 -- Name: uploads uploads_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -959,6 +1028,41 @@ CREATE INDEX "idx_telemetry_org_ts" ON "public"."telemetry_events" USING "btree"
 
 
 --
+-- Name: idx_license_registry_customer; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX "idx_license_registry_customer" ON "public"."license_registry" USING "btree" ("customer");
+
+
+--
+-- Name: idx_license_registry_org; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX "idx_license_registry_org" ON "public"."license_registry" USING "btree" ("org_id");
+
+
+--
+-- Name: idx_license_registry_expiry; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX "idx_license_registry_expiry" ON "public"."license_registry" USING "btree" ("status", "expires_at");
+
+
+--
+-- Name: idx_license_registry_supersedes; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX "idx_license_registry_supersedes" ON "public"."license_registry" USING "btree" ("supersedes");
+
+
+--
+-- Name: idx_issuance_audit_license; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX "idx_issuance_audit_license" ON "public"."issuance_audit" USING "btree" ("license_id");
+
+
+--
 -- Name: idx_users_email_unique; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -987,6 +1091,23 @@ CREATE RULE "trg_telemetry_no_delete" AS
 
 CREATE RULE "trg_telemetry_no_update" AS
     ON UPDATE TO "public"."telemetry_events" DO INSTEAD NOTHING;
+
+
+--
+-- Name: issuance_audit issuance_audit_no_delete; Type: RULE; Schema: public; Owner: -
+-- R-1.9.1-L3 (AC2): the issuance audit ledger is append-only.
+--
+
+CREATE RULE "issuance_audit_no_delete" AS
+    ON DELETE TO "public"."issuance_audit" DO INSTEAD NOTHING;
+
+
+--
+-- Name: issuance_audit issuance_audit_no_update; Type: RULE; Schema: public; Owner: -
+--
+
+CREATE RULE "issuance_audit_no_update" AS
+    ON UPDATE TO "public"."issuance_audit" DO INSTEAD NOTHING;
 
 
 --
@@ -1178,7 +1299,7 @@ INSERT INTO "public"."permissions" ("id", "payload") VALUES ('p_sn_inc', '{"id":
 
 -- uploads (0 rows)
 
-INSERT INTO "public"."alembic_version" ("version_num") VALUES ('0025') ON CONFLICT DO NOTHING;
+INSERT INTO "public"."alembic_version" ("version_num") VALUES ('0026') ON CONFLICT DO NOTHING;
 
 
 --
