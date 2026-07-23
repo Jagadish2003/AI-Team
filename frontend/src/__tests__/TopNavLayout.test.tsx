@@ -77,12 +77,13 @@ describe("TopNav — org name never crowds out the nav", () => {
     expect(label).toHaveTextContent(LONG_ORG_NAME);
   });
 
-  it("still renders all 7 primary nav items alongside a long org name", () => {
+  it("still renders all 8 primary nav items alongside a long org name", () => {
     renderNav();
     const expectedItems = [
       "Integration Hub",
       "Stack Builder",
       "Discovery Run",
+      "Run Health",
       "Source Intelligence",
       "Opportunity Review",
       "Agent Blueprint",

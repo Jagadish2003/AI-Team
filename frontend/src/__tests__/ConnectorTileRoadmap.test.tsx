@@ -2,7 +2,7 @@
  * ConnectorTileRoadmap.test.tsx — R191-R1 T5 (AT-726)
  *
  * A roadmap connector (SAP/D365 and any tile whose ingestion does not ship yet)
- * renders as a non-connectable "Coming — <target>" tile in the Integration Hub,
+ * renders as a non-connectable "Coming soon" tile in the Integration Hub,
  * regardless of role. A shipped connector is unaffected.
  */
 import React from "react";
@@ -77,12 +77,12 @@ function renderTile(connector: unknown) {
 beforeEach(() => vi.clearAllMocks());
 
 describe("ConnectorTile — roadmap (AT-726)", () => {
-  it("renders SAP as a non-connectable 'Coming — 2.0.1' tile", () => {
+  it("renders SAP as a non-connectable 'Coming soon' tile", () => {
     renderTile(roadmapSap());
-    // Roadmap badge shows the committed target.
-    expect(screen.getByTestId("connector-roadmap-badge")).toHaveTextContent("Coming — 2.0.1");
+    // Roadmap badge keeps the visual contract clean even when target metadata exists.
+    expect(screen.getByTestId("connector-roadmap-badge")).toHaveTextContent("Coming soon");
     // The action button is labelled and disabled — never "Connect".
-    const btn = screen.getByRole("button", { name: /coming . 2\.0\.1/i });
+    const btn = screen.getByRole("button", { name: /coming soon/i });
     expect(btn).toBeDisabled();
     expect(screen.queryByRole("button", { name: /^connect$/i })).not.toBeInTheDocument();
   });

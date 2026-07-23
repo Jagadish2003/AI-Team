@@ -246,9 +246,6 @@ export default function DiscoveryFocusPage({
           {roadmapSystems.length > 0 && (
             <div className="mt-4 flex flex-wrap gap-2" aria-label="Roadmap systems">
               {roadmapSystems.map(system => {
-                const target = /\d/.test(system.target_release)
-                  ? `Coming — ${system.target_release}`
-                  : 'Coming soon';
                 return (
                   <span
                     key={system.system_id}
@@ -256,7 +253,7 @@ export default function DiscoveryFocusPage({
                     className="inline-flex items-center gap-2 rounded-full border border-amber-500/30 bg-amber-500/10 px-2.5 py-1 text-xs font-medium text-amber-100"
                   >
                     <span>{system.label}</span>
-                    <span className="text-amber-200/80">{target}</span>
+                    <span className="text-amber-200/80">Coming soon</span>
                   </span>
                 );
               })}

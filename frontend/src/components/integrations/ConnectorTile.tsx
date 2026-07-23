@@ -74,13 +74,12 @@ export default function ConnectorTile({
   const isEnabled = ENABLED_CONNECTOR_IDS.includes(connector.id);
 
   // R191-R1 T5 (AT-726): a roadmap connector (SAP/D365 and any tile whose
-  // ingestion does not ship yet) is never connectable — it renders as a
-  // "Coming — <target>" tile with a disabled action. SAP/D365 carry a versioned
-  // target (2.0.1); other unshipped tiles are "unscheduled" and read "Coming soon".
+  // ingestion does not ship yet) is never connectable. Keep the release target
+  // available for metadata/tooltips, but use one clean visible label everywhere.
   const isRoadmap = connector.roadmap === true;
   const roadmapTarget = connector.roadmapTarget ?? null;
   const roadmapIsVersioned = Boolean(roadmapTarget && /\d/.test(roadmapTarget));
-  const comingLabel = roadmapIsVersioned ? `Coming — ${roadmapTarget}` : 'Coming soon';
+  const comingLabel = 'Coming soon';
 
   // Connecting / configuring / reconnecting are analyst+ writes (the connector
   // auth-url and token routes are analyst+). Viewers get a read-only hub: their
@@ -125,7 +124,7 @@ export default function ConnectorTile({
   const outboundSetupGate = hideAuthCode && isEnabled;
 
   // When the token is expired/missing, override the button to "Reconnect".
-  // A roadmap tile always shows its "Coming …" label (it can never connect).
+  // A roadmap tile always shows its "Coming soon" label (it can never connect).
   const actionLabel = isRoadmap
     ? comingLabel
     : outboundSetupGate
@@ -201,11 +200,11 @@ export default function ConnectorTile({
               </span>
             )}
             {isRoadmap ? (
-              // Roadmap tile: an honest "Coming — <target>" pill in place of the
-              // (meaningless) connection-status badge (R191-R1 T5 / AT-726).
+              // Roadmap tile: an honest Coming soon pill in place of the
+              // meaningless connection-status badge (R191-R1 T5 / AT-726).
               <span
                 data-testid="connector-roadmap-badge"
-                className="inline-flex items-center whitespace-nowrap rounded-full border border-amber-500/30 bg-amber-500/15 px-2 py-0.5 text-xs font-medium leading-none text-amber-200"
+                className="integration-coming-soon-status-pill inline-flex items-center whitespace-nowrap rounded-full border text-xs font-medium leading-none"
               >
                 {comingLabel}
               </span>
