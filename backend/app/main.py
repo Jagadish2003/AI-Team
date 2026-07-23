@@ -67,6 +67,7 @@ from .routes_auth import register_auth_routes
 from .routes_license import register_license_routes
 from .routes_ingestion import register_ingestion_routes
 from .routes_runbook_matches import register_runbook_match_routes
+from .routes_secops_evidence import register_secops_evidence_routes
 from .security import require_auth
 from .auth.configs import CONNECTOR_AUTH_CONFIGS
 from .auth.secrets import validate_all_secrets
@@ -317,6 +318,8 @@ register_license_routes(app)
 register_ingestion_routes(app)
 # MSP-B5 T4: analyst accept/dismiss/defer lifecycle for proposed runbook matches.
 register_runbook_match_routes(app)
+# MSP-B12 T3: analyst-only, audited resolution of one SecOps evidence pointer.
+register_secops_evidence_routes(app)
 
 origins = [
     o.strip()

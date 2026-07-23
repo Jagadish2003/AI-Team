@@ -326,6 +326,49 @@ class TestDetectorShapes:
         assert ev["category"] == "Phishing"
 
 
+class TestRunbookMatching:
+
+    @pytest.mark.parametrize("detector", [RECURRENCE, TRIAGE])
+    def test_b5_absence_is_explicitly_labelled(self, detector):
+        result = _detect(detector, _estate())[0]
+        leg = result.raw_evidence["runbook_leg"]
+        assert leg["degraded"] is True
+        assert leg["label"] == "runbook match unavailable"
+        assert result.raw_evidence["runbook_match_available"] is False
+
+    def test_remediation_recurrence_carries_b5_match(self):
+        estate = _estate()
+        estate["vulnerability_response"]["runbook_matching"] = {
+            "available": True,
+            "matches": {
+                "1:openssl-server-patch": {
+                    "runbook_id": "RB-PATCH-1",
+                    "title": "Standard server patch playbook",
+                }
+            },
+        }
+        result = _detect(RECURRENCE, estate)[0]
+        leg = result.raw_evidence["runbook_leg"]
+        assert leg["documented"] is True
+        assert leg["runbook_id"] == "RB-PATCH-1"
+        assert result.raw_evidence["runbook_match_available"] is True
+
+    def test_sir_triage_carries_b5_match(self):
+        estate = _estate()
+        estate["secops"]["runbook_matching"] = {
+            "available": True,
+            "matches": {
+                "Phishing|Credential harvesting|Resolved by mitigation": {
+                    "runbook_id": "RB-PHISH-1",
+                    "title": "Phishing triage playbook",
+                }
+            },
+        }
+        result = _detect(TRIAGE, estate)[0]
+        assert result.raw_evidence["runbook_leg"]["runbook_id"] == "RB-PHISH-1"
+        assert result.raw_evidence["runbook_match_available"] is True
+
+
 # ── Determinism + fail-safe ──────────────────────────────────────────────────────
 
 class TestDeterminismAndFailSafe:

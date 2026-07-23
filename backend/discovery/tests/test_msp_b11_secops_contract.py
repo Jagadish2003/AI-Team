@@ -34,6 +34,7 @@ from discovery.signals.budget import BudgetReport
 from discovery.signals.ops_calibration import CALIBRATED_RUN_EVENT_BUDGET
 from discovery.signals.remediation_signature import compute_remediation_signature
 from discovery.signals.secops_volume import (
+    TABLE_SECURITY_INCIDENT,
     TABLE_VULNERABLE_ITEM,
     SecOpsOrgScopeError,
     SecOpsVolumeStream,
@@ -409,6 +410,67 @@ class _CapturingIngest:
         return {"org_id": org_id, "artifacts": len(artifacts)}
 
 
+def test_ac5_production_sir_handoff_redacts_before_checkpoint(monkeypatch):
+    _offline(monkeypatch)
+    ingest = _CapturingIngest()
+    stored, read_cp, save_cp = _checkpoint_store()
+    monkeypatch.setattr(
+        sn,
+        "_read_security_incident_notes",
+        lambda records, client=None: [
+            _security_incident(_IOC_NOTE, sys_id=records[0]["sys_id"])
+        ],
+    )
+
+    result = sn.ingest_sir_changes(
+        org_id="org-a",
+        run_id="run-notes",
+        clock=lambda: FIRST_CLOCK,
+        read_checkpoint=read_cp,
+        save_checkpoint=save_cp,
+        handoff_security_notes=True,
+        security_note_ingest_fn=ingest,
+        security_note_record_event_fn=lambda *args: None,
+    )
+
+    assert result["streams"]["sn_si_incident"]["checkpoint_advanced"] is True
+    assert result["security_note_handoff"]["artifacts_handed_off"] == 1
+    indexed = ingest.calls[0][1][0].content
+    assert "[REDACTED:" in indexed
+    assert all(secret not in indexed for secret in _IOC_LEAKS)
+
+
+def test_ac5_failed_note_handoff_does_not_advance_checkpoint(monkeypatch):
+    _offline(monkeypatch)
+    stored, read_cp, save_cp = _checkpoint_store()
+    monkeypatch.setattr(
+        sn,
+        "_read_security_incident_notes",
+        lambda records, client=None: [
+            _security_incident(_IOC_NOTE, sys_id=records[0]["sys_id"])
+        ],
+    )
+
+    class _FailedIngest:
+        artifacts_failed = 1
+
+    result = sn.ingest_sir_changes(
+        org_id="org-a",
+        run_id="run-notes-failed",
+        clock=lambda: FIRST_CLOCK,
+        read_checkpoint=read_cp,
+        save_checkpoint=save_cp,
+        handoff_security_notes=True,
+        security_note_ingest_fn=lambda *args: _FailedIngest(),
+        security_note_record_event_fn=lambda *args: None,
+    )
+
+    stream = result["streams"]["sn_si_incident"]
+    assert stream["checkpoint_advanced"] is False
+    assert "security-note retrieval handoff failed" in stream["error"]
+    assert ("org-a", sn.SIR_CHECKPOINT_ID) not in stored
+
+
 def test_ac5_iocs_and_credentials_never_reach_retrievable_content():
     ingest = _CapturingIngest()
     ingest_security_notes(
@@ -582,3 +644,64 @@ def test_ac7_volume_stream_reuses_the_b7_budget_report_shape():
     with pytest.raises(SecOpsOrgScopeError):
         stream.admit({"sys_id": "vi-1", "org_id": "org-b"},
                      table_family=TABLE_VULNERABLE_ITEM, org_id="org-a")
+
+
+def test_ac7_budget_never_splits_equal_timestamp_checkpoint_boundary():
+    stream = SecOpsVolumeStream(budget=2)
+    rows = [
+        {
+            "sys_id": "sir-1",
+            "org_id": "org-a",
+            "source_timestamp": "2026-07-01 09:00:00",
+            "category": "phishing",
+        },
+        {
+            "sys_id": "sir-2",
+            "org_id": "org-a",
+            "source_timestamp": "2026-07-01 10:00:00",
+            "category": "phishing",
+        },
+        {
+            "sys_id": "sir-3",
+            "org_id": "org-a",
+            "source_timestamp": "2026-07-01 10:00:00",
+            "category": "phishing",
+        },
+    ]
+    admissions = stream.admit_records(
+        rows, table_family=TABLE_SECURITY_INCIDENT, org_id="org-a"
+    )
+    report = stream.measurements("org-a")
+
+    assert [a.disposition for a in admissions] == ["new", "deferred", "deferred"]
+    assert report.safe_checkpoints[TABLE_SECURITY_INCIDENT] == "2026-07-01 09:00:00"
+    assert report.budget_report["deferred_window"]["first"] == "2026-07-01 10:00:00"
+
+
+def test_ac7_sir_and_vr_share_one_production_budget(monkeypatch):
+    _offline(monkeypatch)
+    stored, read_cp, save_cp = _checkpoint_store()
+    stream = SecOpsVolumeStream(budget=2)
+
+    sir = sn.ingest_sir_changes(
+        org_id="org-a",
+        run_id="run-shared-budget",
+        clock=lambda: FIRST_CLOCK,
+        read_checkpoint=read_cp,
+        save_checkpoint=save_cp,
+        volume_stream=stream,
+    )
+    vr = sn.ingest_vr_changes(
+        org_id="org-a",
+        run_id="run-shared-budget",
+        clock=lambda: FIRST_CLOCK,
+        read_checkpoint=read_cp,
+        save_checkpoint=save_cp,
+        volume_stream=stream,
+    )
+
+    assert len(sir["security_incidents"]) == 2
+    assert vr["vulnerable_items"] == []
+    assert vr["volume"]["budget_report"]["breached"] is True
+    assert vr["volume"]["records_processed"] == 2
+    assert vr["volume"]["records_deferred"] > 0

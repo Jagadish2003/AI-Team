@@ -835,6 +835,7 @@ def run(
     _any_github = "github_engineering" in _selected_domains
     _any_enterprise_ops = "enterprise_ops" in _selected_domains
     _any_db_opsignal = "sqlserver_opsignal" in _selected_domains
+    _any_security_ops = "security_ops" in _selected_domains
 
     # Default to all systems if None
     if mode is None:
@@ -875,6 +876,7 @@ def run(
     teams_data: Dict[str, Any] = {}
     confluence_data: Dict[str, Any] = {}
     sharepoint_data: Dict[str, Any] = {}
+    secops_volume_measurements: Optional[Dict[str, Any]] = None
     logger.info(f"Systems: {sorted(list(_systems))}")
 
     # CS-4 / AT-313: each ingest stage reports success to update_run_step via
@@ -926,20 +928,70 @@ def run(
                 if stream_errors:
                     sn_ok = False
                     sn_err = "; ".join(stream_errors)
+                from .signals.secops_volume import SecOpsVolumeStream
+
+                cmdb_index = {
+                    str(ci.get("sys_id")): {
+                        "ci_class": ci.get("ci_class") or ci.get("sys_class_name")
+                    }
+                    for ci in (cmdb_data.get("configuration_items") or [])
+                    if isinstance(ci, dict) and ci.get("sys_id")
+                }
+                secops_volume_stream = SecOpsVolumeStream(cmdb_index=cmdb_index)
                 # MSP-B11 T1: Security Operations SIR workflow signal, on the
                 # same incremental sys_updated_on rails. Additive (a new
                 # sn_data["secops"] key, no existing consumer) and non-blocking:
                 # a stream failure degrades ServiceNow to partial, never aborts.
                 secops_data = servicenow.ingest_sir_changes(
-                    org_id=org_id, run_id=run_id
+                    org_id=org_id,
+                    run_id=run_id,
+                    volume_stream=secops_volume_stream,
+                    handoff_security_notes=_any_security_ops,
                 )
                 sn_data["secops"] = secops_data
                 # MSP-B11 T2: Vulnerability Response workflow signal — three
                 # independently-checkpointed VR streams, same non-blocking rails.
                 vr_data = servicenow.ingest_vr_changes(
-                    org_id=org_id, run_id=run_id
+                    org_id=org_id,
+                    run_id=run_id,
+                    volume_stream=secops_volume_stream,
                 )
                 sn_data["vulnerability_response"] = vr_data
+                secops_volume_measurements = secops_volume_stream.measurements(
+                    org_id
+                ).to_dict()
+                secops_data["volume"] = secops_volume_measurements
+                vr_data["volume"] = secops_volume_measurements
+                sn_data["secops_volume"] = secops_volume_measurements
+
+                # MSP-B12 T3: persist the bounded B11 records behind their lean
+                # evidence pointers. The API resolves one record at a time under
+                # org + analyst RBAC and emits an audit event.
+                if _any_security_ops:
+                    try:
+                        from .packs.security_ops_evidence_resolver import (
+                            RunKVEvidenceRecordStore,
+                            index_signal_records,
+                        )
+
+                        evidence_store = RunKVEvidenceRecordStore(run_id, org_id)
+                        indexed = index_signal_records(
+                            evidence_store, org_id, sn_data
+                        )
+                        evidence_store.flush()
+                        sn_data["secops_evidence_resolution"] = {
+                            "available": True,
+                            "records_indexed": indexed,
+                        }
+                    except Exception as evidence_exc:  # noqa: BLE001
+                        sn_data["secops_evidence_resolution"] = {
+                            "available": False,
+                            "records_indexed": 0,
+                            "error": str(evidence_exc),
+                        }
+                        secops_data.setdefault("streams", {})[
+                            "evidence_record_store"
+                        ] = {"error": str(evidence_exc)}
                 secops_errors = [
                     stream.get("error")
                     for streams in (
@@ -1957,6 +2009,7 @@ def run(
         "perSystem": _per_system,
         "succeeded": _succeeded,
         "ingestErrors": _ingest_errors,
+        "secopsVolume": secops_volume_measurements,
     }
 
 def _empty_run(run_id: str, org_id: str, mode: str, started_at: str) -> Dict:

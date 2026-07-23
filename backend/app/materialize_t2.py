@@ -1,7 +1,14 @@
 import time
 from typing import Any, Dict, List, Tuple
 
+from discovery.packs.security_ops_aggregation_floor import (
+    SecOpsAggregationFloorViolation,
+    assert_output_safe,
+)
+
 from . import db
+
+SECURITY_OPS_PACK_ID = "security_ops"
 
 
 def _now_epoch() -> int:
@@ -98,6 +105,40 @@ def _audit_event(action: str, by: str = "System") -> Dict[str, Any]:
         "action": action,
         "by": by,
     }
+
+
+def _secops_seed_slice(
+    opportunities: List[Dict[str, Any]],
+    evidence: List[Dict[str, Any]],
+) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    """Return only the Security Operations materialization slice."""
+    secops_opps = [
+        opportunity
+        for opportunity in opportunities
+        if opportunity.get("packId") == SECURITY_OPS_PACK_ID
+    ]
+    evidence_ids = {
+        evidence_id
+        for opportunity in secops_opps
+        for evidence_id in (opportunity.get("evidenceIds") or [])
+    }
+    secops_evidence = [
+        item
+        for item in evidence
+        if item.get("packId") == SECURITY_OPS_PACK_ID
+        or item.get("id") in evidence_ids
+    ]
+    return secops_opps, secops_evidence
+
+
+def _assert_secops_materialized(
+    value: Any,
+    *,
+    where: str,
+    enabled: bool,
+) -> None:
+    if enabled:
+        assert_output_safe(value, where=where)
 
 
 def _ingest_summary_from_payload(
@@ -328,9 +369,21 @@ def run_trackb_and_persist(
 
         opps = seed.get("opportunities", [])
         ev = seed.get("evidence", [])
+        secops_opps, secops_ev = _secops_seed_slice(opps, ev)
+        selected_pack_ids = payload.get("packIds") or (
+            [payload.get("packId")] if payload.get("packId") else []
+        )
+        secops_enabled = SECURITY_OPS_PACK_ID in selected_pack_ids
+        _assert_secops_materialized(
+            {"opportunities": secops_opps, "evidence": secops_ev},
+            where="Track-A Security Operations seed",
+            enabled=secops_enabled,
+        )
 
         db.run_kv_set("opps", run_id, opps)
         db.run_kv_set("evidence", run_id, ev)
+        if payload.get("secopsVolume") is not None:
+            db.run_kv_set("secops_volume", run_id, payload["secopsVolume"])
 
         # R16-B1 (T6): persist the queryable evidence-pointer trail so a finding
         # can later be walked back to the source artifacts that produced it
@@ -371,7 +424,21 @@ def run_trackb_and_persist(
             _emit_event(run_id, "PLAN", "Generating implementation roadmap...")
             from .roadmap_engine import build_roadmap
 
-            db.run_kv_set("roadmap", run_id, build_roadmap(opps))
+            roadmap = build_roadmap(opps)
+            if secops_enabled:
+                secops_roadmap = (
+                    roadmap
+                    if len(secops_opps) == len(opps)
+                    else build_roadmap(secops_opps)
+                )
+                _assert_secops_materialized(
+                    secops_roadmap,
+                    where="Security Operations roadmap",
+                    enabled=True,
+                )
+            db.run_kv_set("roadmap", run_id, roadmap)
+        except SecOpsAggregationFloorViolation:
+            raise
         except Exception as e:
             errors["roadmap"] = str(e)
 
@@ -399,7 +466,26 @@ def run_trackb_and_persist(
             )
             er["sourcesAnalyzed"] = sa
 
+            if secops_enabled:
+                if len(secops_opps) == len(opps):
+                    secops_report = er
+                else:
+                    secops_roadmap = build_roadmap(secops_opps)
+                    secops_report = build_executive_report(
+                        run_id=run_id,
+                        opps=secops_opps,
+                        roadmap=secops_roadmap,
+                        selected_system_ids=selected_system_ids,
+                    )
+                _assert_secops_materialized(
+                    secops_report,
+                    where="Security Operations executive report",
+                    enabled=True,
+                )
+
             db.run_kv_set("executive_report", run_id, er)
+        except SecOpsAggregationFloorViolation:
+            raise
         except Exception as e:
             errors["exec_report"] = str(e)
             db.run_kv_set(
@@ -450,11 +536,24 @@ def run_trackb_and_persist(
             )
             if enrichment.get("ai_mode_label"):
                 _emit_event(run_id, "AI_ANALYZE", enrichment["ai_mode_label"])
+            secops_enrichment = [
+                result
+                for result in (enrichment.get("packResults") or [])
+                if isinstance(result, dict)
+                and result.get("packId") == SECURITY_OPS_PACK_ID
+            ]
+            _assert_secops_materialized(
+                secops_enrichment,
+                where="Security Operations enrichment",
+                enabled=secops_enabled,
+            )
             db.run_kv_set(KV_LLM_ENRICHMENT, run_id, enrichment)
             if enrichment.get("executiveSummary"):
                 exec_report["aiExecutiveSummary"] = enrichment["executiveSummary"]
                 db.run_kv_set("executive_report", run_id, exec_report)
             _emit_event(run_id, "COMPLETE", "AI analysis and enrichment completed")
+        except SecOpsAggregationFloorViolation:
+            raise
         except Exception as e:
             errors["llm_enrichment"] = str(e)
             _emit_event(run_id, "AI_ERROR", f"AI analysis failed: {e}", level="WARNING")

@@ -35,12 +35,12 @@ Org scoping
 and no other (the substrate's ``ingest_content`` guarantee). This module never
 trusts an org id carried on the content.
 
-B12 wiring
-----------
-This is the callable seam; it is deliberately NOT auto-run inside the SecOps
-``ingest`` path (that would write to the retrieval store before a consumer
-exists). B12 / retrieval preparation invokes :func:`ingest_security_notes`; the
-redaction guarantee holds whenever it does.
+Production wiring
+-----------------
+``servicenow.ingest_sir_changes`` invokes this seam from its checkpointed batch
+callback when the production runner enables security-note handoff. A handoff
+failure therefore prevents the SIR checkpoint from advancing, while the
+detector-visible workflow projection remains note-free.
 """
 from __future__ import annotations
 

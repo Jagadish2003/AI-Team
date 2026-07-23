@@ -58,6 +58,9 @@ try:  # package-qualified first, bare fallback (mirrors the other pack modules)
         find_individual_references,
         is_contract_complete,
         missing_contract_parts,
+        RUNBOOK_MATCH_UNAVAILABLE_LABEL,
+        build_runbook_leg,
+        runbook_matching_available,
     )
     from backend.app.provenance import EvidencePointer
 except ModuleNotFoundError:  # pragma: no cover - import shim
@@ -76,6 +79,9 @@ except ModuleNotFoundError:  # pragma: no cover - import shim
         find_individual_references,
         is_contract_complete,
         missing_contract_parts,
+        RUNBOOK_MATCH_UNAVAILABLE_LABEL,
+        build_runbook_leg,
+        runbook_matching_available,
     )
     from app.provenance import EvidencePointer
 

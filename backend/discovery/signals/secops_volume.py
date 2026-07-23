@@ -36,7 +36,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Mapping, Optional, Tuple
+from itertools import groupby
+from typing import Any, Dict, Iterable, List, Mapping, Optional, Tuple
 
 from .budget import DEFAULT_RUN_EVENT_BUDGET, BudgetReport, RunBudget
 from .remediation_signature import (
@@ -345,6 +346,12 @@ class SecOpsVolumeStream:
         self._per_table: Dict[str, Dict[str, int]] = {}
         self._safe_checkpoints: Dict[str, Optional[str]] = {}
         self._safe_dt: Dict[str, datetime] = {}
+        # Once an equal-timestamp group no longer fits, the remainder of the
+        # run is deferred.  This deliberately leaves a few budget slots unused
+        # rather than splitting one ServiceNow timestamp boundary: the persisted
+        # ``sys_updated_on`` cursor can then resume with ``> checkpoint`` without
+        # skipping siblings that share the boundary timestamp.
+        self._defer_remainder = False
 
     def _table_counts(self, table_family: str) -> Dict[str, int]:
         return self._per_table.setdefault(
@@ -377,7 +384,7 @@ class SecOpsVolumeStream:
 
         # Per-run budget: once the budgeted window is full, defer-and-count — the
         # safe checkpoint is NOT advanced, so deferred work is re-fetched next run.
-        if not self._budget.has_capacity():
+        if self._defer_remainder or not self._budget.has_capacity():
             self._budget.defer(f"servicenow:{table_family}", cursor, dt)
             counts["deferred"] += 1
             return SecOpsAdmission(None, "deferred")
@@ -397,6 +404,50 @@ class SecOpsVolumeStream:
         aggregate._fold(record, dt, cursor)
         self._advance_checkpoint(table_family, cursor, dt)
         return SecOpsAdmission(aggregate, disposition)
+
+    def admit_records(
+        self,
+        records: Iterable[Mapping[str, Any]],
+        *,
+        table_family: str,
+        org_id: str,
+    ) -> List[SecOpsAdmission]:
+        """Admit one deterministically ordered table delta without splitting a
+        ``sys_updated_on`` boundary.
+
+        ServiceNow checkpoints are timestamp-only.  If a budget cut divided two
+        records carrying the same timestamp, resuming with ``sys_updated_on >
+        checkpoint`` would skip the deferred sibling.  Records are therefore
+        handled as equal-timestamp groups: a group is admitted only when the
+        entire group fits; otherwise it and every later record are visibly
+        deferred.  The resulting safe checkpoint is strictly before the first
+        deferred timestamp.
+        """
+        items = list(records or [])
+        admissions: List[SecOpsAdmission] = []
+        for _cursor, grouped in groupby(
+            items,
+            key=lambda record: _text(
+                record.get("sys_updated_on") or record.get("source_timestamp")
+            )
+            or "",
+        ):
+            group = list(grouped)
+            remaining = (
+                None
+                if self._budget.limit is None
+                else max(self._budget.limit - self._budget.processed, 0)
+            )
+            if (
+                self._defer_remainder
+                or (remaining is not None and len(group) > remaining)
+            ):
+                self._defer_remainder = True
+            admissions.extend(
+                self.admit(record, table_family=table_family, org_id=org_id)
+                for record in group
+            )
+        return admissions
 
     def _advance_checkpoint(
         self, table_family: str, cursor: Optional[str], dt: Optional[datetime]

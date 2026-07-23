@@ -76,6 +76,26 @@ def _time_in_state_seconds(item: Mapping[str, Any]) -> Optional[float]:
     return (resolved - opened).total_seconds()
 
 
+def _runbook_match_for(
+    signature: str,
+    members: List[Mapping[str, Any]],
+    block: Mapping[str, Any],
+) -> Optional[Dict[str, Any]]:
+    """Return the MSP-B5 match for this deterministic remediation signature."""
+    for member in members:
+        direct = member.get("runbook_match")
+        if isinstance(direct, Mapping) and direct:
+            return dict(direct)
+    matching = block.get("runbook_matching")
+    if isinstance(matching, Mapping):
+        matches = matching.get("matches")
+        if isinstance(matches, Mapping):
+            hit = matches.get(signature)
+            if isinstance(hit, Mapping) and hit:
+                return dict(hit)
+    return None
+
+
 def _loops(sn_data: Optional[Mapping[str, Any]], org_id: Optional[str] = None) -> List[Dict[str, Any]]:
     block = common.vr_block(sn_data)
     effective = common.effective_org(block, org_id)
@@ -117,6 +137,8 @@ def _loops(sn_data: Optional[Mapping[str, Any]], org_id: Optional[str] = None) -
             "severity_band": _dominant_band(bands),
             "org_id": effective,
             "members": members,
+            "b5_available": fc.runbook_matching_available(dict(block)),
+            "runbook_match": _runbook_match_for(signature, members, block),
         })
     loops.sort(key=lambda l: (-l["recurrence_count"], l["signature"]))
     return loops
@@ -138,6 +160,10 @@ def _build_result(loop: Dict[str, Any], min_cycles: int) -> DetectorResult:
         json.dumps(material, sort_keys=True, separators=(",", ":")).encode("utf-8")
     ).hexdigest()[:20]
 
+    runbook_leg = fc.build_runbook_leg(
+        runbook_match=loop.get("runbook_match"),
+        b5_available=bool(loop.get("b5_available")),
+    )
     evidence = {
         "vulnerability_class": loop["vulnerability_class"],
         "ci_class": loop["ci_class"],
@@ -150,6 +176,8 @@ def _build_result(loop: Dict[str, Any], min_cycles: int) -> DetectorResult:
         "severity_band": loop["severity_band"],
         "severity_bands": loop["severity_bands"],
         "record_count": loop["recurrence_count"],
+        "composite": runbook_leg,
+        "finding_kind": runbook_leg["kind"],
     }
     artifacts = common.pointer_artifacts(loop["members"], artifact_type="vulnerable_item")
     systems = [common.SOURCE_SYSTEM]
@@ -186,6 +214,12 @@ def _build_result(loop: Dict[str, Any], min_cycles: int) -> DetectorResult:
             "confidence": confidence["level"],
             "corroborated": False,
             "corroboration_sources": systems,
+            "finding_kind": runbook_leg["kind"],
+            "runbook_documented": runbook_leg["documented"],
+            "runbook_match_available": bool(
+                loop.get("b5_available") and loop.get("runbook_match")
+            ),
+            "runbook_leg": runbook_leg,
             "finding_ref": f"servicenow:remediation-recurrence:{digest}",
             "finding_contract": contract,
         },

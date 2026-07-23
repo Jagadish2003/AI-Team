@@ -73,6 +73,31 @@ def _close_minutes(inc: Mapping[str, Any]) -> Optional[float]:
     return (closed - opened).total_seconds() / 60.0
 
 
+def _runbook_match_for(
+    *,
+    category: str,
+    subcategory: str,
+    classification: str,
+    members: List[Mapping[str, Any]],
+    block: Mapping[str, Any],
+) -> Optional[Dict[str, Any]]:
+    """Return an MSP-B5 match for this repeatable triage disposition."""
+    for member in members:
+        direct = member.get("runbook_match")
+        if isinstance(direct, Mapping) and direct:
+            return dict(direct)
+    matching = block.get("runbook_matching")
+    if isinstance(matching, Mapping):
+        matches = matching.get("matches")
+        if isinstance(matches, Mapping):
+            match_key = "|".join((category, subcategory, classification))
+            for key in (match_key, category):
+                hit = matches.get(key)
+                if isinstance(hit, Mapping) and hit:
+                    return dict(hit)
+    return None
+
+
 def _categories(sn_data: Optional[Mapping[str, Any]], org_id: Optional[str] = None) -> List[Dict[str, Any]]:
     block = common.secops_block(sn_data)
     effective = common.effective_org(block, org_id)
@@ -122,6 +147,14 @@ def _categories(sn_data: Optional[Mapping[str, Any]], org_id: Optional[str] = No
             "queues": queues,
             "members": members,
             "org_id": effective,
+            "b5_available": fc.runbook_matching_available(dict(block)),
+            "runbook_match": _runbook_match_for(
+                category=category,
+                subcategory=subcategory,
+                classification=classifications[0],
+                members=members,
+                block=block,
+            ),
         })
     categories.sort(key=lambda c: (-c["incident_volume"], c["category"], c["subcategory"]))
     return categories
@@ -141,6 +174,10 @@ def _build_result(c: Dict[str, Any], min_volume: int) -> DetectorResult:
         json.dumps(material, sort_keys=True, separators=(",", ":")).encode("utf-8")
     ).hexdigest()[:20]
 
+    runbook_leg = fc.build_runbook_leg(
+        runbook_match=c.get("runbook_match"),
+        b5_available=bool(c.get("b5_available")),
+    )
     evidence = {
         "category": c["category"],
         "subcategory": c["subcategory"],
@@ -152,6 +189,8 @@ def _build_result(c: Dict[str, Any], min_volume: int) -> DetectorResult:
         "severity_bands": c["severity_bands"],
         "queues": c["queues"],
         "record_count": c["incident_volume"],
+        "composite": runbook_leg,
+        "finding_kind": runbook_leg["kind"],
     }
     artifacts = common.pointer_artifacts(c["members"], artifact_type="security_incident")
     systems = [common.SOURCE_SYSTEM]
@@ -185,6 +224,12 @@ def _build_result(c: Dict[str, Any], min_volume: int) -> DetectorResult:
             "confidence": confidence["level"],
             "corroborated": False,
             "corroboration_sources": systems,
+            "finding_kind": runbook_leg["kind"],
+            "runbook_documented": runbook_leg["documented"],
+            "runbook_match_available": bool(
+                c.get("b5_available") and c.get("runbook_match")
+            ),
+            "runbook_leg": runbook_leg,
             "finding_ref": f"servicenow:sir-triage-toil:{digest}",
             "finding_contract": contract,
         },

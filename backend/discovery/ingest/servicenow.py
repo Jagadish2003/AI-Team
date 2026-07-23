@@ -398,7 +398,7 @@ class ServiceNowClient:
         self,
         table: str,
         params: Dict[str, Any],
-        max_records: int = 10000,
+        max_records: Optional[int] = 10000,
     ) -> List[Dict]:
         """
         Query a ServiceNow table with sysparm_offset pagination.
@@ -425,7 +425,7 @@ class ServiceNowClient:
                 if not records:
                     break
                 all_records.extend(records)
-                if len(all_records) >= max_records:
+                if max_records is not None and len(all_records) >= max_records:
                     raise ServiceNowIngestError(
                         f"ServiceNow table/{table} result exceeded {max_records} records. "
                         f"Narrow the query window."
@@ -1181,7 +1181,10 @@ SECOPS_AUDIT_TABLE = "sys_audit"
 SIR_TABLE = "sn_si_incident"
 SIR_AUDIT_TABLE = SECOPS_AUDIT_TABLE  # retained name; shared audit table
 SIR_CHECKPOINT_ID = "servicenow:sn_si_incident"
-SIR_RECORD_CAP = CMDB_RECORD_CAP
+# SecOps transport reads are not truncated by the CMDB connector's unrelated
+# 10k cap. The shared MSP-B7 ``SecOpsVolumeStream`` below owns the per-run
+# processing budget, loud deferral, and safe resume checkpoint.
+SIR_RECORD_CAP: Optional[int] = None
 SIR_SOURCE_TYPE = "servicenow_security_incident"
 
 # Workflow field scope — workload, not weakness.  Scalars, assignment details,
@@ -1203,6 +1206,20 @@ SIR_FIELDS: Tuple[str, ...] = (
     "closed_at",
     "close_code",
     "resolution_code",
+)
+
+# Notes are fetched through a second, isolated projection only after the
+# corresponding workflow records have been admitted. They never enter
+# ``ServiceNowSecurityIncident`` or the detector-visible SIR payload.
+SIR_SECURITY_NOTE_FIELDS: Tuple[str, ...] = (
+    "sys_id",
+    "number",
+    "category",
+    "sys_updated_on",
+    "work_notes",
+    "comments",
+    "additional_comments",
+    "close_notes",
 )
 
 # Field-scope guard (MSP-B11 AC2).  These are the sensitive-content fields a SIR
@@ -1347,7 +1364,7 @@ def _read_workflow_field_history(
     *,
     client: Optional[ServiceNowClient] = None,
     audit_records: Optional[List[Dict[str, Any]]] = None,
-    record_cap: int = CMDB_RECORD_CAP,
+    record_cap: Optional[int] = CMDB_RECORD_CAP,
 ) -> Dict[str, Dict[str, List[ServiceNowWorkflowTransition]]]:
     """Read audited transitions of ``history_fields`` for the supplied records.
 
@@ -1372,7 +1389,7 @@ def _read_workflow_field_history(
         remaining = record_cap
         records: List[Dict[str, Any]] = []
         for offset in range(0, len(ordered_ids), 100):
-            if remaining <= 0:
+            if remaining is not None and remaining <= 0:
                 break
             batch = ordered_ids[offset : offset + 100]
             page = client.table_query(
@@ -1390,7 +1407,8 @@ def _read_workflow_field_history(
                 },
                 max_records=remaining,
             )
-            remaining -= len(page)
+            if remaining is not None:
+                remaining -= len(page)
             records.extend(page)
     else:
         records = audit_records or []
@@ -1558,6 +1576,140 @@ def get_security_incidents(
     return _read_security_incidents(org_id, client)
 
 
+def _read_security_incident_notes(
+    incident_records: List[Dict[str, Any]],
+    client: Optional[ServiceNowClient] = None,
+) -> List[Dict[str, Any]]:
+    """Fetch notes for the already-admitted SIR records through a separate scope.
+
+    The normal SIR projection remains workflow-only. This second query is bounded
+    to exact admitted ``sys_id`` values and returns note-bearing records solely to
+    ``servicenow_security_notes_handoff``, where redaction happens before a
+    retrieval artifact is constructed.
+    """
+    admitted = {
+        str(record.get("sys_id")): record
+        for record in incident_records
+        if isinstance(record, dict) and record.get("sys_id")
+    }
+    if not admitted:
+        return []
+
+    if is_live():
+        if client is None:
+            client = _get_client()
+        rows: List[Dict[str, Any]] = []
+        ordered_ids = sorted(admitted)
+        for offset in range(0, len(ordered_ids), 100):
+            batch = ordered_ids[offset : offset + 100]
+            rows.extend(
+                client.table_query(
+                    SIR_TABLE,
+                    {
+                        "sysparm_query": (
+                            f"sys_idIN{','.join(batch)}^ORDERBYsys_updated_on^ORDERBYsys_id"
+                        ),
+                        "sysparm_fields": ",".join(SIR_SECURITY_NOTE_FIELDS),
+                        "sysparm_display_value": "all",
+                        "sysparm_exclude_reference_link": "true",
+                    },
+                    # Exact-id query: +1 makes hitting the cap a duplicate/contract
+                    # error instead of rejecting a complete expected response.
+                    max_records=len(batch) + 1,
+                )
+            )
+        instance_url = getattr(client, "instance_url", None)
+    else:
+        fixture = _load_secops_fixture()
+        instance_url = (fixture.get("_meta") or {}).get("instance_url")
+        rows = [
+            row
+            for row in fixture.get(SIR_TABLE, [])
+            if isinstance(row, dict) and str(row.get("sys_id") or "") in admitted
+        ]
+
+    notes: List[Dict[str, Any]] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        sys_id = _optional_sn_text(row.get("sys_id"))
+        if not sys_id or sys_id not in admitted:
+            continue
+        workflow = admitted[sys_id]
+        note_record: Dict[str, Any] = {
+            field: row.get(field)
+            for field in SIR_SECURITY_NOTE_FIELDS
+            if field in row
+        }
+        note_record.update(
+            {
+                "sys_id": sys_id,
+                "number": note_record.get("number") or workflow.get("number"),
+                "category": note_record.get("category") or workflow.get("category"),
+                "source_timestamp": (
+                    _optional_sn_text(note_record.get("sys_updated_on"))
+                    or workflow.get("source_timestamp")
+                ),
+                "source_url": workflow.get("source_url")
+                or _servicenow_record_url(instance_url, SIR_TABLE, sys_id),
+            }
+        )
+        notes.append(note_record)
+    notes.sort(
+        key=lambda row: (
+            str(row.get("source_timestamp") or ""),
+            str(row.get("sys_id") or ""),
+        )
+    )
+    return notes
+
+
+def _budget_secops_delta(
+    objects: List[Any],
+    *,
+    volume_stream: Any,
+    table_family: str,
+    org_id: str,
+    updated_after: Optional[str],
+    watermark: str,
+) -> DeltaBatch:
+    """Apply the shared B7 SecOps budget and return the checkpoint-safe delta."""
+    candidates: List[Dict[str, Any]] = []
+    for obj in objects:
+        record = obj.as_dict()
+        record.update(artifact_id=obj.sys_id, change_kind=ChangeKind.UPDATED)
+        candidates.append(record)
+
+    admissions = volume_stream.admit_records(
+        candidates, table_family=table_family, org_id=org_id
+    )
+    records = [
+        record
+        for record, admission in zip(candidates, admissions)
+        if admission.is_processed
+    ]
+    deferred = any(admission.is_deferred for admission in admissions)
+    if not deferred:
+        return DeltaBatch(
+            records=records, next_checkpoint=watermark, is_complete=True
+        )
+
+    safe = volume_stream.measurements(org_id).safe_checkpoints.get(table_family)
+    if safe:
+        # Complete this budgeted window and resume strictly after the last whole
+        # timestamp group that was processed.
+        return DeltaBatch(records=records, next_checkpoint=safe, is_complete=True)
+
+    # This table received no budget (an earlier SecOps family consumed it). Keep
+    # the prior position intact. On a first run the empty value is rejected by
+    # change_runner; on an incremental run ``is_complete=False`` prevents a write.
+    return DeltaBatch(
+        records=records,
+        next_checkpoint=updated_after or "",
+        is_complete=False,
+    )
+
+
 class ServiceNowSecurityIncidentChangeIngestor(ChangeBasedIngestor):
     """Incremental, bounded ``sn_si_incident`` reader using ``sys_updated_on``.
 
@@ -1580,10 +1732,16 @@ class ServiceNowSecurityIncidentChangeIngestor(ChangeBasedIngestor):
         org_id: str,
         client: Optional[ServiceNowClient] = None,
         clock: Optional[Callable[[], datetime]] = None,
+        volume_stream: Optional[Any] = None,
     ) -> None:
         self.org_id = org_id
         self.client = client
         self.clock = clock
+        if volume_stream is None:
+            from discovery.signals.secops_volume import SecOpsVolumeStream
+
+            volume_stream = SecOpsVolumeStream()
+        self.volume_stream = volume_stream
 
     def ingest_changes(
         self, org_id: str, since: Optional[Checkpoint]
@@ -1602,12 +1760,14 @@ class ServiceNowSecurityIncidentChangeIngestor(ChangeBasedIngestor):
             updated_after=updated_after,
             updated_through=watermark,
         )
-        records: List[Dict[str, Any]] = []
-        for incident in incidents:
-            record = incident.as_dict()
-            record.update(artifact_id=incident.sys_id, change_kind=ChangeKind.UPDATED)
-            records.append(record)
-        yield DeltaBatch(records=records, next_checkpoint=watermark, is_complete=True)
+        yield _budget_secops_delta(
+            incidents,
+            volume_stream=self.volume_stream,
+            table_family=SIR_TABLE,
+            org_id=org_id,
+            updated_after=updated_after,
+            watermark=watermark,
+        )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1630,7 +1790,7 @@ class ServiceNowSecurityIncidentChangeIngestor(ChangeBasedIngestor):
 # ─────────────────────────────────────────────────────────────────────────────
 
 VR_FIXTURE_PATH = Path(__file__).parent / "fixtures" / "servicenow_vr_sample.json"
-VR_RECORD_CAP = CMDB_RECORD_CAP
+VR_RECORD_CAP: Optional[int] = None
 VR_HISTORY_FIELDS: Tuple[str, ...] = ("state", "assignment_group")
 
 VR_VULN_ITEM_TABLE = "sn_vul_vulnerable_item"
@@ -2135,6 +2295,7 @@ class _ServiceNowVRStreamIngestor(ChangeBasedIngestor):
 
     reports_deletes = False
     _stream_label = "VR"
+    _table_family = ""
 
     def __init__(
         self,
@@ -2142,10 +2303,16 @@ class _ServiceNowVRStreamIngestor(ChangeBasedIngestor):
         org_id: str,
         client: Optional[ServiceNowClient] = None,
         clock: Optional[Callable[[], datetime]] = None,
+        volume_stream: Optional[Any] = None,
     ) -> None:
         self.org_id = org_id
         self.client = client
         self.clock = clock
+        if volume_stream is None:
+            from discovery.signals.secops_volume import SecOpsVolumeStream
+
+            volume_stream = SecOpsVolumeStream()
+        self.volume_stream = volume_stream
 
     def _read(self, updated_after: Optional[str], updated_through: Optional[str]) -> List[Any]:
         raise NotImplementedError
@@ -2161,12 +2328,14 @@ class _ServiceNowVRStreamIngestor(ChangeBasedIngestor):
             raise ServiceNowIngestError(f"{self._stream_label} checkpoint scope mismatch")
         updated_after = _validated_secops_cursor(since.value if since else None)
         watermark = _cmdb_watermark(self.clock)
-        records: List[Dict[str, Any]] = []
-        for obj in self._read(updated_after, watermark):
-            record = obj.as_dict()
-            record.update(artifact_id=obj.sys_id, change_kind=ChangeKind.UPDATED)
-            records.append(record)
-        yield DeltaBatch(records=records, next_checkpoint=watermark, is_complete=True)
+        yield _budget_secops_delta(
+            self._read(updated_after, watermark),
+            volume_stream=self.volume_stream,
+            table_family=self._table_family,
+            org_id=org_id,
+            updated_after=updated_after,
+            watermark=watermark,
+        )
 
 
 class ServiceNowVulnerableItemChangeIngestor(_ServiceNowVRStreamIngestor):
@@ -2174,6 +2343,7 @@ class ServiceNowVulnerableItemChangeIngestor(_ServiceNowVRStreamIngestor):
 
     connector_id = VR_VULN_ITEM_CHECKPOINT_ID
     _stream_label = "vulnerable item"
+    _table_family = VR_VULN_ITEM_TABLE
 
     def _read(self, updated_after, updated_through):
         return _read_vulnerable_items(
@@ -2187,6 +2357,7 @@ class ServiceNowVulnerabilityGroupChangeIngestor(_ServiceNowVRStreamIngestor):
 
     connector_id = VR_GROUP_CHECKPOINT_ID
     _stream_label = "vulnerability group"
+    _table_family = VR_GROUP_TABLE
 
     def _read(self, updated_after, updated_through):
         return _read_vulnerability_groups(
@@ -2200,6 +2371,7 @@ class ServiceNowRemediationTaskChangeIngestor(_ServiceNowVRStreamIngestor):
 
     connector_id = VR_REMEDIATION_TASK_CHECKPOINT_ID
     _stream_label = "remediation task"
+    _table_family = VR_REMEDIATION_TASK_TABLE
 
     def _read(self, updated_after, updated_through):
         return _read_remediation_tasks(
@@ -2241,6 +2413,7 @@ def _ingestion_result_payload(result: Any) -> Dict[str, Any]:
     return {
         "connector_id": result.connector_id,
         "records": result.records,
+        "complete": result.complete,
         "checkpoint_advanced": result.checkpoint_advanced,
         "checkpoint": result.new_checkpoint.value if result.new_checkpoint else None,
         "error": str(result.error) if result.error else None,
@@ -2364,6 +2537,10 @@ def ingest_sir_changes(
     clock: Optional[Callable[[], datetime]] = None,
     read_checkpoint: Optional[Callable[[str, str], Optional[Checkpoint]]] = None,
     save_checkpoint: Optional[Callable[[Checkpoint], None]] = None,
+    volume_stream: Optional[Any] = None,
+    handoff_security_notes: bool = False,
+    security_note_ingest_fn: Optional[Callable[..., Any]] = None,
+    security_note_record_event_fn: Optional[Callable[..., Any]] = None,
 ) -> Dict[str, Any]:
     """Apply the SIR workflow-signal stream on the shared change-ingestion rails.
 
@@ -2382,21 +2559,62 @@ def ingest_sir_changes(
         client = _get_client()
 
     collected: List[Dict[str, Any]] = []
+    note_handoff: Dict[str, Any] = {
+        "enabled": bool(handoff_security_notes),
+        "notes_seen": 0,
+        "artifacts_handed_off": 0,
+        "redacted": 0,
+        "secrets_redacted": 0,
+        "pattern_types": [],
+    }
+
+    ingestor = ServiceNowSecurityIncidentChangeIngestor(
+        org_id=org_id,
+        client=client,
+        clock=clock,
+        volume_stream=volume_stream,
+    )
 
     def process(batch: DeltaBatch) -> None:
-        for record in batch.records:
-            collected.append(
-                {
-                    key: value
-                    for key, value in record.items()
-                    if key not in {"artifact_id", "change_kind"}
-                }
+        normalized = [
+            {
+                key: value
+                for key, value in record.items()
+                if key not in {"artifact_id", "change_kind"}
+            }
+            for record in batch.records
+        ]
+        if handoff_security_notes and normalized:
+            from discovery.ingest.servicenow_security_notes_handoff import (
+                ingest_security_notes,
             )
 
+            notes = _read_security_incident_notes(normalized, client)
+            outcome = ingest_security_notes(
+                org_id,
+                notes,
+                ingest_fn=security_note_ingest_fn,
+                record_event_fn=security_note_record_event_fn,
+            )
+            note_handoff.update(
+                {
+                    "notes_seen": outcome.notes_seen,
+                    "artifacts_handed_off": outcome.artifacts_handed_off,
+                    "redacted": outcome.redacted,
+                    "secrets_redacted": outcome.secrets_redacted,
+                    "pattern_types": sorted(set(outcome.pattern_types)),
+                }
+            )
+            substrate_result = outcome.ingest_result
+            failed = int(getattr(substrate_result, "artifacts_failed", 0) or 0)
+            if failed:
+                raise ServiceNowIngestError(
+                    f"security-note retrieval handoff failed for {failed} artifact(s)"
+                )
+        collected.extend(normalized)
+
     result = ingest_with_checkpoint(
-        ServiceNowSecurityIncidentChangeIngestor(
-            org_id=org_id, client=client, clock=clock
-        ),
+        ingestor,
         org_id,
         process_batch=process,
         read_checkpoint=read_checkpoint or _repo.read_checkpoint,
@@ -2406,6 +2624,8 @@ def ingest_sir_changes(
         "org_id": org_id,
         "run_id": run_id,
         "security_incidents": collected,
+        "security_note_handoff": note_handoff,
+        "volume": ingestor.volume_stream.measurements(org_id).to_dict(),
         "streams": {"sn_si_incident": _ingestion_result_payload(result)},
     }
 
@@ -2418,6 +2638,7 @@ def ingest_vr_changes(
     clock: Optional[Callable[[], datetime]] = None,
     read_checkpoint: Optional[Callable[[str, str], Optional[Checkpoint]]] = None,
     save_checkpoint: Optional[Callable[[Checkpoint], None]] = None,
+    volume_stream: Optional[Any] = None,
 ) -> Dict[str, Any]:
     """Apply the three Vulnerability Response streams on the shared rails.
 
@@ -2435,6 +2656,10 @@ def ingest_vr_changes(
 
     if is_live() and client is None:
         client = _get_client()
+    if volume_stream is None:
+        from discovery.signals.secops_volume import SecOpsVolumeStream
+
+        volume_stream = SecOpsVolumeStream()
 
     read_cp = read_checkpoint or _repo.read_checkpoint
     save_cp = save_checkpoint or _repo.save_checkpoint
@@ -2465,7 +2690,12 @@ def ingest_vr_changes(
                 )
 
         result = ingest_with_checkpoint(
-            ingestor_cls(org_id=org_id, client=client, clock=clock),
+            ingestor_cls(
+                org_id=org_id,
+                client=client,
+                clock=clock,
+                volume_stream=volume_stream,
+            ),
             org_id,
             process_batch=process,
             read_checkpoint=read_cp,
@@ -2480,6 +2710,7 @@ def ingest_vr_changes(
         "vulnerability_groups": collected["vulnerability_groups"],
         "remediation_tasks": collected["remediation_tasks"],
         "workload_summary": summarize_vulnerability_workload(collected["vulnerable_items"]),
+        "volume": volume_stream.measurements(org_id).to_dict(),
         "streams": streams,
     }
 def _assignment_group_name(value: Any) -> Optional[str]:

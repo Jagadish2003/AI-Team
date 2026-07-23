@@ -170,6 +170,26 @@ class TestEveryOutputSurface:
                              {"ci_class": "cmdb_ci_storage_device", "count": 12}]}]}
         assert af.find_output_violations(report) == []
 
+    def test_materialization_boundary_fails_closed(self):
+        materialize = _mod("app.materialize_t2")
+        with pytest.raises(materialize.SecOpsAggregationFloorViolation):
+            materialize._assert_secops_materialized(
+                {"report": {"cells": [{"ip_address": "10.0.0.5"}]}},
+                where="post-detector report",
+                enabled=True,
+            )
+
+    def test_materialization_slice_is_pack_isolated(self):
+        materialize = _mod("app.materialize_t2")
+        opps = [
+            {"id": "s", "packId": "security_ops", "evidenceIds": ["es"]},
+            {"id": "c", "packId": "cloud_ops", "evidenceIds": ["ec"]},
+        ]
+        evidence = [{"id": "es"}, {"id": "ec"}]
+        secops_opps, secops_evidence = materialize._secops_seed_slice(opps, evidence)
+        assert [item["id"] for item in secops_opps] == ["s"]
+        assert [item["id"] for item in secops_evidence] == ["es"]
+
 
 # ── Evidence-pointer resolution: org-scoped, access-controlled, audited ──────────
 
@@ -266,6 +286,32 @@ class TestEvidenceResolution:
         store.put("org-a", "servicenow", "vi-1", {"sys_id": "vi-1", "state": "Open"})
         assert store.get("org-a", "servicenow", "vi-1") is not None
         assert store.get("org-b", "servicenow", "vi-1") is None
+
+    def test_run_kv_store_persists_for_production_resolution(self):
+        class _Db:
+            values = {}
+
+            @classmethod
+            def run_kv_get(cls, key, run_id, default=None):
+                return cls.values.get((key, run_id), default)
+
+            @classmethod
+            def run_kv_set(cls, key, run_id, value):
+                cls.values[(key, run_id)] = value
+
+        estate = _est._estate()
+        writer = rv.RunKVEvidenceRecordStore(
+            "run-1", "org-a", db_api=_Db
+        )
+        indexed = rv.index_signal_records(writer, "org-a", estate)
+        assert writer.flush() == indexed
+
+        reader = rv.RunKVEvidenceRecordStore("run-1", "org-a", db_api=_Db)
+        record = reader.get("org-a", "servicenow", "vi-server-001")
+        assert record["vulnerability_class"] == "missing patch"
+
+        foreign = rv.RunKVEvidenceRecordStore("run-1", "org-b", db_api=_Db)
+        assert foreign.get("org-b", "servicenow", "vi-server-001") is None
 
     def test_pointer_on_finding_is_lean_no_record_content(self):
         """The pointer names artifact + provenance only — no record content embedded."""

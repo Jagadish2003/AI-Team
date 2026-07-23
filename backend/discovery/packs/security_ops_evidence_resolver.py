@@ -45,6 +45,7 @@ AUDIT_EVENT = "secops.evidence_pointer_resolved"
 # resolved from require_role/require_auth).
 _ROLE_RANK: Dict[str, int] = {"owner": 3, "analyst": 2, "viewer": 1}
 DEFAULT_MIN_ROLE = "analyst"
+KV_SECOPS_EVIDENCE_RECORDS = "secops_evidence_records"
 
 
 def role_at_least(role: Optional[str], minimum: str) -> bool:
@@ -110,6 +111,92 @@ class InMemoryEvidenceRecordStore(EvidenceRecordStore):
             return None
         record = partition.get((source_system, source_artifact))
         return copy.deepcopy(record) if record is not None else None
+
+
+class RunKVEvidenceRecordStore(EvidenceRecordStore):
+    """Persistent, run-scoped production store backed by ``app.db.run_kv_*``.
+
+    The value carries its owning org in addition to the run key. Reads require
+    both to match, so even a mistakenly reused run id cannot cross an org
+    boundary. Call :meth:`flush` after bulk indexing; route-side instances load
+    the persisted snapshot read-only.
+    """
+
+    def __init__(
+        self,
+        run_id: str,
+        org_id: str,
+        *,
+        db_api: Optional[Any] = None,
+    ) -> None:
+        if not str(run_id or "").strip():
+            raise ValueError("run_id is required")
+        if not str(org_id or "").strip():
+            raise ValueError("org_id is required")
+        if db_api is None:
+            try:
+                from app import db as db_api
+            except ModuleNotFoundError:  # pragma: no cover - package import shim
+                from backend.app import db as db_api
+        self.run_id = str(run_id)
+        self.org_id = str(org_id)
+        self._db = db_api
+        stored = (
+            self._db.run_kv_get(KV_SECOPS_EVIDENCE_RECORDS, self.run_id, {})
+            or {}
+        )
+        if (
+            isinstance(stored, dict)
+            and stored.get("org_id") == self.org_id
+            and isinstance(stored.get("records"), dict)
+        ):
+            self._records: Dict[str, Dict[str, Any]] = copy.deepcopy(stored["records"])
+        else:
+            self._records = {}
+        self._dirty = False
+
+    @staticmethod
+    def _key(source_system: str, source_artifact: str) -> str:
+        return f"{source_system}\x1f{source_artifact}"
+
+    def put(
+        self,
+        org_id: str,
+        source_system: str,
+        source_artifact: str,
+        record: Dict[str, Any],
+    ) -> None:
+        if org_id != self.org_id:
+            raise ValueError("evidence record organization mismatch")
+        if not (source_system and source_artifact):
+            return
+        self._records[self._key(source_system, source_artifact)] = copy.deepcopy(record)
+        self._dirty = True
+
+    def get(
+        self,
+        org_id: str,
+        source_system: str,
+        source_artifact: str,
+    ) -> Optional[Dict[str, Any]]:
+        if org_id != self.org_id:
+            return None
+        record = self._records.get(self._key(source_system, source_artifact))
+        return copy.deepcopy(record) if record is not None else None
+
+    def flush(self) -> int:
+        """Persist the org-partitioned snapshot and return its record count."""
+        if self._dirty:
+            self._db.run_kv_set(
+                KV_SECOPS_EVIDENCE_RECORDS,
+                self.run_id,
+                {
+                    "org_id": self.org_id,
+                    "records": copy.deepcopy(self._records),
+                },
+            )
+            self._dirty = False
+        return len(self._records)
 
 
 # ── Populate the store from a run's normalized B11 signal ────────────────────
