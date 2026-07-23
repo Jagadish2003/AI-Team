@@ -63,7 +63,14 @@ export default function ConnectorTile({
 }) {
   const isConnected = connector.status === 'connected';
   const isConfigured = connector.configured;
-  const isEnabled = ENABLED_CONNECTOR_IDS.includes(connector.id);
+  // MSP-B13 (AT-748): a multi-scope cloud connector (AWS/Azure Events) onboards
+  // in the detail panel (credentials + scope pinning + per-scope health), NOT via
+  // the tile's OAuth Connect flow. Its tile action just opens that panel — enabled
+  // for every role, since Analyst/Viewer open it to VIEW health (read-only) and
+  // the panel enforces Owner-only edits. So it bypasses the OAuth-only enablement
+  // gate below.
+  const isMultiScope = Boolean(connector.multiScope);
+  const isEnabled = isMultiScope || ENABLED_CONNECTOR_IDS.includes(connector.id);
 
   // Connecting / configuring / reconnecting are analyst+ writes (the connector
   // auth-url and token routes are analyst+). Viewers get a read-only hub: their
@@ -109,8 +116,14 @@ export default function ConnectorTile({
   // Dynamics 365 / SAP) keeps its normal disabled "Connect" state.
   const outboundSetupGate = hideAuthCode && isEnabled;
 
-  // When the token is expired/missing, override the button to "Reconnect"
-  const actionLabel = outboundSetupGate
+  // When the token is expired/missing, override the button to "Reconnect".
+  // Multi-scope cloud connectors take precedence: their action opens the
+  // onboarding/health panel ("Set up" when new, "Manage" once configured).
+  const actionLabel = isMultiScope
+    ? isConnected
+      ? 'Manage'
+      : 'Set up'
+    : outboundSetupGate
     ? 'Set up outbound access'
     : tokenExpired
     ? 'Reconnect'
@@ -120,12 +133,15 @@ export default function ConnectorTile({
     ? 'View data'
     : 'Connect';
 
-  const actionVariant =
-    outboundSetupGate || !isConnected || tokenExpired
-      ? 'primary'
-      : isConfigured
+  const actionVariant = isMultiScope
+    ? isConnected
       ? 'secondary'
-      : 'tertiary';
+      : 'primary'
+    : outboundSetupGate || !isConnected || tokenExpired
+    ? 'primary'
+    : isConfigured
+    ? 'secondary'
+    : 'tertiary';
 
   // R17-D4 Addendum A / T11: at the licensed limit, a NEW connection is blocked
   // (forward-only). Only applies to a not-yet-connected system — the 'connected'
@@ -133,15 +149,20 @@ export default function ConnectorTile({
   // existing systems keep working when a lower-limit key lands (AC12).
   const limitBlocksNew = Boolean(connectBlocked) && !isConnected;
   // Viewers can only use the read-only "View data" action; every write action
-  // (Connect / Configure & Sync / Reconnect) is disabled for them.
-  const viewerBlocks = isViewer && actionLabel !== 'View data';
-  const actionDisabled = !isEnabled || limitBlocksNew || viewerBlocks;
+  // (Connect / Configure & Sync / Reconnect) is disabled for them. A multi-scope
+  // tile is exempt — it opens a read-only panel for Viewer/Analyst (health), with
+  // Owner-only edits enforced inside the panel (MSP-B13 AT-748, T6-AC3).
+  const viewerBlocks = isViewer && !isMultiScope && actionLabel !== 'View data';
+  // A multi-scope tile only OPENS the panel (no OAuth/new connection here), so the
+  // license new-connection gate never disables it.
+  const actionDisabled =
+    !isEnabled || (limitBlocksNew && !isMultiScope) || viewerBlocks;
 
   // R18-C0 P4 / AT-566: a connected tile offers Disconnect. Disconnecting is a
   // connector write (analyst+), so viewers never see it; it is independent of the
   // new-connection license gate (removing a connection is always allowed).
   const canDisconnect = isConnected && !isViewer && Boolean(onDisconnect);
-  const disabledTitle = limitBlocksNew
+  const disabledTitle = (limitBlocksNew && !isMultiScope)
     ? (connectBlockMessage || 'Your license limit has been reached. Contact CloudFulcrum to add more.')
     : !isEnabled
     ? 'Connecting new sources is currently unavailable'
@@ -218,6 +239,13 @@ export default function ConnectorTile({
           }`}
           onClick={(e: React.MouseEvent<HTMLButtonElement>) => {
             e.stopPropagation();
+            // MSP-B13 (AT-748): a multi-scope cloud connector onboards in the
+            // detail panel — the tile action just selects it to open that panel
+            // (never the OAuth Connect flow, which it does not use).
+            if (isMultiScope) {
+              onSelect();
+              return;
+            }
             // R18-A3 T5 (AT-558): in a no-public-inbound deployment, never start
             // the authorization-code flow for a connector with an outbound-only
             // mode — open the detail panel (outbound setup path) instead so the

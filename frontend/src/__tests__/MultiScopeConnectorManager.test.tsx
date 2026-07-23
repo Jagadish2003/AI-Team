@@ -205,3 +205,43 @@ describe('MultiScopeConnectorManager — test connection + gating', () => {
     expect(screen.getByRole('button', { name: /save & connect/i })).toBeDisabled();
   });
 });
+
+// ── T6-AC2 / AC3 — RBAC: Owner manages; Analyst/Viewer read-only health ─────
+describe('MultiScopeConnectorManager — RBAC (T6-AC2/AC3)', () => {
+  it.each(['analyst', 'viewer'] as const)(
+    'shows a read-only notice and lets %s view health but not modify',
+    async (role) => {
+      mocks.role = role;
+      mocks.fetchCloudScopes.mockResolvedValue({
+        ...EMPTY_SCOPES,
+        scopes: [
+          {
+            scope_id: '123456789012',
+            kind: 'aws_account',
+            label: 'Prod',
+            status: 'ok',
+            regions: ['us-east-1'],
+          },
+        ],
+      });
+      render(<MultiScopeConnectorManager connector={connector('aws_events', 'connected') as any} />);
+      // Health is visible (read).
+      expect(await screen.findByText('Prod')).toBeInTheDocument();
+      expect(screen.getByText('Healthy')).toBeInTheDocument();
+      // Read-only affordance + disabled write control (no modify).
+      expect(screen.getByTestId('cloud-connector-readonly')).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /replace credentials/i })).toBeDisabled();
+    },
+  );
+
+  it('lets an Owner manage (write controls enabled, no read-only notice)', async () => {
+    mocks.role = 'owner';
+    render(<MultiScopeConnectorManager connector={connector('aws_events', 'connected') as any} />);
+    await waitFor(() => expect(mocks.fetchCloudScopes).toHaveBeenCalled());
+    expect(screen.queryByTestId('cloud-connector-readonly')).not.toBeInTheDocument();
+    // Save enabled once credentials are entered.
+    fireEvent.change(screen.getByLabelText('Hub access key ID'), { target: { value: 'AKIA' } });
+    fireEvent.change(screen.getByLabelText('Hub secret access key'), { target: { value: 'shh' } });
+    expect(screen.getByRole('button', { name: /replace credentials/i })).toBeEnabled();
+  });
+});

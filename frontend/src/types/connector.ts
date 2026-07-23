@@ -36,4 +36,12 @@ export interface Connector {
   // Declared Salesforce cloud products for this org (e.g. 'salesforce_ncino',
   // 'salesforce_sc'). Drives the connector's actual read-scope display.
   products?: string[];
+  // MSP-B13 (AT-748): catalog-driven multi-scope cloud connector flag. When true
+  // this connector onboards through the shared MultiScopeConnectorCard (one
+  // connection, many accounts/subscriptions) and is registered as a Cloud
+  // Operations tile from the catalog — never a hardcoded tile definition.
+  multiScope?: boolean;
+  // Singular noun for one scope of a multi-scope connector ('account' /
+  // 'subscription'). Carried from the catalog; drives display copy.
+  scopeNoun?: string;
 }
