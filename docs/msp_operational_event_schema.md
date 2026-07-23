@@ -768,12 +768,40 @@ is the thin MSP-B1 binding: `AWSEventConnector` is the skeleton with
 `provider='aws'` and the three AWS surfaces (CloudWatch / EventBridge / CloudTrail)
 wired to their B0 mappers. `build_offline_aws_source()` reads the deterministic
 [`aws_native_events_sample.json`](../backend/discovery/ingest/fixtures/aws_native_events_sample.json)
-fixture so a run works with no AWS account (offline-first). The **live** poll
-source — a boto3 client polling the three surfaces with credentials resolved from
-the vault (per-run context, never process-global env) — is a follow-up MSP-B1
-subtask that depends on the SME-provided AWS credentials and drops in behind the
-same `CloudPollSource` interface with no change to this connector or the skeleton.
-MSP-B2's Azure connector is the SAME skeleton with `provider='azure'`.
+fixture so a run works with no AWS account (offline-first). MSP-B2's Azure
+connector is the SAME skeleton with `provider='azure'`.
+
+### AWS auth & cross-account access (MSP-B1 / AT-642, T2)
+
+The **live** poll source is
+[`aws_poll_source.py`](../backend/discovery/ingest/aws_poll_source.py)'s
+`AWSLivePollSource`, backed by the auth layer in
+[`aws_auth.py`](../backend/discovery/ingest/aws_auth.py). It implements the MSP
+access model — **one connection, many accounts, each account a scope**:
+
+* **Hub credentials** (the management identity's long-lived key) are vaulted as a
+  static credential under connector id `aws_events`; **direct per-account keys**
+  (the fallback) under the reserved id `aws_events:account:{account_id}`. No AWS
+  secret ever lives in config or an `.env` credential.
+* Per managed account, `AWSAuthenticator` has the hub call `sts:AssumeRole` on that
+  account's read-only role (ExternalId-gated), yielding short-lived scoped
+  credentials; if a role is absent or an AssumeRole attempt fails, it **falls back
+  to direct per-account keys**. Credentials are cached per `(org, account)` — one
+  assumption per account per run.
+* Each `(account, region, surface)` is a scope. The surface readers use EXACTLY
+  the granted read-only calls — `cloudwatch:DescribeAlarmHistory` (reconciled to
+  the Alarm State Change shape `map_cloudwatch` consumes), `events:ListRules` +
+  `events:DescribeRule` (the bounded EventBridge rule surface), and
+  `cloudtrail:LookupEvents`. Across-run resume rides a per-scope time watermark.
+* The boto3 clients are built through an injectable `AWSClientFactory`
+  (`Boto3ClientFactory` lazily imports boto3; tests inject seeded fakes), so the
+  whole auth + ingest path is proven with no AWS account.
+
+The minimal read-only IAM policy the connector needs ships as a partner-security
+artifact — [`deployment/aws_readonly_iam_policy.json`](../deployment/aws_readonly_iam_policy.json)
++ [`deployment/AWS_READONLY_IAM_POLICY.md`](../deployment/AWS_READONLY_IAM_POLICY.md)
+— minimal (exactly the calls used, no wildcard/write actions) and requiring
+independent security-review sign-off (AT-642 AC9).
 
 ### Contract suite
 
