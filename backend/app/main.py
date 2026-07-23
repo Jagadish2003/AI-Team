@@ -73,6 +73,7 @@ from .routes_run_health import register_run_health_routes
 from .routes_auth import register_auth_routes
 from .routes_license import register_license_routes
 from .routes_usage_report import register_usage_report_routes
+from .routes_usage_summary import register_usage_summary_routes
 from .routes_ingestion import register_ingestion_routes
 from .security import require_auth
 from .auth.configs import CONNECTOR_AUTH_CONFIGS
@@ -329,6 +330,8 @@ register_auth_routes(app)
 register_license_routes(app)
 # R-1.9.1-L2 / T3 (AT-695): Owner-only signed usage-report generator route.
 register_usage_report_routes(app)
+# R-1.9.1-L2 / T5 (AT-697): Owner-only pre-invoice usage-summary route (AC6).
+register_usage_summary_routes(app)
 # R16-A1 / AT-383 (T7): admin ingestion-checkpoint reset.
 register_ingestion_routes(app)
 
