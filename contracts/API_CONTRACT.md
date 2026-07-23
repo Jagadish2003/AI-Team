@@ -151,6 +151,27 @@ Purpose: persist connector connection status + metadata.
 Request (v1): `{ "status": "connected" }`  
 Response: updated `Connector`
 
+#### Cloud Connector Onboarding — AWS & Azure Events (MSP-B13 / AT-745)
+
+Multi-scope cloud connectors (`aws_events`, `azure_events`): one connection, many
+accounts/subscriptions, each scope a system. Secret fields are **write-only** —
+encrypted into the per-org vault (R17-D3 path) and never returned. RBAC: Owner
+creates/tests/pins/unpins; Analyst/Viewer read scopes + health only.
+
+- `POST /api/connectors/{aws_events|azure_events}` — Owner: create/rotate the connection.
+  - AWS request: `{ "partition": "aws"|"aws-us-gov", "access_key_id", "secret_access_key", "session_token"? }`
+  - Azure request: `{ "environment": "AzureCloud"|"AzureUSGovernment", "mode": "lighthouse"|"direct", "tenant_id", "client_id", "client_secret" }`
+  - Response: `CloudConnectionStatus` (metadata only — no secret): `{ connector_id, provider, configured, status, partition?, environment?, mode?, scope_count, updated_at }`
+- `POST /api/connectors/{id}/test` — Owner: validate auth + reachability **before save** (never persists).
+  - Response `TestConnectionResult`: `{ connector_id, provider, ok, reason?, message, identity? }` (HTTP 200 with the verdict; provider-specific `reason` on failure).
+- `GET /api/connectors/{id}/scopes` — Viewer+: `{ connector_id, provider, scopes: ScopeView[], candidates: string[] }`. Candidates are discovered-but-unpinned scopes (never ingested until pinned).
+- `POST /api/connectors/{id}/scopes` — Owner: pin (activate forward-only) a scope, validated by an assume-role (AWS) / auth (direct-keys, Azure) probe.
+  - AWS request: `{ "account_id", "role_arn"?, "external_id"?, "regions"?: string[], "partition"?, "label"?, "access_key_id"?, "secret_access_key"? }`
+  - Azure request: `{ "subscription_id", "label"? }`
+  - Response: `ScopesResponse` (as GET).
+- `DELETE /api/connectors/{id}/scopes/{scopeId}` — Owner: unpin (stops ingestion forward-only; history retained). Idempotent → 204.
+- `GET /api/connectors/{id}/scopes/{scopeId}/health` — Viewer+: `ScopeHealthResponse` `{ connector_id, scope_id, status, healthy, message?, last_checkpoint_at?, event_volume_last_run?, surfaces_ok[], surfaces_failed{} }`. `status` uses the same vocabulary as run health (`pending`/`ok`/`auth_failed`/`partial`/`failed`).
+
 #### GET /api/confidence/explanation
 Replaces: `src/data/mockConfidenceExplanation.json`  
 Response: `ConfidenceExplanation` (`src/types/normalization.ts`)
