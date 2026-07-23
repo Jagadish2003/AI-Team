@@ -268,14 +268,15 @@ def test_ac14_shown_count_matches_enforced_count(client: TestClient, monkeypatch
     assert _connect(client, org, "sys1").status_code == 200
     assert _connect(client, org, "sys2").status_code == 200
 
-    # The hub-facing state shows we are exactly at the cap, no headroom.
+    # The hub-facing state shows we are exactly at the cap, no headroom. Subset
+    # check (not exact-equality): MSP-B13 / T4 added additive keys
+    # (approachingCap/atCap/notice) to this response, which must not break the
+    # T10 core-shape assertions.
     state = client.get(LIMITS_PATH, headers=hdr).json()
-    assert state == {
-        "systemsUsed": 2,
-        "systemsLicensed": 2,
-        "unlimited": False,
-        "canConnectMore": False,
-    }
+    assert state["systemsUsed"] == 2
+    assert state["systemsLicensed"] == 2
+    assert state["unlimited"] is False
+    assert state["canConnectMore"] is False
 
     # The enforced block on the (N+1)th connect carries the SAME numbers — one
     # system = one connected entity, shown == enforced.
@@ -297,12 +298,10 @@ def test_ac14_state_reflects_higher_limit_key_no_restart(client: TestClient, mon
     _install(client, org, _mint(priv, max_systems=1))
     assert _connect(client, org, "sys1").status_code == 200
     at_limit = client.get(LIMITS_PATH, headers=hdr).json()
-    assert at_limit == {
-        "systemsUsed": 1,
-        "systemsLicensed": 1,
-        "unlimited": False,
-        "canConnectMore": False,
-    }
+    assert at_limit["systemsUsed"] == 1
+    assert at_limit["systemsLicensed"] == 1
+    assert at_limit["unlimited"] is False
+    assert at_limit["canConnectMore"] is False
 
     _install(client, org, _mint(priv, max_systems=3))
     after = client.get(LIMITS_PATH, headers=hdr).json()
@@ -393,12 +392,11 @@ def test_single_key_drives_both_scope_and_name(client: TestClient, monkeypatch):
     # §1 — the scope from the same key: one system connects, the next is blocked.
     assert _connect(client, org, "sys1").status_code == 200
     assert _connect(client, org, "sys2").status_code == 402
-    assert client.get(LIMITS_PATH, headers=hdr).json() == {
-        "systemsUsed": 1,
-        "systemsLicensed": 1,
-        "unlimited": False,
-        "canConnectMore": False,
-    }
+    limits_state = client.get(LIMITS_PATH, headers=hdr).json()
+    assert limits_state["systemsUsed"] == 1
+    assert limits_state["systemsLicensed"] == 1
+    assert limits_state["unlimited"] is False
+    assert limits_state["canConnectMore"] is False
 
 
 @pytest.mark.parametrize("role", ["owner", "analyst", "viewer"])
