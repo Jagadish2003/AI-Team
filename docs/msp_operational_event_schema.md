@@ -866,6 +866,20 @@ connector-panel artifact (same pattern as the B7 `budget_report`):
   construction under `NETWORK_PROFILE=no_public_inbound`. A structural test scans
   the connector modules for any push/inbound API.
 
+### Contract suite (AT-647, T7)
+
+[`backend/discovery/tests/test_msp_b1_contract.py`](../backend/discovery/tests/test_msp_b1_contract.py)
+is the consolidated Section-3 contract for MSP-B1 — one labelled test per
+acceptance criterion (AC1–AC8), each reproducing that criterion's scenario, with
+the **B8-bridge transport equivalence (AC4)** as its headline: B0's golden fixtures
+run through the native connector are detector-identical to the bridge path except
+`source_system` (`'aws'` vs `'bridge:aws'`). It sits alongside the per-task suites
+(T1–T6) and restates the whole contract in one place, mirroring
+`test_msp_b7_contract.py`. Pure-Python (seeded fakes; the bridge runs over an
+in-memory staging sink). AC9 (the read-only IAM policy) is a human design-review
+gate on the [`deployment/AWS_READONLY_IAM_POLICY.md`](../deployment/AWS_READONLY_IAM_POLICY.md)
+artifact.
+
 ### Contract suite
 
 [`backend/discovery/tests/test_cloud_event_connector.py`](../backend/discovery/tests/test_cloud_event_connector.py)
