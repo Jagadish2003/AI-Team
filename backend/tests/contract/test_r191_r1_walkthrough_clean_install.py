@@ -138,7 +138,29 @@ def _git(args: list[str]) -> str:
     return result.stdout.strip()
 
 
-def _changed_paths_against_r1_base() -> set[str]:
+def _changed_paths_against_ref(ref: str) -> set[str]:
+    output = _git(["diff", "--name-only", f"{ref}...HEAD"])
+    return {line.replace("\\", "/") for line in output.splitlines() if line}
+
+
+def _is_ancestor(ref: str, descendant: str = "HEAD") -> bool:
+    result = subprocess.run(
+        ["git", "merge-base", "--is-ancestor", ref, descendant],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+    )
+    return result.returncode == 0
+
+
+def _story_changed_paths() -> set[str]:
+    # If dev has already been merged into this feature branch, ignore dev's own
+    # changes for the R191-R1 config-only guard and inspect only this branch's
+    # story delta on top of dev. Otherwise fall back to the R1 target branch.
+    if _is_ancestor("origin/dev"):
+        return _changed_paths_against_ref("origin/dev")
+
     candidates = [
         os.environ.get("R191_R1_BASE_REF"),
         "origin/R-1.9.1-R1",
@@ -147,9 +169,7 @@ def _changed_paths_against_r1_base() -> set[str]:
     for ref in [c for c in candidates if c]:
         try:
             _git(["rev-parse", "--verify", ref])
-            base = _git(["merge-base", ref, "HEAD"])
-            output = _git(["diff", "--name-only", base, "HEAD"])
-            return {line.replace("\\", "/") for line in output.splitlines() if line}
+            return _changed_paths_against_ref(ref)
         except RuntimeError:
             continue
     pytest.skip("No R191-R1 base ref available for diff guard")
@@ -337,7 +357,7 @@ def test_frontend_stack_builder_has_no_cached_registry_arrays():
 
 
 def test_registry_story_diff_avoids_engine_and_template_model_code():
-    changed = _changed_paths_against_r1_base()
+    changed = _story_changed_paths()
     forbidden = sorted(
         path
         for path in changed
