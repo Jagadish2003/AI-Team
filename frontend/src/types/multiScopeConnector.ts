@@ -79,10 +79,17 @@ export interface TestConnectionResult {
   scopesReachable?: number;
 }
 
+/** One option in a `select` form field (AWS partition, Azure environment/mode). */
+export interface SelectOption {
+  value: string;
+  label: string;
+}
+
 /**
  * One field in a connection-creation or add-scope form. A `secret` field is
  * write-only: rendered masked, never pre-filled, cleared after a successful save
- * (T1-AC2).
+ * (T1-AC2). A field carrying `options` renders as a `<select>` (MSP-B13 T2 — AWS
+ * partition / Azure environment + access mode).
  */
 export interface ConnectorFormField {
   /** Payload key sent to the create/add-scope handler. */
@@ -95,6 +102,10 @@ export interface ConnectorFormField {
   secret?: boolean;
   /** Whether the field must be non-empty before submit. Defaults to true. */
   required?: boolean;
+  /** Present => the field is a dropdown selection (e.g. partition/environment). */
+  options?: SelectOption[];
+  /** Initial/reset value — especially for a `select` (e.g. the default partition). */
+  defaultValue?: string;
 }
 
 /**

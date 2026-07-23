@@ -31,6 +31,18 @@ export const AWS_EVENTS_CONFIG: MultiScopeConnectorConfig = {
     'again. Each account is reached read-only via role assumption or direct keys.',
   credentialFields: [
     {
+      key: 'partition',
+      label: 'Partition',
+      // MSP-B1 aws_partitions: commercial `aws` and GovCloud (US) `aws-us-gov`.
+      options: [
+        { value: 'aws', label: 'AWS Commercial (aws)' },
+        { value: 'aws-us-gov', label: 'AWS GovCloud US (aws-us-gov)' },
+      ],
+      defaultValue: 'aws',
+      hint: 'GovCloud uses regional STS and arn:aws-us-gov ARNs.',
+      required: true,
+    },
+    {
       key: 'access_key_id',
       label: 'Hub access key ID',
       placeholder: 'AKIA…',
@@ -57,6 +69,12 @@ export const AWS_EVENTS_CONFIG: MultiScopeConnectorConfig = {
       label: 'Account ID',
       placeholder: '123456789012',
       required: true,
+    },
+    {
+      key: 'label',
+      label: 'Label (optional)',
+      placeholder: 'Production',
+      required: false,
     },
     {
       key: 'role_arn',
@@ -94,6 +112,29 @@ export const AZURE_EVENTS_CONFIG: MultiScopeConnectorConfig = {
     'shown again. Only explicitly pinned subscriptions are ever ingested.',
   credentialFields: [
     {
+      key: 'environment',
+      label: 'Environment',
+      // MSP-B2 azure_environments: public cloud and US Government sovereign cloud.
+      options: [
+        { value: 'AzureCloud', label: 'Azure Public (AzureCloud)' },
+        { value: 'AzureUSGovernment', label: 'Azure US Government' },
+      ],
+      defaultValue: 'AzureCloud',
+      hint: 'Selects the login + ARM endpoints for the sovereign cloud.',
+      required: true,
+    },
+    {
+      key: 'mode',
+      label: 'Access mode',
+      // azure_events_config: Lighthouse (delegated) vs direct per-tenant SP.
+      options: [
+        { value: 'direct', label: 'Direct (per-tenant service principal)' },
+        { value: 'lighthouse', label: 'Lighthouse (delegated)' },
+      ],
+      defaultValue: 'direct',
+      required: true,
+    },
+    {
       key: 'tenant_id',
       label: 'Tenant ID',
       placeholder: '00000000-0000-0000-0000-000000000000',
@@ -121,7 +162,7 @@ export const AZURE_EVENTS_CONFIG: MultiScopeConnectorConfig = {
       required: true,
     },
     {
-      key: 'display_name',
+      key: 'label',
       label: 'Display name (optional)',
       placeholder: 'Production',
       required: false,

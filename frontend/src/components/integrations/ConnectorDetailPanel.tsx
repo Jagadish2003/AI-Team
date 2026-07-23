@@ -15,6 +15,8 @@ import PostgreSQLScopePicker from './PostgreSQLScopePicker';
 import StaticCredentialManager from './StaticCredentialManager';
 import OutboundAuthSetup from './OutboundAuthSetup';
 import { isStaticCredentialConnector } from './staticCredentialConnectors';
+import MultiScopeConnectorManager from './MultiScopeConnectorManager';
+import { isMultiScopeConnector } from './multiScopeConnectors';
 
 // T41-7: Connection Health - configured read scope for this connector.
 // Shows what AgentIQ is configured to read from this source.
@@ -173,6 +175,31 @@ export default function ConnectorDetailPanel({
   const isConnected = connector.status === 'connected';
   const isConfigured = connector.configured;
   const viewerOnlyScope = isViewerOnlyScopeUser();
+
+  // MSP-B13 (AT-744): AWS/Azure Event connectors onboard through the shared
+  // multi-scope card (one connection, many accounts/subscriptions). It owns the
+  // whole onboarding surface (credentials, test, scope panel + health), so the
+  // panel renders a dedicated body for it instead of the single-connection
+  // Access-as / Configure layout below.
+  if (isMultiScopeConnector(connector.id)) {
+    return (
+      <div className="rounded-xl border border-border bg-panel p-5">
+        <div className="flex items-start justify-between gap-2">
+          <div className="min-w-0">
+            <div className="break-words text-xl font-semibold leading-snug text-text">
+              {connector.name} Integration
+            </div>
+            <div className="mt-1 break-words text-sm text-muted">{connector.category}</div>
+          </div>
+          <Badge status={connector.status} />
+        </div>
+        <div className="mt-4 border-t border-border" />
+        <div className="mt-4">
+          <MultiScopeConnectorManager connector={connector} />
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="rounded-xl border border-border bg-panel p-5">

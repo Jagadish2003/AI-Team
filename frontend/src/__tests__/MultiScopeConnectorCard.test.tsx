@@ -245,3 +245,142 @@ describe('role gating', () => {
     expect(removeBtn).toHaveAttribute('title', 'Owner role required.');
   });
 });
+
+// ── T2-AC1 — AWS partition selection + role-ARN scope add ───────────────────
+describe('T2-AC1 — AWS partition + role ARN', () => {
+  it('renders a partition dropdown with commercial + GovCloud, defaulting to aws', () => {
+    renderAws();
+    const partition = screen.getByLabelText('Partition') as HTMLSelectElement;
+    expect(partition.tagName).toBe('SELECT');
+    expect(partition.value).toBe('aws');
+    const values = Array.from(partition.options).map((o) => o.value);
+    expect(values).toEqual(['aws', 'aws-us-gov']);
+  });
+
+  it('submits the selected partition with the credentials', async () => {
+    const props = renderAws();
+    fireEvent.change(screen.getByLabelText('Partition'), { target: { value: 'aws-us-gov' } });
+    fireEvent.change(screen.getByLabelText('Hub access key ID'), {
+      target: { value: 'AKIAEXAMPLE' },
+    });
+    fireEvent.change(screen.getByLabelText('Hub secret access key'), {
+      target: { value: 'super-secret' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: /save & connect/i }));
+    await waitFor(() =>
+      expect(props.onCreateConnection).toHaveBeenCalledWith(
+        expect.objectContaining({ partition: 'aws-us-gov' }),
+      ),
+    );
+  });
+
+  it('offers role ARN + external ID in the add-scope form', () => {
+    renderAws({ connected: true, scopes: AWS_SCOPES });
+    expect(screen.getByLabelText(/role ARN/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/External ID/i)).toBeInTheDocument();
+  });
+});
+
+// ── T2-AC2 — Azure service principal + environment selection ────────────────
+describe('T2-AC2 — Azure environment selection', () => {
+  function renderAzure(overrides = {}) {
+    const props = {
+      config: AZURE_EVENTS_CONFIG,
+      connected: false,
+      scopes: [],
+      onCreateConnection: vi.fn().mockResolvedValue(undefined),
+      onTestConnection: vi.fn().mockResolvedValue({ ok: true, message: 'ok' }),
+      ...overrides,
+    };
+    render(<MultiScopeConnectorCard {...props} />);
+    return props;
+  }
+
+  it('renders tenant/client/secret fields and an environment dropdown', () => {
+    renderAzure();
+    expect(screen.getByLabelText('Tenant ID')).toBeInTheDocument();
+    expect(screen.getByLabelText('Client (application) ID')).toBeInTheDocument();
+    const secret = screen.getByLabelText('Client secret') as HTMLInputElement;
+    expect(secret).toHaveAttribute('type', 'password');
+    const env = screen.getByLabelText('Environment') as HTMLSelectElement;
+    expect(env.value).toBe('AzureCloud');
+    expect(Array.from(env.options).map((o) => o.value)).toEqual([
+      'AzureCloud',
+      'AzureUSGovernment',
+    ]);
+  });
+
+  it('submits environment + mode with the service principal', async () => {
+    const props = renderAzure();
+    fireEvent.change(screen.getByLabelText('Environment'), {
+      target: { value: 'AzureUSGovernment' },
+    });
+    fireEvent.change(screen.getByLabelText('Tenant ID'), { target: { value: 'tid' } });
+    fireEvent.change(screen.getByLabelText('Client (application) ID'), {
+      target: { value: 'cid' },
+    });
+    fireEvent.change(screen.getByLabelText('Client secret'), { target: { value: 'sec' } });
+    fireEvent.click(screen.getByRole('button', { name: /save & connect/i }));
+    await waitFor(() =>
+      expect(props.onCreateConnection).toHaveBeenCalledWith(
+        expect.objectContaining({
+          environment: 'AzureUSGovernment',
+          mode: 'direct',
+          tenant_id: 'tid',
+          client_id: 'cid',
+          client_secret: 'sec',
+        }),
+      ),
+    );
+  });
+});
+
+// ── T2-AC3 / AC4 — candidate subscriptions require explicit pinning ─────────
+describe('T2-AC3/AC4 — Azure candidate scopes require pinning', () => {
+  const CANDIDATES = ['sub-aaaa', 'sub-bbbb'];
+
+  function renderAzureCandidates(onPinCandidate = vi.fn().mockResolvedValue(undefined)) {
+    render(
+      <MultiScopeConnectorCard
+        config={AZURE_EVENTS_CONFIG}
+        connected
+        scopes={[]}
+        candidates={CANDIDATES}
+        onCreateConnection={vi.fn().mockResolvedValue(undefined)}
+        onPinCandidate={onPinCandidate}
+        onRemoveScope={vi.fn().mockResolvedValue(undefined)}
+      />,
+    );
+    return onPinCandidate;
+  }
+
+  it('displays discovered subscriptions as pending-approval candidates', () => {
+    renderAzureCandidates();
+    const panel = screen.getByTestId('candidate-scopes');
+    expect(panel).toHaveTextContent('sub-aaaa');
+    expect(panel).toHaveTextContent('sub-bbbb');
+    expect(panel).toHaveTextContent(/Pending approval/i);
+    // Candidates are NOT in the active/pinned list.
+    expect(screen.queryByLabelText('Connected subscriptions')).not.toBeInTheDocument();
+  });
+
+  it('pins a candidate only on explicit click, by its identifier', async () => {
+    const onPin = renderAzureCandidates();
+    fireEvent.click(screen.getByRole('button', { name: /pin sub-aaaa/i }));
+    await waitFor(() => expect(onPin).toHaveBeenCalledWith('sub-aaaa'));
+    expect(onPin).toHaveBeenCalledTimes(1);
+  });
+
+  it('shows no candidate panel when there is no pin handler', () => {
+    render(
+      <MultiScopeConnectorCard
+        config={AZURE_EVENTS_CONFIG}
+        connected
+        scopes={[]}
+        candidates={CANDIDATES}
+        onCreateConnection={vi.fn().mockResolvedValue(undefined)}
+      />,
+    );
+    expect(screen.queryByTestId('candidate-scopes')).not.toBeInTheDocument();
+  });
+});
