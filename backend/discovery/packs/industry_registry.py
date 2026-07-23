@@ -290,15 +290,13 @@ INDUSTRY_REGISTRY: Dict[str, IndustryConfig] = {
         industry_id="energy_utilities",
         label="Energy & utilities",
         # R191-R1 T3: sqlserver_opsignal added — the shipped native-DB pack
-        # serves the new database anchor below. sap stays as-is here: unlike
-        # manufacturing/logistics_supply_chain (T1), this industry's existing
-        # sap entry is out of this task's scope (databases only) — re-anchoring
-        # it is a separate concern this task does not touch.
+        # serves the new database anchor below. R191-R1 T6 now enforces the
+        # full anchor-on-shipped rule, so SAP moves to roadmap until its real
+        # ingestor ships.
         pack_hints=["service_cloud", "sqlserver_opsignal"],
         system_defaults={
             "salesforce":     SystemDefaultConfig("system_of_record",          "primary",   ["service_casework", "compliance_risk", "approvals"]),
             "salesforce_sc":  SystemDefaultConfig("system_of_record",          "primary",   ["service_casework", "compliance_risk"]),
-            "sap":            SystemDefaultConfig("system_of_record",          "primary",   ["approvals", "compliance_risk", "handoffs_routing"]),
             "servicenow":     SystemDefaultConfig("operational_signal_source", "secondary", ["compliance_risk", "backlog_work_queues"]),
             "jira":           SystemDefaultConfig("operational_signal_source", "secondary", ["backlog_work_queues", "change_release"]),
             "sharepoint":     SystemDefaultConfig("documentation_system",      "secondary", ["documents_knowledge", "compliance_risk"]),
@@ -317,6 +315,12 @@ INDUSTRY_REGISTRY: Dict[str, IndustryConfig] = {
             "maintenance approval workflows, and field-to-office handoff "
             "friction are primary signal categories."
         ),
+        roadmap_systems=[
+            RoadmapSystemConfig(
+                "sap", "SAP", "2.0.1",
+                "SAP connector and pack are demand-gated for 2.0.1 - not yet connectable.",
+            ),
+        ],
     ),
 
     "manufacturing": IndustryConfig(
