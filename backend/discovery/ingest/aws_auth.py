@@ -39,6 +39,13 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
+from .aws_partitions import (
+    PARTITION_AWS,
+    resolve_partition_for_region,
+    resolve_service_endpoint_or_none,
+    validate_region,
+)
+
 logger = logging.getLogger(__name__)
 
 #: Vault connector id the hub credential is stored under.
@@ -145,11 +152,21 @@ class AWSAccountConfig:
     role_arn: Optional[str] = None
     external_id: Optional[str] = None
     regions: Tuple[str, ...] = ()
+    partition: str = ""     # "" → derived from regions (default commercial 'aws')
     label: Optional[str] = None
 
     def __post_init__(self) -> None:
         if not self.account_id:
             raise ValueError("AWSAccountConfig.account_id is required")
+        # Partition (AT-645): explicit if given, else derived from the region(s);
+        # every region is validated against it so a GovCloud region under the
+        # commercial partition (or vice-versa) fails at config time, not run time.
+        resolved = self.partition or (
+            resolve_partition_for_region(self.regions[0]) if self.regions else PARTITION_AWS
+        )
+        for region in self.regions:
+            validate_region(resolved, region)
+        object.__setattr__(self, "partition", resolved)
 
     @property
     def uses_role_assumption(self) -> bool:
@@ -201,6 +218,11 @@ class Boto3ClientFactory(AWSClientFactory):
         kwargs: Dict[str, Any] = {}
         if region:
             kwargs["region_name"] = region
+        # Partition-aware endpoint (AT-645): a GovCloud region resolves the
+        # aws-us-gov endpoint; None lets boto3's own resolution stand.
+        endpoint = resolve_service_endpoint_or_none(service, region)
+        if endpoint:
+            kwargs["endpoint_url"] = endpoint
         if credentials is not None:
             kwargs.update(credentials.to_boto3_kwargs())
         return boto3.client(service, **kwargs)
@@ -419,6 +441,7 @@ def parse_account_config(entry: Dict[str, Any]) -> AWSAccountConfig:
         role_arn=entry.get("role_arn"),
         external_id=entry.get("external_id"),
         regions=tuple(str(r) for r in regions),
+        partition=str(entry.get("partition", "") or ""),
         label=entry.get("label"),
     )
 

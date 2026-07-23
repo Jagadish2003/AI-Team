@@ -823,6 +823,28 @@ artifact — [`deployment/aws_readonly_iam_policy.json`](../deployment/aws_reado
 — minimal (exactly the calls used, no wildcard/write actions) and requiring
 independent security-review sign-off (AT-642 AC9).
 
+### Partition-aware endpoints (AT-645, T5)
+
+AWS is two partitions: commercial (`aws`) and GovCloud (`aws-us-gov`).
+[`aws_partitions.py`](../backend/discovery/ingest/aws_partitions.py) makes endpoint
+configuration partition-aware from day one — a pure, config-level surface (no
+boto3/network):
+
+* `endpoint_map(partition, region)` resolves every connector service endpoint
+  (`monitoring`/`events`/`cloudtrail`/`sts`.`{region}`.`amazonaws.com`), so GovCloud
+  endpoints (`*.us-gov-west-1.amazonaws.com`) are resolved correctly and testable
+  without a live call (AC7).
+* `AWSAccountConfig.partition` is selectable per connection; when unset it is
+  derived from the account's region, and a region contradicting its partition (a
+  GovCloud region under commercial, or vice-versa) is rejected at config time.
+* The commercial partition has a global STS endpoint; GovCloud is regional-only.
+* Resource ARNs the connector builds (e.g. a CloudWatch alarm ARN) carry the
+  correct partition (`arn:aws-us-gov:…` in GovCloud).
+
+This is the config surface **MSP-B9's live verification consumes** (its
+follow-through, including FIPS endpoint variants, is referenced in
+`aws_partitions.B9_LIVE_VERIFICATION_NOTE`).
+
 ### Contract suite
 
 [`backend/discovery/tests/test_cloud_event_connector.py`](../backend/discovery/tests/test_cloud_event_connector.py)
