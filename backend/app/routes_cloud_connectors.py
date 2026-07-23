@@ -45,6 +45,7 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from fastapi import Depends, FastAPI, HTTPException, Response
@@ -86,6 +87,69 @@ SCOPE_STATUS_PARTIAL = "partial"
 SCOPE_STATUS_FAILED = "failed"
 
 _HEALTHY_STATUSES = frozenset({SCOPE_STATUS_OK})
+
+# ---------------------------------------------------------------------------
+# Partner security artifacts (MSP-B13 / T5, AT-747 — AC3/AC4)
+#
+# The card links the partner security docs — the minimal read-only AWS IAM policy
+# (MSP-B1 AC9) and the Azure Reader RBAC role (MSP-B2 AC9) — "downloadable at the
+# point a security reviewer asks for them". The FILE is the single source of truth
+# (the `deployment/` artifacts shipped by B1/B2); these routes serve them so the
+# frontend never duplicates their content. Non-secret documentation → viewer+.
+# ---------------------------------------------------------------------------
+
+#: The shipped deployment artifacts directory (repo-root/deployment).
+_DEPLOYMENT_DIR = Path(__file__).resolve().parents[2] / "deployment"
+
+#: Per-connector downloadable security artifacts (metadata only; the file content
+#: is read from _DEPLOYMENT_DIR at request time). The ``id`` is the stable download
+#: key the frontend references.
+SECURITY_ARTIFACTS: Dict[str, List[Dict[str, str]]] = {
+    AWS_EVENTS: [
+        {
+            "id": "iam_policy",
+            "label": "Minimal read-only IAM policy (JSON)",
+            "description": (
+                "The least-privilege IAM policy the assumed read-only role needs — "
+                "importable as-is (MSP-B1 AC9)."
+            ),
+            "filename": "aws_readonly_iam_policy.json",
+            "media_type": "application/json",
+        },
+        {
+            "id": "iam_policy_guide",
+            "label": "IAM policy setup guide",
+            "description": (
+                "Permission-by-capability mapping, deployment steps, and the "
+                "security-review checklist."
+            ),
+            "filename": "AWS_READONLY_IAM_POLICY.md",
+            "media_type": "text/markdown",
+        },
+    ],
+    AZURE_EVENTS: [
+        {
+            "id": "rbac_role",
+            "label": "Reader RBAC role definition (JSON)",
+            "description": (
+                "The minimal read-only Azure custom role — importable via "
+                "'az role definition create' (MSP-B2 AC9)."
+            ),
+            "filename": "azure_event_connector_role.json",
+            "media_type": "application/json",
+        },
+        {
+            "id": "rbac_role_guide",
+            "label": "Reader RBAC setup guide",
+            "description": (
+                "Permission-by-capability mapping, Lighthouse + direct-subscription "
+                "assignment, and the security-review checklist."
+            ),
+            "filename": "AZURE_EVENT_CONNECTOR_RBAC.md",
+            "media_type": "text/markdown",
+        },
+    ],
+}
 
 
 class CloudProbeError(Exception):
@@ -351,6 +415,24 @@ class ScopesResponse(BaseModel):
     provider: str
     scopes: List[ScopeView]
     candidates: List[str] = []
+
+
+class SecurityArtifact(BaseModel):
+    """One downloadable partner security artifact (MSP-B13 / T5, AC3/AC4)."""
+
+    id: str
+    label: str
+    description: str
+    filename: str
+    media_type: str
+
+
+class SecurityArtifactsResponse(BaseModel):
+    """The connector's downloadable security artifacts (IAM policy / RBAC role)."""
+
+    connector_id: str
+    provider: str
+    artifacts: List[SecurityArtifact]
 
 
 class ScopeHealthResponse(BaseModel):
@@ -687,6 +769,68 @@ def register_cloud_connector_routes(app: FastAPI) -> None:
             event_volume_last_run=scope.get("event_volume_last_run"),
             surfaces_ok=list(scope.get("surfaces_ok") or []),
             surfaces_failed=dict(scope.get("surfaces_failed") or {}),
+        )
+
+    # -----------------------------------------------------------------------
+    # Security artifacts (Viewer+) — downloadable IAM policy / RBAC role (AC3/AC4)
+    # -----------------------------------------------------------------------
+    @app.get(
+        "/api/connectors/{connector_id}/security-artifacts",
+        response_model=SecurityArtifactsResponse,
+        dependencies=[Depends(require_auth), Depends(require_role("viewer"))],
+    )
+    def list_security_artifacts(connector_id: str) -> SecurityArtifactsResponse:
+        """List the connector's downloadable partner security artifacts (AC3/AC4).
+
+        Viewer+ (read-only, non-secret documentation). Metadata only — the file
+        content is fetched from the per-artifact download route below. The card
+        renders one download control per entry so a security reviewer can grab the
+        minimal read-only IAM policy (AWS) / Reader RBAC role (Azure) in the flow.
+        """
+        provider = _require_cloud_connector(connector_id)
+        items = SECURITY_ARTIFACTS.get(connector_id, [])
+        return SecurityArtifactsResponse(
+            connector_id=connector_id,
+            provider=provider,
+            artifacts=[SecurityArtifact(**a) for a in items],
+        )
+
+    @app.get(
+        "/api/connectors/{connector_id}/security-artifacts/{artifact_id}",
+        dependencies=[Depends(require_auth), Depends(require_role("viewer"))],
+    )
+    def download_security_artifact(connector_id: str, artifact_id: str) -> Response:
+        """Serve one partner security artifact as a download (AC3/AC4).
+
+        Viewer+ (non-secret documentation). The file content is read from the
+        shipped ``deployment/`` artifact at request time — the SINGLE source of
+        truth (B1/B2 AC9), never duplicated into the frontend. Unknown connector or
+        artifact id → 404; a missing file on disk → 404 (never a 500). Served with a
+        ``Content-Disposition: attachment`` so the browser downloads it by name.
+        """
+        _require_cloud_connector(connector_id)
+        meta = next(
+            (a for a in SECURITY_ARTIFACTS.get(connector_id, []) if a["id"] == artifact_id),
+            None,
+        )
+        if meta is None:
+            raise HTTPException(status_code=404, detail="Unknown security artifact")
+        # The filename is from our own trusted map (never request input), but resolve
+        # and confirm it stays inside the deployment dir as belt-and-suspenders.
+        path = (_DEPLOYMENT_DIR / meta["filename"]).resolve()
+        if _DEPLOYMENT_DIR.resolve() not in path.parents:
+            raise HTTPException(status_code=404, detail="Security artifact not found")
+        try:
+            data = path.read_bytes()
+        except OSError:
+            logger.error("Security artifact file missing on disk: %s", path)
+            raise HTTPException(status_code=404, detail="Security artifact file not found")
+        return Response(
+            content=data,
+            media_type=meta["media_type"],
+            headers={
+                "Content-Disposition": f'attachment; filename="{meta["filename"]}"'
+            },
         )
 
 

@@ -6,7 +6,10 @@ Date: 2026-07-23
 > connector routes for `aws_events` / `azure_events` (T3 / AT-745 — create with
 > write-only vault credentials, `POST /{id}/test`, `GET/POST/DELETE /{id}/scopes`,
 > `GET /{id}/scopes/{scope}/health`) documented under "Connectors & Confidence".
-> T4 / AT-746 (system-count integration) extends `GET /api/license/limits`'s
+> T5 / AT-747 adds the per-connector security-artifact routes
+> `GET /api/connectors/{id}/security-artifacts` (list) and
+> `GET /api/connectors/{id}/security-artifacts/{artifactId}` (download), serving the
+> shipped `deployment/` IAM-policy / RBAC-role docs (viewer+). T4 / AT-746 (system-count integration) extends `GET /api/license/limits`'s
 > `LicenseLimitsResponse` with the additive optional fields `approachingCap`
 > (`boolean`), `atCap` (`boolean`), and `notice` (`string | null`) — the
 > approaching-capacity warning and at-cap hard-stop wording the Integration Hub /
@@ -183,6 +186,8 @@ creates/tests/pins/unpins; Analyst/Viewer read scopes + health only.
   - Response: `ScopesResponse` (as GET).
 - `DELETE /api/connectors/{id}/scopes/{scopeId}` — Owner: unpin (stops ingestion forward-only; history retained). Idempotent → 204.
 - `GET /api/connectors/{id}/scopes/{scopeId}/health` — Viewer+: `ScopeHealthResponse` `{ connector_id, scope_id, status, healthy, message?, last_checkpoint_at?, event_volume_last_run?, surfaces_ok[], surfaces_failed{} }`. `status` uses the same vocabulary as run health (`pending`/`ok`/`auth_failed`/`partial`/`failed`).
+- `GET /api/connectors/{id}/security-artifacts` — Viewer+ (T5 / AT-747): `{ connector_id, provider, artifacts: SecurityArtifact[] }` where `SecurityArtifact = { id, label, description, filename, media_type }`. The downloadable partner security docs (AWS minimal read-only IAM policy `iam_policy`/`iam_policy_guide`; Azure Reader RBAC role `rbac_role`/`rbac_role_guide`).
+- `GET /api/connectors/{id}/security-artifacts/{artifactId}` — Viewer+: serves the artifact file (`Content-Disposition: attachment`) from the shipped `deployment/` docs — the single source of truth (B1/B2 AC9). Unknown connector/artifact → 404.
 
 #### GET /api/confidence/explanation
 Replaces: `src/data/mockConfidenceExplanation.json`  

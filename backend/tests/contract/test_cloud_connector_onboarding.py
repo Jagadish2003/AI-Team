@@ -568,3 +568,83 @@ def test_scope_health_unknown_scope_is_404(client):
     assert client.get(
         "/api/connectors/aws_events/scopes/nope/health", headers=OWNER
     ).status_code == 404
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# MSP-B13 / T5 (AT-747) — security artifacts (AC3/AC4)
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def test_list_security_artifacts_aws(client):
+    r = client.get("/api/connectors/aws_events/security-artifacts", headers=VIEWER)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["provider"] == "aws"
+    ids = {a["id"] for a in body["artifacts"]}
+    assert "iam_policy" in ids               # the minimal read-only IAM policy (AC3)
+    # Every artifact carries the metadata the card renders.
+    for a in body["artifacts"]:
+        assert a["label"] and a["description"] and a["filename"] and a["media_type"]
+
+
+def test_list_security_artifacts_azure(client):
+    body = client.get(
+        "/api/connectors/azure_events/security-artifacts", headers=VIEWER
+    ).json()
+    ids = {a["id"] for a in body["artifacts"]}
+    assert "rbac_role" in ids                 # the Reader RBAC role (AC4)
+
+
+def test_list_security_artifacts_requires_auth(client):
+    assert client.get("/api/connectors/aws_events/security-artifacts").status_code == 401
+
+
+def test_list_security_artifacts_unknown_connector_404(client):
+    assert client.get(
+        "/api/connectors/gcp_events/security-artifacts", headers=OWNER
+    ).status_code == 404
+
+
+def test_download_aws_iam_policy(client):
+    r = client.get(
+        "/api/connectors/aws_events/security-artifacts/iam_policy", headers=VIEWER
+    )
+    assert r.status_code == 200, r.text
+    # The real minimal IAM policy content is served (single source: deployment/).
+    assert r.headers["content-type"].startswith("application/json")
+    assert 'attachment; filename="aws_readonly_iam_policy.json"' in r.headers.get(
+        "content-disposition", ""
+    )
+    assert '"Version"' in r.text and "Statement" in r.text
+
+
+def test_download_azure_rbac_role(client):
+    r = client.get(
+        "/api/connectors/azure_events/security-artifacts/rbac_role", headers=VIEWER
+    )
+    assert r.status_code == 200, r.text
+    assert 'filename="azure_event_connector_role.json"' in r.headers.get(
+        "content-disposition", ""
+    )
+    # Reader-only role — the JSON names the read actions, never write/delete.
+    assert "Microsoft.AlertsManagement/alerts/read" in r.text
+
+
+def test_download_markdown_guide(client):
+    r = client.get(
+        "/api/connectors/aws_events/security-artifacts/iam_policy_guide", headers=VIEWER
+    )
+    assert r.status_code == 200
+    assert r.headers["content-type"].startswith("text/markdown")
+
+
+def test_download_unknown_artifact_404(client):
+    assert client.get(
+        "/api/connectors/aws_events/security-artifacts/nope", headers=VIEWER
+    ).status_code == 404
+
+
+def test_download_requires_auth(client):
+    assert client.get(
+        "/api/connectors/aws_events/security-artifacts/iam_policy"
+    ).status_code == 401
