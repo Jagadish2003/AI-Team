@@ -161,6 +161,29 @@ provider's OAuth app registration before going to production.
   simply not read under the real org. Communicate this one-time reconnect to early-access
   customers when deploying this change.
 
+### Native AWS event connector (`aws_events`, MSP-B1)
+
+The native AWS connector (CloudWatch alarm history, EventBridge, CloudTrail) uses
+**cross-account role assumption from a hub identity** — one connection, many
+accounts, each account a scope. It is configured, not discovered, and no AWS
+secret ever lives in `.env` or config.
+
+| Setting | Purpose |
+|---|---|
+| `AWS_EVENT_ACCOUNTS` | JSON array of secret-free managed-account configs: `{account_id, role_arn?, external_id?, regions[]}`. Role ARNs/regions/external id are non-secret and live here (or offline uses the fixture); an account with a `role_arn` is reached by role assumption, one without by direct keys. Inline AWS keys are rejected. |
+| Vault: `aws_events` | The **hub** identity's access key (username = access key id, secret = secret access key), Fernet-encrypted in the credential vault. |
+| Vault: `aws_events:account:{account_id}` | Optional **direct per-account read-only keys** — the fallback used when an account offers no cross-account role (or role assumption fails). |
+| `AWS_EVENTS_HUB_ACCESS_KEY_ID` / `_SECRET_ACCESS_KEY` / `_SESSION_TOKEN` | CLI/standalone hub-key fallback **only** — never production, never in `.env` templates. |
+
+Per managed account the hub calls `sts:AssumeRole` on the account's read-only
+role (ExternalId-gated) for short-lived scoped credentials. The **minimal
+read-only IAM policy** AWS reviewers should inspect before granting access is the
+partner artifact [`aws_readonly_iam_policy.json`](./aws_readonly_iam_policy.json) +
+[`AWS_READONLY_IAM_POLICY.md`](./AWS_READONLY_IAM_POLICY.md) — exactly the calls
+the connector makes (`cloudwatch:DescribeAlarmHistory`, `events:ListRules`/`DescribeRule`,
+`cloudtrail:LookupEvents`, `sts:AssumeRole`), no wildcard or write actions.
+`boto3` is a lazy, live-only dependency (offline runs and tests never import it).
+
 ---
 
 ## No-Public-Inbound Deployments (R18-A3)

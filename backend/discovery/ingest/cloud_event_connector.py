@@ -407,8 +407,12 @@ class CloudEventConnector(ChangeBasedIngestor):
         The detector-visible, provider-agnostic ``event`` (identical in shape to a
         bridge record's ``event``) wrapped with the change vocabulary and native
         trace-back metadata — ``provider_event_id`` for dedupe, the scope's
-        ``surface``/``account``/``region`` for source trace, the ``evidence_pointer``
-        that resolves to the raw payload, and the B7 admission ``disposition``.
+        ``surface``/``account_scope``/``region`` for source trace, the
+        ``evidence_pointer`` that resolves to the raw payload, and the B7 admission
+        ``disposition``. ``account_scope`` names the managed account/subscription
+        the event was ingested from — the MSP "one connection, many accounts, each
+        account a scope" model (MSP-B1 / AT-642); it rides every record so a
+        multi-account run never loses which account a signal belongs to.
         """
         return {
             "artifact_id": f"{self.provider}:{event.signal_id}",
@@ -416,6 +420,7 @@ class CloudEventConnector(ChangeBasedIngestor):
             "source_system": self.provider,
             "provider": self.provider,
             "surface": scope.surface,
+            "account_scope": scope.account,
             "account": scope.account,
             "region": scope.region,
             "provider_event_id": event.signal_id,
