@@ -51,6 +51,7 @@ from fastapi import Depends, FastAPI, HTTPException, Response
 from pydantic import BaseModel
 
 from app import db
+from app import license_limits
 from app.auth.secrets import MissingSecretError
 from app.middleware.audit import log_event
 from app.middleware.tenancy import get_current_org_id
@@ -580,6 +581,17 @@ def register_cloud_connector_routes(app: FastAPI) -> None:
                 detail="Create the connection before pinning a scope.",
             )
 
+        # Licence gate (MSP-B13 / T4, AT-746): each pinned scope is one system, so
+        # pinning a NEW scope is gated on the org's max_systems exactly as a
+        # connector connect is. Re-pinning an already-pinned scope is idempotent and
+        # never blocked. Enforced here — the moment of connection — where the stop is
+        # honest and expected, before any probe or vault write. Raises HTTP 402 with
+        # the hard-stop wording at the cap. A missing scope id falls through to the
+        # provider helper's 400 (an unusable pin, not a licence block).
+        scope_id = _scope_id_from_body(connector_id, body)
+        if scope_id:
+            license_limits.enforce_can_pin_scope(org_id, connector_id, scope_id)
+
         if connector_id == AWS_EVENTS:
             scope = _pin_aws_scope(org_id, body)
         else:
@@ -681,6 +693,17 @@ def register_cloud_connector_routes(app: FastAPI) -> None:
 # ---------------------------------------------------------------------------
 # Provider-specific create / test / pin helpers
 # ---------------------------------------------------------------------------
+
+
+def _scope_id_from_body(connector_id: str, body: Dict[str, Any]) -> str:
+    """The scope's stable id from a pin body (account_id / subscription_id).
+
+    Used for the pre-pin licence gate so the check keys on the same id the scope is
+    stored under. Empty when the caller omitted it — the provider helper then
+    returns the precise 400 rather than a licence block.
+    """
+    key = "account_id" if connector_id == AWS_EVENTS else "subscription_id"
+    return str(body.get(key) or "").strip()
 
 
 def _missing_fields(pairs: List[tuple]) -> List[str]:

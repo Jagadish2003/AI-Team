@@ -1,6 +1,18 @@
 # AgentIQ — API_CONTRACT.md (EPIC E0)
-Version: v1.11
-Date: 2026-07-22
+Version: v1.12
+Date: 2026-07-23
+
+> v1.12 — MSP-B13 (Cloud Connector Onboarding): added the multi-scope cloud
+> connector routes for `aws_events` / `azure_events` (T3 / AT-745 — create with
+> write-only vault credentials, `POST /{id}/test`, `GET/POST/DELETE /{id}/scopes`,
+> `GET /{id}/scopes/{scope}/health`) documented under "Connectors & Confidence".
+> T4 / AT-746 (system-count integration) extends `GET /api/license/limits`'s
+> `LicenseLimitsResponse` with the additive optional fields `approachingCap`
+> (`boolean`), `atCap` (`boolean`), and `notice` (`string | null`) — the
+> approaching-capacity warning and at-cap hard-stop wording the Integration Hub /
+> cloud-connector cards render. Each pinned AWS account / Azure subscription counts
+> as one system against the licence's `max_systems`, enforced at pin time (HTTP 402
+> hard stop). Additive; pre-v1.12 consumers are unaffected.
 
 > v1.11 — MSP-B5 T4: added authenticated Analyst+ runbook-match lifecycle
 > endpoints: `GET /api/runbook-matches/{recurrenceId}`, `POST
