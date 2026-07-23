@@ -170,7 +170,8 @@ secret ever lives in `.env` or config.
 
 | Setting | Purpose |
 |---|---|
-| `AWS_EVENT_ACCOUNTS` | JSON array of secret-free managed-account configs: `{account_id, role_arn?, external_id?, regions[]}`. Role ARNs/regions/external id are non-secret and live here (or offline uses the fixture); an account with a `role_arn` is reached by role assumption, one without by direct keys. Inline AWS keys are rejected. |
+| `AWS_EVENT_ACCOUNTS` | JSON array of secret-free managed-account configs: `{account_id, role_arn?, external_id?, regions[], partition?}`. Role ARNs/regions/external id are non-secret and live here (or offline uses the fixture); an account with a `role_arn` is reached by role assumption, one without by direct keys. Inline AWS keys are rejected. |
+| `partition` (per account) | `aws` (commercial, default) or `aws-us-gov` (GovCloud). Selectable per connection; when omitted it is derived from the account's region, and a region that contradicts the partition (a GovCloud region under commercial, or vice-versa) is rejected at config time. GovCloud resolves `*.us-gov-west-1.amazonaws.com` endpoints and `arn:aws-us-gov:…` ARNs. Live GovCloud verification (incl. FIPS endpoints) is MSP-B9's follow-through. |
 | Vault: `aws_events` | The **hub** identity's access key (username = access key id, secret = secret access key), Fernet-encrypted in the credential vault. |
 | Vault: `aws_events:account:{account_id}` | Optional **direct per-account read-only keys** — the fallback used when an account offers no cross-account role (or role assumption fails). |
 | `AWS_EVENTS_HUB_ACCESS_KEY_ID` / `_SECRET_ACCESS_KEY` / `_SESSION_TOKEN` | CLI/standalone hub-key fallback **only** — never production, never in `.env` templates. |

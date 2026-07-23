@@ -45,6 +45,7 @@ from .aws_event_connector import (
     SURFACE_EVENTBRIDGE,
     aws_scope,
 )
+from .aws_partitions import arn_partition_for_region
 from .cloud_event_connector import CloudPollSource, CloudScope, PollPage
 
 logger = logging.getLogger(__name__)
@@ -136,7 +137,9 @@ def _alarm_history_to_state_change(
         return None
     item_type = item.get("HistoryItemType", "")
     new_state, old_state = _parse_alarm_history_states(item.get("HistoryData"))
-    alarm_arn = f"arn:aws:cloudwatch:{region or ''}:{account_id}:alarm:{name}"
+    # Partition-aware ARN (AT-645): GovCloud resources are arn:aws-us-gov:…
+    arn_partition = arn_partition_for_region(region)
+    alarm_arn = f"arn:{arn_partition}:cloudwatch:{region or ''}:{account_id}:alarm:{name}"
     return {
         "id": _bounded_id(f"{name}|{ts}|{item_type}"),
         "detail-type": "CloudWatch Alarm State Change",
