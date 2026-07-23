@@ -1,7 +1,25 @@
 # AgentIQ — API_CONTRACT.md (EPIC E0)
-Version: v1.10
-Date: 2026-07-09
+Version: v1.11
+Date: 2026-07-21
 
+> v1.11 — R-1.9.1-L1 / T1 + T2 (Licensing Completion & Hardening): extended the
+> Owner-only `LicenseStatusResponse` (`GET /api/license`, also returned by
+> `POST /api/license/update-key`) with two additive, optional-null fields:
+> `deployment_type` (`string | null` — the payload v2 deployment topology,
+> `"saas"` | `"customer_hosted"`, parsed from the signed license and exposed for
+> the License UI; `null` for a pre-v2 key or any non-verifiable state — T1/AC5)
+> and `reason` (`string | null` — the machine-readable invalid reason when
+> `status` is `"invalid"`, notably `"org_mismatch"` for a key bound to a different
+> installation org, so the UI can render a specific plain-language explanation;
+> `null` for a healthy valid/grace status — T2/AC1). Org binding is enforced at
+> verification time: a signature-valid key whose payload `org_id` does not match
+> the installation org validates as `invalid: org_mismatch` and is rejected at
+> paste time on `POST /api/license/update-key` (HTTP 400, detail "This license was
+> issued to a different organisation"), leaving any previously installed key
+> untouched. The license key format is otherwise unchanged (the new payload fields
+> sit within the already-signed v2 payload). Additive — no previously documented
+> field changed. Mirrors `src/types/license.ts`.
+>
 > v1.10 — R18-C0 P8 (Re-editable review decisions, AC8): extended
 > `ReviewAuditEvent` with the optional `tsEpoch` (`number`, the newest-first sort
 > key already emitted by the backend) and `previousDecision` (`Decision`, the

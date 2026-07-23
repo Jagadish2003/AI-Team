@@ -89,11 +89,19 @@ class SetupStatePayload(BaseModel):
     saved_at: Optional[str] = None
 
 
+class RoadmapSystemItem(BaseModel):
+    system_id: str
+    label: str
+    target_release: str
+    reason: str
+
+
 class IndustryListItem(BaseModel):
     industry_id: str
     label: str
     pack_hints: List[str]
     recommended_systems: List[str]
+    roadmap_systems: List[RoadmapSystemItem]
 
 
 class SystemDefaultItem(BaseModel):
@@ -176,6 +184,15 @@ def register_stack_builder_routes(app: FastAPI) -> None:
                 label=ind.label,
                 pack_hints=ind.pack_hints,
                 recommended_systems=ind.recommended_systems,
+                roadmap_systems=[
+                    RoadmapSystemItem(
+                        system_id=roadmap.system_id,
+                        label=roadmap.label,
+                        target_release=roadmap.target_release,
+                        reason=roadmap.reason,
+                    )
+                    for roadmap in ind.roadmap_systems
+                ],
             )
             for ind in list_industries()
         ]

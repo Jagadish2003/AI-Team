@@ -95,6 +95,10 @@ class RunStartedPayload(TypedDict, total=False):
 class RunCompletedPayload(TypedDict, total=False):
     pack_id: NotRequired[Optional[str]]
     system_count: NotRequired[Optional[int]]
+    # R-1.9.1-L1 / T6 (AC5): the license deployment_type (saas | customer_hosted)
+    # the run executed under, stamped by the discovery runner so L2 billing can
+    # record the AI-deployment topology. None when the org has no verifiable license.
+    deployment_type: NotRequired[Optional[str]]
 
 
 class ConnectorHealthPayload(TypedDict):
@@ -316,6 +320,9 @@ class GraphContextBuiltPayload(TypedDict, total=False):
 class RunStartedEvent(TypedDict):
     run_id: str
     org_id: str
+    # R-1.9.1-L1 / T6 (AC5): license deployment_type stamped by the discovery
+    # runner into the run's telemetry context (None when unlicensed).
+    deployment_type: NotRequired[Optional[str]]
 
 
 class RunCompletedEvent(TypedDict):
