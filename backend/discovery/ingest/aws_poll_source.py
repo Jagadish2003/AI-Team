@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import json
 import logging
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 from .aws_auth import AWSAccountConfig, AWSAuthenticator, AWSCredentials
@@ -71,8 +72,48 @@ def _bounded_id(value: str, *, limit: int = 256) -> str:
     return value if len(value) <= limit else value[:limit]
 
 
+def _iso(value: Any) -> str:
+    """Normalise a provider timestamp to a canonical ISO-8601 string.
+
+    boto3/botocore deserialise API timestamps to aware ``datetime`` objects, while
+    offline fixtures carry ISO strings. Both must produce the SAME string so the
+    per-account watermark (checkpoint) compares consistently across a fixture run
+    and a live run — a datetime is rendered via ``isoformat()``, a string passes
+    through, anything else degrades to ``str()``.
+    """
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value
+    try:
+        return value.isoformat()
+    except AttributeError:
+        return str(value)
+
+
+def _watermark_to_datetime(watermark: str) -> Optional[datetime]:
+    """Parse a watermark ISO string to an aware datetime for the API ``StartDate``.
+
+    ``DescribeAlarmHistory`` takes a ``datetime`` for ``StartDate``; the checkpoint
+    is stored as an ISO string, so convert it here. A trailing ``Z`` and naive
+    values are tolerated (assumed UTC); an empty/unparseable watermark yields
+    ``None`` (omit ``StartDate`` — the client-side filter still enforces "only new").
+    """
+    if not watermark:
+        return None
+    s = watermark.strip()
+    if s.endswith("Z"):
+        s = s[:-1] + "+00:00"
+    try:
+        dt = datetime.fromisoformat(s)
+    except ValueError:
+        return None
+    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+
+
 def _alarm_history_to_state_change(
-    item: Dict[str, Any], *, account_id: str, region: Optional[str]
+    item: Dict[str, Any], *, account_id: str, region: Optional[str],
+    timestamp_iso: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
     """Adapt one ``DescribeAlarmHistory`` item to the Alarm State Change shape.
 
@@ -83,11 +124,13 @@ def _alarm_history_to_state_change(
     equivalence harness flagged for B1 to resolve — so the native connector emits
     detector-identical events without changing the B0 mapper contract.
 
-    Returns ``None`` (loud-skip) for an item with no alarm name / timestamp — it
-    has no stable identity and cannot be a state-change event.
+    ``timestamp_iso`` is the caller-normalised item time (see :func:`_iso`); when
+    omitted it is derived from the item. Returns ``None`` (loud-skip) for an item
+    with no alarm name / timestamp — it has no stable identity and cannot be a
+    state-change event.
     """
     name = item.get("AlarmName")
-    ts = item.get("Timestamp")
+    ts = timestamp_iso if timestamp_iso is not None else _iso(item.get("Timestamp"))
     if not name or not ts:
         return None
     item_type = item.get("HistoryItemType", "")
@@ -127,27 +170,38 @@ def _parse_alarm_history_states(history_data: Any) -> Tuple[str, str]:
 def read_cloudwatch(
     client: Any, *, region: Optional[str], account_id: str, watermark: str, page_size: int
 ) -> Tuple[List[Dict[str, Any]], str]:
-    """Read new CloudWatch alarm-history state changes since ``watermark``.
+    """Read new CloudWatch alarm-history state changes since ``watermark`` (AT-643).
 
-    Uses ``cloudwatch:DescribeAlarmHistory`` (StateUpdate items), following
-    ``NextToken`` internally. Returns ``(events, new_watermark)`` where events are
-    in the map_cloudwatch input shape and new_watermark is the newest item time.
+    V1 scope: CloudWatch **alarm state changes only** — ``DescribeAlarmHistory``
+    filtered to ``HistoryItemType='StateUpdate'`` — NOT CloudWatch metrics or
+    CloudWatch Logs. ``StartDate`` narrows the server-side window to the account's
+    checkpoint, and a client-side ``ts > watermark`` filter is the authoritative
+    incremental guard so a second run re-reads nothing (AC3). Follows ``NextToken``
+    internally (bounded by :data:`MAX_PAGES_PER_POLL`). Returns
+    ``(events, new_watermark)`` — events in the ``map_cloudwatch`` input shape, and
+    the newest item time as the account's next checkpoint position.
     """
     events: List[Dict[str, Any]] = []
     newest = watermark
+    start_date = _watermark_to_datetime(watermark)
     token: Optional[str] = None
     for _ in range(MAX_PAGES_PER_POLL):
         params: Dict[str, Any] = {"HistoryItemType": "StateUpdate", "MaxRecords": page_size}
-        if watermark:
-            params["StartDate"] = watermark
+        if start_date is not None:
+            params["StartDate"] = start_date
         if token:
             params["NextToken"] = token
         resp = client.describe_alarm_history(**params) or {}
         for item in resp.get("AlarmHistoryItems", []) or []:
-            ts = str(item.get("Timestamp", ""))
+            ts = _iso(item.get("Timestamp"))
+            # Authoritative incremental guard: only events strictly newer than the
+            # account's checkpoint — never a re-read, regardless of what the server
+            # returned for the window (AC3).
             if watermark and ts <= watermark:
                 continue
-            event = _alarm_history_to_state_change(item, account_id=account_id, region=region)
+            event = _alarm_history_to_state_change(
+                item, account_id=account_id, region=region, timestamp_iso=ts
+            )
             if event is None:
                 continue
             events.append(event)
