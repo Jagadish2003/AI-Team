@@ -751,6 +751,42 @@ class BillingRunCompletedPayload(TypedDict, total=False):
     completed_at: NotRequired[Optional[str]]
 
 
+class BillingSystemLedgerPayload(TypedDict, total=False):
+    """billing.system_connected / billing.system_disconnected — R-1.9.1-L2 / T2 (AC2).
+
+    The immutable connect/disconnect LEDGER: one event is emitted for each genuine
+    system addition (``billing.system_connected``) and each genuine removal
+    (``billing.system_disconnected``). Together with the per-run billing record
+    (T1) this gives the L2 usage report the pro-ration record CloudFulcrum needs
+    for mid-term system additions/removals — a system connected partway through a
+    period, or disconnected before its end, is billed for the portion it was live.
+
+    A "system" is one connected Integration-Hub entity (the pricing "one connected
+    entity = one system" definition), so the ledger records only true state
+    transitions: re-authorising an already-connected connector is not a new system
+    and emits nothing, and disconnecting a connector that was never connected emits
+    nothing. This keeps the ledger free of phantom additions/removals so the report
+    aggregates cleanly (usage_report.py reads connector / system_identity /
+    occurred_at / seq for each ledger entry).
+
+    connector is the Integration-Hub connector id (e.g. ``salesforce``, ``jira``);
+    system_identity is the concrete instance being added/removed (the captured
+    instance/base URL where one is known, else the connector id) so pro-ration can
+    tell two instances of the same connector type apart. occurred_at is the ISO-8601
+    UTC transition time. seq is the per-org monotonic tamper-evidence sequence
+    number stamped at emission (T4); None when the counter could not be advanced
+    (the event is still emitted, just unsequenced).
+
+    PII/secret guard: identifiers, a non-secret instance URL, a timestamp, and the
+    sequence number only — never tokens, credentials, or the org's private data.
+    """
+    connector: NotRequired[str]
+    system_identity: NotRequired[Optional[str]]
+    occurred_at: NotRequired[str]
+    org_id: NotRequired[str]
+    seq: NotRequired[Optional[int]]
+
+
 # ---------------------------------------------------------------------------
 # Registry helpers
 # ---------------------------------------------------------------------------
@@ -882,6 +918,13 @@ register_event_type("retrieval.model_backfill", RetrievalModelBackfillPayload)
 # usage report has a complete, immutable record; record_event() raises ValueError
 # for an unregistered type, so registration must precede the first emission.
 register_event_type("billing.run_completed", BillingRunCompletedPayload)
+# R-1.9.1-L2 / T2 (AC2) — the system connect/disconnect billing ledger. Emitted by
+# app.billing_ledger from the Integration-Hub connect/disconnect routes on each
+# genuine state transition so the L2 usage report has the pro-ration record for
+# mid-term system additions/removals; record_event() raises ValueError for an
+# unregistered type, so registration must precede the first emission.
+register_event_type("billing.system_connected", BillingSystemLedgerPayload)
+register_event_type("billing.system_disconnected", BillingSystemLedgerPayload)
 
 
 # ---------------------------------------------------------------------------

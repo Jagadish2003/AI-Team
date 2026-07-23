@@ -31,6 +31,7 @@ from .db import (
     org_connector_set,
 )
 from . import license_limits
+from . import billing_ledger
 from .normalization_enrichment import KV_NORMALIZATION, enrich_ambiguous_mappings
 from .opportunity_display import (
     with_display,
@@ -455,10 +456,19 @@ def connect_connector(connector_id: str, body: Dict[str, Any]) -> Dict[str, Any]
     # disconnect) are never blocked. Raises HTTP 402 when at the licensed limit.
     if status == license_limits.CONNECTED_STATUS:
         license_limits.enforce_can_connect(org_id, connector_id)
+    # R-1.9.1-L2 / T2 (AC2): capture the connection state BEFORE the write so the
+    # billing ledger records only a genuine transition on this bidirectional toggle.
+    was_connected = c.get("status") == license_limits.CONNECTED_STATUS
     c["status"] = status
     c["lastSynced"] = c.get("lastSynced", "—")
     # Write to THIS org's namespaced row — never the shared catalog.
     org_connector_set(org_id, connector_id, c)
+    billing_ledger.record_connection_change(
+        org_id,
+        connector_id,
+        was_connected=was_connected,
+        now_connected=status == license_limits.CONNECTED_STATUS,
+    )
     return c
 
 
