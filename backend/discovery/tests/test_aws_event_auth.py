@@ -24,7 +24,6 @@ import os
 import pytest
 
 from discovery.ingest.aws_auth import (
-    AUTH_MODE_DIRECT_KEYS,
     AWSAccountConfig,
     AWSAuthenticator,
     AWSAuthError,
@@ -234,7 +233,7 @@ def test_ac1_incremental_run_advances_per_scope_watermark():
 
 def test_direct_keys_account_without_a_role():
     account = AWSAccountConfig(account_id="333333333333", regions=("us-east-1",))
-    assert account.auth_mode == AUTH_MODE_DIRECT_KEYS  # no role → direct keys
+    assert not account.uses_role_assumption  # no role_arn → direct keys only
     factory = FakeAWSClientFactory({"333333333333": _account_data("333333333333")})
 
     def account_keys(org_id, account_id):

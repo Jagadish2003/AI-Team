@@ -48,10 +48,6 @@ HUB_CONNECTOR_ID = "aws_events"
 #: assumed account's CloudTrail, so an MSP auditor sees who assumed the role).
 DEFAULT_ROLE_SESSION_NAME = "agentiq-msp-b1"
 
-#: Auth modes for an account scope.
-AUTH_MODE_ASSUME_ROLE = "assume_role"
-AUTH_MODE_DIRECT_KEYS = "direct_keys"
-
 #: AWS credential-looking config keys that must NEVER appear in account config —
 #: a secret belongs in the vault, not in deployment config. Extends the shared
 #: ``operational_config.FORBIDDEN_SECRET_KEYS`` with the AWS-specific spellings
@@ -138,22 +134,31 @@ class AWSAccountConfig:
     ``external_id`` is the optional STS confused-deputy guard. ``regions`` are the
     regions to poll (empty → the client's default region). Config only — never a
     secret (secrets are vaulted).
+
+    How the account is reached is derived purely from config: an account with a
+    ``role_arn`` is assumed into (with a direct-keys fallback), one without uses
+    direct per-account keys only. There is no stored/selected "mode" — the access
+    concept never enters the ingestion layer.
     """
 
     account_id: str
     role_arn: Optional[str] = None
     external_id: Optional[str] = None
     regions: Tuple[str, ...] = ()
-    auth_mode: str = AUTH_MODE_ASSUME_ROLE
     label: Optional[str] = None
 
     def __post_init__(self) -> None:
         if not self.account_id:
             raise ValueError("AWSAccountConfig.account_id is required")
-        # An account with no role can only use direct keys — normalise so the
-        # authenticator never tries to AssumeRole with no role arn.
-        mode = self.auth_mode if self.role_arn else AUTH_MODE_DIRECT_KEYS
-        object.__setattr__(self, "auth_mode", mode)
+
+    @property
+    def uses_role_assumption(self) -> bool:
+        """True when this account is reached by assuming a cross-account role.
+
+        Derived from config (the presence of ``role_arn``) — the decision is a
+        function of what is configured, not of any stored access-mode flag.
+        """
+        return bool(self.role_arn)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -266,9 +271,9 @@ class AWSAuthenticator:
     Preferred path per account: the hub identity calls ``sts:AssumeRole`` on the
     account's read-only ``role_arn`` and the connector uses the returned temporary
     credentials. Fallback: direct per-account keys from the vault — used when the
-    account declares ``auth_mode='direct_keys'`` (no role), OR when an AssumeRole
-    attempt fails and direct keys happen to be configured (so one misconfigured
-    role never blocks an otherwise-reachable account).
+    account has no ``role_arn`` (direct keys only), OR when an AssumeRole attempt
+    fails and direct keys happen to be configured (so one misconfigured role never
+    blocks an otherwise-reachable account).
 
     Resolved credentials are cached per ``(org_id, account_id)`` for the lifetime
     of the authenticator (one AssumeRole per account per run, not per surface/
@@ -305,8 +310,11 @@ class AWSAuthenticator:
         if cached is not None:
             return cached
 
+        # The path is chosen from CONFIG (whether a role_arn is set), not from any
+        # stored access-mode: an account with a role is assumed into (direct-keys
+        # fallback), one without uses direct per-account keys only.
         creds: Optional[AWSCredentials]
-        if account.auth_mode == AUTH_MODE_ASSUME_ROLE:
+        if account.role_arn:
             creds = self._try_assume_role(org_id, account)
             if creds is None:
                 # Fallback: direct per-account keys if configured.
@@ -321,9 +329,8 @@ class AWSAuthenticator:
 
         if creds is None:
             raise AWSAuthError(
-                f"no AWS credentials for account {account.account_id} "
-                f"(mode={account.auth_mode}) — configure the hub role or vault the "
-                f"account's read-only keys"
+                f"no AWS credentials for account {account.account_id} — configure "
+                f"the hub role assumption or vault the account's read-only keys"
             )
         self._cache[cache_key] = creds
         return creds
@@ -412,7 +419,6 @@ def parse_account_config(entry: Dict[str, Any]) -> AWSAccountConfig:
         role_arn=entry.get("role_arn"),
         external_id=entry.get("external_id"),
         regions=tuple(str(r) for r in regions),
-        auth_mode=entry.get("auth_mode", AUTH_MODE_ASSUME_ROLE),
         label=entry.get("label"),
     )
 

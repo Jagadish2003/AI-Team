@@ -170,7 +170,7 @@ secret ever lives in `.env` or config.
 
 | Setting | Purpose |
 |---|---|
-| `AWS_EVENT_ACCOUNTS` | JSON array of secret-free managed-account configs: `{account_id, role_arn?, external_id?, regions[], auth_mode?}`. Role ARNs/regions/external id are non-secret and live here (or offline uses the fixture). Inline AWS keys are rejected. |
+| `AWS_EVENT_ACCOUNTS` | JSON array of secret-free managed-account configs: `{account_id, role_arn?, external_id?, regions[]}`. Role ARNs/regions/external id are non-secret and live here (or offline uses the fixture); an account with a `role_arn` is reached by role assumption, one without by direct keys. Inline AWS keys are rejected. |
 | Vault: `aws_events` | The **hub** identity's access key (username = access key id, secret = secret access key), Fernet-encrypted in the credential vault. |
 | Vault: `aws_events:account:{account_id}` | Optional **direct per-account read-only keys** — the fallback used when an account offers no cross-account role (or role assumption fails). |
 | `AWS_EVENTS_HUB_ACCESS_KEY_ID` / `_SECRET_ACCESS_KEY` / `_SESSION_TOKEN` | CLI/standalone hub-key fallback **only** — never production, never in `.env` templates. |
