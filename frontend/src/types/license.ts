@@ -45,6 +45,18 @@ export interface LicenseLimitsResponse {
    * connected system is always allowed (forward-only), decided server-side.
    */
   canConnectMore: boolean;
+  /**
+   * MSP-B13 / T4 (AT-746) — the Integration Hub / cloud-connector cards render an
+   * approaching-capacity notice and an at-cap hard stop with the agreed wording.
+   * Additive to the T10 shape (optional): pre-T4 responses omit them.
+   *
+   * `approachingCap`: under the cap but within the configured margin of it.
+   * `atCap`: at or over the licensed limit (no headroom left).
+   * `notice`: the approaching / at-cap wording to display; null when neither.
+   */
+  approachingCap?: boolean;
+  atCap?: boolean;
+  notice?: string | null;
 }
 
 /**

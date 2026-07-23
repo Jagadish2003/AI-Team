@@ -33,6 +33,10 @@ export default function LicenseLimitBanner({
 
   const { systemsUsed, systemsLicensed, unlimited, canConnectMore } = limits;
   const atLimit = !unlimited && !canConnectMore;
+  // MSP-B13 / T4 (AT-746): approaching-capacity notice — shown when the org is
+  // under the cap but within the configured margin of it (never together with the
+  // at-limit hard stop). The wording comes from the backend `notice` field.
+  const approaching = !atLimit && Boolean(limits.approachingCap) && Boolean(limits.notice);
 
   return (
     <div
@@ -42,7 +46,9 @@ export default function LicenseLimitBanner({
         'flex flex-wrap items-center justify-between gap-x-4 gap-y-1 rounded-xl border px-4 py-2.5 text-xs shadow-sm',
         atLimit
           ? 'border-amber-500/30 bg-amber-500/10 text-amber-200'
-          : 'border-border bg-panel text-muted',
+          : approaching
+            ? 'border-amber-500/20 bg-amber-500/5 text-amber-200'
+            : 'border-border bg-panel text-muted',
       ].join(' ')}
     >
       <div className="flex items-center gap-2">
@@ -54,6 +60,11 @@ export default function LicenseLimitBanner({
       {atLimit && systemsLicensed != null && (
         <span data-testid="license-at-limit" className="font-medium">
           {systemLimitMessage(systemsLicensed)}
+        </span>
+      )}
+      {approaching && (
+        <span data-testid="license-approaching-limit" className="font-medium">
+          {limits.notice}
         </span>
       )}
     </div>
