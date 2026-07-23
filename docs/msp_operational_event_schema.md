@@ -801,6 +801,18 @@ access model — **one connection, many accounts, each account a scope**:
   checkpoint advances independently. Live `Timestamp` values (botocore returns
   aware datetimes) are normalised to the same ISO string a fixture carries so
   watermarks compare across fixture and live runs.
+* **CloudTrail + EventBridge polling (AT-644, T4).** CloudTrail: `LookupEvents`
+  ingests **management (audit) events only** — data events are never returned by
+  LookupEvents, and `_is_management_event` defensively drops any explicit
+  `Data`/`Insight` record; incremental by the same `StartTime` + `ts > watermark`
+  time watermark as CloudWatch. EventBridge: bounded reads over the scoped rule set
+  (`ListRules` + `DescribeRule`) → `map_eventbridge`; because a rule set is
+  configuration not a time series, its per-scope checkpoint is a compact
+  `{rule_key: signature}` map and a rule is emitted only when NEW or CHANGED — an
+  unchanged rule set re-reads nothing (AC3). V1 scope is enforced end to end: only
+  CloudWatch alarms, bounded EventBridge operational events, and CloudTrail
+  management events — no data events, no GuardDuty/Security Hub streams (never
+  called, never granted), no logs/metrics.
 * The boto3 clients are built through an injectable `AWSClientFactory`
   (`Boto3ClientFactory` lazily imports boto3; tests inject seeded fakes), so the
   whole auth + ingest path is proven with no AWS account.
