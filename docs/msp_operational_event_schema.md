@@ -793,6 +793,14 @@ access model — **one connection, many accounts, each account a scope**:
   the Alarm State Change shape `map_cloudwatch` consumes), `events:ListRules` +
   `events:DescribeRule` (the bounded EventBridge rule surface), and
   `cloudtrail:LookupEvents`. Across-run resume rides a per-scope time watermark.
+* **CloudWatch polling (AT-643, T3).** V1 ingests CloudWatch **alarm state changes
+  only** — `DescribeAlarmHistory` filtered to `HistoryItemType='StateUpdate'`, NOT
+  metrics or CloudWatch Logs. `StartDate` narrows the server window to each
+  account's checkpoint, and a client-side `ts > watermark` filter is the
+  authoritative incremental guard so a second run re-reads nothing; each account's
+  checkpoint advances independently. Live `Timestamp` values (botocore returns
+  aware datetimes) are normalised to the same ISO string a fixture carries so
+  watermarks compare across fixture and live runs.
 * The boto3 clients are built through an injectable `AWSClientFactory`
   (`Boto3ClientFactory` lazily imports boto3; tests inject seeded fakes), so the
   whole auth + ingest path is proven with no AWS account.
