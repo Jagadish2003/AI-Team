@@ -713,3 +713,74 @@ budget). It is pure-Python (in-memory evidence store, no DB) and runs alongside
 the per-task suites (`test_ops_stream_dedup.py`, `test_ops_stream_aggregation.py`,
 `test_ops_stream_noise_floor.py`, `test_ops_stream_budget.py`,
 `test_correlation_windows.py`, `test_ops_calibration.py`).
+
+---
+
+## 15. Shared native cloud-connector skeleton (MSP-B1 / AT-641, T1)
+
+The MSP-B8 bridge normalises *exported* event history through the B0 mappers;
+MSP-B1 (AWS) and MSP-B2 (Azure) do the same for a *live, checkpointed* feed. Those
+two native connectors do the same four things and differ only in the provider
+edge, so the common shape is built ONCE in
+[`backend/discovery/ingest/cloud_event_connector.py`](../backend/discovery/ingest/cloud_event_connector.py)
+and both consume it — the direct application of the R17-A3/A4 "share the
+extraction, not just the idea" discipline to clouds. The skeleton IS the contract
+with MSP-B2: if B2 must fork it, that is a design defect to surface early (AT-641).
+
+### The four responsibilities
+
+* **Poll loop.** For each configured *scope* (a managed account/subscription ×
+  provider surface, e.g. CloudWatch in `us-east-1`) the connector pages forward
+  from that scope's last position via an injectable `CloudPollSource` — the ONLY
+  provider-specific edge (a live boto3 / Azure SDK client in production, an
+  in-memory `StaticCloudPollSource` offline/in tests).
+* **Per-scope checkpoints.** One `(org_id, connector_id)` checkpoint row is
+  persisted by the runner, but a deployment polls many scopes. The opaque value
+  encodes a per-scope position MAP (`{"v":1,"scopes":{scope_key: position}}`); a
+  scope absent from the map is polled from the beginning, so a first load is
+  resumable. The runner never interprets it (R16-A1 AC5).
+* **Mapper invocation.** Each raw payload is normalised through the B0 reference
+  mapper named on its scope, so every event is the identical detector-visible
+  `OperationalEvent` shape (§5) — a detector never branches on provider.
+* **Admission hand-off (B7).** Every mapped event is handed to an `OpsEventStream`
+  (§8), so re-fires fold into one active signal with a count at the door and the
+  per-run budget (§11) is enforced. `active_signals()` exposes the deduplicated
+  view; `budget_report()` exposes the deferral proof.
+
+### Transport equivalence with the bridge (AC4)
+
+The connector re-stamps each event's `source_system` to the provider family
+(`'aws'` / `'azure'`) while PRESERVING the mapper's `event_signature` — exactly
+mirroring the way the bridge (§8 of the B8 story) re-stamps to `'bridge:<provider>'`.
+So a natively-ingested event and its bridged twin are detector-identical except
+for that one field (`'aws'` vs `'bridge:aws'`). The raw payload is stored against
+the event's OBSERVED evidence pointer (§6) — reachable for trace-back, never
+embedded in the detector-visible model.
+
+Deletes: `reports_deletes = False` — a cloud event stream is append-only
+observation history; a fired alarm or logged API call is never retracted, so
+there is no deletion to propagate (the limitation is declared, not faked).
+
+### AWS instantiation
+
+[`backend/discovery/ingest/aws_event_connector.py`](../backend/discovery/ingest/aws_event_connector.py)
+is the thin MSP-B1 binding: `AWSEventConnector` is the skeleton with
+`provider='aws'` and the three AWS surfaces (CloudWatch / EventBridge / CloudTrail)
+wired to their B0 mappers. `build_offline_aws_source()` reads the deterministic
+[`aws_native_events_sample.json`](../backend/discovery/ingest/fixtures/aws_native_events_sample.json)
+fixture so a run works with no AWS account (offline-first). The **live** poll
+source — a boto3 client polling the three surfaces with credentials resolved from
+the vault (per-run context, never process-global env) — is a follow-up MSP-B1
+subtask that depends on the SME-provided AWS credentials and drops in behind the
+same `CloudPollSource` interface with no change to this connector or the skeleton.
+MSP-B2's Azure connector is the SAME skeleton with `provider='azure'`.
+
+### Contract suite
+
+[`backend/discovery/tests/test_cloud_event_connector.py`](../backend/discovery/tests/test_cloud_event_connector.py)
+proves AC4 (the B0 golden fixtures run through the native connector are equivalent
+to their bridged twins except `source_system` — for AWS *and*, through the same
+skeleton with `provider='azure'`, for Azure) and AC5 (a seeded re-firing alarm
+folds into one active signal with a count, live through the native poll path, and
+the aggregate still opens back to its raw instances), plus the poll loop, opaque
+per-scope checkpoints, resumable first load, and loud-skip robustness.
