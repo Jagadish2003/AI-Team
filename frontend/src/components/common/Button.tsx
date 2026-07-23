@@ -9,7 +9,8 @@ export default function Button({
   variant = 'primary',
   className = '',
   title,
-  ariaLabel
+  ariaLabel,
+  type = 'button'
 }: {
   children: React.ReactNode;
   onClick?: React.MouseEventHandler<HTMLButtonElement>;
@@ -18,6 +19,9 @@ export default function Button({
   className?: string;
   title?: string;
   ariaLabel?: string;
+  // Defaults to 'button' so an existing Button placed inside a <form> never
+  // accidentally submits it; pass 'submit' explicitly for a form's submit button.
+  type?: 'button' | 'submit' | 'reset';
 }) {
   const base = 'inline-flex min-h-9 items-center justify-center whitespace-nowrap rounded-md px-3 py-2 text-sm font-medium transition-[border-color,background-color,box-shadow,color,opacity] focus:outline-none focus-visible:ring-1 focus-visible:ring-accent/40 disabled:cursor-not-allowed disabled:opacity-40';
   const variants: Record<Variant, string> = {
@@ -29,6 +33,7 @@ export default function Button({
 };
   return (
     <button
+      type={type}
       title={title}
       aria-label={ariaLabel}
       className={`${base} ${variants[variant] ?? ''} ${className}`}
