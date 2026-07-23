@@ -79,10 +79,36 @@ guard). Replace `HUB_ACCOUNT_ID` and `EXTERNAL_ID`.
    role ARNs, regions, and the `ExternalId` — via the connector's configuration
    (role ARNs/regions are non-secret; keys go to the vault only).
 
+## Minimality traceability (for the reviewer)
+
+Every granted action maps to exactly one call the connector makes — no action is
+granted that the code does not use, and no call is made that is not granted. A
+reviewer can confirm minimality against the source without reading the whole
+connector; the machine check `test_ac9_iam_policy_is_exactly_the_calls_used`
+enforces the set equality in CI.
+
+| Granted action | Used by (code) | Purpose |
+|---|---|---|
+| `cloudwatch:DescribeAlarmHistory` | `aws_poll_source.read_cloudwatch` | Alarm state-change history (`StateUpdate` only) |
+| `events:ListRules` | `aws_poll_source.read_eventbridge` | Enumerate the bounded scoped rule set |
+| `events:DescribeRule` | `aws_poll_source.read_eventbridge` (`_describe_rule`) | Read a scoped rule's configuration |
+| `cloudtrail:LookupEvents` | `aws_poll_source.read_cloudtrail` | Management (audit) event history |
+| `sts:AssumeRole` | `aws_auth.AWSAuthenticator._try_assume_role` | Hub → per-account read-only role |
+
+No other AWS API is called anywhere in the connector (`aws_event_connector.py`,
+`aws_auth.py`, `aws_poll_source.py`, `aws_partitions.py`, `aws_health.py`); the
+outbound-only posture is separately pinned by the AC6 module scan.
+
 ## Security-review sign-off (AC9)
 
 This artifact must be reviewed and signed off by **someone other than its author**
 before access is granted — that independent review is the acceptance gate.
+
+Reviewer checklist:
+- [ ] The granted actions equal exactly the "Minimality traceability" set above (no more, no fewer).
+- [ ] No wildcard (`*`) actions and no write/delete/modify actions.
+- [ ] All statements are `Effect: Allow`, read-only; `Resource` scoping fits our accounts/regions/rules.
+- [ ] The hub `sts:AssumeRole` is scoped to the specific read-only role ARNs; each account's trust policy is `ExternalId`-gated.
 
 | | Name | Date |
 |---|---|---|
