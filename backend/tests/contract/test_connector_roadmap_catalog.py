@@ -170,6 +170,19 @@ class TestRoadmapNotConnectable:
         resp = self._connect(client, org, "dynamics365")
         assert resp.status_code == 409, resp.text
 
+    def test_connecting_roadmap_connector_absent_from_catalog_still_409(
+        self, client: TestClient
+    ):
+        """Regression (review finding): a roadmap tile that is NOT pre-seeded in the
+        org's connector catalog must STILL be refused with 409 — the roadmap guard
+        runs before the catalog lookup, so a missing catalog row can never fall
+        through to a 404 and silently bypass the non-connectable block."""
+        org = self._owner_org()
+        _seed_catalog(["github"])  # 'sap' intentionally absent from the catalog
+        resp = self._connect(client, org, "sap")
+        assert resp.status_code == 409, resp.text
+        assert "roadmap" in resp.json().get("detail", "").lower()
+
     def test_shipped_connector_still_connects(self, client: TestClient):
         org = self._owner_org()
         _seed_catalog(["github"])

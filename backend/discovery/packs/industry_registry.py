@@ -70,6 +70,16 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 
+# R191-R1: the SAP/D365 demand-gated release target is owned by
+# app.connector_roadmap (the catalog's roadmap source of truth). Import it here so
+# the Stack Builder registry and the Integration Hub catalog never drift on the
+# target string — one edit there moves both surfaces. (app.connector_roadmap is a
+# standalone, dependency-light module, so this import introduces no cycle.)
+try:
+    from app.connector_roadmap import TARGET_2_0_1
+except ModuleNotFoundError:  # project-root execution uses backend as package
+    from backend.app.connector_roadmap import TARGET_2_0_1
+
 
 # ── Data models ───────────────────────────────────────────────────────────────
 
@@ -215,11 +225,11 @@ INDUSTRY_REGISTRY: Dict[str, IndustryConfig] = {
     # SAP/D365 connectors and packs defer to 2.0.1, demand-gated).
     roadmap_systems=[
         RoadmapSystemConfig(
-            "sap", "SAP", "2.0.1",
+            "sap", "SAP", TARGET_2_0_1,
             "SAP connector and pack are demand-gated for 2.0.1 — not yet connectable.",
         ),
         RoadmapSystemConfig(
-            "dynamics365", "Dynamics 365", "2.0.1",
+            "dynamics365", "Dynamics 365", TARGET_2_0_1,
             "Dynamics 365 connector and pack are demand-gated for 2.0.1 — not yet connectable.",
         ),
     ],
@@ -317,7 +327,7 @@ INDUSTRY_REGISTRY: Dict[str, IndustryConfig] = {
         ),
         roadmap_systems=[
             RoadmapSystemConfig(
-                "sap", "SAP", "2.0.1",
+                "sap", "SAP", TARGET_2_0_1,
                 "SAP connector and pack are demand-gated for 2.0.1 - not yet connectable.",
             ),
         ],
@@ -357,11 +367,11 @@ INDUSTRY_REGISTRY: Dict[str, IndustryConfig] = {
         # SAP/D365 connectors and packs defer to 2.0.1, demand-gated).
         roadmap_systems=[
             RoadmapSystemConfig(
-                "sap", "SAP", "2.0.1",
+                "sap", "SAP", TARGET_2_0_1,
                 "SAP connector and pack are demand-gated for 2.0.1 — not yet connectable.",
             ),
             RoadmapSystemConfig(
-                "dynamics365", "Dynamics 365", "2.0.1",
+                "dynamics365", "Dynamics 365", TARGET_2_0_1,
                 "Dynamics 365 connector and pack are demand-gated for 2.0.1 — not yet connectable.",
             ),
         ],

@@ -169,6 +169,22 @@ async def lifespan(app: FastAPI):
     # Dev and test environments run without connector secrets set.
     if os.getenv("REQUIRE_CONNECTOR_SECRETS") == "1":
         validate_all_secrets(CONNECTOR_AUTH_CONFIGS)
+        # R1.9.1-H1 T4 (follow-up): the production DEPLOYMENT PROFILE is selected
+        # ONLY by ENVIRONMENT=production (see app.deployment_profile.is_production).
+        # REQUIRE_CONNECTOR_SECRETS=1 enforces secret presence but does NOT make a
+        # process production — so a deployment that sets only the latter still runs
+        # under the dev profile, which leaves the customer-tenant CUSTOMER_TENANT_API_KEY
+        # env fallback ENABLED (vault revocation could be bypassed). Warn loudly so an
+        # operator who set REQUIRE_CONNECTOR_SECRETS=1 as a production signal also sets
+        # ENVIRONMENT=production, which is now mandatory for the production profile.
+        if not _is_production():
+            logger.warning(
+                "REQUIRE_CONNECTOR_SECRETS=1 is set but ENVIRONMENT is not "
+                "'production'. The production deployment profile is selected ONLY by "
+                "ENVIRONMENT=production; without it this process runs under the dev "
+                "profile and the CUSTOMER_TENANT_API_KEY environment fallback stays "
+                "enabled. Set ENVIRONMENT=production on production deployments."
+            )
     # AUTH-2 review #3/#4/#8: fail fast (prod) / warn (dev) if the org-approval
     # email config is missing, so broken approval links never ship silently.
     _validate_org_approval_config()
@@ -443,22 +459,26 @@ def list_connectors() -> List[Dict[str, Any]]:
 )
 def connect_connector(connector_id: str, body: Dict[str, Any]) -> Dict[str, Any]:
     org_id = get_current_org_id()
-    c = org_connector_get(org_id, connector_id)
-    if not c:
-        raise HTTPException(404, "connector not found")
     status = body.get("status", "connected")
     # R191-R1 T5 (AT-726 / AC2): a roadmap connector (SAP/D365 and any tile whose
     # ingestion does not ship yet) is NOT connectable — refuse a connect attempt
     # with an actionable, named reason so it can never become a connected system
-    # a run could select. Applies only to the connect transition; a disconnect on
-    # an unconnected roadmap tile is a harmless no-op.
+    # a run could select. This guard runs BEFORE the catalog lookup below so a
+    # roadmap tile is refused with 409 regardless of whether it is pre-seeded in
+    # the org's connector catalog — a roadmap tile absent from the catalog must
+    # not fall through to the 404 and silently bypass the block. Applies only to
+    # the connect transition; a disconnect on an unconnected roadmap tile is a
+    # harmless no-op.
     if status == license_limits.CONNECTED_STATUS and connector_roadmap.is_roadmap(
         connector_id
     ):
         raise HTTPException(
             409,
-            connector_roadmap.roadmap_block_message(connector_id, c.get("name")),
+            connector_roadmap.roadmap_block_message(connector_id),
         )
+    c = org_connector_get(org_id, connector_id)
+    if not c:
+        raise HTTPException(404, "connector not found")
     # R17-D4 Addendum A / T9: enforce limits.max_systems at connection time.
     # Only a transition TO "connected" adds a system; forward-only, so reconnects
     # of an already-connected connector and any non-connect status change (e.g.

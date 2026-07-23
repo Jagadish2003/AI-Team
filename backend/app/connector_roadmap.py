@@ -77,13 +77,17 @@ SHIPPED_CONNECTOR_IDS = frozenset(
 # here is a real `connectors.json` catalog tile whose ingestion does not ship
 # (verified by `test_catalog_is_fully_classified`, which cross-checks the seed).
 # The dynamically-discovered ingestor cross-check is R191-R1 AC1 (a later task).
-_TARGET_2_0_1 = "2.0.1"
+# Canonical release-target constant for the SAP/D365 demand-gated tiles. Public
+# (no leading underscore) and imported by the Stack Builder registry
+# (discovery/packs/industry_registry.py) so the target string lives in ONE place —
+# change the release here and both the catalog and the registry move together.
+TARGET_2_0_1 = "2.0.1"
 UNSCHEDULED_TARGET = "unscheduled"
 
 ROADMAP_TARGETS: Dict[str, str] = {
     # Demand-gated for 2.0.1 — auth/config exists, ingestion does not (AT-726).
-    "sap": _TARGET_2_0_1,
-    "dynamics365": _TARGET_2_0_1,
+    "sap": TARGET_2_0_1,
+    "dynamics365": TARGET_2_0_1,
     # Other catalog tiles without a shipped ingestor — roadmap, unscheduled.
     "databricks": UNSCHEDULED_TARGET,
     "oracle_ebs": UNSCHEDULED_TARGET,
@@ -136,7 +140,9 @@ def annotate_connector(row: Dict[str, Any]) -> Dict[str, Any]:
     workspace-catalog grouping are untouched.
     """
     connector_id = str(row.get("id") or row.get("system_id") or "")
-    roadmap = bool(connector_id) and is_roadmap(connector_id)
+    # is_roadmap("") is already False (the empty string is not a roadmap id), so no
+    # separate truthiness guard is needed.
+    roadmap = is_roadmap(connector_id)
     return {
         **row,
         "roadmap": roadmap,
