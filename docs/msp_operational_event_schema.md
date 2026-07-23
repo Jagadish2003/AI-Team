@@ -714,3 +714,179 @@ budget). It is pure-Python (in-memory evidence store, no DB) and runs alongside
 the per-task suites (`test_ops_stream_dedup.py`, `test_ops_stream_aggregation.py`,
 `test_ops_stream_noise_floor.py`, `test_ops_stream_budget.py`,
 `test_correlation_windows.py`, `test_ops_calibration.py`).
+
+---
+
+## 15. Shared native cloud-connector skeleton (MSP-B1 / AT-641, T1)
+
+The MSP-B8 bridge normalises *exported* event history through the B0 mappers;
+MSP-B1 (AWS) and MSP-B2 (Azure) do the same for a *live, checkpointed* feed. Those
+two native connectors do the same four things and differ only in the provider
+edge, so the common shape is built ONCE in
+[`backend/discovery/ingest/cloud_event_connector.py`](../backend/discovery/ingest/cloud_event_connector.py)
+and both consume it — the direct application of the R17-A3/A4 "share the
+extraction, not just the idea" discipline to clouds. The skeleton IS the contract
+with MSP-B2: if B2 must fork it, that is a design defect to surface early (AT-641).
+
+### The four responsibilities
+
+* **Poll loop.** For each configured *scope* (a managed account/subscription ×
+  provider surface, e.g. CloudWatch in `us-east-1`) the connector pages forward
+  from that scope's last position via an injectable `CloudPollSource` — the ONLY
+  provider-specific edge (a live boto3 / Azure SDK client in production, an
+  in-memory `StaticCloudPollSource` offline/in tests).
+* **Per-scope checkpoints.** One `(org_id, connector_id)` checkpoint row is
+  persisted by the runner, but a deployment polls many scopes. The opaque value
+  encodes a per-scope position MAP (`{"v":1,"scopes":{scope_key: position}}`); a
+  scope absent from the map is polled from the beginning, so a first load is
+  resumable. The runner never interprets it (R16-A1 AC5).
+* **Mapper invocation.** Each raw payload is normalised through the B0 reference
+  mapper named on its scope, so every event is the identical detector-visible
+  `OperationalEvent` shape (§5) — a detector never branches on provider.
+* **Admission hand-off (B7).** Every mapped event is handed to an `OpsEventStream`
+  (§8), so re-fires fold into one active signal with a count at the door and the
+  per-run budget (§11) is enforced. `active_signals()` exposes the deduplicated
+  view; `budget_report()` exposes the deferral proof.
+
+### Transport equivalence with the bridge (AC4)
+
+The connector re-stamps each event's `source_system` to the provider family
+(`'aws'` / `'azure'`) while PRESERVING the mapper's `event_signature` — exactly
+mirroring the way the bridge (§8 of the B8 story) re-stamps to `'bridge:<provider>'`.
+So a natively-ingested event and its bridged twin are detector-identical except
+for that one field (`'aws'` vs `'bridge:aws'`). The raw payload is stored against
+the event's OBSERVED evidence pointer (§6) — reachable for trace-back, never
+embedded in the detector-visible model.
+
+Deletes: `reports_deletes = False` — a cloud event stream is append-only
+observation history; a fired alarm or logged API call is never retracted, so
+there is no deletion to propagate (the limitation is declared, not faked).
+
+### AWS instantiation
+
+[`backend/discovery/ingest/aws_event_connector.py`](../backend/discovery/ingest/aws_event_connector.py)
+is the thin MSP-B1 binding: `AWSEventConnector` is the skeleton with
+`provider='aws'` and the three AWS surfaces (CloudWatch / EventBridge / CloudTrail)
+wired to their B0 mappers. `build_offline_aws_source()` reads the deterministic
+[`aws_native_events_sample.json`](../backend/discovery/ingest/fixtures/aws_native_events_sample.json)
+fixture so a run works with no AWS account (offline-first). MSP-B2's Azure
+connector is the SAME skeleton with `provider='azure'`.
+
+### AWS auth & cross-account access (MSP-B1 / AT-642, T2)
+
+The **live** poll source is
+[`aws_poll_source.py`](../backend/discovery/ingest/aws_poll_source.py)'s
+`AWSLivePollSource`, backed by the auth layer in
+[`aws_auth.py`](../backend/discovery/ingest/aws_auth.py). It implements the MSP
+access model — **one connection, many accounts, each account a scope**:
+
+* **Hub credentials** (the management identity's long-lived key) are vaulted as a
+  static credential under connector id `aws_events`; **direct per-account keys**
+  (the fallback) under the reserved id `aws_events:account:{account_id}`. No AWS
+  secret ever lives in config or an `.env` credential.
+* Per managed account, `AWSAuthenticator` has the hub call `sts:AssumeRole` on that
+  account's read-only role (ExternalId-gated), yielding short-lived scoped
+  credentials; if a role is absent or an AssumeRole attempt fails, it **falls back
+  to direct per-account keys**. Credentials are cached per `(org, account)` — one
+  assumption per account per run.
+* Each `(account, region, surface)` is a scope. The surface readers use EXACTLY
+  the granted read-only calls — `cloudwatch:DescribeAlarmHistory` (reconciled to
+  the Alarm State Change shape `map_cloudwatch` consumes), `events:ListRules` +
+  `events:DescribeRule` (the bounded EventBridge rule surface), and
+  `cloudtrail:LookupEvents`. Across-run resume rides a per-scope time watermark.
+* **CloudWatch polling (AT-643, T3).** V1 ingests CloudWatch **alarm state changes
+  only** — `DescribeAlarmHistory` filtered to `HistoryItemType='StateUpdate'`, NOT
+  metrics or CloudWatch Logs. `StartDate` narrows the server window to each
+  account's checkpoint, and a client-side `ts > watermark` filter is the
+  authoritative incremental guard so a second run re-reads nothing; each account's
+  checkpoint advances independently. Live `Timestamp` values (botocore returns
+  aware datetimes) are normalised to the same ISO string a fixture carries so
+  watermarks compare across fixture and live runs.
+* **CloudTrail + EventBridge polling (AT-644, T4).** CloudTrail: `LookupEvents`
+  ingests **management (audit) events only** — data events are never returned by
+  LookupEvents, and `_is_management_event` defensively drops any explicit
+  `Data`/`Insight` record; incremental by the same `StartTime` + `ts > watermark`
+  time watermark as CloudWatch. EventBridge: bounded reads over the scoped rule set
+  (`ListRules` + `DescribeRule`) → `map_eventbridge`; because a rule set is
+  configuration not a time series, its per-scope checkpoint is a compact
+  `{rule_key: signature}` map and a rule is emitted only when NEW or CHANGED — an
+  unchanged rule set re-reads nothing (AC3). V1 scope is enforced end to end: only
+  CloudWatch alarms, bounded EventBridge operational events, and CloudTrail
+  management events — no data events, no GuardDuty/Security Hub streams (never
+  called, never granted), no logs/metrics.
+* The boto3 clients are built through an injectable `AWSClientFactory`
+  (`Boto3ClientFactory` lazily imports boto3; tests inject seeded fakes), so the
+  whole auth + ingest path is proven with no AWS account.
+
+The minimal read-only IAM policy the connector needs ships as a partner-security
+artifact — [`deployment/aws_readonly_iam_policy.json`](../deployment/aws_readonly_iam_policy.json)
++ [`deployment/AWS_READONLY_IAM_POLICY.md`](../deployment/AWS_READONLY_IAM_POLICY.md)
+— minimal (exactly the calls used, no wildcard/write actions) and requiring
+independent security-review sign-off (AT-642 AC9).
+
+### Partition-aware endpoints (AT-645, T5)
+
+AWS is two partitions: commercial (`aws`) and GovCloud (`aws-us-gov`).
+[`aws_partitions.py`](../backend/discovery/ingest/aws_partitions.py) makes endpoint
+configuration partition-aware from day one — a pure, config-level surface (no
+boto3/network):
+
+* `endpoint_map(partition, region)` resolves every connector service endpoint
+  (`monitoring`/`events`/`cloudtrail`/`sts`.`{region}`.`amazonaws.com`), so GovCloud
+  endpoints (`*.us-gov-west-1.amazonaws.com`) are resolved correctly and testable
+  without a live call (AC7).
+* `AWSAccountConfig.partition` is selectable per connection; when unset it is
+  derived from the account's region, and a region contradicting its partition (a
+  GovCloud region under commercial, or vice-versa) is rejected at config time.
+* The commercial partition has a global STS endpoint; GovCloud is regional-only.
+* Resource ARNs the connector builds (e.g. a CloudWatch alarm ARN) carry the
+  correct partition (`arn:aws-us-gov:…` in GovCloud).
+
+This is the config surface **MSP-B9's live verification consumes** (its
+follow-through, including FIPS endpoint variants, is referenced in
+`aws_partitions.B9_LIVE_VERIFICATION_NOTE`).
+
+### Failure loudness & outbound-only (AT-646, T6)
+
+Failures are loud, never silent ([`aws_health.py`](../backend/discovery/ingest/aws_health.py)).
+The poll source records a per-account health outcome that
+`AWSEventConnector.health_report()` exposes as the run-record / R18-C2
+connector-panel artifact (same pattern as the B7 `budget_report`):
+
+* A per-account **auth failure** (revoked role, expired/missing credentials) marks
+  that account `auth_failed` and degrades only its scopes — **other accounts
+  continue** and their data is still ingested (AC8). A failure is logged at WARNING
+  and reported; it is never a silent skip that hides missing data.
+* **Throttling** backs off (bounded exponential retry, injectable sleeper) and is
+  counted per account; a scope that recovers stays `ok` with its `throttle_events`
+  reported, so the back-off is visible and the data is retried, not thinned. A
+  throttle budget that is exhausted marks the scope `failed` (status `partial` if
+  other scopes succeeded) — loud, never a silent partial that reads as complete.
+* **Outbound-only** (AC6): the connector only makes checkpointed polling calls —
+  no SNS subscriptions, webhooks, or inbound listeners — so it works by
+  construction under `NETWORK_PROFILE=no_public_inbound`. A structural test scans
+  the connector modules for any push/inbound API.
+
+### Contract suite (AT-647, T7)
+
+[`backend/discovery/tests/test_msp_b1_contract.py`](../backend/discovery/tests/test_msp_b1_contract.py)
+is the consolidated Section-3 contract for MSP-B1 — one labelled test per
+acceptance criterion (AC1–AC8), each reproducing that criterion's scenario, with
+the **B8-bridge transport equivalence (AC4)** as its headline: B0's golden fixtures
+run through the native connector are detector-identical to the bridge path except
+`source_system` (`'aws'` vs `'bridge:aws'`). It sits alongside the per-task suites
+(T1–T6) and restates the whole contract in one place, mirroring
+`test_msp_b7_contract.py`. Pure-Python (seeded fakes; the bridge runs over an
+in-memory staging sink). AC9 (the read-only IAM policy) is a human design-review
+gate on the [`deployment/AWS_READONLY_IAM_POLICY.md`](../deployment/AWS_READONLY_IAM_POLICY.md)
+artifact.
+
+### Contract suite
+
+[`backend/discovery/tests/test_cloud_event_connector.py`](../backend/discovery/tests/test_cloud_event_connector.py)
+proves AC4 (the B0 golden fixtures run through the native connector are equivalent
+to their bridged twins except `source_system` — for AWS *and*, through the same
+skeleton with `provider='azure'`, for Azure) and AC5 (a seeded re-firing alarm
+folds into one active signal with a count, live through the native poll path, and
+the aggregate still opens back to its raw instances), plus the poll loop, opaque
+per-scope checkpoints, resumable first load, and loud-skip robustness.
