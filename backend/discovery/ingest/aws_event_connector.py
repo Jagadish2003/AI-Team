@@ -66,11 +66,17 @@ class AWSEventConnector(CloudEventConnector):
 
     Adds nothing to the skeleton but the AWS identity; construct it with a
     :class:`~discovery.ingest.cloud_event_connector.CloudPollSource` (offline via
-    :func:`build_offline_aws_source`, live in a follow-up subtask).
+    :func:`build_offline_aws_source`, live via ``aws_poll_source.build_live_aws_source``).
     """
 
     provider = PROVIDER_AWS
     connector_id = "aws_events"
+
+    def health_report(self) -> dict:
+        """Per-account run-health (auth/throttle/partial states) — the R18-C2 panel
+        artifact (AT-646). Empty when the poll source reports no health (offline)."""
+        report = getattr(self.poll_source, "health_report", None)
+        return report() if callable(report) else {}
 
 
 def aws_scope(

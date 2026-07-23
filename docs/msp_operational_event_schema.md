@@ -845,6 +845,27 @@ This is the config surface **MSP-B9's live verification consumes** (its
 follow-through, including FIPS endpoint variants, is referenced in
 `aws_partitions.B9_LIVE_VERIFICATION_NOTE`).
 
+### Failure loudness & outbound-only (AT-646, T6)
+
+Failures are loud, never silent ([`aws_health.py`](../backend/discovery/ingest/aws_health.py)).
+The poll source records a per-account health outcome that
+`AWSEventConnector.health_report()` exposes as the run-record / R18-C2
+connector-panel artifact (same pattern as the B7 `budget_report`):
+
+* A per-account **auth failure** (revoked role, expired/missing credentials) marks
+  that account `auth_failed` and degrades only its scopes — **other accounts
+  continue** and their data is still ingested (AC8). A failure is logged at WARNING
+  and reported; it is never a silent skip that hides missing data.
+* **Throttling** backs off (bounded exponential retry, injectable sleeper) and is
+  counted per account; a scope that recovers stays `ok` with its `throttle_events`
+  reported, so the back-off is visible and the data is retried, not thinned. A
+  throttle budget that is exhausted marks the scope `failed` (status `partial` if
+  other scopes succeeded) — loud, never a silent partial that reads as complete.
+* **Outbound-only** (AC6): the connector only makes checkpointed polling calls —
+  no SNS subscriptions, webhooks, or inbound listeners — so it works by
+  construction under `NETWORK_PROFILE=no_public_inbound`. A structural test scans
+  the connector modules for any push/inbound API.
+
 ### Contract suite
 
 [`backend/discovery/tests/test_cloud_event_connector.py`](../backend/discovery/tests/test_cloud_event_connector.py)
