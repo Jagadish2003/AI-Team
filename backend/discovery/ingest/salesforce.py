@@ -25,7 +25,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from . import is_live
+from . import get_ingest_org, is_live
+from .operational_config import CredentialRecordError
 
 logger = logging.getLogger(__name__)
 
@@ -82,16 +83,22 @@ def _get_client() -> Optional["SalesforceClient"]:
     from . import get_live_connector, resolve_vault_connector
 
     cred = get_live_connector("salesforce") or resolve_vault_connector("salesforce")
+    org_id = get_ingest_org()
 
     # No credential at all: in live mode this is a clear, actionable error; offline
     # simply has no client (the fixture path is used instead).
     if not cred:
         if is_live():
-            raise IngestError(
-                "Live mode requires a Salesforce credential from the credential "
-                "vault (instance URL + OAuth access token). Connect Salesforce in "
-                "the Integration Hub, or set INGEST_MODE=offline to run without "
-                "credentials."
+            raise CredentialRecordError(
+                org_id=org_id,
+                connector_id="salesforce",
+                missing_field="credential",
+                message=(
+                    "Live mode requires a Salesforce credential from the credential "
+                    "vault (instance URL + OAuth access token). Connect Salesforce in "
+                    "the Integration Hub, or set INGEST_MODE=offline to run without "
+                    "credentials."
+                ),
             )
         return None
 
@@ -102,19 +109,29 @@ def _get_client() -> Optional["SalesforceClient"]:
     # without one is a configuration error surfaced loudly and named — never a
     # silent env default (R191-H1 / T2, AC4).
     if not instance_url:
-        raise IngestError(
-            "Salesforce credential record is missing its instance URL "
-            "('salesforce' connector). The instance URL is captured at OAuth "
-            "connect and stored on the credential record; reconnect Salesforce in "
-            "the Integration Hub so the record carries its URL. "
-            "(No SF_INSTANCE_URL environment fallback is used.)"
+        raise CredentialRecordError(
+            org_id=org_id,
+            connector_id="salesforce",
+            missing_field="url",
+            message=(
+                "Salesforce credential record is missing its instance URL "
+                "('salesforce' connector). The instance URL is captured at OAuth "
+                "connect and stored on the credential record; reconnect Salesforce in "
+                "the Integration Hub so the record carries its URL. "
+                "(No SF_INSTANCE_URL environment fallback is used.)"
+            ),
         )
     if not access_token:
         if is_live():
-            raise IngestError(
-                "Salesforce credential record is missing its OAuth access token "
-                "('salesforce' connector). Connect Salesforce in the Integration "
-                "Hub, or set INGEST_MODE=offline to run without credentials."
+            raise CredentialRecordError(
+                org_id=org_id,
+                connector_id="salesforce",
+                missing_field="token",
+                message=(
+                    "Salesforce credential record is missing its OAuth access token "
+                    "('salesforce' connector). Connect Salesforce in the Integration "
+                    "Hub, or set INGEST_MODE=offline to run without credentials."
+                ),
             )
         return None
 
@@ -1348,6 +1365,8 @@ def ingest(sf_client: Optional[SalesforceClient] = None) -> Dict[str, Any]:
             "cases": cases,
             "user_names": user_names,
         }
+    except CredentialRecordError:
+        raise
     except IngestError:
         raise
     except Exception as e:

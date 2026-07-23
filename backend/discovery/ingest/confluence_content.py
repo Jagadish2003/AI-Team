@@ -104,6 +104,7 @@ class _StorageTextRenderer(HTMLParser):
         self._buf: List[str] = []
         self._heading_level: Optional[int] = None
         self._skip_depth = 0
+        self._in_li = False
 
     def _flush(self) -> None:
         text = re.sub(r"[ \t]+", " ", "".join(self._buf)).strip()
@@ -133,6 +134,7 @@ class _StorageTextRenderer(HTMLParser):
             return
         if tag == "li":
             self._flush()
+            self._in_li = True
             self._buf.append("- ")
             return
         if tag in ("td", "th"):
@@ -140,12 +142,18 @@ class _StorageTextRenderer(HTMLParser):
                 self._buf.append(" | ")
             return
         if tag in self._BLOCK_TAGS:
+            if tag == "p" and self._in_li:
+                return
             self._flush()
 
     def handle_endtag(self, tag: str) -> None:
         tag = tag.lower()
         if tag in self._SKIP_TEXT_TAGS:
             self._skip_depth = max(0, self._skip_depth - 1)
+            return
+        if tag == "li":
+            self._flush()
+            self._in_li = False
             return
         if tag in self._HEADING_LEVELS or tag in self._BLOCK_TAGS:
             self._flush()
@@ -235,6 +243,18 @@ def build_content_artifact(
     space_key = record.get("space_key")
     content_id = record.get("content_id")
     if not space_key or not content_id:
+        missing = []
+        if not space_key:
+            missing.append("space_key")
+        if not content_id:
+            missing.append("content_id")
+        logger.warning(
+            "confluence_content: skipping page artifact with missing identity "
+            "field(s) %s (org=%s artifact_id=%s)",
+            missing,
+            org_id,
+            record.get("artifact_id"),
+        )
         return None
 
     body = ingestor._raw_page_body(org_id, space_key, content_id) or {}
@@ -345,6 +365,7 @@ class DeepContentResult:
     # R18-A5 / AT-604 (T5, AC4) — page(s) refused at depth because their space is
     # not in the CURRENT granted/non-archived set (body never fetched).
     pages_ungranted_skipped: int = 0
+    pages_identity_missing: int = 0
     pages_render_failed: int = 0
     artifacts_handed_off: int = 0
     artifacts_indexed: int = 0
@@ -441,6 +462,26 @@ def ingest_confluence_content(
         r for r in valid_records
         if classify_confluence_content(r.get("content_type")) == ContentRoute.PAGE_CONTENT
     ]
+
+    identity_ready = []
+    for r in scoped:
+        if r.get("space_key") and r.get("content_id"):
+            identity_ready.append(r)
+        else:
+            result.pages_identity_missing += 1
+            missing = []
+            if not r.get("space_key"):
+                missing.append("space_key")
+            if not r.get("content_id"):
+                missing.append("content_id")
+            logger.warning(
+                "confluence_content: skipping page at depth with missing identity "
+                "field(s) %s (org=%s artifact_id=%s)",
+                missing,
+                org_id,
+                r.get("artifact_id"),
+            )
+    scoped = identity_ready
 
     # AC4 — re-verify the granted-space boundary AT DEPTH, before any body fetch.
     # We do not merely trust that each record came from a granted space (the

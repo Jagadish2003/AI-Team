@@ -17,6 +17,7 @@ from discovery.ingest.java_app_config import (
     DEFAULT_CREDENTIAL_REF,
     JavaAppTarget,
     load_targets,
+    safe_endpoint_error,
     resolve_secret,
 )
 from discovery.ingest.operational_config import OperationalCredentialMissing
@@ -158,3 +159,21 @@ def test_secret_lookup_failure_fails_closed(caplog):
             )
     # The warning names the credential ref, never the (would-be) token value.
     assert "FALLBACK" not in caplog.text
+
+
+def test_java_config_uses_shared_safe_endpoint_error():
+    target = JavaAppTarget(
+        app_id="payments-api",
+        name="Payments",
+        actuator_url="https://p/actuator",
+        log_source="https://p/logs",
+        metadata={"environment": "staging"},
+    )
+    safe = safe_endpoint_error(target, "actuator", TimeoutError("token=SECRET timed out"))
+    assert safe == {
+        "app_id": "payments-api",
+        "endpoint_type": "actuator",
+        "error_category": "timeout",
+        "exception_type": "TimeoutError",
+        "environment": "staging",
+    }

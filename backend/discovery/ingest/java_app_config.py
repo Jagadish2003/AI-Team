@@ -69,8 +69,11 @@ from typing import Any, Callable, Dict, List, Optional
 
 from . import get_live_connector, is_live
 from .operational_config import (
+    classify_endpoint_error,
     find_inline_secret_keys,
+    log_endpoint_failure,
     resolve_target_secret,
+    safe_endpoint_error,
 )
 
 logger = logging.getLogger(__name__)
@@ -83,6 +86,17 @@ _TARGETS_ENV = "JAVA_APP_TARGETS"
 #: Default vault connector key used when a target does not name its own
 #: ``credential_ref``. Mirrors the connector_id of the ingestor.
 DEFAULT_CREDENTIAL_REF = "java_app"
+
+__all__ = [
+    "DEFAULT_CREDENTIAL_REF",
+    "JavaAppConfigError",
+    "JavaAppTarget",
+    "classify_endpoint_error",
+    "load_targets",
+    "log_endpoint_failure",
+    "resolve_secret",
+    "safe_endpoint_error",
+]
 
 
 class JavaAppConfigError(Exception):

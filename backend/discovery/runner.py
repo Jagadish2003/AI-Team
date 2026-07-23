@@ -717,6 +717,7 @@ def _ingest_confluence_corroboration(org_id: str, run_id: str) -> Dict[str, Any]
         logger.warning(
             "Confluence deep content hand-off failed (non-blocking) org=%s run=%s: [%s]",
             org_id, run_id, type(e).__name__,
+            exc_info=True,
         )
 
     return build_confluence_corroboration_payload(collected)
@@ -1014,6 +1015,7 @@ def run(
 
     # 1. Ingest
     from .ingest import salesforce, servicenow, jira as jira_mod
+    from .ingest.operational_config import CredentialRecordError
     from .ingest.salesforce import IngestError as SFError
     from .ingest.servicenow import ServiceNowIngestError as SNError
     from .ingest.jira import JiraIngestError
@@ -1049,7 +1051,7 @@ def run(
             sf_data = salesforce.ingest()
             logger.info("Salesforce ingestion: OK")
             clear_connector_auth_failure(org_id, "salesforce")
-    except SFError as e:
+    except (SFError, CredentialRecordError) as e:
         sf_ok = False
         sf_err = str(e)
         logger.error(f"Salesforce ingestion FAILED: {e}")

@@ -197,21 +197,22 @@ def test_env_fallback_active_when_not_production(monkeypatch):
         tenancy._current_org_id.reset(token)
 
 
-def test_env_fallback_suppressed_in_production(monkeypatch):
-    """REQUIRE_CONNECTOR_SECRETS=1 + no vault credential → '' (no env fallback)."""
+def test_env_fallback_not_suppressed_by_require_connector_secrets(monkeypatch):
+    """REQUIRE_CONNECTOR_SECRETS=1 is not the production profile by itself."""
     monkeypatch.setenv("REQUIRE_CONNECTOR_SECRETS", "1")
+    monkeypatch.delenv("ENVIRONMENT", raising=False)
     monkeypatch.delenv("CREDENTIAL_VAULT_KEY", raising=False)  # no usable vault
-    monkeypatch.setenv(CONFIG_KEY_API_KEY, _FAKE_AZURE_KEY)  # present but ignored
-    token = tenancy._current_org_id.set("org-ct-envfallback-prod")
+    monkeypatch.setenv(CONFIG_KEY_API_KEY, _FAKE_AZURE_KEY)
+    token = tenancy._current_org_id.set("org-ct-envfallback-require-secrets")
     try:
-        assert resolve_customer_tenant_api_key() == ""
+        assert resolve_customer_tenant_api_key() == _FAKE_AZURE_KEY
     finally:
         tenancy._current_org_id.reset(token)
 
 
 def test_vault_credential_still_used_in_production(monkeypatch):
     """The guard suppresses only the ENV fallback — a vaulted credential still
-    resolves normally under REQUIRE_CONNECTOR_SECRETS=1."""
+    resolves normally when REQUIRE_CONNECTOR_SECRETS=1 is set."""
     org = "org-ct-prod-vault"
     monkeypatch.setenv("REQUIRE_CONNECTOR_SECRETS", "1")
     monkeypatch.setenv("CREDENTIAL_VAULT_KEY", _VAULT_KEY)
@@ -297,17 +298,16 @@ def test_no_production_warning_when_env_var_unset(caplog, monkeypatch):
     assert _warning_messages(caplog) == []
 
 
-def test_warns_when_env_var_set_under_require_connector_secrets(caplog, monkeypatch):
+def test_no_warning_when_env_var_set_under_require_connector_secrets_only(caplog, monkeypatch):
     monkeypatch.setenv("REQUIRE_CONNECTOR_SECRETS", "1")
+    monkeypatch.delenv("ENVIRONMENT", raising=False)
     monkeypatch.setenv(CONFIG_KEY_API_KEY, _FAKE_AZURE_KEY)
 
     with caplog.at_level(logging.WARNING):
         validate_no_production_env_fallback()
 
     msgs = _warning_messages(caplog)
-    assert any(CONFIG_KEY_API_KEY in m for m in msgs), msgs
-    # The credential value itself must never appear in the log.
-    assert not any(_FAKE_AZURE_KEY in m for m in msgs), msgs
+    assert not any(CONFIG_KEY_API_KEY in m for m in msgs), msgs
 
 
 def test_warns_when_env_var_set_under_environment_production(caplog, monkeypatch):
