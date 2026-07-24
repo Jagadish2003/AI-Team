@@ -19,6 +19,8 @@ const mocks = vi.hoisted(() => ({
   fetchCloudScopes: vi.fn(),
   pinCloudScope: vi.fn(),
   unpinCloudScope: vi.fn(),
+  fetchSecurityArtifacts: vi.fn(),
+  downloadSecurityArtifact: vi.fn(),
   push: vi.fn(),
   invalidate: vi.fn(),
   role: 'owner' as 'owner' | 'analyst' | 'viewer',
@@ -30,6 +32,8 @@ vi.mock('../services/cloudConnectorApi', () => ({
   fetchCloudScopes: (...a: unknown[]) => mocks.fetchCloudScopes(...a),
   pinCloudScope: (...a: unknown[]) => mocks.pinCloudScope(...a),
   unpinCloudScope: (...a: unknown[]) => mocks.unpinCloudScope(...a),
+  fetchSecurityArtifacts: (...a: unknown[]) => mocks.fetchSecurityArtifacts(...a),
+  downloadSecurityArtifact: (...a: unknown[]) => mocks.downloadSecurityArtifact(...a),
 }));
 
 vi.mock('../context/AuthContext', () => ({
@@ -75,6 +79,12 @@ beforeEach(() => {
   });
   mocks.pinCloudScope.mockResolvedValue({ ...EMPTY_SCOPES });
   mocks.unpinCloudScope.mockResolvedValue(undefined);
+  mocks.fetchSecurityArtifacts.mockResolvedValue({
+    connector_id: 'x',
+    provider: 'x',
+    artifacts: [],
+  });
+  mocks.downloadSecurityArtifact.mockResolvedValue(undefined);
 });
 
 afterEach(() => {
@@ -178,6 +188,48 @@ describe('MultiScopeConnectorManager — Azure wiring (T2-AC2/AC4)', () => {
         subscription_id: 'sub-42',
       }),
     );
+  });
+});
+
+describe('MultiScopeConnectorManager — security artifacts (T5-AC3/AC4)', () => {
+  const AWS_ARTIFACTS = {
+    connector_id: 'aws_events',
+    provider: 'aws',
+    artifacts: [
+      {
+        id: 'iam_policy',
+        label: 'Minimal read-only IAM policy (JSON)',
+        description: 'The least-privilege IAM policy the assumed role needs.',
+        filename: 'aws_readonly_iam_policy.json',
+        media_type: 'application/json',
+      },
+    ],
+  };
+
+  it('lists the connector security artifacts and downloads one on click', async () => {
+    mocks.fetchSecurityArtifacts.mockResolvedValue(AWS_ARTIFACTS);
+    render(<MultiScopeConnectorManager connector={connector('aws_events') as any} />);
+    await waitFor(() =>
+      expect(mocks.fetchSecurityArtifacts).toHaveBeenCalledWith('aws_events'),
+    );
+    const btn = await screen.findByRole('button', {
+      name: /download minimal read-only iam policy/i,
+    });
+    fireEvent.click(btn);
+    await waitFor(() =>
+      expect(mocks.downloadSecurityArtifact).toHaveBeenCalledWith(
+        'aws_events',
+        'iam_policy',
+        'aws_readonly_iam_policy.json',
+      ),
+    );
+  });
+
+  it('hides the section when the artifact fetch fails (non-fatal)', async () => {
+    mocks.fetchSecurityArtifacts.mockRejectedValue(new Error('nope'));
+    render(<MultiScopeConnectorManager connector={connector('azure_events') as any} />);
+    await waitFor(() => expect(mocks.fetchSecurityArtifacts).toHaveBeenCalled());
+    expect(screen.queryByTestId('security-artifacts')).not.toBeInTheDocument();
   });
 });
 

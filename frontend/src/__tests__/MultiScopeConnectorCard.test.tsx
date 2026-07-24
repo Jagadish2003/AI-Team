@@ -230,6 +230,84 @@ describe('T1-AC4 — scope panel with health', () => {
   });
 });
 
+// ── T5-AC1/AC2 — shared run-health vocabulary, healthy vs failed distinct ────
+describe('T5-AC1/AC2 — per-scope health vocabulary + visual distinction', () => {
+  it('labels each scope with the shared run-health term', () => {
+    renderAws({ connected: true, scopes: AWS_SCOPES });
+    // The exact backend vocabulary words render on the badges.
+    expect(screen.getByText('Healthy')).toBeInTheDocument();
+    expect(screen.getByText('Auth failed')).toBeInTheDocument();
+  });
+
+  it('marks healthy and failed scopes with distinct tones (AC2)', () => {
+    renderAws({ connected: true, scopes: AWS_SCOPES });
+    const badges = screen.getAllByTestId('scope-health-badge');
+    const tones = badges.map((b) => b.getAttribute('data-tone'));
+    // The ok scope is 'healthy'; the auth_failed scope is 'error' — never the same.
+    expect(tones).toContain('healthy');
+    expect(tones).toContain('error');
+  });
+});
+
+// ── T5-AC3/AC4 — security-artifact download links ────────────────────────────
+describe('T5-AC3/AC4 — security artifacts', () => {
+  const ARTIFACTS = [
+    {
+      id: 'iam_policy',
+      label: 'Minimal read-only IAM policy (JSON)',
+      description: 'Least-privilege policy for the assumed role.',
+      filename: 'aws_readonly_iam_policy.json',
+      media_type: 'application/json',
+    },
+    {
+      id: 'iam_policy_guide',
+      label: 'IAM policy setup guide',
+      description: 'Permission-by-capability mapping and checklist.',
+      filename: 'AWS_READONLY_IAM_POLICY.md',
+      media_type: 'text/markdown',
+    },
+  ];
+
+  it('renders a download control per artifact from the card', () => {
+    renderAws({ securityArtifacts: ARTIFACTS, onDownloadArtifact: vi.fn() });
+    const section = screen.getByTestId('security-artifacts');
+    expect(section).toHaveTextContent('Minimal read-only IAM policy (JSON)');
+    expect(section).toHaveTextContent('IAM policy setup guide');
+    expect(
+      screen.getByRole('button', { name: /download minimal read-only iam policy/i }),
+    ).toBeInTheDocument();
+  });
+
+  it('invokes onDownloadArtifact with the artifact id', async () => {
+    const onDownloadArtifact = vi.fn().mockResolvedValue(undefined);
+    renderAws({ securityArtifacts: ARTIFACTS, onDownloadArtifact });
+    fireEvent.click(
+      screen.getByRole('button', { name: /download iam policy setup guide/i }),
+    );
+    await waitFor(() =>
+      expect(onDownloadArtifact).toHaveBeenCalledWith('iam_policy_guide'),
+    );
+  });
+
+  it('renders download controls even for a non-owner (read-only docs)', () => {
+    renderAws({
+      securityArtifacts: ARTIFACTS,
+      onDownloadArtifact: vi.fn(),
+      canManage: false,
+      manageDisabledReason: 'Owner role required.',
+    });
+    // Downloads are not gated by canManage — a reviewer can grab the docs.
+    expect(
+      screen.getByRole('button', { name: /download minimal read-only iam policy/i }),
+    ).toBeEnabled();
+  });
+
+  it('omits the section when there are no artifacts', () => {
+    renderAws({ securityArtifacts: [] });
+    expect(screen.queryByTestId('security-artifacts')).not.toBeInTheDocument();
+  });
+});
+
 // ── Role gating ──────────────────────────────────────────────────────────────
 describe('role gating', () => {
   it('disables write controls and explains why when canManage is false', () => {
