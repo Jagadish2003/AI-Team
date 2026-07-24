@@ -52,6 +52,7 @@ from .azure_events_config import (
     AzureEventConfig,
     AzureEventConfigError,
     load_azure_event_config,
+    resolve_azure_event_config,
 )
 from .azure_alerts import (
     AzureAlertsClient,
@@ -1024,8 +1025,13 @@ def build_ingestor(
     Returns None when the connector is not configured for the org (not an error —
     the connector simply contributes nothing). Raises
     :class:`AzureEventConfigError` on a present-but-invalid config.
+
+    Resolves through :func:`resolve_azure_event_config` so an Owner who connected
+    Azure through the Integration Hub (environment/mode + pinned subscriptions on
+    the connector record) is picked up automatically, with the explicit
+    ``AZURE_EVENT_CONFIG`` env / offline fixture still taking precedence.
     """
-    config = load_azure_event_config(org_id, env=env)
+    config = resolve_azure_event_config(org_id, env=env)
     if config is None:
         return None
     return AzureEventIngestor(

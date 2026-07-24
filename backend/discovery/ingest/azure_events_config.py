@@ -36,7 +36,7 @@ import logging
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 try:  # shared "no secret in config" guard (identical rule to Java/.NET targets)
     from .operational_config import find_inline_secret_keys
@@ -264,3 +264,123 @@ def load_azure_event_config(
     if entry is None:
         return None
     return _coerce_config(entry)
+
+
+# ── Integration Hub bridge (MSP-B2 T7 / B13) ─────────────────────────────────────
+#
+# The env/fixture config above is the per-deployment override. The everyday path,
+# though, is an Owner connecting Azure through the Integration Hub: the connect flow
+# (routes_cloud_connectors._store_azure_connection) writes the non-secret
+# ``environment``/``mode`` onto this org's connector record and vaults the service
+# principal, and pinning a subscription (routes_cloud_connectors.pin_scope) appends
+# it to ``record["scopes"]``. That IS the pinned-subscription set — the same
+# Owner-approved, never-auto-growing contract the env config expresses — so we build
+# an AzureEventConfig from it when no explicit env/fixture config is present. This is
+# the bridge that makes "a pinned scope is the only thing the connector ingests" true
+# end to end; without it a UI-connected connector is invisible to ingestion.
+
+
+def _pinned_subscription_ids(record: Dict[str, Any]) -> List[str]:
+    """The pinned subscription ids on a connector record, in pinned order.
+
+    Reads ONLY ``record["scopes"]`` (the Owner-pinned set), never
+    ``candidate_scopes`` (delegated-but-unapproved), so the "never silently
+    growing" discipline (AC4/AC7) holds through the bridge exactly as it does for
+    the env config. De-duplicates while preserving order.
+    """
+    scopes = record.get("scopes")
+    if not isinstance(scopes, list):
+        return []
+    out: List[str] = []
+    seen: set = set()
+    for scope in scopes:
+        if not isinstance(scope, dict):
+            continue
+        sid = str(scope.get("scope_id") or "").strip()
+        if sid and sid not in seen:
+            seen.add(sid)
+            out.append(sid)
+    return out
+
+
+def config_from_connector_record(
+    record: Optional[Dict[str, Any]], *, org_id: Optional[str] = None
+) -> Optional[AzureEventConfig]:
+    """Build an :class:`AzureEventConfig` from an Integration Hub connector record.
+
+    Returns None when the record is absent, not connected, or has no pinned
+    subscriptions — in every one of those cases the connector genuinely has nothing
+    to ingest yet, so it contributes nothing (not an error). The service principal
+    is NOT read here — it stays in the vault, resolved separately by
+    ``get_service_principal`` exactly as the env-config path does.
+    """
+    if not isinstance(record, dict):
+        return None
+    status = str(record.get("status") or "").strip().lower()
+    if status != "connected":
+        return None
+    subscriptions = _pinned_subscription_ids(record)
+    if not subscriptions:
+        return None
+    return AzureEventConfig(
+        environment=resolve_environment(record.get("environment")),
+        mode=str(record.get("mode") or DEFAULT_MODE).strip().lower() or DEFAULT_MODE,
+        subscriptions=subscriptions,
+        credential_ref=CONNECTOR_ID,
+        metadata={"source": "integration_hub"},
+    )
+
+
+def _default_record_loader(org_id: str) -> Optional[Dict[str, Any]]:
+    """Read this org's ``azure_events`` connector record from the DB.
+
+    Lazily imports ``app.db`` so this module stays offline-safe at import time
+    (only calling the bridge in a DB-available context touches the DB). Any failure
+    degrades to None so a DB hiccup leaves Azure out rather than crashing the run.
+    """
+    try:
+        from app import db  # local import: keeps module import offline-safe
+    except Exception:  # pragma: no cover - import guard
+        return None
+    try:
+        record = db.org_connector_get(org_id, CONNECTOR_ID)
+    except Exception:  # pragma: no cover - DB failure degrades to "not configured"
+        logger.exception(
+            "Failed to read azure_events connector record for org %s", org_id
+        )
+        return None
+    return dict(record) if record else None
+
+
+def resolve_azure_event_config(
+    org_id: str,
+    *,
+    env: Optional[Dict[str, str]] = None,
+    record_loader: Optional[Callable[[str], Optional[Dict[str, Any]]]] = None,
+) -> Optional[AzureEventConfig]:
+    """Resolve the effective Azure config: env/fixture first, else the Hub record.
+
+    Precedence (highest first):
+      1. the explicit per-deployment ``AZURE_EVENT_CONFIG`` env / offline fixture
+         (``load_azure_event_config``) — an operator override always wins;
+      2. the Integration Hub connector record (``config_from_connector_record``) —
+         the everyday UI-connected path.
+
+    Returns None when neither yields a config (the connector contributes nothing).
+    Both callers that gate Azure ingestion — ``_resolve_azure_events`` (systems set)
+    and ``build_ingestor`` (the poller) — resolve through here, so the two can never
+    disagree about whether Azure is configured. ``record_loader`` is injectable for
+    tests; it defaults to the DB read.
+    """
+    explicit = load_azure_event_config(org_id, env=env)
+    if explicit is not None:
+        return explicit
+    loader = record_loader or _default_record_loader
+    try:
+        record = loader(org_id)
+    except Exception:  # pragma: no cover - loader failure degrades to "not configured"
+        logger.exception(
+            "Azure connector record loader failed for org %s", org_id
+        )
+        return None
+    return config_from_connector_record(record, org_id=org_id)

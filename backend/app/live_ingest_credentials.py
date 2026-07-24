@@ -635,7 +635,7 @@ def _resolve_azure_events(org_id: str, live: List[str]) -> None:
     """
     try:
         from discovery.ingest.azure_events import get_service_principal
-        from discovery.ingest.azure_events_config import load_azure_event_config
+        from discovery.ingest.azure_events_config import resolve_azure_event_config
     except Exception:  # pragma: no cover - import guard
         logger.exception(
             "Azure event connector modules unavailable; skipping live ingest (org=%s)",
@@ -644,7 +644,7 @@ def _resolve_azure_events(org_id: str, live: List[str]) -> None:
         return
 
     try:
-        config = load_azure_event_config(org_id)
+        config = resolve_azure_event_config(org_id)
     except Exception:
         # A present-but-invalid config must not break live resolution for the run.
         logger.exception(
