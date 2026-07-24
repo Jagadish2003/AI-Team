@@ -134,17 +134,26 @@ def _emit(event_type: str, org_id: str, connector_id: str, system_identity: Opti
             seq: Optional[int] = billing_chain.next_seq(org_id)
         except Exception:
             seq = None
-        record_event(
-            event_type,
-            {
-                "connector": connector_id,
-                "system_identity": identity,
-                "occurred_at": datetime.now(timezone.utc).isoformat(),
-                "org_id": org_id,
-                "seq": seq,
-                "source": _SOURCE,
-            },
-        )
+        payload = {
+            "connector": connector_id,
+            "system_identity": identity,
+            "occurred_at": datetime.now(timezone.utc).isoformat(),
+            "org_id": org_id,
+            "seq": seq,
+            "source": _SOURCE,
+        }
+        # Attribute the event to the org the transition BELONGS to — not the ambient
+        # request context. record_event lets the request context win over the payload
+        # org_id (by design), but the OAuth authorization_code callback runs
+        # unauthenticated (ambient org = DEV_DEFAULT_ORG) while acting for the org in
+        # its signed state nonce. Without pinning, the connect would be filed under
+        # "default" while its seq came from THIS org's counter — splitting the
+        # tenant's ledger from its sequence and gapping its tamper chain. Correct
+        # attribution, not spoofing: the event truly belongs to org_id.
+        from app.middleware.tenancy import event_org_context
+
+        with event_org_context(org_id):
+            record_event(event_type, payload)
     except Exception:  # pragma: no cover — metering must never break a request
         logger.warning(
             "%s emit failed for %s/%s", event_type, org_id, connector_id, exc_info=True

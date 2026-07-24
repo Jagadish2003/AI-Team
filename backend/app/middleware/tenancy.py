@@ -27,6 +27,7 @@ from __future__ import annotations
 import logging
 import os
 import time
+from contextlib import contextmanager
 from contextvars import ContextVar
 from typing import Callable
 
@@ -214,6 +215,33 @@ def resolve_event_org_id(explicit_org_id: str | None = None) -> str:
         UNATTRIBUTED_ORG,
     )
     return UNATTRIBUTED_ORG
+
+
+@contextmanager
+def event_org_context(org_id: str):
+    """Temporarily attribute events emitted inside the block to ``org_id``.
+
+    :func:`resolve_event_org_id` lets the ambient request context WIN over an
+    explicit payload ``org_id`` on purpose (so a stale explicit value can never
+    misattribute an in-request event). That rule breaks for a caller acting on
+    behalf of a specific org while running in a request whose ambient org differs —
+    the unauthenticated OAuth ``authorization_code`` callback is the case: it
+    carries the connecting org in its signed state nonce, not in the request auth,
+    so its ambient context is ``DEV_DEFAULT_ORG``. A billing-ledger connect event
+    emitted there (its per-org ``seq`` already drawn from the real org's counter)
+    would otherwise be filed under ``"default"`` — splitting the tenant's ledger
+    from its sequence and gapping the tenant's tamper chain.
+
+    Wrapping the emit in this context makes the ambient org == ``org_id`` for the
+    block, then restores the previous value. Correct attribution (the event truly
+    belongs to ``org_id``), not spoofing — it affects only event attribution, never
+    auth/RBAC. Effectively a no-op when the ambient org already equals ``org_id``.
+    """
+    token = _current_org_id.set(org_id)
+    try:
+        yield
+    finally:
+        _current_org_id.reset(token)
 
 
 def resolve_request_org_id(request: Request) -> str:
