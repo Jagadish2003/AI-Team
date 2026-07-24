@@ -82,6 +82,10 @@ const SYSTEM_DEFAULT_ASSUMPTIONS: Record<string, Partial<SystemWeighting>> = {
   azure_devops:      { role: 'operational_signal_source', priority: 'secondary', workflowFocus: ['change_release', 'backlog_work_queues'] },
   linear:            { role: 'operational_signal_source', priority: 'secondary', workflowFocus: ['backlog_work_queues'] },
   zendesk:           { role: 'operational_signal_source', priority: 'secondary', workflowFocus: ['service_casework', 'backlog_work_queues'] },
+  // Cloud Operations (MSP-B13) — canonical connector ids; *_event_source are the
+  // legacy template-suggestion ids kept for backward compatibility.
+  aws_events:        { role: 'operational_signal_source', priority: 'secondary', workflowFocus: ['backlog_work_queues'] },
+  azure_events:      { role: 'operational_signal_source', priority: 'secondary', workflowFocus: ['backlog_work_queues'] },
   aws_event_source:  { role: 'operational_signal_source', priority: 'secondary', workflowFocus: ['backlog_work_queues'] },
   azure_event_source:{ role: 'operational_signal_source', priority: 'secondary', workflowFocus: ['backlog_work_queues'] },
   slack:             { role: 'operational_signal_source', priority: 'secondary', workflowFocus: ['communications', 'handoffs_routing'] },

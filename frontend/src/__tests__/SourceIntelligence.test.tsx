@@ -59,6 +59,18 @@ const CONNECTORS = [
   { id: 'slack',      name: 'Slack',      status: 'connected', tier: 'standard'   },
 ];
 
+// Mutable so a single test can add a connector (e.g. the native Azure Event
+// connector) without changing the shared baseline the other tests rely on.
+let mockConnectors: typeof CONNECTORS = CONNECTORS;
+
+// MSP-B2: an Azure-attributed normalization row (source key "Azure Events").
+const MAPPED_AZURE = {
+  id: 'map_az', sourceSystem: 'Azure Events', sourceType: 'Events',
+  sourceField: 'azure_events.event_signal', commonEntity: 'Workflow',
+  commonField: 'Workflow.event', status: 'MAPPED' as const,
+  confidence: 'HIGH' as const, sampleValues: [],
+};
+
 const PERMISSIONS_OK = [
   { id: 'p1', label: 'Read CMDB', sourceSystem: 'ServiceNow', required: true, satisfied: true },
 ];
@@ -106,7 +118,7 @@ vi.mock('../context/NormalizationContext', () => ({
 }));
 
 vi.mock('../context/ConnectorContext', () => ({
-  useConnectorContext: () => ({ all: CONNECTORS }),
+  useConnectorContext: () => ({ get all() { return mockConnectors; } }),
 }));
 
 vi.mock('../context/RunContext', () => ({
@@ -142,6 +154,7 @@ describe('SourceIntelligencePage v1.3 — T41-4', () => {
     mockPermissions = PERMISSIONS_OK;
     mockPermissionsLoading = false;
     mockPermissionsError = null;
+    mockConnectors = CONNECTORS;
   });
 
   // ── Basic rendering ──────────────────────────────────────────────────────
@@ -236,6 +249,20 @@ describe('SourceIntelligencePage v1.3 — T41-4', () => {
     expect(sfRow.textContent).toContain('Salesforce');
     expect(sfRow.textContent).toContain('Confirmed');
     expect(sfRow.textContent).not.toContain('Not assessed');
+  });
+
+  it('MSP-B2: Azure Events row shows signals (no zero-signal state) when Azure-attributed rows exist', () => {
+    mockConnectors = [
+      ...CONNECTORS,
+      { id: 'azure_events', name: 'Azure Events', status: 'connected', tier: 'standard' },
+    ];
+    mockRows = [MAPPED_AZURE, MAPPED_SN, MAPPED_JIRA];
+    mockCounts = { MAPPED: 3, UNMAPPED: 0, AMBIGUOUS: 0 };
+    renderPage();
+    // The Azure connector renders as a source row and, because a normalization row
+    // is keyed to its source key ("Azure Events"), it is NOT treated as zero-signal.
+    expect(screen.getByTestId('source-row-azure_events')).toBeTruthy();
+    expect(screen.queryByTestId('zero-signal-azure_events')).toBeNull();
   });
 
   it('I1: ServiceNow row shows Permissions confirmed (joined via sourceKey)', () => {

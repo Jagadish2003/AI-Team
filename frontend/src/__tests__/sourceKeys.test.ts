@@ -20,6 +20,11 @@ describe('sourceKeys registry', () => {
     expect(sourceKeyForConnector('jira_confluence')).toBe('Jira');
   });
 
+  it('SK1: recognizes the native Azure Event connector (MSP-B2) so Source Intelligence can join its signals', () => {
+    expect(sourceKeyForConnector('azure_events')).toBe('Azure Events');
+    expect(connectorIdForSourceKey('Azure Events')).toBe('azure_events');
+  });
+
   it('SK2: SOURCE_KEY_MAP has no duplicate values', () => {
     const values = Object.values(SOURCE_KEY_MAP);
     expect(new Set(values).size).toBe(values.length);

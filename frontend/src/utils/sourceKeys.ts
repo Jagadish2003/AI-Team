@@ -40,6 +40,10 @@ export const SOURCE_KEY_MAP: Record<string, string> = {
   d365: "Dynamics 365",
   ncino: "nCino",
   sap: "SAP",
+  // MSP-B2: native Azure Event Connector. The connector id joins to the Azure
+  // operational-event source key so Source Intelligence counts Azure signals when
+  // the run produces Azure-attributed evidence.
+  azure_events: "Azure Events",
 };
 
 const CONNECTOR_ID_ALIASES: Record<string, keyof typeof SOURCE_KEY_MAP> = {

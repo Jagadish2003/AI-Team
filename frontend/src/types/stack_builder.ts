@@ -133,7 +133,8 @@ export type SystemGroup =
   | 'work_tracking'
   | 'comms_knowledge'
   | 'code_engineering'
-  | 'data_infrastructure';
+  | 'data_infrastructure'
+  | 'cloud_operations';
 
 export type ConnectionStatus =
   | 'connected'       // green dot
