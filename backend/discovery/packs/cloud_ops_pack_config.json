@@ -7,7 +7,7 @@
     "note": "Editing a value below changes behaviour on the next run; no restart or code change required."
   },
 
-  "packVersion": "1.1.0",
+  "packVersion": "1.2.0",
 
   "terminology": {
     "_note": "The NOC vocabulary this pack speaks in findings, roadmap, and executive report — the same externalized mechanism the lending pack uses to drive borrower/covenant language. glossary defines each canonical NOC term (MSP-B6 T1 AC3); language_map re-labels generic AgentIQ vocabulary into NOC language for terminology-aware rendering (later tasks).",

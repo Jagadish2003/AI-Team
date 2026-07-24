@@ -184,8 +184,8 @@ PACK_REGISTRY: Dict[str, Dict[str, Any]] = {
         "packId":        "cloud_ops",
         # MSP-B6 T1 AC1: version stamped on every run (R16-B1). Bumped to 1.1.0 by
         # MSP-B6 T4 (AT-739) — adds the config-driven ops-impact scorer (behaviour
-        # change). Bump on any future detector/scorer/corroboration change.
-        "packVersion":   "1.1.0",
+        # change). MSP-B5 production wiring adds its documentation-gap detector.
+        "packVersion":   "1.2.0",
         "packName":      "Cloud Operations",
         "domain":        "cloud_ops",
         "pack_domain":   "cloud_ops",
@@ -196,6 +196,7 @@ PACK_REGISTRY: Dict[str, Dict[str, Any]] = {
             "discovery.detectors.cloud_ops_reassignment_ping_pong",
             "discovery.detectors.cloud_ops_queue_ageing",
             "discovery.detectors.cloud_ops_shared_ci_hotspot",
+            "discovery.detectors.cloud_ops_runbook_documentation_gap",
         ],
         # UI labels are per-detector (S6/S7); added with the detectors in T2/T3.
         "ui_labels_path": None,

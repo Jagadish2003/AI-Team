@@ -204,6 +204,10 @@ def test_cloud_and_security_packs_execute_together_with_distinct_contracts():
     assert packs["cloud_ops"]["packVersion"] == get_pack_version("cloud_ops")
     assert packs["security_ops"]["packVersion"] == get_pack_version("security_ops")
     assert "RECURRING_RESOLUTION_LOOP" in packs["cloud_ops"]["detectorsExecuted"]
+    assert (
+        "OPS_RUNBOOK_DOCUMENTATION_GAP"
+        in packs["cloud_ops"]["detectorsExecuted"]
+    )
     assert "SECOPS_REMEDIATION_RECURRENCE" in packs["security_ops"]["detectorsExecuted"]
     for opportunity in payload["opportunities"]:
         assert opportunity["packId"] in {"cloud_ops", "security_ops"}

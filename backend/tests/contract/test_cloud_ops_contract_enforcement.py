@@ -211,7 +211,9 @@ class TestRunbookLegBuilder:
         leg = fc.build_runbook_leg(runbook_match={"runbook_id": "RB-1"}, b5_available=True)
         assert leg == {
             "kind": "documented_repeated_manual", "documented": True, "b5_available": True,
-            "degraded": False, "runbook_id": "RB-1", "runbook_title": "",
+            "degraded": False, "provisional": False, "runbook_state": "observed",
+            "label": "Observed runbook match", "runbook_id": "RB-1",
+            "runbook_title": "",
         }
 
     def test_degraded_leg(self):
@@ -220,7 +222,26 @@ class TestRunbookLegBuilder:
         assert leg["degraded"] is True
         assert leg["label"] == "runbook match unavailable"
 
-    def test_b5_available_but_no_match_degrades(self):
+    def test_b5_available_but_no_match_is_not_an_outage(self):
         leg = fc.build_runbook_leg(runbook_match=None, b5_available=True)
         assert leg["kind"] == "repeated_manual"
-        assert leg["label"] == "runbook match unavailable"
+        assert leg["degraded"] is False
+        assert leg["runbook_state"] == "absent"
+        assert leg["label"] == "no runbook match"
+
+    def test_canonical_proposed_match_stays_visibly_provisional(self):
+        leg = fc.build_runbook_leg(
+            runbook_match={
+                "match_state": "proposed",
+                "runbook": {
+                    "source_artifact": "page-42",
+                    "title": "Restart the worker",
+                },
+            },
+            b5_available=True,
+        )
+        assert leg["documented"] is False
+        assert leg["provisional"] is True
+        assert leg["runbook_state"] == "proposed"
+        assert leg["runbook_id"] == "page-42"
+        assert leg["runbook_title"] == "Restart the worker"

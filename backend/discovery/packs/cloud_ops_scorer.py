@@ -66,6 +66,7 @@ CLOUD_OPS_DETECTOR_IDS = frozenset({
     "REASSIGNMENT_PING_PONG",
     "QUEUE_AGEING",
     "SHARED_CI_HOTSPOT",
+    "OPS_RUNBOOK_DOCUMENTATION_GAP",
 })
 
 # The four ranking dimensions, in Section-2 order.

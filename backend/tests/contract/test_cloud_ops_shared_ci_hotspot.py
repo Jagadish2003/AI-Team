@@ -195,7 +195,8 @@ class TestContractAndWiring:
         from discovery.packs.pack_config import get_detector_modules
         mods = get_detector_modules("cloud_ops")
         assert any("cloud_ops_shared_ci_hotspot" in m for m in mods)
-        assert len(mods) == 5
+        assert any("cloud_ops_runbook_documentation_gap" in m for m in mods)
+        assert len(mods) == 6
 
     def test_emphasised_by_a_focus(self):
         from discovery.packs.focus_affinity import all_affinity_detector_ids
