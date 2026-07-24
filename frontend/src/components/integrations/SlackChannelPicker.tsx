@@ -14,8 +14,10 @@
  *
  * Consent clarity: the customer can see exactly which channels are part of
  * discovery and exclude noisy/irrelevant ones. When no selection has been saved
- * yet (configured === false) every channel is pre-checked, reflecting the
- * backwards-compatible default (read all) so the customer can narrow it.
+ * yet (configured === false) NO channel is pre-checked. Until a selection is
+ * saved the ingestor still reads every accessible channel (the backwards-
+ * compatible default); the picker just doesn't pre-check them, so the customer
+ * explicitly opts channels in.
  *
  * Viewers get a read-only picker (PATCH is analyst+).
  */
@@ -24,6 +26,8 @@ import { useToast } from '../common/Toast';
 import { ApiError, apiGet, apiPatch } from '../../lib/apiClient';
 import { useAuthOptional } from '../../context/AuthContext';
 import { isViewerRole } from '../../utils/roles';
+import PickerSkeleton from './PickerSkeleton';
+import ConversationContentConsentNotice from './ConversationContentConsentNotice';
 
 interface SlackChannel {
   id: string;
@@ -68,13 +72,13 @@ export default function SlackChannelPicker({ onSaved }: Props) {
       .then((data) => {
         const channels = data?.available ?? [];
         setAvailable(channels);
-        // Configured → the saved selection. Not configured yet → pre-check all,
-        // which reflects the current "read all accessible channels" default and
-        // lets the customer narrow it.
+        // Configured → the saved selection. Not configured yet → pre-select NONE
+        // (consistent with the Jira/Confluence/SharePoint/GitHub pickers). Until
+        // the customer saves a selection the ingestor still reads every accessible
+        // channel (the backwards-compatible default); the picker just doesn't
+        // pre-check them.
         setSelected(
-          data?.configured
-            ? new Set(data.selected ?? [])
-            : new Set(channels.map((c) => c.id)),
+          data?.configured ? new Set(data.selected ?? []) : new Set(),
         );
       })
       .catch(() => {
@@ -114,11 +118,7 @@ export default function SlackChannelPicker({ onSaved }: Props) {
   }, [selected, push, onSaved]);
 
   if (loading) {
-    return (
-      <div className="mt-4 text-xs text-muted animate-pulse">
-        Loading Slack channels…
-      </div>
-    );
+    return <PickerSkeleton label="Loading Slack channels" />;
   }
 
   return (
@@ -135,6 +135,13 @@ export default function SlackChannelPicker({ onSaved }: Props) {
         selected channels — unselected channels are never ingested, even if the
         connection can see them. You can change this later.
       </p>
+
+      {/* R18-A4 / AT-598 (T5, AC7): depth-phase consent — reading conversation
+          text is more sensitive than reading activity counts, so the copy states
+          plainly that message CONTENT in selected channels is used as evidence. */}
+      <ConversationContentConsentNotice scopeLabel="selected channels" />
+
+      <div className="mt-3" />
 
       {available.length === 0 ? (
         <p className="text-xs text-muted italic">

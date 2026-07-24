@@ -16,6 +16,9 @@
 import React from "react";
 import { render, screen, fireEvent } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
+// The licence usage strip reads from the shared data cache (so it survives
+// navigation), which needs a DataCacheProvider ancestor.
+import { renderWithCache } from "../test-utils/renderWithCache";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 // ConnectorTile fetches token-status only for connected+enabled tiles; mock the
@@ -147,7 +150,7 @@ describe("IntegrationHubPage license usage (AT-506)", () => {
       canConnectMore: false,
     });
 
-    render(
+    renderWithCache(
       <MemoryRouter initialEntries={["/integration-hub"]}>
         <IntegrationHubPage />
       </MemoryRouter>,
@@ -165,7 +168,7 @@ describe("IntegrationHubPage license usage (AT-506)", () => {
       canConnectMore: true,
     });
 
-    render(
+    renderWithCache(
       <MemoryRouter initialEntries={["/integration-hub"]}>
         <IntegrationHubPage />
       </MemoryRouter>,

@@ -10,6 +10,7 @@ tenant keys. They are not live credentials.
 """
 from __future__ import annotations
 
+import logging
 import os
 from unittest.mock import patch
 
@@ -25,7 +26,10 @@ from app.auth.vault import (
 )
 from app.middleware import tenancy
 from app.model_gateway.customer_tenant_config import CONFIG_KEY_API_KEY
-from app.model_gateway.customer_tenant_vault import resolve_customer_tenant_api_key
+from app.model_gateway.customer_tenant_vault import (
+    resolve_customer_tenant_api_key,
+    validate_no_production_env_fallback,
+)
 
 _VAULT_KEY = Fernet.generate_key().decode()
 
@@ -219,3 +223,117 @@ def test_vault_credential_still_used_in_production(monkeypatch):
     finally:
         tenancy._current_org_id.reset(token)
         revoke_customer_tenant_credential(org)
+
+
+# ---------------------------------------------------------------------------
+# R1.9.1-H1 T4 (F4 fix) — production guard also covers ENVIRONMENT=production,
+# and pairs the runtime suppression with a startup-visibility warning.
+# ---------------------------------------------------------------------------
+
+
+def test_env_fallback_suppressed_under_environment_production(monkeypatch):
+    """ENVIRONMENT=production (no REQUIRE_CONNECTOR_SECRETS) also suppresses the
+    env fallback — the guard is not narrowly tied to the older signal alone."""
+    monkeypatch.delenv("REQUIRE_CONNECTOR_SECRETS", raising=False)
+    monkeypatch.setenv("ENVIRONMENT", "production")
+    monkeypatch.delenv("CREDENTIAL_VAULT_KEY", raising=False)  # no usable vault
+    monkeypatch.setenv(CONFIG_KEY_API_KEY, _FAKE_AZURE_KEY)  # present but ignored
+    token = tenancy._current_org_id.set("org-ct-envfallback-prod-envvar")
+    try:
+        assert resolve_customer_tenant_api_key() == ""
+    finally:
+        tenancy._current_org_id.reset(token)
+
+
+def test_vault_credential_still_used_under_environment_production(monkeypatch):
+    """A vaulted credential still resolves under ENVIRONMENT=production — the
+    guard suppresses only the env fallback, never the vault path."""
+    org = "org-ct-prod-vault-envvar"
+    monkeypatch.delenv("REQUIRE_CONNECTOR_SECRETS", raising=False)
+    monkeypatch.setenv("ENVIRONMENT", "production")
+    monkeypatch.setenv("CREDENTIAL_VAULT_KEY", _VAULT_KEY)
+    monkeypatch.delenv(CONFIG_KEY_API_KEY, raising=False)
+    store_customer_tenant_credential(org, _FAKE_AZURE_KEY)
+    token = tenancy._current_org_id.set(org)
+    try:
+        assert resolve_customer_tenant_api_key() == _FAKE_AZURE_KEY
+    finally:
+        tenancy._current_org_id.reset(token)
+        revoke_customer_tenant_credential(org)
+
+
+def test_env_fallback_unaffected_by_non_production_environment_value(monkeypatch):
+    """ENVIRONMENT set to something other than 'production' (e.g. 'staging',
+    'development') behaves like dev/standalone — env fallback stays active."""
+    monkeypatch.delenv("REQUIRE_CONNECTOR_SECRETS", raising=False)
+    monkeypatch.setenv("ENVIRONMENT", "staging")
+    monkeypatch.delenv("CREDENTIAL_VAULT_KEY", raising=False)
+    monkeypatch.setenv(CONFIG_KEY_API_KEY, _FAKE_AZURE_KEY)
+    token = tenancy._current_org_id.set("org-ct-envfallback-staging")
+    try:
+        assert resolve_customer_tenant_api_key() == _FAKE_AZURE_KEY
+    finally:
+        tenancy._current_org_id.reset(token)
+
+
+# ---------------------------------------------------------------------------
+# validate_no_production_env_fallback() — the paired startup-visibility check.
+# The env var is already provably unused in production (tests above); this is
+# pure operator-facing hygiene, and must never raise.
+# ---------------------------------------------------------------------------
+
+
+def _warning_messages(caplog) -> list:
+    return [r.getMessage() for r in caplog.records if r.levelno >= logging.WARNING]
+
+
+def test_no_production_warning_when_env_var_unset(caplog, monkeypatch):
+    monkeypatch.setenv("REQUIRE_CONNECTOR_SECRETS", "1")
+    monkeypatch.delenv(CONFIG_KEY_API_KEY, raising=False)
+
+    with caplog.at_level(logging.WARNING):
+        validate_no_production_env_fallback()
+
+    assert _warning_messages(caplog) == []
+
+
+def test_warns_when_env_var_set_under_require_connector_secrets(caplog, monkeypatch):
+    monkeypatch.setenv("REQUIRE_CONNECTOR_SECRETS", "1")
+    monkeypatch.setenv(CONFIG_KEY_API_KEY, _FAKE_AZURE_KEY)
+
+    with caplog.at_level(logging.WARNING):
+        validate_no_production_env_fallback()
+
+    msgs = _warning_messages(caplog)
+    assert any(CONFIG_KEY_API_KEY in m for m in msgs), msgs
+    # The credential value itself must never appear in the log.
+    assert not any(_FAKE_AZURE_KEY in m for m in msgs), msgs
+
+
+def test_warns_when_env_var_set_under_environment_production(caplog, monkeypatch):
+    monkeypatch.delenv("REQUIRE_CONNECTOR_SECRETS", raising=False)
+    monkeypatch.setenv("ENVIRONMENT", "production")
+    monkeypatch.setenv(CONFIG_KEY_API_KEY, _FAKE_AZURE_KEY)
+
+    with caplog.at_level(logging.WARNING):
+        validate_no_production_env_fallback()
+
+    assert any(CONFIG_KEY_API_KEY in m for m in _warning_messages(caplog))
+
+
+def test_no_warning_in_dev_even_with_env_var_set(caplog, monkeypatch):
+    """Dev/standalone is unchanged: no warning, no behaviour change."""
+    monkeypatch.delenv("REQUIRE_CONNECTOR_SECRETS", raising=False)
+    monkeypatch.delenv("ENVIRONMENT", raising=False)
+    monkeypatch.setenv(CONFIG_KEY_API_KEY, _FAKE_AZURE_KEY)
+
+    with caplog.at_level(logging.WARNING):
+        validate_no_production_env_fallback()
+
+    assert _warning_messages(caplog) == []
+
+
+def test_validate_no_production_env_fallback_never_raises(monkeypatch):
+    monkeypatch.setenv("REQUIRE_CONNECTOR_SECRETS", "1")
+    monkeypatch.setenv(CONFIG_KEY_API_KEY, _FAKE_AZURE_KEY)
+    validate_no_production_env_fallback()  # must not raise

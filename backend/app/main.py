@@ -31,7 +31,7 @@ from .db import (
     org_connector_set,
 )
 from . import license_limits
-from .normalization_enrichment import enrich_ambiguous_mappings
+from .normalization_enrichment import KV_NORMALIZATION, enrich_ambiguous_mappings
 from .opportunity_display import (
     with_display,
     with_display_title,
@@ -49,6 +49,11 @@ from .routes_stack_builder import register_stack_builder_routes
 from .routes_stack_builder_launch import register_stack_builder_launch_routes
 from .routes_salesforce_products import register_salesforce_products_routes
 from .routes_slack_channels import register_slack_channels_routes
+from .routes_teams_channels import register_teams_channels_routes
+from .routes_jira_projects import register_jira_projects_routes
+from .routes_confluence_spaces import register_confluence_spaces_routes
+from .routes_sharepoint_sites import register_sharepoint_sites_routes
+from .routes_github_repos import register_github_repos_routes
 from .routes_sprint4_t1 import register_sprint4_t1_routes
 from .routes_sprint4_t2 import register_sprint4_t2_routes
 from .routes_sprint4_t3 import register_sprint4_t3_routes
@@ -64,6 +69,7 @@ from .routes_entities import register_entities_routes
 from .routes_causal import register_causal_routes
 from .routes_graph import register_graph_routes
 from .routes_retrieval import register_retrieval_routes
+from .routes_run_health import register_run_health_routes
 from .routes_auth import register_auth_routes
 from .routes_license import register_license_routes
 from .routes_ingestion import register_ingestion_routes
@@ -103,14 +109,13 @@ def _verify_db_driver_imports() -> None:
 def _is_production() -> bool:
     """True when this process should be treated as production.
 
-    Mirrors the two signals already used elsewhere: an explicit
-    ENVIRONMENT=production, or REQUIRE_CONNECTOR_SECRETS=1 (the deployment flag
-    that gates connector-secret enforcement).
+    Delegates to :func:`app.deployment_profile.is_production`, the single
+    source of truth for this check (R1.9.1-H1 T4) — kept as a thin wrapper
+    here so existing call sites in this module are unaffected.
     """
-    return (
-        os.getenv("ENVIRONMENT", "").strip().lower() == "production"
-        or os.getenv("REQUIRE_CONNECTOR_SECRETS") == "1"
-    )
+    from .deployment_profile import is_production
+
+    return is_production()
 
 
 def _validate_org_approval_config() -> None:
@@ -290,6 +295,11 @@ register_stack_builder_launch_routes(app)
 register_workspace_catalog_routes(app)
 register_salesforce_products_routes(app)
 register_slack_channels_routes(app)
+register_teams_channels_routes(app)
+register_jira_projects_routes(app)
+register_confluence_spaces_routes(app)
+register_sharepoint_sites_routes(app)
+register_github_repos_routes(app)
 # Sprint 4 routes are registered in dependency order T1 → T2 → T3 → T4 → T6.
 # FastAPI resolves routes in registration order, so a module registered earlier
 # wins any shared path prefix. T6 (LLM enrichment / evidence-trace) MUST be
@@ -313,6 +323,9 @@ register_causal_routes(app)
 register_graph_routes(app)
 # R18-B2 T6: retrieval freshness metrics for the run-health dashboard (AC7).
 register_retrieval_routes(app)
+# R18-C2 T1: Run-Health Dashboard aggregation endpoints (connectors, runs,
+# content/freshness, packs) — org-scoped, Owner/Analyst read-only.
+register_run_health_routes(app)
 register_auth_routes(app)
 # LIC-1 / T6 (AT-347): Owner-only license status + update-key admin routes.
 register_license_routes(app)
@@ -668,6 +681,18 @@ def list_mappings(run_id: str) -> List[Dict[str, Any]]:
     except KeyError:
         raise HTTPException(404, "run not found")
 
+    # Serve precomputed enrichment when available — never re-run the LLM on a
+    # read. enrich_ambiguous_mappings caches its enriched rows under
+    # KV_NORMALIZATION (marked with 'batchCallMade', written only by it). Return
+    # those if present; only compute — the one synchronous Claude batch call —
+    # when the cache is absent, so repeat GETs never trigger an LLM round-trip.
+    cached = run_kv_get(KV_NORMALIZATION, run_id, None)
+    if (
+        isinstance(cached, dict)
+        and "batchCallMade" in cached
+        and isinstance(cached.get("rows"), list)
+    ):
+        return cached["rows"]
     raw_mappings = get_all("mappings")
     return enrich_ambiguous_mappings(run_id, raw_mappings, db)
 
@@ -675,16 +700,20 @@ def list_mappings(run_id: str) -> List[Dict[str, Any]]:
 @app.get("/api/runs/{run_id}/opportunities", dependencies=[Depends(require_auth), Depends(require_role("viewer"))])
 def list_opportunities(run_id: str) -> List[Dict[str, Any]]:
     try:
-        read_run(run_id)
+        run = read_run(run_id)
     except KeyError:
         raise HTTPException(404, "run not found")
 
     opps = run_kv_get("opps", run_id, None)
     if opps is None:
-        raise HTTPException(
-            status_code=404,
-            detail=f"No opportunities for run '{run_id}'. T2 materialisation may not have completed.",
-        )
+        # The run EXISTS (read_run above did not 404) but has not materialised
+        # opportunities yet — it is still computing. Return an EMPTY list (200),
+        # not 404, so a client can fetch opportunities in parallel with run
+        # status without erroring on an in-progress run; the "still preparing"
+        # vs "no opportunities" distinction is made from run status client-side.
+        # A genuinely unknown/cross-org run still 404s at read_run above, so
+        # tenant isolation and the "no latest-run fallback" contract are intact.
+        return []
     # Apply the full display shaping (title overrides + the stable matrix score
     # offset). The decision/override endpoints below apply the SAME shaping via
     # with_display(), so a bubble keeps its coordinates when its decision changes.

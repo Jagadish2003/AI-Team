@@ -45,7 +45,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import PageShell from '../components/common/PageShell';
-import LoadingPanel from '../components/common/LoadingPanel';
+import { Skeleton } from '../components/common/Skeleton';
 import ErrorPanel from '../components/common/ErrorPanel';
 import ConnectorGroupSection, { GroupConfig } from '../components/integrations/ConnectorGroupSection';
 import RightPanel from '../components/integrations/RightPanel';
@@ -53,7 +53,11 @@ import LicenseLimitBanner, { systemLimitMessage } from '../components/integratio
 import ConfirmDialog from '../components/common/ConfirmDialog';
 import { useToast } from '../components/common/Toast';
 import { ApiError } from '../lib/apiClient';
+import { useResource } from '../lib/dataCache';
+import { cacheKeys } from '../lib/cacheKeys';
 import { useConnectorContext } from '../context/ConnectorContext';
+import { useAuthOptional } from '../context/AuthContext';
+import { isViewerRole } from '../utils/roles';
 import { isDiscoveryReadyConnector } from '../utils/sourceReadiness';
 import { computeConfidence } from '../utils/confidence';
 import { Connector, OutboundSetupRequest } from '../types/connector';
@@ -151,6 +155,18 @@ export default function IntegrationHubPage() {
   const navigate         = useNavigate();
   const location         = useLocation();
   const [searchParams]   = useSearchParams();
+  const auth             = useAuthOptional();
+  const isViewer         = isViewerRole(auth?.user?.role);
+
+  // Connect → View data (no manual "Configure & Sync" step). Configuring a
+  // connector is now just a flag-flip that makes it discovery-ready, so it is
+  // done automatically: any connector that is connected but not yet configured is
+  // configured here in the background. This covers every connect path (OAuth
+  // callback, client-credentials, static) AND any connector that was left
+  // connected-but-unconfigured before this change — so its tile flips straight to
+  // "View data". analyst+ only (configuring is a write; viewers can't); guarded by
+  // a ref so each id is attempted once and the post-configure refetch can't loop.
+  const autoConfiguredRef = useRef<Set<string>>(new Set());
 
   // ?category= deep-link param — ENG-IH-2 AC6
   const deepLinkCategory = searchParams.get('category') ?? null;
@@ -182,6 +198,25 @@ export default function IntegrationHubPage() {
     [recommended, standard],
   );
 
+  // Auto-configure connected-but-unconfigured connectors (Connect → View data).
+  // See autoConfiguredRef above for the rationale. Runs whenever the connector
+  // set changes; each id is attempted at most once (the ref), and after configure
+  // the connector reports configured=true so it no longer matches.
+  useEffect(() => {
+    if (isViewer) return; // configuring is analyst+; viewers can't
+    for (const c of allConnectors) {
+      if (
+        c.status === 'connected' &&
+        !c.configured &&
+        !autoConfiguredRef.current.has(c.id)
+      ) {
+        autoConfiguredRef.current.add(c.id);
+        configureSync(c.id);
+      }
+    }
+  }, [allConnectors, isViewer, configureSync]);
+
+
   // R17-D4 Addendum A / T11 (AT-506): license-limit state (systems used /
   // licensed) from T10's GET /api/license/limits. Re-fetched whenever the
   // connector set changes — i.e. after a connect/disconnect/configure round-trip
@@ -189,14 +224,19 @@ export default function IntegrationHubPage() {
   // connection with no restart (AC11). Fail-open: a fetch error leaves it null so
   // the UI never wrongly blocks — the backend gate (T9) remains the source of
   // truth for enforcement regardless of what the hub shows.
-  const [licenseLimits, setLicenseLimits] = useState<LicenseLimitsResponse | null>(null);
-  useEffect(() => {
-    let alive = true;
-    fetchLicenseLimits()
-      .then(l => { if (alive) setLicenseLimits(l); })
-      .catch(() => { if (alive) setLicenseLimits(null); });
-    return () => { alive = false; };
-  }, [allConnectors]);
+  // On the SHARED cache, not page-local state: the cache lives at the app root,
+  // so navigating away and back re-renders the strip from the cached value with
+  // NO refetch and no skeleton. It refreshes only when it should — a
+  // connect/disconnect invalidates this key (ConnectorContext), and any other
+  // user's change arrives via the org event stream — and those refreshes are
+  // background (the current value stays on screen). A fetch error resolves to
+  // null, i.e. the strip hides: fail-open, since the backend gate (T9) remains
+  // the source of truth for enforcement (AC11).
+  const {
+    data: licenseData,
+    loading: licenseLoading,
+  } = useResource<LicenseLimitsResponse | null>(cacheKeys.license, fetchLicenseLimits);
+  const licenseLimits = licenseData ?? null;
 
   // At/over the licensed cap → block NEW connections (forward-only; reconnecting
   // an already-connected system is never blocked, handled per-tile via isConnected
@@ -309,7 +349,10 @@ export default function IntegrationHubPage() {
       push('Coming Soon');
     } else {
       connectConnector(id);
-      push('Connector connected. Click Configure & Sync to load data.');
+      // Connect now leads straight to "View data" — configuring is automatic
+      // (see the auto-configure effect). For OAuth connectors this toast is not
+      // seen (the browser redirects to the provider), but keep it accurate.
+      push('Connecting…');
     }
   }
 
@@ -385,7 +428,29 @@ export default function IntegrationHubPage() {
       title="Integration Hub"
       description="Connect enterprise systems to provide data for discovery. Manage credentials and connection status for your workspace."
     >
-        {loading && <LoadingPanel />}
+        {loading && (
+          // Skeleton mirrors the groups-column tile grid + side panel so the real
+          // tiles fill the same space instead of snapping in after a spinner.
+          <div
+            aria-busy="true"
+            aria-label="Loading Integration Hub"
+            className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_360px]"
+          >
+            <div className="flex min-w-0 flex-col gap-6">
+              {[0, 1].map((g) => (
+                <div key={g}>
+                  <Skeleton className="mb-3 h-5 w-48" />
+                  <div className="grid gap-4 sm:grid-cols-2">
+                    {[0, 1, 2, 3].map((t) => (
+                      <Skeleton key={t} className="h-32 w-full rounded-xl" />
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+            <Skeleton className="h-96 w-full rounded-xl" />
+          </div>
+        )}
         {error && !loading && <ErrorPanel message={error} onRetry={refetch} />}
 
         {!loading && !error && (
@@ -395,7 +460,7 @@ export default function IntegrationHubPage() {
             <div className="flex min-w-0 flex-col gap-4">
 
               {/* R17-D4 Addendum A / T11: systems used vs licensed (AC14) */}
-              <LicenseLimitBanner limits={licenseLimits} />
+              <LicenseLimitBanner limits={licenseLimits} loading={licenseLoading} />
 
               {/* Deep-link announcement for screen readers */}
               {highlightedCategory && (

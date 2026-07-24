@@ -1,4 +1,4 @@
-import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { useRunContext } from "./RunContext";
 import {
   fetchAudit,
@@ -8,10 +8,11 @@ import {
 } from "../api/analystReviewApi";
 import type { OpportunityCandidate, ReviewAuditEvent } from "../types/analystReview";
 import type { Decision } from "../types/common";
-import { runScopedErrorMessage } from "../utils/apiErrors";
+import { isRunNotFoundError, runScopedErrorMessage } from "../utils/apiErrors";
 import { useDiscoveryRunContext } from "./DiscoveryRunContext";
 import { useDataCache } from "../lib/dataCache";
 import { cacheKeys } from "../lib/cacheKeys";
+import { useRevalidateOnFocus } from "../lib/useRevalidate";
 
 type AnalystReviewContextValue = {
   loading: boolean;
@@ -56,7 +57,7 @@ function uid(prefix: string): string {
 
 export function AnalystReviewProvider({ children }: { children: React.ReactNode }) {
   const { runId } = useRunContext();
-  const { run } = useDiscoveryRunContext();
+  const { run, computing } = useDiscoveryRunContext();
   const runStatus = run?.status?.toLowerCase();
   const cache = useDataCache();
 
@@ -71,29 +72,53 @@ export function AnalystReviewProvider({ children }: { children: React.ReactNode 
   const refetch = useCallback(() => setFetchCount((c) => c + 1), []);
   const select = useCallback((id: string | null) => setSelectedId(id), []);
 
+  // The run whose opportunities we already hold. Distinguishes a FIRST load (show
+  // the loading state) from a revalidation of data we already have (must stay on
+  // screen). Without this, the focus/interval/push revalidation that keeps the
+  // org in sync replaced the whole page with skeletons every time the user
+  // switched back to the tab.
+  const loadedRunIdRef = useRef<string | null>(null);
+
+  // Clear the previous run's data the moment the active run changes, so a stale
+  // opportunity list never shows while the new run's fetch is in flight. Kept
+  // separate from the fetch effect below so a status-driven refetch of the SAME
+  // run does not blank the list (no flicker).
   useEffect(() => {
-    if (!runId) {
-      setOpportunities([]);
-      setAudit([]);
-      setSelectedId(null);
+    loadedRunIdRef.current = null;
+    setOpportunities([]);
+    setAudit([]);
+    setSelectedId(null);
+    setError(null);
+  }, [runId]);
+
+  useEffect(() => {
+    if (!runId || runStatus === "failed") {
       setLoading(false);
-      setError(null);
       return;
     }
-    if (!hasMaterializedArtifacts(runStatus)) {
-      setOpportunities([]);
-      setAudit([]);
-      setSelectedId(null);
-      setLoading(runStatus !== "failed");
-      setError(runStatus === "failed" ? "Discovery run failed before opportunities were generated." : null);
-      return;
-    }
+    // Defer the opportunities/audit fetch until the run has SETTLED (not
+    // computing): /opportunities is fetched ONCE the run reaches 100% (this effect
+    // re-runs as `computing` flips to false), never polled during the run. While
+    // computing, the "preparing" state below drives the view. This removes the
+    // during-run /runs/{id}/opportunities + /audit hits.
+    if (computing) return;
     let cancelled = false;
 
     (async () => {
-      setLoading(true);
+      // Only surface the loading state on the FIRST load of this run. Later runs
+      // of this effect are revalidations (status change, decision refresh, and
+      // the focus/interval/push org sync) — they must refresh the list silently
+      // with the current one still rendered, never swap it for skeletons.
+      if (loadedRunIdRef.current !== runId) setLoading(true);
       setError(null);
       try {
+        // Fetch as soon as the run id is known — do NOT gate on run status. The
+        // /opportunities endpoint returns [] (not 404) for a run that has not
+        // materialised yet, so a still-computing run simply yields an empty list
+        // here and the "preparing" state is derived from run status below. This
+        // removes the status→opportunities waterfall hop (opportunities now load
+        // in parallel with run status instead of after it).
+        //
         // Opportunities are the critical Viewer+ resource. The audit trail is an
         // owner-only endpoint (RBAC: analysts/viewers get 403), so it is fetched
         // tolerantly — a 403 or any audit failure degrades to an empty trail and
@@ -103,14 +128,17 @@ export function AnalystReviewProvider({ children }: { children: React.ReactNode 
           fetchAudit(runId).catch(() => [] as ReviewAuditEvent[]),
         ]);
         if (cancelled) return;
+        // We now hold this run's data — later fetches revalidate in the
+        // background instead of re-showing the loading state.
+        loadedRunIdRef.current = runId;
         setOpportunities(opps);
         setAudit(aud);
         setSelectedId((prev) => (prev && opps.some((o) => o.id === prev) ? prev : (opps[0]?.id ?? null)));
       } catch (e: any) {
         if (cancelled) return;
-        setOpportunities([]);
-        setAudit([]);
-        setSelectedId(null);
+        // A stale/cross-org run id 404s here; DiscoveryRunContext clears it, so
+        // stay quiet rather than flashing an error before the id is dropped.
+        if (isRunNotFoundError(e)) return;
         setError(runScopedErrorMessage(e, "Failed to load analyst review data"));
       } finally {
         if (!cancelled) setLoading(false);
@@ -118,7 +146,32 @@ export function AnalystReviewProvider({ children }: { children: React.ReactNode 
     })();
 
     return () => { cancelled = true; };
-  }, [runId, runStatus, fetchCount]);
+  }, [runId, runStatus, computing, fetchCount]);
+
+  // Opportunities, decisions and the audit trail are SHARED across the org —
+  // several analysts review the same run. Revalidate on tab focus and on a slow
+  // tick so another analyst's approve/reject/override appears here without a
+  // reload. The fetch replaces the list only on success, so there is no flicker,
+  // and the server stays the source of truth for a concurrently-edited decision.
+  // Post-run collaborative sync only — never while the run is computing (the
+  // completion fetch above covers that, and we don't poll during a run).
+  useRevalidateOnFocus(refetch, { enabled: Boolean(runId) && !computing });
+
+  // A run that exists but has not materialised yet (still computing, or status
+  // not yet loaded) with no opportunities in hand is "preparing" — surface a
+  // loading state, not an empty "no opportunities" view. A failed run surfaces an
+  // error. Both are derived from run status, which arrives in PARALLEL with the
+  // opportunities fetch above rather than gating it.
+  const preparing =
+    Boolean(runId) &&
+    runStatus !== "failed" &&
+    !hasMaterializedArtifacts(runStatus) &&
+    opportunities.length === 0;
+  const exposedLoading = loading || preparing;
+  const exposedError =
+    runStatus === "failed"
+      ? "Discovery run failed before opportunities were generated."
+      : error;
 
   const setDecision = useCallback(
     async (oppId: string, decision: Decision) => {
@@ -203,8 +256,8 @@ export function AnalystReviewProvider({ children }: { children: React.ReactNode 
   );
 
   const value = useMemo(
-    () => ({ loading, error, refetch, opportunities, selectedId, select, audit, setDecision, saveOverride }),
-    [loading, error, refetch, opportunities, selectedId, select, audit, setDecision, saveOverride]
+    () => ({ loading: exposedLoading, error: exposedError, refetch, opportunities, selectedId, select, audit, setDecision, saveOverride }),
+    [exposedLoading, exposedError, refetch, opportunities, selectedId, select, audit, setDecision, saveOverride]
   );
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;

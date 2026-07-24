@@ -95,6 +95,10 @@ class RunStartedPayload(TypedDict, total=False):
 class RunCompletedPayload(TypedDict, total=False):
     pack_id: NotRequired[Optional[str]]
     system_count: NotRequired[Optional[int]]
+    # R-1.9.1-L1 / T6 (AC5): the license deployment_type (saas | customer_hosted)
+    # the run executed under, stamped by the discovery runner so L2 billing can
+    # record the AI-deployment topology. None when the org has no verifiable license.
+    deployment_type: NotRequired[Optional[str]]
 
 
 class ConnectorHealthPayload(TypedDict):
@@ -119,9 +123,17 @@ RunSignalSnapshotEvent = RunSignalSnapshotPayload   # alias
 
 
 class PackExecutedPayload(TypedDict, total=False):
-    """T1-S14-C — written after each pack execution."""
+    """Exact, org-scoped execution snapshot for a discovery pack."""
+    org_id: NotRequired[str]
+    run_id: NotRequired[str]
     pack_id: NotRequired[str]
+    pack_name: NotRequired[str]
+    pack_version: NotRequired[str]
+    detector_ids: NotRequired[list[str]]
     detector_count: NotRequired[int]
+    evaluated_count: NotRequired[int]
+    not_evaluated_count: NotRequired[int]
+    executed_at: NotRequired[str]
     duration_ms: NotRequired[int]
 
 
@@ -308,6 +320,9 @@ class GraphContextBuiltPayload(TypedDict, total=False):
 class RunStartedEvent(TypedDict):
     run_id: str
     org_id: str
+    # R-1.9.1-L1 / T6 (AC5): license deployment_type stamped by the discovery
+    # runner into the run's telemetry context (None when unlicensed).
+    deployment_type: NotRequired[Optional[str]]
 
 
 class RunCompletedEvent(TypedDict):
@@ -541,6 +556,38 @@ class IngestionStructureCapturedPayload(TypedDict, total=False):
     file_count: NotRequired[int]
     directory_count: NotRequired[int]
     binary_file_count: NotRequired[int]
+    observed_at: NotRequired[str]
+
+
+class IngestionArtifactSkippedPayload(TypedDict, total=False):
+    """ingestion.artifact_skipped — R18-C2 / T2 (emission gap-fill).
+
+    Emitted at the ORIGIN — the document ingestor (``discovery/ingest/documents.py``)
+    — once per artifact it skips-with-reason, so the Run-Health Dashboard's content
+    panel (R18-C2 T1, AC3) can report skipped-with-reason volume as an EXPLICIT,
+    org-scoped fact rather than inferring it. Before this, a skip was recorded only
+    on the in-flight hand-off record and a WARNING log — never a queryable event —
+    so the state existed but the dashboard could not read it. Fire-and-forget by
+    contract: a telemetry write failure must never break ingestion.
+
+    org_id:          The org the content belongs to (required for aggregation).
+    connector_id:    The ingestor that skipped (e.g. 'documents').
+    source_system:   The producing system for the artifact.
+    artifact_id:     The skipped artifact (file id / path).
+    reason:          Why it was skipped — one of the extraction reasons
+                     (size_capped, budget_exceeded, unsupported_format, no_handler,
+                     encrypted, scanned_image).
+    count:           Artifacts represented by this event (always 1 per artifact).
+    run_id:          The run during which the skip occurred, when available.
+    observed_at:     When the skip happened (UTC ISO), when available.
+    """
+    org_id: str
+    connector_id: str
+    source_system: NotRequired[str]
+    artifact_id: NotRequired[str]
+    reason: str
+    count: NotRequired[int]
+    run_id: NotRequired[str]
     observed_at: NotRequired[str]
 
 
@@ -789,6 +836,9 @@ register_event_type("connector.health_check", ConnectorHealthPayload)
 register_event_type("db.query_executed", DbQueryExecutedEvent)
 register_event_type("db.ingestor_completed", DBIngestorCompletedPayload)
 register_event_type("run.signal_snapshot", RunSignalSnapshotPayload)
+# R18-C2 T2: emitted at the detector execution origin. The run-health Packs
+# panel consumes this historical snapshot instead of reconstructing an old run
+# from the mutable pack registry.
 register_event_type("run.pack_executed", PackExecutedPayload)
 # T3-S11-A Sprint 11
 register_event_type("temporal.enrichment_completed", TemporalEnrichmentCompletedPayload)
@@ -841,6 +891,14 @@ register_event_type("ingestion.structure_captured", IngestionStructureCapturedPa
 # in run health. Registered here so the connector can emit it; record_event() raises
 # ValueError for an unregistered type, so registration must precede first emission.
 register_event_type("ingestion.subscription_health", IngestionSubscriptionHealthPayload)
+# R18-C2 / T2 (emission gap-fill): per-skipped-artifact event, emitted at origin
+# by the document ingestor (discovery/ingest/documents.py) so the run-health
+# dashboard's content panel can report skipped-with-reason volume as an explicit
+# org-scoped fact instead of inferring it (the only genuine gap the T1 dashboard
+# could not read). Registered here so the ingestor can emit it; record_event()
+# raises ValueError for an unregistered type, so registration must precede the
+# first emission.
+register_event_type("ingestion.artifact_skipped", IngestionArtifactSkippedPayload)
 # R16-D1 / AT-366 (T5) — model provider gateway telemetry. Registered here so
 # the gateway's generate()/embed() paths can emit them; record_event() raises
 # ValueError for an unregistered type, so registration must land before any

@@ -11,7 +11,8 @@
  *   npx vitest run src/__tests__/ConnectorTileTokenStatus.test.tsx
  */
 import React from "react";
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { screen, fireEvent, waitFor } from "@testing-library/react";
+import { renderWithCache } from "../test-utils/renderWithCache";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import ConnectorTile from "../components/integrations/ConnectorTile";
@@ -39,8 +40,11 @@ function connectedSalesforce() {
   };
 }
 
+// The tile reads its token status from the shared data cache (so it survives
+// navigation and refreshes live), which needs a DataCacheProvider ancestor.
+// Each render gets a fresh provider, so the cache never leaks between tests.
 function renderTile(onPrimary = vi.fn(), onReconnect = vi.fn()) {
-  render(
+  renderWithCache(
     <ConnectorTile
       connector={connectedSalesforce() as any}
       icon={<span>SF</span>}

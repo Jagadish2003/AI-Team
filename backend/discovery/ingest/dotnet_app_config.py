@@ -41,8 +41,8 @@ API keys, tokens, usernames, passwords, certificate references, connection
 strings, and any other secret MUST NOT appear in the target configuration, in
 code, or in logs. The configuration carries only a ``credential_ref`` naming
 where the secret lives; :func:`resolve_secret` reads the decrypted value from the
-per-run credential context and falls back to an env var only for CLI/standalone
-use. To make the rule enforceable rather than merely documented,
+per-run credential context (vault only, **fail-closed** — no env fallback;
+R191-H1 / T1). To make the rule enforceable rather than merely documented,
 :func:`load_targets` REJECTS any target entry that carries an inline
 secret-looking field (the shared ``FORBIDDEN_SECRET_KEYS``) — a misconfigured
 deployment that pastes a credential into config surfaces as a rejected target
@@ -86,10 +86,6 @@ FIXTURE_PATH = Path(__file__).parent / "fixtures" / "dotnet_app_sample.json"
 
 #: Env var (live mode) holding a JSON array of target configs for the deployment.
 _TARGETS_ENV = "DOTNET_APP_TARGETS"
-
-#: Env var (CLI/standalone) holding the credential for the default ``dotnet_app``
-#: vault key. A custom ``credential_ref`` namespaces its own ``{REF}_TOKEN``.
-_DEFAULT_ENV_TOKEN_KEY = "DOTNET_APP_TOKEN"
 
 #: Default vault connector key used when a target does not name its own
 #: ``credential_ref``. Mirrors the connector_id of the ingestor.
@@ -248,23 +244,27 @@ def resolve_secret(
     connector_lookup: Callable[[str], Optional[Dict[str, str]]] = get_live_connector,
     env: Optional[Dict[str, str]] = None,
 ) -> Optional[str]:
-    """Resolve a target's credential from the vault — never from config or logs (AC4).
+    """Resolve a target's credential from the vault — vault only, fail-closed (AC4).
 
     Delegates to the shared :func:`operational_config.resolve_target_secret` (the
-    identical vault-first / env-fallback resolution used by the Java ingestor), so
-    the credential handling cannot diverge between platforms. Returns ``None`` when
-    the target needs no credential (``credential_ref`` is None) or none is
-    configured. The resolved secret is handed straight to the HTTP/log client and
-    is never attached to the target, logged, or echoed.
+    identical vault-only, fail-closed resolution used by the Java ingestor), so the
+    credential handling cannot diverge between platforms. There is **no env
+    fallback** (R191-H1 / T1 — F1 fix): a target that declares a ``credential_ref``
+    with no vault token raises
+    :class:`operational_config.OperationalCredentialMissing` and the ingestor
+    fail-closes for that target. Returns ``None`` only when the target needs no
+    credential (``credential_ref`` is None). The resolved secret is handed straight
+    to the HTTP/log client and is never attached to the target, logged, or echoed.
+
+    ``env`` is accepted for backward-compatible call signatures but is intentionally
+    **never read** — there is no environment credential path (R191-H1 / T1).
     """
+    _ = env  # no environment credential path — accepted for signature compatibility
     return resolve_target_secret(
         org_id,
         app_id=target.app_id,
         credential_ref=target.credential_ref,
-        default_credential_ref=DEFAULT_CREDENTIAL_REF,
-        default_env_token_key=_DEFAULT_ENV_TOKEN_KEY,
         connector_lookup=connector_lookup,
-        env=env,
     )
 
 

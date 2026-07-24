@@ -5,6 +5,8 @@ import { postEvidenceDecision } from '../api/evidenceApi';
 import { useRunContext } from './RunContext';
 import { useDiscoveryRunContext } from './DiscoveryRunContext';
 import { runScopedErrorMessage } from '../utils/apiErrors';
+import { useDataCache } from '../lib/dataCache';
+import { cacheKeys } from '../lib/cacheKeys';
 
 type PartialResultsContextValue = {
   entities: ExtractedEntity[];
@@ -69,6 +71,7 @@ const defaultTypes: Record<EntityType, boolean> = {
 export function PartialResultsProvider({ children }: { children: React.ReactNode }) {
   const { runId } = useRunContext();
   const { run } = useDiscoveryRunContext();
+  const cache = useDataCache();
   const runStatus = run?.status?.toLowerCase();
   const [entities, setEntities] = useState<ExtractedEntity[]>([]);
   const [evidence, setEvidence] = useState<EvidenceReview[]>([]);
@@ -212,16 +215,22 @@ export function PartialResultsProvider({ children }: { children: React.ReactNode
     setEvidence(prev => prev.map(ev => ev.id === selectedEvidenceId ? { ...ev, decision } : ev));
 
     // Persist to backend so decision survives page refresh
-    postEvidenceDecision(runId, selectedEvidenceId, decision as any).catch(() => {
-      // Roll back on failure
-      setEvidence(prev => prev.map(ev => ev.id === selectedEvidenceId ? { ...ev, decision: 'UNREVIEWED' } : ev));
-    });
+    postEvidenceDecision(runId, selectedEvidenceId, decision as any)
+      .then(() => {
+        // Keep the shared runEvidence cache (read elsewhere via useResource, e.g.
+        // the Blueprint page) in step with this decision.
+        cache.invalidate(cacheKeys.runEvidence(runId));
+      })
+      .catch(() => {
+        // Roll back on failure
+        setEvidence(prev => prev.map(ev => ev.id === selectedEvidenceId ? { ...ev, decision: 'UNREVIEWED' } : ev));
+      });
 
     const idx = currentIndex;
     if (idx >= 0) goNextUnreviewed(idx);
 
     return true;
-  }, [selectedEvidenceId, runId, evidence, currentIndex, goNextUnreviewed]);
+  }, [selectedEvidenceId, runId, evidence, currentIndex, goNextUnreviewed, cache]);
 
   const approveSelected = useCallback(() => setDecisionForSelected('APPROVED'), [setDecisionForSelected]);
   const rejectSelected = useCallback(() => setDecisionForSelected('REJECTED'), [setDecisionForSelected]);

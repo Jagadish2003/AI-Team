@@ -29,7 +29,7 @@ import { useAuthOptional } from '../../context/AuthContext';
 import { useNetworkProfileOptional } from '../../context/NetworkProfileContext';
 import { useToast } from '../common/Toast';
 import JwtBearerCredentialModal from './JwtBearerCredentialModal';
-import { useDataCache } from '../../lib/dataCache';
+import { useDataCache, useResource } from '../../lib/dataCache';
 import { cacheKeys } from '../../lib/cacheKeys';
 
 function formatUpdated(iso: string | null): string | null {
@@ -60,28 +60,26 @@ export default function OutboundAuthSetup({
   const outboundModes = capability?.outbound_only_modes ?? [];
   const supportsJwt = outboundModes.includes('jwt_bearer');
   const supportsClientCreds = outboundModes.includes('client_credentials');
+  const supportsStatic = outboundModes.includes('static');
+  // Client-credentials is THIS component's path only when there is no static
+  // fallback (e.g. Teams / SharePoint). When the connector also supports static
+  // (e.g. ServiceNow user/password), StaticCredentialManager owns the setup —
+  // otherwise clicking "Set up outbound access" would open the static form AND
+  // fire a client-credentials token request the provider isn't configured for
+  // (the "Could not acquire a token from the provider" toast).
+  const usesClientCreds = supportsClientCreds && !supportsStatic;
 
-  const [jwtStatus, setJwtStatus] = useState<ConnectorCredentialStatus | null>(null);
   const [modalOpen, setModalOpen] = useState(false);
 
-  const loadJwtStatus = useCallback(() => {
-    if (!supportsJwt) return () => {};
-    let alive = true;
-    fetchJwtBearerCredentialStatus(connector.id)
-      .then((s) => {
-        if (alive) setJwtStatus(s);
-      })
-      .catch(() => {
-        if (alive) setJwtStatus(null);
-      });
-    return () => {
-      alive = false;
-    };
-  }, [connector.id, supportsJwt]);
-
-  useEffect(() => {
-    return loadJwtStatus();
-  }, [loadJwtStatus]);
+  // JWT-bearer credential status on the SHARED cache, keyed per connector: it
+  // survives navigation and is refreshed live (saving/removing the key
+  // invalidates it below; another user's change arrives via the org event
+  // stream). Disabled (null key) for connectors with no jwt_bearer mode.
+  const { data: jwtStatusData } = useResource<ConnectorCredentialStatus>(
+    supportsJwt ? cacheKeys.connectorJwtStatus(connector.id) : null,
+    () => fetchJwtBearerCredentialStatus(connector.id),
+  );
+  const jwtStatus = jwtStatusData ?? null;
 
   // The tile's "Set up outbound access" button is the single write entry point
   // (the parent bumps outboundSetupRequest.nonce). Owner-gated + guarded by a
@@ -95,24 +93,29 @@ export default function OutboundAuthSetup({
     consumedNonce.current = outboundSetupRequest.nonce;
     if (outboundSetupRequest.connectorId !== connector.id || !isOwner) return;
     if (supportsJwt) setModalOpen(true);
-    else if (supportsClientCreds) void handleClientCredsConnect();
+    else if (usesClientCreds) void handleClientCredsConnect();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [outboundSetupRequest, connector.id, isOwner, supportsJwt, supportsClientCreds]);
+  }, [outboundSetupRequest, connector.id, isOwner, supportsJwt, usesClientCreds]);
 
   // After an outbound credential change (key save/remove, or a client-credentials
   // connect), refresh this card's own status AND invalidate the connector list +
   // network profile so the tile state and auth-capability gating (now
   // cache-backed) reflect the change everywhere, with no page reload.
   function onOutboundChanged() {
-    loadJwtStatus();
+    // This card's own status is now cache-backed, so invalidate its key rather
+    // than re-running a local loader — every consumer of it refreshes, not just
+    // this instance.
+    cache.invalidate(cacheKeys.connectorJwtStatus(connector.id));
+    cache.invalidate(cacheKeys.connectorTokenStatus(connector.id));
     cache.invalidate(cacheKeys.connectors);
     cache.invalidate(cacheKeys.networkProfile);
+    cache.invalidate(cacheKeys.license);
   }
 
   // Only relevant in no-public-inbound; and only for outbound modes that need a
   // dedicated setup UI here (static is handled by StaticCredentialManager).
   if (!noPublicInbound) return null;
-  if (!supportsJwt && !supportsClientCreds) return null;
+  if (!supportsJwt && !usesClientCreds) return null;
 
   async function handleClientCredsConnect() {
     try {
@@ -180,9 +183,10 @@ export default function OutboundAuthSetup({
         </div>
       )}
 
-      {/* client-credentials (Microsoft Graph, ServiceNow) — formless connect
-          triggered from the tile's "Set up outbound access" button. */}
-      {supportsClientCreds && (
+      {/* client-credentials (Microsoft Graph — Teams/SharePoint) — formless
+          connect triggered from the tile's "Set up outbound access" button.
+          Connectors that also support static (ServiceNow) use that form instead. */}
+      {usesClientCreds && (
         <div>
           <p className="text-[11px] leading-relaxed text-muted">
             Service-identity (client-credentials) — connects under the deployment's

@@ -26,11 +26,12 @@ export function RunRequiredEmptyState({
         title="No discovery run selected"
         message={
           <>
-            This screen is tied to a specific discovery run. Start a run from the{" "}
-            <span className="font-medium text-text">Discovery Run</span> page to continue.
+            This screen is tied to a specific discovery run. Connect a source in the{" "}
+            <span className="font-medium text-text">Integration Hub</span>, then start a
+            discovery run to continue.
           </>
         }
-        actionLabel="Go to Discovery Run"
+        actionLabel="Go to Integration Hub"
         onAction={onStart}
       />
     </>

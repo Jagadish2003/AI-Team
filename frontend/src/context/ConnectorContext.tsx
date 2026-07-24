@@ -177,12 +177,16 @@ export function ConnectorProvider({ children }: { children: React.ReactNode }) {
     setSelectedConnectorId(id);
   },[]);
 
-  // Connecting/configuring/disconnecting a connector can change its tile state
-  // AND the network-profile auth-capability gating, so both keys are invalidated
-  // → tiles, the detail panel, and gating all refresh live (no reload).
+  // Connecting/configuring/disconnecting a connector can change its tile state,
+  // the network-profile auth-capability gating, AND the licence systems-used
+  // count ("one connected entity = one system"), so all three keys are
+  // invalidated → tiles, the detail panel, gating, and the usage strip all
+  // refresh live (no reload). The licence key is what keeps the strip correct
+  // now that it reads from the cache rather than re-fetching per connector change.
   const invalidateConnectorState = useCallback(() => {
     cache.invalidate(cacheKeys.connectors);
     cache.invalidate(cacheKeys.networkProfile);
+    cache.invalidate(cacheKeys.license);
   }, [cache]);
 
   const connectConnector = useCallback(async (id: string) => {

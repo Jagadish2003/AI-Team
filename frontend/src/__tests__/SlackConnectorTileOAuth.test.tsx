@@ -54,12 +54,11 @@ function nonOauthDisconnected() {
   return { ...slackDisconnected(), id: "workday", name: "Workday" };
 }
 
-// UI gate (July 2026): only Salesforce/ServiceNow/Jira are connectable from the
-// Integration Hub for now. Slack's OAuth backend stays wired (AT-420/AT-422) —
-// only the tile's Connect button is disabled until Slack is re-added to
-// ConnectorTile's ENABLED_CONNECTOR_IDS.
-describe("Slack tile Connect is UI-disabled (hub allowlist = SF/SNOW/Jira)", () => {
-  it("renders a disabled Connect button for Slack that never fires onPrimary", () => {
+// UI gate: R18-A4 (Slack & Teams Deep Content) adds Slack to the Integration Hub
+// allowlist, so its Connect button is now ENABLED and drives the real OAuth flow
+// (AT-420/AT-422). Non-allowlisted connectors stay disabled.
+describe("Slack tile Connect is enabled (R18-A4 hub allowlist)", () => {
+  it("renders an enabled Connect button for Slack that fires onPrimary", () => {
     const onPrimary = vi.fn();
     render(
       <ConnectorTile
@@ -72,10 +71,10 @@ describe("Slack tile Connect is UI-disabled (hub allowlist = SF/SNOW/Jira)", () 
     );
 
     const btn = screen.getByRole("button", { name: "Connect" }) as HTMLButtonElement;
-    expect(btn.disabled).toBe(true);
+    expect(btn.disabled).toBe(false);
 
     fireEvent.click(btn);
-    expect(onPrimary).not.toHaveBeenCalled();
+    expect(onPrimary).toHaveBeenCalledTimes(1);
   });
 
   it("leaves a non-OAuth connector (Workday) disabled — allowlist stays scoped", () => {

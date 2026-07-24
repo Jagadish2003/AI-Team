@@ -46,6 +46,26 @@ DEFAULT_PRIVATE_KEY = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "cloudfulcrum_private.pem"
 )
 
+# R-1.9.1-L1 / T1 (AT-687): payload schema version. v2 adds org binding
+# (``org_id``), the signing-key selector (``kid``), ``deployment_type``, and the
+# opaque per-installation ``report_key``. It is stamped into every issued payload
+# so the verifier (T2–T4) can tell a v2 key (has org_id + kid) from a v1-shaped
+# one and reject the latter as ``unsupported_payload_version``. The window to do
+# this cleanly is now — before any real customer key is in the field.
+PAYLOAD_VERSION = 2
+
+# The two recognised deployment topologies (payload v2). ``saas`` is the
+# CloudFulcrum-hosted multi-tenant offering; ``customer_hosted`` is an on-prem /
+# customer-cloud install. Parsed and surfaced in license status (AC5) and, in L2,
+# stamped into run/telemetry context.
+DEPLOYMENT_TYPES = ("saas", "customer_hosted")
+DEFAULT_DEPLOYMENT_TYPE = "saas"
+
+# The default signing-key identifier. The trusted public keys become a keyed set
+# in T3 (kid → public key); this is the id of the current signing key. Overriding
+# it per issue lets key rotation be a config change, not a binary release.
+DEFAULT_KID = "cf-2026-1"
+
 
 def build_payload(
     customer: str,
@@ -55,9 +75,13 @@ def build_payload(
     *,
     max_systems: int | None = None,
     org_name: str | None = None,
+    org_id: str | None = None,
+    kid: str = DEFAULT_KID,
+    deployment_type: str = DEFAULT_DEPLOYMENT_TYPE,
+    report_key: str | None = None,
     today: datetime.date | None = None,
 ) -> dict:
-    """Assemble the full signed payload.
+    """Assemble the full signed payload (schema v2 — R-1.9.1-L1 / T1).
 
     ``issued_at`` is today and ``expires_at`` is today + term_months*30 days, so
     the term boundary is baked into the signed payload (the customer cannot move
@@ -75,15 +99,39 @@ def build_payload(
     across the UI once the key is installed (header, workspace labels, reports,
     License page — resolved in ONE place server-side, see
     ``app.org_display_name``). It defaults to ``customer`` when not given, so the
-    display name is always populated and sensible; the field is purely additive
-    (structure otherwise unchanged), and keys issued before the addendum simply
-    omit it — the resolver falls back to ``customer`` for those (AC15/AC16).
+    display name is always populated and sensible.
+
+    Payload v2 (R-1.9.1-L1 / T1) adds four fields, purely additively — every
+    existing field above is unchanged:
+
+      * ``payload_version`` — ``2``. Lets the verifier reject v1-shaped payloads
+        (no ``org_id`` / ``kid``) as ``unsupported_payload_version`` (T4).
+      * ``org_id`` — the installation org this license is bound to. A key whose
+        ``org_id`` does not match the installation org validates as
+        ``org_mismatch`` (T2). Defaults to ``customer`` when not given so the
+        field is always populated for a v2 key.
+      * ``kid`` — key identifier selecting which trusted public key verifies this
+        license, so signing-key rotation is a config change, not a binary
+        update (T3).
+      * ``deployment_type`` — ``saas`` | ``customer_hosted``. Parsed and exposed
+        in license status, and (in L2) stamped into run/telemetry context (AC5).
+      * ``report_key`` — the per-installation usage-report signing key, consumed
+        by R-1.9.1-L2. Opaque to this scheme (carried, never interpreted here).
     """
     issued = today or datetime.date.today()
     expires = issued + datetime.timedelta(days=term_months * 30)
+    if deployment_type not in DEPLOYMENT_TYPES:
+        raise ValueError(
+            f"deployment_type must be one of {DEPLOYMENT_TYPES}, got {deployment_type!r}"
+        )
     return {
+        "payload_version": PAYLOAD_VERSION,
         "customer": customer,
         "org_name": org_name or customer,
+        "org_id": org_id or customer,
+        "kid": kid,
+        "deployment_type": deployment_type,
+        "report_key": report_key,
         "license_id": license_id,
         "issued_at": issued.isoformat(),
         "expires_at": expires.isoformat(),
@@ -134,6 +182,10 @@ def generate(
     grace_days: int = 14,
     max_systems: int | None = None,
     org_name: str | None = None,
+    org_id: str | None = None,
+    kid: str = DEFAULT_KID,
+    deployment_type: str = DEFAULT_DEPLOYMENT_TYPE,
+    report_key: str | None = None,
 ) -> str:
     """End-to-end: build payload, load the private key, return the signed key."""
     payload = build_payload(
@@ -143,6 +195,10 @@ def generate(
         grace_days,
         max_systems=max_systems,
         org_name=org_name,
+        org_id=org_id,
+        kid=kid,
+        deployment_type=deployment_type,
+        report_key=report_key,
     )
     private_key = load_private_key(private_key_pem_path)
     return sign_payload(payload, private_key)
@@ -175,6 +231,41 @@ def main(argv=None) -> int:
         ),
     )
     parser.add_argument(
+        "--org-id",
+        default=None,
+        help=(
+            "R-1.9.1-L1 (payload v2): the installation org this license is bound "
+            "to. A key whose org_id does not match the installation org is rejected "
+            "as org_mismatch. Defaults to --customer when omitted."
+        ),
+    )
+    parser.add_argument(
+        "--kid",
+        default=DEFAULT_KID,
+        help=(
+            "R-1.9.1-L1 (payload v2): key identifier selecting which trusted public "
+            f"key verifies this license. Defaults to {DEFAULT_KID!r}."
+        ),
+    )
+    parser.add_argument(
+        "--deployment-type",
+        default=DEFAULT_DEPLOYMENT_TYPE,
+        choices=DEPLOYMENT_TYPES,
+        help=(
+            "R-1.9.1-L1 (payload v2): deployment topology (saas | customer_hosted). "
+            "Parsed and exposed in license status. Defaults to "
+            f"{DEFAULT_DEPLOYMENT_TYPE!r}."
+        ),
+    )
+    parser.add_argument(
+        "--report-key",
+        default=None,
+        help=(
+            "R-1.9.1-L1 (payload v2): per-installation usage-report signing key, "
+            "consumed by R-1.9.1-L2. Opaque here; carried in the signed payload."
+        ),
+    )
+    parser.add_argument(
         "--private-key",
         default=DEFAULT_PRIVATE_KEY,
         help="Path to the CloudFulcrum private key PEM (git-ignored / secrets manager).",
@@ -198,8 +289,12 @@ def main(argv=None) -> int:
             args.grace_days,
             args.max_systems,
             args.org_name,
+            args.org_id,
+            args.kid,
+            args.deployment_type,
+            args.report_key,
         )
-    except (OSError, RuntimeError) as exc:
+    except (OSError, RuntimeError, ValueError) as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 1
 

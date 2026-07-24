@@ -1,6 +1,8 @@
 """Regression tests for enterprise_applications -> dev integration fixes."""
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 
 def _db_signal_payload(connector_id: str) -> dict:
     return {
@@ -42,7 +44,9 @@ def _patch_runner_side_effects(monkeypatch, runner):
     monkeypatch.setattr(
         runner,
         "_snapshot_detector_evaluations",
-        lambda **kwargs: None,
+        # R18-C2 pack provenance consumes the snapshot's documented completion
+        # timestamp. Keep this side-effect stub aligned with that return contract.
+        lambda **kwargs: datetime(2026, 7, 14, tzinfo=timezone.utc),
     )
     try:
         import app.entity_extractor as entity_extractor

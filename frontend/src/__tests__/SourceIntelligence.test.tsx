@@ -161,8 +161,9 @@ describe('SourceIntelligencePage v1.3 — T41-4', () => {
     renderPage();
     expect(screen.getByTestId('page-title').textContent).toBe('Source Intelligence');
     expect(screen.getByText(/How AgentIQ understood your connected sources/)).toBeTruthy();
-    expect(screen.getByText('Loading Source Intelligence')).toBeTruthy();
-    expect(screen.getByText(/Reading source mappings/)).toBeTruthy();
+    // Loading now shows a layout-shaped skeleton (labelled for a11y) rather than a
+    // centered spinner panel, so the heading/subtext stay put with no layout shift.
+    expect(screen.getByLabelText('Loading Source Intelligence')).toBeTruthy();
   });
 
   it('SI2: three stat cards render with correct labels', () => {

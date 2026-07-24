@@ -102,6 +102,8 @@ class JavaAppIngestor(OperationalChangeIngestor):
     connector_id = "java_app"
     source_system = "java_app"
     reports_deletes = False
+    #: Human-facing name for a fail-closed credential-miss health record (AC1).
+    health_system = "Java Application"
 
     # ── Collection hooks ─────────────────────────────────────────────────────
     def _load_targets(self, org_id: str) -> List[JavaAppTarget]:

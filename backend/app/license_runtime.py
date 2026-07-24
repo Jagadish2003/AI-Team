@@ -185,7 +185,11 @@ def evaluate_license(
             if emit:
                 record_event(
                     "license.clock_anomaly",
-                    {"last_seen": str(last_seen), "now": str(today)},
+                    # org_id threaded for the same reason as the status events
+                    # below: this path also runs from the background startup /
+                    # periodic sweeps, where there is no request context to
+                    # attribute the event from.
+                    {"org_id": org_id, "last_seen": str(last_seen), "now": str(today)},
                 )
             # Treat as read-only until the clock is consistent again. Do NOT
             # advance last_seen (the clock cannot be trusted right now).
@@ -208,8 +212,13 @@ def evaluate_license(
     if not key_string:
         result = {"status": LicenseStatus.READONLY, "reason": "no_license"}
     else:
-        # 4. Offline validation of the installed key.
-        result = validate_license(key_string, public_key)
+        # 4. Offline validation of the installed key, BOUND to this installation
+        # org (R-1.9.1-L1 / T2, AC1): a key whose payload org_id names a different
+        # org validates as invalid: org_mismatch. The org being evaluated IS the
+        # installation org, so pass it straight through.
+        result = validate_license(
+            key_string, public_key, installation_org_id=org_id
+        )
 
     # 5. Clock was consistent → record today as the org's new baseline. UPDATE-only,
     # so a keyless (row-less) org persists nothing and stays ``no_license``.
@@ -235,6 +244,32 @@ def get_current_license_status(*, org_id: str | None = None, public_key=None) ->
     if org_id is None:
         org_id = _resolve_context_org_id()
     return evaluate_license(org_id=org_id, public_key=public_key, persist=False, emit=False)
+
+
+def get_deployment_type(org_id: str | None = None) -> str | None:
+    """Resolve the ``deployment_type`` of an org's current license, or ``None``.
+
+    R-1.9.1-L1 / T6 (AC5): the single source the run/telemetry context stamps
+    ``deployment_type`` from. The discovery runner threads this onto its
+    ``run.started`` / ``run.completed`` events so L2 billing can record which AI
+    deployment topology (``saas`` | ``customer_hosted``) a run executed under.
+
+    Side-effect-free — reuses :func:`get_current_license_status`, which lifts
+    ``deployment_type`` to the top level of a verified result (T1). Returns
+    ``None`` for every case with no topology to stamp: a keyless / invalid /
+    pre-v2 license (no verified payload), a valid key that carries no
+    ``deployment_type``, or a non-string value. Never raises — a context read
+    must never break a run, so any failure resolves to ``None``.
+    """
+    try:
+        result = get_current_license_status(org_id=org_id)
+    except Exception:  # pragma: no cover — defensive; a context read must not break a run
+        logger.warning(
+            "license: deployment_type read failed for org %s", org_id, exc_info=True
+        )
+        return None
+    deployment_type = result.get("deployment_type")
+    return deployment_type if isinstance(deployment_type, str) else None
 
 
 def persist_validated_status(
@@ -282,10 +317,17 @@ def _emit_status_events(result: dict, *, org_id: str, prev_status: str | None) -
     customer = result.get("customer")
     expires_at = result.get("expires_at")
 
+    # org_id is threaded into every payload: these events are emitted from
+    # BACKGROUND paths (the startup validation sweep and the periodic re-check)
+    # where there is no request context, so without it record_event cannot resolve
+    # a tenant and files them under UNATTRIBUTED — losing the attribution and
+    # logging "event org attribution unresolved" at startup. The org is already
+    # known here (it is what was validated), so pass it.
     if customer is not None and expires_at is not None:
         record_event(
             "license.validated",
             {
+                "org_id": org_id,
                 "customer": customer,
                 "status": status,
                 "expires_at": expires_at,
@@ -296,12 +338,12 @@ def _emit_status_events(result: dict, *, org_id: str, prev_status: str | None) -
             if status == LicenseStatus.GRACE:
                 record_event(
                     "license.entered_grace",
-                    {"customer": customer, "expires_at": expires_at},
+                    {"org_id": org_id, "customer": customer, "expires_at": expires_at},
                 )
             elif status == LicenseStatus.READONLY:
                 record_event(
                     "license.entered_readonly",
-                    {"customer": customer, "expires_at": expires_at},
+                    {"org_id": org_id, "customer": customer, "expires_at": expires_at},
                 )
 
 

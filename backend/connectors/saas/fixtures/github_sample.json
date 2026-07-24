@@ -21,5 +21,22 @@
   },
   "connector_id": "github",
   "org_id": "",
-  "run_id": ""
+  "run_id": "",
+  "selectable_repos": [
+    {
+      "id": "acme/web-app",
+      "name": "web-app",
+      "owner": "acme"
+    },
+    {
+      "id": "acme/api",
+      "name": "api",
+      "owner": "acme"
+    },
+    {
+      "id": "acme/infra",
+      "name": "infra",
+      "owner": "acme"
+    }
+  ]
 }

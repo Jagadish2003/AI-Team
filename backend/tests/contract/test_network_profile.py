@@ -164,3 +164,44 @@ def test_endpoint_reports_no_public_inbound(client):
     assert body["connectors"]["salesforce"]["has_outbound_only_mode"] is True
     assert body["connectors"]["servicenow"]["has_outbound_only_mode"] is True
     assert body["connectors"]["teams"]["has_outbound_only_mode"] is True
+
+
+# ---------------------------------------------------------------------------
+# AC4 enforced server-side on the authorization-code initiation endpoint
+# ---------------------------------------------------------------------------
+
+
+def test_auth_url_blocked_for_outbound_only_connector_in_no_public_inbound(client):
+    # AC4 (server-side): the UI hides the Connect button, but a direct API caller
+    # must ALSO be stopped from STARTING an authorization_code flow that cannot
+    # complete (the callback can never arrive). Salesforce has an outbound-only
+    # mode (jwt_bearer), so the flow is refused.
+    with patch.dict(os.environ, {"NETWORK_PROFILE": "no_public_inbound"}):
+        resp = client.get(
+            "/api/connectors/salesforce/auth-url", headers=_AUTH_HEADERS
+        )
+    assert resp.status_code == 409, resp.text
+    assert "outbound" in resp.json()["detail"].lower()
+
+
+def test_auth_url_allowed_for_authorization_code_only_connector_in_no_public_inbound(
+    client,
+):
+    # GitHub has NO outbound-only mode — AC4 only blocks where one EXISTS. The
+    # flow is still offered (the scoped-inbound package, T6, is the fallback).
+    with patch.dict(os.environ, {"NETWORK_PROFILE": "no_public_inbound"}):
+        resp = client.get("/api/connectors/github/auth-url", headers=_AUTH_HEADERS)
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["connector_id"] == "github"
+
+
+def test_auth_url_allowed_for_outbound_only_connector_in_standard_profile(client):
+    # In a standard deployment the guard never fires — Salesforce authorization_code
+    # remains available.
+    with patch.dict(os.environ, {}, clear=False):
+        os.environ.pop("NETWORK_PROFILE", None)
+        resp = client.get(
+            "/api/connectors/salesforce/auth-url", headers=_AUTH_HEADERS
+        )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["connector_id"] == "salesforce"

@@ -71,7 +71,7 @@ export default function OpportunityMapPage() {
           <RunRequiredEmptyState
             pageTitle="Opportunity Map"
             pageDescription="Portfolio view: browse, compare, shortlist. Open Analyst Review only when you're ready to govern decisions."
-            onStart={() => nav('/discovery-run')}
+            onStart={() => nav('/integration-hub')}
           />
         </div>
       </div>

@@ -122,6 +122,85 @@ def get_connector_instance_url(org_id: str, connector_id: str) -> Optional[str]:
         return None
 
 
+# Substrings that mark an ingestion failure as an AUTHENTICATION failure (an
+# invalid/revoked/expired session) rather than a transient/network error. Kept
+# lowercase; matched case-insensitively against the exception text.
+_AUTH_FAILURE_MARKERS = (
+    "http 401",
+    "401:",
+    "invalid_session_id",
+    "invalid session",
+    "session expired",
+    "unauthorized",
+    "invalid_grant",
+    "token has expired",
+    "access token is invalid",
+)
+
+
+def flag_connector_auth_failure(org_id: str, connector_id: str, error: object) -> bool:
+    """Flag a connector for RECONNECT when a live call failed with an auth error.
+
+    When a connector's ingestion fails with a 401 / invalid-session / unauthorized
+    error, the stored OAuth token is no longer usable even if its recorded expiry
+    is still in the future (the provider revoked the session server-side, e.g.
+    Salesforce ``INVALID_SESSION_ID``). Marking the credential ``refresh_failed``
+    makes ``GET /api/connectors/{id}/token-status`` return ``refresh_failed``, so
+    the Integration Hub tile switches its button to **Reconnect** — telling the
+    user exactly when to re-authenticate.
+
+    Only flags genuine AUTH failures (see ``_AUTH_FAILURE_MARKERS``); a transient
+    or network error is left alone so a connector is never wrongly told to
+    reconnect. Best-effort and never raises — a flagging failure must not affect
+    the run. Returns True when the connector was flagged.
+    """
+    try:
+        message = str(error).lower()
+    except Exception:
+        return False
+    if not any(marker in message for marker in _AUTH_FAILURE_MARKERS):
+        return False
+    try:
+        from app.auth.vault import _mark_refresh_failed
+
+        _mark_refresh_failed(org_id, connector_id)
+        logger.warning(
+            "connector %s hit an authentication failure for org %s — flagged for "
+            "reconnect (token-status will report 'refresh_failed').",
+            connector_id,
+            org_id,
+        )
+        return True
+    except Exception:  # pragma: no cover — best-effort; never break the run
+        logger.debug(
+            "Failed to flag auth failure for connector %s (org=%s)",
+            connector_id,
+            org_id,
+            exc_info=True,
+        )
+        return False
+
+
+def clear_connector_auth_failure(org_id: str, connector_id: str) -> None:
+    """Clear a connector's reconnect flag after a SUCCESSFUL live call.
+
+    The inverse of :func:`flag_connector_auth_failure`: once a connector ingests
+    cleanly, any stale ``refresh_failed`` flag is removed so token-status returns
+    to ``connected`` and the tile shows 'View data' again without a reconnect.
+    Best-effort and never raises. Only touches an already-flagged row."""
+    try:
+        from app.auth.vault import _clear_refresh_failed
+
+        _clear_refresh_failed(org_id, connector_id)
+    except Exception:  # pragma: no cover — best-effort; never break the run
+        logger.debug(
+            "Failed to clear auth-failure flag for connector %s (org=%s)",
+            connector_id,
+            org_id,
+            exc_info=True,
+        )
+
+
 def capture_instance_url(
     connector_id: str,
     token_response: Optional[dict],
@@ -295,8 +374,10 @@ def _derive_oauth_instance_url(connector_id: str, access_token: str) -> Optional
 
       * ServiceNow — the instance host is fully determined by the OAuth config
         (``SERVICENOW_INSTANCE`` → token_url), so the base is derived from it.
-      * Jira Cloud — the api.atlassian.com gateway base depends on the token's
-        cloudId, discovered live via the accessible-resources endpoint.
+      * Jira Cloud / Confluence Cloud — the api.atlassian.com gateway base depends
+        on the token's cloudId, discovered live via the accessible-resources
+        endpoint (``/ex/jira/{cloudId}`` and ``/ex/confluence/{cloudId}``
+        respectively).
       * Salesforce — the instance_url always rides in the token response and is
         captured at connect, so there is no static fallback here.
 
@@ -312,6 +393,8 @@ def _derive_oauth_instance_url(connector_id: str, access_token: str) -> Optional
             )
         if connector_id == "jira":
             return _run_coro(fetch_jira_gateway_base(access_token))
+        if connector_id == "confluence":
+            return _run_coro(fetch_confluence_gateway_base(access_token))
     except Exception:
         logger.exception("OAuth instance-URL derivation failed for %s", connector_id)
     return None

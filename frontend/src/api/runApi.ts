@@ -22,8 +22,12 @@ export function triggerCompute(runId: string): Promise<{ ok: boolean }> {
   return apiPost<{ ok: boolean }>(`/api/runs/${runId}/compute`, {});
 }
 
-export function fetchRunStatus(runId: string): Promise<{ status: string }> {
-  return apiGet<{ status: string }>(`/api/runs/${runId}/status`);
+export function fetchRunStatus(
+  runId: string,
+): Promise<{ status: string; current_step?: string | null; failed_steps?: string[] }> {
+  return apiGet<{ status: string; current_step?: string | null; failed_steps?: string[] }>(
+    `/api/runs/${runId}/status`,
+  );
 }
 
 export function fetchEvidence(runId: string): Promise<EvidenceReview[]> {

@@ -1,11 +1,16 @@
 --
--- AgentIQ — consolidated provisioning script (schema + seed), head 0023.
+-- AgentIQ — consolidated provisioning script (schema + seed), head 0025.
 --
 -- Single self-contained replacement for the former 01_schema.sql / 02_seed.sql /
--- 03_lazy_runtime_tables.sql. Creates the agentiq role, all 27 tables (incl.
--- org_licenses, ingestion_checkpoints, opportunity_instances),
--- indexes/constraints/rules, seeds the core reference rows, and stamps
--- alembic_version to head 0023.
+-- 03_lazy_runtime_tables.sql. Creates the agentiq role, all tables (incl.
+-- org_licenses, ingestion_checkpoints, opportunity_instances, and the R18-B1/B2
+-- pgvector-backed retrieval_chunks + retrieval_refresh_queue),
+-- indexes/constraints/rules, seeds the core reference rows, grants the app login
+-- role(s) privileges on the schema, and stamps alembic_version to head 0025.
+--
+-- Requires the pgvector extension for the retrieval_chunks vector column
+-- (CREATE EXTENSION below); the provisioning connection must be permitted to
+-- create it — on managed PostgreSQL this is typically a one-time grant.
 --
 -- Run connected to the TARGET database (which must already exist), as a
 -- superuser or the schema owner:
@@ -985,6 +990,129 @@ CREATE RULE "trg_telemetry_no_update" AS
 
 
 --
+-- R18-B1 / R18-B2 — retrieval substrate + freshness (migrations 0024, 0025).
+--
+-- SOURCE OF TRUTH: database/models/retrieval.py (ALL_RETRIEVAL_DDL) and
+-- database/models/retrieval_freshness.py (ALL_FRESHNESS_DDL), applied by
+-- migrations 0024/0025 and the runtime ensure_retrieval_store() /
+-- ensure_freshness_schema() helpers. This pure-SQL provisioning path mirrors those
+-- and MUST be kept in sync with them — if you change the schema there (columns,
+-- types, defaults, indexes, CHECK values), make the identical change here. The
+-- retrieval_chunks table below is the FINAL state after BOTH migrations: it
+-- includes the R18-B2 freshness columns (is_stale / stale_at) that 0025 adds.
+--
+-- The embedding column uses the pgvector "vector" type; the extension must exist
+-- before the table is created. IF NOT EXISTS makes the extension create idempotent.
+--
+
+CREATE EXTENSION IF NOT EXISTS "vector" WITH SCHEMA "public";
+
+
+--
+-- Name: retrieval_chunks; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE "public"."retrieval_chunks" (
+    "chunk_id" character varying(36) NOT NULL,
+    "org_id" character varying(64) NOT NULL,
+    "content" "text" NOT NULL,
+    "content_hash" character varying(64) NOT NULL,
+    "content_type" character varying(32) NOT NULL,
+    "source_system" character varying(64) NOT NULL,
+    "source_artifact" character varying(1024) NOT NULL,
+    "source_timestamp" timestamp without time zone,
+    "chunk_position" integer DEFAULT 0 NOT NULL,
+    "embedding" "public"."vector",
+    "embedding_model" character varying(128),
+    "embedding_model_version" character varying(64),
+    "embedded_at" timestamp without time zone,
+    "provenance" "text",
+    "created_at" timestamp without time zone NOT NULL,
+    "updated_at" timestamp without time zone NOT NULL,
+    "is_stale" boolean DEFAULT false NOT NULL,
+    "stale_at" timestamp without time zone,
+    CONSTRAINT "retrieval_chunks_content_type_check" CHECK ((("content_type")::"text" = ANY ((ARRAY['code'::character varying, 'conversation'::character varying, 'prose'::character varying])::"text"[])))
+);
+
+
+--
+-- Name: retrieval_refresh_queue; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE "public"."retrieval_refresh_queue" (
+    "id" character varying(36) NOT NULL,
+    "org_id" character varying(64) NOT NULL,
+    "source_system" character varying(64) NOT NULL,
+    "source_artifact" character varying(512) NOT NULL,
+    "change_kind" character varying(16) NOT NULL,
+    "status" character varying(16) DEFAULT 'pending'::character varying NOT NULL,
+    "attempts" integer DEFAULT 0 NOT NULL,
+    "enqueued_at" timestamp without time zone NOT NULL,
+    "updated_at" timestamp without time zone NOT NULL,
+    "last_error" "text",
+    CONSTRAINT "retrieval_refresh_queue_status_check" CHECK ((("status")::"text" = ANY ((ARRAY['done'::character varying, 'failed'::character varying, 'in_progress'::character varying, 'pending'::character varying])::"text"[])))
+);
+
+
+--
+-- Name: retrieval_chunks retrieval_chunks_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY "public"."retrieval_chunks"
+    ADD CONSTRAINT "retrieval_chunks_pkey" PRIMARY KEY ("chunk_id");
+
+
+--
+-- Name: retrieval_refresh_queue retrieval_refresh_queue_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY "public"."retrieval_refresh_queue"
+    ADD CONSTRAINT "retrieval_refresh_queue_pkey" PRIMARY KEY ("id");
+
+
+--
+-- Name: idx_retrieval_chunks_org_source; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX "idx_retrieval_chunks_org_source" ON "public"."retrieval_chunks" USING "btree" ("org_id", "source_system");
+
+
+--
+-- Name: idx_retrieval_chunks_org_hash; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX "idx_retrieval_chunks_org_hash" ON "public"."retrieval_chunks" USING "btree" ("org_id", "content_hash");
+
+
+--
+-- Name: idx_retrieval_chunks_org_artifact; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX "idx_retrieval_chunks_org_artifact" ON "public"."retrieval_chunks" USING "btree" ("org_id", "source_artifact");
+
+
+--
+-- Name: idx_retrieval_chunks_org_stale; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX "idx_retrieval_chunks_org_stale" ON "public"."retrieval_chunks" USING "btree" ("org_id", "is_stale");
+
+
+--
+-- Name: uq_refresh_queue_org_artifact; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX "uq_refresh_queue_org_artifact" ON "public"."retrieval_refresh_queue" USING "btree" ("org_id", "source_system", "source_artifact");
+
+
+--
+-- Name: idx_refresh_queue_org_status; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX "idx_refresh_queue_org_status" ON "public"."retrieval_refresh_queue" USING "btree" ("org_id", "status");
+
+
+--
 -- PostgreSQL database dump complete
 --
 
@@ -1050,4 +1178,40 @@ INSERT INTO "public"."permissions" ("id", "payload") VALUES ('p_sn_inc', '{"id":
 
 -- uploads (0 rows)
 
-INSERT INTO "public"."alembic_version" ("version_num") VALUES ('0023') ON CONFLICT DO NOTHING;
+INSERT INTO "public"."alembic_version" ("version_num") VALUES ('0025') ON CONFLICT DO NOTHING;
+
+
+--
+-- Application-role grants.
+--
+-- provision.sql builds the schema as the role that RUNS it (a superuser such as
+-- 'postgres', or the schema owner 'agentiq' set above), so THAT role owns the
+-- tables and implicitly has every privilege. But an application may log in as a
+-- SEPARATE role from the tables' owner — this deployment's app logs in as
+-- 'aiqdevusr' (see DEV_DATABASE_URL / PROD_DATABASE_URL in .env), which owns
+-- nothing here and would otherwise hit "permission denied for table ..." on its
+-- first write (e.g. seed_owner -> workspace_members).
+--
+-- Grant every app login role this deployment uses USAGE/CREATE on the schema and
+-- full privileges on all CURRENT and FUTURE objects. Guarded per role, so it is a
+-- safe no-op where a given role does not exist. To support another app role, add
+-- it to the array below. Pure SQL (no psql \set), so this runs identically via
+-- `psql -f` and via a psycopg2 loader.
+--
+DO
+$$
+DECLARE
+    r text;
+    app_roles text[] := ARRAY['agentiq', 'aiqdevusr'];
+BEGIN
+    FOREACH r IN ARRAY app_roles LOOP
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = r) THEN
+            EXECUTE format('GRANT USAGE, CREATE ON SCHEMA public TO %I', r);
+            EXECUTE format('GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO %I', r);
+            EXECUTE format('GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO %I', r);
+            EXECUTE format('ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO %I', r);
+            EXECUTE format('ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO %I', r);
+        END IF;
+    END LOOP;
+END
+$$;

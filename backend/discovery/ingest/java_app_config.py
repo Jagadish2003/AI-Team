@@ -36,9 +36,11 @@ configuration, in logs, or in code. The configuration carries only a
 ``credential_ref`` naming where the secret lives; :func:`resolve_secret` reads
 the decrypted value from the per-run credential context (DB-sourced vault token,
 isolated per org/run — the same mechanism the SaaS connectors use, see
-``discovery.ingest.get_live_connector``) and falls back to an env var only for
-CLI/standalone use. The resolved secret is returned to the caller and is never
-attached to the target, logged, or echoed in a ``repr``.
+``discovery.ingest.get_live_connector``). Resolution is **vault-only and
+fail-closed** (R191-H1 / T1): a target whose credential is missing from the vault
+raises rather than reading the process environment. The resolved secret is
+returned to the caller and is never attached to the target, logged, or echoed in
+a ``repr``.
 
 To make the "no secrets in config" rule enforceable rather than merely
 documented, :func:`load_targets` REJECTS any target entry that carries an inline
@@ -77,10 +79,6 @@ FIXTURE_PATH = Path(__file__).parent / "fixtures" / "java_app_sample.json"
 
 #: Env var (live mode) holding a JSON array of target configs for the deployment.
 _TARGETS_ENV = "JAVA_APP_TARGETS"
-
-#: Env var (CLI/standalone) holding the credential for the default ``java_app``
-#: vault key. A custom ``credential_ref`` namespaces its own ``{REF}_TOKEN``.
-_DEFAULT_ENV_TOKEN_KEY = "JAVA_APP_TOKEN"
 
 #: Default vault connector key used when a target does not name its own
 #: ``credential_ref``. Mirrors the connector_id of the ingestor.
@@ -234,27 +232,31 @@ def resolve_secret(
     connector_lookup: Callable[[str], Optional[Dict[str, str]]] = get_live_connector,
     env: Optional[Dict[str, str]] = None,
 ) -> Optional[str]:
-    """Resolve a target's credential from the vault — never from config or logs (AC3).
+    """Resolve a target's credential from the vault — vault only, fail-closed (AC3).
 
-    Resolution mirrors the SaaS connectors: the per-run credential context first
-    (a DB-sourced vault token, isolated per org/run via ``contextvars``), then an
-    env var as a CLI/standalone fallback. Returns ``None`` when the target needs
-    no credential (``credential_ref`` is None) or none is configured — the caller
-    decides whether that is acceptable (an internal unauthenticated Actuator) or a
-    skip.
+    Resolution mirrors the SaaS connectors: the credential comes from the per-run
+    credential context ONLY (a DB-sourced vault token, isolated per org/run via
+    ``contextvars``). There is **no env fallback** (R191-H1 / T1 — F1 fix): a target
+    that declares a ``credential_ref`` with no vault token raises
+    :class:`operational_config.OperationalCredentialMissing`, and the ingestor
+    fail-closes for that target (it does not run; the run continues for other
+    targets; the miss surfaces in connector health). Returns ``None`` only when the
+    target needs no credential (``credential_ref`` is None — an internal
+    unauthenticated Actuator).
 
     The returned secret is handed straight to the HTTP/log client and is never
-    attached to the target, logged, or echoed. ``connector_lookup``/``env`` are
-    injectable so tests can exercise resolution without a live vault. The actual
-    vault-first/env-fallback resolution is the shared
+    attached to the target, logged, or echoed. ``connector_lookup`` is injectable so
+    tests can exercise resolution without a live vault. The actual vault-only,
+    fail-closed resolution is the shared
     :func:`operational_config.resolve_target_secret` (identical for Java and .NET).
+
+    ``env`` is accepted for backward-compatible call signatures but is intentionally
+    **never read** — there is no environment credential path (R191-H1 / T1).
     """
+    _ = env  # no environment credential path — accepted for signature compatibility
     return resolve_target_secret(
         org_id,
         app_id=target.app_id,
         credential_ref=target.credential_ref,
-        default_credential_ref=DEFAULT_CREDENTIAL_REF,
-        default_env_token_key=_DEFAULT_ENV_TOKEN_KEY,
         connector_lookup=connector_lookup,
-        env=env,
     )

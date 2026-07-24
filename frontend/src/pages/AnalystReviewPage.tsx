@@ -38,7 +38,7 @@ export default function AnalystReviewPage() {
           <RunRequiredEmptyState
             pageTitle="Analyst Review"
             pageDescription="Deep-dive trust layer: validate and override AI rationale per opportunity before executive reporting."
-            onStart={() => nav('/discovery-run')}
+            onStart={() => nav('/integration-hub')}
           />
         </div>
       </div>
