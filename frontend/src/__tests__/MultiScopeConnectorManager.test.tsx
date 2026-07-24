@@ -245,3 +245,72 @@ describe('MultiScopeConnectorManager — RBAC (T6-AC2/AC3)', () => {
     expect(screen.getByRole('button', { name: /replace credentials/i })).toBeEnabled();
   });
 });
+
+// ── Dynamic connection status (badge driven by backend state) ───────────────
+describe('MultiScopeConnectorManager — dynamic connection status', () => {
+  it('shows Not Connected before any credentials are configured', async () => {
+    render(<MultiScopeConnectorManager connector={connector('aws_events') as any} />);
+    await waitFor(() => expect(mocks.fetchCloudScopes).toHaveBeenCalled());
+    expect(screen.getByText('Not connected')).toBeInTheDocument();
+    // Never a premature green "Connected" badge.
+    expect(screen.queryByText('Connected')).not.toBeInTheDocument();
+  });
+
+  it('does NOT infer Connected from pre-existing scopes when the connector is not configured', async () => {
+    // Regression guard: pinned scopes are data, not a connection signal.
+    mocks.fetchCloudScopes.mockResolvedValue({
+      ...EMPTY_SCOPES,
+      scopes: [{ scope_id: '111111111111', kind: 'aws_account', status: 'ok' }],
+    });
+    render(<MultiScopeConnectorManager connector={connector('aws_events') as any} />);
+    await waitFor(() => expect(mocks.fetchCloudScopes).toHaveBeenCalled());
+    expect(screen.getByText('Not connected')).toBeInTheDocument();
+    expect(screen.queryByText('Connected')).not.toBeInTheDocument();
+  });
+
+  it('shows a Connecting… state while the create request is in flight, then Connected', async () => {
+    let resolveCreate: (v: unknown) => void = () => {};
+    mocks.createCloudConnection.mockReturnValue(
+      new Promise((res) => {
+        resolveCreate = res;
+      }),
+    );
+    render(<MultiScopeConnectorManager connector={connector('aws_events') as any} />);
+    await waitFor(() => expect(mocks.fetchCloudScopes).toHaveBeenCalled());
+    fireEvent.change(screen.getByLabelText('Hub access key ID'), { target: { value: 'AKIA' } });
+    fireEvent.change(screen.getByLabelText('Hub secret access key'), { target: { value: 'shh' } });
+    fireEvent.click(screen.getByRole('button', { name: /save & connect/i }));
+
+    // In-flight: connecting badge + disabled button (no repeat submissions), no green yet.
+    // "Connecting…" appears in both the header badge and the submit button.
+    expect((await screen.findAllByText(/Connecting…/)).length).toBeGreaterThanOrEqual(1);
+    expect(screen.queryByText('Connected')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /connecting…/i })).toBeDisabled();
+
+    // Resolve → backend confirmed → green Connected.
+    resolveCreate({ connector_id: 'aws_events', provider: 'aws', configured: true, status: 'connected', scope_count: 0 });
+    expect(await screen.findByText('Connected')).toBeInTheDocument();
+  });
+
+  it('stays Not Connected and surfaces the backend error when create fails', async () => {
+    const { ApiError } = await import('../lib/apiClient');
+    mocks.createCloudConnection.mockRejectedValue(
+      new ApiError('bad', 400, { detail: 'AWS rejected the credentials.' }),
+    );
+    render(<MultiScopeConnectorManager connector={connector('aws_events') as any} />);
+    await waitFor(() => expect(mocks.fetchCloudScopes).toHaveBeenCalled());
+    fireEvent.change(screen.getByLabelText('Hub access key ID'), { target: { value: 'AKIA' } });
+    fireEvent.change(screen.getByLabelText('Hub secret access key'), { target: { value: 'bad' } });
+    fireEvent.click(screen.getByRole('button', { name: /save & connect/i }));
+
+    expect(await screen.findByText('AWS rejected the credentials.')).toBeInTheDocument();
+    expect(screen.getByText('Not connected')).toBeInTheDocument();
+    expect(screen.queryByText('Connected')).not.toBeInTheDocument();
+  });
+
+  it('renders the provider-branded icon (not the generic fallback)', async () => {
+    const { connectorIcons } = await import('../components/integrations/ConnectorIcons');
+    expect(connectorIcons['AWS Events']).toBeTruthy();
+    expect(connectorIcons['Azure Events']).toBeTruthy();
+  });
+});

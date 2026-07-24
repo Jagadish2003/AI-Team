@@ -52,6 +52,56 @@ function ServiceNowConnectorIcon() {
   );
 }
 
+// MSP-B13 (AT-748): provider-branded, theme-aware (currentColor) marks for the
+// AWS/Azure Event tiles — a monochrome line style consistent with the custom
+// ServiceNow icon above and the lucide line icons in this library. No external
+// image URLs; the mark inherits the connector-icon accent colour.
+
+/** AWS — the cloud + "smile" arrow, drawn as a single-colour line mark. */
+function AwsConnectorIcon() {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      aria-hidden="true"
+      className="connector-icon h-[18px] w-[18px]"
+      fill="none"
+      stroke="currentColor"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      strokeWidth="2"
+    >
+      {/* cloud */}
+      <path d="M7.5 12.5a2.6 2.6 0 0 1 .3-5.2 4 4 0 0 1 7.7-1 3.1 3.1 0 0 1 1 6.2H8a2.6 2.6 0 0 1-.5 0Z" />
+      {/* smile */}
+      <path d="M4.5 16.4c4.6 2.3 10.4 2.3 15 0" />
+      {/* arrow head on the smile */}
+      <path d="M17.8 15.4 19.7 16.3 18.9 18.2" />
+    </svg>
+  );
+}
+
+/** Azure — the stylised "A" chevron mark, single-colour line. */
+function AzureConnectorIcon() {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      aria-hidden="true"
+      className="connector-icon h-[18px] w-[18px]"
+      fill="none"
+      stroke="currentColor"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      strokeWidth="2"
+    >
+      {/* left face of the A */}
+      <path d="M11 4 4 19h4l4.5-10.5" />
+      {/* right face + base tie of the A */}
+      <path d="M12.2 8 16.5 19H20L13.2 4 12.2 8Z" />
+      <path d="M9.5 15.5h6.2" />
+    </svg>
+  );
+}
+
 export const connectorIcons: Record<string, React.ReactNode> = {
   Salesforce: <CloudCog {...iconProps} />,
   ServiceNow: <ServiceNowConnectorIcon />,
@@ -72,6 +122,9 @@ export const connectorIcons: Record<string, React.ReactNode> = {
   SharePoint: <Share2 {...iconProps} />,
   Notion: <PanelTop {...iconProps} />,
   Slack: <Slack {...iconProps} />,
+
+  'AWS Events': <AwsConnectorIcon />,
+  'Azure Events': <AzureConnectorIcon />,
 
   GitHub: <Github {...iconProps} />,
   GitLab: <Gitlab {...iconProps} />,

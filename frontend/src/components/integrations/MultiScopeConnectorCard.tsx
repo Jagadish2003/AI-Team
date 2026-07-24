@@ -35,6 +35,7 @@ import {
   Clock,
   HelpCircle,
   Lock,
+  Loader2,
   type LucideIcon,
 } from 'lucide-react';
 import Button from '../common/Button';
@@ -190,8 +191,20 @@ function missingRequired(
 
 interface Props {
   config: MultiScopeConnectorConfig;
+  /**
+   * Provider-branded icon for the card header (reuses the Integration Hub's
+   * shared connector-icon registry). Defaults to the generic cloud mark.
+   */
+  icon?: React.ReactNode;
   /** Whether a connection (credential) already exists for this org. */
   connected: boolean;
+  /**
+   * True while a create/connect submission is in flight, so the header can show
+   * a transient "Connecting…" state instead of a premature "Connected" badge.
+   * Optional — the card also tracks its own in-flight save; this lets the parent
+   * reflect connecting state it drives.
+   */
+  connecting?: boolean;
   /** Optional non-secret summary of the stored connection (e.g. masked identity). */
   connectionSummary?: string | null;
   /** The scopes (accounts/subscriptions) pinned under this connection. */
@@ -223,7 +236,9 @@ interface Props {
 
 export default function MultiScopeConnectorCard({
   config,
+  icon,
   connected,
+  connecting = false,
   connectionSummary = null,
   scopes = [],
   candidates = [],
@@ -242,6 +257,10 @@ export default function MultiScopeConnectorCard({
   );
   const [savingCred, setSavingCred] = useState(false);
   const [credError, setCredError] = useState<string | null>(null);
+
+  // Transient connecting state: a save is in flight here, OR the parent signals
+  // one. Drives the header's "Connecting…" badge and blocks a premature green.
+  const isConnecting = !connected && (connecting || savingCred);
 
   // ── Test-connection state (T1-AC3) ────────────────────────────────────────
   const [testing, setTesting] = useState(false);
@@ -357,11 +376,13 @@ export default function MultiScopeConnectorCard({
 
   return (
     <div className="rounded-xl border border-border bg-panel p-5 shadow-sm">
-      {/* Header */}
+      {/* Header. The status badge is driven ONLY by the backend connection state
+          (`connected`) with a transient "Connecting…" while a save is in flight —
+          it never shows green before the backend has confirmed the connection. */}
       <div className="flex items-start justify-between gap-3">
         <div className="flex min-w-0 items-start gap-3">
           <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-accent/20 bg-accent/10 text-accent">
-            <Cloud size={18} />
+            {icon ?? <Cloud size={18} />}
           </span>
           <div className="min-w-0">
             <h3 className="flex items-center gap-2 text-base font-semibold text-text">
@@ -369,6 +390,10 @@ export default function MultiScopeConnectorCard({
               {connected ? (
                 <span className="inline-flex items-center gap-1 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2 py-0.5 text-[11px] font-medium leading-none text-emerald-300">
                   <PlugZap size={11} /> Connected
+                </span>
+              ) : isConnecting ? (
+                <span className="inline-flex items-center gap-1 rounded-full border border-sky-500/30 bg-sky-500/10 px-2 py-0.5 text-[11px] font-medium leading-none text-sky-300">
+                  <Loader2 size={11} className="animate-spin" /> Connecting…
                 </span>
               ) : (
                 <span className="inline-flex items-center gap-1 rounded-full border border-border bg-slate-500/10 px-2 py-0.5 text-[11px] font-medium leading-none text-muted">
@@ -482,7 +507,11 @@ export default function MultiScopeConnectorCard({
               disabled={savingCred || !canManage || !credComplete}
               title={disabledTitle}
             >
-              {savingCred ? 'Saving…' : connected ? 'Replace credentials' : 'Save & connect'}
+              {savingCred
+                ? 'Connecting…'
+                : connected
+                ? 'Replace credentials'
+                : 'Save & connect'}
             </Button>
           </div>
         </form>

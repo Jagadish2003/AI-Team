@@ -20,6 +20,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import MultiScopeConnectorCard from './MultiScopeConnectorCard';
 import { multiScopeConnectorConfig } from './multiScopeConnectors';
+import { connectorIcons } from './ConnectorIcons';
 import { Connector } from '../../types/connector';
 import { ConnectedScope, ScopeHealthStatus, TestConnectionResult } from '../../types/multiScopeConnector';
 import {
@@ -112,12 +113,24 @@ export default function MultiScopeConnectorManager({
   const isAzure = connector.id === 'azure_events';
   const scopeIdKey = isAzure ? 'subscription_id' : 'account_id';
 
-  const [connected, setConnected] = useState<boolean>(
-    connector.status === 'connected' || Boolean(connector.configured),
-  );
+  // Connection state is the BACKEND's, not a local guess: a connection exists
+  // only when the connector record is configured/connected (create sets both).
+  // Derived from the live connector prop so the card badge and the panel header
+  // (which reads connector.status) can never disagree.
+  const backendConnected = connector.status === 'connected' || Boolean(connector.configured);
+  const [connected, setConnected] = useState<boolean>(backendConnected);
+  const [connecting, setConnecting] = useState<boolean>(false);
   const [scopes, setScopes] = useState<ConnectedScope[]>([]);
   const [candidates, setCandidates] = useState<string[]>([]);
   const [loadingScopes, setLoadingScopes] = useState<boolean>(true);
+
+  // Re-sync to the backend state whenever the connector prop refreshes (e.g.
+  // after a create invalidates the connectors cache and the list refetches). This
+  // is what keeps "Connected" honest: if the backend never confirmed the
+  // connection, an optimistic flip is corrected back here.
+  useEffect(() => {
+    setConnected(backendConnected);
+  }, [backendConnected]);
 
   const loadScopes = useCallback(() => {
     let alive = true;
@@ -125,9 +138,12 @@ export default function MultiScopeConnectorManager({
     fetchCloudScopes(connector.id)
       .then((resp) => {
         if (!alive) return;
+        // Pinned scopes + candidates are DATA, not a connection signal — never
+        // infer "connected" from them (that produced a green badge with no
+        // stored credential). Connection state comes only from the backend
+        // connector record above.
         setScopes(resp.scopes.map(toConnectedScope));
         setCandidates(resp.candidates ?? []);
-        if (resp.scopes.length > 0) setConnected(true);
       })
       .catch(() => {
         /* read failure is non-fatal — the onboarding form still renders */
@@ -150,11 +166,17 @@ export default function MultiScopeConnectorManager({
   }, [cache]);
 
   async function handleCreate(values: Record<string, string>) {
+    setConnecting(true);
     try {
       await createCloudConnection(connector.id, values);
     } catch (err) {
+      // Failure: stay Not Connected and surface the backend error in the card.
       throw asCardError(err, 'Could not save the connection.');
+    } finally {
+      setConnecting(false);
     }
+    // Success: the backend persisted + confirmed the connection — reflect it now,
+    // and the cache refetch below re-confirms it from the connector record.
     setConnected(true);
     toast.push(`${config?.name ?? connector.name} connection saved.`, 'success');
     loadScopes();
@@ -218,7 +240,9 @@ export default function MultiScopeConnectorManager({
   return (
     <MultiScopeConnectorCard
       config={config}
+      icon={connectorIcons[connector.name]}
       connected={connected}
+      connecting={connecting}
       scopes={scopes}
       candidates={candidates}
       loadingScopes={loadingScopes}
