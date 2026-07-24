@@ -451,6 +451,30 @@ _INGEST_ALLOWLIST: Dict[Tuple[str, str], str] = {
         "Reads GIT_CONTENT_REPOS (a JSON array of configured repos); "
         "configuration discovery, not a credential."
     ),
+    ("aws_auth.py", "<dynamic:default_hub_resolver>"): (
+        "CLI/standalone hub-credential fallback (MSP-B1): reads the "
+        "AWS_EVENTS_HUB_ACCESS_KEY_ID/_SECRET_ACCESS_KEY/_SESSION_TOKEN "
+        "infrastructure env vars only — a deployment-level hub identity, never a "
+        "per-org connector credential — and only after the vault "
+        "(_vault_static_credential) has been checked first. Documented in "
+        "CLAUDE.md as a non-production, never-in-.env fallback."
+    ),
+    ("azure_events_config.py", "<dynamic:_raw_config_entry>"): (
+        "Reads AZURE_EVENT_CONFIG (a non-secret JSON config of pinned "
+        "subscriptions / environment / access mode, MSP-B2); configuration "
+        "discovery, not a credential — the service principal secret resolves via "
+        "the vault only, and inline secrets in the config are rejected."
+    ),
+    ("servicenow.py", "<dynamic:get_incident_metrics>"): (
+        "Reads SERVICENOW_FIRST_ASSIGNED_FIELD (MSP-B4): the NAME of the "
+        "ServiceNow field holding the first-assigned timestamp — a schema/config "
+        "knob added to the query field list, never a credential."
+    ),
+    ("servicenow.py", "<dynamic:ingest>"): (
+        "Reads SERVICENOW_FIRST_ASSIGNED_FIELD (MSP-B4) on the offline-fixture "
+        "path — the same non-credential field-name config as get_incident_metrics; "
+        "the credential itself resolves via the vault only."
+    ),
 }
 
 
