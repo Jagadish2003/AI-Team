@@ -35,10 +35,15 @@ from app.rbac import seed_owner
 _AUTH_HEADERS = {"Authorization": "Bearer dev-token-change-me"}
 
 # Minimal read-only Confluence scopes — the single source of truth for the
-# assertions below mirrors app/auth/configs.py.
+# assertions below mirrors app/auth/configs.py. These are the GRANULAR v2 scopes
+# (the client speaks the Confluence v2 REST API; the classic read:confluence-*
+# scopes only authorize the deprecated v1 API).
 _EXPECTED_CONFLUENCE_SCOPES = [
-    "read:confluence-content.all",
-    "read:confluence-space.summary",
+    "read:space:confluence",
+    "read:page:confluence",
+    "read:blogpost:confluence",
+    "read:attachment:confluence",
+    "read:label:confluence",
     "offline_access",
 ]
 

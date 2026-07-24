@@ -29,6 +29,7 @@ import { fetchPermissions } from "../services/staticApi";
 import { apiGet } from "../lib/apiClient";
 import { useRunContext } from "./RunContext";
 import { useDiscoveryRunContext } from "./DiscoveryRunContext";
+import { useRevalidateOnFocus } from "../lib/useRevalidate";
 
 export type Tab = "MAPPED" | "UNMAPPED" | "AMBIGUOUS";
 type SortMode = "Confidence High→Low" | "Source A→Z";
@@ -114,6 +115,14 @@ export function NormalizationProvider({
       return;
     }
 
+    // Fetch normalization only once the run has SETTLED (not computing). During a
+    // discovery run only /status is polled (progress + completion detection); the
+    // derived normalization data is fetched a SINGLE time when the run reaches
+    // 100% — this effect re-runs as `computing` flips to false — and again on an
+    // explicit refetch (focus/interval/manual, post-run). This stops the old
+    // every-3-seconds /runs/{id}/normalization poll during a run.
+    if (computing) return;
+
     let alive = true;
     if (fetchCount === 0) setRowsLoading(true);
     setRowsError(null);
@@ -134,18 +143,15 @@ export function NormalizationProvider({
     return () => {
       alive = false;
     };
-  }, [runId, fetchCount]);
+  }, [runId, computing, fetchCount]);
 
-  // Auto-refresh normalization data while the run is computing
-  useEffect(() => {
-    if (!runId || !computing) return;
-
-    const interval = setInterval(() => {
-      refetchRows();
-    }, 3000);
-
-    return () => clearInterval(interval);
-  }, [runId, computing, refetchRows]);
+  // Normalization mappings are SHARED across the org — another analyst's edit
+  // must appear here without a reload. Only for a SETTLED run (never while it is
+  // computing — the completion fetch above covers that); a slow focus/interval
+  // revalidation keeps the post-run view in sync.
+  useRevalidateOnFocus(refetchRows, {
+    enabled: Boolean(runId) && !computing,
+  });
 
   // Confidence — still from mock until Sprint 5 adds an endpoint
   const [confidence] = useState<ConfidenceExplanation>(

@@ -120,8 +120,11 @@ def test_implements_change_based_ingestor(case: ConnectorCase):
     ing = case.make(100)
     assert isinstance(ing, ChangeBasedIngestor)
     assert ing.connector_id == case.connector_id
-    # Timestamp/delta-forward polling cannot surface deletions — declared, not faked.
-    assert ing.reports_deletes is False
+    # R18-A5 (T4): Confluence now detects deletions via a full-inventory id diff
+    # (AT-603, reports_deletes=True); SharePoint content deletion/archival is
+    # deferred to R18-B2, so its content ingestor still declares reports_deletes=False.
+    expected_reports_deletes = case.connector_id == "confluence"
+    assert ing.reports_deletes is expected_reports_deletes
 
 
 # ─────────────────────────────────────────────────────────────────────────────

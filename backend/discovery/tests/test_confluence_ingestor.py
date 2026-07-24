@@ -29,6 +29,7 @@ from discovery.ingest.base import ChangeBasedIngestor, Checkpoint, DeltaBatch
 from discovery.ingest.confluence import (
     ConfluenceIngestor,
     _decode_checkpoint,
+    _decode_known_ids,
     _encode_checkpoint,
 )
 
@@ -66,8 +67,10 @@ def test_confluence_implements_change_based_ingestor():
     ing = ConfluenceIngestor()
     assert isinstance(ing, ChangeBasedIngestor)
     assert ing.connector_id == "confluence"
-    # Last-modified-forward polling cannot surface deletions — declared explicitly.
-    assert ing.reports_deletes is False
+    # R18-A5 / AT-603 (T4): deletion IS detected now — each run diffs the current
+    # page/blogpost id set against the checkpoint's known ids and tombstones any
+    # that disappeared or flipped to archived, so the connector reports deletes.
+    assert ing.reports_deletes is True
 
 
 def test_records_carry_artifact_id_and_change_kind():
@@ -255,9 +258,12 @@ def test_ac3_failure_midload_resumes_without_loss_or_duplication():
 # Opaque checkpoint encoding
 # ─────────────────────────────────────────────────────────────────────────────
 def test_checkpoint_value_is_opaque_but_decodable_by_owner():
+    # Schema v2 (R18-A5 / AT-603): "known_ids" carries the per-space id sets
+    # deletion/archival detection diffs against; a caller that supplies none
+    # (as here) still round-trips the cursor map exactly as before.
     value = _encode_checkpoint({"ENG": "2026-06-10T09:00:00Z", "OPS": "2026-06-10T09:30:00Z"})
     assert value == (
-        '{"spaces":{"ENG":"2026-06-10T09:00:00Z","OPS":"2026-06-10T09:30:00Z"},"v":1}'
+        '{"known_ids":{},"spaces":{"ENG":"2026-06-10T09:00:00Z","OPS":"2026-06-10T09:30:00Z"},"v":2}'
     )
     assert _decode_checkpoint(value) == {
         "ENG": "2026-06-10T09:00:00Z",
@@ -271,6 +277,28 @@ def test_decode_checkpoint_is_tolerant_of_garbage():
     assert _decode_checkpoint("not json") == {}
     assert _decode_checkpoint(json.dumps({"v": 1})) == {}  # no spaces key
     assert _decode_checkpoint(json.dumps({"spaces": []})) == {}  # wrong type
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# known_ids encoding (R18-A5 / AT-603) — deletion/archival diff state
+# ─────────────────────────────────────────────────────────────────────────────
+def test_known_ids_round_trips_through_encode_decode():
+    value = _encode_checkpoint(
+        {"ENG": "2026-06-10T09:00:00Z"}, {"ENG": {"200", "100"}, "OPS": {"500"}}
+    )
+    assert _decode_known_ids(value) == {"ENG": {"100", "200"}, "OPS": {"500"}}
+    # The cursor map is unaffected by the extra known_ids payload.
+    assert _decode_checkpoint(value) == {"ENG": "2026-06-10T09:00:00Z"}
+
+
+def test_decode_known_ids_is_tolerant_of_garbage_and_v1_checkpoints():
+    assert _decode_known_ids(None) == {}
+    assert _decode_known_ids("") == {}
+    assert _decode_known_ids("not json") == {}
+    # A v1 checkpoint (pre-AT-603) has no known_ids key at all — a safe,
+    # self-healing bootstrap rather than a crash.
+    v1_value = json.dumps({"v": 1, "spaces": {"ENG": "2026-06-10T09:00:00Z"}})
+    assert _decode_known_ids(v1_value) == {}
 
 
 def test_round_trip_through_runner_then_back_yields_empty_delta():

@@ -82,6 +82,11 @@ function normalizeConnector(raw: ConnectorPayload): Connector | null {
     products: Array.isArray(raw.products)
       ? raw.products.filter((product): product is string => typeof product === 'string')
       : [],
+    // MSP-B13 (AT-748): catalog-driven multi-scope flag + scope noun, carried
+    // through so the hub can register cloud tiles from the catalog with no
+    // hardcoded id list.
+    multiScope: raw.multiScope === true,
+    scopeNoun: typeof raw.scopeNoun === 'string' ? raw.scopeNoun : undefined,
   };
 }
 
@@ -172,12 +177,16 @@ export function ConnectorProvider({ children }: { children: React.ReactNode }) {
     setSelectedConnectorId(id);
   },[]);
 
-  // Connecting/configuring/disconnecting a connector can change its tile state
-  // AND the network-profile auth-capability gating, so both keys are invalidated
-  // → tiles, the detail panel, and gating all refresh live (no reload).
+  // Connecting/configuring/disconnecting a connector can change its tile state,
+  // the network-profile auth-capability gating, AND the licence systems-used
+  // count ("one connected entity = one system"), so all three keys are
+  // invalidated → tiles, the detail panel, gating, and the usage strip all
+  // refresh live (no reload). The licence key is what keeps the strip correct
+  // now that it reads from the cache rather than re-fetching per connector change.
   const invalidateConnectorState = useCallback(() => {
     cache.invalidate(cacheKeys.connectors);
     cache.invalidate(cacheKeys.networkProfile);
+    cache.invalidate(cacheKeys.license);
   }, [cache]);
 
   const connectConnector = useCallback(async (id: string) => {

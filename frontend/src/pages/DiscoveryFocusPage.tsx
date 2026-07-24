@@ -1,6 +1,8 @@
 import React from 'react';
-import { Info, Loader2, MoveRight } from 'lucide-react';
+import { Info, MoveRight } from 'lucide-react';
 import Button from '../components/common/Button';
+import InlineError from '../components/common/InlineError';
+import { Skeleton } from '../components/common/Skeleton';
 import {
   FocusCard as FocusCardType,
   IndustryListItem,
@@ -107,21 +109,19 @@ interface Props {
 // local data would falsely imply the user is seeing current backend config
 // (R18-C1 T3 / AC10).
 function RegistryRetry({ message, onRetry }: { message: string; onRetry: () => void }) {
-  return (
-    <div className="rounded-lg border border-red-400/30 bg-red-500/10 px-3 py-3 text-xs text-red-200">
-      <p className="mb-2 leading-relaxed">{message}</p>
-      <Button variant="tertiary" onClick={onRetry} className="px-3 py-1 text-xs">
-        Retry
-      </Button>
-    </div>
-  );
+  return <InlineError title="Couldn't load from the registry" message={message} onRetry={onRetry} />;
 }
 
-function RegistryLoading({ label }: { label: string }) {
+// Pill-shaped skeletons that mirror the final PillTag option row, so the section
+// reserves its space and reads as "options loading" instead of flashing a tiny
+// spinner and then popping the pills in (which made selection feel glitchy).
+function SkeletonPills({ label }: { label: string }) {
+  const widths = ['w-24', 'w-32', 'w-20', 'w-28', 'w-24', 'w-32'];
   return (
-    <div className="flex items-center gap-2 text-xs text-muted">
-      <Loader2 size={14} className="animate-spin" aria-hidden="true" />
-      {label}
+    <div className="flex flex-wrap gap-2" aria-busy="true" aria-label={label}>
+      {widths.map((w, i) => (
+        <Skeleton key={i} className={`h-8 ${w} rounded-full`} />
+      ))}
     </div>
   );
 }
@@ -221,7 +221,7 @@ export default function DiscoveryFocusPage({
             operating context.
           </p>
           {registryLoading ? (
-            <RegistryLoading label="Loading industries…" />
+            <SkeletonPills label="Loading industries…" />
           ) : registryError ? (
             <RegistryRetry message={registryError} onRetry={onRetryRegistry} />
           ) : (
@@ -252,7 +252,7 @@ export default function DiscoveryFocusPage({
             a focus for common operating models. Everything stays editable.
           </p>
           {registryLoading ? (
-            <RegistryLoading label="Loading templates…" />
+            <SkeletonPills label="Loading templates…" />
           ) : registryError ? (
             <RegistryRetry message={registryError} onRetry={onRetryRegistry} />
           ) : (

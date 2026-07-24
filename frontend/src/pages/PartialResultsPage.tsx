@@ -60,7 +60,7 @@ export default function PartialResultsPage() {
           <RunRequiredEmptyState
             pageTitle="Evidence Collection"
             pageDescription="Evidence collection acts as the trust layer for discovery, enabling enterprise transparency by clearly showing what evidence was inferred, from which source, and with what level of confidence."
-            onStart={() => nav('/discovery-run')}
+            onStart={() => nav('/integration-hub')}
           />
         </div>
       </div>

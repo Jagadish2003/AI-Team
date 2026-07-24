@@ -16,11 +16,16 @@ export const cacheKeys = {
   connectorsScope: 'connectors',
   connectors: 'connectors',
   connectorProducts: 'connectors/salesforce/products',
+  connectorSpaces: 'connectors/confluence/spaces',
+  connectorSites: 'connectors/sharepoint/sites',
+  connectorRepos: 'connectors/github/repos',
   connectorCredentialStatus: (id: string) => `connectors/${id}/credential-status`,
   connectorJwtStatus: (id: string) => `connectors/${id}/jwt-credentials`,
   connectorTokenStatus: (id: string) => `connectors/${id}/token-status`,
   workspaceCatalog: 'integration-hub/workspace-catalog',
   networkProfile: 'network-profile',
+  /** Stack Builder's industry + template registry (one key — one fetch pair). */
+  stackBuilderRegistry: 'stack-builder/registry',
 
   // ── Runs (run-scoped resources) ──────────────────────────────────────────
   runs: 'runs',
@@ -39,6 +44,15 @@ export const cacheKeys = {
   runOppEnrichment: (runId: string, oppId: string) =>
     `runs/${runId}/opportunities/${oppId}/enrichment`,
   runExecutiveReport: (runId: string) => `runs/${runId}/executive-report`,
+
+  // ── Run Health dashboard ─────────────────────────────────────────────────
+  /** Prefix covering every run-health panel — invalidate to refresh them all. */
+  runHealthScope: 'run-health',
+  runHealthConnectors: 'run-health/connectors',
+  runHealthRuns: 'run-health/runs',
+  runHealthContent: 'run-health/content',
+  runHealthPacks: 'run-health/packs',
+  runHealthAttention: 'run-health/attention',
 
   // ── Workspace / account ──────────────────────────────────────────────────
   license: 'license',

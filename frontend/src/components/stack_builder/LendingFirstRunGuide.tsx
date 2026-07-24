@@ -131,17 +131,17 @@ export default function LendingFirstRunGuide({
     <section
       aria-labelledby="lending-guide-title"
       aria-live={launchState === 'launching' || launchState === 'launch_error' ? 'polite' : undefined}
-      className="overflow-hidden rounded-xl border border-emerald-400/30 bg-gradient-to-br from-emerald-500/10 via-panel to-panel shadow-sm"
+      className="overflow-hidden rounded-xl border border-accent/30 bg-gradient-to-br from-accent/10 via-panel to-panel shadow-sm"
     >
-      <div className="border-b border-emerald-400/20 px-5 py-4">
+      <div className="border-b border-accent/20 px-5 py-4">
         <div className="flex items-start gap-3">
           <StatusIcon
             size={20}
-            className={`mt-0.5 flex-shrink-0 text-emerald-300 ${launchState === 'launching' ? 'animate-spin' : ''}`}
+            className={`mt-0.5 flex-shrink-0 text-accent ${launchState === 'launching' ? 'animate-spin' : ''}`}
             aria-hidden="true"
           />
           <div>
-            <p className="text-xs font-semibold uppercase tracking-[0.14em] text-emerald-300">
+            <p className="text-xs font-semibold uppercase tracking-[0.14em] text-accent">
               First-run guide
             </p>
             <h2 id="lending-guide-title" className="mt-1 text-base font-semibold text-text">
@@ -215,7 +215,7 @@ export default function LendingFirstRunGuide({
               <ul className="mt-2 space-y-1.5 text-xs leading-relaxed text-muted">
                 {template.detector_emphasis.map(detector => (
                   <li key={detector} className="flex gap-2">
-                    <span className="text-emerald-300" aria-hidden="true">-</span>
+                    <span className="text-accent" aria-hidden="true">-</span>
                     <span>{humanise(detector)}</span>
                   </li>
                 ))}

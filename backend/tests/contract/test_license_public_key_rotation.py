@@ -14,6 +14,7 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from app import licensing
+from app.licensing import DEFAULT_KID
 
 
 def _pub_pem(priv: Ed25519PrivateKey) -> str:
@@ -24,6 +25,9 @@ def _pub_pem(priv: Ed25519PrivateKey) -> str:
 
 
 def _mint(priv: Ed25519PrivateKey, *, expires_at: str) -> str:
+    """A v2-shaped key (org_id + default kid) so it clears the T4 version gate;
+    the kid resolves through the LICENSE_PUBLIC_KEY single-key path under
+    DEFAULT_KID, exactly as a real default-kid key does."""
     payload = {
         "customer": "City National Bank",
         "license_id": "cnb-2026-001",
@@ -31,6 +35,8 @@ def _mint(priv: Ed25519PrivateKey, *, expires_at: str) -> str:
         "expires_at": expires_at,
         "term_months": 12,
         "grace_days": 14,
+        "org_id": "org-cnb",
+        "kid": DEFAULT_KID,
         "limits": {"max_workspaces": None, "enabled_packs": None},
     }
     payload_b64 = base64.b64encode(json.dumps(payload, sort_keys=True).encode()).decode()

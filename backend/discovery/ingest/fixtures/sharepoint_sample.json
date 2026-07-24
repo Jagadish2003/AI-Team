@@ -35,5 +35,95 @@
     "S-secret/x-docs": [
       {"id": "x100", "name": "board-minutes.docx", "createdDateTime": "2026-06-10T09:00:00Z", "size": 9000, "file": {"mimeType": "application/vnd.openxmlformats-officedocument.wordprocessingml.document"}, "createdBy": {"user": {"id": "U999", "displayName": "Board"}}, "lastModifiedBy": {"user": {"id": "U999", "displayName": "Board"}}, "parentReference": {"driveId": "x-docs", "path": "/drive/root:"}}
     ]
+  },
+  "_pages_comment": "R18-A5 / AT-601 — page-native content surface (site pages) for the SharePoint content path. Keyed by site_id; only pages on GRANTED sites (S-eng) are ever read — the ungranted site's pages (S-secret) are seeded to prove they are NOT ingested. Each page carries the Microsoft Graph sitePage shape: id/title/webUrl/timestamps plus a canvasLayout whose text webparts hold the body as innerHtml (HTML headings preserved so the substrate's prose policy chunks on structure). These are page-native content, never library binary files (those are the driveItems above → R18-A1 document path).",
+  "pages": {
+    "S-eng": [
+      {
+        "id": "pg-onboarding",
+        "name": "engineering-onboarding.aspx",
+        "title": "Engineering Onboarding",
+        "webUrl": "https://contoso.sharepoint.com/sites/eng/SitePages/engineering-onboarding.aspx",
+        "createdDateTime": "2026-05-01T10:00:00Z",
+        "lastModifiedDateTime": "2026-06-11T08:05:00Z",
+        "lastModifiedBy": {"user": {"id": "U100", "displayName": "Ada"}},
+        "canvasLayout": {
+          "horizontalSections": [
+            {"columns": [{"webparts": [
+              {"@odata.type": "#microsoft.graph.textWebPart", "innerHtml": "<h2>Getting Started</h2><p>New engineers start by cloning the platform monorepo and running the bootstrap script, which provisions a local Postgres database, seeds fixtures, and installs the pinned Python and Node toolchains. Access to the shared staging environment is granted through the platform team: open a request in the onboarding channel and a maintainer approves it within one business day. Read the architecture overview before your first change so you understand how discovery runs, materialization, and the retrieval substrate fit together, and where each connector's signal and content paths diverge. Pair with your onboarding buddy for the first week and ship a small, low-risk change end to end to exercise the full review, CI, and deploy pipeline before taking on anything larger.</p>"}
+            ]}]},
+            {"columns": [{"webparts": [
+              {"@odata.type": "#microsoft.graph.textWebPart", "innerHtml": "<h2>Deployment Runbook</h2><p>Deployments go out every Tuesday and Thursday behind a feature flag. The release owner cuts a tagged build, watches the canary health checks for error-rate and latency regressions, and promotes to a full rollout only once the canary stays green for fifteen minutes. If a health check trips, roll back immediately with the deploy tool rather than trying to hotfix forward, because a clean rollback is always faster and safer than debugging in production under load. Post the rollback reason in the incident channel and open a follow-up ticket so the regression is understood and reproduced before the next release attempt is scheduled.</p>"}
+            ]}]},
+            {"columns": [{"webparts": [
+              {"@odata.type": "#microsoft.graph.textWebPart", "innerHtml": "<h2>Production Support</h2><p>For production support, the on-call rotation is published in the team calendar and hands off every Monday morning. Page the on-call engineer through the alerting tool for anything customer-facing, and use the support channel for non-urgent questions that can wait for business hours. Every incident gets a short write-up within two business days, capturing the timeline, the operational signals that fired, the customer impact, and the follow-up actions, so the team keeps learning from real failure modes instead of rediscovering the same ones. Link the write-up back to the runbook it exercised so the runbook improves over time.</p>"},
+              {"@odata.type": "#microsoft.graph.imageWebPart", "innerHtml": ""}
+            ]}]}
+          ]
+        }
+      },
+      {
+        "id": "pg-decisions",
+        "name": "architecture-decisions.aspx",
+        "title": "Architecture Decisions",
+        "webUrl": "https://contoso.sharepoint.com/sites/eng/SitePages/architecture-decisions.aspx",
+        "createdDateTime": "2026-05-15T09:00:00Z",
+        "lastModifiedDateTime": "2026-06-10T09:30:00Z",
+        "lastModifiedBy": {"user": {"id": "U201", "displayName": "Kai"}},
+        "canvasLayout": {
+          "horizontalSections": [
+            {"columns": [{"webparts": [
+              {"@odata.type": "#microsoft.graph.textWebPart", "innerHtml": "<h3>ADR-014: Retrieval substrate ownership</h3><p>Producers hand extracted text plus provenance to one ingest entry point and never write vectors themselves. This keeps chunking, hashing, and embedding in a single owned layer so retrieval stays trustworthy across every source.</p>"}
+            ]}]}
+          ]
+        }
+      }
+    ],
+    "S-secret": [
+      {
+        "id": "pg-board",
+        "name": "board-notes.aspx",
+        "title": "Board Notes (not granted)",
+        "webUrl": "https://contoso.sharepoint.com/sites/exec/SitePages/board-notes.aspx",
+        "createdDateTime": "2026-05-01T10:00:00Z",
+        "lastModifiedDateTime": "2026-06-11T08:05:00Z",
+        "canvasLayout": {
+          "horizontalSections": [
+            {"columns": [{"webparts": [
+              {"@odata.type": "#microsoft.graph.textWebPart", "innerHtml": "<h2>Confidential</h2><p>This executive page lives on an ungranted site and must never be ingested by the content path.</p>"}
+            ]}]}
+          ]
+        }
+      }
+    ]
+  },
+  "_lists_comment": "R18-A5 / AT-601 — page-native list TEXT surface. Keyed by site_id; only lists on GRANTED sites are read. Each list carries Graph list metadata plus its items' 'fields' text; the content path renders a list's item text as one structure-preserving prose artifact per list.",
+  "lists": {
+    "S-eng": [
+      {
+        "id": "list-runbooks",
+        "displayName": "Runbooks",
+        "webUrl": "https://contoso.sharepoint.com/sites/eng/Lists/Runbooks",
+        "createdDateTime": "2026-05-02T09:00:00Z",
+        "lastModifiedDateTime": "2026-06-09T14:00:00Z",
+        "list": {"template": "genericList"},
+        "items": [
+          {"id": "1", "lastModifiedDateTime": "2026-06-09T14:00:00Z", "fields": {"Title": "Database failover", "Description": "Promote the standby replica, repoint the connection string, and verify write health before announcing recovery."}},
+          {"id": "2", "lastModifiedDateTime": "2026-06-08T11:00:00Z", "fields": {"Title": "Cache stampede", "Description": "Enable request coalescing and warm the hot keys; do not flush the whole cache during peak traffic."}}
+        ]
+      }
+    ],
+    "S-secret": [
+      {
+        "id": "list-exec",
+        "displayName": "Exec Tracker (not granted)",
+        "webUrl": "https://contoso.sharepoint.com/sites/exec/Lists/ExecTracker",
+        "lastModifiedDateTime": "2026-06-09T14:00:00Z",
+        "list": {"template": "genericList"},
+        "items": [
+          {"id": "1", "fields": {"Title": "Confidential", "Description": "Ungranted-site list text must never be ingested."}}
+        ]
+      }
+    ]
   }
 }

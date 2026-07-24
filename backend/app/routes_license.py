@@ -30,7 +30,11 @@ from .license_runtime import (
     persist_validated_status,
     set_org_license_key,
 )
-from .licensing import LicenseStatus, validate_license
+from .licensing import (
+    REASON_ORG_MISMATCH,
+    LicenseStatus,
+    validate_license,
+)
 from .middleware.tenancy import get_current_org_id
 from .org_display_name import resolve_org_display_name
 from .rbac import require_role
@@ -45,19 +49,38 @@ LICENSE_BANNER_PATH = "/api/license/banner"
 LICENSE_LIMITS_PATH = "/api/license/limits"
 LICENSE_ORG_NAME_PATH = "/api/license/org-name"
 
+# Plain-language paste-time rejection for a key bound to a different org
+# (R-1.9.1-L1 / T2, AC1). The same wording backs the UI reason for the
+# org_mismatch banner/status; keep it human, not the machine reason code.
+ORG_MISMATCH_MESSAGE = "This license was issued to a different organisation"
+
 router = APIRouter(tags=["license"])
 
 
 class LicenseStatusResponse(BaseModel):
     """Owner-facing license status. Detail fields are null when there is no
     valid key (no_license / invalid / clock_rollback), where only ``status``
-    is meaningful."""
+    is meaningful.
+
+    ``deployment_type`` (R-1.9.1-L1 / T1, payload v2) is the deployment topology
+    (``saas`` | ``customer_hosted``) parsed from the validated payload and
+    exposed here so the License UI can show it (AC5). It is ``null`` for a pre-v2
+    key that carries no such field, and for any non-verifiable state.
+
+    ``reason`` (R-1.9.1-L1 / T2, AC1) carries the machine-readable invalid reason
+    when ``status`` is ``invalid`` — notably ``org_mismatch`` for a key bound to a
+    different organisation — so the License UI can render the specific
+    plain-language explanation ("this license was issued to a different
+    organisation") rather than a bare "invalid". It is ``null`` for a healthy
+    (valid/grace) status."""
 
     status: str
     customer: Optional[str] = None
     term: Optional[int] = None  # term_months from the validated payload
+    deployment_type: Optional[str] = None
     expires_at: Optional[str] = None
     days_remaining: Optional[int] = None
+    reason: Optional[str] = None
 
 
 class LicenseBannerResponse(BaseModel):
@@ -107,6 +130,12 @@ class LicenseLimitsResponse(BaseModel):
     systemsLicensed: Optional[int] = None  # null => unlimited license
     unlimited: bool
     canConnectMore: bool
+    # MSP-B13 / T4 (AT-746) — approaching-cap notice + at-cap hard stop the
+    # Integration Hub / cloud-connector cards render (AC2/AC5). Additive to the T10
+    # shape: pre-T4 clients simply ignore them.
+    approachingCap: bool = False
+    atCap: bool = False
+    notice: Optional[str] = None  # approaching or at-cap wording; null when neither
 
 
 class LicenseOrgNameResponse(BaseModel):
@@ -136,8 +165,10 @@ def _to_status_response(result: dict) -> LicenseStatusResponse:
         status=result.get("status"),
         customer=result.get("customer"),
         term=payload.get("term_months"),
+        deployment_type=result.get("deployment_type"),
         expires_at=result.get("expires_at"),
         days_remaining=result.get("days_remaining"),
+        reason=result.get("reason"),
     )
 
 
@@ -235,12 +266,20 @@ def update_license_key(body: UpdateKeyRequest) -> LicenseStatusResponse:
     never replace a working license. A valid key is persisted to the caller's
     org row in ``org_licenses`` and the refreshed status is returned immediately —
     no restart required.
+
+    Org binding (R-1.9.1-L1 / T2, AC1): the pasted key is validated BOUND to the
+    caller's installation org, so a key issued for a different organisation is
+    rejected at paste time with a plain-language reason — Customer A's key pasted
+    into Customer B's installation fails closed and says why, and B's working key
+    is untouched.
     """
-    result = validate_license(body.key)
+    org_id = get_current_org_id()
+    result = validate_license(body.key, installation_org_id=org_id)
     if result.get("status") == LicenseStatus.INVALID:
+        if result.get("reason") == REASON_ORG_MISMATCH:
+            raise HTTPException(status_code=400, detail=ORG_MISMATCH_MESSAGE)
         raise HTTPException(status_code=400, detail="This key is not valid")
 
-    org_id = get_current_org_id()
     set_org_license_key(org_id, body.key)
     # Refresh the org's derived status cache (last_status / last_seen_date)
     # IMMEDIATELY after the key write — before the fire-and-forget telemetry,

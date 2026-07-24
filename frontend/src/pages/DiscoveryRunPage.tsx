@@ -3,19 +3,18 @@ import { CheckCircle2, Circle, Info, Loader2, XCircle } from "lucide-react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { InfoPanel } from "../components/common/InfoPanel";
 import LoadingPanel from "../components/common/LoadingPanel";
+import { Skeleton } from "../components/common/Skeleton";
 import PageShell from "../components/common/PageShell";
 import TemplateRunNotice from "../components/discovery_run/TemplateRunNotice";
 import { useDiscoveryRunContext } from "../context/DiscoveryRunContext";
 import { useConnectorContext } from "../context/ConnectorContext";
 import { useSourceIntakeContext } from "../context/SourceIntakeContext";
 import { useRunContext } from "../context/RunContext";
-import { useAuthOptional } from "../context/AuthContext";
-import { isViewerRole } from "../utils/roles";
 import {
   DISCOVERY_SOURCE_REQUIREMENT_MESSAGE,
   isDiscoveryReadyConnector,
 } from "../utils/sourceReadiness";
-import { apiGet, apiGetRunScoped } from "../lib/apiClient";
+import { apiGet } from "../lib/apiClient";
 
 // ---------------------------------------------------------------------------
 // DISCOVERY_STEPS — ordered list of all seven discovery stages (CS-4 T5 AC4).
@@ -69,6 +68,36 @@ const DISCOVERY_STEPS: DiscoveryStep[] = [
     subLabel: "Ingesting channel activity, escalation, and cross-reference signals",
   },
   {
+    id: "teams",
+    label: "Microsoft Teams",
+    subLabel: "Ingesting channel activity, escalation, and cross-reference signals",
+  },
+  {
+    id: "confluence",
+    label: "Confluence",
+    subLabel: "Ingesting page and space activity signals",
+  },
+  {
+    id: "sharepoint",
+    label: "SharePoint",
+    subLabel: "Ingesting document library activity signals",
+  },
+  {
+    id: "github",
+    label: "GitHub",
+    subLabel: "Ingesting pull request, commit, and branch signals",
+  },
+  {
+    id: "java_app",
+    label: "Java Application",
+    subLabel: "Ingesting operational health and log signals",
+  },
+  {
+    id: "dotnet_app",
+    label: ".NET Application",
+    subLabel: "Ingesting operational health and log signals",
+  },
+  {
     id: "sf_ncino",
     label: "nCino Lending",
     subLabel: "Ingesting nCino loan origination signals",
@@ -110,7 +139,19 @@ const STEP_INDEX = Object.fromEntries(
 // Salesforce drives two passes (CRM + the declared second product), so both
 // sf_crm and sf_ncino map to the salesforce source.
 // ---------------------------------------------------------------------------
-const SOURCE_STEP_IDS = new Set(["sf_crm", "sn", "jira", "sf_ncino", "slack"]);
+const SOURCE_STEP_IDS = new Set([
+  "sf_crm",
+  "sn",
+  "jira",
+  "sf_ncino",
+  "slack",
+  "teams",
+  "confluence",
+  "sharepoint",
+  "github",
+  "java_app",
+  "dotnet_app",
+]);
 
 // The pack-specific second Salesforce pass (labelled by the selected pack —
 // Service Cloud / nCino / …). It is a source step, but it is rendered LAST among
@@ -124,6 +165,12 @@ const STEP_SOURCE_TOKENS: Record<string, string[]> = {
   sn: ["servicenow"],
   jira: ["jira"],
   slack: ["slack"],
+  teams: ["teams"],
+  confluence: ["confluence"],
+  sharepoint: ["sharepoint"],
+  github: ["github"],
+  java_app: ["java_app"],
+  dotnet_app: ["dotnet_app"],
 };
 
 // Normalise a connected-source label/id for matching: lower-cased, trimmed.
@@ -474,19 +521,28 @@ export function DiscoveryStepList({
 
         let isCompleted: boolean;
         let isActive: boolean;
-        if (isGeneric) {
+        if (isFailed) {
+          // A failed ingest shows only the error icon — never completed/active.
+          isCompleted = false;
+          isActive = false;
+        } else if (runComplete) {
+          // The run has finished (materialised): every non-failed stage is done.
+          // Authoritative over activeIdx — the backend's last-seen current_step
+          // can be stale or point at an early stage for an already-finished run
+          // (it isn't always advanced to "complete"), so a finished run must
+          // never show a spinner or a pending circle.
+          isCompleted = true;
+          isActive = false;
+        } else if (isGeneric) {
           // Ingested once the pipeline reaches detection (all sources read);
           // shows the spinner while source ingestion is still in progress.
-          isCompleted = !isFailed && activeIdx >= detectIdx;
-          isActive =
-            !isFailed && !isCompleted && activeIdx >= 0 && activeIdx < detectIdx;
+          isCompleted = activeIdx >= detectIdx;
+          isActive = !isCompleted && activeIdx >= 0 && activeIdx < detectIdx;
         } else {
-          isCompleted =
-            !isFailed &&
-            (isTerminal
-              ? runComplete && activeIdx >= canonicalIdx
-              : activeIdx > canonicalIdx);
-          isActive = !isFailed && !isCompleted && activeIdx === canonicalIdx;
+          // Still running: the terminal step greens only via runComplete (above);
+          // other steps green once the run has advanced past their index.
+          isCompleted = isTerminal ? false : activeIdx > canonicalIdx;
+          isActive = !isCompleted && activeIdx === canonicalIdx;
         }
 
         return (
@@ -640,10 +696,6 @@ export default function DiscoveryRunPage() {
   const { runId } = useRunContext();
   const { connectors } = useConnectorContext();
   const { uploadedFiles } = useSourceIntakeContext(); // T41-8: sampleWorkspaceEnabled removed
-  // Replay re-triggers compute (POST /api/runs/{run_id}/replay is analyst+), so
-  // viewers get a disabled Replay button — read-only access.
-  const auth = useAuthOptional();
-  const isViewer = isViewerRole(auth?.user?.role);
 
   const {
     run,
@@ -652,28 +704,14 @@ export default function DiscoveryRunPage() {
     error,
     started,
     computing,
+    currentStep,
+    failedSteps,
     startRun,
-    restartRun,
     refetch,
   } = useDiscoveryRunContext();
 
-  // ---------------------------------------------------------------------------
-  // CS-4 T5: Poll /api/runs/{runId}/status every 2 s while the run is active.
-  // Reads current_step from the response and stops once complete or errored.
-  // ---------------------------------------------------------------------------
-  const [currentStep, setCurrentStep] = useState<string | null>(null);
-  const [failedSteps, setFailedSteps] = useState<string[]>([]);
-
-  // Reset the step indicator whenever the active run changes. Without this, a
-  // newly started run inherits the previous run's last step (e.g. "complete")
-  // — the /status poll only overwrites currentStep once the backend has written
-  // a non-null current_step, so until the first step lands the progress list
-  // would show every step ticked while the backend is still ingesting. The new
-  // run's real step is then re-applied from its /status response.
-  useEffect(() => {
-    setCurrentStep(null);
-    setFailedSteps([]);
-  }, [runId]);
+  // current_step / failed_steps now come from DiscoveryRunContext's single
+  // /status poll (no separate page-level poller) — see the context provider.
 
   // CS-4: the declared Salesforce product (from Integration Hub) decides what
   // the second Salesforce discovery pass is labelled as. Single declaration
@@ -698,76 +736,6 @@ export default function DiscoveryRunPage() {
     };
   }, []);
 
-  // CS-4 T5 + AT-313: poll the run status while the run is active. The base
-  // cadence is 2 s (AC4), and it stays at 2 s while the step is actively
-  // advancing. When the step is unchanged between polls (a long-running or
-  // stalled stage) the interval backs off geometrically up to a cap, so a slow
-  // run is not hammered with a fixed 2 s poll for minutes on end. The cadence
-  // resets to the 2 s base as soon as the step advances again. Self-scheduling
-  // setTimeout (not setInterval) so each delay can differ.
-  useEffect(() => {
-    if (!runId || !computing) return;
-
-    const BASE_DELAY_MS = 2000;
-    const MAX_DELAY_MS = 15000;
-    const BACKOFF_FACTOR = 1.5;
-
-    let cancelled = false;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    let delay = BASE_DELAY_MS;
-    // `undefined` = no poll yet; the first observation always counts as a change
-    // so the cadence starts at the base even if current_step is still null.
-    let lastStep: string | null | undefined = undefined;
-
-    const schedule = () => {
-      if (cancelled) return;
-      timer = setTimeout(() => void tick(), delay);
-    };
-
-    const tick = async () => {
-      try {
-        const st = await apiGetRunScoped<{
-          current_step?: string | null;
-          status?: string;
-          failed_steps?: string[];
-        }>(runId, "/status");
-
-        if (cancelled) return;
-
-        if (st.current_step != null) setCurrentStep(st.current_step);
-        setFailedSteps(Array.isArray(st.failed_steps) ? st.failed_steps : []);
-
-        const step = st.current_step ?? null;
-        if (step !== lastStep) {
-          delay = BASE_DELAY_MS; // progress moved — stay responsive
-        } else {
-          delay = Math.min(delay * BACKOFF_FACTOR, MAX_DELAY_MS);
-        }
-        lastStep = step;
-
-        // Stop polling once the step reaches complete or the run errors out.
-        const done =
-          step === "complete" ||
-          (st.status != null &&
-            !["running", "queued"].includes(st.status.toLowerCase()));
-        if (done) return; // do not reschedule
-      } catch {
-        // Non-blocking: polling failures do not surface errors to the UI, but
-        // do back off so a persistently failing endpoint is not hammered.
-        if (cancelled) return;
-        delay = Math.min(delay * BACKOFF_FACTOR, MAX_DELAY_MS);
-      }
-      schedule();
-    };
-
-    void tick(); // immediate first poll, then self-scheduled with backoff
-
-    return () => {
-      cancelled = true;
-      if (timer) clearTimeout(timer);
-    };
-  }, [runId, computing]);
-
   const status = run?.status?.toLowerCase();
   const isMaterialized =
     status === "complete" || status === "completed" || status === "partial";
@@ -775,34 +743,21 @@ export default function DiscoveryRunPage() {
   const runScopedPath = (path: string) =>
     runId ? `${path}?runId=${runId}` : path;
 
-  const [displayPct, setDisplayPct] = useState(0);
-  const targetPct = useMemo(() => {
+  // Percentage is derived directly from the run's current_step (the SAME signal
+  // that drives the Discovery Progress checklist, so the number and the green-
+  // checked steps always agree). Previously this was animated one integer at a
+  // time via a requestAnimationFrame chain — up to ~99 whole-page re-renders to
+  // count 0→99. The step signal only changes a handful of times per run, so
+  // deriving it straight from currentStep updates just as often with none of the
+  // re-render churn.
+  const displayPct = useMemo(() => {
     if (isComplete) return 100;
     if (!computing) return 0;
-    // Tie the percentage to the SAME current_step signal that drives the
-    // Discovery Progress checklist, so the number and the green-checked steps
-    // always agree — both reflect the backend's update_run_step() timing.
-    // Each working step is one slice of the pipeline; "complete" maps to 100%.
     const idx = currentStep != null ? (STEP_INDEX[currentStep] ?? -1) : -1;
     if (idx < 0) return 0;
     const lastIdx = DISCOVERY_STEPS.length - 1; // index of the terminal "complete" step
     return Math.min(Math.round((idx / lastIdx) * 100), 99);
   }, [isComplete, computing, currentStep]);
-
-  // FIX: Safe requestAnimationFrame implementation
-  useEffect(() => {
-    if (displayPct === targetPct) return;
-
-    const id = requestAnimationFrame(() => {
-      setDisplayPct((prev) => {
-        if (prev < targetPct) return prev + 1;
-        if (prev > targetPct) return prev - 1;
-        return prev;
-      });
-    });
-
-    return () => cancelAnimationFrame(id);
-  }, [displayPct, targetPct]);
 
   const inputs = useMemo(() => {
     const connectedSources = connectors
@@ -906,7 +861,9 @@ export default function DiscoveryRunPage() {
     return () => observer.disconnect();
   }, [updateLogOverflow]);
 
-  if (loading || (!runId && autoStartRequested && hasAtLeastOneSource)) {
+  // A run is actually being STARTED (no run id yet, auto-start requested) — the
+  // only case where "Starting discovery run" is the truth.
+  if (!runId && autoStartRequested && hasAtLeastOneSource) {
     return (
       <PageShell title="Discovery Run" description={pageDescription}>
         <LoadingPanel
@@ -917,15 +874,39 @@ export default function DiscoveryRunPage() {
     );
   }
 
+  // Loading an EXISTING run (first load of this run id). This is not "starting"
+  // anything — an already-complete run was showing the start copy, which read as
+  // if it were running again. Skeleton mirrors the run layout below (status bar,
+  // progress panel, summary + log grid) so it fills the same space.
+  if (loading) {
+    return (
+      <PageShell title="Discovery Run" description={pageDescription}>
+        <div aria-busy="true" aria-label="Loading discovery run">
+          <Skeleton className="mb-5 h-16 w-full rounded-xl" />
+          <Skeleton className="mb-4 h-64 w-full rounded-xl" />
+          <div className="grid grid-cols-1 items-start gap-4 lg:grid-cols-3">
+            <Skeleton className="h-96 w-full rounded-xl" />
+            <Skeleton className="h-96 w-full rounded-xl lg:col-span-2" />
+          </div>
+        </div>
+      </PageShell>
+    );
+  }
+
   if (!runId) {
     return (
       <PageShell title="Discovery Run" description={pageDescription}>
         <InfoPanel
           title="No Active Run"
           message="Start a new discovery run to continue."
-          actionLabel="Start New Discovery Run"
-          actionDisabled={!hasAtLeastOneSource}
-          onAction={() => void startRun(inputs)}
+          actionLabel={
+            hasAtLeastOneSource ? "Start New Discovery Run" : "Go to Integration Hub"
+          }
+          onAction={
+            hasAtLeastOneSource
+              ? () => void startRun(inputs)
+              : () => nav("/integration-hub")
+          }
         >
           {!hasAtLeastOneSource && (
             <div className="mt-3 text-center text-sm font-medium text-muted">
@@ -965,21 +946,6 @@ export default function DiscoveryRunPage() {
       description={pageDescription}
       actions={
         <>
-          <button
-            className="rounded-md border border-accent/20 bg-accent/5 px-3 py-2 text-sm font-medium text-accent transition-colors hover:border-accent/45 hover:bg-accent/10 focus:outline-none focus-visible:ring-1 focus-visible:ring-accent/40 disabled:cursor-not-allowed disabled:opacity-50"
-            onClick={() => void restartRun()}
-            disabled={!started || !isMaterialized || computing || loading || isViewer}
-            title={
-              isViewer
-                ? "Replay requires an analyst or owner role."
-                : !isMaterialized
-                  ? "Replay is available after this run finishes."
-                  : undefined
-            }
-          >
-            Replay Run
-          </button>
-
           <button
             className="rounded-md border border-accent/20 bg-accent/5 px-3 py-2 text-sm font-medium text-accent transition-colors hover:border-accent/45 hover:bg-accent/10 focus:outline-none focus-visible:ring-1 focus-visible:ring-accent/40 disabled:cursor-not-allowed disabled:opacity-50"
             onClick={() => nav(runScopedPath("/source-intelligence"))}
@@ -1022,12 +988,12 @@ export default function DiscoveryRunPage() {
         {/* CS-4 T5 AC4: Discovery progress step list — shown while computing.
             Replaces the generic ComputingPill spinner as the primary progress
             indicator. Hidden once the run materialises. */}
-        {(computing || currentStep != null) && (
+        {(computing || currentStep != null || isMaterialized) && (
           <div className="mb-4 rounded-xl border border-border bg-panel p-4">
             <div className="mb-4 text-lg font-semibold">Discovery Progress</div>
             <DiscoveryStepList
               currentStep={currentStep}
-              runComplete={!computing}
+              runComplete={isMaterialized}
               salesforceProduct={salesforceProduct}
               failedSteps={failedSteps}
               connectedSources={progressConnectedSources}

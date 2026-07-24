@@ -1,6 +1,21 @@
 # AgentIQ — API_CONTRACT.md (EPIC E0)
-Version: v1.11
-Date: 2026-07-22
+Version: v1.12
+Date: 2026-07-23
+
+> v1.12 — MSP-B13 (Cloud Connector Onboarding): added the multi-scope cloud
+> connector routes for `aws_events` / `azure_events` (T3 / AT-745 — create with
+> write-only vault credentials, `POST /{id}/test`, `GET/POST/DELETE /{id}/scopes`,
+> `GET /{id}/scopes/{scope}/health`) documented under "Connectors & Confidence".
+> T5 / AT-747 adds the per-connector security-artifact routes
+> `GET /api/connectors/{id}/security-artifacts` (list) and
+> `GET /api/connectors/{id}/security-artifacts/{artifactId}` (download), serving the
+> shipped `deployment/` IAM-policy / RBAC-role docs (viewer+). T4 / AT-746 (system-count integration) extends `GET /api/license/limits`'s
+> `LicenseLimitsResponse` with the additive optional fields `approachingCap`
+> (`boolean`), `atCap` (`boolean`), and `notice` (`string | null`) — the
+> approaching-capacity warning and at-cap hard-stop wording the Integration Hub /
+> cloud-connector cards render. Each pinned AWS account / Azure subscription counts
+> as one system against the licence's `max_systems`, enforced at pin time (HTTP 402
+> hard stop). Additive; pre-v1.12 consumers are unaffected.
 
 > v1.11 — MSP-B5 T4: added authenticated Analyst+ runbook-match lifecycle
 > endpoints: `GET /api/runbook-matches/{recurrenceId}`, `POST
@@ -27,6 +42,24 @@ Date: 2026-07-22
 > `packs` (per-pack execution metadata) fields were already added by R191-P1 T2
 > and are unchanged here.
 
+> v1.11 — R-1.9.1-L1 / T1 + T2 (Licensing Completion & Hardening): extended the
+> Owner-only `LicenseStatusResponse` (`GET /api/license`, also returned by
+> `POST /api/license/update-key`) with two additive, optional-null fields:
+> `deployment_type` (`string | null` — the payload v2 deployment topology,
+> `"saas"` | `"customer_hosted"`, parsed from the signed license and exposed for
+> the License UI; `null` for a pre-v2 key or any non-verifiable state — T1/AC5)
+> and `reason` (`string | null` — the machine-readable invalid reason when
+> `status` is `"invalid"`, notably `"org_mismatch"` for a key bound to a different
+> installation org, so the UI can render a specific plain-language explanation;
+> `null` for a healthy valid/grace status — T2/AC1). Org binding is enforced at
+> verification time: a signature-valid key whose payload `org_id` does not match
+> the installation org validates as `invalid: org_mismatch` and is rejected at
+> paste time on `POST /api/license/update-key` (HTTP 400, detail "This license was
+> issued to a different organisation"), leaving any previously installed key
+> untouched. The license key format is otherwise unchanged (the new payload fields
+> sit within the already-signed v2 payload). Additive — no previously documented
+> field changed. Mirrors `src/types/license.ts`.
+>
 > v1.10 — R18-C0 P8 (Re-editable review decisions, AC8): extended
 > `ReviewAuditEvent` with the optional `tsEpoch` (`number`, the newest-first sort
 > key already emitted by the backend) and `previousDecision` (`Decision`, the
@@ -150,6 +183,29 @@ Response: `Connector[]` (`src/types/connector.ts`)
 Purpose: persist connector connection status + metadata.  
 Request (v1): `{ "status": "connected" }`  
 Response: updated `Connector`
+
+#### Cloud Connector Onboarding — AWS & Azure Events (MSP-B13 / AT-745)
+
+Multi-scope cloud connectors (`aws_events`, `azure_events`): one connection, many
+accounts/subscriptions, each scope a system. Secret fields are **write-only** —
+encrypted into the per-org vault (R17-D3 path) and never returned. RBAC: Owner
+creates/tests/pins/unpins; Analyst/Viewer read scopes + health only.
+
+- `POST /api/connectors/{aws_events|azure_events}` — Owner: create/rotate the connection.
+  - AWS request: `{ "partition": "aws"|"aws-us-gov", "access_key_id", "secret_access_key", "session_token"? }`
+  - Azure request: `{ "environment": "AzureCloud"|"AzureUSGovernment", "mode": "lighthouse"|"direct", "tenant_id", "client_id", "client_secret" }`
+  - Response: `CloudConnectionStatus` (metadata only — no secret): `{ connector_id, provider, configured, status, partition?, environment?, mode?, scope_count, updated_at }`
+- `POST /api/connectors/{id}/test` — Owner: validate auth + reachability **before save** (never persists).
+  - Response `TestConnectionResult`: `{ connector_id, provider, ok, reason?, message, identity? }` (HTTP 200 with the verdict; provider-specific `reason` on failure).
+- `GET /api/connectors/{id}/scopes` — Viewer+: `{ connector_id, provider, scopes: ScopeView[], candidates: string[] }`. Candidates are discovered-but-unpinned scopes (never ingested until pinned).
+- `POST /api/connectors/{id}/scopes` — Owner: pin (activate forward-only) a scope, validated by an assume-role (AWS) / auth (direct-keys, Azure) probe.
+  - AWS request: `{ "account_id", "role_arn"?, "external_id"?, "regions"?: string[], "partition"?, "label"?, "access_key_id"?, "secret_access_key"? }`
+  - Azure request: `{ "subscription_id", "label"? }`
+  - Response: `ScopesResponse` (as GET).
+- `DELETE /api/connectors/{id}/scopes/{scopeId}` — Owner: unpin (stops ingestion forward-only; history retained). Idempotent → 204.
+- `GET /api/connectors/{id}/scopes/{scopeId}/health` — Viewer+: `ScopeHealthResponse` `{ connector_id, scope_id, status, healthy, message?, last_checkpoint_at?, event_volume_last_run?, surfaces_ok[], surfaces_failed{} }`. `status` uses the same vocabulary as run health (`pending`/`ok`/`auth_failed`/`partial`/`failed`).
+- `GET /api/connectors/{id}/security-artifacts` — Viewer+ (T5 / AT-747): `{ connector_id, provider, artifacts: SecurityArtifact[] }` where `SecurityArtifact = { id, label, description, filename, media_type }`. The downloadable partner security docs (AWS minimal read-only IAM policy `iam_policy`/`iam_policy_guide`; Azure Reader RBAC role `rbac_role`/`rbac_role_guide`).
+- `GET /api/connectors/{id}/security-artifacts/{artifactId}` — Viewer+: serves the artifact file (`Content-Disposition: attachment`) from the shipped `deployment/` docs — the single source of truth (B1/B2 AC9). Unknown connector/artifact → 404.
 
 #### GET /api/confidence/explanation
 Replaces: `src/data/mockConfidenceExplanation.json`  

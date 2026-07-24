@@ -127,6 +127,14 @@ os.environ["OAUTH_CALLBACK_ALLOW_UNAUTH"] = ""
 # overrides via monkeypatch.setenv (e.g. test_email_service.py) still apply.
 os.environ["EMAIL_PROVIDER"] = "noop"
 
+# Default the deployment network posture to 'standard' for the suite regardless
+# of backend/.env (which may set no_public_inbound for local outbound-auth
+# testing). Under no_public_inbound the authorization_code /auth-url flow is
+# intentionally 409 for connectors with an outbound-only mode (R18-A3 AC4), which
+# would break the many tests that exercise that flow. The no-public-inbound
+# suites set NETWORK_PROFILE themselves via monkeypatch (auto-reverts to this).
+os.environ["NETWORK_PROFILE"] = "standard"
+
 
 # ---------------------------------------------------------------------------
 # Test-only connection helper (NO SQL translation)
@@ -419,6 +427,9 @@ def pytest_configure(config):
     os.environ["ANTHROPIC_API_KEY"] = ""
     os.environ["AGENTIQ_DISABLE_BACKGROUND_JOBS"] = "1"
     os.environ["EMAIL_PROVIDER"] = "noop"  # no real SMTP during tests
+    # Deterministic network posture regardless of backend/.env — see the
+    # module-level note above. No-public-inbound suites override via monkeypatch.
+    os.environ["NETWORK_PROFILE"] = "standard"
     os.environ["SEED_DIR"] = str(_resolve_seed_dir())
     os.environ.setdefault("CORS_ORIGINS", "http://localhost:5173")
 
@@ -591,6 +602,43 @@ def _license_gate_valid_by_default():
         "app.middleware.license_gate.get_current_license_status",
         lambda *a, **k: {"status": "valid"},
     ):
+        yield
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _unlicensed_cap_exempts_default_org():
+    """R-1.9.1-L1 / T5 (AC4): keep the shared ``default`` test org exempt from the
+    unlicensed connection cap.
+
+    T5 makes ``get_max_systems`` return the unlicensed cap (default 2) when an org
+    has no license installed. That behaviour is exercised deterministically by the
+    feature suites on FRESH, isolated orgs (``test_license_max_systems``,
+    ``test_addendum_a_contract``'s AC16, and the AC4 route tests). The session,
+    however, shares ONE ``default`` org across many connector tests that
+    legitimately connect real systems on it via NON-gated paths (OAuth callbacks,
+    client-credentials, direct db writes). That accumulated connector state could
+    push a LATER *gated* call on ``default`` over the cap and 402 it, purely as a
+    function of test execution order — a false failure unrelated to the assertion.
+
+    Treating ``default`` as unlimited (its pre-T5 behaviour) removes that ordering
+    coupling — exactly as ``_license_gate_valid_by_default`` does for the run gate.
+    Fresh per-test orgs are untouched, so the cap's real behaviour is still fully
+    exercised. Internal callers (``can_connect_new_system`` / ``enforce_can_connect``
+    / ``get_limit_state``) resolve ``get_max_systems`` from the module namespace, so
+    patching the attribute covers them too.
+    """
+    from unittest.mock import patch
+
+    from app import license_limits
+
+    _real_get_max_systems = license_limits.get_max_systems
+
+    def _exempt_default(org_id):
+        if org_id == "default":
+            return None  # unlimited — the shared org's pre-T5 behaviour
+        return _real_get_max_systems(org_id)
+
+    with patch("app.license_limits.get_max_systems", _exempt_default):
         yield
 
 

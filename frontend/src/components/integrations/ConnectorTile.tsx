@@ -7,6 +7,8 @@ import { fetchTokenStatus, TokenStatus } from '../../services/staticApi';
 import { useAuthOptional } from '../../context/AuthContext';
 import { useNetworkProfileOptional } from '../../context/NetworkProfileContext';
 import { isViewerRole } from '../../utils/roles';
+import { useResource } from '../../lib/dataCache';
+import { cacheKeys } from '../../lib/cacheKeys';
 
 // Connectors whose Connect button is ENABLED on the Integration Hub. This is a
 // UI gate only — the OAuth backends for the other connectors (Slack AT-420,
@@ -14,11 +16,17 @@ import { isViewerRole } from '../../utils/roles';
 // (CONNECTOR_AUTH_CONFIGS + the generic auth-url → callback flow), so re-enabling
 // one later is just adding its id back to this list.
 //
-// Product decision (July 2026): only the three systems of record are connectable
-// from the hub for now; every other tile renders its action button disabled with
-// the "Connecting new sources is currently unavailable" tooltip.
+// Product decision (July 2026): the three systems of record plus GitHub are
+// connectable from the hub. R18-A4 (Slack & Teams Deep Content) adds the two chat
+// platforms and R18-A5 (Confluence & SharePoint Deep Content) adds the two
+// knowledge platforms — their OAuth backends (AT-420 Slack / AT-434 Teams /
+// AT-462 Confluence+SharePoint) and the reach + depth ingestion paths are fully
+// wired, and connecting them is what surfaces the deep-content consent copy and
+// starts conversation/page ingestion. Every other tile renders its action button
+// disabled with the "Connecting new sources is currently unavailable" tooltip.
 const ENABLED_CONNECTOR_IDS = [
-  'salesforce', 'servicenow', 'jira', 'github',
+  'salesforce', 'servicenow', 'jira', 'github', 'slack', 'teams',
+  'confluence', 'sharepoint',
 ];
 
 export default function ConnectorTile({
@@ -63,7 +71,14 @@ export default function ConnectorTile({
 }) {
   const isConnected = connector.status === 'connected';
   const isConfigured = connector.configured;
-  const isEnabled = ENABLED_CONNECTOR_IDS.includes(connector.id);
+  // MSP-B13 (AT-748): a multi-scope cloud connector (AWS/Azure Events) onboards
+  // in the detail panel (credentials + scope pinning + per-scope health), NOT via
+  // the tile's OAuth Connect flow. Its tile action just opens that panel — enabled
+  // for every role, since Analyst/Viewer open it to VIEW health (read-only) and
+  // the panel enforces Owner-only edits. So it bypasses the OAuth-only enablement
+  // gate below.
+  const isMultiScope = Boolean(connector.multiScope);
+  const isEnabled = isMultiScope || ENABLED_CONNECTOR_IDS.includes(connector.id);
 
   // Connecting / configuring / reconnecting are analyst+ writes (the connector
   // auth-url and token routes are analyst+). Viewers get a read-only hub: their
@@ -72,19 +87,17 @@ export default function ConnectorTile({
   const auth = useAuthOptional();
   const isViewer = isViewerRole(auth?.user?.role);
 
-  const [tokenStatus, setTokenStatus] = useState<TokenStatus | null>(null);
-
-  useEffect(() => {
-    if (!isConnected || !isEnabled) {
-      setTokenStatus(null);
-      return;
-    }
-    let alive = true;
-    fetchTokenStatus(connector.id)
-      .then((r) => { if (alive) setTokenStatus(r.status); })
-      .catch(() => { /* non-fatal — tile still renders without token status */ });
-    return () => { alive = false; };
-  }, [connector.id, isConnected, isEnabled]);
+  // Token status on the SHARED cache, keyed per connector: it survives navigation
+  // (no refetch when you come back to the hub), is deduped across tiles, and is
+  // refreshed live — a connect/disconnect invalidates it, and another user's
+  // change arrives via the org event stream. Disabled (null key) unless the
+  // connector is actually connected, so we never ask for a token that cannot
+  // exist. A failure is non-fatal: the tile just renders without the status.
+  const { data: tokenStatusData } = useResource(
+    isConnected && isEnabled ? cacheKeys.connectorTokenStatus(connector.id) : null,
+    () => fetchTokenStatus(connector.id),
+  );
+  const tokenStatus: TokenStatus | null = tokenStatusData?.status ?? null;
 
   // R18-A3 T5 (AT-558): in a no-public-inbound deployment the browser
   // authorization-code flow can never complete (the provider redirect can't
@@ -109,8 +122,14 @@ export default function ConnectorTile({
   // Dynamics 365 / SAP) keeps its normal disabled "Connect" state.
   const outboundSetupGate = hideAuthCode && isEnabled;
 
-  // When the token is expired/missing, override the button to "Reconnect"
-  const actionLabel = outboundSetupGate
+  // When the token is expired/missing, override the button to "Reconnect".
+  // Multi-scope cloud connectors take precedence: their action opens the
+  // onboarding/health panel ("Set up" when new, "Manage" once configured).
+  const actionLabel = isMultiScope
+    ? isConnected
+      ? 'Manage'
+      : 'Set up'
+    : outboundSetupGate
     ? 'Set up outbound access'
     : tokenExpired
     ? 'Reconnect'
@@ -120,12 +139,15 @@ export default function ConnectorTile({
     ? 'View data'
     : 'Connect';
 
-  const actionVariant =
-    outboundSetupGate || !isConnected || tokenExpired
-      ? 'primary'
-      : isConfigured
+  const actionVariant = isMultiScope
+    ? isConnected
       ? 'secondary'
-      : 'tertiary';
+      : 'primary'
+    : outboundSetupGate || !isConnected || tokenExpired
+    ? 'primary'
+    : isConfigured
+    ? 'secondary'
+    : 'tertiary';
 
   // R17-D4 Addendum A / T11: at the licensed limit, a NEW connection is blocked
   // (forward-only). Only applies to a not-yet-connected system — the 'connected'
@@ -133,15 +155,20 @@ export default function ConnectorTile({
   // existing systems keep working when a lower-limit key lands (AC12).
   const limitBlocksNew = Boolean(connectBlocked) && !isConnected;
   // Viewers can only use the read-only "View data" action; every write action
-  // (Connect / Configure & Sync / Reconnect) is disabled for them.
-  const viewerBlocks = isViewer && actionLabel !== 'View data';
-  const actionDisabled = !isEnabled || limitBlocksNew || viewerBlocks;
+  // (Connect / Configure & Sync / Reconnect) is disabled for them. A multi-scope
+  // tile is exempt — it opens a read-only panel for Viewer/Analyst (health), with
+  // Owner-only edits enforced inside the panel (MSP-B13 AT-748, T6-AC3).
+  const viewerBlocks = isViewer && !isMultiScope && actionLabel !== 'View data';
+  // A multi-scope tile only OPENS the panel (no OAuth/new connection here), so the
+  // license new-connection gate never disables it.
+  const actionDisabled =
+    !isEnabled || (limitBlocksNew && !isMultiScope) || viewerBlocks;
 
   // R18-C0 P4 / AT-566: a connected tile offers Disconnect. Disconnecting is a
   // connector write (analyst+), so viewers never see it; it is independent of the
   // new-connection license gate (removing a connection is always allowed).
   const canDisconnect = isConnected && !isViewer && Boolean(onDisconnect);
-  const disabledTitle = limitBlocksNew
+  const disabledTitle = (limitBlocksNew && !isMultiScope)
     ? (connectBlockMessage || 'Your license limit has been reached. Contact CloudFulcrum to add more.')
     : !isEnabled
     ? 'Connecting new sources is currently unavailable'
@@ -218,6 +245,13 @@ export default function ConnectorTile({
           }`}
           onClick={(e: React.MouseEvent<HTMLButtonElement>) => {
             e.stopPropagation();
+            // MSP-B13 (AT-748): a multi-scope cloud connector onboards in the
+            // detail panel — the tile action just selects it to open that panel
+            // (never the OAuth Connect flow, which it does not use).
+            if (isMultiScope) {
+              onSelect();
+              return;
+            }
             // R18-A3 T5 (AT-558): in a no-public-inbound deployment, never start
             // the authorization-code flow for a connector with an outbound-only
             // mode — open the detail panel (outbound setup path) instead so the

@@ -85,23 +85,28 @@ def test_every_default_resolver_has_a_backing_module_declared():
     assert set(resolvers._DEFAULT_RESOLVERS) == set(resolvers._RESOLVER_MODULES)
 
 
-def test_slack_resolver_returns_current_message_artifact(monkeypatch):
-    class FakeSlackIngestor:
+def test_slack_resolver_returns_whole_thread_artifact(monkeypatch):
+    """R18-A4 / AT-596 (T3): the Slack resolver re-extracts the WHOLE thread for a
+    thread-level source_artifact, not a single message — so a refresh re-chunks the
+    entire thread with author-attributed text."""
+    raw = {
+        "C123": [
+            {"ts": "1700000000.000000", "text": "pricing exception needs review",
+             "user": "U1", "reply_count": 2, "reactions": []},
+            {"ts": "1700000001.000000", "text": "on it", "user": "U2",
+             "thread_ts": "1700000000.000000"},
+            {"ts": "1700000002.000000", "text": "fixed", "user": "U3",
+             "thread_ts": "1700000000.000000"},
+        ]
+    }
+
+    class FakeSlackIngestor(slack_mod.SlackIngestor):
         def _raw_messages(self, org_id, channel):
             assert org_id == "org_1"
-            assert channel == {"id": "C123"}
-            return [
-                {"ts": "100.000", "text": "old"},
-                {
-                    "ts": "1700000000.000000",
-                    "text": "pricing exception needs review",
-                    "edited": {"ts": "1700000001.000000"},
-                    "thread_ts": "1700000000.000000",
-                    "user": "U1",
-                    "reply_count": 2,
-                    "reactions": [{"name": "eyes", "count": 1}],
-                },
-            ]
+            return list(raw.get(channel["id"], []))
+
+        def _raw_channels(self, org_id):
+            return [{"id": "C123", "name": "ops"}]
 
     monkeypatch.setattr(slack_mod, "SlackIngestor", FakeSlackIngestor)
 
@@ -109,13 +114,38 @@ def test_slack_resolver_returns_current_message_artifact(monkeypatch):
 
     assert isinstance(artifact, ContentArtifact)
     assert artifact.source_system == "slack"
-    assert artifact.source_artifact == "C123:1700000000.000000"
-    assert artifact.content == "pricing exception needs review"
+    assert artifact.source_artifact == "C123:1700000000.000000"  # thread-level id
     assert artifact.content_type == "conversation"
-    assert artifact.provenance["thread_ts"] == "1700000000.000000"
+    # Whole thread, author-attributed, oldest first.
+    assert artifact.content == "U1: pricing exception needs review\nU2: on it\nU3: fixed"
+    assert artifact.provenance["thread_id"] == "1700000000.000000"
+    assert artifact.provenance["message_count"] == 3
 
 
-def test_confluence_resolver_returns_metadata_artifact(monkeypatch):
+def test_slack_resolver_returns_empty_artifact_for_vanished_thread(monkeypatch):
+    """A thread whose messages are all gone resolves to EMPTY content, so the swap
+    removes its chunks (self-cleaning deletion)."""
+    class FakeSlackIngestor(slack_mod.SlackIngestor):
+        def _raw_messages(self, org_id, channel):
+            return []
+
+        def _raw_channels(self, org_id):
+            return [{"id": "C123", "name": "ops"}]
+
+    monkeypatch.setattr(slack_mod, "SlackIngestor", FakeSlackIngestor)
+
+    artifact = resolvers._resolve_slack("org_1", "C123:1700000000.000000")
+    assert isinstance(artifact, ContentArtifact)
+    assert artifact.content == ""
+    assert artifact.source_artifact == "C123:1700000000.000000"
+
+
+def test_confluence_resolver_returns_full_rendered_page_artifact(monkeypatch):
+    """R18-A5 / AT-603 (T4): the refresh-worker resolver must render the SAME
+    full page body confluence_content.py's direct hand-off does — not a
+    metadata-only stub — so a freshness-driven re-chunk of an edited page is
+    never a downgrade (AC3)."""
+
     class FakeConfluenceIngestor:
         def _raw_content(self, org_id, space):
             assert org_id == "org_1"
@@ -136,6 +166,15 @@ def test_confluence_resolver_returns_metadata_artifact(monkeypatch):
                 },
             ]
 
+        def _raw_page_body(self, org_id, space_key, content_id):
+            assert org_id == "org_1"
+            assert space_key == "OPS"
+            assert content_id == "42"
+            return {
+                "body": {"storage": {"value": "<h1>Operating Model</h1><p>How the team runs day to day.</p>"}},
+                "metadata": {"labels": {"results": [{"prefix": "global", "name": "process"}]}},
+            }
+
     monkeypatch.setattr(confluence_mod, "ConfluenceIngestor", FakeConfluenceIngestor)
 
     artifact = resolvers._resolve_confluence("org_1", "OPS:42")
@@ -143,9 +182,36 @@ def test_confluence_resolver_returns_metadata_artifact(monkeypatch):
     assert artifact.source_system == "confluence"
     assert artifact.source_artifact == "OPS:42"
     assert artifact.content_type == "prose"
-    assert "Operating model" in artifact.content
-    assert "Analyst One" in artifact.content
+    # Full rendered body with headings preserved — not a metadata line.
+    assert artifact.content.startswith("# Operating Model")
+    assert "How the team runs day to day." in artifact.content
     assert artifact.source_timestamp == "2026-07-08T12:00:00Z"
+    assert artifact.provenance["labels"] == ["process"]
+    assert artifact.provenance["url"] == "/wiki/spaces/OPS/pages/42"
+
+
+def test_confluence_resolver_returns_none_for_trashed_or_archived_page(monkeypatch):
+    """R18-A5 / AT-603 (T4): a page whose status is no longer current must not
+    be resolved into fresh content — the connector's own known-id diff already
+    handles this case as a deletion (remove_artifact), not an upsert."""
+
+    class FakeConfluenceIngestor:
+        def _raw_content(self, org_id, space):
+            return [
+                {
+                    "id": "42",
+                    "type": "page",
+                    "status": "trashed",
+                    "version": {"number": 4, "when": "2026-07-09T00:00:00Z"},
+                },
+            ]
+
+        def _raw_page_body(self, org_id, space_key, content_id):  # pragma: no cover
+            raise AssertionError("must not fetch a body for a non-current page")
+
+    monkeypatch.setattr(confluence_mod, "ConfluenceIngestor", FakeConfluenceIngestor)
+
+    assert resolvers._resolve_confluence("org_1", "OPS:42") is None
 
 
 def test_operational_resolver_returns_log_artifact(monkeypatch):
@@ -184,11 +250,32 @@ def test_operational_resolver_returns_log_artifact(monkeypatch):
     assert artifact.source_timestamp == "2026-07-08T12:01:00Z"
 
 
-def test_resolvers_return_none_for_unknown_artifact(monkeypatch):
-    class FakeSlackIngestor:
+def test_resolver_returns_empty_for_unknown_thread(monkeypatch):
+    """A thread id not present in the channel resolves to empty content (its chunks,
+    if any, are swapped out) rather than a spurious single-message artifact."""
+    class FakeSlackIngestor(slack_mod.SlackIngestor):
         def _raw_messages(self, org_id, channel):
-            return [{"ts": "1.0", "text": "not it"}]
+            return [{"ts": "1.0", "text": "not it", "user": "U1"}]
+
+        def _raw_channels(self, org_id):
+            return [{"id": "C123", "name": "ops"}]
 
     monkeypatch.setattr(slack_mod, "SlackIngestor", FakeSlackIngestor)
 
-    assert resolvers._resolve_slack("org_1", "C123:2.0") is None
+    artifact = resolvers._resolve_slack("org_1", "C123:2.0")
+    assert isinstance(artifact, ContentArtifact)
+    assert artifact.content == ""
+    assert artifact.source_artifact == "C123:2.0"
+
+
+def test_resolver_returns_none_for_malformed_artifact_id(monkeypatch):
+    """An id with no thread separator can't be resolved → None (stays queued)."""
+    class FakeSlackIngestor(slack_mod.SlackIngestor):
+        def _raw_messages(self, org_id, channel):  # pragma: no cover - never reached
+            return []
+
+        def _raw_channels(self, org_id):  # pragma: no cover - never reached
+            return []
+
+    monkeypatch.setattr(slack_mod, "SlackIngestor", FakeSlackIngestor)
+    assert resolvers._resolve_slack("org_1", "no-separator") is None

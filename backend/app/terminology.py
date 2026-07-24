@@ -194,23 +194,30 @@ def rewrite_text(text: Optional[str], terminology: Optional[Dict[str, str]]) -> 
     return _rewrite(text, pattern, expanded)
 
 
-def resolve_run_terminology(run_id: str) -> Dict[str, str]:
+def resolve_run_terminology(
+    run_id: str, run: Optional[Dict[str, Any]] = None
+) -> Dict[str, str]:
     """Resolve the terminology map for a run's ACTIVE template.
 
     Reads the template id recorded on the run at launch (run record `templateId`,
     with the `setup_context` KV as a fallback), then returns that template's
     `terminology` dict from the registry. Returns ``{}`` when the run has no
     template or the template declares no terminology — the safe no-op default.
-    Never raises: a lookup problem degrades to an empty map (generic wording)."""
+    Never raises: a lookup problem degrades to an empty map (generic wording).
+
+    ``run``: a caller that already loaded the run record (e.g. the opportunities
+    endpoint via ``read_run``) may pass it to avoid a redundant re-read; when
+    omitted the record is fetched here."""
     try:
         from . import db
     except ImportError:  # pragma: no cover - project-root execution
         import app.db as db  # type: ignore
 
-    try:
-        run = db.get_run(run_id) or {}
-    except Exception:
-        return {}
+    if run is None:
+        try:
+            run = db.get_run(run_id) or {}
+        except Exception:
+            return {}
 
     terminology_by_pack = resolve_run_terminology_by_pack(run_id, run=run)
     if len(terminology_by_pack) == 1:

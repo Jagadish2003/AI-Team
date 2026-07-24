@@ -20,9 +20,15 @@ Principles this module encodes (Addendum A §1 / AC10–AC13):
     (AC12). This mirrors LIC-1's never-a-cold-stop posture — commercial pressure
     comes from blocking growth, not breaking production.
 
-  * ``max_systems`` of ``None`` (or absent) behaves as UNLIMITED, so keys issued
-    before this addendum remain valid and unconstrained (AC13). Enforcement is
-    opt-in per key.
+  * ``max_systems`` of ``None`` (or absent) on a VALID license behaves as
+    UNLIMITED, so keys issued before this addendum remain valid and unconstrained
+    (AC13). Enforcement is opt-in per key.
+
+  * R-1.9.1-L1 / T5 (AC4): an UNLICENSED org (no verifiable license payload) is
+    NOT unlimited — it is capped at ``get_unlicensed_system_cap()`` (config,
+    default 2). Connecting beyond the cap is refused at connection time with
+    licensing-specific wording. Installing a valid license lifts the cap to the
+    payload's ``max_systems`` (or to unlimited when the payload scopes none).
 
 This module is deliberately the single source of the counting + entitlement
 logic; the connect-time gates (``main.connect_connector``,
@@ -33,7 +39,8 @@ used / systems licensed state) and T11 (frontend) build on the same helpers.
 from __future__ import annotations
 
 import logging
-from typing import Optional
+import os
+from typing import Any, Dict, List, Optional
 
 from fastapi import HTTPException
 
@@ -51,19 +58,91 @@ CONNECTED_STATUS = "connected"
 # scope block (buy more systems) from a term block (renew the key).
 BLOCK_REASON = "system_limit_reached"
 
+# MSP-B13 / T4 (AT-746): "approaching-cap" margin — how many systems may remain
+# before the Integration Hub shows the approaching-capacity notice. Configurable
+# (the AC's "configured warning"); default 1 so the LAST licensable seat always
+# warns before it is taken. 0 disables the approaching notice (only the at-cap
+# hard stop remains).
+_DEFAULT_APPROACHING_MARGIN = 1
+
+
+def _approaching_margin() -> int:
+    """Configured systems-remaining threshold for the approaching-cap notice."""
+    raw = os.environ.get("LICENSE_APPROACHING_CAP_MARGIN")
+    if raw is None or not raw.strip():
+        return _DEFAULT_APPROACHING_MARGIN
+    try:
+        return max(0, int(raw))
+    except (TypeError, ValueError):
+        logger.warning(
+            "license limits: non-integer LICENSE_APPROACHING_CAP_MARGIN %r — using %d",
+            raw, _DEFAULT_APPROACHING_MARGIN,
+        )
+        return _DEFAULT_APPROACHING_MARGIN
+
+
+# R-1.9.1-L1 / T5 (AC4) — Unlicensed connection cap.
+# With NO valid license installed, an org may connect only a small number of
+# systems before new connections are refused (naming licensing as the reason),
+# instead of the previous "unlimited until a key is pasted". Config via the
+# ``UNLICENSED_SYSTEM_CAP`` env var (resolved live so an operator change needs no
+# restart); default 2. A *valid* license with no ``limits.max_systems`` stays
+# unlimited — the cap applies ONLY when there is no verifiable license payload.
+UNLICENSED_SYSTEM_CAP_ENV = "UNLICENSED_SYSTEM_CAP"
+DEFAULT_UNLICENSED_SYSTEM_CAP = 2
+
+
+def get_unlicensed_system_cap() -> int:
+    """Systems an UNLICENSED org may connect before new connections are refused.
+
+    Reads the ``UNLICENSED_SYSTEM_CAP`` env var live (so a deployment can tune it
+    without a restart); default ``2``. A missing/blank value uses the default; a
+    non-integer or negative value falls back to the default and logs a warning
+    rather than blocking every connect (forward-only never over-blocks on bad
+    config).
+    """
+    raw = os.getenv(UNLICENSED_SYSTEM_CAP_ENV)
+    if raw is None or raw.strip() == "":
+        return DEFAULT_UNLICENSED_SYSTEM_CAP
+    try:
+        cap = int(raw)
+    except (TypeError, ValueError):
+        logger.warning(
+            "license limits: non-integer %s=%r — using default %d",
+            UNLICENSED_SYSTEM_CAP_ENV,
+            raw,
+            DEFAULT_UNLICENSED_SYSTEM_CAP,
+        )
+        return DEFAULT_UNLICENSED_SYSTEM_CAP
+    if cap < 0:
+        logger.warning(
+            "license limits: negative %s=%d — using default %d",
+            UNLICENSED_SYSTEM_CAP_ENV,
+            cap,
+            DEFAULT_UNLICENSED_SYSTEM_CAP,
+        )
+        return DEFAULT_UNLICENSED_SYSTEM_CAP
+    return cap
+
 
 def get_max_systems(org_id: str) -> Optional[int]:
-    """The org's licensed ``max_systems``, or ``None`` for an unlimited license.
+    """The org's effective system cap, or ``None`` for an unlimited license.
 
     Reads the org's live-validated license via
     ``license_runtime.get_current_license_status`` (the side-effect-free path the
-    run gate also uses) and returns ``payload.limits.max_systems``.
+    run gate also uses). The result is one of three cases:
 
-    ``None`` means "do not enforce a system cap" and is returned for every case
-    where no numeric limit applies: an unlimited/pre-addendum key
-    (``max_systems`` null or absent), or no verifiable payload at all
-    (no_license / invalid — those states are handled by LIC-1's existing
-    read-only behaviour, not by this scope limit). Never raises.
+      * **Valid license with ``limits.max_systems`` = N** → ``N``.
+      * **Valid license with no ``limits.max_systems``** (null/absent, including
+        pre-addendum keys) → ``None`` (unlimited — the issuer's explicit choice).
+      * **No verifiable license payload** (no_license / invalid / org_mismatch /
+        unsupported_payload_version / clock_rollback — an install that has no
+        usable license) → the **unlicensed connection cap**
+        (``get_unlicensed_system_cap()``, config, default 2). This is the
+        R-1.9.1-L1 / T5 (AC4) change: an unlicensed org is capped, not unlimited.
+
+    A status-read exception returns ``None`` (do not over-block on a transient
+    read failure — that is an error state, not an "unlicensed" one). Never raises.
     """
     try:
         result = get_current_license_status(org_id=org_id)
@@ -71,10 +150,19 @@ def get_max_systems(org_id: str) -> Optional[int]:
         logger.exception("license limits: status read failed for org %s", org_id)
         return None
 
-    payload = result.get("payload") or {}
+    payload = result.get("payload")
+    if payload is None:
+        # T5 / AC4: no verifiable license installed → the unlicensed cap, not
+        # unlimited. no_license / invalid / clock_rollback results carry no
+        # ``payload`` key at all, so ``payload is None`` is exactly the unlicensed
+        # signal. A verified license ALWAYS carries a payload (even an empty one,
+        # an older key shape with no limits block) — that stays unlimited below.
+        return get_unlicensed_system_cap()
+
     limits = payload.get("limits") or {}
     max_systems = limits.get("max_systems")
     if max_systems is None:
+        # A verified license that does not scope max_systems stays unlimited.
         return None
     try:
         return int(max_systems)
@@ -89,24 +177,74 @@ def get_max_systems(org_id: str) -> Optional[int]:
         return None
 
 
+def _is_multi_scope(record: Dict[str, Any]) -> bool:
+    """Whether a connector record is a multi-scope cloud connector (MSP-B13).
+
+    A multi-scope connector (AWS/Azure Events) is one-connection-MANY-scopes: each
+    pinned account/subscription is a billable system, and the connection row itself
+    is not. Detected from the catalog ``multiScope`` flag (merged in by
+    ``org_connectors_list``), with the presence of a ``scopes`` list as a fallback
+    signal so a per-org override that dropped the flag is still counted correctly.
+    """
+    return bool(record.get("multiScope")) or isinstance(record.get("scopes"), list)
+
+
+def _pinned_scope_count(record: Dict[str, Any]) -> int:
+    """Number of PINNED scopes on a multi-scope connector record.
+
+    Only pinned scopes live on ``scopes`` (candidates live on ``candidate_scopes``
+    and are never counted — forward-only activation, MSP-B13 AC4), so the length of
+    the list is exactly the connector's billable system count.
+    """
+    scopes = record.get("scopes")
+    if not isinstance(scopes, list):
+        return 0
+    return sum(1 for s in scopes if isinstance(s, dict) and s.get("scope_id"))
+
+
+def _has_license_payload(org_id: str) -> bool:
+    """Whether the org has a verifiable license payload (a usable license).
+
+    Used only to choose the block wording in :func:`enforce_can_connect` — an
+    unlicensed org gets licensing-specific copy, a licensed-but-capped org gets
+    the "your license covers N" copy. Never raises.
+    """
+    try:
+        result = get_current_license_status(org_id=org_id)
+    except Exception:  # pragma: no cover — defensive
+        return False
+    # A verified license carries a ``payload`` key (present even when empty); the
+    # no-license / invalid results omit it entirely.
+    return result.get("payload") is not None
+
+
 def count_connected_systems(org_id: str) -> int:
     """Number of systems currently connected for the org.
 
-    A "system" is one connected Integration-Hub entity: a connector whose per-org
-    state is ``status == "connected"`` (``db.org_connectors_list`` merges the
-    shared catalog with this org's own connection state). This is exactly the
-    count the customer sees in the hub, so the enforced count matches the pricing
-    definition (Addendum A §1, AC14).
+    A "system" is one connected Integration-Hub entity — the pricing definition
+    (Addendum A §1, AC14). For a single-scope connector that is the connector when
+    its per-org ``status == "connected"``; for a MULTI-SCOPE cloud connector
+    (MSP-B13: AWS/Azure Events) it is each PINNED account/subscription, so the
+    connection contributes its pinned-scope count, not one (the connection row
+    itself is not a billable system). ``db.org_connectors_list`` merges the shared
+    catalog with this org's own state, so the count the customer sees in the hub is
+    exactly the count enforced here.
     """
-    connectors = db.org_connectors_list(org_id)
-    return sum(1 for c in connectors if c.get("status") == CONNECTED_STATUS)
+    total = 0
+    for c in db.org_connectors_list(org_id):
+        if _is_multi_scope(c):
+            total += _pinned_scope_count(c)
+        elif c.get("status") == CONNECTED_STATUS:
+            total += 1
+    return total
 
 
 def _build_limit_state(used: int, max_systems: Optional[int]) -> dict:
     """Pure derivation of the Integration-Hub limit state from its two inputs.
 
     Split out from :func:`get_limit_state` so the used-vs-licensed maths (and the
-    unlimited / at-limit derivation) is unit-testable without a DB or a license.
+    unlimited / approaching / at-cap derivation) is unit-testable without a DB or a
+    license.
 
     ``max_systems`` of ``None`` means unlimited, so ``systemsLicensed`` is ``None``
     and ``canConnectMore`` is always ``True``. Otherwise ``canConnectMore`` mirrors
@@ -114,13 +252,40 @@ def _build_limit_state(used: int, max_systems: Optional[int]) -> dict:
     is the hub-wide "is there headroom" signal, NOT a per-connector verdict: a
     reconnect of an already-connected system is always allowed regardless
     (forward-only), which the connect-time gate handles per connector.
+
+    MSP-B13 / T4 (AT-746) adds the approaching-cap notice + at-cap hard stop the
+    Integration Hub / cloud-connector cards render (AC2/AC5):
+
+      * ``atCap`` — at or over the licensed limit (``used >= max_systems``); carries
+        the hard-stop ``notice`` (:func:`limit_message`).
+      * ``approachingCap`` — under the cap but within the configured margin of it
+        (``0 < remaining <= LICENSE_APPROACHING_CAP_MARGIN``); carries the
+        approaching ``notice`` (:func:`approaching_cap_message`).
+
+    Both are additive to the T10 shape; ``notice`` is ``None`` when there is nothing
+    to warn about (comfortably under the cap, or unlimited).
     """
     unlimited = max_systems is None
+    can_connect = unlimited or used < max_systems
+    at_cap = (not unlimited) and used >= max_systems
+    approaching = False
+    notice: Optional[str] = None
+    if at_cap:
+        notice = limit_message(max_systems)
+    elif not unlimited:
+        remaining = max_systems - used
+        margin = _approaching_margin()
+        if margin > 0 and 0 < remaining <= margin:
+            approaching = True
+            notice = approaching_cap_message(used, max_systems)
     return {
         "systemsUsed": used,
         "systemsLicensed": max_systems,  # None => unlimited license
         "unlimited": unlimited,
-        "canConnectMore": unlimited or used < max_systems,
+        "canConnectMore": can_connect,
+        "approachingCap": approaching,
+        "atCap": at_cap,
+        "notice": notice,
     }
 
 
@@ -134,8 +299,11 @@ def get_limit_state(org_id: str) -> dict:
     customer sees is exactly the count that is enforced (Addendum A §1 / AC14).
 
     Returns ``{systemsUsed, systemsLicensed, unlimited, canConnectMore}`` where
-    ``systemsLicensed``/``unlimited`` reflect ``max_systems`` (``None`` => unlimited,
-    including pre-addendum keys and no-license/invalid states, per AC13).
+    ``systemsLicensed``/``unlimited`` reflect ``get_max_systems`` — ``None`` =>
+    unlimited (a valid license with no ``max_systems``, including pre-addendum
+    keys). An UNLICENSED org reports the unlicensed cap (default 2) as
+    ``systemsLicensed`` with ``unlimited=False`` (R-1.9.1-L1 / T5, AC4) — it is a
+    real numeric limit now, not unlimited.
     """
     return _build_limit_state(count_connected_systems(org_id), get_max_systems(org_id))
 
@@ -175,21 +343,120 @@ def can_connect_new_system(org_id: str, connector_id: Optional[str] = None) -> b
 
 
 def limit_message(max_systems: int) -> str:
-    """The customer-facing block message (Addendum A §1)."""
+    """The customer-facing block message for a LICENSED org at its cap (Addendum A §1)."""
     return (
         f"Your license covers {max_systems} systems. "
         "Contact CloudFulcrum to add more."
     )
 
 
+def approaching_cap_message(used: int, max_systems: int) -> str:
+    """The approaching-capacity notice wording (MSP-B13 / T4, AC2/AC5).
+
+    Shown before the cap is reached so a customer is warned honestly at connection
+    time, not surprised at the cap. ``remaining`` is always positive here (the
+    at-cap case uses :func:`limit_message` instead).
+    """
+    remaining = max_systems - used
+    seat = "system" if remaining == 1 else "systems"
+    return (
+        f"You are approaching your licence limit: {used} of {max_systems} systems "
+        f"connected ({remaining} {seat} remaining). Contact CloudFulcrum to add more."
+    )
+
+
+def unlicensed_limit_message(cap: int) -> str:
+    """The block message for an UNLICENSED org at the cap (R-1.9.1-L1 / T5, AC4).
+
+    Names licensing explicitly as the reason — this install has no license, so the
+    remedy is to install one, not to "buy more systems".
+    """
+    return (
+        f"No license is installed. Unlicensed installations can connect up to "
+        f"{cap} systems. Install a license from CloudFulcrum to connect more."
+    )
+
+
+# ---------------------------------------------------------------------------
+# Per-scope activation gate — MSP-B13 / T4 (AT-746)
+#
+# A multi-scope cloud connector (AWS/Azure Events) bills PER PINNED SCOPE, so the
+# licence gate must fire when an Owner PINS a scope, not when the connection is
+# created. These helpers mirror can_connect_new_system / enforce_can_connect but
+# key idempotency on the (connector, scope) pair rather than the connector.
+# ---------------------------------------------------------------------------
+
+
+def _pinned_scope_ids(org_id: str, connector_id: str) -> List[str]:
+    """The scope ids already pinned on this org's connector, or []."""
+    record = db.org_connector_get(org_id, connector_id) or {}
+    scopes = record.get("scopes")
+    if not isinstance(scopes, list):
+        return []
+    return [
+        str(s.get("scope_id"))
+        for s in scopes
+        if isinstance(s, dict) and s.get("scope_id")
+    ]
+
+
+def can_pin_new_scope(
+    org_id: str, connector_id: str, scope_id: Optional[str] = None
+) -> bool:
+    """Whether the org may PIN another scope under its licence (MSP-B13 AC5).
+
+    Each pinned scope is one system, so a new pin is a new system and is subject to
+    ``max_systems`` exactly like a connector connect. Re-pinning an ALREADY-pinned
+    scope is idempotent (not a new system) and is never blocked — forward-only,
+    mirroring :func:`can_connect_new_system`'s reconnect refinement.
+    """
+    max_systems = get_max_systems(org_id)
+    if max_systems is None:
+        return True  # unlimited licence (or no enforceable limit)
+    if scope_id is not None and str(scope_id) in _pinned_scope_ids(org_id, connector_id):
+        return True  # idempotent re-pin of an existing scope — not a new system
+    return count_connected_systems(org_id) < max_systems
+
+
+def enforce_can_pin_scope(
+    org_id: str, connector_id: str, scope_id: Optional[str] = None
+) -> None:
+    """Raise HTTP 402 if pinning ``scope_id`` would exceed ``max_systems`` (AC3).
+
+    No-op when the licence is unlimited, the org is under its limit, or the scope is
+    already pinned (idempotent). On a block it raises ``HTTPException(402)`` with the
+    SAME structured detail as :func:`enforce_can_connect` (message + reason +
+    used/licensed counts), so the cloud-connector card renders the identical
+    hard-stop wording the connector connect gate does.
+    """
+    if can_pin_new_scope(org_id, connector_id, scope_id):
+        return
+    max_systems = get_max_systems(org_id)
+    used = count_connected_systems(org_id)
+    raise HTTPException(
+        status_code=402,
+        detail={
+            "detail": limit_message(max_systems),
+            "reason": BLOCK_REASON,
+            "systemsUsed": used,
+            "systemsLicensed": max_systems,
+        },
+    )
+
+
 def enforce_can_connect(org_id: str, connector_id: Optional[str] = None) -> None:
-    """Raise HTTP 402 if connecting ``connector_id`` would exceed ``max_systems``.
+    """Raise HTTP 402 if connecting ``connector_id`` would exceed the system cap.
 
     No-op when the license is unlimited, when the org is under its limit, or when
     the connector is already connected (idempotent reconnect). On a block it
     raises ``HTTPException(402)`` with a structured detail carrying the clear
-    message and a request path, plus the used/licensed counts the Integration Hub
+    message, the ``BLOCK_REASON``, and the used/licensed counts the Integration Hub
     surfaces (T10/T11).
+
+    The cap applies to BOTH a licensed org that scopes ``max_systems`` AND an
+    unlicensed org (R-1.9.1-L1 / T5, AC4) — the two are distinguished only by the
+    block WORDING: an unlicensed org gets licensing-specific copy naming the
+    missing license, a capped licensed org gets the "your license covers N" copy.
 
     402 Payment Required (the same code LIC-1's run gate uses) cleanly separates a
     license/entitlement block from an auth (401) or RBAC (403) failure.
@@ -197,13 +464,18 @@ def enforce_can_connect(org_id: str, connector_id: Optional[str] = None) -> None
     if can_connect_new_system(org_id, connector_id):
         return
 
-    # Only reachable when a numeric limit applies and it is exceeded.
+    # Only reachable when a numeric cap applies and it is exceeded.
     max_systems = get_max_systems(org_id)
     used = count_connected_systems(org_id)
+    message = (
+        limit_message(max_systems)
+        if _has_license_payload(org_id)
+        else unlicensed_limit_message(max_systems)
+    )
     raise HTTPException(
         status_code=402,
         detail={
-            "detail": limit_message(max_systems),
+            "detail": message,
             "reason": BLOCK_REASON,
             "systemsUsed": used,
             "systemsLicensed": max_systems,

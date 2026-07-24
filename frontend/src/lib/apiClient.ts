@@ -160,6 +160,29 @@ export async function apiDelete<T = void>(path: string): Promise<T> {
   return body as T;
 }
 
+/**
+ * Authenticated binary/text download. Fetches `path` with the standard auth
+ * header and returns the response `Blob` plus the server-suggested filename
+ * (parsed from `Content-Disposition`), so a caller can trigger a browser download
+ * of an authenticated resource (e.g. the cloud-connector security artifacts —
+ * MSP-B13 T5). A `<a download href>` cannot carry the Authorization header, which
+ * is why the download goes through fetch here.
+ */
+export async function apiGetBlob(
+  path: string,
+): Promise<{ blob: Blob; filename: string | null }> {
+  const res = await fetch(`${BASE_URL}${path}`, { headers: { ...authHeader() } });
+  if (!res.ok) {
+    if (res.status === 401) _handle401();
+    const body = await parseBody(res);
+    throw new ApiError(`GET ${path} failed`, res.status, body);
+  }
+  const blob = await res.blob();
+  const cd = res.headers.get("content-disposition") ?? "";
+  const match = /filename\*?=(?:UTF-8'')?"?([^";]+)"?/i.exec(cd);
+  return { blob, filename: match ? decodeURIComponent(match[1]) : null };
+}
+
 /* ========== TASK 7 - NEW CODE START ========== */
 
 /**

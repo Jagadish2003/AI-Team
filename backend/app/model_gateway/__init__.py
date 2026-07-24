@@ -303,6 +303,22 @@ def validate_provider_config() -> None:
     gen_provider = _resolve_provider(gen_name, _ENV_GENERATION)
     emb_provider = _resolve_provider(emb_name, _ENV_EMBEDDING)
 
+    # The 'hosted' provider has no embeddings endpoint — its embed() returns []
+    # by design (Anthropic's hosted API does not expose embeddings). Selecting it
+    # for embeddings therefore silently DISABLES retrieval: every retrieval_chunk
+    # stays pending (embedding IS NULL) forever and search returns nothing. Make
+    # that misconfiguration loud at startup instead of leaving it to be inferred
+    # from an endless "gateway returned 0 vectors" worker log.
+    if emb_provider.name == "hosted":
+        logger.warning(
+            "%s=hosted: the hosted provider does not support embeddings — retrieval "
+            "embedding is DISABLED (chunks never embed; search returns nothing). Set "
+            "%s to 'in_boundary' (any OpenAI-compatible embeddings API) or "
+            "'customer_tenant' to enable retrieval. See backend/.env.template.",
+            _ENV_EMBEDDING,
+            _ENV_EMBEDDING,
+        )
+
     # R17-D2 T2 — reserved-connector-id collision guard. The customer-tenant model
     # credential is vaulted in the shared `credentials` table under a reserved
     # connector_id ("customer_tenant"). If a REAL OAuth connector were ever
@@ -341,6 +357,23 @@ def validate_provider_config() -> None:
             logger.debug(
                 "model_gateway: provider %s validate() raised", provider.name, exc_info=True
             )
+
+    # R1.9.1-H1 T4 (F4 fix): warn at startup if CUSTOMER_TENANT_API_KEY is set
+    # under the production deployment profile. Unconditional — checked
+    # regardless of which provider is currently selected, so the warning
+    # fires as soon as the var is set in production, not only once
+    # customer_tenant becomes the active provider.
+    try:
+        from app.model_gateway.customer_tenant_vault import (
+            validate_no_production_env_fallback,
+        )
+
+        validate_no_production_env_fallback()
+    except Exception:  # pragma: no cover - validation must never block startup
+        logger.debug(
+            "model_gateway: customer_tenant production env-fallback check raised",
+            exc_info=True,
+        )
 
     logger.info(
         "model_gateway config validated: %s=%s %s=%s",

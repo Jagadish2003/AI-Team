@@ -5,6 +5,19 @@ Blocks the discovery-run *mutating* endpoints when the license status is
 route, and all ``valid`` / ``grace`` traffic untouched. This is the behavioural
 restriction of the scheme — graceful, never a hard lockout (story §5, AC5/AC6).
 
+Seat-overage gate (R17-D4 Addendum A follow-up): the connect-time gate
+(``license_limits.enforce_can_connect``) is FORWARD-ONLY — it blocks *new*
+connections past ``max_systems`` but never disconnects existing ones, so an org
+that connected systems while unlicensed (unlimited) and then installed a smaller
+key ends up with more systems connected than it is licensed for. Because the
+value of a license is consumed at RUN time, this gate additionally blocks a
+discovery run while ``connected_systems > max_systems``, with an actionable "you
+have N of M — disconnect the extra" message. It runs ONLY after the status check
+passes (a healthy license), only when the license carries a numeric cap
+(unlimited licenses are never seat-gated), and FAILS OPEN on a count error so a
+valid run is never wrongly blocked by a transient DB hiccup (the status gate
+above remains the fail-closed license-validity check).
+
 Why middleware (not a per-route dependency): the gate is a single
 cross-cutting policy over a small, well-known set of run-trigger paths. A
 middleware keeps the logic in one module behind a one-line
@@ -28,7 +41,7 @@ from __future__ import annotations
 
 import logging
 import re
-from typing import Callable
+from typing import Callable, Optional, Tuple
 
 from fastapi import FastAPI, Request, Response
 from fastapi.responses import JSONResponse
@@ -81,6 +94,57 @@ def _blocked_response(status: str) -> JSONResponse:
     )
 
 
+def _seat_overage(org_id: str) -> Optional[Tuple[int, int]]:
+    """Return ``(used, licensed)`` when the org has MORE systems connected than
+    its license covers, else ``None``.
+
+    Uses the SAME single-source-of-truth helpers the connect gate and the
+    Integration Hub counter use (``license_limits``), so the count can never
+    drift. Returns ``None`` — i.e. do NOT seat-gate — for an unlimited license
+    (no numeric cap) and, deliberately, for ANY error: this check is additive to
+    the fail-closed status gate above and must never over-block a valid-license
+    run because a count query hiccuped (fail OPEN on the overage dimension only).
+    """
+    try:
+        from ..license_limits import count_connected_systems, get_max_systems
+
+        licensed = get_max_systems(org_id)
+        if licensed is None:
+            return None  # unlimited — no seat cap to enforce
+        used = count_connected_systems(org_id)
+        return (used, licensed) if used > licensed else None
+    except Exception:  # noqa: BLE001 — never block a valid run on a count error
+        logger.warning(
+            "license gate: seat-count check failed for org %s — not seat-gating",
+            org_id,
+            exc_info=True,
+        )
+        return None
+
+
+def _overage_blocked_response(used: int, licensed: int) -> JSONResponse:
+    """Clear, structured 402 for a run blocked by the connected-system seat cap.
+
+    Distinct ``reason`` and the used/licensed counts let the SPA show an
+    actionable "disconnect N systems" message rather than a generic renewal banner.
+    """
+    excess = max(0, used - licensed)
+    return JSONResponse(
+        status_code=402,
+        content={
+            "detail": (
+                f"You have {used} systems connected but your license covers "
+                f"{licensed}. Disconnect {excess} system"
+                f"{'s' if excess != 1 else ''} in the Integration Hub to run "
+                "discovery, or contact CloudFulcrum to increase your license."
+            ),
+            "reason": "license_over_limit",
+            "systemsUsed": used,
+            "systemsLicensed": licensed,
+        },
+    )
+
+
 class LicenseGateMiddleware(BaseHTTPMiddleware):
     """Block run-trigger endpoints unless the license is live-validated healthy.
 
@@ -109,7 +173,13 @@ class LicenseGateMiddleware(BaseHTTPMiddleware):
             # Fail closed: block unless the live status is explicitly valid/grace.
             if status not in _RUN_ALLOWED_STATUSES:
                 return _blocked_response(status or LicenseStatus.INVALID)
-        # Everything else (reads, auth/login, valid/grace runs) passes through.
+            # License is healthy — now enforce the SEAT COUNT: a valid license
+            # still cannot run discovery while more systems are connected than it
+            # covers (forward-only connect gate leaves such overage in place).
+            overage = _seat_overage(org_id)
+            if overage is not None:
+                return _overage_blocked_response(*overage)
+        # Everything else (reads, auth/login, in-limit valid/grace runs) passes through.
         return await call_next(request)
 
 

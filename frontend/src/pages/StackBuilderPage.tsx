@@ -6,16 +6,17 @@
  * routes between the 4 child pages, and translates state to /launch + /compute.
  */
 
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useRunContext } from '../context/RunContext';
 import { useAuthOptional } from '../context/AuthContext';
 import { isViewerRole } from '../utils/roles';
 
 // Import components and types
-import { CheckCircle2, Database, Layers3, Loader2, Target } from 'lucide-react';
+import { CheckCircle2, Database, Layers3, Target } from 'lucide-react';
 import type { WorkspaceCatalogResponse } from '../types/workspace_catalog';
 import { useResource } from '../lib/dataCache';
+import { Skeleton } from '../components/common/Skeleton';
 import { cacheKeys } from '../lib/cacheKeys';
 import type {
   SetupState,
@@ -25,6 +26,7 @@ import type {
   SystemDefaultItem,
 } from '../types/stack_builder';
 import PageShell from '../components/common/PageShell';
+import InlineError from '../components/common/InlineError';
 import {
   DiscoveryConfidenceBar,
   LendingFirstRunGuide,
@@ -444,14 +446,6 @@ export default function StackBuilderPage({
 
   const setupState = useSetupState();
 
-  // R18-C1 T3: industries + templates come from the backend registry, not
-  // hardcoded frontend arrays. On failure we keep the lists EMPTY and surface a
-  // retry (see DiscoveryFocusPage) — never a stale local fallback (AC7/AC8/AC10).
-  // (Catalog state is provided below via the shared data cache — useResource.)
-  const [industries, setIndustries] = useState<IndustryListItem[]>([]);
-  const [templates, setTemplates] = useState<TemplateListItem[]>([]);
-  const [registryLoading, setRegistryLoading] = useState(true);
-  const [registryError, setRegistryError] = useState<string | null>(null);
   const [launchState, setLaunchState] = useState<LendingGuideLaunchState>('setup');
 
   const { state, steps } = setupState;
@@ -498,34 +492,37 @@ export default function StackBuilderPage({
     // per fetch so this mirrors the previous per-fetch application.
   }, [catalog, catalogErrObj, setupState.setSalesforceClouds, setupState.initFromCatalog]);
 
-  // R18-C1 T3: load the industry + template registries. Both come from the same
-  // backend source of truth, so one loader drives both pickers and one Retry
-  // reloads both. On error the lists are cleared (no stale local fallback).
-  const fetchRegistry = useCallback(() => {
-    setRegistryLoading(true);
-    Promise.all([
+  // R18-C1 T3: industries + templates come from the backend registry, not
+  // hardcoded frontend arrays. Both come from the same source of truth, so ONE
+  // cache key drives both pickers and one Retry reloads both. On the SHARED
+  // cache (not page-local state) so navigating away and back re-renders them
+  // from cache with no refetch and no skeleton — the registry only changes when
+  // the backend's does, which the background revalidation picks up silently.
+  // On error the lists stay EMPTY and a retry is surfaced (see
+  // DiscoveryFocusPage) — never a stale local fallback (AC7/AC8/AC10).
+  const registryFetcher = useCallback(async () => {
+    const [fetchedIndustries, fetchedTemplates] = await Promise.all([
       fetchIndustries(apiBase, token),
       fetchTemplates(apiBase, token),
-    ])
-      .then(([fetchedIndustries, fetchedTemplates]) => {
-        setIndustries(fetchedIndustries);
-        setTemplates(fetchedTemplates);
-        setRegistryError(null);
-      })
-      .catch((err) => {
-        console.error('[StackBuilderPage] Registry fetch failed:', err);
-        setRegistryError(
-          'Could not load industries and templates from the registry. Please retry.',
-        );
-        setIndustries([]);
-        setTemplates([]);
-      })
-      .finally(() => setRegistryLoading(false));
+    ]);
+    return { industries: fetchedIndustries, templates: fetchedTemplates };
   }, [apiBase, token]);
 
-  useEffect(() => {
-    fetchRegistry();
-  }, [fetchRegistry]);
+  const {
+    data: registryData,
+    loading: registryLoading,
+    error: registryErrObj,
+    refetch: fetchRegistry,
+  } = useResource<{ industries: IndustryListItem[]; templates: TemplateListItem[] }>(
+    cacheKeys.stackBuilderRegistry,
+    registryFetcher,
+  );
+  // Memoised so the empty fallbacks keep a stable identity across renders.
+  const industries = useMemo(() => registryData?.industries ?? [], [registryData]);
+  const templates = useMemo(() => registryData?.templates ?? [], [registryData]);
+  const registryError = registryErrObj
+    ? 'Could not load industries and templates from the registry. Please retry.'
+    : null;
 
   const loadIndustrySystemDefaults = useCallback(
     (industryId: string): Promise<SystemDefaultItem[]> =>
@@ -533,20 +530,12 @@ export default function StackBuilderPage({
     [apiBase, token],
   );
 
-  // Refresh on tab focus/visibility. Retained until Phase 2 wires connector
-  // mutations to invalidate the catalog; harmless alongside cache invalidation.
-  useEffect(() => {
-    const handleVisibilityChange = () => {
-      if (!document.hidden) refetchCatalog();
-    };
-    const handleFocus = () => refetchCatalog();
-    document.addEventListener('visibilitychange', handleVisibilityChange);
-    window.addEventListener('focus', handleFocus);
-    return () => {
-      document.removeEventListener('visibilitychange', handleVisibilityChange);
-      window.removeEventListener('focus', handleFocus);
-    };
-  }, [refetchCatalog]);
+  // NOTE: this page used to re-fetch the catalog itself on tab focus/visibility.
+  // That is now both redundant and harmful: DataCacheProvider already
+  // background-revalidates every observed key on focus (and on the org change
+  // stream), whereas useResource's refetch() is a FOREGROUND run — it flips
+  // `loading`, so returning to the tab replaced the already-loaded step with its
+  // skeleton. The shared cache keeps the catalog fresh silently instead.
 
   const handleLaunch = useCallback(async () => {
     if (launchState === 'launching') return;
@@ -670,22 +659,28 @@ export default function StackBuilderPage({
             />
           )}
           {state.currentStep === 2 && catalogLoading && (
-            <div className="flex flex-col items-center justify-center gap-3 py-16 text-muted">
-              <Loader2 size={24} className="animate-spin text-emerald-500" aria-hidden />
-              <p className="text-sm">Loading your connected systems…</p>
+            // Skeleton mirrors the connected-systems list so the rows fill the
+            // same space instead of snapping in after a centered spinner.
+            <div
+              aria-busy="true"
+              aria-label="Loading your connected systems"
+              className="rounded-xl border border-border bg-panel p-5 shadow-sm"
+            >
+              <Skeleton className="h-5 w-56" />
+              <Skeleton className="mt-2 h-3 w-80" />
+              <div className="mt-5 space-y-3">
+                {[0, 1, 2, 3].map((i) => (
+                  <Skeleton key={i} className="h-14 w-full rounded-lg" />
+                ))}
+              </div>
             </div>
           )}
           {state.currentStep === 2 && catalogError && !catalogLoading && (
-            <div className="rounded-xl border border-red-200 bg-red-50/10 px-5 py-4 text-sm text-red-400">
-              {catalogError}
-              <button
-                type="button"
-                onClick={() => window.location.reload()}
-                className="ml-2 underline hover:no-underline"
-              >
-                Retry
-              </button>
-            </div>
+            <InlineError
+              title="Could not load your connected systems"
+              message={catalogError}
+              onRetry={refetchCatalog}
+            />
           )}
           {state.currentStep === 2 && !catalogLoading && !catalogError && (
             <YourSystemsPage setupState={setupState} catalog={catalog} />

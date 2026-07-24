@@ -214,13 +214,13 @@ The backend exposes the flag plus a per-connector auth-capability map at
 outbound setup path. The flag lives at the connect/setup edge only — it never touches
 ingestion (which stays mode-agnostic via `get_connector_credentials()`).
 
-Connectors whose **only** grant is `authorization_code` (**GitHub**, **Slack** — and
-Teams / SharePoint before their client-credentials mode shipped) have no outbound-only
-mode, so their Connect button is **not** hidden. Those fall back to the two options below.
+Connectors whose **only** grant is `authorization_code` (**GitHub** and **Slack**) have no
+outbound-only mode, so their Connect button is **not** hidden. Those fall back to the two
+options below. (Teams / SharePoint gained a Graph client-credentials mode in AT-556, so they
+are no longer in this set.)
 
 The one exception is a connector whose **only** OAuth grant is `authorization_code`
-(currently **GitHub** and **Slack**, plus **Teams / SharePoint** until their client-credentials
-mode ships). That grant finishes with a browser redirect to a callback URL, which needs an
+(currently **GitHub** and **Slack**). That grant finishes with a browser redirect to a callback URL, which needs an
 inbound-reachable path. Two options, in order of preference:
 
 1. **Internal-only completion (zero inbound).** Because the callback is browser-delivered, an

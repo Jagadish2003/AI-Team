@@ -68,18 +68,31 @@ describe('SlackChannelPicker', () => {
     expect(screen.getByText('#deploys')).toBeInTheDocument();
   });
 
-  it('pre-selects all channels when no selection has been saved yet', async () => {
+  // R18-A4 / AT-598 (T5, AC7): the depth-phase consent copy must state plainly
+  // that message CONTENT in the selected channels is read and used as evidence.
+  it('shows the depth-phase message-content consent copy', async () => {
     render(<SlackChannelPicker />);
     await screen.findByText('#ops-incidents');
-    // Both start checked (reflects the read-all default the customer can narrow).
-    expect(screen.getByText('2 of 2 channels selected')).toBeInTheDocument();
+    expect(
+      screen.getByText(/message content in selected channels is read and used as discovery evidence/i),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/private\s+channels and direct messages are never read/i),
+    ).toBeInTheDocument();
   });
 
-  it('sends only the selected channels in the PATCH (customer narrows the set)', async () => {
+  it('pre-selects nothing when no selection has been saved yet', async () => {
     render(<SlackChannelPicker />);
-    // De-select 'deploys' so only 'ops-incidents' remains selected.
-    const deploys = await screen.findByText('#deploys');
-    fireEvent.click(deploys);
+    await screen.findByText('#ops-incidents');
+    // Nothing pre-checked — the customer explicitly opts channels in.
+    expect(screen.getByText('0 of 2 channels selected')).toBeInTheDocument();
+  });
+
+  it('sends only the selected channels in the PATCH (customer opts channels in)', async () => {
+    render(<SlackChannelPicker />);
+    // Select 'ops-incidents' only.
+    const ops = await screen.findByText('#ops-incidents');
+    fireEvent.click(ops);
     fireEvent.click(screen.getByText('Save channel selection'));
 
     await waitFor(() => expect(mockApiPatch).toHaveBeenCalledTimes(1));
@@ -137,3 +150,7 @@ describe('SlackChannelPicker placement in ConnectorDetailPanel', () => {
     expect(screen.queryByText('Channels AgentIQ reads')).not.toBeInTheDocument();
   });
 });
+
+// Teams now has its own in-app channel picker (TeamsChannelPicker), covered by
+// src/__tests__/TeamsChannelPicker.test.tsx — including its depth-phase consent
+// copy and its placement in ConnectorDetailPanel.

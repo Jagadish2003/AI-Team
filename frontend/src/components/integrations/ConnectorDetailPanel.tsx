@@ -9,12 +9,20 @@ import { isViewerRole } from '../../utils/roles';
 import { ExternalLink, CheckCircle2 } from 'lucide-react';
 import SalesforceProductPicker from './SalesforceProductPicker';
 import SlackChannelPicker from './SlackChannelPicker';
+import TeamsChannelPicker from './TeamsChannelPicker';
+import JiraProjectPicker from './JiraProjectPicker';
+import ConfluenceSpacePicker from './ConfluenceSpacePicker';
+import SharePointSitePicker from './SharePointSitePicker';
+import GitHubRepoPicker from './GitHubRepoPicker';
 import SqlServerScopePicker from './SqlServerScopePicker';
 import OracleScopePicker from './OracleScopePicker';
 import PostgreSQLScopePicker from './PostgreSQLScopePicker';
 import StaticCredentialManager from './StaticCredentialManager';
 import OutboundAuthSetup from './OutboundAuthSetup';
 import { isStaticCredentialConnector } from './staticCredentialConnectors';
+import MultiScopeConnectorManager from './MultiScopeConnectorManager';
+import { isMultiScopeConnector } from './multiScopeConnectors';
+import { useNetworkProfileOptional } from '../../context/NetworkProfileContext';
 
 // T41-7: Connection Health - configured read scope for this connector.
 // Shows what AgentIQ is configured to read from this source.
@@ -161,6 +169,12 @@ export default function ConnectorDetailPanel({
   // read-only panel — this action is disabled for them.
   const auth = useAuthOptional();
   const isViewer = isViewerRole(auth?.user?.role);
+  // R18-A3: the static-credential vault flow is a NO-PUBLIC-INBOUND feature. Its
+  // only write entry point is the "Set up outbound access" button, which
+  // OutboundAuthSetup renders ONLY when noPublicInbound. In the standard profile
+  // these connectors authenticate via the normal Connect (OAuth) flow / env, so
+  // the credentials card would just point at a button that isn't there.
+  const { noPublicInbound } = useNetworkProfileOptional();
 
   if (!connector) {
     return (
@@ -173,6 +187,31 @@ export default function ConnectorDetailPanel({
   const isConnected = connector.status === 'connected';
   const isConfigured = connector.configured;
   const viewerOnlyScope = isViewerOnlyScopeUser();
+
+  // MSP-B13 (AT-744): AWS/Azure Event connectors onboard through the shared
+  // multi-scope card (one connection, many accounts/subscriptions). It owns the
+  // whole onboarding surface (credentials, test, scope panel + health), so the
+  // panel renders a dedicated body for it instead of the single-connection
+  // Access-as / Configure layout below.
+  if (isMultiScopeConnector(connector.id)) {
+    return (
+      <div className="rounded-xl border border-border bg-panel p-5">
+        <div className="flex items-start justify-between gap-2">
+          <div className="min-w-0">
+            <div className="break-words text-xl font-semibold leading-snug text-text">
+              {connector.name} Integration
+            </div>
+            <div className="mt-1 break-words text-sm text-muted">{connector.category}</div>
+          </div>
+          <Badge status={connector.status} />
+        </div>
+        <div className="mt-4 border-t border-border" />
+        <div className="mt-4">
+          <MultiScopeConnectorManager connector={connector} />
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="rounded-xl border border-border bg-panel p-5">
@@ -209,7 +248,7 @@ export default function ConnectorDetailPanel({
           that authenticate with URL + username + token/password (Jira,
           ServiceNow, native DBs). Shown near the top because entering the
           credential is how these connectors get connected. Owner-gated inside. */}
-      {isStaticCredentialConnector(connector.id) && (
+      {isStaticCredentialConnector(connector.id) && noPublicInbound && (
         <div className="mt-4">
           <StaticCredentialManager connector={connector} outboundSetupRequest={outboundSetupRequest} />
         </div>
@@ -231,10 +270,57 @@ export default function ConnectorDetailPanel({
         </>
       )}
 
-      {/* R18-C0 P5: Slack channel selection — pick which channels AgentIQ reads. */}
+      {/* R18-C0 P5: Slack channel selection — pick which channels AgentIQ reads.
+          The picker carries the R18-A4 depth-phase consent notice inline. */}
       {connector.id === 'slack' && isConnected && (
         <>
           <SlackChannelPicker />
+          <div className="mt-4 border-t border-border" />
+        </>
+      )}
+
+      {/* Jira project selection — pick which project AgentIQ scopes discovery to
+          (single-project; the Jira analogue of the Slack channel selection). */}
+      {connector.id === 'jira' && isConnected && (
+        <>
+          <JiraProjectPicker />
+          <div className="mt-4 border-t border-border" />
+        </>
+      )}
+
+      {/* Teams channel selection — pick which granted channels AgentIQ reads
+          (multi-select; the Teams analogue of the Slack channel selection). The
+          picker carries the R18-A4 depth-phase consent notice inline. */}
+      {connector.id === 'teams' && isConnected && (
+        <>
+          <TeamsChannelPicker />
+          <div className="mt-4 border-t border-border" />
+        </>
+      )}
+
+      {/* Confluence space selection — pick which granted spaces AgentIQ reads
+          (multi-select; the Confluence analogue of the Slack channel selection). */}
+      {connector.id === 'confluence' && isConnected && (
+        <>
+          <ConfluenceSpacePicker />
+          <div className="mt-4 border-t border-border" />
+        </>
+      )}
+
+      {/* SharePoint site selection — pick which granted sites AgentIQ reads
+          (multi-select; the SharePoint analogue of the Slack channel selection). */}
+      {connector.id === 'sharepoint' && isConnected && (
+        <>
+          <SharePointSitePicker />
+          <div className="mt-4 border-t border-border" />
+        </>
+      )}
+
+      {/* GitHub repository selection — pick which repositories AgentIQ reads
+          (multi-select; the GitHub analogue of the Slack channel selection). */}
+      {connector.id === 'github' && isConnected && (
+        <>
+          <GitHubRepoPicker />
           <div className="mt-4 border-t border-border" />
         </>
       )}

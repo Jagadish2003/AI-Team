@@ -138,3 +138,63 @@ def test_reads_unaffected_when_status_error(client, monkeypatch):
     resp = client.get("/api/runs", headers=AUTH)
 
     assert resp.status_code == 200
+
+
+# --------------------------------------------------------------------------
+# Seat-overage gate: a VALID license still can't run discovery while more
+# systems are connected than it covers (forward-only connect gate leaves the
+# overage in place). Applies only to a numeric cap, and fails OPEN on error.
+# --------------------------------------------------------------------------
+def _force_seats(monkeypatch, used, licensed) -> None:
+    """Point the gate's seat check at fixed used/licensed counts.
+
+    _seat_overage imports these from app.license_limits at call time, so patching
+    the source-module attributes is what the gate resolves."""
+    monkeypatch.setattr("app.license_limits.get_max_systems", lambda org_id: licensed)
+    monkeypatch.setattr("app.license_limits.count_connected_systems", lambda org_id: used)
+
+
+def test_run_start_blocked_when_over_seat_limit(client, monkeypatch):
+    _force_status(monkeypatch, LicenseStatus.VALID)  # license itself is healthy
+    _force_seats(monkeypatch, used=8, licensed=3)
+
+    resp = client.post("/api/runs/start", json={}, headers=AUTH)
+
+    assert resp.status_code == 402
+    body = resp.json()
+    assert body["reason"] == "license_over_limit"
+    assert body["systemsUsed"] == 8
+    assert body["systemsLicensed"] == 3
+
+
+def test_run_allowed_when_within_seat_limit(client, monkeypatch):
+    _force_status(monkeypatch, LicenseStatus.VALID)
+    _force_seats(monkeypatch, used=2, licensed=3)
+
+    resp = client.post("/api/runs/start", json={}, headers=AUTH)
+
+    # Not seat-gated → the request reaches the route (422/200 on empty body).
+    assert resp.status_code != 402
+
+
+def test_unlimited_license_never_seat_gated(client, monkeypatch):
+    _force_status(monkeypatch, LicenseStatus.VALID)
+    _force_seats(monkeypatch, used=99, licensed=None)  # None => unlimited
+
+    resp = client.post("/api/runs/start", json={}, headers=AUTH)
+
+    assert resp.status_code != 402
+
+
+def test_seat_check_fails_open_on_count_error(client, monkeypatch):
+    _force_status(monkeypatch, LicenseStatus.VALID)
+
+    def _boom(*a, **k):
+        raise RuntimeError("db down")
+
+    monkeypatch.setattr("app.license_limits.get_max_systems", _boom)
+
+    resp = client.post("/api/runs/start", json={}, headers=AUTH)
+
+    # The seat check must never over-block a valid run on a count error.
+    assert resp.status_code != 402

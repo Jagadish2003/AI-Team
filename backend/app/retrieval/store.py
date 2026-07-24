@@ -555,6 +555,7 @@ def search(
     query_vector: Sequence[float],
     k: int = 10,
     source_filter: Optional[Sequence[str]] = None,
+    artifact_filter: Optional[Sequence[str]] = None,
     min_score: Optional[float] = None,
     embedding_model: Optional[str] = None,
     embedding_model_version: Optional[str] = None,
@@ -565,10 +566,17 @@ def search(
     HARD org partition: the ``WHERE`` clause always leads with ``org_id = %s`` — a
     query can only ever match the caller's own partition (AC3).
 
-    ``source_filter``  scopes results to named source systems ('only Confluence',
-                       'only this repo') via ``source_system = ANY(...)`` (AC4).
-    ``min_score``      excludes weak matches below the cosine-similarity floor
-                       (AC4).
+    ``source_filter``    scopes results to named source systems ('only Confluence',
+                         'only this repo') via ``source_system = ANY(...)`` (AC4).
+    ``artifact_filter``  scopes results to an EXACT set of ``source_artifact`` ids
+                         (``source_artifact = ANY(...)``) — never a LIKE/substring
+                         match. R18-A6 T5's component-scoped retrieval builds this
+                         allowlist from the structure map (component -> declaring
+                         file), so a query can be confined to one component's REAL
+                         files rather than any file whose path/name coincidentally
+                         resembles it.
+    ``min_score``        excludes weak matches below the cosine-similarity floor
+                         (AC4).
     ``embedding_model`` / ``embedding_model_version`` restrict the search to
                        vectors produced by a specific model, so vectors from
                        different models are never compared (AC8). ``retrieve()``
@@ -601,6 +609,9 @@ def search(
     if source_filter:
         where.append("source_system = ANY(%s)")
         params.append(list(source_filter))
+    if artifact_filter:
+        where.append("source_artifact = ANY(%s)")
+        params.append(list(artifact_filter))
     if embedding_model is not None:
         where.append("embedding_model = %s")
         params.append(embedding_model)
@@ -632,6 +643,55 @@ def search(
     with closing(db.connect()) as con:
         cur = con.cursor()
         cur.execute(sql, exec_params)
+        rows = cur.fetchall()
+    return [dict(r) for r in rows]
+
+
+def list_chunks_by_artifacts(
+    org_id: str,
+    artifacts: Sequence[str],
+    limit: int = 10,
+    include_stale: bool = False,
+) -> list[dict[str, Any]]:
+    """Return this org's embedded chunks for an EXACT set of ``source_artifact`` ids.
+
+    The no-query counterpart to :func:`search` — no vector to rank against, so
+    this is a direct read rather than a similarity search. Used by R18-A6 T5's
+    component-scoped retrieval when a caller wants a component's currently-indexed
+    code directly, rather than an answer to a semantic question about it.
+
+    ``artifacts`` is matched EXACTLY (``source_artifact = ANY(%s)``) — never a
+    LIKE/substring match — so a file that merely mentions a component's name in a
+    comment, or an unrelated ``*Test`` file, is never mistaken for that
+    component's real code (AC5).
+
+    HARD org partition (``org_id = %s`` first, AC3). Only embedded rows
+    participate (``embedding IS NOT NULL``), matching :func:`search`'s retrieval
+    invariant — un-embedded content is not-yet-retrievable, never an error.
+    ``include_stale=False`` (default) excludes stale chunks, matching the
+    freshness contract (R18-B2 / AC1). Ordered by ``source_artifact`` then
+    ``chunk_position`` for a stable, readable listing; ``chunk_id`` breaks ties
+    deterministically.
+    """
+    if not artifacts:
+        return []
+    where = ["org_id = %s", "embedding IS NOT NULL", "source_artifact = ANY(%s)"]
+    params: list[Any] = [org_id, list(artifacts)]
+    if not include_stale:
+        where.append("is_stale = FALSE")
+    sql = (
+        "SELECT chunk_id, org_id, content, content_hash, content_type, "
+        "       source_system, source_artifact, source_timestamp, chunk_position, "
+        "       embedding_model, embedding_model_version, is_stale "
+        "FROM retrieval_chunks "
+        f"WHERE {' AND '.join(where)} "
+        "ORDER BY source_artifact ASC, chunk_position ASC, chunk_id ASC "
+        "LIMIT %s"
+    )
+    params.append(int(limit))
+    with closing(db.connect()) as con:
+        cur = con.cursor()
+        cur.execute(sql, params)
         rows = cur.fetchall()
     return [dict(r) for r in rows]
 
@@ -703,6 +763,69 @@ def iter_artifact_provenance(
             d["provenance"] = {}
         out.append(d)
     return out
+
+
+def count_chunks_by_source(org_id: str) -> list[dict[str, Any]]:
+    """Return the org's indexed-content volume broken down by source system.
+
+    R18-C2 T1 (Run-Health Dashboard, content panel): a read-only aggregation of
+    the chunks already stored — assembling existing truth, not new instrumentation.
+    Org-scoped like every read. Each row reports the total chunk count and the
+    embedded (retrievable) subset for one ``source_system``, ordered by source so
+    the panel renders deterministically.
+    """
+    with closing(db.connect()) as con:
+        cur = con.cursor()
+        cur.execute(
+            "SELECT source_system, COUNT(*) AS chunk_count, "
+            "COUNT(*) FILTER (WHERE embedding IS NOT NULL) AS embedded_count "
+            "FROM retrieval_chunks WHERE org_id = %s "
+            "GROUP BY source_system ORDER BY source_system ASC",
+            (org_id,),
+        )
+        rows = cur.fetchall()
+    return [
+        {
+            "source_system": r[0],
+            "chunk_count": int(r[1]),
+            "embedded_count": int(r[2]),
+        }
+        for r in rows
+    ]
+
+
+def pending_embedding_backlog(org_id: str) -> dict[str, Any]:
+    """Return the current unembedded backlog and its observed time span.
+
+    The run-health attention rules use this org-scoped record summary to
+    distinguish a transient batch from work that is accumulating: a backlog is
+    only considered growing when enough pending rows span a meaningful period.
+    ``oldest_created_at`` and ``newest_created_at`` are timestamps from the
+    existing chunk records, not dashboard observation timestamps, so repeated
+    reads over unchanged data remain deterministic.
+    """
+    with closing(db.connect()) as con:
+        cur = con.cursor()
+        cur.execute(
+            "SELECT COUNT(*), MIN(created_at), MAX(created_at) "
+            "FROM retrieval_chunks "
+            "WHERE org_id = %s AND embedding IS NULL",
+            (org_id,),
+        )
+        row = cur.fetchone()
+
+    count = int(row[0]) if row else 0
+    oldest = row[1] if row and row[1] is not None else None
+    newest = row[2] if row and row[2] is not None else None
+    return {
+        "count": count,
+        "oldest_created_at": (
+            oldest.isoformat() if hasattr(oldest, "isoformat") else oldest
+        ),
+        "newest_created_at": (
+            newest.isoformat() if hasattr(newest, "isoformat") else newest
+        ),
+    }
 
 
 # ---------------------------------------------------------------------------

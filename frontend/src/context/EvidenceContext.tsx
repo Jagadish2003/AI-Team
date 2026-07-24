@@ -5,6 +5,8 @@ import type { EvidenceReview } from "../types/evidence";
 import type { Decision } from "../types/common";
 import { runScopedErrorMessage } from "../utils/apiErrors";
 import { useDiscoveryRunContext } from "./DiscoveryRunContext";
+import { useDataCache } from "../lib/dataCache";
+import { cacheKeys } from "../lib/cacheKeys";
 
 type EvidenceContextValue = {
   loading: boolean;
@@ -25,6 +27,7 @@ function hasMaterializedArtifacts(status: string | undefined): boolean {
 export function EvidenceProvider({ children }: { children: React.ReactNode }) {
   const { runId } = useRunContext();
   const { run } = useDiscoveryRunContext();
+  const cache = useDataCache();
   const runStatus = run?.status?.toLowerCase();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -76,13 +79,17 @@ export function EvidenceProvider({ children }: { children: React.ReactNode }) {
       try {
         const updated = await postEvidenceDecision(runId, evidenceId, decision);
         setEvidence((prev) => prev.map((e) => (e.id === evidenceId ? updated : e)));
+        // The shared cache holds this run's evidence (e.g. the Blueprint page reads
+        // cacheKeys.runEvidence via useResource). Invalidate it so that view reflects
+        // the new decision immediately instead of on the next revalidation tick.
+        cache.invalidate(cacheKeys.runEvidence(runId));
         return { ok: true };
       } catch (e: any) {
         setEvidence(before);
         return { ok: false, error: e?.message ?? "Failed to save evidence decision" };
       }
     },
-    [runId, evidence]
+    [runId, evidence, cache]
   );
 
   const value = useMemo(
